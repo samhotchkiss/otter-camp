@@ -216,16 +216,30 @@ func (w *OpenClawPipelineWorker) reconcileMemoryExtraction(ctx context.Context, 
 		// This should be injected from runtime so it can use the OpenClaw bridge runner.
 		return w.failPhase(ctx, orgID, "memory_extraction", fmt.Errorf("ellie ingestion worker not configured"))
 	}
+
+	agentMemoryReplay, err := importer.ReplayOpenClawAgentMemorySnapshots(ctx, w.DB, orgID)
+	if err != nil {
+		return w.failPhase(ctx, orgID, "memory_extraction", fmt.Errorf("replay openclaw agent memory snapshots: %w", err))
+	}
+
 	pendingRooms, err := w.IngestionStore.CountRoomsForIngestion(ctx, orgID)
 	if err != nil {
 		return err
 	}
 	if pendingRooms == 0 {
+		label := "memory extraction complete"
+		if agentMemoryReplay.ChunksInserted > 0 {
+			label = fmt.Sprintf(
+				"memory extraction complete (agent_memory_md inserted=%d agents=%d)",
+				agentMemoryReplay.ChunksInserted,
+				agentMemoryReplay.AgentsProcessed,
+			)
+		}
 		_, err := w.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
 			OrgID:         orgID,
 			MigrationType: "memory_extraction",
 			Status:        store.MigrationProgressStatusCompleted,
-			CurrentLabel:  stringPtr("memory extraction complete"),
+			CurrentLabel:  stringPtr(label),
 		})
 		return err
 	}
@@ -254,19 +268,20 @@ func (w *OpenClawPipelineWorker) reconcileMemoryExtraction(ctx context.Context, 
 		return err
 	}
 
-	if runResult.ProcessedMessages > 0 || runResult.InsertedMemories > 0 {
+	if runResult.ProcessedMessages > 0 || runResult.InsertedMemories > 0 || agentMemoryReplay.ChunksInserted > 0 {
 		_, _ = w.ProgressStore.Advance(ctx, store.AdvanceMigrationProgressInput{
 			OrgID:          orgID,
 			MigrationType:  "memory_extraction",
-			ProcessedDelta: max(runResult.ProcessedMessages, 0),
+			ProcessedDelta: max(runResult.ProcessedMessages, 0) + max(agentMemoryReplay.ChunksInserted, 0),
 			CurrentLabel: stringPtr(fmt.Sprintf(
-				"rooms_pending=%d processed_msgs=%d windows=%d inserted=%d (llm=%d heuristic=%d)",
+				"rooms_pending=%d processed_msgs=%d windows=%d inserted=%d (llm=%d heuristic=%d) + agent_memory_md_inserted=%d",
 				pendingRoomsAfter,
 				runResult.ProcessedMessages,
 				runResult.WindowsProcessed,
 				runResult.InsertedMemories,
 				runResult.InsertedLLMMemories,
 				runResult.InsertedHeuristicMemories,
+				agentMemoryReplay.ChunksInserted,
 			)),
 		})
 	}

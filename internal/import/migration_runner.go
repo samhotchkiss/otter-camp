@@ -746,6 +746,21 @@ func (r *OpenClawMigrationRunner) runEllieBackfillPhase(
 		}
 	}
 
+	replayResult := OpenClawAgentMemoryReplayResult{}
+	if r.DB != nil {
+		replayed, replayErr := ReplayOpenClawAgentMemorySnapshots(ctx, r.DB, input.OrgID)
+		if replayErr != nil {
+			_, _ = r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+				OrgID:         input.OrgID,
+				MigrationType: phaseType,
+				Status:        store.MigrationProgressStatusFailed,
+				Error:         migrationRunnerStringPtr(replayErr.Error()),
+			})
+			return nil, replayErr
+		}
+		replayResult = replayed
+	}
+
 	backfillResult, backfillErr := r.EllieBackfillRunner.RunBackfill(ctx, OpenClawEllieBackfillInput{
 		OrgID: input.OrgID,
 	})
@@ -759,13 +774,19 @@ func (r *OpenClawMigrationRunner) runEllieBackfillPhase(
 		return nil, backfillErr
 	}
 
-	if backfillResult.ProcessedMessages > 0 {
+	processedDelta := backfillResult.ProcessedMessages + replayResult.ChunksInserted
+	if processedDelta > 0 {
 		if _, advanceErr := r.ProgressStore.Advance(ctx, store.AdvanceMigrationProgressInput{
 			OrgID:          input.OrgID,
 			MigrationType:  phaseType,
-			ProcessedDelta: backfillResult.ProcessedMessages,
+			ProcessedDelta: processedDelta,
 			CurrentLabel: migrationRunnerStringPtr(
-				fmt.Sprintf("processed %d messages", backfillResult.ProcessedMessages),
+				fmt.Sprintf(
+					"processed %d messages + replayed %d agent_memory_md chunks (%d agents)",
+					backfillResult.ProcessedMessages,
+					replayResult.ChunksInserted,
+					replayResult.AgentsProcessed,
+				),
 			),
 		}); advanceErr != nil {
 			return nil, advanceErr

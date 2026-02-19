@@ -86,6 +86,7 @@ type OpenClawGatewayCaller struct {
 	gatewayToken     string
 	agentID          string
 	sessionNamespace string
+	expectedModel    string
 	callTimeout      time.Duration
 	now              func() time.Time
 }
@@ -115,9 +116,15 @@ func NewOpenClawGatewayCallerFromEnv() *OpenClawGatewayCaller {
 	)
 	agentID := firstNonEmpty(
 		strings.TrimSpace(os.Getenv("ELLIE_LLM_OPENCLAW_AGENT_ID")),
+		strings.TrimSpace(os.Getenv("ELLIE_LLM_OPENCLAW_AGENT")),
 		strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_AGENT_ID")),
+		strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_AGENT")),
 		defaultEllieIngestionOpenClawAgentID,
 	)
+	expectedModel := strings.TrimSpace(strings.ToLower(firstNonEmpty(
+		strings.TrimSpace(os.Getenv("ELLIE_LLM_OPENCLAW_EXPECT_MODEL_CONTAINS")),
+		strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_EXPECT_MODEL_CONTAINS")),
+	)))
 	sessionNamespace := firstNonEmpty(
 		strings.TrimSpace(os.Getenv("ELLIE_LLM_OPENCLAW_SESSION_NAMESPACE")),
 		"ellie-migration",
@@ -134,6 +141,7 @@ func NewOpenClawGatewayCallerFromEnv() *OpenClawGatewayCaller {
 		gatewayToken:     gatewayToken,
 		agentID:          agentID,
 		sessionNamespace: sessionNamespace,
+		expectedModel:    expectedModel,
 		callTimeout:      timeout,
 		now:              func() time.Time { return time.Now().UTC() },
 	}
@@ -204,8 +212,17 @@ func (c *OpenClawGatewayCaller) Call(ctx context.Context, orgID string, prompt s
 		return OpenClawGatewayCallResult{}, errors.New("openclaw gateway payload is empty")
 	}
 
+	model := strings.TrimSpace(response.Result.Meta.AgentMeta.Model)
+	if expected := strings.TrimSpace(c.expectedModel); expected != "" && !strings.Contains(strings.ToLower(model), expected) {
+		return OpenClawGatewayCallResult{}, fmt.Errorf(
+			"openclaw model %q does not include required token %q",
+			model,
+			expected,
+		)
+	}
+
 	return OpenClawGatewayCallResult{
-		Model:   strings.TrimSpace(response.Result.Meta.AgentMeta.Model),
+		Model:   model,
 		TraceID: strings.TrimSpace(response.RunID),
 		Text:    text,
 	}, nil
@@ -271,4 +288,3 @@ func (c *OpenClawGatewayCaller) runGatewayAgentCall(ctx context.Context, orgID s
 	}
 	return output, nil
 }
-

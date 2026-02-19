@@ -1,0 +1,5 @@
+DROP POLICY IF EXISTS openclaw_agent_memory_snapshots_org_isolation ON openclaw_agent_memory_snapshots;
+DROP TRIGGER IF EXISTS openclaw_agent_memory_snapshots_updated_at_trg ON openclaw_agent_memory_snapshots;
+DROP INDEX IF EXISTS openclaw_agent_memory_snapshots_org_updated_idx;
+DROP INDEX IF EXISTS openclaw_agent_memory_snapshots_org_slug_uidx;
+DROP TABLE IF EXISTS openclaw_agent_memory_snapshots;

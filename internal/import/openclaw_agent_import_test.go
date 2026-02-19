@@ -281,6 +281,64 @@ func TestImportOpenClawAgentsFromPayloadDedupesDuplicateIdentityRecords(t *testi
 	require.Equal(t, "Frank", displayName)
 }
 
+func TestReplayOpenClawAgentMemorySnapshotsReinsertsMemoryChunks(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-agent-memory-replay")
+
+	result, err := ImportOpenClawAgentsFromPayload(context.Background(), db, OpenClawAgentPayloadImportOptions{
+		OrgID: orgID,
+		Identities: []ImportedAgentIdentity{
+			{
+				ID:     "main",
+				Name:   "Frank",
+				Memory: "- First memory fact\n- Second memory fact",
+				SourceFiles: map[string]string{
+					"MEMORY.md": "/tmp/workspace-main/MEMORY.md",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Processed)
+
+	var initialChunks int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		   FROM memories
+		  WHERE org_id = $1
+		    AND metadata->>'source_table' = 'agent_memory_md'`,
+		orgID,
+	).Scan(&initialChunks)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, initialChunks, 2)
+
+	_, err = db.Exec(
+		`DELETE FROM memories
+		  WHERE org_id = $1
+		    AND metadata->>'source_table' = 'agent_memory_md'`,
+		orgID,
+	)
+	require.NoError(t, err)
+
+	replay, err := ReplayOpenClawAgentMemorySnapshots(context.Background(), db, orgID)
+	require.NoError(t, err)
+	require.Equal(t, 1, replay.AgentsProcessed)
+	require.Equal(t, initialChunks, replay.ChunksInserted)
+
+	var replayedChunks int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		   FROM memories
+		  WHERE org_id = $1
+		    AND metadata->>'source_table' = 'agent_memory_md'`,
+		orgID,
+	).Scan(&replayedChunks)
+	require.NoError(t, err)
+	require.Equal(t, initialChunks, replayedChunks)
+}
+
 func TestImportOpenClawAgentsFromPayloadSkipsMalformedRecordsWithWarnings(t *testing.T) {
 	connStr := getOpenClawImportTestDatabaseURL(t)
 	db := setupOpenClawImportTestDatabase(t, connStr)

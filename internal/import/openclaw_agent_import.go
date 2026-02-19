@@ -57,6 +57,11 @@ type OpenClawAgentPayloadImportResult struct {
 	Warnings       []string
 }
 
+type OpenClawAgentMemoryReplayResult struct {
+	AgentsProcessed int
+	ChunksInserted  int
+}
+
 func ImportOpenClawAgents(
 	ctx context.Context,
 	db *sql.DB,
@@ -249,10 +254,14 @@ func importOpenClawAgentPayload(
 			return OpenClawAgentPayloadImportResult{}, fmt.Errorf("failed to upsert openclaw agent %q: %w", slug, err)
 		}
 
+		if err := upsertOpenClawAgentMemorySnapshot(ctx, tx, orgID, agentID, slug, identity); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("agent %q MEMORY.md snapshot failed: %v", slug, err))
+		}
+
 		// Index agent MEMORY.md as first-class memories. This is curated, high-signal context.
 		// We keep ingestion deterministic here (split into bullet/paragraph chunks) and rely on
 		// embedding + dedup downstream to normalize.
-		if err := upsertOpenClawAgentMemoryMarkdown(ctx, tx, orgID, agentID, slug, identity); err != nil {
+		if _, err := upsertOpenClawAgentMemoryMarkdown(ctx, tx, orgID, agentID, slug, identity); err != nil {
 			// Never fail the whole agent import because one agent memory file is malformed.
 			result.Warnings = append(result.Warnings, fmt.Sprintf("agent %q MEMORY.md ingest failed: %v", slug, err))
 		}
@@ -280,20 +289,20 @@ func upsertOpenClawAgentMemoryMarkdown(
 	agentID string,
 	agentSlug string,
 	identity ImportedAgentIdentity,
-) error {
+) (int, error) {
 	if tx == nil {
-		return fmt.Errorf("transaction is required")
+		return 0, fmt.Errorf("transaction is required")
 	}
 	orgID = strings.TrimSpace(orgID)
 	agentID = strings.TrimSpace(agentID)
 	agentSlug = strings.TrimSpace(agentSlug)
 	if orgID == "" || agentID == "" || agentSlug == "" {
-		return nil
+		return 0, nil
 	}
 
 	raw := strings.TrimSpace(identity.Memory)
 	if raw == "" {
-		return nil
+		return 0, nil
 	}
 
 	sourcePath := ""
@@ -303,10 +312,11 @@ func upsertOpenClawAgentMemoryMarkdown(
 
 	chunks := splitAgentMemoryMarkdown(raw)
 	if len(chunks) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	now := time.Now().UTC()
+	inserted := 0
 	for _, chunk := range chunks {
 		content := strings.TrimSpace(chunk)
 		if content == "" {
@@ -322,10 +332,10 @@ func upsertOpenClawAgentMemoryMarkdown(
 			"file_path":    sourcePath,
 		})
 
-		_, err := tx.ExecContext(
+		res, err := tx.ExecContext(
 			ctx,
 			`INSERT INTO memories (
-				org_id, kind, title, content, metadata, importance, confidence, status,
+					org_id, kind, title, content, metadata, importance, confidence, status,
 				source_conversation_id, source_project_id, occurred_at, sensitivity
 			) VALUES (
 				$1, $2, $3, $4, $5::jsonb, $6, $7, 'active',
@@ -342,10 +352,153 @@ func upsertOpenClawAgentMemoryMarkdown(
 			now,
 		)
 		if err != nil {
-			return err
+			return 0, err
+		}
+		if rows, err := res.RowsAffected(); err == nil && rows > 0 {
+			inserted++
 		}
 	}
-	return nil
+	return inserted, nil
+}
+
+func upsertOpenClawAgentMemorySnapshot(
+	ctx context.Context,
+	tx *sql.Tx,
+	orgID string,
+	agentID string,
+	agentSlug string,
+	identity ImportedAgentIdentity,
+) error {
+	if tx == nil {
+		return fmt.Errorf("transaction is required")
+	}
+	orgID = strings.TrimSpace(orgID)
+	agentID = strings.TrimSpace(agentID)
+	agentSlug = strings.TrimSpace(agentSlug)
+	if orgID == "" || agentID == "" || agentSlug == "" {
+		return nil
+	}
+
+	raw := strings.TrimSpace(identity.Memory)
+	sourcePath := ""
+	if identity.SourceFiles != nil {
+		sourcePath = strings.TrimSpace(identity.SourceFiles["MEMORY.md"])
+	}
+	if raw == "" {
+		_, err := tx.ExecContext(
+			ctx,
+			`DELETE FROM openclaw_agent_memory_snapshots
+			  WHERE org_id = $1
+			    AND agent_slug = $2`,
+			orgID,
+			agentSlug,
+		)
+		return err
+	}
+
+	_, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO openclaw_agent_memory_snapshots (
+			org_id,
+			agent_id,
+			agent_slug,
+			source_file_path,
+			memory_md,
+			memory_md_hash
+		) VALUES (
+			$1,
+			$2,
+			$3,
+			NULLIF($4, ''),
+			$5,
+			md5($5)
+		)
+		ON CONFLICT (org_id, agent_slug) DO UPDATE
+		SET
+			agent_id = EXCLUDED.agent_id,
+			source_file_path = EXCLUDED.source_file_path,
+			memory_md = EXCLUDED.memory_md,
+			memory_md_hash = EXCLUDED.memory_md_hash,
+			updated_at = NOW()`,
+		orgID,
+		agentID,
+		agentSlug,
+		sourcePath,
+		raw,
+	)
+	return err
+}
+
+func ReplayOpenClawAgentMemorySnapshots(
+	ctx context.Context,
+	db *sql.DB,
+	orgID string,
+) (OpenClawAgentMemoryReplayResult, error) {
+	result := OpenClawAgentMemoryReplayResult{}
+	if db == nil {
+		return result, fmt.Errorf("database is required")
+	}
+	orgID = strings.TrimSpace(orgID)
+	if !openClawImportUUIDRegex.MatchString(orgID) {
+		return result, fmt.Errorf("invalid org_id")
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return result, fmt.Errorf("failed to start openclaw agent memory replay transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	rows, err := tx.QueryContext(
+		ctx,
+		`SELECT agent_id::text, agent_slug, COALESCE(source_file_path, ''), memory_md
+		   FROM openclaw_agent_memory_snapshots
+		  WHERE org_id = $1
+		  ORDER BY agent_slug ASC`,
+		orgID,
+	)
+	if err != nil {
+		return result, fmt.Errorf("failed to load openclaw agent memory snapshots: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			agentID    string
+			agentSlug  string
+			sourcePath string
+			memoryMD   string
+		)
+		if err := rows.Scan(&agentID, &agentSlug, &sourcePath, &memoryMD); err != nil {
+			return result, fmt.Errorf("failed to scan openclaw agent memory snapshot: %w", err)
+		}
+		identity := ImportedAgentIdentity{
+			Memory: memoryMD,
+			SourceFiles: map[string]string{
+				"MEMORY.md": sourcePath,
+			},
+		}
+		inserted, err := upsertOpenClawAgentMemoryMarkdown(ctx, tx, orgID, agentID, agentSlug, identity)
+		if err != nil {
+			return result, fmt.Errorf("failed to replay openclaw agent MEMORY.md for %q: %w", agentSlug, err)
+		}
+		result.AgentsProcessed++
+		result.ChunksInserted += inserted
+	}
+	if err := rows.Err(); err != nil {
+		return result, fmt.Errorf("failed to iterate openclaw agent memory snapshots: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return result, fmt.Errorf("failed to commit openclaw agent memory replay transaction: %w", err)
+	}
+	committed = true
+	return result, nil
 }
 
 func splitAgentMemoryMarkdown(raw string) []string {
