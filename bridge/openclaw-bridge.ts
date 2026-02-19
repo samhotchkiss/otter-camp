@@ -258,6 +258,8 @@ type DMDispatchEvent = {
     sender_id?: string;
     sender_type?: string;
     sender_name?: string;
+    inject_identity?: boolean;
+    incremental_context?: string;
   };
 };
 
@@ -376,6 +378,7 @@ type SessionContext = {
   responderAgentID?: string;
   pendingQuestionnaire?: QuestionnairePayload;
   identityMetadata?: SessionIdentityMetadata;
+  forceIdentityBootstrap?: boolean;
   displayLabel?: string;
   executionMode?: ExecutionMode;
   projectRoot?: string;
@@ -3265,12 +3268,39 @@ async function withAutoRecallContext(sessionKey: string, rawContent: string): Pr
   }
 }
 
+function formatIncrementalDMContent(rawContent: string, rawIncrementalContext: string): string {
+  const content = rawContent.trim();
+  const incrementalContext = rawIncrementalContext.trim();
+  if (!incrementalContext) {
+    return content;
+  }
+  if (!content) {
+    return [
+      '[OtterCamp Context Update]',
+      incrementalContext,
+      '[/OtterCamp Context Update]',
+    ].join('\n');
+  }
+  return [
+    '[OtterCamp Context Update]',
+    incrementalContext,
+    '[/OtterCamp Context Update]',
+    '',
+    content,
+  ].join('\n');
+}
+
+export function formatIncrementalDMContentForTest(content: string, incrementalContext: string): string {
+  return formatIncrementalDMContent(content, incrementalContext);
+}
+
 async function withSessionContext(
   sessionKey: string,
   rawContent: string,
-  options?: { includeUserContent?: boolean },
+  options?: { includeUserContent?: boolean; forceIdentityBootstrap?: boolean },
 ): Promise<string> {
   const includeUserContent = options?.includeUserContent !== false;
+  const forceIdentityBootstrap = options?.forceIdentityBootstrap === true;
   const content = rawContent.trim();
   if (!content) {
     return '';
@@ -3281,6 +3311,8 @@ async function withSessionContext(
   }
   const isDirectMessage = context.kind === 'dm';
   const shouldBootstrapIdentity =
+    forceIdentityBootstrap ||
+    context.forceIdentityBootstrap === true ||
     !contextPrimedSessions.has(sessionKey) ||
     (isDirectMessage && !context.identityMetadata);
 
@@ -3290,6 +3322,7 @@ async function withSessionContext(
       ...context,
       executionMode: execution.mode,
       projectRoot: execution.projectRoot,
+      forceIdentityBootstrap: false,
     };
 
     let identityMetadata = context.identityMetadata;
@@ -3338,7 +3371,7 @@ async function withSessionContext(
     return sections.join('\n\n');
   }
   const reminderSections: string[] = [];
-  const shouldPersistIdentityPreamble = context.kind === 'dm';
+  const shouldPersistIdentityPreamble = context.kind !== 'dm';
   const identityPreamble = shouldPersistIdentityPreamble
     ? getTrimmedString(context.identityMetadata?.preamble)
     : '';
@@ -4318,10 +4351,12 @@ async function sendMessageToSession(
   sessionKey: string,
   content: string,
   messageID?: string,
+  options?: { forceIdentityBootstrap?: boolean },
 ): Promise<void> {
+  const forceIdentityBootstrap = options?.forceIdentityBootstrap === true;
   const idempotencyKey =
     (messageID || '').trim() || `dm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const isFirstDispatchForSession = !contextPrimedSessions.has(sessionKey);
+  const isFirstDispatchForSession = forceIdentityBootstrap || !contextPrimedSessions.has(sessionKey);
   const isCanonicalChameleonSession = parseChameleonSessionKey(sessionKey) !== null;
   const recallAwareContent = await withAutoRecallContext(sessionKey, content);
   if (!recallAwareContent) {
@@ -4352,6 +4387,7 @@ async function sendMessageToSession(
   if (isCanonicalChameleonSession) {
     const extraSystemPrompt = await withSessionContext(sessionKey, recallAwareContent, {
       includeUserContent: false,
+      forceIdentityBootstrap,
     });
     try {
       await sendRequest('agent', {
@@ -4372,7 +4408,9 @@ async function sendMessageToSession(
     }
   }
 
-  const contextualContent = await withSessionContext(sessionKey, recallAwareContent);
+  const contextualContent = await withSessionContext(sessionKey, recallAwareContent, {
+    forceIdentityBootstrap,
+  });
   if (!contextualContent) {
     return;
   }
@@ -4656,6 +4694,40 @@ async function recordCompactionMemory(signal: CompactionSignal): Promise<void> {
   }
 }
 
+async function reportCompactionSignalToOtterCamp(signal: CompactionSignal): Promise<void> {
+  if (!signal.orgID || !signal.sessionKey) {
+    return;
+  }
+
+  const response = await fetchWithRetry(`${OTTERCAMP_URL}/api/openclaw/events`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(OTTERCAMP_TOKEN
+        ? {
+            Authorization: `Bearer ${OTTERCAMP_TOKEN}`,
+            'X-OpenClaw-Token': OTTERCAMP_TOKEN,
+          }
+        : {}),
+    },
+    body: JSON.stringify({
+      event: 'session.compaction',
+      org_id: signal.orgID,
+      session_key: signal.sessionKey,
+      compaction_detected: true,
+      data: {
+        session_key: signal.sessionKey,
+        compaction_detected: true,
+      },
+    }),
+  }, 'report compaction signal');
+
+  if (!response.ok) {
+    const snippet = (await response.text().catch(() => '')).slice(0, 300);
+    throw new Error(`compaction signal report failed: ${response.status} ${response.statusText} ${snippet}`.trim());
+  }
+}
+
 async function fetchCompactionRecoveryContext(signal: CompactionSignal): Promise<string> {
   if (!signal.orgID || !signal.agentID) {
     return '';
@@ -4831,6 +4903,10 @@ export async function runCompactionRecoveryForTest(
 
 export async function fetchCompactionRecoveryContextForTest(signal: CompactionSignal): Promise<string> {
   return fetchCompactionRecoveryContext(signal);
+}
+
+export async function reportCompactionSignalToOtterCampForTest(signal: CompactionSignal): Promise<void> {
+  await reportCompactionSignalToOtterCamp(signal);
 }
 
 export function resetCompactionRecoveryStateForTest(): void {
@@ -5019,6 +5095,18 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
     } else if (!compactionSignal.agentID) {
       compactionSignal.agentID = parseAgentIDFromSessionKey(compactionSignal.sessionKey) || undefined;
     }
+
+    if (sessionContext) {
+      contextPrimedSessions.delete(compactionSignal.sessionKey);
+      setSessionContext(compactionSignal.sessionKey, {
+        ...sessionContext,
+        forceIdentityBootstrap: true,
+      });
+    }
+
+    await reportCompactionSignalToOtterCamp(compactionSignal).catch((err) => {
+      console.warn(`[bridge] failed to report compaction signal for ${compactionSignal.sessionKey}:`, err);
+    });
 
     await runCompactionRecovery(compactionSignal).catch((err) => {
       console.warn(`[bridge] compaction recovery failed for ${compactionSignal.sessionKey}:`, err);
@@ -6097,6 +6185,8 @@ async function handleOpenClawGatewayCallDispatchEvent(event: OpenClawGatewayCall
 async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
   const sessionKey = (event.data?.session_key || '').trim();
   const content = (event.data?.content || '').trim();
+  const incrementalContext = getTrimmedString(event.data?.incremental_context);
+  const injectIdentity = event.data?.inject_identity === true;
   const orgID = getTrimmedString(event.org_id);
   const threadID = getTrimmedString(event.data?.thread_id);
   const agentID = getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(sessionKey);
@@ -6108,16 +6198,25 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
   }
 
   const existingContext = sessionContexts.get(sessionKey);
+  if (injectIdentity) {
+    contextPrimedSessions.delete(sessionKey);
+  }
   setSessionContext(sessionKey, {
     ...existingContext,
     kind: 'dm',
     orgID: orgID || existingContext?.orgID,
     threadID: threadID || existingContext?.threadID,
     agentID: agentID || existingContext?.agentID,
+    identityMetadata: injectIdentity ? undefined : existingContext?.identityMetadata,
+    displayLabel: injectIdentity ? undefined : existingContext?.displayLabel,
+    forceIdentityBootstrap: injectIdentity,
   });
 
+  const outboundContent = formatIncrementalDMContent(content, incrementalContext);
   try {
-    await sendMessageToSession(sessionKey, content, messageID || undefined);
+    await sendMessageToSession(sessionKey, outboundContent, messageID || undefined, {
+      forceIdentityBootstrap: injectIdentity,
+    });
     console.log(
       `[bridge] delivered dm.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
