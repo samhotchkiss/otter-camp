@@ -497,4 +497,59 @@ describe("GlobalChatContext", () => {
       ).toBeInTheDocument();
     });
   });
+
+  it("increments unread counts for issue comment events with nested issue ids", async () => {
+    window.localStorage.setItem(
+      "otter-camp-global-chat:v1",
+      JSON.stringify({
+        isOpen: true,
+        selectedKey: "dm:dm_avatar-design",
+        conversations: [
+          {
+            key: "issue:issue-1",
+            type: "issue",
+            issueId: "issue-1",
+            projectId: "project-1",
+            title: "Issue thread",
+            contextLabel: "Issue • Otter Camp",
+            subtitle: "Issue chat",
+            unreadCount: 0,
+            updatedAt: "2026-02-11T10:00:00.000Z",
+          },
+          {
+            key: "dm:dm_avatar-design",
+            type: "dm",
+            threadId: "dm_avatar-design",
+            agent: { id: "avatar-design", name: "Jeff G", status: "online" },
+            title: "Jeff G",
+            contextLabel: "Direct message",
+            subtitle: "Agent chat",
+            unreadCount: 0,
+            updatedAt: "2026-02-11T10:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    wsState.lastMessage = {
+      type: "IssueCommentCreated",
+      data: {
+        comment: {
+          issue_id: "issue-1",
+          body: "Nested issue payload",
+        },
+      },
+    };
+
+    render(
+      <GlobalChatProvider>
+        <ConversationDetails />
+      </GlobalChatProvider>,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("issue:issue-1|Issue thread|Issue • Otter Camp|1"),
+      ).toBeInTheDocument();
+    });
+  });
 });

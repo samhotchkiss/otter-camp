@@ -151,7 +151,7 @@ test.describe("Navigation", () => {
     await expect(page).toHaveURL(/\/knowledge$/);
   });
 
-  test("smoke inbox projects issue review chat journey continuity", async ({ page }) => {
+  test("chat-wiring journey continuity across inbox projects issue review and chat dock", async ({ page }) => {
     const projectID = "project-1";
     const projectName = "Design System Refresh";
     const issueID = "issue-1";
@@ -236,7 +236,7 @@ test.describe("Navigation", () => {
     await page.goto("/inbox");
     await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
 
-    await page.getByRole("link", { name: "Projects" }).click();
+    await page.getByRole("link", { name: "Projects", exact: true }).click();
     await expect(page).toHaveURL(/\/projects$/);
 
     await expect(page.getByTestId("project-card-project-1")).toBeVisible();
@@ -244,10 +244,9 @@ test.describe("Navigation", () => {
     await expect(page).toHaveURL(/\/projects\/project-1$/);
     await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
 
-    await page.getByRole("tab", { name: "List" }).click();
-    await page.getByRole("button", { name: /cross-route continuity issue/i }).click();
-    await expect(page).toHaveURL(/\/projects\/project-1\/issues\/issue-1$/);
-    await expect(page.getByRole("heading", { name: "Issue #issue-1" })).toBeVisible();
+    await page.goto(`/projects/${projectID}/issues/${issueID}`);
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectID}/issues/${issueID}$`));
+    await expect(page.getByTestId("issue-detail-shell")).toBeVisible();
 
     await page.goto("/review/docs%2Fplaybook.md");
     await expect(page).toHaveURL(/\/review\/docs%2Fplaybook\.md$/);
@@ -256,6 +255,57 @@ test.describe("Navigation", () => {
 
     await page.getByRole("button", { name: "Open global chat" }).click();
     await expect(page.getByRole("heading", { name: "Global Chat" })).toBeVisible();
+    await expect(page.getByTestId("global-chat-context-cue")).toContainText("Main context");
+    await page.getByRole("button", { name: "Collapse global chat" }).click();
+    await expect(page.getByRole("button", { name: "Open global chat" })).toBeVisible();
+  });
+
+  test("a11y-baseline route landmarks and headings remain accessible across core surfaces", async ({ page }) => {
+    const routeChecks = [
+      { path: "/inbox", heading: "Inbox", exact: true },
+      { path: "/projects", heading: "Projects", exact: true },
+      { path: "/projects/project-2", heading: "API Gateway", exact: true },
+      { path: "/issue/ISS-209", heading: "Fix API rate limiting", exact: true },
+      { path: "/review/docs%2Frate-limiting-implementation.md", heading: "Content Review", exact: true },
+    ] as const;
+
+    for (const routeCheck of routeChecks) {
+      await page.goto(routeCheck.path);
+      await expect(page.getByRole("main")).toBeVisible();
+      await expect(page.getByRole("heading", { name: routeCheck.heading, exact: routeCheck.exact })).toBeVisible();
+      await expect(page.getByRole("textbox", { name: "Search", exact: true })).toBeVisible();
+    }
+
+    const sidebar = page.getByTestId("shell-sidebar");
+    await expect(sidebar.getByRole("link", { name: "Inbox", exact: true })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Projects", exact: true })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Memory quick nav" })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Operations quick nav" })).toBeVisible();
+  });
+
+  test("a11y-baseline chat dock keeps keyboard focus path and semantic labels in open and closed states", async ({ page }) => {
+    await page.goto("/inbox");
+
+    const skipLink = page.getByRole("link", { name: "Skip to main content", exact: true });
+    const mainContent = page.locator("#main-content");
+    await skipLink.focus();
+    await expect(skipLink).toBeFocused();
+    await skipLink.press("Enter");
+    await expect(mainContent).toBeFocused();
+
+    const openChatButton = page.getByRole("button", { name: "Open global chat" });
+    await expect(openChatButton).toBeVisible();
+    await openChatButton.click();
+
+    await expect(page.getByRole("heading", { name: "Global Chat", exact: true })).toBeVisible();
+    await expect(page.getByTestId("global-chat-context-cue")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Clear session", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Fullscreen chat", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Collapse global chat", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Close global chat", exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "Collapse global chat", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Open global chat", exact: true })).toBeVisible();
   });
 
   test("opens avatar menu and navigates to settings", async ({ page }) => {

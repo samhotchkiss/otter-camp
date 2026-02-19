@@ -929,17 +929,19 @@ export default function GlobalChatSurface({
         return;
       }
       const payload = lastMessage.data as Record<string, unknown>;
+      const comment =
+        payload.comment && typeof payload.comment === "object"
+          ? (payload.comment as Record<string, unknown>)
+          : null;
       const eventIssueID =
         (typeof payload.issue_id === "string" && payload.issue_id) ||
         (typeof payload.issueId === "string" && payload.issueId) ||
+        (comment && typeof comment.issue_id === "string" && comment.issue_id) ||
+        (comment && typeof comment.issueId === "string" && comment.issueId) ||
         "";
       if (eventIssueID !== issueID) {
         return;
       }
-      const comment =
-        payload.comment && typeof payload.comment === "object"
-          ? payload.comment
-          : null;
       if (!comment) {
         return;
       }
@@ -1557,6 +1559,7 @@ export default function GlobalChatSurface({
           onInput={onDraftInput}
           onKeyDown={onDraftKeyDown}
           onPaste={onComposerPaste}
+          aria-label="Message composer"
           placeholder={`Message ${conversationTitle}...`}
           rows={1}
           disabled={sending || uploadingAttachments || (conversationType === "issue" && issueAuthorID === "")}

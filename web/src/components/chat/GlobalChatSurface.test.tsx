@@ -591,4 +591,66 @@ describe("GlobalChatSurface", () => {
       expect(String(matches[0]?.id ?? "")).toBe("msg-echo-1");
     });
   });
+
+  it("applies issue websocket comments when issue_id is provided in nested comment payload", async () => {
+    const issueConversation: GlobalIssueConversation = {
+      key: "issue:issue-1",
+      type: "issue",
+      issueId: "issue-1",
+      projectId: "project-1",
+      title: "Issue One",
+      contextLabel: "Issue • Project One",
+      subtitle: "Issue conversation",
+      unreadCount: 0,
+      updatedAt: "2026-02-07T00:00:00.000Z",
+    };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/issues/issue-1?")) {
+        return {
+          ok: true,
+          json: async () => ({
+            issue: {
+              id: "issue-1",
+              project_id: "project-1",
+            },
+            comments: [],
+            participants: [{ agent_id: "agent-2", role: "owner" }],
+            questionnaires: [],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({}),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { rerender } = render(<GlobalChatSurface conversation={issueConversation} />);
+    await screen.findByPlaceholderText("Message Issue One...");
+
+    wsState.lastMessage = {
+      type: "IssueCommentCreated",
+      data: {
+        comment: {
+          id: "comment-1",
+          issue_id: "issue-1",
+          author_agent_id: "agent-2",
+          body: "Nested issue comment event",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      },
+    };
+    rerender(<GlobalChatSurface conversation={issueConversation} />);
+
+    await waitFor(() => {
+      const match = (lastMessageHistoryProps?.messages ?? []).find(
+        (entry) => String(entry.content ?? "") === "Nested issue comment event",
+      );
+      expect(match).toBeTruthy();
+    });
+  });
 });
