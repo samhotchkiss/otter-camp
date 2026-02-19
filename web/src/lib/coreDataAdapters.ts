@@ -315,7 +315,7 @@ export function mapInboxPayloadToCoreItems(payload: unknown, now = new Date()): 
         status,
       } satisfies CoreInboxItem;
     })
-    .filter((item): item is CoreInboxItem => item !== null);
+    .filter(Boolean) as CoreInboxItem[];
 }
 
 export function mapProjectsPayloadToCoreCards(payload: unknown): CoreProjectCard[] {
