@@ -657,7 +657,7 @@ func TestSettingsRoutesAreRegistered(t *testing.T) {
 	}
 }
 
-func TestUploadsRouteServesStoredFile(t *testing.T) {
+func TestUploadsRouteBlocksDirectFileAccess(t *testing.T) {
 	t.Parallel()
 
 	router := NewRouter()
@@ -684,11 +684,11 @@ func TestUploadsRouteServesStoredFile(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
 	}
-	if body := rec.Body.String(); body != content {
-		t.Fatalf("expected uploads body %q, got %q", content, body)
+	if strings.Contains(rec.Body.String(), content) {
+		t.Fatalf("expected uploads route to hide stored file content")
 	}
 }
 

@@ -739,11 +739,91 @@ func TestCreateMessageDMDispatchesToOpenClaw(t *testing.T) {
 	require.Equal(t, "sam-user", event.Data.SenderID)
 	require.Equal(t, "user", event.Data.SenderType)
 	require.Equal(t, "Sam", event.Data.SenderName)
+	require.Len(t, event.Data.Attachments, 0)
 
 	var count int
 	err = db.QueryRow(`SELECT COUNT(*) FROM comments WHERE thread_id = 'dm_itsalive'`).Scan(&count)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
+}
+
+func TestCreateMessageDMDispatchIncludesAttachments(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-attachments-org")
+	attachmentID := insertMessageTestAttachment(t, db, orgID, "diagram.png")
+
+	_, err := db.Exec(
+		`INSERT INTO agent_sync_state (org_id, id, name, status, session_key, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, NOW())`,
+		orgID,
+		"itsalive",
+		"Ivy",
+		"online",
+		"agent:itsalive:main",
+	)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":    orgID,
+		"thread_id": "dm_itsalive",
+		"content":   "Please review the attached image",
+		"attachments": []map[string]interface{}{
+			{
+				"id":         attachmentID,
+				"filename":   "diagram.png",
+				"size_bytes": 2048,
+				"mime_type":  "image/png",
+				"url":        "/api/attachments/" + attachmentID,
+			},
+		},
+		"sender_id":   "sam-user",
+		"sender_type": "user",
+		"sender_name": "Sam",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, "dm.message", event.Type)
+	require.Len(t, event.Data.Attachments, 1)
+	require.Equal(t, "/api/attachments/"+attachmentID, event.Data.Attachments[0].URL)
+	require.Equal(t, "diagram.png", event.Data.Attachments[0].Filename)
+	require.Equal(t, "image/png", event.Data.Attachments[0].ContentType)
+	require.EqualValues(t, 2048, event.Data.Attachments[0].SizeBytes)
+}
+
+func TestBuildDMDispatchEventOmitsAttachmentsWhenEmpty(t *testing.T) {
+	handler := &MessageHandler{}
+	threadID := "dm_itsalive"
+	req := createMessageRequest{
+		ThreadID: &threadID,
+		Content:  "no attachments payload",
+	}
+	event := handler.buildDMDispatchEvent(
+		context.Background(),
+		nil,
+		"org-id",
+		"message-id",
+		req,
+		dmDispatchTarget{
+			AgentID:    "itsalive",
+			SessionKey: "agent:itsalive:main",
+		},
+	)
+
+	raw, err := json.Marshal(event)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "\"attachments\"")
 }
 
 func TestCreateMessageDMUsesChameleonFallbackWhenSyncStateMissingByUUID(t *testing.T) {

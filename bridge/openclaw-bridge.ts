@@ -260,7 +260,15 @@ type DMDispatchEvent = {
     sender_name?: string;
     inject_identity?: boolean;
     incremental_context?: string;
+    attachments?: unknown;
   };
+};
+
+type DMDispatchAttachment = {
+  url: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
 };
 
 type ProjectChatDispatchEvent = {
@@ -580,6 +588,7 @@ let isDispatchReplayFlushing = false;
 let isPeriodicSyncRunning = false;
 let requestId = 0;
 const pendingRequests = new Map<string, PendingRequest>();
+let sendRequestOverrideForTest: ((method: string, params: Record<string, unknown>) => Promise<unknown>) | null = null;
 const sessionContexts = new Map<string, SessionContext>();
 const contextPrimedSessions = new Set<string>();
 const workspaceCacheByAgentSlot = new Map<string, AgentWorkspaceCacheEntry>();
@@ -658,6 +667,12 @@ export function setExecFileForTest(
 
 export function setProcessExitForTest(fn: ((code: number) => never) | null): void {
   processExitFn = fn || defaultProcessExit;
+}
+
+export function setSendRequestForTest(
+  fn: ((method: string, params: Record<string, unknown>) => Promise<unknown>) | null,
+): void {
+  sendRequestOverrideForTest = fn;
 }
 
 function resolveConfiguredOtterCampOrgID(): string {
@@ -4319,6 +4334,9 @@ async function connectToOpenClaw(): Promise<void> {
 }
 
 async function sendRequest(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  if (sendRequestOverrideForTest) {
+    return sendRequestOverrideForTest(method, params);
+  }
   if (!openClawWS || openClawWS.readyState !== WebSocket.OPEN) {
     throw new Error('not connected to OpenClaw');
   }
@@ -4351,15 +4369,20 @@ async function sendMessageToSession(
   sessionKey: string,
   content: string,
   messageID?: string,
-  options?: { forceIdentityBootstrap?: boolean },
+  options?: { forceIdentityBootstrap?: boolean; attachments?: DMDispatchAttachment[] },
 ): Promise<void> {
   const forceIdentityBootstrap = options?.forceIdentityBootstrap === true;
   const idempotencyKey =
     (messageID || '').trim() || `dm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const normalizedAttachments = (options?.attachments || []).filter(
+    (attachment) => getTrimmedString(attachment.url),
+  );
+  const hasAttachments = normalizedAttachments.length > 0;
   const isFirstDispatchForSession = forceIdentityBootstrap || !contextPrimedSessions.has(sessionKey);
   const isCanonicalChameleonSession = parseChameleonSessionKey(sessionKey) !== null;
-  const recallAwareContent = await withAutoRecallContext(sessionKey, content);
-  if (!recallAwareContent) {
+  const trimmedContent = content.trim();
+  const recallAwareContent = trimmedContent ? await withAutoRecallContext(sessionKey, trimmedContent) : '';
+  if (!recallAwareContent && !hasAttachments) {
     return;
   }
 
@@ -4384,7 +4407,7 @@ async function sendMessageToSession(
     }
   }
 
-  if (isCanonicalChameleonSession) {
+  if (isCanonicalChameleonSession && recallAwareContent) {
     const extraSystemPrompt = await withSessionContext(sessionKey, recallAwareContent, {
       includeUserContent: false,
       forceIdentityBootstrap,
@@ -4395,6 +4418,7 @@ async function sendMessageToSession(
         sessionKey,
         message: recallAwareContent,
         deliver: false,
+        ...(hasAttachments ? { attachments: normalizedAttachments } : {}),
         ...(extraSystemPrompt ? { extraSystemPrompt } : {}),
       });
       return;
@@ -4408,16 +4432,21 @@ async function sendMessageToSession(
     }
   }
 
-  const contextualContent = await withSessionContext(sessionKey, recallAwareContent, {
+  const contextualContent = recallAwareContent
+    ? await withSessionContext(sessionKey, recallAwareContent, {
     forceIdentityBootstrap,
-  });
-  if (!contextualContent) {
+  })
+    : '';
+  const fallbackAttachmentMessage = buildAttachmentOnlyDispatchMessage(normalizedAttachments);
+  const outboundMessage = contextualContent || fallbackAttachmentMessage;
+  if (!outboundMessage && !hasAttachments) {
     return;
   }
   await sendRequest('chat.send', {
     idempotencyKey,
     sessionKey,
-    message: contextualContent,
+    message: outboundMessage,
+    ...(hasAttachments ? { attachments: normalizedAttachments } : {}),
   });
 }
 
@@ -6182,18 +6211,71 @@ async function handleOpenClawGatewayCallDispatchEvent(event: OpenClawGatewayCall
   }
 }
 
+function resolveDMDispatchAttachmentURL(rawURL: string): string {
+  const trimmed = rawURL.trim();
+  if (!trimmed) {
+    return '';
+  }
+  try {
+    const resolved = new URL(trimmed, OTTERCAMP_URL);
+    if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
+      return '';
+    }
+    return resolved.toString();
+  } catch {
+    return '';
+  }
+}
+
+function normalizeDMDispatchAttachments(raw: unknown): DMDispatchAttachment[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const normalized: DMDispatchAttachment[] = [];
+  for (const entry of raw) {
+    const record = asRecord(entry);
+    if (!record) {
+      continue;
+    }
+    const resolvedURL = resolveDMDispatchAttachmentURL(getTrimmedString(record.url));
+    if (!resolvedURL) {
+      continue;
+    }
+    const filename = getTrimmedString(record.filename) || 'attachment';
+    const contentType = getTrimmedString(record.content_type) || 'application/octet-stream';
+    const parsedSize = Number(record.size_bytes);
+    normalized.push({
+      url: resolvedURL,
+      filename,
+      content_type: contentType,
+      size_bytes: Number.isFinite(parsedSize) && parsedSize > 0 ? parsedSize : 0,
+    });
+  }
+  return normalized;
+}
+
+function buildAttachmentOnlyDispatchMessage(attachments: DMDispatchAttachment[]): string {
+  if (attachments.length === 0) {
+    return '';
+  }
+  const list = attachments.slice(0, 3).map((attachment) => attachment.filename).join(', ');
+  const suffix = attachments.length > 3 ? ` (+${attachments.length - 3} more)` : '';
+  return `[Attachments] ${list}${suffix}`;
+}
+
 async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
   const sessionKey = (event.data?.session_key || '').trim();
   const content = (event.data?.content || '').trim();
   const incrementalContext = getTrimmedString(event.data?.incremental_context);
   const injectIdentity = event.data?.inject_identity === true;
+  const attachments = normalizeDMDispatchAttachments(event.data?.attachments);
   const orgID = getTrimmedString(event.org_id);
   const threadID = getTrimmedString(event.data?.thread_id);
   const agentID = getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(sessionKey);
   const messageID = getTrimmedString(event.data?.message_id);
 
-  if (!sessionKey || !content) {
-    console.warn('[bridge] skipped dm.message with missing session key or content');
+  if (!sessionKey || (!content && attachments.length === 0)) {
+    console.warn('[bridge] skipped dm.message with missing session key and payload');
     return;
   }
 
@@ -6216,6 +6298,7 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
   try {
     await sendMessageToSession(sessionKey, outboundContent, messageID || undefined, {
       forceIdentityBootstrap: injectIdentity,
+      attachments,
     });
     console.log(
       `[bridge] delivered dm.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
@@ -6228,7 +6311,7 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
         sessionKey,
         agentID,
         summary: `Dispatched DM to ${agentID}`,
-        detail: content.slice(0, 500),
+        detail: (content || buildAttachmentOnlyDispatchMessage(attachments)).slice(0, 500),
         scope: {
           thread_id: threadID || undefined,
         },

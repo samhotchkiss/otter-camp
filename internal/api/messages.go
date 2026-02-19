@@ -82,6 +82,13 @@ type openClawDMDispatchEvent struct {
 	Data      openClawDMDispatchData `json:"data"`
 }
 
+type openClawDMDispatchAttachment struct {
+	URL         string `json:"url"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	SizeBytes   int64  `json:"size_bytes"`
+}
+
 type openClawDMDispatchData struct {
 	MessageID          string `json:"message_id"`
 	ThreadID           string `json:"thread_id"`
@@ -93,6 +100,7 @@ type openClawDMDispatchData struct {
 	SenderName         string `json:"sender_name,omitempty"`
 	InjectIdentity     bool   `json:"inject_identity,omitempty"`
 	IncrementalContext string `json:"incremental_context,omitempty"`
+	Attachments []openClawDMDispatchAttachment `json:"attachments,omitempty"`
 }
 
 type messageListResponse struct {
@@ -1287,6 +1295,9 @@ func (h *MessageHandler) buildDMDispatchEvent(
 	if req.SenderName != nil {
 		event.Data.SenderName = strings.TrimSpace(*req.SenderName)
 	}
+	if attachments := buildDMDispatchAttachments(req.Attachments); len(attachments) > 0 {
+		event.Data.Attachments = attachments
+	}
 	if req.IncrementalContext != nil {
 		event.Data.IncrementalContext = strings.TrimSpace(*req.IncrementalContext)
 	}
@@ -1328,6 +1339,45 @@ func (h *MessageHandler) buildDMDispatchEvent(
 	}
 
 	return event
+}
+
+func buildDMDispatchAttachments(attachments []AttachmentMetadata) []openClawDMDispatchAttachment {
+	if len(attachments) == 0 {
+		return nil
+	}
+
+	result := make([]openClawDMDispatchAttachment, 0, len(attachments))
+	for _, attachment := range attachments {
+		url := strings.TrimSpace(attachment.URL)
+		if id := strings.TrimSpace(attachment.ID); id != "" {
+			url = "/api/attachments/" + id
+		}
+		if url == "" {
+			continue
+		}
+		filename := strings.TrimSpace(attachment.Filename)
+		if filename == "" {
+			filename = "attachment"
+		}
+		contentType := strings.TrimSpace(attachment.MimeType)
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		sizeBytes := attachment.SizeBytes
+		if sizeBytes < 0 {
+			sizeBytes = 0
+		}
+		result = append(result, openClawDMDispatchAttachment{
+			URL:         url,
+			Filename:    filename,
+			ContentType: contentType,
+			SizeBytes:   sizeBytes,
+		})
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func (h *MessageHandler) dispatchDMMessageToOpenClaw(event openClawDMDispatchEvent) error {
