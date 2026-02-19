@@ -28,7 +28,6 @@ describe("mapInboxPayloadToCoreItems", () => {
     expect(items).toEqual([
       {
         id: "approval-1",
-        issueId: "ISS-1",
         type: "approval",
         title: "Approval request",
         description: "Run: npm publish",

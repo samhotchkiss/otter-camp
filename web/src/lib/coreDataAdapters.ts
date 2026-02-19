@@ -169,7 +169,7 @@ function normalizeRepoLabel(rawRepo: string, fallbackID: string): string {
   return withoutProtocol;
 }
 
-function inferIssueLabel(record: UnknownRecord, fallbackIndex: number): string | undefined {
+function inferIssueLabel(record: UnknownRecord, fallbackIndex?: number): string | undefined {
   const issueNumber = readNumber(record, "issue_number", "issueNumber", "github_number");
   if (issueNumber !== null && issueNumber > 0) {
     return `ISS-${Math.floor(issueNumber)}`;
@@ -186,7 +186,7 @@ function inferIssueLabel(record: UnknownRecord, fallbackIndex: number): string |
     return match[0].toUpperCase();
   }
 
-  if (fallbackIndex > 0) {
+  if (typeof fallbackIndex === "number" && fallbackIndex > 0) {
     return `ISS-${fallbackIndex}`;
   }
   return undefined;
@@ -302,7 +302,7 @@ export function mapInboxPayloadToCoreItems(payload: unknown, now = new Date()): 
 
       return {
         id,
-        issueId: inferIssueLabel(record, index + 1),
+        issueId: inferIssueLabel(record),
         type: "approval",
         title,
         description,
