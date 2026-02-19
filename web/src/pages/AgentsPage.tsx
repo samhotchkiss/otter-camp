@@ -830,13 +830,13 @@ function AgentsPageComponent({
   const virtualItems = rowVirtualizer.getVirtualItems();
 
   return (
-    <div className="w-full">
+    <div data-testid="agents-shell" className="mx-auto w-full max-w-[1240px] space-y-6">
       {/* Header */}
-      <div className="mb-8">
+      <div className="rounded-3xl border border-[var(--border)] bg-[var(--surface)]/70 p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-semibold text-slate-100">Agents</h1>
-            <p className="mt-1 text-slate-500">
+            <h1 className="text-3xl font-semibold text-[var(--text)]">Agents</h1>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
               {counts.all} agents • {counts.online} online
             </p>
           </div>
@@ -844,15 +844,15 @@ function AgentsPageComponent({
           <div className="flex items-center gap-3">
             <a
               href="/agents/new"
-              className="rounded-lg border border-[#C9A86C]/60 bg-[#C9A86C]/20 px-3 py-1.5 text-xs font-medium text-[#C9A86C]"
+              className="rounded-full border border-[#C9A86C]/60 bg-[#C9A86C]/15 px-3 py-1.5 text-xs font-semibold tracking-wide text-[#C9A86C]"
             >
               Add Agent
             </a>
             <div
-              className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ${
+              className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${
                 connected
-                  ? "bg-[#C9A86C]/20 text-[#C9A86C]"
-                  : "bg-red-500/20 text-red-400"
+                  ? "border-[#C9A86C]/40 bg-[#C9A86C]/15 text-[#C9A86C]"
+                  : "border-red-500/40 bg-red-500/15 text-red-400"
               }`}
             >
               <span
@@ -869,7 +869,7 @@ function AgentsPageComponent({
         <p className="mt-4 text-xs text-[var(--text-muted)]">
           Chats are routed through OpenClaw with OtterCamp identity injection.
         </p>
-        <div className="mt-6 flex flex-wrap gap-2" role="group" aria-label="Agent status filters">
+        <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Agent status filters">
           <StatusFilterButton
             status="all"
             label="All"
@@ -901,7 +901,7 @@ function AgentsPageComponent({
         </div>
       </div>
 
-      <section className="mb-6 rounded-2xl border border-[var(--border)] bg-[var(--surface)]/60 p-4">
+      <section className="rounded-3xl border border-[var(--border)] bg-[var(--surface)]/70 p-4 shadow-sm">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-medium text-[var(--text)]">Management Roster</h2>
           <div className="flex flex-wrap gap-2 text-xs">

@@ -22,7 +22,7 @@ const (
 	defaultEllieIngestionOpenClawGatewayURL         = "ws://127.0.0.1:18791"
 	defaultEllieIngestionOpenClawAgentID            = "elephant"
 	defaultEllieIngestionOpenClawSessionNamespace   = "ellie-ingestion"
-	defaultEllieIngestionOpenClawGatewayCallTimeout = 90 * time.Second
+	defaultEllieIngestionOpenClawGatewayCallTimeout = 3 * time.Minute
 	defaultEllieIngestionOpenClawMaxCandidateChars  = 800
 	defaultEllieIngestionOpenClawMaxPromptChars     = 18000
 	defaultEllieIngestionOpenClawMaxMessageChars    = 1200
@@ -30,6 +30,10 @@ const (
 )
 
 var ellieIngestionOpenClawSessionTokenPattern = regexp.MustCompile(`[^a-z0-9_-]+`)
+var (
+	ellieIngestionSlackLinePattern = regexp.MustCompile(`(?m)^\[Slack[^\]]*\]\s*(.+?)\s*\[slack message id:.*$`)
+	ellieIngestionSystemSlackHead  = regexp.MustCompile(`(?i)^System:\s*\[[^\]]+\]\s*Slack (?:DM from|message in [^ ]+ from)\s+[^:]+:\s*(.+)$`)
+)
 
 type EllieIngestionOpenClawRunner interface {
 	Run(ctx context.Context, args []string) ([]byte, error)
@@ -302,7 +306,7 @@ func (e *EllieIngestionOpenClawExtractor) Extract(
 
 	paramsRaw, err := json.Marshal(map[string]any{
 		"idempotencyKey": e.idempotencyKey(orgID, roomID, input.Messages),
-		"sessionKey":     e.sessionKey(orgID),
+		"sessionKey":     e.sessionKey(orgID, roomID, input.Messages),
 		"message":        buildEllieIngestionOpenClawPrompt(input, e.maxPromptChars, e.maxMessageChars),
 		"deliver":        false,
 	})
@@ -370,12 +374,14 @@ func (e *EllieIngestionOpenClawExtractor) Extract(
 	}, nil
 }
 
-func (e *EllieIngestionOpenClawExtractor) sessionKey(orgID string) string {
+func (e *EllieIngestionOpenClawExtractor) sessionKey(orgID, roomID string, messages []store.EllieIngestionMessage) string {
+	windowHash := e.windowFingerprint(orgID, roomID, messages)
 	return fmt.Sprintf(
-		"agent:%s:main:%s:%s",
+		"agent:%s:main:%s:%s-%s",
 		e.agentID,
 		e.sessionNamespace,
 		normalizeEllieIngestionOpenClawSessionToken(orgID, "org"),
+		windowHash,
 	)
 }
 
@@ -418,12 +424,14 @@ func (e *EllieIngestionOpenClawExtractor) runGatewayAgentCall(
 }
 
 func (e *EllieIngestionOpenClawExtractor) idempotencyKey(orgID, roomID string, messages []store.EllieIngestionMessage) string {
+	return "ellie-ingestion-" + e.windowFingerprint(orgID, roomID, messages)
+}
+
+func (e *EllieIngestionOpenClawExtractor) windowFingerprint(orgID, roomID string, messages []store.EllieIngestionMessage) string {
 	var builder strings.Builder
 	builder.WriteString(strings.TrimSpace(orgID))
 	builder.WriteString("|")
 	builder.WriteString(strings.TrimSpace(roomID))
-	builder.WriteString("|")
-	builder.WriteString(e.now().UTC().Format(time.RFC3339Nano))
 	for _, message := range messages {
 		builder.WriteString("|")
 		builder.WriteString(strings.TrimSpace(message.ID))
@@ -431,7 +439,7 @@ func (e *EllieIngestionOpenClawExtractor) idempotencyKey(orgID, roomID string, m
 		builder.WriteString(message.CreatedAt.UTC().Format(time.RFC3339Nano))
 	}
 	sum := sha1.Sum([]byte(builder.String()))
-	return fmt.Sprintf("ellie-ingestion-%x", sum[:8])
+	return fmt.Sprintf("%x", sum[:8])
 }
 
 func buildEllieIngestionOpenClawPrompt(
@@ -463,7 +471,11 @@ func buildEllieIngestionOpenClawPrompt(
 	baseLen := builder.Len()
 	entries := make([]string, 0, len(input.Messages))
 	for _, message := range input.Messages {
-		entries = append(entries, formatEllieIngestionPromptMessage(message, maxMessageChars))
+		normalized, ok := normalizeEllieIngestionPromptMessage(message)
+		if !ok {
+			continue
+		}
+		entries = append(entries, formatEllieIngestionPromptMessage(normalized, maxMessageChars))
 	}
 
 	// Cap prompt size to avoid websocket close code 1009 (message too large).
@@ -529,6 +541,80 @@ func formatEllieIngestionPromptMessage(message store.EllieIngestionMessage, maxB
 	builder.WriteString(body)
 	builder.WriteString("\n")
 	return builder.String()
+}
+
+func normalizeEllieIngestionPromptMessage(message store.EllieIngestionMessage) (store.EllieIngestionMessage, bool) {
+	body := strings.TrimSpace(message.Body)
+	if body == "" {
+		return store.EllieIngestionMessage{}, false
+	}
+	lower := strings.ToLower(body)
+	senderType := strings.TrimSpace(strings.ToLower(message.SenderType))
+
+	// Drop known ingestion noise before it ever reaches the LLM.
+	if strings.Contains(lower, "agent status check") ||
+		strings.Contains(lower, "read heartbeat.md") ||
+		strings.Contains(lower, "heartbeat_ok") ||
+		strings.Contains(lower, "exec completed") ||
+		strings.Contains(lower, "bridge heartbeat") ||
+		strings.Contains(lower, "health sweep") ||
+		strings.Contains(lower, "no_reply") {
+		return store.EllieIngestionMessage{}, false
+	}
+
+	// Convert Slack-wrapped bridge payloads into human-readable conversational text.
+	var extracted []string
+	for _, match := range ellieIngestionSlackLinePattern.FindAllStringSubmatch(body, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		line := strings.TrimSpace(match[1])
+		if line != "" {
+			extracted = append(extracted, line)
+		}
+	}
+	if len(extracted) == 0 {
+		if match := ellieIngestionSystemSlackHead.FindStringSubmatch(body); len(match) >= 2 {
+			line := strings.TrimSpace(match[1])
+			if line != "" {
+				extracted = append(extracted, line)
+			}
+		}
+	}
+	if len(extracted) > 0 {
+		body = strings.Join(extracted, "\n")
+		if senderType == "system" {
+			// Bridge wrappers often misclassify Slack-human payloads as system.
+			senderType = "user"
+		}
+	}
+
+	// Drop internal wrapper crumbs.
+	lines := strings.Split(body, "\n")
+	clean := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		l := strings.ToLower(trimmed)
+		if strings.HasPrefix(trimmed, "[message_id:") || strings.HasPrefix(trimmed, "[slack message id:") {
+			continue
+		}
+		if strings.HasPrefix(l, "system: [") && strings.Contains(l, "] slack ") {
+			continue
+		}
+		clean = append(clean, trimmed)
+	}
+	body = strings.TrimSpace(strings.Join(clean, "\n"))
+	if body == "" {
+		return store.EllieIngestionMessage{}, false
+	}
+
+	out := message
+	out.Body = body
+	out.SenderType = senderType
+	return out, true
 }
 
 var (

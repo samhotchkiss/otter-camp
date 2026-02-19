@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,8 +99,11 @@ func TestEllieIngestionOpenClawExtractorBuildsGatewayAgentCall(t *testing.T) {
 	var params map[string]any
 	require.NoError(t, json.Unmarshal([]byte(runner.args[6]), &params))
 	require.Equal(t, false, params["deliver"])
-	require.Equal(t, "agent:elephant:main:ellie-ingestion:0d86d9e4-b8a1-46cf-aed1-c666123c2d1f", params["sessionKey"])
-	require.NotEmpty(t, params["idempotencyKey"])
+	sessionKey, _ := params["sessionKey"].(string)
+	require.Contains(t, sessionKey, "agent:elephant:main:ellie-ingestion:0d86d9e4-b8a1-46cf-aed1-c666123c2d1f-")
+	idempotencyKey, _ := params["idempotencyKey"].(string)
+	require.NotEmpty(t, idempotencyKey)
+	require.Contains(t, sessionKey, strings.TrimPrefix(idempotencyKey, "ellie-ingestion-"))
 	require.Contains(t, params["message"], "Return strict JSON only")
 	require.Contains(t, params["message"], "We decided to keep explicit SQL migrations.")
 }
@@ -291,4 +295,29 @@ func TestEllieIngestionOpenClawExtractorDoesNotFallBackToExecWhenBridgeIsConfigu
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "openclaw bridge call failed")
 	require.Empty(t, execRunner.args)
+}
+
+func TestNormalizeEllieIngestionPromptMessageExtractsSlackContent(t *testing.T) {
+	msg := store.EllieIngestionMessage{
+		SenderType: "user",
+		Body: `System: [2026-01-29 18:44:26 MST] Slack DM from Sam: I'm connected via tailscale
+
+[Slack Sam +22s 2026-01-29 18:44 MST] I'm connected via tailscale [slack message id: 1769737465.571049 channel: D0ABF8X5TM2]
+[message_id: 1769737465.571049]`,
+	}
+
+	normalized, ok := normalizeEllieIngestionPromptMessage(msg)
+	require.True(t, ok)
+	require.Equal(t, "user", normalized.SenderType)
+	require.Equal(t, "I'm connected via tailscale", normalized.Body)
+}
+
+func TestNormalizeEllieIngestionPromptMessageDropsOperationalNoise(t *testing.T) {
+	msg := store.EllieIngestionMessage{
+		SenderType: "user",
+		Body:       "System: [2026-01-29 18:44:26 MST] AGENT STATUS CHECK: Read last 1-2 messages from each project channel.",
+	}
+
+	_, ok := normalizeEllieIngestionPromptMessage(msg)
+	require.False(t, ok)
 }

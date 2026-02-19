@@ -3,6 +3,16 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import TaskDetailPage from "../TaskDetailPage";
+import IssueDetailPage from "../IssueDetailPage";
+
+vi.mock("../../contexts/WebSocketContext", () => ({
+  useWS: () => ({
+    connected: false,
+    lastMessage: null,
+    sendMessage: vi.fn(() => true),
+  }),
+  useOptionalWS: () => null,
+}));
 
 const localStorageMock = (() => {
   let store: Record<string, string> = {};
@@ -34,6 +44,24 @@ function renderTaskDetail(pathname: string) {
       {
         path: "/projects/:id/tasks/:taskId",
         element: <TaskDetailPage />,
+      },
+    ],
+    { initialEntries: [pathname] }
+  );
+
+  return render(<RouterProvider router={router} />);
+}
+
+function renderIssueDetail(pathname: string) {
+  const router = createMemoryRouter(
+    [
+      {
+        path: "/projects/:id/issues/:issueId",
+        element: <IssueDetailPage />,
+      },
+      {
+        path: "/issue/:issueId",
+        element: <IssueDetailPage />,
       },
     ],
     { initialEntries: [pathname] }
@@ -138,5 +166,35 @@ describe("TaskDetailPage", () => {
       "/projects/550e8400-e29b-41d4-a716-446655440010",
     );
     expect(screen.queryByRole("link", { name: "Back to Dashboard" })).not.toBeInTheDocument();
+  });
+
+  it("renders dedicated issue-detail shell on project issue route", async () => {
+    renderIssueDetail("/projects/550e8400-e29b-41d4-a716-446655440010/issues/issue-123");
+    expect(screen.getByTestId("issue-detail-shell")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Request Changes" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+  });
+
+  it("renders dedicated issue-detail shell on issue alias route", async () => {
+    renderIssueDetail("/issue/issue-123");
+    expect(screen.getByTestId("issue-detail-shell")).toBeInTheDocument();
+  });
+
+  it("renders missing issue id fallback when alias route param trims empty", async () => {
+    renderIssueDetail("/issue/%20");
+    expect(screen.getByTestId("issue-detail-shell")).toBeInTheDocument();
+    expect(screen.getByText("Missing issue id.")).toBeInTheDocument();
+  });
+
+  it("surfaces approval action failures with an alert and keeps the route stable", async () => {
+    const user = userEvent.setup();
+    localStorageMock.setItem("otter-camp-org-id", "550e8400-e29b-41d4-a716-446655440000");
+    global.fetch = vi.fn().mockRejectedValue(new Error("Network error")) as unknown as typeof fetch;
+
+    renderIssueDetail("/issue/issue-123");
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Network error");
+    expect(screen.getByTestId("issue-detail-shell")).toBeInTheDocument();
   });
 });

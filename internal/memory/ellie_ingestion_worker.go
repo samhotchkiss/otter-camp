@@ -609,10 +609,17 @@ func isRetriableEllieIngestionLLMError(err error) bool {
 	}
 	// Conservatively retry gateway-size errors and transient websocket close codes.
 	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "websocket") && (strings.Contains(msg, "1006") || strings.Contains(msg, "1001") || strings.Contains(msg, "timeout")) {
+	if strings.Contains(msg, "websocket") &&
+		(strings.Contains(msg, "1006") || strings.Contains(msg, "1001") || strings.Contains(msg, "1012") || strings.Contains(msg, "timeout")) {
 		return true
 	}
 	if strings.Contains(msg, "openclaw bridge call failed") {
+		return true
+	}
+	if strings.Contains(msg, "econnrefused") || strings.Contains(msg, "connection refused") {
+		return true
+	}
+	if strings.Contains(msg, "unexpected server response: 502") || strings.Contains(msg, "bad gateway") {
 		return true
 	}
 	return false
@@ -796,7 +803,9 @@ func normalizeEllieLLMExtractedCandidate(
 	score, decision := ellieIngestionStage2Decision(kind, title, content, metadata, window)
 	metadata["accept_score"] = score
 	metadata["accept_decision"] = decision
-	if decision != "accept" {
+	// Keep review-scored candidates to match local high-recall behavior.
+	// Only hard rejects are discarded here.
+	if decision == "reject" {
 		return store.CreateEllieExtractedMemoryInput{}, false
 	}
 
@@ -851,9 +860,6 @@ func normalizeEllieLLMExtractedCandidate(
 
 func ellieIngestionHasSensitiveLeak(text string) bool {
 	lower := strings.ToLower(text)
-	if strings.Contains(lower, "[redacted_secret]") || strings.Contains(lower, "[pii_redacted]") {
-		return true
-	}
 	// Token-like patterns (keep conservative).
 	if strings.Contains(lower, "ghp_") || strings.Contains(lower, "sk-") || strings.Contains(lower, "xoxb-") || strings.Contains(lower, "xoxp-") {
 		return true
@@ -1005,19 +1011,22 @@ func ellieIngestionStage2EvidenceScore(metadata map[string]any, window []store.E
 func ellieIngestionIsArtifactMessage(msg store.EllieIngestionMessage) bool {
 	body := strings.TrimSpace(msg.Body)
 	lower := strings.ToLower(body)
+	senderType := strings.TrimSpace(strings.ToLower(msg.SenderType))
 	if strings.HasPrefix(body, "[Queued") || strings.Contains(body, "Queued #") {
 		return true
 	}
-	if strings.TrimSpace(strings.ToLower(msg.SenderType)) == "system" {
+	if senderType == "system" {
 		return true
 	}
 	if strings.Contains(lower, "heartbeat") || strings.Contains(lower, "no_reply") {
 		return true
 	}
-	if strings.HasPrefix(body, "System:") {
+	// Slack bridge can wrap human messages as "System: [ts] Slack message ...".
+	// Treat these as artifacts only when the sender itself is system.
+	if strings.HasPrefix(body, "System:") && senderType == "system" {
 		return true
 	}
-	if strings.HasPrefix(body, "Tool ") && strings.Contains(lower, "result:") {
+	if strings.HasPrefix(body, "Tool ") && strings.Contains(lower, "result:") && senderType == "system" {
 		return true
 	}
 	return false

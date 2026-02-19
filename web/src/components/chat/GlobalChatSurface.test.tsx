@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import GlobalChatSurface from "./GlobalChatSurface";
 import type {
   GlobalDMConversation,
+  GlobalIssueConversation,
   GlobalProjectConversation,
 } from "../../contexts/GlobalChatContext";
 
@@ -110,6 +111,50 @@ describe("GlobalChatSurface", () => {
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("shows a project context cue in the chat surface", async () => {
+    const projectConversation: GlobalProjectConversation = {
+      key: "project:project-1",
+      type: "project",
+      projectId: "project-1",
+      title: "Project One",
+      contextLabel: "Project • Project One",
+      subtitle: "Team thread",
+      unreadCount: 0,
+      updatedAt: "2026-02-07T00:00:00.000Z",
+    };
+
+    render(<GlobalChatSurface conversation={projectConversation} />);
+
+    await screen.findByPlaceholderText("Message Project One...");
+    expect(screen.getByText("Project context")).toBeInTheDocument();
+  });
+
+  it("shows a DM context cue in the chat surface", async () => {
+    render(<GlobalChatSurface conversation={baseConversation} />);
+
+    await screen.findByPlaceholderText("Message Stone...");
+    expect(screen.getByText("DM context")).toBeInTheDocument();
+  });
+
+  it("shows an issue context cue in the chat surface", async () => {
+    const issueConversation: GlobalIssueConversation = {
+      key: "issue:issue-1",
+      type: "issue",
+      issueId: "issue-1",
+      projectId: "project-1",
+      title: "Issue One",
+      contextLabel: "Issue • Issue One",
+      subtitle: "Issue conversation",
+      unreadCount: 0,
+      updatedAt: "2026-02-07T00:00:00.000Z",
+    };
+
+    render(<GlobalChatSurface conversation={issueConversation} />);
+
+    await screen.findByPlaceholderText("Message Issue One...");
+    expect(screen.getByText("Issue context")).toBeInTheDocument();
   });
 
   it("refetches when conversation identity changes", async () => {

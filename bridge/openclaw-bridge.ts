@@ -632,6 +632,9 @@ export function buildGatewayConnectCapsForTest(): string[] {
 }
 const defaultExecFileAsync = promisify(execFile);
 let execFileAsync = defaultExecFileAsync;
+const OPENCLAW_COMMAND_DEFAULT_TIMEOUT_MS = 60_000;
+const OPENCLAW_COMMAND_TIMEOUT_HEADROOM_MS = 15_000;
+const OPENCLAW_COMMAND_MAX_TIMEOUT_MS = 5 * 60_000;
 const defaultProcessExit = (code: number): never => process.exit(code);
 let processExitFn: (code: number) => never = defaultProcessExit;
 let resolvedOtterCampOrgIDFromHostConfig = '';
@@ -5835,14 +5838,11 @@ function compactMemoryExtractFallbackEnvelope(): string {
 }
 
 function sanitizeMemoryExtractErrorDetail(rawDetail: string): string {
-  const compact = rawDetail.replace(/\s+/g, ' ').trim();
+  const compact = compactErrorDetail(rawDetail, MEMORY_EXTRACT_MAX_ERROR_CHARS);
   if (!compact) {
     return 'memory extraction command failed';
   }
-  if (compact.length <= MEMORY_EXTRACT_MAX_ERROR_CHARS) {
-    return compact;
-  }
-  return `${compact.slice(0, MEMORY_EXTRACT_MAX_ERROR_CHARS)}...`;
+  return compact;
 }
 
 export function compactMemoryExtractOutput(rawOutput: string): string {
@@ -5898,14 +5898,44 @@ const GATEWAY_CALL_MAX_OUTPUT_CHARS = 35000;
 const GATEWAY_CALL_MAX_ERROR_CHARS = 1000;
 
 function sanitizeGatewayCallErrorDetail(rawDetail: string): string {
-  const compact = rawDetail.replace(/\\s+/g, ' ').trim();
+  const compact = compactErrorDetail(rawDetail, GATEWAY_CALL_MAX_ERROR_CHARS);
   if (!compact) {
     return 'openclaw gateway call failed';
   }
-  if (compact.length <= GATEWAY_CALL_MAX_ERROR_CHARS) {
+  return compact;
+}
+
+function compactErrorDetail(rawDetail: string, maxChars: number): string {
+  const compact = rawDetail.replace(/\\s+/g, ' ').trim();
+  if (!compact || maxChars <= 0) {
+    return '';
+  }
+  if (compact.length <= maxChars) {
     return compact;
   }
-  return `${compact.slice(0, GATEWAY_CALL_MAX_ERROR_CHARS)}...`;
+
+  // Keep both the beginning and end so command context and the root-cause tail survive truncation.
+  const headChars = Math.max(80, Math.floor(maxChars * 0.55));
+  const tailChars = Math.max(60, maxChars - headChars - 5);
+  const head = compact.slice(0, headChars);
+  const tail = compact.slice(-tailChars);
+  return `${head} ... ${tail}`;
+}
+
+function resolveOpenClawCommandTimeoutMS(args: string[]): number {
+  let timeoutMS = OPENCLAW_COMMAND_DEFAULT_TIMEOUT_MS;
+  const timeoutIndex = args.indexOf('--timeout');
+  if (timeoutIndex >= 0 && timeoutIndex + 1 < args.length) {
+    const requested = Number.parseInt(args[timeoutIndex + 1] || '', 10);
+    if (Number.isFinite(requested) && requested > 0) {
+      timeoutMS = Math.max(timeoutMS, requested + OPENCLAW_COMMAND_TIMEOUT_HEADROOM_MS);
+    }
+  }
+  return Math.min(timeoutMS, OPENCLAW_COMMAND_MAX_TIMEOUT_MS);
+}
+
+export function resolveOpenClawCommandTimeoutMSForTest(args: string[]): number {
+  return resolveOpenClawCommandTimeoutMS(args);
 }
 
 function compactGatewayCallOutput(rawOutput: string): { ok: true; output: string } | { ok: false; error: string } {
@@ -6259,8 +6289,9 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
 }
 
 async function runOpenClawCommandCapture(args: string[]): Promise<string> {
+  const timeoutMS = resolveOpenClawCommandTimeoutMS(args);
   const result = await execFileAsync('openclaw', args, {
-    timeout: 60_000,
+    timeout: timeoutMS,
     maxBuffer: 2 * 1024 * 1024,
   });
   const resultRecord = asRecord(result);

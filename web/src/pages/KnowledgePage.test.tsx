@@ -67,6 +67,7 @@ describe("KnowledgePage", () => {
     );
 
     expect(await screen.findByText("Stone real dataset entry")).toBeInTheDocument();
+    expect(screen.getByTestId("knowledge-shell")).toBeInTheDocument();
     expect(await screen.findByText("Memory Evaluation")).toBeInTheDocument();
     expect(await screen.findByText("pass")).toBeInTheDocument();
     expect(await screen.findByRole("link", { name: "View dashboard" })).toHaveAttribute("href", "/knowledge/evaluation");

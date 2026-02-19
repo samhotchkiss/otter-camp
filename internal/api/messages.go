@@ -859,7 +859,26 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 		if !errors.Is(err, sql.ErrNoRows) {
 			return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
 		}
-	} else if strings.TrimSpace(target.SessionKey) != "" {
+		// UUID not found in sync state — try resolving the agent's slug and
+		// looking up sync state by slug. DM threads use UUIDs but sync state
+		// stores agents by slug.
+		if uuidRegex.MatchString(agentID) {
+			var slug string
+			if slugErr := db.QueryRowContext(ctx,
+				`SELECT slug FROM agents WHERE org_id = $1 AND id = $2`,
+				orgID, agentID,
+			).Scan(&slug); slugErr == nil && slug != "" {
+				err = db.QueryRowContext(ctx,
+					`SELECT id, COALESCE(session_key, '') FROM agent_sync_state WHERE org_id = $1 AND id = $2`,
+					orgID, slug,
+				).Scan(&target.AgentID, &target.SessionKey)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
+				}
+			}
+		}
+	}
+	if err == nil && strings.TrimSpace(target.SessionKey) != "" {
 		normalizedSessionKey, normalizeErr := normalizeDMDispatchSessionKey(ctx, db, orgID, target.AgentID, target.SessionKey)
 		if normalizeErr != nil {
 			return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")

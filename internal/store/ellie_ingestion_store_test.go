@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"testing"
 	"time"
@@ -172,4 +173,55 @@ func TestEllieIngestionStoreHasComplianceFingerprint(t *testing.T) {
 	exists, err = store.HasComplianceFingerprint(context.Background(), orgID, "fingerprint-999")
 	require.NoError(t, err)
 	require.False(t, exists)
+}
+
+func TestEllieIngestionStoreInsertExtractedMemoryNullsMissingForeignRefs(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "ellie-ingestion-missing-refs-org")
+	projectID := createTestProject(t, db, orgID, "Ellie Ingestion Missing Refs Project")
+	store := NewEllieIngestionStore(db)
+
+	// Valid room so memory row has workspace context.
+	var roomID string
+	err := db.QueryRow(
+		`INSERT INTO rooms (org_id, name, type, context_id)
+		 VALUES ($1, 'Missing Refs Room', 'project', $2)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&roomID)
+	require.NoError(t, err)
+	require.NotEmpty(t, roomID)
+
+	// UUID-shaped IDs that do not exist in this org should not fail insertion.
+	missingConversationID := "11111111-1111-1111-1111-111111111111"
+	missingProjectID := "22222222-2222-2222-2222-222222222222"
+
+	inserted, err := store.InsertExtractedMemory(context.Background(), CreateEllieExtractedMemoryInput{
+		OrgID:                orgID,
+		Kind:                 "fact",
+		Title:                "Missing refs should not fail",
+		Content:              "This should insert and null invalid foreign references.",
+		SourceConversationID: &missingConversationID,
+		SourceProjectID:      &missingProjectID,
+	})
+	require.NoError(t, err)
+	require.True(t, inserted)
+
+	var conversationID sql.NullString
+	var storedProjectID sql.NullString
+	err = db.QueryRow(
+		`SELECT source_conversation_id::text, source_project_id::text
+		   FROM memories
+		  WHERE org_id = $1
+		    AND title = 'Missing refs should not fail'
+		  ORDER BY created_at DESC
+		  LIMIT 1`,
+		orgID,
+	).Scan(&conversationID, &storedProjectID)
+	require.NoError(t, err)
+	require.False(t, conversationID.Valid)
+	require.False(t, storedProjectID.Valid)
 }

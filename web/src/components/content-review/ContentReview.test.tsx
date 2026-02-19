@@ -4,6 +4,15 @@ import userEvent from "@testing-library/user-event";
 import ContentReview from "./ContentReview";
 
 describe("ContentReview state workflow", () => {
+  it("renders redesigned review shell scaffolding for stats, line lane, and sidebar", () => {
+    render(<ContentReview initialMarkdown="# Title\n\nBody" reviewerName="Sam" />);
+
+    expect(screen.getByTestId("content-review-shell")).toBeInTheDocument();
+    expect(screen.getByTestId("review-stats-grid")).toBeInTheDocument();
+    expect(screen.getByTestId("review-line-lane")).toBeInTheDocument();
+    expect(screen.getByTestId("review-comment-sidebar")).toBeInTheDocument();
+  });
+
   it("starts in Draft and requires Ready-for-Review before approval actions", () => {
     render(<ContentReview initialMarkdown="# Title\n\nBody" reviewerName="Sam" />);
 
@@ -94,7 +103,7 @@ describe("ContentReview markdown source/render toggle", () => {
 
     await user.click(screen.getByRole("button", { name: "Rendered" }));
 
-    expect(screen.getByText("Heading")).toBeInTheDocument();
+    expect(screen.getAllByText("Heading").length).toBeGreaterThan(0);
     expect(screen.getByText("one")).toBeInTheDocument();
     expect(screen.getByText((content) => content.includes("value"))).toBeInTheDocument();
   });
@@ -197,5 +206,28 @@ describe("ContentReview read-only snapshots", () => {
 
     await user.click(screen.getByRole("button", { name: "Rendered" }));
     expect(await screen.findByText("old feedback")).toBeInTheDocument();
+  });
+});
+
+describe("ContentReview sidebar navigation", () => {
+  it("renders section navigation with comment counts and updates active section", async () => {
+    const user = userEvent.setup();
+    const markdown = [
+      "# Intro",
+      "",
+      "Body {>>Sam: intro note<<}",
+      "",
+      "## Details",
+      "",
+      "More body text.",
+    ].join("\n");
+    render(<ContentReview initialMarkdown={markdown} reviewerName="Sam" />);
+
+    expect(screen.getByRole("button", { name: "Open section Intro" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open section Details" })).toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes("1 comment"))).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Open section Details" }));
+    expect(screen.getByTestId("active-review-section")).toHaveTextContent("details");
   });
 });

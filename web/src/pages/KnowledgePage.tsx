@@ -219,14 +219,18 @@ export default function KnowledgePage() {
   });
 
   return (
-    <div className="knowledge-page">
+    <div data-testid="knowledge-shell" className="mx-auto w-full max-w-[1240px] space-y-6">
       {/* Page Header */}
-      <header className="page-header">
-        <div className="page-header-left">
-          <h1 className="page-title">Knowledge Base</h1>
-          <span className="entry-count">{entries.length} entries</span>
+      <header className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-[var(--border)] bg-[var(--surface)]/70 p-6 shadow-sm">
+        <div>
+          <h1 className="text-3xl font-semibold text-[var(--text)]">Knowledge Base</h1>
+          <span className="mt-1 inline-flex text-sm text-[var(--text-muted)]">{entries.length} entries</span>
         </div>
-        <button type="button" className="btn btn-primary" onClick={openCreateModal}>
+        <button
+          type="button"
+          className="rounded-full border border-[#C9A86C]/60 bg-[#C9A86C]/15 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-[#C9A86C]"
+          onClick={openCreateModal}
+        >
           + New Entry
         </button>
       </header>
@@ -294,10 +298,14 @@ export default function KnowledgePage() {
       </section>
 
       {/* Tag Filters (search handled by magic bar ⌘K) */}
-      <div className="knowledge-controls">
-        <div className="tag-filters">
+      <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)]/60 p-4">
+        <div className="flex flex-wrap gap-2">
           <button
-            className={`tag-pill ${!selectedTag ? 'active' : ''}`}
+            className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+              !selectedTag
+                ? "border-[#C9A86C]/50 bg-[#C9A86C]/15 text-[#C9A86C]"
+                : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:border-[#C9A86C]/40 hover:text-[var(--text)]"
+            }`}
             onClick={() => setSelectedTag(null)}
           >
             All
@@ -305,7 +313,11 @@ export default function KnowledgePage() {
           {allTags.map((tag) => (
             <button
               key={tag}
-              className={`tag-pill ${selectedTag === tag ? 'active' : ''}`}
+              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                selectedTag === tag
+                  ? "border-[#C9A86C]/50 bg-[#C9A86C]/15 text-[#C9A86C]"
+                  : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:border-[#C9A86C]/40 hover:text-[var(--text)]"
+              }`}
               onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
             >
               {tag}
@@ -315,38 +327,38 @@ export default function KnowledgePage() {
       </div>
 
       {/* Entry Grid */}
-      <div className="knowledge-grid">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {loading && (
-          <div className="knowledge-empty">
+          <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-10 text-center text-[var(--text-muted)] md:col-span-2 xl:col-span-3">
             <p>Loading knowledge entries…</p>
           </div>
         )}
         {!loading && loadError && (
-          <div className="knowledge-empty">
+          <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-10 text-center text-rose-400 md:col-span-2 xl:col-span-3">
             <p>Unable to load knowledge entries</p>
-            <p className="empty-hint">{loadError}</p>
+            <p className="mt-2 text-sm text-rose-300/80">{loadError}</p>
           </div>
         )}
         {filteredEntries.map((entry) => (
           <article
             key={entry.id}
-            className="entry-card"
+            className="group cursor-pointer rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 transition hover:border-[#C9A86C]/40 hover:bg-[var(--surface-alt)]"
             onClick={() => setSelectedEntry(entry)}
           >
-            <div className="entry-card-header">
-              <h3 className="entry-title">{entry.title}</h3>
-              <span className="entry-author">{entry.created_by}</span>
+            <div className="flex items-start justify-between gap-3">
+              <h3 className="text-base font-semibold text-[var(--text)] transition group-hover:text-[#C9A86C]">{entry.title}</h3>
+              <span className="rounded-full border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-0.5 text-xs text-[var(--text-muted)]">{entry.created_by}</span>
             </div>
-            <p className="entry-preview">{entry.content}</p>
-            <div className="entry-card-footer">
-              <div className="entry-tags">
+            <p className="mt-3 line-clamp-4 text-sm text-[var(--text-muted)]">{entry.content}</p>
+            <div className="mt-4 flex items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-1.5">
                 {entry.tags.slice(0, 3).map((tag) => (
-                  <span key={tag} className="tag">
+                  <span key={tag} className="rounded-full border border-[#C9A86C]/35 bg-[#C9A86C]/10 px-2 py-0.5 text-[11px] font-medium text-[#C9A86C]">
                     {tag}
                   </span>
                 ))}
               </div>
-              <span className="entry-date">{timeAgo(entry.updated_at)}</span>
+              <span className="text-xs text-[var(--text-muted)]">{timeAgo(entry.updated_at)}</span>
             </div>
           </article>
         ))}
@@ -354,10 +366,10 @@ export default function KnowledgePage() {
 
       {/* Empty State */}
       {!loading && !loadError && filteredEntries.length === 0 && (
-        <div className="knowledge-empty">
-          <span className="empty-icon">📚</span>
+        <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface)]/50 p-10 text-center text-[var(--text-muted)]">
+          <span className="text-4xl">📚</span>
           <p>No entries found</p>
-          <p className="empty-hint">
+          <p className="mt-1 text-sm text-[var(--text-muted)]">
             {selectedTag
               ? 'Try selecting a different tag'
               : 'Create your first knowledge entry'}

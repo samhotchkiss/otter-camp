@@ -69,6 +69,25 @@ describe("DashboardLayout", () => {
     expect(await screen.findByRole("button", { name: "Connections" })).toBeInTheDocument();
   });
 
+  it("renders three-zone shell layout landmarks", async () => {
+    render(
+      <MemoryRouter initialEntries={["/projects"]}>
+        <KeyboardShortcutsProvider>
+          <DashboardLayout>
+            <div>child</div>
+          </DashboardLayout>
+        </KeyboardShortcutsProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId("shell-layout")).toBeInTheDocument();
+    expect(screen.getByTestId("shell-sidebar")).toBeInTheDocument();
+    expect(screen.getByTestId("shell-header")).toBeInTheDocument();
+    expect(screen.getByTestId("shell-workspace")).toBeInTheDocument();
+    expect(screen.getByTestId("shell-chat-slot")).toBeInTheDocument();
+    expect(screen.getByText("child")).toBeInTheDocument();
+  });
+
   it("renders inbox count as a separate badge even when count is zero", async () => {
     inboxMock.mockResolvedValue({ items: [] });
 
@@ -201,5 +220,34 @@ describe("DashboardLayout", () => {
     expect(await screen.findByText("Bridge offline")).toBeInTheDocument();
     expect(screen.queryByText("Bridge offline - reconnecting")).not.toBeInTheDocument();
     expect(screen.queryByText("Last successful sync 1h ago")).not.toBeInTheDocument();
+  });
+
+  it("supports mobile sidebar and chat slot toggles while preserving shell stability", async () => {
+    render(
+      <MemoryRouter initialEntries={["/projects"]}>
+        <KeyboardShortcutsProvider>
+          <DashboardLayout>
+            <div>child</div>
+          </DashboardLayout>
+        </KeyboardShortcutsProvider>
+      </MemoryRouter>,
+    );
+
+    const sidebar = await screen.findByTestId("shell-sidebar");
+    const chatSlot = screen.getByTestId("shell-chat-slot");
+    expect(chatSlot).not.toHaveClass("hidden");
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle menu" }));
+    expect(sidebar).toHaveClass("open");
+    fireEvent.click(screen.getByRole("button", { name: "Close navigation" }));
+    expect(sidebar).not.toHaveClass("open");
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle chat panel" }));
+    expect(chatSlot).toHaveClass("hidden");
+    fireEvent.click(screen.getByRole("button", { name: "Toggle chat panel" }));
+    expect(chatSlot).not.toHaveClass("hidden");
+
+    fireEvent.click(screen.getByRole("link", { name: /Inbox/ }));
+    expect(screen.getByTestId("shell-layout")).toBeInTheDocument();
   });
 });

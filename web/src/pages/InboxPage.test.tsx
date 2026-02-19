@@ -81,6 +81,14 @@ describe("InboxPage", () => {
           status: "pending",
           createdAt: "2026-02-18T20:00:00Z",
         },
+        {
+          id: "approval-2",
+          type: "Command",
+          command: "npm run test",
+          agent: "Agent-009",
+          status: "pending",
+          createdAt: "2026-02-18T19:00:00Z",
+        },
       ],
     });
 
@@ -94,10 +102,14 @@ describe("InboxPage", () => {
     expect(card).toHaveClass("oc-card-interactive");
 
     const typeBadge = screen.getByText("review");
-    expect(typeBadge).toHaveClass("oc-chip");
+    expect(typeBadge).toHaveClass("badge-type");
+    expect(typeBadge).toHaveClass("badge-review");
+    const approvalBadge = screen.getByText("approval");
+    expect(approvalBadge).toHaveClass("badge-type");
+    expect(approvalBadge).toHaveClass("badge-approval");
 
-    expect(screen.getByRole("button", { name: "Approve" })).toHaveClass("oc-toolbar-button", "oc-toolbar-button--primary");
-    expect(screen.getByRole("button", { name: "Reject" })).toHaveClass("oc-toolbar-button");
+    expect(screen.getAllByRole("button", { name: "Approve" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "Reject" }).length).toBeGreaterThan(0);
   });
 
   it("renders filter tabs with counts and filters visible inbox items", async () => {

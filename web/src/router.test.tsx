@@ -35,6 +35,10 @@ describe("router", () => {
     expect(hasPath(router.routes as RouteNode[], "projects/:id/tasks/:taskId")).toBe(true);
   });
 
+  it("registers the project issue detail route", () => {
+    expect(hasPath(router.routes as RouteNode[], "projects/:id/issues/:issueId")).toBe(true);
+  });
+
   it("registers the memory evaluation dashboard route", () => {
     expect(hasPath(router.routes as RouteNode[], "knowledge/evaluation")).toBe(true);
   });
@@ -43,5 +47,11 @@ describe("router", () => {
     expect(hasPath(router.routes as RouteNode[], "chats")).toBe(true);
     expect(hasPath(router.routes as RouteNode[], "chats/:chatId")).toBe(true);
     expect(hasPath(router.routes as RouteNode[], "chats/archived")).toBe(true);
+  });
+
+  it("registers design alias routes for project, issue, and review paths", () => {
+    expect(hasPath(router.routes as RouteNode[], "project/:projectId")).toBe(true);
+    expect(hasPath(router.routes as RouteNode[], "issue/:issueId")).toBe(true);
+    expect(hasPath(router.routes as RouteNode[], "review/:documentId")).toBe(true);
   });
 });

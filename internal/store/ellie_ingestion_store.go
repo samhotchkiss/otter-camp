@@ -533,6 +533,18 @@ func (s *EllieIngestionStore) InsertExtractedMemory(ctx context.Context, input C
 	}
 	defer conn.Close()
 
+	// The extractor can emit UUID-looking source IDs that don't exist in this workspace
+	// (for example when model output drifts). Validate and null these references instead
+	// of failing the entire window run.
+	sourceConversationID, err = sanitizeEllieForeignReference(ctx, conn, orgID, sourceConversationID, "conversations")
+	if err != nil {
+		return false, err
+	}
+	sourceProjectID, err = sanitizeEllieForeignReference(ctx, conn, orgID, sourceProjectID, "projects")
+	if err != nil {
+		return false, err
+	}
+
 	result, err := conn.ExecContext(
 		ctx,
 		`INSERT INTO memories (
@@ -1091,4 +1103,40 @@ func normalizeOptionalEllieUUID(value *string) (interface{}, error) {
 		return nil, fmt.Errorf("invalid uuid")
 	}
 	return trimmed, nil
+}
+
+func sanitizeEllieForeignReference(
+	ctx context.Context,
+	conn *sql.Conn,
+	orgID string,
+	value any,
+	target string,
+) (any, error) {
+	id, ok := value.(string)
+	if !ok {
+		return nil, nil
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, nil
+	}
+
+	var query string
+	switch target {
+	case "conversations":
+		query = `SELECT EXISTS(SELECT 1 FROM conversations WHERE org_id = $1 AND id = $2)`
+	case "projects":
+		query = `SELECT EXISTS(SELECT 1 FROM projects WHERE org_id = $1 AND id = $2)`
+	default:
+		return nil, fmt.Errorf("unsupported foreign reference target %q", target)
+	}
+
+	var exists bool
+	if err := conn.QueryRowContext(ctx, query, orgID, id).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("failed to validate %s reference: %w", target, err)
+	}
+	if !exists {
+		return nil, nil
+	}
+	return id, nil
 }
