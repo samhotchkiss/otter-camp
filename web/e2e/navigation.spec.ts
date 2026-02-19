@@ -68,13 +68,16 @@ test.describe("Navigation", () => {
   test("figma-parity-issue route renders baseline issue detail surface", async ({ page }) => {
     await page.goto("/issue/ISS-209");
 
-    await expect(page.getByRole("heading", { name: "Fix API rate limiting" })).toBeVisible();
-    await expect(page.getByText("Proposed Solution Awaiting Approval")).toBeVisible();
-    await expect(page.getByRole("button", { name: /Approve Solution/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Request Changes/ })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Discussion" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Related Issues" })).toBeVisible();
+    const issueShell = page.getByTestId("issue-detail-shell");
+    const header = issueShell.locator("header").first();
+    await expect(page.getByRole("heading", { name: "Fix API rate limiting", exact: true })).toBeVisible();
+    await expect(issueShell.getByText("Issue #209")).toBeVisible();
+    await expect(issueShell.getByText(/^Ready for Review$/).first()).toBeVisible();
+    await expect(header.getByRole("button", { name: "Approve", exact: true })).toBeVisible();
+    await expect(header.getByRole("button", { name: "Request Changes", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Issue context" })).toBeVisible();
+    await expect(page.getByTestId("issue-thread-shell")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Linked document" })).toBeVisible();
   });
 
   test("figma-parity-review route renders baseline content review surface", async ({ page }) => {
@@ -82,10 +85,46 @@ test.describe("Navigation", () => {
 
     await expect(page.getByRole("heading", { name: "Content Review" })).toBeVisible();
     await expect(page.getByTestId("content-review-route-path")).toContainText("docs/rate-limiting-implementation.md");
-    await expect(page.getByRole("button", { name: "Request Changes" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Approve" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Document" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "All Comments" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Mark Ready for Review" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Markdown Review Session" })).toBeVisible();
+    await expect(page.getByTestId("review-line-lane")).toBeVisible();
+    await expect(page.getByTestId("review-comment-sidebar")).toBeVisible();
+  });
+
+  test("issue-wiring route uses API issue context and approval actions", async ({ page }) => {
+    await page.goto("/issue/ISS-209");
+
+    const issueShell = page.getByTestId("issue-detail-shell");
+    const header = issueShell.locator("header").first();
+    await expect(issueShell.getByRole("heading", { name: "Fix API rate limiting", exact: true })).toBeVisible();
+    await expect(issueShell.getByText("Issue #209")).toBeVisible();
+    await expect(issueShell.getByText(/^Ready for Review$/).first()).toBeVisible();
+
+    await header.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(issueShell.getByRole("status")).toContainText("Issue approved.");
+  });
+
+  test("review-wiring linked review route loads issue context and transitions state", async ({ page }) => {
+    await page.goto("/review/posts%2Frate-limiting-implementation.md?project_id=project-2&issue_id=issue-209");
+
+    await expect(page.getByTestId("content-review-linked-issue")).toContainText("Linked issue: issue-209");
+    await expect(page.getByTestId("content-review-linked-issue")).toContainText("Project: project-2");
+    await expect(page.getByTestId("content-review-linked-issue")).toContainText("Comments: 0");
+
+    await page.getByRole("button", { name: "Mark Ready for Review" }).click();
+    await page.getByRole("button", { name: "Request Changes" }).click();
+    await expect(page.getByText("Changes requested.")).toBeVisible();
+  });
+
+  test("file-explorer markdown links open review route with encoded path continuity", async ({ page }) => {
+    await page.goto("/projects/project-2");
+
+    const readmeLink = page.getByRole("link", { name: /README\.md/i });
+    await expect(readmeLink).toBeVisible();
+    await readmeLink.click();
+
+    await expect(page).toHaveURL(/\/review\/docs%2FREADME\.md$/);
+    await expect(page.getByRole("heading", { name: "Content Review" })).toBeVisible();
   });
 
   test("shows primary shell navigation links", async ({ page }) => {

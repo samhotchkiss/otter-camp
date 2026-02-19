@@ -178,7 +178,7 @@ test.describe("Figma parity snapshots", () => {
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto("/issue/ISS-209");
-      await expect(page.getByRole("heading", { name: "Fix API rate limiting" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Fix API rate limiting", exact: true })).toBeVisible();
       await normalizeEditorViewport(page);
       await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-issue-${viewport.name}.png`, {
         animations: "disabled",

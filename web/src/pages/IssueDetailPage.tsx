@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import IssueThreadPanel from "../components/project/IssueThreadPanel";
 import { API_URL } from "../lib/api";
@@ -7,8 +7,31 @@ const ORG_STORAGE_KEY = "otter-camp-org-id";
 
 type ApprovalAction = "needs_changes" | "approved";
 
+type IssueHeaderPayload = {
+  issue?: {
+    title?: string;
+    body?: string | null;
+    issue_number?: number;
+    project_id?: string;
+    approval_state?: string;
+  };
+};
+
 function getOrgID(): string {
   return (window.localStorage.getItem(ORG_STORAGE_KEY) ?? "").trim();
+}
+
+function normalizeApprovalLabel(state: string | null): string {
+  switch (state) {
+    case "ready_for_review":
+      return "Ready for Review";
+    case "needs_changes":
+      return "Needs Changes";
+    case "approved":
+      return "Approved";
+    default:
+      return "Draft";
+  }
 }
 
 export default function IssueDetailPage() {
@@ -18,9 +41,78 @@ export default function IssueDetailPage() {
   const [pendingAction, setPendingAction] = useState<ApprovalAction | null>(null);
   const [approvalStatus, setApprovalStatus] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [issueLoading, setIssueLoading] = useState(true);
+  const [issueLoadError, setIssueLoadError] = useState<string | null>(null);
+  const [issueTitle, setIssueTitle] = useState<string>("");
+  const [issueSummary, setIssueSummary] = useState<string>(
+    "Dedicated issue workflow surface with approval, discussion, and review context.",
+  );
+  const [issueNumber, setIssueNumber] = useState<number | null>(null);
+  const [issueProjectScope, setIssueProjectScope] = useState<string>("");
+  const [issueApprovalState, setIssueApprovalState] = useState<string | null>(null);
+  const [issueRefreshKey, setIssueRefreshKey] = useState(0);
 
   const orgID = getOrgID();
   const orgMissing = orgID === "";
+
+  useEffect(() => {
+    if (!resolvedIssueId) {
+      setIssueLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIssueLoading(true);
+    setIssueLoadError(null);
+
+    const url = new URL(`${API_URL}/api/issues/${encodeURIComponent(resolvedIssueId)}`);
+    if (orgID) {
+      url.searchParams.set("org_id", orgID);
+    }
+
+    void fetch(url.toString(), { headers: { "Content-Type": "application/json" } })
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.error ?? "Failed to load issue details");
+        }
+        return response.json() as Promise<IssueHeaderPayload>;
+      })
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        const issue = payload.issue;
+        const title = typeof issue?.title === "string" ? issue.title.trim() : "";
+        const body = typeof issue?.body === "string" ? issue.body.trim() : "";
+        const number = typeof issue?.issue_number === "number" && Number.isFinite(issue.issue_number)
+          ? issue.issue_number
+          : null;
+        const scope = typeof issue?.project_id === "string" ? issue.project_id.trim() : "";
+        const approvalState = typeof issue?.approval_state === "string" ? issue.approval_state.trim() : "";
+
+        setIssueTitle(title);
+        setIssueSummary(body || "Dedicated issue workflow surface with approval, discussion, and review context.");
+        setIssueNumber(number);
+        setIssueProjectScope(scope);
+        setIssueApprovalState(approvalState || null);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setIssueLoadError(error instanceof Error ? error.message : "Failed to load issue details");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIssueLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [orgID, resolvedIssueId, issueRefreshKey]);
 
   if (!resolvedIssueId) {
     return (
@@ -57,6 +149,7 @@ export default function IssueDetailPage() {
         const payload = await response.json().catch(() => null);
         throw new Error(payload?.error ?? "Failed to update issue approval state");
       }
+      setIssueApprovalState(action);
       setApprovalStatus(action === "approved" ? "Issue approved." : "Changes requested.");
     } catch (error) {
       setApprovalError(error instanceof Error ? error.message : "Failed to update issue approval state");
@@ -86,9 +179,15 @@ export default function IssueDetailPage() {
       <header className="rounded-3xl border border-[var(--border)] bg-[var(--surface)]/75 p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold text-[var(--text)]">Issue #{resolvedIssueId}</h1>
+            <h1 className="text-2xl font-semibold text-[var(--text)]">{issueTitle || `Issue #${resolvedIssueId}`}</h1>
+            <p className="mt-1 text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">
+              Issue #{issueNumber ?? resolvedIssueId}
+            </p>
+            <p className="mt-1 text-xs text-[var(--text-muted)]">
+              {normalizeApprovalLabel(issueApprovalState)}
+            </p>
             <p className="mt-1 text-sm text-[var(--text-muted)]">
-              Dedicated issue workflow surface with approval, discussion, and review context.
+              {issueSummary}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -137,6 +236,21 @@ export default function IssueDetailPage() {
             {approvalError}
           </p>
         )}
+        {issueLoading && (
+          <p className="mt-3 text-xs text-[var(--text-muted)]">Loading issue context...</p>
+        )}
+        {!issueLoading && issueLoadError && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <p className="text-xs text-red-700">{issueLoadError}</p>
+            <button
+              type="button"
+              className="rounded border border-red-500/40 px-2 py-1 text-xs text-red-700 hover:bg-red-500/10"
+              onClick={() => setIssueRefreshKey((current) => current + 1)}
+            >
+              Retry
+            </button>
+          </div>
+        )}
       </header>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(260px,320px)_1fr]">
@@ -149,7 +263,7 @@ export default function IssueDetailPage() {
             </div>
             <div>
               <dt className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">Project scope</dt>
-              <dd className="text-[var(--text)]">{resolvedProjectId || "Global alias route"}</dd>
+              <dd className="text-[var(--text)]">{issueProjectScope || resolvedProjectId || "Global alias route"}</dd>
             </div>
             <div>
               <dt className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">Controls</dt>
