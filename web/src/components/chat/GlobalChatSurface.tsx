@@ -1559,6 +1559,7 @@ export default function GlobalChatSurface({
           onInput={onDraftInput}
           onKeyDown={onDraftKeyDown}
           onPaste={onComposerPaste}
+          aria-label="Message composer"
           placeholder={`Message ${conversationTitle}...`}
           rows={1}
           disabled={sending || uploadingAttachments || (conversationType === "issue" && issueAuthorID === "")}
