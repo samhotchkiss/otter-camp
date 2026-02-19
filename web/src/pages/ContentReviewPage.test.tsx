@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -71,8 +71,10 @@ describe("ContentReviewPage", () => {
     expect(screen.getByTestId("content-review-linked-issue")).toHaveTextContent("State: ready_for_review");
     expect(screen.getByTestId("content-review-linked-issue")).toHaveTextContent("Comments: 2");
     expect(screen.getByTestId("content-review-route-path")).toHaveTextContent("posts/rate-limiting-implementation.md");
-    const sourceTextarea = screen.getByTestId("source-textarea") as HTMLTextAreaElement;
-    expect(sourceTextarea.value).toContain("# Live review draft");
+    await waitFor(() => {
+      const sourceTextarea = screen.getByTestId("source-textarea") as HTMLTextAreaElement;
+      expect(sourceTextarea.value).toContain("# Live review draft");
+    });
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/api/issues/issue-209?org_id=org-123"),
       expect.any(Object),
