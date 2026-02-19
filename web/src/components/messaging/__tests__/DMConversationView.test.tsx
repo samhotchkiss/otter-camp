@@ -189,4 +189,139 @@ describe("DMConversationView", () => {
     expect(String(postCall[1]?.body ?? "")).toContain("Hello with Enter");
     expect(screen.getByText("Delivered to bridge")).toBeInTheDocument();
   });
+
+  it("uploads attachments and includes them in message send payload", async () => {
+    window.localStorage.setItem("otter-camp-org-id", "org-123");
+    window.localStorage.setItem("otter_camp_token", "token-123");
+
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            messages: [],
+            hasMore: false,
+            totalCount: 0,
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            attachment: {
+              id: "att-1",
+              filename: "diagram.png",
+              size_bytes: 1024,
+              mime_type: "image/png",
+              url: "/api/attachments/att-1",
+            },
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            message: {
+              id: "m-sent-att-1",
+              thread_id: "dm_agent-1",
+              sender_id: "current-user",
+              sender_name: "You",
+              sender_type: "user",
+              content: "",
+              attachments: [
+                {
+                  id: "att-1",
+                  filename: "diagram.png",
+                  size_bytes: 1024,
+                  mime_type: "image/png",
+                  url: "/api/attachments/att-1",
+                },
+              ],
+              created_at: new Date().toISOString(),
+            },
+            delivery: { attempted: true, delivered: true },
+          }),
+      });
+
+    const agent: Agent = {
+      id: "agent-1",
+      name: "Agent One",
+      status: "online",
+      role: "Helper",
+    };
+
+    render(<DMConversationView agent={agent} />);
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("Message Agent One...")).toBeInTheDocument();
+    });
+
+    const fileInput = screen.getByTestId("dm-attachment-input") as HTMLInputElement;
+    const sendButton = screen.getByLabelText("Send message");
+    const file = new File(["image-bytes"], "diagram.png", { type: "image/png" });
+
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText("diagram.png")).toBeInTheDocument();
+    });
+    expect(sendButton).not.toBeDisabled();
+
+    fireEvent.click(sendButton);
+
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(3));
+
+    const uploadCall = mockFetch.mock.calls[1] as [string, RequestInit];
+    expect(uploadCall[0]).toContain("/api/messages/attachments");
+
+    const sendCall = mockFetch.mock.calls[2] as [string, RequestInit];
+    expect(sendCall[1]?.method).toBe("POST");
+    const body = JSON.parse(String(sendCall[1]?.body ?? "{}")) as {
+      attachments?: Array<{ id: string }>;
+    };
+    expect(body.attachments?.map((attachment) => attachment.id)).toEqual(["att-1"]);
+  });
+
+  it("shows clear upload errors for unsupported attachments", async () => {
+    window.localStorage.setItem("otter-camp-org-id", "org-123");
+    window.localStorage.setItem("otter_camp_token", "token-123");
+
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            messages: [],
+            hasMore: false,
+            totalCount: 0,
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 415,
+        headers: {
+          get: () => "application/json",
+        },
+        json: () => Promise.resolve({ error: "unsupported attachment type" }),
+      });
+
+    const agent: Agent = {
+      id: "agent-1",
+      name: "Agent One",
+      status: "online",
+      role: "Helper",
+    };
+
+    render(<DMConversationView agent={agent} />);
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("Message Agent One...")).toBeInTheDocument();
+    });
+
+    const fileInput = screen.getByTestId("dm-attachment-input") as HTMLInputElement;
+    const file = new File(["bad-binary"], "payload.exe", { type: "application/x-msdownload" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText("unsupported attachment type")).toBeInTheDocument();
+    });
+  });
 });

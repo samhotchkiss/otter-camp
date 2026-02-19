@@ -5,13 +5,14 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type ChangeEvent,
   type KeyboardEvent,
 } from "react";
 import { useWS } from "../../contexts/WebSocketContext";
 import { API_URL } from "../../lib/api";
 import MessageHistory from "./MessageHistory";
 import AgentStatusIndicator from "./AgentStatusIndicator";
-import type { Agent, DMMessage, PaginationInfo } from "./types";
+import type { Agent, DMMessage, MessageAttachment, PaginationInfo } from "./types";
 import { getInitials } from "./utils";
 
 export type DMConversationViewProps = {
@@ -98,6 +99,53 @@ function normalizeSenderType(value: unknown): "user" | "agent" | undefined {
   return undefined;
 }
 
+function formatAttachmentSize(sizeBytes: number): string {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return "0 B";
+  }
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} B`;
+  }
+  if (sizeBytes < 1024 * 1024) {
+    return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function normalizeMessageAttachments(raw: unknown): MessageAttachment[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const attachments: MessageAttachment[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = getNonEmptyString(record.id);
+    const filename = getNonEmptyString(record.filename);
+    const mimeType =
+      getNonEmptyString(record.mime_type) ??
+      getNonEmptyString(record.mimeType) ??
+      "application/octet-stream";
+    const url = getNonEmptyString(record.url);
+    const sizeRaw = record.size_bytes ?? record.sizeBytes;
+    const sizeBytes = typeof sizeRaw === "number" && Number.isFinite(sizeRaw) ? sizeRaw : 0;
+    if (!id || !filename || !url) {
+      continue;
+    }
+    attachments.push({
+      id,
+      filename,
+      size_bytes: sizeBytes > 0 ? sizeBytes : 0,
+      mime_type: mimeType,
+      url,
+      thumbnail_url: getNonEmptyString(record.thumbnail_url) ?? getNonEmptyString(record.thumbnailUrl),
+    });
+  }
+  return attachments;
+}
+
 function normalizeMessage(
   raw: unknown,
   defaults: {
@@ -146,6 +194,7 @@ function normalizeMessage(
     content:
       getNonEmptyString(message.content) ??
       (typeof message.content === "string" ? message.content : ""),
+    attachments: normalizeMessageAttachments(message.attachments),
     createdAt:
       getNonEmptyString(message.createdAt) ??
       getNonEmptyString(message.created_at) ??
@@ -214,7 +263,9 @@ export default function DMConversationView({
 
   const [messages, setMessages] = useState<DMMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
+  const [queuedAttachments, setQueuedAttachments] = useState<MessageAttachment[]>([]);
   const [isSending, setIsSending] = useState(false);
+  const [isUploadingAttachments, setIsUploadingAttachments] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -224,6 +275,7 @@ export default function DMConversationView({
   });
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const { lastMessage, sendMessage: wsSend } = useWS();
   const messageDefaults = useMemo(
     () => ({
@@ -282,6 +334,8 @@ export default function DMConversationView({
       setError(null);
       setDeliveryIndicator(null);
       setMessages([]);
+      setQueuedAttachments([]);
+      setIsUploadingAttachments(false);
       setPagination({ hasMore: false });
 
       try {
@@ -350,9 +404,91 @@ export default function DMConversationView({
     });
   }, [computedThreadId, lastMessage, messageDefaults]);
 
+  const uploadSelectedFiles = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0 || isUploadingAttachments) {
+        return;
+      }
+      const { token, orgId } = getStoredAuthContext();
+      if (!orgId) {
+        setError("Missing org context for attachment upload");
+        return;
+      }
+
+      setIsUploadingAttachments(true);
+      setError(null);
+      setDeliveryIndicator({ tone: "neutral", text: "Uploading attachments..." });
+      let uploadedCount = 0;
+
+      for (const file of files) {
+        const formData = new FormData();
+        formData.append("org_id", orgId);
+        formData.append("file", file);
+        try {
+          const response = await fetch(`${API_URL}/api/messages/attachments`, {
+            method: "POST",
+            headers: buildRequestHeaders({ token }),
+            body: formData,
+          });
+          if (!response.ok) {
+            throw await toResponseError(response, `Failed to upload ${file.name}`);
+          }
+          const payload = await response.json();
+          const normalized = normalizeMessageAttachments([payload?.attachment])[0];
+          if (!normalized) {
+            throw new Error(`Invalid upload response for ${file.name}`);
+          }
+          uploadedCount += 1;
+          setQueuedAttachments((prev) => {
+            if (prev.some((attachment) => attachment.id === normalized.id)) {
+              return prev;
+            }
+            return [...prev, normalized];
+          });
+        } catch (uploadErr) {
+          setError(uploadErr instanceof Error ? uploadErr.message : `Failed to upload ${file.name}`);
+        }
+      }
+
+      if (uploadedCount > 0) {
+        const suffix = uploadedCount === 1 ? "" : "s";
+        setDeliveryIndicator({
+          tone: "success",
+          text: `${uploadedCount} attachment${suffix} ready`,
+        });
+      } else {
+        setDeliveryIndicator({ tone: "warning", text: "Attachment upload failed" });
+      }
+      setIsUploadingAttachments(false);
+    },
+    [isUploadingAttachments],
+  );
+
+  const handleAttachClick = useCallback(() => {
+    attachmentInputRef.current?.click();
+  }, []);
+
+  const handleAttachmentInputChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.target.files ?? []);
+      if (files.length > 0) {
+        void uploadSelectedFiles(files);
+      }
+      event.currentTarget.value = "";
+    },
+    [uploadSelectedFiles],
+  );
+
+  const handleRemoveQueuedAttachment = useCallback((attachmentID: string) => {
+    setQueuedAttachments((prev) => prev.filter((attachment) => attachment.id !== attachmentID));
+  }, []);
+
   const handleSend = useCallback(async () => {
     const content = inputValue.trim();
-    if (!content || isSending) return;
+    const attachmentsForSend = queuedAttachments;
+    if ((content === "" && attachmentsForSend.length === 0) || isSending || isUploadingAttachments) {
+      return;
+    }
 
     setIsSending(true);
     setError(null);
@@ -365,14 +501,19 @@ export default function DMConversationView({
       senderName: currentUserName,
       senderType: "user",
       content,
+      attachments: attachmentsForSend,
       createdAt: new Date().toISOString(),
     };
 
     setMessages((prev) => [...prev, optimisticMessage]);
     setInputValue("");
+    setQueuedAttachments([]);
 
     try {
       if (onSendMessage) {
+        if (attachmentsForSend.length > 0) {
+          throw new Error("Attachments are not supported by the custom send handler");
+        }
         await onSendMessage(content);
       } else {
         const { token, orgId } = getStoredAuthContext();
@@ -385,6 +526,7 @@ export default function DMConversationView({
             sender_id: currentUserId,
             sender_type: "user",
             sender_name: currentUserName,
+            attachments: attachmentsForSend,
             ...(orgId ? { org_id: orgId } : {}),
           }),
         });
@@ -422,6 +564,7 @@ export default function DMConversationView({
       });
     } catch (err) {
       setMessages((prev) => prev.filter((m) => m.id !== optimisticMessage.id));
+      setQueuedAttachments(attachmentsForSend);
       setError(err instanceof Error ? err.message : "Failed to send message");
       setDeliveryIndicator({ tone: "warning", text: "Send failed; not saved" });
       setInputValue(content);
@@ -436,7 +579,9 @@ export default function DMConversationView({
     currentUserName,
     messageDefaults,
     inputValue,
+    queuedAttachments,
     isSending,
+    isUploadingAttachments,
     onSendMessage,
     wsSend,
   ]);
@@ -542,10 +687,57 @@ export default function DMConversationView({
         </div>
       ) : null}
 
+      {queuedAttachments.length > 0 ? (
+        <div className="border-t border-[var(--border)] px-5 py-2">
+          <div className="flex flex-wrap gap-2">
+            {queuedAttachments.map((attachment) => (
+              <div
+                key={attachment.id}
+                className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-1 text-xs text-[var(--text)]"
+              >
+                <span className="max-w-[180px] truncate">{attachment.filename}</span>
+                <span className="text-[var(--text-muted)]">{formatAttachmentSize(attachment.size_bytes)}</span>
+                <button
+                  type="button"
+                  onClick={() => handleRemoveQueuedAttachment(attachment.id)}
+                  className="text-[var(--text-muted)] transition hover:text-[var(--red)]"
+                  aria-label={`Remove ${attachment.filename}`}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <form
         onSubmit={handleSubmit}
         className="flex items-end gap-3 border-t border-[var(--border)] px-5 py-4"
       >
+        <input
+          ref={attachmentInputRef}
+          type="file"
+          className="hidden"
+          onChange={handleAttachmentInputChange}
+          data-testid="dm-attachment-input"
+        />
+        <button
+          type="button"
+          onClick={handleAttachClick}
+          disabled={isSending || isUploadingAttachments}
+          className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2 focus:ring-offset-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label="Attach file"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className="h-5 w-5"
+          >
+            <path d="M8 7a4 4 0 0 1 8 0v5a6 6 0 1 1-12 0V6a2 2 0 1 1 4 0v6a.75.75 0 0 0 1.5 0V7H8Z" />
+          </svg>
+        </button>
         <textarea
           ref={inputRef}
           value={inputValue}
@@ -554,12 +746,12 @@ export default function DMConversationView({
           onInput={handleInput}
           placeholder={`Message ${agent.name}...`}
           rows={1}
-          disabled={isSending}
+          disabled={isSending || isUploadingAttachments}
           className="flex-1 resize-none rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] px-4 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] disabled:opacity-50"
         />
         <button
           type="submit"
-          disabled={!inputValue.trim() || isSending}
+          disabled={(inputValue.trim() === "" && queuedAttachments.length === 0) || isSending || isUploadingAttachments}
           className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent)] text-[#1A1918] transition hover:bg-[var(--accent-hover)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2 focus:ring-offset-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-50"
           aria-label="Send message"
         >
