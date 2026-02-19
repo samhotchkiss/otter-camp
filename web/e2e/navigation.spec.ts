@@ -32,6 +32,32 @@ test.describe("Navigation", () => {
     await expect(page.getByText("Critical: API rate limit exceeded")).toBeVisible();
   });
 
+  test("figma-parity-chat dock open and collapse states render", async ({ page }) => {
+    await page.goto("/inbox");
+
+    await expect(page.getByRole("button", { name: "Open global chat" })).toBeVisible();
+    await page.getByRole("button", { name: "Open global chat" }).click();
+    await expect(page.getByRole("heading", { name: "Global Chat" })).toBeVisible();
+    await expect(page.getByTestId("global-chat-context-cue")).toContainText("Main context");
+
+    await page.getByRole("button", { name: "Collapse global chat" }).click();
+    await expect(page.getByRole("button", { name: "Open global chat" })).toBeVisible();
+  });
+
+  test("figma-parity-secondary routes render baseline surfaces", async ({ page }) => {
+    await page.goto("/agents");
+    await expect(page.getByRole("heading", { name: "Agent Status" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Chameleon Agents (On-Demand)" })).toBeVisible();
+
+    await page.goto("/knowledge");
+    await expect(page.getByRole("heading", { name: "Memory System" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Stream: Conversation Extraction" })).toBeVisible();
+
+    await page.goto("/connections");
+    await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "OpenClaw Bridge" })).toBeVisible();
+  });
+
   test("shows primary topbar links", async ({ page }) => {
     await page.goto("/");
 
