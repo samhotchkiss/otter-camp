@@ -965,7 +965,10 @@ export default function ProjectDetailPage() {
   };
 
   return (
-    <div data-testid="project-detail-shell" className="mx-auto flex min-h-full w-full max-w-[1360px] flex-col">
+    <div
+      data-testid="project-detail-shell"
+      className="mx-auto flex min-h-full w-full min-w-0 max-w-[1360px] flex-col"
+    >
       {/* Breadcrumb */}
       <nav className="mb-4 flex items-center gap-2 text-sm text-[var(--text-muted)]">
         <Link to="/projects" className="hover:text-[var(--text)]">
@@ -977,11 +980,11 @@ export default function ProjectDetailPage() {
 
       {/* Project Header */}
       <header className="mb-6 rounded-3xl border border-[var(--border)] bg-[var(--surface)]/75 p-6 shadow-sm">
-        <div className="flex items-start gap-5">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--surface-alt)] text-4xl">
+        <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start">
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-[var(--surface-alt)] text-4xl">
             {emoji}
           </div>
-          <div className="flex-1">
+          <div className="min-w-0 flex-1">
             <h1 className="text-2xl font-bold text-[var(--text)]">
               {project.name}
             </h1>
@@ -1030,7 +1033,7 @@ export default function ProjectDetailPage() {
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex w-full flex-wrap items-center justify-start gap-2 lg:w-auto lg:justify-end">
             <button
               type="button"
               onClick={openProjectChat}
@@ -1045,7 +1048,10 @@ export default function ProjectDetailPage() {
             >
               Settings
             </button>
-            <form onSubmit={handleSubmitIssueRequest} className="flex items-center gap-2">
+            <form
+              onSubmit={handleSubmitIssueRequest}
+              className="flex w-full min-w-0 flex-col gap-2 sm:w-auto sm:flex-row sm:items-center"
+            >
               <label htmlFor="new-issue-title" className="sr-only">
                 New issue
               </label>
@@ -1063,7 +1069,7 @@ export default function ProjectDetailPage() {
                   }
                 }}
                 placeholder="New issue..."
-                className="w-56 rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] sm:w-64"
               />
               <button
                 type="submit"
@@ -1089,7 +1095,7 @@ export default function ProjectDetailPage() {
       </header>
 
       {/* Tabs */}
-      <div className="mb-6 flex gap-1 border-b border-[var(--border)]">
+      <div className="mb-6 flex gap-1 overflow-x-auto whitespace-nowrap border-b border-[var(--border)]">
         {tabs.map((tab) => (
           <button
             key={tab.key}
@@ -1116,9 +1122,9 @@ export default function ProjectDetailPage() {
 
       {/* Tab Content */}
       {activeTab === "board" && (
-        <div className="flex flex-1 gap-6 overflow-x-auto pb-4">
+        <div className="flex min-w-0 flex-1 gap-6 overflow-x-auto pb-4">
           {/* Kanban Board */}
-          <div className="flex flex-1 gap-5 overflow-x-auto">
+          <div className="flex min-w-0 flex-1 gap-5 overflow-x-auto">
             {COLUMNS.map((col) => (
               <BoardColumn
                 key={col.key}
@@ -1167,11 +1173,11 @@ export default function ProjectDetailPage() {
       )}
 
       {activeTab === "list" && (
-        <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
+        <div className="overflow-x-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
           <div className="space-y-3">
             {tasks.filter(t => t.status !== "done" && t.status !== "cancelled").length > 0 ? (
               <>
-                <div className="grid grid-cols-[minmax(0,1fr)_120px_120px_90px] items-center gap-3 px-3 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                <div className="grid min-w-[720px] grid-cols-[minmax(0,1fr)_120px_120px_90px] items-center gap-3 px-3 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
                   <span>Issue</span>
                   <span>Assignee</span>
                   <span>Status</span>
@@ -1182,9 +1188,9 @@ export default function ProjectDetailPage() {
                     key={task.id}
                     type="button"
                     onClick={() => handleTaskClick(task)}
-                    className="grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_120px_120px_90px] items-center gap-3 rounded-xl border border-[var(--border)] p-4 text-left transition hover:border-[#C9A86C]/50 hover:bg-[var(--surface-alt)]"
+                    className="grid min-w-[720px] w-full cursor-pointer grid-cols-[minmax(0,1fr)_120px_120px_90px] items-center gap-3 rounded-xl border border-[var(--border)] p-4 text-left transition hover:border-[#C9A86C]/50 hover:bg-[var(--surface-alt)]"
                   >
-                    <span className="truncate text-sm font-medium text-[var(--text)]">
+                    <span className="break-words text-sm font-medium text-[var(--text)]">
                       {typeof task.issueNumber === "number" ? `#${task.issueNumber} ` : ""}
                       {task.title}
                     </span>
@@ -1251,7 +1257,7 @@ export default function ProjectDetailPage() {
       {activeTab === "files" && <ProjectFileBrowser projectId={project.id} />}
 
       {activeTab === "issues" && (
-        <div className={`grid gap-4 ${issueId ? "xl:grid-cols-[minmax(320px,420px)_1fr]" : "grid-cols-1"}`}>
+        <div className={`grid min-w-0 gap-4 ${issueId ? "xl:grid-cols-[minmax(320px,420px)_1fr]" : "grid-cols-1"}`}>
           <ProjectIssuesList
             projectId={project.id}
             selectedIssueID={issueId ?? null}

@@ -296,6 +296,58 @@ describe("IssueThreadPanel", () => {
     expect(screen.getByText("Fix the issue detail metadata rendering path.")).toBeInTheDocument();
   });
 
+  it("applies responsive overflow classes to issue thread shell and comment surfaces", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/issues/issue-1?")) {
+        return mockJSONResponse({
+          issue: {
+            id: "issue-1",
+            issue_number: 1,
+            title: "Responsive issue",
+            state: "open",
+            origin: "local",
+            approval_state: "ready_for_review",
+          },
+          participants: [],
+          comments: [
+            {
+              id: "comment-1",
+              author_agent_id: "sam",
+              body: "Layout stability comment",
+              created_at: "2026-02-06T11:00:00Z",
+              updated_at: "2026-02-06T11:00:00Z",
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/agents?")) {
+        return mockJSONResponse({
+          agents: [{ id: "sam", name: "Sam" }],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<IssueThreadPanel issueID="issue-1" />);
+
+    expect(await screen.findByText("#1 Responsive issue")).toBeInTheDocument();
+    expect(screen.getByTestId("issue-thread-shell")).toHaveClass("min-w-0");
+
+    const summaryRow = screen.getByTestId("issue-thread-approval").parentElement;
+    expect(summaryRow).toHaveClass("items-start");
+    expect(summaryRow).toHaveClass("sm:items-center");
+
+    const threadHeader = screen.getByText("Thread").parentElement;
+    expect(threadHeader).toHaveClass("flex-col");
+    expect(threadHeader).toHaveClass("sm:flex-row");
+
+    const commentItem = screen.getByText("Layout stability comment").closest("li");
+    const commentMetaRow = commentItem?.querySelector("div");
+    expect(commentMetaRow).toHaveClass("flex-wrap");
+  });
+
   it("renders project-scoped issue not-found state with back link", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

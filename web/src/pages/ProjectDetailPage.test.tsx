@@ -350,6 +350,60 @@ describe("ProjectDetailPage files tab", () => {
     expect(screen.queryByText("No tasks")).not.toBeInTheDocument();
   });
 
+  it("applies responsive overflow classes for tabs and list layout", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-responsive-1",
+              issue_number: 42,
+              title: "A very long issue title that should preserve layout stability in narrow widths",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "in_progress",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    expect(screen.getByTestId("project-detail-shell")).toHaveClass("min-w-0");
+
+    const tabsContainer = screen.getByRole("button", { name: "Board" }).closest("div");
+    expect(tabsContainer).toHaveClass("overflow-x-auto");
+    expect(tabsContainer).toHaveClass("whitespace-nowrap");
+
+    await user.click(screen.getByRole("button", { name: "List" }));
+
+    const listHeader = screen.getByText("Issue").parentElement;
+    expect(listHeader).toHaveClass("min-w-[720px]");
+
+    const listRow = screen.getByRole("button", { name: /A very long issue title/i });
+    expect(listRow).toHaveClass("min-w-[720px]");
+  });
+
   it("submits New Issue request to project chat endpoint", async () => {
     const user = userEvent.setup();
     localStorage.setItem("otter-camp-user-name", "Sam");
