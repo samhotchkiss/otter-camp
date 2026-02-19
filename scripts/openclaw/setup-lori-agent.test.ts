@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { ensureLoriAgentConfig, ensureLoriWorkspaceScaffold } from "./setup-lori-agent";
+import { ensureLoriAgentConfig, ensureLoriWorkspaceScaffold, setupLoriAgent } from "./setup-lori-agent";
 
 function writeConfig(configPath: string, payload: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
@@ -131,5 +131,28 @@ describe("ensureLoriWorkspaceScaffold", () => {
     const second = ensureLoriWorkspaceScaffold(workspacePath, samsBrainPath);
     assert.equal(first.changed, true);
     assert.equal(second.changed, false);
+  });
+});
+
+describe("setupLoriAgent", () => {
+  it("applies config and workspace scaffolding in one call", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lori-setup-all-"));
+    const configPath = path.join(tempRoot, ".openclaw", "openclaw.json");
+    const workspacePath = path.join(tempRoot, ".openclaw", "workspace-lori");
+    const samsBrainPath = path.join(tempRoot, "Documents", "SamsBrain", "Agents", "Lori");
+
+    const result = setupLoriAgent({
+      configPath,
+      workspacePath,
+      samsBrainPath,
+    });
+
+    assert.equal(result.config.changed, true);
+    assert.equal(result.workspace.changed, true);
+
+    const config = readConfig(configPath);
+    const agents = ((config.agents as { list?: Array<Record<string, unknown>> })?.list || []);
+    assert.equal(agents.some((entry) => String(entry.id || "").trim() === "lori"), true);
+    assert.equal(fs.lstatSync(path.join(workspacePath, "SOUL.md")).isSymbolicLink(), true);
   });
 });

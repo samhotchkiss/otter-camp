@@ -44,6 +44,17 @@ type LoriWorkspaceResult = {
   samsBrainPath: string;
 };
 
+type LoriPaths = {
+  configPath: string;
+  workspacePath: string;
+  samsBrainPath: string;
+};
+
+type LoriSetupResult = {
+  config: LoriConfigResult;
+  workspace: LoriWorkspaceResult;
+};
+
 function parseJSONFile(filePath: string): Record<string, unknown> {
   if (!fs.existsSync(filePath)) {
     return {};
@@ -150,21 +161,55 @@ export function ensureLoriWorkspaceScaffold(workspacePath: string, samsBrainPath
   };
 }
 
-function resolveConfigPathFromCLI(argv: string[]): string {
-  const index = argv.findIndex((value) => value === "--config");
-  if (index >= 0) {
-    const candidate = String(argv[index + 1] || "").trim();
-    if (!candidate) {
-      throw new Error("--config requires a path value");
-    }
-    return candidate;
+export function resolveDefaultLoriPaths(homeDir: string = os.homedir()): LoriPaths {
+  return {
+    configPath: path.join(homeDir, ".openclaw", "openclaw.json"),
+    workspacePath: path.join(homeDir, ".openclaw", "workspace-lori"),
+    samsBrainPath: path.join(homeDir, "Documents", "SamsBrain", "Agents", "Lori"),
+  };
+}
+
+export function setupLoriAgent(overrides: Partial<LoriPaths> = {}): LoriSetupResult {
+  const defaults = resolveDefaultLoriPaths();
+  const paths: LoriPaths = {
+    configPath: overrides.configPath || defaults.configPath,
+    workspacePath: overrides.workspacePath || defaults.workspacePath,
+    samsBrainPath: overrides.samsBrainPath || defaults.samsBrainPath,
+  };
+  return {
+    config: ensureLoriAgentConfig(paths.configPath),
+    workspace: ensureLoriWorkspaceScaffold(paths.workspacePath, paths.samsBrainPath),
+  };
+}
+
+function resolvePathArg(argv: string[], flag: string): string | null {
+  const index = argv.findIndex((value) => value === flag);
+  if (index < 0) {
+    return null;
   }
-  return path.join(os.homedir(), ".openclaw", "openclaw.json");
+  const candidate = String(argv[index + 1] || "").trim();
+  if (!candidate) {
+    throw new Error(`${flag} requires a path value`);
+  }
+  return candidate;
+}
+
+function resolveLoriPathsFromCLI(argv: string[]): LoriPaths {
+  const defaults = resolveDefaultLoriPaths();
+  return {
+    configPath: resolvePathArg(argv, "--config") || defaults.configPath,
+    workspacePath: resolvePathArg(argv, "--workspace") || defaults.workspacePath,
+    samsBrainPath: resolvePathArg(argv, "--samsbrain") || defaults.samsBrainPath,
+  };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const configPath = resolveConfigPathFromCLI(process.argv.slice(2));
-  const result = ensureLoriAgentConfig(configPath);
-  const changeLabel = result.changed ? "updated" : "unchanged";
-  console.log(`[setup-lori-agent] ${changeLabel}: ${result.configPath}`);
+  const paths = resolveLoriPathsFromCLI(process.argv.slice(2));
+  const result = setupLoriAgent(paths);
+  console.log(
+    `[setup-lori-agent] config=${result.config.changed ? "updated" : "unchanged"} (${result.config.configPath})`,
+  );
+  console.log(
+    `[setup-lori-agent] workspace=${result.workspace.changed ? "updated" : "unchanged"} (${result.workspace.workspacePath})`,
+  );
 }
