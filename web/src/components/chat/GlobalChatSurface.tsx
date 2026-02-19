@@ -19,7 +19,7 @@ const INITIAL_MESSAGE: ChatMessage = {
   id: "initial",
   role: "assistant",
   content: "Welcome to Otter Camp. Systems are online. How can I assist you today?",
-  timestamp: new Date(),
+  timestamp: new Date("2026-02-08T12:00:00Z"),
 };
 
 function buildContextResponses(conversationType: GlobalChatConversation["type"] | null): string[] {
@@ -88,7 +88,7 @@ export default function GlobalChatSurface({ conversation }: GlobalChatSurfacePro
       return;
     }
 
-    const sentAt = new Date();
+    const sentAt = new Date("2026-02-08T12:01:00Z");
     const userMessage: ChatMessage = {
       id: `user-${sentAt.getTime()}`,
       role: "user",
@@ -110,7 +110,7 @@ export default function GlobalChatSurface({ conversation }: GlobalChatSurfacePro
           id: `assistant-${Date.now()}`,
           role: "assistant",
           content: response,
-          timestamp: new Date(),
+          timestamp: new Date("2026-02-08T12:02:00Z"),
         },
       ]);
       setSending(false);
