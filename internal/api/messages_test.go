@@ -306,6 +306,80 @@ func TestBuildDMDispatchEvent_IncrementalContext(t *testing.T) {
 	require.Equal(t, incrementalContext, event.Data.IncrementalContext)
 }
 
+func TestDMInjectionState_InvalidatesOnAgentIdentityUpdate(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-injection-invalidate-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "dm-injection-invalidate-agent")
+	threadID := "dm_" + agentID
+	sessionKey := canonicalChameleonSessionKey(agentID)
+
+	_, err := db.Exec(
+		`UPDATE agents
+		 SET soul_md = $3,
+		     identity_md = $4,
+		     instructions_md = $5
+		 WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+		"Soul v1",
+		"Identity v1",
+		"Instructions v1",
+	)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO dm_injection_state (
+			org_id,
+			thread_id,
+			session_key,
+			agent_id,
+			injected_at,
+			injection_hash,
+			compaction_detected
+		) VALUES ($1, $2, $3, $4, NOW(), $5, FALSE)`,
+		orgID,
+		threadID,
+		sessionKey,
+		agentID,
+		"hash-v1",
+	)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`UPDATE agents
+		 SET soul_md = $3
+		 WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+		"Soul v2",
+	)
+	require.NoError(t, err)
+
+	var injectionHash sql.NullString
+	err = db.QueryRow(
+		`SELECT injection_hash
+		 FROM dm_injection_state
+		 WHERE org_id = $1 AND thread_id = $2`,
+		orgID,
+		threadID,
+	).Scan(&injectionHash)
+	require.NoError(t, err)
+	require.False(t, injectionHash.Valid)
+
+	handler := &MessageHandler{}
+	req := createMessageRequest{
+		ThreadID: &threadID,
+		Content:  "Need refreshed identity",
+	}
+	target := dmDispatchTarget{
+		AgentID:    agentID,
+		SessionKey: sessionKey,
+	}
+
+	event := handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-refresh", req, target)
+	require.True(t, event.Data.InjectIdentity)
+}
+
 func TestMessageCRUDTaskThread(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "messages-org")
