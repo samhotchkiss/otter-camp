@@ -65,6 +65,18 @@ test.describe("Navigation", () => {
     await expect(page).toHaveURL(/\/review\/docs%2FREADME\.md$/);
   });
 
+  test("figma-parity-issue route renders baseline issue detail surface", async ({ page }) => {
+    await page.goto("/issue/ISS-209");
+
+    await expect(page.getByRole("heading", { name: "Fix API rate limiting" })).toBeVisible();
+    await expect(page.getByText("Proposed Solution Awaiting Approval")).toBeVisible();
+    await expect(page.getByRole("button", { name: /Approve Solution/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Request Changes/ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Discussion" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Related Issues" })).toBeVisible();
+  });
+
   test("figma-parity-review route renders baseline content review surface", async ({ page }) => {
     await page.goto("/review/docs%2Frate-limiting-implementation.md");
 
