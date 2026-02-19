@@ -19,6 +19,19 @@ test.describe("Navigation", () => {
     await expect(page.getByPlaceholder("Search...")).toBeVisible();
   });
 
+  test("figma-parity-inbox baseline content and filters render", async ({ page }) => {
+    await page.goto("/inbox");
+
+    await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "All (6)" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Unread (3)" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Starred (1)" })).toBeVisible();
+    await expect(page.getByText("PR #234 awaiting approval")).toBeVisible();
+
+    await page.getByRole("tab", { name: "Starred (1)" }).click();
+    await expect(page.getByText("Critical: API rate limit exceeded")).toBeVisible();
+  });
+
   test("shows primary topbar links", async ({ page }) => {
     await page.goto("/");
 
