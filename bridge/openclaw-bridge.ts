@@ -112,6 +112,7 @@ const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
 const OPENCLAW_SYSTEM_AGENT_PATCH_TARGETS = new Set(['chameleon', 'elephant']);
 const PERMANENT_OPENCLAW_AGENTS = new Set(['main', 'elephant', 'ellie-extractor', 'lori', 'chameleon']);
+const MAIN_OPENCLAW_SESSION_KEY = 'agent:main:main';
 const OPENCLAW_TOOL_EVENT_CAP = 'tool-events';
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
 let otterCampOrgIDForTestOverride: string | null = null;
@@ -1452,6 +1453,56 @@ function parseAgentSlotFromSessionKey(sessionKey: string): string {
     return '';
   }
   return candidate;
+}
+
+type DispatchSessionTarget = {
+  sessionKey: string;
+  routedAgentID: string;
+};
+
+function resolveMainDispatchSessionKey(rawSessionKey: string): string {
+  const sessionKey = getTrimmedString(rawSessionKey);
+  if (
+    sessionKey &&
+    /^agent:main:/i.test(sessionKey) &&
+    !PROJECT_ID_PATTERN.test(sessionKey) &&
+    !ISSUE_ID_PATTERN.test(sessionKey)
+  ) {
+    return sessionKey;
+  }
+  return MAIN_OPENCLAW_SESSION_KEY;
+}
+
+function resolveProjectChatDispatchTarget(
+  agentID: string,
+  projectID: string,
+  rawSessionKey: string,
+): DispatchSessionTarget {
+  const normalizedAgentID = getTrimmedString(agentID).toLowerCase();
+  const requestedSessionKey = getTrimmedString(rawSessionKey);
+  if (!normalizedAgentID) {
+    return { sessionKey: requestedSessionKey, routedAgentID: '' };
+  }
+
+  if (normalizedAgentID === 'main') {
+    return {
+      sessionKey: resolveMainDispatchSessionKey(requestedSessionKey),
+      routedAgentID: normalizedAgentID,
+    };
+  }
+
+  const routedAgentID = isPermanentOpenClawAgent(normalizedAgentID) ? normalizedAgentID : 'chameleon';
+  if (routedAgentID === 'chameleon') {
+    return {
+      sessionKey: `agent:chameleon:oc:${projectID}`,
+      routedAgentID,
+    };
+  }
+
+  return {
+    sessionKey: requestedSessionKey || `agent:${routedAgentID}:project:${projectID}`,
+    routedAgentID,
+  };
 }
 
 function normalizeUpdatedAt(value: number): number {
@@ -4390,9 +4441,10 @@ async function sendMessageToSession(
   sessionKey: string,
   content: string,
   messageID?: string,
-  options?: { forceIdentityBootstrap?: boolean; attachments?: DMDispatchAttachment[] },
+  options?: { forceIdentityBootstrap?: boolean; attachments?: DMDispatchAttachment[]; preferAgentMethod?: boolean },
 ): Promise<void> {
   const forceIdentityBootstrap = options?.forceIdentityBootstrap === true;
+  const preferAgentMethod = options?.preferAgentMethod === true;
   const idempotencyKey =
     (messageID || '').trim() || `dm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const normalizedAttachments = (options?.attachments || []).filter(
@@ -4401,6 +4453,7 @@ async function sendMessageToSession(
   const hasAttachments = normalizedAttachments.length > 0;
   const isFirstDispatchForSession = forceIdentityBootstrap || !contextPrimedSessions.has(sessionKey);
   const isCanonicalChameleonSession = parseChameleonSessionKey(sessionKey) !== null;
+  const shouldUseAgentMethod = isCanonicalChameleonSession || preferAgentMethod;
   const trimmedContent = content.trim();
   const recallAwareContent = trimmedContent ? await withAutoRecallContext(sessionKey, trimmedContent) : '';
   if (!recallAwareContent && !hasAttachments) {
@@ -4428,7 +4481,7 @@ async function sendMessageToSession(
     }
   }
 
-  if (isCanonicalChameleonSession && recallAwareContent) {
+  if (shouldUseAgentMethod && recallAwareContent) {
     const extraSystemPrompt = await withSessionContext(sessionKey, recallAwareContent, {
       includeUserContent: false,
       forceIdentityBootstrap,
@@ -6353,15 +6406,16 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
 async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): Promise<void> {
   const projectID = getTrimmedString(event.data?.project_id);
   const projectName = getTrimmedString(event.data?.project_name);
-  const agentID = getTrimmedString(event.data?.agent_id);
+  const requestedSessionKey = getTrimmedString(event.data?.session_key);
+  const agentID = getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(requestedSessionKey);
   const agentName = getTrimmedString(event.data?.agent_name);
   const content = getTrimmedString(event.data?.content);
   const questionnaire = normalizeQuestionnairePayload(event.data?.questionnaire);
   const orgID = getTrimmedString(event.org_id);
   const messageID = getTrimmedString(event.data?.message_id) || undefined;
-  const sessionKey =
-    getTrimmedString(event.data?.session_key) ||
-    (agentID && projectID ? `agent:${agentID}:project:${projectID}` : '');
+  const dispatchTarget = resolveProjectChatDispatchTarget(agentID, projectID, requestedSessionKey);
+  const sessionKey = dispatchTarget.sessionKey;
+  const useAgentMethod = dispatchTarget.routedAgentID === 'main';
   let outboundContent = content;
   if (questionnaire) {
     const formatted = formatQuestionnaireForFallback(questionnaire);
@@ -6384,7 +6438,9 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
   });
 
   try {
-    await sendMessageToSession(sessionKey, outboundContent, messageID);
+    await sendMessageToSession(sessionKey, outboundContent, messageID, {
+      preferAgentMethod: useAgentMethod,
+    });
     console.log(
       `[bridge] delivered project.chat.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );

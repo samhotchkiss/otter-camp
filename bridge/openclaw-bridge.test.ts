@@ -44,6 +44,7 @@ import {
   resolveOpenClawCommandTimeoutMSForTest,
   setExecFileForTest,
   setOtterCampSocketForTest,
+  setSendRequestForTest,
   runSerializedSyncOperationForTest,
   setContinuousModeEnabledForTest,
   setPathWithinProjectRootForTest,
@@ -221,6 +222,67 @@ describe("bridge chameleon session key helpers", () => {
     assert.equal(isPermanentOpenClawAgentForTest("lori"), true);
     assert.equal(isPermanentOpenClawAgentForTest("chameleon"), true);
     assert.equal(isPermanentOpenClawAgentForTest("technonymous"), false);
+  });
+});
+
+describe("bridge project dispatch routing", () => {
+  const rpcCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+
+  beforeEach(() => {
+    rpcCalls.length = 0;
+    resetSessionContextsForTest();
+    setSendRequestForTest(async (method, params) => {
+      rpcCalls.push({ method, params });
+      return {};
+    });
+  });
+
+  afterEach(() => {
+    setSendRequestForTest(null);
+  });
+
+  it("routes non-permanent project agents through chameleon session keys", async () => {
+    const projectID = "11111111-2222-3333-4444-555555555555";
+    await dispatchInboundEventForTest("project.chat.message", {
+      type: "project.chat.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "msg-1",
+        project_id: projectID,
+        project_name: "Spec 521",
+        agent_id: "technonymous",
+        agent_name: "Technonymous",
+        content: "Ship the patch.",
+      },
+    });
+
+    const dispatchCall = rpcCalls.find((call) => call.method === "agent");
+    assert.equal(dispatchCall?.method, "agent");
+    assert.equal(dispatchCall?.params.sessionKey, `agent:chameleon:oc:${projectID}`);
+
+    const context = getSessionContextForTest(`agent:chameleon:oc:${projectID}`);
+    assert.equal(context?.kind, "project_chat");
+    assert.equal(context?.agentID, "technonymous");
+    assert.equal(context?.agentName, "Technonymous");
+  });
+
+  it("routes main project dispatches to the main session via agent method", async () => {
+    await dispatchInboundEventForTest("project.chat.message", {
+      type: "project.chat.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "msg-main",
+        project_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        project_name: "Main routing",
+        agent_id: "main",
+        agent_name: "Frank",
+        content: "Please review this project update.",
+      },
+    });
+
+    const dispatchCall = rpcCalls.find((call) => call.method === "agent");
+    assert.equal(dispatchCall?.method, "agent");
+    assert.equal(dispatchCall?.params.sessionKey, "agent:main:main");
   });
 });
 
