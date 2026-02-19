@@ -3,10 +3,12 @@ package migration
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -25,6 +27,11 @@ var openClawPipelinePhaseOrder = []string{
 	"project_discovery",
 	"project_docs_scanning",
 }
+
+var (
+	openClawInlineProjectHintPattern = regexp.MustCompile(`(?i)\b(?:project|repo)[:=]\s*([a-z0-9][a-z0-9._-]{1,63})`)
+	openClawInlineIssueHintPattern   = regexp.MustCompile(`(?i)\b(?:issue|task|todo)[:=]\s*([^\n.;]+)`)
+)
 
 type OpenClawPipelineWorker struct {
 	DB *sql.DB
@@ -586,7 +593,7 @@ func discoverProjectsFromChatMessages(ctx context.Context, db *sql.DB, orgID str
 		return importer.OpenClawProjectDiscoveryResult{}, fmt.Errorf("db is required")
 	}
 
-	// Only pull messages that look like they might carry inline hints.
+	// Pull chat messages that look like they might carry inline hints.
 	rows, err := db.QueryContext(
 		ctx,
 		`SELECT sender_id::text, body, created_at
@@ -632,6 +639,107 @@ func discoverProjectsFromChatMessages(ctx context.Context, db *sql.DB, orgID str
 		return importer.OpenClawProjectDiscoveryResult{}, fmt.Errorf("read project discovery chat messages: %w", err)
 	}
 
+	memorySignals := make([]importer.OpenClawMemorySignal, 0)
+	memoryRows, err := db.QueryContext(
+		ctx,
+		`SELECT title,
+		        content,
+		        metadata,
+		        occurred_at,
+		        LOWER(COALESCE(metadata->>'source_table', '')) AS source_table
+		   FROM memories
+		  WHERE org_id = $1
+		    AND status = 'active'
+		    AND (
+		      (kind = 'context' AND LOWER(COALESCE(metadata->>'type', '')) IN ('project', 'issue'))
+		      OR LOWER(COALESCE(metadata->>'source_table', '')) = 'agent_memory_md'
+		    )
+		  ORDER BY occurred_at ASC, created_at ASC
+		  LIMIT 200000`,
+		orgID,
+	)
+	if err != nil {
+		return importer.OpenClawProjectDiscoveryResult{}, fmt.Errorf("list context memories for project discovery: %w", err)
+	}
+	defer memoryRows.Close()
+
+	for memoryRows.Next() {
+		var (
+			title       string
+			content     string
+			metadataRaw []byte
+			occurredAt  time.Time
+			sourceTable string
+		)
+		if err := memoryRows.Scan(&title, &content, &metadataRaw, &occurredAt, &sourceTable); err != nil {
+			return importer.OpenClawProjectDiscoveryResult{}, fmt.Errorf("scan project discovery memory: %w", err)
+		}
+
+		var metadata map[string]any
+		if len(metadataRaw) > 0 {
+			_ = json.Unmarshal(metadataRaw, &metadata)
+		}
+		metaType := strings.TrimSpace(strings.ToLower(openClawMetadataString(metadata, "type")))
+		if metaType != "project" && metaType != "issue" && sourceTable != "agent_memory_md" {
+			continue
+		}
+
+		joinedText := strings.TrimSpace(strings.Join([]string{
+			strings.TrimSpace(title),
+			strings.TrimSpace(content),
+		}, "\n"))
+		projectHint := openClawFirstNonEmpty(
+			openClawMetadataString(metadata, "project"),
+			openClawMetadataString(metadata, "project_key"),
+			openClawMetadataString(metadata, "project_name"),
+			extractInlineProjectHint(joinedText),
+		)
+		if metaType == "project" {
+			projectHint = openClawFirstNonEmpty(projectHint, title)
+		}
+
+		signal := importer.OpenClawMemorySignal{
+			AgentID:     "ellie",
+			Text:        strings.TrimSpace(openClawFirstNonEmpty(joinedText, title, content)),
+			ProjectHint: projectHint,
+			OccurredAt:  occurredAt.UTC(),
+		}
+		if signal.Text == "" {
+			signal.Text = projectHint
+		}
+
+		if metaType == "issue" {
+			issueTitle := strings.TrimSpace(title)
+			if issueTitle == "" {
+				issueTitle = strings.TrimSpace(content)
+			}
+			if issueTitle == "" {
+				continue
+			}
+			signal.IssueSignals = []importer.OpenClawIssueSignal{
+				{
+					Title:      issueTitle,
+					Status:     openClawMetadataString(metadata, "status"),
+					Source:     "memory_context",
+					OccurredAt: occurredAt.UTC(),
+				},
+			}
+		} else if sourceTable == "agent_memory_md" {
+			signal.IssueHints = extractInlineIssueHints(signal.Text)
+		}
+		if strings.TrimSpace(signal.ProjectHint) == "" {
+			// Without a project hint there is nowhere to attach issue signals.
+			if len(signal.IssueSignals) > 0 || len(signal.IssueHints) > 0 {
+				continue
+			}
+			continue
+		}
+		memorySignals = append(memorySignals, signal)
+	}
+	if err := memoryRows.Err(); err != nil {
+		return importer.OpenClawProjectDiscoveryResult{}, fmt.Errorf("read project discovery memories: %w", err)
+	}
+
 	reference := time.Now().UTC()
 	if raw := strings.TrimSpace(os.Getenv("OTTER_PIPELINE_REFERENCE_TIME_UTC")); raw != "" {
 		if parsed, parseErr := time.Parse(time.RFC3339, raw); parseErr == nil && !parsed.IsZero() {
@@ -643,7 +751,62 @@ func discoverProjectsFromChatMessages(ctx context.Context, db *sql.DB, orgID str
 		OrgID: orgID,
 		ImportInput: importer.OpenClawProjectImportInput{
 			Sessions: signals,
+			Memories: memorySignals,
 		},
 		ReferenceTime: reference,
 	})
+}
+
+func openClawMetadataString(metadata map[string]any, keys ...string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	for _, key := range keys {
+		raw, ok := metadata[key]
+		if !ok || raw == nil {
+			continue
+		}
+		value := strings.TrimSpace(fmt.Sprint(raw))
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func openClawFirstNonEmpty(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func extractInlineProjectHint(value string) string {
+	match := openClawInlineProjectHintPattern.FindStringSubmatch(strings.TrimSpace(value))
+	if len(match) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(match[1])
+}
+
+func extractInlineIssueHints(value string) []string {
+	matches := openClawInlineIssueHintPattern.FindAllStringSubmatch(strings.TrimSpace(value), -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) != 2 {
+			continue
+		}
+		hint := strings.TrimSpace(match[1])
+		if hint == "" {
+			continue
+		}
+		out = append(out, hint)
+	}
+	return out
 }

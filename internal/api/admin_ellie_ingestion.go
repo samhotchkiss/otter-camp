@@ -32,16 +32,28 @@ func (h *AdminEllieIngestionHandler) GetCoverage(w http.ResponseWriter, r *http.
 			days = v
 		}
 	}
+	failureLimit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("failure_limit")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil {
+			failureLimit = v
+		}
+	}
 
 	rows, summary, err := h.Store.ListCoverageByDay(r.Context(), orgID, days)
 	if err != nil {
 		http.Error(w, `{"error":"failed to load coverage"}`, http.StatusInternalServerError)
 		return
 	}
+	diagnostics, err := h.Store.ListCoverageDiagnostics(r.Context(), orgID, days, failureLimit)
+	if err != nil {
+		http.Error(w, `{"error":"failed to load coverage diagnostics"}`, http.StatusInternalServerError)
+		return
+	}
 
 	resp := map[string]any{
-		"summary": summary,
-		"days":    rows,
+		"summary":     summary,
+		"days":        rows,
+		"diagnostics": diagnostics,
 	}
 	_ = json.NewEncoder(w).Encode(resp)
 }

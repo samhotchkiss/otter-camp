@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,6 +29,7 @@ func TestOpenClawGatewayCallerFromEnvSupportsAgentAliasAndModelExpectation(t *te
 	require.NotNil(t, caller)
 	require.Equal(t, "ellie-extractor", caller.agentID)
 	require.Equal(t, "haiku", caller.expectedModel)
+	require.True(t, caller.requireBridge)
 }
 
 func TestOpenClawGatewayCallerRejectsUnexpectedModel(t *testing.T) {
@@ -55,4 +57,18 @@ func TestOpenClawGatewayCallerAcceptsExpectedModel(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "anthropic/claude-3-5-haiku-latest", result.Model)
 	require.Equal(t, "{\"ok\":true}", result.Text)
+}
+
+func TestOpenClawGatewayCallerRequiresBridgeWhenConfigured(t *testing.T) {
+	caller := &OpenClawGatewayCaller{
+		runner:        fakeOpenClawGatewayRunner{output: []byte(`{"runId":"run-1","status":"ok","result":{"payloads":[{"text":"{\"ok\":true}"}],"meta":{"agentMeta":{"model":"anthropic/claude-3-5-haiku-latest"}}}}`)},
+		gatewayURL:    "ws://127.0.0.1:18791",
+		agentID:       "ellie-extractor",
+		expectedModel: "haiku",
+		requireBridge: true,
+	}
+
+	_, err := caller.Call(context.Background(), "2b6b783e-6af0-4020-9b1e-9c63e9f6df52", "hello")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ws.ErrOpenClawNotConnected)
 }

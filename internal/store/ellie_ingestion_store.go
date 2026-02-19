@@ -81,6 +81,30 @@ type EllieIngestionCoverageSummary struct {
 	ExtractedUpTo *time.Time `json:"extractedUpTo,omitempty"`
 }
 
+type EllieIngestionCoverageModelStat struct {
+	Model         string `json:"model"`
+	Windows       int    `json:"windows"`
+	WindowsOK     int    `json:"windowsOK"`
+	WindowsFailed int    `json:"windowsFailed"`
+	Retries       int    `json:"retries"`
+	InsertedTotal int    `json:"insertedTotal"`
+}
+
+type EllieIngestionCoverageFailure struct {
+	At           time.Time `json:"at"`
+	RoomID       string    `json:"roomId"`
+	Model        string    `json:"model"`
+	LLMAttempts  int       `json:"llmAttempts"`
+	MessageCount int       `json:"messageCount"`
+	TokenCount   int       `json:"tokenCount"`
+	Error        string    `json:"error"`
+}
+
+type EllieIngestionCoverageDiagnostics struct {
+	Models         []EllieIngestionCoverageModelStat `json:"models"`
+	RecentFailures []EllieIngestionCoverageFailure   `json:"recentFailures"`
+}
+
 var validEllieMemoryKinds = map[string]struct{}{
 	"technical_decision": {},
 	"process_decision":   {},
@@ -1050,6 +1074,129 @@ func (s *EllieIngestionStore) ListCoverageByDay(ctx context.Context, orgID strin
 	}
 
 	return out, summary, nil
+}
+
+func (s *EllieIngestionStore) ListCoverageDiagnostics(
+	ctx context.Context,
+	orgID string,
+	days int,
+	failureLimit int,
+) (EllieIngestionCoverageDiagnostics, error) {
+	out := EllieIngestionCoverageDiagnostics{
+		Models:         []EllieIngestionCoverageModelStat{},
+		RecentFailures: []EllieIngestionCoverageFailure{},
+	}
+	if s == nil || s.db == nil {
+		return out, fmt.Errorf("ellie ingestion store is not configured")
+	}
+	orgID = strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(orgID) {
+		return out, fmt.Errorf("invalid org_id")
+	}
+	if days <= 0 {
+		days = 30
+	}
+	if days > 365 {
+		days = 365
+	}
+	if failureLimit <= 0 {
+		failureLimit = 20
+	}
+	if failureLimit > 200 {
+		failureLimit = 200
+	}
+	startDay := time.Now().UTC().AddDate(0, 0, -(days - 1)).Format("2006-01-02")
+
+	conn, err := s.withWorkspaceConn(ctx, orgID)
+	if err != nil {
+		return out, err
+	}
+	defer conn.Close()
+
+	modelRows, err := conn.QueryContext(
+		ctx,
+		`SELECT COALESCE(NULLIF(TRIM(llm_model), ''), 'unknown') AS model,
+		        COUNT(*)::int AS windows,
+		        SUM(CASE WHEN ok THEN 1 ELSE 0 END)::int AS windows_ok,
+		        SUM(CASE WHEN ok THEN 0 ELSE 1 END)::int AS windows_failed,
+		        SUM(GREATEST(llm_attempts - 1, 0))::int AS retries,
+		        SUM(inserted_total)::int AS inserted_total
+		   FROM ellie_ingestion_window_runs
+		  WHERE org_id = $1
+		    AND window_end_at >= ($2::date::timestamp AT TIME ZONE 'UTC')
+		  GROUP BY model
+		  ORDER BY windows DESC, model ASC`,
+		orgID,
+		startDay,
+	)
+	if err != nil {
+		return out, fmt.Errorf("failed to list ellie ingestion model diagnostics: %w", err)
+	}
+	defer modelRows.Close()
+
+	for modelRows.Next() {
+		var row EllieIngestionCoverageModelStat
+		if err := modelRows.Scan(
+			&row.Model,
+			&row.Windows,
+			&row.WindowsOK,
+			&row.WindowsFailed,
+			&row.Retries,
+			&row.InsertedTotal,
+		); err != nil {
+			return out, fmt.Errorf("failed to scan ellie ingestion model diagnostics: %w", err)
+		}
+		out.Models = append(out.Models, row)
+	}
+	if err := modelRows.Err(); err != nil {
+		return out, fmt.Errorf("failed reading ellie ingestion model diagnostics: %w", err)
+	}
+
+	failureRows, err := conn.QueryContext(
+		ctx,
+		`SELECT window_end_at,
+		        room_id::text,
+		        COALESCE(NULLIF(TRIM(llm_model), ''), 'unknown') AS model,
+		        COALESCE(error, ''),
+		        llm_attempts,
+		        message_count,
+		        token_count
+		   FROM ellie_ingestion_window_runs
+		  WHERE org_id = $1
+		    AND ok = FALSE
+		    AND window_end_at >= ($2::date::timestamp AT TIME ZONE 'UTC')
+		  ORDER BY window_end_at DESC
+		  LIMIT $3`,
+		orgID,
+		startDay,
+		failureLimit,
+	)
+	if err != nil {
+		return out, fmt.Errorf("failed to list ellie ingestion failures: %w", err)
+	}
+	defer failureRows.Close()
+
+	for failureRows.Next() {
+		var row EllieIngestionCoverageFailure
+		if err := failureRows.Scan(
+			&row.At,
+			&row.RoomID,
+			&row.Model,
+			&row.Error,
+			&row.LLMAttempts,
+			&row.MessageCount,
+			&row.TokenCount,
+		); err != nil {
+			return out, fmt.Errorf("failed to scan ellie ingestion failure row: %w", err)
+		}
+		row.At = row.At.UTC()
+		out.RecentFailures = append(out.RecentFailures, row)
+	}
+	if err := failureRows.Err(); err != nil {
+		return out, fmt.Errorf("failed reading ellie ingestion failures: %w", err)
+	}
+
+	return out, nil
 }
 
 func (s *EllieIngestionStore) HasComplianceFingerprint(ctx context.Context, orgID, fingerprint string) (bool, error) {

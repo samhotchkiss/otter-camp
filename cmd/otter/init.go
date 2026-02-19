@@ -80,7 +80,7 @@ var (
 	detectInitOpenClaw = func() (*importer.OpenClawInstallation, error) {
 		return importer.DetectOpenClawInstallation(importer.DetectOpenClawOptions{})
 	}
-	parseInitOpenClawSessionEvents = importer.ParseOpenClawSessionEvents
+	parseInitOpenClawSessionEvents   = importer.ParseOpenClawSessionEvents
 	ensureInitOpenClawRequiredAgents = importer.EnsureOpenClawRequiredAgents
 	importInitOpenClawIdentities     = importer.ImportOpenClawAgentIdentities
 	inferInitOpenClawProjects        = importer.InferOpenClawProjectCandidates
@@ -111,10 +111,10 @@ func mapHostedInitTokenValidationError(err error) error {
 }
 
 const (
-	initLocalDefaultAPIBaseURL = "http://localhost:4200"
-	initDefaultAgentModel      = "gpt-5.2-codex"
-	initDefaultBridgeHost      = "127.0.0.1"
-	initDefaultBridgePort      = 18791
+	initLocalDefaultAPIBaseURL      = "http://localhost:4200"
+	initDefaultAgentModel           = "gpt-5.2-codex"
+	initDefaultBridgeHost           = "127.0.0.1"
+	initDefaultBridgePort           = 18791
 	initDefaultBackfillWindowSize   = 30
 	initDefaultBackfillWindowStride = 30
 )
@@ -741,10 +741,15 @@ func importOpenClawData(out io.Writer, client initBootstrapClient, installation 
 	projectsImported := 0
 	issuesImported := 0
 	for _, candidate := range candidates {
+		description := importer.BuildOpenClawProjectDescription(candidate)
+		status := strings.TrimSpace(strings.ToLower(candidate.Status))
+		if status == "" {
+			status = "active"
+		}
 		project, err := client.CreateProject(map[string]interface{}{
 			"name":        candidate.Name,
-			"description": "Imported from OpenClaw",
-			"status":      "active",
+			"description": description,
+			"status":      status,
 		})
 		if err != nil {
 			continue
@@ -762,15 +767,39 @@ func importOpenClawData(out io.Writer, client initBootstrapClient, installation 
 		}
 
 		for _, issue := range candidate.Issues {
-			if _, err := client.CreateIssue(project.ID, map[string]interface{}{
+			payload := map[string]interface{}{
 				"title": issue.Title,
-			}); err == nil {
+			}
+			state, workStatus := inferInitImportedIssueLifecycle(issue)
+			if strings.TrimSpace(state) != "" {
+				payload["state"] = state
+			}
+			if strings.TrimSpace(workStatus) != "" {
+				payload["work_status"] = workStatus
+			}
+			if _, err := client.CreateIssue(project.ID, payload); err == nil {
 				issuesImported++
 			}
 		}
 	}
 
 	return agentsImported, projectsImported, issuesImported
+}
+
+func inferInitImportedIssueLifecycle(issue importer.OpenClawIssueCandidate) (state string, workStatus string) {
+	workStatus = strings.TrimSpace(strings.ToLower(issue.Status))
+	if workStatus == "" {
+		// Fall back to conservative defaults if discovery did not infer a work status.
+		return "open", "queued"
+	}
+	switch workStatus {
+	case "done", "cancelled":
+		return "closed", workStatus
+	case "queued", "planning", "ready", "ready_for_work", "in_progress", "blocked", "review", "flagged":
+		return "open", workStatus
+	default:
+		return "open", "queued"
+	}
 }
 
 func ensureInitGatewayPortConfigured(installation *importer.OpenClawInstallation) error {
