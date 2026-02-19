@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -185,7 +187,7 @@ func upsertOpenClawDiscoveredProject(
 	}
 
 	status := normalizeOpenClawProjectStatus(candidate.Status)
-	description := buildOpenClawProjectDescription(candidate)
+	description := BuildOpenClawProjectDescription(candidate)
 
 	var (
 		existingID          string
@@ -258,17 +260,18 @@ func upsertOpenClawDiscoveredIssue(
 		return false, false, nil
 	}
 
-	state := inferOpenClawIssueState(project.Status, title)
+	state, workStatus := inferOpenClawIssueLifecycle(project.Status, issue)
 	body := buildOpenClawIssueDescription(project, issue)
 
 	var (
-		existingID    string
-		existingState string
-		existingBody  sql.NullString
+		existingID         string
+		existingState      string
+		existingWorkStatus string
+		existingBody       sql.NullString
 	)
 	queryErr := tx.QueryRowContext(
 		ctx,
-		`SELECT id, state, body
+		`SELECT id, state, work_status, body
 		   FROM project_issues
 		  WHERE org_id = $1
 		    AND project_id = $2
@@ -279,7 +282,7 @@ func upsertOpenClawDiscoveredIssue(
 		orgID,
 		projectID,
 		title,
-	).Scan(&existingID, &existingState, &existingBody)
+	).Scan(&existingID, &existingState, &existingWorkStatus, &existingBody)
 	if queryErr != nil {
 		if errors.Is(queryErr, sql.ErrNoRows) {
 			var lockedProjectID string
@@ -313,16 +316,17 @@ func upsertOpenClawDiscoveredIssue(
 			if _, err := tx.ExecContext(
 				ctx,
 				`INSERT INTO project_issues (
-					org_id, project_id, issue_number, title, body, state, origin, closed_at
-				) VALUES (
-					$1, $2, $3, $4, $5, $6, 'local', $7
-				)`,
+						org_id, project_id, issue_number, title, body, state, origin, work_status, closed_at
+					) VALUES (
+						$1, $2, $3, $4, $5, $6, 'local', $7, $8
+					)`,
 				orgID,
 				projectID,
 				nextIssueNumber,
 				title,
 				nullableOpenClawText(body),
 				state,
+				workStatus,
 				closedAt,
 			); err != nil {
 				return false, false, fmt.Errorf("insert discovered issue %s: %w", title, err)
@@ -333,7 +337,9 @@ func upsertOpenClawDiscoveredIssue(
 	}
 
 	currentBody := strings.TrimSpace(existingBody.String)
-	if strings.EqualFold(strings.TrimSpace(existingState), state) && currentBody == body {
+	if strings.EqualFold(strings.TrimSpace(existingState), state) &&
+		strings.EqualFold(strings.TrimSpace(existingWorkStatus), workStatus) &&
+		currentBody == body {
 		return false, false, nil
 	}
 
@@ -345,11 +351,13 @@ func upsertOpenClawDiscoveredIssue(
 		ctx,
 		`UPDATE project_issues
 		    SET state = $2,
-		        body = $3,
-		        closed_at = $4
+		        work_status = $3,
+		        body = $4,
+		        closed_at = $5
 		  WHERE id = $1`,
 		existingID,
 		state,
+		workStatus,
 		nullableOpenClawText(body),
 		closedAt,
 	); err != nil {
@@ -359,11 +367,19 @@ func upsertOpenClawDiscoveredIssue(
 	return false, true, nil
 }
 
-func inferOpenClawIssueState(projectStatus, title string) string {
-	if strings.EqualFold(strings.TrimSpace(projectStatus), "completed") || hasOpenClawCompletionSignal(title) {
-		return "closed"
+func inferOpenClawIssueLifecycle(projectStatus string, issue OpenClawIssueCandidate) (state string, workStatus string) {
+	rawStatus := strings.TrimSpace(issue.Status)
+	workStatus = normalizeOpenClawIssueStatus(issue.Status, issue.Title)
+	if rawStatus == "" && strings.EqualFold(strings.TrimSpace(projectStatus), "completed") && !isOpenClawTerminalIssueStatus(workStatus) {
+		workStatus = "done"
 	}
-	return "open"
+	if hasOpenClawCompletionSignal(issue.Title) && !isOpenClawTerminalIssueStatus(workStatus) {
+		workStatus = "done"
+	}
+	if isOpenClawTerminalIssueStatus(workStatus) {
+		return "closed", workStatus
+	}
+	return "open", workStatus
 }
 
 func normalizeOpenClawProjectStatus(value string) string {
@@ -378,13 +394,22 @@ func normalizeOpenClawProjectStatus(value string) string {
 }
 
 func buildOpenClawProjectDescription(candidate OpenClawProjectCandidate) string {
-	parts := []string{"Imported from OpenClaw conversation history."}
+	return BuildOpenClawProjectDescription(candidate)
+}
+
+// BuildOpenClawProjectDescription generates a concise, human-readable description
+// for projects inferred from OpenClaw migration signals.
+func BuildOpenClawProjectDescription(candidate OpenClawProjectCandidate) string {
+	parts := []string{
+		buildOpenClawProjectIntro(candidate),
+	}
 	if candidate.LastDiscussedAt != nil && !candidate.LastDiscussedAt.IsZero() {
-		parts = append(parts, "Last discussed: "+candidate.LastDiscussedAt.UTC().Format(time.RFC3339)+".")
+		parts = append(parts, "Last discussed on "+candidate.LastDiscussedAt.UTC().Format("2006-01-02")+".")
 	}
-	if len(candidate.Signals) > 0 {
-		parts = append(parts, "Signals: "+strings.Join(candidate.Signals, ", ")+".")
+	if evidence := buildOpenClawEvidenceSummary(candidate.Signals); evidence != "" {
+		parts = append(parts, evidence)
 	}
+	parts = append(parts, "Inferred status: "+normalizeOpenClawProjectStatus(candidate.Status)+".")
 	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
@@ -396,10 +421,112 @@ func buildOpenClawIssueDescription(project OpenClawProjectCandidate, issue OpenC
 	if strings.TrimSpace(issue.Source) != "" {
 		parts = append(parts, "Source: "+strings.TrimSpace(issue.Source)+".")
 	}
+	if status := strings.TrimSpace(issue.Status); status != "" {
+		parts = append(parts, "Status: "+status+".")
+	}
 	if !issue.OccurredAt.IsZero() {
 		parts = append(parts, "Seen at: "+issue.OccurredAt.UTC().Format(time.RFC3339)+".")
 	}
 	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+func buildOpenClawProjectIntro(candidate OpenClawProjectCandidate) string {
+	issueTitles := collectOpenClawIssueTitles(candidate.Issues, 3)
+	if len(issueTitles) > 0 {
+		return "Imported from OpenClaw activity. Initial focus: " + strings.Join(issueTitles, "; ") + "."
+	}
+
+	repo := strings.TrimSpace(candidate.RepoPath)
+	if repo != "" {
+		repoName := strings.TrimSpace(strings.TrimSuffix(filepath.Base(repo), ".git"))
+		if repoName != "" && repoName != "." && repoName != string(filepath.Separator) {
+			return "Imported from OpenClaw activity for repository " + repoName + "."
+		}
+	}
+
+	if name := strings.TrimSpace(candidate.Name); name != "" {
+		return "Imported from OpenClaw activity for " + name + "."
+	}
+	return "Imported from OpenClaw activity."
+}
+
+func collectOpenClawIssueTitles(issues []OpenClawIssueCandidate, limit int) []string {
+	if limit <= 0 || len(issues) == 0 {
+		return nil
+	}
+	out := make([]string, 0, limit)
+	seen := map[string]struct{}{}
+	for _, issue := range issues {
+		title := strings.TrimSpace(issue.Title)
+		title = strings.TrimRight(title, ".")
+		if title == "" {
+			continue
+		}
+		if len(title) > 96 {
+			title = strings.TrimSpace(title[:96]) + "..."
+		}
+		norm := strings.ToLower(title)
+		if _, exists := seen[norm]; exists {
+			continue
+		}
+		seen[norm] = struct{}{}
+		out = append(out, title)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func buildOpenClawEvidenceSummary(signals []string) string {
+	if len(signals) == 0 {
+		return ""
+	}
+
+	counts := map[string]int{}
+	for _, signal := range signals {
+		normalized := "other"
+		if idx := strings.Index(signal, ":"); idx > 0 {
+			normalized = strings.TrimSpace(strings.ToLower(signal[:idx]))
+		} else {
+			trimmed := strings.TrimSpace(strings.ToLower(signal))
+			if trimmed != "" {
+				normalized = trimmed
+			}
+		}
+		switch normalized {
+		case "workspace", "session", "memory":
+			// keep known buckets
+		default:
+			normalized = "other"
+		}
+		counts[normalized]++
+	}
+
+	if len(counts) == 0 {
+		return ""
+	}
+
+	ordered := []string{"workspace", "session", "memory"}
+	fragments := make([]string, 0, len(counts))
+	for _, bucket := range ordered {
+		if count := counts[bucket]; count > 0 {
+			fragments = append(fragments, fmt.Sprintf("%s (%d)", bucket, count))
+			delete(counts, bucket)
+		}
+	}
+	if len(counts) > 0 {
+		remaining := make([]string, 0, len(counts))
+		for bucket := range counts {
+			remaining = append(remaining, bucket)
+		}
+		sort.Strings(remaining)
+		for _, bucket := range remaining {
+			fragments = append(fragments, fmt.Sprintf("%s (%d)", bucket, counts[bucket]))
+		}
+	}
+
+	return "Evidence: " + strings.Join(fragments, ", ") + "."
 }
 
 func nullableOpenClawText(value string) any {

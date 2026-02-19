@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import DashboardLayout from "./DashboardLayout";
 import { KeyboardShortcutsProvider } from "../contexts/KeyboardShortcutsContext";
 
@@ -41,6 +41,10 @@ function renderLayout(pathname = "/projects") {
 }
 
 describe("DashboardLayout", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it("renders figma shell scaffold with sidebar sections and header controls", async () => {
     renderLayout("/projects");
 
@@ -68,12 +72,27 @@ describe("DashboardLayout", () => {
     expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
   });
 
+  it("hydrates sidebar identity from the active session", async () => {
+    window.localStorage.setItem("otter_camp_user", JSON.stringify({
+      id: "user-1",
+      name: "Sam Rivera",
+      email: "sam@otter.camp",
+    }));
+
+    renderLayout("/projects");
+
+    expect(await screen.findByText("Sam Rivera")).toBeInTheDocument();
+    expect(screen.getByText("sam@otter.camp")).toBeInTheDocument();
+    expect(screen.queryByText("Jane Smith")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sidebar user menu" })).toHaveTextContent("SR");
+  });
+
   it("supports sidebar and chat panel toggles while preserving shell stability", async () => {
     renderLayout("/projects");
 
     const sidebar = await screen.findByTestId("shell-sidebar");
     const chatSlot = screen.getByTestId("shell-chat-slot");
-    expect(chatSlot).not.toHaveClass("hidden");
+    expect(chatSlot).toHaveAttribute("aria-hidden", "false");
 
     fireEvent.click(screen.getByRole("button", { name: "Toggle menu" }));
     expect(sidebar).toHaveClass("open");
@@ -81,9 +100,9 @@ describe("DashboardLayout", () => {
     expect(sidebar).not.toHaveClass("open");
 
     fireEvent.click(screen.getByRole("button", { name: "Toggle chat panel" }));
-    expect(chatSlot).toHaveClass("hidden");
+    expect(chatSlot).toHaveAttribute("aria-hidden", "true");
     fireEvent.click(screen.getByRole("button", { name: "Toggle chat panel" }));
-    expect(chatSlot).not.toHaveClass("hidden");
+    expect(chatSlot).toHaveAttribute("aria-hidden", "false");
   });
 
   it("marks the active projects navigation link with aria-current", async () => {

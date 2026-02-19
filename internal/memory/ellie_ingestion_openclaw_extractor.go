@@ -15,12 +15,13 @@ import (
 	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/store"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
 const (
 	defaultEllieIngestionOpenClawBinary             = "openclaw"
 	defaultEllieIngestionOpenClawGatewayURL         = "ws://127.0.0.1:18791"
-	defaultEllieIngestionOpenClawAgentID            = "elephant"
+	defaultEllieIngestionOpenClawAgentID            = "ellie-extractor"
 	defaultEllieIngestionOpenClawSessionNamespace   = "ellie-ingestion"
 	defaultEllieIngestionOpenClawGatewayCallTimeout = 3 * time.Minute
 	defaultEllieIngestionOpenClawMaxCandidateChars  = 800
@@ -61,6 +62,7 @@ type EllieIngestionOpenClawExtractorConfig struct {
 	MaxResponseCandidateLength int
 	MaxPromptChars             int
 	MaxMessageChars            int
+	RequireBridge              bool
 }
 
 type EllieIngestionOpenClawExtractor struct {
@@ -77,6 +79,7 @@ type EllieIngestionOpenClawExtractor struct {
 	maxResponseCandidateLength int
 	maxPromptChars             int
 	maxMessageChars            int
+	requireBridge              bool
 }
 
 type ellieIngestionOpenClawExecRunner struct {
@@ -183,17 +186,20 @@ func NewEllieIngestionOpenClawExtractorFromEnv() (*EllieIngestionOpenClawExtract
 		maxMessageChars = parsed
 	}
 
+	requireBridge := parseEllieBoolEnvDefault("ELLIE_INGESTION_OPENCLAW_REQUIRE_BRIDGE", true)
+
 	return NewEllieIngestionOpenClawExtractor(EllieIngestionOpenClawExtractorConfig{
 		OpenClawBinary:             strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_BINARY")),
 		GatewayURL:                 strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_GATEWAY_URL")),
 		GatewayToken:               firstNonEmpty(strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_GATEWAY_TOKEN")), strings.TrimSpace(os.Getenv("OPENCLAW_TOKEN"))),
 		AgentID:                    strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_AGENT")),
 		SessionNamespace:           strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_SESSION_NAMESPACE")),
-		ExpectedModelContains:      strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_EXPECT_MODEL_CONTAINS")),
+		ExpectedModelContains:      firstNonEmpty(strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_EXPECT_MODEL_CONTAINS")), "haiku"),
 		GatewayCallTimeout:         timeout,
 		MaxResponseCandidateLength: maxCandidateChars,
 		MaxPromptChars:             maxPromptChars,
 		MaxMessageChars:            maxMessageChars,
+		RequireBridge:              requireBridge,
 	})
 }
 
@@ -260,6 +266,7 @@ func NewEllieIngestionOpenClawExtractor(cfg EllieIngestionOpenClawExtractorConfi
 		maxResponseCandidateLength: maxCandidateChars,
 		maxPromptChars:             maxPromptChars,
 		maxMessageChars:            maxMessageChars,
+		requireBridge:              cfg.RequireBridge,
 	}, nil
 }
 
@@ -412,6 +419,10 @@ func (e *EllieIngestionOpenClawExtractor) runGatewayAgentCall(
 		return output, nil
 	}
 
+	if e.requireBridge {
+		return nil, ws.ErrOpenClawNotConnected
+	}
+
 	output, err := e.runner.Run(ctx, args)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -421,6 +432,21 @@ func (e *EllieIngestionOpenClawExtractor) runGatewayAgentCall(
 		)
 	}
 	return output, nil
+}
+
+func parseEllieBoolEnvDefault(key string, fallback bool) bool {
+	raw := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if raw == "" {
+		return fallback
+	}
+	switch raw {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func (e *EllieIngestionOpenClawExtractor) idempotencyKey(orgID, roomID string, messages []store.EllieIngestionMessage) string {

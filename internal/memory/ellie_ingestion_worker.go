@@ -376,6 +376,31 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (EllieIngestionRunRe
 						break
 					}
 
+					// If the LLM returns a syntactically valid payload but no candidates,
+					// fall back to a heuristic candidate so we don't silently drop the
+					// window and advance cursors with zero coverage.
+					if len(llmCandidates) == 0 {
+						if fallback, ok := deriveEllieMemoryCandidateFromWindow(subWindow); ok {
+							meta := map[string]any{}
+							if len(fallback.Metadata) > 0 {
+								_ = json.Unmarshal(fallback.Metadata, &meta)
+							}
+							if meta == nil {
+								meta = map[string]any{}
+							}
+							meta["extraction_method"] = "heuristic_fallback_after_empty_llm"
+							if model := strings.TrimSpace(llmResult.Model); model != "" {
+								meta["extraction_model"] = model
+							}
+							if traceID := strings.TrimSpace(llmResult.TraceID); traceID != "" {
+								meta["extraction_trace_id"] = traceID
+							}
+							meta["llm_attempts"] = llmAttempts
+							fallback.Metadata, _ = json.Marshal(meta)
+							llmCandidates = append(llmCandidates, fallback)
+						}
+					}
+
 					result.WindowsProcessed++
 					result.ProcessedMessages += len(subWindow)
 
@@ -393,7 +418,19 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (EllieIngestionRunRe
 						}
 						insertedTotal++
 						result.InsertedMemories++
-						result.InsertedLLMMemories++
+						method := ""
+						if raw := candidate.Metadata; len(raw) > 0 {
+							var meta map[string]any
+							_ = json.Unmarshal(raw, &meta)
+							if v, ok := meta["extraction_method"].(string); ok {
+								method = strings.TrimSpace(strings.ToLower(v))
+							}
+						}
+						if method == "heuristic_fallback_after_empty_llm" {
+							result.InsertedHeuristicMemories++
+						} else {
+							result.InsertedLLMMemories++
+						}
 
 						metaType := ""
 						if raw := candidate.Metadata; len(raw) > 0 {

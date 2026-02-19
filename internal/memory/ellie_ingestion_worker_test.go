@@ -433,7 +433,10 @@ func TestEllieIngestionWorkerFallsBackToHeuristicsWhenLLMReturnsNoCandidates(t *
 	require.NoError(t, err)
 	require.Equal(t, 1, run.ProcessedMessages)
 	require.Equal(t, 1, extractor.calls)
-	require.Len(t, fakeStore.created, 0)
+	require.Len(t, fakeStore.created, 1)
+	require.Equal(t, 1, run.InsertedMemories)
+	require.Equal(t, 1, run.InsertedHeuristicMemories)
+	require.Equal(t, 0, run.InsertedLLMMemories)
 }
 
 func TestEllieIngestionWorkerAvoidsFalsePositiveDecisionAndFactClassification(t *testing.T) {

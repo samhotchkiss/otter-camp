@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/store"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 	"github.com/stretchr/testify/require"
 )
 
@@ -242,6 +243,7 @@ func TestNewEllieIngestionOpenClawExtractorFromEnv(t *testing.T) {
 	require.Equal(t, "haiku", extractor.expectedModelContains)
 	require.Equal(t, 45*time.Second, extractor.gatewayCallTimeout)
 	require.Equal(t, 512, extractor.maxResponseCandidateLength)
+	require.True(t, extractor.requireBridge)
 }
 
 func TestNewEllieIngestionOpenClawExtractorFromEnvRejectsInvalidTimeout(t *testing.T) {
@@ -294,6 +296,27 @@ func TestEllieIngestionOpenClawExtractorDoesNotFallBackToExecWhenBridgeIsConfigu
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "openclaw bridge call failed")
+	require.Empty(t, execRunner.args)
+}
+
+func TestEllieIngestionOpenClawExtractorRequiresBridgeWhenConfigured(t *testing.T) {
+	execRunner := &fakeEllieIngestionOpenClawRunner{
+		output: []byte(`{"runId":"run-1","status":"ok","result":{"payloads":[{"text":"{\"candidates\":[]}"}],"meta":{"agentMeta":{"model":"anthropic/claude-3-5-haiku-latest"}}}}`),
+	}
+	extractor, err := NewEllieIngestionOpenClawExtractor(EllieIngestionOpenClawExtractorConfig{
+		Runner:                execRunner,
+		ExpectedModelContains: "haiku",
+		RequireBridge:         true,
+	})
+	require.NoError(t, err)
+
+	_, err = extractor.Extract(context.Background(), EllieIngestionLLMExtractionInput{
+		OrgID:    "org-1",
+		RoomID:   "room-1",
+		Messages: []store.EllieIngestionMessage{{ID: "msg-1", Body: "Any content."}},
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, err, ws.ErrOpenClawNotConnected)
 	require.Empty(t, execRunner.args)
 }
 

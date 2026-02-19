@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -88,14 +90,16 @@ type openClawDMDispatchAttachment struct {
 }
 
 type openClawDMDispatchData struct {
-	MessageID   string                         `json:"message_id"`
-	ThreadID    string                         `json:"thread_id"`
-	AgentID     string                         `json:"agent_id"`
-	SessionKey  string                         `json:"session_key,omitempty"`
-	Content     string                         `json:"content"`
-	SenderID    string                         `json:"sender_id,omitempty"`
-	SenderType  string                         `json:"sender_type,omitempty"`
-	SenderName  string                         `json:"sender_name,omitempty"`
+	MessageID          string `json:"message_id"`
+	ThreadID           string `json:"thread_id"`
+	AgentID            string `json:"agent_id"`
+	SessionKey         string `json:"session_key,omitempty"`
+	Content            string `json:"content"`
+	SenderID           string `json:"sender_id,omitempty"`
+	SenderType         string `json:"sender_type,omitempty"`
+	SenderName         string `json:"sender_name,omitempty"`
+	InjectIdentity     bool   `json:"inject_identity,omitempty"`
+	IncrementalContext string `json:"incremental_context,omitempty"`
 	Attachments []openClawDMDispatchAttachment `json:"attachments,omitempty"`
 }
 
@@ -107,16 +111,17 @@ type messageListResponse struct {
 }
 
 type createMessageRequest struct {
-	OrgID           *string
-	TaskID          *string
-	ThreadID        *string
-	AuthorID        *string
-	SenderID        *string
-	SenderType      *string
-	SenderName      *string
-	SenderAvatarURL *string
-	Content         string
-	Attachments     []AttachmentMetadata
+	OrgID              *string
+	TaskID             *string
+	ThreadID           *string
+	AuthorID           *string
+	SenderID           *string
+	SenderType         *string
+	SenderName         *string
+	SenderAvatarURL    *string
+	IncrementalContext *string
+	Content            string
+	Attachments        []AttachmentMetadata
 }
 
 type updateMessageRequest struct {
@@ -256,7 +261,7 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if shouldDispatch {
-		event := h.buildDMDispatchEvent(orgID, messageID, req, dispatchTarget)
+		event := h.buildDMDispatchEvent(r.Context(), db, orgID, messageID, req, dispatchTarget)
 		dedupeKey := fmt.Sprintf("dm.message:%s", messageID)
 		queuedForRetry := false
 		if queued, err := enqueueOpenClawDispatchEvent(r.Context(), db, orgID, event.Type, dedupeKey, event); err != nil {
@@ -700,6 +705,11 @@ func decodeCreateMessageRequest(r *http.Request) (createMessageRequest, error) {
 		return createMessageRequest{}, errors.New("invalid sender_avatar_url")
 	}
 
+	incrementalContext, _, err := parseOptionalStringFieldAny(raw, "incremental_context", "incrementalContext")
+	if err != nil {
+		return createMessageRequest{}, errors.New("invalid incremental_context")
+	}
+
 	contentRaw, ok := raw["content"]
 	content := ""
 	if ok && len(contentRaw) > 0 && string(contentRaw) != "null" {
@@ -716,16 +726,17 @@ func decodeCreateMessageRequest(r *http.Request) (createMessageRequest, error) {
 	}
 
 	return createMessageRequest{
-		OrgID:           trimPtr(orgID),
-		TaskID:          trimPtr(taskID),
-		ThreadID:        trimPtr(threadID),
-		AuthorID:        trimPtr(authorID),
-		SenderID:        trimPtr(senderID),
-		SenderType:      trimPtr(senderType),
-		SenderName:      trimPtr(senderName),
-		SenderAvatarURL: trimPtr(senderAvatarURL),
-		Content:         strings.TrimSpace(content),
-		Attachments:     attachments,
+		OrgID:              trimPtr(orgID),
+		TaskID:             trimPtr(taskID),
+		ThreadID:           trimPtr(threadID),
+		AuthorID:           trimPtr(authorID),
+		SenderID:           trimPtr(senderID),
+		SenderType:         trimPtr(senderType),
+		SenderName:         trimPtr(senderName),
+		SenderAvatarURL:    trimPtr(senderAvatarURL),
+		IncrementalContext: trimPtr(incrementalContext),
+		Content:            strings.TrimSpace(content),
+		Attachments:        attachments,
 	}, nil
 }
 
@@ -1083,7 +1094,176 @@ func resolveWorkspaceAgentSlugByID(
 	return strings.TrimSpace(slug), nil
 }
 
+type dmInjectionState struct {
+	ThreadID           string
+	SessionKey         string
+	AgentID            string
+	InjectedAt         sql.NullTime
+	InjectionHash      string
+	CompactionDetected bool
+}
+
+func loadDMInjectionState(
+	ctx context.Context,
+	db *sql.DB,
+	orgID string,
+	threadID string,
+) (*dmInjectionState, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil, nil
+	}
+
+	var state dmInjectionState
+	err := db.QueryRowContext(
+		ctx,
+		`SELECT
+			thread_id,
+			COALESCE(session_key, ''),
+			agent_id,
+			injected_at,
+			COALESCE(injection_hash, ''),
+			compaction_detected
+		 FROM dm_injection_state
+		 WHERE org_id = $1 AND thread_id = $2`,
+		orgID,
+		threadID,
+	).Scan(
+		&state.ThreadID,
+		&state.SessionKey,
+		&state.AgentID,
+		&state.InjectedAt,
+		&state.InjectionHash,
+		&state.CompactionDetected,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &state, nil
+}
+
+func computeDMAgentIdentityHash(
+	ctx context.Context,
+	db *sql.DB,
+	orgID string,
+	agentID string,
+) (string, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return "", nil
+	}
+
+	var soulMD string
+	var identityMD string
+	var instructionsMD string
+	err := db.QueryRowContext(
+		ctx,
+		`SELECT
+			COALESCE(soul_md, ''),
+			COALESCE(identity_md, ''),
+			COALESCE(instructions_md, '')
+		 FROM agents
+		 WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+	).Scan(&soulMD, &identityMD, &instructionsMD)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+
+	hashInput := soulMD + "\x1f" + identityMD + "\x1f" + instructionsMD
+	sum := sha256.Sum256([]byte(hashInput))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func shouldInjectDMIdentity(state *dmInjectionState, currentHash string) bool {
+	if state == nil {
+		return true
+	}
+	if !state.InjectedAt.Valid {
+		return true
+	}
+	if state.CompactionDetected {
+		return true
+	}
+
+	normalizedCurrentHash := strings.TrimSpace(currentHash)
+	normalizedStoredHash := strings.TrimSpace(state.InjectionHash)
+	return normalizedCurrentHash != normalizedStoredHash
+}
+
+func persistDMInjectionState(
+	ctx context.Context,
+	db *sql.DB,
+	orgID string,
+	threadID string,
+	sessionKey string,
+	agentID string,
+	currentHash string,
+	injectIdentity bool,
+) error {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+
+	sessionKey = strings.TrimSpace(sessionKey)
+	agentID = strings.TrimSpace(agentID)
+	currentHash = strings.TrimSpace(currentHash)
+
+	if injectIdentity {
+		_, err := db.ExecContext(
+			ctx,
+			`INSERT INTO dm_injection_state (
+				org_id,
+				thread_id,
+				session_key,
+				agent_id,
+				injected_at,
+				injection_hash,
+				compaction_detected,
+				updated_at
+			) VALUES ($1, $2, $3, $4, NOW(), NULLIF($5, ''), FALSE, NOW())
+			ON CONFLICT (org_id, thread_id) DO UPDATE SET
+				session_key = EXCLUDED.session_key,
+				agent_id = EXCLUDED.agent_id,
+				injected_at = EXCLUDED.injected_at,
+				injection_hash = EXCLUDED.injection_hash,
+				compaction_detected = FALSE,
+				updated_at = NOW()`,
+			orgID,
+			threadID,
+			sessionKey,
+			agentID,
+			currentHash,
+		)
+		return err
+	}
+
+	_, err := db.ExecContext(
+		ctx,
+		`UPDATE dm_injection_state
+		 SET session_key = $3,
+		     agent_id = $4,
+		     updated_at = NOW()
+		 WHERE org_id = $1 AND thread_id = $2`,
+		orgID,
+		threadID,
+		sessionKey,
+		agentID,
+	)
+	return err
+}
+
 func (h *MessageHandler) buildDMDispatchEvent(
+	ctx context.Context,
+	db *sql.DB,
 	orgID string,
 	messageID string,
 	req createMessageRequest,
@@ -1117,6 +1297,45 @@ func (h *MessageHandler) buildDMDispatchEvent(
 	}
 	if attachments := buildDMDispatchAttachments(req.Attachments); len(attachments) > 0 {
 		event.Data.Attachments = attachments
+	}
+	if req.IncrementalContext != nil {
+		event.Data.IncrementalContext = strings.TrimSpace(*req.IncrementalContext)
+	}
+
+	threadID = strings.TrimSpace(threadID)
+	if threadID != "" {
+		injectIdentity := true
+		currentHash := ""
+
+		if db != nil {
+			identityHash, err := computeDMAgentIdentityHash(ctx, db, orgID, target.AgentID)
+			if err != nil {
+				log.Printf("messages: failed to compute DM identity hash for thread %s: %v", threadID, err)
+			} else {
+				currentHash = identityHash
+				state, loadErr := loadDMInjectionState(ctx, db, orgID, threadID)
+				if loadErr != nil {
+					log.Printf("messages: failed to load DM injection state for thread %s: %v", threadID, loadErr)
+				} else {
+					injectIdentity = shouldInjectDMIdentity(state, currentHash)
+					if persistErr := persistDMInjectionState(
+						ctx,
+						db,
+						orgID,
+						threadID,
+						target.SessionKey,
+						target.AgentID,
+						currentHash,
+						injectIdentity,
+					); persistErr != nil {
+						log.Printf("messages: failed to persist DM injection state for thread %s: %v", threadID, persistErr)
+						injectIdentity = true
+					}
+				}
+			}
+		}
+
+		event.Data.InjectIdentity = injectIdentity
 	}
 
 	return event

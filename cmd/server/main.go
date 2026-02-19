@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"sync"
@@ -108,17 +107,9 @@ func main() {
 						log.Printf("✅ Ellie ingestion OpenClaw bridge runner enabled")
 					}
 				} else {
-					// Without a runtime OpenClaw handler, the extractor will fall back to exec'ing
-					// the OpenClaw binary directly. In hosted deployments this is often unavailable,
-					// which would degrade ingestion to heuristic-only (very low yield).
-					openClawBinary := strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_BINARY"))
-					if openClawBinary == "" {
-						openClawBinary = "openclaw"
-					}
-					if _, err := exec.LookPath(openClawBinary); err != nil {
-						log.Printf("⚠️  Ellie ingestion OpenClaw extractor disabled; no OpenClaw bridge handler and %q not found in PATH", openClawBinary)
-						openClawExtractor = nil
-					}
+					// Bridge-only policy: do not silently fall back to local exec/cloud direct paths.
+					// The extractor will return bridge-unavailable and retry without advancing cursors.
+					log.Printf("⚠️  Ellie ingestion OpenClaw bridge handler unavailable; extractor will wait/retry")
 				}
 				if openClawExtractor != nil {
 					llmExtractor = openClawExtractor
@@ -286,6 +277,8 @@ func main() {
 						gatewayCaller.SetBridgeRunner(bridgeRunner)
 						log.Printf("✅ OpenClaw migration pipeline bridge runner enabled")
 					}
+				} else {
+					log.Printf("⚠️  OpenClaw migration pipeline bridge handler unavailable; LLM phases will wait/retry")
 				}
 
 				// Use a backfill-mode ingestion worker for the migration pipeline so we use
@@ -301,6 +294,8 @@ func main() {
 						} else {
 							extractor.SetBridgeRunner(bridgeRunner)
 						}
+					} else {
+						log.Printf("⚠️  OpenClaw migration ingestion bridge handler unavailable; extraction will wait/retry")
 					}
 					migrationIngestionExtractor = extractor
 				}

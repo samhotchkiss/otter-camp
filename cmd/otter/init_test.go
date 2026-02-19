@@ -346,6 +346,17 @@ func TestInitHostedRunsImportAndStartsBridge(t *testing.T) {
 	if len(client.createProjectInputs) != 1 {
 		t.Fatalf("expected one imported project call, got %d", len(client.createProjectInputs))
 	}
+	projectInput := client.createProjectInputs[0]
+	descriptionValue, ok := projectInput["description"].(string)
+	if !ok || strings.TrimSpace(descriptionValue) == "" {
+		t.Fatalf("expected generated project description, got %#v", projectInput["description"])
+	}
+	if !strings.Contains(descriptionValue, "Initial focus: Review imported context.") {
+		t.Fatalf("expected issue-focused project description, got %q", descriptionValue)
+	}
+	if strings.Contains(descriptionValue, "Signals:") {
+		t.Fatalf("description should avoid legacy raw signal formatting, got %q", descriptionValue)
+	}
 	if len(client.createIssueCalls) != 1 {
 		t.Fatalf("expected one imported issue call, got %d", len(client.createIssueCalls))
 	}
