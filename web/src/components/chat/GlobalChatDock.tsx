@@ -29,6 +29,7 @@ function isGenericDMLabel(value: string): boolean {
 
 type GlobalChatDockProps = {
   embedded?: boolean;
+  onToggleRail?: () => void;
 };
 
 type RouteScopedConversation =
@@ -107,7 +108,7 @@ function findFrankAgentFallback(agentNamesByID: Map<string, string>): { id: stri
   return { id: best.id, name: best.name };
 }
 
-export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps) {
+export default function GlobalChatDock({ embedded = false, onToggleRail }: GlobalChatDockProps) {
   const {
     isOpen,
     totalUnread,
@@ -132,6 +133,8 @@ export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps
   const [archivingChatID, setArchivingChatID] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [routeScopeMode, setRouteScopeMode] = useState<"route" | "org">("route");
+  const embeddedPanelPinnedOpen = embedded && typeof onToggleRail === "function";
+  const dockOpen = embeddedPanelPinnedOpen ? true : isOpen;
 
   const visibleConversations = useMemo(() => {
     const byRecent = (items: GlobalChatConversation[]): GlobalChatConversation[] =>
@@ -271,10 +274,10 @@ export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps
   }, [conversations, routeProjectNameHint, routeScopedConversation]);
 
   useEffect(() => {
-    if (isOpen && selectedKey) {
+    if (dockOpen && selectedKey) {
       markConversationRead(selectedKey);
     }
-  }, [isOpen, markConversationRead, selectedKey]);
+  }, [dockOpen, markConversationRead, selectedKey]);
 
   useEffect(() => {
     const match = /^\/chats\/([^/]+)$/.exec(location.pathname);
@@ -324,9 +327,11 @@ export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && isOpen) {
+      if (event.key === "Escape" && dockOpen) {
         if (isFullscreen) {
           setIsFullscreen(false);
+        } else if (embeddedPanelPinnedOpen) {
+          onToggleRail?.();
         } else {
           setDockOpen(false);
         }
@@ -334,7 +339,7 @@ export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isOpen, isFullscreen, setDockOpen]);
+  }, [dockOpen, embeddedPanelPinnedOpen, isFullscreen, onToggleRail, setDockOpen]);
 
   useEffect(() => {
     setResetProjectError(null);
@@ -416,7 +421,12 @@ export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps
     ) ?? null;
   }, [conversations, routeScopedConversation]);
 
-  const primaryOrgDMConversation = useMemo(() => {
+  const anyOrgDMConversation = useMemo(() => {
+    const dmConversations = visibleConversations.filter((conversation) => conversation.type === "dm");
+    return dmConversations[0] ?? null;
+  }, [visibleConversations]);
+
+  const frankOrgDMConversation = useMemo(() => {
     const dmConversations = visibleConversations.filter((conversation) => conversation.type === "dm");
     if (dmConversations.length === 0) {
       return null;
@@ -434,19 +444,29 @@ export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps
         threadID.includes("frank")
       );
     });
-    return frankMatch ?? dmConversations[0];
+    return frankMatch ?? null;
   }, [resolveConversationTitle, visibleConversations]);
-
-  const orgConversationTitle = useMemo(() => {
-    if (!primaryOrgDMConversation) {
-      return "Frank";
-    }
-    return resolveConversationTitle(primaryOrgDMConversation);
-  }, [primaryOrgDMConversation, resolveConversationTitle]);
 
   const frankFallbackAgent = useMemo(() => {
     return findFrankAgentFallback(agentNamesByID);
   }, [agentNamesByID]);
+
+  const orgConversationTitle = useMemo(() => {
+    if (frankOrgDMConversation) {
+      return resolveConversationTitle(frankOrgDMConversation);
+    }
+    if (frankFallbackAgent) {
+      return frankFallbackAgent.name;
+    }
+    if (anyOrgDMConversation) {
+      return resolveConversationTitle(anyOrgDMConversation);
+    }
+    return "Frank";
+  }, [anyOrgDMConversation, frankFallbackAgent, frankOrgDMConversation, resolveConversationTitle]);
+
+  const hasOrgChatTarget = useMemo(() => {
+    return Boolean(frankOrgDMConversation || frankFallbackAgent || anyOrgDMConversation);
+  }, [anyOrgDMConversation, frankFallbackAgent, frankOrgDMConversation]);
 
   const routeScopedSwapLabel = useMemo(() => {
     if (!routeScopedConversation) {
@@ -515,32 +535,36 @@ export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps
       return;
     }
     if (routeScopeMode === "route") {
-      if (primaryOrgDMConversation) {
+      if (frankOrgDMConversation) {
         setRouteScopeMode("org");
-        selectConversation(primaryOrgDMConversation.key);
-        markConversationRead(primaryOrgDMConversation.key);
+        selectConversation(frankOrgDMConversation.key);
+        markConversationRead(frankOrgDMConversation.key);
         return;
       }
-      const fallbackAgent = frankFallbackAgent;
-      if (!fallbackAgent) {
-        return;
-      }
-      setRouteScopeMode("org");
-      openConversation(
-        {
-          type: "dm",
-          agent: {
-            id: fallbackAgent.id,
-            name: fallbackAgent.name,
-            status: "online",
+      if (frankFallbackAgent) {
+        setRouteScopeMode("org");
+        openConversation(
+          {
+            type: "dm",
+            agent: {
+              id: frankFallbackAgent.id,
+              name: frankFallbackAgent.name,
+              status: "online",
+            },
+            threadId: `dm_${frankFallbackAgent.id}`,
+            title: frankFallbackAgent.name,
+            contextLabel: "Organization chat",
+            subtitle: "Direct message",
           },
-          threadId: `dm_${fallbackAgent.id}`,
-          title: fallbackAgent.name,
-          contextLabel: "Organization chat",
-          subtitle: "Direct message",
-        },
-        { focus: true, openDock: true },
-      );
+          { focus: true, openDock: true },
+        );
+        return;
+      }
+      if (anyOrgDMConversation) {
+        setRouteScopeMode("org");
+        selectConversation(anyOrgDMConversation.key);
+        markConversationRead(anyOrgDMConversation.key);
+      }
       return;
     }
 
@@ -554,10 +578,11 @@ export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps
       openConversation(routeScopedInput, { focus: true, openDock: true });
     }
   }, [
+    anyOrgDMConversation,
     frankFallbackAgent,
+    frankOrgDMConversation,
     markConversationRead,
     openConversation,
-    primaryOrgDMConversation,
     routeScopeMode,
     routeScopedConversation,
     routeScopedInput,
@@ -693,7 +718,7 @@ export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps
   }, [selectedConversation]);
 
   if (embedded) {
-    if (!isOpen) {
+    if (!dockOpen) {
       return (
         <div className="flex h-full items-end justify-end p-3">
           <button
@@ -739,7 +764,11 @@ export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps
               type="button"
               onClick={() => {
                 setIsFullscreen(false);
-                toggleDock();
+                if (embeddedPanelPinnedOpen) {
+                  onToggleRail?.();
+                } else {
+                  toggleDock();
+                }
               }}
               className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
               aria-label="Collapse global chat"
@@ -750,7 +779,11 @@ export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps
               type="button"
               onClick={() => {
                 setIsFullscreen(false);
-                setDockOpen(false);
+                if (embeddedPanelPinnedOpen) {
+                  onToggleRail?.();
+                } else {
+                  setDockOpen(false);
+                }
               }}
               className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border)] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
               aria-label="Close global chat"
@@ -792,7 +825,7 @@ export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps
                     <button
                       type="button"
                       onClick={handleSwapScope}
-                      disabled={routeScopeMode === "route" && !primaryOrgDMConversation && !frankFallbackAgent}
+                      disabled={routeScopeMode === "route" && !hasOrgChatTarget}
                       className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {routeScopedSwapLabel}
@@ -850,7 +883,7 @@ export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps
     );
   }
 
-  if (!isOpen) {
+  if (!dockOpen) {
     return (
       <div className="fixed bottom-4 right-4 z-50">
         <button
@@ -1049,7 +1082,7 @@ export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps
                           <button
                             type="button"
                             onClick={handleSwapScope}
-                            disabled={routeScopeMode === "route" && !primaryOrgDMConversation && !frankFallbackAgent}
+                            disabled={routeScopeMode === "route" && !hasOrgChatTarget}
                             className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {routeScopedSwapLabel}

@@ -105,6 +105,26 @@ describe("DashboardLayout", () => {
     expect(chatSlot).toHaveAttribute("aria-hidden", "false");
   });
 
+  it("collapses chat rail to handle width and lets content expand when compacted", async () => {
+    renderLayout("/projects");
+
+    const chatSlot = await screen.findByTestId("shell-chat-slot");
+    const mainContent = document.getElementById("main-content");
+    const contentShell = mainContent?.firstElementChild as HTMLElement | null;
+    expect(contentShell).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle chat panel" }));
+    expect(chatSlot).toHaveAttribute("aria-hidden", "true");
+    expect(chatSlot).toHaveStyle({ width: "16px" });
+    expect(contentShell).toHaveClass("w-full");
+    expect(contentShell).toHaveClass("max-w-none");
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle chat panel" }));
+    expect(chatSlot).toHaveAttribute("aria-hidden", "false");
+    expect(contentShell).toHaveClass("mx-auto");
+    expect(contentShell).toHaveClass("max-w-6xl");
+  });
+
   it("marks the active projects navigation link with aria-current", async () => {
     renderLayout("/projects");
     const activeProjectsLink = await screen.findByRole("link", { name: "Projects" });
