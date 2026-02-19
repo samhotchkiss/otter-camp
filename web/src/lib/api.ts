@@ -260,6 +260,129 @@ export interface SyncAgentsResponse {
   sync_healthy?: boolean;
 }
 
+export interface AdminAgentSummary {
+  id: string;
+  workspace_agent_id: string;
+  name: string;
+  status: string;
+  is_ephemeral: boolean;
+  project_id?: string | null;
+  model?: string;
+  context_tokens?: number;
+  total_tokens?: number;
+  heartbeat_every?: string;
+  channel?: string;
+  session_key?: string;
+  last_seen?: string;
+}
+
+export interface AdminAgentsResponse {
+  agents: AdminAgentSummary[];
+  total: number;
+}
+
+export interface AdminAgentDetailResponse {
+  agent?: AdminAgentSummary;
+  sync?: {
+    current_task?: string;
+    context_tokens?: number;
+    total_tokens?: number;
+    last_seen?: string;
+    updated_at?: string;
+  };
+}
+
+export interface MemoryEntry {
+  id: string;
+  agent_id: string;
+  kind: string;
+  title: string;
+  content: string;
+  metadata?: unknown;
+  importance?: number;
+  confidence?: number;
+  sensitivity?: string;
+  status?: string;
+  occurred_at?: string;
+  source_project?: string | null;
+  source_issue?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  relevance?: number;
+}
+
+export interface MemoryEntriesResponse {
+  items: MemoryEntry[];
+  total: number;
+}
+
+export interface MemoryEvent {
+  id: number;
+  event_type: string;
+  payload?: unknown;
+  created_at: string;
+}
+
+export interface MemoryEventsResponse {
+  items: MemoryEvent[];
+  total: number;
+}
+
+export interface KnowledgeEntry {
+  id: string;
+  title: string;
+  content: string;
+  tags?: string[];
+  created_by?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface KnowledgeResponse {
+  items: KnowledgeEntry[];
+  total: number;
+}
+
+export interface TaxonomyNode {
+  id: string;
+  org_id: string;
+  parent_id?: string | null;
+  slug: string;
+  display_name: string;
+  description?: string | null;
+  depth: number;
+}
+
+export interface TaxonomyNodesResponse {
+  nodes: TaxonomyNode[];
+}
+
+export interface TaxonomySubtreeMemory {
+  memory_id: string;
+  kind: string;
+  title: string;
+  content: string;
+  source_conversation_id?: string | null;
+  source_project_id?: string | null;
+}
+
+export interface TaxonomySubtreeMemoriesResponse {
+  memories: TaxonomySubtreeMemory[];
+}
+
+export interface ProjectTreeEntry {
+  name: string;
+  type: string;
+  path: string;
+  size?: number;
+}
+
+export interface AgentMemoryFilesResponse {
+  ref: string;
+  path: string;
+  entries: ProjectTreeEntry[];
+}
+
 export interface AdminConnectionsResponse {
   bridge?: {
     connected?: boolean;
@@ -341,6 +464,41 @@ export const api = {
     return apiFetch<IssueListResponse>(path);
   },
   syncAgents: () => apiFetch<SyncAgentsResponse>(`/api/sync/agents`),
+  adminAgents: () => apiFetch<AdminAgentsResponse>(`/api/admin/agents`),
+  adminAgent: (id: string) => apiFetch<AdminAgentDetailResponse>(`/api/admin/agents/${encodeURIComponent(id)}`),
+  adminAgentMemoryFiles: (id: string) => apiFetch<AgentMemoryFilesResponse>(`/api/admin/agents/${encodeURIComponent(id)}/memory`),
+  memoryEntries: (agentID: string, options: { kind?: string; limit?: number; offset?: number } = {}) => {
+    const params = new URLSearchParams();
+    params.set("agent_id", agentID);
+    if (options.kind) {
+      params.set("kind", options.kind);
+    }
+    if (typeof options.limit === "number" && Number.isFinite(options.limit)) {
+      params.set("limit", String(Math.max(1, Math.floor(options.limit))));
+    }
+    if (typeof options.offset === "number" && Number.isFinite(options.offset)) {
+      params.set("offset", String(Math.max(0, Math.floor(options.offset))));
+    }
+    return apiFetch<MemoryEntriesResponse>(`/api/memory/entries?${params.toString()}`);
+  },
+  memoryEvents: (limit = 100) => {
+    const bounded = Math.max(1, Math.floor(limit));
+    return apiFetch<MemoryEventsResponse>(`/api/memory/events?limit=${bounded}`);
+  },
+  knowledge: (limit = 200) => {
+    const bounded = Math.max(1, Math.floor(limit));
+    return apiFetch<KnowledgeResponse>(`/api/knowledge?limit=${bounded}`);
+  },
+  taxonomyNodes: (parentID?: string) => {
+    const params = new URLSearchParams();
+    if (parentID && parentID.trim()) {
+      params.set("parent_id", parentID.trim());
+    }
+    const query = params.toString();
+    const path = query ? `/api/taxonomy/nodes?${query}` : "/api/taxonomy/nodes";
+    return apiFetch<TaxonomyNodesResponse>(path);
+  },
+  taxonomyNodeMemories: (id: string) => apiFetch<TaxonomySubtreeMemoriesResponse>(`/api/taxonomy/nodes/${encodeURIComponent(id)}/memories`),
   adminConnections: () => apiFetch<AdminConnectionsResponse>(`/api/admin/connections`),
   
   // Approval actions
