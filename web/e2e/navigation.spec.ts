@@ -1,9 +1,11 @@
 import { test, expect } from "@playwright/test";
 import { bootstrapAuthenticatedSession } from "./helpers/auth";
+import { installCoreDataApiMocks } from "./helpers/coreDataRoutes";
 
 test.describe("Navigation", () => {
   test.beforeEach(async ({ page }) => {
     await bootstrapAuthenticatedSession(page);
+    await installCoreDataApiMocks(page);
   });
 
   test("figma-parity-shell baseline scaffold renders", async ({ page }) => {
@@ -23,13 +25,15 @@ test.describe("Navigation", () => {
     await page.goto("/inbox");
 
     await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
-    await expect(page.getByRole("tab", { name: "All (6)" })).toBeVisible();
-    await expect(page.getByRole("tab", { name: "Unread (3)" })).toBeVisible();
-    await expect(page.getByRole("tab", { name: "Starred (1)" })).toBeVisible();
-    await expect(page.getByText("PR #234 awaiting approval")).toBeVisible();
+    await expect(page.getByRole("tab", { name: "All (3)" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Unread (2)" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Starred (0)" })).toBeVisible();
+    await expect(page.getByText("Deploy frontend")).toBeVisible();
 
+    await page.getByRole("button", { name: "Toggle star for Deploy frontend" }).click();
+    await expect(page.getByRole("tab", { name: "Starred (1)" })).toBeVisible();
     await page.getByRole("tab", { name: "Starred (1)" }).click();
-    await expect(page.getByText("Critical: API rate limit exceeded")).toBeVisible();
+    await expect(page.getByText("Deploy frontend")).toBeVisible();
   });
 
   test("figma-parity-projects baseline cards and activity render", async ({ page }) => {
@@ -85,6 +89,48 @@ test.describe("Navigation", () => {
     await page.goto("/connections");
     await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "OpenClaw Bridge" })).toBeVisible();
+  });
+
+  test("core-data-wiring-inbox approve and reject actions update API-backed rows", async ({ page }) => {
+    const decisions: string[] = [];
+    await page.route("**/api/approvals/exec/*/respond**", async (route) => {
+      const body = route.request().postDataJSON() as { action?: string } | null;
+      const action = typeof body?.action === "string" ? body.action : "";
+      decisions.push(action);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ success: true }),
+      });
+    });
+
+    await page.goto("/inbox");
+    await expect(page.getByText("Deploy frontend")).toBeVisible();
+    await expect(page.getByText("Publish package")).toBeVisible();
+
+    await page.getByRole("button", { name: "Approve Deploy frontend" }).click();
+    await expect(page.getByText("Deploy frontend")).not.toBeVisible();
+
+    await page.getByRole("button", { name: "Reject Publish package" }).click();
+    await expect(page.getByText("Publish package")).not.toBeVisible();
+    await expect(page.getByText("Nightly sync complete")).toBeVisible();
+    expect(decisions).toEqual(["approve", "reject"]);
+  });
+
+  test("figma-parity-core projects and project-detail render API-backed baseline surfaces", async ({ page }) => {
+    await page.goto("/projects");
+
+    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+    await expect(page.getByTestId("project-card-project-1")).toBeVisible();
+    await expect(page.getByTestId("project-card-project-2")).toBeVisible();
+    await expect(page.getByText("2 item(s) awaiting review")).toBeVisible();
+
+    await page.getByTestId("project-card-project-2").click();
+    await expect(page).toHaveURL(/\/projects\/project-2$/);
+    await expect(page.getByRole("heading", { name: "API Gateway" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Open Issues" })).toBeVisible();
+    await expect(page.getByTestId("shell-workspace").getByText("Fix API rate limiting")).toBeVisible();
+    await expect(page.getByTestId("project-detail-right-rail")).toBeVisible();
   });
 
   test("shows primary topbar links", async ({ page }) => {
