@@ -385,6 +385,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   }, []);
 
   const currentRouteLabel = useMemo(() => routeLabel(location.pathname), [location.pathname]);
+  const chatRailWidthPx = chatOpen ? chatDockWidth : CHAT_DOCK_HANDLE_VISIBLE_PX;
+  const contentShellClass = chatOpen
+    ? "mx-auto max-w-6xl space-y-4 md:space-y-6"
+    : "w-full max-w-none space-y-4 md:space-y-6";
 
   return (
     <div className="shell-layout flex h-screen overflow-hidden bg-stone-950 text-stone-200 font-sans" data-testid="shell-layout">
@@ -661,13 +665,13 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
         <div className="shell-workspace relative flex flex-1 overflow-hidden" data-testid="shell-workspace">
           <main className="shell-content min-w-0 flex-1 overflow-y-auto bg-stone-950 p-4 md:p-6" id="main-content">
-            <div className="mx-auto max-w-6xl space-y-4 md:space-y-6">{children}</div>
+            <div className={contentShellClass}>{children}</div>
           </main>
           <aside
             className="shell-chat-slot pointer-events-none absolute inset-y-0 right-0 z-20 max-lg:hidden"
             data-testid="shell-chat-slot"
             aria-hidden={!chatOpen}
-            style={{ width: `${chatDockWidth}px` }}
+            style={{ width: `${chatRailWidthPx}px` }}
           >
             <div className="pointer-events-auto relative h-full overflow-visible">
               <div
@@ -686,8 +690,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 >
                   <span aria-hidden="true">{chatOpen ? "›" : "‹"}</span>
                 </button>
-                <div className="h-full border-l border-stone-800 bg-stone-900 shadow-2xl shadow-black/40">
-                  <GlobalChatDock embedded />
+                <div className={`h-full border-l border-stone-800 bg-stone-900 ${chatOpen ? "shadow-2xl shadow-black/40" : ""}`}>
+                  <GlobalChatDock embedded onToggleRail={toggleChatDock} />
                 </div>
               </div>
             </div>

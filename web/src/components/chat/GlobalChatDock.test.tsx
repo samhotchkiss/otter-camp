@@ -332,6 +332,23 @@ describe("GlobalChatDock", () => {
     expect(globalChatState.setDockOpen).toHaveBeenCalledWith(false);
   });
 
+  it("uses rail toggle callback for embedded hide actions", async () => {
+    const user = userEvent.setup();
+    const onToggleRail = vi.fn();
+    globalChatState.conversations = [];
+    globalChatState.selectedConversation = null;
+    globalChatState.selectedKey = null;
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <GlobalChatDock embedded onToggleRail={onToggleRail} />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Collapse global chat" }));
+    expect(onToggleRail).toHaveBeenCalledTimes(1);
+  });
+
   it("defaults to project-scoped chat on project detail routes", async () => {
     globalChatState.conversations = [
       {
