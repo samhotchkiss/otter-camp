@@ -133,30 +133,50 @@ test.describe("Navigation", () => {
     await expect(page.getByTestId("project-detail-right-rail")).toBeVisible();
   });
 
-  test("shows primary topbar links", async ({ page }) => {
-    await page.goto("/");
+  test("figma-parity-issue route renders baseline issue detail surface", async ({ page }) => {
+    await page.goto("/issue/ISS-209");
 
-    const nav = page.locator("nav.nav-links");
-    await expect(nav).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Inbox" })).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Projects" })).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Workflows" })).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Knowledge" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Fix API rate limiting" })).toBeVisible();
+    await expect(page.getByText("Proposed Solution Awaiting Approval")).toBeVisible();
+    await expect(page.getByRole("button", { name: /Approve Solution/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Request Changes/ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Discussion" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Related Issues" })).toBeVisible();
   });
 
-  test("navigates between primary routes", async ({ page }) => {
+  test("figma-parity-review route renders baseline content review surface", async ({ page }) => {
+    await page.goto("/review/docs%2Frate-limiting-implementation.md");
+
+    await expect(page.getByRole("heading", { name: "Content Review" })).toBeVisible();
+    await expect(page.getByTestId("content-review-route-path")).toContainText("docs/rate-limiting-implementation.md");
+    await expect(page.getByRole("button", { name: "Request Changes" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Approve" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Document" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "All Comments" })).toBeVisible();
+  });
+
+  test("shows primary shell navigation links", async ({ page }) => {
     await page.goto("/");
 
-    await page.getByRole("link", { name: "Projects" }).click();
+    const sidebar = page.getByTestId("shell-sidebar");
+    await expect(sidebar).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Inbox" })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Projects", exact: true })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Memory quick nav" })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Operations quick nav" })).toBeVisible();
+  });
+
+  test("navigates between available primary routes", async ({ page }) => {
+    await page.goto("/");
+
+    await page.getByRole("link", { name: "Projects", exact: true }).click();
     await expect(page).toHaveURL(/\/projects$/);
 
     await page.getByRole("link", { name: "Inbox" }).click();
     await expect(page).toHaveURL(/\/inbox$/);
 
-    await page.getByRole("link", { name: "Workflows" }).click();
-    await expect(page).toHaveURL(/\/workflows$/);
-
-    await page.getByRole("link", { name: "Knowledge" }).click();
+    await page.getByRole("link", { name: "Memory quick nav" }).click();
     await expect(page).toHaveURL(/\/knowledge$/);
   });
 
