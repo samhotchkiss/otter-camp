@@ -1,499 +1,221 @@
-/**
- * KnowledgePage - Second Brain / Knowledge Base
- * Design spec: Jeff G
- * 
- * Features:
- * - Tag filtering
- * - Card grid layout
- * - Entry detail modal
- */
+type ConversationExtract = {
+  id: number;
+  source: string;
+  extract: string;
+  timestamp: string;
+  confidence: number;
+};
 
-import { type FormEvent, useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { apiFetch, type ApiError } from '../lib/api';
+type TaxonomyCategory = {
+  name: string;
+  entries: number;
+  lastUpdated: string;
+  tone: "amber" | "orange" | "lime" | "emerald";
+};
 
-interface KnowledgeEntry {
-  id: string;
+type ProjectDoc = {
   title: string;
-  content: string;
-  tags: string[];
-  created_by: string;
-  created_at: string;
-  updated_at: string;
+  author: string;
+  lastEdited: string;
+  status: "current" | "archived";
+};
+
+type MemoryStat = {
+  label: string;
+  value: string;
+  tone: "amber" | "orange" | "lime";
+};
+
+const CONVERSATION_EXTRACTS: ConversationExtract[] = [
+  {
+    id: 1,
+    source: "Agent-042 -> Orchestrator",
+    extract: "User prefers React hooks over class components",
+    timestamp: "5 min ago",
+    confidence: 0.95,
+  },
+  {
+    id: 2,
+    source: "Agent-127 -> Memory System",
+    extract: "API rate limit set to 1000 req/min per customer",
+    timestamp: "12 min ago",
+    confidence: 0.98,
+  },
+  {
+    id: 3,
+    source: "Agent-089 -> Staffing Manager",
+    extract: "Database queries optimized using indexing strategy",
+    timestamp: "23 min ago",
+    confidence: 0.92,
+  },
+  {
+    id: 4,
+    source: "Orchestrator -> Agent-042",
+    extract: "Customer Portal requires mobile-first responsive design",
+    timestamp: "1h ago",
+    confidence: 0.96,
+  },
+];
+
+const TAXONOMY_CATEGORIES: TaxonomyCategory[] = [
+  { name: "Technical Preferences", entries: 45, lastUpdated: "2 min ago", tone: "amber" },
+  { name: "Project Requirements", entries: 78, lastUpdated: "15 min ago", tone: "orange" },
+  { name: "Code Patterns", entries: 123, lastUpdated: "1h ago", tone: "lime" },
+  { name: "System Architecture", entries: 34, lastUpdated: "3h ago", tone: "emerald" },
+  { name: "Agent Behaviors", entries: 67, lastUpdated: "30 min ago", tone: "amber" },
+];
+
+const PROJECT_DOCS: ProjectDoc[] = [
+  { title: "Customer Portal - Authentication Flow", author: "Memory System", lastEdited: "10 min ago", status: "current" },
+  { title: "API Gateway - Security Best Practices", author: "Agent-127", lastEdited: "1h ago", status: "current" },
+  { title: "Database Optimization Guidelines", author: "Agent-089", lastEdited: "2h ago", status: "current" },
+  { title: "Deployment Pipeline Configuration", author: "Orchestrator", lastEdited: "5h ago", status: "archived" },
+];
+
+const MEMORY_STATS: MemoryStat[] = [
+  { label: "Vector Embeddings", value: "12,847", tone: "amber" },
+  { label: "Entity Syntheses", value: "342", tone: "orange" },
+  { label: "File-Backed Memories", value: "1,204", tone: "lime" },
+  { label: "Context Injections", value: "3,891", tone: "amber" },
+];
+
+function toneClasses(tone: TaxonomyCategory["tone"]): string {
+  if (tone === "orange") {
+    return "text-orange-400 border-orange-500/20 hover:bg-orange-500/5";
+  }
+  if (tone === "lime") {
+    return "text-lime-400 border-lime-500/20 hover:bg-lime-500/5";
+  }
+  if (tone === "emerald") {
+    return "text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/5";
+  }
+  return "text-amber-400 border-amber-500/20 hover:bg-amber-500/5";
 }
 
-interface KnowledgeListResponse {
-  items: KnowledgeEntry[];
-  total: number;
-}
-
-interface KnowledgeImportEntry {
-  title: string;
-  content: string;
-  tags: string[];
-  created_by: string;
-}
-
-interface KnowledgeImportResponse {
-  inserted: number;
-}
-
-interface MemoryEvaluationSummary {
-  id: string;
-  created_at: string;
-  passed: boolean;
-  failed_gates?: string[];
-  metrics?: {
-    precision_at_k?: number;
-    false_injection_rate?: number;
-    recovery_success_rate?: number;
-    p95_latency_ms?: number;
-  };
-}
-
-function timeAgo(dateString: string): string {
-  const date = new Date(dateString);
-  const now = new Date();
-  const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
-  
-  if (seconds < 60) return 'just now';
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  if (seconds < 604800) return `${Math.floor(seconds / 86400)}d ago`;
-  return date.toLocaleDateString();
+function statToneClasses(tone: MemoryStat["tone"]): string {
+  if (tone === "orange") {
+    return "border-orange-500/20 bg-orange-500/10 text-orange-400";
+  }
+  if (tone === "lime") {
+    return "border-lime-500/20 bg-lime-500/10 text-lime-400";
+  }
+  return "border-amber-500/20 bg-amber-500/10 text-amber-400";
 }
 
 export default function KnowledgePage() {
-  const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
-  const [selectedTag, setSelectedTag] = useState<string | null>(null);
-  const [selectedEntry, setSelectedEntry] = useState<KnowledgeEntry | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [isCreatingEntry, setIsCreatingEntry] = useState(false);
-  const [createEntryError, setCreateEntryError] = useState<string | null>(null);
-  const [newEntryTitle, setNewEntryTitle] = useState("");
-  const [newEntryContent, setNewEntryContent] = useState("");
-  const [newEntryTags, setNewEntryTags] = useState("");
-  const [newEntryAuthor, setNewEntryAuthor] = useState("");
-  const [evaluation, setEvaluation] = useState<MemoryEvaluationSummary | null>(null);
-  const [evaluationLoading, setEvaluationLoading] = useState(true);
-  const [evaluationError, setEvaluationError] = useState<string | null>(null);
-
-  const loadEntries = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-
-    try {
-      const payload = await apiFetch<KnowledgeListResponse>('/api/knowledge');
-      const normalizedEntries = (payload.items ?? []).map((entry) => ({
-        ...entry,
-        tags: entry.tags ?? [],
-      }));
-      setEntries(normalizedEntries);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Failed to load knowledge entries';
-      setLoadError(message);
-      setEntries([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadEntries();
-  }, [loadEntries]);
-
-  function normalizeTagsInput(rawTags: string): string[] {
-    return [...new Set(rawTags
-      .split(",")
-      .map((tag) => tag.trim().toLowerCase())
-      .filter((tag) => tag.length > 0))];
-  }
-
-  function toKnowledgeImportEntry(entry: KnowledgeEntry): KnowledgeImportEntry {
-    return {
-      title: entry.title,
-      content: entry.content,
-      tags: entry.tags ?? [],
-      created_by: entry.created_by,
-    };
-  }
-
-  function resetNewEntryDraft(): void {
-    setNewEntryTitle("");
-    setNewEntryContent("");
-    setNewEntryTags("");
-    setCreateEntryError(null);
-    const storedUserName = (window.localStorage.getItem("otter-camp-user-name") ?? "").trim();
-    setNewEntryAuthor(storedUserName || "You");
-  }
-
-  function openCreateModal(): void {
-    resetNewEntryDraft();
-    setIsCreateModalOpen(true);
-  }
-
-  async function handleCreateEntry(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (isCreatingEntry) {
-      return;
-    }
-
-    const title = newEntryTitle.trim();
-    const content = newEntryContent.trim();
-    const createdBy = newEntryAuthor.trim() || "You";
-    const tags = normalizeTagsInput(newEntryTags);
-    if (!title || !content) {
-      setCreateEntryError("Title and content are required.");
-      return;
-    }
-
-    setCreateEntryError(null);
-    setIsCreatingEntry(true);
-    try {
-      const mergedEntries: KnowledgeImportEntry[] = [
-        ...entries.map((entry) => toKnowledgeImportEntry(entry)),
-        {
-          title,
-          content,
-          tags,
-          created_by: createdBy,
-        },
-      ];
-      await apiFetch<KnowledgeImportResponse>("/api/knowledge/import", {
-        method: "POST",
-        body: JSON.stringify({ entries: mergedEntries }),
-      });
-      await loadEntries();
-      setIsCreateModalOpen(false);
-      setSelectedTag(null);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Failed to create knowledge entry";
-      setCreateEntryError(message);
-    } finally {
-      setIsCreatingEntry(false);
-    }
-  }
-
-  useEffect(() => {
-    let active = true;
-    setEvaluationLoading(true);
-    setEvaluationError(null);
-
-    void apiFetch<{ run?: MemoryEvaluationSummary }>('/api/memory/evaluations/latest')
-      .then((payload) => {
-        if (!active) return;
-        setEvaluation(payload?.run ?? null);
-      })
-      .catch((error: unknown) => {
-        if (!active) return;
-        if (error && typeof error === "object" && (error as ApiError).status === 404) {
-          // Older deployments may not expose evaluation APIs yet.
-          setEvaluation(null);
-          setEvaluationError(null);
-          return;
-        }
-        const message = error instanceof Error ? error.message : 'Failed to load memory evaluation summary';
-        setEvaluationError(message);
-        setEvaluation(null);
-      })
-      .finally(() => {
-        if (!active) return;
-        setEvaluationLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  // Get all unique tags
-  const allTags = Array.from(
-    new Set(entries.flatMap((e) => e.tags))
-  ).sort();
-
-  // Filter entries by tag (search handled by magic bar)
-  const filteredEntries = entries.filter((entry) => {
-    return !selectedTag || entry.tags.includes(selectedTag);
-  });
-
   return (
-    <div data-testid="knowledge-shell" className="mx-auto w-full max-w-[1240px] space-y-6">
-      {/* Page Header */}
-      <header className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-[var(--border)] bg-[var(--surface)]/70 p-6 shadow-sm">
+    <div data-testid="knowledge-shell" className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-semibold text-[var(--text)]">Knowledge Base</h1>
-          <span className="mt-1 inline-flex text-sm text-[var(--text-muted)]">{entries.length} entries</span>
+          <h1 className="flex items-center gap-2 text-xl font-semibold text-stone-100">
+            <span aria-hidden="true" className="text-orange-500">🧠</span>
+            Memory System
+          </h1>
+          <p className="text-sm text-stone-500">Vector retrieval • Entity synthesis • File persistence</p>
         </div>
-        <button
-          type="button"
-          className="rounded-full border border-[#C9A86C]/60 bg-[#C9A86C]/15 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-[#C9A86C]"
-          onClick={openCreateModal}
-        >
-          + New Entry
-        </button>
-      </header>
-
-      <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold text-[var(--text)]">Memory Evaluation</h2>
-          <Link to="/knowledge/evaluation" className="text-xs font-medium text-[#C9A86C] hover:underline">
-            View dashboard
-          </Link>
-        </div>
-        {evaluationLoading && <p className="mt-2 text-sm text-[var(--text-muted)]">Loading latest evaluation…</p>}
-        {!evaluationLoading && evaluationError && (
-          <p className="mt-2 text-sm text-rose-500">Evaluation unavailable: {evaluationError}</p>
-        )}
-        {!evaluationLoading && !evaluationError && !evaluation && (
-          <p className="mt-2 text-sm text-[var(--text-muted)]">No evaluation runs recorded yet.</p>
-        )}
-        {!evaluationLoading && !evaluationError && evaluation && (
-          <div className="mt-3 grid gap-2 sm:grid-cols-4">
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-2">
-              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Status</p>
-              <p className={`mt-1 text-sm font-medium ${evaluation.passed ? 'text-emerald-600' : 'text-rose-500'}`}>
-                {evaluation.passed ? 'pass' : 'fail'}
-              </p>
-            </div>
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-2">
-              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Precision@k</p>
-              <p className="mt-1 text-sm font-medium text-[var(--text)]">
-                {typeof evaluation.metrics?.precision_at_k === 'number'
-                  ? evaluation.metrics.precision_at_k.toFixed(2)
-                  : 'n/a'}
-              </p>
-            </div>
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-2">
-              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">False inject</p>
-              <p className="mt-1 text-sm font-medium text-[var(--text)]">
-                {typeof evaluation.metrics?.false_injection_rate === 'number'
-                  ? evaluation.metrics.false_injection_rate.toFixed(2)
-                  : 'n/a'}
-              </p>
-            </div>
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-2">
-              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Recovery</p>
-              <p className="mt-1 text-sm font-medium text-[var(--text)]">
-                {typeof evaluation.metrics?.recovery_success_rate === 'number'
-                  ? evaluation.metrics.recovery_success_rate.toFixed(2)
-                  : 'n/a'}
-              </p>
-            </div>
-          </div>
-        )}
-      </section>
-
-      <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold text-[var(--text)]">Ingestion Coverage</h2>
-          <Link to="/knowledge/ingestion" className="text-xs font-medium text-[#C9A86C] hover:underline">
-            View coverage
-          </Link>
-        </div>
-        <p className="mt-2 text-sm text-[var(--text-muted)]">
-          See what day extraction has reached, plus per-day message counts, window counts, retries, and extracted memories.
-        </p>
-      </section>
-
-      {/* Tag Filters (search handled by magic bar ⌘K) */}
-      <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)]/60 p-4">
-        <div className="flex flex-wrap gap-2">
-          <button
-            className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-              !selectedTag
-                ? "border-[#C9A86C]/50 bg-[#C9A86C]/15 text-[#C9A86C]"
-                : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:border-[#C9A86C]/40 hover:text-[var(--text)]"
-            }`}
-            onClick={() => setSelectedTag(null)}
-          >
-            All
-          </button>
-          {allTags.map((tag) => (
-            <button
-              key={tag}
-              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                selectedTag === tag
-                  ? "border-[#C9A86C]/50 bg-[#C9A86C]/15 text-[#C9A86C]"
-                  : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:border-[#C9A86C]/40 hover:text-[var(--text)]"
-              }`}
-              onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
-            >
-              {tag}
-            </button>
-          ))}
+        <div className="relative">
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-stone-500">⌕</span>
+          <input
+            type="text"
+            placeholder="Search memory graph..."
+            className="w-64 rounded-lg border border-stone-800 bg-stone-900 py-2 pl-9 pr-4 text-xs text-stone-300 outline-none placeholder:text-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/40"
+          />
         </div>
       </div>
 
-      {/* Entry Grid */}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {loading && (
-          <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-10 text-center text-[var(--text-muted)] md:col-span-2 xl:col-span-3">
-            <p>Loading knowledge entries…</p>
-          </div>
-        )}
-        {!loading && loadError && (
-          <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-10 text-center text-rose-400 md:col-span-2 xl:col-span-3">
-            <p>Unable to load knowledge entries</p>
-            <p className="mt-2 text-sm text-rose-300/80">{loadError}</p>
-          </div>
-        )}
-        {filteredEntries.map((entry) => (
-          <article
-            key={entry.id}
-            className="group cursor-pointer rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 transition hover:border-[#C9A86C]/40 hover:bg-[var(--surface-alt)]"
-            onClick={() => setSelectedEntry(entry)}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <h3 className="text-base font-semibold text-[var(--text)] transition group-hover:text-[#C9A86C]">{entry.title}</h3>
-              <span className="rounded-full border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-0.5 text-xs text-[var(--text-muted)]">{entry.created_by}</span>
-            </div>
-            <p className="mt-3 line-clamp-4 text-sm text-[var(--text-muted)]">{entry.content}</p>
-            <div className="mt-4 flex items-center justify-between gap-2">
-              <div className="flex flex-wrap gap-1.5">
-                {entry.tags.slice(0, 3).map((tag) => (
-                  <span key={tag} className="rounded-full border border-[#C9A86C]/35 bg-[#C9A86C]/10 px-2 py-0.5 text-[11px] font-medium text-[#C9A86C]">
-                    {tag}
-                  </span>
-                ))}
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        {MEMORY_STATS.map((stat) => (
+          <article key={stat.label} className="group relative overflow-hidden rounded-lg border border-stone-800 bg-stone-900 p-4">
+            <div className={`absolute inset-0 opacity-20 transition-opacity group-hover:opacity-30 ${statToneClasses(stat.tone)}`} />
+            <div className="relative z-10">
+              <div className="mb-2 flex items-start justify-between">
+                <span className={`rounded-lg border px-2 py-1 text-xs ${statToneClasses(stat.tone)}`}>◉</span>
+                <span className="text-lime-500">↗</span>
               </div>
-              <span className="text-xs text-[var(--text-muted)]">{timeAgo(entry.updated_at)}</span>
+              <p className="text-2xl font-bold tracking-tight text-stone-200">{stat.value}</p>
+              <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-stone-500">{stat.label}</p>
             </div>
           </article>
         ))}
       </div>
 
-      {/* Empty State */}
-      {!loading && !loadError && filteredEntries.length === 0 && (
-        <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface)]/50 p-10 text-center text-[var(--text-muted)]">
-          <span className="text-4xl">📚</span>
-          <p>No entries found</p>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">
-            {selectedTag
-              ? 'Try selecting a different tag'
-              : 'Create your first knowledge entry'}
-          </p>
-        </div>
-      )}
-
-      {/* Entry Detail Modal */}
-      {selectedEntry && (
-        <div className="modal-overlay" onClick={() => setSelectedEntry(null)}>
-          <div className="entry-modal" onClick={(e) => e.stopPropagation()}>
-            <header className="entry-modal-header">
-              <h2>{selectedEntry.title}</h2>
-              <button
-                className="modal-close"
-                onClick={() => setSelectedEntry(null)}
-              >
-                ✕
-              </button>
-            </header>
-            <div className="entry-modal-meta">
-              <span>Created by {selectedEntry.created_by}</span>
-              <span>•</span>
-              <span>Updated {timeAgo(selectedEntry.updated_at)}</span>
-            </div>
-            <div className="entry-modal-tags">
-              {selectedEntry.tags.map((tag) => (
-                <span key={tag} className="tag">
-                  {tag}
-                </span>
-              ))}
-            </div>
-            <div className="entry-modal-content">
-              <pre>{selectedEntry.content}</pre>
-            </div>
-            <div className="entry-modal-actions">
-              <button className="btn btn-secondary">Edit</button>
-              <button className="btn btn-ghost">Delete</button>
-            </div>
+      <div className="grid h-[500px] grid-cols-1 gap-6 lg:grid-cols-3">
+        <section className="flex flex-col overflow-hidden rounded-lg border border-stone-800 bg-stone-900 lg:col-span-2">
+          <header className="flex items-center justify-between border-b border-stone-800 bg-stone-950/30 p-4">
+            <h2 className="text-sm font-semibold text-stone-200">Stream: Conversation Extraction</h2>
+            <span className="rounded border border-lime-500/20 bg-lime-500/10 px-2 py-0.5 text-[10px] text-lime-400">LIVE</span>
+          </header>
+          <div className="flex-1 space-y-2 overflow-y-auto p-2">
+            {CONVERSATION_EXTRACTS.map((extract) => (
+              <article key={extract.id} className="group rounded border border-stone-800/50 bg-stone-950/50 p-3 transition hover:border-amber-500/30">
+                <div className="mb-2 flex items-start justify-between gap-2">
+                  <div>
+                    <div className="mb-1 flex items-center gap-2">
+                      <span className="rounded bg-amber-500/10 px-1.5 text-[10px] text-amber-400">{extract.source}</span>
+                      <span className="text-[10px] text-stone-600">{extract.timestamp}</span>
+                    </div>
+                    <p className="text-sm text-stone-300 transition group-hover:text-stone-100">"{extract.extract}"</p>
+                  </div>
+                  <div className="ml-3 text-right">
+                    <p className="text-[10px] text-stone-500">CONFIDENCE</p>
+                    <p className="text-xs font-bold text-lime-400">{Math.round(extract.confidence * 100)}%</p>
+                  </div>
+                </div>
+              </article>
+            ))}
           </div>
-        </div>
-      )}
+        </section>
 
-      {isCreateModalOpen && (
-        <div className="modal-overlay" onClick={() => {
-          if (!isCreatingEntry) {
-            setIsCreateModalOpen(false);
-          }
-        }}>
-          <div className="entry-modal" onClick={(event) => event.stopPropagation()}>
-            <header className="entry-modal-header">
-              <h2>New knowledge entry</h2>
-              <button
-                type="button"
-                className="modal-close"
-                onClick={() => setIsCreateModalOpen(false)}
-                disabled={isCreatingEntry}
+        <section className="flex flex-col overflow-hidden rounded-lg border border-stone-800 bg-stone-900">
+          <header className="border-b border-stone-800 bg-stone-950/30 p-4">
+            <h2 className="text-sm font-semibold text-stone-200">Taxonomy</h2>
+          </header>
+          <div className="flex-1 space-y-2 overflow-y-auto p-2">
+            {TAXONOMY_CATEGORIES.map((category) => (
+              <article
+                key={category.name}
+                className={`flex cursor-pointer items-center justify-between rounded border bg-stone-950/50 p-3 transition ${toneClasses(category.tone)}`}
               >
-                ✕
-              </button>
-            </header>
-            <form className="space-y-3" onSubmit={(event) => void handleCreateEntry(event)}>
-              <label className="block text-sm text-[var(--text-muted)]">
-                Title
-                <input
-                  type="text"
-                  value={newEntryTitle}
-                  onChange={(event) => setNewEntryTitle(event.target.value)}
-                  className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                  placeholder="Short, specific title"
-                  disabled={isCreatingEntry}
-                />
-              </label>
-              <label className="block text-sm text-[var(--text-muted)]">
-                Content
-                <textarea
-                  value={newEntryContent}
-                  onChange={(event) => setNewEntryContent(event.target.value)}
-                  className="mt-1 min-h-36 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                  placeholder="Write the knowledge entry body"
-                  disabled={isCreatingEntry}
-                />
-              </label>
-              <label className="block text-sm text-[var(--text-muted)]">
-                Tags (comma-separated)
-                <input
-                  type="text"
-                  value={newEntryTags}
-                  onChange={(event) => setNewEntryTags(event.target.value)}
-                  className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                  placeholder="product, onboarding, faq"
-                  disabled={isCreatingEntry}
-                />
-              </label>
-              <label className="block text-sm text-[var(--text-muted)]">
-                Author
-                <input
-                  type="text"
-                  value={newEntryAuthor}
-                  onChange={(event) => setNewEntryAuthor(event.target.value)}
-                  className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                  disabled={isCreatingEntry}
-                />
-              </label>
-              {createEntryError ? (
-                <p className="text-sm text-rose-500">{createEntryError}</p>
-              ) : null}
-              <div className="entry-modal-actions">
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => setIsCreateModalOpen(false)}
-                  disabled={isCreatingEntry}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary" disabled={isCreatingEntry}>
-                  {isCreatingEntry ? "Saving..." : "Create entry"}
-                </button>
+                <div>
+                  <h3 className="text-xs font-medium text-stone-300">{category.name}</h3>
+                  <p className="text-[10px] text-stone-600">Updated {category.lastUpdated}</p>
+                </div>
+                <p className="text-lg font-bold font-mono">{category.entries}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <section className="rounded-lg border border-stone-800 bg-stone-900">
+        <header className="flex items-center justify-between border-b border-stone-800 bg-stone-950/30 px-4 py-3">
+          <h2 className="text-sm font-semibold text-stone-200">Authored Documentation</h2>
+          <button className="text-[10px] text-stone-500 transition hover:text-stone-300" type="button">Export All</button>
+        </header>
+        <div className="divide-y divide-stone-800/50">
+          {PROJECT_DOCS.map((doc) => (
+            <article key={doc.title} className="group flex items-center justify-between px-4 py-3 transition hover:bg-stone-800/30">
+              <div>
+                <h3 className="text-sm font-medium text-stone-300 transition group-hover:text-amber-400">{doc.title}</h3>
+                <div className="mt-1 flex items-center gap-3 text-[10px] text-stone-500">
+                  <span>{doc.author}</span>
+                  <span>•</span>
+                  <span>Edited {doc.lastEdited}</span>
+                </div>
               </div>
-            </form>
-          </div>
+              <span
+                className={`rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                  doc.status === "current"
+                    ? "border-lime-500/20 bg-lime-500/10 text-lime-400"
+                    : "border-stone-700 bg-stone-800 text-stone-500"
+                }`}
+              >
+                {doc.status}
+              </span>
+            </article>
+          ))}
         </div>
-      )}
+      </section>
     </div>
   );
 }
