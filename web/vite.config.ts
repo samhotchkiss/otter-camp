@@ -6,6 +6,15 @@ import { readFileSync } from "node:fs";
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+        },
+      },
+    },
+  },
   define: {
     __APP_VERSION__: JSON.stringify(getAppVersion()),
     __BUILD_SHA__: JSON.stringify(getBuildSha()),
