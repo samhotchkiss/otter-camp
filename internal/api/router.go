@@ -53,11 +53,23 @@ func NewRouter() http.Handler {
 	}
 
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
+		AllowOriginFunc: func(r *http.Request, origin string) bool {
+			// Allow same root domain (*.otter.camp) and localhost for dev
+			if origin == "" {
+				return true
+			}
+			if strings.HasSuffix(origin, ".otter.camp") || origin == "https://otter.camp" {
+				return true
+			}
+			if strings.Contains(origin, "localhost") || strings.Contains(origin, "127.0.0.1") {
+				return true
+			}
+			return false
+		},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Org-ID", "X-Otter-Org", "X-Workspace-ID", "X-Session-Token"},
 		ExposedHeaders:   []string{"Link"},
-		AllowCredentials: false,
+		AllowCredentials: true,
 		MaxAge:           300,
 	}))
 
