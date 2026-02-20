@@ -314,6 +314,43 @@ type Issue struct {
 	NextStepDueAt *string `json:"next_step_due_at,omitempty"`
 }
 
+type IssuePipelineProgressionResult struct {
+	IssueID               string  `json:"issue_id"`
+	CompletedStepID       string  `json:"completed_step_id"`
+	CurrentPipelineStepID *string `json:"current_pipeline_step_id,omitempty"`
+	CompletedPipeline     bool    `json:"completed_pipeline"`
+	ParkedForHumanReview  bool    `json:"parked_for_human_review"`
+}
+
+type IssuePipelineHistoryEntry struct {
+	ID          string  `json:"id"`
+	StepID      string  `json:"step_id"`
+	AgentID     *string `json:"agent_id,omitempty"`
+	StartedAt   string  `json:"started_at"`
+	CompletedAt *string `json:"completed_at,omitempty"`
+	Result      string  `json:"result"`
+	Notes       string  `json:"notes"`
+}
+
+type IssuePipelineStatusPayload struct {
+	CurrentStepID       *string                     `json:"current_step_id,omitempty"`
+	CurrentStep         *PipelineStep               `json:"current_step,omitempty"`
+	PipelineStartedAt   *string                     `json:"pipeline_started_at,omitempty"`
+	PipelineCompletedAt *string                     `json:"pipeline_completed_at,omitempty"`
+	Steps               []PipelineStep              `json:"steps"`
+	History             []IssuePipelineHistoryEntry `json:"history"`
+}
+
+type IssuePipelineStatus struct {
+	Issue    Issue                      `json:"issue"`
+	Pipeline IssuePipelineStatusPayload `json:"pipeline"`
+}
+
+type IssuePipelineActionResponse struct {
+	Result IssuePipelineProgressionResult `json:"result"`
+	Status IssuePipelineStatus            `json:"status"`
+}
+
 type QuestionnaireQuestion struct {
 	ID          string   `json:"id"`
 	Text        string   `json:"text"`
@@ -2384,4 +2421,85 @@ func (c *Client) RespondIssueQuestionnaire(questionnaireID string, input Respond
 		return Questionnaire{}, err
 	}
 	return questionnaire, nil
+}
+
+func (c *Client) IssuePipelineStepDone(issueID string, agentID *string, notes string) (IssuePipelineActionResponse, error) {
+	if err := c.requireAuth(); err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return IssuePipelineActionResponse{}, errors.New("issue id is required")
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"agent_id": agentID,
+		"notes":    strings.TrimSpace(notes),
+	})
+	if err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/issues/"+url.PathEscape(issueID)+"/pipeline/step-complete", bytes.NewReader(payload))
+	if err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var resp IssuePipelineActionResponse
+	if err := c.do(req, &resp); err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	return resp, nil
+}
+
+func (c *Client) IssuePipelineStepReject(issueID string, agentID *string, reason string) (IssuePipelineActionResponse, error) {
+	if err := c.requireAuth(); err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return IssuePipelineActionResponse{}, errors.New("issue id is required")
+	}
+	if strings.TrimSpace(reason) == "" {
+		return IssuePipelineActionResponse{}, errors.New("reason is required")
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"agent_id": agentID,
+		"reason":   strings.TrimSpace(reason),
+	})
+	if err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/issues/"+url.PathEscape(issueID)+"/pipeline/step-reject", bytes.NewReader(payload))
+	if err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var resp IssuePipelineActionResponse
+	if err := c.do(req, &resp); err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	return resp, nil
+}
+
+func (c *Client) GetIssuePipelineStatus(issueID string) (IssuePipelineStatus, error) {
+	if err := c.requireAuth(); err != nil {
+		return IssuePipelineStatus{}, err
+	}
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return IssuePipelineStatus{}, errors.New("issue id is required")
+	}
+
+	req, err := c.newRequest(http.MethodGet, "/api/issues/"+url.PathEscape(issueID)+"/pipeline/status", nil)
+	if err != nil {
+		return IssuePipelineStatus{}, err
+	}
+	var status IssuePipelineStatus
+	if err := c.do(req, &status); err != nil {
+		return IssuePipelineStatus{}, err
+	}
+	return status, nil
 }
