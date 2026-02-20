@@ -833,7 +833,8 @@ export default function GlobalChatSurface({
   const postSendRefreshTimersRef = useRef<number[]>([]);
   const stalledTurnTimerRef = useRef<number | null>(null);
   const awaitingAgentReplyRef = useRef(false);
-  const { lastMessage } = useWS();
+  const { lastMessage, connected: wsConnected } = useWS();
+  const prevWsConnectedRef = useRef(wsConnected);
   const conversationType = conversation.type;
   const conversationKey = conversation.key;
   const conversationTitle = conversation.title;
@@ -1083,6 +1084,14 @@ export default function GlobalChatSurface({
   useEffect(() => {
     void loadConversation();
   }, [loadConversation, refreshVersion]);
+
+  // Catch-up refresh when WebSocket reconnects (loads messages missed while disconnected)
+  useEffect(() => {
+    if (wsConnected && !prevWsConnectedRef.current) {
+      void loadConversation({ silent: true });
+    }
+    prevWsConnectedRef.current = wsConnected;
+  }, [wsConnected, loadConversation]);
 
   // Fallback polling: silently refresh messages every 15s in case WS drops
   useEffect(() => {
