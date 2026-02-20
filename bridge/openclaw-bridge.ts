@@ -596,6 +596,7 @@ const contextPrimedSessions = new Set<string>();
 const workspaceCacheByAgentSlot = new Map<string, AgentWorkspaceCacheEntry>();
 let workspaceGuideCache: WorkspaceGuideCacheEntry | null = null;
 const deliveredRunIDs = new Set<string>();
+const lastPersistedReplyBySession = new Map<string, number>();
 const deliveredRunIDOrder: string[] = [];
 const progressLogLineHashes = new Set<string>();
 const progressLogLineHashOrder: string[] = [];
@@ -5325,6 +5326,26 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
   const runID = getTrimmedString(payload.runId) || getTrimmedString(payload.run_id);
   if (runID && deliveredRunIDs.has(runID)) {
     return;
+  }
+
+  // Content-based dedup: skip if same content was persisted for this session within 30s
+  const contentForDedup = extractMessageContent(
+    asRecord(payload.message)?.content ?? payload.content,
+  );
+  if (contentForDedup && sessionKey) {
+    const dedupKey = `${sessionKey}::${contentForDedup.slice(0, 200)}`;
+    const lastTime = lastPersistedReplyBySession.get(dedupKey);
+    if (lastTime && Date.now() - lastTime < 30_000) {
+      return;
+    }
+    lastPersistedReplyBySession.set(dedupKey, Date.now());
+    // Prune old entries
+    if (lastPersistedReplyBySession.size > 200) {
+      const cutoff = Date.now() - 60_000;
+      for (const [k, v] of lastPersistedReplyBySession) {
+        if (v < cutoff) lastPersistedReplyBySession.delete(k);
+      }
+    }
   }
 
   const messageRecord = asRecord(payload.message);
