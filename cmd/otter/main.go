@@ -119,7 +119,7 @@ Commands:
   repo info        Show repo URL for project
   issue            Manage project issues
   room             Manage room stats
-  pipeline         Configure per-project pipeline settings
+  pipeline         Configure per-project pipeline settings and step chains
   deploy           Configure per-project deployment settings
   migrate          Run migration utilities
   version          Show CLI version`)

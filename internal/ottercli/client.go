@@ -571,6 +571,26 @@ type PipelineRoles struct {
 	Reviewer PipelineRoleAssignment `json:"reviewer"`
 }
 
+type PipelineStep struct {
+	ID              string  `json:"id"`
+	ProjectID       string  `json:"project_id"`
+	StepNumber      int     `json:"step_number"`
+	Name            string  `json:"name"`
+	Description     string  `json:"description"`
+	AssignedAgentID *string `json:"assigned_agent_id,omitempty"`
+	StepType        string  `json:"step_type"`
+	AutoAdvance     bool    `json:"auto_advance"`
+}
+
+type PipelineStepCreateInput struct {
+	StepNumber      int     `json:"step_number"`
+	Name            string  `json:"name"`
+	Description     string  `json:"description,omitempty"`
+	AssignedAgentID *string `json:"assigned_agent_id"`
+	StepType        string  `json:"step_type"`
+	AutoAdvance     bool    `json:"auto_advance"`
+}
+
 type DeployConfig struct {
 	DeployMethod  string  `json:"deployMethod"`
 	GitHubRepoURL *string `json:"githubRepoUrl,omitempty"`
@@ -815,6 +835,103 @@ func (c *Client) SetPipelineRoles(projectID string, roles PipelineRoles) (Pipeli
 		return PipelineRoles{}, err
 	}
 	return updated, nil
+}
+
+func (c *Client) ListPipelineSteps(projectID string) ([]PipelineStep, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, errors.New("project id is required")
+	}
+
+	req, err := c.newRequest(http.MethodGet, "/api/projects/"+url.PathEscape(projectID)+"/pipeline-steps", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Items []PipelineStep `json:"items"`
+	}
+	if err := c.do(req, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Items, nil
+}
+
+func (c *Client) CreatePipelineStep(projectID string, input PipelineStepCreateInput) (PipelineStep, error) {
+	if err := c.requireAuth(); err != nil {
+		return PipelineStep{}, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return PipelineStep{}, errors.New("project id is required")
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return PipelineStep{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/projects/"+url.PathEscape(projectID)+"/pipeline-steps", bytes.NewReader(payload))
+	if err != nil {
+		return PipelineStep{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var created PipelineStep
+	if err := c.do(req, &created); err != nil {
+		return PipelineStep{}, err
+	}
+	return created, nil
+}
+
+func (c *Client) DeletePipelineStep(projectID string, stepID string) error {
+	if err := c.requireAuth(); err != nil {
+		return err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return errors.New("project id is required")
+	}
+	stepID = strings.TrimSpace(stepID)
+	if stepID == "" {
+		return errors.New("step id is required")
+	}
+
+	req, err := c.newRequest(http.MethodDelete, "/api/projects/"+url.PathEscape(projectID)+"/pipeline-steps/"+url.PathEscape(stepID), nil)
+	if err != nil {
+		return err
+	}
+	return c.do(req, nil)
+}
+
+func (c *Client) ReorderPipelineSteps(projectID string, stepIDs []string) ([]PipelineStep, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, errors.New("project id is required")
+	}
+	payload, err := json.Marshal(map[string]any{
+		"step_ids": stepIDs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(http.MethodPut, "/api/projects/"+url.PathEscape(projectID)+"/pipeline-steps/reorder", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var resp struct {
+		Items []PipelineStep `json:"items"`
+	}
+	if err := c.do(req, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Items, nil
 }
 
 func (c *Client) GetDeployConfig(projectID string) (DeployConfig, error) {
