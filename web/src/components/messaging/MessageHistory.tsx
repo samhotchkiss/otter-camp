@@ -11,7 +11,7 @@ import MessageMarkdown from "./MessageMarkdown";
 import Questionnaire from "../Questionnaire";
 import QuestionnaireResponse from "../QuestionnaireResponse";
 
-const SCROLL_BOTTOM_THRESHOLD_PX = 40;
+const SCROLL_BOTTOM_THRESHOLD_PX = 200;
 
 function formatAttachmentSize(sizeBytes: number): string {
   if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
@@ -476,17 +476,13 @@ export default function MessageHistory({
     const prevCount = prevMessageCountRef.current;
     prevMessageCountRef.current = messages.length;
     if (messages.length > prevCount) {
-      // Always scroll to bottom on new messages unless the user has scrolled
-      // far up (more than ~200px from bottom). This ensures agent replies
-      // are always visible even if a small scroll offset exists.
-      const container = containerRef.current;
-      const nearBottom = !container || (
-        container.scrollHeight - container.scrollTop - container.clientHeight <= 200
-      );
-      if (prevCount === 0 || pinnedToBottomRef.current || nearBottom) {
+      if (prevCount === 0 || pinnedToBottomRef.current) {
+        // Double-RAF to ensure DOM has fully reflowed with new content
         requestAnimationFrame(() => {
-          endRef.current?.scrollIntoView({
-            behavior: prevCount === 0 ? "auto" : "smooth",
+          requestAnimationFrame(() => {
+            endRef.current?.scrollIntoView({
+              behavior: prevCount === 0 ? "auto" : "smooth",
+            });
           });
         });
       }
