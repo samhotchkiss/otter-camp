@@ -70,6 +70,95 @@ func TestClientPipelineRoleMethods(t *testing.T) {
 	}
 }
 
+func TestClientPipelineSteps(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.String()
+		gotBody = nil
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/projects/project-1/pipeline-steps":
+			_, _ = w.Write([]byte(`{"items":[{"id":"step-1","project_id":"project-1","step_number":1,"name":"Draft","description":"","assigned_agent_id":"agent-1","step_type":"agent_work","auto_advance":true}]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/projects/project-1/pipeline-steps":
+			_, _ = w.Write([]byte(`{"id":"step-2","project_id":"project-1","step_number":2,"name":"Review","description":"","assigned_agent_id":null,"step_type":"human_review","auto_advance":false}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/api/projects/project-1/pipeline-steps/reorder":
+			_, _ = w.Write([]byte(`{"items":[{"id":"step-2","project_id":"project-1","step_number":1,"name":"Review","description":"","assigned_agent_id":null,"step_type":"human_review","auto_advance":false},{"id":"step-1","project_id":"project-1","step_number":2,"name":"Draft","description":"","assigned_agent_id":"agent-1","step_type":"agent_work","auto_advance":true}]}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/projects/project-1/pipeline-steps/step-2":
+			_, _ = w.Write([]byte(`{"deleted":true}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		}
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		Token:   "token-1",
+		OrgID:   "org-1",
+		HTTP:    srv.Client(),
+	}
+
+	steps, err := client.ListPipelineSteps("project-1")
+	if err != nil {
+		t.Fatalf("ListPipelineSteps() error = %v", err)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/api/projects/project-1/pipeline-steps" {
+		t.Fatalf("ListPipelineSteps request = %s %s", gotMethod, gotPath)
+	}
+	if len(steps) != 1 || steps[0].ID != "step-1" {
+		t.Fatalf("ListPipelineSteps response = %#v", steps)
+	}
+
+	created, err := client.CreatePipelineStep("project-1", PipelineStepCreateInput{
+		StepNumber:  2,
+		Name:        "Review",
+		StepType:    "human_review",
+		AutoAdvance: false,
+	})
+	if err != nil {
+		t.Fatalf("CreatePipelineStep() error = %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/projects/project-1/pipeline-steps" {
+		t.Fatalf("CreatePipelineStep request = %s %s", gotMethod, gotPath)
+	}
+	if gotBody["step_number"] != float64(2) || gotBody["name"] != "Review" {
+		t.Fatalf("CreatePipelineStep payload = %#v", gotBody)
+	}
+	if created.ID != "step-2" {
+		t.Fatalf("CreatePipelineStep response = %#v", created)
+	}
+
+	reordered, err := client.ReorderPipelineSteps("project-1", []string{"step-2", "step-1"})
+	if err != nil {
+		t.Fatalf("ReorderPipelineSteps() error = %v", err)
+	}
+	if gotMethod != http.MethodPut || gotPath != "/api/projects/project-1/pipeline-steps/reorder" {
+		t.Fatalf("ReorderPipelineSteps request = %s %s", gotMethod, gotPath)
+	}
+	if gotBody["step_ids"] == nil {
+		t.Fatalf("ReorderPipelineSteps payload = %#v", gotBody)
+	}
+	if len(reordered) != 2 || reordered[0].ID != "step-2" {
+		t.Fatalf("ReorderPipelineSteps response = %#v", reordered)
+	}
+
+	if err := client.DeletePipelineStep("project-1", "step-2"); err != nil {
+		t.Fatalf("DeletePipelineStep() error = %v", err)
+	}
+	if gotMethod != http.MethodDelete || gotPath != "/api/projects/project-1/pipeline-steps/step-2" {
+		t.Fatalf("DeletePipelineStep request = %s %s", gotMethod, gotPath)
+	}
+}
+
 func TestClientDeployConfigMethods(t *testing.T) {
 	var gotMethod string
 	var gotPath string

@@ -118,6 +118,9 @@ func NewRouter() http.Handler {
 	adminEllieIngestionHandler := &AdminEllieIngestionHandler{}
 	// Settings uses standalone handler functions (no struct needed)
 	pipelineRolesHandler := &PipelineRolesHandler{}
+	pipelineStepsHandler := &PipelineStepsHandler{}
+	pipelineStaffingHandler := &PipelineStaffingHandler{}
+	issuePipelineActionsHandler := &IssuePipelineActionsHandler{}
 	deployConfigHandler := &DeployConfigHandler{}
 	jobsHandler := &JobsHandler{}
 	openClawMigrationHandler := NewOpenClawMigrationControlPlaneHandler(db)
@@ -177,6 +180,16 @@ func NewRouter() http.Handler {
 		agentActivityHandler.Store = store.NewAgentActivityEventStore(db)
 		conversationTokenHandler.Store = store.NewConversationTokenStore(db)
 		pipelineRolesHandler.Store = store.NewPipelineRoleStore(db)
+		pipelineStepsHandler.Store = store.NewPipelineStepStore(db)
+		issuesHandler.PipelineStepStore = pipelineStepsHandler.Store
+		pipelineStaffingHandler.Store = pipelineStepsHandler.Store
+		pipelineStaffingHandler.DB = db
+		issuePipelineActionsHandler.IssueStore = issuesHandler.IssueStore
+		issuePipelineActionsHandler.PipelineStepStore = pipelineStepsHandler.Store
+		issuePipelineActionsHandler.ProgressionService = &IssuePipelineProgressionService{
+			PipelineStepStore: pipelineStepsHandler.Store,
+			IssueStore:        issuesHandler.IssueStore,
+		}
 		deployConfigHandler.Store = store.NewDeployConfigStore(db)
 		jobsHandler.Store = store.NewAgentJobStore(db)
 		jobsHandler.DB = db
@@ -310,6 +323,12 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}/settings", projectsHandler.UpdateSettings)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pipeline-roles", pipelineRolesHandler.Get)
 		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/pipeline-roles", pipelineRolesHandler.Put)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pipeline-steps", pipelineStepsHandler.List)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pipeline-steps", pipelineStepsHandler.Create)
+		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/pipeline-steps/reorder", pipelineStepsHandler.Reorder)
+		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}/pipeline-steps/{stepID}", pipelineStepsHandler.Patch)
+		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}/pipeline-steps/{stepID}", pipelineStepsHandler.Delete)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pipeline-staffing", pipelineStaffingHandler.Apply)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/deploy-config", deployConfigHandler.Get)
 		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/deploy-config", deployConfigHandler.Put)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat", projectChatHandler.List)
@@ -351,6 +370,9 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pull-requests", githubPullRequestsHandler.CreateForProject)
 		r.With(middleware.OptionalWorkspace).Get("/issues", issuesHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}", issuesHandler.Get)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/pipeline/step-complete", issuePipelineActionsHandler.StepComplete)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/pipeline/step-reject", issuePipelineActionsHandler.StepReject)
+		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/pipeline/status", issuePipelineActionsHandler.Status)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/comments", issuesHandler.CreateComment)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/questionnaire", questionnaireHandler.CreateIssueQuestionnaire)
 		r.With(middleware.OptionalWorkspace).Post("/questionnaires/{id}/response", questionnaireHandler.Respond)
