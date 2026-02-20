@@ -97,6 +97,14 @@ type UpdateIssuePipelineStateInput struct {
 	PipelineCompletedAt   *time.Time
 }
 
+type IssuePipelineState struct {
+	IssueID               string     `json:"issue_id"`
+	ProjectID             string     `json:"project_id"`
+	CurrentPipelineStepID *string    `json:"current_pipeline_step_id,omitempty"`
+	PipelineStartedAt     *time.Time `json:"pipeline_started_at,omitempty"`
+	PipelineCompletedAt   *time.Time `json:"pipeline_completed_at,omitempty"`
+}
+
 type PipelineStepStore struct {
 	db *sql.DB
 }
@@ -692,6 +700,58 @@ func (s *PipelineStepStore) UpdateIssuePipelineState(ctx context.Context, input 
 	}
 
 	return tx.Commit()
+}
+
+func (s *PipelineStepStore) GetIssuePipelineState(ctx context.Context, issueID string) (*IssuePipelineState, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+	issueID = strings.TrimSpace(issueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, fmt.Errorf("%w: invalid issue_id", ErrValidation)
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	var record IssuePipelineState
+	var currentStepID sql.NullString
+	var startedAt sql.NullTime
+	var completedAt sql.NullTime
+	if err := conn.QueryRowContext(
+		ctx,
+		`SELECT id, project_id, current_pipeline_step_id, pipeline_started_at, pipeline_completed_at
+		 FROM project_issues
+		 WHERE org_id = $1 AND id = $2`,
+		workspaceID,
+		issueID,
+	).Scan(
+		&record.IssueID,
+		&record.ProjectID,
+		&currentStepID,
+		&startedAt,
+		&completedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to get issue pipeline state: %w", err)
+	}
+
+	if currentStepID.Valid {
+		record.CurrentPipelineStepID = &currentStepID.String
+	}
+	if startedAt.Valid {
+		record.PipelineStartedAt = &startedAt.Time
+	}
+	if completedAt.Valid {
+		record.PipelineCompletedAt = &completedAt.Time
+	}
+	return &record, nil
 }
 
 func ensurePipelineIssueVisible(ctx context.Context, conn Querier, issueID string) error {
