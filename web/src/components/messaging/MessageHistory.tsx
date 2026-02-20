@@ -10,6 +10,7 @@ import { formatTimestamp, getInitials } from "./utils";
 import MessageMarkdown from "./MessageMarkdown";
 import Questionnaire from "../Questionnaire";
 import QuestionnaireResponse from "../QuestionnaireResponse";
+import LiveTimestamp from "../LiveTimestamp";
 
 const SCROLL_BOTTOM_THRESHOLD_PX = 200;
 
@@ -177,6 +178,8 @@ function MessageAvatar({
   const bgColor =
     senderType === "agent"
       ? "bg-[#ff9800] text-[#1c1200]"
+      : senderType === "emission"
+        ? "bg-[var(--surface-alt)] text-[var(--text-muted)]"
       : "bg-[var(--surface-alt)] text-[var(--text)]";
 
   if (avatarUrl) {
@@ -233,8 +236,14 @@ function MessageBubble({
     );
   }
 
+  const isEmission = message.senderType === "emission";
+  const isEmissionWarning = isEmission && message.emissionWarning === true;
   const bubbleStyle = isOwnMessage
     ? "oc-message-bubble-user bg-[var(--accent)] text-[#1A1918]"
+    : isEmissionWarning
+      ? "oc-message-bubble-emission-warning border border-[var(--orange)]/45 bg-[var(--orange)]/18 text-[var(--orange)]"
+    : isEmission
+      ? "oc-message-bubble-emission border border-[var(--border)]/50 bg-[var(--surface-alt)] text-[var(--text-muted)] opacity-60"
     : message.senderType === "agent"
       ? "oc-message-bubble-agent border border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text)]"
       : "bg-[var(--surface-alt)] text-[var(--text)]";
@@ -260,11 +269,22 @@ function MessageBubble({
               Agent
             </span>
           )}
-          <span className="text-[10px] text-[var(--text-muted)]">
-            {formatTimestamp(message.createdAt)}
-          </span>
+          {isEmission ? (
+            <LiveTimestamp
+              timestamp={message.createdAt}
+              verbose
+              className="text-[10px] text-[var(--text-muted)]"
+            />
+          ) : (
+            <span className="text-[10px] text-[var(--text-muted)]">
+              {formatTimestamp(message.createdAt)}
+            </span>
+          )}
         </div>
-        <div className={`min-w-0 max-w-full overflow-hidden rounded-2xl px-4 py-2.5 ${bubbleStyle}`}>
+        <div
+          className={`min-w-0 max-w-full overflow-hidden rounded-2xl px-4 py-2.5 ${bubbleStyle}`}
+          data-testid={isEmission ? "message-bubble-emission" : undefined}
+        >
           {message.questionnaire ? (
             message.questionnaire.responses ? (
               <QuestionnaireResponse questionnaire={message.questionnaire} />
@@ -277,15 +297,22 @@ function MessageBubble({
               <QuestionnaireResponse questionnaire={message.questionnaire} />
             )
           ) : (
-            <>
-              <MessageMarkdown
-                markdown={message.content}
-                className="text-sm leading-relaxed"
-              />
-              {message.attachments && message.attachments.length > 0 ? (
-                <MessageAttachments attachments={message.attachments} />
-              ) : null}
-            </>
+            isEmission ? (
+              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                {isEmissionWarning ? "⚠️ " : "🔄 "}
+                {message.content}
+              </p>
+            ) : (
+              <>
+                <MessageMarkdown
+                  markdown={message.content}
+                  className="text-sm leading-relaxed"
+                />
+                {message.attachments && message.attachments.length > 0 ? (
+                  <MessageAttachments attachments={message.attachments} />
+                ) : null}
+              </>
+            )
           )}
         </div>
         {message.optimistic ? (
@@ -384,6 +411,7 @@ export type MessageHistoryProps = {
   messages: DMMessage[];
   currentUserId: string;
   threadId?: string;
+  autoScrollSignal?: number;
   agent?: Agent;
   hasMore?: boolean;
   isLoadingMore?: boolean;
@@ -402,6 +430,7 @@ export default function MessageHistory({
   messages,
   currentUserId,
   threadId,
+  autoScrollSignal,
   agent,
   hasMore = false,
   isLoadingMore = false,
@@ -419,6 +448,7 @@ export default function MessageHistory({
   const pendingPrependRef = useRef(false);
   const scrollSnapshotRef = useRef({ scrollHeight: 0, scrollTop: 0 });
   const pinnedToBottomRef = useRef(true);
+  const lastAutoScrollSignalRef = useRef(autoScrollSignal);
 
   const handleLoadMore = useCallback(async () => {
     if (!onLoadMore || isLoadingMore) return;
@@ -443,10 +473,11 @@ export default function MessageHistory({
     prevMessageCountRef.current = 0;
     pendingPrependRef.current = false;
     pinnedToBottomRef.current = true;
+    lastAutoScrollSignalRef.current = autoScrollSignal;
     requestAnimationFrame(() => {
       endRef.current?.scrollIntoView({ behavior: "auto" });
     });
-  }, [threadId]);
+  }, [autoScrollSignal, threadId]);
 
   const handleScroll = useCallback(() => {
     const container = containerRef.current;
@@ -488,6 +519,19 @@ export default function MessageHistory({
       }
     }
   }, [messages]);
+
+  useEffect(() => {
+    if (autoScrollSignal === undefined) {
+      return;
+    }
+    if (lastAutoScrollSignalRef.current === autoScrollSignal) {
+      return;
+    }
+    lastAutoScrollSignalRef.current = autoScrollSignal;
+    requestAnimationFrame(() => {
+      endRef.current?.scrollIntoView({ behavior: "smooth" });
+    });
+  }, [autoScrollSignal]);
 
   return (
     <div

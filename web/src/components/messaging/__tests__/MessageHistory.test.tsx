@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import MessageHistory from "../MessageHistory";
@@ -12,6 +12,10 @@ const agent: Agent = {
 };
 
 describe("MessageHistory", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("renders an empty state when there are no messages", () => {
     render(<MessageHistory messages={[]} currentUserId="user-1" agent={agent} />);
     expect(
@@ -203,5 +207,74 @@ describe("MessageHistory", () => {
     expect(screen.getByText("Jeff G")).toBeInTheDocument();
     expect(screen.queryByText("avatar-design")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Jeff G")).toHaveTextContent("JG");
+  });
+
+  it("renders emission messages as grayed timeline bubbles with spinner and live timestamp", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-08T12:00:00Z"));
+
+    const messages: DMMessage[] = [
+      {
+        id: "emission-dm_agent-1",
+        threadId: "dm_agent-1",
+        senderId: "emission:dm_agent-1",
+        senderName: "Agent One",
+        senderType: "emission",
+        content: "Reading docs/agents/overview",
+        createdAt: "2026-02-08T11:59:54.000Z",
+      },
+    ];
+
+    render(<MessageHistory messages={messages} currentUserId="user-1" agent={agent} />);
+
+    expect(screen.getByText("🔄 Reading docs/agents/overview")).toBeInTheDocument();
+    expect(screen.getByText("6 seconds ago")).toBeInTheDocument();
+    expect(screen.getByTestId("message-bubble-emission")).toHaveClass("opacity-60");
+  });
+
+  it("auto-scrolls when emission updates change autoScrollSignal without adding rows", () => {
+    const originalScrollIntoView = window.HTMLElement.prototype.scrollIntoView;
+    const scrollIntoViewMock = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+
+    const messages: DMMessage[] = [
+      {
+        id: "emission-dm_agent-1",
+        threadId: "dm_agent-1",
+        senderId: "emission:dm_agent-1",
+        senderName: "Agent One",
+        senderType: "emission",
+        content: "Running command",
+        createdAt: "2026-02-08T11:59:54.000Z",
+      },
+    ];
+
+    const { rerender } = render(
+      <MessageHistory
+        messages={messages}
+        currentUserId="user-1"
+        agent={agent}
+        autoScrollSignal={0}
+      />,
+    );
+    const initialCalls = scrollIntoViewMock.mock.calls.length;
+
+    rerender(
+      <MessageHistory
+        messages={messages}
+        currentUserId="user-1"
+        agent={agent}
+        autoScrollSignal={1}
+      />,
+    );
+
+    expect(scrollIntoViewMock.mock.calls.length).toBeGreaterThan(initialCalls);
+
+    rafSpy.mockRestore();
+    window.HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
   });
 });
