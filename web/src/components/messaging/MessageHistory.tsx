@@ -460,6 +460,23 @@ export default function MessageHistory({
 
   useEffect(() => {
     const container = containerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      if (!pinnedToBottomRef.current) {
+        return;
+      }
+      endRef.current?.scrollIntoView({ behavior: "auto" });
+    });
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+    };
+  }, [threadId]);
+
+  useEffect(() => {
+    const container = containerRef.current;
     if (!container) return;
 
     if (pendingPrependRef.current) {
