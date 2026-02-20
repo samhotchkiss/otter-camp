@@ -2103,6 +2103,139 @@ describe("bridge memory extraction dispatch helpers", () => {
     assert.equal(String(data.output || "").includes("systemPromptReport"), false);
   });
 
+  it("rewrites memory.extract.request params sessionKey to an org-stable session key", async () => {
+    let capturedArgs: string[] = [];
+    setExecFileForTest((cmd, args, _options, callback) => {
+      assert.equal(cmd, "openclaw");
+      capturedArgs = [...args];
+      callback(
+        null,
+        '{"runId":"trace-session-reuse","status":"ok","result":{"payloads":[{"text":"{\\"candidates\\":[]}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"}}}}',
+        "",
+      );
+    });
+
+    await dispatchInboundEventForTest("memory.extract.request", {
+      type: "memory.extract.request",
+      org_id: "0D86D9E4-B8A1-46CF-AED1-C666123C2D1F",
+      data: {
+        request_id: "req-session-reuse-1",
+        args: [
+          "gateway",
+          "call",
+          "agent",
+          "--json",
+          "--params",
+          '{"sessionKey":"agent:elephant:main:ellie-ingestion:0d86d9e4-b8a1-46cf-aed1-c666123c2d1f-a1b2c3d4","idempotencyKey":"ellie-ingestion-a1b2c3d4","message":"extract"}',
+        ],
+      },
+    });
+
+    const paramsIndex = capturedArgs.indexOf("--params");
+    assert.notEqual(paramsIndex, -1);
+    const params = JSON.parse(capturedArgs[paramsIndex + 1] || "{}") as Record<string, unknown>;
+    assert.equal(
+      params.sessionKey,
+      "agent:elephant:main:ellie-ingestion:0d86d9e4-b8a1-46cf-aed1-c666123c2d1f",
+    );
+  });
+
+  it("keeps running when memory.extract.request params are malformed", async () => {
+    setExecFileForTest((_cmd, _args, _options, callback) => {
+      callback(
+        null,
+        '{"runId":"trace-malformed-params","status":"ok","result":{"payloads":[{"text":"{\\"candidates\\":[]}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"}}}}',
+        "",
+      );
+    });
+
+    await dispatchInboundEventForTest("memory.extract.request", {
+      type: "memory.extract.request",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        request_id: "req-malformed-params",
+        args: ["gateway", "call", "agent", "--json", "--params", "{not-json"],
+      },
+    });
+
+    assert.equal(sentMessages.length, 1);
+    const data = sentMessages[0]?.data as Record<string, unknown>;
+    assert.equal(data.request_id, "req-malformed-params");
+    assert.equal(data.ok, true);
+  });
+
+  it("keeps memory extraction session reuse bounded for 10 sequential requests", async () => {
+    const uniqueSessionKeys = new Set<string>();
+    setExecFileForTest((_cmd, args, _options, callback) => {
+      const paramsIndex = args.indexOf("--params");
+      if (paramsIndex >= 0 && paramsIndex + 1 < args.length) {
+        const params = JSON.parse(args[paramsIndex + 1] || "{}") as Record<string, unknown>;
+        uniqueSessionKeys.add(String(params.sessionKey || ""));
+      }
+      callback(
+        null,
+        '{"runId":"trace-session-reuse-10","status":"ok","result":{"payloads":[{"text":"{\\"candidates\\":[]}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"}}}}',
+        "",
+      );
+    });
+
+    for (let i = 0; i < 10; i += 1) {
+      await dispatchInboundEventForTest("memory.extract.request", {
+        type: "memory.extract.request",
+        org_id: "11111111-2222-3333-4444-555555555555",
+        data: {
+          request_id: `req-seq-10-${i}`,
+          args: [
+            "gateway",
+            "call",
+            "agent",
+            "--json",
+            "--params",
+            `{"sessionKey":"agent:elephant:main:ellie-ingestion:11111111-2222-3333-4444-555555555555-${i.toString(16).padStart(2, "0")}","idempotencyKey":"ellie-ingestion-${i}","message":"extract-${i}"}`,
+          ],
+        },
+      });
+    }
+
+    assert.equal(uniqueSessionKeys.size <= 2, true);
+  });
+
+  it("keeps memory extraction session reuse bounded for 100 sequential requests", async () => {
+    const uniqueSessionKeys = new Set<string>();
+    setExecFileForTest((_cmd, args, _options, callback) => {
+      const paramsIndex = args.indexOf("--params");
+      if (paramsIndex >= 0 && paramsIndex + 1 < args.length) {
+        const params = JSON.parse(args[paramsIndex + 1] || "{}") as Record<string, unknown>;
+        uniqueSessionKeys.add(String(params.sessionKey || ""));
+      }
+      callback(
+        null,
+        '{"runId":"trace-session-reuse-100","status":"ok","result":{"payloads":[{"text":"{\\"candidates\\":[]}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"}}}}',
+        "",
+      );
+    });
+
+    for (let i = 0; i < 100; i += 1) {
+      await dispatchInboundEventForTest("memory.extract.request", {
+        type: "memory.extract.request",
+        org_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        data: {
+          request_id: `req-seq-100-${i}`,
+          args: [
+            "gateway",
+            "call",
+            "agent",
+            "--json",
+            "--params",
+            `{"sessionKey":"agent:elephant:main:ellie-ingestion:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee-${i.toString(16).padStart(2, "0")}","idempotencyKey":"ellie-ingestion-${i}","message":"extract-${i}"}`,
+          ],
+        },
+      });
+    }
+
+    assert.equal(uniqueSessionKeys.size <= 5, true);
+  });
+
   it("rejects unsupported memory.extract.request commands with error response", async () => {
     await dispatchInboundEventForTest("memory.extract.request", {
       type: "memory.extract.request",
