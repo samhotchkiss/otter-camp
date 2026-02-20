@@ -25,8 +25,10 @@ export default function AuthHandler({ children }: { children: React.ReactNode })
     const persistToken = (token: string) => {
       localStorage.setItem(PRIMARY_AUTH_TOKEN_KEY, token);
       localStorage.setItem(LEGACY_AUTH_TOKEN_KEY, token);
-      // Set cookie so browser-initiated requests (<img src>, etc.) can authenticate
-      document.cookie = `otter_camp_token=${encodeURIComponent(token)}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax`;
+      // Set cookie so browser-initiated requests (<img src>, etc.) can authenticate.
+      // Use domain=.otter.camp so it covers sam.otter.camp AND api.otter.camp.
+      const cookieDomain = window.location.hostname.endsWith('.otter.camp') ? '; domain=.otter.camp' : '';
+      document.cookie = `otter_camp_token=${encodeURIComponent(token)}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax${cookieDomain}`;
     };
 
     const getStoredToken = () => {
@@ -80,7 +82,8 @@ export default function AuthHandler({ children }: { children: React.ReactNode })
         const storedToken = getStoredToken();
         if (storedToken) {
           // Ensure cookie is set for browser-initiated requests
-          document.cookie = `otter_camp_token=${encodeURIComponent(storedToken)}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax`;
+          const cookieDomain = window.location.hostname.endsWith('.otter.camp') ? '; domain=.otter.camp' : '';
+          document.cookie = `otter_camp_token=${encodeURIComponent(storedToken)}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax${cookieDomain}`;
           setUser({
             id: 'stored-user',
             name: 'Sam',
