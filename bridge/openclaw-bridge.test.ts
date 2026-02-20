@@ -535,8 +535,7 @@ describe("bridge identity preamble helpers", () => {
   const originalFetch = globalThis.fetch;
   const agentID = "a1b2c3d4-5678-90ab-cdef-1234567890ab";
   const sessionKey = `agent:chameleon:oc:${agentID}`;
-  const reminderGuidePointer =
-    "Refer to OTTERCAMP.md and OTTER_COMMANDS.md for CLI syntax and operating rules.";
+  const reminderGuidePointer = "Refer to OTTERCAMP.md and OTTER_COMMANDS.md for rules.";
 
   beforeEach(() => {
     resetSessionContextsForTest();
@@ -770,6 +769,23 @@ describe("bridge identity preamble helpers", () => {
       }
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
+  });
+
+  it("keeps UUID-only issue reminder payloads under 200 characters", async () => {
+    const issueSessionKey = "agent:main:issue:compact-reminder";
+    setSessionContextForTest(issueSessionKey, {
+      kind: "issue_comment",
+      projectID: "12345678-1234-1234-1234-123456789abc",
+      issueID: "87654321-4321-4321-4321-cba987654321",
+      orgID: "org-1",
+    });
+
+    await formatSessionSystemPromptForTest(issueSessionKey, "bootstrap turn");
+    const reminderPrompt = await formatSessionSystemPromptForTest(issueSessionKey, "next turn");
+
+    assert.ok(reminderPrompt.includes("[OTTERCAMP_CONTEXT_REMINDER]"));
+    assert.ok(reminderPrompt.includes(reminderGuidePointer));
+    assert.equal(reminderPrompt.length < 200, true);
   });
 
   it("syncs otter CLI auth config into the chameleon workspace home paths", () => {

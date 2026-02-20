@@ -2825,7 +2825,7 @@ function buildContextReminder(context: SessionContext): string {
       typeof context.issueNumber === 'number' && Number.isFinite(context.issueNumber)
         ? `#${context.issueNumber}`
         : context.issueID || 'unknown issue';
-    return `Issue thread ${issueLabel} (${context.projectID || 'unknown project'})`;
+    return `Issue ${issueLabel} (${context.projectID || 'unknown project'})`;
   }
   return `DM thread (${context.threadID || 'unknown thread'})`;
 }
@@ -3538,7 +3538,7 @@ async function withSessionContext(
   }
   const reminder = [
     '[OTTERCAMP_CONTEXT_REMINDER]',
-    `- ${buildContextReminder(context)} | Refer to ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME} and ${OTTERCAMP_COMMAND_REFERENCE_FILENAME} for CLI syntax and operating rules.`,
+    `- ${buildContextReminder(context)} | Refer to ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME} and ${OTTERCAMP_COMMAND_REFERENCE_FILENAME} for rules.`,
     '[/OTTERCAMP_CONTEXT_REMINDER]',
   ].join('\n');
   if (!includeUserContent) {
