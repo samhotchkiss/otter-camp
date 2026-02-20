@@ -349,6 +349,52 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
     setArchiveError(null);
   }, [selectedKey]);
 
+  // Auto-open Frank/main DM when dock is open but no conversation is selected
+  useEffect(() => {
+    if (!dockOpen || selectedConversation) {
+      return;
+    }
+    // Try existing Frank DM first
+    if (frankOrgDMConversation) {
+      selectConversation(frankOrgDMConversation.key);
+      markConversationRead(frankOrgDMConversation.key);
+      return;
+    }
+    // Try any existing DM
+    if (anyOrgDMConversation) {
+      selectConversation(anyOrgDMConversation.key);
+      markConversationRead(anyOrgDMConversation.key);
+      return;
+    }
+    // Create a new Frank DM from fallback agent data
+    if (frankFallbackAgent) {
+      openConversation(
+        {
+          type: "dm",
+          agent: {
+            id: frankFallbackAgent.id,
+            name: frankFallbackAgent.name,
+            status: "online",
+          },
+          threadId: `dm_${frankFallbackAgent.id}`,
+          title: frankFallbackAgent.name,
+          contextLabel: "Organization chat",
+          subtitle: "Direct message",
+        },
+        { focus: true, openDock: false },
+      );
+    }
+  }, [
+    dockOpen,
+    selectedConversation,
+    frankOrgDMConversation,
+    anyOrgDMConversation,
+    frankFallbackAgent,
+    selectConversation,
+    markConversationRead,
+    openConversation,
+  ]);
+
   const unreadBadge = useMemo(() => {
     if (totalUnread <= 0) {
       return null;
