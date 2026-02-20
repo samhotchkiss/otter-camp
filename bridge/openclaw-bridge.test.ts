@@ -40,6 +40,7 @@ import {
   resetPeriodicSyncGuardForTest,
   resetReconnectStateForTest,
   resolveOtterCampWSSecret,
+  resetChatEmissionForwardingStateForTest,
   resetSessionContextsForTest,
   resolveOpenClawCommandTimeoutMSForTest,
   setExecFileForTest,
@@ -115,6 +116,7 @@ describe("bridge tool-event ingestion helpers", () => {
   beforeEach(() => {
     resetIngestedToolEventsForTest();
     resetMutationEnforcementStateForTest();
+    resetChatEmissionForwardingStateForTest();
     setMutationAbortForTest(async () => {});
   });
 
@@ -162,6 +164,129 @@ describe("bridge tool-event ingestion helpers", () => {
     const state = getIngestedToolEventsStateForTest();
     assert.equal(state.count, 0);
     assert.equal(state.last, null);
+  });
+});
+
+describe("bridge chat emission forwarding", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    resetSessionContextsForTest();
+    resetChatEmissionForwardingStateForTest();
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  afterEach(() => {
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("forwards tool-stream events as chat emissions with dm source key", async () => {
+    const emissionBodies: string[] = [];
+    setSessionContextForTest("agent:main:main", {
+      kind: "dm",
+      orgID: "11111111-2222-3333-4444-555555555555",
+      threadID: "dm_main",
+      agentID: "main",
+    });
+
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("/api/emissions")) {
+        emissionBodies.push(String(init?.body ?? ""));
+        return new Response("{}", {
+          status: 202,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("{}", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await handleOpenClawEventForTest({
+      event: "agent",
+      payload: {
+        stream: "tool",
+        phase: "start",
+        sessionKey: "agent:main:main",
+        tool: "write",
+        args: {
+          path: "docs/plan.md",
+        },
+      },
+    });
+
+    assert.equal(emissionBodies.length, 1);
+    const payload = JSON.parse(emissionBodies[0]);
+    assert.equal(payload?.emissions?.[0]?.source_id, "dm:dm_main");
+    assert.equal(payload?.emissions?.[0]?.source_type, "bridge");
+    assert.match(String(payload?.emissions?.[0]?.summary ?? ""), /write/i);
+  });
+
+  it("throttles repeated intermediate events to one emission per second per session", async () => {
+    const emissionBodies: string[] = [];
+    setSessionContextForTest("agent:main:main", {
+      kind: "dm",
+      orgID: "11111111-2222-3333-4444-555555555555",
+      threadID: "dm_main",
+      agentID: "main",
+    });
+
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("/api/emissions")) {
+        emissionBodies.push(String(init?.body ?? ""));
+        return new Response("{}", {
+          status: 202,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("{}", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await handleOpenClawEventForTest({
+      event: "agent",
+      payload: {
+        stream: "tool",
+        phase: "start",
+        sessionKey: "agent:main:main",
+        tool: "read",
+      },
+    });
+
+    await handleOpenClawEventForTest({
+      event: "agent",
+      payload: {
+        stream: "tool",
+        phase: "start",
+        sessionKey: "agent:main:main",
+        tool: "write",
+      },
+    });
+
+    assert.equal(emissionBodies.length, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 1050));
+
+    await handleOpenClawEventForTest({
+      event: "agent",
+      payload: {
+        stream: "tool",
+        phase: "start",
+        sessionKey: "agent:main:main",
+        tool: "search",
+      },
+    });
+
+    assert.equal(emissionBodies.length, 2);
   });
 });
 
