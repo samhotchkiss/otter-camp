@@ -66,6 +66,11 @@ type UpdatePipelineStepInput struct {
 	AutoAdvance    bool
 }
 
+type PipelineStepStaffingAssignment struct {
+	StepID          string
+	AssignedAgentID *string
+}
+
 type CreateIssuePipelineHistoryInput struct {
 	IssueID     string
 	StepID      string
@@ -512,6 +517,136 @@ func (s *PipelineStepStore) DeleteStep(ctx context.Context, stepID string) error
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (s *PipelineStepStore) ApplyStaffingPlan(ctx context.Context, projectID string, assignments []PipelineStepStaffingAssignment) ([]PipelineStep, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+	projectID = strings.TrimSpace(projectID)
+	if !uuidRegex.MatchString(projectID) {
+		return nil, fmt.Errorf("%w: invalid project_id", ErrValidation)
+	}
+	if len(assignments) == 0 {
+		return nil, fmt.Errorf("%w: assignments are required", ErrValidation)
+	}
+
+	normalized := make([]PipelineStepStaffingAssignment, 0, len(assignments))
+	seen := make(map[string]struct{}, len(assignments))
+	for _, assignment := range assignments {
+		stepID := strings.TrimSpace(assignment.StepID)
+		if !uuidRegex.MatchString(stepID) {
+			return nil, fmt.Errorf("%w: invalid step_id", ErrValidation)
+		}
+		if _, exists := seen[stepID]; exists {
+			return nil, fmt.Errorf("%w: duplicate step_id in staffing plan", ErrValidation)
+		}
+		seen[stepID] = struct{}{}
+
+		var assignedAgentID *string
+		if assignment.AssignedAgentID != nil {
+			trimmed := strings.TrimSpace(*assignment.AssignedAgentID)
+			if trimmed != "" {
+				if !uuidRegex.MatchString(trimmed) {
+					return nil, fmt.Errorf("%w: invalid assigned_agent_id", ErrValidation)
+				}
+				assignedAgentID = &trimmed
+			}
+		}
+
+		normalized = append(normalized, PipelineStepStaffingAssignment{
+			StepID:          stepID,
+			AssignedAgentID: assignedAgentID,
+		})
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	if err := ensurePipelineProjectVisible(ctx, tx, projectID); err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.QueryContext(
+		ctx,
+		`SELECT id FROM pipeline_steps WHERE org_id = $1 AND project_id = $2`,
+		workspaceID,
+		projectID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read existing pipeline steps: %w", err)
+	}
+	defer rows.Close()
+
+	existingStepIDs := make(map[string]struct{})
+	for rows.Next() {
+		var id string
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan existing pipeline step: %w", scanErr)
+		}
+		existingStepIDs[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed reading existing pipeline steps: %w", err)
+	}
+
+	for _, assignment := range normalized {
+		if _, ok := existingStepIDs[assignment.StepID]; !ok {
+			return nil, ErrNotFound
+		}
+		if assignment.AssignedAgentID != nil {
+			if err := ensurePipelineAgentVisible(ctx, tx, *assignment.AssignedAgentID); err != nil {
+				return nil, err
+			}
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			`UPDATE pipeline_steps
+			 SET assigned_agent_id = $1
+			 WHERE org_id = $2 AND project_id = $3 AND id = $4`,
+			nullableString(assignment.AssignedAgentID),
+			workspaceID,
+			projectID,
+			assignment.StepID,
+		); err != nil {
+			return nil, fmt.Errorf("failed to apply staffing assignment: %w", err)
+		}
+	}
+
+	rows, err = tx.QueryContext(
+		ctx,
+		`SELECT id, org_id, project_id, step_number, name, description, assigned_agent_id, step_type, auto_advance, created_at, updated_at
+		 FROM pipeline_steps
+		 WHERE org_id = $1 AND project_id = $2
+		 ORDER BY step_number ASC, created_at ASC`,
+		workspaceID,
+		projectID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load staffed pipeline steps: %w", err)
+	}
+	defer rows.Close()
+
+	updated := make([]PipelineStep, 0)
+	for rows.Next() {
+		step, scanErr := scanPipelineStep(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("failed to scan staffed pipeline step: %w", scanErr)
+		}
+		updated = append(updated, step)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed reading staffed pipeline steps: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return updated, nil
 }
 
 func (s *PipelineStepStore) AppendIssuePipelineHistory(ctx context.Context, input CreateIssuePipelineHistoryInput) (*IssuePipelineHistoryEntry, error) {
