@@ -607,6 +607,37 @@ func TestEllieIngestionWorkerStartSleepsAfterProcessedError(t *testing.T) {
 	require.LessOrEqual(t, fakeStore.listRoomsCalls, 5)
 }
 
+func TestEllieIngestionWorkerStartSleepsAfterProcessedSuccess(t *testing.T) {
+	fakeStore := newFakeEllieIngestionStore()
+	base := time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC)
+	fakeStore.rooms = []store.EllieRoomIngestionCandidate{{OrgID: "org-1", RoomID: "room-1"}}
+	fakeStore.messages[roomCursorKey("org-1", "room-1")] = []store.EllieIngestionMessage{
+		{
+			ID:        "msg-1",
+			OrgID:     "org-1",
+			RoomID:    "room-1",
+			Body:      "We decided to use Postgres for this project.",
+			CreatedAt: base,
+		},
+	}
+
+	worker := NewEllieIngestionWorker(fakeStore, EllieIngestionWorkerConfig{
+		Interval:   20 * time.Millisecond,
+		BatchSize:  10,
+		MaxPerRoom: 10,
+	})
+	worker.Logf = nil
+
+	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Millisecond)
+	defer cancel()
+	worker.Start(ctx)
+
+	fakeStore.mu.Lock()
+	defer fakeStore.mu.Unlock()
+	require.LessOrEqual(t, fakeStore.listRoomsCalls, 5)
+	require.GreaterOrEqual(t, fakeStore.listRoomsCalls, 2)
+}
+
 func TestEllieIngestionWorkerStartRetriesQuicklyWhenOpenClawDisconnected(t *testing.T) {
 	fakeStore := newFakeEllieIngestionStore()
 	base := time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC)
