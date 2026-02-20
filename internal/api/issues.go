@@ -28,10 +28,12 @@ type IssuesHandler struct {
 	ChatThreadStore     *store.ChatThreadStore
 	QuestionnaireStore  *store.QuestionnaireStore
 	ProjectStore        *store.ProjectStore
+	PipelineStepStore   *store.PipelineStepStore
 	CommitStore         *store.ProjectCommitStore
 	ProjectRepos        *store.ProjectRepoStore
 	ComplianceReviewer  issueComplianceReviewer
 	EllieIngestionStore *store.EllieIngestionStore
+	EllieContextTrigger func(context.Context, store.ProjectIssue) error
 	DB                  *sql.DB
 	Hub                 *ws.Hub
 	OpenClawDispatcher  openClawMessageDispatcher
@@ -153,6 +155,7 @@ type issuePatchRequest struct {
 }
 
 const maxLinkedIssueDocumentBytes = 512 * 1024
+const ellieContextGateBypassEnv = "OTTER_PIPELINE_ELLIE_CONTEXT_GATE_BYPASS"
 
 func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	if h.IssueStore == nil {
@@ -1259,6 +1262,106 @@ func buildIssueKickoffMessage(issue store.ProjectIssue) string {
 	return strings.Join(lines, "\n")
 }
 
+func (h *IssuesHandler) issuePipelineStepStore() *store.PipelineStepStore {
+	if h.PipelineStepStore != nil {
+		return h.PipelineStepStore
+	}
+	if h.DB == nil {
+		return nil
+	}
+	return store.NewPipelineStepStore(h.DB)
+}
+
+func (h *IssuesHandler) shouldBypassEllieContextGate() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(ellieContextGateBypassEnv))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *IssuesHandler) defaultEllieContextTrigger(ctx context.Context, issue store.ProjectIssue) error {
+	if h == nil || h.IssueStore == nil {
+		return fmt.Errorf("issue store unavailable")
+	}
+	authorAgentID, err := h.ensureEllieComplianceAuthorID(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = h.IssueStore.CreateComment(ctx, store.CreateProjectIssueCommentInput{
+		IssueID:       issue.ID,
+		AuthorAgentID: authorAgentID,
+		Body:          "Ellie context warmup complete for this issue.",
+	})
+	return err
+}
+
+func (h *IssuesHandler) runEllieContextGateBeforeKickoff(
+	ctx context.Context,
+	issue store.ProjectIssue,
+) bool {
+	stepStore := h.issuePipelineStepStore()
+	if stepStore == nil {
+		return true
+	}
+
+	steps, err := stepStore.ListStepsByProject(ctx, issue.ProjectID)
+	if err != nil {
+		log.Printf("issues: ellie context gate skipped for issue %s due to pipeline step lookup error: %v", issue.ID, err)
+		return true
+	}
+	if len(steps) == 0 {
+		return true
+	}
+
+	if state, stateErr := stepStore.GetIssuePipelineState(ctx, issue.ID); stateErr == nil && state != nil && state.EllieContextGateStatus != nil {
+		normalized := strings.ToLower(strings.TrimSpace(*state.EllieContextGateStatus))
+		if normalized == store.IssueEllieContextGateStatusSucceeded || normalized == store.IssueEllieContextGateStatusBypassed {
+			return true
+		}
+	}
+
+	now := time.Now().UTC()
+	if h.shouldBypassEllieContextGate() {
+		if err := stepStore.UpdateIssueEllieContextGate(ctx, store.UpdateIssueEllieContextGateInput{
+			IssueID:   issue.ID,
+			Status:    store.IssueEllieContextGateStatusBypassed,
+			CheckedAt: &now,
+		}); err != nil {
+			log.Printf("issues: failed to persist ellie context gate bypass for issue %s: %v", issue.ID, err)
+		}
+		return true
+	}
+
+	trigger := h.EllieContextTrigger
+	if trigger == nil {
+		trigger = h.defaultEllieContextTrigger
+	}
+	if err := trigger(ctx, issue); err != nil {
+		errorMessage := strings.TrimSpace(err.Error())
+		if updateErr := stepStore.UpdateIssueEllieContextGate(ctx, store.UpdateIssueEllieContextGateInput{
+			IssueID:   issue.ID,
+			Status:    store.IssueEllieContextGateStatusFailed,
+			Error:     &errorMessage,
+			CheckedAt: &now,
+		}); updateErr != nil {
+			log.Printf("issues: failed to persist ellie context gate failure for issue %s: %v", issue.ID, updateErr)
+		}
+		log.Printf("issues: ellie context gate blocked kickoff dispatch for issue %s: %v", issue.ID, err)
+		return false
+	}
+
+	if err := stepStore.UpdateIssueEllieContextGate(ctx, store.UpdateIssueEllieContextGateInput{
+		IssueID:   issue.ID,
+		Status:    store.IssueEllieContextGateStatusSucceeded,
+		CheckedAt: &now,
+	}); err != nil {
+		log.Printf("issues: failed to persist ellie context gate success for issue %s: %v", issue.ID, err)
+	}
+	return true
+}
+
 func (h *IssuesHandler) dispatchIssueKickoffBestEffort(
 	ctx context.Context,
 	issue store.ProjectIssue,
@@ -1270,6 +1373,9 @@ func (h *IssuesHandler) dispatchIssueKickoffBestEffort(
 
 	target, shouldDispatch, _, err := h.resolveIssueCommentDispatchTarget(ctx, issue.ID, "user")
 	if err != nil || !shouldDispatch {
+		return
+	}
+	if !h.runEllieContextGateBeforeKickoff(ctx, issue) {
 		return
 	}
 

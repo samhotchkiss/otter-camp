@@ -298,6 +298,84 @@ func TestClientIssueMethodsUseExpectedPathsAndPayloads(t *testing.T) {
 	}
 }
 
+func TestClientIssuePipelineActions(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.String()
+		gotBody = nil
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/issues/issue-1/pipeline/step-complete":
+			_, _ = w.Write([]byte(`{"result":{"issue_id":"issue-1","completed_step_id":"step-1","current_pipeline_step_id":"step-2","completed_pipeline":false,"parked_for_human_review":false},"status":{"issue":{"id":"issue-1","project_id":"project-1","issue_number":42,"title":"Pipeline issue","state":"open","origin":"local","approval_state":"draft","work_status":"in_progress","priority":"P2"},"pipeline":{"current_step_id":"step-2","steps":[{"id":"step-1","project_id":"project-1","step_number":1,"name":"Draft","description":"","assigned_agent_id":"agent-1","step_type":"agent_work","auto_advance":true},{"id":"step-2","project_id":"project-1","step_number":2,"name":"Review","description":"","assigned_agent_id":null,"step_type":"human_review","auto_advance":false}],"history":[]}}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/issues/issue-1/pipeline/step-reject":
+			_, _ = w.Write([]byte(`{"result":{"issue_id":"issue-1","completed_step_id":"step-2","current_pipeline_step_id":"step-1","completed_pipeline":false,"parked_for_human_review":false},"status":{"issue":{"id":"issue-1","project_id":"project-1","issue_number":42,"title":"Pipeline issue","state":"open","origin":"local","approval_state":"draft","work_status":"in_progress","priority":"P2"},"pipeline":{"current_step_id":"step-1","steps":[{"id":"step-1","project_id":"project-1","step_number":1,"name":"Draft","description":"","assigned_agent_id":"agent-1","step_type":"agent_work","auto_advance":true}],"history":[{"id":"hist-1","step_id":"step-2","agent_id":"agent-9","started_at":"2026-02-20T08:00:00Z","completed_at":"2026-02-20T08:01:00Z","result":"rejected","notes":"needs detail"}]}}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/issues/issue-1/pipeline/status":
+			_, _ = w.Write([]byte(`{"issue":{"id":"issue-1","project_id":"project-1","issue_number":42,"title":"Pipeline issue","state":"open","origin":"local","approval_state":"draft","work_status":"in_progress","priority":"P2"},"pipeline":{"current_step_id":"step-1","steps":[{"id":"step-1","project_id":"project-1","step_number":1,"name":"Draft","description":"","assigned_agent_id":"agent-1","step_type":"agent_work","auto_advance":true}],"history":[{"id":"hist-1","step_id":"step-2","agent_id":"agent-9","started_at":"2026-02-20T08:00:00Z","completed_at":"2026-02-20T08:01:00Z","result":"rejected","notes":"needs detail"}]}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		}
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		Token:   "token-1",
+		OrgID:   "org-1",
+		HTTP:    srv.Client(),
+	}
+
+	doneResp, err := client.IssuePipelineStepDone("issue-1", stringPtr("agent-1"), "Draft complete")
+	if err != nil {
+		t.Fatalf("IssuePipelineStepDone() error = %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/issues/issue-1/pipeline/step-complete" {
+		t.Fatalf("IssuePipelineStepDone request = %s %s", gotMethod, gotPath)
+	}
+	if gotBody["notes"] != "Draft complete" {
+		t.Fatalf("IssuePipelineStepDone payload = %#v", gotBody)
+	}
+	if doneResp.Result.CurrentPipelineStepID == nil || *doneResp.Result.CurrentPipelineStepID != "step-2" {
+		t.Fatalf("IssuePipelineStepDone response = %#v", doneResp.Result)
+	}
+
+	rejectResp, err := client.IssuePipelineStepReject("issue-1", stringPtr("agent-9"), "needs detail")
+	if err != nil {
+		t.Fatalf("IssuePipelineStepReject() error = %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/issues/issue-1/pipeline/step-reject" {
+		t.Fatalf("IssuePipelineStepReject request = %s %s", gotMethod, gotPath)
+	}
+	if gotBody["reason"] != "needs detail" {
+		t.Fatalf("IssuePipelineStepReject payload = %#v", gotBody)
+	}
+	if rejectResp.Result.CurrentPipelineStepID == nil || *rejectResp.Result.CurrentPipelineStepID != "step-1" {
+		t.Fatalf("IssuePipelineStepReject response = %#v", rejectResp.Result)
+	}
+
+	status, err := client.GetIssuePipelineStatus("issue-1")
+	if err != nil {
+		t.Fatalf("GetIssuePipelineStatus() error = %v", err)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/api/issues/issue-1/pipeline/status" {
+		t.Fatalf("GetIssuePipelineStatus request = %s %s", gotMethod, gotPath)
+	}
+	if status.Pipeline.CurrentStepID == nil || *status.Pipeline.CurrentStepID != "step-1" {
+		t.Fatalf("GetIssuePipelineStatus response = %#v", status.Pipeline.CurrentStepID)
+	}
+	if len(status.Pipeline.History) != 1 {
+		t.Fatalf("GetIssuePipelineStatus history = %#v", status.Pipeline.History)
+	}
+}
+
 func TestClientResolveAgentByName(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/agents" {
