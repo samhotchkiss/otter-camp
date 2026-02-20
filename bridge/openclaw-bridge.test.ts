@@ -56,6 +56,7 @@ import {
   handleOpenClawEventForTest,
   getIngestedToolEventsStateForTest,
   getMutationEnforcementStateForTest,
+  resetWorkflowSyncStateForTest,
   validateMutationToolTargetsWithinProjectRootForTest,
   type QuestionnairePayload,
   type QuestionnaireQuestion,
@@ -356,6 +357,86 @@ describe("bridge issue dispatch routing", () => {
     const dispatchCall = rpcCalls.find((call) => call.method === "agent");
     assert.equal(dispatchCall?.method, "agent");
     assert.equal(dispatchCall?.params.sessionKey, "agent:main:main");
+  });
+});
+
+describe("bridge assistant final dedup", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    resetSessionContextsForTest();
+    resetWorkflowSyncStateForTest();
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  afterEach(() => {
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("dedups whitespace-variant final replies across distinct run IDs", async () => {
+    const sessionKey = "agent:main:main";
+    const persistedBodies: string[] = [];
+
+    setSessionContextForTest(sessionKey, {
+      kind: "dm",
+      orgID: "org-1",
+      threadID: "dm_dedup",
+      agentID: "main",
+    });
+
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("/api/messages")) {
+        persistedBodies.push(String(init?.body ?? ""));
+        return new Response(
+          JSON.stringify({
+            message: {
+              id: `msg-${persistedBodies.length}`,
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return new Response("{}", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await handleOpenClawEventForTest({
+      event: "chat",
+      payload: {
+        state: "final",
+        sessionKey,
+        runId: "run-dedup-1",
+        message: {
+          role: "assistant",
+          content: "Done.\n\nShipped fix.",
+        },
+      },
+    });
+
+    await handleOpenClawEventForTest({
+      event: "chat",
+      payload: {
+        state: "final",
+        sessionKey,
+        runId: "run-dedup-2",
+        message: {
+          role: "assistant",
+          content: "Done.  Shipped    fix.",
+        },
+      },
+    });
+
+    assert.equal(persistedBodies.length, 1);
   });
 });
 
