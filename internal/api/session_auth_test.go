@@ -57,3 +57,35 @@ func TestRequireSessionIdentityRejectsMalformedMagicToken(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractSessionTokenFallbackOrder(t *testing.T) {
+	t.Run("prefers Authorization bearer token", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/messages?token=query-token", nil)
+		req.Header.Set("Authorization", "Bearer auth-token")
+		req.Header.Set("X-Session-Token", "header-token")
+		req.AddCookie(&http.Cookie{Name: "otter_camp_token", Value: "cookie-token"})
+
+		require.Equal(t, "auth-token", extractSessionToken(req))
+	})
+
+	t.Run("falls back to X-Session-Token when bearer is absent", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/messages?token=query-token", nil)
+		req.Header.Set("X-Session-Token", "header-token")
+		req.AddCookie(&http.Cookie{Name: "otter_camp_token", Value: "cookie-token"})
+
+		require.Equal(t, "header-token", extractSessionToken(req))
+	})
+
+	t.Run("falls back to cookie token for browser image requests", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/messages?token=query-token", nil)
+		req.AddCookie(&http.Cookie{Name: "otter_camp_token", Value: "cookie-token"})
+
+		require.Equal(t, "cookie-token", extractSessionToken(req))
+	})
+
+	t.Run("falls back to query token when headers and cookie are absent", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/messages?token=query-token", nil)
+
+		require.Equal(t, "query-token", extractSessionToken(req))
+	})
+}

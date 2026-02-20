@@ -3600,6 +3600,10 @@ function extractMessageContent(value: unknown): string {
   );
 }
 
+function normalizeAssistantReplyForDedup(content: string): string {
+  return content.trim().replace(/\s+/g, ' ').slice(0, 200);
+}
+
 function normalizeQuestionnaireType(value: unknown): QuestionnaireQuestion['type'] | null {
   const normalized = getTrimmedString(value).toLowerCase();
   switch (normalized) {
@@ -4144,6 +4148,9 @@ export function resetSessionContextsForTest(): void {
   contextPrimedSessions.clear();
   workspaceCacheByAgentSlot.clear();
   workspaceGuideCache = null;
+  lastPersistedReplyBySession.clear();
+  deliveredRunIDs.clear();
+  deliveredRunIDOrder.length = 0;
 }
 
 export function resetIngestedToolEventsForTest(): void {
@@ -5318,9 +5325,12 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
     asRecord(payload.message)?.content ?? payload.content,
   );
   if (contentForDedup && sessionKey) {
-    const dedupKey = `${sessionKey}::${contentForDedup.slice(0, 200)}`;
+    const dedupKey = `${sessionKey}::${normalizeAssistantReplyForDedup(contentForDedup)}`;
     const lastTime = lastPersistedReplyBySession.get(dedupKey);
     if (lastTime && Date.now() - lastTime < 30_000) {
+      console.log(
+        `[bridge] deduped assistant final reply for ${sessionKey}${runID ? ` (run_id=${runID})` : ''}`,
+      );
       return;
     }
     lastPersistedReplyBySession.set(dedupKey, Date.now());

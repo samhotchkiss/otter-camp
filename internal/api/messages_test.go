@@ -802,6 +802,110 @@ func TestCreateMessageDMDispatchIncludesAttachments(t *testing.T) {
 	require.EqualValues(t, 2048, event.Data.Attachments[0].SizeBytes)
 }
 
+func TestCreateMessageDMUserBroadcastIncludesFrontendThreadKeys(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-broadcast-user-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "dm-broadcast-agent")
+
+	hub := ws.NewHub()
+	go hub.Run()
+	client := ws.NewClient(hub, nil)
+	client.SetOrgID(orgID)
+	hub.Register(client)
+	t.Cleanup(func() { hub.Unregister(client) })
+	time.Sleep(20 * time.Millisecond)
+
+	handler := &MessageHandler{Hub: hub}
+	threadID := "dm_" + agentID
+	body, err := json.Marshal(map[string]any{
+		"org_id":      orgID,
+		"thread_id":   threadID,
+		"content":     "Hello from user",
+		"sender_type": "user",
+		"sender_name": "Sam",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateMessage(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	select {
+	case raw := <-client.Send:
+		var event map[string]any
+		require.NoError(t, json.Unmarshal(raw, &event))
+		require.Equal(t, "DMMessageReceived", event["type"])
+
+		data, ok := event["data"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, threadID, data["threadId"])
+		require.Equal(t, threadID, data["thread_id"])
+
+		message, ok := data["message"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, threadID, message["threadId"])
+		require.Equal(t, "Hello from user", message["content"])
+		require.Equal(t, "user", message["senderType"])
+		require.Equal(t, "Sam", message["senderName"])
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected dm message broadcast")
+	}
+}
+
+func TestCreateMessageDMAgentBroadcastIncludesFrontendThreadKeys(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-broadcast-agent-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "dm-broadcast-agent")
+
+	hub := ws.NewHub()
+	go hub.Run()
+	client := ws.NewClient(hub, nil)
+	client.SetOrgID(orgID)
+	hub.Register(client)
+	t.Cleanup(func() { hub.Unregister(client) })
+	time.Sleep(20 * time.Millisecond)
+
+	handler := &MessageHandler{Hub: hub}
+	threadID := "dm_" + agentID
+	body, err := json.Marshal(map[string]any{
+		"org_id":      orgID,
+		"thread_id":   threadID,
+		"content":     "Bridge-persisted agent response",
+		"sender_type": "agent",
+		"sender_name": "Stone",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateMessage(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	select {
+	case raw := <-client.Send:
+		var event map[string]any
+		require.NoError(t, json.Unmarshal(raw, &event))
+		require.Equal(t, "DMMessageReceived", event["type"])
+
+		data, ok := event["data"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, threadID, data["threadId"])
+		require.Equal(t, threadID, data["thread_id"])
+		require.Equal(t, "Stone", data["from"])
+		require.Equal(t, "Bridge-persisted agent response", data["preview"])
+
+		message, ok := data["message"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, threadID, message["threadId"])
+		require.Equal(t, "Bridge-persisted agent response", message["content"])
+		require.Equal(t, "agent", message["senderType"])
+		require.Equal(t, "Stone", message["senderName"])
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected dm message broadcast")
+	}
+}
+
 func TestBuildDMDispatchEventOmitsAttachmentsWhenEmpty(t *testing.T) {
 	handler := &MessageHandler{}
 	threadID := "dm_itsalive"
