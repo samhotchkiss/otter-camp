@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import MessageHistory from "../MessageHistory";
 import type { Agent, DMMessage } from "../types";
@@ -275,6 +275,116 @@ describe("MessageHistory", () => {
     expect(scrollIntoViewMock.mock.calls.length).toBeGreaterThan(initialCalls);
 
     rafSpy.mockRestore();
+    window.HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+  });
+
+  it("keeps scroll pinned to bottom on history resize when user is pinned", () => {
+    const originalScrollIntoView = window.HTMLElement.prototype.scrollIntoView;
+    const scrollIntoViewMock = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+    const resizeCallbacks: ResizeObserverCallback[] = [];
+    const originalResizeObserver = globalThis.ResizeObserver;
+    class ResizeObserverMock {
+      observe = vi.fn();
+      disconnect = vi.fn();
+      unobserve = vi.fn();
+
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallbacks.push(callback);
+      }
+    }
+    // @ts-expect-error test shim
+    globalThis.ResizeObserver = ResizeObserverMock;
+
+    const messages: DMMessage[] = [
+      {
+        id: "m1",
+        threadId: "dm_agent-1",
+        senderId: "user-1",
+        senderName: "You",
+        senderType: "user",
+        content: "Pinned",
+        createdAt: "2024-01-01T00:00:00.000Z",
+      },
+    ];
+
+    const { container } = render(
+      <MessageHistory messages={messages} currentUserId="user-1" agent={agent} />,
+    );
+    const history = container.querySelector(".oc-chat-history") as HTMLDivElement;
+    Object.defineProperty(history, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(history, "clientHeight", { configurable: true, value: 500 });
+    Object.defineProperty(history, "scrollTop", { configurable: true, value: 500, writable: true });
+    fireEvent.scroll(history);
+
+    const baselineCalls = scrollIntoViewMock.mock.calls.length;
+    act(() => {
+      resizeCallbacks[0]?.([], {} as ResizeObserver);
+    });
+    expect(scrollIntoViewMock.mock.calls.length).toBeGreaterThan(baselineCalls);
+
+    if (originalResizeObserver) {
+      globalThis.ResizeObserver = originalResizeObserver;
+    } else {
+      // @ts-expect-error test shim
+      delete globalThis.ResizeObserver;
+    }
+    window.HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+  });
+
+  it("does not force scroll-to-bottom on history resize when user scrolled up", () => {
+    const originalScrollIntoView = window.HTMLElement.prototype.scrollIntoView;
+    const scrollIntoViewMock = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+    const resizeCallbacks: ResizeObserverCallback[] = [];
+    const originalResizeObserver = globalThis.ResizeObserver;
+    class ResizeObserverMock {
+      observe = vi.fn();
+      disconnect = vi.fn();
+      unobserve = vi.fn();
+
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallbacks.push(callback);
+      }
+    }
+    // @ts-expect-error test shim
+    globalThis.ResizeObserver = ResizeObserverMock;
+
+    const messages: DMMessage[] = [
+      {
+        id: "m1",
+        threadId: "dm_agent-1",
+        senderId: "user-1",
+        senderName: "You",
+        senderType: "user",
+        content: "Unpinned",
+        createdAt: "2024-01-01T00:00:00.000Z",
+      },
+    ];
+
+    const { container } = render(
+      <MessageHistory messages={messages} currentUserId="user-1" agent={agent} />,
+    );
+    const history = container.querySelector(".oc-chat-history") as HTMLDivElement;
+    Object.defineProperty(history, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(history, "clientHeight", { configurable: true, value: 500 });
+    Object.defineProperty(history, "scrollTop", { configurable: true, value: 100, writable: true });
+    fireEvent.scroll(history);
+
+    const baselineCalls = scrollIntoViewMock.mock.calls.length;
+    act(() => {
+      resizeCallbacks[0]?.([], {} as ResizeObserver);
+    });
+    expect(scrollIntoViewMock.mock.calls.length).toBe(baselineCalls);
+
+    if (originalResizeObserver) {
+      globalThis.ResizeObserver = originalResizeObserver;
+    } else {
+      // @ts-expect-error test shim
+      delete globalThis.ResizeObserver;
+    }
     window.HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
   });
 });
