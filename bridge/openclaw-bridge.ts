@@ -4068,7 +4068,9 @@ async function pushActivityEventBatch(orgID: string, events: BridgeAgentActivity
     return true;
   }
 
-  const response = await fetchWithRetry(`${OTTERCAMP_URL}/api/activity/events`, {
+  // Use plain fetch (no retry) for activity events — retries block the event loop
+  // and prevent DM dispatch messages from being processed on the WS connection.
+  const response = await fetch(`${OTTERCAMP_URL}/api/activity/events`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -4083,7 +4085,7 @@ async function pushActivityEventBatch(orgID: string, events: BridgeAgentActivity
       org_id: orgID,
       events,
     }),
-  }, 'push activity events');
+  });
   if (!response.ok) {
     const snippet = (await response.text().catch(() => '')).slice(0, 240);
     console.error(
