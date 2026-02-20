@@ -2827,7 +2827,7 @@ function buildContextReminder(context: SessionContext): string {
       typeof context.issueNumber === 'number' && Number.isFinite(context.issueNumber)
         ? `#${context.issueNumber}`
         : context.issueID || 'unknown issue';
-    return `Issue thread ${issueLabel} (${context.projectID || 'unknown project'})`;
+    return `Issue ${issueLabel} (${context.projectID || 'unknown project'})`;
   }
   return `DM thread (${context.threadID || 'unknown thread'})`;
 }
@@ -3538,26 +3538,11 @@ async function withSessionContext(
     }
     return sections.join('\n\n');
   }
-  const reminderSections: string[] = [];
-  const shouldPersistIdentityPreamble = context.kind !== 'dm';
-  const identityPreamble = shouldPersistIdentityPreamble
-    ? getTrimmedString(context.identityMetadata?.preamble)
-    : '';
-  if (identityPreamble) {
-    reminderSections.push(identityPreamble);
-  }
-  const operatingGuideReminder = buildOtterCampOperatingGuideReminder(sessionKey);
-  if (operatingGuideReminder) {
-    reminderSections.push(operatingGuideReminder);
-  }
-  const actionDefaults = buildSurfaceActionDefaults(context);
-  if (actionDefaults) {
-    reminderSections.push(actionDefaults);
-  }
-  reminderSections.push(
-    `[OTTERCAMP_CONTEXT_REMINDER]\n- ${buildContextReminder(context)}\n[/OTTERCAMP_CONTEXT_REMINDER]`,
-  );
-  const reminder = reminderSections.join('\n\n');
+  const reminder = [
+    '[OTTERCAMP_CONTEXT_REMINDER]',
+    `- ${buildContextReminder(context)} | Refer to ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME} and ${OTTERCAMP_COMMAND_REFERENCE_FILENAME} for rules.`,
+    '[/OTTERCAMP_CONTEXT_REMINDER]',
+  ].join('\n');
   if (!includeUserContent) {
     return reminder;
   }
@@ -3615,6 +3600,10 @@ function extractMessageContent(value: unknown): string {
     getTrimmedString(record.body) ||
     ''
   );
+}
+
+function normalizeAssistantReplyForDedup(content: string): string {
+  return content.trim().replace(/\s+/g, ' ').slice(0, 200);
 }
 
 function normalizeQuestionnaireType(value: unknown): QuestionnaireQuestion['type'] | null {
@@ -4161,6 +4150,9 @@ export function resetSessionContextsForTest(): void {
   contextPrimedSessions.clear();
   workspaceCacheByAgentSlot.clear();
   workspaceGuideCache = null;
+  lastPersistedReplyBySession.clear();
+  deliveredRunIDs.clear();
+  deliveredRunIDOrder.length = 0;
   lastChatEmissionAtBySession.clear();
 }
 
@@ -5506,9 +5498,12 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
     asRecord(payload.message)?.content ?? payload.content,
   );
   if (contentForDedup && sessionKey) {
-    const dedupKey = `${sessionKey}::${contentForDedup.slice(0, 200)}`;
+    const dedupKey = `${sessionKey}::${normalizeAssistantReplyForDedup(contentForDedup)}`;
     const lastTime = lastPersistedReplyBySession.get(dedupKey);
     if (lastTime && Date.now() - lastTime < 30_000) {
+      console.log(
+        `[bridge] deduped assistant final reply for ${sessionKey}${runID ? ` (run_id=${runID})` : ''}`,
+      );
       return;
     }
     lastPersistedReplyBySession.set(dedupKey, Date.now());

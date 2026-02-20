@@ -654,6 +654,60 @@ describe("GlobalChatSurface", () => {
     });
   });
 
+  it("deduplicates repeated agent DM websocket payloads with equivalent content", async () => {
+    const nowISO = new Date().toISOString();
+    const { rerender } = render(<GlobalChatSurface conversation={baseConversation} />);
+    await screen.findByPlaceholderText("Message Stone...");
+
+    wsState.lastMessage = {
+      type: "DMMessageReceived",
+      data: {
+        threadId: "dm_agent-stone",
+        message: {
+          id: "dm-agent-1",
+          threadId: "dm_agent-stone",
+          senderType: "agent",
+          senderName: "Stone",
+          content: "Same answer",
+          createdAt: nowISO,
+          updatedAt: nowISO,
+        },
+      },
+    };
+    rerender(<GlobalChatSurface conversation={baseConversation} />);
+
+    await waitFor(() => {
+      const matches = (lastMessageHistoryProps?.messages ?? []).filter(
+        (entry) => String(entry.content ?? "") === "Same answer",
+      );
+      expect(matches).toHaveLength(1);
+    });
+
+    wsState.lastMessage = {
+      type: "DMMessageReceived",
+      data: {
+        threadId: "dm_agent-stone",
+        message: {
+          id: "dm-agent-2",
+          threadId: "dm_agent-stone",
+          senderType: "agent",
+          senderName: "Stone",
+          content: "Same   answer",
+          createdAt: nowISO,
+          updatedAt: nowISO,
+        },
+      },
+    };
+    rerender(<GlobalChatSurface conversation={baseConversation} />);
+
+    await waitFor(() => {
+      const matches = (lastMessageHistoryProps?.messages ?? []).filter(
+        (entry) => String(entry.content ?? "").replace(/\s+/g, " ").trim() === "Same answer",
+      );
+      expect(matches).toHaveLength(1);
+    });
+  });
+
   it("renders latest chat emission and expands full emission history for active dm conversation", async () => {
     const { rerender } = render(<GlobalChatSurface conversation={baseConversation} />);
     await screen.findByPlaceholderText("Message Stone...");
