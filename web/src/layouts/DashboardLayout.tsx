@@ -59,6 +59,30 @@ const CHAT_DOCK_DEFAULT_WIDTH_PX = 384;
 const CHAT_DOCK_MIN_WIDTH_PX = 320;
 const CHAT_DOCK_MAX_WIDTH_PX = 960;
 const CHAT_DOCK_HANDLE_VISIBLE_PX = 16;
+const CHAT_DOCK_WIDTH_STORAGE_KEY = "otter-shell-width";
+
+function readStoredChatDockWidth(): number | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = (window.localStorage.getItem(CHAT_DOCK_WIDTH_STORAGE_KEY) ?? "").trim();
+    if (!raw) {
+      return null;
+    }
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function clampChatDockWidthForViewport(rawWidth: number, viewportWidth: number): number {
+  const viewportBound = Math.max(CHAT_DOCK_MIN_WIDTH_PX, Math.floor(viewportWidth - 220));
+  const maxWidth = Math.min(CHAT_DOCK_MAX_WIDTH_PX, viewportBound);
+  const normalized = Number.isFinite(rawWidth) ? Math.round(rawWidth) : CHAT_DOCK_DEFAULT_WIDTH_PX;
+  return Math.max(CHAT_DOCK_MIN_WIDTH_PX, Math.min(maxWidth, normalized));
+}
 
 function logOut() {
   document.cookie = "otter_auth=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
@@ -153,7 +177,12 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(true);
-  const [chatDockWidth, setChatDockWidth] = useState(CHAT_DOCK_DEFAULT_WIDTH_PX);
+  const [chatDockWidth, setChatDockWidth] = useState(() => {
+    const storedWidth = readStoredChatDockWidth();
+    const initialWidth = storedWidth ?? CHAT_DOCK_DEFAULT_WIDTH_PX;
+    const viewportWidth = typeof window === "undefined" ? CHAT_DOCK_MAX_WIDTH_PX : window.innerWidth;
+    return clampChatDockWidthForViewport(initialWidth, viewportWidth);
+  });
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
   const [sidebarInboxItems, setSidebarInboxItems] = useState<SidebarInboxItem[]>([]);
   const [sidebarProjectItems, setSidebarProjectItems] = useState<SidebarProjectItem[]>([]);
@@ -275,12 +304,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   }, [avatarMenuOpen]);
 
   const clampChatDockWidth = useCallback((rawWidth: number): number => {
-    const viewportBound = typeof window === "undefined"
-      ? CHAT_DOCK_MAX_WIDTH_PX
-      : Math.max(CHAT_DOCK_MIN_WIDTH_PX, Math.floor(window.innerWidth - 220));
-    const maxWidth = Math.min(CHAT_DOCK_MAX_WIDTH_PX, viewportBound);
-    const normalized = Number.isFinite(rawWidth) ? Math.round(rawWidth) : CHAT_DOCK_DEFAULT_WIDTH_PX;
-    return Math.max(CHAT_DOCK_MIN_WIDTH_PX, Math.min(maxWidth, normalized));
+    const viewportWidth = typeof window === "undefined" ? CHAT_DOCK_MAX_WIDTH_PX : window.innerWidth;
+    return clampChatDockWidthForViewport(rawWidth, viewportWidth);
   }, []);
 
   useEffect(() => {
