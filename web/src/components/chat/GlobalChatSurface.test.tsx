@@ -708,7 +708,7 @@ describe("GlobalChatSurface", () => {
     });
   });
 
-  it("renders latest chat emission and expands full emission history for active dm conversation", async () => {
+  it("renders a single in-place emission message in the timeline for active dm conversation", async () => {
     const { rerender } = render(<GlobalChatSurface conversation={baseConversation} />);
     await screen.findByPlaceholderText("Message Stone...");
 
@@ -725,8 +725,14 @@ describe("GlobalChatSurface", () => {
     };
     rerender(<GlobalChatSurface conversation={baseConversation} />);
 
-    await screen.findByText("Running write");
-    expect(screen.getByRole("button", { name: "Show all" })).toBeInTheDocument();
+    await waitFor(() => {
+      const emissions = (lastMessageHistoryProps?.messages ?? []).filter(
+        (entry) => entry.senderType === "emission",
+      );
+      expect(emissions).toHaveLength(1);
+      expect(emissions[0]?.content).toBe("Running write");
+      expect(emissions[0]?.id).toBe("emission-dm:dm_agent-stone");
+    });
 
     wsState.lastMessage = {
       type: "EmissionReceived",
@@ -741,19 +747,17 @@ describe("GlobalChatSurface", () => {
     };
     rerender(<GlobalChatSurface conversation={baseConversation} />);
 
-    await screen.findByText("Reading docs");
-    expect(screen.queryByText("Running write")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
-    expect(screen.getByText("Reading docs")).toBeInTheDocument();
-    expect(screen.getByText("Running write")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
-    expect(screen.getByText("Reading docs")).toBeInTheDocument();
-    expect(screen.queryByText("Running write")).not.toBeInTheDocument();
+    await waitFor(() => {
+      const emissions = (lastMessageHistoryProps?.messages ?? []).filter(
+        (entry) => entry.senderType === "emission",
+      );
+      expect(emissions).toHaveLength(1);
+      expect(emissions[0]?.content).toBe("Reading docs");
+      expect(emissions[0]?.id).toBe("emission-dm:dm_agent-stone");
+    });
   });
 
-  it("auto-dismisses chat emissions when final agent reply arrives", async () => {
+  it("replaces timeline emission message in-place when final agent reply arrives", async () => {
     const nowISO = "2026-02-08T00:00:00.000Z";
     const { rerender } = render(<GlobalChatSurface conversation={baseConversation} />);
     await screen.findByPlaceholderText("Message Stone...");
@@ -770,7 +774,13 @@ describe("GlobalChatSurface", () => {
       },
     };
     rerender(<GlobalChatSurface conversation={baseConversation} />);
-    await screen.findByText("Planning response");
+    let emissionIndex = -1;
+    await waitFor(() => {
+      emissionIndex = (lastMessageHistoryProps?.messages ?? []).findIndex(
+        (entry) => entry.senderType === "emission",
+      );
+      expect(emissionIndex).toBeGreaterThanOrEqual(0);
+    });
 
     wsState.lastMessage = {
       type: "DMMessageReceived",
@@ -790,8 +800,11 @@ describe("GlobalChatSurface", () => {
     rerender(<GlobalChatSurface conversation={baseConversation} />);
 
     await waitFor(() => {
-      expect(screen.queryByText("Planning response")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("chat-emission-indicator")).not.toBeInTheDocument();
+      const messages = lastMessageHistoryProps?.messages ?? [];
+      const emissions = messages.filter((entry) => entry.senderType === "emission");
+      expect(emissions).toHaveLength(0);
+      expect(messages[emissionIndex]?.id).toBe("msg-agent-1");
+      expect(messages[emissionIndex]?.content).toBe("Done and shipped.");
     });
   });
 
