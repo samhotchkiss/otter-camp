@@ -10,6 +10,7 @@ import { formatTimestamp, getInitials } from "./utils";
 import MessageMarkdown from "./MessageMarkdown";
 import Questionnaire from "../Questionnaire";
 import QuestionnaireResponse from "../QuestionnaireResponse";
+import LiveTimestamp from "../LiveTimestamp";
 
 const SCROLL_BOTTOM_THRESHOLD_PX = 200;
 
@@ -177,6 +178,8 @@ function MessageAvatar({
   const bgColor =
     senderType === "agent"
       ? "bg-[#ff9800] text-[#1c1200]"
+      : senderType === "emission"
+        ? "bg-[var(--surface-alt)] text-[var(--text-muted)]"
       : "bg-[var(--surface-alt)] text-[var(--text)]";
 
   if (avatarUrl) {
@@ -233,8 +236,11 @@ function MessageBubble({
     );
   }
 
+  const isEmission = message.senderType === "emission";
   const bubbleStyle = isOwnMessage
     ? "oc-message-bubble-user bg-[var(--accent)] text-[#1A1918]"
+    : isEmission
+      ? "oc-message-bubble-emission border border-[var(--border)]/50 bg-[var(--surface-alt)] text-[var(--text-muted)] opacity-60"
     : message.senderType === "agent"
       ? "oc-message-bubble-agent border border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text)]"
       : "bg-[var(--surface-alt)] text-[var(--text)]";
@@ -260,11 +266,22 @@ function MessageBubble({
               Agent
             </span>
           )}
-          <span className="text-[10px] text-[var(--text-muted)]">
-            {formatTimestamp(message.createdAt)}
-          </span>
+          {isEmission ? (
+            <LiveTimestamp
+              timestamp={message.createdAt}
+              verbose
+              className="text-[10px] text-[var(--text-muted)]"
+            />
+          ) : (
+            <span className="text-[10px] text-[var(--text-muted)]">
+              {formatTimestamp(message.createdAt)}
+            </span>
+          )}
         </div>
-        <div className={`min-w-0 max-w-full overflow-hidden rounded-2xl px-4 py-2.5 ${bubbleStyle}`}>
+        <div
+          className={`min-w-0 max-w-full overflow-hidden rounded-2xl px-4 py-2.5 ${bubbleStyle}`}
+          data-testid={isEmission ? "message-bubble-emission" : undefined}
+        >
           {message.questionnaire ? (
             message.questionnaire.responses ? (
               <QuestionnaireResponse questionnaire={message.questionnaire} />
@@ -277,15 +294,22 @@ function MessageBubble({
               <QuestionnaireResponse questionnaire={message.questionnaire} />
             )
           ) : (
-            <>
-              <MessageMarkdown
-                markdown={message.content}
-                className="text-sm leading-relaxed"
-              />
-              {message.attachments && message.attachments.length > 0 ? (
-                <MessageAttachments attachments={message.attachments} />
-              ) : null}
-            </>
+            isEmission ? (
+              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                {"🔄 "}
+                {message.content}
+              </p>
+            ) : (
+              <>
+                <MessageMarkdown
+                  markdown={message.content}
+                  className="text-sm leading-relaxed"
+                />
+                {message.attachments && message.attachments.length > 0 ? (
+                  <MessageAttachments attachments={message.attachments} />
+                ) : null}
+              </>
+            )
           )}
         </div>
         {message.optimistic ? (
