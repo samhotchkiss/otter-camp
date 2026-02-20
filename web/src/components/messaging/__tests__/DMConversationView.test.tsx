@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import DMConversationView from "../DMConversationView";
 import type { Agent } from "../types";
+import { useWS } from "../../../contexts/WebSocketContext";
 
 vi.mock("../../../contexts/WebSocketContext", () => ({
   useWS: vi.fn(() => ({
@@ -18,6 +19,11 @@ describe("DMConversationView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
+    vi.mocked(useWS).mockReturnValue({
+      connected: true,
+      lastMessage: null,
+      sendMessage: vi.fn(() => true),
+    });
   });
 
   it("fetches and renders initial messages", async () => {
@@ -188,6 +194,44 @@ describe("DMConversationView", () => {
     expect(postCall[1]?.method).toBe("POST");
     expect(String(postCall[1]?.body ?? "")).toContain("Hello with Enter");
     expect(screen.getByText("Delivered to bridge")).toBeInTheDocument();
+  });
+
+  it("updates delivery indicator when websocket marks DM delivery as delivered", async () => {
+    vi.mocked(useWS).mockReturnValue({
+      connected: true,
+      lastMessage: {
+        type: "DMMessageDeliveryUpdated",
+        data: {
+          threadId: "dm_agent-1",
+          messageId: "msg-delivered-1",
+          deliveryStatus: "delivered",
+        },
+      } as unknown,
+      sendMessage: vi.fn(() => true),
+    });
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          messages: [],
+          hasMore: false,
+          totalCount: 0,
+        }),
+    });
+
+    const agent: Agent = {
+      id: "agent-1",
+      name: "Agent One",
+      status: "online",
+      role: "Helper",
+    };
+
+    render(<DMConversationView agent={agent} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Delivered to bridge")).toBeInTheDocument();
+    });
   });
 
   it("uploads attachments and includes them in message send payload", async () => {

@@ -379,6 +379,27 @@ export default function DMConversationView({
 
   useEffect(() => {
     if (!lastMessage) return;
+    if (lastMessage.type === "DMMessageDeliveryUpdated") {
+      const data = lastMessage.data as {
+        threadId?: string;
+        thread_id?: string;
+        deliveryStatus?: string;
+        delivery_status?: string;
+      };
+      const eventThreadID = data.threadId ?? data.thread_id;
+      if (eventThreadID !== computedThreadId) return;
+
+      const normalizedStatus = String(data.deliveryStatus ?? data.delivery_status ?? "")
+        .trim()
+        .toLowerCase();
+      if (normalizedStatus === "delivered") {
+        setDeliveryIndicator({ tone: "success", text: "Delivered to bridge" });
+      } else if (normalizedStatus === "failed") {
+        setDeliveryIndicator({ tone: "warning", text: "Delivery failed" });
+      }
+      return;
+    }
+
     if (lastMessage.type !== "DMMessageReceived") return;
 
     const data = lastMessage.data as {

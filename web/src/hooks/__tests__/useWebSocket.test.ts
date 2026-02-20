@@ -396,6 +396,7 @@ describe("useWebSocket", () => {
       "AgentStatusChanged",
       "FeedItemsAdded",
       "DMMessageReceived",
+      "DMMessageDeliveryUpdated",
       "ExecApprovalRequested",
       "ExecApprovalResolved",
       "IssueCreated",
