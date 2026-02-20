@@ -5751,11 +5751,13 @@ async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
     throw err;
   }
 
-  try {
-    await syncWorkflowProjectsFromCronJobs(cronJobs);
-  } catch (err) {
-    console.error('[bridge] workflow project cron sync failed:', err);
-  }
+  // Disabled: cron→workflow project sync creates unwanted projects.
+  // Re-enable when OtterCamp has proper workflow UI.
+  // try {
+  //   await syncWorkflowProjectsFromCronJobs(cronJobs);
+  // } catch (err) {
+  //   console.error('[bridge] workflow project cron sync failed:', err);
+  // }
 }
 
 async function pullDispatchQueueJobs(limit = 50): Promise<DispatchQueueJob[]> {
