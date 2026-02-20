@@ -118,6 +118,7 @@ func NewRouter() http.Handler {
 	adminEllieIngestionHandler := &AdminEllieIngestionHandler{}
 	// Settings uses standalone handler functions (no struct needed)
 	pipelineRolesHandler := &PipelineRolesHandler{}
+	pipelineStepsHandler := &PipelineStepsHandler{}
 	deployConfigHandler := &DeployConfigHandler{}
 	jobsHandler := &JobsHandler{}
 	openClawMigrationHandler := NewOpenClawMigrationControlPlaneHandler(db)
@@ -177,6 +178,7 @@ func NewRouter() http.Handler {
 		agentActivityHandler.Store = store.NewAgentActivityEventStore(db)
 		conversationTokenHandler.Store = store.NewConversationTokenStore(db)
 		pipelineRolesHandler.Store = store.NewPipelineRoleStore(db)
+		pipelineStepsHandler.Store = store.NewPipelineStepStore(db)
 		deployConfigHandler.Store = store.NewDeployConfigStore(db)
 		jobsHandler.Store = store.NewAgentJobStore(db)
 		jobsHandler.DB = db
@@ -310,6 +312,11 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}/settings", projectsHandler.UpdateSettings)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pipeline-roles", pipelineRolesHandler.Get)
 		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/pipeline-roles", pipelineRolesHandler.Put)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pipeline-steps", pipelineStepsHandler.List)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pipeline-steps", pipelineStepsHandler.Create)
+		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/pipeline-steps/reorder", pipelineStepsHandler.Reorder)
+		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}/pipeline-steps/{stepID}", pipelineStepsHandler.Patch)
+		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}/pipeline-steps/{stepID}", pipelineStepsHandler.Delete)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/deploy-config", deployConfigHandler.Get)
 		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/deploy-config", deployConfigHandler.Put)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat", projectChatHandler.List)

@@ -44,6 +44,28 @@ type CreatePipelineStepInput struct {
 	AutoAdvance     bool
 }
 
+type UpdatePipelineStepInput struct {
+	StepID string
+
+	SetStepNumber bool
+	StepNumber    int
+
+	SetName bool
+	Name    string
+
+	SetDescription bool
+	Description    string
+
+	SetAssignedAgentID bool
+	AssignedAgentID    *string
+
+	SetStepType bool
+	StepType    string
+
+	SetAutoAdvance bool
+	AutoAdvance    bool
+}
+
 type CreateIssuePipelineHistoryInput struct {
 	IssueID     string
 	StepID      string
@@ -332,6 +354,156 @@ func (s *PipelineStepStore) ReorderSteps(ctx context.Context, projectID string, 
 	}
 
 	return tx.Commit()
+}
+
+func (s *PipelineStepStore) UpdateStep(ctx context.Context, input UpdatePipelineStepInput) (*PipelineStep, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	stepID := strings.TrimSpace(input.StepID)
+	if !uuidRegex.MatchString(stepID) {
+		return nil, fmt.Errorf("%w: invalid step_id", ErrValidation)
+	}
+
+	assignments := []string{}
+	args := []any{}
+	argPosition := 1
+
+	if input.SetStepNumber {
+		if input.StepNumber <= 0 {
+			return nil, fmt.Errorf("%w: step_number must be greater than zero", ErrValidation)
+		}
+		assignments = append(assignments, fmt.Sprintf("step_number = $%d", argPosition))
+		args = append(args, input.StepNumber)
+		argPosition++
+	}
+	if input.SetName {
+		trimmed := strings.TrimSpace(input.Name)
+		if trimmed == "" {
+			return nil, fmt.Errorf("%w: name is required", ErrValidation)
+		}
+		assignments = append(assignments, fmt.Sprintf("name = $%d", argPosition))
+		args = append(args, trimmed)
+		argPosition++
+	}
+	if input.SetDescription {
+		assignments = append(assignments, fmt.Sprintf("description = $%d", argPosition))
+		args = append(args, strings.TrimSpace(input.Description))
+		argPosition++
+	}
+	if input.SetAssignedAgentID {
+		var normalized *string
+		if input.AssignedAgentID != nil {
+			trimmed := strings.TrimSpace(*input.AssignedAgentID)
+			if trimmed != "" {
+				if !uuidRegex.MatchString(trimmed) {
+					return nil, fmt.Errorf("%w: invalid assigned_agent_id", ErrValidation)
+				}
+				normalized = &trimmed
+			}
+		}
+		input.AssignedAgentID = normalized
+		assignments = append(assignments, fmt.Sprintf("assigned_agent_id = $%d", argPosition))
+		args = append(args, nullableString(input.AssignedAgentID))
+		argPosition++
+	}
+	if input.SetStepType {
+		stepType := normalizePipelineStepType(input.StepType)
+		if !isValidPipelineStepType(stepType) {
+			return nil, fmt.Errorf("%w: invalid step_type", ErrValidation)
+		}
+		assignments = append(assignments, fmt.Sprintf("step_type = $%d", argPosition))
+		args = append(args, stepType)
+		argPosition++
+	}
+	if input.SetAutoAdvance {
+		assignments = append(assignments, fmt.Sprintf("auto_advance = $%d", argPosition))
+		args = append(args, input.AutoAdvance)
+		argPosition++
+	}
+
+	if len(assignments) == 0 {
+		return nil, fmt.Errorf("%w: no fields to update", ErrValidation)
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	if input.SetAssignedAgentID && input.AssignedAgentID != nil {
+		if err := ensurePipelineAgentVisible(ctx, tx, *input.AssignedAgentID); err != nil {
+			return nil, err
+		}
+	}
+	if err := ensurePipelineStepVisible(ctx, tx, stepID); err != nil {
+		return nil, err
+	}
+
+	whereStepArg := argPosition
+	whereOrgArg := argPosition + 1
+	args = append(args, stepID, workspaceID)
+
+	query := fmt.Sprintf(
+		`UPDATE pipeline_steps
+		 SET %s
+		 WHERE id = $%d AND org_id = $%d
+		 RETURNING id, org_id, project_id, step_number, name, description, assigned_agent_id, step_type, auto_advance, created_at, updated_at`,
+		strings.Join(assignments, ", "),
+		whereStepArg,
+		whereOrgArg,
+	)
+
+	record, err := scanPipelineStep(tx.QueryRowContext(ctx, query, args...))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to update pipeline step: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (s *PipelineStepStore) DeleteStep(ctx context.Context, stepID string) error {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return ErrNoWorkspace
+	}
+	stepID = strings.TrimSpace(stepID)
+	if !uuidRegex.MatchString(stepID) {
+		return fmt.Errorf("%w: invalid step_id", ErrValidation)
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	result, err := conn.ExecContext(
+		ctx,
+		`DELETE FROM pipeline_steps WHERE id = $1 AND org_id = $2`,
+		stepID,
+		workspaceID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete pipeline step: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read pipeline step delete result: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *PipelineStepStore) AppendIssuePipelineHistory(ctx context.Context, input CreateIssuePipelineHistoryInput) (*IssuePipelineHistoryEntry, error) {
