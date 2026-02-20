@@ -73,6 +73,7 @@ const HEARTBEAT_MISS_THRESHOLD = 2;
 const DISPATCH_REPLAY_MAX_ITEMS = 1000;
 const DISPATCH_REPLAY_MAX_BYTES = 10 * 1024 * 1024;
 const MAX_TRACKED_DISPATCH_REPLAY_IDS = 5000;
+const MAX_TRACKED_DELIVERED_DM_MESSAGE_IDS = 5000;
 const BRIDGE_HEALTH_PORT = (() => {
   const raw = Number.parseInt((process.env.OTTER_BRIDGE_HEALTH_PORT || '').trim(), 10);
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -617,6 +618,8 @@ const dispatchReplayQueue: DispatchReplayQueueItem[] = [];
 const queuedDispatchReplayIDs = new Set<string>();
 const deliveredDispatchReplayIDs = new Set<string>();
 const deliveredDispatchReplayIDOrder: string[] = [];
+const deliveredDMMessageIDs = new Set<string>();
+const deliveredDMMessageIDOrder: string[] = [];
 let dispatchReplayQueueBytes = 0;
 const recentCompactionRecoveryByKey = new Map<string, number>();
 let lastSuccessfulSyncAtMs = 0;
@@ -1374,6 +1377,50 @@ export async function replayQueuedDispatchEventsForTest(
     flushedIDs.push(current.id);
   }
   return flushedIDs;
+}
+
+function rememberDeliveredDMMessageID(messageID: string, maxItems: number = MAX_TRACKED_DELIVERED_DM_MESSAGE_IDS): void {
+  const normalized = getTrimmedString(messageID);
+  if (!normalized) {
+    return;
+  }
+  if (deliveredDMMessageIDs.has(normalized)) {
+    return;
+  }
+  deliveredDMMessageIDs.add(normalized);
+  deliveredDMMessageIDOrder.push(normalized);
+  while (deliveredDMMessageIDOrder.length > maxItems) {
+    const oldest = deliveredDMMessageIDOrder.shift();
+    if (!oldest) {
+      continue;
+    }
+    deliveredDMMessageIDs.delete(oldest);
+  }
+}
+
+function hasDeliveredDMMessageID(messageID: string): boolean {
+  const normalized = getTrimmedString(messageID);
+  if (!normalized) {
+    return false;
+  }
+  return deliveredDMMessageIDs.has(normalized);
+}
+
+export function rememberDeliveredDMMessageIDForTest(messageID: string, maxItems?: number): void {
+  rememberDeliveredDMMessageID(messageID, maxItems && maxItems > 0 ? maxItems : MAX_TRACKED_DELIVERED_DM_MESSAGE_IDS);
+}
+
+export function hasDeliveredDMMessageIDForTest(messageID: string): boolean {
+  return hasDeliveredDMMessageID(messageID);
+}
+
+export function resetDeliveredDMMessageIDsForTest(): void {
+  deliveredDMMessageIDs.clear();
+  deliveredDMMessageIDOrder.length = 0;
+}
+
+export function getDeliveredDMMessageIDsForTest(): string[] {
+  return [...deliveredDMMessageIDOrder];
 }
 
 function setSessionContext(sessionKey: string, context: SessionContext): void {
@@ -6653,11 +6700,20 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
   });
 
   const outboundContent = formatIncrementalDMContent(content, incrementalContext);
+  if (messageID && hasDeliveredDMMessageID(messageID)) {
+    console.log(
+      `[bridge] skipped duplicate dm.message for ${sessionKey} (message_id=${messageID})`,
+    );
+    return;
+  }
   try {
     await sendMessageToSession(sessionKey, outboundContent, messageID || undefined, {
       forceIdentityBootstrap: injectIdentity,
       attachments,
     });
+    if (messageID) {
+      rememberDeliveredDMMessageID(messageID);
+    }
     console.log(
       `[bridge] delivered dm.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
