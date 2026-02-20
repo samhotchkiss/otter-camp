@@ -2148,3 +2148,87 @@ func TestSchemaIncludesOpenClawHistoryFailureLedgerMigration(t *testing.T) {
 	require.Contains(t, downContent, "drop index if exists openclaw_history_import_failures_identity_uidx")
 	require.Contains(t, downContent, "drop table if exists openclaw_history_import_failures")
 }
+
+func TestMigration088PipelineWorkflowFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"088_create_pipeline_steps_and_issue_history.up.sql",
+		"088_create_pipeline_steps_and_issue_history.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "088_create_pipeline_steps_and_issue_history.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table pipeline_steps")
+	require.Contains(t, upContent, "step_type in ('agent_work', 'agent_review', 'human_review')")
+	require.Contains(t, upContent, "create table issue_pipeline_history")
+	require.Contains(t, upContent, "result in ('completed', 'rejected', 'skipped')")
+	require.Contains(t, upContent, "add column current_pipeline_step_id")
+	require.Contains(t, upContent, "add column pipeline_started_at")
+	require.Contains(t, upContent, "add column pipeline_completed_at")
+	require.Contains(t, upContent, "enable row level security")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "088_create_pipeline_steps_and_issue_history.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop table if exists issue_pipeline_history")
+	require.Contains(t, downContent, "drop table if exists pipeline_steps")
+	require.Contains(t, downContent, "drop column if exists current_pipeline_step_id")
+	require.Contains(t, downContent, "drop column if exists pipeline_started_at")
+	require.Contains(t, downContent, "drop column if exists pipeline_completed_at")
+}
+
+func TestSchemaPipelineStepAndIssueHistoryTablesExist(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	var pipelineSteps sql.NullString
+	err := db.QueryRow(`SELECT to_regclass('public.pipeline_steps')::text`).Scan(&pipelineSteps)
+	require.NoError(t, err)
+	require.True(t, pipelineSteps.Valid)
+
+	var issuePipelineHistory sql.NullString
+	err = db.QueryRow(`SELECT to_regclass('public.issue_pipeline_history')::text`).Scan(&issuePipelineHistory)
+	require.NoError(t, err)
+	require.True(t, issuePipelineHistory.Valid)
+
+	var hasCurrentStep bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'project_issues'
+			  AND column_name = 'current_pipeline_step_id'
+		)`,
+	).Scan(&hasCurrentStep)
+	require.NoError(t, err)
+	require.True(t, hasCurrentStep)
+
+	var hasPipelineStartedAt bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'project_issues'
+			  AND column_name = 'pipeline_started_at'
+		)`,
+	).Scan(&hasPipelineStartedAt)
+	require.NoError(t, err)
+	require.True(t, hasPipelineStartedAt)
+
+	var hasPipelineCompletedAt bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'project_issues'
+			  AND column_name = 'pipeline_completed_at'
+		)`,
+	).Scan(&hasPipelineCompletedAt)
+	require.NoError(t, err)
+	require.True(t, hasPipelineCompletedAt)
+}
