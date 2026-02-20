@@ -2164,6 +2164,78 @@ describe("bridge memory extraction dispatch helpers", () => {
     assert.equal(data.ok, true);
   });
 
+  it("keeps memory extraction session reuse bounded for 10 sequential requests", async () => {
+    const uniqueSessionKeys = new Set<string>();
+    setExecFileForTest((_cmd, args, _options, callback) => {
+      const paramsIndex = args.indexOf("--params");
+      if (paramsIndex >= 0 && paramsIndex + 1 < args.length) {
+        const params = JSON.parse(args[paramsIndex + 1] || "{}") as Record<string, unknown>;
+        uniqueSessionKeys.add(String(params.sessionKey || ""));
+      }
+      callback(
+        null,
+        '{"runId":"trace-session-reuse-10","status":"ok","result":{"payloads":[{"text":"{\\"candidates\\":[]}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"}}}}',
+        "",
+      );
+    });
+
+    for (let i = 0; i < 10; i += 1) {
+      await dispatchInboundEventForTest("memory.extract.request", {
+        type: "memory.extract.request",
+        org_id: "11111111-2222-3333-4444-555555555555",
+        data: {
+          request_id: `req-seq-10-${i}`,
+          args: [
+            "gateway",
+            "call",
+            "agent",
+            "--json",
+            "--params",
+            `{"sessionKey":"agent:elephant:main:ellie-ingestion:11111111-2222-3333-4444-555555555555-${i.toString(16).padStart(2, "0")}","idempotencyKey":"ellie-ingestion-${i}","message":"extract-${i}"}`,
+          ],
+        },
+      });
+    }
+
+    assert.equal(uniqueSessionKeys.size <= 2, true);
+  });
+
+  it("keeps memory extraction session reuse bounded for 100 sequential requests", async () => {
+    const uniqueSessionKeys = new Set<string>();
+    setExecFileForTest((_cmd, args, _options, callback) => {
+      const paramsIndex = args.indexOf("--params");
+      if (paramsIndex >= 0 && paramsIndex + 1 < args.length) {
+        const params = JSON.parse(args[paramsIndex + 1] || "{}") as Record<string, unknown>;
+        uniqueSessionKeys.add(String(params.sessionKey || ""));
+      }
+      callback(
+        null,
+        '{"runId":"trace-session-reuse-100","status":"ok","result":{"payloads":[{"text":"{\\"candidates\\":[]}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"}}}}',
+        "",
+      );
+    });
+
+    for (let i = 0; i < 100; i += 1) {
+      await dispatchInboundEventForTest("memory.extract.request", {
+        type: "memory.extract.request",
+        org_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        data: {
+          request_id: `req-seq-100-${i}`,
+          args: [
+            "gateway",
+            "call",
+            "agent",
+            "--json",
+            "--params",
+            `{"sessionKey":"agent:elephant:main:ellie-ingestion:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee-${i.toString(16).padStart(2, "0")}","idempotencyKey":"ellie-ingestion-${i}","message":"extract-${i}"}`,
+          ],
+        },
+      });
+    }
+
+    assert.equal(uniqueSessionKeys.size <= 5, true);
+  });
+
   it("rejects unsupported memory.extract.request commands with error response", async () => {
     await dispatchInboundEventForTest("memory.extract.request", {
       type: "memory.extract.request",
