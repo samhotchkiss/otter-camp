@@ -864,13 +864,14 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 
 	agentID := parseDMThreadAgentID(*req.ThreadID)
 	if agentID == "" && uuidRegex.MatchString(*req.ThreadID) {
-		// thread_id is a chat record UUID — look up the thread_key and extract
-		// the agent ID. Use a direct query without RLS dependency.
+		// thread_id is a chat record UUID — look up the thread_key in a
+		// transaction with org context set (for RLS).
 		var threadKey string
-		_ = db.QueryRowContext(ctx,
-			`SELECT COALESCE(thread_key, '') FROM chat_threads WHERE id = $1`,
-			*req.ThreadID,
-		).Scan(&threadKey)
+		if tx, txErr := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true}); txErr == nil {
+			_, _ = tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL app.org_id = '%s'", orgID))
+			_ = tx.QueryRowContext(ctx, `SELECT COALESCE(thread_key, '') FROM chat_threads WHERE id = $1`, *req.ThreadID).Scan(&threadKey)
+			_ = tx.Rollback()
+		}
 		if threadKey != "" && strings.HasPrefix(threadKey, "dm:") {
 			agentID = parseDMThreadAgentID(strings.TrimPrefix(threadKey, "dm:"))
 		}
@@ -879,8 +880,18 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 		return dmDispatchTarget{}, false, "", 0, nil
 	}
 
+	// Use a transaction with org context for RLS-protected queries.
+	tx, txErr := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if txErr != nil {
+		return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
+	}
+	defer tx.Rollback()
+	if _, setErr := tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL app.org_id = '%s'", orgID)); setErr != nil {
+		return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
+	}
+
 	var target dmDispatchTarget
-	err := db.QueryRowContext(
+	err := tx.QueryRowContext(
 		ctx,
 		`SELECT id, COALESCE(session_key, '') FROM agent_sync_state WHERE org_id = $1 AND id = $2`,
 		orgID,
@@ -895,11 +906,11 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 		// stores agents by slug.
 		if uuidRegex.MatchString(agentID) {
 			var slug string
-			if slugErr := db.QueryRowContext(ctx,
+			if slugErr := tx.QueryRowContext(ctx,
 				`SELECT slug FROM agents WHERE org_id = $1 AND id = $2`,
 				orgID, agentID,
 			).Scan(&slug); slugErr == nil && slug != "" {
-				err = db.QueryRowContext(ctx,
+				err = tx.QueryRowContext(ctx,
 					`SELECT id, COALESCE(session_key, '') FROM agent_sync_state WHERE org_id = $1 AND id = $2`,
 					orgID, slug,
 				).Scan(&target.AgentID, &target.SessionKey)
@@ -921,13 +932,13 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 			}
 			// If not found in agentRoles, try the agents table by name or role.
 			if resolvedSlug == "" {
-				_ = db.QueryRowContext(ctx,
+				_ = tx.QueryRowContext(ctx,
 					`SELECT COALESCE(slug, role, name) FROM agents WHERE org_id = $1 AND (name = $2 OR role = $2) LIMIT 1`,
 					orgID, agentID,
 				).Scan(&resolvedSlug)
 			}
 			if resolvedSlug != "" {
-				err = db.QueryRowContext(ctx,
+				err = tx.QueryRowContext(ctx,
 					`SELECT id, COALESCE(session_key, '') FROM agent_sync_state WHERE org_id = $1 AND id = $2`,
 					orgID, resolvedSlug,
 				).Scan(&target.AgentID, &target.SessionKey)
