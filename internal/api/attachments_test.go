@@ -376,6 +376,49 @@ func TestGetAttachmentStreamsFileWithSyncToken(t *testing.T) {
 	}
 }
 
+func TestGetAttachmentStreamsFileWithSessionCookie(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "attachment-get-cookie-auth")
+	attachmentID, content := insertStoredAttachmentFixture(t, db, orgID, "cookie.txt", []byte("cookie auth body"), "text/plain")
+	userID := insertTestUser(t, db, orgID, "attachment-get-cookie-user")
+	token := "oc_sess_attachment_cookie_auth"
+	insertTestSession(t, db, orgID, userID, token, time.Now().UTC().Add(1*time.Hour))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/attachments/"+attachmentID, nil)
+	req.AddCookie(&http.Cookie{Name: "otter_camp_token", Value: token})
+	rr := httptest.NewRecorder()
+	handler := &AttachmentsHandler{}
+	handler.GetAttachment(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GetAttachment() status = %v, want %v (body=%s)", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := rr.Body.String(); got != string(content) {
+		t.Fatalf("GetAttachment() body = %q, want %q", got, string(content))
+	}
+}
+
+func TestGetAttachmentStreamsFileWithSessionQueryToken(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "attachment-get-query-auth")
+	attachmentID, content := insertStoredAttachmentFixture(t, db, orgID, "query.txt", []byte("query auth body"), "text/plain")
+	userID := insertTestUser(t, db, orgID, "attachment-get-query-user")
+	token := "oc_sess_attachment_query_auth"
+	insertTestSession(t, db, orgID, userID, token, time.Now().UTC().Add(1*time.Hour))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/attachments/"+attachmentID+"?token="+token, nil)
+	rr := httptest.NewRecorder()
+	handler := &AttachmentsHandler{}
+	handler.GetAttachment(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GetAttachment() status = %v, want %v (body=%s)", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := rr.Body.String(); got != string(content) {
+		t.Fatalf("GetAttachment() body = %q, want %q", got, string(content))
+	}
+}
+
 func insertStoredAttachmentFixture(
 	t *testing.T,
 	db *sql.DB,
