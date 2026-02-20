@@ -119,6 +119,7 @@ func NewRouter() http.Handler {
 	// Settings uses standalone handler functions (no struct needed)
 	pipelineRolesHandler := &PipelineRolesHandler{}
 	pipelineStepsHandler := &PipelineStepsHandler{}
+	issuePipelineActionsHandler := &IssuePipelineActionsHandler{}
 	deployConfigHandler := &DeployConfigHandler{}
 	jobsHandler := &JobsHandler{}
 	openClawMigrationHandler := NewOpenClawMigrationControlPlaneHandler(db)
@@ -179,6 +180,12 @@ func NewRouter() http.Handler {
 		conversationTokenHandler.Store = store.NewConversationTokenStore(db)
 		pipelineRolesHandler.Store = store.NewPipelineRoleStore(db)
 		pipelineStepsHandler.Store = store.NewPipelineStepStore(db)
+		issuePipelineActionsHandler.IssueStore = issuesHandler.IssueStore
+		issuePipelineActionsHandler.PipelineStepStore = pipelineStepsHandler.Store
+		issuePipelineActionsHandler.ProgressionService = &IssuePipelineProgressionService{
+			PipelineStepStore: pipelineStepsHandler.Store,
+			IssueStore:        issuesHandler.IssueStore,
+		}
 		deployConfigHandler.Store = store.NewDeployConfigStore(db)
 		jobsHandler.Store = store.NewAgentJobStore(db)
 		jobsHandler.DB = db
@@ -358,6 +365,9 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pull-requests", githubPullRequestsHandler.CreateForProject)
 		r.With(middleware.OptionalWorkspace).Get("/issues", issuesHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}", issuesHandler.Get)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/pipeline/step-complete", issuePipelineActionsHandler.StepComplete)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/pipeline/step-reject", issuePipelineActionsHandler.StepReject)
+		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/pipeline/status", issuePipelineActionsHandler.Status)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/comments", issuesHandler.CreateComment)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/questionnaire", questionnaireHandler.CreateIssueQuestionnaire)
 		r.With(middleware.OptionalWorkspace).Post("/questionnaires/{id}/response", questionnaireHandler.Respond)
