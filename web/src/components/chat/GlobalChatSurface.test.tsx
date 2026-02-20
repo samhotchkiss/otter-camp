@@ -653,4 +653,120 @@ describe("GlobalChatSurface", () => {
       expect(match).toBeTruthy();
     });
   });
+
+  it("deduplicates repeated agent DM websocket payloads with equivalent content", async () => {
+    const nowISO = new Date().toISOString();
+    const { rerender } = render(<GlobalChatSurface conversation={baseConversation} />);
+    await screen.findByPlaceholderText("Message Stone...");
+
+    wsState.lastMessage = {
+      type: "DMMessageReceived",
+      data: {
+        threadId: "dm_agent-stone",
+        message: {
+          id: "dm-agent-1",
+          threadId: "dm_agent-stone",
+          senderType: "agent",
+          senderName: "Stone",
+          content: "Same answer",
+          createdAt: nowISO,
+          updatedAt: nowISO,
+        },
+      },
+    };
+    rerender(<GlobalChatSurface conversation={baseConversation} />);
+
+    await waitFor(() => {
+      const matches = (lastMessageHistoryProps?.messages ?? []).filter(
+        (entry) => String(entry.content ?? "") === "Same answer",
+      );
+      expect(matches).toHaveLength(1);
+    });
+
+    wsState.lastMessage = {
+      type: "DMMessageReceived",
+      data: {
+        threadId: "dm_agent-stone",
+        message: {
+          id: "dm-agent-2",
+          threadId: "dm_agent-stone",
+          senderType: "agent",
+          senderName: "Stone",
+          content: "Same   answer",
+          createdAt: nowISO,
+          updatedAt: nowISO,
+        },
+      },
+    };
+    rerender(<GlobalChatSurface conversation={baseConversation} />);
+
+    await waitFor(() => {
+      const matches = (lastMessageHistoryProps?.messages ?? []).filter(
+        (entry) => String(entry.content ?? "").replace(/\s+/g, " ").trim() === "Same answer",
+      );
+      expect(matches).toHaveLength(1);
+    });
+  });
+
+  it("schedules long-tail fallback refresh polling for delivered DM sends", async () => {
+    const user = userEvent.setup();
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/messages?")) {
+        return {
+          ok: true,
+          json: async () => ({ messages: [] }),
+        };
+      }
+      if (url.endsWith("/api/messages") && String(init?.method ?? "GET").toUpperCase() === "POST") {
+        return {
+          ok: true,
+          json: async () => ({
+            message: {
+              id: "dm-send-1",
+              threadId: "dm_agent-stone",
+              senderId: "user:sam",
+              senderType: "user",
+              senderName: "Sam",
+              content: "Need status update",
+              createdAt: "2026-02-08T00:00:00.000Z",
+              updatedAt: "2026-02-08T00:00:00.000Z",
+            },
+            delivery: { delivered: true },
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({}),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<GlobalChatSurface conversation={baseConversation} />);
+    const composer = await screen.findByPlaceholderText("Message Stone...");
+    await user.type(composer, "Need status update");
+
+    const baselineTimerCalls = setTimeoutSpy.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled();
+      const postCalls = fetchMock.mock.calls.filter(([url, init]) => {
+        const normalizedURL = String(url);
+        const method = String((init as RequestInit | undefined)?.method ?? "GET").toUpperCase();
+        return normalizedURL.endsWith("/api/messages") && method === "POST";
+      });
+      expect(postCalls).toHaveLength(1);
+    });
+
+    const newTimerDelays = setTimeoutSpy.mock.calls
+      .slice(baselineTimerCalls)
+      .map((call) => Number(call[1] ?? 0));
+
+    expect(newTimerDelays).toEqual(
+      expect.arrayContaining([1200, 3500, 7000, 12000, 20000, 30000, 45000, 60000, 90000, 120000]),
+    );
+  });
 });

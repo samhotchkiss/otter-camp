@@ -29,7 +29,7 @@ const USER_NAME_STORAGE_KEY = "otter-camp-user-name";
 const PROJECT_CHAT_SESSION_RESET_AUTHOR = "__otter_session__";
 const PROJECT_CHAT_SESSION_RESET_PREFIX = "project_chat_session_reset:";
 const CHAT_SESSION_RESET_PREFIX = "chat_session_reset:";
-const POST_SEND_REFRESH_DELAYS_MS = [1200, 3500, 7000, 12000];
+const POST_SEND_REFRESH_DELAYS_MS = [1200, 3500, 7000, 12000, 20000, 30000, 45000, 60000, 90000, 120000];
 
 type DeliveryTone = "neutral" | "success" | "warning";
 
@@ -540,6 +540,30 @@ function likelyOptimisticEchoMatch(existing: ChatMessage, incoming: ChatMessage)
   return Math.abs(existingMs - incomingMs) <= 2 * 60 * 1000;
 }
 
+function likelyDuplicateAgentReply(existing: ChatMessage, incoming: ChatMessage): boolean {
+  if (existing.senderType !== "agent" || incoming.senderType !== "agent") {
+    return false;
+  }
+  if (existing.threadId !== incoming.threadId) {
+    return false;
+  }
+  if (existing.isSessionReset || incoming.isSessionReset) {
+    return false;
+  }
+  if (normalizeMessageTextForMatch(existing.content) !== normalizeMessageTextForMatch(incoming.content)) {
+    return false;
+  }
+  if (attachmentSignature(existing) !== attachmentSignature(incoming)) {
+    return false;
+  }
+  const existingMs = Date.parse(existing.createdAt);
+  const incomingMs = Date.parse(incoming.createdAt);
+  if (Number.isNaN(existingMs) || Number.isNaN(incomingMs)) {
+    return true;
+  }
+  return Math.abs(existingMs - incomingMs) <= 30 * 1000;
+}
+
 function upsertIncomingMessage(
   prev: ChatMessage[],
   incoming: ChatMessage,
@@ -565,6 +589,23 @@ function upsertIncomingMessage(
     const next = [...prev];
     next[optimisticMatchIndex] = {
       ...incoming,
+      optimistic: false,
+      failed: false,
+    };
+    if (sortResult) {
+      return next.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+    }
+    return next;
+  }
+
+  const duplicateAgentIndex = prev.findIndex((entry) => likelyDuplicateAgentReply(entry, incoming));
+  if (duplicateAgentIndex >= 0) {
+    const next = [...prev];
+    const existing = next[duplicateAgentIndex];
+    next[duplicateAgentIndex] = {
+      ...existing,
+      ...incoming,
+      id: existing.id,
       optimistic: false,
       failed: false,
     };
