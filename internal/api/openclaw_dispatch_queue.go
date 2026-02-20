@@ -15,6 +15,7 @@ const (
 	defaultOpenClawDispatchPullLimit = 50
 	maxOpenClawDispatchPullLimit     = 200
 	openClawDispatchClaimTTLSeconds  = 90
+	openClawDispatchMaxAttempts      = 20
 )
 
 type openClawDispatchJob struct {
@@ -44,7 +45,7 @@ func ensureOpenClawDispatchQueueSchema(ctx context.Context, db *sql.DB) error {
 				dedupe_key TEXT NOT NULL UNIQUE,
 				payload JSONB NOT NULL,
 				status TEXT NOT NULL DEFAULT 'pending'
-					CHECK (status IN ('pending', 'processing', 'delivered')),
+					CHECK (status IN ('pending', 'processing', 'delivered', 'failed')),
 				attempts INTEGER NOT NULL DEFAULT 0,
 				last_error TEXT,
 				available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -58,6 +59,11 @@ func ensureOpenClawDispatchQueueSchema(ctx context.Context, db *sql.DB) error {
 				ON openclaw_dispatch_queue (status, available_at, created_at)`,
 			`CREATE INDEX IF NOT EXISTS openclaw_dispatch_queue_org_idx
 				ON openclaw_dispatch_queue (org_id, created_at)`,
+			`ALTER TABLE openclaw_dispatch_queue
+				DROP CONSTRAINT IF EXISTS openclaw_dispatch_queue_status_check`,
+			`ALTER TABLE openclaw_dispatch_queue
+				ADD CONSTRAINT openclaw_dispatch_queue_status_check
+				CHECK (status IN ('pending', 'processing', 'delivered', 'failed'))`,
 		}
 		for _, statement := range statements {
 			if _, err := db.ExecContext(ctx, statement); err != nil {
@@ -268,11 +274,18 @@ func ackOpenClawDispatchJob(
 		result, err = db.ExecContext(
 			ctx,
 			`UPDATE openclaw_dispatch_queue
-			 SET status = 'pending',
+			 SET status = CASE
+			         WHEN attempts >= $4 THEN 'failed'
+			         ELSE 'pending'
+			     END,
 			     last_error = NULLIF($3, ''),
-			     available_at = NOW() + make_interval(
-			       secs => LEAST(300, GREATEST(5, (power(2, LEAST(attempts, 8)))::int))
-			     ),
+			     available_at = CASE
+			         WHEN attempts >= $4 THEN available_at
+			         WHEN attempts <= 1 THEN NOW() + make_interval(secs => 5)
+			         WHEN attempts = 2 THEN NOW() + make_interval(secs => 15)
+			         WHEN attempts = 3 THEN NOW() + make_interval(secs => 30)
+			         ELSE NOW() + make_interval(secs => 60)
+			     END,
 			     claim_token = NULL,
 			     claimed_at = NULL,
 			     updated_at = NOW()
@@ -282,6 +295,7 @@ func ackOpenClawDispatchJob(
 			id,
 			claimToken,
 			strings.TrimSpace(lastError),
+			openClawDispatchMaxAttempts,
 		)
 	}
 	if err != nil {

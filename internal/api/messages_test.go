@@ -63,6 +63,8 @@ func setupMessageTestDB(t *testing.T) *sql.DB {
 	require.NoError(t, os.Setenv("DATABASE_URL", connStr))
 	tasksDBOnce = sync.Once{}
 	tasksDBErr = nil
+	openClawDispatchQueueSchemaOnce = sync.Once{}
+	openClawDispatchQueueSchemaErr = nil
 	if tasksDB != nil {
 		_ = tasksDB.Close()
 		tasksDB = nil
@@ -189,12 +191,12 @@ func TestDMFallbackSessionKeyForAgentSlug(t *testing.T) {
 			agentSlug: "lori",
 			want:      "agent:lori:main",
 		},
-			{
-				name:      "no slug routes to chameleon",
-				agentSlug: "",
-				want:      canonicalChameleonSessionKey(agentID),
-			},
-		}
+		{
+			name:      "no slug routes to chameleon",
+			agentSlug: "",
+			want:      canonicalChameleonSessionKey(agentID),
+		},
+	}
 
 	for _, tt := range tests {
 		tt := tt
@@ -669,7 +671,9 @@ func TestCreateMessageDMBridgeOfflinePersistsMessageWithDeliveryWarning(t *testi
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
 	handler.CreateMessage(rr, req)
-	require.Equal(t, http.StatusOK, rr.Code)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d: %s", rr.Code, rr.Body.String())
+	}
 
 	var createResp struct {
 		Message  Message          `json:"message"`
