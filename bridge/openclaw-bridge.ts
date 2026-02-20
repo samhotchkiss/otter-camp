@@ -112,6 +112,7 @@ const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
 const OPENCLAW_SYSTEM_AGENT_PATCH_TARGETS = new Set(['chameleon', 'elephant']);
 const PERMANENT_OPENCLAW_AGENTS = new Set(['main', 'elephant', 'ellie-extractor', 'lori', 'chameleon']);
+const CHAT_EMISSION_THROTTLE_MS = 1000;
 const MAIN_OPENCLAW_SESSION_KEY = 'agent:main:main';
 const OPENCLAW_TOOL_EVENT_CAP = 'tool-events';
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
@@ -597,6 +598,7 @@ const workspaceCacheByAgentSlot = new Map<string, AgentWorkspaceCacheEntry>();
 let workspaceGuideCache: WorkspaceGuideCacheEntry | null = null;
 const deliveredRunIDs = new Set<string>();
 const lastPersistedReplyBySession = new Map<string, number>();
+const lastChatEmissionAtBySession = new Map<string, number>();
 const deliveredRunIDOrder: string[] = [];
 const progressLogLineHashes = new Set<string>();
 const progressLogLineHashOrder: string[] = [];
@@ -4151,11 +4153,16 @@ export function resetSessionContextsForTest(): void {
   lastPersistedReplyBySession.clear();
   deliveredRunIDs.clear();
   deliveredRunIDOrder.length = 0;
+  lastChatEmissionAtBySession.clear();
 }
 
 export function resetIngestedToolEventsForTest(): void {
   ingestedToolEventCountForTest = 0;
   lastIngestedToolEventForTest = null;
+}
+
+export function resetChatEmissionForwardingStateForTest(): void {
+  lastChatEmissionAtBySession.clear();
 }
 
 export function getIngestedToolEventsStateForTest(): {
@@ -5235,6 +5242,160 @@ async function enforceMutationToolPolicy(event: OpenClawToolEvent): Promise<void
   }
 }
 
+function normalizeChatEmissionSummary(summary: string): string {
+  return summary.replace(/\s+/g, ' ').trim().slice(0, 200);
+}
+
+function resolveChatEmissionRoute(
+  sessionKey: string,
+): { orgID: string; sourceID: string; scope?: Record<string, string> } | null {
+  let context = sessionContexts.get(sessionKey);
+  if (!context) {
+    const inferred = inferSessionContextFromKey(sessionKey);
+    if (inferred) {
+      setSessionContext(sessionKey, inferred);
+      context = inferred;
+    }
+  }
+
+  const orgID = getTrimmedString(context?.orgID) || resolveConfiguredOtterCampOrgID();
+  if (!orgID) {
+    return null;
+  }
+
+  if (context?.kind === 'dm') {
+    const threadID = getTrimmedString(context.threadID);
+    if (threadID) {
+      return {
+        orgID,
+        sourceID: `dm:${threadID}`,
+      };
+    }
+  }
+
+  if (context?.kind === 'project_chat') {
+    const projectID = getTrimmedString(context.projectID);
+    if (projectID) {
+      return {
+        orgID,
+        sourceID: `project:${projectID}`,
+        scope: { project_id: projectID },
+      };
+    }
+  }
+
+  if (context?.kind === 'issue_comment') {
+    const issueID = getTrimmedString(context.issueID);
+    const projectID = getTrimmedString(context.projectID);
+    if (issueID) {
+      return {
+        orgID,
+        sourceID: `issue:${issueID}`,
+        scope: {
+          ...(projectID ? { project_id: projectID } : {}),
+          issue_id: issueID,
+        },
+      };
+    }
+  }
+
+  return {
+    orgID,
+    sourceID: `session:${sessionKey}`,
+  };
+}
+
+function shouldThrottleChatEmission(sessionKey: string, nowMs = Date.now()): boolean {
+  const lastSentAt = lastChatEmissionAtBySession.get(sessionKey) ?? 0;
+  if (nowMs - lastSentAt < CHAT_EMISSION_THROTTLE_MS) {
+    return true;
+  }
+  lastChatEmissionAtBySession.set(sessionKey, nowMs);
+  if (lastChatEmissionAtBySession.size > 5000) {
+    const cutoff = nowMs - (5 * 60 * 1000);
+    for (const [key, value] of lastChatEmissionAtBySession) {
+      if (value < cutoff) {
+        lastChatEmissionAtBySession.delete(key);
+      }
+    }
+  }
+  return false;
+}
+
+async function forwardChatEmissionToOtterCamp(sessionKey: string, summary: string): Promise<void> {
+  const normalizedSummary = normalizeChatEmissionSummary(summary);
+  if (!normalizedSummary) {
+    return;
+  }
+  const route = resolveChatEmissionRoute(sessionKey);
+  if (!route) {
+    return;
+  }
+  if (shouldThrottleChatEmission(sessionKey)) {
+    return;
+  }
+
+  const response = await fetchWithRetry(
+    `${OTTERCAMP_URL}/api/emissions?org_id=${encodeURIComponent(route.orgID)}`,
+    {
+      method: 'POST',
+      headers: buildOtterCampAuthHeaders(true),
+      body: JSON.stringify({
+        emissions: [
+          {
+            source_type: 'bridge',
+            source_id: route.sourceID,
+            kind: 'status',
+            summary: normalizedSummary,
+            timestamp: new Date().toISOString(),
+            ...(route.scope ? { scope: route.scope } : {}),
+          },
+        ],
+      }),
+    },
+    'forward chat emission',
+  );
+  if (!response.ok) {
+    const snippet = (await response.text().catch(() => '')).slice(0, 300);
+    throw new Error(`chat emission forward failed: ${response.status} ${response.statusText} ${snippet}`.trim());
+  }
+}
+
+function summarizeToolEventForChatEmission(event: OpenClawToolEvent): string {
+  const tool = getTrimmedString(event.tool) || 'tool';
+  const target =
+    getTrimmedString(event.args?.path) ||
+    getTrimmedString(event.args?.file) ||
+    getTrimmedString(event.args?.command);
+  if (target) {
+    return `Running ${tool}: ${target}`;
+  }
+  return `Running ${tool}`;
+}
+
+function summarizeIntermediateChatState(
+  payload: Record<string, unknown>,
+  state: string,
+): string | null {
+  const messageRecord = asRecord(payload.message);
+  const content = extractMessageContent(
+    messageRecord?.content ?? payload.content ?? payload.status ?? payload.summary,
+  );
+  if (content) {
+    if (state === 'thinking') {
+      return `Thinking: ${content}`;
+    }
+    return content;
+  }
+  if (state === 'thinking') {
+    return 'Thinking...';
+  }
+  if (state === 'stream' || state === 'running' || state === 'working') {
+    return 'Working...';
+  }
+  return null;
+}
+
 async function handleOpenClawToolEvent(event: OpenClawToolEvent): Promise<void> {
   ingestedToolEventCountForTest += 1;
   lastIngestedToolEventForTest = {
@@ -5242,6 +5403,12 @@ async function handleOpenClawToolEvent(event: OpenClawToolEvent): Promise<void> 
     ...(event.args ? { args: { ...event.args } } : {}),
   };
   await enforceMutationToolPolicy(event);
+  if (event.phase === 'start') {
+    const summary = summarizeToolEventForChatEmission(event);
+    await forwardChatEmissionToOtterCamp(event.sessionKey, summary).catch((err) => {
+      console.warn(`[bridge] failed to forward tool emission for ${event.sessionKey}:`, err);
+    });
+  }
 }
 
 async function handleOpenClawEvent(message: Record<string, unknown>): Promise<void> {
@@ -5299,10 +5466,6 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
   }
 
   const state = getTrimmedString(payload.state).toLowerCase();
-  if (state !== 'final') {
-    return;
-  }
-
   const sessionKey = getTrimmedString(payload.sessionKey) || getTrimmedString(payload.session_key);
   if (!sessionKey) {
     return;
@@ -5313,6 +5476,16 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
       return;
     }
     setSessionContext(sessionKey, inferredContext);
+  }
+
+  if (state !== 'final') {
+    const summary = summarizeIntermediateChatState(payload, state);
+    if (summary) {
+      await forwardChatEmissionToOtterCamp(sessionKey, summary).catch((err) => {
+        console.warn(`[bridge] failed to forward chat emission for ${sessionKey}:`, err);
+      });
+    }
+    return;
   }
 
   const runID = getTrimmedString(payload.runId) || getTrimmedString(payload.run_id);

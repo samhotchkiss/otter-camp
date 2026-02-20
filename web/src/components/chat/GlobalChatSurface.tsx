@@ -29,7 +29,8 @@ const USER_NAME_STORAGE_KEY = "otter-camp-user-name";
 const PROJECT_CHAT_SESSION_RESET_AUTHOR = "__otter_session__";
 const PROJECT_CHAT_SESSION_RESET_PREFIX = "project_chat_session_reset:";
 const CHAT_SESSION_RESET_PREFIX = "chat_session_reset:";
-const POST_SEND_REFRESH_DELAYS_MS = [1200, 3500, 7000, 12000, 20000, 30000, 45000, 60000, 90000, 120000];
+const POST_SEND_REFRESH_DELAYS_MS = [1200, 3500, 7000, 12000];
+const STALLED_TURN_TIMEOUT_MS = 60_000;
 
 type DeliveryTone = "neutral" | "success" | "warning";
 
@@ -77,6 +78,15 @@ type ChatMessage = DMMessage & {
   attachments?: ChatAttachment[];
   optimistic?: boolean;
   failed?: boolean;
+};
+
+type ChatEmission = {
+  id: string;
+  sourceID: string;
+  summary: string;
+  timestamp: string;
+  scopeProjectID?: string;
+  scopeIssueID?: string;
 };
 
 type GlobalChatSurfaceProps = {
@@ -478,6 +488,75 @@ function normalizeDeliveryErrorText(raw: unknown): string {
   return message;
 }
 
+function getTrimmedString(raw: unknown): string {
+  if (typeof raw !== "string") {
+    return "";
+  }
+  return raw.trim();
+}
+
+function normalizeChatEmission(raw: unknown): ChatEmission | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const nested = record.emission && typeof record.emission === "object"
+    ? (record.emission as Record<string, unknown>)
+    : null;
+  const target = nested ?? record;
+
+  const id = getTrimmedString(target.id);
+  const sourceID = getTrimmedString(target.source_id);
+  const summary = getTrimmedString(target.summary);
+  const timestampRaw = getTrimmedString(target.timestamp);
+  const timestamp = timestampRaw ? new Date(timestampRaw).toISOString() : "";
+
+  if (!id || !sourceID || !summary || !timestamp || Number.isNaN(Date.parse(timestamp))) {
+    return null;
+  }
+
+  const scopeRecord = target.scope && typeof target.scope === "object"
+    ? (target.scope as Record<string, unknown>)
+    : null;
+  const scopeProjectID = getTrimmedString(scopeRecord?.project_id);
+  const scopeIssueID = getTrimmedString(scopeRecord?.issue_id);
+
+  return {
+    id,
+    sourceID,
+    summary,
+    timestamp,
+    ...(scopeProjectID ? { scopeProjectID } : {}),
+    ...(scopeIssueID ? { scopeIssueID } : {}),
+  };
+}
+
+function chatEmissionMatchesConversation(
+  emission: ChatEmission,
+  conversationType: GlobalChatConversation["type"],
+  dmThreadID: string,
+  projectID: string,
+  issueID: string,
+): boolean {
+  if (conversationType === "dm") {
+    return emission.sourceID === `dm:${dmThreadID}`;
+  }
+  if (conversationType === "project") {
+    return emission.sourceID === `project:${projectID}` || emission.scopeProjectID === projectID;
+  }
+  return emission.sourceID === `issue:${issueID}` || emission.scopeIssueID === issueID;
+}
+
+function upsertChatEmission(prev: ChatEmission[], incoming: ChatEmission): ChatEmission[] {
+  const byID = prev.findIndex((entry) => entry.id === incoming.id);
+  if (byID >= 0) {
+    const next = [...prev];
+    next[byID] = incoming;
+    return next.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+  }
+  return [...prev, incoming].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+}
+
 function formatAttachmentSize(sizeBytes: number): string {
   if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
     return "0 B";
@@ -667,11 +746,16 @@ export default function GlobalChatSurface({
   const [queuedAttachments, setQueuedAttachments] = useState<ChatAttachment[]>([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
+  const [chatEmissions, setChatEmissions] = useState<ChatEmission[]>([]);
+  const [showAllChatEmissions, setShowAllChatEmissions] = useState(false);
+  const [showStalledTurnWarning, setShowStalledTurnWarning] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const onConversationTouchedRef = useRef(onConversationTouched);
   const postSendRefreshTimersRef = useRef<number[]>([]);
+  const stalledTurnTimerRef = useRef<number | null>(null);
+  const awaitingAgentReplyRef = useRef(false);
   const { lastMessage } = useWS();
   const conversationType = conversation.type;
   const conversationKey = conversation.key;
@@ -716,6 +800,36 @@ export default function GlobalChatSurface({
       window.clearTimeout(timerID);
     }
     postSendRefreshTimersRef.current = [];
+  }, []);
+
+  const clearStalledTurnTimer = useCallback(() => {
+    if (stalledTurnTimerRef.current !== null) {
+      window.clearTimeout(stalledTurnTimerRef.current);
+      stalledTurnTimerRef.current = null;
+    }
+  }, []);
+
+  const clearStalledTurnWarning = useCallback(() => {
+    awaitingAgentReplyRef.current = false;
+    clearStalledTurnTimer();
+    setShowStalledTurnWarning(false);
+  }, [clearStalledTurnTimer]);
+
+  const startStalledTurnWarningWindow = useCallback(() => {
+    awaitingAgentReplyRef.current = true;
+    setShowStalledTurnWarning(false);
+    clearStalledTurnTimer();
+    stalledTurnTimerRef.current = window.setTimeout(() => {
+      if (!awaitingAgentReplyRef.current) {
+        return;
+      }
+      setShowStalledTurnWarning(true);
+    }, STALLED_TURN_TIMEOUT_MS);
+  }, [clearStalledTurnTimer]);
+
+  const clearChatEmissions = useCallback(() => {
+    setChatEmissions([]);
+    setShowAllChatEmissions(false);
   }, []);
 
   const loadConversation = useCallback(async (options?: { silent?: boolean }) => {
@@ -901,13 +1015,35 @@ export default function GlobalChatSurface({
     setQueuedAttachments([]);
     setUploadingAttachments(false);
     setIsDragActive(false);
+    clearChatEmissions();
+    clearStalledTurnWarning();
     return () => {
       clearPostSendRefreshTimers();
+      clearStalledTurnTimer();
     };
-  }, [clearPostSendRefreshTimers, conversationKey]);
+  }, [
+    clearPostSendRefreshTimers,
+    clearChatEmissions,
+    clearStalledTurnWarning,
+    clearStalledTurnTimer,
+    conversationKey,
+  ]);
 
   useEffect(() => {
     if (!lastMessage) {
+      return;
+    }
+
+    if (lastMessage.type === "EmissionReceived") {
+      const emission = normalizeChatEmission(lastMessage.data);
+      if (!emission) {
+        return;
+      }
+      if (!chatEmissionMatchesConversation(emission, conversationType, dmThreadID, projectID, issueID)) {
+        return;
+      }
+      setChatEmissions((prev) => upsertChatEmission(prev, emission));
+      clearStalledTurnWarning();
       return;
     }
 
@@ -937,6 +1073,8 @@ export default function GlobalChatSurface({
       if (normalized.senderType === "agent") {
         clearPostSendRefreshTimers();
         setDeliveryIndicator({ tone: "success", text: "Agent replied" });
+        clearChatEmissions();
+        clearStalledTurnWarning();
       }
 
       setMessages((prev) => upsertIncomingMessage(prev, normalized));
@@ -958,6 +1096,8 @@ export default function GlobalChatSurface({
       if (normalized.senderType === "agent") {
         clearPostSendRefreshTimers();
         setDeliveryIndicator({ tone: "success", text: "Agent replied" });
+        clearChatEmissions();
+        clearStalledTurnWarning();
       }
       if (normalized.isSessionReset) {
         setDeliveryIndicator({ tone: "neutral", text: "Started new session" });
@@ -1002,6 +1142,8 @@ export default function GlobalChatSurface({
       if (normalized.senderType === "agent") {
         clearPostSendRefreshTimers();
         setDeliveryIndicator({ tone: "success", text: "Agent replied" });
+        clearChatEmissions();
+        clearStalledTurnWarning();
       }
 
       setMessages((prev) => upsertIncomingMessage(prev, normalized, true));
@@ -1018,7 +1160,14 @@ export default function GlobalChatSurface({
     issueAuthorID,
     lastMessage,
     clearPostSendRefreshTimers,
+    clearChatEmissions,
+    clearStalledTurnWarning,
   ]);
+
+  const latestChatEmission = chatEmissions.length > 0
+    ? chatEmissions[chatEmissions.length - 1] ?? null
+    : null;
+  const priorChatEmissions = latestChatEmission ? chatEmissions.slice(0, -1) : [];
 
   const uploadSelectedFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) {
@@ -1160,6 +1309,7 @@ export default function GlobalChatSurface({
     setSending(true);
     setDeliveryIndicator({ tone: "neutral", text: "Sending..." });
     clearPostSendRefreshTimers();
+    startStalledTurnWarningWindow();
 
     const optimisticID = isRetry
       ? retryMessageID!.trim()
@@ -1346,6 +1496,7 @@ export default function GlobalChatSurface({
         }
       }
     } catch (sendError) {
+      clearStalledTurnWarning();
       setMessages((prev) =>
         prev.map((entry) =>
           entry.id === optimisticID
@@ -1382,6 +1533,8 @@ export default function GlobalChatSurface({
     touchConversation,
     loadConversation,
     clearPostSendRefreshTimers,
+    clearStalledTurnWarning,
+    startStalledTurnWarningWindow,
   ]);
 
   const handleRetryMessage = useCallback(
@@ -1540,6 +1693,42 @@ export default function GlobalChatSurface({
         onSubmitQuestionnaire={submitQuestionnaireResponse}
       />
 
+      {latestChatEmission ? (
+        <div
+          data-testid="chat-emission-indicator"
+          className="border-t border-[var(--border)]/70 bg-[var(--surface-alt)]/40 px-4 py-2"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <p className="inline-flex min-w-0 items-center gap-2 text-xs text-[var(--text-muted)]">
+              <span className="inline-flex h-2.5 w-2.5 animate-pulse rounded-full bg-[var(--accent)]" />
+              <span className="truncate">{latestChatEmission.summary}</span>
+            </p>
+            <button
+              type="button"
+              className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[11px] text-[var(--text-muted)] transition hover:text-[var(--text)]"
+              onClick={() => setShowAllChatEmissions((current) => !current)}
+            >
+              {showAllChatEmissions ? "Collapse" : "Show all"}
+            </button>
+          </div>
+          {showAllChatEmissions && priorChatEmissions.length > 0 ? (
+            <ul className="mt-2 max-h-36 space-y-1 overflow-y-auto border-t border-[var(--border)]/70 pt-2">
+              {priorChatEmissions
+                .slice()
+                .reverse()
+                .map((emission) => (
+                  <li
+                    key={emission.id}
+                    className="text-xs text-[var(--text-muted)]"
+                  >
+                    {emission.summary}
+                  </li>
+                ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+
       {error ? (
         <div className="border-t border-[var(--red)]/40 bg-[var(--red)]/15 px-4 py-2">
           <p className="text-sm text-[var(--red)]">{error}</p>
@@ -1551,6 +1740,12 @@ export default function GlobalChatSurface({
           <p className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] ${deliveryIndicatorClass(deliveryIndicator)}`}>
             {deliveryIndicator.text}
           </p>
+        </div>
+      ) : null}
+
+      {showStalledTurnWarning ? (
+        <div className="border-t border-[var(--orange)]/40 bg-[var(--orange)]/15 px-4 py-2">
+          <p className="text-sm text-[var(--orange)]">Agent may be unresponsive</p>
         </div>
       ) : null}
 
