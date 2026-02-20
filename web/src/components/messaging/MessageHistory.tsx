@@ -554,6 +554,12 @@ export default function MessageHistory({
             endRef.current?.scrollIntoView({
               behavior: prevCount === 0 ? "auto" : "smooth",
             });
+            // Belt-and-suspenders: one more scroll after a short delay for slow layouts
+            if (prevCount === 0) {
+              setTimeout(() => {
+                endRef.current?.scrollIntoView({ behavior: "auto" });
+              }, 100);
+            }
           });
         });
       }

@@ -95,9 +95,11 @@ const toWebSocketUrl = (path: string) => {
   }
 
   // Connect to API server for WebSocket (may be different from frontend host).
-  const apiBase = API_URL || window.location.origin;
-  const apiHost = apiBase.replace(/^https?:\/\//, "");
+  // If API_URL is relative (e.g. "/api"), fall back to current origin.
+  const origin = window.location.origin;
+  const apiBase = API_URL && /^https?:\/\//.test(API_URL) ? API_URL : origin;
   const protocol = apiBase.startsWith("https") ? "wss:" : "ws:";
+  const apiHost = apiBase.replace(/^https?:\/\//, "");
   return `${protocol}//${apiHost}${path}`;
 };
 

@@ -1065,6 +1065,14 @@ export default function GlobalChatSurface({
     void loadConversation();
   }, [loadConversation, refreshVersion]);
 
+  // Fallback polling: silently refresh messages every 15s in case WS drops
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void loadConversation({ silent: true });
+    }, 15_000);
+    return () => window.clearInterval(interval);
+  }, [loadConversation]);
+
   useEffect(() => {
     clearPostSendRefreshTimers();
     setQueuedAttachments([]);

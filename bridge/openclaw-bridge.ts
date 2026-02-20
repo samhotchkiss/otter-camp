@@ -4616,9 +4616,14 @@ async function persistAssistantReplyToOtterCamp(params: {
     return;
   }
 
-  // Suppress NO_REPLY / HEARTBEAT_OK responses — these are internal signals, not user-facing
+  // Suppress NO_REPLY / HEARTBEAT_OK responses — these are internal signals, not user-facing.
+  // Also suppress partial fragments ("NO", "NO_") that leak from streaming truncation.
   const upperContent = content.toUpperCase().replace(/[^A-Z_]/g, '');
-  if (upperContent === 'NO_REPLY' || upperContent === 'NOREPLY' || upperContent === 'HEARTBEAT_OK' || upperContent === 'HEARTBEATOK') {
+  if (
+    upperContent === 'NO_REPLY' || upperContent === 'NOREPLY' ||
+    upperContent === 'HEARTBEAT_OK' || upperContent === 'HEARTBEATOK' ||
+    upperContent === 'NO' || upperContent === 'NO_'
+  ) {
     return;
   }
 

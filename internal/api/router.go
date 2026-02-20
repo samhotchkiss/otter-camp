@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/samhotchkiss/otter-camp/internal/automigrate"
 	"github.com/samhotchkiss/otter-camp/internal/gitserver"
@@ -34,6 +35,9 @@ type HealthResponse struct {
 
 func NewRouter() http.Handler {
 	r := chi.NewRouter()
+
+	// Compress responses (gzip/deflate) — reduces static asset sizes and helps Railway proxy
+	r.Use(chimiddleware.Compress(5, "text/html", "text/css", "application/javascript", "application/json", "image/svg+xml"))
 
 	hub := ws.NewHub()
 	go hub.Run()

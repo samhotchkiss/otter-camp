@@ -179,6 +179,21 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Suppress internal agent signals that should never be persisted
+	if req.SenderType != nil && *req.SenderType == "agent" {
+		upper := strings.ToUpper(strings.TrimSpace(req.Content))
+		if upper == "NO_REPLY" || upper == "NOREPLY" || upper == "NO REPLY" ||
+			upper == "HEARTBEAT_OK" || upper == "HEARTBEATOK" ||
+			upper == "NO_" || upper == "NO" {
+			sendJSON(w, http.StatusOK, map[string]interface{}{
+				"id":         "00000000-0000-0000-0000-000000000000",
+				"content":    req.Content,
+				"suppressed": true,
+			})
+			return
+		}
+	}
+
 	if req.AuthorID != nil && !uuidRegex.MatchString(*req.AuthorID) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid author_id"})
 		return
@@ -204,6 +219,30 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 	if dispatchErr != nil {
 		sendJSON(w, statusCode, errorResponse{Error: dispatchErr.Error()})
 		return
+	}
+
+	// Server-side dedup: reject duplicate agent messages (same thread + content within 30s)
+	if req.ThreadID != nil && req.SenderType != nil && *req.SenderType == "agent" {
+		var existingID string
+		dedupErr := db.QueryRowContext(r.Context(), `
+			SELECT id FROM comments
+			WHERE thread_id = $1
+			  AND sender_type = 'agent'
+			  AND content = $2
+			  AND created_at > NOW() - INTERVAL '30 seconds'
+			ORDER BY created_at DESC
+			LIMIT 1
+		`, *req.ThreadID, req.Content).Scan(&existingID)
+		if dedupErr == nil {
+			// Duplicate found — return the existing message as if we created it
+			log.Printf("[dedup] suppressed duplicate agent message in thread %s (existing: %s)", *req.ThreadID, existingID)
+			sendJSON(w, http.StatusOK, map[string]interface{}{
+				"id":      existingID,
+				"content": req.Content,
+				"deduped": true,
+			})
+			return
+		}
 	}
 
 	tx, err := db.BeginTx(r.Context(), nil)
