@@ -880,6 +880,23 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 		return dmDispatchTarget{}, false, "", 0, nil
 	}
 
+	// Fast path: if we can resolve the agent slug from the agentRoles
+	// reverse map AND it's a routing-exempt agent, return the canonical
+	// session key directly without any DB queries (avoids RLS issues).
+	for slug, roleName := range agentRoles {
+		if strings.EqualFold(roleName, agentID) || strings.EqualFold(slug, agentID) {
+			if isDMRoutingExemptAgentSlug(slug) {
+				return dmDispatchTarget{
+					AgentID:    slug,
+					SessionKey: canonicalAgentMainSessionKey(slug),
+				}, true, "", 0, nil
+			}
+			// Resolved slug for a non-exempt agent — remap to chameleon below.
+			agentID = slug
+			break
+		}
+	}
+
 	// Use a transaction with org context for RLS-protected queries.
 	tx, txErr := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if txErr != nil {
