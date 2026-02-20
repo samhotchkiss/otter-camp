@@ -30,7 +30,7 @@ const PROJECT_CHAT_SESSION_RESET_AUTHOR = "__otter_session__";
 const PROJECT_CHAT_SESSION_RESET_PREFIX = "project_chat_session_reset:";
 const CHAT_SESSION_RESET_PREFIX = "chat_session_reset:";
 const POST_SEND_REFRESH_DELAYS_MS = [1200, 3500, 7000, 12000, 20000, 30000, 45000, 60000, 90000, 120000];
-const STALLED_TURN_TIMEOUT_MS = 60_000;
+const STALLED_TURN_TIMEOUT_MS = 120_000;
 
 type DeliveryTone = "neutral" | "success" | "warning";
 
@@ -562,6 +562,7 @@ function upsertEmissionTimelineMessage(
     senderType: "emission",
     content: emission.summary,
     createdAt: emission.timestamp,
+    emissionWarning: false,
   };
   const byID = prev.findIndex((entry) => entry.id === emissionMessageID && entry.senderType === "emission");
   if (byID >= 0) {
@@ -570,6 +571,31 @@ function upsertEmissionTimelineMessage(
     return next;
   }
   return [...prev, nextMessage];
+}
+
+function upsertStalledEmissionTimelineMessage(
+  prev: ChatMessage[],
+  emissionMessageID: string,
+  threadID: string,
+  senderName: string,
+): ChatMessage[] {
+  const warningMessage: ChatMessage = {
+    id: emissionMessageID,
+    threadId: threadID,
+    senderId: `emission:stalled:${threadID}`,
+    senderName,
+    senderType: "emission",
+    content: "Agent may be unresponsive",
+    createdAt: new Date().toISOString(),
+    emissionWarning: true,
+  };
+  const byID = prev.findIndex((entry) => entry.id === emissionMessageID && entry.senderType === "emission");
+  if (byID >= 0) {
+    const next = [...prev];
+    next[byID] = warningMessage;
+    return next;
+  }
+  return [...prev, warningMessage];
 }
 
 function upsertReplyReplacingEmission(
@@ -780,7 +806,7 @@ export default function GlobalChatSurface({
   const [queuedAttachments, setQueuedAttachments] = useState<ChatAttachment[]>([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
-  const [showStalledTurnWarning, setShowStalledTurnWarning] = useState(false);
+  const [emissionAutoScrollSignal, setEmissionAutoScrollSignal] = useState(0);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -845,20 +871,21 @@ export default function GlobalChatSurface({
   const clearStalledTurnWarning = useCallback(() => {
     awaitingAgentReplyRef.current = false;
     clearStalledTurnTimer();
-    setShowStalledTurnWarning(false);
   }, [clearStalledTurnTimer]);
 
   const startStalledTurnWarningWindow = useCallback(() => {
     awaitingAgentReplyRef.current = true;
-    setShowStalledTurnWarning(false);
     clearStalledTurnTimer();
     stalledTurnTimerRef.current = window.setTimeout(() => {
       if (!awaitingAgentReplyRef.current) {
         return;
       }
-      setShowStalledTurnWarning(true);
+      setMessages((prev) =>
+        upsertStalledEmissionTimelineMessage(prev, emissionMessageID, threadID, conversationTitle),
+      );
+      setEmissionAutoScrollSignal((prev) => prev + 1);
     }, STALLED_TURN_TIMEOUT_MS);
-  }, [clearStalledTurnTimer]);
+  }, [clearStalledTurnTimer, conversationTitle, emissionMessageID, threadID]);
 
   const loadConversation = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent === true;
@@ -1071,6 +1098,7 @@ export default function GlobalChatSurface({
       setMessages((prev) =>
         upsertEmissionTimelineMessage(prev, emission, emissionMessageID, threadID, conversationTitle),
       );
+      setEmissionAutoScrollSignal((prev) => prev + 1);
       clearStalledTurnWarning();
       return;
     }
@@ -1720,6 +1748,7 @@ export default function GlobalChatSurface({
         messages={messages}
         currentUserId={conversationType === "issue" ? issueAuthorID || currentUserID : currentUserID}
         threadId={threadID}
+        autoScrollSignal={emissionAutoScrollSignal}
         agent={pseudoAgent}
         agentNamesByID={agentNamesByID}
         resolveAgentName={resolveAgentName}
@@ -1738,12 +1767,6 @@ export default function GlobalChatSurface({
           <p className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] ${deliveryIndicatorClass(deliveryIndicator)}`}>
             {deliveryIndicator.text}
           </p>
-        </div>
-      ) : null}
-
-      {showStalledTurnWarning ? (
-        <div className="border-t border-[var(--orange)]/40 bg-[var(--orange)]/15 px-4 py-2">
-          <p className="text-sm text-[var(--orange)]">Agent may be unresponsive</p>
         </div>
       ) : null}
 

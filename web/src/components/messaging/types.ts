@@ -76,6 +76,7 @@ export type DMMessage = {
   createdAt: string;
   optimistic?: boolean;
   failed?: boolean;
+  emissionWarning?: boolean;
   isSessionReset?: boolean;
   sessionID?: string;
 };

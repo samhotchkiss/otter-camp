@@ -237,8 +237,11 @@ function MessageBubble({
   }
 
   const isEmission = message.senderType === "emission";
+  const isEmissionWarning = isEmission && message.emissionWarning === true;
   const bubbleStyle = isOwnMessage
     ? "oc-message-bubble-user bg-[var(--accent)] text-[#1A1918]"
+    : isEmissionWarning
+      ? "oc-message-bubble-emission-warning border border-[var(--orange)]/45 bg-[var(--orange)]/18 text-[var(--orange)]"
     : isEmission
       ? "oc-message-bubble-emission border border-[var(--border)]/50 bg-[var(--surface-alt)] text-[var(--text-muted)] opacity-60"
     : message.senderType === "agent"
@@ -296,7 +299,7 @@ function MessageBubble({
           ) : (
             isEmission ? (
               <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                {"🔄 "}
+                {isEmissionWarning ? "⚠️ " : "🔄 "}
                 {message.content}
               </p>
             ) : (
@@ -408,6 +411,7 @@ export type MessageHistoryProps = {
   messages: DMMessage[];
   currentUserId: string;
   threadId?: string;
+  autoScrollSignal?: number;
   agent?: Agent;
   hasMore?: boolean;
   isLoadingMore?: boolean;
@@ -426,6 +430,7 @@ export default function MessageHistory({
   messages,
   currentUserId,
   threadId,
+  autoScrollSignal,
   agent,
   hasMore = false,
   isLoadingMore = false,
@@ -443,6 +448,7 @@ export default function MessageHistory({
   const pendingPrependRef = useRef(false);
   const scrollSnapshotRef = useRef({ scrollHeight: 0, scrollTop: 0 });
   const pinnedToBottomRef = useRef(true);
+  const lastAutoScrollSignalRef = useRef(autoScrollSignal);
 
   const handleLoadMore = useCallback(async () => {
     if (!onLoadMore || isLoadingMore) return;
@@ -467,10 +473,11 @@ export default function MessageHistory({
     prevMessageCountRef.current = 0;
     pendingPrependRef.current = false;
     pinnedToBottomRef.current = true;
+    lastAutoScrollSignalRef.current = autoScrollSignal;
     requestAnimationFrame(() => {
       endRef.current?.scrollIntoView({ behavior: "auto" });
     });
-  }, [threadId]);
+  }, [autoScrollSignal, threadId]);
 
   const handleScroll = useCallback(() => {
     const container = containerRef.current;
@@ -512,6 +519,19 @@ export default function MessageHistory({
       }
     }
   }, [messages]);
+
+  useEffect(() => {
+    if (autoScrollSignal === undefined) {
+      return;
+    }
+    if (lastAutoScrollSignalRef.current === autoScrollSignal) {
+      return;
+    }
+    lastAutoScrollSignalRef.current = autoScrollSignal;
+    requestAnimationFrame(() => {
+      endRef.current?.scrollIntoView({ behavior: "smooth" });
+    });
+  }, [autoScrollSignal]);
 
   return (
     <div

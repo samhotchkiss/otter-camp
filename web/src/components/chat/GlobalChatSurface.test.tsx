@@ -808,7 +808,7 @@ describe("GlobalChatSurface", () => {
     });
   });
 
-  it("shows stalled warning after 60s when no emission or reply arrives after send", async () => {
+  it("shows stalled emission warning after 120s when no emission or reply arrives after send", async () => {
     const sendAt = "2026-02-08T00:00:00.000Z";
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -852,12 +852,20 @@ describe("GlobalChatSurface", () => {
       expect.objectContaining({ method: "POST" }),
     );
 
-    const stalledTimeout = timeoutSpy.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+    const stalledTimeout = timeoutSpy.mock.calls.find(([, delay]) => delay === 120_000)?.[0];
     expect(typeof stalledTimeout).toBe("function");
     act(() => {
       (stalledTimeout as () => void)();
     });
-    expect(screen.getByText("Agent may be unresponsive")).toBeInTheDocument();
+    await waitFor(() => {
+      const warningEmission = (lastMessageHistoryProps?.messages ?? []).find(
+        (entry) =>
+          entry.senderType === "emission" &&
+          entry.content === "Agent may be unresponsive" &&
+          entry.emissionWarning === true,
+      );
+      expect(warningEmission).toBeDefined();
+    });
   });
 
   it("clears stalled warning when matching emission arrives", async () => {
@@ -904,12 +912,17 @@ describe("GlobalChatSurface", () => {
       expect.objectContaining({ method: "POST" }),
     );
 
-    const stalledTimeout = timeoutSpy.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+    const stalledTimeout = timeoutSpy.mock.calls.find(([, delay]) => delay === 120_000)?.[0];
     expect(typeof stalledTimeout).toBe("function");
     act(() => {
       (stalledTimeout as () => void)();
     });
-    expect(screen.getByText("Agent may be unresponsive")).toBeInTheDocument();
+    await waitFor(() => {
+      const warningEmission = (lastMessageHistoryProps?.messages ?? []).find(
+        (entry) => entry.senderType === "emission" && entry.content === "Agent may be unresponsive",
+      );
+      expect(warningEmission).toBeDefined();
+    });
 
     wsState.lastMessage = {
       type: "EmissionReceived",
@@ -926,7 +939,14 @@ describe("GlobalChatSurface", () => {
       rerender(<GlobalChatSurface conversation={baseConversation} />);
     });
 
-    expect(screen.queryByText("Agent may be unresponsive")).not.toBeInTheDocument();
+    await waitFor(() => {
+      const emissions = (lastMessageHistoryProps?.messages ?? []).filter(
+        (entry) => entry.senderType === "emission",
+      );
+      expect(emissions).toHaveLength(1);
+      expect(emissions[0]?.content).toBe("Running command");
+      expect(emissions[0]?.emissionWarning).not.toBe(true);
+    });
   });
 
   it("clears stalled warning when final agent reply arrives", async () => {
@@ -973,12 +993,17 @@ describe("GlobalChatSurface", () => {
       expect.objectContaining({ method: "POST" }),
     );
 
-    const stalledTimeout = timeoutSpy.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+    const stalledTimeout = timeoutSpy.mock.calls.find(([, delay]) => delay === 120_000)?.[0];
     expect(typeof stalledTimeout).toBe("function");
     act(() => {
       (stalledTimeout as () => void)();
     });
-    expect(screen.getByText("Agent may be unresponsive")).toBeInTheDocument();
+    await waitFor(() => {
+      const warningEmission = (lastMessageHistoryProps?.messages ?? []).find(
+        (entry) => entry.senderType === "emission" && entry.content === "Agent may be unresponsive",
+      );
+      expect(warningEmission).toBeDefined();
+    });
 
     wsState.lastMessage = {
       type: "DMMessageReceived",
@@ -999,6 +1024,11 @@ describe("GlobalChatSurface", () => {
       rerender(<GlobalChatSurface conversation={baseConversation} />);
     });
 
-    expect(screen.queryByText("Agent may be unresponsive")).not.toBeInTheDocument();
+    await waitFor(() => {
+      const messages = lastMessageHistoryProps?.messages ?? [];
+      const emissions = messages.filter((entry) => entry.senderType === "emission");
+      expect(emissions).toHaveLength(0);
+      expect(messages.some((entry) => entry.content === "Done")).toBe(true);
+    });
   });
 });
