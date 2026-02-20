@@ -26,6 +26,14 @@ function formatAttachmentSize(sizeBytes: number): string {
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function authenticatedAttachmentUrl(url: string): string {
+  if (!url || !url.startsWith("/api/attachments/")) return url;
+  const token = (window.localStorage.getItem("otter_camp_token") ?? "").trim();
+  if (!token) return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}token=${encodeURIComponent(token)}`;
+}
+
 function MessageAttachments({ attachments }: { attachments: MessageAttachment[] }) {
   if (attachments.length === 0) {
     return null;
@@ -39,13 +47,13 @@ function MessageAttachments({ attachments }: { attachments: MessageAttachment[] 
           return (
             <a
               key={attachment.id}
-              href={attachment.url}
+              href={authenticatedAttachmentUrl(attachment.url)}
               target="_blank"
               rel="noreferrer"
               className="block overflow-hidden rounded-xl border border-[var(--border)] bg-black/20"
             >
               <img
-                src={attachment.thumbnail_url || attachment.url}
+                src={authenticatedAttachmentUrl(attachment.thumbnail_url || attachment.url)}
                 alt={attachment.filename}
                 loading="lazy"
                 className="max-h-64 w-full object-cover"
@@ -67,7 +75,7 @@ function MessageAttachments({ attachments }: { attachments: MessageAttachment[] 
               <p className="text-[var(--text-muted)]">{formatAttachmentSize(attachment.size_bytes)}</p>
             </div>
             <a
-              href={attachment.url}
+              href={authenticatedAttachmentUrl(attachment.url)}
               target="_blank"
               rel="noreferrer"
               className="rounded border border-[var(--border)] px-2 py-1 text-[10px] font-medium text-[var(--text)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
