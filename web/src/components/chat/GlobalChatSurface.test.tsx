@@ -653,4 +653,91 @@ describe("GlobalChatSurface", () => {
       expect(match).toBeTruthy();
     });
   });
+
+  it("renders latest chat emission and expands full emission history for active dm conversation", async () => {
+    const { rerender } = render(<GlobalChatSurface conversation={baseConversation} />);
+    await screen.findByPlaceholderText("Message Stone...");
+
+    wsState.lastMessage = {
+      type: "EmissionReceived",
+      data: {
+        id: "em-1",
+        source_type: "bridge",
+        source_id: "dm:dm_agent-stone",
+        kind: "status",
+        summary: "Running write",
+        timestamp: "2026-02-08T00:00:00.000Z",
+      },
+    };
+    rerender(<GlobalChatSurface conversation={baseConversation} />);
+
+    await screen.findByText("Running write");
+    expect(screen.getByRole("button", { name: "Show all" })).toBeInTheDocument();
+
+    wsState.lastMessage = {
+      type: "EmissionReceived",
+      data: {
+        id: "em-2",
+        source_type: "bridge",
+        source_id: "dm:dm_agent-stone",
+        kind: "status",
+        summary: "Reading docs",
+        timestamp: "2026-02-08T00:00:01.000Z",
+      },
+    };
+    rerender(<GlobalChatSurface conversation={baseConversation} />);
+
+    await screen.findByText("Reading docs");
+    expect(screen.queryByText("Running write")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    expect(screen.getByText("Reading docs")).toBeInTheDocument();
+    expect(screen.getByText("Running write")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
+    expect(screen.getByText("Reading docs")).toBeInTheDocument();
+    expect(screen.queryByText("Running write")).not.toBeInTheDocument();
+  });
+
+  it("auto-dismisses chat emissions when final agent reply arrives", async () => {
+    const nowISO = "2026-02-08T00:00:00.000Z";
+    const { rerender } = render(<GlobalChatSurface conversation={baseConversation} />);
+    await screen.findByPlaceholderText("Message Stone...");
+
+    wsState.lastMessage = {
+      type: "EmissionReceived",
+      data: {
+        id: "em-1",
+        source_type: "bridge",
+        source_id: "dm:dm_agent-stone",
+        kind: "status",
+        summary: "Planning response",
+        timestamp: nowISO,
+      },
+    };
+    rerender(<GlobalChatSurface conversation={baseConversation} />);
+    await screen.findByText("Planning response");
+
+    wsState.lastMessage = {
+      type: "DMMessageReceived",
+      data: {
+        threadId: "dm_agent-stone",
+        message: {
+          id: "msg-agent-1",
+          threadId: "dm_agent-stone",
+          senderType: "agent",
+          senderName: "Stone",
+          content: "Done and shipped.",
+          createdAt: nowISO,
+          updatedAt: nowISO,
+        },
+      },
+    };
+    rerender(<GlobalChatSurface conversation={baseConversation} />);
+
+    await waitFor(() => {
+      expect(screen.queryByText("Planning response")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("chat-emission-indicator")).not.toBeInTheDocument();
+    });
+  });
 });
