@@ -8,11 +8,32 @@ import type {
 } from "./types";
 import { formatTimestamp, getInitials } from "./utils";
 import MessageMarkdown from "./MessageMarkdown";
+import { API_URL } from "../../lib/api";
 import Questionnaire from "../Questionnaire";
 import QuestionnaireResponse from "../QuestionnaireResponse";
 import LiveTimestamp from "../LiveTimestamp";
 
 const SCROLL_BOTTOM_THRESHOLD_PX = 200;
+
+/**
+ * Resolve an attachment URL to an absolute URL with auth token.
+ * Relative URLs (e.g. /api/attachments/...) are prefixed with API_URL.
+ * A token query param is appended so browser-initiated requests (<img>) authenticate.
+ */
+function resolveAttachmentUrl(url: string): string {
+  let resolved = url;
+  // Relative URLs need API_URL prefix when frontend and API are on different domains
+  if (resolved.startsWith("/")) {
+    resolved = `${API_URL}${resolved}`;
+  }
+  // Append auth token for browser-initiated requests (<img src>)
+  const token = (typeof window !== "undefined" ? window.localStorage.getItem("otter_camp_token") : null) ?? "";
+  if (token) {
+    const sep = resolved.includes("?") ? "&" : "?";
+    resolved = `${resolved}${sep}token=${encodeURIComponent(token)}`;
+  }
+  return resolved;
+}
 
 function formatAttachmentSize(sizeBytes: number): string {
   if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
@@ -37,16 +58,18 @@ function MessageAttachments({ attachments }: { attachments: MessageAttachment[] 
       {attachments.map((attachment) => {
         const isImage = attachment.mime_type.startsWith("image/");
         if (isImage) {
+          const imgSrc = resolveAttachmentUrl(attachment.thumbnail_url || attachment.url);
+          const fullUrl = resolveAttachmentUrl(attachment.url);
           return (
             <a
               key={attachment.id}
-              href={attachment.url}
+              href={fullUrl}
               target="_blank"
               rel="noreferrer"
               className="block overflow-hidden rounded-xl border border-[var(--border)] bg-black/20"
             >
               <img
-                src={attachment.thumbnail_url || attachment.url}
+                src={imgSrc}
                 alt={attachment.filename}
                 loading="lazy"
                 className="max-h-64 w-full object-cover"
@@ -68,7 +91,7 @@ function MessageAttachments({ attachments }: { attachments: MessageAttachment[] 
               <p className="text-[var(--text-muted)]">{formatAttachmentSize(attachment.size_bytes)}</p>
             </div>
             <a
-              href={attachment.url}
+              href={resolveAttachmentUrl(attachment.url)}
               target="_blank"
               rel="noreferrer"
               className="rounded border border-[var(--border)] px-2 py-1 text-[10px] font-medium text-[var(--text)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
