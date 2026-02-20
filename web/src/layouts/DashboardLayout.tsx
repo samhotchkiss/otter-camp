@@ -320,6 +320,20 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     return () => window.removeEventListener("resize", handleResize);
   }, [clampChatDockWidth]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(
+        CHAT_DOCK_WIDTH_STORAGE_KEY,
+        String(clampChatDockWidth(chatDockWidth)),
+      );
+    } catch {
+      // Ignore localStorage write failures (private mode/quota/etc.).
+    }
+  }, [chatDockWidth, clampChatDockWidth]);
+
   const toggleChatDock = useCallback(() => {
     setChatOpen((open) => !open);
   }, []);

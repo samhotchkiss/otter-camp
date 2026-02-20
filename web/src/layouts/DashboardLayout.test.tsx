@@ -162,6 +162,51 @@ describe("DashboardLayout", () => {
     });
   });
 
+  it("persists resized chat rail width after drag interactions", async () => {
+    renderLayout("/projects");
+
+    const chatSlot = await screen.findByTestId("shell-chat-slot");
+    const resizeHandle = screen.getByRole("button", { name: "Slide chat closed" });
+
+    fireEvent.mouseDown(resizeHandle, { clientX: 900 });
+    fireEvent.mouseMove(window, { clientX: 800 });
+    fireEvent.mouseUp(window);
+
+    expect(chatSlot).toHaveStyle({ width: "484px" });
+    expect(window.localStorage.getItem("otter-shell-width")).toBe("484");
+  });
+
+  it("persists clamped width values when drag exceeds min and max bounds", async () => {
+    const originalInnerWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1024,
+      writable: true,
+    });
+
+    renderLayout("/projects");
+    const chatSlot = await screen.findByTestId("shell-chat-slot");
+    const resizeHandle = screen.getByRole("button", { name: "Slide chat closed" });
+
+    fireEvent.mouseDown(resizeHandle, { clientX: 900 });
+    fireEvent.mouseMove(window, { clientX: 2000 });
+    fireEvent.mouseUp(window);
+    expect(chatSlot).toHaveStyle({ width: "320px" });
+    expect(window.localStorage.getItem("otter-shell-width")).toBe("320");
+
+    fireEvent.mouseDown(resizeHandle, { clientX: 900 });
+    fireEvent.mouseMove(window, { clientX: 0 });
+    fireEvent.mouseUp(window);
+    expect(chatSlot).toHaveStyle({ width: "804px" });
+    expect(window.localStorage.getItem("otter-shell-width")).toBe("804");
+
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: originalInnerWidth,
+      writable: true,
+    });
+  });
+
   it("marks the active projects navigation link with aria-current", async () => {
     renderLayout("/projects");
     const activeProjectsLink = await screen.findByRole("link", { name: "Projects" });
