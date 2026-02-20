@@ -26,7 +26,7 @@ const (
 	maxThreadPageSize     = 100
 )
 
-var dmThreadAgentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
+var dmThreadAgentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._ -]{0,127}$`)
 
 // Message represents a task or DM message payload.
 type Message struct {
@@ -896,6 +896,34 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 				}
 			}
 		}
+		// Not a UUID — try resolving by agent name, role, or legacy
+		// agentRoles display name (handles DM thread keys like "Chief of Staff").
+		if err != nil || target.AgentID == "" {
+			// First, check the hardcoded agentRoles reverse map (legacy sync names).
+			resolvedSlug := ""
+			for slug, roleName := range agentRoles {
+				if strings.EqualFold(roleName, agentID) || strings.EqualFold(slug, agentID) {
+					resolvedSlug = slug
+					break
+				}
+			}
+			// If not found in agentRoles, try the agents table by name or role.
+			if resolvedSlug == "" {
+				_ = db.QueryRowContext(ctx,
+					`SELECT COALESCE(slug, role, name) FROM agents WHERE org_id = $1 AND (name = $2 OR role = $2) LIMIT 1`,
+					orgID, agentID,
+				).Scan(&resolvedSlug)
+			}
+			if resolvedSlug != "" {
+				err = db.QueryRowContext(ctx,
+					`SELECT id, COALESCE(session_key, '') FROM agent_sync_state WHERE org_id = $1 AND id = $2`,
+					orgID, resolvedSlug,
+				).Scan(&target.AgentID, &target.SessionKey)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
+				}
+			}
+		}
 	}
 	if err == nil && strings.TrimSpace(target.SessionKey) != "" {
 		originalSessionKey := strings.TrimSpace(target.SessionKey)
@@ -1074,10 +1102,13 @@ func normalizeDMDispatchSessionKeyForAgentSlug(agentSlug string, agentID string,
 		return normalizedSessionKey
 	}
 
-	if isDMRoutingExemptAgentSlug(normalizedSlug) && ValidateChameleonSessionKey(normalizedSessionKey) {
+	// Exempt agents (main, elephant, lori) always route to their canonical
+	// main session, regardless of what sync state contains. The sync state
+	// may point to a cron or project session which is wrong for DMs.
+	if isDMRoutingExemptAgentSlug(normalizedSlug) {
 		return canonicalAgentMainSessionKey(normalizedSlug)
 	}
-	if normalizedSlug != "" && !isDMRoutingExemptAgentSlug(normalizedSlug) && strings.EqualFold(normalizedSessionKey, canonicalAgentMainSessionKey(normalizedSlug)) {
+	if normalizedSlug != "" && strings.EqualFold(normalizedSessionKey, canonicalAgentMainSessionKey(normalizedSlug)) {
 		return canonicalChameleonSessionKey(agentID)
 	}
 	return normalizedSessionKey
