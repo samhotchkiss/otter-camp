@@ -445,6 +445,23 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Put("/settings/profile", HandleSettingsProfilePut)
 		r.With(middleware.OptionalWorkspace).Get("/settings/notifications", HandleSettingsNotificationsGet)
 		r.With(middleware.OptionalWorkspace).Put("/settings/notifications", HandleSettingsNotificationsPut)
+
+		// Notifications API stubs (frontend expects these)
+		r.Get("/notifications", func(w http.ResponseWriter, r *http.Request) {
+			sendJSON(w, http.StatusOK, map[string]interface{}{"notifications": []interface{}{}, "total": 0})
+		})
+		r.Post("/notifications/{id}/read", func(w http.ResponseWriter, r *http.Request) {
+			sendJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
+		})
+		r.Post("/notifications/{id}/unread", func(w http.ResponseWriter, r *http.Request) {
+			sendJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
+		})
+		r.Post("/notifications/read-all", func(w http.ResponseWriter, r *http.Request) {
+			sendJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
+		})
+		r.Delete("/notifications/{id}", func(w http.ResponseWriter, r *http.Request) {
+			sendJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
+		})
 		r.With(middleware.OptionalWorkspace).Get("/settings/workspace", HandleSettingsWorkspaceGet)
 		r.With(middleware.OptionalWorkspace).Put("/settings/workspace", HandleSettingsWorkspacePut)
 		r.With(middleware.OptionalWorkspace).Get("/settings/integrations", HandleSettingsIntegrationsGet)

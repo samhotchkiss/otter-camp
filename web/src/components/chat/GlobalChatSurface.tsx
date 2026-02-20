@@ -639,6 +639,25 @@ function buildAttachmentLinksMarkdown(attachments: ChatAttachment[]): string {
     .join("\n");
 }
 
+/** Remove duplicate agent messages that were stored before server-side dedup was added. */
+function deduplicateLoadedMessages(messages: ChatMessage[]): ChatMessage[] {
+  const seen = new Map<string, number>();
+  return messages.filter((msg, index) => {
+    if (msg.senderType !== "agent") return true;
+    const key = `${msg.threadId}::${normalizeMessageTextForMatch(msg.content).slice(0, 200)}`;
+    const prevIndex = seen.get(key);
+    if (prevIndex !== undefined) {
+      const prevMsg = messages[prevIndex];
+      const timeDiff = Math.abs(Date.parse(msg.createdAt) - Date.parse(prevMsg.createdAt));
+      if (timeDiff < 30_000) {
+        return false; // duplicate within 30s window
+      }
+    }
+    seen.set(key, index);
+    return true;
+  });
+}
+
 function normalizeMessageTextForMatch(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
@@ -927,7 +946,7 @@ export default function GlobalChatSurface({
               )
               .filter((entry: ChatMessage | null): entry is ChatMessage => entry !== null)
           : [];
-        setMessages(normalized);
+        setMessages(deduplicateLoadedMessages(normalized));
         touchConversation();
         return;
       }
@@ -976,7 +995,7 @@ export default function GlobalChatSurface({
         const normalized = [...normalizedMessages, ...normalizedQuestionnaires];
 
         normalized.sort((a: ChatMessage, b: ChatMessage) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-        setMessages(normalized);
+        setMessages(deduplicateLoadedMessages(normalized));
         touchConversation();
         return;
       }
@@ -1036,7 +1055,7 @@ export default function GlobalChatSurface({
         : [];
       const normalized = [...normalizedComments, ...normalizedQuestionnaires];
       normalized.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-      setMessages(normalized);
+      setMessages(deduplicateLoadedMessages(normalized));
       touchConversation();
     } catch (loadError) {
       if (!silent) {
