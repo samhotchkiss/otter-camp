@@ -30,6 +30,7 @@ const PROJECT_CHAT_SESSION_RESET_AUTHOR = "__otter_session__";
 const PROJECT_CHAT_SESSION_RESET_PREFIX = "project_chat_session_reset:";
 const CHAT_SESSION_RESET_PREFIX = "chat_session_reset:";
 const POST_SEND_REFRESH_DELAYS_MS = [1200, 3500, 7000, 12000];
+const STALLED_TURN_TIMEOUT_MS = 60_000;
 
 type DeliveryTone = "neutral" | "success" | "warning";
 
@@ -706,11 +707,14 @@ export default function GlobalChatSurface({
   const [isDragActive, setIsDragActive] = useState(false);
   const [chatEmissions, setChatEmissions] = useState<ChatEmission[]>([]);
   const [showAllChatEmissions, setShowAllChatEmissions] = useState(false);
+  const [showStalledTurnWarning, setShowStalledTurnWarning] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const onConversationTouchedRef = useRef(onConversationTouched);
   const postSendRefreshTimersRef = useRef<number[]>([]);
+  const stalledTurnTimerRef = useRef<number | null>(null);
+  const awaitingAgentReplyRef = useRef(false);
   const { lastMessage } = useWS();
   const conversationType = conversation.type;
   const conversationKey = conversation.key;
@@ -756,6 +760,31 @@ export default function GlobalChatSurface({
     }
     postSendRefreshTimersRef.current = [];
   }, []);
+
+  const clearStalledTurnTimer = useCallback(() => {
+    if (stalledTurnTimerRef.current !== null) {
+      window.clearTimeout(stalledTurnTimerRef.current);
+      stalledTurnTimerRef.current = null;
+    }
+  }, []);
+
+  const clearStalledTurnWarning = useCallback(() => {
+    awaitingAgentReplyRef.current = false;
+    clearStalledTurnTimer();
+    setShowStalledTurnWarning(false);
+  }, [clearStalledTurnTimer]);
+
+  const startStalledTurnWarningWindow = useCallback(() => {
+    awaitingAgentReplyRef.current = true;
+    setShowStalledTurnWarning(false);
+    clearStalledTurnTimer();
+    stalledTurnTimerRef.current = window.setTimeout(() => {
+      if (!awaitingAgentReplyRef.current) {
+        return;
+      }
+      setShowStalledTurnWarning(true);
+    }, STALLED_TURN_TIMEOUT_MS);
+  }, [clearStalledTurnTimer]);
 
   const clearChatEmissions = useCallback(() => {
     setChatEmissions([]);
@@ -946,10 +975,18 @@ export default function GlobalChatSurface({
     setUploadingAttachments(false);
     setIsDragActive(false);
     clearChatEmissions();
+    clearStalledTurnWarning();
     return () => {
       clearPostSendRefreshTimers();
+      clearStalledTurnTimer();
     };
-  }, [clearPostSendRefreshTimers, clearChatEmissions, conversationKey]);
+  }, [
+    clearPostSendRefreshTimers,
+    clearChatEmissions,
+    clearStalledTurnWarning,
+    clearStalledTurnTimer,
+    conversationKey,
+  ]);
 
   useEffect(() => {
     if (!lastMessage) {
@@ -965,6 +1002,7 @@ export default function GlobalChatSurface({
         return;
       }
       setChatEmissions((prev) => upsertChatEmission(prev, emission));
+      clearStalledTurnWarning();
       return;
     }
 
@@ -995,6 +1033,7 @@ export default function GlobalChatSurface({
         clearPostSendRefreshTimers();
         setDeliveryIndicator({ tone: "success", text: "Agent replied" });
         clearChatEmissions();
+        clearStalledTurnWarning();
       }
 
       setMessages((prev) => upsertIncomingMessage(prev, normalized));
@@ -1017,6 +1056,7 @@ export default function GlobalChatSurface({
         clearPostSendRefreshTimers();
         setDeliveryIndicator({ tone: "success", text: "Agent replied" });
         clearChatEmissions();
+        clearStalledTurnWarning();
       }
       if (normalized.isSessionReset) {
         setDeliveryIndicator({ tone: "neutral", text: "Started new session" });
@@ -1062,6 +1102,7 @@ export default function GlobalChatSurface({
         clearPostSendRefreshTimers();
         setDeliveryIndicator({ tone: "success", text: "Agent replied" });
         clearChatEmissions();
+        clearStalledTurnWarning();
       }
 
       setMessages((prev) => upsertIncomingMessage(prev, normalized, true));
@@ -1079,6 +1120,7 @@ export default function GlobalChatSurface({
     lastMessage,
     clearPostSendRefreshTimers,
     clearChatEmissions,
+    clearStalledTurnWarning,
   ]);
 
   const latestChatEmission = chatEmissions.length > 0
@@ -1226,6 +1268,7 @@ export default function GlobalChatSurface({
     setSending(true);
     setDeliveryIndicator({ tone: "neutral", text: "Sending..." });
     clearPostSendRefreshTimers();
+    startStalledTurnWarningWindow();
 
     const optimisticID = isRetry
       ? retryMessageID!.trim()
@@ -1412,6 +1455,7 @@ export default function GlobalChatSurface({
         }
       }
     } catch (sendError) {
+      clearStalledTurnWarning();
       setMessages((prev) =>
         prev.map((entry) =>
           entry.id === optimisticID
@@ -1448,6 +1492,8 @@ export default function GlobalChatSurface({
     touchConversation,
     loadConversation,
     clearPostSendRefreshTimers,
+    clearStalledTurnWarning,
+    startStalledTurnWarningWindow,
   ]);
 
   const handleRetryMessage = useCallback(
@@ -1653,6 +1699,12 @@ export default function GlobalChatSurface({
           <p className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] ${deliveryIndicatorClass(deliveryIndicator)}`}>
             {deliveryIndicator.text}
           </p>
+        </div>
+      ) : null}
+
+      {showStalledTurnWarning ? (
+        <div className="border-t border-[var(--orange)]/40 bg-[var(--orange)]/15 px-4 py-2">
+          <p className="text-sm text-[var(--orange)]">Agent may be unresponsive</p>
         </div>
       ) : null}
 

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import GlobalChatSurface from "./GlobalChatSurface";
@@ -739,5 +739,199 @@ describe("GlobalChatSurface", () => {
       expect(screen.queryByText("Planning response")).not.toBeInTheDocument();
       expect(screen.queryByTestId("chat-emission-indicator")).not.toBeInTheDocument();
     });
+  });
+
+  it("shows stalled warning after 60s when no emission or reply arrives after send", async () => {
+    const sendAt = "2026-02-08T00:00:00.000Z";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/messages?")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.endsWith("/api/messages")) {
+        return {
+          ok: true,
+          json: async () => ({
+            message: {
+              id: "msg-user-1",
+              threadId: "dm_agent-stone",
+              senderType: "user",
+              senderName: "Sam",
+              content: "Ship it",
+              createdAt: sendAt,
+              updatedAt: sendAt,
+            },
+            delivery: { delivered: false },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const timeoutSpy = vi.spyOn(window, "setTimeout");
+
+    render(<GlobalChatSurface conversation={baseConversation} />);
+    await screen.findByPlaceholderText("Message Stone...");
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Message composer"), {
+        target: { value: "Ship it" },
+      });
+      fireEvent.click(screen.getByLabelText("Send message"));
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/messages"),
+      expect.objectContaining({ method: "POST" }),
+    );
+
+    const stalledTimeout = timeoutSpy.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+    expect(typeof stalledTimeout).toBe("function");
+    act(() => {
+      (stalledTimeout as () => void)();
+    });
+    expect(screen.getByText("Agent may be unresponsive")).toBeInTheDocument();
+  });
+
+  it("clears stalled warning when matching emission arrives", async () => {
+    const sendAt = "2026-02-08T00:00:00.000Z";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/messages?")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.endsWith("/api/messages")) {
+        return {
+          ok: true,
+          json: async () => ({
+            message: {
+              id: "msg-user-1",
+              threadId: "dm_agent-stone",
+              senderType: "user",
+              senderName: "Sam",
+              content: "Ship it",
+              createdAt: sendAt,
+              updatedAt: sendAt,
+            },
+            delivery: { delivered: false },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const timeoutSpy = vi.spyOn(window, "setTimeout");
+
+    const { rerender } = render(<GlobalChatSurface conversation={baseConversation} />);
+    await screen.findByPlaceholderText("Message Stone...");
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Message composer"), {
+        target: { value: "Ship it" },
+      });
+      fireEvent.click(screen.getByLabelText("Send message"));
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/messages"),
+      expect.objectContaining({ method: "POST" }),
+    );
+
+    const stalledTimeout = timeoutSpy.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+    expect(typeof stalledTimeout).toBe("function");
+    act(() => {
+      (stalledTimeout as () => void)();
+    });
+    expect(screen.getByText("Agent may be unresponsive")).toBeInTheDocument();
+
+    wsState.lastMessage = {
+      type: "EmissionReceived",
+      data: {
+        id: "em-clear-1",
+        source_type: "bridge",
+        source_id: "dm:dm_agent-stone",
+        kind: "status",
+        summary: "Running command",
+        timestamp: "2026-02-08T00:01:01.000Z",
+      },
+    };
+    act(() => {
+      rerender(<GlobalChatSurface conversation={baseConversation} />);
+    });
+
+    expect(screen.queryByText("Agent may be unresponsive")).not.toBeInTheDocument();
+  });
+
+  it("clears stalled warning when final agent reply arrives", async () => {
+    const sendAt = "2026-02-08T00:00:00.000Z";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/messages?")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.endsWith("/api/messages")) {
+        return {
+          ok: true,
+          json: async () => ({
+            message: {
+              id: "msg-user-1",
+              threadId: "dm_agent-stone",
+              senderType: "user",
+              senderName: "Sam",
+              content: "Ship it",
+              createdAt: sendAt,
+              updatedAt: sendAt,
+            },
+            delivery: { delivered: false },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const timeoutSpy = vi.spyOn(window, "setTimeout");
+
+    const { rerender } = render(<GlobalChatSurface conversation={baseConversation} />);
+    await screen.findByPlaceholderText("Message Stone...");
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Message composer"), {
+        target: { value: "Ship it" },
+      });
+      fireEvent.click(screen.getByLabelText("Send message"));
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/messages"),
+      expect.objectContaining({ method: "POST" }),
+    );
+
+    const stalledTimeout = timeoutSpy.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+    expect(typeof stalledTimeout).toBe("function");
+    act(() => {
+      (stalledTimeout as () => void)();
+    });
+    expect(screen.getByText("Agent may be unresponsive")).toBeInTheDocument();
+
+    wsState.lastMessage = {
+      type: "DMMessageReceived",
+      data: {
+        threadId: "dm_agent-stone",
+        message: {
+          id: "msg-agent-1",
+          threadId: "dm_agent-stone",
+          senderType: "agent",
+          senderName: "Stone",
+          content: "Done",
+          createdAt: "2026-02-08T00:01:01.000Z",
+          updatedAt: "2026-02-08T00:01:01.000Z",
+        },
+      },
+    };
+    act(() => {
+      rerender(<GlobalChatSurface conversation={baseConversation} />);
+    });
+
+    expect(screen.queryByText("Agent may be unresponsive")).not.toBeInTheDocument();
   });
 });
