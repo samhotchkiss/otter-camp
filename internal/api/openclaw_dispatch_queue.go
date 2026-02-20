@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -24,6 +25,14 @@ type openClawDispatchJob struct {
 	Payload    json.RawMessage
 	ClaimToken string
 	Attempts   int
+}
+
+type openClawDispatchAckResult struct {
+	Acknowledged bool
+	OrgID        string
+	EventType    string
+	Payload      json.RawMessage
+	Status       string
 }
 
 var (
@@ -236,26 +245,24 @@ func ackOpenClawDispatchJob(
 	claimToken string,
 	success bool,
 	lastError string,
-) (bool, error) {
+) (openClawDispatchAckResult, error) {
+	result := openClawDispatchAckResult{}
 	if db == nil {
-		return false, fmt.Errorf("database unavailable")
+		return result, fmt.Errorf("database unavailable")
 	}
 	if err := ensureOpenClawDispatchQueueSchema(ctx, db); err != nil {
-		return false, err
+		return result, err
 	}
 
 	claimToken = strings.TrimSpace(claimToken)
 	if claimToken == "" {
-		return false, fmt.Errorf("claim token required")
+		return result, fmt.Errorf("claim token required")
 	}
 
-	var (
-		result sql.Result
-		err    error
-	)
+	var err error
 
 	if success {
-		result, err = db.ExecContext(
+		err = db.QueryRowContext(
 			ctx,
 			`UPDATE openclaw_dispatch_queue
 			 SET status = 'delivered',
@@ -266,12 +273,13 @@ func ackOpenClawDispatchJob(
 			     updated_at = NOW()
 			 WHERE id = $1
 			   AND claim_token = $2
-			   AND status = 'processing'`,
+			   AND status = 'processing'
+			 RETURNING org_id, event_type, payload, status`,
 			id,
 			claimToken,
-		)
+		).Scan(&result.OrgID, &result.EventType, &result.Payload, &result.Status)
 	} else {
-		result, err = db.ExecContext(
+		err = db.QueryRowContext(
 			ctx,
 			`UPDATE openclaw_dispatch_queue
 			 SET status = CASE
@@ -291,20 +299,21 @@ func ackOpenClawDispatchJob(
 			     updated_at = NOW()
 			 WHERE id = $1
 			   AND claim_token = $2
-			   AND status = 'processing'`,
+			   AND status = 'processing'
+			 RETURNING org_id, event_type, payload, status`,
 			id,
 			claimToken,
 			strings.TrimSpace(lastError),
 			openClawDispatchMaxAttempts,
-		)
+		).Scan(&result.OrgID, &result.EventType, &result.Payload, &result.Status)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return result, nil
 	}
 	if err != nil {
-		return false, err
+		return result, err
 	}
 
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return affected > 0, nil
+	result.Acknowledged = true
+	return result, nil
 }

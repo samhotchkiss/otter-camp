@@ -44,7 +44,7 @@ func TestOpenClawDispatchQueueLifecycle(t *testing.T) {
 	require.NoError(t, json.Unmarshal(jobs[0].Payload, &payload))
 	require.Equal(t, "dm.message", payload["type"])
 
-	acknowledged, err := ackOpenClawDispatchJob(
+	ackResult, err := ackOpenClawDispatchJob(
 		context.Background(),
 		db,
 		jobs[0].ID,
@@ -53,7 +53,7 @@ func TestOpenClawDispatchQueueLifecycle(t *testing.T) {
 		"temporary failure",
 	)
 	require.NoError(t, err)
-	require.True(t, acknowledged)
+	require.True(t, ackResult.Acknowledged)
 
 	jobs, err = claimOpenClawDispatchJobs(context.Background(), db, 10)
 	require.NoError(t, err)
@@ -67,7 +67,7 @@ func TestOpenClawDispatchQueueLifecycle(t *testing.T) {
 	require.Len(t, jobs, 1)
 	require.Equal(t, 2, jobs[0].Attempts)
 
-	acknowledged, err = ackOpenClawDispatchJob(
+	ackResult, err = ackOpenClawDispatchJob(
 		context.Background(),
 		db,
 		jobs[0].ID,
@@ -76,7 +76,7 @@ func TestOpenClawDispatchQueueLifecycle(t *testing.T) {
 		"",
 	)
 	require.NoError(t, err)
-	require.True(t, acknowledged)
+	require.True(t, ackResult.Acknowledged)
 
 	jobs, err = claimOpenClawDispatchJobs(context.Background(), db, 10)
 	require.NoError(t, err)
@@ -107,7 +107,7 @@ func TestOpenClawDispatchQueueAckFailureBackoffSchedule(t *testing.T) {
 		require.NoError(t, claimErr)
 		require.Len(t, jobs, 1, "expected one claimed job at attempt index %d", idx)
 
-		acknowledged, ackErr := ackOpenClawDispatchJob(
+		ackResult, ackErr := ackOpenClawDispatchJob(
 			context.Background(),
 			db,
 			jobs[0].ID,
@@ -116,7 +116,7 @@ func TestOpenClawDispatchQueueAckFailureBackoffSchedule(t *testing.T) {
 			"temporary failure",
 		)
 		require.NoError(t, ackErr)
-		require.True(t, acknowledged)
+		require.True(t, ackResult.Acknowledged)
 
 		var status string
 		var availableAt time.Time
@@ -162,7 +162,7 @@ func TestOpenClawDispatchQueueAckFailureMarksFailedAtMaxAttempts(t *testing.T) {
 		require.NoError(t, claimErr)
 		require.Len(t, jobs, 1, "expected one claimed job at attempt %d", attempt)
 
-		acknowledged, ackErr := ackOpenClawDispatchJob(
+		ackResult, ackErr := ackOpenClawDispatchJob(
 			context.Background(),
 			db,
 			jobs[0].ID,
@@ -171,7 +171,7 @@ func TestOpenClawDispatchQueueAckFailureMarksFailedAtMaxAttempts(t *testing.T) {
 			"bridge unavailable",
 		)
 		require.NoError(t, ackErr)
-		require.True(t, acknowledged)
+		require.True(t, ackResult.Acknowledged)
 
 		var status string
 		var attempts int
