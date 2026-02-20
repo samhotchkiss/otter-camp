@@ -108,6 +108,73 @@ function findFrankAgentFallback(agentNamesByID: Map<string, string>): { id: stri
   return { id: best.id, name: best.name };
 }
 
+function EmptyShellWithInput({ openConversation }: { openConversation: (input: OpenConversationInput, opts?: { focus?: boolean; openDock?: boolean }) => void }) {
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const handleSend = useCallback(() => {
+    const text = draft.trim();
+    if (!text || sending) return;
+    setSending(true);
+    // Create a DM with "main" agent and send the first message
+    openConversation(
+      {
+        type: "dm",
+        agent: { id: "main", name: "Chief of Staff", status: "online" },
+        threadId: "dm_Chief of Staff",
+        title: "Chief of Staff",
+        contextLabel: "Organization chat",
+        subtitle: "Direct message",
+      },
+      { focus: true, openDock: false },
+    );
+    // The message will need to be sent after conversation is created;
+    // for now just open the conversation — user can type again
+    setDraft("");
+    setSending(false);
+  }, [draft, openConversation, sending]);
+
+  return (
+    <div className="flex h-full flex-col justify-between p-4">
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)]/65 p-3">
+        <p className="text-sm text-[var(--text)]">Welcome to Otter Camp. Systems are online.</p>
+      </div>
+      <form
+        onSubmit={(e) => { e.preventDefault(); handleSend(); }}
+        className="flex items-end gap-3 pt-3"
+      >
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              handleSend();
+            }
+          }}
+          placeholder="Send a message..."
+          rows={1}
+          disabled={sending}
+          className="flex-1 resize-none rounded-xl border px-4 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] disabled:opacity-50"
+        />
+        <button
+          type="submit"
+          disabled={sending || draft.trim() === ""}
+          className="inline-flex h-10 w-10 items-center justify-center rounded-xl transition disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label="Send message"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
+            <path d="M3.105 2.288a.75.75 0 0 0-.826.95l1.414 4.926A1.5 1.5 0 0 0 5.135 9.25h6.115a.75.75 0 0 1 0 1.5H5.135a1.5 1.5 0 0 0-1.442 1.086l-1.414 4.926a.75.75 0 0 0 .826.95 28.897 28.897 0 0 0 15.293-7.155.75.75 0 0 0 0-1.114A28.897 28.897 0 0 0 3.105 2.288Z" />
+          </svg>
+        </button>
+      </form>
+      <p className="pt-2 text-[10px] text-[var(--text-muted)]">
+        Press <span className="font-medium">Enter</span> to send
+      </p>
+    </div>
+  );
+}
+
 export default function GlobalChatDock({ embedded = false, onToggleRail }: GlobalChatDockProps) {
   const {
     isOpen,
@@ -450,6 +517,49 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
   const frankFallbackAgent = useMemo(() => {
     return findFrankAgentFallback(agentNamesByID);
   }, [agentNamesByID]);
+
+  // Auto-open Frank/main DM when dock is open but no conversation is selected
+  useEffect(() => {
+    if (!dockOpen || selectedConversation) {
+      return;
+    }
+    if (frankOrgDMConversation) {
+      selectConversation(frankOrgDMConversation.key);
+      markConversationRead(frankOrgDMConversation.key);
+      return;
+    }
+    if (anyOrgDMConversation) {
+      selectConversation(anyOrgDMConversation.key);
+      markConversationRead(anyOrgDMConversation.key);
+      return;
+    }
+    if (frankFallbackAgent) {
+      openConversation(
+        {
+          type: "dm",
+          agent: {
+            id: frankFallbackAgent.id,
+            name: frankFallbackAgent.name,
+            status: "online",
+          },
+          threadId: `dm_${frankFallbackAgent.id}`,
+          title: frankFallbackAgent.name,
+          contextLabel: "Organization chat",
+          subtitle: "Direct message",
+        },
+        { focus: true, openDock: false },
+      );
+    }
+  }, [
+    dockOpen,
+    selectedConversation,
+    frankOrgDMConversation,
+    anyOrgDMConversation,
+    frankFallbackAgent,
+    selectConversation,
+    markConversationRead,
+    openConversation,
+  ]);
 
   const orgConversationTitle = useMemo(() => {
     if (frankOrgDMConversation) {
@@ -866,12 +976,7 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
               </div>
             </div>
           ) : (
-            <div className="flex h-full flex-col justify-between p-4">
-              <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)]/65 p-3">
-                <p className="text-sm text-[var(--text)]">Welcome to Otter Camp. Systems are online. How can I assist you today?</p>
-              </div>
-              <p className="text-xs text-[var(--text-muted)]">Open a project, issue, or direct-message thread to continue.</p>
-            </div>
+            <EmptyShellWithInput openConversation={openConversation} />
           )}
         </div>
       </section>

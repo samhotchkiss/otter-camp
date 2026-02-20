@@ -596,6 +596,7 @@ const contextPrimedSessions = new Set<string>();
 const workspaceCacheByAgentSlot = new Map<string, AgentWorkspaceCacheEntry>();
 let workspaceGuideCache: WorkspaceGuideCacheEntry | null = null;
 const deliveredRunIDs = new Set<string>();
+const lastPersistedReplyBySession = new Map<string, number>();
 const deliveredRunIDOrder: string[] = [];
 const progressLogLineHashes = new Set<string>();
 const progressLogLineHashOrder: string[] = [];
@@ -2824,7 +2825,7 @@ function buildContextReminder(context: SessionContext): string {
       typeof context.issueNumber === 'number' && Number.isFinite(context.issueNumber)
         ? `#${context.issueNumber}`
         : context.issueID || 'unknown issue';
-    return `Issue thread ${issueLabel} (${context.projectID || 'unknown project'})`;
+    return `Issue ${issueLabel} (${context.projectID || 'unknown project'})`;
   }
   return `DM thread (${context.threadID || 'unknown thread'})`;
 }
@@ -3535,26 +3536,11 @@ async function withSessionContext(
     }
     return sections.join('\n\n');
   }
-  const reminderSections: string[] = [];
-  const shouldPersistIdentityPreamble = context.kind !== 'dm';
-  const identityPreamble = shouldPersistIdentityPreamble
-    ? getTrimmedString(context.identityMetadata?.preamble)
-    : '';
-  if (identityPreamble) {
-    reminderSections.push(identityPreamble);
-  }
-  const operatingGuideReminder = buildOtterCampOperatingGuideReminder(sessionKey);
-  if (operatingGuideReminder) {
-    reminderSections.push(operatingGuideReminder);
-  }
-  const actionDefaults = buildSurfaceActionDefaults(context);
-  if (actionDefaults) {
-    reminderSections.push(actionDefaults);
-  }
-  reminderSections.push(
-    `[OTTERCAMP_CONTEXT_REMINDER]\n- ${buildContextReminder(context)}\n[/OTTERCAMP_CONTEXT_REMINDER]`,
-  );
-  const reminder = reminderSections.join('\n\n');
+  const reminder = [
+    '[OTTERCAMP_CONTEXT_REMINDER]',
+    `- ${buildContextReminder(context)} | Refer to ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME} and ${OTTERCAMP_COMMAND_REFERENCE_FILENAME} for rules.`,
+    '[/OTTERCAMP_CONTEXT_REMINDER]',
+  ].join('\n');
   if (!includeUserContent) {
     return reminder;
   }
@@ -5327,6 +5313,26 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
     return;
   }
 
+  // Content-based dedup: skip if same content was persisted for this session within 30s
+  const contentForDedup = extractMessageContent(
+    asRecord(payload.message)?.content ?? payload.content,
+  );
+  if (contentForDedup && sessionKey) {
+    const dedupKey = `${sessionKey}::${contentForDedup.slice(0, 200)}`;
+    const lastTime = lastPersistedReplyBySession.get(dedupKey);
+    if (lastTime && Date.now() - lastTime < 30_000) {
+      return;
+    }
+    lastPersistedReplyBySession.set(dedupKey, Date.now());
+    // Prune old entries
+    if (lastPersistedReplyBySession.size > 200) {
+      const cutoff = Date.now() - 60_000;
+      for (const [k, v] of lastPersistedReplyBySession) {
+        if (v < cutoff) lastPersistedReplyBySession.delete(k);
+      }
+    }
+  }
+
   const messageRecord = asRecord(payload.message);
   const assistantName =
     getTrimmedString(messageRecord?.author) ||
@@ -5751,11 +5757,13 @@ async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
     throw err;
   }
 
-  try {
-    await syncWorkflowProjectsFromCronJobs(cronJobs);
-  } catch (err) {
-    console.error('[bridge] workflow project cron sync failed:', err);
-  }
+  // Disabled: cron→workflow project sync creates unwanted projects.
+  // Re-enable when OtterCamp has proper workflow UI.
+  // try {
+  //   await syncWorkflowProjectsFromCronJobs(cronJobs);
+  // } catch (err) {
+  //   console.error('[bridge] workflow project cron sync failed:', err);
+  // }
 }
 
 async function pullDispatchQueueJobs(limit = 50): Promise<DispatchQueueJob[]> {

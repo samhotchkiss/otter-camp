@@ -11,7 +11,7 @@ import MessageMarkdown from "./MessageMarkdown";
 import Questionnaire from "../Questionnaire";
 import QuestionnaireResponse from "../QuestionnaireResponse";
 
-const SCROLL_BOTTOM_THRESHOLD_PX = 40;
+const SCROLL_BOTTOM_THRESHOLD_PX = 200;
 
 function formatAttachmentSize(sizeBytes: number): string {
   if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
@@ -477,8 +477,13 @@ export default function MessageHistory({
     prevMessageCountRef.current = messages.length;
     if (messages.length > prevCount) {
       if (prevCount === 0 || pinnedToBottomRef.current) {
-        endRef.current?.scrollIntoView({
-          behavior: prevCount === 0 ? "auto" : "smooth",
+        // Double-RAF to ensure DOM has fully reflowed with new content
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            endRef.current?.scrollIntoView({
+              behavior: prevCount === 0 ? "auto" : "smooth",
+            });
+          });
         });
       }
     }
