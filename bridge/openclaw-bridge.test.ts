@@ -535,6 +535,8 @@ describe("bridge identity preamble helpers", () => {
   const originalFetch = globalThis.fetch;
   const agentID = "a1b2c3d4-5678-90ab-cdef-1234567890ab";
   const sessionKey = `agent:chameleon:oc:${agentID}`;
+  const reminderGuidePointer =
+    "Refer to OTTERCAMP.md and OTTER_COMMANDS.md for CLI syntax and operating rules.";
 
   beforeEach(() => {
     resetSessionContextsForTest();
@@ -617,9 +619,10 @@ describe("bridge identity preamble helpers", () => {
 
     const secondPrompt = await formatSessionSystemPromptForTest(sessionKey, "next turn");
     assert.equal(secondPrompt.includes("[OtterCamp Identity Injection]"), false);
-    assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
-    assert.ok(secondPrompt.includes("[OTTERCAMP_ACTION_DEFAULTS]"));
     assert.ok(secondPrompt.includes("[OTTERCAMP_CONTEXT_REMINDER]"));
+    assert.ok(secondPrompt.includes(reminderGuidePointer));
+    assert.equal(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"), false);
+    assert.equal(secondPrompt.includes("[OTTERCAMP_ACTION_DEFAULTS]"), false);
     assert.equal(secondPrompt.includes("next turn"), false);
   });
 
@@ -689,9 +692,10 @@ describe("bridge identity preamble helpers", () => {
       assert.ok(firstPrompt.includes("`/projects/<project-id>/issues/<issue-id>`"));
 
       const secondPrompt = await formatSessionSystemPromptForTest(sessionKey, "next turn");
-      assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
-      assert.ok(secondPrompt.includes('Never self-identify as "Chameleon"'));
+      assert.ok(secondPrompt.includes("[OTTERCAMP_CONTEXT_REMINDER]"));
+      assert.ok(secondPrompt.includes(reminderGuidePointer));
       assert.equal(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE]"), false);
+      assert.equal(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"), false);
     } finally {
       if (originalConfigPath === undefined) {
         delete process.env.OPENCLAW_CONFIG_PATH;
@@ -754,9 +758,10 @@ describe("bridge identity preamble helpers", () => {
       assert.ok(firstPrompt.includes("`/projects/<project-id>/issues/<issue-id>`"));
 
       const secondPrompt = await formatSessionSystemPromptForTest(elephantSessionKey, "next turn");
-      assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
-      assert.ok(secondPrompt.includes('Never self-identify as "Chameleon"'));
+      assert.ok(secondPrompt.includes("[OTTERCAMP_CONTEXT_REMINDER]"));
+      assert.ok(secondPrompt.includes(reminderGuidePointer));
       assert.equal(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE]"), false);
+      assert.equal(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"), false);
     } finally {
       if (originalConfigPath === undefined) {
         delete process.env.OPENCLAW_CONFIG_PATH;

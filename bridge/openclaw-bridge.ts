@@ -3536,26 +3536,11 @@ async function withSessionContext(
     }
     return sections.join('\n\n');
   }
-  const reminderSections: string[] = [];
-  const shouldPersistIdentityPreamble = context.kind !== 'dm';
-  const identityPreamble = shouldPersistIdentityPreamble
-    ? getTrimmedString(context.identityMetadata?.preamble)
-    : '';
-  if (identityPreamble) {
-    reminderSections.push(identityPreamble);
-  }
-  const operatingGuideReminder = buildOtterCampOperatingGuideReminder(sessionKey);
-  if (operatingGuideReminder) {
-    reminderSections.push(operatingGuideReminder);
-  }
-  const actionDefaults = buildSurfaceActionDefaults(context);
-  if (actionDefaults) {
-    reminderSections.push(actionDefaults);
-  }
-  reminderSections.push(
-    `[OTTERCAMP_CONTEXT_REMINDER]\n- ${buildContextReminder(context)}\n[/OTTERCAMP_CONTEXT_REMINDER]`,
-  );
-  const reminder = reminderSections.join('\n\n');
+  const reminder = [
+    '[OTTERCAMP_CONTEXT_REMINDER]',
+    `- ${buildContextReminder(context)} | Refer to ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME} and ${OTTERCAMP_COMMAND_REFERENCE_FILENAME} for CLI syntax and operating rules.`,
+    '[/OTTERCAMP_CONTEXT_REMINDER]',
+  ].join('\n');
   if (!includeUserContent) {
     return reminder;
   }
