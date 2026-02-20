@@ -6227,6 +6227,65 @@ export function ensureGatewayCallCredentials(args: string[], tokenRaw: string = 
   return [...sanitized, '--token', token];
 }
 
+const ELLIE_INGESTION_SESSION_NAMESPACE = 'ellie-ingestion';
+const ELLIE_INGESTION_SESSION_TOKEN_PATTERN = /[^a-z0-9_-]+/g;
+
+function normalizeEllieIngestionSessionToken(raw: string, fallback: string): string {
+  const normalized = raw
+    .trim()
+    .toLowerCase()
+    .replace(ELLIE_INGESTION_SESSION_TOKEN_PATTERN, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '');
+  return normalized || fallback;
+}
+
+function deriveMemoryExtractAgentSlot(params: Record<string, unknown>): string {
+  const sessionKey = getTrimmedString(params.sessionKey);
+  const match = /^agent:([^:]+):/i.exec(sessionKey);
+  if (!match?.[1]) {
+    return 'elephant';
+  }
+  return normalizeEllieIngestionSessionToken(match[1], 'elephant');
+}
+
+function ensureMemoryExtractSessionReuseArgs(args: string[], orgIDRaw: string): string[] {
+  const normalized = normalizeDispatchArgs(args);
+  const orgToken = normalizeEllieIngestionSessionToken(orgIDRaw, '');
+  if (!orgToken) {
+    return normalized;
+  }
+  if (normalized.length < 3) {
+    return normalized;
+  }
+  if (normalized[0] !== 'gateway' || normalized[1] !== 'call' || normalized[2] !== 'agent') {
+    return normalized;
+  }
+
+  const paramsIndex = normalized.indexOf('--params');
+  if (paramsIndex < 0 || paramsIndex + 1 >= normalized.length) {
+    return normalized;
+  }
+
+  let parsedParams: Record<string, unknown> | null = null;
+  try {
+    parsedParams = asRecord(parseJSONValue(normalized[paramsIndex + 1]));
+  } catch {
+    return normalized;
+  }
+  if (!parsedParams) {
+    return normalized;
+  }
+
+  const stableSessionKey = `agent:${deriveMemoryExtractAgentSlot(parsedParams)}:main:${ELLIE_INGESTION_SESSION_NAMESPACE}:${orgToken}`;
+  const rewritten = [...normalized];
+  rewritten[paramsIndex + 1] = JSON.stringify({
+    ...parsedParams,
+    sessionKey: stableSessionKey,
+  });
+  return rewritten;
+}
+
 const MEMORY_EXTRACT_MAX_PAYLOAD_TEXT_CHARS = 8000;
 const MEMORY_EXTRACT_DEFAULT_PAYLOAD_TEXT = '{"candidates":[]}';
 const MEMORY_EXTRACT_DEFAULT_MODEL = 'claude-haiku-4-5';
@@ -6510,7 +6569,9 @@ async function handleMemoryExtractDispatchEvent(event: MemoryExtractDispatchEven
   }
 
   try {
-    const output = await runOpenClawCommandCapture(ensureGatewayCallCredentials(args));
+    const output = await runOpenClawCommandCapture(
+      ensureGatewayCallCredentials(ensureMemoryExtractSessionReuseArgs(args, orgID)),
+    );
     sendResponse({ ok: true, output: compactMemoryExtractOutput(output) });
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
