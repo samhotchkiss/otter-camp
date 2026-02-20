@@ -125,6 +125,88 @@ describe("DashboardLayout", () => {
     expect(contentShell).toHaveClass("max-w-6xl");
   });
 
+  it("restores chat rail width from persisted localStorage value on load", async () => {
+    window.localStorage.setItem("otter-shell-width", "444");
+
+    renderLayout("/projects");
+
+    const chatSlot = await screen.findByTestId("shell-chat-slot");
+    expect(chatSlot).toHaveStyle({ width: "444px" });
+  });
+
+  it("falls back to default chat rail width when persisted value is missing or invalid", async () => {
+    renderLayout("/projects");
+
+    const chatSlot = await screen.findByTestId("shell-chat-slot");
+    expect(chatSlot).toHaveStyle({ width: "384px" });
+  });
+
+  it("clamps restored chat rail width to viewport-aware min/max bounds", async () => {
+    const originalInnerWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 900,
+      writable: true,
+    });
+    window.localStorage.setItem("otter-shell-width", "2000");
+
+    renderLayout("/projects");
+
+    const chatSlot = await screen.findByTestId("shell-chat-slot");
+    expect(chatSlot).toHaveStyle({ width: "680px" });
+
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: originalInnerWidth,
+      writable: true,
+    });
+  });
+
+  it("persists resized chat rail width after drag interactions", async () => {
+    renderLayout("/projects");
+
+    const chatSlot = await screen.findByTestId("shell-chat-slot");
+    const resizeHandle = screen.getByRole("button", { name: "Slide chat closed" });
+
+    fireEvent.mouseDown(resizeHandle, { clientX: 900 });
+    fireEvent.mouseMove(window, { clientX: 800 });
+    fireEvent.mouseUp(window);
+
+    expect(chatSlot).toHaveStyle({ width: "484px" });
+    expect(window.localStorage.getItem("otter-shell-width")).toBe("484");
+  });
+
+  it("persists clamped width values when drag exceeds min and max bounds", async () => {
+    const originalInnerWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1024,
+      writable: true,
+    });
+
+    renderLayout("/projects");
+    const chatSlot = await screen.findByTestId("shell-chat-slot");
+    const resizeHandle = screen.getByRole("button", { name: "Slide chat closed" });
+
+    fireEvent.mouseDown(resizeHandle, { clientX: 900 });
+    fireEvent.mouseMove(window, { clientX: 2000 });
+    fireEvent.mouseUp(window);
+    expect(chatSlot).toHaveStyle({ width: "320px" });
+    expect(window.localStorage.getItem("otter-shell-width")).toBe("320");
+
+    fireEvent.mouseDown(resizeHandle, { clientX: 900 });
+    fireEvent.mouseMove(window, { clientX: 0 });
+    fireEvent.mouseUp(window);
+    expect(chatSlot).toHaveStyle({ width: "804px" });
+    expect(window.localStorage.getItem("otter-shell-width")).toBe("804");
+
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: originalInnerWidth,
+      writable: true,
+    });
+  });
+
   it("marks the active projects navigation link with aria-current", async () => {
     renderLayout("/projects");
     const activeProjectsLink = await screen.findByRole("link", { name: "Projects" });
