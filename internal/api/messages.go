@@ -863,22 +863,20 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 	}
 
 	agentID := parseDMThreadAgentID(*req.ThreadID)
-	if agentID == "" {
-		// thread_id may be a chat record UUID rather than a dm_ prefixed key.
-		// Look up the thread_key from the DB and extract the agent ID from it.
+	if agentID == "" && uuidRegex.MatchString(*req.ThreadID) {
+		// thread_id is a chat record UUID — look up the thread_key and extract
+		// the agent ID. Use a direct query without RLS dependency.
 		var threadKey string
-		if lookupErr := db.QueryRowContext(ctx,
-			`SELECT COALESCE(thread_key, '') FROM chat_threads WHERE org_id = $1 AND id = $2`,
-			orgID, *req.ThreadID,
-		).Scan(&threadKey); lookupErr == nil && threadKey != "" {
-			// thread_key format: "dm:dm_<agentID>"
-			if strings.HasPrefix(threadKey, "dm:") {
-				agentID = parseDMThreadAgentID(strings.TrimPrefix(threadKey, "dm:"))
-			}
+		_ = db.QueryRowContext(ctx,
+			`SELECT COALESCE(thread_key, '') FROM chat_threads WHERE id = $1`,
+			*req.ThreadID,
+		).Scan(&threadKey)
+		if threadKey != "" && strings.HasPrefix(threadKey, "dm:") {
+			agentID = parseDMThreadAgentID(strings.TrimPrefix(threadKey, "dm:"))
 		}
-		if agentID == "" {
-			return dmDispatchTarget{}, false, "", 0, nil
-		}
+	}
+	if agentID == "" {
+		return dmDispatchTarget{}, false, "", 0, nil
 	}
 
 	var target dmDispatchTarget
