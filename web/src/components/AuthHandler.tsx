@@ -25,6 +25,8 @@ export default function AuthHandler({ children }: { children: React.ReactNode })
     const persistToken = (token: string) => {
       localStorage.setItem(PRIMARY_AUTH_TOKEN_KEY, token);
       localStorage.setItem(LEGACY_AUTH_TOKEN_KEY, token);
+      // Set cookie so browser-initiated requests (<img src>, etc.) can authenticate
+      document.cookie = `otter_camp_token=${encodeURIComponent(token)}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax`;
     };
 
     const getStoredToken = () => {
@@ -77,8 +79,8 @@ export default function AuthHandler({ children }: { children: React.ReactNode })
         // Check for existing token in localStorage
         const storedToken = getStoredToken();
         if (storedToken) {
-          // Optionally validate stored token
-          // For MVP, just trust it
+          // Ensure cookie is set for browser-initiated requests
+          document.cookie = `otter_camp_token=${encodeURIComponent(storedToken)}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax`;
           setUser({
             id: 'stored-user',
             name: 'Sam',

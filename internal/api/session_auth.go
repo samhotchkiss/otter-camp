@@ -127,5 +127,17 @@ func extractSessionToken(r *http.Request) string {
 		return token
 	}
 
+	// Fall back to cookie (needed for <img src="..."> and other browser-initiated requests)
+	if cookie, err := r.Cookie("otter_camp_token"); err == nil {
+		if token := strings.TrimSpace(cookie.Value); token != "" {
+			return token
+		}
+	}
+
+	// Fall back to query parameter (needed for <img src="...?token=..."> patterns)
+	if token := strings.TrimSpace(r.URL.Query().Get("token")); token != "" {
+		return token
+	}
+
 	return ""
 }
