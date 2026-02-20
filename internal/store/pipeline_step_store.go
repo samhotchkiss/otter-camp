@@ -18,6 +18,10 @@ const (
 	IssuePipelineResultCompleted = "completed"
 	IssuePipelineResultRejected  = "rejected"
 	IssuePipelineResultSkipped   = "skipped"
+
+	IssueEllieContextGateStatusSucceeded = "succeeded"
+	IssueEllieContextGateStatusFailed    = "failed"
+	IssueEllieContextGateStatusBypassed  = "bypassed"
 )
 
 type PipelineStep struct {
@@ -102,12 +106,22 @@ type UpdateIssuePipelineStateInput struct {
 	PipelineCompletedAt   *time.Time
 }
 
+type UpdateIssueEllieContextGateInput struct {
+	IssueID   string
+	Status    string
+	Error     *string
+	CheckedAt *time.Time
+}
+
 type IssuePipelineState struct {
-	IssueID               string     `json:"issue_id"`
-	ProjectID             string     `json:"project_id"`
-	CurrentPipelineStepID *string    `json:"current_pipeline_step_id,omitempty"`
-	PipelineStartedAt     *time.Time `json:"pipeline_started_at,omitempty"`
-	PipelineCompletedAt   *time.Time `json:"pipeline_completed_at,omitempty"`
+	IssueID                   string     `json:"issue_id"`
+	ProjectID                 string     `json:"project_id"`
+	CurrentPipelineStepID     *string    `json:"current_pipeline_step_id,omitempty"`
+	PipelineStartedAt         *time.Time `json:"pipeline_started_at,omitempty"`
+	PipelineCompletedAt       *time.Time `json:"pipeline_completed_at,omitempty"`
+	EllieContextGateStatus    *string    `json:"ellie_context_gate_status,omitempty"`
+	EllieContextGateError     *string    `json:"ellie_context_gate_error,omitempty"`
+	EllieContextGateCheckedAt *time.Time `json:"ellie_context_gate_checked_at,omitempty"`
 }
 
 type PipelineStepStore struct {
@@ -138,6 +152,19 @@ func normalizeIssuePipelineResult(raw string) string {
 func isValidIssuePipelineResult(result string) bool {
 	switch normalizeIssuePipelineResult(result) {
 	case IssuePipelineResultCompleted, IssuePipelineResultRejected, IssuePipelineResultSkipped:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeIssueEllieContextGateStatus(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+func isValidIssueEllieContextGateStatus(status string) bool {
+	switch normalizeIssueEllieContextGateStatus(status) {
+	case IssueEllieContextGateStatusSucceeded, IssueEllieContextGateStatusFailed, IssueEllieContextGateStatusBypassed:
 		return true
 	default:
 		return false
@@ -857,9 +884,19 @@ func (s *PipelineStepStore) GetIssuePipelineState(ctx context.Context, issueID s
 	var currentStepID sql.NullString
 	var startedAt sql.NullTime
 	var completedAt sql.NullTime
+	var ellieContextGateStatus sql.NullString
+	var ellieContextGateError sql.NullString
+	var ellieContextGateCheckedAt sql.NullTime
 	if err := conn.QueryRowContext(
 		ctx,
-		`SELECT id, project_id, current_pipeline_step_id, pipeline_started_at, pipeline_completed_at
+		`SELECT id,
+		        project_id,
+		        current_pipeline_step_id,
+		        pipeline_started_at,
+		        pipeline_completed_at,
+		        ellie_context_gate_status,
+		        ellie_context_gate_error,
+		        ellie_context_gate_checked_at
 		 FROM project_issues
 		 WHERE org_id = $1 AND id = $2`,
 		workspaceID,
@@ -870,6 +907,9 @@ func (s *PipelineStepStore) GetIssuePipelineState(ctx context.Context, issueID s
 		&currentStepID,
 		&startedAt,
 		&completedAt,
+		&ellieContextGateStatus,
+		&ellieContextGateError,
+		&ellieContextGateCheckedAt,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrNotFound
@@ -886,7 +926,85 @@ func (s *PipelineStepStore) GetIssuePipelineState(ctx context.Context, issueID s
 	if completedAt.Valid {
 		record.PipelineCompletedAt = &completedAt.Time
 	}
+	if ellieContextGateStatus.Valid {
+		record.EllieContextGateStatus = &ellieContextGateStatus.String
+	}
+	if ellieContextGateError.Valid {
+		record.EllieContextGateError = &ellieContextGateError.String
+	}
+	if ellieContextGateCheckedAt.Valid {
+		record.EllieContextGateCheckedAt = &ellieContextGateCheckedAt.Time
+	}
 	return &record, nil
+}
+
+func (s *PipelineStepStore) UpdateIssueEllieContextGate(ctx context.Context, input UpdateIssueEllieContextGateInput) error {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return ErrNoWorkspace
+	}
+
+	issueID := strings.TrimSpace(input.IssueID)
+	if !uuidRegex.MatchString(issueID) {
+		return fmt.Errorf("%w: invalid issue_id", ErrValidation)
+	}
+
+	status := normalizeIssueEllieContextGateStatus(input.Status)
+	if !isValidIssueEllieContextGateStatus(status) {
+		return fmt.Errorf("%w: invalid ellie context gate status", ErrValidation)
+	}
+
+	var gateError *string
+	if input.Error != nil {
+		trimmed := strings.TrimSpace(*input.Error)
+		if trimmed != "" {
+			gateError = &trimmed
+		}
+	}
+	if status != IssueEllieContextGateStatusFailed {
+		gateError = nil
+	}
+
+	checkedAt := time.Now().UTC()
+	if input.CheckedAt != nil {
+		checkedAt = input.CheckedAt.UTC()
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if err := ensurePipelineIssueVisible(ctx, conn, issueID); err != nil {
+		return err
+	}
+
+	result, err := conn.ExecContext(
+		ctx,
+		`UPDATE project_issues
+		 SET ellie_context_gate_status = $1,
+		     ellie_context_gate_error = $2,
+		     ellie_context_gate_checked_at = $3
+		 WHERE org_id = $4 AND id = $5`,
+		status,
+		nullableString(gateError),
+		checkedAt,
+		workspaceID,
+		issueID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update ellie context gate state: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read ellie context gate update result: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+
+	return nil
 }
 
 func ensurePipelineIssueVisible(ctx context.Context, conn Querier, issueID string) error {

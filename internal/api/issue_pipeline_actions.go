@@ -43,8 +43,15 @@ type issuePipelineStatusPayload struct {
 	CurrentStep         *pipelineStepPayload          `json:"current_step,omitempty"`
 	PipelineStartedAt   *string                       `json:"pipeline_started_at,omitempty"`
 	PipelineCompletedAt *string                       `json:"pipeline_completed_at,omitempty"`
+	EllieContextGate    *issuePipelineEllieGateStatus `json:"ellie_context_gate,omitempty"`
 	Steps               []pipelineStepPayload         `json:"steps"`
 	History             []issuePipelineHistoryPayload `json:"history"`
+}
+
+type issuePipelineEllieGateStatus struct {
+	Status    string  `json:"status"`
+	Error     *string `json:"error,omitempty"`
+	CheckedAt *string `json:"checked_at,omitempty"`
 }
 
 type issuePipelineHistoryPayload struct {
@@ -180,6 +187,17 @@ func (h *IssuePipelineActionsHandler) loadIssuePipelineStatus(ctx context.Contex
 			currentStepPayload = &mapped
 		}
 	}
+	var ellieGateStatus *issuePipelineEllieGateStatus
+	if state.EllieContextGateStatus != nil {
+		ellieGateStatus = &issuePipelineEllieGateStatus{
+			Status: strings.TrimSpace(*state.EllieContextGateStatus),
+			Error:  state.EllieContextGateError,
+		}
+		if state.EllieContextGateCheckedAt != nil {
+			formatted := state.EllieContextGateCheckedAt.UTC().Format(time.RFC3339)
+			ellieGateStatus.CheckedAt = &formatted
+		}
+	}
 
 	return &issuePipelineStatusResponse{
 		Issue: toIssueSummaryPayload(*issue, nil, nil),
@@ -188,6 +206,7 @@ func (h *IssuePipelineActionsHandler) loadIssuePipelineStatus(ctx context.Contex
 			CurrentStep:         currentStepPayload,
 			PipelineStartedAt:   formatOptionalPipelineTime(state.PipelineStartedAt),
 			PipelineCompletedAt: formatOptionalPipelineTime(state.PipelineCompletedAt),
+			EllieContextGate:    ellieGateStatus,
 			Steps:               mapPipelineSteps(steps),
 			History:             mapIssuePipelineHistoryPayload(history),
 		},

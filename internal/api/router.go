@@ -181,6 +181,7 @@ func NewRouter() http.Handler {
 		conversationTokenHandler.Store = store.NewConversationTokenStore(db)
 		pipelineRolesHandler.Store = store.NewPipelineRoleStore(db)
 		pipelineStepsHandler.Store = store.NewPipelineStepStore(db)
+		issuesHandler.PipelineStepStore = pipelineStepsHandler.Store
 		pipelineStaffingHandler.Store = pipelineStepsHandler.Store
 		pipelineStaffingHandler.DB = db
 		issuePipelineActionsHandler.IssueStore = issuesHandler.IssueStore

@@ -226,3 +226,50 @@ func TestProjectIssueStorePipelineColumns_UpdateIssuePipelineState(t *testing.T)
 	require.True(t, gotStartedAt.Time.Equal(startedAt))
 	require.True(t, gotCompletedAt.Time.Equal(completedAt))
 }
+
+func TestProjectIssueStorePipelineColumns_UpdateIssueEllieContextGate(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "pipeline-ellie-context-gate-org")
+	projectID := createPipelineStepTestProject(t, db, orgID, "Pipeline Ellie Context Gate Project")
+	issueID := createPipelineStepTestIssue(t, db, orgID, projectID, "Pipeline ellie context gate issue")
+	ctx := ctxWithWorkspace(orgID)
+	store := NewPipelineStepStore(db)
+
+	failedAt := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
+	errorMessage := "ellie trigger failed"
+	err := store.UpdateIssueEllieContextGate(ctx, UpdateIssueEllieContextGateInput{
+		IssueID:   issueID,
+		Status:    IssueEllieContextGateStatusFailed,
+		Error:     &errorMessage,
+		CheckedAt: &failedAt,
+	})
+	require.NoError(t, err)
+
+	state, err := store.GetIssuePipelineState(ctx, issueID)
+	require.NoError(t, err)
+	require.NotNil(t, state.EllieContextGateStatus)
+	require.Equal(t, IssueEllieContextGateStatusFailed, *state.EllieContextGateStatus)
+	require.NotNil(t, state.EllieContextGateError)
+	require.Equal(t, errorMessage, *state.EllieContextGateError)
+	require.NotNil(t, state.EllieContextGateCheckedAt)
+	require.True(t, state.EllieContextGateCheckedAt.Equal(failedAt))
+
+	bypassedAt := failedAt.Add(time.Minute)
+	err = store.UpdateIssueEllieContextGate(ctx, UpdateIssueEllieContextGateInput{
+		IssueID:   issueID,
+		Status:    IssueEllieContextGateStatusBypassed,
+		Error:     &errorMessage,
+		CheckedAt: &bypassedAt,
+	})
+	require.NoError(t, err)
+
+	state, err = store.GetIssuePipelineState(ctx, issueID)
+	require.NoError(t, err)
+	require.NotNil(t, state.EllieContextGateStatus)
+	require.Equal(t, IssueEllieContextGateStatusBypassed, *state.EllieContextGateStatus)
+	require.Nil(t, state.EllieContextGateError)
+	require.NotNil(t, state.EllieContextGateCheckedAt)
+	require.True(t, state.EllieContextGateCheckedAt.Equal(bypassedAt))
+}

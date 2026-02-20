@@ -2231,4 +2231,70 @@ func TestSchemaPipelineStepAndIssueHistoryTablesExist(t *testing.T) {
 	).Scan(&hasPipelineCompletedAt)
 	require.NoError(t, err)
 	require.True(t, hasPipelineCompletedAt)
+
+	var hasEllieContextGateStatus bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'project_issues'
+			  AND column_name = 'ellie_context_gate_status'
+		)`,
+	).Scan(&hasEllieContextGateStatus)
+	require.NoError(t, err)
+	require.True(t, hasEllieContextGateStatus)
+
+	var hasEllieContextGateError bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'project_issues'
+			  AND column_name = 'ellie_context_gate_error'
+		)`,
+	).Scan(&hasEllieContextGateError)
+	require.NoError(t, err)
+	require.True(t, hasEllieContextGateError)
+
+	var hasEllieContextGateCheckedAt bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'project_issues'
+			  AND column_name = 'ellie_context_gate_checked_at'
+		)`,
+	).Scan(&hasEllieContextGateCheckedAt)
+	require.NoError(t, err)
+	require.True(t, hasEllieContextGateCheckedAt)
+}
+
+func TestMigration089IssueEllieContextGateFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"089_add_issue_ellie_context_gate_columns.up.sql",
+		"089_add_issue_ellie_context_gate_columns.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "089_add_issue_ellie_context_gate_columns.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "add column if not exists ellie_context_gate_status")
+	require.Contains(t, upContent, "add column if not exists ellie_context_gate_error")
+	require.Contains(t, upContent, "add column if not exists ellie_context_gate_checked_at")
+	require.Contains(t, upContent, "project_issues_ellie_context_gate_status_chk")
+	require.Contains(t, upContent, "project_issues_ellie_context_gate_idx")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "089_add_issue_ellie_context_gate_columns.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop index if exists project_issues_ellie_context_gate_idx")
+	require.Contains(t, downContent, "drop constraint if exists project_issues_ellie_context_gate_status_chk")
+	require.Contains(t, downContent, "drop column if exists ellie_context_gate_status")
+	require.Contains(t, downContent, "drop column if exists ellie_context_gate_error")
+	require.Contains(t, downContent, "drop column if exists ellie_context_gate_checked_at")
 }
