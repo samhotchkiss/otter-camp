@@ -29,7 +29,7 @@ const USER_NAME_STORAGE_KEY = "otter-camp-user-name";
 const PROJECT_CHAT_SESSION_RESET_AUTHOR = "__otter_session__";
 const PROJECT_CHAT_SESSION_RESET_PREFIX = "project_chat_session_reset:";
 const CHAT_SESSION_RESET_PREFIX = "chat_session_reset:";
-const POST_SEND_REFRESH_DELAYS_MS = [1200, 3500, 7000, 12000];
+const POST_SEND_REFRESH_DELAYS_MS = [1200, 3500, 7000, 12000, 20000, 30000, 45000, 60000, 90000, 120000];
 const STALLED_TURN_TIMEOUT_MS = 60_000;
 
 type DeliveryTone = "neutral" | "success" | "warning";

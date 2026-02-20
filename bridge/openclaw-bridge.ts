@@ -4614,6 +4614,12 @@ async function persistAssistantReplyToOtterCamp(params: {
     return;
   }
 
+  // Suppress NO_REPLY / HEARTBEAT_OK responses — these are internal signals, not user-facing
+  const upperContent = content.toUpperCase().replace(/[^A-Z_]/g, '');
+  if (upperContent === 'NO_REPLY' || upperContent === 'NOREPLY' || upperContent === 'HEARTBEAT_OK' || upperContent === 'HEARTBEATOK') {
+    return;
+  }
+
   const existingContext = sessionContexts.get(sessionKey);
   const inferredContext = inferSessionContextFromKey(sessionKey);
   const context = existingContext || inferredContext;
