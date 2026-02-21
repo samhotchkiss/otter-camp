@@ -3,6 +3,20 @@ import DataManagement from "../components/DataManagement";
 import GitHubSettings from "./settings/GitHubSettings";
 import { API_URL } from "../lib/api";
 
+function settingsAuthFetch(path: string, init?: RequestInit) {
+  const token = localStorage.getItem("otter_camp_token");
+  const orgId = localStorage.getItem("otter-camp-org-id");
+  return fetch(`${API_URL}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token && { Authorization: `Bearer ${token}` }),
+      ...(orgId && { "X-Org-ID": orgId }),
+      ...init?.headers,
+    },
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -974,11 +988,11 @@ export default function SettingsPage() {
       try {
         const [profileRes, notificationsRes, workspaceRes, integrationsRes, gitTokensRes] =
           await Promise.all([
-            fetch(`${API_URL}/api/settings/profile`),
-            fetch(`${API_URL}/api/settings/notifications`),
-            fetch(`${API_URL}/api/settings/workspace`),
-            fetch(`${API_URL}/api/settings/integrations`),
-            fetch(`${API_URL}/api/git/tokens`),
+            settingsAuthFetch("/api/settings/profile"),
+            settingsAuthFetch("/api/settings/notifications"),
+            settingsAuthFetch("/api/settings/workspace"),
+            settingsAuthFetch("/api/settings/integrations"),
+            settingsAuthFetch("/api/git/tokens"),
           ]);
 
         if (profileRes.ok) {
@@ -1108,7 +1122,7 @@ export default function SettingsPage() {
   const handleSaveProfile = useCallback(async () => {
     setSavingProfile(true);
     try {
-      await fetch(`${API_URL}/api/settings/profile`, {
+      await settingsAuthFetch("/api/settings/profile", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(profile),
@@ -1121,7 +1135,7 @@ export default function SettingsPage() {
   const handleSaveNotifications = useCallback(async () => {
     setSavingNotifications(true);
     try {
-      await fetch(`${API_URL}/api/settings/notifications`, {
+      await settingsAuthFetch("/api/settings/notifications", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(notifications),
@@ -1134,7 +1148,7 @@ export default function SettingsPage() {
   const handleSaveWorkspace = useCallback(async () => {
     setSavingWorkspace(true);
     try {
-      await fetch(`${API_URL}/api/settings/workspace`, {
+      await settingsAuthFetch("/api/settings/workspace", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(workspace),
@@ -1147,7 +1161,7 @@ export default function SettingsPage() {
   const handleSaveIntegrations = useCallback(async () => {
     setSavingIntegrations(true);
     try {
-      await fetch(`${API_URL}/api/settings/integrations`, {
+      await settingsAuthFetch("/api/settings/integrations", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(integrations),
@@ -1161,7 +1175,7 @@ export default function SettingsPage() {
     setGitTokenError(null);
     setGeneratedGitToken(null);
 
-    const projectsResponse = await fetch(`${API_URL}/api/projects`);
+    const projectsResponse = await settingsAuthFetch("/api/projects");
     if (!projectsResponse.ok) {
       const payload = await projectsResponse.json().catch(() => null);
       setGitTokenError(payload?.error ?? "Failed to load projects for git token creation.");
@@ -1180,7 +1194,7 @@ export default function SettingsPage() {
       return;
     }
 
-    const response = await fetch(`${API_URL}/api/git/tokens`, {
+    const response = await settingsAuthFetch("/api/git/tokens", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
