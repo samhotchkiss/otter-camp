@@ -1632,8 +1632,19 @@ func (h *MessageHandler) touchDMChatThreadBestEffort(
 	}
 
 	var agentID *string
-	if parsed := parseDMThreadAgentID(threadID); uuidRegex.MatchString(parsed) {
-		agentID = &parsed
+	if parsed := parseDMThreadAgentID(threadID); parsed != "" {
+		if uuidRegex.MatchString(parsed) {
+			agentID = &parsed
+		} else if db != nil {
+			// Thread ID uses a name (e.g. "Chief of Staff") instead of UUID — resolve it.
+			var resolvedID string
+			if err := db.QueryRowContext(ctx,
+				`SELECT id::text FROM agents WHERE org_id = $1 AND (display_name ILIKE $2 OR role ILIKE $2) LIMIT 1`,
+				identity.OrgID, parsed,
+			).Scan(&resolvedID); err == nil && resolvedID != "" {
+				agentID = &resolvedID
+			}
+		}
 	}
 
 	workspaceCtx := context.WithValue(ctx, middleware.WorkspaceIDKey, identity.OrgID)
@@ -1657,14 +1668,9 @@ func resolveDMChatThreadTitle(
 	db *sql.DB,
 	orgID string,
 	agentID *string,
-	senderName *string,
+	_ *string, // senderName — unused; title should always be the agent's name, not the sender's
 ) string {
 	title := "Direct message"
-	if senderName != nil {
-		if trimmed := strings.TrimSpace(*senderName); trimmed != "" {
-			title = trimmed
-		}
-	}
 	if db == nil || agentID == nil {
 		return title
 	}
