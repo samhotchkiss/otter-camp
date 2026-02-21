@@ -108,6 +108,30 @@ function findFrankAgentFallback(agentNamesByID: Map<string, string>): { id: stri
   return { id: best.id, name: best.name };
 }
 
+function isMainAgentConversation(
+  conversation: GlobalChatConversation,
+  resolvedTitle: string,
+): boolean {
+  if (conversation.type !== "dm") {
+    return false;
+  }
+  const displayTitle = resolvedTitle.toLowerCase();
+  const threadID = conversation.threadId.toLowerCase();
+  const agentID = conversation.agent.id.toLowerCase();
+  const agentName = conversation.agent.name.toLowerCase();
+  return (
+    displayTitle.includes("frank") ||
+    displayTitle.includes("chief of staff") ||
+    agentName.includes("frank") ||
+    agentName.includes("chief of staff") ||
+    agentID === "main" ||
+    agentID.includes("frank") ||
+    threadID.includes("frank") ||
+    threadID.includes("chief of staff") ||
+    threadID === "dm_main"
+  );
+}
+
 function EmptyShellWithInput({ openConversation }: { openConversation: (input: OpenConversationInput, opts?: { focus?: boolean; openDock?: boolean }) => void }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -245,6 +269,7 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
   }, [location.pathname]);
 
   const routeProjectID = routeScopedConversation?.projectId ?? "";
+  const isExplicitChatRoute = location.pathname.startsWith("/chats/");
 
   const selectedJumpTarget = useMemo(() => {
     if (!selectedConversation) {
@@ -488,31 +513,13 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
     ) ?? null;
   }, [conversations, routeScopedConversation]);
 
-  const anyOrgDMConversation = useMemo(() => {
-    const dmConversations = visibleConversations.filter((conversation) => conversation.type === "dm");
-    return dmConversations[0] ?? null;
-  }, [visibleConversations]);
-
   const frankOrgDMConversation = useMemo(() => {
     const dmConversations = visibleConversations.filter((conversation) => conversation.type === "dm");
     if (dmConversations.length === 0) {
       return null;
     }
     const frankMatch = dmConversations.find((conversation) => {
-      const displayTitle = resolveConversationTitle(conversation).toLowerCase();
-      const threadID = conversation.threadId.toLowerCase();
-      const agentID = conversation.agent.id.toLowerCase();
-      const agentName = conversation.agent.name.toLowerCase();
-      return (
-        displayTitle.includes("frank") ||
-        displayTitle.includes("chief of staff") ||
-        agentName.includes("frank") ||
-        agentName.includes("chief of staff") ||
-        agentID === "main" ||
-        agentID.includes("frank") ||
-        threadID.includes("frank") ||
-        threadID.includes("chief of staff")
-      );
+      return isMainAgentConversation(conversation, resolveConversationTitle(conversation));
     });
     return frankMatch ?? null;
   }, [resolveConversationTitle, visibleConversations]);
@@ -527,6 +534,7 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
   //   (e.g. user navigated away or did a hard refresh to /projects)
   const shouldDefaultToMainChat = useMemo(() => {
     if (!dockOpen) return false;
+    if (isExplicitChatRoute) return false;
     if (!selectedConversation) return true;
     // If currently showing a project/issue chat but not on a matching route, switch to main
     if (
@@ -535,8 +543,33 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
     ) {
       return true;
     }
+    if (
+      selectedConversation.type === "dm" &&
+      !routeScopedConversation &&
+      !isMainAgentConversation(selectedConversation, resolveConversationTitle(selectedConversation))
+    ) {
+      return true;
+    }
     return false;
-  }, [dockOpen, selectedConversation, routeScopedConversation]);
+  }, [dockOpen, isExplicitChatRoute, resolveConversationTitle, selectedConversation, routeScopedConversation]);
+
+  const openMainFallbackConversation = useCallback(() => {
+    openConversation(
+      {
+        type: "dm",
+        agent: {
+          id: "main",
+          name: "Frank",
+          status: "online",
+        },
+        threadId: "dm_main",
+        title: "Frank",
+        contextLabel: "Organization chat",
+        subtitle: "Direct message",
+      },
+      { focus: true, openDock: false },
+    );
+  }, [openConversation]);
 
   useEffect(() => {
     if (!shouldDefaultToMainChat) {
@@ -545,11 +578,6 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
     if (frankOrgDMConversation) {
       selectConversation(frankOrgDMConversation.key);
       markConversationRead(frankOrgDMConversation.key);
-      return;
-    }
-    if (anyOrgDMConversation) {
-      selectConversation(anyOrgDMConversation.key);
-      markConversationRead(anyOrgDMConversation.key);
       return;
     }
     if (frankFallbackAgent) {
@@ -568,15 +596,17 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
         },
         { focus: true, openDock: false },
       );
+      return;
     }
+    openMainFallbackConversation();
   }, [
     shouldDefaultToMainChat,
     frankOrgDMConversation,
-    anyOrgDMConversation,
     frankFallbackAgent,
     selectConversation,
     markConversationRead,
     openConversation,
+    openMainFallbackConversation,
   ]);
 
   const orgConversationTitle = useMemo(() => {
@@ -586,15 +616,10 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
     if (frankFallbackAgent) {
       return frankFallbackAgent.name;
     }
-    if (anyOrgDMConversation) {
-      return resolveConversationTitle(anyOrgDMConversation);
-    }
     return "Frank";
-  }, [anyOrgDMConversation, frankFallbackAgent, frankOrgDMConversation, resolveConversationTitle]);
+  }, [frankFallbackAgent, frankOrgDMConversation, resolveConversationTitle]);
 
-  const hasOrgChatTarget = useMemo(() => {
-    return Boolean(frankOrgDMConversation || frankFallbackAgent || anyOrgDMConversation);
-  }, [anyOrgDMConversation, frankFallbackAgent, frankOrgDMConversation]);
+  const hasOrgChatTarget = true;
 
   const routeScopedSwapLabel = useMemo(() => {
     if (!routeScopedConversation) {
@@ -622,11 +647,6 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
       markConversationRead(frankOrgDMConversation.key);
       return;
     }
-    if (anyOrgDMConversation) {
-      selectConversation(anyOrgDMConversation.key);
-      markConversationRead(anyOrgDMConversation.key);
-      return;
-    }
     if (frankFallbackAgent) {
       openConversation(
         {
@@ -643,8 +663,10 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
         },
         { focus: true, openDock: false },
       );
+      return;
     }
-  }, [frankOrgDMConversation, anyOrgDMConversation, frankFallbackAgent, selectConversation, markConversationRead, openConversation]);
+    openMainFallbackConversation();
+  }, [frankOrgDMConversation, frankFallbackAgent, markConversationRead, openConversation, openMainFallbackConversation, selectConversation]);
 
   const formatConversationTimestamp = useCallback((value: string): string => {
     const parsed = Date.parse(value);
@@ -728,11 +750,8 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
         );
         return;
       }
-      if (anyOrgDMConversation) {
-        setRouteScopeMode("org");
-        selectConversation(anyOrgDMConversation.key);
-        markConversationRead(anyOrgDMConversation.key);
-      }
+      setRouteScopeMode("org");
+      openMainFallbackConversation();
       return;
     }
 
@@ -746,11 +765,11 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
       openConversation(routeScopedInput, { focus: true, openDock: true });
     }
   }, [
-    anyOrgDMConversation,
     frankFallbackAgent,
     frankOrgDMConversation,
     markConversationRead,
     openConversation,
+    openMainFallbackConversation,
     routeScopeMode,
     routeScopedConversation,
     routeScopedInput,
