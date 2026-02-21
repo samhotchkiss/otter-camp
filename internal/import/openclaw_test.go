@@ -96,11 +96,11 @@ func TestOpenClawAgentImportFallsBackToWorkspaceDiscovery(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "", install.ConfigPath)
 	require.Equal(t, filepath.Join(root, "workspaces"), install.WorkspacesDir)
-	require.Len(t, install.Agents, 2)
+	require.Len(t, install.Agents, 1)
 
 	identities, err := ImportOpenClawAgentIdentities(install)
 	require.NoError(t, err)
-	require.Len(t, identities, 2)
+	require.Len(t, identities, 1)
 
 	byID := map[string]ImportedAgentIdentity{}
 	for _, item := range identities {
@@ -108,6 +108,30 @@ func TestOpenClawAgentImportFallsBackToWorkspaceDiscovery(t *testing.T) {
 	}
 	require.Equal(t, "Frank soul", byID["frank"].Soul)
 	require.Equal(t, "", byID["nova"].Soul)
+}
+
+func TestOpenClawAgentImportGatewayPortFallsBackToTopLevelPort(t *testing.T) {
+	root := t.TempDir()
+	mainWorkspace := filepath.Join(root, "workspaces", "main")
+	require.NoError(t, os.MkdirAll(mainWorkspace, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(mainWorkspace, "IDENTITY.md"), []byte("Frank"), 0o644))
+
+	config := map[string]any{
+		"port":           18888,
+		"workspaces_dir": "./workspaces",
+		"agents": map[string]any{
+			"main": map[string]any{
+				"workspace_dir": "./workspaces/main",
+			},
+		},
+	}
+	configBytes, err := json.Marshal(config)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "openclaw.json"), configBytes, 0o644))
+
+	install, err := DetectOpenClawInstallation(DetectOpenClawOptions{HomeDir: root})
+	require.NoError(t, err)
+	require.Equal(t, 18888, install.Gateway.Port)
 }
 
 func TestOpenClawAgentImportSkipsNonRegularIdentityFiles(t *testing.T) {
@@ -173,6 +197,7 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		require.True(t, result.Updated)
 		require.True(t, result.AddedElephant)
 		require.True(t, result.AddedChameleon)
+		require.Equal(t, []string{"channels", "thinking"}, result.DroppedUnknownKeys)
 
 		updatedRaw, err := os.ReadFile(configPath)
 		require.NoError(t, err)
@@ -203,10 +228,8 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		require.Equal(t, "Ellie", memoryAgent["name"])
 		require.Equal(t, "anthropic/claude-sonnet-4-20250514", memoryAgent["model"])
 		require.Equal(t, "~/.openclaw/workspace-elephant", memoryAgent["workspace"])
-		require.Equal(t, "low", memoryAgent["thinking"])
-		channels, ok := memoryAgent["channels"].([]any)
-		require.True(t, ok)
-		require.Len(t, channels, 0)
+		require.NotContains(t, memoryAgent, "thinking")
+		require.NotContains(t, memoryAgent, "channels")
 
 		chameleon := entryByID["chameleon"]
 		require.Equal(t, "Chameleon", chameleon["name"])
@@ -231,6 +254,7 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		require.False(t, second.Updated)
 		require.False(t, second.AddedElephant)
 		require.False(t, second.AddedChameleon)
+		require.Empty(t, second.DroppedUnknownKeys)
 	})
 
 	t.Run("can add only memory agent when chameleon is disabled", func(t *testing.T) {
@@ -273,6 +297,84 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		require.True(t, listHasAgentID(list, "elephant"))
 		require.False(t, listHasAgentID(list, "chameleon"))
 	})
+}
+
+func TestEnsureOpenClawRequiredAgentsAddsEllieGuidance(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "openclaw.json")
+	config := map[string]any{
+		"agents": map[string]any{
+			"list": []any{
+				map[string]any{
+					"id":   "main",
+					"name": "Main Agent",
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(config)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configPath, raw, 0o644))
+
+	result, err := EnsureOpenClawRequiredAgents(&OpenClawInstallation{
+		RootDir:    root,
+		ConfigPath: configPath,
+	}, EnsureOpenClawRequiredAgentsOptions{
+		IncludeChameleon: false,
+	})
+	require.NoError(t, err)
+	require.True(t, result.AddedElephant)
+	require.True(t, result.Updated)
+
+	soulRaw, err := os.ReadFile(filepath.Join(root, "workspace-elephant", "SOUL.md"))
+	require.NoError(t, err)
+	soul := string(soulRaw)
+	require.Contains(t, soul, "Ask Ellie First")
+	require.Contains(t, soul, "Zero Hallucination")
+}
+
+func TestEnsureOpenClawRequiredAgentsPreservesLegacyElephantSlots(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "openclaw.json")
+	config := map[string]any{
+		"agents": map[string]any{
+			"list": []any{
+				map[string]any{
+					"id":        "elephant",
+					"name":      "Elephant",
+					"workspace": "~/.openclaw/workspace-elephant",
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(config)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configPath, raw, 0o644))
+
+	result, err := EnsureOpenClawRequiredAgents(&OpenClawInstallation{
+		RootDir:    root,
+		ConfigPath: configPath,
+	}, EnsureOpenClawRequiredAgentsOptions{
+		IncludeChameleon: false,
+	})
+	require.NoError(t, err)
+	require.False(t, result.Updated)
+	require.False(t, result.AddedElephant)
+
+	updatedRaw, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	var updated map[string]any
+	require.NoError(t, json.Unmarshal(updatedRaw, &updated))
+	agentsObj, ok := updated["agents"].(map[string]any)
+	require.True(t, ok)
+	list, ok := agentsObj["list"].([]any)
+	require.True(t, ok)
+	require.Len(t, list, 1)
+	require.True(t, listHasAgentID(list, "elephant"))
+}
+
+func TestEllieBootstrapTemplatesContainAskEllieFirstRule(t *testing.T) {
+	require.Contains(t, elephantSOULTemplate, "Ask Ellie First")
 }
 
 func TestWriteFileIfMissingDoesNotFollowSymlinks(t *testing.T) {

@@ -15,7 +15,7 @@ function ProjectIssuesRoute() {
   return (
     <ProjectIssuesList
       projectId="project-1"
-      onSelectIssue={(issueID) => navigate(`/projects/project-1/issues/${issueID}`)}
+      onSelectIssue={(issueID) => navigate(`/projects/project-1/tasks/${issueID}`)}
     />
   );
 }
@@ -30,7 +30,7 @@ describe("ProjectIssuesList navigation integration", () => {
     localStorage.setItem("otter-camp-org-id", "org-123");
   });
 
-  it("navigates to issue thread route when selecting an issue row", async () => {
+  it("navigates to task thread route when selecting a task row", async () => {
     fetchMock
       .mockResolvedValueOnce(
         mockJSONResponse({
@@ -55,12 +55,12 @@ describe("ProjectIssuesList navigation integration", () => {
       <MemoryRouter initialEntries={["/projects/project-1"]}>
         <Routes>
           <Route path="/projects/:id" element={<ProjectIssuesRoute />} />
-          <Route path="/projects/:id/issues/:issueId" element={<div>Issue Thread View</div>} />
+          <Route path="/projects/:id/tasks/:taskId" element={<div>Task Thread View</div>} />
         </Routes>
       </MemoryRouter>,
     );
 
     fireEvent.click(await screen.findByRole("button", { name: /#33 Navigate me/i }));
-    expect(await screen.findByText("Issue Thread View")).toBeInTheDocument();
+    expect(await screen.findByText("Task Thread View")).toBeInTheDocument();
   });
 });

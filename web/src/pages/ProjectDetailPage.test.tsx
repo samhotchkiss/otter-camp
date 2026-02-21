@@ -37,9 +37,9 @@ function mockJSONResponse(body: unknown, ok = true): Response {
   } as Response;
 }
 
-function ProjectIssueRouteEcho() {
-  const { id, issueId } = useParams<{ id: string; issueId: string }>();
-  return <div data-testid="project-issue-route">{id}:{issueId}</div>;
+function ProjectTaskRouteEcho() {
+  const { id, taskId } = useParams<{ id: string; taskId: string }>();
+  return <div data-testid="project-task-route">{id}:{taskId}</div>;
 }
 
 describe("ProjectDetailPage files tab", () => {
@@ -122,7 +122,7 @@ describe("ProjectDetailPage files tab", () => {
     );
   });
 
-  it("loads board data from project issues and computes issue-based header counts", async () => {
+  it("loads board data from project tasks and computes task-based header counts", async () => {
     fetchMock
       .mockResolvedValueOnce(
         mockJSONResponse({
@@ -196,10 +196,10 @@ describe("ProjectDetailPage files tab", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
 
     const fetchedURLs = fetchMock.mock.calls.map(([input]: [unknown]) => String(input));
-    expect(fetchedURLs.some((url) => url.includes("/api/issues?"))).toBe(true);
+    expect(fetchedURLs.some((url) => url.includes("/api/project-tasks?"))).toBe(true);
     expect(fetchedURLs.some((url) => url.includes("/api/tasks?"))).toBe(false);
     expect(screen.getByText("1 item waiting on you")).toBeInTheDocument();
-    expect(screen.getByText("2 active issues")).toBeInTheDocument();
+    expect(screen.getByText("2 active tasks")).toBeInTheDocument();
   });
 
   it("groups issue work status values into board columns and removes legacy task controls", async () => {
@@ -349,7 +349,7 @@ describe("ProjectDetailPage files tab", () => {
     expect(screen.queryByText("No tasks")).not.toBeInTheDocument();
   });
 
-  it("submits New Issue request to project chat endpoint", async () => {
+  it("submits New Task request to project chat endpoint", async () => {
     const user = userEvent.setup();
     localStorage.setItem("otter-camp-user-name", "Sam");
     fetchMock
@@ -369,7 +369,7 @@ describe("ProjectDetailPage files tab", () => {
             id: "msg-1",
             project_id: "project-1",
             author: "Sam",
-            body: "New issue request",
+            body: "New task request",
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           },
@@ -386,8 +386,8 @@ describe("ProjectDetailPage files tab", () => {
     );
 
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
-    await user.type(screen.getByLabelText("New issue"), "Add issue creation workflow");
-    await user.click(screen.getByRole("button", { name: "New Issue" }));
+    await user.type(screen.getByLabelText("New task"), "Add task creation workflow");
+    await user.click(screen.getByRole("button", { name: "New Task" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -404,17 +404,17 @@ describe("ProjectDetailPage files tab", () => {
     expect(submitCall).toBeTruthy();
     const submitBody = JSON.parse((submitCall?.[1] as RequestInit).body as string);
     expect(submitBody.author).toBe("Sam");
-    expect(submitBody.body).toContain("New issue request");
-    expect(submitBody.body).toContain("Title: Add issue creation workflow");
+    expect(submitBody.body).toContain("New task request");
+    expect(submitBody.body).toContain("Title: Add task creation workflow");
 
-    expect(await screen.findByText("Issue request sent to the project agent.")).toBeInTheDocument();
+    expect(await screen.findByText("Task request sent to the project agent.")).toBeInTheDocument();
     expect(openConversationMock).toHaveBeenCalledWith(
       expect.objectContaining({ type: "project", projectId: "project-1" }),
       expect.objectContaining({ focus: true, openDock: true }),
     );
   });
 
-  it("navigates to project issue detail when a board issue card is clicked", async () => {
+  it("navigates to project task detail when a board task card is clicked", async () => {
     const user = userEvent.setup();
     fetchMock
       .mockResolvedValueOnce(
@@ -444,19 +444,19 @@ describe("ProjectDetailPage files tab", () => {
       <MemoryRouter initialEntries={["/projects/project-1"]}>
         <Routes>
           <Route path="/projects/:id" element={<ProjectDetailPage />} />
-          <Route path="/projects/:id/issues/:issueId" element={<ProjectIssueRouteEcho />} />
+          <Route path="/projects/:id/tasks/:taskId" element={<ProjectTaskRouteEcho />} />
         </Routes>
       </MemoryRouter>,
     );
 
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
     await user.click(screen.getByText("Fix task detail routing"));
-    expect(await screen.findByTestId("project-issue-route")).toHaveTextContent(
+    expect(await screen.findByTestId("project-task-route")).toHaveTextContent(
       "project-1:550e8400-e29b-41d4-a716-446655440111",
     );
   });
 
-  it("navigates to project issue detail when a list issue row is clicked", async () => {
+  it("navigates to project task detail when a list task row is clicked", async () => {
     const user = userEvent.setup();
     fetchMock
       .mockResolvedValueOnce(
@@ -486,7 +486,7 @@ describe("ProjectDetailPage files tab", () => {
       <MemoryRouter initialEntries={["/projects/project-1"]}>
         <Routes>
           <Route path="/projects/:id" element={<ProjectDetailPage />} />
-          <Route path="/projects/:id/issues/:issueId" element={<ProjectIssueRouteEcho />} />
+          <Route path="/projects/:id/tasks/:taskId" element={<ProjectTaskRouteEcho />} />
         </Routes>
       </MemoryRouter>,
     );
@@ -494,7 +494,7 @@ describe("ProjectDetailPage files tab", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "List" }));
     await user.click(screen.getByText(/Verify list row click route/i));
-    expect(await screen.findByTestId("project-issue-route")).toHaveTextContent(
+    expect(await screen.findByTestId("project-task-route")).toHaveTextContent(
       "project-1:550e8400-e29b-41d4-a716-446655440112",
     );
   });
@@ -604,7 +604,7 @@ describe("ProjectDetailPage files tab", () => {
     expect(screen.getByText("P1")).toBeInTheDocument();
   });
 
-  it("uses issue-centric empty copy in list tab when no active issues remain", async () => {
+  it("uses task-centric empty copy in list tab when no active tasks remain", async () => {
     const user = userEvent.setup();
     fetchMock
       .mockResolvedValueOnce(
@@ -645,8 +645,8 @@ describe("ProjectDetailPage files tab", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "List" }));
 
-    expect(screen.getByText("No active issues")).toBeInTheDocument();
-    expect(screen.queryByText("No active tasks")).not.toBeInTheDocument();
+    expect(screen.getByText("No active tasks")).toBeInTheDocument();
+    expect(screen.queryByText("No active issues")).not.toBeInTheDocument();
   });
 
   it("does not leak agent name mappings across project remounts", async () => {
@@ -772,7 +772,7 @@ describe("ProjectDetailPage files tab", () => {
           agents: [{ id: workflowAgentID, name: "Frank" }],
         });
       }
-      if (url.includes("/api/issues?") && method === "GET") {
+      if (url.includes("/api/project-tasks?") && method === "GET") {
         return mockJSONResponse({ items: [] });
       }
       if (url.includes("/api/activity/recent?") && method === "GET") {
@@ -818,13 +818,13 @@ describe("ProjectDetailPage files tab", () => {
     await user.selectOptions(screen.getByLabelText("Workflow schedule type"), "every");
     await user.clear(screen.getByLabelText("Workflow every milliseconds"));
     await user.type(screen.getByLabelText("Workflow every milliseconds"), "600000");
-    await user.clear(screen.getByLabelText("Workflow issue title pattern"));
-    await user.type(screen.getByLabelText("Workflow issue title pattern"), "Every run pattern");
-    await user.clear(screen.getByLabelText("Workflow issue body"));
-    await user.type(screen.getByLabelText("Workflow issue body"), "Run body");
-    await user.selectOptions(screen.getByLabelText("Workflow issue priority"), "P1");
-    await user.clear(screen.getByLabelText("Workflow issue labels"));
-    await user.type(screen.getByLabelText("Workflow issue labels"), "automated, briefing");
+    await user.clear(screen.getByLabelText("Workflow task title pattern"));
+    await user.type(screen.getByLabelText("Workflow task title pattern"), "Every run pattern");
+    await user.clear(screen.getByLabelText("Workflow task body"));
+    await user.type(screen.getByLabelText("Workflow task body"), "Run body");
+    await user.selectOptions(screen.getByLabelText("Workflow task priority"), "P1");
+    await user.clear(screen.getByLabelText("Workflow task labels"));
+    await user.type(screen.getByLabelText("Workflow task labels"), "automated, briefing");
     await user.selectOptions(screen.getByLabelText("Workflow pipeline"), "auto_close");
     await user.click(screen.getByRole("button", { name: "Save settings" }));
 
@@ -904,7 +904,7 @@ describe("ProjectDetailPage files tab", () => {
           agents: [{ id: workflowAgentID, name: "Frank" }],
         });
       }
-      if (url.includes("/api/issues?") && method === "GET") {
+      if (url.includes("/api/project-tasks?") && method === "GET") {
         return mockJSONResponse({ items: [] });
       }
       if (url.includes("/api/activity/recent?") && method === "GET") {
@@ -975,7 +975,7 @@ describe("ProjectDetailPage files tab", () => {
       if (url.includes("/api/agents")) {
         return Promise.resolve(mockJSONResponse({ agents: [] }));
       }
-      if (url.includes("/api/issues")) {
+      if (url.includes("/api/project-tasks")) {
         return Promise.resolve(mockJSONResponse({ items: [] }));
       }
       if (url.includes("/api/activity/recent")) {

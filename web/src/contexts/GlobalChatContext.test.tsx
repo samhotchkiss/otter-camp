@@ -110,7 +110,7 @@ describe("GlobalChatContext", () => {
             }),
           };
         }
-        if (url.includes("/api/issues/")) {
+        if (url.includes("/api/project-tasks/")) {
           return {
             ok: false,
             json: async () => ({}),
@@ -397,8 +397,8 @@ describe("GlobalChatContext", () => {
             type: "issue",
             issueId: "issue-1",
             title: "Issue 1a2b3c4d",
-            contextLabel: "Issue",
-            subtitle: "Issue conversation",
+            contextLabel: "Task",
+            subtitle: "Task conversation",
             unreadCount: 0,
             updatedAt: "2026-02-11T10:00:00.000Z",
           },
@@ -417,7 +417,7 @@ describe("GlobalChatContext", () => {
             }),
           };
         }
-        if (url.includes("/api/issues/issue-1")) {
+        if (url.includes("/api/project-tasks/issue-1")) {
           return {
             ok: true,
             json: async () => ({
@@ -441,7 +441,7 @@ describe("GlobalChatContext", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          "issue:issue-1|Write a poem about testing OtterCamp|Issue • Otter Camp|0",
+          "issue:issue-1|Write a poem about testing OtterCamp|Task • Otter Camp|0",
         ),
       ).toBeInTheDocument();
     });

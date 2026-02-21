@@ -905,7 +905,7 @@ export default function GitHubSettings() {
                 const lastSyncAt = status?.lastSyncAt ?? null;
                 const modeLabel =
                   settings.workflowMode === "local_issue_review"
-                    ? "Issue Review (local only)"
+                    ? "Task Review (local only)"
                     : "GitHub PR Sync";
 
                 const badge = (() => {
@@ -1000,12 +1000,12 @@ export default function GitHubSettings() {
                           disabled={!connection || !settings.enabled}
                           helperText={
                             settings.mode === "push"
-                              ? "Local issue-review mode: GitHub PR creation is disabled."
+                              ? "Local task-review mode: GitHub PR creation is disabled."
                               : "GitHub PR sync mode: PR operations remain enabled."
                           }
                         >
                           <option value="sync">GitHub PR Sync</option>
-                          <option value="push">Issue Review (local only)</option>
+                          <option value="push">Task Review (local only)</option>
                         </Select>
 
                         <Toggle

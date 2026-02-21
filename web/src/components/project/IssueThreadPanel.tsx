@@ -533,7 +533,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setError(null);
     setNotFound(false);
 
-    const issueURL = new URL(`${API_URL}/api/issues/${issueID}`);
+    const issueURL = new URL(`${API_URL}/api/project-tasks/${issueID}`);
     issueURL.searchParams.set("org_id", orgID);
     const agentsURL = new URL(`${API_URL}/api/agents`);
     agentsURL.searchParams.set("org_id", orgID);
@@ -545,7 +545,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
       .then(async ([issueResponse, agentsResponse]) => {
         if (!issueResponse.ok) {
           const payload = await issueResponse.json().catch(() => null);
-          const errorMessage = payload?.error ?? "Failed to load issue thread";
+          const errorMessage = payload?.error ?? "Failed to load task thread";
           const issueError = new Error(errorMessage) as Error & { code?: string };
           if (issueResponse.status === 404 || errorMessage === "not found") {
             issueError.code = "not_found";
@@ -594,7 +594,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
           setError(null);
           return;
         }
-        setError(loadError instanceof Error ? loadError.message : "Failed to load issue thread");
+        setError(loadError instanceof Error ? loadError.message : "Failed to load task thread");
       })
       .finally(() => {
         if (!cancelled) {
@@ -624,7 +624,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setParentIssueMissing(false);
     setChildIssues([]);
 
-    const childURL = new URL(`${API_URL}/api/issues`);
+    const childURL = new URL(`${API_URL}/api/project-tasks`);
     childURL.searchParams.set("org_id", orgID);
     childURL.searchParams.set("project_id", projectID);
     childURL.searchParams.set("parent_issue_id", currentIssueID);
@@ -650,7 +650,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     const parentRequest = parentIssueID === ""
       ? Promise.resolve<null | IssueRelationSummary>(null)
       : fetch(
-        `${API_URL}/api/issues/${encodeURIComponent(parentIssueID)}?org_id=${encodeURIComponent(orgID)}`,
+        `${API_URL}/api/project-tasks/${encodeURIComponent(parentIssueID)}?org_id=${encodeURIComponent(orgID)}`,
         { headers: { "Content-Type": "application/json" } },
       )
         .then(async (response) => {
@@ -703,7 +703,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setReviewHistoryLoading(true);
     setReviewHistoryError(null);
 
-    const url = new URL(`${API_URL}/api/issues/${issueID}/review/history`);
+    const url = new URL(`${API_URL}/api/project-tasks/${issueID}/review/history`);
     url.searchParams.set("org_id", orgID);
 
     void fetch(url.toString(), { headers: { "Content-Type": "application/json" } })
@@ -749,7 +749,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setReviewChangesLoading(true);
     setReviewChangesError(null);
 
-    const url = new URL(`${API_URL}/api/issues/${issueID}/review/changes`);
+    const url = new URL(`${API_URL}/api/project-tasks/${issueID}/review/changes`);
     url.searchParams.set("org_id", orgID);
 
     void fetch(url.toString(), { headers: { "Content-Type": "application/json" } })
@@ -827,7 +827,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setReviewVersionError(null);
     try {
       const response = await fetch(
-        `${API_URL}/api/issues/${issueID}/review/history/${encodeURIComponent(sha)}?org_id=${encodeURIComponent(orgID)}`,
+        `${API_URL}/api/project-tasks/${issueID}/review/history/${encodeURIComponent(sha)}?org_id=${encodeURIComponent(orgID)}`,
         { headers: { "Content-Type": "application/json" } },
       );
       if (!response.ok) {
@@ -864,7 +864,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     const addedParticipants: IssueParticipant[] = []
     for (const agentID of toAdd) {
       const response = await fetch(
-        `${API_URL}/api/issues/${issueID}/participants?org_id=${encodeURIComponent(orgID)}`,
+        `${API_URL}/api/project-tasks/${issueID}/participants?org_id=${encodeURIComponent(orgID)}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -909,7 +909,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
 
     try {
       const response = await fetch(
-        `${API_URL}/api/issues/${issueID}/comments?org_id=${encodeURIComponent(orgID)}`,
+        `${API_URL}/api/project-tasks/${issueID}/comments?org_id=${encodeURIComponent(orgID)}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -979,8 +979,8 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setUpdatingApprovalState(action.toState);
     try {
       const endpoint = action.endpoint === "approve"
-        ? `${API_URL}/api/issues/${issue.id}/approve?org_id=${encodeURIComponent(orgID)}`
-        : `${API_URL}/api/issues/${issue.id}/approval-state?org_id=${encodeURIComponent(orgID)}`;
+        ? `${API_URL}/api/project-tasks/${issue.id}/approve?org_id=${encodeURIComponent(orgID)}`
+        : `${API_URL}/api/project-tasks/${issue.id}/approval-state?org_id=${encodeURIComponent(orgID)}`;
       const requestInit: RequestInit = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1026,7 +1026,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setUpdatingParticipant(true);
     try {
       const response = await fetch(
-        `${API_URL}/api/issues/${issueID}/participants?org_id=${encodeURIComponent(orgID)}`,
+        `${API_URL}/api/project-tasks/${issueID}/participants?org_id=${encodeURIComponent(orgID)}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1055,7 +1055,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setUpdatingParticipant(true);
     try {
       const response = await fetch(
-        `${API_URL}/api/issues/${issueID}/participants/${participant.agent_id}?org_id=${encodeURIComponent(orgID)}`,
+        `${API_URL}/api/project-tasks/${issueID}/participants/${participant.agent_id}?org_id=${encodeURIComponent(orgID)}`,
         {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
@@ -1149,7 +1149,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     try {
       for (const nextStatus of statuses) {
         const response = await fetch(
-          `${API_URL}/api/issues/${issue.id}?org_id=${encodeURIComponent(orgID)}`,
+          `${API_URL}/api/project-tasks/${issue.id}?org_id=${encodeURIComponent(orgID)}`,
           {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
@@ -1210,15 +1210,15 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
       <WebSocketIssueSubscriber issueID={issueID} />
       {loading && (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] p-4 text-sm text-[var(--text-muted)]">
-          Loading issue thread...
+          Loading task thread...
         </div>
       )}
 
       {!loading && notFound && (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] p-4">
-          <h2 className="text-base font-semibold text-[var(--text)]">Issue not found</h2>
+          <h2 className="text-base font-semibold text-[var(--text)]">Task not found</h2>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
-            The requested issue could not be found.
+            The requested task could not be found.
           </p>
           <Link
             to={backToProjectPath}
@@ -1272,7 +1272,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
                 <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2">
                   <p className="text-xs font-semibold text-amber-200">Skip workflow stages?</p>
                   <p className="mt-1 text-xs text-amber-100">
-                    Move this issue to {pipelineStageLabel(pendingWorkStatusTransition.targetStage)} and skip intermediate stages.
+                    Move this task to {pipelineStageLabel(pendingWorkStatusTransition.targetStage)} and skip intermediate stages.
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button
@@ -1305,11 +1305,11 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
                   <p>{`Parent: #${parentIssue.issue_number} ${parentIssue.title}`}</p>
                 )}
                 {issue.parent_issue_id && !parentIssue && parentIssueMissing && (
-                  <p>Parent issue unavailable</p>
+                  <p>Parent task unavailable</p>
                 )}
                 {childIssues.length > 0 && (
                   <div>
-                    <p>{`Sub-issues: ${childIssues.length}`}</p>
+                    <p>{`Subtasks: ${childIssues.length}`}</p>
                     <ul className="ml-4 list-disc">
                       {childIssues.map((child) => (
                         <li key={child.id}>{`#${child.issue_number} ${child.title}`}</li>
@@ -1504,7 +1504,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
 
             <div className="flex flex-wrap items-center gap-2">
               <select
-                aria-label="Add agent to issue"
+                aria-label="Add agent to task"
                 className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
                 value={selectedAgentID}
                 onChange={(event) => setSelectedAgentID(event.target.value)}

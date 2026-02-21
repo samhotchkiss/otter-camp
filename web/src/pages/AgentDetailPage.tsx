@@ -4,7 +4,8 @@ import AgentActivityTimeline from "../components/agents/AgentActivityTimeline";
 import AgentIdentityEditor from "../components/agents/AgentIdentityEditor";
 import AgentMemoryBrowser from "../components/agents/AgentMemoryBrowser";
 import { useAgentActivity } from "../hooks/useAgentActivity";
-import { API_URL } from "../lib/api";
+import { useGlobalChat } from "../contexts/GlobalChatContext";
+import { API_URL, apiFetch } from "../lib/api";
 
 const STATUS_OPTIONS = ["started", "completed", "failed", "timeout"];
 
@@ -47,6 +48,7 @@ const DETAIL_TABS: Array<{ id: AgentDetailTab; label: string }> = [
 
 export default function AgentDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const { openConversation } = useGlobalChat();
   const [activeTab, setActiveTab] = useState<AgentDetailTab>("overview");
   const [agentDetail, setAgentDetail] = useState<AgentDetailPayload | null>(null);
   const [detailLoading, setDetailLoading] = useState(true);
@@ -100,11 +102,7 @@ export default function AgentDetailPage() {
     setDetailLoading(true);
     setDetailError(null);
     try {
-      const response = await fetch(`${API_URL}/api/admin/agents/${encodeURIComponent(id)}`);
-      if (!response.ok) {
-        throw new Error(`Failed to load agent detail (${response.status})`);
-      }
-      const payload = (await response.json()) as AgentDetailPayload;
+      const payload = await apiFetch<AgentDetailPayload>(`/api/admin/agents/${encodeURIComponent(id)}`);
       setAgentDetail(payload);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load agent detail";
@@ -158,16 +156,40 @@ export default function AgentDetailPage() {
             <h1 className="text-2xl font-semibold text-[var(--text)]">Agent Details</h1>
             <p className="mt-1 text-sm text-[var(--text-muted)]">{subtitle}</p>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              void loadAgentDetail();
-              void refresh();
-            }}
-            className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--text)] hover:bg-[var(--surface-alt)]"
-          >
-            Refresh
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const agentName = agentDetail?.agent?.name || id || "Agent";
+                const agentId = agentDetail?.agent?.id || id || "";
+                openConversation(
+                  {
+                    type: "dm",
+                    agent: {
+                      id: agentId,
+                      name: agentName,
+                      status: (agentDetail?.agent?.status as "online" | "busy" | "offline") || "offline",
+                    },
+                    title: agentName,
+                  },
+                  { focus: true, openDock: true },
+                );
+              }}
+              className="rounded-lg border border-[#C9A86C]/30 bg-[#C9A86C]/10 px-3 py-1.5 text-sm font-medium text-[#C9A86C] hover:bg-[#C9A86C]/20"
+            >
+              💬 Message
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void loadAgentDetail();
+                void refresh();
+              }}
+              className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--text)] hover:bg-[var(--surface-alt)]"
+            >
+              Refresh
+            </button>
+          </div>
         </div>
       </header>
 
@@ -366,14 +388,7 @@ export default function AgentDetailPage() {
                       setIsLifecyclePending(true);
                       setLifecycleMessage(null);
                       try {
-                        const response = await fetch(
-                          `${API_URL}/api/admin/agents/${encodeURIComponent(id)}/${action}`,
-                          { method: "POST" },
-                        );
-                        if (!response.ok) {
-                          const payload = (await response.json().catch(() => ({}))) as { error?: string };
-                          throw new Error(payload.error || `Failed to ${action} agent (${response.status})`);
-                        }
+                        await apiFetch(`/api/admin/agents/${encodeURIComponent(id)}/${action}`, { method: "POST" });
                         setLifecycleMessage(`${label} request sent.`);
                         await loadAgentDetail();
                       } catch (lifecycleError) {

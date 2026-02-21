@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
-import ContentReview from "./ContentReview";
+import ContentReview, { type ContentReviewActionPayload, type ReviewComment } from "./ContentReview";
 import { resolveEditorForPath } from "./editorModeResolver";
 
 export type DocumentWorkspaceProps = {
@@ -12,6 +12,9 @@ export type DocumentWorkspaceProps = {
   reviewerName?: string;
   readOnly?: boolean;
   onContentChange?: (next: string) => void;
+  onApprove?: (payload: ContentReviewActionPayload) => void;
+  onRequestChanges?: (payload: ContentReviewActionPayload) => void;
+  onCommentAdd?: (comment: ReviewComment) => void;
 };
 
 type DiffLine = {
@@ -62,6 +65,9 @@ export default function DocumentWorkspace({
   reviewerName = "Reviewer",
   readOnly = false,
   onContentChange,
+  onApprove,
+  onRequestChanges,
+  onCommentAdd,
 }: DocumentWorkspaceProps) {
   const resolution = useMemo(() => resolveEditorForPath(path), [path]);
   const [draft, setDraft] = useState(content);
@@ -91,7 +97,15 @@ export default function DocumentWorkspace({
   if (resolution.editorMode === "markdown") {
     return (
       <div data-testid="editor-mode-markdown">
-        <ContentReview key={path} initialMarkdown={draft} reviewerName={reviewerName} readOnly={readOnly} />
+        <ContentReview
+          key={path}
+          initialMarkdown={draft}
+          reviewerName={reviewerName}
+          readOnly={readOnly}
+          onApprove={onApprove}
+          onRequestChanges={onRequestChanges}
+          onCommentAdd={onCommentAdd}
+        />
       </div>
     );
   }
@@ -99,7 +113,7 @@ export default function DocumentWorkspace({
   if (resolution.editorMode === "text") {
     return (
       <section
-        className="space-y-3 rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-900/40"
+        className="min-w-0 space-y-3 rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-900/40"
         data-testid="editor-mode-text"
       >
         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Text Editor</p>
@@ -123,7 +137,7 @@ export default function DocumentWorkspace({
   if (resolution.editorMode === "code") {
     return (
       <section
-        className="space-y-4 rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-900/40"
+        className="min-w-0 space-y-4 rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-900/40"
         data-testid="editor-mode-code"
       >
         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Code Editor</p>
@@ -141,7 +155,7 @@ export default function DocumentWorkspace({
           data-testid="code-editor-input"
           spellCheck={false}
         />
-        <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800" data-testid="code-syntax-preview">
+        <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800" data-testid="code-syntax-preview">
           <SyntaxHighlighter
             language={detectLanguage(path)}
             style={prefersDark ? oneDark : oneLight}
@@ -151,7 +165,7 @@ export default function DocumentWorkspace({
           </SyntaxHighlighter>
         </div>
         {codeDiffLines.length > 0 && (
-          <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800" data-testid="code-diff-view">
+          <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800" data-testid="code-diff-view">
             <div className="bg-slate-100 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:bg-slate-900 dark:text-slate-300">
               Diff vs previous
             </div>
@@ -180,7 +194,7 @@ export default function DocumentWorkspace({
 
   return (
     <section
-      className="space-y-3 rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-900/40"
+      className="min-w-0 space-y-3 rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-900/40"
       data-testid="editor-mode-image"
     >
       <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Image Preview</p>

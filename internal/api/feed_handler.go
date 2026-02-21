@@ -563,10 +563,7 @@ func buildProjectURL(r *http.Request, projectID string) string {
 	if projectID == "" {
 		return ""
 	}
-	base := getPublicBaseURL(r)
-	if strings.Contains(base, "api.otter.camp") {
-		base = "https://sam.otter.camp"
-	}
+	base := getFrontendBaseURL(r)
 	return strings.TrimRight(base, "/") + "/projects/" + projectID
 }
 

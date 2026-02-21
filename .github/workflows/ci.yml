@@ -15,8 +15,12 @@ jobs:
   backend:
     name: Backend Tests
     runs-on: ubuntu-latest
+    env:
+      DOCS_GUARD_BASE_REF: ${{ github.base_ref }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -114,6 +118,8 @@ jobs:
         env:
           PORT: '4200'
           DATABASE_URL: postgres://otter:camp@localhost:5432/ottercamp?sslmode=disable
+          CONVERSATION_EMBEDDING_WORKER_ENABLED: 'false'
+          ELLIE_CONTEXT_INJECTION_WORKER_ENABLED: 'false'
       
       - name: Start frontend dev server
         working-directory: web

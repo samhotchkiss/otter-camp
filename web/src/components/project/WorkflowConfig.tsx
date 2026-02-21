@@ -50,7 +50,7 @@ export default function WorkflowConfig({ value, onChange, agents }: WorkflowConf
         <div>
           <h3 className="text-sm font-semibold text-[var(--text)]">Workflow</h3>
           <p className="text-xs text-[var(--text-muted)]">
-            Configure recurring schedule, issue template, and workflow agent.
+            Configure recurring schedule, task template, and workflow agent.
           </p>
         </div>
         <label className="flex items-center gap-2 text-sm text-[var(--text)]">
@@ -148,9 +148,9 @@ export default function WorkflowConfig({ value, onChange, agents }: WorkflowConf
 
       <div className="grid gap-3 md:grid-cols-2">
         <label className="text-sm text-[var(--text)]">
-          <span className="mb-1 block text-xs text-[var(--text-muted)]">Issue title pattern</span>
+          <span className="mb-1 block text-xs text-[var(--text-muted)]">Task title pattern</span>
           <input
-            aria-label="Workflow issue title pattern"
+            aria-label="Workflow task title pattern"
             value={value.titlePattern}
             onChange={(event) => onChange({ ...value, titlePattern: event.target.value })}
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
@@ -159,7 +159,7 @@ export default function WorkflowConfig({ value, onChange, agents }: WorkflowConf
         <label className="text-sm text-[var(--text)]">
           <span className="mb-1 block text-xs text-[var(--text-muted)]">Priority</span>
           <select
-            aria-label="Workflow issue priority"
+            aria-label="Workflow task priority"
             value={value.priority}
             onChange={(event) =>
               onChange({ ...value, priority: event.target.value as WorkflowConfigState["priority"] })
@@ -175,9 +175,9 @@ export default function WorkflowConfig({ value, onChange, agents }: WorkflowConf
       </div>
 
       <label className="text-sm text-[var(--text)]">
-        <span className="mb-1 block text-xs text-[var(--text-muted)]">Issue body</span>
+        <span className="mb-1 block text-xs text-[var(--text-muted)]">Task body</span>
         <textarea
-          aria-label="Workflow issue body"
+          aria-label="Workflow task body"
           value={value.body}
           onChange={(event) => onChange({ ...value, body: event.target.value })}
           className="h-20 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
@@ -188,7 +188,7 @@ export default function WorkflowConfig({ value, onChange, agents }: WorkflowConf
         <label className="text-sm text-[var(--text)]">
           <span className="mb-1 block text-xs text-[var(--text-muted)]">Labels (comma separated)</span>
           <input
-            aria-label="Workflow issue labels"
+            aria-label="Workflow task labels"
             value={value.labels}
             onChange={(event) => onChange({ ...value, labels: event.target.value })}
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"

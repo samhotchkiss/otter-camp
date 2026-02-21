@@ -1,1041 +1,403 @@
-import { useCallback, useEffect, useMemo, useState, useRef, memo } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
-import AgentCard, { type AgentCardData, formatLastActive } from "../components/AgentCard";
-import { type AgentStatus } from "../components/AgentDM";
-import { useWS } from "../contexts/WebSocketContext";
-import { useGlobalChat } from "../contexts/GlobalChatContext";
-import { useAgentActivity } from "../hooks/useAgentActivity";
-import { isDemoMode } from "../lib/demo";
-import useEmissions from "../hooks/useEmissions";
-import { API_URL, apiFetch } from "../lib/api";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import api, { type AdminAgentSummary, type Project } from "../lib/api";
 
-/**
- * Status filter options including "all".
- */
-type StatusFilter = AgentStatus | "all";
+type AgentStatusTone = "online" | "busy" | "offline";
 
-/**
- * Props for the AgentsPage component.
- */
-export type AgentsPageProps = {
-  apiEndpoint?: string;
+type CardAccent = {
+  border: string;
+  gradient: string;
+  icon: string;
+  pulse: string;
 };
 
-type AdminRosterAgent = {
-  id: string;
-  workspaceAgentID?: string;
-  name: string;
-  status: AgentStatus;
-  model?: string;
-  contextTokens?: number;
-  totalTokens?: number;
-  heartbeatEvery?: string;
-  channel?: string;
-  sessionKey?: string;
-  lastSeen?: string;
-};
+const CARD_ACCENTS: CardAccent[] = [
+  {
+    border: "border-amber-600/20",
+    gradient: "from-amber-600/10 to-orange-600/5",
+    icon: "text-amber-400",
+    pulse: "bg-amber-500",
+  },
+  {
+    border: "border-lime-600/20",
+    gradient: "from-lime-600/10 to-emerald-600/5",
+    icon: "text-lime-400",
+    pulse: "bg-lime-500",
+  },
+  {
+    border: "border-orange-600/20",
+    gradient: "from-orange-600/10 to-rose-600/5",
+    icon: "text-orange-400",
+    pulse: "bg-orange-500",
+  },
+];
 
-type RosterSort = "name" | "status" | "model" | "last_seen";
-
-type AdminConnectionsSession = {
-  id?: string;
-  name?: string;
-  status?: string;
-  model?: string;
-  context_tokens?: number;
-  total_tokens?: number;
-  channel?: string;
-  session_key?: string;
-  last_seen?: string;
-};
-
-type AdminConnectionsPayload = {
-  sessions?: AdminConnectionsSession[];
-};
-
-// Status filter styles - memoized outside component
-// Using gold/amber for active states per DESIGN-SPEC.md
-const ACTIVE_STYLES: Record<StatusFilter, string> = {
-  all: "bg-[var(--surface-alt)] text-[var(--text)]",
-  online: "bg-[#C9A86C]/20 text-[#C9A86C] border-[#C9A86C]/50",
-  busy: "bg-amber-500/20 text-amber-300 border-amber-500/50",
-  offline: "bg-[var(--surface-alt)] text-[var(--text-muted)]",
-};
-
-const DOT_STYLES: Record<StatusFilter, string> = {
-  all: "bg-[var(--text-muted)]",
-  online: "bg-[#C9A86C]",
-  busy: "bg-amber-500",
-  offline: "bg-[var(--text-muted)]",
-};
-
-/**
- * Status filter button component - Memoized.
- */
-const StatusFilterButton = memo(function StatusFilterButton({
-  status,
-  label,
-  count,
-  isActive,
-  onClick,
-}: {
-  status: StatusFilter;
-  label: string;
-  count: number;
-  isActive: boolean;
-  onClick: () => void;
-}) {
-  const className = useMemo(() => {
-    const base = "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition";
-    if (isActive) {
-      return `${base} ${ACTIVE_STYLES[status]}`;
-    }
-    return `${base} border-[var(--border)] bg-[var(--surface)]/50 text-[var(--text-muted)] hover:border-[var(--accent)]/50 hover:text-[var(--text)]`;
-  }, [isActive, status]);
-
-  return (
-    <button type="button" onClick={onClick} className={className}>
-      {status !== "all" && (
-        <span className={`h-2 w-2 rounded-full ${DOT_STYLES[status]}`} />
-      )}
-      {label}
-      <span
-        className={`rounded-full px-2 py-0.5 text-xs ${
-          isActive ? "bg-black/20" : "bg-[var(--surface-alt)]"
-        }`}
-      >
-        {count}
-      </span>
-    </button>
-  );
-});
-
-// Number of columns in the grid
-const GRID_COLUMNS = {
-  sm: 2,
-  lg: 3,
-  xl: 4,
-};
-
-const CARD_HEIGHT = 360; // Conservative estimate; rows are measured after render.
-const GAP = 16;
-
-/**
- * AgentsPage - Grid view of all agents with filtering and DM modal.
- * Uses virtual scrolling for performance with large agent lists.
- *
- * Features:
- * - Responsive grid of agent cards (virtualized)
- * - Filter by status (all/online/busy/offline)
- * - Click card to open AgentDM modal
- * - Real-time status updates via WebSocket
- */
-const SLACK_THREAD_GROUP_HINTS: Record<string, string> = {
-  "g-c0abhd38u05": "essie",
-};
-
-function isElephantAgentCard(agent: AgentCardData): boolean {
-  const normalizedID = normalizeAgentId(agent.id);
-  const normalizedName = agent.name.trim().toLowerCase();
-  const normalizedRole = (agent.role || "").trim().toLowerCase();
-  return (
-    normalizedID === "elephant" ||
-    normalizedName === "elephant" ||
-    normalizedRole.includes("memory archivist")
-  );
-}
-
-function normalizeAgentStatus(value: unknown): AgentStatus | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "online" || normalized === "active") {
+function normalizeStatus(status: string | undefined): AgentStatusTone {
+  const normalized = (status ?? "").trim().toLowerCase();
+  if (normalized === "online") {
     return "online";
   }
-  if (normalized === "busy" || normalized === "working") {
+  if (normalized === "busy") {
     return "busy";
   }
-  if (normalized === "offline" || normalized === "inactive") {
-    return "offline";
-  }
-  return undefined;
+  return "offline";
 }
 
-function normalizeCurrentTaskText(value: string): string {
-  const withoutEmojiCodes = value.replace(/:[a-z0-9_+-]+:/gi, " ");
-  return withoutEmojiCodes.replace(/\s+/g, " ").trim();
+function statusBadgeClasses(status: AgentStatusTone): string {
+  if (status === "online") {
+    return "border-lime-500/20 bg-lime-500/10 text-lime-400";
+  }
+  if (status === "busy") {
+    return "border-amber-500/20 bg-amber-500/10 text-amber-400";
+  }
+  return "border-stone-700 bg-stone-950/70 text-stone-500";
 }
 
-function toTitleFromSlug(value: string): string {
-  return value
-    .split(/[-_.]/g)
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-    .join(" ");
+function statusDotClasses(status: AgentStatusTone): string {
+  if (status === "online") {
+    return "bg-lime-500";
+  }
+  if (status === "busy") {
+    return "bg-amber-500";
+  }
+  return "bg-stone-600";
 }
 
-function humanizeCurrentTask(value: string): string {
-  const trimmed = value.trim();
-  const lower = trimmed.toLowerCase();
-
-  if (lower.startsWith("slack:#")) {
-    const channel = trimmed.slice("slack:".length).trim();
-    if (channel) {
-      return `Active in ${channel}`;
-    }
+function toRelativeTimestamp(input: string | undefined): string {
+  if (!input) {
+    return "No heartbeat";
   }
 
-  const slackThreadMatch = /^slack:(g-[a-z0-9]+)-thread-[a-z0-9._:-]+$/i.exec(trimmed);
-  if (slackThreadMatch?.[1]) {
-    const groupID = slackThreadMatch[1].toLowerCase();
-    const channel = SLACK_THREAD_GROUP_HINTS[groupID];
-    if (channel) {
-      return `Thread in #${channel}`;
-    }
-    return "Thread in Slack";
+  const parsed = new Date(input);
+  if (Number.isNaN(parsed.getTime())) {
+    return "Unknown";
   }
 
-  const webchatMatch = /^webchat:g-agent-([a-z0-9-]+)-main$/i.exec(trimmed);
-  if (webchatMatch?.[1]) {
-    const sessionName = toTitleFromSlug(webchatMatch[1]);
-    if (sessionName) {
-      return `Active in ${sessionName} webchat`;
-    }
-    return "Webchat session";
-  }
-  if (lower.startsWith("webchat:")) {
-    return "Webchat session";
+  const diffMs = Date.now() - parsed.getTime();
+  if (diffMs <= 0) {
+    return "Just now";
   }
 
-  return normalizeCurrentTaskText(trimmed);
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) {
+    return "Just now";
+  }
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
-function normalizeCurrentTask(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
+function normalizeErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
   }
-
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const upper = trimmed.toUpperCase();
-  if (upper === "HEARTBEAT_OK" || upper === "HEARTBEAT OK" || upper === "HEARTBEAT") {
-    return undefined;
-  }
-  if (upper.startsWith("HEARTBEAT_")) {
-    return undefined;
-  }
-
-  const humanized = humanizeCurrentTask(trimmed);
-  if (!humanized) {
-    return undefined;
-  }
-  if (humanized.length <= 120) {
-    return humanized;
-  }
-  return `${humanized.slice(0, 117).trimEnd()}...`;
+  return "Failed to load agents";
 }
 
-function normalizeAgentId(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
+function tokenUsagePercent(agent: AdminAgentSummary): number {
+  const contextTokens = Math.max(0, agent.context_tokens ?? 0);
+  const totalTokens = Math.max(0, agent.total_tokens ?? 0);
+  if (contextTokens <= 0 || totalTokens <= 0) {
+    return 0;
   }
-
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  return Math.min(100, Math.round((contextTokens / totalTokens) * 100));
 }
 
-function normalizeLastActive(value: unknown): string | number | null | undefined {
-  if (value === null || value === undefined) {
-    return value;
+function primaryAgentTag(agent: AdminAgentSummary): string {
+  const model = (agent.model ?? "").trim();
+  if (model) {
+    return model;
   }
-  if (typeof value === "string" || typeof value === "number") {
-    return value;
+  const channel = (agent.channel ?? "").trim();
+  if (channel) {
+    return channel.replace(/[._-]/g, " ");
   }
-  return undefined;
+  return "Unclassified";
 }
 
-function normalizeActivityLookupKey(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const trimmed = value.trim().toLowerCase();
-  return trimmed || undefined;
-}
+export default function AgentsPage() {
+  const navigate = useNavigate();
+  const [agents, setAgents] = useState<AdminAgentSummary[]>([]);
+  const [projectNamesByID, setProjectNamesByID] = useState<Record<string, string>>({});
+  const [currentTaskByAgentID, setCurrentTaskByAgentID] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-function parseSessionAgentIdentity(sessionKey: string | undefined): string | undefined {
-  if (!sessionKey) {
-    return undefined;
-  }
-  const trimmed = sessionKey.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const canonicalMatch = /^agent:chameleon:oc:([0-9a-f-]{36})$/i.exec(trimmed);
-  if (canonicalMatch?.[1]) {
-    return canonicalMatch[1].toLowerCase();
-  }
-
-  if (!trimmed.toLowerCase().startsWith("agent:")) {
-    return undefined;
-  }
-  const rest = trimmed.slice("agent:".length).trim();
-  if (!rest) {
-    return undefined;
-  }
-  const delimiterIdx = rest.indexOf(":");
-  const token = delimiterIdx === -1 ? rest : rest.slice(0, delimiterIdx).trim();
-  return token ? token.toLowerCase() : undefined;
-}
-
-function appendAlias(target: Set<string>, value: string | undefined): void {
-  const normalized = normalizeActivityLookupKey(value);
-  if (!normalized) {
-    return;
-  }
-  target.add(normalized);
-}
-
-function buildIdleFallbackText(agent: AgentCardData): string {
-  const lastActive = formatLastActive(agent.lastActive);
-  if (lastActive === "Never") {
-    return "Idle";
-  }
-  return `Idle ${lastActive.toLowerCase()}`;
-}
-
-function AgentsPageComponent({
-  apiEndpoint = isDemoMode() 
-    ? `${API_URL}/api/agents?demo=true`
-    : `${API_URL}/api/agents`,
-}: AgentsPageProps) {
-  const [agents, setAgents] = useState<AgentCardData[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [rosterAgents, setRosterAgents] = useState<AdminRosterAgent[]>([]);
-  const [rosterSort, setRosterSort] = useState<RosterSort>("name");
-  const [rosterSortAsc, setRosterSortAsc] = useState(true);
-  const [columns, setColumns] = useState(GRID_COLUMNS.lg);
-  const parentRef = useRef<HTMLDivElement>(null);
-
-  const { lastMessage, connected } = useWS();
-  const { openConversation } = useGlobalChat();
-  const { events: recentActivityEvents } = useAgentActivity({
-    mode: "recent",
-    limit: 100,
-  });
-  const { latestBySource } = useEmissions({ limit: 200 });
-
-  // Responsive column count
   useEffect(() => {
-    const updateColumns = () => {
-      const width = window.innerWidth;
-      if (width >= 1280) {
-        setColumns(GRID_COLUMNS.xl);
-      } else if (width >= 1024) {
-        setColumns(GRID_COLUMNS.lg);
-      } else {
-        setColumns(GRID_COLUMNS.sm);
-      }
-    };
+    let cancelled = false;
 
-    updateColumns();
-    window.addEventListener("resize", updateColumns);
-    return () => window.removeEventListener("resize", updateColumns);
-  }, []);
+    async function loadAgents(): Promise<void> {
+      setLoading(true);
+      setLoadError(null);
 
-  // Map sync API response to AgentCardData format
-  const mapAgentData = (agent: Record<string, unknown>): AgentCardData => {
-    const id =
-      normalizeAgentId(agent.id) ||
-      normalizeAgentId(agent.agentId) ||
-      normalizeAgentId(agent.slug) ||
-      "unknown";
-    const name =
-      (typeof agent.name === "string" && agent.name.trim()) ||
-      (typeof agent.displayName === "string" && agent.displayName.trim()) ||
-      id;
-    const statusFromPayload = normalizeAgentStatus(agent.status) ?? "offline";
-    const stalled = agent.stalled === true;
-    const status = stalled ? "offline" : statusFromPayload;
-    const avatarRaw =
-      (typeof agent.avatarUrl === "string" && agent.avatarUrl) ||
-      (typeof agent.avatar === "string" && agent.avatar) ||
-      (typeof agent.avatar_url === "string" && agent.avatar_url) ||
-      undefined;
-    const avatarUrl = avatarRaw && avatarRaw.startsWith("http") ? avatarRaw : undefined;
-    const currentTask =
-      normalizeCurrentTask(agent.currentTask) ||
-      normalizeCurrentTask(agent.current_task) ||
-      normalizeCurrentTask(agent.displayName);
-    const lastActive =
-      agent.lastSeen ||
-      agent.last_seen ||
-      agent.lastActive ||
-      agent.last_active ||
-      agent.updatedAt ||
-      agent.updated_at;
-
-    return {
-      id,
-      name,
-      avatarUrl,
-      status,
-      role: (typeof agent.role === "string" && agent.role) || undefined,
-      currentTask,
-      lastActive: lastActive as string | number | null | undefined,
-    };
-  };
-
-  const fetchAdminRoster = useCallback(async () => {
-    try {
-      const payload = (await apiFetch<{ agents?: Array<Record<string, unknown>> }>(`/api/admin/agents`));
-      let connectionSessions: AdminConnectionsSession[] = [];
       try {
-        const connectionsPayload = await apiFetch<AdminConnectionsPayload>(`/api/admin/connections`);
-        connectionSessions = Array.isArray(connectionsPayload.sessions)
-          ? connectionsPayload.sessions
-          : [];
-      } catch {
-        connectionSessions = [];
-      }
+        const [agentsPayload, projectsPayload] = await Promise.all([
+          api.adminAgents(),
+          api.projects().catch(() => ({ projects: [] as Project[] })),
+        ]);
 
-      const sessionByAlias = new Map<string, AdminConnectionsSession>();
-      for (const session of connectionSessions) {
-        const aliases = new Set<string>();
-        appendAlias(aliases, typeof session.id === "string" ? session.id : undefined);
-        appendAlias(aliases, typeof session.name === "string" ? session.name : undefined);
-        appendAlias(
-          aliases,
-          parseSessionAgentIdentity(typeof session.session_key === "string" ? session.session_key : undefined),
-        );
-        for (const alias of aliases) {
-          if (!sessionByAlias.has(alias)) {
-            sessionByAlias.set(alias, session);
+        if (cancelled) {
+          return;
+        }
+
+        const nextAgents = Array.isArray(agentsPayload.agents) ? agentsPayload.agents : [];
+        const projectMap: Record<string, string> = {};
+        for (const project of projectsPayload.projects ?? []) {
+          const id = (project.id ?? "").trim();
+          const name = (project.name ?? "").trim();
+          if (id && name) {
+            projectMap[id] = name;
           }
         }
-      }
 
-      const next = (payload.agents || []).map((agent) => ({
-        id: String(agent.id || "").trim(),
-        workspaceAgentID:
-          typeof agent.workspace_agent_id === "string" && agent.workspace_agent_id.trim() !== ""
-            ? agent.workspace_agent_id.trim()
-            : undefined,
-        name: String(agent.name || agent.id || "unknown").trim(),
-        status: normalizeAgentStatus(agent.status) || "offline",
-        model: typeof agent.model === "string" && agent.model.trim() !== ""
-          ? agent.model
-          : undefined,
-        contextTokens: typeof agent.context_tokens === "number" ? agent.context_tokens : undefined,
-        totalTokens: typeof agent.total_tokens === "number" ? agent.total_tokens : undefined,
-        heartbeatEvery: typeof agent.heartbeat_every === "string" ? agent.heartbeat_every : undefined,
-        channel: typeof agent.channel === "string" ? agent.channel : undefined,
-        sessionKey: typeof agent.session_key === "string" ? agent.session_key : undefined,
-        lastSeen: typeof agent.last_seen === "string" ? agent.last_seen : undefined,
-      }))
-        .map((agent) => {
-          const aliases = new Set<string>();
-          appendAlias(aliases, agent.id);
-          appendAlias(aliases, agent.workspaceAgentID);
-          appendAlias(aliases, agent.name);
-          appendAlias(aliases, parseSessionAgentIdentity(agent.sessionKey));
-          const matchedSession = [...aliases]
-            .map((alias) => sessionByAlias.get(alias))
-            .find((entry): entry is AdminConnectionsSession => Boolean(entry));
+        const coreAgents = nextAgents.filter((agent) => !agent.is_ephemeral && (agent.id ?? "").trim() !== "");
+        const currentTaskEntries = await Promise.all(
+          coreAgents.map(async (agent) => {
+            try {
+              const detail = await api.adminAgent(agent.id);
+              return [agent.id, (detail.sync?.current_task ?? "").trim()] as const;
+            } catch {
+              return [agent.id, ""] as const;
+            }
+          }),
+        );
 
-          return {
-            ...agent,
-            status:
-              agent.status ||
-              normalizeAgentStatus(matchedSession?.status) ||
-              "offline",
-            model:
-              agent.model ||
-              (typeof matchedSession?.model === "string" ? matchedSession.model : undefined),
-            contextTokens:
-              agent.contextTokens ??
-              (typeof matchedSession?.context_tokens === "number"
-                ? matchedSession.context_tokens
-                : undefined),
-            totalTokens:
-              agent.totalTokens ??
-              (typeof matchedSession?.total_tokens === "number"
-                ? matchedSession.total_tokens
-                : undefined),
-            channel:
-              agent.channel ||
-              (typeof matchedSession?.channel === "string" ? matchedSession.channel : undefined),
-            sessionKey:
-              agent.sessionKey ||
-              (typeof matchedSession?.session_key === "string" ? matchedSession.session_key : undefined),
-            lastSeen:
-              agent.lastSeen ||
-              (typeof matchedSession?.last_seen === "string" ? matchedSession.last_seen : undefined),
-          };
-        });
-      setRosterAgents(next);
-    } catch {
-      setRosterAgents([]);
-    }
-  }, []);
+        if (cancelled) {
+          return;
+        }
 
-  // Fetch agents from API
-  const fetchAgents = useCallback(async () => {
-    try {
-      const endpoint = apiEndpoint.replace(API_URL, '');
-      const data = await apiFetch<unknown>(endpoint);
-      const payload = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
-      const rawAgents = Array.isArray(payload?.agents)
-        ? payload.agents
-        : Array.isArray(data)
-          ? data
-          : [];
-      return rawAgents.map((agent) => mapAgentData(agent as Record<string, unknown>));
-    } catch (err) {
-      throw err instanceof Error ? err : new Error("Failed to load agents");
-    }
-  }, [apiEndpoint]);
+        const nextCurrentTaskByID: Record<string, string> = {};
+        for (const [id, task] of currentTaskEntries) {
+          const normalizedID = id.trim();
+          if (normalizedID && task) {
+            nextCurrentTaskByID[normalizedID] = task;
+          }
+        }
 
-  // Initial fetch
-  useEffect(() => {
-    const loadAgents = async () => {
-      setIsLoading(true);
-      try {
-        const fetchedAgents = await fetchAgents();
-        setAgents(fetchedAgents);
-        await fetchAdminRoster();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load agents");
+        setAgents(nextAgents);
+        setProjectNamesByID(projectMap);
+        setCurrentTaskByAgentID(nextCurrentTaskByID);
+      } catch (error) {
+        if (!cancelled) {
+          setAgents([]);
+          setProjectNamesByID({});
+          setCurrentTaskByAgentID({});
+          setLoadError(normalizeErrorMessage(error));
+        }
       } finally {
-        setIsLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
+    }
+
+    void loadAgents();
+    return () => {
+      cancelled = true;
     };
+  }, [refreshKey]);
 
-    loadAgents();
-  }, [fetchAgents, fetchAdminRoster]);
-
-  // Handle WebSocket messages for real-time status updates
-  useEffect(() => {
-    if (!lastMessage) {
-      return;
-    }
-
-    if (lastMessage.type === "AgentStatusUpdated" || lastMessage.type === "AgentStatusChanged") {
-      const payload =
-        lastMessage.data && typeof lastMessage.data === "object"
-          ? (lastMessage.data as Record<string, unknown>)
-          : {};
-      const nestedAgent =
-        payload.agent && typeof payload.agent === "object"
-          ? (payload.agent as Record<string, unknown>)
-          : null;
-
-      const agentId =
-        (typeof payload.agentId === "string" && payload.agentId) ||
-        (nestedAgent && typeof nestedAgent.id === "string" ? nestedAgent.id : "");
-      if (!agentId) {
-        return;
-      }
-
-      const status =
-        normalizeAgentStatus(payload.status) ??
-        normalizeAgentStatus(nestedAgent?.status);
-      const currentTask =
-        normalizeCurrentTask(payload.currentTask) ||
-        normalizeCurrentTask(payload.current_task) ||
-        normalizeCurrentTask(nestedAgent?.current_task) ||
-        normalizeCurrentTask(nestedAgent?.currentTask);
-      const lastActive =
-        normalizeLastActive(payload.lastActive) ??
-        normalizeLastActive(payload.last_active) ??
-        normalizeLastActive(payload.lastSeen) ??
-        normalizeLastActive(payload.last_seen) ??
-        normalizeLastActive(payload.updatedAt) ??
-        normalizeLastActive(payload.updated_at) ??
-        normalizeLastActive(
-          nestedAgent && (nestedAgent.last_seen || nestedAgent.lastSeen || nestedAgent.updated_at || nestedAgent.updatedAt)
-        );
-
-      setAgents((prev) =>
-        prev.map((agent) =>
-          agent.id === agentId
-            ? {
-                ...agent,
-                status: status ?? agent.status,
-                currentTask: currentTask ?? agent.currentTask,
-                lastActive: lastActive ?? agent.lastActive,
-              }
-            : agent
-        )
-      );
-
-    }
-  }, [lastMessage]);
-
-  // Calculate counts for filters - memoized
-  const latestActivityByAgent = useMemo(() => {
-    const map = new Map<string, NonNullable<AgentCardData["lastAction"]>>();
-    for (const event of recentActivityEvents) {
-      const aliases = new Set<string>();
-      appendAlias(aliases, event.agentId);
-      appendAlias(aliases, event.sessionKey);
-      appendAlias(aliases, parseSessionAgentIdentity(event.sessionKey));
-      if (aliases.size === 0) {
-        continue;
-      }
-
-      for (const lookupKey of aliases) {
-        const existing = map.get(lookupKey);
-        if (!existing || new Date(existing.startedAt || 0).getTime() < event.startedAt.getTime()) {
-          map.set(lookupKey, {
-            summary: event.summary,
-            trigger: event.trigger,
-            channel: event.channel,
-            status: event.status,
-            startedAt: event.startedAt,
-          });
-        }
-      }
-    }
-    return map;
-  }, [recentActivityEvents]);
-
-  const rosterByAlias = useMemo(() => {
-    const lookup = new Map<string, AdminRosterAgent>();
-    for (const rosterAgent of rosterAgents) {
-      const aliases = new Set<string>();
-      appendAlias(aliases, rosterAgent.id);
-      appendAlias(aliases, rosterAgent.workspaceAgentID);
-      appendAlias(aliases, rosterAgent.name);
-      appendAlias(aliases, rosterAgent.sessionKey);
-      appendAlias(aliases, parseSessionAgentIdentity(rosterAgent.sessionKey));
-      for (const alias of aliases) {
-        if (!lookup.has(alias)) {
-          lookup.set(alias, rosterAgent);
-        }
-      }
-    }
-    return lookup;
-  }, [rosterAgents]);
-
-  const agentsWithLastAction = useMemo(
-    () =>
-      agents.map((agent) => {
-        const aliases = new Set<string>();
-        appendAlias(aliases, agent.id);
-        appendAlias(aliases, agent.name);
-        const matchedRosterAgent =
-          [...aliases]
-            .map((alias) => rosterByAlias.get(alias))
-            .find((entry): entry is AdminRosterAgent => Boolean(entry)) ||
-          null;
-
-        appendAlias(aliases, matchedRosterAgent?.workspaceAgentID);
-        appendAlias(aliases, matchedRosterAgent?.sessionKey);
-        appendAlias(aliases, parseSessionAgentIdentity(matchedRosterAgent?.sessionKey));
-
-        const candidateKeys = [...aliases];
-
-        let lastAction: AgentCardData["lastAction"];
-        for (const key of candidateKeys) {
-          const matched = latestActivityByAgent.get(key);
-          if (matched) {
-            lastAction = matched;
-            break;
-          }
-        }
-
-        return {
-          ...agent,
-          lastAction,
-          lastActionFallbackText: lastAction ? undefined : buildIdleFallbackText(agent),
-        };
-      }),
-    [agents, latestActivityByAgent, rosterByAlias],
+  const coreAgents = useMemo(
+    () => agents.filter((agent) => !agent.is_ephemeral),
+    [agents],
   );
-
-  const agentsWithLiveActivity = useMemo(() => {
-    return agentsWithLastAction.map((agent) => {
-      const aliases = new Set<string>();
-      appendAlias(aliases, agent.id);
-      appendAlias(aliases, agent.name);
-      const matchedRosterAgent =
-        [...aliases]
-          .map((alias) => rosterByAlias.get(alias))
-          .find((entry): entry is AdminRosterAgent => Boolean(entry)) ||
-        null;
-      appendAlias(aliases, matchedRosterAgent?.workspaceAgentID);
-      appendAlias(aliases, parseSessionAgentIdentity(matchedRosterAgent?.sessionKey));
-
-      const latestEmission = [...aliases]
-        .map((alias) => latestBySource.get(alias) || latestBySource.get(alias.toLowerCase()))
-        .find((entry) => Boolean(entry));
-      if (!latestEmission) {
-        return agent;
-      }
-      return {
-        ...agent,
-        lastEmission: {
-          summary: latestEmission.summary,
-          timestamp: latestEmission.timestamp,
-        },
-      };
-    });
-  }, [agentsWithLastAction, latestBySource, rosterByAlias]);
-
-  // Calculate counts for filters - memoized
-  const counts = useMemo(() => {
-    const result = { all: agentsWithLiveActivity.length, online: 0, busy: 0, offline: 0 };
-    for (const agent of agentsWithLiveActivity) {
-      result[agent.status]++;
-    }
-    return result;
-  }, [agentsWithLiveActivity]);
-
-  // Filter agents by status - memoized
-  const filteredAgents = useMemo(() => {
-    if (statusFilter === "all") {
-      return agentsWithLiveActivity;
-    }
-    return agentsWithLiveActivity.filter((agent) => agent.status === statusFilter);
-  }, [agentsWithLiveActivity, statusFilter]);
-
-  const filteredRoster = useMemo(() => {
-    if (statusFilter === "all") {
-      return rosterAgents;
-    }
-    return rosterAgents.filter((agent) => agent.status === statusFilter);
-  }, [rosterAgents, statusFilter]);
-
-  const sortedRoster = useMemo(() => {
-    const items = [...filteredRoster];
-    items.sort((left, right) => {
-      let leftValue = "";
-      let rightValue = "";
-      switch (rosterSort) {
-        case "status":
-          leftValue = left.status;
-          rightValue = right.status;
-          break;
-        case "model":
-          leftValue = left.model || "";
-          rightValue = right.model || "";
-          break;
-        case "last_seen":
-          leftValue = left.lastSeen || "";
-          rightValue = right.lastSeen || "";
-          break;
-        default:
-          leftValue = left.name;
-          rightValue = right.name;
-          break;
-      }
-      const comparison = leftValue.localeCompare(rightValue);
-      return rosterSortAsc ? comparison : -comparison;
-    });
-    return items;
-  }, [filteredRoster, rosterSort, rosterSortAsc]);
-
-  // Calculate rows for virtualization
-  const rowCount = useMemo(() => 
-    Math.ceil(filteredAgents.length / columns), 
-    [filteredAgents.length, columns]
+  const chameleonAgents = useMemo(
+    () => agents.filter((agent) => agent.is_ephemeral),
+    [agents],
   );
-
-  // Virtual list for rows
-  const rowVirtualizer = useVirtualizer({
-    count: rowCount,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => CARD_HEIGHT + GAP,
-    overscan: 2,
-  });
-
-  useEffect(() => {
-    if (typeof rowVirtualizer.measure === "function") {
-      rowVirtualizer.measure();
-    }
-  }, [columns, filteredAgents.length, latestBySource.size, recentActivityEvents.length, rowVirtualizer]);
-
-  // Handle card click - memoized
-  const handleAgentClick = useCallback((agent: AgentCardData) => {
-    const elephantConversation = isElephantAgentCard(agent);
-    openConversation({
-      type: "dm",
-      agent: {
-        id: agent.id,
-        name: agent.name,
-        status: agent.status,
-        avatarUrl: agent.avatarUrl,
-        role: agent.role,
-      },
-      title: agent.name,
-      contextLabel: elephantConversation ? "Ellie memory chat" : "Direct agent chat",
-      subtitle: elephantConversation
-        ? "Dedicated memory archivist session."
-        : "Identity injected on open. Project required for writable tasks.",
-    });
-  }, [openConversation]);
-
-  // Filter button handlers - memoized
-  const handleFilterAll = useCallback(() => setStatusFilter("all"), []);
-  const handleFilterOnline = useCallback(() => setStatusFilter("online"), []);
-  const handleFilterBusy = useCallback(() => setStatusFilter("busy"), []);
-  const handleFilterOffline = useCallback(() => setStatusFilter("offline"), []);
-
-  const toggleRosterSort = useCallback((nextSort: RosterSort) => {
-    setRosterSort((previous) => {
-      if (previous === nextSort) {
-        setRosterSortAsc((current) => !current);
-        return previous;
-      }
-      setRosterSortAsc(true);
-      return nextSort;
-    });
-  }, []);
-
-  if (isLoading) {
-    return (
-      <div className="flex min-h-[400px] items-center justify-center">
-        <div className="flex items-center gap-3 text-[var(--text-muted)]">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--border)] border-t-[#C9A86C]" />
-          <span>Loading agents...</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="flex min-h-[400px] flex-col items-center justify-center gap-4">
-        <div className="text-red-400">{error}</div>
-        <button
-          type="button"
-          onClick={() => window.location.reload()}
-          className="rounded-lg bg-[var(--surface)] px-4 py-2 text-sm text-[var(--text-muted)] hover:bg-[var(--surface-alt)]"
-        >
-          Try Again
-        </button>
-      </div>
-    );
-  }
-
-  const virtualItems = rowVirtualizer.getVirtualItems();
+  const activeChameleonCount = useMemo(
+    () => chameleonAgents.filter((agent) => normalizeStatus(agent.status) !== "offline").length,
+    [chameleonAgents],
+  );
 
   return (
-    <div className="w-full">
-      {/* Header */}
-      <div className="mb-8">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-semibold text-slate-100">Agents</h1>
-            <p className="mt-1 text-slate-500">
-              {counts.all} agents • {counts.online} online
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <a
-              href="/agents/new"
-              className="rounded-lg border border-[#C9A86C]/60 bg-[#C9A86C]/20 px-3 py-1.5 text-xs font-medium text-[#C9A86C]"
-            >
-              Add Agent
-            </a>
-            <div
-              className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ${
-                connected
-                  ? "bg-[#C9A86C]/20 text-[#C9A86C]"
-                  : "bg-red-500/20 text-red-400"
-              }`}
-            >
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  connected ? "bg-[#C9A86C] animate-pulse" : "bg-red-500"
-                }`}
-              />
-              {connected ? "Live" : "Disconnected"}
-            </div>
-          </div>
+    <div data-testid="agents-shell" className="space-y-8">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-stone-100">Agent Status</h1>
+          <p className="text-sm text-stone-500">{coreAgents.length} Permanent Cores • {activeChameleonCount} Active Chameleons</p>
         </div>
-
-        {/* Status filters */}
-        <p className="mt-4 text-xs text-[var(--text-muted)]">
-          Chats are routed through OpenClaw with OtterCamp identity injection.
-        </p>
-        <div className="mt-6 flex flex-wrap gap-2">
-          <StatusFilterButton
-            status="all"
-            label="All"
-            count={counts.all}
-            isActive={statusFilter === "all"}
-            onClick={handleFilterAll}
-          />
-          <StatusFilterButton
-            status="online"
-            label="Online"
-            count={counts.online}
-            isActive={statusFilter === "online"}
-            onClick={handleFilterOnline}
-          />
-          <StatusFilterButton
-            status="busy"
-            label="Busy"
-            count={counts.busy}
-            isActive={statusFilter === "busy"}
-            onClick={handleFilterBusy}
-          />
-          <StatusFilterButton
-            status="offline"
-            label="Offline"
-            count={counts.offline}
-            isActive={statusFilter === "offline"}
-            onClick={handleFilterOffline}
-          />
+        <div className="flex gap-2">
+          <button className="inline-flex items-center gap-2 rounded border border-stone-700 bg-stone-800 px-3 py-1.5 text-xs font-medium text-stone-200 transition hover:bg-stone-700" type="button">
+            <span aria-hidden="true">⌨</span>
+            Logs
+          </button>
+          <button className="inline-flex items-center gap-2 rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-amber-500" type="button">
+            <span aria-hidden="true">🤖</span>
+            Spawn Agent
+          </button>
         </div>
       </div>
 
-      <section className="mb-6 rounded-2xl border border-[var(--border)] bg-[var(--surface)]/60 p-4">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-medium text-[var(--text)]">Management Roster</h2>
-          <div className="flex flex-wrap gap-2 text-xs">
-            <button
-              type="button"
-              onClick={() => toggleRosterSort("name")}
-              className="rounded border border-[var(--border)] px-2 py-1 text-[var(--text-muted)]"
-            >
-              Name
-            </button>
-            <button
-              type="button"
-              onClick={() => toggleRosterSort("status")}
-              className="rounded border border-[var(--border)] px-2 py-1 text-[var(--text-muted)]"
-            >
-              Status
-            </button>
-            <button
-              type="button"
-              onClick={() => toggleRosterSort("model")}
-              className="rounded border border-[var(--border)] px-2 py-1 text-[var(--text-muted)]"
-            >
-              Model
-            </button>
-            <button
-              type="button"
-              onClick={() => toggleRosterSort("last_seen")}
-              className="rounded border border-[var(--border)] px-2 py-1 text-[var(--text-muted)]"
-            >
-              Last Active
-            </button>
-          </div>
-        </div>
-
-        {sortedRoster.length === 0 ? (
-          <p className="text-sm text-[var(--text-muted)]">No roster entries available yet.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-[var(--border)] text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-[var(--text-muted)]">
-                  <th className="px-2 py-2">Name</th>
-                  <th className="px-2 py-2">Slot</th>
-                  <th className="px-2 py-2">Status</th>
-                  <th className="px-2 py-2">Model</th>
-                  <th className="px-2 py-2">Tokens</th>
-                  <th className="px-2 py-2">Last Active</th>
-                  <th className="px-2 py-2">Heartbeat</th>
-                  <th className="px-2 py-2">Channels</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--border)]">
-                {sortedRoster.map((agent) => (
-                  <tr key={agent.id} data-testid={`roster-row-${agent.id}`} className="text-[var(--text)]">
-                    <td className="px-2 py-2 font-medium">
-                      <a href={`/agents/${encodeURIComponent(agent.id)}`} className="hover:underline">
-                        {agent.name}
-                      </a>
-                    </td>
-                    <td className="px-2 py-2">{agent.id}</td>
-                    <td className="px-2 py-2">{agent.status}</td>
-                    <td className="px-2 py-2">{agent.model || "n/a"}</td>
-                    <td className="px-2 py-2">
-                      {Number.isFinite(agent.totalTokens)
-                        ? Number(agent.totalTokens).toLocaleString()
-                        : "—"}
-                    </td>
-                    <td className="px-2 py-2">{agent.lastSeen || "n/a"}</td>
-                    <td className="px-2 py-2">{agent.heartbeatEvery || "n/a"}</td>
-                    <td className="px-2 py-2">{agent.channel || "n/a"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* Agent grid with virtual scrolling */}
-      {filteredAgents.length === 0 ? (
-        <div className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface)]/50">
-          <p className="text-[var(--text-muted)]">
-            {statusFilter === "all"
-              ? "No agents found"
-              : `No ${statusFilter} agents`}
-          </p>
-        </div>
-      ) : (
-        <div
-          ref={parentRef}
-          className="max-h-[70vh] overflow-y-auto"
-        >
-          <div
-            style={{
-              height: `${rowVirtualizer.getTotalSize()}px`,
-              width: "100%",
-              position: "relative",
-            }}
+      {loading ? (
+        <section className="rounded-lg border border-stone-800 bg-stone-900 p-4">
+          <p className="text-sm text-stone-400">Loading agents...</p>
+        </section>
+      ) : loadError ? (
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-500/20 bg-rose-500/10 p-4">
+          <p className="text-sm text-rose-300">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => setRefreshKey((value) => value + 1)}
+            className="rounded border border-rose-400/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-200 hover:bg-rose-500/20"
           >
-            {virtualItems.map((virtualRow) => {
-              const startIndex = virtualRow.index * columns;
-              const rowAgents = filteredAgents.slice(startIndex, startIndex + columns);
-              
+            Retry
+          </button>
+        </section>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            {coreAgents.length === 0 ? (
+              <article className="rounded-lg border border-stone-800 bg-stone-900 p-5 md:col-span-3">
+                <p className="text-sm text-stone-400">No permanent core agents were found for this workspace.</p>
+              </article>
+            ) : null}
+
+            {coreAgents.map((agent, index) => {
+              const accent = CARD_ACCENTS[index % CARD_ACCENTS.length];
+              const status = normalizeStatus(agent.status);
+              const contextTokens = Math.max(0, agent.context_tokens ?? 0);
+              const totalTokens = Math.max(0, agent.total_tokens ?? 0);
+              const usagePercent = tokenUsagePercent(agent);
+              const currentTask = (currentTaskByAgentID[agent.id] ?? "").trim()
+                || (status === "offline" ? "No active task (offline)." : "Waiting for task sync.");
+              const agentID = (agent.id ?? "").trim() || (agent.workspace_agent_id ?? "").trim();
+
               return (
-                <div
-                  key={virtualRow.key}
-                  ref={typeof rowVirtualizer.measureElement === "function" ? rowVirtualizer.measureElement : undefined}
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    width: "100%",
-                    transform: `translateY(${virtualRow.start}px)`,
-                  }}
-                  className="grid gap-4 pb-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-                >
-                  {rowAgents.map((agent) => (
-                    <AgentCard
-                      key={agent.id}
-                      agent={agent}
-                      onClick={handleAgentClick}
-                      detailHref={`/agents/${encodeURIComponent(agent.id)}`}
-                    />
-                  ))}
-                </div>
+                <article key={agent.workspace_agent_id || agent.id || String(index)} className={`group relative cursor-pointer overflow-hidden rounded-lg border bg-stone-900 p-5 ${accent.border}`} onClick={() => navigate(`/agents/${encodeURIComponent(agentID)}`)}>
+                  <div className={`absolute inset-0 bg-gradient-to-br ${accent.gradient} opacity-50 transition-opacity group-hover:opacity-100`} />
+                  <div className="relative z-10">
+                    <div className="mb-4 flex items-start justify-between">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-stone-700 bg-stone-800">
+                          <span aria-hidden="true" className={accent.icon}>◉</span>
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="truncate text-sm font-semibold text-stone-200">{agent.name || agentID || "Unnamed agent"}</h3>
+                          <p className="truncate text-[10px] uppercase tracking-wider text-stone-500">{agentID || "unknown"}</p>
+                        </div>
+                      </div>
+                      <span className={`inline-flex items-center gap-1.5 rounded border px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${statusBadgeClasses(status)}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${statusDotClasses(status)}`} />
+                        {status}
+                      </span>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-stone-500">Last seen</span>
+                        <span className="font-mono text-stone-300">{toRelativeTimestamp(agent.last_seen)}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-stone-500">Context / Total</span>
+                        <span className="font-mono text-lime-400">{contextTokens.toLocaleString()} / {totalTokens.toLocaleString()}</span>
+                      </div>
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-stone-800">
+                        <div className={`h-full rounded-full ${accent.pulse}`} style={{ width: `${usagePercent}%` }} />
+                      </div>
+                      <div className="mt-4 rounded border border-stone-800/60 bg-stone-950/50 p-2">
+                        <div className="mb-1 flex items-center gap-2 text-[10px] uppercase tracking-wide text-stone-500">
+                          <span aria-hidden="true">◌</span>
+                          Current Task
+                        </div>
+                        <p className="truncate text-xs text-stone-300">{currentTask}</p>
+                      </div>
+                    </div>
+                  </div>
+                </article>
               );
             })}
           </div>
-        </div>
+
+          <section className="overflow-hidden rounded-lg border border-stone-800 bg-stone-900">
+            <header className="flex items-center gap-2 border-b border-stone-800 px-5 py-4">
+              <span aria-hidden="true" className="text-amber-400">⚡</span>
+              <h2 className="text-sm font-semibold text-stone-200">Chameleon Agents (On-Demand)</h2>
+            </header>
+            <div className="divide-y divide-stone-800/50">
+              {chameleonAgents.length === 0 ? (
+                <article className="p-4">
+                  <p className="text-sm text-stone-400">No chameleon agents are running.</p>
+                </article>
+              ) : null}
+
+              {chameleonAgents.map((agent, index) => {
+                const status = normalizeStatus(agent.status);
+                const projectID = (agent.project_id ?? "").trim();
+                const projectName = projectID ? (projectNamesByID[projectID] || projectID) : "";
+                const totalTokens = Math.max(0, agent.total_tokens ?? 0);
+                const agentID = (agent.id ?? "").trim() || (agent.workspace_agent_id ?? "").trim();
+
+                return (
+                  <article key={agent.workspace_agent_id || agent.id || String(index)} className="group flex cursor-pointer items-center justify-between p-4 transition hover:bg-stone-800/30" onClick={() => navigate(`/agents/${encodeURIComponent(agentID)}`)}>
+                    <div className="flex min-w-0 items-center gap-4">
+                      <div
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded border ${
+                          status === "offline"
+                            ? "border-stone-700 bg-stone-800 text-stone-500"
+                            : "border-lime-500/20 bg-lime-500/10 text-lime-400"
+                        }`}
+                      >
+                        <span aria-hidden="true">🤖</span>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <h3 className="truncate text-sm font-medium text-stone-200">{agent.name || agent.id || "Unnamed agent"}</h3>
+                          <span className="max-w-[260px] truncate rounded border border-stone-700 bg-stone-800 px-1.5 py-0.5 text-[10px] text-stone-400">
+                            {primaryAgentTag(agent)}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 flex min-w-0 items-center gap-3 text-xs text-stone-500">
+                          <span className="inline-flex items-center gap-1">
+                            <span aria-hidden="true">⏱</span>
+                            {toRelativeTimestamp(agent.last_seen)}
+                          </span>
+                          {projectName ? (
+                            <span className="truncate text-amber-400/80">• Working on {projectName}</span>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-6">
+                      <div className="text-right">
+                        <p className="text-lg font-bold leading-none text-stone-200">{totalTokens.toLocaleString()}</p>
+                        <p className="text-[10px] uppercase text-stone-500">Tokens</p>
+                      </div>
+                      <div
+                        className={`rounded-full p-1.5 ${
+                          status === "offline"
+                            ? "bg-stone-800 text-stone-500"
+                            : status === "busy"
+                              ? "bg-amber-500/10 text-amber-500"
+                              : "bg-lime-500/10 text-lime-500"
+                        }`}
+                      >
+                        {status === "offline" ? (
+                          <span aria-hidden="true">⏱</span>
+                        ) : status === "busy" ? (
+                          <span aria-hidden="true">●</span>
+                        ) : (
+                          <span aria-hidden="true">✓</span>
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        </>
       )}
     </div>
   );
 }
-
-const AgentsPage = memo(AgentsPageComponent);
-
-export default AgentsPage;

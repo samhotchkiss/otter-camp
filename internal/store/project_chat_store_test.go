@@ -217,3 +217,115 @@ func TestProjectChatStoreGetByIDHonorsWorkspace(t *testing.T) {
 	_, err = chatStore.GetByID(ctxB, projectA, created.ID)
 	require.ErrorIs(t, err, ErrForbidden)
 }
+
+func TestProjectChatStoreCreateDualWritesConversationMessage(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "chat-dual-write-org")
+	ctx := ctxWithWorkspace(orgID)
+	projectID := insertProjectChatTestProject(t, db, orgID, "Dual Write Project")
+
+	chatStore := NewProjectChatStore(db)
+
+	created, err := chatStore.Create(ctx, CreateProjectChatMessageInput{
+		ProjectID: projectID,
+		Author:    "Sam",
+		Body:      "Dual-write body",
+	})
+	require.NoError(t, err)
+
+	var (
+		roomType   string
+		contextID  string
+		senderType string
+		msgType    string
+		mirrored   string
+	)
+	err = db.QueryRow(
+		`SELECT r.type, r.context_id::text, cm.sender_type, cm.type, cm.body
+		 FROM chat_messages cm
+		 JOIN rooms r ON r.id = cm.room_id
+		 WHERE cm.id = $1 AND cm.org_id = $2`,
+		created.ID,
+		orgID,
+	).Scan(&roomType, &contextID, &senderType, &msgType, &mirrored)
+	require.NoError(t, err)
+	require.Equal(t, "project", roomType)
+	require.Equal(t, projectID, contextID)
+	require.Equal(t, "user", senderType)
+	require.Equal(t, "message", msgType)
+	require.Equal(t, "Dual-write body", mirrored)
+
+	_, err = chatStore.Create(ctx, CreateProjectChatMessageInput{
+		ProjectID: projectID,
+		Author:    "Frank",
+		Body:      "Second dual-write body",
+	})
+	require.NoError(t, err)
+
+	var roomCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM rooms
+		 WHERE org_id = $1 AND type = 'project' AND context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&roomCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, roomCount)
+}
+
+func TestProjectChatStoreCreateDualWriteRollbackOnConversationFailure(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "chat-dual-rollback-org")
+	ctx := ctxWithWorkspace(orgID)
+	projectID := insertProjectChatTestProject(t, db, orgID, "Dual Rollback Project")
+
+	_, err := db.Exec(`
+		CREATE OR REPLACE FUNCTION fail_chat_messages_insert_for_test()
+		RETURNS trigger
+		AS $$
+		BEGIN
+			RAISE EXCEPTION 'forced chat_messages failure';
+		END;
+		$$ LANGUAGE plpgsql;
+	`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`
+		CREATE TRIGGER chat_messages_fail_insert_trg
+		BEFORE INSERT ON chat_messages
+		FOR EACH ROW
+		EXECUTE FUNCTION fail_chat_messages_insert_for_test();
+	`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = db.Exec("DROP TRIGGER IF EXISTS chat_messages_fail_insert_trg ON chat_messages")
+		_, _ = db.Exec("DROP FUNCTION IF EXISTS fail_chat_messages_insert_for_test()")
+	})
+
+	chatStore := NewProjectChatStore(db)
+
+	_, err = chatStore.Create(ctx, CreateProjectChatMessageInput{
+		ProjectID: projectID,
+		Author:    "Sam",
+		Body:      "should rollback",
+	})
+	require.Error(t, err)
+
+	var legacyCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM project_chat_messages
+		 WHERE org_id = $1
+		   AND project_id = $2
+		   AND body = 'should rollback'`,
+		orgID,
+		projectID,
+	).Scan(&legacyCount)
+	require.NoError(t, err)
+	require.Equal(t, 0, legacyCount)
+}

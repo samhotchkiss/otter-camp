@@ -3,7 +3,9 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -48,6 +50,48 @@ const (
 	defaultGitHubRepoRoot     = "./data/repos"
 	defaultGitHubPollInterval = time.Hour
 	defaultGitHubAPIBaseURL   = "https://api.github.com"
+
+	defaultConversationEmbeddingEnabled      = true
+	defaultConversationEmbeddingPollInterval = 5 * time.Second
+	defaultConversationEmbeddingBatchSize    = 20
+	defaultConversationEmbeddingProvider     = "openai"
+	defaultConversationEmbeddingModel        = "text-embedding-3-small"
+	defaultConversationEmbeddingDimension    = 1536
+	defaultConversationEmbeddingOllamaURL    = "http://localhost:11434"
+	defaultConversationEmbeddingOpenAIBase   = "https://api.openai.com"
+
+	defaultConversationSegmentationEnabled      = true
+	defaultConversationSegmentationPollInterval = 5 * time.Second
+	defaultConversationSegmentationBatchSize    = 200
+	defaultConversationSegmentationGapThreshold = 30 * time.Minute
+
+	defaultEllieIngestionEnabled    = true
+	defaultEllieIngestionInterval   = 5 * time.Minute
+	defaultEllieIngestionBatchSize  = 100
+	defaultEllieIngestionMaxPerRoom = 200
+	defaultEllieIngestionMode       = "normal"
+	defaultEllieIngestionWindowGap  = 15 * time.Minute
+	// Backfill defaults are higher-throughput and use count-based windows.
+	defaultEllieIngestionBackfillMaxPerRoom      = 250
+	defaultEllieIngestionBackfillWindowSize      = 30
+	defaultEllieIngestionBackfillWindowStride    = 30
+
+	defaultEllieContextInjectionEnabled          = true
+	defaultEllieContextInjectionPollInterval     = 3 * time.Second
+	defaultEllieContextInjectionBatchSize        = 50
+	defaultEllieContextInjectionThreshold        = 0.62
+	defaultEllieContextInjectionCooldownMessages = 4
+	defaultEllieContextInjectionMaxItems         = 3
+
+	defaultConversationTokenBackfillEnabled      = true
+	defaultConversationTokenBackfillPollInterval = 5 * time.Second
+	defaultConversationTokenBackfillBatchSize    = 200
+
+	defaultJobSchedulerEnabled       = true
+	defaultJobSchedulerPollInterval  = 5 * time.Second
+	defaultJobSchedulerMaxPerPoll    = 50
+	defaultJobSchedulerRunTimeout    = 5 * time.Minute
+	defaultJobSchedulerMaxRunHistory = 100
 )
 
 type GitHubConfig struct {
@@ -62,14 +106,76 @@ type GitHubConfig struct {
 }
 
 type Config struct {
-	Port        string
-	DatabaseURL string
-	Environment string
-	GitHub      GitHubConfig
+	OrgID                     string
+	Port                      string
+	DatabaseURL               string
+	Environment               string
+	GitHub                    GitHubConfig
+	ConversationEmbedding     ConversationEmbeddingConfig
+	ConversationSegmentation  ConversationSegmentationConfig
+	EllieIngestion            EllieIngestionConfig
+	EllieContextInjection     EllieContextInjectionConfig
+	ConversationTokenBackfill ConversationTokenBackfillConfig
+	JobScheduler              JobSchedulerConfig
+}
+
+type ConversationEmbeddingConfig struct {
+	Enabled       bool
+	PollInterval  time.Duration
+	BatchSize     int
+	Provider      string
+	Model         string
+	Dimension     int
+	OllamaURL     string
+	OpenAIBaseURL string
+	OpenAIAPIKey  string
+}
+
+type ConversationSegmentationConfig struct {
+	Enabled      bool
+	PollInterval time.Duration
+	BatchSize    int
+	GapThreshold time.Duration
+}
+
+type EllieIngestionConfig struct {
+	Enabled              bool
+	Interval             time.Duration
+	BatchSize            int
+	MaxPerRoom           int
+	Mode                 string
+	WindowGap            time.Duration
+	BackfillMaxPerRoom   int
+	BackfillWindowSize   int
+	BackfillWindowStride int
+}
+
+type EllieContextInjectionConfig struct {
+	Enabled          bool
+	PollInterval     time.Duration
+	BatchSize        int
+	Threshold        float64
+	CooldownMessages int
+	MaxItems         int
+}
+
+type ConversationTokenBackfillConfig struct {
+	Enabled      bool
+	PollInterval time.Duration
+	BatchSize    int
+}
+
+type JobSchedulerConfig struct {
+	Enabled       bool
+	PollInterval  time.Duration
+	MaxPerPoll    int
+	RunTimeout    time.Duration
+	MaxRunHistory int
 }
 
 func Load() (Config, error) {
 	cfg := Config{
+		OrgID:       strings.TrimSpace(os.Getenv("OTTER_ORG_ID")),
 		Port:        firstNonEmpty(strings.TrimSpace(os.Getenv("PORT")), defaultPort),
 		DatabaseURL: strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		Environment: resolveEnvironment(),
@@ -87,6 +193,30 @@ func Load() (Config, error) {
 				defaultGitHubAPIBaseURL,
 			),
 		},
+		ConversationEmbedding: ConversationEmbeddingConfig{
+			Provider: firstNonEmpty(
+				strings.TrimSpace(os.Getenv("CONVERSATION_EMBEDDER_PROVIDER")),
+				defaultConversationEmbeddingProvider,
+			),
+			Model: firstNonEmpty(
+				strings.TrimSpace(os.Getenv("CONVERSATION_EMBEDDER_MODEL")),
+				defaultConversationEmbeddingModel,
+			),
+			OllamaURL: firstNonEmpty(
+				strings.TrimSpace(os.Getenv("CONVERSATION_EMBEDDER_OLLAMA_URL")),
+				defaultConversationEmbeddingOllamaURL,
+			),
+			OpenAIBaseURL: firstNonEmpty(
+				strings.TrimSpace(os.Getenv("CONVERSATION_EMBEDDER_OPENAI_BASE_URL")),
+				defaultConversationEmbeddingOpenAIBase,
+			),
+			OpenAIAPIKey: strings.TrimSpace(os.Getenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY")),
+		},
+		ConversationSegmentation:  ConversationSegmentationConfig{},
+		EllieIngestion:            EllieIngestionConfig{},
+		EllieContextInjection:     EllieContextInjectionConfig{},
+		ConversationTokenBackfill: ConversationTokenBackfillConfig{},
+		JobScheduler:              JobSchedulerConfig{},
 	}
 
 	githubEnabled, err := parseBool("GITHUB_INTEGRATION_ENABLED", false)
@@ -101,6 +231,191 @@ func Load() (Config, error) {
 	}
 	cfg.GitHub.PollInterval = pollInterval
 
+	conversationEmbeddingEnabled, err := parseBool("CONVERSATION_EMBEDDING_WORKER_ENABLED", defaultConversationEmbeddingEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationEmbedding.Enabled = conversationEmbeddingEnabled
+
+	conversationPollInterval, err := parseDuration("CONVERSATION_EMBEDDING_POLL_INTERVAL", defaultConversationEmbeddingPollInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationEmbedding.PollInterval = conversationPollInterval
+
+	conversationBatchSize, err := parseInt("CONVERSATION_EMBEDDING_BATCH_SIZE", defaultConversationEmbeddingBatchSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationEmbedding.BatchSize = conversationBatchSize
+
+	conversationDimension, err := parseInt("CONVERSATION_EMBEDDER_DIMENSION", defaultConversationEmbeddingDimension)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationEmbedding.Dimension = conversationDimension
+
+	conversationSegmentationEnabled, err := parseBool("CONVERSATION_SEGMENTATION_WORKER_ENABLED", defaultConversationSegmentationEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationSegmentation.Enabled = conversationSegmentationEnabled
+
+	conversationSegmentationPollInterval, err := parseDuration("CONVERSATION_SEGMENTATION_POLL_INTERVAL", defaultConversationSegmentationPollInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationSegmentation.PollInterval = conversationSegmentationPollInterval
+
+	conversationSegmentationBatchSize, err := parseInt("CONVERSATION_SEGMENTATION_BATCH_SIZE", defaultConversationSegmentationBatchSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationSegmentation.BatchSize = conversationSegmentationBatchSize
+
+	conversationSegmentationGapThreshold, err := parseDuration("CONVERSATION_SEGMENTATION_GAP_THRESHOLD", defaultConversationSegmentationGapThreshold)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationSegmentation.GapThreshold = conversationSegmentationGapThreshold
+
+	ellieIngestionEnabled, err := parseBool("ELLIE_INGESTION_WORKER_ENABLED", defaultEllieIngestionEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.Enabled = ellieIngestionEnabled
+
+	ellieIngestionInterval, err := parseDuration("ELLIE_INGESTION_INTERVAL", defaultEllieIngestionInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.Interval = ellieIngestionInterval
+
+	ellieIngestionBatchSize, err := parseInt("ELLIE_INGESTION_BATCH_SIZE", defaultEllieIngestionBatchSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.BatchSize = ellieIngestionBatchSize
+
+	ellieIngestionMaxPerRoom, err := parseInt("ELLIE_INGESTION_MAX_PER_ROOM", defaultEllieIngestionMaxPerRoom)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.MaxPerRoom = ellieIngestionMaxPerRoom
+
+	cfg.EllieIngestion.Mode = firstNonEmpty(
+		strings.TrimSpace(os.Getenv("ELLIE_INGESTION_MODE")),
+		defaultEllieIngestionMode,
+	)
+
+	ellieIngestionWindowGap, err := parseDuration("ELLIE_INGESTION_WINDOW_GAP", defaultEllieIngestionWindowGap)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.WindowGap = ellieIngestionWindowGap
+
+	ellieIngestionBackfillMaxPerRoom, err := parseInt("ELLIE_INGESTION_BACKFILL_MAX_PER_ROOM", defaultEllieIngestionBackfillMaxPerRoom)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.BackfillMaxPerRoom = ellieIngestionBackfillMaxPerRoom
+
+	ellieIngestionBackfillWindowSize, err := parseInt("ELLIE_INGESTION_BACKFILL_WINDOW_SIZE", defaultEllieIngestionBackfillWindowSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.BackfillWindowSize = ellieIngestionBackfillWindowSize
+
+	ellieIngestionBackfillWindowStride, err := parseInt("ELLIE_INGESTION_BACKFILL_WINDOW_STRIDE", defaultEllieIngestionBackfillWindowStride)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.BackfillWindowStride = ellieIngestionBackfillWindowStride
+
+	ellieContextInjectionEnabled, err := parseBool("ELLIE_CONTEXT_INJECTION_WORKER_ENABLED", defaultEllieContextInjectionEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieContextInjection.Enabled = ellieContextInjectionEnabled
+
+	ellieContextInjectionInterval, err := parseDuration("ELLIE_CONTEXT_INJECTION_POLL_INTERVAL", defaultEllieContextInjectionPollInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieContextInjection.PollInterval = ellieContextInjectionInterval
+
+	ellieContextInjectionBatchSize, err := parseInt("ELLIE_CONTEXT_INJECTION_BATCH_SIZE", defaultEllieContextInjectionBatchSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieContextInjection.BatchSize = ellieContextInjectionBatchSize
+
+	ellieContextInjectionThreshold, err := parseFloat("ELLIE_CONTEXT_INJECTION_THRESHOLD", defaultEllieContextInjectionThreshold)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieContextInjection.Threshold = ellieContextInjectionThreshold
+
+	ellieContextInjectionCooldownMessages, err := parseInt("ELLIE_CONTEXT_INJECTION_COOLDOWN_MESSAGES", defaultEllieContextInjectionCooldownMessages)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieContextInjection.CooldownMessages = ellieContextInjectionCooldownMessages
+
+	ellieContextInjectionMaxItems, err := parseInt("ELLIE_CONTEXT_INJECTION_MAX_ITEMS", defaultEllieContextInjectionMaxItems)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieContextInjection.MaxItems = ellieContextInjectionMaxItems
+
+	conversationTokenBackfillEnabled, err := parseBool("CONVERSATION_TOKEN_BACKFILL_WORKER_ENABLED", defaultConversationTokenBackfillEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationTokenBackfill.Enabled = conversationTokenBackfillEnabled
+
+	conversationTokenBackfillPollInterval, err := parseDuration("CONVERSATION_TOKEN_BACKFILL_POLL_INTERVAL", defaultConversationTokenBackfillPollInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationTokenBackfill.PollInterval = conversationTokenBackfillPollInterval
+
+	conversationTokenBackfillBatchSize, err := parseInt("CONVERSATION_TOKEN_BACKFILL_BATCH_SIZE", defaultConversationTokenBackfillBatchSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationTokenBackfill.BatchSize = conversationTokenBackfillBatchSize
+
+	jobSchedulerEnabled, err := parseBool("JOB_SCHEDULER_ENABLED", defaultJobSchedulerEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.JobScheduler.Enabled = jobSchedulerEnabled
+
+	jobSchedulerPollInterval, err := parseDuration("JOB_SCHEDULER_POLL_INTERVAL", defaultJobSchedulerPollInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.JobScheduler.PollInterval = jobSchedulerPollInterval
+
+	jobSchedulerMaxPerPoll, err := parseInt("JOB_SCHEDULER_MAX_PER_POLL", defaultJobSchedulerMaxPerPoll)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.JobScheduler.MaxPerPoll = jobSchedulerMaxPerPoll
+
+	jobSchedulerRunTimeout, err := parseDuration("JOB_SCHEDULER_RUN_TIMEOUT", defaultJobSchedulerRunTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.JobScheduler.RunTimeout = jobSchedulerRunTimeout
+
+	jobSchedulerMaxRunHistory, err := parseInt("JOB_SCHEDULER_MAX_RUN_HISTORY", defaultJobSchedulerMaxRunHistory)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.JobScheduler.MaxRunHistory = jobSchedulerMaxRunHistory
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -109,6 +424,125 @@ func Load() (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if c.ConversationEmbedding.Enabled {
+		if c.ConversationEmbedding.PollInterval <= 0 {
+			return fmt.Errorf("CONVERSATION_EMBEDDING_POLL_INTERVAL must be greater than zero")
+		}
+		if c.ConversationEmbedding.BatchSize <= 0 {
+			return fmt.Errorf("CONVERSATION_EMBEDDING_BATCH_SIZE must be greater than zero")
+		}
+	}
+	if c.ConversationEmbedding.Enabled || c.EllieContextInjection.Enabled {
+		if c.ConversationEmbedding.Provider == "" {
+			return fmt.Errorf("CONVERSATION_EMBEDDER_PROVIDER must not be empty when conversation embedding or ellie context injection is enabled")
+		}
+		if c.ConversationEmbedding.Model == "" {
+			return fmt.Errorf("CONVERSATION_EMBEDDER_MODEL must not be empty when conversation embedding or ellie context injection is enabled")
+		}
+		if c.ConversationEmbedding.Dimension <= 0 {
+			return fmt.Errorf("CONVERSATION_EMBEDDER_DIMENSION must be greater than zero when conversation embedding or ellie context injection is enabled")
+		}
+		if strings.EqualFold(strings.TrimSpace(c.ConversationEmbedding.Provider), "openai") &&
+			strings.TrimSpace(c.ConversationEmbedding.OpenAIAPIKey) == "" {
+			return fmt.Errorf("CONVERSATION_EMBEDDER_OPENAI_API_KEY is required when CONVERSATION_EMBEDDER_PROVIDER is openai and conversation embedding or ellie context injection is enabled")
+		}
+	}
+
+	if c.ConversationSegmentation.Enabled {
+		if c.ConversationSegmentation.PollInterval <= 0 {
+			return fmt.Errorf("CONVERSATION_SEGMENTATION_POLL_INTERVAL must be greater than zero")
+		}
+		if c.ConversationSegmentation.BatchSize <= 0 {
+			return fmt.Errorf("CONVERSATION_SEGMENTATION_BATCH_SIZE must be greater than zero")
+		}
+		if c.ConversationSegmentation.GapThreshold <= 0 {
+			return fmt.Errorf("CONVERSATION_SEGMENTATION_GAP_THRESHOLD must be greater than zero")
+		}
+	}
+
+	if c.EllieIngestion.Enabled {
+		if c.EllieIngestion.Interval <= 0 {
+			return fmt.Errorf("ELLIE_INGESTION_INTERVAL must be greater than zero")
+		}
+		if c.EllieIngestion.BatchSize <= 0 {
+			return fmt.Errorf("ELLIE_INGESTION_BATCH_SIZE must be greater than zero")
+		}
+		if c.EllieIngestion.MaxPerRoom <= 0 {
+			return fmt.Errorf("ELLIE_INGESTION_MAX_PER_ROOM must be greater than zero")
+		}
+		switch strings.ToLower(strings.TrimSpace(c.EllieIngestion.Mode)) {
+		case "normal", "backfill":
+		default:
+			return fmt.Errorf("ELLIE_INGESTION_MODE must be either normal or backfill")
+		}
+		if c.EllieIngestion.WindowGap <= 0 {
+			return fmt.Errorf("ELLIE_INGESTION_WINDOW_GAP must be greater than zero")
+		}
+		if c.EllieIngestion.BackfillMaxPerRoom <= 0 {
+			return fmt.Errorf("ELLIE_INGESTION_BACKFILL_MAX_PER_ROOM must be greater than zero")
+		}
+		if c.EllieIngestion.BackfillWindowSize < 0 {
+			return fmt.Errorf("ELLIE_INGESTION_BACKFILL_WINDOW_SIZE must be greater than or equal to zero")
+		}
+		if c.EllieIngestion.BackfillWindowStride < 0 {
+			return fmt.Errorf("ELLIE_INGESTION_BACKFILL_WINDOW_STRIDE must be greater than or equal to zero")
+		}
+		if c.EllieIngestion.BackfillWindowSize == 0 {
+			if c.EllieIngestion.BackfillWindowStride != 0 {
+				return fmt.Errorf("ELLIE_INGESTION_BACKFILL_WINDOW_STRIDE must be zero when ELLIE_INGESTION_BACKFILL_WINDOW_SIZE is zero")
+			}
+		} else {
+			if c.EllieIngestion.BackfillWindowStride <= 0 {
+				return fmt.Errorf("ELLIE_INGESTION_BACKFILL_WINDOW_STRIDE must be greater than zero")
+			}
+			if c.EllieIngestion.BackfillWindowStride > c.EllieIngestion.BackfillWindowSize {
+				return fmt.Errorf("ELLIE_INGESTION_BACKFILL_WINDOW_STRIDE must be less than or equal to ELLIE_INGESTION_BACKFILL_WINDOW_SIZE")
+			}
+		}
+	}
+
+	if c.EllieContextInjection.Enabled {
+		if c.EllieContextInjection.PollInterval <= 0 {
+			return fmt.Errorf("ELLIE_CONTEXT_INJECTION_POLL_INTERVAL must be greater than zero")
+		}
+		if c.EllieContextInjection.BatchSize <= 0 {
+			return fmt.Errorf("ELLIE_CONTEXT_INJECTION_BATCH_SIZE must be greater than zero")
+		}
+		if c.EllieContextInjection.Threshold <= 0 || c.EllieContextInjection.Threshold > 1 {
+			return fmt.Errorf("ELLIE_CONTEXT_INJECTION_THRESHOLD must be in (0,1]")
+		}
+		if c.EllieContextInjection.CooldownMessages < 0 {
+			return fmt.Errorf("ELLIE_CONTEXT_INJECTION_COOLDOWN_MESSAGES must be greater than or equal to zero")
+		}
+		if c.EllieContextInjection.MaxItems <= 0 {
+			return fmt.Errorf("ELLIE_CONTEXT_INJECTION_MAX_ITEMS must be greater than zero")
+		}
+	}
+
+	if c.ConversationTokenBackfill.Enabled {
+		if c.ConversationTokenBackfill.PollInterval <= 0 {
+			return fmt.Errorf("CONVERSATION_TOKEN_BACKFILL_POLL_INTERVAL must be greater than zero")
+		}
+		if c.ConversationTokenBackfill.BatchSize <= 0 {
+			return fmt.Errorf("CONVERSATION_TOKEN_BACKFILL_BATCH_SIZE must be greater than zero")
+		}
+	}
+
+	if c.JobScheduler.Enabled {
+		if c.JobScheduler.PollInterval <= 0 {
+			return fmt.Errorf("JOB_SCHEDULER_POLL_INTERVAL must be greater than zero")
+		}
+		if c.JobScheduler.MaxPerPoll <= 0 {
+			return fmt.Errorf("JOB_SCHEDULER_MAX_PER_POLL must be greater than zero")
+		}
+		if c.JobScheduler.RunTimeout <= 0 {
+			return fmt.Errorf("JOB_SCHEDULER_RUN_TIMEOUT must be greater than zero")
+		}
+		if c.JobScheduler.MaxRunHistory <= 0 {
+			return fmt.Errorf("JOB_SCHEDULER_MAX_RUN_HISTORY must be greater than zero")
+		}
+	}
+
 	if !c.GitHub.Enabled {
 		return nil
 	}
@@ -192,6 +626,36 @@ func parseDuration(name string, defaultValue time.Duration) (time.Duration, erro
 
 	if parsed <= 0 {
 		return 0, fmt.Errorf("%s must be greater than zero", name)
+	}
+
+	return parsed, nil
+}
+
+func parseInt(name string, defaultValue int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return defaultValue, nil
+	}
+
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a valid integer: %w", name, err)
+	}
+	return parsed, nil
+}
+
+func parseFloat(name string, defaultValue float64) (float64, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return defaultValue, nil
+	}
+
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a valid float: %w", name, err)
+	}
+	if math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return 0, fmt.Errorf("%s must be a finite float", name)
 	}
 
 	return parsed, nil

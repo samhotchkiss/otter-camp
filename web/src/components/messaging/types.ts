@@ -17,7 +17,7 @@ export type Agent = {
 /**
  * Message sender type - distinguishes between human users and AI agents.
  */
-export type MessageSenderType = "user" | "agent";
+export type MessageSenderType = "user" | "agent" | "emission";
 
 export type MessageAttachment = {
   id: string;
@@ -76,6 +76,7 @@ export type DMMessage = {
   createdAt: string;
   optimistic?: boolean;
   failed?: boolean;
+  emissionWarning?: boolean;
   isSessionReset?: boolean;
   sessionID?: string;
 };

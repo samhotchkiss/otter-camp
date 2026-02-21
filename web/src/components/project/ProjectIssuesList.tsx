@@ -71,7 +71,7 @@ function normalizeIssueKindLabel(kind: string): string {
   if (kind === "pull_request") {
     return "PR";
   }
-  return "Issue";
+  return "Task";
 }
 
 function normalizeOriginLabel(origin: string): string {
@@ -159,7 +159,7 @@ export default function ProjectIssuesList({
       return;
     }
 
-    const issuesURL = new URL(`${API_URL}/api/issues`);
+    const issuesURL = new URL(`${API_URL}/api/project-tasks`);
     issuesURL.searchParams.set("org_id", orgID);
     issuesURL.searchParams.set("project_id", projectId);
     issuesURL.searchParams.set("limit", "200");
@@ -189,7 +189,7 @@ export default function ProjectIssuesList({
       .then(async ([issuesResponse, agentsResponse]) => {
         if (!issuesResponse.ok) {
           const payload = await issuesResponse.json().catch(() => null);
-          throw new Error(payload?.error ?? "Failed to load issues");
+          throw new Error(payload?.error ?? "Failed to load tasks");
         }
         const issuesPayload = await issuesResponse.json() as ProjectIssuesResponse;
         const agentMap = new Map<string, string>();
@@ -216,7 +216,7 @@ export default function ProjectIssuesList({
           return;
         }
         setError(
-          fetchError instanceof Error ? fetchError.message : "Failed to load issues",
+          fetchError instanceof Error ? fetchError.message : "Failed to load tasks",
         );
       })
       .finally(() => {
@@ -282,7 +282,7 @@ export default function ProjectIssuesList({
           </label>
           <select
             id="issues-state-filter"
-            aria-label="Issue state filter"
+            aria-label="Task state filter"
             className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
             value={stateFilter}
             onChange={(event) => setStateFilter(event.target.value as IssueFilterState)}
@@ -298,13 +298,13 @@ export default function ProjectIssuesList({
           </label>
           <select
             id="issues-kind-filter"
-            aria-label="Issue type filter"
+            aria-label="Task type filter"
             className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
             value={kindFilter}
             onChange={(event) => setKindFilter(event.target.value as IssueFilterKind)}
           >
             <option value="all">All</option>
-            <option value="issue">Issues</option>
+            <option value="issue">Tasks</option>
             <option value="pull_request">PRs</option>
           </select>
         </div>
@@ -314,7 +314,7 @@ export default function ProjectIssuesList({
           </label>
           <select
             id="issues-origin-filter"
-            aria-label="Issue origin filter"
+            aria-label="Task origin filter"
             className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
             value={originFilter}
             onChange={(event) => setOriginFilter(event.target.value as IssueFilterOrigin)}
@@ -328,7 +328,7 @@ export default function ProjectIssuesList({
 
       {isLoading && (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] px-4 py-6 text-sm text-[var(--text-muted)]">
-          Loading issues...
+          Loading tasks...
         </div>
       )}
 
@@ -347,7 +347,7 @@ export default function ProjectIssuesList({
 
       {!isLoading && !error && items.length === 0 && (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] px-4 py-6 text-sm text-[var(--text-muted)]">
-          No issues found for the selected filters.
+          No tasks found for the selected filters.
         </div>
       )}
 
@@ -395,12 +395,12 @@ export default function ProjectIssuesList({
                     {parentIssueID !== "" && (
                       <span>
                         {parentIssue
-                          ? `Sub-issue of #${parentIssue.issue_number}`
-                          : "Sub-issue"}
+                          ? `Subtask of #${parentIssue.issue_number}`
+                          : "Subtask"}
                       </span>
                     )}
                     {childCount > 0 && (
-                      <span>Sub-issues: {childCount}</span>
+                      <span>Subtasks: {childCount}</span>
                     )}
                     <span>Owner: {ownerLabelByIssueID.get(issue.id) ?? "Unassigned"}</span>
                     <span>Last activity: {formatLastActivity(issue.last_activity_at)}</span>

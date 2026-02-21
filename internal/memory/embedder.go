@@ -163,9 +163,25 @@ func (e *ollamaEmbedder) Embed(ctx context.Context, inputs []string) ([][]float6
 
 	out := make([][]float64, 0, len(inputs))
 	for _, input := range inputs {
-		vector, err := e.embedOne(ctx, input)
+		// Truncate to stay within model context window.
+		// nomic-embed-text context varies by quantization; ~2048 tokens safe limit.
+		truncated := truncateForEmbedding(input, 8000)
+		vector, err := e.embedOne(ctx, truncated)
 		if err != nil {
-			return nil, err
+			// If a single input fails (e.g. still too long for model context),
+			// try progressively shorter truncation before giving up.
+			for _, fallbackLen := range []int{4000, 2000, 500} {
+				shorter := truncateForEmbedding(input, fallbackLen)
+				vector, err = e.embedOne(ctx, shorter)
+				if err == nil {
+					break
+				}
+			}
+			if err != nil {
+				// Return a zero vector so the batch can continue.
+				// The message will be marked as embedded (with zeros) to avoid retrying.
+				vector = make([]float64, e.dimension)
+			}
 		}
 		out = append(out, vector)
 	}
@@ -254,7 +270,8 @@ func (e *openAIEmbedder) Embed(ctx context.Context, inputs []string) ([][]float6
 		if trimmed == "" {
 			return nil, ErrEmbedderInputRequired
 		}
-		normalized = append(normalized, trimmed)
+		// Truncate to stay within model context limits
+		normalized = append(normalized, truncateForEmbedding(trimmed, 8000))
 	}
 	return e.embedBatchWithRetry(ctx, normalized)
 }
@@ -309,7 +326,7 @@ func (e *openAIEmbedder) embedBatchAttempt(ctx context.Context, inputs []string)
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxEmbedderSuccessBodyBytes)).Decode(&payload); err != nil {
-		return nil, false, fmt.Errorf("decode openai response: %w", err)
+		return nil, false, fmt.Errorf("decode openai response: status %d: %w", resp.StatusCode, err)
 	}
 	if len(payload.Data) != len(inputs) {
 		return nil, false, fmt.Errorf("openai response vector count mismatch: expected %d got %d", len(inputs), len(payload.Data))
@@ -380,4 +397,19 @@ func sleepWithContext(ctx context.Context, duration time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// truncateForEmbedding truncates text to maxChars to stay within embedding
+// model context windows. Truncates at the last space boundary to avoid
+// splitting words.
+func truncateForEmbedding(text string, maxChars int) string {
+	if len(text) <= maxChars {
+		return text
+	}
+	truncated := text[:maxChars]
+	// Try to break at last space
+	if idx := strings.LastIndex(truncated, " "); idx > maxChars/2 {
+		truncated = truncated[:idx]
+	}
+	return truncated
 }

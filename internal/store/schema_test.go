@@ -265,6 +265,1259 @@ func TestMigration061ChatThreadsLengthLimitFilesExistAndContainConstraints(t *te
 	require.Contains(t, downContent, "drop constraint if exists chat_threads_thread_key_length_chk")
 }
 
+func TestMigration063ConversationSchemaFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"063_create_conversation_core_schema.up.sql",
+		"063_create_conversation_core_schema.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "063_create_conversation_core_schema.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists rooms")
+	require.Contains(t, upContent, "create table if not exists room_participants")
+	require.Contains(t, upContent, "create table if not exists conversations")
+	require.Contains(t, upContent, "create table if not exists chat_messages")
+	require.Contains(t, upContent, "create table if not exists memories")
+	require.Contains(t, upContent, "chat_messages_embedding_idx")
+	require.Contains(t, upContent, "memories_dedup_active")
+	require.Contains(t, upContent, "enable row level security")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "063_create_conversation_core_schema.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop table if exists room_participants")
+	require.Contains(t, downContent, "drop table if exists rooms")
+	require.Contains(t, downContent, "drop table if exists chat_messages")
+	require.Contains(t, downContent, "drop table if exists conversations")
+	require.Contains(t, downContent, "drop table if exists memories")
+}
+
+func TestSchemaConversationCoreTablesCreateAndRollback(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Up()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	for _, table := range []string{
+		"rooms",
+		"room_participants",
+		"conversations",
+		"chat_messages",
+		"memories",
+	} {
+		require.True(t, schemaTableExists(t, db, table), table)
+	}
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	for _, table := range []string{
+		"rooms",
+		"room_participants",
+		"conversations",
+		"chat_messages",
+		"memories",
+	} {
+		require.False(t, schemaTableExists(t, db, table), table)
+	}
+}
+
+func TestSchemaConversationCoreRLSAndIndexes(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	for _, indexName := range []string{
+		"rooms_org_type_context_idx",
+		"room_participants_room_joined_idx",
+		"chat_messages_room_created_idx",
+		"chat_messages_conversation_idx",
+		"chat_messages_search_idx",
+		"chat_messages_embedding_idx",
+		"chat_messages_unembedded_idx",
+		"memories_dedup_active",
+		"memories_embedding_idx",
+		"memories_org_kind_idx",
+		"memories_org_status_idx",
+		"memories_conversation_idx",
+	} {
+		var indexRegClass sql.NullString
+		err := db.QueryRow(`SELECT to_regclass('public.' || $1)::text`, indexName).Scan(&indexRegClass)
+		require.NoError(t, err)
+		require.True(t, indexRegClass.Valid, indexName)
+	}
+
+	for _, table := range []string{
+		"rooms",
+		"room_participants",
+		"conversations",
+		"chat_messages",
+		"memories",
+	} {
+		var rlsEnabled bool
+		err := db.QueryRow(`SELECT relrowsecurity FROM pg_class WHERE relname = $1`, table).Scan(&rlsEnabled)
+		require.NoError(t, err)
+		require.True(t, rlsEnabled, table)
+	}
+}
+
+func TestSchemaProjectChatBackfillCreatesProjectRooms(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(63)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "project-chat-backfill-room-org")
+	projectID := createTestProject(t, db, orgID, "Project Chat Backfill Room Project")
+
+	_, err = db.Exec(
+		`INSERT INTO project_chat_messages (org_id, project_id, author, body, attachments)
+		 VALUES ($1, $2, 'Sam', 'room bootstrap', '[]'::jsonb)`,
+		orgID,
+		projectID,
+	)
+	require.NoError(t, err)
+
+	err = m.Steps(1)
+	require.NoError(t, err)
+
+	var roomCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM rooms
+		 WHERE org_id = $1
+		   AND type = 'project'
+		   AND context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&roomCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, roomCount)
+}
+
+func TestMigration064ProjectChatBackfillFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"064_backfill_project_chat_rooms_and_messages.up.sql",
+		"064_backfill_project_chat_rooms_and_messages.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "064_backfill_project_chat_rooms_and_messages.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "insert into rooms")
+	require.Contains(t, upContent, "insert into chat_messages")
+	require.Contains(t, upContent, "on conflict (id) do nothing")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "064_backfill_project_chat_rooms_and_messages.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "delete from chat_messages")
+}
+
+func TestMigration066EllieIngestionCursorsDownIncludesPolicyDrop(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"066_create_ellie_ingestion_cursors.up.sql",
+		"066_create_ellie_ingestion_cursors.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "066_create_ellie_ingestion_cursors.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop policy if exists ellie_ingestion_cursors_org_isolation on ellie_ingestion_cursors")
+	require.Contains(t, downContent, "drop table if exists ellie_ingestion_cursors")
+}
+
+func TestMigration067EllieRetrievalStrategiesFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"067_create_ellie_retrieval_strategies.up.sql",
+		"067_create_ellie_retrieval_strategies.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "067_create_ellie_retrieval_strategies.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists ellie_retrieval_strategies")
+	require.Contains(t, upContent, "create index if not exists ellie_retrieval_strategies_org_active_idx")
+	require.Contains(t, upContent, "create policy ellie_retrieval_strategies_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "067_create_ellie_retrieval_strategies.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop trigger if exists ellie_retrieval_strategies_updated_at_trg")
+	require.Contains(t, downContent, "drop index if exists ellie_retrieval_strategies_org_active_idx")
+	require.Contains(t, downContent, "drop policy if exists ellie_retrieval_strategies_org_isolation on ellie_retrieval_strategies")
+	require.Contains(t, downContent, "drop table if exists ellie_retrieval_strategies")
+}
+
+func TestMigration068EllieRetrievalQualityEventsFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"068_create_ellie_retrieval_quality_events.up.sql",
+		"068_create_ellie_retrieval_quality_events.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "068_create_ellie_retrieval_quality_events.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists ellie_retrieval_quality_events")
+	require.Contains(t, upContent, "create index if not exists ellie_retrieval_quality_events_org_project_idx")
+	require.Contains(t, upContent, "create index if not exists ellie_retrieval_quality_events_org_created_idx")
+	require.Contains(t, upContent, "create policy ellie_retrieval_quality_events_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "068_create_ellie_retrieval_quality_events.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop index if exists ellie_retrieval_quality_events_org_created_idx")
+	require.Contains(t, downContent, "drop index if exists ellie_retrieval_quality_events_org_project_idx")
+	require.Contains(t, downContent, "drop table if exists ellie_retrieval_quality_events")
+}
+
+func TestMigration069ConversationSensitivityFilesExistAndContainConstraint(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"069_add_conversations_sensitivity.down.sql",
+		"069_add_conversations_sensitivity.up.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "069_add_conversations_sensitivity.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "alter table conversations")
+	require.Contains(t, upContent, "add column if not exists sensitivity")
+	require.Contains(t, upContent, "default 'normal'")
+	require.Contains(t, upContent, "'normal'")
+	require.Contains(t, upContent, "'sensitive'")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "069_add_conversations_sensitivity.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop column if exists sensitivity")
+}
+
+func TestMigration071MemoriesSensitivityFilesExistAndContainConstraint(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"071_add_memories_sensitivity.down.sql",
+		"071_add_memories_sensitivity.up.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "071_add_memories_sensitivity.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "alter table memories")
+	require.Contains(t, upContent, "add column if not exists sensitivity")
+	require.Contains(t, upContent, "default 'normal'")
+	require.Contains(t, upContent, "'normal'")
+	require.Contains(t, upContent, "'sensitive'")
+	require.Contains(t, upContent, "create index if not exists memories_org_sensitivity_idx")
+	require.Contains(t, upContent, "where sensitivity = 'sensitive'")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "071_add_memories_sensitivity.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop index if exists memories_org_sensitivity_idx")
+	require.Contains(t, downContent, "drop column if exists sensitivity")
+}
+
+func TestMigration072ComplianceRulesFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"072_create_compliance_rules.down.sql",
+		"072_create_compliance_rules.up.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "072_create_compliance_rules.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists compliance_rules")
+	require.Contains(t, upContent, "category text not null")
+	require.Contains(t, upContent, "'code_quality'")
+	require.Contains(t, upContent, "'security'")
+	require.Contains(t, upContent, "severity text not null default 'required'")
+	require.Contains(t, upContent, "'required'")
+	require.Contains(t, upContent, "'recommended'")
+	require.Contains(t, upContent, "'informational'")
+	require.Contains(t, upContent, "create index if not exists compliance_rules_org_idx")
+	require.Contains(t, upContent, "create index if not exists compliance_rules_project_idx")
+	require.Contains(t, upContent, "create policy compliance_rules_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "072_create_compliance_rules.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop policy if exists compliance_rules_org_isolation")
+	require.Contains(t, downContent, "drop index if exists compliance_rules_project_idx")
+	require.Contains(t, downContent, "drop index if exists compliance_rules_org_idx")
+	require.Contains(t, downContent, "drop table if exists compliance_rules")
+}
+
+func TestMigration074MigrationProgressFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"074_create_migration_progress.down.sql",
+		"074_create_migration_progress.up.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "074_create_migration_progress.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists migration_progress")
+	require.Contains(t, upContent, "migration_type text not null")
+	require.Contains(t, upContent, "status text not null default 'pending'")
+	require.Contains(t, upContent, "processed_items int not null default 0")
+	require.Contains(t, upContent, "create unique index if not exists migration_progress_org_type_uidx")
+	require.Contains(t, upContent, "create policy migration_progress_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "074_create_migration_progress.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop policy if exists migration_progress_org_isolation")
+	require.Contains(t, downContent, "drop index if exists migration_progress_org_type_uidx")
+	require.Contains(t, downContent, "drop table if exists migration_progress")
+}
+
+func TestMigration075ConversationTokenTrackingFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"075_add_conversation_token_tracking.down.sql",
+		"075_add_conversation_token_tracking.up.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "075_add_conversation_token_tracking.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "alter table chat_messages")
+	require.Contains(t, upContent, "add column if not exists token_count")
+	require.Contains(t, upContent, "alter table conversations")
+	require.Contains(t, upContent, "add column if not exists total_tokens")
+	require.Contains(t, upContent, "alter table rooms")
+	require.Contains(t, upContent, "create index if not exists chat_messages_room_created_tokens_idx")
+	require.Contains(t, upContent, "create or replace function otter_estimate_token_count")
+	require.Contains(t, upContent, "create or replace function otter_chat_messages_token_rollup")
+	require.Contains(t, upContent, "create trigger chat_messages_token_rollup_trg")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "075_add_conversation_token_tracking.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop trigger if exists chat_messages_token_rollup_trg on chat_messages")
+	require.Contains(t, downContent, "drop function if exists otter_chat_messages_token_rollup")
+	require.Contains(t, downContent, "drop function if exists otter_estimate_token_count")
+	require.Contains(t, downContent, "drop index if exists chat_messages_room_created_tokens_idx")
+	require.Contains(t, downContent, "drop column if exists token_count")
+	require.Contains(t, downContent, "drop column if exists total_tokens")
+}
+
+func TestMigration078Embedding1536ColumnsFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"078_add_1536_embedding_columns.down.sql",
+		"078_add_1536_embedding_columns.up.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "078_add_1536_embedding_columns.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "alter table memories")
+	require.Contains(t, upContent, "add column if not exists embedding_1536 vector(1536)")
+	require.Contains(t, upContent, "alter table chat_messages")
+	require.Contains(t, upContent, "add column if not exists embedding_1536 vector(1536)")
+	require.Contains(t, upContent, "create index if not exists memories_embedding_1536_idx")
+	require.Contains(t, upContent, "create index if not exists chat_messages_embedding_1536_idx")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "078_add_1536_embedding_columns.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop index if exists memories_embedding_1536_idx")
+	require.Contains(t, downContent, "drop index if exists chat_messages_embedding_1536_idx")
+	require.Contains(t, downContent, "drop column if exists embedding_1536")
+}
+
+func TestSchemaIncludesEllieProjectDocsMigration(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"081_create_ellie_project_docs.up.sql",
+		"081_create_ellie_project_docs.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "081_create_ellie_project_docs.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists ellie_project_docs")
+	require.Contains(t, upContent, "summary_embedding vector(1536)")
+	require.Contains(t, upContent, "unique (org_id, project_id, file_path)")
+	require.Contains(t, upContent, "create index if not exists ellie_project_docs_org_project_active_idx")
+	require.Contains(t, upContent, "create index if not exists ellie_project_docs_embedding_idx")
+	require.Contains(t, upContent, "create trigger ellie_project_docs_updated_at_trg")
+	require.Contains(t, upContent, "create policy ellie_project_docs_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "081_create_ellie_project_docs.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop trigger if exists ellie_project_docs_updated_at_trg")
+	require.Contains(t, downContent, "drop index if exists ellie_project_docs_embedding_idx")
+	require.Contains(t, downContent, "drop index if exists ellie_project_docs_org_project_active_idx")
+	require.Contains(t, downContent, "drop policy if exists ellie_project_docs_org_isolation on ellie_project_docs")
+	require.Contains(t, downContent, "drop table if exists ellie_project_docs")
+}
+
+func TestMigration082RoomsExcludeFromIngestionFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"082_add_rooms_exclude_from_ingestion.up.sql",
+		"082_add_rooms_exclude_from_ingestion.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "082_add_rooms_exclude_from_ingestion.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "alter table rooms")
+	require.Contains(t, upContent, "add column if not exists exclude_from_ingestion")
+	require.Contains(t, upContent, "default false")
+	require.Contains(t, upContent, "create index if not exists rooms_org_exclude_from_ingestion_idx")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "082_add_rooms_exclude_from_ingestion.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop index if exists rooms_org_exclude_from_ingestion_idx")
+	require.Contains(t, downContent, "drop column if exists exclude_from_ingestion")
+}
+
+func TestSchemaConversationsSensitivityColumnAndConstraint(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	var isNullable string
+	var defaultExpr sql.NullString
+	err := db.QueryRow(
+		`SELECT is_nullable, column_default
+		 FROM information_schema.columns
+		 WHERE table_schema = 'public'
+		   AND table_name = 'conversations'
+		   AND column_name = 'sensitivity'`,
+	).Scan(&isNullable, &defaultExpr)
+	require.NoError(t, err)
+	require.Equal(t, "NO", strings.ToUpper(strings.TrimSpace(isNullable)))
+	require.True(t, defaultExpr.Valid)
+	require.Contains(t, strings.ToLower(defaultExpr.String), "normal")
+
+	var constraintDef string
+	err = db.QueryRow(
+		`SELECT pg_get_constraintdef(oid)
+		 FROM pg_constraint
+		 WHERE conrelid = 'conversations'::regclass
+		   AND contype = 'c'
+		   AND pg_get_constraintdef(oid) ILIKE '%sensitivity%'
+		 ORDER BY oid DESC
+		 LIMIT 1`,
+	).Scan(&constraintDef)
+	require.NoError(t, err)
+	lowered := strings.ToLower(constraintDef)
+	require.Contains(t, lowered, "sensitivity")
+	require.Contains(t, lowered, "'normal'")
+	require.Contains(t, lowered, "'sensitive'")
+}
+
+func TestMigration070ContextInjectionsFilesExistAndContainDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"070_create_context_injections.down.sql",
+		"070_create_context_injections.up.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "070_create_context_injections.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists context_injections")
+	require.Contains(t, upContent, "unique (room_id, memory_id)")
+	require.Contains(t, upContent, "create index if not exists idx_context_injections_room")
+	require.Contains(t, upContent, "enable row level security")
+	require.Contains(t, upContent, "context_injections_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "070_create_context_injections.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop policy if exists context_injections_org_isolation")
+	require.Contains(t, downContent, "drop index if exists idx_context_injections_room")
+	require.Contains(t, downContent, "drop table if exists context_injections")
+}
+
+func TestSchemaContextInjectionsTableAndConstraint(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	var tableRegClass sql.NullString
+	err := db.QueryRow(`SELECT to_regclass('public.context_injections')::text`).Scan(&tableRegClass)
+	require.NoError(t, err)
+	require.True(t, tableRegClass.Valid)
+
+	var roomIdx sql.NullString
+	err = db.QueryRow(`SELECT to_regclass('public.idx_context_injections_room')::text`).Scan(&roomIdx)
+	require.NoError(t, err)
+	require.True(t, roomIdx.Valid)
+
+	var rlsEnabled bool
+	err = db.QueryRow(
+		`SELECT relrowsecurity
+		 FROM pg_class
+		 WHERE relname = 'context_injections'`,
+	).Scan(&rlsEnabled)
+	require.NoError(t, err)
+	require.True(t, rlsEnabled)
+
+	var uniqueConstraintCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM pg_constraint
+		 WHERE conrelid = 'context_injections'::regclass
+		   AND contype = 'u'
+		   AND pg_get_constraintdef(oid) ILIKE '%(room_id, memory_id)%'`,
+	).Scan(&uniqueConstraintCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, uniqueConstraintCount)
+}
+
+func TestSchemaMemoriesAndConversationsSensitivityColumnsAndConstraints(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	for _, tableName := range []string{"memories", "conversations"} {
+		var isNullable string
+		var defaultExpr sql.NullString
+		err := db.QueryRow(
+			`SELECT is_nullable, column_default
+			 FROM information_schema.columns
+			 WHERE table_schema = 'public'
+			   AND table_name = $1
+			   AND column_name = 'sensitivity'`,
+			tableName,
+		).Scan(&isNullable, &defaultExpr)
+		require.NoError(t, err)
+		require.Equal(t, "NO", strings.ToUpper(strings.TrimSpace(isNullable)))
+		require.True(t, defaultExpr.Valid)
+		require.Contains(t, strings.ToLower(defaultExpr.String), "normal")
+
+		var constraintDef string
+		err = db.QueryRow(
+			`SELECT pg_get_constraintdef(oid)
+			 FROM pg_constraint
+			 WHERE conrelid = to_regclass('public.' || $1)
+			   AND contype = 'c'
+			   AND pg_get_constraintdef(oid) ILIKE '%sensitivity%'
+			 ORDER BY oid DESC
+			 LIMIT 1`,
+			tableName,
+		).Scan(&constraintDef)
+		require.NoError(t, err)
+		lowered := strings.ToLower(constraintDef)
+		require.Contains(t, lowered, "sensitivity")
+		require.Contains(t, lowered, "'normal'")
+		require.Contains(t, lowered, "'sensitive'")
+	}
+
+	var sensitivityIndexDef string
+	err := db.QueryRow(
+		`SELECT indexdef
+		 FROM pg_indexes
+		 WHERE schemaname = 'public'
+		   AND indexname = 'memories_org_sensitivity_idx'`,
+	).Scan(&sensitivityIndexDef)
+	require.NoError(t, err)
+	loweredIndexDef := strings.ToLower(sensitivityIndexDef)
+	require.Contains(t, loweredIndexDef, "where")
+	require.Contains(t, loweredIndexDef, "sensitivity")
+	require.Contains(t, loweredIndexDef, "sensitive")
+}
+
+func TestSchemaComplianceRulesTableAndConstraints(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	var tableRegClass sql.NullString
+	err := db.QueryRow(`SELECT to_regclass('public.compliance_rules')::text`).Scan(&tableRegClass)
+	require.NoError(t, err)
+	require.True(t, tableRegClass.Valid)
+
+	var orgIdx sql.NullString
+	err = db.QueryRow(`SELECT to_regclass('public.compliance_rules_org_idx')::text`).Scan(&orgIdx)
+	require.NoError(t, err)
+	require.True(t, orgIdx.Valid)
+
+	var projectIdx sql.NullString
+	err = db.QueryRow(`SELECT to_regclass('public.compliance_rules_project_idx')::text`).Scan(&projectIdx)
+	require.NoError(t, err)
+	require.True(t, projectIdx.Valid)
+
+	var rlsEnabled bool
+	err = db.QueryRow(
+		`SELECT relrowsecurity
+		 FROM pg_class
+		 WHERE relname = 'compliance_rules'`,
+	).Scan(&rlsEnabled)
+	require.NoError(t, err)
+	require.True(t, rlsEnabled)
+
+	var enabledDefault sql.NullString
+	err = db.QueryRow(
+		`SELECT column_default
+		 FROM information_schema.columns
+		 WHERE table_schema = 'public'
+		   AND table_name = 'compliance_rules'
+		   AND column_name = 'enabled'`,
+	).Scan(&enabledDefault)
+	require.NoError(t, err)
+	require.True(t, enabledDefault.Valid)
+	require.Contains(t, strings.ToLower(enabledDefault.String), "true")
+
+	var severityDefault sql.NullString
+	err = db.QueryRow(
+		`SELECT column_default
+		 FROM information_schema.columns
+		 WHERE table_schema = 'public'
+		   AND table_name = 'compliance_rules'
+		   AND column_name = 'severity'`,
+	).Scan(&severityDefault)
+	require.NoError(t, err)
+	require.True(t, severityDefault.Valid)
+	require.Contains(t, strings.ToLower(severityDefault.String), "required")
+
+	var categoryConstraint string
+	err = db.QueryRow(
+		`SELECT pg_get_constraintdef(oid)
+		 FROM pg_constraint
+		 WHERE conrelid = 'compliance_rules'::regclass
+		   AND contype = 'c'
+		   AND pg_get_constraintdef(oid) ILIKE '%category%'
+		 ORDER BY oid DESC
+		 LIMIT 1`,
+	).Scan(&categoryConstraint)
+	require.NoError(t, err)
+	loweredCategory := strings.ToLower(categoryConstraint)
+	require.Contains(t, loweredCategory, "'code_quality'")
+	require.Contains(t, loweredCategory, "'security'")
+	require.Contains(t, loweredCategory, "'scope'")
+	require.Contains(t, loweredCategory, "'style'")
+	require.Contains(t, loweredCategory, "'process'")
+	require.Contains(t, loweredCategory, "'technical'")
+
+	var severityConstraint string
+	err = db.QueryRow(
+		`SELECT pg_get_constraintdef(oid)
+		 FROM pg_constraint
+		 WHERE conrelid = 'compliance_rules'::regclass
+		   AND contype = 'c'
+		   AND pg_get_constraintdef(oid) ILIKE '%severity%'
+		 ORDER BY oid DESC
+		 LIMIT 1`,
+	).Scan(&severityConstraint)
+	require.NoError(t, err)
+	loweredSeverity := strings.ToLower(severityConstraint)
+	require.Contains(t, loweredSeverity, "'required'")
+	require.Contains(t, loweredSeverity, "'recommended'")
+	require.Contains(t, loweredSeverity, "'informational'")
+}
+
+func TestSchemaProjectChatBackfillCopiesMessagesWithParity(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(63)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "project-chat-backfill-parity-org")
+	projectID := createTestProject(t, db, orgID, "Project Chat Backfill Parity Project")
+
+	var firstID string
+	err = db.QueryRow(
+		`INSERT INTO project_chat_messages (org_id, project_id, author, body, attachments)
+		 VALUES ($1, $2, 'Sam', 'first body', '[{\"id\":\"file-1\"}]'::jsonb)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&firstID)
+	require.NoError(t, err)
+
+	var secondID string
+	err = db.QueryRow(
+		`INSERT INTO project_chat_messages (org_id, project_id, author, body, attachments)
+		 VALUES ($1, $2, 'Frank', 'second body', '[]'::jsonb)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&secondID)
+	require.NoError(t, err)
+
+	err = m.Steps(1)
+	require.NoError(t, err)
+
+	var copiedCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chat_messages cm
+		 JOIN rooms r ON r.id = cm.room_id
+		 WHERE cm.org_id = $1
+		   AND r.type = 'project'
+		   AND r.context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&copiedCount)
+	require.NoError(t, err)
+	require.Equal(t, 2, copiedCount)
+
+	var firstBody, firstAttachments string
+	err = db.QueryRow(
+		`SELECT body, attachments::text
+		 FROM chat_messages
+		 WHERE id = $1`,
+		firstID,
+	).Scan(&firstBody, &firstAttachments)
+	require.NoError(t, err)
+	require.Equal(t, "first body", firstBody)
+	require.Contains(t, firstAttachments, `"id": "file-1"`)
+
+	var secondBody string
+	err = db.QueryRow(`SELECT body FROM chat_messages WHERE id = $1`, secondID).Scan(&secondBody)
+	require.NoError(t, err)
+	require.Equal(t, "second body", secondBody)
+}
+
+func TestSchemaProjectChatBackfillIsIdempotent(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(63)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "project-chat-backfill-idempotent-org")
+	projectID := createTestProject(t, db, orgID, "Project Chat Backfill Idempotent Project")
+
+	_, err = db.Exec(
+		`INSERT INTO project_chat_messages (org_id, project_id, author, body, attachments)
+		 VALUES ($1, $2, 'Sam', 'idempotent body', '[{\"id\":\"doc\"}]'::jsonb)`,
+		orgID,
+		projectID,
+	)
+	require.NoError(t, err)
+
+	upRaw, err := os.ReadFile(filepath.Join(getMigrationsDir(t), "064_backfill_project_chat_rooms_and_messages.up.sql"))
+	require.NoError(t, err)
+	upSQL := string(upRaw)
+
+	_, err = db.Exec(upSQL)
+	require.NoError(t, err)
+
+	var firstMessageCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chat_messages cm
+		 JOIN rooms r ON r.id = cm.room_id
+		 WHERE cm.org_id = $1
+		   AND r.type = 'project'
+		   AND r.context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&firstMessageCount)
+	require.NoError(t, err)
+
+	var firstRoomCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM rooms
+		 WHERE org_id = $1
+		   AND type = 'project'
+		   AND context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&firstRoomCount)
+	require.NoError(t, err)
+
+	_, err = db.Exec(upSQL)
+	require.NoError(t, err)
+
+	var secondMessageCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chat_messages cm
+		 JOIN rooms r ON r.id = cm.room_id
+		 WHERE cm.org_id = $1
+		   AND r.type = 'project'
+		   AND r.context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&secondMessageCount)
+	require.NoError(t, err)
+
+	var secondRoomCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM rooms
+		 WHERE org_id = $1
+		   AND type = 'project'
+		   AND context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&secondRoomCount)
+	require.NoError(t, err)
+
+	require.Equal(t, firstMessageCount, secondMessageCount)
+	require.Equal(t, firstRoomCount, secondRoomCount)
+}
+
+func TestMigration065MemoriesBackfillFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"065_backfill_legacy_memory_tables_into_memories.up.sql",
+		"065_backfill_legacy_memory_tables_into_memories.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "065_backfill_legacy_memory_tables_into_memories.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "insert into memories")
+	require.Contains(t, upContent, "memory_entries")
+	require.Contains(t, upContent, "shared_knowledge")
+	require.Contains(t, upContent, "agent_memories")
+	require.Contains(t, upContent, "on conflict (org_id, content_hash) where status = 'active' do nothing")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "065_backfill_legacy_memory_tables_into_memories.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "delete from memories")
+	require.Contains(t, downContent, "source_table")
+}
+
+func TestSchemaMemoriesBackfillCopiesLegacyRows(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(64)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "memories-backfill-copy-org")
+	projectID := createTestProject(t, db, orgID, "Memories Backfill Copy Project")
+	agentID := insertSchemaAgent(t, db, orgID, "memories-copy-agent")
+
+	var memoryEntryID string
+	err = db.QueryRow(
+		`INSERT INTO memory_entries (
+			org_id, agent_id, kind, title, content, metadata, importance, confidence, sensitivity, status, source_project
+		) VALUES (
+			$1, $2, 'decision', 'Entry Decision', 'Memory entry content', '{}'::jsonb, 3, 0.8, 'internal', 'active', $3
+		) RETURNING id`,
+		orgID,
+		agentID,
+		projectID,
+	).Scan(&memoryEntryID)
+	require.NoError(t, err)
+
+	var sharedKnowledgeID string
+	err = db.QueryRow(
+		`INSERT INTO shared_knowledge (
+			org_id, source_agent_id, kind, title, content, metadata, status
+		) VALUES (
+			$1, $2, 'pattern', 'Shared Pattern', 'Shared knowledge content', '{}'::jsonb, 'active'
+		) RETURNING id`,
+		orgID,
+		agentID,
+	).Scan(&sharedKnowledgeID)
+	require.NoError(t, err)
+
+	var agentMemoryID string
+	err = db.QueryRow(
+		`INSERT INTO agent_memories (
+			org_id, agent_id, kind, date, content
+		) VALUES (
+			$1, $2, 'long_term', CURRENT_DATE, 'Agent memory content'
+		) RETURNING id`,
+		orgID,
+		agentID,
+	).Scan(&agentMemoryID)
+	require.NoError(t, err)
+
+	err = m.Steps(1)
+	require.NoError(t, err)
+
+	var copiedCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' IN ('memory_entries', 'shared_knowledge', 'agent_memories')`,
+		orgID,
+	).Scan(&copiedCount)
+	require.NoError(t, err)
+	require.Equal(t, 3, copiedCount)
+
+	for _, check := range [][2]string{
+		{"memory_entries", memoryEntryID},
+		{"shared_knowledge", sharedKnowledgeID},
+		{"agent_memories", agentMemoryID},
+	} {
+		var exists bool
+		err = db.QueryRow(
+			`SELECT EXISTS (
+				SELECT 1
+				FROM memories
+				WHERE org_id = $1
+				  AND metadata->>'source_table' = $2
+				  AND metadata->>'source_id' = $3
+			)`,
+			orgID,
+			check[0],
+			check[1],
+		).Scan(&exists)
+		require.NoError(t, err)
+		require.True(t, exists, check[0])
+	}
+}
+
+func TestSchemaMemoriesBackfillMapsStatusesAndKinds(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(64)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "memories-backfill-mapping-org")
+	agentID := insertSchemaAgent(t, db, orgID, "memories-mapping-agent")
+
+	var memoryEntryID string
+	err = db.QueryRow(
+		`INSERT INTO memory_entries (
+			org_id, agent_id, kind, title, content, metadata, importance, confidence, sensitivity, status
+		) VALUES (
+			$1, $2, 'decision', 'Warm Decision', 'Warm memory entry', '{}'::jsonb, 3, 0.7, 'internal', 'warm'
+		) RETURNING id`,
+		orgID,
+		agentID,
+	).Scan(&memoryEntryID)
+	require.NoError(t, err)
+
+	var sharedKnowledgeID string
+	err = db.QueryRow(
+		`INSERT INTO shared_knowledge (
+			org_id, source_agent_id, kind, title, content, metadata, status
+		) VALUES (
+			$1, $2, 'correction', 'Superseded Correction', 'Old correction', '{}'::jsonb, 'superseded'
+		) RETURNING id`,
+		orgID,
+		agentID,
+	).Scan(&sharedKnowledgeID)
+	require.NoError(t, err)
+
+	var agentMemoryID string
+	err = db.QueryRow(
+		`INSERT INTO agent_memories (
+			org_id, agent_id, kind, date, content
+		) VALUES (
+			$1, $2, 'note', CURRENT_DATE, 'Agent note content'
+		) RETURNING id`,
+		orgID,
+		agentID,
+	).Scan(&agentMemoryID)
+	require.NoError(t, err)
+
+	err = m.Steps(1)
+	require.NoError(t, err)
+
+	var (
+		entryKind   string
+		entryStatus string
+	)
+	err = db.QueryRow(
+		`SELECT kind, status
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' = 'memory_entries'
+		   AND metadata->>'source_id' = $2`,
+		orgID,
+		memoryEntryID,
+	).Scan(&entryKind, &entryStatus)
+	require.NoError(t, err)
+	require.Equal(t, "technical_decision", entryKind)
+	require.Equal(t, "archived", entryStatus)
+
+	var (
+		sharedKind   string
+		sharedStatus string
+	)
+	err = db.QueryRow(
+		`SELECT kind, status
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' = 'shared_knowledge'
+		   AND metadata->>'source_id' = $2`,
+		orgID,
+		sharedKnowledgeID,
+	).Scan(&sharedKind, &sharedStatus)
+	require.NoError(t, err)
+	require.Equal(t, "correction", sharedKind)
+	require.Equal(t, "deprecated", sharedStatus)
+
+	var (
+		agentKind   string
+		agentStatus string
+	)
+	err = db.QueryRow(
+		`SELECT kind, status
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' = 'agent_memories'
+		   AND metadata->>'source_id' = $2`,
+		orgID,
+		agentMemoryID,
+	).Scan(&agentKind, &agentStatus)
+	require.NoError(t, err)
+	require.Equal(t, "context", agentKind)
+	require.Equal(t, "active", agentStatus)
+}
+
+func TestSchemaMemoriesBackfillIsIdempotent(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(64)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "memories-backfill-idempotent-org")
+	agentID := insertSchemaAgent(t, db, orgID, "memories-idempotent-agent")
+
+	_, err = db.Exec(
+		`INSERT INTO memory_entries (
+			org_id, agent_id, kind, title, content, metadata, importance, confidence, sensitivity, status
+		) VALUES (
+			$1, $2, 'fact', 'Idempotent Fact', 'Idempotent memory content', '{}'::jsonb, 2, 0.9, 'internal', 'active'
+		)`,
+		orgID,
+		agentID,
+	)
+	require.NoError(t, err)
+
+	upRaw, err := os.ReadFile(filepath.Join(getMigrationsDir(t), "065_backfill_legacy_memory_tables_into_memories.up.sql"))
+	require.NoError(t, err)
+	upSQL := string(upRaw)
+
+	_, err = db.Exec(upSQL)
+	require.NoError(t, err)
+
+	var firstCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' = 'memory_entries'`,
+		orgID,
+	).Scan(&firstCount)
+	require.NoError(t, err)
+
+	_, err = db.Exec(upSQL)
+	require.NoError(t, err)
+
+	var secondCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' = 'memory_entries'`,
+		orgID,
+	).Scan(&secondCount)
+	require.NoError(t, err)
+
+	require.Equal(t, firstCount, secondCount)
+}
+
 func TestSchemaChatThreadsLengthConstraints(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
@@ -834,4 +2087,214 @@ func TestSchemaProjectChatAttachmentColumnsAndForeignKey(t *testing.T) {
 		"schema-test-missing-chat-message-"+missingMessageID,
 	)
 	requirePQCode(t, err, "23503")
+}
+
+func TestMigration073AgentJobsFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"073_create_agent_jobs.up.sql",
+		"073_create_agent_jobs.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "073_create_agent_jobs.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists agent_jobs")
+	require.Contains(t, upContent, "create table if not exists agent_job_runs")
+	require.Contains(t, upContent, "schedule_kind in ('cron', 'interval', 'once')")
+	require.Contains(t, upContent, "payload_kind in ('message', 'system_event')")
+	require.Contains(t, upContent, "status in ('active', 'paused', 'completed', 'failed')")
+	require.Contains(t, upContent, "for update skip locked")
+	require.Contains(t, upContent, "enable row level security")
+	require.Contains(t, upContent, "agent_jobs_org_isolation")
+	require.Contains(t, upContent, "agent_job_runs_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "073_create_agent_jobs.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop table if exists agent_job_runs")
+	require.Contains(t, downContent, "drop table if exists agent_jobs")
+}
+
+func TestSchemaIncludesOpenClawHistoryFailureLedgerMigration(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"083_create_openclaw_history_import_failures.up.sql",
+		"083_create_openclaw_history_import_failures.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "083_create_openclaw_history_import_failures.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists openclaw_history_import_failures")
+	require.Contains(t, upContent, "attempt_count int not null default 1")
+	require.Contains(t, upContent, "first_seen_at timestamptz not null default now()")
+	require.Contains(t, upContent, "last_seen_at timestamptz not null default now()")
+	require.Contains(t, upContent, "create unique index if not exists openclaw_history_import_failures_identity_uidx")
+	require.Contains(t, upContent, "create policy openclaw_history_import_failures_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "083_create_openclaw_history_import_failures.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop policy if exists openclaw_history_import_failures_org_isolation")
+	require.Contains(t, downContent, "drop index if exists openclaw_history_import_failures_identity_uidx")
+	require.Contains(t, downContent, "drop table if exists openclaw_history_import_failures")
+}
+
+func TestMigration088PipelineWorkflowFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"088_create_pipeline_steps_and_issue_history.up.sql",
+		"088_create_pipeline_steps_and_issue_history.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "088_create_pipeline_steps_and_issue_history.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table pipeline_steps")
+	require.Contains(t, upContent, "step_type in ('agent_work', 'agent_review', 'human_review')")
+	require.Contains(t, upContent, "create table issue_pipeline_history")
+	require.Contains(t, upContent, "result in ('completed', 'rejected', 'skipped')")
+	require.Contains(t, upContent, "add column current_pipeline_step_id")
+	require.Contains(t, upContent, "add column pipeline_started_at")
+	require.Contains(t, upContent, "add column pipeline_completed_at")
+	require.Contains(t, upContent, "enable row level security")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "088_create_pipeline_steps_and_issue_history.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop table if exists issue_pipeline_history")
+	require.Contains(t, downContent, "drop table if exists pipeline_steps")
+	require.Contains(t, downContent, "drop column if exists current_pipeline_step_id")
+	require.Contains(t, downContent, "drop column if exists pipeline_started_at")
+	require.Contains(t, downContent, "drop column if exists pipeline_completed_at")
+}
+
+func TestSchemaPipelineStepAndIssueHistoryTablesExist(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	var pipelineSteps sql.NullString
+	err := db.QueryRow(`SELECT to_regclass('public.pipeline_steps')::text`).Scan(&pipelineSteps)
+	require.NoError(t, err)
+	require.True(t, pipelineSteps.Valid)
+
+	var issuePipelineHistory sql.NullString
+	err = db.QueryRow(`SELECT to_regclass('public.issue_pipeline_history')::text`).Scan(&issuePipelineHistory)
+	require.NoError(t, err)
+	require.True(t, issuePipelineHistory.Valid)
+
+	var hasCurrentStep bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'project_issues'
+			  AND column_name = 'current_pipeline_step_id'
+		)`,
+	).Scan(&hasCurrentStep)
+	require.NoError(t, err)
+	require.True(t, hasCurrentStep)
+
+	var hasPipelineStartedAt bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'project_issues'
+			  AND column_name = 'pipeline_started_at'
+		)`,
+	).Scan(&hasPipelineStartedAt)
+	require.NoError(t, err)
+	require.True(t, hasPipelineStartedAt)
+
+	var hasPipelineCompletedAt bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'project_issues'
+			  AND column_name = 'pipeline_completed_at'
+		)`,
+	).Scan(&hasPipelineCompletedAt)
+	require.NoError(t, err)
+	require.True(t, hasPipelineCompletedAt)
+
+	var hasEllieContextGateStatus bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'project_issues'
+			  AND column_name = 'ellie_context_gate_status'
+		)`,
+	).Scan(&hasEllieContextGateStatus)
+	require.NoError(t, err)
+	require.True(t, hasEllieContextGateStatus)
+
+	var hasEllieContextGateError bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'project_issues'
+			  AND column_name = 'ellie_context_gate_error'
+		)`,
+	).Scan(&hasEllieContextGateError)
+	require.NoError(t, err)
+	require.True(t, hasEllieContextGateError)
+
+	var hasEllieContextGateCheckedAt bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'project_issues'
+			  AND column_name = 'ellie_context_gate_checked_at'
+		)`,
+	).Scan(&hasEllieContextGateCheckedAt)
+	require.NoError(t, err)
+	require.True(t, hasEllieContextGateCheckedAt)
+}
+
+func TestMigration089IssueEllieContextGateFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"089_add_issue_ellie_context_gate_columns.up.sql",
+		"089_add_issue_ellie_context_gate_columns.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "089_add_issue_ellie_context_gate_columns.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "add column if not exists ellie_context_gate_status")
+	require.Contains(t, upContent, "add column if not exists ellie_context_gate_error")
+	require.Contains(t, upContent, "add column if not exists ellie_context_gate_checked_at")
+	require.Contains(t, upContent, "project_issues_ellie_context_gate_status_chk")
+	require.Contains(t, upContent, "project_issues_ellie_context_gate_idx")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "089_add_issue_ellie_context_gate_columns.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop index if exists project_issues_ellie_context_gate_idx")
+	require.Contains(t, downContent, "drop constraint if exists project_issues_ellie_context_gate_status_chk")
+	require.Contains(t, downContent, "drop column if exists ellie_context_gate_status")
+	require.Contains(t, downContent, "drop column if exists ellie_context_gate_error")
+	require.Contains(t, downContent, "drop column if exists ellie_context_gate_checked_at")
 }

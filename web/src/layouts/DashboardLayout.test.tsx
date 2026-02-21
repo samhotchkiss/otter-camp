@@ -17,7 +17,7 @@ vi.mock("../components/GlobalSearch", () => ({
 }));
 
 vi.mock("../components/chat/GlobalChatDock", () => ({
-  default: () => null,
+  default: () => <div>chat-dock</div>,
 }));
 
 vi.mock("../hooks/useKeyboardShortcuts", () => ({
@@ -28,150 +28,212 @@ vi.mock("../contexts/WebSocketContext", () => ({
   useWS: () => ({ connected: true }),
 }));
 
-const { inboxMock } = vi.hoisted(() => ({
-  inboxMock: vi.fn(async () => ({ items: [] as unknown[] })),
-}));
-const { adminConnectionsMock } = vi.hoisted(() => ({
-  adminConnectionsMock: vi.fn(async () => ({
-    bridge: { connected: true, sync_healthy: true, status: "healthy" },
-  })),
-}));
-
-vi.mock("../lib/api", () => ({
-  api: {
-    inbox: inboxMock,
-    adminConnections: adminConnectionsMock,
-  },
-}));
+function renderLayout(pathname = "/projects") {
+  return render(
+    <MemoryRouter initialEntries={[pathname]}>
+      <KeyboardShortcutsProvider>
+        <DashboardLayout>
+          <div>child</div>
+        </DashboardLayout>
+      </KeyboardShortcutsProvider>
+    </MemoryRouter>,
+  );
+}
 
 describe("DashboardLayout", () => {
   beforeEach(() => {
-    inboxMock.mockReset();
-    inboxMock.mockResolvedValue({ items: [] });
-    adminConnectionsMock.mockReset();
-    adminConnectionsMock.mockResolvedValue({
-      bridge: { connected: true, sync_healthy: true, status: "healthy" },
-    });
+    window.localStorage.clear();
   });
 
-  it("shows Connections in navigation", async () => {
-    render(
-      <MemoryRouter initialEntries={["/connections"]}>
-        <KeyboardShortcutsProvider>
-          <DashboardLayout>
-            <div>child</div>
-          </DashboardLayout>
-        </KeyboardShortcutsProvider>
-      </MemoryRouter>,
-    );
+  it("renders figma shell scaffold with sidebar sections and header controls", async () => {
+    renderLayout("/projects");
+
+    expect(await screen.findByTestId("shell-layout")).toBeInTheDocument();
+    expect(screen.getByTestId("shell-sidebar")).toBeInTheDocument();
+    expect(screen.getByTestId("shell-header")).toBeInTheDocument();
+    expect(screen.getByTestId("shell-workspace")).toBeInTheDocument();
+    expect(screen.getByTestId("shell-chat-slot")).toBeInTheDocument();
+    expect(screen.getByText("Otter Camp")).toBeInTheDocument();
+    expect(screen.getByText("Agent Ops")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Inbox" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Projects" })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search...")).toBeInTheDocument();
+    expect(screen.getByTestId("shell-route-label")).toHaveTextContent("projects");
+    expect(screen.getByText("child")).toBeInTheDocument();
+  });
+
+  it("shows the user menu and keeps settings links available", async () => {
+    renderLayout("/connections");
 
     fireEvent.click(screen.getByRole("button", { name: "User menu" }));
-    expect(await screen.findByRole("button", { name: "Connections" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Agents" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connections" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Feed" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
   });
 
-  it("renders inbox count as a separate badge even when count is zero", async () => {
-    inboxMock.mockResolvedValue({ items: [] });
+  it("hydrates sidebar identity from the active session", async () => {
+    window.localStorage.setItem("otter_camp_user", JSON.stringify({
+      id: "user-1",
+      name: "Sam Rivera",
+      email: "sam@otter.camp",
+    }));
 
-    render(
-      <MemoryRouter initialEntries={["/projects"]}>
-        <KeyboardShortcutsProvider>
-          <DashboardLayout>
-            <div>child</div>
-          </DashboardLayout>
-        </KeyboardShortcutsProvider>
-      </MemoryRouter>,
-    );
+    renderLayout("/projects");
 
-    expect(await screen.findByText("Inbox")).toBeInTheDocument();
-    const badges = await screen.findAllByText("0");
-    expect(badges.length).toBeGreaterThanOrEqual(1);
-    expect(badges[0]).toHaveClass("nav-badge");
+    expect(await screen.findByText("Sam Rivera")).toBeInTheDocument();
+    expect(screen.getByText("sam@otter.camp")).toBeInTheDocument();
+    expect(screen.queryByText("Jane Smith")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sidebar user menu" })).toHaveTextContent("SR");
   });
 
-  it("renders non-zero inbox count in the badge", async () => {
-    inboxMock.mockResolvedValue({ items: [{ id: "a" }, { id: "b" }, { id: "c" }] });
+  it("supports sidebar and chat panel toggles while preserving shell stability", async () => {
+    renderLayout("/projects");
 
-    render(
-      <MemoryRouter initialEntries={["/projects"]}>
-        <KeyboardShortcutsProvider>
-          <DashboardLayout>
-            <div>child</div>
-          </DashboardLayout>
-        </KeyboardShortcutsProvider>
-      </MemoryRouter>,
-    );
+    const sidebar = await screen.findByTestId("shell-sidebar");
+    const chatSlot = screen.getByTestId("shell-chat-slot");
+    expect(chatSlot).toHaveAttribute("aria-hidden", "false");
 
-    const badges = await screen.findAllByText("3");
-    expect(badges.length).toBeGreaterThanOrEqual(1);
-    expect(badges[0]).toHaveClass("nav-badge");
+    fireEvent.click(screen.getByRole("button", { name: "Toggle menu" }));
+    expect(sidebar).toHaveClass("open");
+    fireEvent.click(screen.getByRole("button", { name: "Close menu" }));
+    expect(sidebar).not.toHaveClass("open");
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle chat panel" }));
+    expect(chatSlot).toHaveAttribute("aria-hidden", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Toggle chat panel" }));
+    expect(chatSlot).toHaveAttribute("aria-hidden", "false");
   });
 
-  it("renders healthy bridge indicator without delay banner", async () => {
-    adminConnectionsMock.mockResolvedValue({
-      bridge: { connected: true, sync_healthy: true, status: "healthy" },
+  it("collapses chat rail to handle width and lets content expand when compacted", async () => {
+    renderLayout("/projects");
+
+    const chatSlot = await screen.findByTestId("shell-chat-slot");
+    const mainContent = document.getElementById("main-content");
+    const contentShell = mainContent?.firstElementChild as HTMLElement | null;
+    expect(contentShell).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle chat panel" }));
+    expect(chatSlot).toHaveAttribute("aria-hidden", "true");
+    expect(chatSlot).toHaveStyle({ width: "16px" });
+    expect(contentShell).toHaveClass("w-full");
+    expect(contentShell).toHaveClass("max-w-none");
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle chat panel" }));
+    expect(chatSlot).toHaveAttribute("aria-hidden", "false");
+    expect(contentShell).toHaveClass("mx-auto");
+    expect(contentShell).toHaveClass("max-w-6xl");
+  });
+
+  it("restores chat rail width from persisted localStorage value on load", async () => {
+    window.localStorage.setItem("otter-shell-width", "444");
+
+    renderLayout("/projects");
+
+    const chatSlot = await screen.findByTestId("shell-chat-slot");
+    expect(chatSlot).toHaveStyle({ width: "444px" });
+  });
+
+  it("falls back to default chat rail width when persisted value is missing or invalid", async () => {
+    renderLayout("/projects");
+
+    const chatSlot = await screen.findByTestId("shell-chat-slot");
+    expect(chatSlot).toHaveStyle({ width: "384px" });
+  });
+
+  it("clamps restored chat rail width to viewport-aware min/max bounds", async () => {
+    const originalInnerWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 900,
+      writable: true,
+    });
+    window.localStorage.setItem("otter-shell-width", "2000");
+
+    renderLayout("/projects");
+
+    const chatSlot = await screen.findByTestId("shell-chat-slot");
+    expect(chatSlot).toHaveStyle({ width: "680px" });
+
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: originalInnerWidth,
+      writable: true,
+    });
+  });
+
+  it("persists resized chat rail width after drag interactions", async () => {
+    renderLayout("/projects");
+
+    const chatSlot = await screen.findByTestId("shell-chat-slot");
+    const resizeHandle = screen.getByRole("button", { name: "Slide chat closed" });
+
+    fireEvent.mouseDown(resizeHandle, { clientX: 900 });
+    fireEvent.mouseMove(window, { clientX: 800 });
+    fireEvent.mouseUp(window);
+
+    expect(chatSlot).toHaveStyle({ width: "484px" });
+    expect(window.localStorage.getItem("otter-shell-width")).toBe("484");
+  });
+
+  it("persists clamped width values when drag exceeds min and max bounds", async () => {
+    const originalInnerWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1024,
+      writable: true,
     });
 
-    render(
-      <MemoryRouter initialEntries={["/projects"]}>
-        <KeyboardShortcutsProvider>
-          <DashboardLayout>
-            <div>child</div>
-          </DashboardLayout>
-        </KeyboardShortcutsProvider>
-      </MemoryRouter>,
-    );
+    renderLayout("/projects");
+    const chatSlot = await screen.findByTestId("shell-chat-slot");
+    const resizeHandle = screen.getByRole("button", { name: "Slide chat closed" });
 
-    expect(await screen.findByText("Bridge healthy")).toBeInTheDocument();
-    expect(screen.queryByText("Messages may be delayed - bridge reconnecting")).not.toBeInTheDocument();
+    fireEvent.mouseDown(resizeHandle, { clientX: 900 });
+    fireEvent.mouseMove(window, { clientX: 2000 });
+    fireEvent.mouseUp(window);
+    expect(chatSlot).toHaveStyle({ width: "320px" });
+    expect(window.localStorage.getItem("otter-shell-width")).toBe("320");
+
+    fireEvent.mouseDown(resizeHandle, { clientX: 900 });
+    fireEvent.mouseMove(window, { clientX: 0 });
+    fireEvent.mouseUp(window);
+    expect(chatSlot).toHaveStyle({ width: "804px" });
+    expect(window.localStorage.getItem("otter-shell-width")).toBe("804");
+
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: originalInnerWidth,
+      writable: true,
+    });
   });
 
-  it("renders degraded bridge indicator and delayed-message banner", async () => {
-    adminConnectionsMock.mockResolvedValue({
-      bridge: {
-        connected: true,
-        sync_healthy: false,
-        status: "degraded",
-        last_sync_age_seconds: 185,
-      },
-    });
-
-    render(
-      <MemoryRouter initialEntries={["/projects"]}>
-        <KeyboardShortcutsProvider>
-          <DashboardLayout>
-            <div>child</div>
-          </DashboardLayout>
-        </KeyboardShortcutsProvider>
-      </MemoryRouter>,
-    );
-
-    expect(await screen.findByText("Bridge connected, OpenClaw unreachable")).toBeInTheDocument();
-    expect(await screen.findByText("Bridge connected but OpenClaw unreachable")).toBeInTheDocument();
-    expect(await screen.findByText("Last successful sync 3m ago")).toBeInTheDocument();
+  it("marks the active projects navigation link with aria-current", async () => {
+    renderLayout("/projects");
+    const activeProjectsLink = await screen.findByRole("link", { name: "Projects" });
+    expect(activeProjectsLink).toHaveAttribute("aria-current", "page");
   });
 
-  it("renders unhealthy bridge indicator and delayed-message banner", async () => {
-    adminConnectionsMock.mockResolvedValue({
-      bridge: {
-        connected: false,
-        sync_healthy: false,
-        status: "unhealthy",
-        last_sync_age_seconds: 5400,
-      },
-    });
+  it("applies responsive shell guard classes to prevent overflow drift", async () => {
+    renderLayout("/projects");
 
-    render(
-      <MemoryRouter initialEntries={["/projects"]}>
-        <KeyboardShortcutsProvider>
-          <DashboardLayout>
-            <div>child</div>
-          </DashboardLayout>
-        </KeyboardShortcutsProvider>
-      </MemoryRouter>,
-    );
+    const sidebar = await screen.findByTestId("shell-sidebar");
+    expect(sidebar).toHaveClass("fixed");
+    expect(sidebar).toHaveClass("lg:relative");
 
-    expect(await screen.findByText("Bridge offline")).toBeInTheDocument();
-    expect(await screen.findByText("Bridge offline - reconnecting")).toBeInTheDocument();
-    expect(await screen.findByText("Last successful sync 1h ago")).toBeInTheDocument();
+    const menuToggle = screen.getByRole("button", { name: "Toggle menu" });
+    expect(menuToggle).toHaveClass("md:hidden");
+
+    const searchInput = screen.getByPlaceholderText("Search...");
+    expect(searchInput.parentElement).toHaveClass("hidden");
+    expect(searchInput.parentElement).toHaveClass("md:block");
+
+    const workspace = screen.getByTestId("shell-workspace");
+    expect(workspace).toHaveClass("overflow-hidden");
+
+    const chatSlot = screen.getByTestId("shell-chat-slot");
+    expect(chatSlot).toHaveClass("max-lg:hidden");
+
+    const mainContent = document.getElementById("main-content");
+    expect(mainContent).toHaveClass("min-w-0");
   });
 });

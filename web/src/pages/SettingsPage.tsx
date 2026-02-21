@@ -728,7 +728,7 @@ function LabelManagementSection({
   return (
     <SectionCard
       title="Label Management"
-      description="Manage reusable project and issue labels"
+      description="Manage reusable project and task labels"
       icon="🏷️"
     >
       <div className="space-y-4">
@@ -1231,7 +1231,7 @@ export default function SettingsPage() {
       return;
     }
     const confirmed = window.confirm(
-      `Delete label "${label.name}"? This will remove it from linked projects and issues.`,
+      `Delete label "${label.name}"? This will remove it from linked projects and tasks.`,
     );
     if (!confirmed) {
       return;

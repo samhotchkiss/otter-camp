@@ -136,11 +136,11 @@ function getCurrentAuthorName(): string {
 
 function buildProjectIssueRequestMessage(projectName: string, issueTitle: string): string {
   return [
-    "New issue request",
+    "New task request",
     `Project: ${projectName}`,
     `Title: ${issueTitle}`,
     "",
-    "Please create a new project issue for this request.",
+    "Please create a new project task for this request.",
   ].join("\n");
 }
 
@@ -364,7 +364,7 @@ function BoardColumn({
         ))}
         {tasks.length === 0 && (
           <div className="py-8 text-center text-sm text-[var(--text-muted)]">
-            No issues
+            No tasks
           </div>
         )}
       </div>
@@ -400,9 +400,10 @@ function ActivityItem({ activity }: { activity: Activity }) {
 type TabKey = "board" | "list" | "activity" | "files" | "issues" | "settings";
 
 export default function ProjectDetailPage() {
-  const { id, issueId } = useParams<{ id: string; issueId?: string }>();
+  const { id, taskId, issueId } = useParams<{ id: string; taskId?: string; issueId?: string }>();
+  const selectedTaskId = taskId ?? issueId;
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<TabKey>(issueId ? "issues" : "board");
+  const [activeTab, setActiveTab] = useState<TabKey>(selectedTaskId ? "issues" : "board");
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
@@ -425,23 +426,23 @@ export default function ProjectDetailPage() {
   const { upsertConversation, openConversation } = useGlobalChat();
   const { emissions: projectEmissions } = useEmissions({
     projectId: id,
-    issueId: issueId ?? undefined,
+    issueId: selectedTaskId ?? undefined,
     limit: 20,
   });
   const issueChatTitle = useMemo(() => {
-    if (!issueId) {
-      return "Issue thread";
+    if (!selectedTaskId) {
+      return "Task thread";
     }
-    const matchingIssue = tasks.find((task) => task.id === issueId);
+    const matchingIssue = tasks.find((task) => task.id === selectedTaskId);
     const normalizedTitle = matchingIssue?.title?.trim() ?? "";
-    return normalizedTitle || "Issue thread";
-  }, [issueId, tasks]);
+    return normalizedTitle || "Task thread";
+  }, [selectedTaskId, tasks]);
 
   const refreshProjectIssues = useCallback(async (projectID: string) => {
     const orgId = localStorage.getItem("otter-camp-org-id");
     const issuesUrl = orgId
-      ? `${API_URL}/api/issues?org_id=${encodeURIComponent(orgId)}&project_id=${encodeURIComponent(projectID)}&limit=200`
-      : `${API_URL}/api/issues?project_id=${encodeURIComponent(projectID)}&limit=200`;
+      ? `${API_URL}/api/project-tasks?org_id=${encodeURIComponent(orgId)}&project_id=${encodeURIComponent(projectID)}&limit=200`
+      : `${API_URL}/api/project-tasks?project_id=${encodeURIComponent(projectID)}&limit=200`;
     const issuesRes = await fetch(issuesUrl);
     if (!issuesRes.ok) {
       return;
@@ -673,35 +674,35 @@ export default function ProjectDetailPage() {
   }, [project, upsertConversation]);
 
   useEffect(() => {
-    if (!project || !issueId) {
+    if (!project || !selectedTaskId) {
       return;
     }
     upsertConversation({
       type: "issue",
-      issueId,
+      issueId: selectedTaskId,
       projectId: project.id,
       title: issueChatTitle,
-      contextLabel: `Issue • ${project.name}`,
-      subtitle: "Issue conversation",
+      contextLabel: `Task • ${project.name}`,
+      subtitle: "Task conversation",
     });
-  }, [issueChatTitle, issueId, project, upsertConversation]);
+  }, [issueChatTitle, selectedTaskId, project, upsertConversation]);
 
   useEffect(() => {
-    if (!project || !issueId || activeTab !== "issues") {
+    if (!project || !selectedTaskId || activeTab !== "issues") {
       return;
     }
     openConversation(
       {
         type: "issue",
-        issueId,
+        issueId: selectedTaskId,
         projectId: project.id,
         title: issueChatTitle,
-        contextLabel: `Issue • ${project.name}`,
-        subtitle: "Issue conversation",
+        contextLabel: `Task • ${project.name}`,
+        subtitle: "Task conversation",
       },
       { focus: true, openDock: true },
     );
-  }, [activeTab, issueChatTitle, issueId, openConversation, project]);
+  }, [activeTab, issueChatTitle, selectedTaskId, openConversation, project]);
 
   const tasksByColumn = useMemo(() => {
     const activeIssueIDs = new Set<string>();
@@ -742,10 +743,10 @@ export default function ProjectDetailPage() {
   }, [tasks]);
 
   useEffect(() => {
-    if (issueId) {
+    if (selectedTaskId) {
       setActiveTab("issues");
     }
-  }, [issueId]);
+  }, [selectedTaskId]);
 
   if (isLoading) {
     return (
@@ -792,7 +793,7 @@ export default function ProjectDetailPage() {
     { key: "list", label: "List" },
     { key: "activity", label: "Activity" },
     { key: "files", label: "Files" },
-    { key: "issues", label: "Issues" },
+    { key: "issues", label: "Tasks" },
     { key: "settings", label: "Settings" },
   ];
 
@@ -800,7 +801,7 @@ export default function ProjectDetailPage() {
     if (!id) {
       return;
     }
-    navigate(`/projects/${id}/issues/${task.id}`);
+    navigate(`/projects/${id}/tasks/${task.id}`);
   };
 
   const primaryAgentName =
@@ -939,7 +940,7 @@ export default function ProjectDetailPage() {
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
-        throw new Error(payload?.error ?? "Failed to submit issue request");
+        throw new Error(payload?.error ?? "Failed to submit task request");
       }
 
       const payload = await response.json().catch(() => null);
@@ -949,16 +950,16 @@ export default function ProjectDetailPage() {
       const deliveryError =
         typeof delivery?.error === "string" ? delivery.error.trim() : "";
       if (deliveryError) {
-        setNewIssueSuccess("Issue request saved; bridge delivery pending.");
+        setNewIssueSuccess("Task request saved; bridge delivery pending.");
       } else if (delivery?.delivered) {
-        setNewIssueSuccess("Issue request sent to the project agent.");
+        setNewIssueSuccess("Task request sent to the project agent.");
       } else {
-        setNewIssueSuccess("Issue request saved.");
+        setNewIssueSuccess("Task request saved.");
       }
       setNewIssueDraft("");
       openProjectChat();
     } catch (err) {
-      setNewIssueError(err instanceof Error ? err.message : "Failed to submit issue request");
+      setNewIssueError(err instanceof Error ? err.message : "Failed to submit task request");
     } finally {
       setIsSubmittingIssueRequest(false);
     }
@@ -995,7 +996,7 @@ export default function ProjectDetailPage() {
                 )}
               </div>
               <span>•</span>
-              <span>{activeTaskCount} active issue{activeTaskCount !== 1 ? "s" : ""}</span>
+              <span>{activeTaskCount} active task{activeTaskCount !== 1 ? "s" : ""}</span>
               {primaryAgentName && (
                 <>
                   <span>•</span>
@@ -1024,7 +1025,7 @@ export default function ProjectDetailPage() {
             </button>
             <form onSubmit={handleSubmitIssueRequest} className="flex items-center gap-2">
               <label htmlFor="new-issue-title" className="sr-only">
-                New issue
+                New task
               </label>
               <input
                 id="new-issue-title"
@@ -1039,7 +1040,7 @@ export default function ProjectDetailPage() {
                     setNewIssueSuccess(null);
                   }
                 }}
-                placeholder="New issue..."
+                placeholder="New task..."
                 className="w-56 rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
               />
               <button
@@ -1047,7 +1048,7 @@ export default function ProjectDetailPage() {
                 disabled={isSubmittingIssueRequest || newIssueDraft.trim() === ""}
                 className="rounded-lg bg-[#C9A86C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#B8975B] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isSubmittingIssueRequest ? "Sending..." : "New Issue"}
+                {isSubmittingIssueRequest ? "Sending..." : "New Task"}
               </button>
             </form>
           </div>
@@ -1120,14 +1121,14 @@ export default function ProjectDetailPage() {
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
                   Live Emissions
                 </p>
-                <EmissionStream
-                  emissions={projectEmissions}
-                  projectId={project.id}
-                  issueId={issueId ?? undefined}
-                  limit={4}
-                  emptyText="No live emissions yet"
-                  className="mt-2 text-xs text-[var(--text-muted)]"
-                />
+            <EmissionStream
+              emissions={projectEmissions}
+              projectId={project.id}
+              issueId={selectedTaskId ?? undefined}
+              limit={4}
+              emptyText="No live emissions yet"
+              className="mt-2 text-xs text-[var(--text-muted)]"
+            />
               </div>
               {activity.length > 0 ? (
                 activity.map((a) => (
@@ -1149,7 +1150,7 @@ export default function ProjectDetailPage() {
             {tasks.filter(t => t.status !== "done" && t.status !== "cancelled").length > 0 ? (
               <>
                 <div className="grid grid-cols-[minmax(0,1fr)_120px_120px_90px] items-center gap-3 px-3 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-                  <span>Issue</span>
+                  <span>Task</span>
                   <span>Assignee</span>
                   <span>Status</span>
                   <span>Priority</span>
@@ -1189,7 +1190,7 @@ export default function ProjectDetailPage() {
               </>
             ) : (
               <div className="py-8 text-center text-sm text-[var(--text-muted)]">
-                No active issues
+                No active tasks
               </div>
             )}
           </div>
@@ -1205,7 +1206,7 @@ export default function ProjectDetailPage() {
             <EmissionStream
               emissions={projectEmissions}
               projectId={project.id}
-              issueId={issueId ?? undefined}
+              issueId={selectedTaskId ?? undefined}
               limit={8}
               emptyText="No live emissions yet"
               className="mt-2 text-sm text-[var(--text-muted)]"
@@ -1228,15 +1229,15 @@ export default function ProjectDetailPage() {
       {activeTab === "files" && <ProjectFileBrowser projectId={project.id} />}
 
       {activeTab === "issues" && (
-        <div className={`grid gap-4 ${issueId ? "xl:grid-cols-[minmax(320px,420px)_1fr]" : "grid-cols-1"}`}>
+        <div className={`grid gap-4 ${selectedTaskId ? "xl:grid-cols-[minmax(320px,420px)_1fr]" : "grid-cols-1"}`}>
           <ProjectIssuesList
             projectId={project.id}
-            selectedIssueID={issueId ?? null}
+            selectedIssueID={selectedTaskId ?? null}
             onSelectIssue={(selectedIssueID) =>
-              navigate(`/projects/${project.id}/issues/${selectedIssueID}`)
+              navigate(`/projects/${project.id}/tasks/${selectedIssueID}`)
             }
           />
-          {issueId && <IssueThreadPanel issueID={issueId} projectID={project.id} />}
+          {selectedTaskId && <IssueThreadPanel issueID={selectedTaskId} projectID={project.id} />}
         </div>
       )}
 
@@ -1260,7 +1261,7 @@ export default function ProjectDetailPage() {
           <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5">
             <h2 className="text-base font-semibold text-[var(--text)]">Workflow</h2>
             <p className="mt-1 text-sm text-[var(--text-muted)]">
-              Configure recurring issue creation for this project.
+              Configure recurring task creation for this project.
             </p>
             <div className="mt-4">
             <WorkflowConfig

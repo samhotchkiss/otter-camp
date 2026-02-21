@@ -50,15 +50,62 @@ log_error() {
   echo -e "${red}❌${reset} $*" >&2
 }
 
-stop_bridge() {
+runtime_dir() {
+  echo "${OTTERCAMP_RUNTIME_DIR:-/tmp}"
+}
+
+runtime_file() {
+  local name="$1"
+  echo "$(runtime_dir)/${name}"
+}
+
+stop_pid_file_process() {
+  local pid_file="$1"
+  local label="$2"
+  if [[ ! -f "$pid_file" ]]; then
+    return 0
+  fi
+
+  local pid
+  pid="$(tr -d '[:space:]' < "$pid_file" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && [[ "$pid" =~ ^[0-9]+$ ]]; then
+    kill "$pid" 2>/dev/null || true
+    sleep 1
+  fi
+
+  rm -f "$pid_file"
+  log_success "${label} PID file removed."
+}
+
+stop_processes_by_pattern() {
+  local pattern="$1"
+  local label="$2"
   local pids
-  pids=$(pgrep -f "openclaw-bridge.ts" 2>/dev/null || true)
+  pids=$(pgrep -f "$pattern" 2>/dev/null || true)
   if [[ -n "$pids" ]]; then
-    echo "Stopping bridge process(es)..."
+    echo "Stopping ${label} process(es)..."
     echo "$pids" | xargs kill 2>/dev/null || true
     sleep 1
-    log_success "Bridge stopped."
+    log_success "${label} stopped."
   fi
+}
+
+stop_server() {
+  local server_pid_file
+  server_pid_file="$(runtime_file "ottercamp-server.pid")"
+  local server_pattern
+  server_pattern="${OTTERCAMP_SERVER_PATTERN:-[.]\/bin\/server}"
+  stop_pid_file_process "$server_pid_file" "Server"
+  stop_processes_by_pattern "$server_pattern" "Server"
+}
+
+stop_bridge() {
+  local bridge_pid_file
+  bridge_pid_file="$(runtime_file "ottercamp-bridge.pid")"
+  local bridge_pattern
+  bridge_pattern="${OTTERCAMP_BRIDGE_PATTERN:-openclaw-bridge.ts}"
+  stop_pid_file_process "$bridge_pid_file" "Bridge"
+  stop_processes_by_pattern "$bridge_pattern" "Bridge"
 }
 
 stop_docker() {
@@ -115,6 +162,47 @@ remove_cli_config() {
   fi
 }
 
+cleanup_runtime_artifacts() {
+  local artifacts=(
+    "$(runtime_file "ottercamp-server.pid")"
+    "$(runtime_file "ottercamp-bridge.pid")"
+    "$(runtime_file "ottercamp-server.log")"
+    "$(runtime_file "ottercamp-server.error.log")"
+    "$(runtime_file "ottercamp-bridge.log")"
+    "$(runtime_file "ottercamp-bridge.error.log")"
+  )
+
+  local path
+  for path in "${artifacts[@]}"; do
+    if [[ -e "$path" ]]; then
+      rm -f "$path"
+      log_success "Removed $path"
+    fi
+  done
+}
+
+is_port_in_use() {
+  local port="$1"
+  if ! [[ "$port" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+    return $?
+  fi
+  log_warn "lsof not found; skipping port verification for :$port"
+  return 1
+}
+
+verify_port_released() {
+  local port="${PORT:-4200}"
+  if is_port_in_use "$port"; then
+    log_error "Port $port is still in use after uninstall."
+    return 1
+  fi
+  log_success "Port $port is free."
+}
+
 main() {
   while (($# > 0)); do
     case "$1" in
@@ -139,10 +227,13 @@ main() {
     echo
   fi
 
+  stop_server
   stop_bridge
   stop_docker
   remove_local_data
   remove_cli_config
+  cleanup_runtime_artifacts
+  verify_port_released
 
   echo
   echo -e "${bold}Uninstall complete.${reset}"

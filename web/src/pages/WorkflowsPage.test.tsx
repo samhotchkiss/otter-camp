@@ -71,7 +71,7 @@ describe("WorkflowsPage", () => {
     expect(screen.getByText("2 workflow projects · 1 active · 1 paused")).toBeInTheDocument();
     expect(screen.getByText("Morning Briefing")).toBeInTheDocument();
     expect(screen.getByText("System Heartbeat")).toBeInTheDocument();
-    expect(screen.getByText("Latest issue: Morning run issue")).toBeInTheDocument();
+    expect(screen.getByText("Latest task: Morning run issue")).toBeInTheDocument();
   });
 
   it("toggles workflow_enabled via project patch endpoint", async () => {
@@ -260,7 +260,7 @@ describe("WorkflowsPage", () => {
 
     expect(await screen.findByText("No workflow projects yet")).toBeInTheDocument();
     expect(
-      screen.getByText("Enable workflow fields on a project to schedule recurring issue creation."),
+      screen.getByText("Enable workflow fields on a project to schedule recurring task creation."),
     ).toBeInTheDocument();
   });
 });

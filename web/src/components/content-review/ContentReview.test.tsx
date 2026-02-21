@@ -4,6 +4,30 @@ import userEvent from "@testing-library/user-event";
 import ContentReview from "./ContentReview";
 
 describe("ContentReview state workflow", () => {
+  it("renders redesigned review shell scaffolding for stats, line lane, and sidebar", () => {
+    render(<ContentReview initialMarkdown="# Title\n\nBody" reviewerName="Sam" />);
+
+    expect(screen.getByTestId("content-review-shell")).toBeInTheDocument();
+    expect(screen.getByTestId("content-review-shell")).toHaveClass("min-w-0");
+    expect(screen.getByTestId("review-stats-grid")).toBeInTheDocument();
+    expect(screen.getByTestId("review-stats-grid")).toHaveClass("grid-cols-1");
+    expect(screen.getByTestId("review-line-lane")).toBeInTheDocument();
+    expect(screen.getByTestId("review-line-lane")).toHaveClass("min-w-0");
+    expect(screen.getByTestId("review-comment-sidebar")).toBeInTheDocument();
+    expect(screen.getByTestId("review-comment-sidebar")).toHaveClass("min-w-0");
+  });
+
+  it("applies responsive overflow classes to source controls and line grid", () => {
+    render(<ContentReview initialMarkdown="# Title\n\nBody" reviewerName="Sam" />);
+
+    const controlsRow = screen.getByRole("button", { name: "Add Inline Comment" }).parentElement;
+    expect(controlsRow).toHaveClass("flex-col");
+    expect(controlsRow).toHaveClass("sm:flex-row");
+
+    const sourceGrid = screen.getByTestId("source-textarea").parentElement;
+    expect(sourceGrid).toHaveClass("overflow-x-auto");
+  });
+
   it("starts in Draft and requires Ready-for-Review before approval actions", () => {
     render(<ContentReview initialMarkdown="# Title\n\nBody" reviewerName="Sam" />);
 
@@ -94,7 +118,7 @@ describe("ContentReview markdown source/render toggle", () => {
 
     await user.click(screen.getByRole("button", { name: "Rendered" }));
 
-    expect(screen.getByText("Heading")).toBeInTheDocument();
+    expect(screen.getAllByText("Heading").length).toBeGreaterThan(0);
     expect(screen.getByText("one")).toBeInTheDocument();
     expect(screen.getByText((content) => content.includes("value"))).toBeInTheDocument();
   });
@@ -197,5 +221,42 @@ describe("ContentReview read-only snapshots", () => {
 
     await user.click(screen.getByRole("button", { name: "Rendered" }));
     expect(await screen.findByText("old feedback")).toBeInTheDocument();
+  });
+
+  it("does not auto-focus the source editor in read-only mode", async () => {
+    render(
+      <ContentReview
+        initialMarkdown={"# Snapshot\n\nBody {>>AB: old feedback<<}"}
+        reviewerName="Sam"
+        readOnly
+      />
+    );
+
+    const source = screen.getByTestId("source-textarea") as HTMLTextAreaElement;
+    await new Promise((resolve) => window.setTimeout(resolve, 25));
+    expect(document.activeElement).not.toBe(source);
+  });
+});
+
+describe("ContentReview sidebar navigation", () => {
+  it("renders section navigation with comment counts and updates active section", async () => {
+    const user = userEvent.setup();
+    const markdown = [
+      "# Intro",
+      "",
+      "Body {>>Sam: intro note<<}",
+      "",
+      "## Details",
+      "",
+      "More body text.",
+    ].join("\n");
+    render(<ContentReview initialMarkdown={markdown} reviewerName="Sam" />);
+
+    expect(screen.getByRole("button", { name: "Open section Intro" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open section Details" })).toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes("1 comment"))).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Open section Details" }));
+    expect(screen.getByTestId("active-review-section")).toHaveTextContent("details");
   });
 });

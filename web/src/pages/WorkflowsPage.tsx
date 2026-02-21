@@ -245,7 +245,7 @@ export default function WorkflowsPage() {
           <div style={{ fontSize: 48, marginBottom: 16 }}>🔁</div>
           <h3 style={{ color: "var(--text-primary, #e2e8f0)", margin: "0 0 8px" }}>No workflow projects yet</h3>
           <p style={{ maxWidth: 420, margin: "0 auto" }}>
-            Enable workflow fields on a project to schedule recurring issue creation.
+            Enable workflow fields on a project to schedule recurring task creation.
           </p>
         </div>
       )}
@@ -323,7 +323,7 @@ export default function WorkflowsPage() {
                 <span>Runs: {project.workflow_run_count || 0}</span>
                 <span>Last run: {timeAgo(project.workflow_last_run_at)}</span>
                 <span>Next run: {timeUntil(project.workflow_next_run_at)}</span>
-                {latest?.title && <span>Latest issue: {latest.title}</span>}
+                {latest?.title && <span>Latest task: {latest.title}</span>}
               </div>
             </div>
           );

@@ -9,6 +9,7 @@ describe("DocumentWorkspace mode routing", () => {
       <DocumentWorkspace path="/posts/2026-02-06-launch.md" content="# Draft" reviewerName="Sam" />
     );
     expect(screen.getByTestId("editor-mode-markdown")).toBeInTheDocument();
+    expect(screen.getByTestId("content-review-shell")).toBeInTheDocument();
 
     rerender(<DocumentWorkspace path="/notes/todo.txt" content="todo" reviewerName="Sam" />);
     expect(screen.getByTestId("editor-mode-text")).toBeInTheDocument();
@@ -46,6 +47,9 @@ describe("DocumentWorkspace mode routing", () => {
 
     expect(screen.getByTestId("code-syntax-preview")).toBeInTheDocument();
     expect(screen.getByTestId("code-diff-view")).toBeInTheDocument();
+    expect(screen.getByTestId("editor-mode-code")).toHaveClass("min-w-0");
+    expect(screen.getByTestId("code-syntax-preview")).toHaveClass("overflow-x-auto");
+    expect(screen.getByTestId("code-diff-view")).toHaveClass("overflow-x-auto");
     expect(screen.getByTestId("code-diff-view")).toHaveTextContent("println");
   });
 

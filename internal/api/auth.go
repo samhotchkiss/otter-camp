@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -488,6 +489,26 @@ func sessionTTL() time.Duration {
 	return defaultSessionTTL
 }
 
+// getFrontendBaseURL returns the base URL for the frontend application.
+// It checks (in order): Origin header, Referer header, OTTER_FRONTEND_BASE_URL env var,
+// then falls back to getPublicBaseURL. This avoids hardcoding any specific subdomain.
+func getFrontendBaseURL(r *http.Request) string {
+	if r != nil {
+		if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+			return strings.TrimRight(origin, "/")
+		}
+		if referer := strings.TrimSpace(r.Header.Get("Referer")); referer != "" {
+			if u, err := url.Parse(referer); err == nil && u.Host != "" {
+				return u.Scheme + "://" + u.Host
+			}
+		}
+	}
+	if base := strings.TrimSpace(os.Getenv("OTTER_FRONTEND_BASE_URL")); base != "" {
+		return strings.TrimRight(base, "/")
+	}
+	return getPublicBaseURL(r)
+}
+
 func getPublicBaseURL(r *http.Request) string {
 	if base := strings.TrimSpace(os.Getenv("OTTER_PUBLIC_BASE_URL")); base != "" {
 		return base
@@ -559,6 +580,14 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 	orgNameInput := strings.TrimSpace(firstNonEmpty(req.OrganizationName, req.OrgName, req.Org))
 	orgSlugInput := strings.TrimSpace(req.OrgSlug)
 
+	// When no explicit org is provided, resolve from the caller's auth token.
+	// This ensures the bridge creates magic links for its own org automatically.
+	if orgNameInput == "" && orgSlugInput == "" {
+		if callerOrgSlug := resolveCallerOrgSlug(r); callerOrgSlug != "" {
+			orgSlugInput = callerOrgSlug
+		}
+	}
+
 	orgName := orgNameInput
 	if orgName == "" {
 		orgName = strings.TrimSpace(name)
@@ -603,10 +632,7 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 	// This keeps the web app and otter CLI on the same workspace/org context.
 	if orgNameInput == "" && orgSlugInput == "" && localAuthToken != "" {
 		if expiresAt, ok := lookupActiveSessionExpiry(r.Context(), db, localAuthToken); ok {
-			baseURL := getPublicBaseURL(r)
-			if strings.Contains(baseURL, "api.otter.camp") {
-				baseURL = "https://sam.otter.camp"
-			}
+			baseURL := getFrontendBaseURL(r)
 			magicURL := baseURL + "/?auth=" + localAuthToken
 			sendJSON(w, http.StatusOK, MagicLinkResponse{
 				URL:       magicURL,
@@ -671,11 +697,7 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build the magic link URL
-	baseURL := getPublicBaseURL(r)
-	// Use sam.otter.camp if we detect we're in production
-	if strings.Contains(baseURL, "api.otter.camp") {
-		baseURL = "https://sam.otter.camp"
-	}
+	baseURL := getFrontendBaseURL(r)
 	magicURL := baseURL + "/?auth=" + authToken
 
 	sendJSON(w, http.StatusOK, MagicLinkResponse{
@@ -683,6 +705,36 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 		Token:     authToken,
 		ExpiresAt: expiresAt,
 	})
+}
+
+// resolveCallerOrgSlug extracts the org slug from the caller's Bearer token.
+// This allows the magic link endpoint to inherit the caller's org when no
+// explicit org is provided — critical for 1:1 OpenClaw↔OtterCamp mapping.
+func resolveCallerOrgSlug(r *http.Request) string {
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	if authHeader == "" {
+		return ""
+	}
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	token = strings.TrimSpace(token)
+	if token == "" || token == authHeader {
+		return ""
+	}
+	db, err := getAuthDB()
+	if err != nil || db == nil {
+		return ""
+	}
+	var slug string
+	err = db.QueryRowContext(r.Context(),
+		`SELECT o.slug FROM sessions s
+		 JOIN organizations o ON s.org_id = o.id
+		 WHERE s.token = $1 AND s.expires_at > NOW()`,
+		token,
+	).Scan(&slug)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(slug)
 }
 
 func lookupActiveSessionExpiry(ctx context.Context, db *sql.DB, token string) (time.Time, bool) {

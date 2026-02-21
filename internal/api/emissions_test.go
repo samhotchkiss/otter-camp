@@ -286,6 +286,70 @@ func TestEmissionWebsocketBroadcast(t *testing.T) {
 	require.Equal(t, "agent-1", event.Emission.SourceID)
 }
 
+func TestEmissionsHandlerIngestChatDMSourceRoutingBroadcast(t *testing.T) {
+	buffer := NewEmissionBuffer(10)
+	broadcaster := &fakeEmissionBroadcaster{}
+	handler := &EmissionsHandler{
+		Buffer: buffer,
+		Hub:    broadcaster,
+	}
+	router := newEmissionsTestRouter(handler)
+
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	now := time.Now().UTC().Format(time.RFC3339)
+	body := `{
+		"emissions":[
+			{
+				"id":"em-chat-dm-1",
+				"source_type":"bridge",
+				"source_id":"dm:dm_main",
+				"kind":"status",
+				"summary":"Running write tool",
+				"timestamp":"` + now + `"
+			}
+		]
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/emissions?org_id="+orgID, bytes.NewReader([]byte(body)))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	require.Len(t, broadcaster.orgBroadcasts, 1)
+	require.Equal(t, orgID, broadcaster.orgBroadcasts[0])
+	require.Len(t, broadcaster.topicBroadcasts, 0)
+
+	require.NotEmpty(t, broadcaster.payloads)
+	var event emissionReceivedEvent
+	require.NoError(t, json.Unmarshal(broadcaster.payloads[0], &event))
+	require.Equal(t, ws.MessageEmissionReceived, event.Type)
+	require.Equal(t, "em-chat-dm-1", event.Emission.ID)
+	require.Equal(t, "bridge", event.Emission.SourceType)
+	require.Equal(t, "dm:dm_main", event.Emission.SourceID)
+}
+
+func TestEmissionsHandlerIngestRejectsMalformedChatPayload(t *testing.T) {
+	buffer := NewEmissionBuffer(10)
+	handler := &EmissionsHandler{Buffer: buffer}
+	router := newEmissionsTestRouter(handler)
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+
+	body := `{
+		"emissions":[
+			{
+				"id":"em-chat-bad-1",
+				"source_type":"bridge",
+				"kind":"status",
+				"summary":"Missing source id"
+			}
+		]
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/emissions?org_id="+orgID, bytes.NewReader([]byte(body)))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "source_id is required")
+}
+
 func TestBroadcastEmissionEventMarshalErrorLogsWarning(t *testing.T) {
 	broadcaster := &fakeEmissionBroadcaster{}
 	orgID := "550e8400-e29b-41d4-a716-446655440000"

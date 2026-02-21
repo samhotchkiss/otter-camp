@@ -67,12 +67,13 @@ const RECONNECT_WARNING_THRESHOLD = 5;
 const RECONNECT_ALERT_THRESHOLD = 30;
 const RECONNECT_RESTART_THRESHOLD = 60;
 const RESTART_FAILURE_EXIT_THRESHOLD = 2;
-const HEARTBEAT_INTERVAL_MS = 10000;
+const HEARTBEAT_INTERVAL_MS = 5000;
 const HEARTBEAT_PONG_TIMEOUT_MS = 5000;
 const HEARTBEAT_MISS_THRESHOLD = 2;
 const DISPATCH_REPLAY_MAX_ITEMS = 1000;
 const DISPATCH_REPLAY_MAX_BYTES = 10 * 1024 * 1024;
 const MAX_TRACKED_DISPATCH_REPLAY_IDS = 5000;
+const MAX_TRACKED_DELIVERED_DM_MESSAGE_IDS = 5000;
 const BRIDGE_HEALTH_PORT = (() => {
   const raw = Number.parseInt((process.env.OTTER_BRIDGE_HEALTH_PORT || '').trim(), 10);
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -92,12 +93,14 @@ const PROJECT_ID_PATTERN = /(?:^|:)project:([0-9a-f-]{36})(?:$|:)/i;
 const ISSUE_ID_PATTERN = /(?:^|:)issue:([0-9a-f-]{36})(?:$|:)/i;
 const COMPLETION_PROGRESS_LINE_PATTERN = /\bIssue\s+#(\d+)\s+\|\s+Commit\s+([0-9a-f]{7,40})\s+\|\s+([^|]+)\|/i;
 const CHAMELEON_SESSION_KEY_PATTERN =
-  /^agent:chameleon:oc:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+  /^agent:chameleon:oc:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?::([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))?$/i;
 const SUPPORTED_DISPATCH_EVENT_TYPES = new Set([
   'dm.message',
   'project.chat.message',
   'issue.comment.message',
   'admin.command',
+  'memory.extract.request',
+  'openclaw.gateway.call.request',
 ]);
 const IGNORED_OTTERCAMP_SOCKET_EVENT_TYPES = new Set([
   'connected',
@@ -109,6 +112,9 @@ const SAFE_SESSION_FILENAME_PATTERN = /^[a-z0-9][a-z0-9._-]{7,127}$/i;
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
 const OPENCLAW_SYSTEM_AGENT_PATCH_TARGETS = new Set(['chameleon', 'elephant']);
+const PERMANENT_OPENCLAW_AGENTS = new Set(['main', 'elephant', 'ellie-extractor', 'lori', 'chameleon']);
+const CHAT_EMISSION_THROTTLE_MS = 1000;
+const MAIN_OPENCLAW_SESSION_KEY = 'agent:main:main';
 const OPENCLAW_TOOL_EVENT_CAP = 'tool-events';
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
 let otterCampOrgIDForTestOverride: string | null = null;
@@ -256,7 +262,17 @@ type DMDispatchEvent = {
     sender_id?: string;
     sender_type?: string;
     sender_name?: string;
+    inject_identity?: boolean;
+    incremental_context?: string;
+    attachments?: unknown;
   };
+};
+
+type DMDispatchAttachment = {
+  url: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
 };
 
 type ProjectChatDispatchEvent = {
@@ -333,6 +349,24 @@ type AdminCommandDispatchEvent = {
   };
 };
 
+type MemoryExtractDispatchEvent = {
+  type?: string;
+  org_id?: string;
+  data?: {
+    request_id?: string;
+    args?: unknown;
+  };
+};
+
+type OpenClawGatewayCallDispatchEvent = {
+  type?: string;
+  org_id?: string;
+  data?: {
+    request_id?: string;
+    args?: unknown;
+  };
+};
+
 type DispatchQueueJob = {
   id: number;
   event_type?: string;
@@ -356,6 +390,7 @@ type SessionContext = {
   responderAgentID?: string;
   pendingQuestionnaire?: QuestionnairePayload;
   identityMetadata?: SessionIdentityMetadata;
+  forceIdentityBootstrap?: boolean;
   displayLabel?: string;
   executionMode?: ExecutionMode;
   projectRoot?: string;
@@ -557,11 +592,14 @@ let isDispatchReplayFlushing = false;
 let isPeriodicSyncRunning = false;
 let requestId = 0;
 const pendingRequests = new Map<string, PendingRequest>();
+let sendRequestOverrideForTest: ((method: string, params: Record<string, unknown>) => Promise<unknown>) | null = null;
 const sessionContexts = new Map<string, SessionContext>();
 const contextPrimedSessions = new Set<string>();
 const workspaceCacheByAgentSlot = new Map<string, AgentWorkspaceCacheEntry>();
 let workspaceGuideCache: WorkspaceGuideCacheEntry | null = null;
 const deliveredRunIDs = new Set<string>();
+const lastPersistedReplyBySession = new Map<string, number>();
+const lastChatEmissionAtBySession = new Map<string, number>();
 const deliveredRunIDOrder: string[] = [];
 const progressLogLineHashes = new Set<string>();
 const progressLogLineHashOrder: string[] = [];
@@ -580,6 +618,8 @@ const dispatchReplayQueue: DispatchReplayQueueItem[] = [];
 const queuedDispatchReplayIDs = new Set<string>();
 const deliveredDispatchReplayIDs = new Set<string>();
 const deliveredDispatchReplayIDOrder: string[] = [];
+const deliveredDMMessageIDs = new Set<string>();
+const deliveredDMMessageIDOrder: string[] = [];
 let dispatchReplayQueueBytes = 0;
 const recentCompactionRecoveryByKey = new Map<string, number>();
 let lastSuccessfulSyncAtMs = 0;
@@ -612,6 +652,9 @@ export function buildGatewayConnectCapsForTest(): string[] {
 }
 const defaultExecFileAsync = promisify(execFile);
 let execFileAsync = defaultExecFileAsync;
+const OPENCLAW_COMMAND_DEFAULT_TIMEOUT_MS = 60_000;
+const OPENCLAW_COMMAND_TIMEOUT_HEADROOM_MS = 15_000;
+const OPENCLAW_COMMAND_MAX_TIMEOUT_MS = 5 * 60_000;
 const defaultProcessExit = (code: number): never => process.exit(code);
 let processExitFn: (code: number) => never = defaultProcessExit;
 let resolvedOtterCampOrgIDFromHostConfig = '';
@@ -632,6 +675,12 @@ export function setExecFileForTest(
 
 export function setProcessExitForTest(fn: ((code: number) => never) | null): void {
   processExitFn = fn || defaultProcessExit;
+}
+
+export function setSendRequestForTest(
+  fn: ((method: string, params: Record<string, unknown>) => Promise<unknown>) | null,
+): void {
+  sendRequestOverrideForTest = fn;
 }
 
 function resolveConfiguredOtterCampOrgID(): string {
@@ -1330,6 +1379,50 @@ export async function replayQueuedDispatchEventsForTest(
   return flushedIDs;
 }
 
+function rememberDeliveredDMMessageID(messageID: string, maxItems: number = MAX_TRACKED_DELIVERED_DM_MESSAGE_IDS): void {
+  const normalized = getTrimmedString(messageID);
+  if (!normalized) {
+    return;
+  }
+  if (deliveredDMMessageIDs.has(normalized)) {
+    return;
+  }
+  deliveredDMMessageIDs.add(normalized);
+  deliveredDMMessageIDOrder.push(normalized);
+  while (deliveredDMMessageIDOrder.length > maxItems) {
+    const oldest = deliveredDMMessageIDOrder.shift();
+    if (!oldest) {
+      continue;
+    }
+    deliveredDMMessageIDs.delete(oldest);
+  }
+}
+
+function hasDeliveredDMMessageID(messageID: string): boolean {
+  const normalized = getTrimmedString(messageID);
+  if (!normalized) {
+    return false;
+  }
+  return deliveredDMMessageIDs.has(normalized);
+}
+
+export function rememberDeliveredDMMessageIDForTest(messageID: string, maxItems?: number): void {
+  rememberDeliveredDMMessageID(messageID, maxItems && maxItems > 0 ? maxItems : MAX_TRACKED_DELIVERED_DM_MESSAGE_IDS);
+}
+
+export function hasDeliveredDMMessageIDForTest(messageID: string): boolean {
+  return hasDeliveredDMMessageID(messageID);
+}
+
+export function resetDeliveredDMMessageIDsForTest(): void {
+  deliveredDMMessageIDs.clear();
+  deliveredDMMessageIDOrder.length = 0;
+}
+
+export function getDeliveredDMMessageIDsForTest(): string[] {
+  return [...deliveredDMMessageIDOrder];
+}
+
 function setSessionContext(sessionKey: string, context: SessionContext): void {
   const normalized = getTrimmedString(sessionKey);
   if (!normalized) {
@@ -1349,12 +1442,31 @@ function setSessionContext(sessionKey: string, context: SessionContext): void {
   }
 }
 
-export function parseChameleonSessionKey(sessionKey: string): string | null {
+export type ParsedChameleonSessionKey = {
+  projectID: string;
+  issueID?: string;
+};
+
+function isPermanentOpenClawAgent(agentID: string): boolean {
+  const normalized = getTrimmedString(agentID).toLowerCase();
+  return normalized !== '' && PERMANENT_OPENCLAW_AGENTS.has(normalized);
+}
+
+export function isPermanentOpenClawAgentForTest(agentID: string): boolean {
+  return isPermanentOpenClawAgent(agentID);
+}
+
+export function parseChameleonSessionKey(sessionKey: string): ParsedChameleonSessionKey | null {
   const match = CHAMELEON_SESSION_KEY_PATTERN.exec(getTrimmedString(sessionKey));
   if (!match || !match[1]) {
     return null;
   }
-  return match[1].toLowerCase();
+  const projectID = match[1].toLowerCase();
+  const issueID = getTrimmedString(match[2]).toLowerCase();
+  if (issueID) {
+    return { projectID, issueID };
+  }
+  return { projectID };
 }
 
 export function isCanonicalChameleonSessionKey(sessionKey: string): boolean {
@@ -1362,9 +1474,9 @@ export function isCanonicalChameleonSessionKey(sessionKey: string): boolean {
 }
 
 function parseAgentIDFromSessionKey(sessionKey: string): string {
-  const chameleonAgentID = parseChameleonSessionKey(sessionKey);
-  if (chameleonAgentID) {
-    return chameleonAgentID;
+  const chameleonContext = parseChameleonSessionKey(sessionKey);
+  if (chameleonContext) {
+    return '';
   }
   const match = /^agent:([^:]+):/i.exec(sessionKey.trim());
   if (!match || !match[1]) {
@@ -1391,6 +1503,131 @@ function parseAgentSlotFromSessionKey(sessionKey: string): string {
     return '';
   }
   return candidate;
+}
+
+type DispatchSessionTarget = {
+  sessionKey: string;
+  routedAgentID: string;
+};
+
+function resolveMainDispatchSessionKey(rawSessionKey: string): string {
+  const sessionKey = getTrimmedString(rawSessionKey);
+  if (
+    sessionKey &&
+    /^agent:main:/i.test(sessionKey) &&
+    !PROJECT_ID_PATTERN.test(sessionKey) &&
+    !ISSUE_ID_PATTERN.test(sessionKey)
+  ) {
+    return sessionKey;
+  }
+  return MAIN_OPENCLAW_SESSION_KEY;
+}
+
+function resolveProjectChatDispatchTarget(
+  agentID: string,
+  projectID: string,
+  rawSessionKey: string,
+): DispatchSessionTarget {
+  const normalizedAgentID = getTrimmedString(agentID).toLowerCase();
+  const requestedSessionKey = getTrimmedString(rawSessionKey);
+  if (!normalizedAgentID) {
+    return { sessionKey: requestedSessionKey, routedAgentID: '' };
+  }
+
+  if (normalizedAgentID === 'main') {
+    return {
+      sessionKey: resolveMainDispatchSessionKey(requestedSessionKey),
+      routedAgentID: normalizedAgentID,
+    };
+  }
+
+  const routedAgentID = isPermanentOpenClawAgent(normalizedAgentID) ? normalizedAgentID : 'chameleon';
+  if (routedAgentID === 'chameleon') {
+    return {
+      sessionKey: `agent:chameleon:oc:${projectID}`,
+      routedAgentID,
+    };
+  }
+
+  return {
+    sessionKey: requestedSessionKey || `agent:${routedAgentID}:project:${projectID}`,
+    routedAgentID,
+  };
+}
+
+function resolveIssueCommentDispatchTarget(
+  agentID: string,
+  projectID: string,
+  issueID: string,
+  rawSessionKey: string,
+): DispatchSessionTarget {
+  const normalizedAgentID = getTrimmedString(agentID).toLowerCase();
+  const requestedSessionKey = getTrimmedString(rawSessionKey);
+  if (!normalizedAgentID) {
+    return { sessionKey: requestedSessionKey, routedAgentID: '' };
+  }
+
+  if (normalizedAgentID === 'main') {
+    return {
+      sessionKey: resolveMainDispatchSessionKey(requestedSessionKey),
+      routedAgentID: normalizedAgentID,
+    };
+  }
+
+  const routedAgentID = isPermanentOpenClawAgent(normalizedAgentID) ? normalizedAgentID : 'chameleon';
+  if (routedAgentID === 'chameleon') {
+    return {
+      sessionKey: `agent:chameleon:oc:${projectID}:${issueID}`,
+      routedAgentID,
+    };
+  }
+
+  return {
+    sessionKey: requestedSessionKey || `agent:${routedAgentID}:issue:${issueID}`,
+    routedAgentID,
+  };
+}
+
+function inferSessionContextFromKey(sessionKey: string): SessionContext | null {
+  const normalized = getTrimmedString(sessionKey);
+  if (!normalized) {
+    return null;
+  }
+
+  const chameleon = parseChameleonSessionKey(normalized);
+  if (chameleon) {
+    const fallbackOrgID = resolveConfiguredOtterCampOrgID();
+    if (chameleon.issueID) {
+      return {
+        kind: 'issue_comment',
+        ...(fallbackOrgID ? { orgID: fallbackOrgID } : {}),
+        projectID: chameleon.projectID,
+        issueID: chameleon.issueID,
+      };
+    }
+    return {
+      kind: 'project_chat',
+      ...(fallbackOrgID ? { orgID: fallbackOrgID } : {}),
+      projectID: chameleon.projectID,
+    };
+  }
+
+  const projectID = getTrimmedString(PROJECT_ID_PATTERN.exec(normalized)?.[1]);
+  const issueID = getTrimmedString(ISSUE_ID_PATTERN.exec(normalized)?.[1]);
+  if (!projectID && !issueID) {
+    return null;
+  }
+  if (issueID) {
+    return {
+      kind: 'issue_comment',
+      ...(projectID ? { projectID } : {}),
+      issueID,
+    };
+  }
+  return {
+    kind: 'project_chat',
+    projectID,
+  };
 }
 
 function normalizeUpdatedAt(value: number): number {
@@ -1432,10 +1669,15 @@ function deriveActivityScope(session: OpenClawSession): AgentActivityScope | und
   }
 
   const context = sessionContexts.get(sessionKey);
+  const inferredContext = inferSessionContextFromKey(sessionKey);
   const deliveryContext = asRecord(session.deliveryContext);
 
-  const projectFromSession = PROJECT_ID_PATTERN.exec(sessionKey)?.[1];
-  const issueFromSession = ISSUE_ID_PATTERN.exec(sessionKey)?.[1];
+  const projectFromSession =
+    getTrimmedString(inferredContext?.projectID) ||
+    PROJECT_ID_PATTERN.exec(sessionKey)?.[1];
+  const issueFromSession =
+    getTrimmedString(inferredContext?.issueID) ||
+    ISSUE_ID_PATTERN.exec(sessionKey)?.[1];
   const projectID =
     projectFromSession ||
     getTrimmedString(context?.projectID) ||
@@ -2632,7 +2874,7 @@ function buildContextReminder(context: SessionContext): string {
       typeof context.issueNumber === 'number' && Number.isFinite(context.issueNumber)
         ? `#${context.issueNumber}`
         : context.issueID || 'unknown issue';
-    return `Issue thread ${issueLabel} (${context.projectID || 'unknown project'})`;
+    return `Issue ${issueLabel} (${context.projectID || 'unknown project'})`;
   }
   return `DM thread (${context.threadID || 'unknown thread'})`;
 }
@@ -3125,13 +3367,12 @@ async function resolveSessionIdentityMetadata(
   context: SessionContext,
   content: string,
 ): Promise<SessionIdentityMetadata | null> {
-  const canonicalChameleonAgentID = parseChameleonSessionKey(sessionKey);
+  const canonicalChameleonSession = parseChameleonSessionKey(sessionKey);
   const normalizedContextAgentID =
     getTrimmedString(context.agentID) ||
     getTrimmedString(context.responderAgentID);
   const fallbackAgentID = parseAgentIDFromSessionKey(sessionKey);
   const agentID = (
-    canonicalChameleonAgentID ||
     normalizedContextAgentID ||
     fallbackAgentID
   ).trim().toLowerCase();
@@ -3140,8 +3381,8 @@ async function resolveSessionIdentityMetadata(
   }
   const orgID = getTrimmedString(context.orgID) || OTTERCAMP_ORG_ID;
   const taskSummary = deriveTaskSummary(context, content);
-  const whoAmISessionKey = canonicalChameleonAgentID
-    ? sessionKey
+  const whoAmISessionKey = canonicalChameleonSession
+    ? undefined
     : (context.kind === 'dm' ? sessionKey : undefined);
 
   const compactPayload = await fetchWhoAmIProfile(agentID, whoAmISessionKey, orgID, 'compact');
@@ -3242,12 +3483,39 @@ async function withAutoRecallContext(sessionKey: string, rawContent: string): Pr
   }
 }
 
+function formatIncrementalDMContent(rawContent: string, rawIncrementalContext: string): string {
+  const content = rawContent.trim();
+  const incrementalContext = rawIncrementalContext.trim();
+  if (!incrementalContext) {
+    return content;
+  }
+  if (!content) {
+    return [
+      '[OtterCamp Context Update]',
+      incrementalContext,
+      '[/OtterCamp Context Update]',
+    ].join('\n');
+  }
+  return [
+    '[OtterCamp Context Update]',
+    incrementalContext,
+    '[/OtterCamp Context Update]',
+    '',
+    content,
+  ].join('\n');
+}
+
+export function formatIncrementalDMContentForTest(content: string, incrementalContext: string): string {
+  return formatIncrementalDMContent(content, incrementalContext);
+}
+
 async function withSessionContext(
   sessionKey: string,
   rawContent: string,
-  options?: { includeUserContent?: boolean },
+  options?: { includeUserContent?: boolean; forceIdentityBootstrap?: boolean },
 ): Promise<string> {
   const includeUserContent = options?.includeUserContent !== false;
+  const forceIdentityBootstrap = options?.forceIdentityBootstrap === true;
   const content = rawContent.trim();
   if (!content) {
     return '';
@@ -3258,6 +3526,8 @@ async function withSessionContext(
   }
   const isDirectMessage = context.kind === 'dm';
   const shouldBootstrapIdentity =
+    forceIdentityBootstrap ||
+    context.forceIdentityBootstrap === true ||
     !contextPrimedSessions.has(sessionKey) ||
     (isDirectMessage && !context.identityMetadata);
 
@@ -3267,6 +3537,7 @@ async function withSessionContext(
       ...context,
       executionMode: execution.mode,
       projectRoot: execution.projectRoot,
+      forceIdentityBootstrap: false,
     };
 
     let identityMetadata = context.identityMetadata;
@@ -3314,26 +3585,11 @@ async function withSessionContext(
     }
     return sections.join('\n\n');
   }
-  const reminderSections: string[] = [];
-  const shouldPersistIdentityPreamble = context.kind === 'dm';
-  const identityPreamble = shouldPersistIdentityPreamble
-    ? getTrimmedString(context.identityMetadata?.preamble)
-    : '';
-  if (identityPreamble) {
-    reminderSections.push(identityPreamble);
-  }
-  const operatingGuideReminder = buildOtterCampOperatingGuideReminder(sessionKey);
-  if (operatingGuideReminder) {
-    reminderSections.push(operatingGuideReminder);
-  }
-  const actionDefaults = buildSurfaceActionDefaults(context);
-  if (actionDefaults) {
-    reminderSections.push(actionDefaults);
-  }
-  reminderSections.push(
-    `[OTTERCAMP_CONTEXT_REMINDER]\n- ${buildContextReminder(context)}\n[/OTTERCAMP_CONTEXT_REMINDER]`,
-  );
-  const reminder = reminderSections.join('\n\n');
+  const reminder = [
+    '[OTTERCAMP_CONTEXT_REMINDER]',
+    `- ${buildContextReminder(context)} | Refer to ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME} and ${OTTERCAMP_COMMAND_REFERENCE_FILENAME} for rules.`,
+    '[/OTTERCAMP_CONTEXT_REMINDER]',
+  ].join('\n');
   if (!includeUserContent) {
     return reminder;
   }
@@ -3391,6 +3647,10 @@ function extractMessageContent(value: unknown): string {
     getTrimmedString(record.body) ||
     ''
   );
+}
+
+function normalizeAssistantReplyForDedup(content: string): string {
+  return content.trim().replace(/\s+/g, ' ').slice(0, 200);
 }
 
 function normalizeQuestionnaireType(value: unknown): QuestionnaireQuestion['type'] | null {
@@ -3855,7 +4115,9 @@ async function pushActivityEventBatch(orgID: string, events: BridgeAgentActivity
     return true;
   }
 
-  const response = await fetchWithRetry(`${OTTERCAMP_URL}/api/activity/events`, {
+  // Use plain fetch (no retry) for activity events — retries block the event loop
+  // and prevent DM dispatch messages from being processed on the WS connection.
+  const response = await fetch(`${OTTERCAMP_URL}/api/activity/events`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -3870,7 +4132,7 @@ async function pushActivityEventBatch(orgID: string, events: BridgeAgentActivity
       org_id: orgID,
       events,
     }),
-  }, 'push activity events');
+  });
   if (!response.ok) {
     const snippet = (await response.text().catch(() => '')).slice(0, 240);
     console.error(
@@ -3937,11 +4199,19 @@ export function resetSessionContextsForTest(): void {
   contextPrimedSessions.clear();
   workspaceCacheByAgentSlot.clear();
   workspaceGuideCache = null;
+  lastPersistedReplyBySession.clear();
+  deliveredRunIDs.clear();
+  deliveredRunIDOrder.length = 0;
+  lastChatEmissionAtBySession.clear();
 }
 
 export function resetIngestedToolEventsForTest(): void {
   ingestedToolEventCountForTest = 0;
   lastIngestedToolEventForTest = null;
+}
+
+export function resetChatEmissionForwardingStateForTest(): void {
+  lastChatEmissionAtBySession.clear();
 }
 
 export function getIngestedToolEventsStateForTest(): {
@@ -4263,6 +4533,9 @@ async function connectToOpenClaw(): Promise<void> {
 }
 
 async function sendRequest(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  if (sendRequestOverrideForTest) {
+    return sendRequestOverrideForTest(method, params);
+  }
   if (!openClawWS || openClawWS.readyState !== WebSocket.OPEN) {
     throw new Error('not connected to OpenClaw');
   }
@@ -4295,13 +4568,22 @@ async function sendMessageToSession(
   sessionKey: string,
   content: string,
   messageID?: string,
+  options?: { forceIdentityBootstrap?: boolean; attachments?: DMDispatchAttachment[]; preferAgentMethod?: boolean },
 ): Promise<void> {
+  const forceIdentityBootstrap = options?.forceIdentityBootstrap === true;
+  const preferAgentMethod = options?.preferAgentMethod === true;
   const idempotencyKey =
     (messageID || '').trim() || `dm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const isFirstDispatchForSession = !contextPrimedSessions.has(sessionKey);
+  const normalizedAttachments = (options?.attachments || []).filter(
+    (attachment) => getTrimmedString(attachment.url),
+  );
+  const hasAttachments = normalizedAttachments.length > 0;
+  const isFirstDispatchForSession = forceIdentityBootstrap || !contextPrimedSessions.has(sessionKey);
   const isCanonicalChameleonSession = parseChameleonSessionKey(sessionKey) !== null;
-  const recallAwareContent = await withAutoRecallContext(sessionKey, content);
-  if (!recallAwareContent) {
+  const shouldUseAgentMethod = isCanonicalChameleonSession || preferAgentMethod;
+  const trimmedContent = content.trim();
+  const recallAwareContent = trimmedContent ? await withAutoRecallContext(sessionKey, trimmedContent) : '';
+  if (!recallAwareContent && !hasAttachments) {
     return;
   }
 
@@ -4326,9 +4608,10 @@ async function sendMessageToSession(
     }
   }
 
-  if (isCanonicalChameleonSession) {
+  if (shouldUseAgentMethod && recallAwareContent) {
     const extraSystemPrompt = await withSessionContext(sessionKey, recallAwareContent, {
       includeUserContent: false,
+      forceIdentityBootstrap,
     });
     try {
       await sendRequest('agent', {
@@ -4336,6 +4619,7 @@ async function sendMessageToSession(
         sessionKey,
         message: recallAwareContent,
         deliver: false,
+        ...(hasAttachments ? { attachments: normalizedAttachments } : {}),
         ...(extraSystemPrompt ? { extraSystemPrompt } : {}),
       });
       return;
@@ -4349,14 +4633,21 @@ async function sendMessageToSession(
     }
   }
 
-  const contextualContent = await withSessionContext(sessionKey, recallAwareContent);
-  if (!contextualContent) {
+  const contextualContent = recallAwareContent
+    ? await withSessionContext(sessionKey, recallAwareContent, {
+    forceIdentityBootstrap,
+  })
+    : '';
+  const fallbackAttachmentMessage = buildAttachmentOnlyDispatchMessage(normalizedAttachments);
+  const outboundMessage = contextualContent || fallbackAttachmentMessage;
+  if (!outboundMessage && !hasAttachments) {
     return;
   }
   await sendRequest('chat.send', {
     idempotencyKey,
     sessionKey,
-    message: contextualContent,
+    message: outboundMessage,
+    ...(hasAttachments ? { attachments: normalizedAttachments } : {}),
   });
 }
 
@@ -4372,10 +4663,26 @@ async function persistAssistantReplyToOtterCamp(params: {
     return;
   }
 
-  const context = sessionContexts.get(sessionKey);
+  // Suppress NO_REPLY / HEARTBEAT_OK responses — these are internal signals, not user-facing.
+  // Also suppress partial fragments ("NO", "NO_") that leak from streaming truncation.
+  const upperContent = content.toUpperCase().replace(/[^A-Z_]/g, '');
+  if (
+    upperContent === 'NO_REPLY' || upperContent === 'NOREPLY' ||
+    upperContent === 'HEARTBEAT_OK' || upperContent === 'HEARTBEATOK' ||
+    upperContent === 'NO' || upperContent === 'NO_'
+  ) {
+    return;
+  }
+
+  const existingContext = sessionContexts.get(sessionKey);
+  const inferredContext = inferSessionContextFromKey(sessionKey);
+  const context = existingContext || inferredContext;
   if (!context) {
     // Ignore non-DM assistant activity (e.g. cron/system sessions).
     return;
+  }
+  if (!existingContext && inferredContext) {
+    setSessionContext(sessionKey, inferredContext);
   }
   let persistedTarget = sessionKey;
 
@@ -4456,7 +4763,7 @@ async function persistAssistantReplyToOtterCamp(params: {
     }
     persistedTarget = threadID;
   } else if (context.kind === 'project_chat') {
-    const orgID = getTrimmedString(context.orgID);
+    const orgID = getTrimmedString(context.orgID) || resolveConfiguredOtterCampOrgID();
     const projectID = getTrimmedString(context.projectID);
     if (!orgID || !projectID) {
       return;
@@ -4486,7 +4793,7 @@ async function persistAssistantReplyToOtterCamp(params: {
     }
     persistedTarget = `project:${projectID}`;
   } else if (context.kind === 'issue_comment') {
-    const orgID = getTrimmedString(context.orgID);
+    const orgID = getTrimmedString(context.orgID) || resolveConfiguredOtterCampOrgID();
     const issueID = getTrimmedString(context.issueID);
     const responderAgentID = getTrimmedString(context.responderAgentID);
     if (!orgID || !issueID || !responderAgentID) {
@@ -4630,6 +4937,40 @@ async function recordCompactionMemory(signal: CompactionSignal): Promise<void> {
   if (!response.ok) {
     const snippet = (await response.text().catch(() => '')).slice(0, 300);
     throw new Error(`record compaction memory failed: ${response.status} ${response.statusText} ${snippet}`.trim());
+  }
+}
+
+async function reportCompactionSignalToOtterCamp(signal: CompactionSignal): Promise<void> {
+  if (!signal.orgID || !signal.sessionKey) {
+    return;
+  }
+
+  const response = await fetchWithRetry(`${OTTERCAMP_URL}/api/openclaw/events`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(OTTERCAMP_TOKEN
+        ? {
+            Authorization: `Bearer ${OTTERCAMP_TOKEN}`,
+            'X-OpenClaw-Token': OTTERCAMP_TOKEN,
+          }
+        : {}),
+    },
+    body: JSON.stringify({
+      event: 'session.compaction',
+      org_id: signal.orgID,
+      session_key: signal.sessionKey,
+      compaction_detected: true,
+      data: {
+        session_key: signal.sessionKey,
+        compaction_detected: true,
+      },
+    }),
+  }, 'report compaction signal');
+
+  if (!response.ok) {
+    const snippet = (await response.text().catch(() => '')).slice(0, 300);
+    throw new Error(`compaction signal report failed: ${response.status} ${response.statusText} ${snippet}`.trim());
   }
 }
 
@@ -4810,6 +5151,10 @@ export async function fetchCompactionRecoveryContextForTest(signal: CompactionSi
   return fetchCompactionRecoveryContext(signal);
 }
 
+export async function reportCompactionSignalToOtterCampForTest(signal: CompactionSignal): Promise<void> {
+  await reportCompactionSignalToOtterCamp(signal);
+}
+
 export function resetCompactionRecoveryStateForTest(): void {
   recentCompactionRecoveryByKey.clear();
 }
@@ -4957,6 +5302,160 @@ async function enforceMutationToolPolicy(event: OpenClawToolEvent): Promise<void
   }
 }
 
+function normalizeChatEmissionSummary(summary: string): string {
+  return summary.replace(/\s+/g, ' ').trim().slice(0, 200);
+}
+
+function resolveChatEmissionRoute(
+  sessionKey: string,
+): { orgID: string; sourceID: string; scope?: Record<string, string> } | null {
+  let context = sessionContexts.get(sessionKey);
+  if (!context) {
+    const inferred = inferSessionContextFromKey(sessionKey);
+    if (inferred) {
+      setSessionContext(sessionKey, inferred);
+      context = inferred;
+    }
+  }
+
+  const orgID = getTrimmedString(context?.orgID) || resolveConfiguredOtterCampOrgID();
+  if (!orgID) {
+    return null;
+  }
+
+  if (context?.kind === 'dm') {
+    const threadID = getTrimmedString(context.threadID);
+    if (threadID) {
+      return {
+        orgID,
+        sourceID: `dm:${threadID}`,
+      };
+    }
+  }
+
+  if (context?.kind === 'project_chat') {
+    const projectID = getTrimmedString(context.projectID);
+    if (projectID) {
+      return {
+        orgID,
+        sourceID: `project:${projectID}`,
+        scope: { project_id: projectID },
+      };
+    }
+  }
+
+  if (context?.kind === 'issue_comment') {
+    const issueID = getTrimmedString(context.issueID);
+    const projectID = getTrimmedString(context.projectID);
+    if (issueID) {
+      return {
+        orgID,
+        sourceID: `issue:${issueID}`,
+        scope: {
+          ...(projectID ? { project_id: projectID } : {}),
+          issue_id: issueID,
+        },
+      };
+    }
+  }
+
+  return {
+    orgID,
+    sourceID: `session:${sessionKey}`,
+  };
+}
+
+function shouldThrottleChatEmission(sessionKey: string, nowMs = Date.now()): boolean {
+  const lastSentAt = lastChatEmissionAtBySession.get(sessionKey) ?? 0;
+  if (nowMs - lastSentAt < CHAT_EMISSION_THROTTLE_MS) {
+    return true;
+  }
+  lastChatEmissionAtBySession.set(sessionKey, nowMs);
+  if (lastChatEmissionAtBySession.size > 5000) {
+    const cutoff = nowMs - (5 * 60 * 1000);
+    for (const [key, value] of lastChatEmissionAtBySession) {
+      if (value < cutoff) {
+        lastChatEmissionAtBySession.delete(key);
+      }
+    }
+  }
+  return false;
+}
+
+async function forwardChatEmissionToOtterCamp(sessionKey: string, summary: string): Promise<void> {
+  const normalizedSummary = normalizeChatEmissionSummary(summary);
+  if (!normalizedSummary) {
+    return;
+  }
+  const route = resolveChatEmissionRoute(sessionKey);
+  if (!route) {
+    return;
+  }
+  if (shouldThrottleChatEmission(sessionKey)) {
+    return;
+  }
+
+  const response = await fetchWithRetry(
+    `${OTTERCAMP_URL}/api/emissions?org_id=${encodeURIComponent(route.orgID)}`,
+    {
+      method: 'POST',
+      headers: buildOtterCampAuthHeaders(true),
+      body: JSON.stringify({
+        emissions: [
+          {
+            source_type: 'bridge',
+            source_id: route.sourceID,
+            kind: 'status',
+            summary: normalizedSummary,
+            timestamp: new Date().toISOString(),
+            ...(route.scope ? { scope: route.scope } : {}),
+          },
+        ],
+      }),
+    },
+    'forward chat emission',
+  );
+  if (!response.ok) {
+    const snippet = (await response.text().catch(() => '')).slice(0, 300);
+    throw new Error(`chat emission forward failed: ${response.status} ${response.statusText} ${snippet}`.trim());
+  }
+}
+
+function summarizeToolEventForChatEmission(event: OpenClawToolEvent): string {
+  const tool = getTrimmedString(event.tool) || 'tool';
+  const target =
+    getTrimmedString(event.args?.path) ||
+    getTrimmedString(event.args?.file) ||
+    getTrimmedString(event.args?.command);
+  if (target) {
+    return `Running ${tool}: ${target}`;
+  }
+  return `Running ${tool}`;
+}
+
+function summarizeIntermediateChatState(
+  payload: Record<string, unknown>,
+  state: string,
+): string | null {
+  const messageRecord = asRecord(payload.message);
+  const content = extractMessageContent(
+    messageRecord?.content ?? payload.content ?? payload.status ?? payload.summary,
+  );
+  if (content) {
+    if (state === 'thinking') {
+      return `Thinking: ${content}`;
+    }
+    return content;
+  }
+  if (state === 'thinking') {
+    return 'Thinking...';
+  }
+  if (state === 'stream' || state === 'running' || state === 'working') {
+    return 'Working...';
+  }
+  return null;
+}
+
 async function handleOpenClawToolEvent(event: OpenClawToolEvent): Promise<void> {
   ingestedToolEventCountForTest += 1;
   lastIngestedToolEventForTest = {
@@ -4964,6 +5463,12 @@ async function handleOpenClawToolEvent(event: OpenClawToolEvent): Promise<void> 
     ...(event.args ? { args: { ...event.args } } : {}),
   };
   await enforceMutationToolPolicy(event);
+  if (event.phase === 'start') {
+    const summary = summarizeToolEventForChatEmission(event);
+    await forwardChatEmissionToOtterCamp(event.sessionKey, summary).catch((err) => {
+      console.warn(`[bridge] failed to forward tool emission for ${event.sessionKey}:`, err);
+    });
+  }
 }
 
 async function handleOpenClawEvent(message: Record<string, unknown>): Promise<void> {
@@ -4997,6 +5502,18 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
       compactionSignal.agentID = parseAgentIDFromSessionKey(compactionSignal.sessionKey) || undefined;
     }
 
+    if (sessionContext) {
+      contextPrimedSessions.delete(compactionSignal.sessionKey);
+      setSessionContext(compactionSignal.sessionKey, {
+        ...sessionContext,
+        forceIdentityBootstrap: true,
+      });
+    }
+
+    await reportCompactionSignalToOtterCamp(compactionSignal).catch((err) => {
+      console.warn(`[bridge] failed to report compaction signal for ${compactionSignal.sessionKey}:`, err);
+    });
+
     await runCompactionRecovery(compactionSignal).catch((err) => {
       console.warn(`[bridge] compaction recovery failed for ${compactionSignal.sessionKey}:`, err);
     });
@@ -5009,21 +5526,54 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
   }
 
   const state = getTrimmedString(payload.state).toLowerCase();
-  if (state !== 'final') {
-    return;
-  }
-
   const sessionKey = getTrimmedString(payload.sessionKey) || getTrimmedString(payload.session_key);
   if (!sessionKey) {
     return;
   }
   if (!sessionContexts.has(sessionKey)) {
+    const inferredContext = inferSessionContextFromKey(sessionKey);
+    if (!inferredContext) {
+      return;
+    }
+    setSessionContext(sessionKey, inferredContext);
+  }
+
+  if (state !== 'final') {
+    const summary = summarizeIntermediateChatState(payload, state);
+    if (summary) {
+      await forwardChatEmissionToOtterCamp(sessionKey, summary).catch((err) => {
+        console.warn(`[bridge] failed to forward chat emission for ${sessionKey}:`, err);
+      });
+    }
     return;
   }
 
   const runID = getTrimmedString(payload.runId) || getTrimmedString(payload.run_id);
   if (runID && deliveredRunIDs.has(runID)) {
     return;
+  }
+
+  // Content-based dedup: skip if same content was persisted for this session within 30s
+  const contentForDedup = extractMessageContent(
+    asRecord(payload.message)?.content ?? payload.content,
+  );
+  if (contentForDedup && sessionKey) {
+    const dedupKey = `${sessionKey}::${normalizeAssistantReplyForDedup(contentForDedup)}`;
+    const lastTime = lastPersistedReplyBySession.get(dedupKey);
+    if (lastTime && Date.now() - lastTime < 30_000) {
+      console.log(
+        `[bridge] deduped assistant final reply for ${sessionKey}${runID ? ` (run_id=${runID})` : ''}`,
+      );
+      return;
+    }
+    lastPersistedReplyBySession.set(dedupKey, Date.now());
+    // Prune old entries
+    if (lastPersistedReplyBySession.size > 200) {
+      const cutoff = Date.now() - 60_000;
+      for (const [k, v] of lastPersistedReplyBySession) {
+        if (v < cutoff) lastPersistedReplyBySession.delete(k);
+      }
+    }
   }
 
   const messageRecord = asRecord(payload.message);
@@ -5450,11 +6000,13 @@ async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
     throw err;
   }
 
-  try {
-    await syncWorkflowProjectsFromCronJobs(cronJobs);
-  } catch (err) {
-    console.error('[bridge] workflow project cron sync failed:', err);
-  }
+  // Disabled: cron→workflow project sync creates unwanted projects.
+  // Re-enable when OtterCamp has proper workflow UI.
+  // try {
+  //   await syncWorkflowProjectsFromCronJobs(cronJobs);
+  // } catch (err) {
+  //   console.error('[bridge] workflow project cron sync failed:', err);
+  // }
 }
 
 async function pullDispatchQueueJobs(limit = 50): Promise<DispatchQueueJob[]> {
@@ -5578,6 +6130,14 @@ async function dispatchInboundEvent(
       await handleAdminCommandDispatchEvent(record as AdminCommandDispatchEvent);
       return true;
     }
+    if (normalizedType === 'memory.extract.request') {
+      await handleMemoryExtractDispatchEvent(record as MemoryExtractDispatchEvent);
+      return true;
+    }
+    if (normalizedType === 'openclaw.gateway.call.request') {
+      await handleOpenClawGatewayCallDispatchEvent(record as OpenClawGatewayCallDispatchEvent);
+      return true;
+    }
     return false;
   };
 
@@ -5677,30 +6237,551 @@ export function resetPeriodicSyncGuardForTest(): void {
   isPeriodicSyncRunning = false;
 }
 
+export function setOtterCampSocketForTest(socket: { readyState: number; send: (payload: string) => void } | null): void {
+  otterCampWS = socket as unknown as WebSocket | null;
+}
+
+function normalizeDispatchArgs(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const args: string[] = [];
+  for (const rawArg of value) {
+    if (typeof rawArg !== 'string') {
+      return [];
+    }
+    const arg = rawArg.trim();
+    if (!arg) {
+      return [];
+    }
+    args.push(arg);
+  }
+  return args;
+}
+
+export function ensureGatewayCallCredentials(args: string[], tokenRaw: string = OPENCLAW_TOKEN): string[] {
+  const normalized = normalizeDispatchArgs(args);
+  const sanitized: string[] = [];
+  for (let idx = 0; idx < normalized.length; idx += 1) {
+    const arg = normalized[idx];
+    if (arg === '--url') {
+      idx += 1; // Drop explicit URL override for local bridge execution.
+      continue;
+    }
+    sanitized.push(arg);
+  }
+
+  if (sanitized.length < 3) {
+    return sanitized;
+  }
+  if (sanitized[0] !== 'gateway' || sanitized[1] !== 'call' || sanitized[2] !== 'agent') {
+    return sanitized;
+  }
+  if (sanitized.includes('--token') || sanitized.includes('--password')) {
+    return sanitized;
+  }
+  const token = tokenRaw.trim();
+  if (!token) {
+    return sanitized;
+  }
+  return [...sanitized, '--token', token];
+}
+
+const ELLIE_INGESTION_SESSION_NAMESPACE = 'ellie-ingestion';
+const ELLIE_INGESTION_SESSION_TOKEN_PATTERN = /[^a-z0-9_-]+/g;
+
+function normalizeEllieIngestionSessionToken(raw: string, fallback: string): string {
+  const normalized = raw
+    .trim()
+    .toLowerCase()
+    .replace(ELLIE_INGESTION_SESSION_TOKEN_PATTERN, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '');
+  return normalized || fallback;
+}
+
+function deriveMemoryExtractAgentSlot(params: Record<string, unknown>): string {
+  const sessionKey = getTrimmedString(params.sessionKey);
+  const match = /^agent:([^:]+):/i.exec(sessionKey);
+  if (!match?.[1]) {
+    return 'elephant';
+  }
+  return normalizeEllieIngestionSessionToken(match[1], 'elephant');
+}
+
+function ensureMemoryExtractSessionReuseArgs(args: string[], orgIDRaw: string): string[] {
+  const normalized = normalizeDispatchArgs(args);
+  const orgToken = normalizeEllieIngestionSessionToken(orgIDRaw, '');
+  if (!orgToken) {
+    return normalized;
+  }
+  if (normalized.length < 3) {
+    return normalized;
+  }
+  if (normalized[0] !== 'gateway' || normalized[1] !== 'call' || normalized[2] !== 'agent') {
+    return normalized;
+  }
+
+  const paramsIndex = normalized.indexOf('--params');
+  if (paramsIndex < 0 || paramsIndex + 1 >= normalized.length) {
+    return normalized;
+  }
+
+  let parsedParams: Record<string, unknown> | null = null;
+  try {
+    parsedParams = asRecord(parseJSONValue(normalized[paramsIndex + 1]));
+  } catch {
+    return normalized;
+  }
+  if (!parsedParams) {
+    return normalized;
+  }
+
+  const stableSessionKey = `agent:${deriveMemoryExtractAgentSlot(parsedParams)}:main:${ELLIE_INGESTION_SESSION_NAMESPACE}:${orgToken}`;
+  const rewritten = [...normalized];
+  rewritten[paramsIndex + 1] = JSON.stringify({
+    ...parsedParams,
+    sessionKey: stableSessionKey,
+  });
+  return rewritten;
+}
+
+const MEMORY_EXTRACT_MAX_PAYLOAD_TEXT_CHARS = 8000;
+const MEMORY_EXTRACT_DEFAULT_PAYLOAD_TEXT = '{"candidates":[]}';
+const MEMORY_EXTRACT_DEFAULT_MODEL = 'claude-haiku-4-5';
+const MEMORY_EXTRACT_MAX_ERROR_CHARS = 1000;
+const MEMORY_EXTRACT_MAX_OUTPUT_CHARS = 12000;
+
+function truncateMemoryExtractPayloadText(text: string): string {
+  if (text.length <= MEMORY_EXTRACT_MAX_PAYLOAD_TEXT_CHARS) {
+    return text;
+  }
+  const normalized = text.trim();
+  if (
+    normalized.startsWith('{')
+    || normalized.startsWith('[')
+    || normalized.startsWith('```')
+  ) {
+    // Avoid returning truncated JSON payload fragments that decode as invalid JSON upstream.
+    return MEMORY_EXTRACT_DEFAULT_PAYLOAD_TEXT;
+  }
+  return text.slice(0, MEMORY_EXTRACT_MAX_PAYLOAD_TEXT_CHARS);
+}
+
+function parseMemoryExtractGatewayResponse(raw: string): Record<string, unknown> | null {
+  const direct = raw.trim();
+  if (!direct) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(direct) as unknown;
+    return asRecord(parsed);
+  } catch {
+    // Fall through to best-effort object extraction.
+  }
+
+  const objectStart = direct.indexOf('{');
+  const objectEnd = direct.lastIndexOf('}');
+  if (objectStart < 0 || objectEnd <= objectStart) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(direct.slice(objectStart, objectEnd + 1)) as unknown;
+    return asRecord(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function decodeJSONStringLiteral(rawValue: string): string {
+  try {
+    return JSON.parse(`"${rawValue}"`) as string;
+  } catch {
+    return rawValue;
+  }
+}
+
+function extractFirstJSONStringField(raw: string, field: string): string {
+  const pattern = new RegExp(`"${field}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`);
+  const match = raw.match(pattern);
+  if (!match?.[1]) {
+    return '';
+  }
+  return decodeJSONStringLiteral(match[1]).trim();
+}
+
+function compactMemoryExtractFallbackEnvelope(): string {
+  return JSON.stringify({
+    runId: '',
+    status: 'ok',
+    result: {
+      payloads: [{ text: MEMORY_EXTRACT_DEFAULT_PAYLOAD_TEXT }],
+      meta: {
+        agentMeta: {
+          model: MEMORY_EXTRACT_DEFAULT_MODEL,
+        },
+      },
+    },
+  });
+}
+
+function sanitizeMemoryExtractErrorDetail(rawDetail: string): string {
+  const compact = compactErrorDetail(rawDetail, MEMORY_EXTRACT_MAX_ERROR_CHARS);
+  if (!compact) {
+    return 'memory extraction command failed';
+  }
+  return compact;
+}
+
+export function compactMemoryExtractOutput(rawOutput: string): string {
+  const trimmed = rawOutput.trim();
+  if (!trimmed) {
+    return rawOutput;
+  }
+
+  const parsed = parseMemoryExtractGatewayResponse(trimmed);
+  const result = asRecord(parsed?.result);
+  const payloadsRaw = Array.isArray(result?.payloads) ? result?.payloads : [];
+  const payloadText = payloadsRaw
+    .map((entry) => {
+      const record = asRecord(entry);
+      const text = getTrimmedString(record?.text);
+      if (!text) {
+        return null;
+      }
+      return text;
+    })
+    .find((entry): entry is string => typeof entry === 'string')
+    || extractFirstJSONStringField(trimmed, 'text')
+    || MEMORY_EXTRACT_DEFAULT_PAYLOAD_TEXT;
+
+  const model = getTrimmedString(
+    asRecord(asRecord(result?.meta)?.agentMeta)?.model,
+  ) || extractFirstJSONStringField(trimmed, 'model') || MEMORY_EXTRACT_DEFAULT_MODEL;
+
+  const status = getTrimmedString(parsed?.status)
+    || extractFirstJSONStringField(trimmed, 'status')
+    || 'ok';
+  const runID = getTrimmedString(parsed?.runId)
+    || extractFirstJSONStringField(trimmed, 'runId');
+
+  const compact: Record<string, unknown> = {
+    runId: runID,
+    status,
+    result: {
+      payloads: [{ text: truncateMemoryExtractPayloadText(payloadText) }],
+      meta: {
+        agentMeta: {
+          model,
+        },
+      },
+    },
+  };
+
+  return JSON.stringify(compact);
+}
+
+const GATEWAY_CALL_MAX_PAYLOAD_TEXT_CHARS = 20000;
+const GATEWAY_CALL_MAX_OUTPUT_CHARS = 35000;
+const GATEWAY_CALL_MAX_ERROR_CHARS = 1000;
+
+function sanitizeGatewayCallErrorDetail(rawDetail: string): string {
+  const compact = compactErrorDetail(rawDetail, GATEWAY_CALL_MAX_ERROR_CHARS);
+  if (!compact) {
+    return 'openclaw gateway call failed';
+  }
+  return compact;
+}
+
+function compactErrorDetail(rawDetail: string, maxChars: number): string {
+  const compact = rawDetail.replace(/\\s+/g, ' ').trim();
+  if (!compact || maxChars <= 0) {
+    return '';
+  }
+  if (compact.length <= maxChars) {
+    return compact;
+  }
+
+  // Keep both the beginning and end so command context and the root-cause tail survive truncation.
+  const headChars = Math.max(80, Math.floor(maxChars * 0.55));
+  const tailChars = Math.max(60, maxChars - headChars - 5);
+  const head = compact.slice(0, headChars);
+  const tail = compact.slice(-tailChars);
+  return `${head} ... ${tail}`;
+}
+
+function resolveOpenClawCommandTimeoutMS(args: string[]): number {
+  let timeoutMS = OPENCLAW_COMMAND_DEFAULT_TIMEOUT_MS;
+  const timeoutIndex = args.indexOf('--timeout');
+  if (timeoutIndex >= 0 && timeoutIndex + 1 < args.length) {
+    const requested = Number.parseInt(args[timeoutIndex + 1] || '', 10);
+    if (Number.isFinite(requested) && requested > 0) {
+      timeoutMS = Math.max(timeoutMS, requested + OPENCLAW_COMMAND_TIMEOUT_HEADROOM_MS);
+    }
+  }
+  return Math.min(timeoutMS, OPENCLAW_COMMAND_MAX_TIMEOUT_MS);
+}
+
+export function resolveOpenClawCommandTimeoutMSForTest(args: string[]): number {
+  return resolveOpenClawCommandTimeoutMS(args);
+}
+
+function compactGatewayCallOutput(rawOutput: string): { ok: true; output: string } | { ok: false; error: string } {
+  const trimmed = rawOutput.trim();
+  if (!trimmed) {
+    return { ok: false, error: 'openclaw gateway call returned empty output' };
+  }
+
+  const parsed = parseMemoryExtractGatewayResponse(trimmed);
+  const result = asRecord(parsed?.result);
+  const payloadsRaw = Array.isArray(result?.payloads) ? result?.payloads : [];
+  const payloadText = payloadsRaw
+    .map((entry) => {
+      const record = asRecord(entry);
+      const text = getTrimmedString(record?.text);
+      if (!text) {
+        return null;
+      }
+      return text;
+    })
+    .find((entry): entry is string => typeof entry === 'string')
+    || extractFirstJSONStringField(trimmed, 'text');
+
+  const model = getTrimmedString(
+    asRecord(asRecord(result?.meta)?.agentMeta)?.model,
+  ) || extractFirstJSONStringField(trimmed, 'model');
+
+  const status = getTrimmedString(parsed?.status)
+    || extractFirstJSONStringField(trimmed, 'status')
+    || 'ok';
+  const runID = getTrimmedString(parsed?.runId)
+    || extractFirstJSONStringField(trimmed, 'runId');
+
+  const safePayloadText = payloadText ?? '';
+  if (safePayloadText.length > GATEWAY_CALL_MAX_PAYLOAD_TEXT_CHARS) {
+    return {
+      ok: false,
+      error: `openclaw gateway call payload too large (${safePayloadText.length} chars); reduce output size`,
+    };
+  }
+
+  const compact: Record<string, unknown> = {
+    runId: runID,
+    status,
+    result: {
+      payloads: [{ text: safePayloadText }],
+      meta: {
+        agentMeta: {
+          model: model || undefined,
+        },
+      },
+    },
+  };
+
+  const output = JSON.stringify(compact);
+  if (output.length > GATEWAY_CALL_MAX_OUTPUT_CHARS) {
+    return { ok: false, error: 'openclaw gateway call output too large; reduce output size' };
+  }
+  return { ok: true, output };
+}
+
+function sendOtterCampSocketEvent(event: Record<string, unknown>): boolean {
+  if (!otterCampWS || otterCampWS.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  otterCampWS.send(JSON.stringify(event));
+  return true;
+}
+
+async function handleMemoryExtractDispatchEvent(event: MemoryExtractDispatchEvent): Promise<void> {
+  const orgID = getTrimmedString(event.org_id);
+  const requestID = getTrimmedString(event.data?.request_id) || genId();
+  const args = normalizeDispatchArgs(event.data?.args);
+
+  const sendResponse = (payload: { ok: boolean; output?: string; error?: string }): void => {
+    let output = payload.output;
+    if (output && output.length > MEMORY_EXTRACT_MAX_OUTPUT_CHARS) {
+      output = compactMemoryExtractFallbackEnvelope();
+    }
+    const error = payload.error ? sanitizeMemoryExtractErrorDetail(payload.error) : undefined;
+    const sent = sendOtterCampSocketEvent({
+      type: 'memory.extract.response',
+      timestamp: new Date().toISOString(),
+      org_id: orgID,
+      data: {
+        request_id: requestID,
+        ok: payload.ok,
+        ...(output !== undefined ? { output } : {}),
+        ...(error ? { error } : {}),
+      },
+    });
+    if (!sent) {
+      console.warn(`[bridge] failed to deliver memory.extract.response for request_id=${requestID}; socket unavailable`);
+    }
+  };
+
+  if (args.length < 3 || args[0] !== 'gateway' || args[1] !== 'call' || args[2] !== 'agent') {
+    sendResponse({
+      ok: false,
+      error: 'memory.extract.request requires args beginning with: gateway call agent',
+    });
+    return;
+  }
+
+  try {
+    const output = await runOpenClawCommandCapture(
+      ensureGatewayCallCredentials(ensureMemoryExtractSessionReuseArgs(args, orgID)),
+    );
+    sendResponse({ ok: true, output: compactMemoryExtractOutput(output) });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    sendResponse({ ok: false, error: detail });
+  }
+}
+
+async function handleOpenClawGatewayCallDispatchEvent(event: OpenClawGatewayCallDispatchEvent): Promise<void> {
+  const orgID = getTrimmedString(event.org_id);
+  const requestID = getTrimmedString(event.data?.request_id) || genId();
+  const args = normalizeDispatchArgs(event.data?.args);
+
+  const sendResponse = (payload: { ok: boolean; output?: string; error?: string }): void => {
+    const error = payload.error ? sanitizeGatewayCallErrorDetail(payload.error) : undefined;
+    const sent = sendOtterCampSocketEvent({
+      type: 'openclaw.gateway.call.response',
+      timestamp: new Date().toISOString(),
+      org_id: orgID,
+      data: {
+        request_id: requestID,
+        ok: payload.ok,
+        ...(payload.output !== undefined ? { output: payload.output } : {}),
+        ...(error ? { error } : {}),
+      },
+    });
+    if (!sent) {
+      console.warn(`[bridge] failed to deliver openclaw.gateway.call.response for request_id=${requestID}; socket unavailable`);
+    }
+  };
+
+  if (args.length < 3 || args[0] !== 'gateway' || args[1] !== 'call' || args[2] !== 'agent') {
+    sendResponse({
+      ok: false,
+      error: 'openclaw.gateway.call.request requires args beginning with: gateway call agent',
+    });
+    return;
+  }
+
+  try {
+    const raw = await runOpenClawCommandCapture(ensureGatewayCallCredentials(args));
+    const compacted = compactGatewayCallOutput(raw);
+    if (!compacted.ok) {
+      sendResponse({ ok: false, error: compacted.error });
+      return;
+    }
+    sendResponse({ ok: true, output: compacted.output });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    sendResponse({ ok: false, error: detail });
+  }
+}
+
+function resolveDMDispatchAttachmentURL(rawURL: string): string {
+  const trimmed = rawURL.trim();
+  if (!trimmed) {
+    return '';
+  }
+  try {
+    const resolved = new URL(trimmed, OTTERCAMP_URL);
+    if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
+      return '';
+    }
+    return resolved.toString();
+  } catch {
+    return '';
+  }
+}
+
+function normalizeDMDispatchAttachments(raw: unknown): DMDispatchAttachment[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const normalized: DMDispatchAttachment[] = [];
+  for (const entry of raw) {
+    const record = asRecord(entry);
+    if (!record) {
+      continue;
+    }
+    const resolvedURL = resolveDMDispatchAttachmentURL(getTrimmedString(record.url));
+    if (!resolvedURL) {
+      continue;
+    }
+    const filename = getTrimmedString(record.filename) || 'attachment';
+    const contentType = getTrimmedString(record.content_type) || 'application/octet-stream';
+    const parsedSize = Number(record.size_bytes);
+    normalized.push({
+      url: resolvedURL,
+      filename,
+      content_type: contentType,
+      size_bytes: Number.isFinite(parsedSize) && parsedSize > 0 ? parsedSize : 0,
+    });
+  }
+  return normalized;
+}
+
+function buildAttachmentOnlyDispatchMessage(attachments: DMDispatchAttachment[]): string {
+  if (attachments.length === 0) {
+    return '';
+  }
+  const list = attachments.slice(0, 3).map((attachment) => attachment.filename).join(', ');
+  const suffix = attachments.length > 3 ? ` (+${attachments.length - 3} more)` : '';
+  return `[Attachments] ${list}${suffix}`;
+}
+
 async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
   const sessionKey = (event.data?.session_key || '').trim();
   const content = (event.data?.content || '').trim();
+  const incrementalContext = getTrimmedString(event.data?.incremental_context);
+  const injectIdentity = event.data?.inject_identity === true;
+  const attachments = normalizeDMDispatchAttachments(event.data?.attachments);
   const orgID = getTrimmedString(event.org_id);
   const threadID = getTrimmedString(event.data?.thread_id);
   const agentID = getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(sessionKey);
   const messageID = getTrimmedString(event.data?.message_id);
 
-  if (!sessionKey || !content) {
-    console.warn('[bridge] skipped dm.message with missing session key or content');
+  if (!sessionKey || (!content && attachments.length === 0)) {
+    console.warn('[bridge] skipped dm.message with missing session key and payload');
     return;
   }
 
   const existingContext = sessionContexts.get(sessionKey);
+  if (injectIdentity) {
+    contextPrimedSessions.delete(sessionKey);
+  }
   setSessionContext(sessionKey, {
     ...existingContext,
     kind: 'dm',
     orgID: orgID || existingContext?.orgID,
     threadID: threadID || existingContext?.threadID,
     agentID: agentID || existingContext?.agentID,
+    identityMetadata: injectIdentity ? undefined : existingContext?.identityMetadata,
+    displayLabel: injectIdentity ? undefined : existingContext?.displayLabel,
+    forceIdentityBootstrap: injectIdentity,
   });
 
+  const outboundContent = formatIncrementalDMContent(content, incrementalContext);
+  if (messageID && hasDeliveredDMMessageID(messageID)) {
+    console.log(
+      `[bridge] skipped duplicate dm.message for ${sessionKey} (message_id=${messageID})`,
+    );
+    return;
+  }
   try {
-    await sendMessageToSession(sessionKey, content, messageID || undefined);
+    await sendMessageToSession(sessionKey, outboundContent, messageID || undefined, {
+      forceIdentityBootstrap: injectIdentity,
+      attachments,
+    });
+    if (messageID) {
+      rememberDeliveredDMMessageID(messageID);
+    }
     console.log(
       `[bridge] delivered dm.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
@@ -5712,7 +6793,7 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
         sessionKey,
         agentID,
         summary: `Dispatched DM to ${agentID}`,
-        detail: content.slice(0, 500),
+        detail: (content || buildAttachmentOnlyDispatchMessage(attachments)).slice(0, 500),
         scope: {
           thread_id: threadID || undefined,
         },
@@ -5733,15 +6814,16 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
 async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): Promise<void> {
   const projectID = getTrimmedString(event.data?.project_id);
   const projectName = getTrimmedString(event.data?.project_name);
-  const agentID = getTrimmedString(event.data?.agent_id);
+  const requestedSessionKey = getTrimmedString(event.data?.session_key);
+  const agentID = getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(requestedSessionKey);
   const agentName = getTrimmedString(event.data?.agent_name);
   const content = getTrimmedString(event.data?.content);
   const questionnaire = normalizeQuestionnairePayload(event.data?.questionnaire);
   const orgID = getTrimmedString(event.org_id);
   const messageID = getTrimmedString(event.data?.message_id) || undefined;
-  const sessionKey =
-    getTrimmedString(event.data?.session_key) ||
-    (agentID && projectID ? `agent:${agentID}:project:${projectID}` : '');
+  const dispatchTarget = resolveProjectChatDispatchTarget(agentID, projectID, requestedSessionKey);
+  const sessionKey = dispatchTarget.sessionKey;
+  const useAgentMethod = dispatchTarget.routedAgentID === 'main';
   let outboundContent = content;
   if (questionnaire) {
     const formatted = formatQuestionnaireForFallback(questionnaire);
@@ -5764,7 +6846,9 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
   });
 
   try {
-    await sendMessageToSession(sessionKey, outboundContent, messageID);
+    await sendMessageToSession(sessionKey, outboundContent, messageID, {
+      preferAgentMethod: useAgentMethod,
+    });
     console.log(
       `[bridge] delivered project.chat.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
@@ -5797,7 +6881,8 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
 async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent): Promise<void> {
   const issueID = getTrimmedString(event.data?.issue_id);
   const projectID = getTrimmedString(event.data?.project_id);
-  const agentID = getTrimmedString(event.data?.agent_id);
+  const requestedSessionKey = getTrimmedString(event.data?.session_key);
+  const agentID = getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(requestedSessionKey);
   const agentName = getTrimmedString(event.data?.agent_name);
   const responderAgentID = getTrimmedString(event.data?.responder_agent_id);
   const issueTitle = getTrimmedString(event.data?.issue_title);
@@ -5808,9 +6893,9 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
   const messageID = getTrimmedString(event.data?.message_id) || undefined;
   const parsedIssueNumber = Number(event.data?.issue_number);
   const issueNumber = Number.isFinite(parsedIssueNumber) ? parsedIssueNumber : undefined;
-  const sessionKey =
-    getTrimmedString(event.data?.session_key) ||
-    (agentID && issueID ? `agent:${agentID}:issue:${issueID}` : '');
+  const dispatchTarget = resolveIssueCommentDispatchTarget(agentID, projectID, issueID, requestedSessionKey);
+  const sessionKey = dispatchTarget.sessionKey;
+  const useAgentMethod = dispatchTarget.routedAgentID === 'main';
   let outboundContent = content;
   if (questionnaire) {
     const formatted = formatQuestionnaireForFallback(questionnaire);
@@ -5837,7 +6922,9 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
   });
 
   try {
-    await sendMessageToSession(sessionKey, outboundContent, messageID);
+    await sendMessageToSession(sessionKey, outboundContent, messageID, {
+      preferAgentMethod: useAgentMethod,
+    });
     console.log(
       `[bridge] delivered issue.comment.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
@@ -5872,10 +6959,18 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
 }
 
 async function runOpenClawCommandCapture(args: string[]): Promise<string> {
-  const { stdout, stderr } = await execFileAsync('openclaw', args, {
-    timeout: 60_000,
+  const timeoutMS = resolveOpenClawCommandTimeoutMS(args);
+  const result = await execFileAsync('openclaw', args, {
+    timeout: timeoutMS,
     maxBuffer: 2 * 1024 * 1024,
   });
+  const resultRecord = asRecord(result);
+  const stdout = typeof result === 'string'
+    ? result
+    : getTrimmedString(resultRecord?.stdout) || '';
+  const stderr = typeof result === 'string'
+    ? ''
+    : getTrimmedString(resultRecord?.stderr) || '';
   if (stdout?.trim()) {
     console.log(`[bridge] openclaw ${args.join(' ')} stdout: ${stdout.trim()}`);
   }

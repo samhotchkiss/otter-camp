@@ -1,4 +1,5 @@
 import { useCallback, useState, useRef } from "react";
+import { API_URL } from "../lib/api";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -517,7 +518,7 @@ export default function DataManagement({ orgId }: DataManagementProps) {
         setImportProgress(50);
 
         // Validate with server
-        const response = await fetch("/api/import/validate", {
+        const response = await fetch(`${API_URL}/api/import/validate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(data),

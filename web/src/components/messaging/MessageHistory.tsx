@@ -8,10 +8,32 @@ import type {
 } from "./types";
 import { formatTimestamp, getInitials } from "./utils";
 import MessageMarkdown from "./MessageMarkdown";
+import { API_URL } from "../../lib/api";
 import Questionnaire from "../Questionnaire";
 import QuestionnaireResponse from "../QuestionnaireResponse";
+import LiveTimestamp from "../LiveTimestamp";
 
-const SCROLL_BOTTOM_THRESHOLD_PX = 40;
+const SCROLL_BOTTOM_THRESHOLD_PX = 200;
+
+/**
+ * Resolve an attachment URL to an absolute URL with auth token.
+ * Relative URLs (e.g. /api/attachments/...) are prefixed with API_URL.
+ * A token query param is appended so browser-initiated requests (<img>) authenticate.
+ */
+function resolveAttachmentUrl(url: string): string {
+  let resolved = url;
+  // Relative URLs need API_URL prefix when frontend and API are on different domains
+  if (resolved.startsWith("/")) {
+    resolved = `${API_URL}${resolved}`;
+  }
+  // Append auth token for browser-initiated requests (<img src>)
+  const token = (typeof window !== "undefined" ? window.localStorage.getItem("otter_camp_token") : null) ?? "";
+  if (token) {
+    const sep = resolved.includes("?") ? "&" : "?";
+    resolved = `${resolved}${sep}token=${encodeURIComponent(token)}`;
+  }
+  return resolved;
+}
 
 function formatAttachmentSize(sizeBytes: number): string {
   if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
@@ -36,16 +58,18 @@ function MessageAttachments({ attachments }: { attachments: MessageAttachment[] 
       {attachments.map((attachment) => {
         const isImage = attachment.mime_type.startsWith("image/");
         if (isImage) {
+          const imgSrc = resolveAttachmentUrl(attachment.thumbnail_url || attachment.url);
+          const fullUrl = resolveAttachmentUrl(attachment.url);
           return (
             <a
               key={attachment.id}
-              href={attachment.url}
+              href={fullUrl}
               target="_blank"
               rel="noreferrer"
               className="block overflow-hidden rounded-xl border border-[var(--border)] bg-black/20"
             >
               <img
-                src={attachment.thumbnail_url || attachment.url}
+                src={imgSrc}
                 alt={attachment.filename}
                 loading="lazy"
                 className="max-h-64 w-full object-cover"
@@ -67,7 +91,7 @@ function MessageAttachments({ attachments }: { attachments: MessageAttachment[] 
               <p className="text-[var(--text-muted)]">{formatAttachmentSize(attachment.size_bytes)}</p>
             </div>
             <a
-              href={attachment.url}
+              href={resolveAttachmentUrl(attachment.url)}
               target="_blank"
               rel="noreferrer"
               className="rounded border border-[var(--border)] px-2 py-1 text-[10px] font-medium text-[var(--text)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
@@ -176,7 +200,9 @@ function MessageAvatar({
 }) {
   const bgColor =
     senderType === "agent"
-      ? "bg-[var(--accent)]/20 text-[var(--accent)]"
+      ? "bg-[#ff9800] text-[#1c1200]"
+      : senderType === "emission"
+        ? "bg-[var(--surface-alt)] text-[var(--text-muted)]"
       : "bg-[var(--surface-alt)] text-[var(--text)]";
 
   if (avatarUrl) {
@@ -233,15 +259,21 @@ function MessageBubble({
     );
   }
 
+  const isEmission = message.senderType === "emission";
+  const isEmissionWarning = isEmission && message.emissionWarning === true;
   const bubbleStyle = isOwnMessage
-    ? "bg-[var(--accent)] text-[#1A1918]"
+    ? "oc-message-bubble-user bg-[var(--accent)] text-[#1A1918]"
+    : isEmissionWarning
+      ? "oc-message-bubble-emission-warning border border-[var(--orange)]/45 bg-[var(--orange)]/18 text-[var(--orange)]"
+    : isEmission
+      ? "oc-message-bubble-emission border border-[var(--border)]/50 bg-[var(--surface-alt)] text-[var(--text-muted)] opacity-60"
     : message.senderType === "agent"
-      ? "border border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text)]"
+      ? "oc-message-bubble-agent border border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text)]"
       : "bg-[var(--surface-alt)] text-[var(--text)]";
 
   return (
     <div
-      className={`flex gap-3 ${isOwnMessage ? "flex-row-reverse" : "flex-row"}`}
+      className={`flex min-w-0 gap-3 ${isOwnMessage ? "flex-row-reverse" : "flex-row"}`}
     >
       <MessageAvatar
         name={displaySenderName}
@@ -249,19 +281,33 @@ function MessageBubble({
         senderType={message.senderType}
       />
       <div
-        className={`flex max-w-[75%] flex-col ${isOwnMessage ? "items-end" : "items-start"}`}
+        className={`flex min-w-0 max-w-[75%] flex-col ${isOwnMessage ? "items-end" : "items-start"}`}
       >
-        <div className="mb-1 flex items-center gap-2">
-          <span className="text-xs font-medium text-[var(--text-muted)]">
+        <div className="mb-1 flex min-w-0 items-center gap-2">
+          <span className="truncate text-xs font-medium text-[var(--text-muted)]">
             {displaySenderName}
           </span>
           {message.senderType === "agent" && (
-            <span className="rounded-full bg-[var(--accent)]/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[var(--accent)]">
+            <span className="oc-message-agent-chip rounded-full bg-[var(--accent)]/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[var(--accent)]">
               Agent
             </span>
           )}
+          {isEmission ? (
+            <LiveTimestamp
+              timestamp={message.createdAt}
+              verbose
+              className="text-[10px] text-[var(--text-muted)]"
+            />
+          ) : (
+            <span className="text-[10px] text-[var(--text-muted)]">
+              {formatTimestamp(message.createdAt)}
+            </span>
+          )}
         </div>
-        <div className={`rounded-2xl px-4 py-2.5 ${bubbleStyle}`}>
+        <div
+          className={`min-w-0 max-w-full overflow-hidden rounded-2xl px-4 py-2.5 ${bubbleStyle}`}
+          data-testid={isEmission ? "message-bubble-emission" : undefined}
+        >
           {message.questionnaire ? (
             message.questionnaire.responses ? (
               <QuestionnaireResponse questionnaire={message.questionnaire} />
@@ -274,15 +320,22 @@ function MessageBubble({
               <QuestionnaireResponse questionnaire={message.questionnaire} />
             )
           ) : (
-            <>
-              <MessageMarkdown
-                markdown={message.content}
-                className="text-sm leading-relaxed"
-              />
-              {message.attachments && message.attachments.length > 0 ? (
-                <MessageAttachments attachments={message.attachments} />
-              ) : null}
-            </>
+            isEmission ? (
+              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                {isEmissionWarning ? "⚠️ " : "🔄 "}
+                {message.content}
+              </p>
+            ) : (
+              <>
+                <MessageMarkdown
+                  markdown={message.content}
+                  className="text-sm leading-relaxed"
+                />
+                {message.attachments && message.attachments.length > 0 ? (
+                  <MessageAttachments attachments={message.attachments} />
+                ) : null}
+              </>
+            )
           )}
         </div>
         {message.optimistic ? (
@@ -302,9 +355,6 @@ function MessageBubble({
             ) : null}
           </div>
         ) : null}
-        <span className="mt-1 text-[10px] text-[var(--text-muted)]">
-          {formatTimestamp(message.createdAt)}
-        </span>
       </div>
     </div>
   );
@@ -384,6 +434,7 @@ export type MessageHistoryProps = {
   messages: DMMessage[];
   currentUserId: string;
   threadId?: string;
+  autoScrollSignal?: number;
   agent?: Agent;
   hasMore?: boolean;
   isLoadingMore?: boolean;
@@ -402,6 +453,7 @@ export default function MessageHistory({
   messages,
   currentUserId,
   threadId,
+  autoScrollSignal,
   agent,
   hasMore = false,
   isLoadingMore = false,
@@ -419,6 +471,7 @@ export default function MessageHistory({
   const pendingPrependRef = useRef(false);
   const scrollSnapshotRef = useRef({ scrollHeight: 0, scrollTop: 0 });
   const pinnedToBottomRef = useRef(true);
+  const lastAutoScrollSignalRef = useRef(autoScrollSignal);
 
   const handleLoadMore = useCallback(async () => {
     if (!onLoadMore || isLoadingMore) return;
@@ -443,10 +496,11 @@ export default function MessageHistory({
     prevMessageCountRef.current = 0;
     pendingPrependRef.current = false;
     pinnedToBottomRef.current = true;
+    lastAutoScrollSignalRef.current = autoScrollSignal;
     requestAnimationFrame(() => {
       endRef.current?.scrollIntoView({ behavior: "auto" });
     });
-  }, [threadId]);
+  }, [autoScrollSignal, threadId]);
 
   const handleScroll = useCallback(() => {
     const container = containerRef.current;
@@ -457,6 +511,23 @@ export default function MessageHistory({
     pinnedToBottomRef.current =
       distanceFromBottom <= SCROLL_BOTTOM_THRESHOLD_PX;
   }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      if (!pinnedToBottomRef.current) {
+        return;
+      }
+      endRef.current?.scrollIntoView({ behavior: "auto" });
+    });
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+    };
+  }, [threadId]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -477,18 +548,42 @@ export default function MessageHistory({
     prevMessageCountRef.current = messages.length;
     if (messages.length > prevCount) {
       if (prevCount === 0 || pinnedToBottomRef.current) {
-        endRef.current?.scrollIntoView({
-          behavior: prevCount === 0 ? "auto" : "smooth",
+        // Double-RAF to ensure DOM has fully reflowed with new content
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            endRef.current?.scrollIntoView({
+              behavior: prevCount === 0 ? "auto" : "smooth",
+            });
+            // Belt-and-suspenders: one more scroll after a short delay for slow layouts
+            if (prevCount === 0) {
+              setTimeout(() => {
+                endRef.current?.scrollIntoView({ behavior: "auto" });
+              }, 100);
+            }
+          });
         });
       }
     }
   }, [messages]);
 
+  useEffect(() => {
+    if (autoScrollSignal === undefined) {
+      return;
+    }
+    if (lastAutoScrollSignalRef.current === autoScrollSignal) {
+      return;
+    }
+    lastAutoScrollSignalRef.current = autoScrollSignal;
+    requestAnimationFrame(() => {
+      endRef.current?.scrollIntoView({ behavior: "smooth" });
+    });
+  }, [autoScrollSignal]);
+
   return (
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      className={`flex-1 overflow-y-auto px-5 py-4 ${className}`}
+      className={`oc-chat-history flex-1 overflow-x-hidden overflow-y-auto px-5 py-4 ${className}`}
     >
       {hasMore && onLoadMore && (
         <div className="mb-4 flex justify-center">

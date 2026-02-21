@@ -222,6 +222,11 @@ func isWebSocketOriginAllowed(r *http.Request) bool {
 		return true
 	}
 
+	// Allow same root domain (e.g., sam.otter.camp → api.otter.camp)
+	if isSameRootDomain(originHost, reqHost) {
+		return true
+	}
+
 	allowList := strings.Split(strings.TrimSpace(os.Getenv("WS_ALLOWED_ORIGINS")), ",")
 	for _, candidate := range allowList {
 		if isAllowedOriginCandidate(originURL, candidate) {
@@ -251,6 +256,22 @@ func normalizeOriginHost(host string) string {
 		return parsedHost
 	}
 	return host
+}
+
+// isSameRootDomain checks if two hosts share the same root domain.
+// e.g., "sam.otter.camp" and "api.otter.camp" both have root "otter.camp".
+func isSameRootDomain(a, b string) bool {
+	rootA := extractRootDomain(a)
+	rootB := extractRootDomain(b)
+	return rootA != "" && rootA == rootB
+}
+
+func extractRootDomain(host string) string {
+	parts := strings.Split(host, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	return strings.Join(parts[len(parts)-2:], ".")
 }
 
 func isLoopbackAliasPair(a, b string) bool {

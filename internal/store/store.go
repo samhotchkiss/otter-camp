@@ -238,3 +238,13 @@ func nullableString(value *string) interface{} {
 	}
 	return trimmed
 }
+
+// nullableText returns nil for empty strings, otherwise the trimmed value.
+// Use for non-pointer string fields that should be NULL when empty.
+func nullableText(value string) interface{} {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
+}

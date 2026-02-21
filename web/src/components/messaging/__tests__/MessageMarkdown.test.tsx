@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import MessageMarkdown, { resolveOtterInternalLink } from "../MessageMarkdown";
 
 describe("resolveOtterInternalLink", () => {
-  it("classifies project issue routes as internal", () => {
-    expect(resolveOtterInternalLink("/projects/project-1/issues/issue-2")).toMatchObject({
-      href: "/projects/project-1/issues/issue-2",
-      kind: "Issue",
-      detail: "Project project-1 · Issue issue-2",
+  it("classifies project task routes as internal", () => {
+    expect(resolveOtterInternalLink("/projects/project-1/tasks/issue-2")).toMatchObject({
+      href: "/projects/project-1/tasks/issue-2",
+      kind: "Task",
+      detail: "Project project-1 · Task issue-2",
     });
   });
 
@@ -23,15 +23,15 @@ describe("resolveOtterInternalLink", () => {
 describe("MessageMarkdown", () => {
   it("renders OtterCamp links as context cards", () => {
     render(
-      <MessageMarkdown markdown="[Open issue](https://localhost:4200/projects/project-1/issues/issue-2)" />,
+      <MessageMarkdown markdown="[Open task](https://localhost:4200/projects/project-1/tasks/issue-2)" />,
     );
 
     const card = screen.getByTestId("otter-internal-link-card");
     expect(card).toBeInTheDocument();
-    expect(card).toHaveAttribute("href", "/projects/project-1/issues/issue-2");
-    expect(screen.getByText("Issue")).toBeInTheDocument();
-    expect(screen.getByText("Open issue")).toBeInTheDocument();
-    expect(screen.getByText("Project project-1 · Issue issue-2")).toBeInTheDocument();
+    expect(card).toHaveAttribute("href", "/projects/project-1/tasks/issue-2");
+    expect(screen.getByText("Task")).toBeInTheDocument();
+    expect(screen.getByText("Open task")).toBeInTheDocument();
+    expect(screen.getByText("Project project-1 · Task issue-2")).toBeInTheDocument();
   });
 
   it("keeps external links as regular anchors", () => {

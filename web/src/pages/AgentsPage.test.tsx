@@ -1,220 +1,141 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import AgentsPage from "./AgentsPage";
 
-const openConversationMock = vi.fn();
-
-vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getTotalSize: () => (count > 0 ? 236 : 0),
-    getVirtualItems: () =>
-      count > 0
-        ? [
-            {
-              key: "row-0",
-              index: 0,
-              size: 236,
-              start: 0,
-            },
-          ]
-        : [],
-  }),
+const { adminAgentsMock, adminAgentMock, projectsMock } = vi.hoisted(() => ({
+  adminAgentsMock: vi.fn(),
+  adminAgentMock: vi.fn(),
+  projectsMock: vi.fn(),
 }));
 
-vi.mock("../contexts/WebSocketContext", () => ({
-  useWS: () => ({
-    connected: true,
-    lastMessage: null,
-    sendMessage: vi.fn(),
-  }),
-  useOptionalWS: () => null,
-}));
+vi.mock("../lib/api", async () => {
+  const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
+  return {
+    ...actual,
+    default: {
+      ...actual.default,
+      adminAgents: adminAgentsMock,
+      adminAgent: adminAgentMock,
+      projects: projectsMock,
+    },
+  };
+});
 
-vi.mock("../contexts/GlobalChatContext", () => ({
-  useGlobalChat: () => ({
-    openConversation: openConversationMock,
-  }),
-}));
+const AGENTS_PAYLOAD = {
+  total: 4,
+  agents: [
+    {
+      id: "elephant",
+      workspace_agent_id: "00000000-0000-0000-0000-000000000001",
+      name: "Ellie",
+      status: "online",
+      is_ephemeral: false,
+      context_tokens: 1400,
+      total_tokens: 2200,
+      last_seen: "2026-02-19T09:41:00.000Z",
+      model: "claude-opus",
+      channel: "dm",
+    },
+    {
+      id: "staffing-manager",
+      workspace_agent_id: "00000000-0000-0000-0000-000000000002",
+      name: "Marcus",
+      status: "busy",
+      is_ephemeral: false,
+      context_tokens: 980,
+      total_tokens: 1900,
+      last_seen: "2026-02-19T09:32:00.000Z",
+      model: "claude-sonnet",
+      channel: "bridge",
+    },
+    {
+      id: "agent-042",
+      workspace_agent_id: "00000000-0000-0000-0000-000000000003",
+      name: "Agent-042",
+      status: "online",
+      is_ephemeral: true,
+      context_tokens: 320,
+      total_tokens: 810,
+      project_id: "project-42",
+      model: "frontend-specialist",
+      last_seen: "2026-02-19T09:44:00.000Z",
+    },
+    {
+      id: "agent-156",
+      workspace_agent_id: "00000000-0000-0000-0000-000000000004",
+      name: "Agent-156",
+      status: "offline",
+      is_ephemeral: true,
+      context_tokens: 0,
+      total_tokens: 0,
+      project_id: null,
+      model: "",
+      last_seen: "2026-02-18T10:00:00.000Z",
+    },
+  ],
+};
 
 describe("AgentsPage", () => {
   beforeEach(() => {
+    adminAgentsMock.mockReset();
+    adminAgentMock.mockReset();
+    projectsMock.mockReset();
+
+    adminAgentsMock.mockResolvedValue(AGENTS_PAYLOAD);
+    projectsMock.mockResolvedValue({
+      projects: [
+        { id: "project-42", name: "Customer Portal" },
+      ],
+    });
+    adminAgentMock.mockImplementation(async (id: string) => {
+      if (id === "elephant") {
+        return { sync: { current_task: "Coordinating inbox triage" } };
+      }
+      if (id === "staffing-manager") {
+        return { sync: { current_task: "Allocating Agent-042 to Customer Portal" } };
+      }
+      return { sync: {} };
+    });
+  });
+
+  afterEach(() => {
     vi.restoreAllMocks();
-    openConversationMock.mockReset();
-    localStorage.setItem("otter-camp-org-id", "org-123");
   });
 
-  it("renders persistent last action on agent cards", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/sync/agents")) {
-        return new Response(
-          JSON.stringify({
-            agents: [
-              {
-                id: "main",
-                name: "Frank",
-                status: "online",
-                role: "Lead Agent",
-                current_task: "slack:#engineering",
-              },
-            ],
-          }),
-          { status: 200 },
-        );
-      }
+  it("renders API-driven permanent and chameleon agent rows", async () => {
+    render(<MemoryRouter><AgentsPage /></MemoryRouter>);
 
-      if (url.includes("/api/activity/recent")) {
-        return new Response(
-          JSON.stringify({
-            items: [
-              {
-                id: "evt-1",
-                org_id: "org-123",
-                agent_id: "Frank",
-                trigger: "chat.slack",
-                summary: "Responded to Sam in #leadership",
-                status: "completed",
-                tokens_used: 30,
-                duration_ms: 800,
-                started_at: "2026-02-08T12:58:00.000Z",
-                created_at: "2026-02-08T12:58:00.000Z",
-              },
-            ],
-          }),
-          { status: 200 },
-        );
-      }
-      if (url.includes("/api/admin/agents")) {
-        return new Response(JSON.stringify({ agents: [] }), { status: 200 });
-      }
+    expect(screen.getByRole("heading", { name: "Agent Status" })).toBeInTheDocument();
+    expect(await screen.findByText("2 Permanent Cores • 1 Active Chameleons")).toBeInTheDocument();
 
-      throw new Error(`unexpected url: ${url}`);
-    });
+    expect(screen.getByRole("button", { name: "Logs" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Spawn Agent" })).toBeInTheDocument();
 
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    expect(screen.getByText("Ellie")).toBeInTheDocument();
+    expect(screen.getByText("Marcus")).toBeInTheDocument();
+    expect(screen.getByText("Coordinating inbox triage")).toBeInTheDocument();
+    expect(screen.getByText("Allocating Agent-042 to Customer Portal")).toBeInTheDocument();
 
-    render(<AgentsPage apiEndpoint="https://api.otter.camp/api/sync/agents" />);
+    expect(screen.getByRole("heading", { name: "Chameleon Agents (On-Demand)" })).toBeInTheDocument();
+    expect(screen.getByText("Agent-042")).toBeInTheDocument();
+    expect(screen.getByText("frontend-specialist")).toBeInTheDocument();
+    expect(screen.getByText(/Working on Customer Portal/)).toBeInTheDocument();
 
-    expect(await screen.findByText("Frank")).toBeInTheDocument();
-    expect(await screen.findByText("Active in #engineering")).toBeInTheDocument();
-    expect(await screen.findByText("Responded to Sam in #leadership")).toBeInTheDocument();
-    expect(screen.getByText("Slack")).toBeInTheDocument();
-    expect(screen.getByText("Chats are routed through OpenClaw with OtterCamp identity injection.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "View timeline" })).toHaveAttribute("href", "/agents/main");
-
-    fireEvent.click(screen.getByText("Frank"));
-    expect(openConversationMock).toHaveBeenCalledTimes(1);
-    expect(openConversationMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contextLabel: "Direct agent chat",
-        subtitle: "Identity injected on open. Project required for writable tasks.",
-      }),
-    );
+    expect(screen.queryByText("Orchestrator")).not.toBeInTheDocument();
   });
 
-  it("still renders cards when activity query fails", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/sync/agents")) {
-        return new Response(
-          JSON.stringify({ agents: [{ id: "main", name: "Frank", status: "offline" }] }),
-          { status: 200 },
-        );
-      }
+  it("shows load failures and allows retry", async () => {
+    adminAgentsMock
+      .mockRejectedValueOnce(new Error("agents load failed"))
+      .mockResolvedValueOnce(AGENTS_PAYLOAD);
 
-      if (url.includes("/api/activity/recent")) {
-        return new Response(JSON.stringify({ error: "boom" }), { status: 500 });
-      }
-      if (url.includes("/api/admin/agents")) {
-        return new Response(JSON.stringify({ agents: [] }), { status: 200 });
-      }
+    render(<MemoryRouter><AgentsPage /></MemoryRouter>);
 
-      throw new Error(`unexpected url: ${url}`);
-    });
+    expect(await screen.findByText("agents load failed")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    render(<AgentsPage apiEndpoint="https://api.otter.camp/api/sync/agents" />);
-
-    expect(await screen.findByText("Frank")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(screen.getByText(/^Idle/)).toBeInTheDocument();
-    });
-  });
-
-  it("opens elephant DMs with an ellie memory context label", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/sync/agents")) {
-        return new Response(
-          JSON.stringify({ agents: [{ id: "elephant", name: "Elephant", status: "online", role: "Memory Archivist" }] }),
-          { status: 200 },
-        );
-      }
-      if (url.includes("/api/activity/recent")) {
-        return new Response(JSON.stringify({ items: [] }), { status: 200 });
-      }
-      if (url.includes("/api/admin/agents")) {
-        return new Response(JSON.stringify({ agents: [] }), { status: 200 });
-      }
-      throw new Error(`unexpected url: ${url}`);
-    });
-
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    render(<AgentsPage apiEndpoint="https://api.otter.camp/api/sync/agents" />);
-
-    expect(await screen.findByText("Elephant")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Elephant"));
-
-    expect(openConversationMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contextLabel: "Ellie memory chat",
-        subtitle: "Dedicated memory archivist session.",
-      }),
-    );
-  });
-
-  it("renders management roster and links add-agent action to /agents/new", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/admin/agents")) {
-        return new Response(
-          JSON.stringify({
-            agents: [
-              {
-                id: "main",
-                name: "Frank",
-                status: "online",
-                model: "gpt-5.2-codex",
-                heartbeat_every: "15m",
-                channel: "slack:#engineering",
-                last_seen: "just now",
-              },
-            ],
-          }),
-          { status: 200 },
-        );
-      }
-      if (url.includes("/api/sync/agents")) {
-        return new Response(
-          JSON.stringify({ agents: [{ id: "main", name: "Frank", status: "online" }] }),
-          { status: 200 },
-        );
-      }
-      if (url.includes("/api/activity/recent")) {
-        return new Response(JSON.stringify({ items: [] }), { status: 200 });
-      }
-
-      throw new Error(`unexpected url: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    render(<AgentsPage apiEndpoint="https://api.otter.camp/api/sync/agents" />);
-
-    expect(await screen.findByTestId("roster-row-main")).toBeInTheDocument();
-
-    const addAgentLink = screen.getByRole("link", { name: "Add Agent" });
-    expect(addAgentLink).toHaveAttribute("href", "/agents/new");
-    expect(screen.queryByRole("dialog", { name: "Add Agent" })).not.toBeInTheDocument();
+    expect(await screen.findByText("2 Permanent Cores • 1 Active Chameleons")).toBeInTheDocument();
+    expect(screen.getByText("Ellie")).toBeInTheDocument();
   });
 });

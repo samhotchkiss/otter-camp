@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,7 +28,7 @@ func TestRequireOpenClawSyncAuth_NoSecretConfigured(t *testing.T) {
 	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", nil)
-	status, err := requireOpenClawSyncAuth(req)
+	status, err := requireOpenClawSyncAuth(req.Context(), nil, req)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -42,7 +43,7 @@ func TestRequireOpenClawSyncAuth_MissingToken(t *testing.T) {
 	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", nil)
-	status, err := requireOpenClawSyncAuth(req)
+	status, err := requireOpenClawSyncAuth(req.Context(), nil, req)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -59,7 +60,7 @@ func TestRequireOpenClawSyncAuth_ValidBearerToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", nil)
 	req.Header.Set("Authorization", "Bearer sync-secret")
 
-	status, err := requireOpenClawSyncAuth(req)
+	status, err := requireOpenClawSyncAuth(req.Context(), nil, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -76,7 +77,7 @@ func TestRequireOpenClawSyncAuth_FallbackToWebhookSecret(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", nil)
 	req.Header.Set("X-OpenClaw-Token", "webhook-secret")
 
-	status, err := requireOpenClawSyncAuth(req)
+	status, err := requireOpenClawSyncAuth(req.Context(), nil, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -93,7 +94,7 @@ func TestRequireOpenClawSyncAuth_BackwardCompatibleTokenVariable(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", nil)
 	req.Header.Set("X-OpenClaw-Token", "legacy-sync-secret")
 
-	status, err := requireOpenClawSyncAuth(req)
+	status, err := requireOpenClawSyncAuth(req.Context(), nil, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1137,6 +1138,230 @@ func TestOpenClawDispatchQueuePullAndAck(t *testing.T) {
 	var pullAgainResp openClawDispatchQueuePullResponse
 	require.NoError(t, json.NewDecoder(pullAgainRec.Body).Decode(&pullAgainResp))
 	require.Empty(t, pullAgainResp.Jobs)
+}
+
+func TestOpenClawDispatchQueueAckBroadcastsDMDeliveryDelivered(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "sync-dispatch-dm-delivered-org")
+
+	queued, err := enqueueOpenClawDispatchEvent(
+		context.Background(),
+		db,
+		orgID,
+		"dm.message",
+		"dm.message:msg-delivered",
+		map[string]any{
+			"type":   "dm.message",
+			"org_id": orgID,
+			"data": map[string]any{
+				"message_id": "msg-delivered",
+				"thread_id":  "dm_main",
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, queued)
+
+	hub := ws.NewHub()
+	go hub.Run()
+	client := ws.NewClient(hub, nil)
+	client.SetOrgID(orgID)
+	hub.Register(client)
+	t.Cleanup(func() { hub.Unregister(client) })
+	time.Sleep(20 * time.Millisecond)
+
+	handler := &OpenClawSyncHandler{DB: db, Hub: hub}
+
+	pullReq := httptest.NewRequest(http.MethodGet, "/api/sync/openclaw/dispatch/pending?limit=5", nil)
+	pullReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	pullRec := httptest.NewRecorder()
+	handler.PullDispatchQueue(pullRec, pullReq)
+	require.Equal(t, http.StatusOK, pullRec.Code)
+
+	var pullResp openClawDispatchQueuePullResponse
+	require.NoError(t, json.NewDecoder(pullRec.Body).Decode(&pullResp))
+	require.Len(t, pullResp.Jobs, 1)
+
+	ackBody := bytes.NewReader([]byte(`{"claim_token":"` + pullResp.Jobs[0].ClaimToken + `","success":true}`))
+	ackReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/sync/openclaw/dispatch/"+strconv.FormatInt(pullResp.Jobs[0].ID, 10)+"/ack",
+		ackBody,
+	)
+	ackReq = addRouteParam(ackReq, "id", strconv.FormatInt(pullResp.Jobs[0].ID, 10))
+	ackReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	ackRec := httptest.NewRecorder()
+	handler.AckDispatchQueue(ackRec, ackReq)
+	require.Equal(t, http.StatusOK, ackRec.Code)
+
+	select {
+	case raw := <-client.Send:
+		var event map[string]any
+		require.NoError(t, json.Unmarshal(raw, &event))
+		require.Equal(t, "DMMessageDeliveryUpdated", event["type"])
+
+		data, ok := event["data"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "msg-delivered", data["messageId"])
+		require.Equal(t, "msg-delivered", data["message_id"])
+		require.Equal(t, "dm_main", data["threadId"])
+		require.Equal(t, "dm_main", data["thread_id"])
+		require.Equal(t, "delivered", data["deliveryStatus"])
+		require.Equal(t, "delivered", data["delivery_status"])
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected DM delivery broadcast event")
+	}
+}
+
+func TestOpenClawDispatchQueueAckBroadcastsDMDeliveryFailed(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "sync-dispatch-dm-failed-org")
+
+	queued, err := enqueueOpenClawDispatchEvent(
+		context.Background(),
+		db,
+		orgID,
+		"dm.message",
+		"dm.message:msg-failed",
+		map[string]any{
+			"type":   "dm.message",
+			"org_id": orgID,
+			"data": map[string]any{
+				"message_id": "msg-failed",
+				"thread_id":  "dm_main",
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, queued)
+
+	_, err = db.Exec(`UPDATE openclaw_dispatch_queue SET attempts = 19 WHERE dedupe_key = 'dm.message:msg-failed'`)
+	require.NoError(t, err)
+
+	hub := ws.NewHub()
+	go hub.Run()
+	client := ws.NewClient(hub, nil)
+	client.SetOrgID(orgID)
+	hub.Register(client)
+	t.Cleanup(func() { hub.Unregister(client) })
+	time.Sleep(20 * time.Millisecond)
+
+	handler := &OpenClawSyncHandler{DB: db, Hub: hub}
+
+	pullReq := httptest.NewRequest(http.MethodGet, "/api/sync/openclaw/dispatch/pending?limit=5", nil)
+	pullReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	pullRec := httptest.NewRecorder()
+	handler.PullDispatchQueue(pullRec, pullReq)
+	require.Equal(t, http.StatusOK, pullRec.Code)
+
+	var pullResp openClawDispatchQueuePullResponse
+	require.NoError(t, json.NewDecoder(pullRec.Body).Decode(&pullResp))
+	require.Len(t, pullResp.Jobs, 1)
+	require.Equal(t, 20, pullResp.Jobs[0].Attempts)
+
+	ackBody := bytes.NewReader([]byte(`{"claim_token":"` + pullResp.Jobs[0].ClaimToken + `","success":false,"error":"bridge timeout"}`))
+	ackReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/sync/openclaw/dispatch/"+strconv.FormatInt(pullResp.Jobs[0].ID, 10)+"/ack",
+		ackBody,
+	)
+	ackReq = addRouteParam(ackReq, "id", strconv.FormatInt(pullResp.Jobs[0].ID, 10))
+	ackReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	ackRec := httptest.NewRecorder()
+	handler.AckDispatchQueue(ackRec, ackReq)
+	require.Equal(t, http.StatusOK, ackRec.Code)
+
+	select {
+	case raw := <-client.Send:
+		var event map[string]any
+		require.NoError(t, json.Unmarshal(raw, &event))
+		require.Equal(t, "DMMessageDeliveryUpdated", event["type"])
+
+		data, ok := event["data"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "msg-failed", data["messageId"])
+		require.Equal(t, "msg-failed", data["message_id"])
+		require.Equal(t, "dm_main", data["threadId"])
+		require.Equal(t, "dm_main", data["thread_id"])
+		require.Equal(t, "failed", data["deliveryStatus"])
+		require.Equal(t, "failed", data["delivery_status"])
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected DM delivery failure broadcast event")
+	}
+
+	var status string
+	err = db.QueryRow(`SELECT status FROM openclaw_dispatch_queue WHERE dedupe_key = 'dm.message:msg-failed'`).Scan(&status)
+	require.NoError(t, err)
+	require.Equal(t, "failed", status)
+}
+
+func TestOpenClawDispatchQueueAckSkipsBroadcastForNonDMEvents(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "sync-dispatch-nondm-org")
+
+	queued, err := enqueueOpenClawDispatchEvent(
+		context.Background(),
+		db,
+		orgID,
+		"project.chat.message",
+		"project.chat.message:msg-1",
+		map[string]any{
+			"type": "project.chat.message",
+			"data": map[string]any{"message_id": "msg-1"},
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, queued)
+
+	hub := ws.NewHub()
+	go hub.Run()
+	client := ws.NewClient(hub, nil)
+	client.SetOrgID(orgID)
+	hub.Register(client)
+	t.Cleanup(func() { hub.Unregister(client) })
+	time.Sleep(20 * time.Millisecond)
+
+	handler := &OpenClawSyncHandler{DB: db, Hub: hub}
+
+	pullReq := httptest.NewRequest(http.MethodGet, "/api/sync/openclaw/dispatch/pending?limit=5", nil)
+	pullReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	pullRec := httptest.NewRecorder()
+	handler.PullDispatchQueue(pullRec, pullReq)
+	require.Equal(t, http.StatusOK, pullRec.Code)
+
+	var pullResp openClawDispatchQueuePullResponse
+	require.NoError(t, json.NewDecoder(pullRec.Body).Decode(&pullResp))
+	require.Len(t, pullResp.Jobs, 1)
+
+	ackBody := bytes.NewReader([]byte(`{"claim_token":"` + pullResp.Jobs[0].ClaimToken + `","success":true}`))
+	ackReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/sync/openclaw/dispatch/"+strconv.FormatInt(pullResp.Jobs[0].ID, 10)+"/ack",
+		ackBody,
+	)
+	ackReq = addRouteParam(ackReq, "id", strconv.FormatInt(pullResp.Jobs[0].ID, 10))
+	ackReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	ackRec := httptest.NewRecorder()
+	handler.AckDispatchQueue(ackRec, ackReq)
+	require.Equal(t, http.StatusOK, ackRec.Code)
+
+	select {
+	case raw := <-client.Send:
+		t.Fatalf("unexpected websocket event for non-DM ack: %s", string(raw))
+	case <-time.After(200 * time.Millisecond):
+	}
 }
 
 func TestAgentStatusConsistency(t *testing.T) {

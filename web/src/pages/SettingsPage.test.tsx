@@ -94,7 +94,7 @@ describe("SettingsPage label management", () => {
     });
 
     expect(confirmSpy).toHaveBeenCalledWith(
-      'Delete label "feature"? This will remove it from linked projects and issues.',
+      'Delete label "feature"? This will remove it from linked projects and tasks.',
     );
     expect(
       fetchMock.mock.calls.some(([input]) =>

@@ -173,8 +173,8 @@ export function NoProjectsEmpty({ onCreate }: { onCreate?: () => void }) {
 export function NoTasksEmpty({ onCreate }: { onCreate?: () => void }) {
   return (
     <EmptyState
-      title="No issues yet"
-      description="Get started by creating your first issue."
+      title="No tasks yet"
+      description="Get started by creating your first task."
       icon={
         <svg
           className="h-12 w-12 text-slate-300 dark:text-slate-600"

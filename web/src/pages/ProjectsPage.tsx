@@ -47,7 +47,7 @@ const SAMPLE_PROJECTS: Project[] = [
   {
     id: "2",
     name: "Otter Camp",
-    description: "Project and issue tracking for AI agent teams",
+    description: "Project and task tracking for AI agent teams",
     taskCount: 24,
     completedCount: 18,
     color: "amber",

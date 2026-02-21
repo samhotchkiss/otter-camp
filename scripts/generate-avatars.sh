@@ -15,7 +15,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AGENTS_DIR="$(cd "$SCRIPT_DIR/../data/agents" && pwd)"
 GENERATE_SCRIPT="/Users/sam/.npm-global/lib/node_modules/openclaw/skills/nano-banana-pro/scripts/generate_image.py"
-GEMINI_API_KEY="${GEMINI_API_KEY:-AIzaSyBzM9km4mqu1yGu3OO1vKomp0TS_ogq2Bw}"
+GEMINI_API_KEY="${GEMINI_API_KEY:?GEMINI_API_KEY must be set in environment}"
 export GEMINI_API_KEY
 
 THREADS=4

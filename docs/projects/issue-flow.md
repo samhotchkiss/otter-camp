@@ -46,7 +46,6 @@ Typical path:
 - Sub-agent blockers are raised to project manager first.
 - If unresolved, blockers escalate to human.
 - Human escalation puts task `on_hold` and surfaces it in inbox.
-
 ## External Flow (When GitHub Connected)
 
 - Manual/poll/webhook sync updates task/repo mirrors.

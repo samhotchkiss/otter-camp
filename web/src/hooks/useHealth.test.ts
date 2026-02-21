@@ -30,7 +30,7 @@ describe("useHealth", () => {
     renderHook(() => useHealth());
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/health");
+      expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/health"));
     });
   });
 

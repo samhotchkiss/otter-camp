@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -59,9 +60,10 @@ type EnsureOpenClawRequiredAgentsOptions struct {
 
 type EnsureOpenClawRequiredAgentsResult struct {
 	Updated            bool
-	AddedElephant   bool
+	AddedElephant      bool
 	AddedChameleon     bool
 	MemoryWorkspaceDir string
+	DroppedUnknownKeys []string
 }
 
 type openClawConfigFile struct {
@@ -70,6 +72,10 @@ type openClawConfigFile struct {
 	SessionsDir2   string          `json:"sessionsDir"`
 	WorkspacesDir  string          `json:"workspaces_dir"`
 	WorkspacesDir2 string          `json:"workspacesDir"`
+	Host           string          `json:"host"`
+	Port           int             `json:"port"`
+	Token          string          `json:"token"`
+	APIKey         string          `json:"api_key"`
 	Agents         json.RawMessage `json:"agents"`
 	Slots          json.RawMessage `json:"slots"`
 }
@@ -82,8 +88,17 @@ type openClawAgentCandidate struct {
 
 var elephantSOULTemplate = strings.TrimSpace(`# Ellie (Elephant)
 
-You are Ellie, the Elephant. Your job is to read agent session logs, extract what's worth
-remembering, and distribute it via Otter Camp memory and knowledge commands.
+You are Ellie, Otter Camp's memory and retrieval specialist. Your job is to read agent
+session logs, extract what is worth remembering, and distribute that context through memory
+and knowledge commands.
+
+Ask Ellie First:
+- Before finalizing decisions, check memory retrieval context first.
+- If relevant context is missing, say so explicitly and request clarification.
+
+Zero Hallucination:
+- Never invent missing context.
+- If retrieval has no supporting evidence, return "no relevant memory found" and stop.
 
 You run quietly and prioritize signal over noise.
 `)
@@ -97,6 +112,13 @@ var elephantStateTemplate = map[string]any{
 		"total_knowledge_shared": 0,
 		"last_run_duration_ms":   0,
 	},
+}
+
+var openClawGeneratedAgentAllowedKeys = map[string]struct{}{
+	"id":        {},
+	"name":      {},
+	"workspace": {},
+	"model":     {},
 }
 
 func EnsureOpenClawRequiredAgents(
@@ -126,39 +148,52 @@ func EnsureOpenClawRequiredAgents(
 	switch agents := root["agents"].(type) {
 	case map[string]any:
 		if list, ok := agents["list"].([]any); ok {
-			updatedList, addedMemory, addedChameleon := ensureListAgentSlots(list, opts)
+			updatedList, addedMemory, addedChameleon, droppedUnknown := ensureListAgentSlots(list, opts)
 			agents["list"] = updatedList
 			result.AddedElephant = addedMemory
 			result.AddedChameleon = addedChameleon
 			result.Updated = addedMemory || addedChameleon
+			result.DroppedUnknownKeys = append(result.DroppedUnknownKeys, droppedUnknown...)
 		} else {
-			addedMemory := ensureMapAgentSlot(agents, "elephant", buildElephantSlot())
+			addedMemory := false
+			droppedUnknown := make([]string, 0, 2)
+			if !mapHasAnyAgentID(agents, "elephant", "ellie") {
+				sanitized, dropped := sanitizeGeneratedOpenClawAgentSlot(buildElephantSlot())
+				droppedUnknown = append(droppedUnknown, dropped...)
+				addedMemory = ensureMapAgentSlot(agents, "elephant", sanitized)
+			}
 			addedChameleon := false
 			if opts.IncludeChameleon {
-				addedChameleon = ensureMapAgentSlot(agents, "chameleon", buildChameleonSlot())
+				sanitized, dropped := sanitizeGeneratedOpenClawAgentSlot(buildChameleonSlot())
+				droppedUnknown = append(droppedUnknown, dropped...)
+				addedChameleon = ensureMapAgentSlot(agents, "chameleon", sanitized)
 			}
 			result.AddedElephant = addedMemory
 			result.AddedChameleon = addedChameleon
 			result.Updated = addedMemory || addedChameleon
+			result.DroppedUnknownKeys = append(result.DroppedUnknownKeys, droppedUnknown...)
 		}
 		root["agents"] = agents
 	case []any:
-		updated, addedMemory, addedChameleon := ensureListAgentSlots(agents, opts)
+		updated, addedMemory, addedChameleon, droppedUnknown := ensureListAgentSlots(agents, opts)
 		result.Updated = addedMemory || addedChameleon
 		result.AddedElephant = addedMemory
 		result.AddedChameleon = addedChameleon
+		result.DroppedUnknownKeys = append(result.DroppedUnknownKeys, droppedUnknown...)
 		root["agents"] = updated
 	default:
 		agentsObj := map[string]any{
 			"list": []any{},
 		}
-		updated, addedMemory, addedChameleon := ensureListAgentSlots(agentsObj["list"].([]any), opts)
+		updated, addedMemory, addedChameleon, droppedUnknown := ensureListAgentSlots(agentsObj["list"].([]any), opts)
 		agentsObj["list"] = updated
 		root["agents"] = agentsObj
 		result.Updated = addedMemory || addedChameleon
 		result.AddedElephant = addedMemory
 		result.AddedChameleon = addedChameleon
+		result.DroppedUnknownKeys = append(result.DroppedUnknownKeys, droppedUnknown...)
 	}
+	result.DroppedUnknownKeys = normalizeDroppedUnknownKeys(result.DroppedUnknownKeys)
 
 	if result.AddedElephant {
 		workspaceDir, err := ensureElephantWorkspace(install.RootDir)
@@ -186,17 +221,21 @@ func EnsureOpenClawRequiredAgents(
 func ensureListAgentSlots(
 	agents []any,
 	opts EnsureOpenClawRequiredAgentsOptions,
-) (updated []any, addedMemory bool, addedChameleon bool) {
+) (updated []any, addedMemory bool, addedChameleon bool, droppedUnknown []string) {
 	updated = append([]any{}, agents...)
-	if !listHasAgentID(updated, "elephant") {
-		updated = append(updated, buildElephantSlot())
+	if !listHasAnyAgentID(updated, "elephant", "ellie") {
+		sanitized, dropped := sanitizeGeneratedOpenClawAgentSlot(buildElephantSlot())
+		updated = append(updated, sanitized)
+		droppedUnknown = append(droppedUnknown, dropped...)
 		addedMemory = true
 	}
 	if opts.IncludeChameleon && !listHasAgentID(updated, "chameleon") {
-		updated = append(updated, buildChameleonSlot())
+		sanitized, dropped := sanitizeGeneratedOpenClawAgentSlot(buildChameleonSlot())
+		updated = append(updated, sanitized)
+		droppedUnknown = append(droppedUnknown, dropped...)
 		addedChameleon = true
 	}
-	return updated, addedMemory, addedChameleon
+	return updated, addedMemory, addedChameleon, normalizeDroppedUnknownKeys(droppedUnknown)
 }
 
 func listHasAgentID(agents []any, id string) bool {
@@ -211,6 +250,15 @@ func listHasAgentID(agents []any, id string) bool {
 		}
 		candidate := strings.ToLower(strings.TrimSpace(lookupString(record, "id", "slug", "agent_id", "agent")))
 		if candidate == target {
+			return true
+		}
+	}
+	return false
+}
+
+func listHasAnyAgentID(agents []any, ids ...string) bool {
+	for _, id := range ids {
+		if listHasAgentID(agents, id) {
 			return true
 		}
 	}
@@ -238,6 +286,29 @@ func ensureMapAgentSlot(agents map[string]any, id string, value map[string]any) 
 	return true
 }
 
+func mapHasAnyAgentID(agents map[string]any, ids ...string) bool {
+	for _, id := range ids {
+		target := strings.TrimSpace(strings.ToLower(id))
+		if target == "" {
+			continue
+		}
+		for key, existing := range agents {
+			if strings.EqualFold(strings.TrimSpace(key), target) {
+				return true
+			}
+			record, ok := existing.(map[string]any)
+			if !ok {
+				continue
+			}
+			candidate := strings.ToLower(strings.TrimSpace(lookupString(record, "id", "slug", "agent_id", "agent")))
+			if candidate == target {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func buildElephantSlot() map[string]any {
 	return map[string]any{
 		"id":        "elephant",
@@ -255,6 +326,44 @@ func buildChameleonSlot() map[string]any {
 		"name":      "Chameleon",
 		"workspace": "~/.openclaw/workspace-chameleon",
 	}
+}
+
+func sanitizeGeneratedOpenClawAgentSlot(slot map[string]any) (map[string]any, []string) {
+	sanitized := make(map[string]any, len(slot))
+	dropped := make([]string, 0)
+	for key, value := range slot {
+		normalizedKey := strings.ToLower(strings.TrimSpace(key))
+		if _, ok := openClawGeneratedAgentAllowedKeys[normalizedKey]; !ok {
+			dropped = append(dropped, normalizedKey)
+			continue
+		}
+		sanitized[normalizedKey] = value
+	}
+	return sanitized, normalizeDroppedUnknownKeys(dropped)
+}
+
+func normalizeDroppedUnknownKeys(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.ToLower(strings.TrimSpace(value))
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+	sort.Strings(normalized)
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 func ensureElephantWorkspace(rootDir string) (string, error) {
@@ -367,7 +476,7 @@ func DetectOpenClawInstallation(opts DetectOpenClawOptions) (*OpenClawInstallati
 		ConfigPath:    configPath,
 		SessionsDir:   sessionsDir,
 		WorkspacesDir: workspacesDir,
-		Gateway:       parseGatewayConfig(config.Gateway),
+		Gateway:       parseGatewayConfig(config),
 		Agents:        agents,
 	}, nil
 }
@@ -375,6 +484,10 @@ func DetectOpenClawInstallation(opts DetectOpenClawOptions) (*OpenClawInstallati
 func ImportOpenClawAgentIdentities(install *OpenClawInstallation) ([]ImportedAgentIdentity, error) {
 	if install == nil {
 		return nil, errors.New("installation is required")
+	}
+	guard, err := NewOpenClawSourceGuard(install.RootDir)
+	if err != nil {
+		return nil, err
 	}
 
 	identities := make([]ImportedAgentIdentity, 0, len(install.Agents))
@@ -387,7 +500,7 @@ func ImportOpenClawAgentIdentities(install *OpenClawInstallation) ([]ImportedAge
 		}
 
 		for _, fileName := range identityFileNames {
-			content, sourcePath, found, err := readIdentityFile(agent.WorkspaceDir, fileName)
+			content, sourcePath, found, err := readIdentityFileGuarded(agent.WorkspaceDir, fileName, guard)
 			if err != nil {
 				return nil, err
 			}
@@ -469,15 +582,59 @@ func loadOpenClawConfig(configPath string) (openClawConfigFile, error) {
 	return cfg, nil
 }
 
-func parseGatewayConfig(raw map[string]any) OpenClawGatewayConfig {
-	if len(raw) == 0 {
-		return OpenClawGatewayConfig{}
+func parseGatewayConfig(config openClawConfigFile) OpenClawGatewayConfig {
+	raw := config.Gateway
+	host := lookupString(raw, "host", "hostname")
+	port := lookupInt(raw, "port")
+	token := lookupString(raw, "token", "api_key", "apiKey")
+
+	urlHost, urlPort := parseGatewayURL(lookupString(raw, "url", "ws_url", "wsUrl", "target"))
+	if host == "" {
+		host = urlHost
 	}
+	if port <= 0 {
+		port = urlPort
+	}
+	if host == "" {
+		host = strings.TrimSpace(config.Host)
+	}
+	if port <= 0 {
+		port = config.Port
+	}
+	if token == "" {
+		token = firstNonEmpty(strings.TrimSpace(config.Token), strings.TrimSpace(config.APIKey))
+	}
+
 	return OpenClawGatewayConfig{
-		Host:  lookupString(raw, "host", "hostname"),
-		Port:  lookupInt(raw, "port"),
-		Token: lookupString(raw, "token", "api_key", "apiKey"),
+		Host:  host,
+		Port:  port,
+		Token: token,
 	}
+}
+
+func parseGatewayURL(raw string) (string, int) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", 0
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" {
+		return "", 0
+	}
+
+	port := 0
+	if parsed.Port() != "" {
+		port = lookupInt(map[string]any{"port": parsed.Port()}, "port")
+	}
+	if port <= 0 {
+		switch strings.ToLower(parsed.Scheme) {
+		case "ws", "http":
+			port = 80
+		case "wss", "https":
+			port = 443
+		}
+	}
+	return parsed.Hostname(), port
 }
 
 func collectOpenClawAgents(rootDir, workspaceRoot string, config openClawConfigFile) ([]OpenClawAgentWorkspace, error) {
@@ -522,15 +679,24 @@ func collectOpenClawAgents(rootDir, workspaceRoot string, config openClawConfigF
 			if !entry.IsDir() {
 				continue
 			}
-			workspace := filepath.Join(workspaceRoot, entry.Name())
+			// Skip directories that don't look like agent workspaces.
+			// A valid workspace has at least one identity file (SOUL.md or IDENTITY.md).
+			name := entry.Name()
+			if isSkippableWorkspaceDir(name) {
+				continue
+			}
+			workspace := filepath.Join(workspaceRoot, name)
 			clean := filepath.Clean(workspace)
 			if _, ok := byWorkspace[clean]; ok {
 				continue
 			}
+			if !hasAnyIdentityFile(clean) {
+				continue
+			}
 			byWorkspace[clean] = struct{}{}
 			agents = append(agents, OpenClawAgentWorkspace{
-				ID:           entry.Name(),
-				Name:         entry.Name(),
+				ID:           name,
+				Name:         name,
 				WorkspaceDir: clean,
 			})
 		}
@@ -555,7 +721,22 @@ func extractAgentCandidates(raw json.RawMessage) []openClawAgentCandidate {
 	candidates := make([]openClawAgentCandidate, 0)
 	switch typed := parsed.(type) {
 	case map[string]any:
+		// Handle {"list": [...], "defaults": {...}} format (OpenClaw agents config)
+		if listVal, ok := typed["list"]; ok {
+			if listArr, ok := listVal.([]any); ok {
+				for _, value := range listArr {
+					candidate, ok := decodeAgentCandidate("", value)
+					if ok {
+						candidates = append(candidates, candidate)
+					}
+				}
+			}
+		}
+		// Also try each key as an agent entry (legacy map format)
 		for key, value := range typed {
+			if key == "list" || key == "defaults" {
+				continue
+			}
 			candidate, ok := decodeAgentCandidate(key, value)
 			if ok {
 				candidates = append(candidates, candidate)
@@ -629,14 +810,66 @@ func resolveWorkspacePath(rootDir, workspaceRoot string, candidate openClawAgent
 	}
 
 	id := strings.TrimSpace(candidate.ID)
-	if workspaceRoot != "" && id != "" {
-		path := filepath.Join(workspaceRoot, id)
+	if id != "" {
+		// Try workspaceRoot/id (e.g., workspaces/main)
+		if workspaceRoot != "" {
+			path := filepath.Join(workspaceRoot, id)
+			if isDirectory(path) {
+				return filepath.Clean(path)
+			}
+		}
+		// Try rootDir/workspace-id (e.g., ~/.openclaw/workspace-main)
+		// This is the common OpenClaw layout where each agent has workspace-<slug>
+		path := filepath.Join(rootDir, "workspace-"+id)
 		if isDirectory(path) {
 			return filepath.Clean(path)
+		}
+		// Special case: "main" agent often uses bare "workspace/" directory
+		if id == "main" {
+			barePath := filepath.Join(rootDir, "workspace")
+			if isDirectory(barePath) {
+				return filepath.Clean(barePath)
+			}
 		}
 	}
 
 	return ""
+}
+
+var skippableWorkspaceDirs = map[string]struct{}{
+	".git":         {},
+	"node_modules": {},
+	"scripts":      {},
+	"memory":       {},
+	"logs":         {},
+	"tmp":          {},
+	"cache":        {},
+}
+
+func isSkippableWorkspaceDir(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	if _, ok := skippableWorkspaceDirs[lower]; ok {
+		return true
+	}
+	// Skip hidden directories
+	if strings.HasPrefix(lower, ".") {
+		return true
+	}
+	return false
+}
+
+func hasAnyIdentityFile(workspaceDir string) bool {
+	for _, name := range identityFileNames {
+		path := filepath.Join(workspaceDir, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			continue
+		}
+		if info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func detectWorkspaceRoot(rootDir string) string {
@@ -648,10 +881,23 @@ func detectWorkspaceRoot(rootDir string) string {
 }
 
 func readIdentityFile(workspaceDir, fileName string) (string, string, bool, error) {
+	return readIdentityFileGuarded(workspaceDir, fileName, nil)
+}
+
+func readIdentityFileGuarded(workspaceDir, fileName string, guard *OpenClawSourceGuard) (string, string, bool, error) {
 	base := filepath.Clean(workspaceDir)
 	target := filepath.Clean(filepath.Join(base, fileName))
 	if !isWithinDir(base, target) {
 		return "", "", false, nil
+	}
+	return readIdentityFileWithGuard(base, target, guard)
+}
+
+func readIdentityFileWithGuard(_ string, target string, guard *OpenClawSourceGuard) (string, string, bool, error) {
+	if guard != nil {
+		if err := guard.ValidateReadPath(target); err != nil {
+			return "", "", false, err
+		}
 	}
 
 	info, err := os.Lstat(target)

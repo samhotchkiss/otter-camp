@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -50,6 +51,10 @@ func setupMessageTestDB(t *testing.T) *sql.DB {
 		_ = db.Close()
 	})
 
+	// Some down migrations temporarily tighten historical constraints; clear rows
+	// that are incompatible with older schemas before rolling migrations back.
+	_, _ = db.Exec(`TRUNCATE TABLE comments CASCADE`)
+
 	err = m.Down()
 	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		require.NoError(t, err)
@@ -63,6 +68,8 @@ func setupMessageTestDB(t *testing.T) *sql.DB {
 	require.NoError(t, os.Setenv("DATABASE_URL", connStr))
 	tasksDBOnce = sync.Once{}
 	tasksDBErr = nil
+	openClawDispatchQueueSchemaOnce = sync.Once{}
+	openClawDispatchQueueSchemaErr = nil
 	if tasksDB != nil {
 		_ = tasksDB.Close()
 		tasksDB = nil
@@ -147,6 +154,372 @@ func (f *fakeOpenClawDispatcher) SendToOpenClaw(event interface{}) error {
 
 func (f *fakeOpenClawDispatcher) IsConnected() bool {
 	return f.connected
+}
+
+func waitForOrgBroadcastEvent(
+	t *testing.T,
+	client *ws.Client,
+	eventType string,
+	timeout time.Duration,
+) map[string]any {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case raw := <-client.Send:
+			var event map[string]any
+			require.NoError(t, json.Unmarshal(raw, &event))
+			if event["type"] == eventType {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("expected websocket event type %s", eventType)
+		}
+	}
+}
+
+func TestDMRoutingExemptAgentSlug(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, isDMRoutingExemptAgentSlug("main"))
+	require.True(t, isDMRoutingExemptAgentSlug("elephant"))
+	require.True(t, isDMRoutingExemptAgentSlug("lori"))
+	require.True(t, isDMRoutingExemptAgentSlug("MAIN"))
+	require.False(t, isDMRoutingExemptAgentSlug("technonymous"))
+	require.False(t, isDMRoutingExemptAgentSlug(""))
+}
+
+func TestDMFallbackSessionKeyForAgentSlug(t *testing.T) {
+	t.Parallel()
+
+	agentID := "28d27f83-5518-468a-83bf-750f7ec1c9f5"
+	tests := []struct {
+		name      string
+		agentSlug string
+		want      string
+	}{
+		{
+			name:      "non exempt slug routes to chameleon",
+			agentSlug: "technonymous",
+			want:      canonicalChameleonSessionKey(agentID),
+		},
+		{
+			name:      "main slug stays on own session",
+			agentSlug: "main",
+			want:      "agent:main:main",
+		},
+		{
+			name:      "elephant slug stays on own session",
+			agentSlug: "elephant",
+			want:      "agent:elephant:main",
+		},
+		{
+			name:      "lori slug stays on own session",
+			agentSlug: "lori",
+			want:      "agent:lori:main",
+		},
+		{
+			name:      "no slug routes to chameleon",
+			agentSlug: "",
+			want:      canonicalChameleonSessionKey(agentID),
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, dmFallbackSessionKeyForAgentSlug(tt.agentSlug, agentID))
+		})
+	}
+}
+
+func TestNormalizeDMDispatchSessionKeyForAgentSlug(t *testing.T) {
+	t.Parallel()
+
+	agentID := "28d27f83-5518-468a-83bf-750f7ec1c9f5"
+	tests := []struct {
+		name       string
+		agentSlug  string
+		sessionKey string
+		want       string
+	}{
+		{
+			name:       "non exempt chameleon key stays chameleon",
+			agentSlug:  "technonymous",
+			sessionKey: canonicalChameleonSessionKey(agentID),
+			want:       canonicalChameleonSessionKey(agentID),
+		},
+		{
+			name:       "non exempt stale main key migrates to chameleon",
+			agentSlug:  "technonymous",
+			sessionKey: "agent:technonymous:main",
+			want:       canonicalChameleonSessionKey(agentID),
+		},
+		{
+			name:       "exempt main slug rewrites chameleon to dedicated session",
+			agentSlug:  "main",
+			sessionKey: canonicalChameleonSessionKey(agentID),
+			want:       "agent:main:main",
+		},
+		{
+			name:       "exempt elephant slug rewrites chameleon to dedicated session",
+			agentSlug:  "elephant",
+			sessionKey: canonicalChameleonSessionKey(agentID),
+			want:       "agent:elephant:main",
+		},
+		{
+			name:       "exempt lori slug rewrites chameleon to dedicated session",
+			agentSlug:  "lori",
+			sessionKey: canonicalChameleonSessionKey(agentID),
+			want:       "agent:lori:main",
+		},
+		{
+			name:       "non exempt unrelated key is preserved",
+			agentSlug:  "technonymous",
+			sessionKey: "agent:other:main",
+			want:       "agent:other:main",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, normalizeDMDispatchSessionKeyForAgentSlug(tt.agentSlug, agentID, tt.sessionKey))
+		})
+	}
+}
+
+func TestDMInjectionDecider(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	tests := []struct {
+		name        string
+		state       *dmInjectionState
+		currentHash string
+		want        bool
+	}{
+		{
+			name:        "nil state injects",
+			state:       nil,
+			currentHash: "hash-a",
+			want:        true,
+		},
+		{
+			name: "never injected injects",
+			state: &dmInjectionState{
+				InjectionHash: "hash-a",
+			},
+			currentHash: "hash-a",
+			want:        true,
+		},
+		{
+			name: "compaction flagged injects",
+			state: &dmInjectionState{
+				InjectedAt:         sql.NullTime{Time: now, Valid: true},
+				InjectionHash:      "hash-a",
+				CompactionDetected: true,
+			},
+			currentHash: "hash-a",
+			want:        true,
+		},
+		{
+			name: "hash mismatch injects",
+			state: &dmInjectionState{
+				InjectedAt:    sql.NullTime{Time: now, Valid: true},
+				InjectionHash: "hash-a",
+			},
+			currentHash: "hash-b",
+			want:        true,
+		},
+		{
+			name: "warmed current hash does not inject",
+			state: &dmInjectionState{
+				InjectedAt:    sql.NullTime{Time: now, Valid: true},
+				InjectionHash: "hash-a",
+			},
+			currentHash: "hash-a",
+			want:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, shouldInjectDMIdentity(tt.state, tt.currentHash))
+		})
+	}
+}
+
+func TestBuildDMDispatchEvent_InjectionState(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-injection-state-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "dm-injection-agent")
+	_, err := db.Exec(
+		`UPDATE agents
+		 SET soul_md = $3,
+		     identity_md = $4,
+		     instructions_md = $5
+		 WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+		"Soul v1",
+		"Identity v1",
+		"Instructions v1",
+	)
+	require.NoError(t, err)
+
+	handler := &MessageHandler{}
+	threadID := "dm_" + agentID
+	req := createMessageRequest{
+		ThreadID: &threadID,
+		Content:  "First turn",
+	}
+	target := dmDispatchTarget{
+		AgentID:    agentID,
+		SessionKey: canonicalChameleonSessionKey(agentID),
+	}
+
+	event := handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-1", req, target)
+	require.True(t, event.Data.InjectIdentity)
+
+	event = handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-2", req, target)
+	require.False(t, event.Data.InjectIdentity)
+
+	_, err = db.Exec(
+		`UPDATE agents
+		 SET soul_md = $3
+		 WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+		"Soul v2",
+	)
+	require.NoError(t, err)
+
+	event = handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-3", req, target)
+	require.True(t, event.Data.InjectIdentity)
+
+	_, err = db.Exec(
+		`UPDATE dm_injection_state
+		 SET compaction_detected = TRUE
+		 WHERE org_id = $1 AND thread_id = $2`,
+		orgID,
+		threadID,
+	)
+	require.NoError(t, err)
+
+	event = handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-4", req, target)
+	require.True(t, event.Data.InjectIdentity)
+
+	var compactionDetected bool
+	err = db.QueryRow(
+		`SELECT compaction_detected
+		 FROM dm_injection_state
+		 WHERE org_id = $1 AND thread_id = $2`,
+		orgID,
+		threadID,
+	).Scan(&compactionDetected)
+	require.NoError(t, err)
+	require.False(t, compactionDetected)
+}
+
+func TestBuildDMDispatchEvent_IncrementalContext(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-injection-incremental-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "dm-injection-incremental-agent")
+
+	handler := &MessageHandler{}
+	threadID := "dm_" + agentID
+	incrementalContext := "Updated project status: release candidate approved."
+	req := createMessageRequest{
+		ThreadID:           &threadID,
+		Content:            "Ack",
+		IncrementalContext: &incrementalContext,
+	}
+	target := dmDispatchTarget{
+		AgentID:    agentID,
+		SessionKey: canonicalChameleonSessionKey(agentID),
+	}
+
+	event := handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-1", req, target)
+	require.Equal(t, incrementalContext, event.Data.IncrementalContext)
+}
+
+func TestDMInjectionState_InvalidatesOnAgentIdentityUpdate(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-injection-invalidate-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "dm-injection-invalidate-agent")
+	threadID := "dm_" + agentID
+	sessionKey := canonicalChameleonSessionKey(agentID)
+
+	_, err := db.Exec(
+		`UPDATE agents
+		 SET soul_md = $3,
+		     identity_md = $4,
+		     instructions_md = $5
+		 WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+		"Soul v1",
+		"Identity v1",
+		"Instructions v1",
+	)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO dm_injection_state (
+			org_id,
+			thread_id,
+			session_key,
+			agent_id,
+			injected_at,
+			injection_hash,
+			compaction_detected
+		) VALUES ($1, $2, $3, $4, NOW(), $5, FALSE)`,
+		orgID,
+		threadID,
+		sessionKey,
+		agentID,
+		"hash-v1",
+	)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`UPDATE agents
+		 SET soul_md = $3
+		 WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+		"Soul v2",
+	)
+	require.NoError(t, err)
+
+	var injectionHash sql.NullString
+	err = db.QueryRow(
+		`SELECT injection_hash
+		 FROM dm_injection_state
+		 WHERE org_id = $1 AND thread_id = $2`,
+		orgID,
+		threadID,
+	).Scan(&injectionHash)
+	require.NoError(t, err)
+	require.False(t, injectionHash.Valid)
+
+	handler := &MessageHandler{}
+	req := createMessageRequest{
+		ThreadID: &threadID,
+		Content:  "Need refreshed identity",
+	}
+	target := dmDispatchTarget{
+		AgentID:    agentID,
+		SessionKey: sessionKey,
+	}
+
+	event := handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-refresh", req, target)
+	require.True(t, event.Data.InjectIdentity)
 }
 
 func TestMessageCRUDTaskThread(t *testing.T) {
@@ -325,7 +698,9 @@ func TestCreateMessageDMBridgeOfflinePersistsMessageWithDeliveryWarning(t *testi
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
 	handler.CreateMessage(rr, req)
-	require.Equal(t, http.StatusOK, rr.Code)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d: %s", rr.Code, rr.Body.String())
+	}
 
 	var createResp struct {
 		Message  Message          `json:"message"`
@@ -347,6 +722,165 @@ func TestCreateMessageDMBridgeOfflinePersistsMessageWithDeliveryWarning(t *testi
 	err = db.QueryRow(`SELECT COUNT(*) FROM openclaw_dispatch_queue WHERE event_type = 'dm.message'`).Scan(&queued)
 	require.NoError(t, err)
 	require.Equal(t, 1, queued)
+}
+
+func TestCreateMessageDMPendingThenDispatchAckBroadcastsDelivered(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-pending-then-delivered-org")
+
+	hub := ws.NewHub()
+	go hub.Run()
+	client := ws.NewClient(hub, nil)
+	client.SetOrgID(orgID)
+	hub.Register(client)
+	t.Cleanup(func() { hub.Unregister(client) })
+	time.Sleep(20 * time.Millisecond)
+
+	messageHandler := &MessageHandler{
+		OpenClawDispatcher: &fakeOpenClawDispatcher{connected: false},
+		Hub:                hub,
+	}
+	body, err := json.Marshal(map[string]any{
+		"org_id":      orgID,
+		"thread_id":   "dm_main",
+		"content":     "Queue this message",
+		"sender_type": "user",
+		"sender_name": "Sam",
+	})
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	messageHandler.CreateMessage(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var createResp struct {
+		Message  Message          `json:"message"`
+		Delivery dmDeliveryStatus `json:"delivery"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&createResp))
+	require.NotEmpty(t, createResp.Message.ID)
+	require.False(t, createResp.Delivery.Delivered)
+	require.Equal(t, openClawDispatchQueuedWarning, createResp.Delivery.Error)
+
+	syncHandler := &OpenClawSyncHandler{DB: db, Hub: hub}
+
+	pullReq := httptest.NewRequest(http.MethodGet, "/api/sync/openclaw/dispatch/pending?limit=5", nil)
+	pullReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	pullRec := httptest.NewRecorder()
+	syncHandler.PullDispatchQueue(pullRec, pullReq)
+	require.Equal(t, http.StatusOK, pullRec.Code)
+
+	var pullResp openClawDispatchQueuePullResponse
+	require.NoError(t, json.NewDecoder(pullRec.Body).Decode(&pullResp))
+	require.Len(t, pullResp.Jobs, 1)
+
+	ackBody := bytes.NewReader([]byte(`{"claim_token":"` + pullResp.Jobs[0].ClaimToken + `","success":true}`))
+	ackReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/sync/openclaw/dispatch/"+strconv.FormatInt(pullResp.Jobs[0].ID, 10)+"/ack",
+		ackBody,
+	)
+	ackReq = addRouteParam(ackReq, "id", strconv.FormatInt(pullResp.Jobs[0].ID, 10))
+	ackReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	ackRec := httptest.NewRecorder()
+	syncHandler.AckDispatchQueue(ackRec, ackReq)
+	require.Equal(t, http.StatusOK, ackRec.Code)
+
+	event := waitForOrgBroadcastEvent(t, client, "DMMessageDeliveryUpdated", 500*time.Millisecond)
+	data, ok := event["data"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, createResp.Message.ID, data["messageId"])
+	require.Equal(t, "dm_main", data["threadId"])
+	require.Equal(t, "delivered", data["deliveryStatus"])
+}
+
+func TestCreateMessageDMMaxRetryExhaustionBroadcastsFailed(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-pending-then-failed-org")
+
+	hub := ws.NewHub()
+	go hub.Run()
+	client := ws.NewClient(hub, nil)
+	client.SetOrgID(orgID)
+	hub.Register(client)
+	t.Cleanup(func() { hub.Unregister(client) })
+	time.Sleep(20 * time.Millisecond)
+
+	messageHandler := &MessageHandler{
+		OpenClawDispatcher: &fakeOpenClawDispatcher{connected: false},
+		Hub:                hub,
+	}
+	body, err := json.Marshal(map[string]any{
+		"org_id":      orgID,
+		"thread_id":   "dm_main",
+		"content":     "Queue this message",
+		"sender_type": "user",
+		"sender_name": "Sam",
+	})
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	messageHandler.CreateMessage(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var createResp struct {
+		Message  Message          `json:"message"`
+		Delivery dmDeliveryStatus `json:"delivery"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&createResp))
+	require.NotEmpty(t, createResp.Message.ID)
+	require.False(t, createResp.Delivery.Delivered)
+
+	dedupeKey := "dm.message:" + createResp.Message.ID
+	_, err = db.Exec(`UPDATE openclaw_dispatch_queue SET attempts = 19 WHERE dedupe_key = $1`, dedupeKey)
+	require.NoError(t, err)
+
+	syncHandler := &OpenClawSyncHandler{DB: db, Hub: hub}
+
+	pullReq := httptest.NewRequest(http.MethodGet, "/api/sync/openclaw/dispatch/pending?limit=5", nil)
+	pullReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	pullRec := httptest.NewRecorder()
+	syncHandler.PullDispatchQueue(pullRec, pullReq)
+	require.Equal(t, http.StatusOK, pullRec.Code)
+
+	var pullResp openClawDispatchQueuePullResponse
+	require.NoError(t, json.NewDecoder(pullRec.Body).Decode(&pullResp))
+	require.Len(t, pullResp.Jobs, 1)
+	require.Equal(t, 20, pullResp.Jobs[0].Attempts)
+
+	ackBody := bytes.NewReader([]byte(`{"claim_token":"` + pullResp.Jobs[0].ClaimToken + `","success":false,"error":"bridge timeout"}`))
+	ackReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/sync/openclaw/dispatch/"+strconv.FormatInt(pullResp.Jobs[0].ID, 10)+"/ack",
+		ackBody,
+	)
+	ackReq = addRouteParam(ackReq, "id", strconv.FormatInt(pullResp.Jobs[0].ID, 10))
+	ackReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	ackRec := httptest.NewRecorder()
+	syncHandler.AckDispatchQueue(ackRec, ackReq)
+	require.Equal(t, http.StatusOK, ackRec.Code)
+
+	event := waitForOrgBroadcastEvent(t, client, "DMMessageDeliveryUpdated", 500*time.Millisecond)
+	data, ok := event["data"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, createResp.Message.ID, data["messageId"])
+	require.Equal(t, "dm_main", data["threadId"])
+	require.Equal(t, "failed", data["deliveryStatus"])
+
+	var status string
+	err = db.QueryRow(`SELECT status FROM openclaw_dispatch_queue WHERE dedupe_key = $1`, dedupeKey).Scan(&status)
+	require.NoError(t, err)
+	require.Equal(t, "failed", status)
 }
 
 func TestCreateMessageDMDispatchesToOpenClaw(t *testing.T) {
@@ -395,11 +929,276 @@ func TestCreateMessageDMDispatchesToOpenClaw(t *testing.T) {
 	require.Equal(t, "sam-user", event.Data.SenderID)
 	require.Equal(t, "user", event.Data.SenderType)
 	require.Equal(t, "Sam", event.Data.SenderName)
+	require.Len(t, event.Data.Attachments, 0)
 
 	var count int
 	err = db.QueryRow(`SELECT COUNT(*) FROM comments WHERE thread_id = 'dm_itsalive'`).Scan(&count)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
+}
+
+func TestCreateMessageDMSequentialSends(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-sequential-send-org")
+
+	_, err := db.Exec(
+		`INSERT INTO agent_sync_state (org_id, id, name, status, session_key, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, NOW())`,
+		orgID,
+		"itsalive",
+		"Ivy",
+		"online",
+		"agent:itsalive:main",
+	)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	postDM := func(content string) struct {
+		Message  Message          `json:"message"`
+		Delivery dmDeliveryStatus `json:"delivery"`
+	} {
+		t.Helper()
+		payload := map[string]any{
+			"org_id":      orgID,
+			"thread_id":   "dm_itsalive",
+			"content":     content,
+			"sender_id":   "sam-user",
+			"sender_type": "user",
+			"sender_name": "Sam",
+		}
+		body, marshalErr := json.Marshal(payload)
+		require.NoError(t, marshalErr)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.CreateMessage(rec, req)
+		require.Equalf(t, http.StatusOK, rec.Code, "response body: %s", rec.Body.String())
+
+		var resp struct {
+			Message  Message          `json:"message"`
+			Delivery dmDeliveryStatus `json:"delivery"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		return resp
+	}
+
+	first := postDM("First steer")
+	second := postDM("Second steer")
+
+	require.True(t, first.Delivery.Attempted)
+	require.True(t, first.Delivery.Delivered)
+	require.True(t, second.Delivery.Attempted)
+	require.True(t, second.Delivery.Delivered)
+	require.NotEqual(t, first.Message.ID, second.Message.ID)
+	require.NotNil(t, first.Message.ThreadID)
+	require.NotNil(t, second.Message.ThreadID)
+	require.Equal(t, "dm_itsalive", *first.Message.ThreadID)
+	require.Equal(t, "dm_itsalive", *second.Message.ThreadID)
+
+	require.Len(t, dispatcher.calls, 2)
+
+	firstEvent, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	secondEvent, ok := dispatcher.calls[1].(openClawDMDispatchEvent)
+	require.True(t, ok)
+
+	require.Equal(t, "First steer", firstEvent.Data.Content)
+	require.Equal(t, "Second steer", secondEvent.Data.Content)
+	require.NotEmpty(t, firstEvent.Data.MessageID)
+	require.NotEmpty(t, secondEvent.Data.MessageID)
+	require.NotEqual(t, firstEvent.Data.MessageID, secondEvent.Data.MessageID)
+	require.Equal(t, "dm_itsalive", firstEvent.Data.ThreadID)
+	require.Equal(t, "dm_itsalive", secondEvent.Data.ThreadID)
+
+	var messageCount int
+	err = db.QueryRow(`SELECT COUNT(*) FROM comments WHERE thread_id = 'dm_itsalive'`).Scan(&messageCount)
+	require.NoError(t, err)
+	require.Equal(t, 2, messageCount)
+}
+
+func TestCreateMessageDMDispatchIncludesAttachments(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-attachments-org")
+	attachmentID := insertMessageTestAttachment(t, db, orgID, "diagram.png")
+
+	_, err := db.Exec(
+		`INSERT INTO agent_sync_state (org_id, id, name, status, session_key, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, NOW())`,
+		orgID,
+		"itsalive",
+		"Ivy",
+		"online",
+		"agent:itsalive:main",
+	)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":    orgID,
+		"thread_id": "dm_itsalive",
+		"content":   "Please review the attached image",
+		"attachments": []map[string]interface{}{
+			{
+				"id":         attachmentID,
+				"filename":   "diagram.png",
+				"size_bytes": 2048,
+				"mime_type":  "image/png",
+				"url":        "/api/attachments/" + attachmentID,
+			},
+		},
+		"sender_id":   "sam-user",
+		"sender_type": "user",
+		"sender_name": "Sam",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, "dm.message", event.Type)
+	require.Len(t, event.Data.Attachments, 1)
+	require.Equal(t, "/api/attachments/"+attachmentID, event.Data.Attachments[0].URL)
+	require.Equal(t, "diagram.png", event.Data.Attachments[0].Filename)
+	require.Equal(t, "image/png", event.Data.Attachments[0].ContentType)
+	require.EqualValues(t, 2048, event.Data.Attachments[0].SizeBytes)
+}
+
+func TestCreateMessageDMUserBroadcastIncludesFrontendThreadKeys(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-broadcast-user-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "dm-broadcast-agent")
+
+	hub := ws.NewHub()
+	go hub.Run()
+	client := ws.NewClient(hub, nil)
+	client.SetOrgID(orgID)
+	hub.Register(client)
+	t.Cleanup(func() { hub.Unregister(client) })
+	time.Sleep(20 * time.Millisecond)
+
+	handler := &MessageHandler{Hub: hub}
+	threadID := "dm_" + agentID
+	body, err := json.Marshal(map[string]any{
+		"org_id":      orgID,
+		"thread_id":   threadID,
+		"content":     "Hello from user",
+		"sender_type": "user",
+		"sender_name": "Sam",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateMessage(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	select {
+	case raw := <-client.Send:
+		var event map[string]any
+		require.NoError(t, json.Unmarshal(raw, &event))
+		require.Equal(t, "DMMessageReceived", event["type"])
+
+		data, ok := event["data"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, threadID, data["threadId"])
+		require.Equal(t, threadID, data["thread_id"])
+
+		message, ok := data["message"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, threadID, message["threadId"])
+		require.Equal(t, "Hello from user", message["content"])
+		require.Equal(t, "user", message["senderType"])
+		require.Equal(t, "Sam", message["senderName"])
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected dm message broadcast")
+	}
+}
+
+func TestCreateMessageDMAgentBroadcastIncludesFrontendThreadKeys(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-broadcast-agent-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "dm-broadcast-agent")
+
+	hub := ws.NewHub()
+	go hub.Run()
+	client := ws.NewClient(hub, nil)
+	client.SetOrgID(orgID)
+	hub.Register(client)
+	t.Cleanup(func() { hub.Unregister(client) })
+	time.Sleep(20 * time.Millisecond)
+
+	handler := &MessageHandler{Hub: hub}
+	threadID := "dm_" + agentID
+	body, err := json.Marshal(map[string]any{
+		"org_id":      orgID,
+		"thread_id":   threadID,
+		"content":     "Bridge-persisted agent response",
+		"sender_type": "agent",
+		"sender_name": "Stone",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateMessage(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	select {
+	case raw := <-client.Send:
+		var event map[string]any
+		require.NoError(t, json.Unmarshal(raw, &event))
+		require.Equal(t, "DMMessageReceived", event["type"])
+
+		data, ok := event["data"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, threadID, data["threadId"])
+		require.Equal(t, threadID, data["thread_id"])
+		require.Equal(t, "Stone", data["from"])
+		require.Equal(t, "Bridge-persisted agent response", data["preview"])
+
+		message, ok := data["message"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, threadID, message["threadId"])
+		require.Equal(t, "Bridge-persisted agent response", message["content"])
+		require.Equal(t, "agent", message["senderType"])
+		require.Equal(t, "Stone", message["senderName"])
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected dm message broadcast")
+	}
+}
+
+func TestBuildDMDispatchEventOmitsAttachmentsWhenEmpty(t *testing.T) {
+	handler := &MessageHandler{}
+	threadID := "dm_itsalive"
+	req := createMessageRequest{
+		ThreadID: &threadID,
+		Content:  "no attachments payload",
+	}
+	event := handler.buildDMDispatchEvent(
+		context.Background(),
+		nil,
+		"org-id",
+		"message-id",
+		req,
+		dmDispatchTarget{
+			AgentID:    "itsalive",
+			SessionKey: "agent:itsalive:main",
+		},
+	)
+
+	raw, err := json.Marshal(event)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "\"attachments\"")
 }
 
 func TestCreateMessageDMUsesChameleonFallbackWhenSyncStateMissingByUUID(t *testing.T) {
@@ -478,6 +1277,49 @@ func TestCreateMessageDMUsesChameleonFallbackWhenSyncStateMissingBySlug(t *testi
 	require.Equal(t, "agent:chameleon:oc:"+agentID, event.Data.SessionKey)
 }
 
+func TestCreateMessageDMFallsBackToMainWhenFrankAliasMissing(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-fallback-frank-org")
+	agentID := "f22b9d7c-bd76-41aa-a762-5584c43157b4"
+	_, err := db.Exec(
+		`INSERT INTO agents (id, org_id, slug, display_name, status)
+		 VALUES ($1, $2, 'main', 'Frank', 'active')`,
+		agentID,
+		orgID,
+	)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":      orgID,
+		"thread_id":   "dm_frank",
+		"content":     "Hey Frank",
+		"sender_type": "user",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	var createResp struct {
+		Delivery dmDeliveryStatus `json:"delivery"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &createResp))
+	require.True(t, createResp.Delivery.Delivered)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, agentID, event.Data.AgentID)
+	require.Equal(t, "agent:main:main", event.Data.SessionKey)
+	require.Equal(t, "dm_frank", event.Data.ThreadID)
+}
+
 func TestCreateMessageDMUsesElephantMainFallbackWhenSyncStateMissing(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-fallback-elephant-org")
@@ -505,6 +1347,64 @@ func TestCreateMessageDMUsesElephantMainFallbackWhenSyncStateMissing(t *testing.
 	require.True(t, ok)
 	require.Equal(t, agentID, event.Data.AgentID)
 	require.Equal(t, "agent:elephant:main", event.Data.SessionKey)
+}
+
+func TestCreateMessageDMUsesMainFallbackWhenSyncStateMissing(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-fallback-main-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "main")
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":      orgID,
+		"thread_id":   "dm_main",
+		"content":     "Hey Frank",
+		"sender_type": "user",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, agentID, event.Data.AgentID)
+	require.Equal(t, "agent:main:main", event.Data.SessionKey)
+}
+
+func TestCreateMessageDMUsesLoriFallbackWhenSyncStateMissing(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-fallback-lori-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "lori")
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":      orgID,
+		"thread_id":   "dm_lori",
+		"content":     "Hey Lori",
+		"sender_type": "user",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, agentID, event.Data.AgentID)
+	require.Equal(t, "agent:lori:main", event.Data.SessionKey)
 }
 
 func TestCreateMessageDMNormalizesElephantSyncStateFromChameleonKey(t *testing.T) {
@@ -544,6 +1444,54 @@ func TestCreateMessageDMNormalizesElephantSyncStateFromChameleonKey(t *testing.T
 	require.True(t, ok)
 	require.Equal(t, agentID, event.Data.AgentID)
 	require.Equal(t, "agent:elephant:main", event.Data.SessionKey)
+}
+
+func TestCreateMessageDMNormalizesNonExemptSyncStateMainKeyToChameleonAndPersists(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-nonexempt-normalize-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "technonymous")
+
+	_, err := db.Exec(
+		`INSERT INTO agent_sync_state (org_id, id, name, status, session_key, updated_at)
+		 VALUES ($1, $2, $3, 'online', $4, NOW())`,
+		orgID,
+		agentID,
+		"Technonymous",
+		"agent:technonymous:main",
+	)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":      orgID,
+		"thread_id":   "dm_" + agentID,
+		"content":     "Check route",
+		"sender_type": "user",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, agentID, event.Data.AgentID)
+	require.Equal(t, canonicalChameleonSessionKey(agentID), event.Data.SessionKey)
+
+	var persistedSessionKey string
+	err = db.QueryRow(
+		`SELECT session_key FROM agent_sync_state WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+	).Scan(&persistedSessionKey)
+	require.NoError(t, err)
+	require.Equal(t, canonicalChameleonSessionKey(agentID), persistedSessionKey)
 }
 
 func TestCreateMessageDMDispatchFailurePersistsMessageWithDeliveryWarning(t *testing.T) {

@@ -157,7 +157,7 @@ describe("ProjectFileBrowser", () => {
     expect(await screen.findByText("Unable to render file preview for this payload.")).toBeInTheDocument();
   });
 
-  it("creates a linked issue from eligible files and navigates to the issue thread", async () => {
+  it("creates a linked task from eligible files and navigates to the task thread", async () => {
     const user = userEvent.setup();
     fetchMock
       .mockResolvedValueOnce(
@@ -186,18 +186,18 @@ describe("ProjectFileBrowser", () => {
 
     render(<ProjectFileBrowser projectId="project-1" />);
     await user.click(await screen.findByRole("button", { name: /2026-02-07-post\.md/i }));
-    await user.click(await screen.findByRole("button", { name: "Create issue for this file" }));
+    await user.click(await screen.findByRole("button", { name: "Create task for this file" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/api/projects/project-1/issues/link?"),
+        expect.stringContaining("/api/projects/project-1/tasks/link?"),
         expect.objectContaining({ method: "POST" }),
       );
-      expect(navigateMock).toHaveBeenCalledWith("/projects/project-1/issues/issue-123");
+      expect(navigateMock).toHaveBeenCalledWith("/projects/project-1/tasks/issue-123");
     });
   });
 
-  it("shows an actionable error when linked issue creation fails", async () => {
+  it("shows an actionable error when linked task creation fails", async () => {
     const user = userEvent.setup();
     fetchMock
       .mockResolvedValueOnce(
@@ -220,7 +220,7 @@ describe("ProjectFileBrowser", () => {
 
     render(<ProjectFileBrowser projectId="project-1" />);
     await user.click(await screen.findByRole("button", { name: /2026-02-07-post\.md/i }));
-    await user.click(await screen.findByRole("button", { name: "Create issue for this file" }));
+    await user.click(await screen.findByRole("button", { name: "Create task for this file" }));
 
     expect(await screen.findByText("document_path must point to /posts/*.md")).toBeInTheDocument();
     expect(navigateMock).not.toHaveBeenCalled();

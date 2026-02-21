@@ -249,7 +249,7 @@ describe("GlobalChatDock", () => {
     expect(String(secondBody.content || "")).toContain("chat_session_reset:");
   });
 
-  it("offers an issue jump action for selected issue chats", async () => {
+  it("offers an task jump action for selected issue chats", async () => {
     const user = userEvent.setup();
     globalChatState.conversations = [
       {
@@ -258,8 +258,8 @@ describe("GlobalChatDock", () => {
         issueId: "issue-1",
         projectId: "project-1",
         title: "Write a poem about testing OtterCamp",
-        contextLabel: "Issue • Testerooni",
-        subtitle: "Issue conversation",
+        contextLabel: "Task • Testerooni",
+        subtitle: "Task conversation",
         unreadCount: 0,
         updatedAt: "2026-02-11T10:00:00.000Z",
       },
@@ -283,9 +283,9 @@ describe("GlobalChatDock", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("button", { name: "Open issue" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: "Open issue" }));
-    expect(screen.getByTestId("location-probe")).toHaveTextContent("/projects/project-1/issues/issue-1");
+    expect(screen.getByRole("button", { name: "Open task" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Open task" }));
+    expect(screen.getByTestId("location-probe")).toHaveTextContent("/projects/project-1/tasks/issue-1");
   });
 
   it("provides a minimize action in the selected chat header", async () => {

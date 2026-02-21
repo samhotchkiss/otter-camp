@@ -81,6 +81,8 @@ type memoryEvaluationRunPayload struct {
 		FalseInjectionRate  *float64 `json:"false_injection_rate,omitempty"`
 		RecoverySuccessRate *float64 `json:"recovery_success_rate,omitempty"`
 		P95LatencyMs        *float64 `json:"p95_latency_ms,omitempty"`
+		ElliePrecision      *float64 `json:"ellie_retrieval_precision,omitempty"`
+		EllieRecall         *float64 `json:"ellie_retrieval_recall,omitempty"`
 	} `json:"metrics,omitempty"`
 }
 
@@ -102,6 +104,8 @@ type memoryEvaluationMetricsRecord struct {
 	FalseInjectionRate  float64 `json:"false_injection_rate"`
 	RecoverySuccessRate float64 `json:"recovery_success_rate"`
 	P95LatencyMs        float64 `json:"p95_latency_ms"`
+	ElliePrecision      float64 `json:"ellie_retrieval_precision"`
+	EllieRecall         float64 `json:"ellie_retrieval_recall"`
 }
 
 type memoryEvaluationRunRecord struct {
@@ -433,6 +437,8 @@ func (h *MemoryHandler) RunEvaluation(w http.ResponseWriter, r *http.Request) {
 			FalseInjectionRate:  result.Metrics.FalseInjectionRate,
 			RecoverySuccessRate: result.Metrics.RecoverySuccessRate,
 			P95LatencyMs:        result.Metrics.P95LatencyMs,
+			ElliePrecision:      result.Metrics.EllieRetrievalPrecision,
+			EllieRecall:         result.Metrics.EllieRetrievalRecall,
 		},
 		FixturePath: fixturePath,
 	}
@@ -481,10 +487,12 @@ func (h *MemoryHandler) TuneEvaluation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	baseMetrics := memory.EvaluatorMetrics{
-		PrecisionAtK:        latest.Metrics.PrecisionAtK,
-		FalseInjectionRate:  latest.Metrics.FalseInjectionRate,
-		RecoverySuccessRate: latest.Metrics.RecoverySuccessRate,
-		P95LatencyMs:        latest.Metrics.P95LatencyMs,
+		PrecisionAtK:            latest.Metrics.PrecisionAtK,
+		FalseInjectionRate:      latest.Metrics.FalseInjectionRate,
+		RecoverySuccessRate:     latest.Metrics.RecoverySuccessRate,
+		P95LatencyMs:            latest.Metrics.P95LatencyMs,
+		EllieRetrievalPrecision: latest.Metrics.ElliePrecision,
+		EllieRetrievalRecall:    latest.Metrics.EllieRecall,
 	}
 	baselineConfig, err := h.loadMemoryTunerConfig(r, workspaceID)
 	if err != nil {
@@ -710,6 +718,8 @@ func mapMemoryEvaluationRunRecord(record memoryEvaluationRunRecord) memoryEvalua
 	falseInjection := record.Metrics.FalseInjectionRate
 	recovery := record.Metrics.RecoverySuccessRate
 	latency := record.Metrics.P95LatencyMs
+	elliePrecision := record.Metrics.ElliePrecision
+	ellieRecall := record.Metrics.EllieRecall
 	return memoryEvaluationRunPayload{
 		ID:          record.ID,
 		Passed:      record.Passed,
@@ -719,11 +729,15 @@ func mapMemoryEvaluationRunRecord(record memoryEvaluationRunRecord) memoryEvalua
 			FalseInjectionRate  *float64 `json:"false_injection_rate,omitempty"`
 			RecoverySuccessRate *float64 `json:"recovery_success_rate,omitempty"`
 			P95LatencyMs        *float64 `json:"p95_latency_ms,omitempty"`
+			ElliePrecision      *float64 `json:"ellie_retrieval_precision,omitempty"`
+			EllieRecall         *float64 `json:"ellie_retrieval_recall,omitempty"`
 		}{
 			PrecisionAtK:        &precision,
 			FalseInjectionRate:  &falseInjection,
 			RecoverySuccessRate: &recovery,
 			P95LatencyMs:        &latency,
+			ElliePrecision:      &elliePrecision,
+			EllieRecall:         &ellieRecall,
 		},
 	}
 }
@@ -909,12 +923,14 @@ func synthesizeMemoryEvaluatorResult(
 	}
 
 	metrics := memory.EvaluatorMetrics{
-		PrecisionAtK:        precision,
-		FalseInjectionRate:  falseInjection,
-		RecoverySuccessRate: recovery,
-		P95LatencyMs:        latency,
-		AvgInjectedTokens:   float64(cfg.RecallMaxChars) * 0.35,
-		CaseCount:           maxInt(baseMetrics.CaseCount, 1),
+		PrecisionAtK:            precision,
+		FalseInjectionRate:      falseInjection,
+		RecoverySuccessRate:     recovery,
+		P95LatencyMs:            latency,
+		AvgInjectedTokens:       float64(cfg.RecallMaxChars) * 0.35,
+		EllieRetrievalPrecision: baseMetrics.EllieRetrievalPrecision,
+		EllieRetrievalRecall:    baseMetrics.EllieRetrievalRecall,
+		CaseCount:               maxInt(baseMetrics.CaseCount, 1),
 	}
 
 	return buildMemoryEvaluatorResult(metrics, defaultMemoryEvaluatorConfig())

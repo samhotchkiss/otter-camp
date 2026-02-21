@@ -65,7 +65,6 @@ otter issue close --project <name> <number>
 - Sub-agent blocker -> escalate in task chat to project manager agent.
 - If unresolved by project manager -> escalate to human.
 - Human escalation moves task to inbox and `on_hold` until response.
-
 ## Documentation
 
 Every project has a `docs/` dir. See `project-docs-spec.md` for the full spec. The short version:

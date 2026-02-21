@@ -646,6 +646,9 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Status:      "active",
 		IsEphemeral: req.IsEphemeral,
 		ProjectID:   projectID,
+		Role:        req.Role,
+		SoulMD:      req.Soul,
+		IdentityMD:  req.Identity,
 	})
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create agent"})
@@ -1023,7 +1026,17 @@ func (h *AdminAgentsHandler) ListMemoryFiles(w http.ResponseWriter, r *http.Requ
 	memoryRoot := path.Join(root, "memory")
 	resolvedRef, output, err := readTreeListingForBrowse(r.Context(), repoPath, repoMode, ref, memoryRoot, !refProvided)
 	if err != nil {
-		status, message := classifyGitBrowseError(err)
+		status, _ := classifyGitBrowseError(err)
+		if status == http.StatusNotFound {
+			// Empty repo or path doesn't exist yet — return empty list.
+			sendJSON(w, http.StatusOK, adminAgentFilesListResponse{
+				Ref:     ref,
+				Path:    "/memory",
+				Entries: []projectTreeEntry{},
+			})
+			return
+		}
+		_, message := classifyGitBrowseError(err)
 		sendJSON(w, status, errorResponse{Error: message})
 		return
 	}
@@ -1383,6 +1396,30 @@ func ensureAgentFilesWorkingRepo(ctx context.Context, bareRepoPath string) (stri
 	if _, err := runGitInRepo(ctx, workingPath, "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
 		return "", err
 	}
+
+	// If the bare repo was empty (no commits), seed an initial commit so
+	// HEAD is valid and git cat-file / ls-tree work correctly.
+	if _, headErr := runGitInRepo(ctx, workingPath, "rev-parse", "--verify", "HEAD"); headErr != nil {
+		readmePath := filepath.Join(workingPath, "README.md")
+		if writeErr := os.WriteFile(readmePath, []byte("# Agent Files\n\nManaged by Otter Camp.\n"), 0o644); writeErr != nil {
+			return "", fmt.Errorf("failed to create seed README: %w", writeErr)
+		}
+		if _, addErr := runGitInRepo(ctx, workingPath, "add", "README.md"); addErr != nil {
+			return "", fmt.Errorf("failed to stage seed commit: %w", addErr)
+		}
+		seedEnv := []string{"GIT_AUTHOR_NAME=Otter Camp", "GIT_AUTHOR_EMAIL=noreply@otter.camp", "GIT_COMMITTER_NAME=Otter Camp", "GIT_COMMITTER_EMAIL=noreply@otter.camp"}
+		commitCmd := exec.CommandContext(ctx, "git", "-C", workingPath, "commit", "-m", "Initial commit")
+		commitCmd.Env = append(os.Environ(), seedEnv...)
+		if commitOut, commitErr := commitCmd.CombinedOutput(); commitErr != nil {
+			return "", fmt.Errorf("failed to create seed commit: %w (%s)", commitErr, strings.TrimSpace(string(commitOut)))
+		}
+		pushCmd := exec.CommandContext(ctx, "git", "-C", workingPath, "push", "origin", "main")
+		pushCmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		if pushOut, pushErr := pushCmd.CombinedOutput(); pushErr != nil {
+			return "", fmt.Errorf("failed to push seed commit: %w (%s)", pushErr, strings.TrimSpace(string(pushOut)))
+		}
+	}
+
 	return workingPath, nil
 }
 

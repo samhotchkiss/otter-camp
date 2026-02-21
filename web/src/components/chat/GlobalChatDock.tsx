@@ -12,7 +12,7 @@ function conversationTypeLabel(type: "dm" | "project" | "issue"): string {
     return "Project";
   }
   if (type === "issue") {
-    return "Issue";
+    return "Task";
   }
   return "DM";
 }
@@ -69,9 +69,13 @@ export default function GlobalChatDock() {
   }, [conversations, selectedConversation]);
 
   const routeProjectID = useMemo(() => {
-    const issueRouteMatch = /^\/projects\/([^/]+)\/issues\/[^/]+$/.exec(location.pathname);
-    if (issueRouteMatch?.[1]) {
-      return decodeURIComponent(issueRouteMatch[1]);
+    const taskRouteMatch = /^\/projects\/([^/]+)\/tasks\/[^/]+$/.exec(location.pathname);
+    if (taskRouteMatch?.[1]) {
+      return decodeURIComponent(taskRouteMatch[1]);
+    }
+    const legacyIssueRouteMatch = /^\/projects\/([^/]+)\/issues\/[^/]+$/.exec(location.pathname);
+    if (legacyIssueRouteMatch?.[1]) {
+      return decodeURIComponent(legacyIssueRouteMatch[1]);
     }
     const projectRouteMatch = /^\/projects\/([^/]+)$/.exec(location.pathname);
     if (projectRouteMatch?.[1]) {
@@ -96,8 +100,8 @@ export default function GlobalChatDock() {
         return null;
       }
       return {
-        label: "Open issue",
-        href: `/projects/${encodeURIComponent(projectID)}/issues/${encodeURIComponent(selectedConversation.issueId)}`,
+        label: "Open task",
+        href: `/projects/${encodeURIComponent(projectID)}/tasks/${encodeURIComponent(selectedConversation.issueId)}`,
       };
     }
     return null;
@@ -298,38 +302,38 @@ export default function GlobalChatDock() {
           throw new Error(payload?.error ?? "Failed to clear chat session");
         }
       } else {
-        const issueResponse = await fetch(
-          `${API_URL}/api/issues/${selectedConversation.issueId}?org_id=${encodeURIComponent(orgID)}`,
+        const taskResponse = await fetch(
+          `${API_URL}/api/project-tasks/${selectedConversation.issueId}?org_id=${encodeURIComponent(orgID)}`,
           {
             method: "GET",
             headers,
             cache: "no-store",
           },
         );
-        if (!issueResponse.ok) {
-          const payload = await issueResponse.json().catch(() => null);
-          throw new Error(payload?.error ?? "Failed to resolve issue participant for reset");
+        if (!taskResponse.ok) {
+          const payload = await taskResponse.json().catch(() => null);
+          throw new Error(payload?.error ?? "Failed to resolve task participant for reset");
         }
-        const issuePayload = (await issueResponse.json()) as {
+        const taskPayload = (await taskResponse.json()) as {
           participants?: Array<{
             agent_id: string;
             role: "owner" | "collaborator";
             removed_at?: string | null;
           }>;
         };
-        const activeParticipants = Array.isArray(issuePayload.participants)
-          ? issuePayload.participants.filter((entry) => !entry.removed_at)
+        const activeParticipants = Array.isArray(taskPayload.participants)
+          ? taskPayload.participants.filter((entry) => !entry.removed_at)
           : [];
         const ownerAgentID =
           activeParticipants.find((entry) => entry.role === "owner")?.agent_id ??
           activeParticipants[0]?.agent_id ??
           "";
         if (!ownerAgentID) {
-          throw new Error("No issue participant available to anchor reset marker");
+          throw new Error("No task participant available to anchor reset marker");
         }
 
         const response = await fetch(
-          `${API_URL}/api/issues/${selectedConversation.issueId}/comments?org_id=${encodeURIComponent(orgID)}`,
+          `${API_URL}/api/project-tasks/${selectedConversation.issueId}/comments?org_id=${encodeURIComponent(orgID)}`,
           {
             method: "POST",
             headers,
@@ -444,7 +448,7 @@ export default function GlobalChatDock() {
             <div className="h-full overflow-y-auto p-2">
               {visibleConversations.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-[var(--border)] p-4 text-xs text-[var(--text-muted)]">
-                  Start a chat from Agents, Projects, or an Issue thread.
+                  Start a chat from Agents, Projects, or a Task thread.
                 </div>
               ) : (
                 visibleConversations.map((conversation) => {

@@ -56,10 +56,10 @@ function buildDetail(pathname: string): { kind: string; detail: string } {
   if (parts.length === 0) {
     return { kind: "Home", detail: pathname };
   }
-  if (parts[0] === "projects" && parts.length >= 3 && parts[2] === "issues") {
+  if (parts[0] === "projects" && parts.length >= 3 && (parts[2] === "issues" || parts[2] === "tasks")) {
     return {
-      kind: "Issue",
-      detail: `Project ${parts[1]} · Issue ${parts[3] ?? "details"}`,
+      kind: "Task",
+      detail: `Project ${parts[1]} · Task ${parts[3] ?? "details"}`,
     };
   }
   if (parts[0] === "projects" && parts.length === 2) {

@@ -23,13 +23,72 @@ type Client struct {
 
 const maxClientResponseBodyBytes = 1 << 20
 
+type RequestError struct {
+	StatusCode int
+	Detail     string
+}
+
+func (e *RequestError) Error() string {
+	if e == nil {
+		return "request failed"
+	}
+	if strings.TrimSpace(e.Detail) == "" {
+		return fmt.Sprintf("request failed (%d)", e.StatusCode)
+	}
+	return fmt.Sprintf("request failed (%d): %s", e.StatusCode, e.Detail)
+}
+
+func (e *RequestError) HTTPStatusCode() int {
+	if e == nil {
+		return 0
+	}
+	return e.StatusCode
+}
+
+type ResponseDecodeError struct {
+	StatusCode int
+	Detail     string
+}
+
+func (e *ResponseDecodeError) Error() string {
+	if e == nil {
+		return "invalid response"
+	}
+	if strings.TrimSpace(e.Detail) == "" {
+		return fmt.Sprintf("invalid response (%d)", e.StatusCode)
+	}
+	return fmt.Sprintf("invalid response (%d): %s", e.StatusCode, e.Detail)
+}
+
+func (e *ResponseDecodeError) HTTPStatusCode() int {
+	if e == nil {
+		return 0
+	}
+	return e.StatusCode
+}
+
+// HTTPStatusCode returns the HTTP status carried by typed client errors.
+func HTTPStatusCode(err error) (int, bool) {
+	var statusErr interface {
+		HTTPStatusCode() int
+	}
+	if !errors.As(err, &statusErr) {
+		return 0, false
+	}
+	status := statusErr.HTTPStatusCode()
+	if status <= 0 {
+		return 0, false
+	}
+	return status, true
+}
+
 func NewClient(cfg Config, orgOverride string) (*Client, error) {
 	org := strings.TrimSpace(orgOverride)
 	if org == "" {
 		org = strings.TrimSpace(cfg.DefaultOrg)
 	}
 	return &Client{
-		BaseURL: strings.TrimRight(cfg.APIBaseURL, "/"),
+		BaseURL: normalizeAPIBaseURL(cfg.APIBaseURL),
 		Token:   strings.TrimSpace(cfg.Token),
 		OrgID:   org,
 		HTTP: &http.Client{
@@ -49,10 +108,11 @@ func (c *Client) requireAuth() error {
 }
 
 func (c *Client) newRequest(method, path string, body io.Reader) (*http.Request, error) {
-	if c.BaseURL == "" {
+	baseURL := normalizeAPIBaseURL(c.BaseURL)
+	if baseURL == "" {
 		return nil, errors.New("missing API base URL")
 	}
-	endpoint := c.BaseURL + path
+	endpoint := baseURL + path
 	req, err := http.NewRequest(method, endpoint, body)
 	if err != nil {
 		return nil, err
@@ -75,15 +135,133 @@ func (c *Client) do(req *http.Request, out interface{}) error {
 	}
 	defer resp.Body.Close()
 
+	payload, readErr := io.ReadAll(io.LimitReader(resp.Body, maxClientResponseBodyBytes))
+	if readErr != nil {
+		return readErr
+	}
+
 	if resp.StatusCode >= 400 {
-		payload, _ := io.ReadAll(io.LimitReader(resp.Body, maxClientResponseBodyBytes))
-		return fmt.Errorf("request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(payload)))
+		return &RequestError{
+			StatusCode: resp.StatusCode,
+			Detail:     summarizeResponseBody(resp.Header.Get("Content-Type"), payload),
+		}
 	}
 
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(io.LimitReader(resp.Body, maxClientResponseBodyBytes)).Decode(out)
+	if len(bytes.TrimSpace(payload)) == 0 {
+		return io.EOF
+	}
+	if err := json.Unmarshal(payload, out); err != nil {
+		detail := classifyDecodeErrorDetail(resp.Header.Get("Content-Type"), payload)
+		if detail == "" {
+			detail = fmt.Sprintf("invalid JSON response: %v", err)
+		}
+		return &ResponseDecodeError{
+			StatusCode: resp.StatusCode,
+			Detail:     detail,
+		}
+	}
+	return nil
+}
+
+func summarizeResponseBody(contentType string, payload []byte) string {
+	trimmed := strings.TrimSpace(string(payload))
+	if trimmed == "" {
+		return ""
+	}
+	if isLikelyHTMLResponse(contentType, trimmed) {
+		return "html response body omitted"
+	}
+	if msg, ok := extractJSONErrorSummary(payload, contentType); ok {
+		return msg
+	}
+	return truncateResponseText(trimmed, 200)
+}
+
+func classifyDecodeErrorDetail(contentType string, payload []byte) string {
+	trimmed := strings.TrimSpace(string(payload))
+	if trimmed == "" {
+		return "empty response body"
+	}
+	if isLikelyHTMLResponse(contentType, trimmed) {
+		return "expected JSON response but received HTML"
+	}
+	if !looksLikeJSONContent(contentType, trimmed) {
+		return "expected JSON response but received non-JSON body"
+	}
+	return ""
+}
+
+func extractJSONErrorSummary(payload []byte, contentType string) (string, bool) {
+	trimmed := strings.TrimSpace(string(payload))
+	if trimmed == "" || !looksLikeJSONContent(contentType, trimmed) {
+		return "", false
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		return "", false
+	}
+
+	for _, key := range []string{"error", "message", "detail"} {
+		raw, ok := body[key]
+		if !ok {
+			continue
+		}
+		switch value := raw.(type) {
+		case string:
+			value = strings.TrimSpace(value)
+			if value != "" {
+				return truncateResponseText(value, 200), true
+			}
+		case map[string]any:
+			if nested, ok := value["message"].(string); ok && strings.TrimSpace(nested) != "" {
+				return truncateResponseText(strings.TrimSpace(nested), 200), true
+			}
+		}
+	}
+
+	return "", false
+}
+
+func looksLikeJSONContent(contentType, body string) bool {
+	if isJSONContentType(contentType) {
+		return true
+	}
+	if body == "" {
+		return false
+	}
+	return strings.HasPrefix(body, "{") || strings.HasPrefix(body, "[")
+}
+
+func isJSONContentType(contentType string) bool {
+	value := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	if value == "" {
+		return false
+	}
+	return value == "application/json" || value == "text/json" || strings.HasSuffix(value, "+json")
+}
+
+func isLikelyHTMLResponse(contentType, body string) bool {
+	ct := strings.ToLower(contentType)
+	if strings.Contains(ct, "text/html") || strings.Contains(ct, "application/xhtml+xml") {
+		return true
+	}
+	lowerBody := strings.ToLower(strings.TrimSpace(body))
+	return strings.HasPrefix(lowerBody, "<!doctype html") || strings.HasPrefix(lowerBody, "<html")
+}
+
+func truncateResponseText(value string, max int) string {
+	collapsed := strings.Join(strings.Fields(value), " ")
+	if len(collapsed) <= max {
+		return collapsed
+	}
+	if max <= 3 {
+		return collapsed[:max]
+	}
+	return collapsed[:max-3] + "..."
 }
 
 type Project struct {
@@ -136,6 +314,43 @@ type Issue struct {
 	NextStepDueAt *string `json:"next_step_due_at,omitempty"`
 }
 
+type IssuePipelineProgressionResult struct {
+	IssueID               string  `json:"issue_id"`
+	CompletedStepID       string  `json:"completed_step_id"`
+	CurrentPipelineStepID *string `json:"current_pipeline_step_id,omitempty"`
+	CompletedPipeline     bool    `json:"completed_pipeline"`
+	ParkedForHumanReview  bool    `json:"parked_for_human_review"`
+}
+
+type IssuePipelineHistoryEntry struct {
+	ID          string  `json:"id"`
+	StepID      string  `json:"step_id"`
+	AgentID     *string `json:"agent_id,omitempty"`
+	StartedAt   string  `json:"started_at"`
+	CompletedAt *string `json:"completed_at,omitempty"`
+	Result      string  `json:"result"`
+	Notes       string  `json:"notes"`
+}
+
+type IssuePipelineStatusPayload struct {
+	CurrentStepID       *string                     `json:"current_step_id,omitempty"`
+	CurrentStep         *PipelineStep               `json:"current_step,omitempty"`
+	PipelineStartedAt   *string                     `json:"pipeline_started_at,omitempty"`
+	PipelineCompletedAt *string                     `json:"pipeline_completed_at,omitempty"`
+	Steps               []PipelineStep              `json:"steps"`
+	History             []IssuePipelineHistoryEntry `json:"history"`
+}
+
+type IssuePipelineStatus struct {
+	Issue    Issue                      `json:"issue"`
+	Pipeline IssuePipelineStatusPayload `json:"pipeline"`
+}
+
+type IssuePipelineActionResponse struct {
+	Result IssuePipelineProgressionResult `json:"result"`
+	Status IssuePipelineStatus            `json:"status"`
+}
+
 type QuestionnaireQuestion struct {
 	ID          string   `json:"id"`
 	Text        string   `json:"text"`
@@ -179,6 +394,210 @@ type issueDetailResponse struct {
 	Issue Issue `json:"issue"`
 }
 
+type AgentJob struct {
+	ID                  string  `json:"id"`
+	OrgID               string  `json:"org_id"`
+	AgentID             string  `json:"agent_id"`
+	Name                string  `json:"name"`
+	Description         *string `json:"description,omitempty"`
+	ScheduleKind        string  `json:"schedule_kind"`
+	CronExpr            *string `json:"cron_expr,omitempty"`
+	IntervalMS          *int64  `json:"interval_ms,omitempty"`
+	RunAt               *string `json:"run_at,omitempty"`
+	Timezone            string  `json:"timezone"`
+	PayloadKind         string  `json:"payload_kind"`
+	PayloadText         string  `json:"payload_text"`
+	RoomID              *string `json:"room_id,omitempty"`
+	Enabled             bool    `json:"enabled"`
+	Status              string  `json:"status"`
+	LastRunAt           *string `json:"last_run_at,omitempty"`
+	LastRunStatus       *string `json:"last_run_status,omitempty"`
+	LastRunError        *string `json:"last_run_error,omitempty"`
+	NextRunAt           *string `json:"next_run_at,omitempty"`
+	RunCount            int     `json:"run_count"`
+	ErrorCount          int     `json:"error_count"`
+	MaxFailures         int     `json:"max_failures"`
+	ConsecutiveFailures int     `json:"consecutive_failures"`
+	CreatedBy           *string `json:"created_by,omitempty"`
+	CreatedAt           string  `json:"created_at"`
+	UpdatedAt           string  `json:"updated_at"`
+}
+
+type AgentJobRun struct {
+	ID          string  `json:"id"`
+	JobID       string  `json:"job_id"`
+	OrgID       string  `json:"org_id"`
+	Status      string  `json:"status"`
+	StartedAt   string  `json:"started_at"`
+	CompletedAt *string `json:"completed_at,omitempty"`
+	DurationMS  *int    `json:"duration_ms,omitempty"`
+	Error       *string `json:"error,omitempty"`
+	PayloadText string  `json:"payload_text"`
+	MessageID   *string `json:"message_id,omitempty"`
+	CreatedAt   string  `json:"created_at"`
+}
+
+type AgentJobListResponse struct {
+	Items []AgentJob `json:"items"`
+	Total int        `json:"total"`
+}
+
+type AgentJobRunsResponse struct {
+	Items []AgentJobRun `json:"items"`
+	Total int           `json:"total"`
+}
+
+type OpenClawCronJobImportResult struct {
+	Total    int      `json:"total"`
+	Imported int      `json:"imported"`
+	Updated  int      `json:"updated"`
+	Skipped  int      `json:"skipped"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+type OpenClawMigrationImportAgentIdentity struct {
+	ID          string            `json:"id,omitempty"`
+	Slug        string            `json:"slug,omitempty"`
+	Name        string            `json:"name,omitempty"`
+	DisplayName string            `json:"display_name,omitempty"`
+	Workspace   string            `json:"workspace,omitempty"`
+	Soul        string            `json:"soul,omitempty"`
+	Identity    string            `json:"identity,omitempty"`
+	Memory      string            `json:"memory,omitempty"`
+	Tools       string            `json:"tools,omitempty"`
+	SourceFiles map[string]string `json:"source_files,omitempty"`
+}
+
+type OpenClawMigrationImportAgentsInput struct {
+	Identities []OpenClawMigrationImportAgentIdentity `json:"identities"`
+}
+
+type OpenClawMigrationImportAgentsResult struct {
+	Processed      int      `json:"processed"`
+	Inserted       int      `json:"inserted"`
+	Updated        int      `json:"updated"`
+	Skipped        int      `json:"skipped"`
+	ActiveAgents   int      `json:"active_agents"`
+	InactiveAgents int      `json:"inactive_agents"`
+	Warnings       []string `json:"warnings,omitempty"`
+}
+
+type OpenClawMigrationImportBatch struct {
+	ID    string `json:"id"`
+	Index int    `json:"index"`
+	Total int    `json:"total"`
+}
+
+type OpenClawMigrationImportHistoryEvent struct {
+	AgentSlug   string    `json:"agent_slug"`
+	SessionID   string    `json:"session_id,omitempty"`
+	SessionPath string    `json:"session_path,omitempty"`
+	EventID     string    `json:"event_id,omitempty"`
+	ParentID    string    `json:"parent_id,omitempty"`
+	Role        string    `json:"role"`
+	Body        string    `json:"body"`
+	CreatedAt   time.Time `json:"created_at"`
+	Line        int       `json:"line,omitempty"`
+}
+
+type OpenClawMigrationImportHistoryBatchInput struct {
+	UserID string                                `json:"user_id"`
+	Batch  OpenClawMigrationImportBatch          `json:"batch"`
+	Events []OpenClawMigrationImportHistoryEvent `json:"events"`
+}
+
+type OpenClawMigrationImportHistoryBatchResult struct {
+	EventsReceived            int      `json:"events_received"`
+	EventsProcessed           int      `json:"events_processed"`
+	MessagesInserted          int      `json:"messages_inserted"`
+	RoomsCreated              int      `json:"rooms_created"`
+	ParticipantsAdded         int      `json:"participants_added"`
+	EventsSkippedUnknownAgent int      `json:"events_skipped_unknown_agent"`
+	FailedItems               int      `json:"failed_items"`
+	Warnings                  []string `json:"warnings,omitempty"`
+}
+
+type OpenClawMigrationPhaseStatus struct {
+	MigrationType  string `json:"migration_type"`
+	Status         string `json:"status"`
+	TotalItems     *int   `json:"total_items,omitempty"`
+	ProcessedItems int    `json:"processed_items"`
+	FailedItems    int    `json:"failed_items"`
+	CurrentLabel   string `json:"current_label,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+type OpenClawMigrationStatus struct {
+	Active bool                           `json:"active"`
+	Phases []OpenClawMigrationPhaseStatus `json:"phases"`
+}
+
+type OpenClawMigrationReport struct {
+	EventsExpected            int     `json:"events_expected"`
+	EventsProcessed           int     `json:"events_processed"`
+	MessagesInserted          int     `json:"messages_inserted"`
+	EventsSkippedUnknownAgent int     `json:"events_skipped_unknown_agent"`
+	FailedItems               int     `json:"failed_items"`
+	CompletenessRatio         float64 `json:"completeness_ratio"`
+	IsComplete                bool    `json:"is_complete"`
+}
+
+type OpenClawMigrationFailureItem struct {
+	OrgID              string    `json:"org_id"`
+	MigrationType      string    `json:"migration_type"`
+	BatchID            string    `json:"batch_id"`
+	AgentSlug          string    `json:"agent_slug"`
+	SessionID          string    `json:"session_id"`
+	EventID            string    `json:"event_id"`
+	SessionPath        string    `json:"session_path"`
+	Line               int       `json:"line"`
+	MessageIDCandidate string    `json:"message_id_candidate"`
+	ErrorReason        string    `json:"error_reason"`
+	ErrorMessage       string    `json:"error_message"`
+	FirstSeenAt        time.Time `json:"first_seen_at"`
+	LastSeenAt         time.Time `json:"last_seen_at"`
+	AttemptCount       int       `json:"attempt_count"`
+}
+
+type OpenClawMigrationFailures struct {
+	Items []OpenClawMigrationFailureItem `json:"items"`
+	Total int                            `json:"total"`
+}
+
+type OpenClawMigrationRunRequest struct {
+	AgentsOnly        bool   `json:"agents_only"`
+	HistoryOnly       bool   `json:"history_only"`
+	StartPhase        string `json:"start_phase,omitempty"`
+	ForceResumePaused bool   `json:"force_resume_paused"`
+}
+
+type OpenClawMigrationRunResponse struct {
+	Accepted               bool     `json:"accepted"`
+	SelectedPhases         []string `json:"selected_phases,omitempty"`
+	StartedPhases          []string `json:"started_phases,omitempty"`
+	ResumedPhases          []string `json:"resumed_phases,omitempty"`
+	SkippedCompletedPhases []string `json:"skipped_completed_phases,omitempty"`
+	AlreadyRunningPhases   []string `json:"already_running_phases,omitempty"`
+	PausedPhases           []string `json:"paused_phases,omitempty"`
+}
+
+type OpenClawMigrationMutationResponse struct {
+	Status        string `json:"status"`
+	UpdatedPhases int    `json:"updated_phases"`
+}
+
+type OpenClawMigrationResetRequest struct {
+	Confirm string `json:"confirm"`
+}
+
+type OpenClawMigrationResetResponse struct {
+	Status              string         `json:"status"`
+	PausedPhases        int            `json:"paused_phases"`
+	ProgressRowsDeleted int            `json:"progress_rows_deleted"`
+	Deleted             map[string]int `json:"deleted"`
+	TotalDeleted        int            `json:"total_deleted"`
+}
+
 type PipelineRoleAssignment struct {
 	AgentID *string `json:"agentId"`
 }
@@ -189,11 +608,47 @@ type PipelineRoles struct {
 	Reviewer PipelineRoleAssignment `json:"reviewer"`
 }
 
+type PipelineStep struct {
+	ID              string  `json:"id"`
+	ProjectID       string  `json:"project_id"`
+	StepNumber      int     `json:"step_number"`
+	Name            string  `json:"name"`
+	Description     string  `json:"description"`
+	AssignedAgentID *string `json:"assigned_agent_id,omitempty"`
+	StepType        string  `json:"step_type"`
+	AutoAdvance     bool    `json:"auto_advance"`
+}
+
+type PipelineStepCreateInput struct {
+	StepNumber      int     `json:"step_number"`
+	Name            string  `json:"name"`
+	Description     string  `json:"description,omitempty"`
+	AssignedAgentID *string `json:"assigned_agent_id"`
+	StepType        string  `json:"step_type"`
+	AutoAdvance     bool    `json:"auto_advance"`
+}
+
 type DeployConfig struct {
 	DeployMethod  string  `json:"deployMethod"`
 	GitHubRepoURL *string `json:"githubRepoUrl,omitempty"`
 	GitHubBranch  string  `json:"githubBranch"`
 	CLICommand    *string `json:"cliCommand,omitempty"`
+}
+
+type RoomTokenSenderStats struct {
+	SenderID    string `json:"sender_id"`
+	SenderType  string `json:"sender_type"`
+	TotalTokens int64  `json:"total_tokens"`
+}
+
+type RoomTokenStats struct {
+	RoomID                   string                 `json:"room_id"`
+	RoomName                 string                 `json:"room_name"`
+	TotalTokens              int64                  `json:"total_tokens"`
+	ConversationCount        int                    `json:"conversation_count"`
+	AvgTokensPerConversation int64                  `json:"avg_tokens_per_conversation"`
+	Last7DaysTokens          int64                  `json:"last_7_days_tokens"`
+	TokensBySender           []RoomTokenSenderStats `json:"tokens_by_sender"`
 }
 
 func (c *Client) ListProjects() ([]Project, error) {
@@ -302,6 +757,27 @@ func (c *Client) CreateProject(input map[string]interface{}) (Project, error) {
 	return project, nil
 }
 
+func (c *Client) GetRoomStats(roomID string) (RoomTokenStats, error) {
+	if err := c.requireAuth(); err != nil {
+		return RoomTokenStats{}, err
+	}
+	roomID = strings.TrimSpace(roomID)
+	if roomID == "" {
+		return RoomTokenStats{}, errors.New("room id is required")
+	}
+
+	req, err := c.newRequest(http.MethodGet, "/api/v1/rooms/"+url.PathEscape(roomID)+"/stats", nil)
+	if err != nil {
+		return RoomTokenStats{}, err
+	}
+
+	var stats RoomTokenStats
+	if err := c.do(req, &stats); err != nil {
+		return RoomTokenStats{}, err
+	}
+	return stats, nil
+}
+
 func (c *Client) GetProject(projectID string) (Project, error) {
 	if err := c.requireAuth(); err != nil {
 		return Project{}, err
@@ -396,6 +872,103 @@ func (c *Client) SetPipelineRoles(projectID string, roles PipelineRoles) (Pipeli
 		return PipelineRoles{}, err
 	}
 	return updated, nil
+}
+
+func (c *Client) ListPipelineSteps(projectID string) ([]PipelineStep, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, errors.New("project id is required")
+	}
+
+	req, err := c.newRequest(http.MethodGet, "/api/projects/"+url.PathEscape(projectID)+"/pipeline-steps", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Items []PipelineStep `json:"items"`
+	}
+	if err := c.do(req, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Items, nil
+}
+
+func (c *Client) CreatePipelineStep(projectID string, input PipelineStepCreateInput) (PipelineStep, error) {
+	if err := c.requireAuth(); err != nil {
+		return PipelineStep{}, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return PipelineStep{}, errors.New("project id is required")
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return PipelineStep{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/projects/"+url.PathEscape(projectID)+"/pipeline-steps", bytes.NewReader(payload))
+	if err != nil {
+		return PipelineStep{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var created PipelineStep
+	if err := c.do(req, &created); err != nil {
+		return PipelineStep{}, err
+	}
+	return created, nil
+}
+
+func (c *Client) DeletePipelineStep(projectID string, stepID string) error {
+	if err := c.requireAuth(); err != nil {
+		return err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return errors.New("project id is required")
+	}
+	stepID = strings.TrimSpace(stepID)
+	if stepID == "" {
+		return errors.New("step id is required")
+	}
+
+	req, err := c.newRequest(http.MethodDelete, "/api/projects/"+url.PathEscape(projectID)+"/pipeline-steps/"+url.PathEscape(stepID), nil)
+	if err != nil {
+		return err
+	}
+	return c.do(req, nil)
+}
+
+func (c *Client) ReorderPipelineSteps(projectID string, stepIDs []string) ([]PipelineStep, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, errors.New("project id is required")
+	}
+	payload, err := json.Marshal(map[string]any{
+		"step_ids": stepIDs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(http.MethodPut, "/api/projects/"+url.PathEscape(projectID)+"/pipeline-steps/reorder", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var resp struct {
+		Items []PipelineStep `json:"items"`
+	}
+	if err := c.do(req, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Items, nil
 }
 
 func (c *Client) GetDeployConfig(projectID string) (DeployConfig, error) {
@@ -505,8 +1078,10 @@ func (c *Client) FindProject(query string) (Project, error) {
 }
 
 type whoamiResponse struct {
-	Valid bool `json:"valid"`
-	User  struct {
+	Valid   bool   `json:"valid"`
+	OrgID   string `json:"org_id"`
+	OrgSlug string `json:"org_slug"`
+	User    struct {
 		ID    string `json:"id"`
 		Name  string `json:"name"`
 		Email string `json:"email"`
@@ -526,16 +1101,16 @@ type OnboardingAgent struct {
 }
 
 type OnboardingBootstrapResponse struct {
-	OrgID       string    `json:"org_id"`
-	OrgSlug     string    `json:"org_slug"`
-	UserID      string    `json:"user_id"`
-	Token       string    `json:"token"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	ProjectID   string    `json:"project_id"`
-	ProjectName string    `json:"project_name"`
-	IssueID     string    `json:"issue_id"`
-	IssueNumber int64     `json:"issue_number"`
-	IssueTitle  string    `json:"issue_title"`
+	OrgID       string            `json:"org_id"`
+	OrgSlug     string            `json:"org_slug"`
+	UserID      string            `json:"user_id"`
+	Token       string            `json:"token"`
+	ExpiresAt   time.Time         `json:"expires_at"`
+	ProjectID   string            `json:"project_id"`
+	ProjectName string            `json:"project_name"`
+	IssueID     string            `json:"issue_id"`
+	IssueNumber int64             `json:"issue_number"`
+	IssueTitle  string            `json:"issue_title"`
 	Agents      []OnboardingAgent `json:"agents"`
 }
 
@@ -543,9 +1118,13 @@ func (c *Client) WhoAmI() (whoamiResponse, error) {
 	if strings.TrimSpace(c.Token) == "" {
 		return whoamiResponse{}, errors.New("missing auth token")
 	}
+	baseURL := normalizeAPIBaseURL(c.BaseURL)
+	if baseURL == "" {
+		return whoamiResponse{}, errors.New("missing API base URL")
+	}
 	q := url.Values{}
 	q.Set("token", strings.TrimSpace(c.Token))
-	endpoint := c.BaseURL + "/api/auth/validate?" + q.Encode()
+	endpoint := baseURL + "/api/auth/validate?" + q.Encode()
 	// Build request without Bearer header — validate endpoint reads token from query param only.
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -557,6 +1136,29 @@ func (c *Client) WhoAmI() (whoamiResponse, error) {
 		return whoamiResponse{}, err
 	}
 	return resp, nil
+}
+
+func normalizeAPIBaseURL(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		trimmed := strings.TrimRight(value, "/")
+		return strings.TrimSuffix(trimmed, "/api")
+	}
+
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	if strings.HasSuffix(parsed.Path, "/api") {
+		parsed.Path = strings.TrimSuffix(parsed.Path, "/api")
+	}
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+
+	return strings.TrimRight(parsed.String(), "/")
 }
 
 func (c *Client) OnboardingBootstrap(input OnboardingBootstrapRequest) (OnboardingBootstrapResponse, error) {
@@ -1348,6 +1950,334 @@ func (c *Client) ListIssues(projectID string, filters map[string]string) ([]Issu
 	return resp.Items, nil
 }
 
+func (c *Client) ListJobs(filters map[string]string) (AgentJobListResponse, error) {
+	if err := c.requireAuth(); err != nil {
+		return AgentJobListResponse{}, err
+	}
+
+	path := "/api/v1/jobs"
+	q := url.Values{}
+	for key, value := range filters {
+		trimmedValue := strings.TrimSpace(value)
+		if trimmedValue == "" {
+			continue
+		}
+		q.Set(strings.TrimSpace(key), trimmedValue)
+	}
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+
+	req, err := c.newRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return AgentJobListResponse{}, err
+	}
+	var response AgentJobListResponse
+	if err := c.do(req, &response); err != nil {
+		return AgentJobListResponse{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) CreateJob(input map[string]any) (AgentJob, error) {
+	if err := c.requireAuth(); err != nil {
+		return AgentJob{}, err
+	}
+	if len(input) == 0 {
+		return AgentJob{}, errors.New("job payload is required")
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return AgentJob{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(payload))
+	if err != nil {
+		return AgentJob{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var response AgentJob
+	if err := c.do(req, &response); err != nil {
+		return AgentJob{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) PauseJob(jobID string) (AgentJob, error) {
+	return c.runJobAction(http.MethodPost, jobID, "/pause")
+}
+
+func (c *Client) ResumeJob(jobID string) (AgentJob, error) {
+	return c.runJobAction(http.MethodPost, jobID, "/resume")
+}
+
+func (c *Client) RunJobNow(jobID string) (AgentJob, error) {
+	return c.runJobAction(http.MethodPost, jobID, "/run")
+}
+
+func (c *Client) ListJobRuns(jobID string, limit int) (AgentJobRunsResponse, error) {
+	if err := c.requireAuth(); err != nil {
+		return AgentJobRunsResponse{}, err
+	}
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return AgentJobRunsResponse{}, errors.New("job id is required")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	path := fmt.Sprintf("/api/v1/jobs/%s/runs?limit=%d", url.PathEscape(jobID), limit)
+	req, err := c.newRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return AgentJobRunsResponse{}, err
+	}
+	var response AgentJobRunsResponse
+	if err := c.do(req, &response); err != nil {
+		return AgentJobRunsResponse{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) DeleteJob(jobID string) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return nil, errors.New("job id is required")
+	}
+	req, err := c.newRequest(http.MethodDelete, "/api/v1/jobs/"+url.PathEscape(jobID), nil)
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) ImportOpenClawCronJobs() (OpenClawCronJobImportResult, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawCronJobImportResult{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/v1/jobs/import/openclaw-cron", nil)
+	if err != nil {
+		return OpenClawCronJobImportResult{}, err
+	}
+	var response OpenClawCronJobImportResult
+	if err := c.do(req, &response); err != nil {
+		return OpenClawCronJobImportResult{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) ImportOpenClawMigrationAgents(
+	input OpenClawMigrationImportAgentsInput,
+) (OpenClawMigrationImportAgentsResult, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationImportAgentsResult{}, err
+	}
+	if len(input.Identities) == 0 {
+		return OpenClawMigrationImportAgentsResult{}, errors.New("at least one identity is required")
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return OpenClawMigrationImportAgentsResult{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/migrations/openclaw/import/agents", bytes.NewReader(payload))
+	if err != nil {
+		return OpenClawMigrationImportAgentsResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var response OpenClawMigrationImportAgentsResult
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationImportAgentsResult{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) ImportOpenClawMigrationHistoryBatch(
+	input OpenClawMigrationImportHistoryBatchInput,
+) (OpenClawMigrationImportHistoryBatchResult, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationImportHistoryBatchResult{}, err
+	}
+	if strings.TrimSpace(input.UserID) == "" {
+		return OpenClawMigrationImportHistoryBatchResult{}, errors.New("user id is required")
+	}
+	if strings.TrimSpace(input.Batch.ID) == "" {
+		return OpenClawMigrationImportHistoryBatchResult{}, errors.New("batch id is required")
+	}
+	if input.Batch.Index <= 0 {
+		return OpenClawMigrationImportHistoryBatchResult{}, errors.New("batch index must be >= 1")
+	}
+	if input.Batch.Total <= 0 {
+		return OpenClawMigrationImportHistoryBatchResult{}, errors.New("batch total must be >= 1")
+	}
+	if len(input.Events) == 0 {
+		return OpenClawMigrationImportHistoryBatchResult{}, errors.New("at least one history event is required")
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return OpenClawMigrationImportHistoryBatchResult{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/migrations/openclaw/import/history/batch", bytes.NewReader(payload))
+	if err != nil {
+		return OpenClawMigrationImportHistoryBatchResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var response OpenClawMigrationImportHistoryBatchResult
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationImportHistoryBatchResult{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) GetOpenClawMigrationStatus() (OpenClawMigrationStatus, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationStatus{}, err
+	}
+	req, err := c.newRequest(http.MethodGet, "/api/migrations/openclaw/status", nil)
+	if err != nil {
+		return OpenClawMigrationStatus{}, err
+	}
+	var response OpenClawMigrationStatus
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationStatus{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) GetOpenClawMigrationReport() (OpenClawMigrationReport, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationReport{}, err
+	}
+	req, err := c.newRequest(http.MethodGet, "/api/migrations/openclaw/report", nil)
+	if err != nil {
+		return OpenClawMigrationReport{}, err
+	}
+	var response OpenClawMigrationReport
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationReport{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) ListOpenClawMigrationFailures(limit int) (OpenClawMigrationFailures, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationFailures{}, err
+	}
+	if limit < 0 {
+		return OpenClawMigrationFailures{}, errors.New("limit must be >= 0")
+	}
+
+	path := "/api/migrations/openclaw/failures"
+	if limit > 0 {
+		path = path + "?limit=" + url.QueryEscape(strconv.Itoa(limit))
+	}
+	req, err := c.newRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return OpenClawMigrationFailures{}, err
+	}
+	var response OpenClawMigrationFailures
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationFailures{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) RunOpenClawMigration(input OpenClawMigrationRunRequest) (OpenClawMigrationRunResponse, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationRunResponse{}, err
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return OpenClawMigrationRunResponse{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/migrations/openclaw/run", bytes.NewReader(payload))
+	if err != nil {
+		return OpenClawMigrationRunResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var response OpenClawMigrationRunResponse
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationRunResponse{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) PauseOpenClawMigration() (OpenClawMigrationMutationResponse, error) {
+	return c.runOpenClawMigrationMutation("/api/migrations/openclaw/pause")
+}
+
+func (c *Client) ResumeOpenClawMigration() (OpenClawMigrationMutationResponse, error) {
+	return c.runOpenClawMigrationMutation("/api/migrations/openclaw/resume")
+}
+
+func (c *Client) ResetOpenClawMigration(
+	input OpenClawMigrationResetRequest,
+) (OpenClawMigrationResetResponse, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationResetResponse{}, err
+	}
+	if strings.TrimSpace(input.Confirm) == "" {
+		return OpenClawMigrationResetResponse{}, errors.New("confirm token is required")
+	}
+
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return OpenClawMigrationResetResponse{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/migrations/openclaw/reset", bytes.NewReader(payload))
+	if err != nil {
+		return OpenClawMigrationResetResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var response OpenClawMigrationResetResponse
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationResetResponse{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) runOpenClawMigrationMutation(path string) (OpenClawMigrationMutationResponse, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationMutationResponse{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, path, nil)
+	if err != nil {
+		return OpenClawMigrationMutationResponse{}, err
+	}
+	var response OpenClawMigrationMutationResponse
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationMutationResponse{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) runJobAction(method string, jobID string, suffix string) (AgentJob, error) {
+	if err := c.requireAuth(); err != nil {
+		return AgentJob{}, err
+	}
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return AgentJob{}, errors.New("job id is required")
+	}
+	req, err := c.newRequest(method, "/api/v1/jobs/"+url.PathEscape(jobID)+suffix, nil)
+	if err != nil {
+		return AgentJob{}, err
+	}
+	var response AgentJob
+	if err := c.do(req, &response); err != nil {
+		return AgentJob{}, err
+	}
+	return response, nil
+}
+
 func (c *Client) GetIssue(issueID string) (Issue, error) {
 	if err := c.requireAuth(); err != nil {
 		return Issue{}, err
@@ -1491,4 +2421,85 @@ func (c *Client) RespondIssueQuestionnaire(questionnaireID string, input Respond
 		return Questionnaire{}, err
 	}
 	return questionnaire, nil
+}
+
+func (c *Client) IssuePipelineStepDone(issueID string, agentID *string, notes string) (IssuePipelineActionResponse, error) {
+	if err := c.requireAuth(); err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return IssuePipelineActionResponse{}, errors.New("issue id is required")
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"agent_id": agentID,
+		"notes":    strings.TrimSpace(notes),
+	})
+	if err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/issues/"+url.PathEscape(issueID)+"/pipeline/step-complete", bytes.NewReader(payload))
+	if err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var resp IssuePipelineActionResponse
+	if err := c.do(req, &resp); err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	return resp, nil
+}
+
+func (c *Client) IssuePipelineStepReject(issueID string, agentID *string, reason string) (IssuePipelineActionResponse, error) {
+	if err := c.requireAuth(); err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return IssuePipelineActionResponse{}, errors.New("issue id is required")
+	}
+	if strings.TrimSpace(reason) == "" {
+		return IssuePipelineActionResponse{}, errors.New("reason is required")
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"agent_id": agentID,
+		"reason":   strings.TrimSpace(reason),
+	})
+	if err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/issues/"+url.PathEscape(issueID)+"/pipeline/step-reject", bytes.NewReader(payload))
+	if err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var resp IssuePipelineActionResponse
+	if err := c.do(req, &resp); err != nil {
+		return IssuePipelineActionResponse{}, err
+	}
+	return resp, nil
+}
+
+func (c *Client) GetIssuePipelineStatus(issueID string) (IssuePipelineStatus, error) {
+	if err := c.requireAuth(); err != nil {
+		return IssuePipelineStatus{}, err
+	}
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return IssuePipelineStatus{}, errors.New("issue id is required")
+	}
+
+	req, err := c.newRequest(http.MethodGet, "/api/issues/"+url.PathEscape(issueID)+"/pipeline/status", nil)
+	if err != nil {
+		return IssuePipelineStatus{}, err
+	}
+	var status IssuePipelineStatus
+	if err := c.do(req, &status); err != nil {
+		return IssuePipelineStatus{}, err
+	}
+	return status, nil
 }

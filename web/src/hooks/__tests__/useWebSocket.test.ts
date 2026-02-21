@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 
 import useWebSocket, { type WebSocketMessageType } from "../useWebSocket";
+import { API_URL } from "../../lib/api";
 
 class MockWebSocket {
   static CONNECTING = 0;
@@ -76,8 +77,7 @@ const latestSocket = () => {
 };
 
 const expectedSocketUrl = () => {
-  const configured = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
-  const base = configured || window.location.origin;
+  const base = API_URL || window.location.origin;
   const host = base.replace(/^https?:\/\//, "");
   const protocol = base.startsWith("https") ? "wss:" : "ws:";
   return `${protocol}//${host}/ws`;
@@ -396,6 +396,7 @@ describe("useWebSocket", () => {
       "AgentStatusChanged",
       "FeedItemsAdded",
       "DMMessageReceived",
+      "DMMessageDeliveryUpdated",
       "ExecApprovalRequested",
       "ExecApprovalResolved",
       "IssueCreated",

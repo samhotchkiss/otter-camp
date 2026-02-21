@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
 )
 
 func TestRouterSetup(t *testing.T) {
@@ -34,6 +35,31 @@ func TestRouterSetup(t *testing.T) {
 	}
 }
 
+func TestOrgResolutionFromHost(t *testing.T) {
+	db := setupMessageTestDB(t)
+	insertMessageTestOrganization(t, db, "swh")
+	t.Setenv("OTTER_ORG_BASE_DOMAIN", "otter.camp")
+	t.Cleanup(func() { middleware.SetWorkspaceSlugResolver(nil) })
+
+	router := NewRouter()
+
+	hostScopedReq := httptest.NewRequest(http.MethodGet, "/api/knowledge", nil)
+	hostScopedReq.Host = "swh.otter.camp"
+	hostScopedRec := httptest.NewRecorder()
+	router.ServeHTTP(hostScopedRec, hostScopedReq)
+	if hostScopedRec.Code != http.StatusOK {
+		t.Fatalf("expected host-scoped request to resolve workspace, got status %d body=%s", hostScopedRec.Code, hostScopedRec.Body.String())
+	}
+
+	noWorkspaceReq := httptest.NewRequest(http.MethodGet, "/api/knowledge", nil)
+	noWorkspaceReq.Host = "api.otter.camp"
+	noWorkspaceRec := httptest.NewRecorder()
+	router.ServeHTTP(noWorkspaceRec, noWorkspaceReq)
+	if noWorkspaceRec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected non-subdomain request without workspace to be unauthorized, got %d body=%s", noWorkspaceRec.Code, noWorkspaceRec.Body.String())
+	}
+}
+
 func TestCORSMiddleware(t *testing.T) {
 	t.Parallel()
 
@@ -41,7 +67,7 @@ func TestCORSMiddleware(t *testing.T) {
 	req := httptest.NewRequest(http.MethodOptions, "/health", nil)
 	req.Header.Set("Origin", "https://example.com")
 	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
-	req.Header.Set("Access-Control-Request-Headers", "Content-Type, X-Org-ID")
+	req.Header.Set("Access-Control-Request-Headers", "Content-Type, X-Org-ID, X-Otter-Org")
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -60,6 +86,9 @@ func TestCORSMiddleware(t *testing.T) {
 
 	if allowHeaders := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(strings.ToLower(allowHeaders), "x-org-id") {
 		t.Fatalf("expected Access-Control-Allow-Headers to include X-Org-ID, got %q", allowHeaders)
+	}
+	if allowHeaders := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(strings.ToLower(allowHeaders), "x-otter-org") {
+		t.Fatalf("expected Access-Control-Allow-Headers to include X-Otter-Org, got %q", allowHeaders)
 	}
 }
 
@@ -390,6 +419,26 @@ func TestWorkflowRoutesUseOptionalWorkspaceMiddleware(t *testing.T) {
 	}
 }
 
+func TestConversationTokenRoutesUseRequireWorkspaceMiddleware(t *testing.T) {
+	t.Parallel()
+
+	content, err := os.ReadFile(filepath.Join("router.go"))
+	if err != nil {
+		t.Fatalf("failed to read router.go: %v", err)
+	}
+	source := string(content)
+	requiredLines := []string{
+		`r.With(middleware.RequireWorkspace).Get("/v1/rooms/{id}", conversationTokenHandler.GetRoom)`,
+		`r.With(middleware.RequireWorkspace).Get("/v1/rooms/{id}/stats", conversationTokenHandler.GetRoomStats)`,
+		`r.With(middleware.RequireWorkspace).Get("/v1/conversations/{id}", conversationTokenHandler.GetConversation)`,
+	}
+	for _, line := range requiredLines {
+		if !strings.Contains(source, line) {
+			t.Fatalf("expected conversation token route to include RequireWorkspace middleware: %s", line)
+		}
+	}
+}
+
 func TestAdminMutationRoutesRequireCapability(t *testing.T) {
 	t.Parallel()
 
@@ -470,6 +519,112 @@ func TestSettingsRoutesAreRegisteredExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestMigrationStatusRouteUsesRequireWorkspaceMiddleware(t *testing.T) {
+	t.Parallel()
+
+	sourceBytes, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatalf("read router.go: %v", err)
+	}
+	source := string(sourceBytes)
+	requiredLine := `r.With(middleware.RequireWorkspace).Get("/migrations/status", handleMigrationStatus(db))`
+	if !strings.Contains(source, requiredLine) {
+		t.Fatalf("expected migration status route to require workspace middleware")
+	}
+}
+
+func TestOpenClawMigrationRoutesUseRequireWorkspaceAndCapabilityMiddleware(t *testing.T) {
+	t.Parallel()
+
+	sourceBytes, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatalf("read router.go: %v", err)
+	}
+	assertOpenClawMigrationControlPlaneRoutes(t, string(sourceBytes))
+}
+
+func TestRouterRegistersOpenClawMigrationControlPlaneRoutes(t *testing.T) {
+	t.Parallel()
+
+	sourceBytes, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatalf("read router.go: %v", err)
+	}
+	assertOpenClawMigrationControlPlaneRoutes(t, string(sourceBytes))
+}
+
+func TestRouterRegistersOpenClawMigrationReportAndFailuresRoutes(t *testing.T) {
+	t.Parallel()
+
+	sourceBytes, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatalf("read router.go: %v", err)
+	}
+	source := string(sourceBytes)
+	requiredLines := []string{
+		`r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/report", openClawMigrationHandler.Report)`,
+		`r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/failures", openClawMigrationHandler.Failures)`,
+	}
+	for _, line := range requiredLines {
+		if !strings.Contains(source, line) {
+			t.Fatalf("expected OpenClaw migration report/failures route middleware line: %s", line)
+		}
+	}
+}
+
+func TestRouterRegistersOpenClawMigrationImportRoutes(t *testing.T) {
+	t.Parallel()
+
+	sourceBytes, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatalf("read router.go: %v", err)
+	}
+
+	source := string(sourceBytes)
+	requiredLines := []string{
+		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/import/agents", openClawMigrationImportHandler.ImportAgents)`,
+		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/import/history/batch", openClawMigrationImportHandler.ImportHistoryBatch)`,
+	}
+	for _, line := range requiredLines {
+		if !strings.Contains(source, line) {
+			t.Fatalf("expected OpenClaw migration import route middleware line: %s", line)
+		}
+	}
+}
+
+func TestLegacyImportEndpointBehaviorUnchanged(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter()
+	req := httptest.NewRequest(http.MethodPost, "/api/import", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusNotFound {
+		t.Fatalf("expected legacy /api/import endpoint to remain registered")
+	}
+}
+
+func assertOpenClawMigrationControlPlaneRoutes(t *testing.T, source string) {
+	t.Helper()
+
+	requiredLines := []string{
+		`r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/status", openClawMigrationHandler.Status)`,
+		`r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/report", openClawMigrationHandler.Report)`,
+		`r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/failures", openClawMigrationHandler.Failures)`,
+		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/run", openClawMigrationHandler.Run)`,
+		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/pause", openClawMigrationHandler.Pause)`,
+		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/resume", openClawMigrationHandler.Resume)`,
+		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/reset", openClawMigrationHandler.Reset)`,
+		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/reset/memory_extraction", openClawMigrationHandler.ResetMemoryExtraction)`,
+	}
+	for _, line := range requiredLines {
+		if !strings.Contains(source, line) {
+			t.Fatalf("expected OpenClaw migration route middleware line: %s", line)
+		}
+	}
+}
+
 func TestSettingsRoutesAreRegistered(t *testing.T) {
 	t.Parallel()
 
@@ -502,7 +657,7 @@ func TestSettingsRoutesAreRegistered(t *testing.T) {
 	}
 }
 
-func TestUploadsRouteServesStoredFile(t *testing.T) {
+func TestUploadsRouteBlocksDirectFileAccess(t *testing.T) {
 	t.Parallel()
 
 	router := NewRouter()
@@ -529,11 +684,11 @@ func TestUploadsRouteServesStoredFile(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
 	}
-	if body := rec.Body.String(); body != content {
-		t.Fatalf("expected uploads body %q, got %q", content, body)
+	if strings.Contains(rec.Body.String(), content) {
+		t.Fatalf("expected uploads route to hide stored file content")
 	}
 }
 

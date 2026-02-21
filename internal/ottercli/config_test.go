@@ -13,9 +13,10 @@ func TestSaveLoadConfig(t *testing.T) {
 	defer os.Setenv("HOME", oldHome)
 
 	cfg := Config{
-		APIBaseURL: "http://localhost:4200",
-		Token:      "oc_sess_test",
-		DefaultOrg: "00000000-0000-0000-0000-000000000000",
+		APIBaseURL:  "http://localhost:4200",
+		Token:       "oc_sess_test",
+		DefaultOrg:  "00000000-0000-0000-0000-000000000000",
+		DatabaseURL: "postgres://user:pass@localhost:5432/otter?sslmode=disable",
 	}
 
 	if err := SaveConfig(cfg); err != nil {
@@ -27,7 +28,7 @@ func TestSaveLoadConfig(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	if loaded.APIBaseURL != cfg.APIBaseURL || loaded.Token != cfg.Token || loaded.DefaultOrg != cfg.DefaultOrg {
+	if loaded.APIBaseURL != cfg.APIBaseURL || loaded.Token != cfg.Token || loaded.DefaultOrg != cfg.DefaultOrg || loaded.DatabaseURL != cfg.DatabaseURL {
 		t.Fatalf("config mismatch: %#v", loaded)
 	}
 

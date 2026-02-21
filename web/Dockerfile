@@ -18,7 +18,7 @@ RUN npm ci
 COPY . .
 
 # Build args for environment
-ARG VITE_API_URL=https://api.otter.camp
+ARG VITE_API_URL=
 ENV VITE_API_URL=$VITE_API_URL
 
 # Build the app (skip tsc, use vite directly)
@@ -37,7 +37,11 @@ COPY nginx.conf /etc/nginx/templates/default.conf.template
 
 # Railway provides PORT env var, default to 80 for local
 ENV PORT=80
+ENV API_BACKEND_URL=http://api.railway.internal:4200
 
 EXPOSE ${PORT}
 
-CMD ["nginx", "-g", "daemon off;"]
+# Custom entrypoint: substitute only PORT and API_BACKEND_URL, then start nginx
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+ENTRYPOINT ["/docker-entrypoint.sh"]

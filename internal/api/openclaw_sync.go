@@ -362,7 +362,15 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if status, err := requireOpenClawSyncAuth(r); err != nil {
+	// Resolve DB early so session-based auth can work (hosted bridge).
+	db := h.DB
+	if db == nil {
+		if dbConn, err := store.DB(); err == nil {
+			db = dbConn
+		}
+	}
+
+	if status, err := requireOpenClawSyncAuth(r.Context(), db, r); err != nil {
 		sendJSON(w, status, errorResponse{Error: err.Error()})
 		return
 	}
@@ -387,14 +395,6 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 		return
-	}
-
-	// Get database - use store's DB() for connection pooling
-	db := h.DB
-	if db == nil {
-		if dbConn, err := store.DB(); err == nil {
-			db = dbConn
-		}
 	}
 
 	processedCount := 0
@@ -444,10 +444,25 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		}
 
 		name := agentNames[agentID]
+		if name == "" && db != nil && workspaceID != "" {
+			// For chameleon sessions the agentID is a UUID — resolve display
+			// name from the agents table so the sync state carries a human-
+			// readable label instead of a raw UUID.
+			_ = db.QueryRowContext(r.Context(),
+				`SELECT COALESCE(NULLIF(display_name,''), slug) FROM agents WHERE org_id = $1 AND id = $2`,
+				workspaceID, agentID,
+			).Scan(&name)
+		}
 		if name == "" {
 			name = agentID
 		}
 		role := agentRoles[agentID]
+		if role == "" && db != nil && workspaceID != "" {
+			_ = db.QueryRowContext(r.Context(),
+				`SELECT slug FROM agents WHERE org_id = $1 AND id = $2`,
+				workspaceID, agentID,
+			).Scan(&role)
+		}
 		avatar := agentAvatars[agentID]
 
 		updatedAt := time.Unix(session.UpdatedAt/1000, 0)
@@ -640,10 +655,6 @@ func (h *OpenClawSyncHandler) PullDispatchQueue(w http.ResponseWriter, r *http.R
 		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
 		return
 	}
-	if status, err := requireOpenClawSyncAuth(r); err != nil {
-		sendJSON(w, status, errorResponse{Error: err.Error()})
-		return
-	}
 
 	db := h.DB
 	if db == nil {
@@ -653,6 +664,11 @@ func (h *OpenClawSyncHandler) PullDispatchQueue(w http.ResponseWriter, r *http.R
 	}
 	if db == nil {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database unavailable"})
+		return
+	}
+
+	if status, err := requireOpenClawSyncAuth(r.Context(), db, r); err != nil {
+		sendJSON(w, status, errorResponse{Error: err.Error()})
 		return
 	}
 
@@ -692,10 +708,6 @@ func (h *OpenClawSyncHandler) AckDispatchQueue(w http.ResponseWriter, r *http.Re
 		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
 		return
 	}
-	if status, err := requireOpenClawSyncAuth(r); err != nil {
-		sendJSON(w, status, errorResponse{Error: err.Error()})
-		return
-	}
 
 	rawID := strings.TrimSpace(chi.URLParam(r, "id"))
 	if rawID == "" {
@@ -732,22 +744,83 @@ func (h *OpenClawSyncHandler) AckDispatchQueue(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	ok, err := ackOpenClawDispatchJob(r.Context(), db, id, req.ClaimToken, req.Success, req.Error)
+	if status, err := requireOpenClawSyncAuth(r.Context(), db, r); err != nil {
+		sendJSON(w, status, errorResponse{Error: err.Error()})
+		return
+	}
+
+	ackResult, err := ackOpenClawDispatchJob(r.Context(), db, id, req.ClaimToken, req.Success, req.Error)
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to acknowledge dispatch job"})
 		return
 	}
-	if !ok {
+	if !ackResult.Acknowledged {
 		sendJSON(w, http.StatusConflict, errorResponse{Error: "dispatch claim is invalid or expired"})
 		return
 	}
 
+	h.broadcastDMDispatchDeliveryUpdate(ackResult)
+
 	sendJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func requireOpenClawSyncAuth(r *http.Request) (int, error) {
+func (h *OpenClawSyncHandler) broadcastDMDispatchDeliveryUpdate(result openClawDispatchAckResult) {
+	if h == nil || h.Hub == nil {
+		return
+	}
+
+	orgID := strings.TrimSpace(result.OrgID)
+	if orgID == "" {
+		return
+	}
+	if strings.TrimSpace(result.EventType) != "dm.message" {
+		return
+	}
+
+	status := strings.TrimSpace(result.Status)
+	if status != "delivered" && status != "failed" {
+		return
+	}
+
+	var payload struct {
+		Data struct {
+			MessageID string `json:"message_id"`
+			ThreadID  string `json:"thread_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return
+	}
+
+	messageID := strings.TrimSpace(payload.Data.MessageID)
+	threadID := strings.TrimSpace(payload.Data.ThreadID)
+	if messageID == "" || threadID == "" {
+		return
+	}
+
+	event := map[string]any{
+		"type": "DMMessageDeliveryUpdated",
+		"data": map[string]any{
+			"messageId":       messageID,
+			"message_id":      messageID,
+			"threadId":        threadID,
+			"thread_id":       threadID,
+			"deliveryStatus":  status,
+			"delivery_status": status,
+		},
+	}
+
+	raw, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	h.Hub.Broadcast(orgID, raw)
+}
+
+func requireOpenClawSyncAuth(ctx context.Context, db *sql.DB, r *http.Request) (int, error) {
 	secret := resolveOpenClawSyncSecret()
-	if secret == "" {
+	if secret == "" && db == nil {
+		// No shared secret configured and no DB available for session validation.
 		return http.StatusServiceUnavailable, fmt.Errorf("sync authentication is not configured")
 	}
 
@@ -765,8 +838,34 @@ func requireOpenClawSyncAuth(r *http.Request) (int, error) {
 	if token == "" {
 		return http.StatusUnauthorized, fmt.Errorf("missing authentication")
 	}
-	if subtle.ConstantTimeCompare([]byte(token), []byte(secret)) != 1 {
+	if secret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(secret)) == 1 {
+		return http.StatusOK, nil
+	}
+
+	// Allow authenticated user session tokens as an alternative to the shared sync secret.
+	// This is required for hosted onboarding flows where the bridge only has the user's session token.
+	if db == nil {
 		return http.StatusUnauthorized, fmt.Errorf("invalid authentication")
+	}
+
+	workspaceID, err := resolveOpenClawSyncWorkspaceID(r)
+	if err != nil {
+		return http.StatusBadRequest, err
+	}
+	if workspaceID != "" {
+		ctx = context.WithValue(ctx, middleware.WorkspaceIDKey, workspaceID)
+	}
+	if _, err := requireSessionIdentity(ctx, db, r); err != nil {
+		switch {
+		case errors.Is(err, errMissingAuthentication),
+			errors.Is(err, errInvalidSessionToken),
+			errors.Is(err, errAuthentication):
+			return http.StatusUnauthorized, fmt.Errorf("invalid authentication")
+		case errors.Is(err, errWorkspaceMismatch):
+			return http.StatusForbidden, err
+		default:
+			return http.StatusUnauthorized, fmt.Errorf("invalid authentication")
+		}
 	}
 
 	return http.StatusOK, nil

@@ -1,0 +1,678 @@
+package importer
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"strconv"
+	"sort"
+	"strings"
+	"time"
+)
+
+const (
+	OpenClawSessionEventRoleUser       = "user"
+	OpenClawSessionEventRoleAssistant  = "assistant"
+	OpenClawSessionEventRoleToolResult = "toolResult"
+	openClawSessionArchiveGlobsEnv     = "OPENCLAW_SESSION_ARCHIVE_GLOBS"
+)
+
+type OpenClawSessionEvent struct {
+	AgentSlug   string
+	SessionID   string
+	SessionPath string
+	EventID     string
+	ParentID    string
+	Role        string
+	Body        string
+	CreatedAt   time.Time
+	Line        int
+}
+
+type openClawSessionDiscoverySummary struct {
+	RootFileCounts    map[string]int
+	UniqueFiles       int
+	DuplicatesSkipped int
+}
+
+type openClawSessionRawEvent struct {
+	Type      string                     `json:"type"`
+	ID        string                     `json:"id"`
+	ParentID  string                     `json:"parentId"`
+	Timestamp string                     `json:"timestamp"`
+	Message   *openClawSessionRawMessage `json:"message"`
+}
+
+type openClawSessionRawMessage struct {
+	Role     string          `json:"role"`
+	ToolName string          `json:"toolName"`
+	Content  json.RawMessage `json:"content"`
+}
+
+func ParseOpenClawSessionEvents(install *OpenClawInstallation) ([]OpenClawSessionEvent, error) {
+	return parseOpenClawSessionEvents(install, false)
+}
+
+func ParseOpenClawSessionEventsStrict(install *OpenClawInstallation) ([]OpenClawSessionEvent, error) {
+	return parseOpenClawSessionEvents(install, true)
+}
+
+func parseOpenClawSessionEvents(install *OpenClawInstallation, strict bool) ([]OpenClawSessionEvent, error) {
+	if install == nil {
+		return nil, fmt.Errorf("installation is required")
+	}
+
+	root := strings.TrimSpace(install.RootDir)
+	if root == "" {
+		return nil, fmt.Errorf("openclaw root dir is required")
+	}
+	sourceGuard, err := NewOpenClawSourceGuard(root)
+	if err != nil {
+		return nil, err
+	}
+
+	sessionFiles, discoverySummary, err := discoverOpenClawSessionFilesWithSummary(root)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover openclaw session files: %w", err)
+	}
+	log.Printf("openclaw session discovery: %s", formatOpenClawSessionDiscoverySummary(discoverySummary))
+
+	events := make([]OpenClawSessionEvent, 0)
+	for _, sessionPath := range sessionFiles {
+		fileInfo, err := os.Lstat(sessionPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to stat openclaw session file %s: %w", sessionPath, err)
+		}
+		if fileInfo.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("openclaw session file %s must not be a symlink", sessionPath)
+		}
+		if err := sourceGuard.ValidateReadPath(sessionPath); err != nil {
+			return nil, err
+		}
+		sessionEvents, err := parseOpenClawSessionFile(sessionPath, strict)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, sessionEvents...)
+	}
+
+	sort.SliceStable(events, func(i, j int) bool {
+		if !events[i].CreatedAt.Equal(events[j].CreatedAt) {
+			return events[i].CreatedAt.Before(events[j].CreatedAt)
+		}
+		if events[i].AgentSlug != events[j].AgentSlug {
+			return events[i].AgentSlug < events[j].AgentSlug
+		}
+		if events[i].SessionPath != events[j].SessionPath {
+			return events[i].SessionPath < events[j].SessionPath
+		}
+		return events[i].Line < events[j].Line
+	})
+
+	return events, nil
+}
+
+func parseOpenClawSessionFile(sessionPath string, strict bool) ([]OpenClawSessionEvent, error) {
+	file, err := os.Open(sessionPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open openclaw session file %s: %w", sessionPath, err)
+	}
+	defer file.Close()
+
+	agentSlug, sessionID := deriveOpenClawSessionPathMetadata(sessionPath)
+	scanner := bufio.NewScanner(file)
+	// OpenClaw JSONL lines can occasionally exceed the default 64K token limit
+	// (e.g. large tool payloads). Increase the max token size to keep migration
+	// robust for large histories.
+	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+
+	events := make([]OpenClawSessionEvent, 0)
+	lineNo := 0
+	for scanner.Scan() {
+		lineNo++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		var raw openClawSessionRawEvent
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			if strict {
+				return nil, fmt.Errorf("failed to parse openclaw jsonl %s:%d: %w", sessionPath, lineNo, err)
+			}
+			log.Printf("warning: skipping malformed openclaw jsonl line %s:%d: %v", sessionPath, lineNo, err)
+			continue
+		}
+
+		event, include, err := normalizeOpenClawSessionEvent(raw, sessionPath, agentSlug, sessionID, lineNo)
+		if err != nil {
+			if strict {
+				return nil, fmt.Errorf("failed to normalize openclaw session event %s:%d: %w", sessionPath, lineNo, err)
+			}
+			log.Printf("warning: skipping invalid openclaw session event %s:%d: %v", sessionPath, lineNo, err)
+			continue
+		}
+		if !include {
+			continue
+		}
+		events = append(events, event)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("failed reading openclaw session file %s: %w", sessionPath, err)
+	}
+
+	return events, nil
+}
+
+// discoverOpenClawSessionFiles resolves deterministic search roots and collects
+// session JSONL files from:
+//   - primary agent sessions: agents/*/sessions
+//   - default archives: sessions-backup-*
+//   - optional env archives: OPENCLAW_SESSION_ARCHIVE_GLOBS
+//
+// Env glob patterns are comma-separated and resolved relative to root unless
+// absolute. Roots outside root are ignored.
+func discoverOpenClawSessionFiles(root string) ([]string, error) {
+	files, _, err := discoverOpenClawSessionFilesWithSummary(root)
+	return files, err
+}
+
+func discoverOpenClawSessionFilesWithSummary(root string) ([]string, openClawSessionDiscoverySummary, error) {
+	summary := openClawSessionDiscoverySummary{
+		RootFileCounts: make(map[string]int),
+	}
+	searchRoots, err := resolveOpenClawSessionSearchRoots(root)
+	if err != nil {
+		return nil, summary, err
+	}
+
+	var files []string
+	for _, searchRoot := range searchRoots {
+		rootFiles, err := collectOpenClawJSONLFiles(searchRoot)
+		if err != nil {
+			return nil, summary, err
+		}
+		if len(rootFiles) > 0 {
+			summary.RootFileCounts[searchRoot] = len(rootFiles)
+		}
+		files = append(files, rootFiles...)
+	}
+	sort.Strings(files)
+	dedupedFiles, duplicatesSkipped, err := dedupeOpenClawSessionFiles(files)
+	if err != nil {
+		return nil, summary, err
+	}
+	summary.UniqueFiles = len(dedupedFiles)
+	summary.DuplicatesSkipped = duplicatesSkipped
+	return dedupedFiles, summary, nil
+}
+
+func resolveOpenClawSessionSearchRoots(root string) ([]string, error) {
+	cleanRoot := filepath.Clean(strings.TrimSpace(root))
+	if cleanRoot == "" {
+		return nil, fmt.Errorf("openclaw root dir is required")
+	}
+
+	rootSet := map[string]struct{}{}
+	addRoot := func(path string) {
+		clean := filepath.Clean(strings.TrimSpace(path))
+		if clean == "" {
+			return
+		}
+		if !isWithinDir(cleanRoot, clean) {
+			return
+		}
+		rootSet[clean] = struct{}{}
+	}
+
+	for _, match := range sortedGlobMatches(filepath.Join(cleanRoot, "agents", "*", "sessions")) {
+		if isDirectory(match) {
+			addRoot(match)
+		}
+	}
+	topLevelSessions := filepath.Join(cleanRoot, "sessions")
+	if isDirectory(topLevelSessions) {
+		addRoot(topLevelSessions)
+	}
+	for _, match := range sortedGlobMatches(filepath.Join(cleanRoot, "sessions-backup-*")) {
+		if isDirectory(match) {
+			addRoot(match)
+		}
+	}
+
+	for _, pattern := range parseOpenClawArchiveGlobEnv(os.Getenv(openClawSessionArchiveGlobsEnv)) {
+		globPattern := pattern
+		if !filepath.IsAbs(globPattern) {
+			globPattern = filepath.Join(cleanRoot, globPattern)
+		}
+		matches, err := filepath.Glob(globPattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s pattern %q: %w", openClawSessionArchiveGlobsEnv, pattern, err)
+		}
+		sort.Strings(matches)
+		for _, match := range matches {
+			if isDirectory(match) || strings.EqualFold(filepath.Ext(match), ".jsonl") {
+				addRoot(match)
+			}
+		}
+	}
+
+	roots := make([]string, 0, len(rootSet))
+	for rootPath := range rootSet {
+		roots = append(roots, rootPath)
+	}
+	sort.Strings(roots)
+	return roots, nil
+}
+
+func parseOpenClawArchiveGlobEnv(raw string) []string {
+	parts := strings.Split(raw, ",")
+	seen := map[string]struct{}{}
+	globs := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		globs = append(globs, trimmed)
+	}
+	sort.Strings(globs)
+	return globs
+}
+
+func sortedGlobMatches(pattern string) []string {
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil
+	}
+	sort.Strings(matches)
+	return matches
+}
+
+func collectOpenClawJSONLFiles(searchRoot string) ([]string, error) {
+	info, err := os.Stat(searchRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !info.IsDir() {
+		if strings.EqualFold(filepath.Ext(searchRoot), ".jsonl") {
+			return []string{searchRoot}, nil
+		}
+		return nil, nil
+	}
+
+	files := make([]string, 0)
+	err = filepath.WalkDir(searchRoot, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			base := d.Name()
+			if base == ".git" || base == "node_modules" || base == "logs" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.EqualFold(filepath.Ext(path), ".jsonl") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func dedupeOpenClawSessionFiles(files []string) ([]string, int, error) {
+	if len(files) <= 1 {
+		return files, 0, nil
+	}
+
+	seenCanonical := make(map[string]struct{}, len(files))
+	seenSignature := make(map[string]struct{}, len(files))
+	unique := make([]string, 0, len(files))
+	duplicatesSkipped := 0
+
+	for _, path := range files {
+		cleanPath := filepath.Clean(path)
+		canonicalPath := cleanPath
+		if resolved, err := filepath.EvalSymlinks(cleanPath); err == nil {
+			canonicalPath = filepath.Clean(resolved)
+		}
+		if _, exists := seenCanonical[canonicalPath]; exists {
+			duplicatesSkipped++
+			continue
+		}
+
+		signature, err := openClawSessionFileSignature(cleanPath)
+		if err != nil {
+			return nil, 0, err
+		}
+		if signature != "" {
+			if _, exists := seenSignature[signature]; exists {
+				duplicatesSkipped++
+				continue
+			}
+			seenSignature[signature] = struct{}{}
+		}
+
+		seenCanonical[canonicalPath] = struct{}{}
+		unique = append(unique, cleanPath)
+	}
+
+	return unique, duplicatesSkipped, nil
+}
+
+func openClawSessionFileSignature(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", nil
+	}
+
+	sessionID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if sessionID == "" {
+		sessionID = filepath.Base(path)
+	}
+	hash, err := hashOpenClawFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.Join([]string{
+		sessionID,
+		strconv.FormatInt(info.Size(), 10),
+		hash,
+	}, "|"), nil
+}
+
+func formatOpenClawSessionDiscoverySummary(summary openClawSessionDiscoverySummary) string {
+	roots := make([]string, 0, len(summary.RootFileCounts))
+	for root := range summary.RootFileCounts {
+		roots = append(roots, root)
+	}
+	sort.Strings(roots)
+
+	rootSummaries := make([]string, 0, len(roots))
+	for _, root := range roots {
+		rootSummaries = append(rootSummaries, fmt.Sprintf("%s=%d", root, summary.RootFileCounts[root]))
+	}
+	return fmt.Sprintf(
+		"unique_files=%d duplicates_skipped=%d roots=%s",
+		summary.UniqueFiles,
+		summary.DuplicatesSkipped,
+		strings.Join(rootSummaries, ","),
+	)
+}
+
+// deriveOpenClawSessionPathMetadata extracts agent slug and session ID from a
+// session file path. It supports two layouts:
+//
+//	Standard:  .../agents/<slug>/sessions/<uuid>.jsonl  → slug, uuid
+//	Backup:    .../<slug>-sessions/<uuid>.jsonl          → slug, uuid
+func deriveOpenClawSessionPathMetadata(sessionPath string) (agentSlug, sessionID string) {
+	clean := filepath.Clean(sessionPath)
+	sessionID = strings.TrimSuffix(filepath.Base(clean), filepath.Ext(clean))
+
+	sessionsDir := filepath.Dir(clean)
+	parentName := filepath.Base(sessionsDir)
+
+	// Standard layout: parent is "sessions", grandparent is agent slug
+	if parentName == "sessions" {
+		agentDir := filepath.Dir(sessionsDir)
+		agentSlug = strings.TrimSpace(filepath.Base(agentDir))
+		return agentSlug, sessionID
+	}
+
+	// Backup layout: parent is "<slug>-sessions"
+	if strings.HasSuffix(parentName, "-sessions") {
+		agentSlug = strings.TrimSuffix(parentName, "-sessions")
+		return agentSlug, sessionID
+	}
+
+	// Fallback: use parent directory name as slug
+	agentSlug = strings.TrimSpace(parentName)
+	return agentSlug, sessionID
+}
+
+func normalizeOpenClawSessionEvent(
+	raw openClawSessionRawEvent,
+	sessionPath, agentSlug, sessionID string,
+	lineNo int,
+) (OpenClawSessionEvent, bool, error) {
+	if strings.ToLower(strings.TrimSpace(raw.Type)) != "message" {
+		return OpenClawSessionEvent{}, false, nil
+	}
+	if raw.Message == nil {
+		return OpenClawSessionEvent{}, false, nil
+	}
+
+	role := strings.ToLower(strings.TrimSpace(raw.Message.Role))
+	var (
+		normalizedRole string
+		body           string
+	)
+
+	switch role {
+	case "user":
+		normalizedRole = OpenClawSessionEventRoleUser
+		body = extractOpenClawSessionContentText(raw.Message.Content, false)
+	case "assistant":
+		normalizedRole = OpenClawSessionEventRoleAssistant
+		body = extractOpenClawSessionContentText(raw.Message.Content, false)
+	case "toolresult", "tool_result":
+		normalizedRole = OpenClawSessionEventRoleToolResult
+		body = summarizeOpenClawToolResult(raw.Message.ToolName, raw.Message.Content)
+	default:
+		return OpenClawSessionEvent{}, false, nil
+	}
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return OpenClawSessionEvent{}, false, nil
+	}
+
+	createdAt, err := parseOpenClawEventTimestamp(raw.Timestamp)
+	if err != nil {
+		return OpenClawSessionEvent{}, false, err
+	}
+
+	return OpenClawSessionEvent{
+		AgentSlug:   agentSlug,
+		SessionID:   sessionID,
+		SessionPath: filepath.Clean(sessionPath),
+		EventID:     strings.TrimSpace(raw.ID),
+		ParentID:    strings.TrimSpace(raw.ParentID),
+		Role:        normalizedRole,
+		Body:        body,
+		CreatedAt:   createdAt,
+		Line:        lineNo,
+	}, true, nil
+}
+
+func parseOpenClawEventTimestamp(value string) (time.Time, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return time.Time{}, fmt.Errorf("timestamp is required")
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, trimmed); err == nil {
+		return parsed.UTC(), nil
+	}
+	if parsed, err := time.Parse(time.RFC3339, trimmed); err == nil {
+		return parsed.UTC(), nil
+	}
+	return time.Time{}, fmt.Errorf("unsupported timestamp format %q", trimmed)
+}
+
+func extractOpenClawSessionContentText(raw json.RawMessage, includeThinking bool) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return ""
+	}
+
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		return normalizeOpenClawSessionText(asString)
+	}
+
+	var blocks []map[string]any
+	if err := json.Unmarshal(raw, &blocks); err == nil {
+		parts := make([]string, 0, len(blocks))
+		for _, block := range blocks {
+			text := extractOpenClawSessionBlockText(block, includeThinking)
+			if text == "" {
+				continue
+			}
+			parts = append(parts, text)
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	}
+
+	var values []any
+	if err := json.Unmarshal(raw, &values); err == nil {
+		parts := make([]string, 0, len(values))
+		for _, value := range values {
+			switch typed := value.(type) {
+			case string:
+				text := normalizeOpenClawSessionText(typed)
+				if text != "" {
+					parts = append(parts, text)
+				}
+			case map[string]any:
+				text := extractOpenClawSessionBlockText(typed, includeThinking)
+				if text != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	}
+
+	return ""
+}
+
+func extractOpenClawSessionBlockText(block map[string]any, includeThinking bool) string {
+	blockType := strings.ToLower(strings.TrimSpace(openClawSessionAnyString(block["type"])))
+	switch blockType {
+	case "text":
+		return normalizeOpenClawSessionText(
+			firstNonEmpty(
+				openClawSessionAnyString(block["text"]),
+				openClawSessionAnyString(block["content"]),
+			),
+		)
+	case "thinking":
+		if !includeThinking {
+			return ""
+		}
+		return normalizeOpenClawSessionText(
+			firstNonEmpty(
+				openClawSessionAnyString(block["thinking"]),
+				openClawSessionAnyString(block["text"]),
+				openClawSessionAnyString(block["content"]),
+			),
+		)
+	default:
+		if blockType == "" {
+			return normalizeOpenClawSessionText(openClawSessionAnyString(block["text"]))
+		}
+		return ""
+	}
+}
+
+func summarizeOpenClawToolResult(toolName string, content json.RawMessage) string {
+	toolName = strings.TrimSpace(toolName)
+	prefix := "Tool result"
+	if toolName != "" {
+		prefix = fmt.Sprintf("Tool %s result", toolName)
+	}
+
+	summary := extractOpenClawSessionContentText(content, false)
+	if summary == "" {
+		summary = extractOpenClawToolResultFallbackText(content)
+	}
+	summary = truncateOpenClawSessionText(summary, 220)
+	if summary == "" {
+		return prefix
+	}
+	return prefix + ": " + summary
+}
+
+func extractOpenClawToolResultFallbackText(content json.RawMessage) string {
+	var parsed any
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		return ""
+	}
+
+	parts := make([]string, 0, 3)
+	collectOpenClawToolResultText(parsed, &parts, 0)
+	return strings.Join(parts, " | ")
+}
+
+func collectOpenClawToolResultText(value any, parts *[]string, depth int) {
+	if depth > 4 || len(*parts) >= 3 {
+		return
+	}
+
+	switch typed := value.(type) {
+	case string:
+		text := normalizeOpenClawSessionText(typed)
+		if text != "" {
+			*parts = append(*parts, text)
+		}
+	case []any:
+		for _, item := range typed {
+			collectOpenClawToolResultText(item, parts, depth+1)
+			if len(*parts) >= 3 {
+				return
+			}
+		}
+	case map[string]any:
+		for _, key := range []string{"text", "output", "result", "content", "message"} {
+			next, ok := typed[key]
+			if !ok {
+				continue
+			}
+			collectOpenClawToolResultText(next, parts, depth+1)
+			if len(*parts) >= 3 {
+				return
+			}
+		}
+	}
+}
+
+func openClawSessionAnyString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	default:
+		return ""
+	}
+}
+
+func normalizeOpenClawSessionText(value string) string {
+	return strings.TrimSpace(strings.Join(strings.Fields(value), " "))
+}
+
+func truncateOpenClawSessionText(value string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes]) + "..."
+}

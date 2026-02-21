@@ -6,7 +6,12 @@
 import { isDemoMode } from './demo';
 
 const browserOrigin = typeof window !== "undefined" ? window.location.origin : "";
-export const API_URL = import.meta.env.VITE_API_URL || browserOrigin;
+const isLocalhost = typeof window !== "undefined" &&
+  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+export const API_URL = isLocalhost ? browserOrigin : (import.meta.env.VITE_API_URL || browserOrigin);
+const hostedBaseDomain = "otter.camp";
+const hostedReservedSubdomains = new Set(["api", "www"]);
+const hostedOrgSlugPattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
 /**
  * Get query params for API calls that need org_id
@@ -24,9 +29,40 @@ export interface ApiError extends Error {
   status: number;
 }
 
+export function hostedOrgSlugFromHostname(hostname: string): string {
+  const normalizedHost = hostname.trim().toLowerCase().replace(/\.$/, "");
+  if (!normalizedHost || normalizedHost === hostedBaseDomain) {
+    return "";
+  }
+
+  const suffix = `.${hostedBaseDomain}`;
+  if (!normalizedHost.endsWith(suffix)) {
+    return "";
+  }
+
+  const slug = normalizedHost.slice(0, -suffix.length);
+  if (!slug || slug.includes(".") || hostedReservedSubdomains.has(slug)) {
+    return "";
+  }
+  if (!hostedOrgSlugPattern.test(slug)) {
+    return "";
+  }
+
+  return slug;
+}
+
+function hostedOrgSlugFromWindow(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  return hostedOrgSlugFromHostname(window.location.hostname);
+}
+
 export async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem('otter_camp_token');
   const orgId = localStorage.getItem('otter-camp-org-id');
+  const hostedOrgSlug = hostedOrgSlugFromWindow();
+  const shouldSendOrgHeader = !hostedOrgSlug;
 
   let res: Response;
   try {
@@ -35,7 +71,8 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
       headers: {
         'Content-Type': 'application/json',
         ...(token && { Authorization: `Bearer ${token}` }),
-        ...(orgId && { 'X-Org-ID': orgId }),
+        ...(shouldSendOrgHeader && orgId && { 'X-Org-ID': orgId }),
+        ...(hostedOrgSlug && { 'X-Otter-Org': hostedOrgSlug }),
         ...options?.headers,
       },
     });
@@ -108,6 +145,26 @@ export interface Project {
   taskCount?: number;
   completedCount?: number;
   labels?: Label[];
+}
+
+export interface IssueSummary {
+  id: string;
+  project_id: string;
+  issue_number: number;
+  title: string;
+  state: string;
+  origin: string;
+  approval_state?: string;
+  kind: string;
+  owner_agent_id?: string | null;
+  work_status?: string;
+  priority?: string;
+  last_activity_at?: string;
+}
+
+export interface IssueListResponse {
+  items: IssueSummary[];
+  total: number;
 }
 
 export interface Label {
@@ -212,6 +269,129 @@ export interface SyncAgentsResponse {
   sync_healthy?: boolean;
 }
 
+export interface AdminAgentSummary {
+  id: string;
+  workspace_agent_id: string;
+  name: string;
+  status: string;
+  is_ephemeral: boolean;
+  project_id?: string | null;
+  model?: string;
+  context_tokens?: number;
+  total_tokens?: number;
+  heartbeat_every?: string;
+  channel?: string;
+  session_key?: string;
+  last_seen?: string;
+}
+
+export interface AdminAgentsResponse {
+  agents: AdminAgentSummary[];
+  total: number;
+}
+
+export interface AdminAgentDetailResponse {
+  agent?: AdminAgentSummary;
+  sync?: {
+    current_task?: string;
+    context_tokens?: number;
+    total_tokens?: number;
+    last_seen?: string;
+    updated_at?: string;
+  };
+}
+
+export interface MemoryEntry {
+  id: string;
+  agent_id: string;
+  kind: string;
+  title: string;
+  content: string;
+  metadata?: unknown;
+  importance?: number;
+  confidence?: number;
+  sensitivity?: string;
+  status?: string;
+  occurred_at?: string;
+  source_project?: string | null;
+  source_issue?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  relevance?: number;
+}
+
+export interface MemoryEntriesResponse {
+  items: MemoryEntry[];
+  total: number;
+}
+
+export interface MemoryEvent {
+  id: number;
+  event_type: string;
+  payload?: unknown;
+  created_at: string;
+}
+
+export interface MemoryEventsResponse {
+  items: MemoryEvent[];
+  total: number;
+}
+
+export interface KnowledgeEntry {
+  id: string;
+  title: string;
+  content: string;
+  tags?: string[];
+  created_by?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface KnowledgeResponse {
+  items: KnowledgeEntry[];
+  total: number;
+}
+
+export interface TaxonomyNode {
+  id: string;
+  org_id: string;
+  parent_id?: string | null;
+  slug: string;
+  display_name: string;
+  description?: string | null;
+  depth: number;
+}
+
+export interface TaxonomyNodesResponse {
+  nodes: TaxonomyNode[];
+}
+
+export interface TaxonomySubtreeMemory {
+  memory_id: string;
+  kind: string;
+  title: string;
+  content: string;
+  source_conversation_id?: string | null;
+  source_project_id?: string | null;
+}
+
+export interface TaxonomySubtreeMemoriesResponse {
+  memories: TaxonomySubtreeMemory[];
+}
+
+export interface ProjectTreeEntry {
+  name: string;
+  type: string;
+  path: string;
+  size?: number;
+}
+
+export interface AgentMemoryFilesResponse {
+  ref: string;
+  path: string;
+  entries: ProjectTreeEntry[];
+}
+
 export interface AdminConnectionsResponse {
   bridge?: {
     connected?: boolean;
@@ -271,7 +451,63 @@ export const api = {
     const path = query ? `/api/projects?${query}` : "/api/projects";
     return apiFetch<{ projects: Project[] }>(path);
   },
+  project: (id: string) => {
+    const params = new URLSearchParams(getOrgQueryParam().replace(/^\?/, ""));
+    const query = params.toString();
+    const path = query
+      ? `/api/projects/${encodeURIComponent(id)}?${query}`
+      : `/api/projects/${encodeURIComponent(id)}`;
+    return apiFetch<Project>(path);
+  },
+  issues: (options: { projectID: string; state?: string; limit?: number }) => {
+    const params = new URLSearchParams(getOrgQueryParam().replace(/^\?/, ""));
+    params.set("project_id", options.projectID);
+    if (options.state) {
+      params.set("state", options.state);
+    }
+    if (typeof options.limit === "number" && Number.isFinite(options.limit)) {
+      params.set("limit", String(Math.max(1, Math.floor(options.limit))));
+    }
+    const query = params.toString();
+    const path = query ? `/api/issues?${query}` : "/api/issues";
+    return apiFetch<IssueListResponse>(path);
+  },
   syncAgents: () => apiFetch<SyncAgentsResponse>(`/api/sync/agents`),
+  adminAgents: () => apiFetch<AdminAgentsResponse>(`/api/admin/agents`),
+  adminAgent: (id: string) => apiFetch<AdminAgentDetailResponse>(`/api/admin/agents/${encodeURIComponent(id)}`),
+  adminAgentMemoryFiles: (id: string) => apiFetch<AgentMemoryFilesResponse>(`/api/admin/agents/${encodeURIComponent(id)}/memory`),
+  memoryEntries: (agentID: string, options: { kind?: string; limit?: number; offset?: number } = {}) => {
+    const params = new URLSearchParams();
+    params.set("agent_id", agentID);
+    if (options.kind) {
+      params.set("kind", options.kind);
+    }
+    if (typeof options.limit === "number" && Number.isFinite(options.limit)) {
+      params.set("limit", String(Math.max(1, Math.floor(options.limit))));
+    }
+    if (typeof options.offset === "number" && Number.isFinite(options.offset)) {
+      params.set("offset", String(Math.max(0, Math.floor(options.offset))));
+    }
+    return apiFetch<MemoryEntriesResponse>(`/api/memory/entries?${params.toString()}`);
+  },
+  memoryEvents: (limit = 100) => {
+    const bounded = Math.max(1, Math.floor(limit));
+    return apiFetch<MemoryEventsResponse>(`/api/memory/events?limit=${bounded}`);
+  },
+  knowledge: (limit = 200) => {
+    const bounded = Math.max(1, Math.floor(limit));
+    return apiFetch<KnowledgeResponse>(`/api/knowledge?limit=${bounded}`);
+  },
+  taxonomyNodes: (parentID?: string) => {
+    const params = new URLSearchParams();
+    if (parentID && parentID.trim()) {
+      params.set("parent_id", parentID.trim());
+    }
+    const query = params.toString();
+    const path = query ? `/api/taxonomy/nodes?${query}` : "/api/taxonomy/nodes";
+    return apiFetch<TaxonomyNodesResponse>(path);
+  },
+  taxonomyNodeMemories: (id: string) => apiFetch<TaxonomySubtreeMemoriesResponse>(`/api/taxonomy/nodes/${encodeURIComponent(id)}/memories`),
   adminConnections: () => apiFetch<AdminConnectionsResponse>(`/api/admin/connections`),
   
   // Approval actions

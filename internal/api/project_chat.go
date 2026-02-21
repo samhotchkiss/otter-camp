@@ -840,21 +840,34 @@ func (h *ProjectChatHandler) resolveProjectLeadAgent(
 	}
 
 	// 3) Final fallback for new/empty projects: pick any active workspace agent.
-	// Prefer known router agents first so project chat remains usable out of the box.
+	// Prefer organization-wide operator sessions first (main/frank), then known routers.
 	var fallbackSlug, fallbackName string
 	err = h.DB.QueryRowContext(ctx, `
 		SELECT a.slug, a.display_name
 		FROM projects p
 		INNER JOIN agents a ON a.org_id = p.org_id
+		LEFT JOIN agent_sync_state ass
+			ON ass.org_id = p.org_id
+			AND (
+				LOWER(ass.id) = LOWER(a.slug)
+				OR LOWER(ass.id) = LOWER(a.id::text)
+			)
 		WHERE p.id = $1
 		  AND a.status = 'active'
 		ORDER BY
 			CASE LOWER(a.slug)
-				WHEN 'chameleon' THEN 0
-				WHEN 'marcus' THEN 1
-				WHEN 'elephant' THEN 2
+				WHEN 'main' THEN 0
+				WHEN 'frank' THEN 1
+				WHEN 'chameleon' THEN 2
+				WHEN 'marcus' THEN 3
+				WHEN 'elephant' THEN 4
 				ELSE 10
 			END,
+			CASE
+				WHEN LOWER(a.display_name) LIKE '%frank%' THEN 0
+				ELSE 1
+			END,
+			COALESCE(ass.updated_at, a.updated_at) DESC,
 			a.updated_at DESC,
 			a.display_name ASC
 		LIMIT 1

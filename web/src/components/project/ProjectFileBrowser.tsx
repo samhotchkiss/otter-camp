@@ -117,8 +117,8 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
   const [blobError, setBlobError] = useState<string | null>(null);
   const [blobRefreshKey, setBlobRefreshKey] = useState(0);
   const [markdownViewMode, setMarkdownViewMode] = useState<MarkdownViewMode>("render");
-  const [creatingIssue, setCreatingIssue] = useState(false);
-  const [createIssueError, setCreateIssueError] = useState<string | null>(null);
+  const [creatingTask, setCreatingTask] = useState(false);
+  const [createTaskError, setCreateTaskError] = useState<string | null>(null);
 
   const navigate = useNavigate();
   const orgID = getOrgID();
@@ -233,7 +233,7 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
     () => (selectedFilePath ? resolveEditorForPath(selectedFilePath) : null),
     [selectedFilePath],
   );
-  const canCreateLinkedIssue = useMemo(
+  const canCreateLinkedTask = useMemo(
     () => Boolean(selectedFilePath && /^\/posts\/.+\.md$/i.test(selectedFilePath)),
     [selectedFilePath],
   );
@@ -245,7 +245,7 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
 
   useEffect(() => {
     setMarkdownViewMode("render");
-    setCreateIssueError(null);
+    setCreateTaskError(null);
   }, [selectedFilePath]);
 
   function handleOpenEntry(entry: ProjectTreeEntry): void {
@@ -257,15 +257,15 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
     setSelectedFilePath(normalizeAbsolutePath(entry.path));
   }
 
-  async function handleCreateIssueForFile(): Promise<void> {
-    if (!projectId || !orgID || !selectedFilePath || !canCreateLinkedIssue) {
+  async function handleCreateTaskForFile(): Promise<void> {
+    if (!projectId || !orgID || !selectedFilePath || !canCreateLinkedTask) {
       return;
     }
 
-    setCreatingIssue(true);
-    setCreateIssueError(null);
+    setCreatingTask(true);
+    setCreateTaskError(null);
     try {
-      const url = new URL(`${API_URL}/api/projects/${projectId}/issues/link`);
+      const url = new URL(`${API_URL}/api/projects/${projectId}/tasks/link`);
       url.searchParams.set("org_id", orgID);
       const response = await fetch(url.toString(), {
         method: "POST",
@@ -274,17 +274,17 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
-        throw new Error(payload?.error ?? "Failed to create linked issue");
+        throw new Error(payload?.error ?? "Failed to create linked task");
       }
       const payload = (await response.json()) as { id: string };
       if (!payload.id) {
-        throw new Error("Issue creation succeeded but response was missing id");
+        throw new Error("Task creation succeeded but response was missing id");
       }
-      navigate(`/projects/${projectId}/issues/${payload.id}`);
+      navigate(`/projects/${projectId}/tasks/${payload.id}`);
     } catch (error) {
-      setCreateIssueError(error instanceof Error ? error.message : "Failed to create linked issue");
+      setCreateTaskError(error instanceof Error ? error.message : "Failed to create linked task");
     } finally {
-      setCreatingIssue(false);
+      setCreatingTask(false);
     }
   }
 
@@ -437,14 +437,14 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
               <div className="flex items-center justify-between gap-2">
                 <p className="truncate text-sm font-medium text-[var(--text)]">{selectedFilePath}</p>
                 <div className="flex items-center gap-2">
-                  {canCreateLinkedIssue && (
+                  {canCreateLinkedTask && (
                     <button
                       type="button"
                       className="rounded border border-[#C9A86C] bg-[#C9A86C]/20 px-2 py-1 text-xs text-[#C9A86C] hover:bg-[#C9A86C]/30 disabled:opacity-60"
-                      onClick={() => void handleCreateIssueForFile()}
-                      disabled={creatingIssue}
+                      onClick={() => void handleCreateTaskForFile()}
+                      disabled={creatingTask}
                     >
-                      {creatingIssue ? "Creating issue..." : "Create issue for this file"}
+                      {creatingTask ? "Creating task..." : "Create task for this file"}
                     </button>
                   )}
                   <button
@@ -457,9 +457,9 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
                 </div>
               </div>
 
-              {createIssueError && (
+              {createTaskError && (
                 <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-                  {createIssueError}
+                  {createTaskError}
                 </div>
               )}
 

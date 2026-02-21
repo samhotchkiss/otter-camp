@@ -74,7 +74,7 @@ describe("ProjectIssuesList", () => {
     render(<ProjectIssuesList projectId="project-1" />);
 
     const row = await screen.findByRole("button", { name: /#77 Imported bug/i });
-    expect(within(row).getByText("Issue")).toBeInTheDocument();
+    expect(within(row).getByText("Task")).toBeInTheDocument();
     expect(within(row).getByText("GitHub")).toBeInTheDocument();
     expect(within(row).getByText("Open", { selector: "span" })).toBeInTheDocument();
     expect(within(row).getByTestId("issue-approval-issue-1")).toHaveTextContent("Ready for Review");
@@ -133,7 +133,7 @@ describe("ProjectIssuesList", () => {
     render(<ProjectIssuesList projectId="project-1" />);
     expect(await screen.findByText("#10 Issue item")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Issue type filter"), {
+    fireEvent.change(screen.getByLabelText("Task type filter"), {
       target: { value: "pull_request" },
     });
 
@@ -213,13 +213,13 @@ describe("ProjectIssuesList", () => {
     });
 
     render(<ProjectIssuesList projectId="project-1" />);
-    expect(screen.getByText("Loading issues...")).toBeInTheDocument();
+    expect(screen.getByText("Loading tasks...")).toBeInTheDocument();
 
     expect(resolveIssuesFetch).not.toBeNull();
     resolveIssuesFetch!(mockJSONResponse({ items: [], total: 0 }));
 
     expect(
-      await screen.findByText("No issues found for the selected filters."),
+      await screen.findByText("No tasks found for the selected filters."),
     ).toBeInTheDocument();
   });
 
@@ -259,8 +259,8 @@ describe("ProjectIssuesList", () => {
     const parentRow = await screen.findByRole("button", { name: /#10 Parent issue/i });
     const childRow = await screen.findByRole("button", { name: /#11 Child issue/i });
 
-    expect(within(parentRow).getByText("Sub-issues: 1")).toBeInTheDocument();
-    expect(within(childRow).getByText("Sub-issue of #10")).toBeInTheDocument();
+    expect(within(parentRow).getByText("Subtasks: 1")).toBeInTheDocument();
+    expect(within(childRow).getByText("Subtask of #10")).toBeInTheDocument();
     expect(within(parentRow).queryByText("GitHub metadata unavailable")).not.toBeInTheDocument();
     expect(within(childRow).queryByText("GitHub metadata unavailable")).not.toBeInTheDocument();
   });
@@ -278,7 +278,7 @@ describe("ProjectIssuesList", () => {
     expect(await screen.findByText("boom")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(
-      await screen.findByText("No issues found for the selected filters."),
+      await screen.findByText("No tasks found for the selected filters."),
     ).toBeInTheDocument();
   });
 
@@ -308,7 +308,7 @@ describe("ProjectIssuesList", () => {
     expect(within(row).queryByText(/6715afdc-9213-4830-b0a8-3a063c5b4209/)).not.toBeInTheDocument();
   });
 
-  it("renders mini pipeline progress for each issue row", async () => {
+  it("renders mini pipeline progress for each task row", async () => {
     fetchMock.mockImplementation(
       mockIssuesAndAgents(
         [
@@ -331,7 +331,7 @@ describe("ProjectIssuesList", () => {
     render(<ProjectIssuesList projectId="project-1" />);
 
     const row = await screen.findByRole("button", { name: /#56 Show progress/i });
-    expect(within(row).getByLabelText("Issue progress")).toBeInTheDocument();
+    expect(within(row).getByLabelText("Task progress")).toBeInTheDocument();
     expect(within(row).getByTestId("mini-stage-review")).toHaveAttribute("data-stage-state", "current");
   });
 });

@@ -556,7 +556,7 @@ function sanitizeRecentActivityText(
 
   const issueID = (item.issue_id || "").trim();
   if (issueID) {
-    const issueLabel = item.issue_number ? `Issue #${item.issue_number}` : "Issue";
+    const issueLabel = item.issue_number ? `Task #${item.issue_number}` : "Task";
     output = output.replace(new RegExp(issueID, "ig"), issueLabel);
   }
 
