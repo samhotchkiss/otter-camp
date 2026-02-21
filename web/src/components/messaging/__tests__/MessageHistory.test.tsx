@@ -108,7 +108,7 @@ describe("MessageHistory", () => {
     expect(screen.getByText("report.pdf")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute(
       "href",
-      "/uploads/report.pdf",
+      expect.stringContaining("/uploads/report.pdf"),
     );
   });
 

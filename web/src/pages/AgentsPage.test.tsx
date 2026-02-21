@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import AgentsPage from "./AgentsPage";
 
 const { adminAgentsMock, adminAgentMock, projectsMock } = vi.hoisted(() => ({
@@ -103,7 +104,7 @@ describe("AgentsPage", () => {
   });
 
   it("renders API-driven permanent and chameleon agent rows", async () => {
-    render(<AgentsPage />);
+    render(<MemoryRouter><AgentsPage /></MemoryRouter>);
 
     expect(screen.getByRole("heading", { name: "Agent Status" })).toBeInTheDocument();
     expect(await screen.findByText("2 Permanent Cores • 1 Active Chameleons")).toBeInTheDocument();
@@ -129,7 +130,7 @@ describe("AgentsPage", () => {
       .mockRejectedValueOnce(new Error("agents load failed"))
       .mockResolvedValueOnce(AGENTS_PAYLOAD);
 
-    render(<AgentsPage />);
+    render(<MemoryRouter><AgentsPage /></MemoryRouter>);
 
     expect(await screen.findByText("agents load failed")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
