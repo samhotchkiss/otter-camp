@@ -181,9 +181,12 @@ func (h *OpenClawHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // pingLoop sends periodic WebSocket pings to keep the connection alive
-// through Railway's reverse proxy (which drops idle connections).
+// through Railway's reverse proxy (which drops idle connections at ~30s).
+// Uses a shorter interval than the default pingPeriod (54s) to stay under
+// Railway's idle timeout.
 func (h *OpenClawHandler) pingLoop(conn *websocket.Conn) {
-	ticker := time.NewTicker(pingPeriod)
+	const bridgePingPeriod = 15 * time.Second
+	ticker := time.NewTicker(bridgePingPeriod)
 	defer ticker.Stop()
 	for {
 		<-ticker.C
