@@ -221,7 +221,12 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
       });
       if (response.ok) {
         const data = await response.json();
-        const parsed = (data as unknown[])
+        const items = Array.isArray(data)
+          ? data
+          : Array.isArray((data as Record<string, unknown>)?.notifications)
+            ? (data as Record<string, unknown>).notifications as unknown[]
+            : [];
+        const parsed = (items as unknown[])
           .map(parseNotification)
           .filter((n): n is Notification => n !== null);
         setNotifications(parsed);
