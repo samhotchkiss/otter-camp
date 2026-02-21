@@ -1088,6 +1088,135 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Hydrate conversations from server-side chat threads so DMs persist
+  // across subdomains and browser resets (localStorage is per-origin).
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrateFromServer = async () => {
+      const orgID = getStoredOrgID();
+      if (!orgID) {
+        return;
+      }
+
+      const token = getStoredAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      try {
+        const chatsURL = new URL(`${API_URL}/api/chats`);
+        chatsURL.searchParams.set("org_id", orgID);
+        chatsURL.searchParams.set("limit", "50");
+
+        const response = await fetch(chatsURL.toString(), {
+          headers,
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          return;
+        }
+        const payload = await response.json().catch(() => null);
+        if (!payload || !Array.isArray(payload.chats)) {
+          return;
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        const serverThreads = payload.chats as ChatThreadRecord[];
+
+        setConversations((prev) => {
+          const existingKeys = new Set(prev.map((c) => c.key));
+          const newConversations: GlobalChatConversation[] = [];
+
+          for (const thread of serverThreads) {
+            if (thread.archived_at) {
+              continue;
+            }
+
+            let key = "";
+            let conversation: GlobalChatConversation | null = null;
+
+            if (thread.thread_type === "dm") {
+              const threadId = thread.thread_key.startsWith("dm:")
+                ? thread.thread_key.slice(3)
+                : thread.thread_key;
+              key = buildDMKey(threadId);
+              if (existingKeys.has(key)) {
+                continue;
+              }
+              const agentId = thread.agent_id || threadId.replace(/^dm_/, "");
+              conversation = {
+                key,
+                type: "dm",
+                threadId,
+                agent: { id: agentId, name: thread.title || agentId, status: "offline" as const },
+                title: thread.title || agentId,
+                contextLabel: "",
+                chatId: thread.id,
+                updatedAt: thread.last_message_at || new Date().toISOString(),
+                unreadCount: 0,
+              };
+            } else if (thread.thread_type === "project" && thread.project_id) {
+              key = buildProjectKey(thread.project_id);
+              if (existingKeys.has(key)) {
+                continue;
+              }
+              conversation = {
+                key,
+                type: "project",
+                projectId: thread.project_id,
+                title: thread.title || thread.project_id,
+                contextLabel: "",
+                chatId: thread.id,
+                updatedAt: thread.last_message_at || new Date().toISOString(),
+                unreadCount: 0,
+              };
+            } else if (thread.thread_type === "issue" && thread.issue_id) {
+              key = buildIssueKey(thread.issue_id);
+              if (existingKeys.has(key)) {
+                continue;
+              }
+              conversation = {
+                key,
+                type: "issue",
+                issueId: thread.issue_id,
+                projectId: thread.project_id || "",
+                title: thread.title || thread.issue_id,
+                contextLabel: "",
+                chatId: thread.id,
+                updatedAt: thread.last_message_at || new Date().toISOString(),
+                unreadCount: 0,
+              };
+            }
+
+            if (conversation && key) {
+              newConversations.push(conversation);
+            }
+          }
+
+          if (newConversations.length === 0) {
+            return prev;
+          }
+
+          return sortConversations([...prev, ...newConversations]);
+        });
+      } catch {
+        // Server hydration is best-effort; localStorage conversations still work.
+      }
+    };
+
+    void hydrateFromServer();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     const orgID = getStoredOrgID();
     if (!orgID) {

@@ -1164,6 +1164,7 @@ export default function GlobalChatSurface({
 
       if (normalized.senderType === "agent") {
         clearPostSendRefreshTimers();
+        setError(null);
         setDeliveryIndicator({ tone: "success", text: "Agent replied" });
         clearStalledTurnWarning();
       }
@@ -1190,6 +1191,7 @@ export default function GlobalChatSurface({
 
       if (normalized.senderType === "agent") {
         clearPostSendRefreshTimers();
+        setError(null);
         setDeliveryIndicator({ tone: "success", text: "Agent replied" });
         clearStalledTurnWarning();
       }
@@ -1239,6 +1241,7 @@ export default function GlobalChatSurface({
 
       if (normalized.senderType === "agent") {
         clearPostSendRefreshTimers();
+        setError(null);
         setDeliveryIndicator({ tone: "success", text: "Agent replied" });
         clearStalledTurnWarning();
       }
