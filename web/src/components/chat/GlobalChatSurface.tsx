@@ -947,7 +947,19 @@ export default function GlobalChatSurface({
               )
               .filter((entry: ChatMessage | null): entry is ChatMessage => entry !== null)
           : [];
-        setMessages(deduplicateLoadedMessages(normalized));
+        setMessages((prev) => {
+          const next = deduplicateLoadedMessages(normalized);
+          // On silent refresh: if new agent messages appeared, clear stale error/delivery banners
+          if (silent && next.length > prev.length) {
+            const newest = next[next.length - 1];
+            if (newest && newest.senderType === "agent") {
+              setError(null);
+              setDeliveryIndicator({ tone: "success", text: "Agent replied" });
+              clearStalledTurnWarning();
+            }
+          }
+          return next;
+        });
         touchConversation();
         return;
       }
@@ -996,7 +1008,18 @@ export default function GlobalChatSurface({
         const normalized = [...normalizedMessages, ...normalizedQuestionnaires];
 
         normalized.sort((a: ChatMessage, b: ChatMessage) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-        setMessages(deduplicateLoadedMessages(normalized));
+        setMessages((prev) => {
+          const next = deduplicateLoadedMessages(normalized);
+          if (silent && next.length > prev.length) {
+            const newest = next[next.length - 1];
+            if (newest && newest.senderType === "agent") {
+              setError(null);
+              setDeliveryIndicator({ tone: "success", text: "Agent replied" });
+              clearStalledTurnWarning();
+            }
+          }
+          return next;
+        });
         touchConversation();
         return;
       }
