@@ -391,6 +391,96 @@ describe("GlobalChatDock", () => {
     });
   });
 
+  it("switches non-main DM selections to main chat on org pages", async () => {
+    globalChatState.conversations = [
+      {
+        key: "dm:dm_josh",
+        type: "dm",
+        threadId: "dm_josh",
+        title: "Josh",
+        contextLabel: "Direct message",
+        subtitle: "Agent chat",
+        unreadCount: 0,
+        updatedAt: "2026-02-11T11:00:00.000Z",
+        agent: {
+          id: "josh",
+          name: "Josh",
+          status: "online",
+        },
+      },
+      {
+        key: "dm:dm_main",
+        type: "dm",
+        threadId: "dm_main",
+        title: "Frank",
+        contextLabel: "Direct message",
+        subtitle: "Agent chat",
+        unreadCount: 0,
+        updatedAt: "2026-02-11T10:00:00.000Z",
+        agent: {
+          id: "main",
+          name: "Frank",
+          status: "online",
+        },
+      },
+    ];
+    globalChatState.selectedConversation = globalChatState.conversations[0];
+    globalChatState.selectedKey = globalChatState.conversations[0].key;
+
+    render(
+      <MemoryRouter initialEntries={["/inbox"]}>
+        <GlobalChatDock />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(globalChatState.selectConversation).toHaveBeenCalledWith("dm:dm_main");
+    });
+  });
+
+  it("opens canonical main chat when no Frank thread exists", async () => {
+    globalChatState.conversations = [
+      {
+        key: "dm:dm_josh",
+        type: "dm",
+        threadId: "dm_josh",
+        title: "Josh",
+        contextLabel: "Direct message",
+        subtitle: "Agent chat",
+        unreadCount: 0,
+        updatedAt: "2026-02-11T11:00:00.000Z",
+        agent: {
+          id: "josh",
+          name: "Josh",
+          status: "online",
+        },
+      },
+    ];
+    globalChatState.selectedConversation = globalChatState.conversations[0];
+    globalChatState.selectedKey = globalChatState.conversations[0].key;
+
+    render(
+      <MemoryRouter initialEntries={["/inbox"]}>
+        <GlobalChatDock />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(globalChatState.openConversation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "dm",
+          threadId: "dm_main",
+          title: "Frank",
+          agent: expect.objectContaining({
+            id: "main",
+            name: "Frank",
+          }),
+        }),
+        expect.objectContaining({ focus: true }),
+      );
+    });
+  });
+
   it("offers a project route switch to org chat", async () => {
     const user = userEvent.setup();
     globalChatState.conversations = [
