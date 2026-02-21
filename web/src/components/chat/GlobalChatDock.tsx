@@ -521,9 +521,25 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
     return findFrankAgentFallback(agentNamesByID);
   }, [agentNamesByID]);
 
-  // Auto-open Frank/main DM when dock is open but no conversation is selected
+  // Auto-open Frank/main DM when dock is open and either:
+  // - no conversation is selected, OR
+  // - a project/issue chat is selected but we're NOT on that project/issue route
+  //   (e.g. user navigated away or did a hard refresh to /projects)
+  const shouldDefaultToMainChat = useMemo(() => {
+    if (!dockOpen) return false;
+    if (!selectedConversation) return true;
+    // If currently showing a project/issue chat but not on a matching route, switch to main
+    if (
+      (selectedConversation.type === "project" || selectedConversation.type === "issue") &&
+      !routeScopedConversation
+    ) {
+      return true;
+    }
+    return false;
+  }, [dockOpen, selectedConversation, routeScopedConversation]);
+
   useEffect(() => {
-    if (!dockOpen || selectedConversation) {
+    if (!shouldDefaultToMainChat) {
       return;
     }
     if (frankOrgDMConversation) {
@@ -554,8 +570,7 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
       );
     }
   }, [
-    dockOpen,
-    selectedConversation,
+    shouldDefaultToMainChat,
     frankOrgDMConversation,
     anyOrgDMConversation,
     frankFallbackAgent,
@@ -590,6 +605,46 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
     }
     return `Back to ${routeScopedConversationLabel}`;
   }, [orgConversationTitle, routeScopeMode, routeScopedConversation, routeScopedConversationLabel]);
+
+  // Show "Main chat" button when viewing a non-DM conversation and not already on a route-scoped page
+  // (route-scoped pages show the swap button instead)
+  const showMainChatButton = useMemo(() => {
+    if (!selectedConversation) return false;
+    if (selectedConversation.type === "dm") return false;
+    // If there's a route-scoped conversation, the swap button handles this
+    if (routeScopedConversation) return false;
+    return hasOrgChatTarget;
+  }, [selectedConversation, routeScopedConversation, hasOrgChatTarget]);
+
+  const handleGoToMainChat = useCallback(() => {
+    if (frankOrgDMConversation) {
+      selectConversation(frankOrgDMConversation.key);
+      markConversationRead(frankOrgDMConversation.key);
+      return;
+    }
+    if (anyOrgDMConversation) {
+      selectConversation(anyOrgDMConversation.key);
+      markConversationRead(anyOrgDMConversation.key);
+      return;
+    }
+    if (frankFallbackAgent) {
+      openConversation(
+        {
+          type: "dm",
+          agent: {
+            id: frankFallbackAgent.id,
+            name: frankFallbackAgent.name,
+            status: "online",
+          },
+          threadId: `dm_${frankFallbackAgent.id}`,
+          title: frankFallbackAgent.name,
+          contextLabel: "Organization chat",
+          subtitle: "Direct message",
+        },
+        { focus: true, openDock: false },
+      );
+    }
+  }, [frankOrgDMConversation, anyOrgDMConversation, frankFallbackAgent, selectConversation, markConversationRead, openConversation]);
 
   const formatConversationTimestamp = useCallback((value: string): string => {
     const parsed = Date.parse(value);
@@ -926,6 +981,15 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
                     <p className="truncate text-[11px] text-[var(--text-muted)]">{selectedConversation.contextLabel}</p>
                   </div>
                   <div className="mt-0.5 flex items-center gap-1.5">
+                    {showMainChatButton ? (
+                      <button
+                        type="button"
+                        onClick={handleGoToMainChat}
+                        className="rounded-lg border border-[var(--border)] px-2 py-1 text-[10px] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
+                      >
+                        ← Main chat
+                      </button>
+                    ) : null}
                     {routeScopedConversation ? (
                       <button
                         type="button"
@@ -1181,6 +1245,15 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
                         </p>
                       </div>
                       <div className="ml-3 flex shrink-0 items-center gap-2">
+                        {showMainChatButton ? (
+                          <button
+                            type="button"
+                            onClick={handleGoToMainChat}
+                            className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                          >
+                            ← Main chat
+                          </button>
+                        ) : null}
                         {routeScopedConversation ? (
                           <button
                             type="button"
