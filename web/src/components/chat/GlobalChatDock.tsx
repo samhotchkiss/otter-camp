@@ -1,13 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import {
-  useGlobalChat,
-  type GlobalChatConversation,
-  type OpenConversationInput,
-} from "../../contexts/GlobalChatContext";
+import { useGlobalChat, type GlobalChatConversation } from "../../contexts/GlobalChatContext";
 import { API_URL } from "../../lib/api";
 import GlobalChatSurface from "./GlobalChatSurface";
-import { getChatContextCue } from "./chatContextCue";
 import { getInitials } from "../messaging/utils";
 
 const CHAT_SESSION_RESET_PREFIX = "chat_session_reset:";
@@ -17,7 +12,7 @@ function conversationTypeLabel(type: "dm" | "project" | "issue"): string {
     return "Project";
   }
   if (type === "issue") {
-    return "Issue";
+    return "Task";
   }
   return "DM";
 }
@@ -27,179 +22,7 @@ function isGenericDMLabel(value: string): boolean {
   return lower === "" || lower === "you" || lower === "user" || lower === "agent" || lower === "assistant";
 }
 
-type GlobalChatDockProps = {
-  embedded?: boolean;
-  onToggleRail?: () => void;
-};
-
-type RouteScopedConversation =
-  | {
-      type: "project";
-      projectId: string;
-    }
-  | {
-      type: "issue";
-      projectId: string;
-      issueId: string;
-    };
-
-function buildProjectConversationKey(projectId: string): string {
-  return `project:${projectId}`;
-}
-
-function buildIssueConversationKey(issueId: string): string {
-  return `issue:${issueId}`;
-}
-
-function extractProjectNameFromContextLabel(label: string): string {
-  const parts = label.split("•");
-  if (parts.length < 2) {
-    return "";
-  }
-  return parts.slice(1).join("•").trim();
-}
-
-function findFrankAgentFallback(agentNamesByID: Map<string, string>): { id: string; name: string } | null {
-  const seen = new Set<string>();
-  let best: { id: string; name: string; score: number } | null = null;
-
-  for (const [rawAlias, rawName] of agentNamesByID.entries()) {
-    const alias = rawAlias.trim();
-    const name = rawName.trim();
-    if (!alias || !name) {
-      continue;
-    }
-    if (!name.toLowerCase().includes("frank")) {
-      continue;
-    }
-    if (alias.startsWith("agent:")) {
-      continue;
-    }
-
-    const normalizedID = alias.startsWith("dm_") ? alias.slice("dm_".length).trim() : alias;
-    if (!normalizedID || seen.has(normalizedID)) {
-      continue;
-    }
-    seen.add(normalizedID);
-
-    const lower = normalizedID.toLowerCase();
-    let score = 0;
-    if (lower === "frank") {
-      score += 6;
-    }
-    if (lower === "main") {
-      score += 5;
-    }
-    if (lower.includes("frank")) {
-      score += 4;
-    }
-    if (lower.startsWith("agent-")) {
-      score += 2;
-    }
-
-    if (!best || score > best.score) {
-      best = { id: normalizedID, name, score };
-    }
-  }
-
-  if (!best) {
-    return null;
-  }
-  return { id: best.id, name: best.name };
-}
-
-function isMainAgentConversation(
-  conversation: GlobalChatConversation,
-  resolvedTitle: string,
-): boolean {
-  if (conversation.type !== "dm") {
-    return false;
-  }
-  const displayTitle = resolvedTitle.toLowerCase();
-  const threadID = conversation.threadId.toLowerCase();
-  const agentID = conversation.agent.id.toLowerCase();
-  const agentName = conversation.agent.name.toLowerCase();
-  return (
-    displayTitle.includes("frank") ||
-    displayTitle.includes("chief of staff") ||
-    agentName.includes("frank") ||
-    agentName.includes("chief of staff") ||
-    agentID === "main" ||
-    agentID.includes("frank") ||
-    threadID.includes("frank") ||
-    threadID.includes("chief of staff") ||
-    threadID === "dm_main"
-  );
-}
-
-function EmptyShellWithInput({ openConversation }: { openConversation: (input: OpenConversationInput, opts?: { focus?: boolean; openDock?: boolean }) => void }) {
-  const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState(false);
-
-  const handleSend = useCallback(() => {
-    const text = draft.trim();
-    if (!text || sending) return;
-    setSending(true);
-    // Create a DM with "main" agent and send the first message
-    openConversation(
-      {
-        type: "dm",
-        agent: { id: "main", name: "Chief of Staff", status: "online" },
-        threadId: "dm_Chief of Staff",
-        title: "Chief of Staff",
-        contextLabel: "Organization chat",
-        subtitle: "Direct message",
-      },
-      { focus: true, openDock: false },
-    );
-    // The message will need to be sent after conversation is created;
-    // for now just open the conversation — user can type again
-    setDraft("");
-    setSending(false);
-  }, [draft, openConversation, sending]);
-
-  return (
-    <div className="flex h-full flex-col justify-between p-4">
-      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)]/65 p-3">
-        <p className="text-sm text-[var(--text)]">Welcome to Otter Camp. Systems are online.</p>
-      </div>
-      <form
-        onSubmit={(e) => { e.preventDefault(); handleSend(); }}
-        className="flex items-end gap-3 pt-3"
-      >
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              handleSend();
-            }
-          }}
-          placeholder="Send a message..."
-          rows={1}
-          disabled={sending}
-          className="flex-1 resize-none rounded-xl border px-4 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] disabled:opacity-50"
-        />
-        <button
-          type="submit"
-          disabled={sending || draft.trim() === ""}
-          className="inline-flex h-10 w-10 items-center justify-center rounded-xl transition disabled:cursor-not-allowed disabled:opacity-50"
-          aria-label="Send message"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
-            <path d="M3.105 2.288a.75.75 0 0 0-.826.95l1.414 4.926A1.5 1.5 0 0 0 5.135 9.25h6.115a.75.75 0 0 1 0 1.5H5.135a1.5 1.5 0 0 0-1.442 1.086l-1.414 4.926a.75.75 0 0 0 .826.95 28.897 28.897 0 0 0 15.293-7.155.75.75 0 0 0 0-1.114A28.897 28.897 0 0 0 3.105 2.288Z" />
-          </svg>
-        </button>
-      </form>
-      <p className="pt-2 text-[10px] text-[var(--text-muted)]">
-        Press <span className="font-medium">Enter</span> to send
-      </p>
-    </div>
-  );
-}
-
-export default function GlobalChatDock({ embedded = false, onToggleRail }: GlobalChatDockProps) {
+export default function GlobalChatDock() {
   const {
     isOpen,
     totalUnread,
@@ -213,7 +36,6 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
     selectConversation,
     markConversationRead,
     archiveConversation,
-    openConversation,
   } = useGlobalChat();
   const navigate = useNavigate();
   const location = useLocation();
@@ -223,9 +45,6 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [archivingChatID, setArchivingChatID] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [routeScopeMode, setRouteScopeMode] = useState<"route" | "org">("route");
-  const embeddedPanelPinnedOpen = embedded && typeof onToggleRail === "function";
-  const dockOpen = embeddedPanelPinnedOpen ? true : isOpen;
 
   const visibleConversations = useMemo(() => {
     const byRecent = (items: GlobalChatConversation[]): GlobalChatConversation[] =>
@@ -249,27 +68,21 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
     return [];
   }, [conversations, selectedConversation]);
 
-  const routeScopedConversation = useMemo<RouteScopedConversation | null>(() => {
-    const issueRouteMatch = /^\/projects\/([^/]+)\/issues\/([^/]+)(?:\/.*)?$/.exec(location.pathname);
-    if (issueRouteMatch?.[1] && issueRouteMatch?.[2]) {
-      return {
-        type: "issue",
-        projectId: decodeURIComponent(issueRouteMatch[1]),
-        issueId: decodeURIComponent(issueRouteMatch[2]),
-      };
+  const routeProjectID = useMemo(() => {
+    const taskRouteMatch = /^\/projects\/([^/]+)\/tasks\/[^/]+$/.exec(location.pathname);
+    if (taskRouteMatch?.[1]) {
+      return decodeURIComponent(taskRouteMatch[1]);
     }
-    const projectRouteMatch = /^\/projects\/([^/]+)\/?$/.exec(location.pathname);
+    const legacyIssueRouteMatch = /^\/projects\/([^/]+)\/issues\/[^/]+$/.exec(location.pathname);
+    if (legacyIssueRouteMatch?.[1]) {
+      return decodeURIComponent(legacyIssueRouteMatch[1]);
+    }
+    const projectRouteMatch = /^\/projects\/([^/]+)$/.exec(location.pathname);
     if (projectRouteMatch?.[1]) {
-      return {
-        type: "project",
-        projectId: decodeURIComponent(projectRouteMatch[1]),
-      };
+      return decodeURIComponent(projectRouteMatch[1]);
     }
-    return null;
+    return "";
   }, [location.pathname]);
-
-  const routeProjectID = routeScopedConversation?.projectId ?? "";
-  const isExplicitChatRoute = location.pathname.startsWith("/chats/");
 
   const selectedJumpTarget = useMemo(() => {
     if (!selectedConversation) {
@@ -287,89 +100,18 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
         return null;
       }
       return {
-        label: "Open issue",
-        href: `/projects/${encodeURIComponent(projectID)}/issues/${encodeURIComponent(selectedConversation.issueId)}`,
+        label: "Open task",
+        href: `/projects/${encodeURIComponent(projectID)}/tasks/${encodeURIComponent(selectedConversation.issueId)}`,
       };
     }
     return null;
   }, [routeProjectID, selectedConversation]);
-  const selectedContextCue = useMemo(() => {
-    return getChatContextCue(selectedConversation?.type ?? null);
-  }, [selectedConversation]);
-
-  const routeScopedKey = useMemo(() => {
-    if (!routeScopedConversation) {
-      return "";
-    }
-    if (routeScopedConversation.type === "issue") {
-      return buildIssueConversationKey(routeScopedConversation.issueId);
-    }
-    return buildProjectConversationKey(routeScopedConversation.projectId);
-  }, [routeScopedConversation]);
-
-  const routeProjectNameHint = useMemo(() => {
-    if (!routeScopedConversation) {
-      return "";
-    }
-    const fromProjectConversation = conversations.find(
-      (conversation) =>
-        conversation.type === "project" &&
-        conversation.projectId === routeScopedConversation.projectId &&
-        conversation.title.trim() !== "",
-    );
-    if (fromProjectConversation) {
-      return fromProjectConversation.title.trim();
-    }
-    const fromIssueContext = conversations.find(
-      (conversation) =>
-        conversation.type === "issue" &&
-        conversation.projectId === routeScopedConversation.projectId &&
-        extractProjectNameFromContextLabel(conversation.contextLabel) !== "",
-    );
-    if (fromIssueContext) {
-      return extractProjectNameFromContextLabel(fromIssueContext.contextLabel);
-    }
-    return "";
-  }, [conversations, routeScopedConversation]);
-
-  const routeScopedInput = useMemo<OpenConversationInput | null>(() => {
-    if (!routeScopedConversation) {
-      return null;
-    }
-    if (routeScopedConversation.type === "issue") {
-      const issueTitle =
-        conversations.find(
-          (conversation) =>
-            conversation.type === "issue" &&
-            conversation.issueId === routeScopedConversation.issueId &&
-            conversation.title.trim() !== "",
-        )?.title ??
-        routeScopedConversation.issueId;
-      const contextLabel = routeProjectNameHint ? `Issue • ${routeProjectNameHint}` : "Issue";
-      return {
-        type: "issue",
-        issueId: routeScopedConversation.issueId,
-        projectId: routeScopedConversation.projectId,
-        title: issueTitle,
-        contextLabel,
-        subtitle: "Issue conversation",
-      };
-    }
-    const projectTitle = routeProjectNameHint || routeScopedConversation.projectId;
-    return {
-      type: "project",
-      projectId: routeScopedConversation.projectId,
-      title: projectTitle,
-      contextLabel: routeProjectNameHint ? `Project • ${routeProjectNameHint}` : "Project",
-      subtitle: "Project chat",
-    };
-  }, [conversations, routeProjectNameHint, routeScopedConversation]);
 
   useEffect(() => {
-    if (dockOpen && selectedKey) {
+    if (isOpen && selectedKey) {
       markConversationRead(selectedKey);
     }
-  }, [dockOpen, markConversationRead, selectedKey]);
+  }, [isOpen, markConversationRead, selectedKey]);
 
   useEffect(() => {
     const match = /^\/chats\/([^/]+)$/.exec(location.pathname);
@@ -388,42 +130,10 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
   }, [conversations, location.pathname, selectConversation, selectedKey, setDockOpen]);
 
   useEffect(() => {
-    setRouteScopeMode("route");
-  }, [routeScopedKey]);
-
-  useEffect(() => {
-    if (!routeScopedConversation || routeScopeMode !== "route" || !routeScopedInput || !routeScopedKey) {
-      return;
-    }
-    if (selectedKey === routeScopedKey) {
-      return;
-    }
-    const existing = conversations.find((conversation) => conversation.key === routeScopedKey);
-    if (existing) {
-      selectConversation(existing.key);
-      markConversationRead(existing.key);
-      return;
-    }
-    openConversation(routeScopedInput, { focus: true, openDock: false });
-  }, [
-    conversations,
-    markConversationRead,
-    openConversation,
-    routeScopedConversation,
-    routeScopedInput,
-    routeScopedKey,
-    routeScopeMode,
-    selectConversation,
-    selectedKey,
-  ]);
-
-  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && dockOpen) {
+      if (event.key === "Escape" && isOpen) {
         if (isFullscreen) {
           setIsFullscreen(false);
-        } else if (embeddedPanelPinnedOpen) {
-          onToggleRail?.();
         } else {
           setDockOpen(false);
         }
@@ -431,7 +141,7 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [dockOpen, embeddedPanelPinnedOpen, isFullscreen, onToggleRail, setDockOpen]);
+  }, [isOpen, isFullscreen, setDockOpen]);
 
   useEffect(() => {
     setResetProjectError(null);
@@ -491,183 +201,6 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
     [resolveAgentName],
   );
 
-  const routeScopedConversationLabel = routeScopedConversation?.type === "issue"
-    ? "Issue chat"
-    : "Project chat";
-
-  const routeScopedSelectedConversation = useMemo(() => {
-    if (!routeScopedConversation) {
-      return null;
-    }
-    if (routeScopedConversation.type === "issue") {
-      return conversations.find(
-        (conversation) =>
-          conversation.type === "issue" &&
-          conversation.issueId === routeScopedConversation.issueId,
-      ) ?? null;
-    }
-    return conversations.find(
-      (conversation) =>
-        conversation.type === "project" &&
-        conversation.projectId === routeScopedConversation.projectId,
-    ) ?? null;
-  }, [conversations, routeScopedConversation]);
-
-  const frankOrgDMConversation = useMemo(() => {
-    const dmConversations = visibleConversations.filter((conversation) => conversation.type === "dm");
-    if (dmConversations.length === 0) {
-      return null;
-    }
-    const frankMatch = dmConversations.find((conversation) => {
-      return isMainAgentConversation(conversation, resolveConversationTitle(conversation));
-    });
-    return frankMatch ?? null;
-  }, [resolveConversationTitle, visibleConversations]);
-
-  const frankFallbackAgent = useMemo(() => {
-    return findFrankAgentFallback(agentNamesByID);
-  }, [agentNamesByID]);
-
-  // Auto-open Frank/main DM when dock is open and either:
-  // - no conversation is selected, OR
-  // - a project/issue chat is selected but we're NOT on that project/issue route
-  //   (e.g. user navigated away or did a hard refresh to /projects)
-  const shouldDefaultToMainChat = useMemo(() => {
-    if (!dockOpen) return false;
-    if (isExplicitChatRoute) return false;
-    if (!selectedConversation) return true;
-    // If currently showing a project/issue chat but not on a matching route, switch to main
-    if (
-      (selectedConversation.type === "project" || selectedConversation.type === "issue") &&
-      !routeScopedConversation
-    ) {
-      return true;
-    }
-    if (
-      selectedConversation.type === "dm" &&
-      !routeScopedConversation &&
-      !isMainAgentConversation(selectedConversation, resolveConversationTitle(selectedConversation))
-    ) {
-      return true;
-    }
-    return false;
-  }, [dockOpen, isExplicitChatRoute, resolveConversationTitle, selectedConversation, routeScopedConversation]);
-
-  const openMainFallbackConversation = useCallback(() => {
-    openConversation(
-      {
-        type: "dm",
-        agent: {
-          id: "main",
-          name: "Frank",
-          status: "online",
-        },
-        threadId: "dm_main",
-        title: "Frank",
-        contextLabel: "Organization chat",
-        subtitle: "Direct message",
-      },
-      { focus: true, openDock: false },
-    );
-  }, [openConversation]);
-
-  useEffect(() => {
-    if (!shouldDefaultToMainChat) {
-      return;
-    }
-    if (frankOrgDMConversation) {
-      selectConversation(frankOrgDMConversation.key);
-      markConversationRead(frankOrgDMConversation.key);
-      return;
-    }
-    if (frankFallbackAgent) {
-      openConversation(
-        {
-          type: "dm",
-          agent: {
-            id: frankFallbackAgent.id,
-            name: frankFallbackAgent.name,
-            status: "online",
-          },
-          threadId: `dm_${frankFallbackAgent.id}`,
-          title: frankFallbackAgent.name,
-          contextLabel: "Organization chat",
-          subtitle: "Direct message",
-        },
-        { focus: true, openDock: false },
-      );
-      return;
-    }
-    openMainFallbackConversation();
-  }, [
-    shouldDefaultToMainChat,
-    frankOrgDMConversation,
-    frankFallbackAgent,
-    selectConversation,
-    markConversationRead,
-    openConversation,
-    openMainFallbackConversation,
-  ]);
-
-  const orgConversationTitle = useMemo(() => {
-    if (frankOrgDMConversation) {
-      return resolveConversationTitle(frankOrgDMConversation);
-    }
-    if (frankFallbackAgent) {
-      return frankFallbackAgent.name;
-    }
-    return "Frank";
-  }, [frankFallbackAgent, frankOrgDMConversation, resolveConversationTitle]);
-
-  const hasOrgChatTarget = true;
-
-  const routeScopedSwapLabel = useMemo(() => {
-    if (!routeScopedConversation) {
-      return "";
-    }
-    if (routeScopeMode === "route") {
-      return `Org chat (${orgConversationTitle})`;
-    }
-    return `Back to ${routeScopedConversationLabel}`;
-  }, [orgConversationTitle, routeScopeMode, routeScopedConversation, routeScopedConversationLabel]);
-
-  // Show "Main chat" button when viewing a non-DM conversation and not already on a route-scoped page
-  // (route-scoped pages show the swap button instead)
-  const showMainChatButton = useMemo(() => {
-    if (!selectedConversation) return false;
-    if (selectedConversation.type === "dm") return false;
-    // If there's a route-scoped conversation, the swap button handles this
-    if (routeScopedConversation) return false;
-    return hasOrgChatTarget;
-  }, [selectedConversation, routeScopedConversation, hasOrgChatTarget]);
-
-  const handleGoToMainChat = useCallback(() => {
-    if (frankOrgDMConversation) {
-      selectConversation(frankOrgDMConversation.key);
-      markConversationRead(frankOrgDMConversation.key);
-      return;
-    }
-    if (frankFallbackAgent) {
-      openConversation(
-        {
-          type: "dm",
-          agent: {
-            id: frankFallbackAgent.id,
-            name: frankFallbackAgent.name,
-            status: "online",
-          },
-          threadId: `dm_${frankFallbackAgent.id}`,
-          title: frankFallbackAgent.name,
-          contextLabel: "Organization chat",
-          subtitle: "Direct message",
-        },
-        { focus: true, openDock: false },
-      );
-      return;
-    }
-    openMainFallbackConversation();
-  }, [frankOrgDMConversation, frankFallbackAgent, markConversationRead, openConversation, openMainFallbackConversation, selectConversation]);
-
   const formatConversationTimestamp = useCallback((value: string): string => {
     const parsed = Date.parse(value);
     if (!Number.isFinite(parsed)) {
@@ -697,85 +230,6 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
     }
     setArchivingChatID(null);
   }, [archiveConversation, location.pathname, navigate]);
-
-  const handleSelectConversation = useCallback((conversation: GlobalChatConversation) => {
-    selectConversation(conversation.key);
-    markConversationRead(conversation.key);
-    if (routeScopedConversation) {
-      if (
-        (routeScopedConversation.type === "project" &&
-          conversation.type === "project" &&
-          conversation.projectId === routeScopedConversation.projectId) ||
-        (routeScopedConversation.type === "issue" &&
-          conversation.type === "issue" &&
-          conversation.issueId === routeScopedConversation.issueId)
-      ) {
-        setRouteScopeMode("route");
-      } else if (conversation.type === "dm") {
-        setRouteScopeMode("org");
-      }
-    }
-    if (!embedded && conversation.chatId) {
-      navigate(`/chats/${encodeURIComponent(conversation.chatId)}`);
-    }
-  }, [embedded, markConversationRead, navigate, routeScopedConversation, selectConversation]);
-
-  const handleSwapScope = useCallback(() => {
-    if (!routeScopedConversation) {
-      return;
-    }
-    if (routeScopeMode === "route") {
-      if (frankOrgDMConversation) {
-        setRouteScopeMode("org");
-        selectConversation(frankOrgDMConversation.key);
-        markConversationRead(frankOrgDMConversation.key);
-        return;
-      }
-      if (frankFallbackAgent) {
-        setRouteScopeMode("org");
-        openConversation(
-          {
-            type: "dm",
-            agent: {
-              id: frankFallbackAgent.id,
-              name: frankFallbackAgent.name,
-              status: "online",
-            },
-            threadId: `dm_${frankFallbackAgent.id}`,
-            title: frankFallbackAgent.name,
-            contextLabel: "Organization chat",
-            subtitle: "Direct message",
-          },
-          { focus: true, openDock: true },
-        );
-        return;
-      }
-      setRouteScopeMode("org");
-      openMainFallbackConversation();
-      return;
-    }
-
-    setRouteScopeMode("route");
-    if (routeScopedSelectedConversation) {
-      selectConversation(routeScopedSelectedConversation.key);
-      markConversationRead(routeScopedSelectedConversation.key);
-      return;
-    }
-    if (routeScopedInput) {
-      openConversation(routeScopedInput, { focus: true, openDock: true });
-    }
-  }, [
-    frankFallbackAgent,
-    frankOrgDMConversation,
-    markConversationRead,
-    openConversation,
-    openMainFallbackConversation,
-    routeScopeMode,
-    routeScopedConversation,
-    routeScopedInput,
-    routeScopedSelectedConversation,
-    selectConversation,
-  ]);
 
   const handleClearSession = useCallback(async () => {
     if (!selectedConversation) {
@@ -848,38 +302,38 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
           throw new Error(payload?.error ?? "Failed to clear chat session");
         }
       } else {
-        const issueResponse = await fetch(
-          `${API_URL}/api/issues/${selectedConversation.issueId}?org_id=${encodeURIComponent(orgID)}`,
+        const taskResponse = await fetch(
+          `${API_URL}/api/project-tasks/${selectedConversation.issueId}?org_id=${encodeURIComponent(orgID)}`,
           {
             method: "GET",
             headers,
             cache: "no-store",
           },
         );
-        if (!issueResponse.ok) {
-          const payload = await issueResponse.json().catch(() => null);
-          throw new Error(payload?.error ?? "Failed to resolve issue participant for reset");
+        if (!taskResponse.ok) {
+          const payload = await taskResponse.json().catch(() => null);
+          throw new Error(payload?.error ?? "Failed to resolve task participant for reset");
         }
-        const issuePayload = (await issueResponse.json()) as {
+        const taskPayload = (await taskResponse.json()) as {
           participants?: Array<{
             agent_id: string;
             role: "owner" | "collaborator";
             removed_at?: string | null;
           }>;
         };
-        const activeParticipants = Array.isArray(issuePayload.participants)
-          ? issuePayload.participants.filter((entry) => !entry.removed_at)
+        const activeParticipants = Array.isArray(taskPayload.participants)
+          ? taskPayload.participants.filter((entry) => !entry.removed_at)
           : [];
         const ownerAgentID =
           activeParticipants.find((entry) => entry.role === "owner")?.agent_id ??
           activeParticipants[0]?.agent_id ??
           "";
         if (!ownerAgentID) {
-          throw new Error("No issue participant available to anchor reset marker");
+          throw new Error("No task participant available to anchor reset marker");
         }
 
         const response = await fetch(
-          `${API_URL}/api/issues/${selectedConversation.issueId}/comments?org_id=${encodeURIComponent(orgID)}`,
+          `${API_URL}/api/project-tasks/${selectedConversation.issueId}/comments?org_id=${encodeURIComponent(orgID)}`,
           {
             method: "POST",
             headers,
@@ -904,172 +358,7 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
     }
   }, [selectedConversation]);
 
-  if (embedded) {
-    if (!dockOpen) {
-      return (
-        <div className="flex h-full items-end justify-end p-3">
-          <button
-            type="button"
-            onClick={() => setDockOpen(true)}
-            className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 text-sm font-medium text-[var(--text)] shadow-md transition hover:border-[var(--accent)]"
-            aria-label="Open global chat"
-          >
-            <span>Chats</span>
-            {unreadBadge}
-          </button>
-        </div>
-      );
-    }
-
-    return (
-      <section
-        className={`oc-chat-shell flex h-full min-h-0 flex-col overflow-hidden border border-[var(--border)] bg-[var(--surface)] ${
-          isFullscreen ? "fixed inset-0 top-[var(--topbar-height,56px)] z-50" : ""
-        }`}
-      >
-        <header className="oc-chat-shell-header flex min-h-[52px] items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-2.5">
-          <div className="min-w-0 flex-1">
-            <h2 className="sr-only">Global Chat</h2>
-            <div className="flex min-w-0 items-center gap-2">
-              <span
-                aria-hidden="true"
-                className="font-mono text-[15px] leading-none text-lime-400"
-              >
-                &gt;_
-              </span>
-              <span className="truncate whitespace-nowrap font-mono text-sm font-semibold text-[var(--text)]">Otter Shell</span>
-              <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] font-mono uppercase tracking-wide text-[var(--text-muted)]">
-                <span className="h-1.5 w-1.5 rounded-full bg-[var(--green)]" />
-                ONLINE
-              </span>
-            </div>
-          </div>
-          <div className="ml-2 flex shrink-0 items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => {
-                setIsFullscreen(false);
-                if (embeddedPanelPinnedOpen) {
-                  onToggleRail?.();
-                } else {
-                  toggleDock();
-                }
-              }}
-              className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-[11px] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
-              aria-label="Collapse global chat"
-            >
-              Hide
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsFullscreen(false);
-                if (embeddedPanelPinnedOpen) {
-                  onToggleRail?.();
-                } else {
-                  setDockOpen(false);
-                }
-              }}
-              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border)] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
-              aria-label="Close global chat"
-            >
-              ×
-            </button>
-          </div>
-        </header>
-        {resetProjectError ? (
-          <div className="border-b border-[var(--red)]/40 bg-[var(--red)]/15 px-4 py-2">
-            <p className="text-xs text-[var(--red)]">{resetProjectError}</p>
-          </div>
-        ) : null}
-        {archiveError ? (
-          <div className="border-b border-[var(--red)]/40 bg-[var(--red)]/15 px-4 py-2">
-            <p className="text-xs text-[var(--red)]">{archiveError}</p>
-          </div>
-        ) : null}
-
-        <div className="min-h-0 flex-1">
-          {selectedConversation ? (
-            <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-[var(--border)]/90 bg-[var(--surface-alt)]/40 px-4 py-2.5">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <h3 className="truncate text-base font-semibold text-[var(--text)]">
-                      {resolveConversationTitle(selectedConversation)}
-                    </h3>
-                    <p className="truncate text-[11px] text-[var(--text-muted)]">{selectedConversation.contextLabel}</p>
-                  </div>
-                  <div className="mt-0.5 flex items-center gap-1.5">
-                    {showMainChatButton ? (
-                      <button
-                        type="button"
-                        onClick={handleGoToMainChat}
-                        className="rounded-lg border border-[var(--border)] px-2 py-1 text-[10px] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
-                      >
-                        ← Main chat
-                      </button>
-                    ) : null}
-                    {routeScopedConversation ? (
-                      <button
-                        type="button"
-                        onClick={handleSwapScope}
-                        disabled={routeScopeMode === "route" && !hasOrgChatTarget}
-                        className="rounded-lg border border-[var(--border)] px-2 py-1 text-[10px] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {routeScopedSwapLabel}
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (selectedJumpTarget) {
-                          navigate(selectedJumpTarget.href);
-                        }
-                      }}
-                      disabled={!selectedJumpTarget}
-                      className="shrink-0 rounded-lg border border-[var(--border)] px-2 py-1 text-[10px] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {selectedJumpTarget?.label || "Open"}
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-2 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void handleClearSession();
-                    }}
-                    disabled={resettingProjectSession}
-                    className="rounded-lg border border-[var(--border)] px-2 py-1 text-[10px] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {resettingProjectSession ? "Clearing..." : "Clear session"}
-                  </button>
-                </div>
-              </div>
-              <div className="min-h-0 flex-1">
-                <GlobalChatSurface
-                  conversation={selectedConversation}
-                  showContextHeader={false}
-                  refreshVersion={refreshVersion}
-                  agentNamesByID={agentNamesByID}
-                  resolveAgentName={resolveAgentName}
-                  onConversationTouched={() => {
-                    if (selectedConversation.unreadCount > 0) {
-                      markConversationRead(selectedConversation.key);
-                    }
-                  }}
-                />
-              </div>
-            </div>
-          ) : (
-            <EmptyShellWithInput openConversation={openConversation} />
-          )}
-        </div>
-      </section>
-    );
-  }
-
-  if (!dockOpen) {
+  if (!isOpen) {
     return (
       <div className="fixed bottom-4 right-4 z-50">
         <button
@@ -1094,12 +383,6 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
         <header className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--surface-alt)] px-4 py-2.5">
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-semibold text-[var(--text)]">Global Chat</h2>
-            <span
-              data-testid="global-chat-context-cue"
-              className="oc-chip rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]"
-            >
-              {selectedContextCue}
-            </span>
             {unreadBadge}
           </div>
           <div className="flex items-center gap-2">
@@ -1165,7 +448,7 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
             <div className="h-full overflow-y-auto p-2">
               {visibleConversations.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-[var(--border)] p-4 text-xs text-[var(--text-muted)]">
-                  Start a chat from Agents, Projects, or an Issue thread.
+                  Start a chat from Agents, Projects, or a Task thread.
                 </div>
               ) : (
                 visibleConversations.map((conversation) => {
@@ -1177,12 +460,20 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
                       role="button"
                       tabIndex={0}
                       onClick={() => {
-                        handleSelectConversation(conversation);
+                        selectConversation(conversation.key);
+                        markConversationRead(conversation.key);
+                        if (conversation.chatId) {
+                          navigate(`/chats/${encodeURIComponent(conversation.chatId)}`);
+                        }
                       }}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
-                          handleSelectConversation(conversation);
+                          selectConversation(conversation.key);
+                          markConversationRead(conversation.key);
+                          if (conversation.chatId) {
+                            navigate(`/chats/${encodeURIComponent(conversation.chatId)}`);
+                          }
                         }
                       }}
                       className={`mb-1 w-full rounded-xl border px-3 py-2 text-left transition ${
@@ -1264,32 +555,13 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
                         </p>
                       </div>
                       <div className="ml-3 flex shrink-0 items-center gap-2">
-                        {showMainChatButton ? (
-                          <button
-                            type="button"
-                            onClick={handleGoToMainChat}
-                            className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-                          >
-                            ← Main chat
-                          </button>
-                        ) : null}
-                        {routeScopedConversation ? (
-                          <button
-                            type="button"
-                            onClick={handleSwapScope}
-                            disabled={routeScopeMode === "route" && !hasOrgChatTarget}
-                            className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {routeScopedSwapLabel}
-                          </button>
-                        ) : null}
                         <button
                           type="button"
                           onClick={() => {
                             setIsFullscreen(false);
                             setDockOpen(false);
                           }}
-                          className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                          className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
                           aria-label="Minimize global chat"
                         >
                           Minimize
@@ -1302,7 +574,7 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
                             }
                           }}
                           disabled={!selectedJumpTarget}
-                          className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
+                          className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {selectedJumpTarget?.label || "Open context"}
                         </button>
@@ -1312,7 +584,7 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
                             void handleClearSession();
                           }}
                           disabled={resettingProjectSession}
-                          className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
+                          className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {resettingProjectSession ? "Clearing..." : "Clear session"}
                         </button>

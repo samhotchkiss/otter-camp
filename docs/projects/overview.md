@@ -1,13 +1,13 @@
 # Projects: Overview
 
-> Summary: Project model, issue model, Git/repo integration, and how project work flows through Otter Camp.
+> Summary: Project model, task model, Git/repo integration, and how project work flows through Otter Camp.
 > Last updated: 2026-02-19
 > Audience: Agents doing project-level execution or platform changes.
 
 ## Project Core
 
 Projects are first-class containers for:
-- Issues and issue workflows
+- Tasks and task workflows
 - Repo mapping and commit/activity streams
 - Project chat and content workflows
 - Optional GitHub sync metadata
@@ -20,7 +20,7 @@ Primary code:
 
 ## Project Work Objects
 
-Main operational primitive is now project issues (`project_issues`), with:
+Main operational primitive is now project tasks (`project_issues`), with:
 - Work status (`queued`, `in_progress`, `blocked`, `review`, `done`, `cancelled`)
 - Approval state (`draft` -> `ready_for_review` -> ... -> `approved`)
 - Priority (`P0`..`P3`)
@@ -46,6 +46,7 @@ Primary modules:
 
 ## Change Log
 
+- 2026-02-21: Renamed user-facing project work terminology from issues to tasks.
 - 2026-02-19: Bug fix in project detail CI stability/docs guard compliance for Spec 515 follow-up; no behavior change.
 - 2026-02-16: Added hosted wildcard routing runbook link for DNS/TLS and validation workflow (Spec 311).
 - 2026-02-16: Created canonical documentation file and migrated relevant legacy content.

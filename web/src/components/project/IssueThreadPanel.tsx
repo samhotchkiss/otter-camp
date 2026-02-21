@@ -533,7 +533,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setError(null);
     setNotFound(false);
 
-    const issueURL = new URL(`${API_URL}/api/issues/${issueID}`);
+    const issueURL = new URL(`${API_URL}/api/project-tasks/${issueID}`);
     issueURL.searchParams.set("org_id", orgID);
     const agentsURL = new URL(`${API_URL}/api/agents`);
     agentsURL.searchParams.set("org_id", orgID);
@@ -545,7 +545,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
       .then(async ([issueResponse, agentsResponse]) => {
         if (!issueResponse.ok) {
           const payload = await issueResponse.json().catch(() => null);
-          const errorMessage = payload?.error ?? "Failed to load issue thread";
+          const errorMessage = payload?.error ?? "Failed to load task thread";
           const issueError = new Error(errorMessage) as Error & { code?: string };
           if (issueResponse.status === 404 || errorMessage === "not found") {
             issueError.code = "not_found";
@@ -594,7 +594,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
           setError(null);
           return;
         }
-        setError(loadError instanceof Error ? loadError.message : "Failed to load issue thread");
+        setError(loadError instanceof Error ? loadError.message : "Failed to load task thread");
       })
       .finally(() => {
         if (!cancelled) {
@@ -624,7 +624,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setParentIssueMissing(false);
     setChildIssues([]);
 
-    const childURL = new URL(`${API_URL}/api/issues`);
+    const childURL = new URL(`${API_URL}/api/project-tasks`);
     childURL.searchParams.set("org_id", orgID);
     childURL.searchParams.set("project_id", projectID);
     childURL.searchParams.set("parent_issue_id", currentIssueID);
@@ -650,7 +650,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     const parentRequest = parentIssueID === ""
       ? Promise.resolve<null | IssueRelationSummary>(null)
       : fetch(
-        `${API_URL}/api/issues/${encodeURIComponent(parentIssueID)}?org_id=${encodeURIComponent(orgID)}`,
+        `${API_URL}/api/project-tasks/${encodeURIComponent(parentIssueID)}?org_id=${encodeURIComponent(orgID)}`,
         { headers: { "Content-Type": "application/json" } },
       )
         .then(async (response) => {
@@ -703,7 +703,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setReviewHistoryLoading(true);
     setReviewHistoryError(null);
 
-    const url = new URL(`${API_URL}/api/issues/${issueID}/review/history`);
+    const url = new URL(`${API_URL}/api/project-tasks/${issueID}/review/history`);
     url.searchParams.set("org_id", orgID);
 
     void fetch(url.toString(), { headers: { "Content-Type": "application/json" } })
@@ -749,7 +749,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setReviewChangesLoading(true);
     setReviewChangesError(null);
 
-    const url = new URL(`${API_URL}/api/issues/${issueID}/review/changes`);
+    const url = new URL(`${API_URL}/api/project-tasks/${issueID}/review/changes`);
     url.searchParams.set("org_id", orgID);
 
     void fetch(url.toString(), { headers: { "Content-Type": "application/json" } })
@@ -827,7 +827,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setReviewVersionError(null);
     try {
       const response = await fetch(
-        `${API_URL}/api/issues/${issueID}/review/history/${encodeURIComponent(sha)}?org_id=${encodeURIComponent(orgID)}`,
+        `${API_URL}/api/project-tasks/${issueID}/review/history/${encodeURIComponent(sha)}?org_id=${encodeURIComponent(orgID)}`,
         { headers: { "Content-Type": "application/json" } },
       );
       if (!response.ok) {
@@ -864,7 +864,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     const addedParticipants: IssueParticipant[] = []
     for (const agentID of toAdd) {
       const response = await fetch(
-        `${API_URL}/api/issues/${issueID}/participants?org_id=${encodeURIComponent(orgID)}`,
+        `${API_URL}/api/project-tasks/${issueID}/participants?org_id=${encodeURIComponent(orgID)}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -909,7 +909,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
 
     try {
       const response = await fetch(
-        `${API_URL}/api/issues/${issueID}/comments?org_id=${encodeURIComponent(orgID)}`,
+        `${API_URL}/api/project-tasks/${issueID}/comments?org_id=${encodeURIComponent(orgID)}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -979,8 +979,8 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setUpdatingApprovalState(action.toState);
     try {
       const endpoint = action.endpoint === "approve"
-        ? `${API_URL}/api/issues/${issue.id}/approve?org_id=${encodeURIComponent(orgID)}`
-        : `${API_URL}/api/issues/${issue.id}/approval-state?org_id=${encodeURIComponent(orgID)}`;
+        ? `${API_URL}/api/project-tasks/${issue.id}/approve?org_id=${encodeURIComponent(orgID)}`
+        : `${API_URL}/api/project-tasks/${issue.id}/approval-state?org_id=${encodeURIComponent(orgID)}`;
       const requestInit: RequestInit = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1026,7 +1026,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setUpdatingParticipant(true);
     try {
       const response = await fetch(
-        `${API_URL}/api/issues/${issueID}/participants?org_id=${encodeURIComponent(orgID)}`,
+        `${API_URL}/api/project-tasks/${issueID}/participants?org_id=${encodeURIComponent(orgID)}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1055,7 +1055,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     setUpdatingParticipant(true);
     try {
       const response = await fetch(
-        `${API_URL}/api/issues/${issueID}/participants/${participant.agent_id}?org_id=${encodeURIComponent(orgID)}`,
+        `${API_URL}/api/project-tasks/${issueID}/participants/${participant.agent_id}?org_id=${encodeURIComponent(orgID)}`,
         {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
@@ -1149,7 +1149,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     try {
       for (const nextStatus of statuses) {
         const response = await fetch(
-          `${API_URL}/api/issues/${issue.id}?org_id=${encodeURIComponent(orgID)}`,
+          `${API_URL}/api/project-tasks/${issue.id}?org_id=${encodeURIComponent(orgID)}`,
           {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
@@ -1206,22 +1206,19 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
   }
 
   return (
-    <section
-      data-testid="issue-thread-shell"
-      className="min-w-0 rounded-3xl border border-[var(--border)] bg-[var(--surface)]/75 p-6 shadow-sm"
-    >
+    <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
       <WebSocketIssueSubscriber issueID={issueID} />
       {loading && (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] p-4 text-sm text-[var(--text-muted)]">
-          Loading issue thread...
+          Loading task thread...
         </div>
       )}
 
       {!loading && notFound && (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] p-4">
-          <h2 className="text-base font-semibold text-[var(--text)]">Issue not found</h2>
+          <h2 className="text-base font-semibold text-[var(--text)]">Task not found</h2>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
-            The requested issue could not be found.
+            The requested task could not be found.
           </p>
           <Link
             to={backToProjectPath}
@@ -1241,10 +1238,10 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
       {!loading && !notFound && !error && issue && (
         <div className="space-y-5">
           <header className="border-b border-[var(--border)] pb-4">
-            <h2 className="break-words text-lg font-semibold text-[var(--text)]">
+            <h2 className="text-lg font-semibold text-[var(--text)]">
               #{issue.issue_number} {issue.title}
             </h2>
-            <div className="mt-2 flex flex-wrap items-start gap-2 sm:items-center">
+            <div className="mt-2 flex flex-wrap items-center gap-2">
               <p className="text-xs text-[var(--text-muted)]">
                 {issue.origin === "github" ? "GitHub" : "Local"} · {issue.state === "open" ? "Open" : "Closed"}
               </p>
@@ -1275,7 +1272,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
                 <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2">
                   <p className="text-xs font-semibold text-amber-200">Skip workflow stages?</p>
                   <p className="mt-1 text-xs text-amber-100">
-                    Move this issue to {pipelineStageLabel(pendingWorkStatusTransition.targetStage)} and skip intermediate stages.
+                    Move this task to {pipelineStageLabel(pendingWorkStatusTransition.targetStage)} and skip intermediate stages.
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button
@@ -1308,11 +1305,11 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
                   <p>{`Parent: #${parentIssue.issue_number} ${parentIssue.title}`}</p>
                 )}
                 {issue.parent_issue_id && !parentIssue && parentIssueMissing && (
-                  <p>Parent issue unavailable</p>
+                  <p>Parent task unavailable</p>
                 )}
                 {childIssues.length > 0 && (
                   <div>
-                    <p>{`Sub-issues: ${childIssues.length}`}</p>
+                    <p>{`Subtasks: ${childIssues.length}`}</p>
                     <ul className="ml-4 list-disc">
                       {childIssues.map((child) => (
                         <li key={child.id}>{`#${child.issue_number} ${child.title}`}</li>
@@ -1397,7 +1394,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
               </div>
 
               <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-3">
-                <div className="flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-center">
+                <div className="flex items-center justify-between gap-2">
                   <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
                     Review Version History
                   </p>
@@ -1421,7 +1418,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
                   <ul className="mt-2 space-y-2" data-testid="issue-review-history-list">
                     {reviewHistory.map((item) => (
                       <li key={item.sha} className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
-                        <div className="flex flex-col items-start justify-between gap-2 sm:flex-row">
+                        <div className="flex items-start justify-between gap-2">
                           <div>
                             <p className="text-xs font-semibold text-[var(--text)]">
                               {item.subject}
@@ -1505,9 +1502,9 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
               ))}
             </div>
 
-            <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+            <div className="flex flex-wrap items-center gap-2">
               <select
-                aria-label="Add agent to issue"
+                aria-label="Add agent to task"
                 className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
                 value={selectedAgentID}
                 onChange={(event) => setSelectedAgentID(event.target.value)}
@@ -1531,7 +1528,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
           </div>
 
           <div className="space-y-3">
-            <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold text-[var(--text)]">Thread</h3>
               {comments.length > visibleCount && (
                 <button
@@ -1559,7 +1556,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
                       : "border-[var(--border)] bg-[var(--surface-alt)]"
                   }`}
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
+                  <div className="flex items-center justify-between text-xs text-[var(--text-muted)]">
                     <span>{agentNameByID.get(comment.author_agent_id) ?? comment.author_agent_id}</span>
                     <span>{formatTimestamp(comment.created_at)}</span>
                   </div>
@@ -1603,10 +1600,10 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
               placeholder="Write a comment… use @AgentName to auto-add participants."
               className="h-24 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] outline-none ring-0 focus:border-amber-400"
             />
-            <div className="flex justify-stretch sm:justify-end">
+            <div className="flex justify-end">
               <button
                 type="submit"
-                className="w-full rounded-lg bg-[#C9A86C] px-4 py-2 text-sm font-semibold text-white hover:bg-[#b79658] disabled:opacity-50 sm:w-auto"
+                className="rounded-lg bg-[#C9A86C] px-4 py-2 text-sm font-semibold text-white hover:bg-[#b79658] disabled:opacity-50"
                 disabled={submittingComment || !draft.trim() || !defaultCommentAuthorID}
               >
                 {submittingComment ? "Posting..." : "Post Comment"}

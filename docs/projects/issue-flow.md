@@ -1,8 +1,8 @@
-# Projects: Issue Flow
+# Projects: Task Flow
 
-> Summary: End-to-end issue lifecycle from creation through completion, review, and optional external sync.
+> Summary: End-to-end task lifecycle from creation through completion, review, and optional external sync.
 > Last updated: 2026-02-16
-> Audience: Agents orchestrating issue progression.
+> Audience: Agents orchestrating task progression.
 
 ## Work Status Lifecycle
 
@@ -34,10 +34,11 @@ Typical path:
 
 ## External Flow (When GitHub Connected)
 
-- Manual/poll/webhook sync updates issue/repo mirrors.
+- Manual/poll/webhook sync updates task/repo mirrors.
 - Publish/sync actions are capability gated.
 - Conflict resolution requires explicit user action.
 
 ## Change Log
 
+- 2026-02-21: Renamed user-facing lifecycle terminology from issue to task.
 - 2026-02-16: Created canonical documentation file and migrated relevant legacy content.

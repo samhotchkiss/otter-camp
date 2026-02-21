@@ -3,7 +3,6 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useNavigate } from "react-router-dom";
 import { API_URL } from "../../lib/api";
-import { buildReviewDocumentId } from "../content-review/markdownAsset";
 import MarkdownPreview from "../content-review/MarkdownPreview";
 import { resolveEditorForPath } from "../content-review/editorModeResolver";
 import ProjectCommitBrowser from "./ProjectCommitBrowser";
@@ -38,13 +37,6 @@ type ProjectBlobResponse = {
   content: string;
   size: number;
   encoding: "utf-8" | "base64";
-};
-
-type IssueLookupResponse = {
-  items?: Array<{
-    id?: string;
-    document_path?: string | null;
-  }>;
 };
 
 function getOrgID(): string {
@@ -115,11 +107,9 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
   const [mode, setMode] = useState<BrowserMode>("files");
   const [currentPath, setCurrentPath] = useState("/");
   const [entries, setEntries] = useState<ProjectTreeEntry[]>([]);
-  const [treeRef, setTreeRef] = useState("main");
   const [treeLoading, setTreeLoading] = useState(true);
   const [treeError, setTreeError] = useState<string | null>(null);
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
-  const [searchQuery, setSearchQuery] = useState("");
 
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [blob, setBlob] = useState<ProjectBlobResponse | null>(null);
@@ -127,9 +117,8 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
   const [blobError, setBlobError] = useState<string | null>(null);
   const [blobRefreshKey, setBlobRefreshKey] = useState(0);
   const [markdownViewMode, setMarkdownViewMode] = useState<MarkdownViewMode>("render");
-  const [creatingIssue, setCreatingIssue] = useState(false);
-  const [createIssueError, setCreateIssueError] = useState<string | null>(null);
-  const [openingReview, setOpeningReview] = useState(false);
+  const [creatingTask, setCreatingTask] = useState(false);
+  const [createTaskError, setCreateTaskError] = useState<string | null>(null);
 
   const navigate = useNavigate();
   const orgID = getOrgID();
@@ -162,7 +151,6 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
         }
         const payload = (await response.json()) as ProjectTreeResponse;
         if (!cancelled) {
-          setTreeRef(payload.ref || "main");
           setEntries(Array.isArray(payload.entries) ? payload.entries : []);
         }
       } catch (error) {
@@ -245,18 +233,9 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
     () => (selectedFilePath ? resolveEditorForPath(selectedFilePath) : null),
     [selectedFilePath],
   );
-  const filteredEntries = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    if (!query) return entries;
-    return entries.filter((entry) => entry.name.toLowerCase().includes(query));
-  }, [entries, searchQuery]);
-  const canCreateLinkedIssue = useMemo(
+  const canCreateLinkedTask = useMemo(
     () => Boolean(selectedFilePath && /^\/posts\/.+\.md$/i.test(selectedFilePath)),
     [selectedFilePath],
-  );
-  const canOpenInReview = useMemo(
-    () => Boolean(selectedFilePath && selectedResolution?.editorMode === "markdown"),
-    [selectedFilePath, selectedResolution],
   );
 
   const prefersDark = useMemo(() => {
@@ -266,73 +245,8 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
 
   useEffect(() => {
     setMarkdownViewMode("render");
-    setCreateIssueError(null);
+    setCreateTaskError(null);
   }, [selectedFilePath]);
-
-  async function resolveLinkedIssueID(documentPath: string): Promise<string | null> {
-    if (!projectId || !orgID) {
-      return null;
-    }
-
-    const url = new URL(`${API_URL}/api/issues`);
-    url.searchParams.set("org_id", orgID);
-    url.searchParams.set("project_id", projectId);
-    url.searchParams.set("state", "open");
-    url.searchParams.set("limit", "200");
-
-    const response = await fetch(url.toString(), {
-      headers: { "Content-Type": "application/json" },
-    });
-    if (!response.ok) {
-      return null;
-    }
-
-    const payload = (await response.json()) as IssueLookupResponse;
-    const items = Array.isArray(payload.items) ? payload.items : [];
-    const normalizedDocumentPath = normalizeAbsolutePath(documentPath);
-    const match = items.find((item) => {
-      const candidate = typeof item.document_path === "string" ? item.document_path : "";
-      if (!candidate.trim()) {
-        return false;
-      }
-      return normalizeAbsolutePath(candidate) === normalizedDocumentPath;
-    });
-
-    if (!match || typeof match.id !== "string" || !match.id.trim()) {
-      return null;
-    }
-    return match.id.trim();
-  }
-
-  async function handleOpenInReview(): Promise<void> {
-    if (!selectedFilePath) {
-      return;
-    }
-
-    setOpeningReview(true);
-    try {
-      const basePath = `/review/${buildReviewDocumentId(selectedFilePath)}`;
-      const query = new URLSearchParams();
-      if (projectId) {
-        query.set("project_id", projectId);
-      }
-
-      let linkedIssueID: string | null = null;
-      try {
-        linkedIssueID = await resolveLinkedIssueID(selectedFilePath);
-      } catch {
-        linkedIssueID = null;
-      }
-      if (linkedIssueID) {
-        query.set("issue_id", linkedIssueID);
-      }
-
-      const queryString = query.toString();
-      navigate(queryString ? `${basePath}?${queryString}` : basePath);
-    } finally {
-      setOpeningReview(false);
-    }
-  }
 
   function handleOpenEntry(entry: ProjectTreeEntry): void {
     if (entry.type === "dir") {
@@ -343,15 +257,15 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
     setSelectedFilePath(normalizeAbsolutePath(entry.path));
   }
 
-  async function handleCreateIssueForFile(): Promise<void> {
-    if (!projectId || !orgID || !selectedFilePath || !canCreateLinkedIssue) {
+  async function handleCreateTaskForFile(): Promise<void> {
+    if (!projectId || !orgID || !selectedFilePath || !canCreateLinkedTask) {
       return;
     }
 
-    setCreatingIssue(true);
-    setCreateIssueError(null);
+    setCreatingTask(true);
+    setCreateTaskError(null);
     try {
-      const url = new URL(`${API_URL}/api/projects/${projectId}/issues/link`);
+      const url = new URL(`${API_URL}/api/projects/${projectId}/tasks/link`);
       url.searchParams.set("org_id", orgID);
       const response = await fetch(url.toString(), {
         method: "POST",
@@ -360,17 +274,17 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
-        throw new Error(payload?.error ?? "Failed to create linked issue");
+        throw new Error(payload?.error ?? "Failed to create linked task");
       }
       const payload = (await response.json()) as { id: string };
       if (!payload.id) {
-        throw new Error("Issue creation succeeded but response was missing id");
+        throw new Error("Task creation succeeded but response was missing id");
       }
-      navigate(`/projects/${projectId}/issues/${payload.id}`);
+      navigate(`/projects/${projectId}/tasks/${payload.id}`);
     } catch (error) {
-      setCreateIssueError(error instanceof Error ? error.message : "Failed to create linked issue");
+      setCreateTaskError(error instanceof Error ? error.message : "Failed to create linked task");
     } finally {
-      setCreatingIssue(false);
+      setCreatingTask(false);
     }
   }
 
@@ -403,38 +317,23 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
 
   return (
     <section className="space-y-3" data-testid="project-file-browser">
-      <div className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-[var(--text)]">Files</h3>
-          <div className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-muted)]">
-            <span aria-hidden="true">⑂</span>
-            <span>{treeRef}</span>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <input
-            type="search"
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search files..."
-            className="h-8 w-full rounded-md border border-[var(--border)] bg-[var(--surface-alt)] px-2 text-xs text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[#C9A86C] focus:outline-none"
-          />
-          <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-1">
-            <button
-              type="button"
-              className="rounded-md bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text)]"
-              onClick={() => setMode("files")}
-            >
-              Files
-            </button>
-            <button
-              type="button"
-              className="rounded-md px-3 py-1 text-xs font-medium text-[var(--text-muted)] hover:text-[var(--text)]"
-              onClick={() => setMode("commits")}
-            >
-              Commit history
-            </button>
-          </div>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-[var(--text)]">Files</h3>
+        <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-1">
+          <button
+            type="button"
+            className="rounded-md bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text)]"
+            onClick={() => setMode("files")}
+          >
+            Files
+          </button>
+          <button
+            type="button"
+            className="rounded-md px-3 py-1 text-xs font-medium text-[var(--text-muted)] hover:text-[var(--text)]"
+            onClick={() => setMode("commits")}
+          >
+            Commit history
+          </button>
         </div>
       </div>
 
@@ -489,29 +388,29 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
             )
           )}
 
-          {!treeLoading && !treeError && filteredEntries.length === 0 && (
+          {!treeLoading && !treeError && entries.length === 0 && (
             <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text-muted)]">
-              {searchQuery.trim() ? "No files match search." : "No files found."}
+              No files found.
             </p>
           )}
 
-          {!treeLoading && !treeError && filteredEntries.length > 0 && (
+          {!treeLoading && !treeError && entries.length > 0 && (
             <ul className="space-y-1">
-              {filteredEntries.map((entry) => {
+              {entries.map((entry) => {
                 const isActive = selectedFilePath === normalizeAbsolutePath(entry.path);
                 return (
                   <li key={`${entry.type}-${entry.path}`}>
                     <button
                       type="button"
                       onClick={() => handleOpenEntry(entry)}
-                      className={`flex w-full items-center justify-between rounded-lg border px-2 py-1 text-left text-xs ${
+                      className={`flex w-full items-center justify-between rounded-lg border px-2 py-1.5 text-left text-sm ${
                         isActive
                           ? "border-[#C9A86C] bg-[#C9A86C]/20 text-[var(--text)]"
                           : "border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text)] hover:bg-[var(--surface)]"
                       }`}
                     >
-                      <span className="truncate font-medium">
-                        {entry.type === "dir" ? "▸ " : "• "}
+                      <span className="truncate">
+                        {entry.type === "dir" ? "📁 " : "📄 "}
                         {entry.name}
                       </span>
                       {entry.type === "file" && (
@@ -538,24 +437,14 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
               <div className="flex items-center justify-between gap-2">
                 <p className="truncate text-sm font-medium text-[var(--text)]">{selectedFilePath}</p>
                 <div className="flex items-center gap-2">
-                  {canCreateLinkedIssue && (
+                  {canCreateLinkedTask && (
                     <button
                       type="button"
                       className="rounded border border-[#C9A86C] bg-[#C9A86C]/20 px-2 py-1 text-xs text-[#C9A86C] hover:bg-[#C9A86C]/30 disabled:opacity-60"
-                      onClick={() => void handleCreateIssueForFile()}
-                      disabled={creatingIssue}
+                      onClick={() => void handleCreateTaskForFile()}
+                      disabled={creatingTask}
                     >
-                      {creatingIssue ? "Creating issue..." : "Create issue for this file"}
-                    </button>
-                  )}
-                  {canOpenInReview && (
-                    <button
-                      type="button"
-                      className="rounded border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-1 text-xs text-[var(--text)] hover:border-[#C9A86C] hover:text-[#C9A86C]"
-                      onClick={() => void handleOpenInReview()}
-                      disabled={openingReview}
-                    >
-                      {openingReview ? "Opening..." : "Open in Review"}
+                      {creatingTask ? "Creating task..." : "Create task for this file"}
                     </button>
                   )}
                   <button
@@ -568,9 +457,9 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
                 </div>
               </div>
 
-              {createIssueError && (
+              {createTaskError && (
                 <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-                  {createIssueError}
+                  {createTaskError}
                 </div>
               )}
 

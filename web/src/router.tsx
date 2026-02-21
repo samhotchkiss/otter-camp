@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { createBrowserRouter, Navigate, Outlet, useParams } from "react-router-dom";
+import { createBrowserRouter, Outlet } from "react-router-dom";
 import DashboardLayout from "./layouts/DashboardLayout";
 import LoadingSpinner from "./components/LoadingSpinner";
 import RouteErrorFallback from "./components/RouteErrorFallback";
@@ -19,15 +19,10 @@ const TaskDetailPage = lazy(() => lazyWithChunkRetry(() => import("./pages/TaskD
 const NotFoundPage = lazy(() => lazyWithChunkRetry(() => import("./pages/NotFoundPage")));
 const InboxPage = lazy(() => lazyWithChunkRetry(() => import("./pages/InboxPage")));
 const ProjectDetailPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ProjectDetailPage")));
-const ProjectSettingsRoutePage = lazy(() => lazyWithChunkRetry(() => import("./pages/ProjectSettingsRoutePage")));
-const IssueDetailPage = lazy(() => lazyWithChunkRetry(() => import("./pages/IssueDetailPage")));
 const WorkflowsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/WorkflowsPage")));
 const KnowledgePage = lazy(() => lazyWithChunkRetry(() => import("./pages/KnowledgePage")));
 const MemoryEvaluationPage = lazy(() => lazyWithChunkRetry(() => import("./pages/MemoryEvaluationPage")));
-const EllieIngestionCoveragePage = lazy(() => lazyWithChunkRetry(() => import("./pages/EllieIngestionCoveragePage")));
 const ConnectionsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ConnectionsPage")));
-const ArchivedChatsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ArchivedChatsPage")));
-const ContentReviewPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ContentReviewPage")));
 
 /**
  * Suspense wrapper for lazy-loaded routes with loading fallback.
@@ -52,14 +47,6 @@ function DashboardRoot() {
   );
 }
 
-function ProjectAliasAdapter() {
-  const { projectId } = useParams<{ projectId?: string }>();
-  if (!projectId) {
-    return <Navigate to="/projects" replace />;
-  }
-  return <Navigate to={`/projects/${encodeURIComponent(projectId)}`} replace />;
-}
-
 export const router = createBrowserRouter([
   {
     path: "/",
@@ -68,7 +55,7 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: <Navigate to="/inbox" replace />,
+        element: <Dashboard />,
       },
       {
         path: "tasks",
@@ -77,18 +64,6 @@ export const router = createBrowserRouter([
       {
         path: "tasks/:taskId",
         element: <TaskDetailPage />,
-      },
-      {
-        path: "chats",
-        element: <Dashboard />,
-      },
-      {
-        path: "chats/:chatId",
-        element: <Dashboard />,
-      },
-      {
-        path: "chats/archived",
-        element: <ArchivedChatsPage />,
       },
       {
         path: "agents",
@@ -119,28 +94,12 @@ export const router = createBrowserRouter([
         element: <ProjectDetailPage />,
       },
       {
-        path: "projects/:id/settings",
-        element: <ProjectSettingsRoutePage />,
-      },
-      {
         path: "projects/:id/tasks/:taskId",
-        element: <TaskDetailPage />,
-      },
-      {
-        path: "project/:projectId",
-        element: <ProjectAliasAdapter />,
-      },
-      {
-        path: "issue/:issueId",
-        element: <IssueDetailPage />,
+        element: <ProjectDetailPage />,
       },
       {
         path: "projects/:id/issues/:issueId",
-        element: <IssueDetailPage />,
-      },
-      {
-        path: "review/:documentId",
-        element: <ContentReviewPage />,
+        element: <ProjectDetailPage />,
       },
       {
         path: "notifications",
@@ -161,10 +120,6 @@ export const router = createBrowserRouter([
       {
         path: "knowledge/evaluation",
         element: <MemoryEvaluationPage />,
-      },
-      {
-        path: "knowledge/ingestion",
-        element: <EllieIngestionCoveragePage />,
       },
       {
         path: "connections",

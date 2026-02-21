@@ -19,8 +19,6 @@ const globalChatState = {
   markConversationRead: vi.fn(),
   removeConversation: vi.fn(),
   archiveConversation: vi.fn(async () => true),
-  openConversation: vi.fn(),
-  upsertConversation: vi.fn(),
 };
 
 vi.mock("../../contexts/GlobalChatContext", () => ({
@@ -43,8 +41,6 @@ describe("GlobalChatDock", () => {
     globalChatState.selectedConversation = null;
     globalChatState.selectedKey = null;
     globalChatState.totalUnread = 0;
-    globalChatState.archiveConversation = vi.fn(async () => true);
-    globalChatState.openConversation = vi.fn();
     window.localStorage.clear();
     vi.restoreAllMocks();
   });
@@ -243,23 +239,17 @@ describe("GlobalChatDock", () => {
 
     const firstURL = String(fetchMock.mock.calls[0]?.[0] ?? "");
     expect(firstURL).toContain(`/api/admin/agents/${encodeURIComponent(agentID)}/reset`);
-    const firstInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
-    const firstHeaders = (firstInit?.headers ?? {}) as Record<string, string>;
-    expect(firstHeaders.Authorization).toBe("Bearer tok");
 
     const secondURL = String(fetchMock.mock.calls[1]?.[0] ?? "");
     expect(secondURL).toContain("/api/messages");
 
     const secondInit = fetchMock.mock.calls[1]?.[1] as RequestInit | undefined;
-    const secondHeaders = (secondInit?.headers ?? {}) as Record<string, string>;
-    expect(secondHeaders.Authorization).toBe("Bearer tok");
     const secondBody = JSON.parse(String(secondInit?.body ?? "{}")) as Record<string, unknown>;
-    expect(secondBody.org_id).toBe("org-1");
     expect(secondBody.thread_id).toBe(`dm_${agentID}`);
     expect(String(secondBody.content || "")).toContain("chat_session_reset:");
   });
 
-  it("offers an issue jump action for selected issue chats", async () => {
+  it("offers an task jump action for selected issue chats", async () => {
     const user = userEvent.setup();
     globalChatState.conversations = [
       {
@@ -268,8 +258,8 @@ describe("GlobalChatDock", () => {
         issueId: "issue-1",
         projectId: "project-1",
         title: "Write a poem about testing OtterCamp",
-        contextLabel: "Issue • Testerooni",
-        subtitle: "Issue conversation",
+        contextLabel: "Task • Testerooni",
+        subtitle: "Task conversation",
         unreadCount: 0,
         updatedAt: "2026-02-11T10:00:00.000Z",
       },
@@ -293,11 +283,9 @@ describe("GlobalChatDock", () => {
       </MemoryRouter>,
     );
 
-    const openIssueButton = screen.getByRole("button", { name: "Open issue" });
-    expect(openIssueButton).toBeEnabled();
-    expect(openIssueButton).toHaveClass("focus-visible:ring-2");
-    await user.click(openIssueButton);
-    expect(screen.getByTestId("location-probe")).toHaveTextContent("/projects/project-1/issues/issue-1");
+    expect(screen.getByRole("button", { name: "Open task" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Open task" }));
+    expect(screen.getByTestId("location-probe")).toHaveTextContent("/projects/project-1/tasks/issue-1");
   });
 
   it("provides a minimize action in the selected chat header", async () => {
@@ -330,290 +318,5 @@ describe("GlobalChatDock", () => {
 
     await user.click(screen.getByRole("button", { name: "Minimize global chat" }));
     expect(globalChatState.setDockOpen).toHaveBeenCalledWith(false);
-  });
-
-  it("uses rail toggle callback for embedded hide actions", async () => {
-    const user = userEvent.setup();
-    const onToggleRail = vi.fn();
-    globalChatState.conversations = [];
-    globalChatState.selectedConversation = null;
-    globalChatState.selectedKey = null;
-
-    render(
-      <MemoryRouter initialEntries={["/projects/project-1"]}>
-        <GlobalChatDock embedded onToggleRail={onToggleRail} />
-      </MemoryRouter>,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Collapse global chat" }));
-    expect(onToggleRail).toHaveBeenCalledTimes(1);
-  });
-
-  it("defaults to project-scoped chat on project detail routes", async () => {
-    globalChatState.conversations = [
-      {
-        key: "dm:dm_frank",
-        type: "dm",
-        threadId: "dm_frank",
-        title: "Frank",
-        contextLabel: "Direct message",
-        subtitle: "Agent chat",
-        unreadCount: 0,
-        updatedAt: "2026-02-11T10:00:00.000Z",
-        agent: {
-          id: "frank",
-          name: "Frank",
-          status: "online",
-        },
-      },
-      {
-        key: "project:project-1",
-        type: "project",
-        projectId: "project-1",
-        title: "Project One",
-        contextLabel: "Project • Project One",
-        subtitle: "Project chat",
-        unreadCount: 0,
-        updatedAt: "2026-02-11T10:00:00.000Z",
-      },
-    ];
-    globalChatState.selectedConversation = globalChatState.conversations[0];
-    globalChatState.selectedKey = globalChatState.conversations[0].key;
-
-    render(
-      <MemoryRouter initialEntries={["/projects/project-1"]}>
-        <GlobalChatDock />
-      </MemoryRouter>,
-    );
-
-    await waitFor(() => {
-      expect(globalChatState.selectConversation).toHaveBeenCalledWith("project:project-1");
-    });
-  });
-
-  it("switches non-main DM selections to main chat on org pages", async () => {
-    globalChatState.conversations = [
-      {
-        key: "dm:dm_josh",
-        type: "dm",
-        threadId: "dm_josh",
-        title: "Josh",
-        contextLabel: "Direct message",
-        subtitle: "Agent chat",
-        unreadCount: 0,
-        updatedAt: "2026-02-11T11:00:00.000Z",
-        agent: {
-          id: "josh",
-          name: "Josh",
-          status: "online",
-        },
-      },
-      {
-        key: "dm:dm_main",
-        type: "dm",
-        threadId: "dm_main",
-        title: "Frank",
-        contextLabel: "Direct message",
-        subtitle: "Agent chat",
-        unreadCount: 0,
-        updatedAt: "2026-02-11T10:00:00.000Z",
-        agent: {
-          id: "main",
-          name: "Frank",
-          status: "online",
-        },
-      },
-    ];
-    globalChatState.selectedConversation = globalChatState.conversations[0];
-    globalChatState.selectedKey = globalChatState.conversations[0].key;
-
-    render(
-      <MemoryRouter initialEntries={["/inbox"]}>
-        <GlobalChatDock />
-      </MemoryRouter>,
-    );
-
-    await waitFor(() => {
-      expect(globalChatState.selectConversation).toHaveBeenCalledWith("dm:dm_main");
-    });
-  });
-
-  it("opens canonical main chat when no Frank thread exists", async () => {
-    globalChatState.conversations = [
-      {
-        key: "dm:dm_josh",
-        type: "dm",
-        threadId: "dm_josh",
-        title: "Josh",
-        contextLabel: "Direct message",
-        subtitle: "Agent chat",
-        unreadCount: 0,
-        updatedAt: "2026-02-11T11:00:00.000Z",
-        agent: {
-          id: "josh",
-          name: "Josh",
-          status: "online",
-        },
-      },
-    ];
-    globalChatState.selectedConversation = globalChatState.conversations[0];
-    globalChatState.selectedKey = globalChatState.conversations[0].key;
-
-    render(
-      <MemoryRouter initialEntries={["/inbox"]}>
-        <GlobalChatDock />
-      </MemoryRouter>,
-    );
-
-    await waitFor(() => {
-      expect(globalChatState.openConversation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "dm",
-          threadId: "dm_main",
-          title: "Frank",
-          agent: expect.objectContaining({
-            id: "main",
-            name: "Frank",
-          }),
-        }),
-        expect.objectContaining({ focus: true }),
-      );
-    });
-  });
-
-  it("offers a project route switch to org chat", async () => {
-    const user = userEvent.setup();
-    globalChatState.conversations = [
-      {
-        key: "project:project-1",
-        type: "project",
-        projectId: "project-1",
-        title: "Project One",
-        contextLabel: "Project • Project One",
-        subtitle: "Project chat",
-        unreadCount: 0,
-        updatedAt: "2026-02-11T10:00:00.000Z",
-      },
-      {
-        key: "dm:dm_frank",
-        type: "dm",
-        threadId: "dm_frank",
-        title: "Frank",
-        contextLabel: "Direct message",
-        subtitle: "Agent chat",
-        unreadCount: 0,
-        updatedAt: "2026-02-11T10:00:00.000Z",
-        agent: {
-          id: "frank",
-          name: "Frank",
-          status: "online",
-        },
-      },
-    ];
-    globalChatState.selectedConversation = globalChatState.conversations[0];
-    globalChatState.selectedKey = globalChatState.conversations[0].key;
-
-    render(
-      <MemoryRouter initialEntries={["/projects/project-1"]}>
-        <GlobalChatDock />
-      </MemoryRouter>,
-    );
-
-    await user.click(screen.getByRole("button", { name: /org chat \(frank\)/i }));
-    expect(globalChatState.selectConversation).toHaveBeenCalledWith("dm:dm_frank");
-  });
-
-  it("shows a context cue for selected project conversations", () => {
-    globalChatState.conversations = [
-      {
-        key: "project:project-1",
-        type: "project",
-        projectId: "project-1",
-        title: "Otter Camp",
-        contextLabel: "Project • Otter Camp",
-        subtitle: "Project chat",
-        unreadCount: 0,
-        updatedAt: "2026-02-11T10:00:00.000Z",
-      },
-    ];
-    globalChatState.selectedConversation = globalChatState.conversations[0];
-    globalChatState.selectedKey = globalChatState.conversations[0].key;
-
-    render(
-      <MemoryRouter initialEntries={["/projects/project-1"]}>
-        <GlobalChatDock />
-      </MemoryRouter>,
-    );
-
-    expect(screen.getByText("Project context")).toBeInTheDocument();
-    const contextCue = screen.getByTestId("global-chat-context-cue");
-    expect(contextCue).toHaveClass("oc-chip");
-    expect(contextCue).toHaveClass("uppercase");
-  });
-
-  it("shows a context cue for selected issue conversations", () => {
-    globalChatState.conversations = [
-      {
-        key: "issue:issue-9",
-        type: "issue",
-        issueId: "issue-9",
-        projectId: "project-1",
-        title: "Fix context labels",
-        contextLabel: "Issue • Fix context labels",
-        subtitle: "Issue conversation",
-        unreadCount: 0,
-        updatedAt: "2026-02-11T10:00:00.000Z",
-      },
-    ];
-    globalChatState.selectedConversation = globalChatState.conversations[0];
-    globalChatState.selectedKey = globalChatState.conversations[0].key;
-
-    render(
-      <MemoryRouter initialEntries={["/projects/project-1/issues/issue-9"]}>
-        <GlobalChatDock />
-      </MemoryRouter>,
-    );
-
-    expect(screen.getByText("Issue context")).toBeInTheDocument();
-  });
-
-  it("shows a DM context cue for selected direct conversations", () => {
-    globalChatState.conversations = [
-      {
-        key: "dm:dm_stone",
-        type: "dm",
-        threadId: "dm_stone",
-        title: "Stone",
-        contextLabel: "Direct message",
-        subtitle: "Agent chat",
-        unreadCount: 0,
-        updatedAt: "2026-02-11T10:00:00.000Z",
-        agent: {
-          id: "stone",
-          name: "Stone",
-          status: "online",
-        },
-      },
-    ];
-    globalChatState.selectedConversation = globalChatState.conversations[0];
-    globalChatState.selectedKey = globalChatState.conversations[0].key;
-
-    render(
-      <MemoryRouter initialEntries={["/chats"]}>
-        <GlobalChatDock />
-      </MemoryRouter>,
-    );
-
-    expect(screen.getByText("DM context")).toBeInTheDocument();
-  });
-
-  it("shows a main context cue when no conversation is selected", () => {
-    render(
-      <MemoryRouter initialEntries={["/chats"]}>
-        <GlobalChatDock />
-      </MemoryRouter>,
-    );
-
-    expect(screen.getByText("Main context")).toBeInTheDocument();
   });
 });

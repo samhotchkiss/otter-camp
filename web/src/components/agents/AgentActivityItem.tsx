@@ -71,8 +71,8 @@ function AgentActivityItemComponent({ event, defaultExpanded = false }: AgentAct
             <div className="mt-2 space-y-1 text-xs text-slate-600">
               {event.detail ? <p>{event.detail}</p> : null}
               {event.projectId ? <p>Project: {event.projectId}</p> : null}
-              {event.issueId ? <p>Issue: {event.issueId}</p> : null}
-              {event.issueNumber ? <p>Issue #: {event.issueNumber}</p> : null}
+              {event.issueId ? <p>Task: {event.issueId}</p> : null}
+              {event.issueNumber ? <p>Task #: {event.issueNumber}</p> : null}
               {event.threadId ? <p>Thread: {event.threadId}</p> : null}
             </div>
           ) : null}

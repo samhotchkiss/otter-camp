@@ -71,7 +71,7 @@ function normalizeIssueKindLabel(kind: string): string {
   if (kind === "pull_request") {
     return "PR";
   }
-  return "Issue";
+  return "Task";
 }
 
 function normalizeOriginLabel(origin: string): string {
@@ -159,7 +159,7 @@ export default function ProjectIssuesList({
       return;
     }
 
-    const issuesURL = new URL(`${API_URL}/api/issues`);
+    const issuesURL = new URL(`${API_URL}/api/project-tasks`);
     issuesURL.searchParams.set("org_id", orgID);
     issuesURL.searchParams.set("project_id", projectId);
     issuesURL.searchParams.set("limit", "200");
@@ -189,7 +189,7 @@ export default function ProjectIssuesList({
       .then(async ([issuesResponse, agentsResponse]) => {
         if (!issuesResponse.ok) {
           const payload = await issuesResponse.json().catch(() => null);
-          throw new Error(payload?.error ?? "Failed to load issues");
+          throw new Error(payload?.error ?? "Failed to load tasks");
         }
         const issuesPayload = await issuesResponse.json() as ProjectIssuesResponse;
         const agentMap = new Map<string, string>();
@@ -216,7 +216,7 @@ export default function ProjectIssuesList({
           return;
         }
         setError(
-          fetchError instanceof Error ? fetchError.message : "Failed to load issues",
+          fetchError instanceof Error ? fetchError.message : "Failed to load tasks",
         );
       })
       .finally(() => {
@@ -274,18 +274,15 @@ export default function ProjectIssuesList({
   }, [agentNameByID, items]);
 
   return (
-    <section
-      data-testid="project-issues-shell"
-      className="min-w-0 rounded-3xl border border-[var(--border)] bg-[var(--surface)]/75 p-6 shadow-sm"
-    >
-      <div className="mb-4 flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-        <div className="flex w-full flex-col gap-1 sm:w-auto">
+    <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
+      <div className="mb-4 flex flex-wrap items-end gap-3">
+        <div className="flex flex-col gap-1">
           <label className="text-xs font-semibold text-[var(--text-muted)]" htmlFor="issues-state-filter">
             State
           </label>
           <select
             id="issues-state-filter"
-            aria-label="Issue state filter"
+            aria-label="Task state filter"
             className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
             value={stateFilter}
             onChange={(event) => setStateFilter(event.target.value as IssueFilterState)}
@@ -295,29 +292,29 @@ export default function ProjectIssuesList({
             <option value="closed">Closed</option>
           </select>
         </div>
-        <div className="flex w-full flex-col gap-1 sm:w-auto">
+        <div className="flex flex-col gap-1">
           <label className="text-xs font-semibold text-[var(--text-muted)]" htmlFor="issues-kind-filter">
             Type
           </label>
           <select
             id="issues-kind-filter"
-            aria-label="Issue type filter"
+            aria-label="Task type filter"
             className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
             value={kindFilter}
             onChange={(event) => setKindFilter(event.target.value as IssueFilterKind)}
           >
             <option value="all">All</option>
-            <option value="issue">Issues</option>
+            <option value="issue">Tasks</option>
             <option value="pull_request">PRs</option>
           </select>
         </div>
-        <div className="flex w-full flex-col gap-1 sm:w-auto">
+        <div className="flex flex-col gap-1">
           <label className="text-xs font-semibold text-[var(--text-muted)]" htmlFor="issues-origin-filter">
             Origin
           </label>
           <select
             id="issues-origin-filter"
-            aria-label="Issue origin filter"
+            aria-label="Task origin filter"
             className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
             value={originFilter}
             onChange={(event) => setOriginFilter(event.target.value as IssueFilterOrigin)}
@@ -331,7 +328,7 @@ export default function ProjectIssuesList({
 
       {isLoading && (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] px-4 py-6 text-sm text-[var(--text-muted)]">
-          Loading issues...
+          Loading tasks...
         </div>
       )}
 
@@ -350,7 +347,7 @@ export default function ProjectIssuesList({
 
       {!isLoading && !error && items.length === 0 && (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] px-4 py-6 text-sm text-[var(--text-muted)]">
-          No issues found for the selected filters.
+          No tasks found for the selected filters.
         </div>
       )}
 
@@ -367,23 +364,23 @@ export default function ProjectIssuesList({
                 <button
                   type="button"
                   onClick={() => onSelectIssue?.(issue.id)}
-                  className={`min-w-0 w-full rounded-xl border px-4 py-3 text-left transition ${
+                  className={`w-full rounded-xl border px-4 py-3 text-left transition ${
                     selected
                       ? "border-amber-500 bg-[var(--surface)] shadow-[0_0_0_1px_rgba(201,168,108,0.22)]"
-                      : "border-[var(--border)] bg-[var(--surface)] hover:border-amber-300 hover:bg-[var(--surface-alt)]"
+                      : "border-[var(--border)] hover:border-amber-300 hover:bg-[var(--surface-alt)]"
                   }`}
                 >
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <span className="break-words text-sm font-semibold text-[var(--text)]">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-[var(--text)]">
                       #{issue.issue_number} {issue.title}
                     </span>
-                    <span className="rounded-full border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-muted)]">
+                    <span className="rounded-full bg-[var(--surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-muted)]">
                       {normalizeIssueKindLabel(issue.kind)}
                     </span>
-                    <span className="rounded-full border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-muted)]">
+                    <span className="rounded-full bg-[var(--surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-muted)]">
                       {normalizeOriginLabel(issue.origin)}
                     </span>
-                    <span className="rounded-full border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-muted)]">
+                    <span className="rounded-full bg-[var(--surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-muted)]">
                       {issue.state === "open" ? "Open" : "Closed"}
                     </span>
                     <span
@@ -394,16 +391,16 @@ export default function ProjectIssuesList({
                     </span>
                     <PipelineMiniProgress status={issue.work_status ?? "queued"} />
                   </div>
-                  <div className="mt-2 flex min-w-0 flex-wrap items-center gap-4 text-xs text-[var(--text-muted)]">
+                  <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-[var(--text-muted)]">
                     {parentIssueID !== "" && (
                       <span>
                         {parentIssue
-                          ? `Sub-issue of #${parentIssue.issue_number}`
-                          : "Sub-issue"}
+                          ? `Subtask of #${parentIssue.issue_number}`
+                          : "Subtask"}
                       </span>
                     )}
                     {childCount > 0 && (
-                      <span>Sub-issues: {childCount}</span>
+                      <span>Subtasks: {childCount}</span>
                     )}
                     <span>Owner: {ownerLabelByIssueID.get(issue.id) ?? "Unassigned"}</span>
                     <span>Last activity: {formatLastActivity(issue.last_activity_at)}</span>

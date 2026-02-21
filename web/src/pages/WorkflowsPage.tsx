@@ -210,11 +210,13 @@ export default function WorkflowsPage() {
   const pausedCount = projects.length - activeCount;
 
   return (
-    <div data-testid="workflows-shell" className="mx-auto w-full max-w-[1240px] space-y-4">
-      <div className="rounded-3xl border border-[var(--border)] bg-[var(--surface)]/70 p-6 shadow-sm">
+    <div style={{ maxWidth: 960, margin: "0 auto", padding: "24px 16px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
         <div>
-          <h1 className="text-3xl font-semibold text-[var(--text)]">Workflows</h1>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">
+          <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-primary, #e2e8f0)", margin: 0 }}>
+            Workflows
+          </h1>
+          <p style={{ color: "var(--text-muted, #64748b)", margin: "4px 0 0", fontSize: 14 }}>
             {loading
               ? "Loading..."
               : `${projects.length} workflow projects · ${activeCount} active · ${pausedCount} paused`}
@@ -223,72 +225,105 @@ export default function WorkflowsPage() {
       </div>
 
       {error && (
-        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+        <div
+          style={{
+            padding: "12px 16px",
+            borderRadius: 8,
+            background: "rgba(239,68,68,0.1)",
+            border: "1px solid rgba(239,68,68,0.3)",
+            color: "#fca5a5",
+            marginBottom: 16,
+            fontSize: 14,
+          }}
+        >
           {error}
         </div>
       )}
 
       {!loading && projects.length === 0 && !error && (
-        <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface)]/50 px-5 py-14 text-center text-[var(--text-muted)]">
-          <div className="mb-4 text-5xl">🔁</div>
-          <h3 className="mb-2 text-base font-semibold text-[var(--text)]">No workflow projects yet</h3>
-          <p className="mx-auto max-w-[420px] text-sm">
-            Enable workflow fields on a project to schedule recurring issue creation.
+        <div style={{ textAlign: "center", padding: "60px 20px", color: "var(--text-muted, #64748b)" }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>🔁</div>
+          <h3 style={{ color: "var(--text-primary, #e2e8f0)", margin: "0 0 8px" }}>No workflow projects yet</h3>
+          <p style={{ maxWidth: 420, margin: "0 auto" }}>
+            Enable workflow fields on a project to schedule recurring task creation.
           </p>
         </div>
       )}
 
-      <div className="flex flex-col gap-3">
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {projects.map((project) => {
           const isPending = actionPending === project.id;
           const latest = latestRuns[project.id];
           return (
             <div
               key={project.id}
-              className={`rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm transition ${
-                isPending ? "opacity-60" : "opacity-100"
-              }`}
+              style={{
+                background: "var(--bg-card, #1e293b)",
+                border: "1px solid var(--border, #334155)",
+                borderRadius: 10,
+                padding: "16px 20px",
+                opacity: isPending ? 0.6 : 1,
+              }}
             >
-              <div className="flex items-center gap-3">
-                <span className="text-lg">{project.workflow_enabled ? "🟢" : "🟡"}</span>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold text-[var(--text)]">{project.name}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 18 }}>{project.workflow_enabled ? "🟢" : "🟡"}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 15, color: "var(--text-primary, #e2e8f0)" }}>
+                    {project.name}
+                  </div>
                   {project.description && (
-                    <div className="text-xs text-[var(--text-muted)]">{project.description}</div>
+                    <div style={{ fontSize: 13, color: "var(--text-muted, #64748b)" }}>{project.description}</div>
                   )}
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                   <button
                     onClick={() => void triggerRun(project.id)}
                     disabled={isPending || !project.workflow_enabled}
-                    className={`rounded-md border px-2.5 py-1 text-xs font-medium ${
-                      project.workflow_enabled
-                        ? "border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text)] hover:border-[#C9A86C]/50"
-                        : "cursor-not-allowed border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text-muted)]"
-                    }`}
+                    style={{
+                      background: "transparent",
+                      border: "1px solid var(--border, #334155)",
+                      borderRadius: 6,
+                      padding: "4px 10px",
+                      fontSize: 12,
+                      color: project.workflow_enabled ? "var(--text-primary, #e2e8f0)" : "var(--text-muted, #64748b)",
+                      cursor: project.workflow_enabled ? "pointer" : "not-allowed",
+                    }}
                   >
                     Run now
                   </button>
                   <button
                     onClick={() => void toggleWorkflow(project)}
                     disabled={isPending}
-                    className={`rounded-md border px-2.5 py-1 text-xs font-medium transition ${
-                      project.workflow_enabled
-                        ? "border-red-400/40 bg-red-500/10 text-red-300 hover:border-red-400/60"
-                        : "border-emerald-400/40 bg-emerald-500/10 text-emerald-300 hover:border-emerald-400/60"
-                    }`}
+                    style={{
+                      borderRadius: 6,
+                      padding: "4px 10px",
+                      fontSize: 12,
+                      border: "1px solid " + (project.workflow_enabled ? "rgba(239,68,68,0.3)" : "rgba(34,197,94,0.3)"),
+                      background: project.workflow_enabled ? "rgba(239,68,68,0.1)" : "rgba(34,197,94,0.1)",
+                      color: project.workflow_enabled ? "#fca5a5" : "#86efac",
+                      cursor: "pointer",
+                    }}
                   >
                     {project.workflow_enabled ? "Pause" : "Resume"}
                   </button>
                 </div>
               </div>
 
-              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--text-muted)]">
+              <div
+                style={{
+                  marginTop: 12,
+                  fontSize: 12,
+                  color: "var(--text-muted, #64748b)",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 14,
+                }}
+              >
                 <span>Schedule: {humanizeSchedule(project.workflow_schedule)}</span>
                 <span>Runs: {project.workflow_run_count || 0}</span>
                 <span>Last run: {timeAgo(project.workflow_last_run_at)}</span>
                 <span>Next run: {timeUntil(project.workflow_next_run_at)}</span>
-                {latest?.title && <span>Latest issue: {latest.title}</span>}
+                {latest?.title && <span>Latest task: {latest.title}</span>}
               </div>
             </div>
           );

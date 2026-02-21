@@ -123,7 +123,7 @@ describe("GitHubSettings", () => {
     expect(refreshButton.className).toContain("border-[var(--border)]");
   });
 
-  it("shows local issue-review mode label for push-mode projects", async () => {
+  it("shows local task-review mode label for push-mode projects", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/api/github/integration/status")) {
@@ -176,7 +176,7 @@ describe("GitHubSettings", () => {
       expect(screen.getByText("Technonymous")).toBeInTheDocument();
     });
 
-    expect(screen.getAllByText(/Issue Review \(local only\)/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Task Review \(local only\)/).length).toBeGreaterThan(0);
   });
 
   it("renders dry-run summary with blocking and non-blocking checks", async () => {

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/samhotchkiss/otter-camp/internal/automigrate"
 	"github.com/samhotchkiss/otter-camp/internal/gitserver"
@@ -36,9 +35,6 @@ type HealthResponse struct {
 func NewRouter() http.Handler {
 	r := chi.NewRouter()
 
-	// Compress responses (gzip/deflate) — reduces static asset sizes and helps Railway proxy
-	r.Use(chimiddleware.Compress(5, "text/html", "text/css", "application/javascript", "application/json", "image/svg+xml"))
-
 	hub := ws.NewHub()
 	go hub.Run()
 
@@ -57,23 +53,11 @@ func NewRouter() http.Handler {
 	}
 
 	r.Use(cors.Handler(cors.Options{
-		AllowOriginFunc: func(r *http.Request, origin string) bool {
-			// Allow same root domain (*.otter.camp) and localhost for dev
-			if origin == "" {
-				return true
-			}
-			if strings.HasSuffix(origin, ".otter.camp") || origin == "https://otter.camp" {
-				return true
-			}
-			if strings.Contains(origin, "localhost") || strings.Contains(origin, "127.0.0.1") {
-				return true
-			}
-			return false
-		},
+		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Org-ID", "X-Otter-Org", "X-Workspace-ID", "X-Session-Token"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Org-ID", "X-Workspace-ID", "X-Session-Token"},
 		ExposedHeaders:   []string{"Link"},
-		AllowCredentials: true,
+		AllowCredentials: false,
 		MaxAge:           300,
 	}))
 
@@ -95,8 +79,7 @@ func NewRouter() http.Handler {
 	feedPushHandler := NewFeedPushHandler(hub)
 	execApprovalsHandler := &ExecApprovalsHandler{Hub: hub}
 	taskHandler := &TaskHandler{Hub: hub}
-	openClawWSHandler := ws.NewOpenClawHandler(hub, db)
-	registerOpenClawHandler(openClawWSHandler)
+	openClawWSHandler := ws.NewOpenClawHandler(hub)
 	emissionBuffer := NewEmissionBuffer(defaultEmissionBufferSize)
 	emissionsHandler := &EmissionsHandler{Buffer: emissionBuffer, Hub: hub}
 	messageHandler := &MessageHandler{OpenClawDispatcher: openClawWSHandler, Hub: hub}
@@ -113,7 +96,6 @@ func NewRouter() http.Handler {
 	githubIntegrationHandler := NewGitHubIntegrationHandler(db)
 	projectChatHandler := &ProjectChatHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
 	issuesHandler := &IssuesHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
-	openClawEventsHandler := &OpenClawEventsHandler{DB: db}
 	questionnaireHandler := &QuestionnaireHandler{}
 	projectCommitsHandler := &ProjectCommitsHandler{}
 	projectTreeHandler := &ProjectTreeHandler{}
@@ -121,37 +103,24 @@ func NewRouter() http.Handler {
 	sharedKnowledgeHandler := &SharedKnowledgeHandler{}
 	memoryHandler := &MemoryHandler{}
 	memoryEventsHandler := &MemoryEventsHandler{}
-	complianceRulesHandler := &ComplianceRulesHandler{}
 	websocketHandler := &ws.Handler{Hub: hub}
 	projectIssueSyncHandler := &ProjectIssueSyncHandler{}
 	adminAgentsHandler := &AdminAgentsHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	adminConfigHandler := &AdminConfigHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	labelsHandler := &LabelsHandler{}
-	taxonomyHandler := &TaxonomyHandler{}
 	agentActivityHandler := &AgentActivityHandler{DB: db, Hub: hub}
-	conversationTokenHandler := &ConversationTokenHandler{}
-	waitlistHandler := NewWaitlistHandler(db)
-	adminEllieIngestionHandler := &AdminEllieIngestionHandler{}
 	// Settings uses standalone handler functions (no struct needed)
 	pipelineRolesHandler := &PipelineRolesHandler{}
-	pipelineStepsHandler := &PipelineStepsHandler{}
-	pipelineStaffingHandler := &PipelineStaffingHandler{}
-	issuePipelineActionsHandler := &IssuePipelineActionsHandler{}
 	deployConfigHandler := &DeployConfigHandler{}
-	jobsHandler := &JobsHandler{}
-	openClawMigrationHandler := NewOpenClawMigrationControlPlaneHandler(db)
-	openClawMigrationImportHandler := NewOpenClawMigrationImportHandler(db)
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
-	var orgStore *store.OrgStore
 	var githubSyncJobStore *store.GitHubSyncJobStore
 	var projectRepoStore *store.ProjectRepoStore
 	var activityStore *store.ActivityStore
 	var chatThreadStore *store.ChatThreadStore
 	if db != nil {
 		projectStore = store.NewProjectStore(db)
-		orgStore = store.NewOrgStore(db)
 		githubSyncJobStore = store.NewGitHubSyncJobStore(db)
 		projectRepoStore = store.NewProjectRepoStore(db)
 		activityStore = store.NewActivityStore(db)
@@ -170,19 +139,13 @@ func NewRouter() http.Handler {
 		projectChatHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		projectChatHandler.DB = db
 		issuesHandler.IssueStore = store.NewProjectIssueStore(db)
-		issuesHandler.AgentStore = agentStore
 		issuesHandler.ChatThreadStore = chatThreadStore
 		issuesHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		questionnaireHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		issuesHandler.ProjectStore = projectStore
 		issuesHandler.CommitStore = store.NewProjectCommitStore(db)
 		issuesHandler.ProjectRepos = projectRepoStore
-		issuesHandler.EllieIngestionStore = store.NewEllieIngestionStore(db)
 		issuesHandler.DB = db
-		issuesHandler.ComplianceReviewer = newDefaultIssueComplianceReviewer(
-			store.NewComplianceRuleStore(db),
-			issuesHandler.CommitStore,
-		)
 		messageHandler.ChatThreadStore = chatThreadStore
 		projectCommitsHandler.ProjectStore = projectStore
 		projectCommitsHandler.CommitStore = store.NewProjectCommitStore(db)
@@ -192,23 +155,9 @@ func NewRouter() http.Handler {
 		projectIssueSyncHandler.Projects = projectStore
 		labelsHandler.Store = store.NewLabelStore(db)
 		labelsHandler.DB = db
-		taxonomyHandler.Store = store.NewEllieTaxonomyStore(db)
 		agentActivityHandler.Store = store.NewAgentActivityEventStore(db)
-		conversationTokenHandler.Store = store.NewConversationTokenStore(db)
 		pipelineRolesHandler.Store = store.NewPipelineRoleStore(db)
-		pipelineStepsHandler.Store = store.NewPipelineStepStore(db)
-		issuesHandler.PipelineStepStore = pipelineStepsHandler.Store
-		pipelineStaffingHandler.Store = pipelineStepsHandler.Store
-		pipelineStaffingHandler.DB = db
-		issuePipelineActionsHandler.IssueStore = issuesHandler.IssueStore
-		issuePipelineActionsHandler.PipelineStepStore = pipelineStepsHandler.Store
-		issuePipelineActionsHandler.ProgressionService = &IssuePipelineProgressionService{
-			PipelineStepStore: pipelineStepsHandler.Store,
-			IssueStore:        issuesHandler.IssueStore,
-		}
 		deployConfigHandler.Store = store.NewDeployConfigStore(db)
-		jobsHandler.Store = store.NewAgentJobStore(db)
-		jobsHandler.DB = db
 		adminAgentsHandler.Store = agentStore
 		adminAgentsHandler.ProjectStore = projectStore
 		adminAgentsHandler.ProjectRepos = projectRepoStore
@@ -223,39 +172,7 @@ func NewRouter() http.Handler {
 		memoryHandler.Store = store.NewMemoryStore(db)
 		memoryHandler.DB = db
 		memoryEventsHandler.Store = store.NewMemoryEventsStore(db)
-		complianceRulesHandler.Store = store.NewComplianceRuleStore(db)
-		adminEllieIngestionHandler.Store = store.NewEllieIngestionStore(db)
 	}
-
-	if orgStore != nil {
-		middleware.SetWorkspaceSlugResolver(func(ctx context.Context, slug string) (string, bool) {
-			org, err := orgStore.GetBySlug(ctx, slug)
-			if err != nil {
-				return "", false
-			}
-			return strings.TrimSpace(org.ID), true
-		})
-	} else {
-		middleware.SetWorkspaceSlugResolver(nil)
-	}
-
-	if db != nil {
-		middleware.SetSessionTokenResolver(func(ctx context.Context, token string) (string, string, bool) {
-			token = strings.TrimSpace(token)
-			if token == "" {
-				return "", "", false
-			}
-			var orgID, userID string
-			err := db.QueryRowContext(ctx,
-				`SELECT s.org_id, s.user_id FROM sessions s WHERE s.token = $1 AND s.expires_at > NOW()`,
-				token).Scan(&orgID, &userID)
-			if err != nil {
-				return "", "", false
-			}
-			return strings.TrimSpace(orgID), strings.TrimSpace(userID), true
-		})
-	}
-
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db, ChatThreadStore: chatThreadStore}
 	workflowsHandler.ProjectStore = projectStore
 	workflowsHandler.ProjectsHandler = projectsHandler
@@ -287,7 +204,7 @@ func NewRouter() http.Handler {
 
 	// All API routes under /api prefix
 	r.Route("/api", func(r chi.Router) {
-		r.Post("/waitlist", waitlistHandler.Handle)
+		r.Post("/waitlist", HandleWaitlist)
 		r.Get("/search", SearchHandler)
 		r.Get("/commands/search", CommandSearchHandler)
 		r.Post("/commands/execute", CommandExecuteHandler)
@@ -322,10 +239,6 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/memory", agentsHandler.GetMemory)
 		r.With(middleware.OptionalWorkspace).Post("/agents/{id}/memory", agentsHandler.CreateMemory)
 		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/memory/search", agentsHandler.SearchMemory)
-		r.With(middleware.OptionalWorkspace).Get("/compliance/rules", complianceRulesHandler.List)
-		r.With(middleware.OptionalWorkspace).Post("/compliance/rules", complianceRulesHandler.Create)
-		r.With(middleware.OptionalWorkspace).Patch("/compliance/rules/{id}", complianceRulesHandler.Patch)
-		r.With(middleware.OptionalWorkspace).Post("/compliance/rules/{id}/disable", complianceRulesHandler.Disable)
 		r.With(middleware.OptionalWorkspace).Get("/workflows", workflowsHandler.List)
 		r.With(middleware.OptionalWorkspace).Patch("/workflows/{id}", workflowsHandler.Toggle)
 		r.With(middleware.OptionalWorkspace).Post("/workflows/{id}/run", workflowsHandler.Run)
@@ -339,12 +252,6 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}/settings", projectsHandler.UpdateSettings)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pipeline-roles", pipelineRolesHandler.Get)
 		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/pipeline-roles", pipelineRolesHandler.Put)
-		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pipeline-steps", pipelineStepsHandler.List)
-		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pipeline-steps", pipelineStepsHandler.Create)
-		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/pipeline-steps/reorder", pipelineStepsHandler.Reorder)
-		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}/pipeline-steps/{stepID}", pipelineStepsHandler.Patch)
-		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}/pipeline-steps/{stepID}", pipelineStepsHandler.Delete)
-		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pipeline-staffing", pipelineStaffingHandler.Apply)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/deploy-config", deployConfigHandler.Get)
 		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/deploy-config", deployConfigHandler.Put)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat", projectChatHandler.List)
@@ -385,31 +292,46 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pull-requests", githubPullRequestsHandler.ListByProject)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pull-requests", githubPullRequestsHandler.CreateForProject)
 		r.With(middleware.OptionalWorkspace).Get("/issues", issuesHandler.List)
+		r.With(middleware.OptionalWorkspace).Get("/project-tasks", issuesHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}", issuesHandler.Get)
-		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/pipeline/step-complete", issuePipelineActionsHandler.StepComplete)
-		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/pipeline/step-reject", issuePipelineActionsHandler.StepReject)
-		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/pipeline/status", issuePipelineActionsHandler.Status)
+		r.With(middleware.OptionalWorkspace).Get("/project-tasks/{id}", issuesHandler.Get)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/comments", issuesHandler.CreateComment)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/comments", issuesHandler.CreateComment)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/questionnaire", questionnaireHandler.CreateIssueQuestionnaire)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/questionnaire", questionnaireHandler.CreateIssueQuestionnaire)
 		r.With(middleware.OptionalWorkspace).Post("/questionnaires/{id}/response", questionnaireHandler.Respond)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/approval-state", issuesHandler.TransitionApprovalState)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/approval-state", issuesHandler.TransitionApprovalState)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/approve", issuesHandler.Approve)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/approve", issuesHandler.Approve)
 		r.With(middleware.OptionalWorkspace).Patch("/issues/{id}", issuesHandler.PatchIssue)
+		r.With(middleware.OptionalWorkspace).Patch("/project-tasks/{id}", issuesHandler.PatchIssue)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/review/save", issuesHandler.SaveReview)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/review/save", issuesHandler.SaveReview)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/review/address", issuesHandler.AddressReview)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/review/address", issuesHandler.AddressReview)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/review/changes", issuesHandler.ReviewChanges)
+		r.With(middleware.OptionalWorkspace).Get("/project-tasks/{id}/review/changes", issuesHandler.ReviewChanges)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/review/history", issuesHandler.ReviewHistory)
+		r.With(middleware.OptionalWorkspace).Get("/project-tasks/{id}/review/history", issuesHandler.ReviewHistory)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/review/history/{sha}", issuesHandler.ReviewVersion)
+		r.With(middleware.OptionalWorkspace).Get("/project-tasks/{id}/review/history/{sha}", issuesHandler.ReviewVersion)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/participants", issuesHandler.AddParticipant)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/participants", issuesHandler.AddParticipant)
 		r.With(middleware.OptionalWorkspace).Delete("/issues/{id}/participants/{agentID}", issuesHandler.RemoveParticipant)
+		r.With(middleware.OptionalWorkspace).Delete("/project-tasks/{id}/participants/{agentID}", issuesHandler.RemoveParticipant)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/issues", issuesHandler.CreateIssue)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/tasks", issuesHandler.CreateIssue)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/issues/link", issuesHandler.CreateLinkedIssue)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/tasks/link", issuesHandler.CreateLinkedIssue)
 		r.With(middleware.OptionalWorkspace).Get("/chats", chatsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/chats/{id}", chatsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Post("/chats/{id}/archive", chatsHandler.Archive)
 		r.With(middleware.OptionalWorkspace).Post("/chats/{id}/unarchive", chatsHandler.Unarchive)
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/issues/import", projectIssueSyncHandler.ManualImport)
+		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/tasks/import", projectIssueSyncHandler.ManualImport)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/issues/status", projectIssueSyncHandler.Status)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/tasks/status", projectIssueSyncHandler.Status)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/projects/{id}/repo/branches", githubIntegrationHandler.GetProjectBranches)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Put("/projects/{id}/repo/branches", githubIntegrationHandler.UpdateProjectBranches)
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/repo/conflicts/resolve", githubIntegrationHandler.ResolveProjectConflict)
@@ -428,50 +350,26 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/labels", labelsHandler.Create)
 		r.With(middleware.OptionalWorkspace).Patch("/labels/{id}", labelsHandler.Patch)
 		r.With(middleware.OptionalWorkspace).Delete("/labels/{id}", labelsHandler.Delete)
-		r.With(middleware.OptionalWorkspace).Get("/taxonomy/nodes", taxonomyHandler.ListNodes)
-		r.With(middleware.OptionalWorkspace).Post("/taxonomy/nodes", taxonomyHandler.CreateNode)
-		r.With(middleware.OptionalWorkspace).Get("/taxonomy/nodes/{id}", taxonomyHandler.GetNode)
-		r.With(middleware.OptionalWorkspace).Patch("/taxonomy/nodes/{id}", taxonomyHandler.PatchNode)
-		r.With(middleware.OptionalWorkspace).Delete("/taxonomy/nodes/{id}", taxonomyHandler.DeleteNode)
-		r.With(middleware.OptionalWorkspace).Get("/taxonomy/nodes/{id}/memories", taxonomyHandler.ListSubtreeMemories)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/labels", labelsHandler.ListProjectLabels)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/labels", labelsHandler.AddProjectLabels)
 		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}/labels/{lid}", labelsHandler.RemoveProjectLabel)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{pid}/issues/{iid}/labels", labelsHandler.ListIssueLabels)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{pid}/tasks/{iid}/labels", labelsHandler.ListIssueLabels)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{pid}/issues/{iid}/labels", labelsHandler.AddIssueLabels)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{pid}/tasks/{iid}/labels", labelsHandler.AddIssueLabels)
 		r.With(middleware.OptionalWorkspace).Delete("/projects/{pid}/issues/{iid}/labels/{lid}", labelsHandler.RemoveIssueLabel)
+		r.With(middleware.OptionalWorkspace).Delete("/projects/{pid}/tasks/{iid}/labels/{lid}", labelsHandler.RemoveIssueLabel)
 
 		r.With(middleware.OptionalWorkspace).Get("/settings/profile", HandleSettingsProfileGet)
 		r.With(middleware.OptionalWorkspace).Put("/settings/profile", HandleSettingsProfilePut)
 		r.With(middleware.OptionalWorkspace).Get("/settings/notifications", HandleSettingsNotificationsGet)
 		r.With(middleware.OptionalWorkspace).Put("/settings/notifications", HandleSettingsNotificationsPut)
-
-		// Notifications API stubs (frontend expects these)
-		r.Get("/notifications", func(w http.ResponseWriter, r *http.Request) {
-			sendJSON(w, http.StatusOK, map[string]interface{}{"notifications": []interface{}{}, "total": 0})
-		})
-		r.Post("/notifications/{id}/read", func(w http.ResponseWriter, r *http.Request) {
-			sendJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
-		})
-		r.Post("/notifications/{id}/unread", func(w http.ResponseWriter, r *http.Request) {
-			sendJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
-		})
-		r.Post("/notifications/read-all", func(w http.ResponseWriter, r *http.Request) {
-			sendJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
-		})
-		r.Delete("/notifications/{id}", func(w http.ResponseWriter, r *http.Request) {
-			sendJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
-		})
 		r.With(middleware.OptionalWorkspace).Get("/settings/workspace", HandleSettingsWorkspaceGet)
 		r.With(middleware.OptionalWorkspace).Put("/settings/workspace", HandleSettingsWorkspacePut)
 		r.With(middleware.OptionalWorkspace).Get("/settings/integrations", HandleSettingsIntegrationsGet)
 		r.With(middleware.OptionalWorkspace).Put("/settings/integrations", HandleSettingsIntegrationsPut)
 		r.With(middleware.OptionalWorkspace).Post("/settings/integrations/api-keys", HandleSettingsAPIKeyCreate)
 		r.With(middleware.OptionalWorkspace).Delete("/settings/integrations/api-keys/{id}", HandleSettingsAPIKeyDelete)
-
-		r.With(middleware.RequireWorkspace).Get("/v1/rooms/{id}", conversationTokenHandler.GetRoom)
-		r.With(middleware.RequireWorkspace).Get("/v1/rooms/{id}/stats", conversationTokenHandler.GetRoomStats)
-		r.With(middleware.RequireWorkspace).Get("/v1/conversations/{id}", conversationTokenHandler.GetConversation)
 
 		r.With(middleware.OptionalWorkspace).Get("/github/integration/status", githubIntegrationHandler.IntegrationStatus)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/github/integration/repos", githubIntegrationHandler.ListRepos)
@@ -485,21 +383,9 @@ func NewRouter() http.Handler {
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Get("/github/sync/dead-letters", githubSyncDeadLettersHandler.List)
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/github/sync/dead-letters/{id}/replay", githubSyncDeadLettersHandler.Replay)
 		r.Post("/sync/openclaw", openclawSyncHandler.Handle)
-		r.Post("/openclaw/events", openClawEventsHandler.Handle)
 		r.Get("/sync/openclaw/dispatch/pending", openclawSyncHandler.PullDispatchQueue)
 		r.Post("/sync/openclaw/dispatch/{id}/ack", openclawSyncHandler.AckDispatchQueue)
 		r.Get("/sync/agents", openclawSyncHandler.GetAgents)
-		r.With(middleware.RequireWorkspace).Get("/migrations/status", handleMigrationStatus(db))
-		r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/status", openClawMigrationHandler.Status)
-		r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/report", openClawMigrationHandler.Report)
-		r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/failures", openClawMigrationHandler.Failures)
-		r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/run", openClawMigrationHandler.Run)
-		r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/pause", openClawMigrationHandler.Pause)
-		r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/resume", openClawMigrationHandler.Resume)
-		r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/reset", openClawMigrationHandler.Reset)
-		r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/reset/memory_extraction", openClawMigrationHandler.ResetMemoryExtraction)
-		r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/import/agents", openClawMigrationImportHandler.ImportAgents)
-		r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/import/history/batch", openClawMigrationImportHandler.ImportHistoryBatch)
 		r.Patch("/tasks/{id}", taskHandler.UpdateTask)
 		r.Patch("/tasks/{id}/status", taskHandler.UpdateTaskStatus)
 		r.Get("/messages", messageHandler.ListMessages)
@@ -513,17 +399,6 @@ func NewRouter() http.Handler {
 		r.Get("/export", HandleExport)
 		r.Post("/import", HandleImport)
 		r.Post("/import/validate", HandleImportValidate)
-
-		r.With(middleware.OptionalWorkspace).Post("/v1/jobs", jobsHandler.Create)
-		r.With(middleware.OptionalWorkspace).Get("/v1/jobs", jobsHandler.List)
-		r.With(middleware.OptionalWorkspace).Get("/v1/jobs/{id}", jobsHandler.Get)
-		r.With(middleware.OptionalWorkspace).Patch("/v1/jobs/{id}", jobsHandler.Patch)
-		r.With(middleware.OptionalWorkspace).Delete("/v1/jobs/{id}", jobsHandler.Delete)
-		r.With(middleware.OptionalWorkspace).Post("/v1/jobs/{id}/run", jobsHandler.RunNow)
-		r.With(middleware.OptionalWorkspace).Get("/v1/jobs/{id}/runs", jobsHandler.ListRuns)
-		r.With(middleware.OptionalWorkspace).Post("/v1/jobs/{id}/pause", jobsHandler.Pause)
-		r.With(middleware.OptionalWorkspace).Post("/v1/jobs/{id}/resume", jobsHandler.Resume)
-		r.With(middleware.OptionalWorkspace).Post("/v1/jobs/import/openclaw-cron", jobsHandler.ImportOpenClawCron)
 
 		// Admin endpoints
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/init-repos", HandleAdminInitRepos(db))
@@ -556,15 +431,12 @@ func NewRouter() http.Handler {
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/config/release-gate", adminConfigHandler.ReleaseGate)
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/config/cutover", adminConfigHandler.Cutover)
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/config/rollback", adminConfigHandler.Rollback)
-		r.With(middleware.RequireWorkspace).Get("/admin/ellie/ingestion/coverage", adminEllieIngestionHandler.GetCoverage)
 	})
 
 	// WebSocket handlers
 	r.Handle("/ws", websocketHandler)
 	r.Handle("/ws/openclaw", openClawWSHandler)
-	r.Get("/uploads/*", func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	})
+	r.Handle("/uploads/*", http.StripPrefix("/uploads/", http.FileServer(http.Dir(getUploadsStorageDir()))))
 
 	// Static file fallback for frontend SPA (must be last)
 	r.Get("/*", handleRoot)
@@ -690,31 +562,17 @@ func serveStatic(dir string, w http.ResponseWriter, r *http.Request) {
 	// Try to serve the exact file
 	filePath := dir + path
 	if _, err := os.Stat(filePath); err == nil {
-		setCacheHeaders(w, path)
 		http.ServeFile(w, r, filePath)
 		return
 	}
 
 	// For SPA: serve index.html for all non-asset routes
 	if _, err := os.Stat(dir + "/index.html"); err == nil {
-		// SPA fallback is always index.html — never cache it
-		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		http.ServeFile(w, r, dir+"/index.html")
 		return
 	}
 
 	http.NotFound(w, r)
-}
-
-// setCacheHeaders sets appropriate cache headers based on file type.
-// Hashed assets (Vite output) get long-lived caches; HTML gets no-cache.
-func setCacheHeaders(w http.ResponseWriter, path string) {
-	if strings.HasSuffix(path, ".html") || path == "/index.html" {
-		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	} else if strings.HasPrefix(path, "/assets/") {
-		// Vite content-hashed assets — cache aggressively
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	}
 }
 
 func getVersion() string {

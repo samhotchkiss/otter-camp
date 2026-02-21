@@ -157,123 +157,7 @@ describe("ProjectFileBrowser", () => {
     expect(await screen.findByText("Unable to render file preview for this payload.")).toBeInTheDocument();
   });
 
-  it("renders branch and search affordances in files mode header", async () => {
-    fetchMock.mockResolvedValueOnce(
-      mockJSONResponse({
-        ref: "main",
-        path: "/",
-        entries: [],
-      }),
-    );
-
-    render(<ProjectFileBrowser projectId="project-1" />);
-
-    expect(await screen.findByText("main")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Search files...")).toBeInTheDocument();
-  });
-
-  it("opens markdown files in review route with encoded document ids", async () => {
-    const user = userEvent.setup();
-    fetchMock
-      .mockResolvedValueOnce(
-        mockJSONResponse({
-          ref: "main",
-          path: "/",
-          entries: [{ name: "2026-02-07 Draft.md", type: "file", path: "posts/2026-02-07 Draft.md", size: 42 }],
-        }),
-      )
-      .mockResolvedValueOnce(
-        mockJSONResponse({
-          ref: "main",
-          path: "/posts/2026-02-07 Draft.md",
-          content: "# Draft",
-          size: 7,
-          encoding: "utf-8",
-        }),
-      )
-      .mockResolvedValueOnce(
-        mockJSONResponse({
-          items: [
-            {
-              id: "issue-400",
-              document_path: "/posts/2026-02-07 Draft.md",
-            },
-          ],
-        }),
-      );
-
-    render(<ProjectFileBrowser projectId="project-1" />);
-    await user.click(await screen.findByRole("button", { name: /2026-02-07 Draft\.md/i }));
-    await user.click(await screen.findByRole("button", { name: "Open in Review" }));
-
-    expect(navigateMock).toHaveBeenCalledWith(
-      "/review/posts%2F2026-02-07%20Draft.md?project_id=project-1&issue_id=issue-400",
-    );
-  });
-
-  it("falls back to project-scoped review link when no linked issue matches selected markdown", async () => {
-    const user = userEvent.setup();
-    fetchMock
-      .mockResolvedValueOnce(
-        mockJSONResponse({
-          ref: "main",
-          path: "/",
-          entries: [{ name: "draft.md", type: "file", path: "posts/draft.md", size: 42 }],
-        }),
-      )
-      .mockResolvedValueOnce(
-        mockJSONResponse({
-          ref: "main",
-          path: "/posts/draft.md",
-          content: "# Draft",
-          size: 7,
-          encoding: "utf-8",
-        }),
-      )
-      .mockResolvedValueOnce(
-        mockJSONResponse({
-          items: [{ id: "issue-401", document_path: "/posts/other.md" }],
-        }),
-      );
-
-    render(<ProjectFileBrowser projectId="project-1" />);
-    await user.click(await screen.findByRole("button", { name: /draft\.md/i }));
-    await user.click(await screen.findByRole("button", { name: "Open in Review" }));
-
-    expect(navigateMock).toHaveBeenCalledWith("/review/posts%2Fdraft.md?project_id=project-1");
-  });
-
-  it("still navigates to project-scoped review link when linked issue lookup throws", async () => {
-    const user = userEvent.setup();
-    fetchMock
-      .mockResolvedValueOnce(
-        mockJSONResponse({
-          ref: "main",
-          path: "/",
-          entries: [{ name: "draft.md", type: "file", path: "posts/draft.md", size: 42 }],
-        }),
-      )
-      .mockResolvedValueOnce(
-        mockJSONResponse({
-          ref: "main",
-          path: "/posts/draft.md",
-          content: "# Draft",
-          size: 7,
-          encoding: "utf-8",
-        }),
-      )
-      .mockRejectedValueOnce(new Error("network failure"));
-
-    render(<ProjectFileBrowser projectId="project-1" />);
-    await user.click(await screen.findByRole("button", { name: /draft\.md/i }));
-    await user.click(await screen.findByRole("button", { name: "Open in Review" }));
-
-    await waitFor(() => {
-      expect(navigateMock).toHaveBeenCalledWith("/review/posts%2Fdraft.md?project_id=project-1");
-    });
-  });
-
-  it("creates a linked issue from eligible files and navigates to the issue thread", async () => {
+  it("creates a linked task from eligible files and navigates to the task thread", async () => {
     const user = userEvent.setup();
     fetchMock
       .mockResolvedValueOnce(
@@ -302,18 +186,18 @@ describe("ProjectFileBrowser", () => {
 
     render(<ProjectFileBrowser projectId="project-1" />);
     await user.click(await screen.findByRole("button", { name: /2026-02-07-post\.md/i }));
-    await user.click(await screen.findByRole("button", { name: "Create issue for this file" }));
+    await user.click(await screen.findByRole("button", { name: "Create task for this file" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/api/projects/project-1/issues/link?"),
+        expect.stringContaining("/api/projects/project-1/tasks/link?"),
         expect.objectContaining({ method: "POST" }),
       );
-      expect(navigateMock).toHaveBeenCalledWith("/projects/project-1/issues/issue-123");
+      expect(navigateMock).toHaveBeenCalledWith("/projects/project-1/tasks/issue-123");
     });
   });
 
-  it("shows an actionable error when linked issue creation fails", async () => {
+  it("shows an actionable error when linked task creation fails", async () => {
     const user = userEvent.setup();
     fetchMock
       .mockResolvedValueOnce(
@@ -336,7 +220,7 @@ describe("ProjectFileBrowser", () => {
 
     render(<ProjectFileBrowser projectId="project-1" />);
     await user.click(await screen.findByRole("button", { name: /2026-02-07-post\.md/i }));
-    await user.click(await screen.findByRole("button", { name: "Create issue for this file" }));
+    await user.click(await screen.findByRole("button", { name: "Create task for this file" }));
 
     expect(await screen.findByText("document_path must point to /posts/*.md")).toBeInTheDocument();
     expect(navigateMock).not.toHaveBeenCalled();

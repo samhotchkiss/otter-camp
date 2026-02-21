@@ -29,7 +29,7 @@ export default function PipelineMiniProgress({ status, className = "" }: Pipelin
     <div
       className={`inline-flex items-center gap-1 ${className}`.trim()}
       data-testid="pipeline-mini-progress"
-      aria-label="Issue progress"
+      aria-label="Task progress"
     >
       {PIPELINE_STAGES.map((stage, index) => {
         const stageState = states[stage.key];
@@ -58,4 +58,3 @@ export default function PipelineMiniProgress({ status, className = "" }: Pipelin
     </div>
   );
 }
-

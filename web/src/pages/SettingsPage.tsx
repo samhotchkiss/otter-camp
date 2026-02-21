@@ -1,21 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import DataManagement from "../components/DataManagement";
 import GitHubSettings from "./settings/GitHubSettings";
-import { API_URL } from "../lib/api";
-
-function settingsAuthFetch(path: string, init?: RequestInit) {
-  const token = localStorage.getItem("otter_camp_token");
-  const orgId = localStorage.getItem("otter-camp-org-id");
-  return fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token && { Authorization: `Bearer ${token}` }),
-      ...(orgId && { "X-Org-ID": orgId }),
-      ...init?.headers,
-    },
-  });
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -52,7 +37,6 @@ type WorkspaceMember = {
 
 type Workspace = {
   name: string;
-  slug: string;
   members: WorkspaceMember[];
 };
 
@@ -505,13 +489,6 @@ function WorkspaceSection({
       icon="🏕️"
     >
       <div className="space-y-6">
-        <Input
-          label="Organization Slug"
-          value={workspace.slug}
-          onChange={() => {}}
-          readOnly
-        />
-
         {/* Workspace Name */}
         <Input
           label="Workspace Name"
@@ -587,8 +564,6 @@ type IntegrationsSectionProps = {
   onSave: () => Promise<void>;
   onGenerateApiKey: () => Promise<void>;
   onRevokeApiKey: (keyId: string) => Promise<void>;
-  tokenError: string | null;
-  generatedToken: string | null;
   saving: boolean;
 };
 
@@ -598,8 +573,6 @@ function IntegrationsSection({
   onSave,
   onGenerateApiKey,
   onRevokeApiKey,
-  tokenError,
-  generatedToken,
   saving,
 }: IntegrationsSectionProps) {
   const [generatingKey, setGeneratingKey] = useState(false);
@@ -636,16 +609,6 @@ function IntegrationsSection({
       icon="🔗"
     >
       <div className="space-y-6">
-        {generatedToken && (
-          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-900">
-            <p className="text-sm font-medium">Copy this token now. It will only be shown once.</p>
-            <p className="mt-2 break-all font-mono text-sm">{generatedToken}</p>
-          </div>
-        )}
-        {tokenError && (
-          <p className="text-sm text-red-700">{tokenError}</p>
-        )}
-
         {/* OpenClaw Webhook URL */}
         <div>
           <Input
@@ -666,14 +629,14 @@ function IntegrationsSection({
         <div>
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-medium text-[var(--text)]">
-              Git Access Tokens
+              API Keys
             </h3>
             <Button
               variant="secondary"
               onClick={handleGenerateKey}
               loading={generatingKey}
             >
-              Generate Git Token
+              Generate New Key
             </Button>
           </div>
 
@@ -708,10 +671,10 @@ function IntegrationsSection({
           ) : (
             <div className="mt-3 rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface-alt)] px-6 py-8 text-center">
               <p className="text-sm text-[var(--text-muted)]">
-                No git tokens yet
+                No API keys yet
               </p>
               <p className="mt-1 text-xs text-[var(--text-muted)]">
-                Generate a token to access git and API workflows
+                Generate a key to access the API programmatically
               </p>
             </div>
           )}
@@ -765,7 +728,7 @@ function LabelManagementSection({
   return (
     <SectionCard
       title="Label Management"
-      description="Manage reusable project and issue labels"
+      description="Manage reusable project and task labels"
       icon="🏷️"
     >
       <div className="space-y-4">
@@ -943,7 +906,6 @@ export default function SettingsPage() {
   // Workspace state
   const [workspace, setWorkspace] = useState<Workspace>({
     name: "",
-    slug: "",
     members: [],
   });
   const [savingWorkspace, setSavingWorkspace] = useState(false);
@@ -953,8 +915,6 @@ export default function SettingsPage() {
     openclawWebhookUrl: "",
     apiKeys: [],
   });
-  const [gitTokenError, setGitTokenError] = useState<string | null>(null);
-  const [generatedGitToken, setGeneratedGitToken] = useState<string | null>(null);
   const [savingIntegrations, setSavingIntegrations] = useState(false);
 
   // Labels state
@@ -986,13 +946,12 @@ export default function SettingsPage() {
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const [profileRes, notificationsRes, workspaceRes, integrationsRes, gitTokensRes] =
+        const [profileRes, notificationsRes, workspaceRes, integrationsRes] =
           await Promise.all([
-            settingsAuthFetch("/api/settings/profile"),
-            settingsAuthFetch("/api/settings/notifications"),
-            settingsAuthFetch("/api/settings/workspace"),
-            settingsAuthFetch("/api/settings/integrations"),
-            settingsAuthFetch("/api/git/tokens"),
+            fetch("/api/settings/profile"),
+            fetch("/api/settings/notifications"),
+            fetch("/api/settings/workspace"),
+            fetch("/api/settings/integrations"),
           ]);
 
         if (profileRes.ok) {
@@ -1007,42 +966,19 @@ export default function SettingsPage() {
 
         if (workspaceRes.ok) {
           const data = await workspaceRes.json();
-          setWorkspace({
-            name: data?.name ?? "",
-            slug: data?.slug ?? "",
-            members: Array.isArray(data?.members) ? data.members : [],
-          });
+          setWorkspace(data);
         }
 
-        let openclawWebhookUrl = "";
-        let apiKeys: Integrations["apiKeys"] = [];
         if (integrationsRes.ok) {
           const data = await integrationsRes.json();
-          openclawWebhookUrl = data.openclawWebhookUrl ?? "";
-          apiKeys = Array.isArray(data.apiKeys)
-            ? data.apiKeys.map((key: { id: string; name: string; prefix: string; createdAt: string }) => ({
-              id: key.id,
-              name: key.name,
-              prefix: key.prefix,
+          setIntegrations({
+            ...data,
+            apiKeys: data.apiKeys.map((key: { createdAt: string }) => ({
+              ...key,
               createdAt: new Date(key.createdAt),
-            }))
-            : [];
+            })),
+          });
         }
-        if (gitTokensRes.ok) {
-          const data = await gitTokensRes.json();
-          apiKeys = Array.isArray(data.tokens)
-            ? data.tokens.map((token: { id: string; name: string; token_prefix: string; created_at: string }) => ({
-              id: token.id,
-              name: token.name,
-              prefix: token.token_prefix,
-              createdAt: new Date(token.created_at),
-            }))
-            : [];
-        }
-        setIntegrations({
-          openclawWebhookUrl,
-          apiKeys,
-        });
 
         // Load theme from localStorage
         const savedTheme = localStorage.getItem("otter-camp-theme") as ThemeMode;
@@ -1122,7 +1058,7 @@ export default function SettingsPage() {
   const handleSaveProfile = useCallback(async () => {
     setSavingProfile(true);
     try {
-      await settingsAuthFetch("/api/settings/profile", {
+      await fetch("/api/settings/profile", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(profile),
@@ -1135,7 +1071,7 @@ export default function SettingsPage() {
   const handleSaveNotifications = useCallback(async () => {
     setSavingNotifications(true);
     try {
-      await settingsAuthFetch("/api/settings/notifications", {
+      await fetch("/api/settings/notifications", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(notifications),
@@ -1148,7 +1084,7 @@ export default function SettingsPage() {
   const handleSaveWorkspace = useCallback(async () => {
     setSavingWorkspace(true);
     try {
-      await settingsAuthFetch("/api/settings/workspace", {
+      await fetch("/api/settings/workspace", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(workspace),
@@ -1161,7 +1097,7 @@ export default function SettingsPage() {
   const handleSaveIntegrations = useCallback(async () => {
     setSavingIntegrations(true);
     try {
-      await settingsAuthFetch("/api/settings/integrations", {
+      await fetch("/api/settings/integrations", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(integrations),
@@ -1172,80 +1108,28 @@ export default function SettingsPage() {
   }, [integrations]);
 
   const handleGenerateApiKey = useCallback(async () => {
-    setGitTokenError(null);
-    setGeneratedGitToken(null);
-
-    const projectsResponse = await settingsAuthFetch("/api/projects");
-    if (!projectsResponse.ok) {
-      const payload = await projectsResponse.json().catch(() => null);
-      setGitTokenError(payload?.error ?? "Failed to load projects for git token creation.");
-      return;
-    }
-
-    const projectsPayload = await projectsResponse.json().catch(() => ({})) as {
-      projects?: Array<{ id?: string }>;
-    };
-    const projectIDs = (projectsPayload.projects ?? [])
-      .map((project) => project.id ?? "")
-      .filter((id) => id !== "");
-
-    if (projectIDs.length === 0) {
-      setGitTokenError("Create a project before generating a git token.");
-      return;
-    }
-
-    const response = await settingsAuthFetch("/api/git/tokens", {
+    const response = await fetch("/api/settings/integrations/api-keys", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: `Git Token ${integrations.apiKeys.length + 1}`,
-        projects: projectIDs.map((projectID) => ({
-          project_id: projectID,
-          permission: "write",
-        })),
-      }),
+      body: JSON.stringify({ name: `API Key ${integrations.apiKeys.length + 1}` }),
     });
 
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null);
-      setGitTokenError(payload?.error ?? "Failed to create git token.");
-      return;
+    if (response.ok) {
+      const newKey = await response.json();
+      setIntegrations((prev) => ({
+        ...prev,
+        apiKeys: [
+          ...prev.apiKeys,
+          { ...newKey, createdAt: new Date(newKey.createdAt) },
+        ],
+      }));
     }
-
-    const token = await response.json() as {
-      id: string;
-      name: string;
-      token_prefix: string;
-      token?: string;
-      created_at: string;
-    };
-
-    setIntegrations((prev) => ({
-      ...prev,
-      apiKeys: [
-        {
-          id: token.id,
-          name: token.name,
-          prefix: token.token_prefix,
-          createdAt: new Date(token.created_at),
-        },
-        ...prev.apiKeys,
-      ],
-    }));
-    setGeneratedGitToken(token.token ?? null);
   }, [integrations.apiKeys.length]);
 
   const handleRevokeApiKey = useCallback(async (keyId: string) => {
-    setGitTokenError(null);
-    const response = await fetch(`/api/git/tokens/${encodeURIComponent(keyId)}/revoke`, {
-      method: "POST",
+    await fetch(`/api/settings/integrations/api-keys/${keyId}`, {
+      method: "DELETE",
     });
-
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null);
-      setGitTokenError(payload?.error ?? "Failed to revoke git token.");
-      return;
-    }
 
     setIntegrations((prev) => ({
       ...prev,
@@ -1347,7 +1231,7 @@ export default function SettingsPage() {
       return;
     }
     const confirmed = window.confirm(
-      `Delete label "${label.name}"? This will remove it from linked projects and issues.`,
+      `Delete label "${label.name}"? This will remove it from linked projects and tasks.`,
     );
     if (!confirmed) {
       return;
@@ -1417,8 +1301,6 @@ export default function SettingsPage() {
           onSave={handleSaveIntegrations}
           onGenerateApiKey={handleGenerateApiKey}
           onRevokeApiKey={handleRevokeApiKey}
-          tokenError={gitTokenError}
-          generatedToken={generatedGitToken}
           saving={savingIntegrations}
         />
 

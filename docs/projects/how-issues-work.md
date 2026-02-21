@@ -1,12 +1,12 @@
-# Projects: How Issues Work
+# Projects: How Tasks Work
 
-> Summary: Canonical issue data model and operational semantics used by Otter Camp.
+> Summary: Canonical task data model and operational semantics used by Otter Camp.
 > Last updated: 2026-02-16
-> Audience: Agents writing issue automation or UI/API behavior.
+> Audience: Agents writing task automation or UI/API behavior.
 
 ## Canonical Model
 
-Issue store: `internal/store/project_issue_store.go`
+Task store: `internal/store/project_issue_store.go`
 
 Key fields:
 - identity: `id`, `issue_number`, `project_id`, `org_id`
@@ -17,7 +17,7 @@ Key fields:
 
 ## Why This Model
 
-Design moved from simple open/closed issue state to explicit work-tracking + review state so:
+Design moved from simple open/closed task state to explicit work-tracking + review state so:
 - Agents can reason on machine-readable work lifecycle
 - Humans can approve/reject with explicit transitions
 - Dashboards can surface blocked/review/done accurately
@@ -32,7 +32,13 @@ Representative routes (see `internal/api/router.go`):
 - `POST /api/issues/{id}/approval-state`
 - `POST /api/issues/{id}/approve`
 - Review/history endpoints under `/api/issues/{id}/review/*`
+- Alias routes also support task naming:
+- `POST /api/projects/{id}/tasks`
+- `GET /api/project-tasks`
+- `PATCH /api/project-tasks/{id}`
+- Comment/approval/review endpoints under `/api/project-tasks/{id}/...`
 
 ## Change Log
 
+- 2026-02-21: Renamed user-facing issue terminology to task terminology and documented task endpoint aliases.
 - 2026-02-16: Created canonical documentation file and migrated relevant legacy content.
