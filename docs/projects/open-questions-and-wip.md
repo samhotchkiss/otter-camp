@@ -13,9 +13,10 @@
 ## Decisions Needed
 
 - Canonical hosted URL pattern: `{site}.otter.camp` vs fixed hostnames.
-- Whether issue/project review UX should fully enforce spec-driven gate checks before close.
+- Whether task/project review UX should fully enforce spec-driven gate checks before close.
 - How aggressively to prune stale duplicate files/folders in repo root and frontend tree.
 
 ## Change Log
 
+- 2026-02-21: Renamed user-facing issue terminology to task terminology.
 - 2026-02-16: Created canonical documentation file and migrated relevant legacy content.

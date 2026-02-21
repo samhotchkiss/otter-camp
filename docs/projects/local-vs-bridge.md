@@ -6,8 +6,8 @@
 
 ## Invariants (Both Modes)
 
-- Project/issue truth is in Otter Camp DB.
-- Issue and work-status semantics are identical.
+- Project/task truth is in Otter Camp DB.
+- Task and work-status semantics are identical.
 - Memory/retrieval worker behavior is backend-driven.
 
 ## Local Mode
@@ -30,4 +30,5 @@
 
 ## Change Log
 
+- 2026-02-21: Renamed project issue terminology to project task terminology.
 - 2026-02-16: Created canonical documentation file and migrated relevant legacy content.

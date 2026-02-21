@@ -43,7 +43,7 @@ describe("IssueThreadPanel realtime integration", () => {
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/issues/issue-1?")) {
+      if (url.includes("/api/project-tasks/issue-1?")) {
         return mockJSONResponse({
           issue: {
             id: "issue-1",
@@ -117,7 +117,7 @@ describe("IssueThreadPanel realtime integration", () => {
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/issues/issue-1/review/history?")) {
+      if (url.includes("/api/project-tasks/issue-1/review/history?")) {
         return mockJSONResponse({
           issue_id: "issue-1",
           document_path: "/posts/2026-02-07-review.md",
@@ -133,7 +133,7 @@ describe("IssueThreadPanel realtime integration", () => {
           total: 1,
         });
       }
-      if (url.includes("/api/issues/issue-1/review/changes?")) {
+      if (url.includes("/api/project-tasks/issue-1/review/changes?")) {
         return mockJSONResponse({
           issue_id: "issue-1",
           document_path: "/posts/2026-02-07-review.md",
@@ -144,7 +144,7 @@ describe("IssueThreadPanel realtime integration", () => {
           total: 1,
         });
       }
-      if (url.includes("/api/issues/issue-1?")) {
+      if (url.includes("/api/project-tasks/issue-1?")) {
         return mockJSONResponse({
           issue: {
             id: "issue-1",
@@ -174,12 +174,12 @@ describe("IssueThreadPanel realtime integration", () => {
 
     await waitFor(() => {
       expect(
-        fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/issues/issue-1/review/history?")),
+        fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/project-tasks/issue-1/review/history?")),
       ).toHaveLength(1);
     });
     await waitFor(() => {
       expect(
-        fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/issues/issue-1/review/changes?")),
+        fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/project-tasks/issue-1/review/changes?")),
       ).toHaveLength(1);
     });
 
@@ -196,7 +196,7 @@ describe("IssueThreadPanel realtime integration", () => {
 
     await waitFor(() => {
       expect(
-        fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/issues/issue-1/review/history?")),
+        fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/project-tasks/issue-1/review/history?")),
       ).toHaveLength(1);
     });
 
@@ -213,11 +213,11 @@ describe("IssueThreadPanel realtime integration", () => {
 
     await waitFor(() => {
       expect(
-        fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/issues/issue-1/review/history?")),
+        fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/project-tasks/issue-1/review/history?")),
       ).toHaveLength(2);
     });
     expect(
-      fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/issues/issue-1/review/changes?")),
+      fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/project-tasks/issue-1/review/changes?")),
     ).toHaveLength(2);
   });
 });

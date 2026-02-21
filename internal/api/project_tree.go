@@ -531,7 +531,8 @@ func classifyGitBrowseError(err error) (int, string) {
 	message := strings.TrimSpace(err.Error())
 	lower := strings.ToLower(message)
 	switch {
-	case strings.Contains(lower, "not a valid object name"):
+	case strings.Contains(lower, "not a valid object name"),
+		strings.Contains(lower, "invalid object name"):
 		return http.StatusNotFound, "ref or path not found"
 	case strings.Contains(lower, "path") && strings.Contains(lower, "does not exist"):
 		return http.StatusNotFound, "ref or path not found"

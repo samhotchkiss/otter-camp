@@ -67,12 +67,13 @@ const RECONNECT_WARNING_THRESHOLD = 5;
 const RECONNECT_ALERT_THRESHOLD = 30;
 const RECONNECT_RESTART_THRESHOLD = 60;
 const RESTART_FAILURE_EXIT_THRESHOLD = 2;
-const HEARTBEAT_INTERVAL_MS = 10000;
+const HEARTBEAT_INTERVAL_MS = 5000;
 const HEARTBEAT_PONG_TIMEOUT_MS = 5000;
 const HEARTBEAT_MISS_THRESHOLD = 2;
 const DISPATCH_REPLAY_MAX_ITEMS = 1000;
 const DISPATCH_REPLAY_MAX_BYTES = 10 * 1024 * 1024;
 const MAX_TRACKED_DISPATCH_REPLAY_IDS = 5000;
+const MAX_TRACKED_DELIVERED_DM_MESSAGE_IDS = 5000;
 const BRIDGE_HEALTH_PORT = (() => {
   const raw = Number.parseInt((process.env.OTTER_BRIDGE_HEALTH_PORT || '').trim(), 10);
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -92,7 +93,7 @@ const PROJECT_ID_PATTERN = /(?:^|:)project:([0-9a-f-]{36})(?:$|:)/i;
 const ISSUE_ID_PATTERN = /(?:^|:)issue:([0-9a-f-]{36})(?:$|:)/i;
 const COMPLETION_PROGRESS_LINE_PATTERN = /\bIssue\s+#(\d+)\s+\|\s+Commit\s+([0-9a-f]{7,40})\s+\|\s+([^|]+)\|/i;
 const CHAMELEON_SESSION_KEY_PATTERN =
-  /^agent:chameleon:oc:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+  /^agent:chameleon:oc:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?::([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))?$/i;
 const SUPPORTED_DISPATCH_EVENT_TYPES = new Set([
   'dm.message',
   'project.chat.message',
@@ -111,6 +112,9 @@ const SAFE_SESSION_FILENAME_PATTERN = /^[a-z0-9][a-z0-9._-]{7,127}$/i;
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
 const OPENCLAW_SYSTEM_AGENT_PATCH_TARGETS = new Set(['chameleon', 'elephant']);
+const PERMANENT_OPENCLAW_AGENTS = new Set(['main', 'elephant', 'ellie-extractor', 'lori', 'chameleon']);
+const CHAT_EMISSION_THROTTLE_MS = 1000;
+const MAIN_OPENCLAW_SESSION_KEY = 'agent:main:main';
 const OPENCLAW_TOOL_EVENT_CAP = 'tool-events';
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
 let otterCampOrgIDForTestOverride: string | null = null;
@@ -594,6 +598,8 @@ const contextPrimedSessions = new Set<string>();
 const workspaceCacheByAgentSlot = new Map<string, AgentWorkspaceCacheEntry>();
 let workspaceGuideCache: WorkspaceGuideCacheEntry | null = null;
 const deliveredRunIDs = new Set<string>();
+const lastPersistedReplyBySession = new Map<string, number>();
+const lastChatEmissionAtBySession = new Map<string, number>();
 const deliveredRunIDOrder: string[] = [];
 const progressLogLineHashes = new Set<string>();
 const progressLogLineHashOrder: string[] = [];
@@ -612,6 +618,8 @@ const dispatchReplayQueue: DispatchReplayQueueItem[] = [];
 const queuedDispatchReplayIDs = new Set<string>();
 const deliveredDispatchReplayIDs = new Set<string>();
 const deliveredDispatchReplayIDOrder: string[] = [];
+const deliveredDMMessageIDs = new Set<string>();
+const deliveredDMMessageIDOrder: string[] = [];
 let dispatchReplayQueueBytes = 0;
 const recentCompactionRecoveryByKey = new Map<string, number>();
 let lastSuccessfulSyncAtMs = 0;
@@ -1371,6 +1379,50 @@ export async function replayQueuedDispatchEventsForTest(
   return flushedIDs;
 }
 
+function rememberDeliveredDMMessageID(messageID: string, maxItems: number = MAX_TRACKED_DELIVERED_DM_MESSAGE_IDS): void {
+  const normalized = getTrimmedString(messageID);
+  if (!normalized) {
+    return;
+  }
+  if (deliveredDMMessageIDs.has(normalized)) {
+    return;
+  }
+  deliveredDMMessageIDs.add(normalized);
+  deliveredDMMessageIDOrder.push(normalized);
+  while (deliveredDMMessageIDOrder.length > maxItems) {
+    const oldest = deliveredDMMessageIDOrder.shift();
+    if (!oldest) {
+      continue;
+    }
+    deliveredDMMessageIDs.delete(oldest);
+  }
+}
+
+function hasDeliveredDMMessageID(messageID: string): boolean {
+  const normalized = getTrimmedString(messageID);
+  if (!normalized) {
+    return false;
+  }
+  return deliveredDMMessageIDs.has(normalized);
+}
+
+export function rememberDeliveredDMMessageIDForTest(messageID: string, maxItems?: number): void {
+  rememberDeliveredDMMessageID(messageID, maxItems && maxItems > 0 ? maxItems : MAX_TRACKED_DELIVERED_DM_MESSAGE_IDS);
+}
+
+export function hasDeliveredDMMessageIDForTest(messageID: string): boolean {
+  return hasDeliveredDMMessageID(messageID);
+}
+
+export function resetDeliveredDMMessageIDsForTest(): void {
+  deliveredDMMessageIDs.clear();
+  deliveredDMMessageIDOrder.length = 0;
+}
+
+export function getDeliveredDMMessageIDsForTest(): string[] {
+  return [...deliveredDMMessageIDOrder];
+}
+
 function setSessionContext(sessionKey: string, context: SessionContext): void {
   const normalized = getTrimmedString(sessionKey);
   if (!normalized) {
@@ -1390,12 +1442,31 @@ function setSessionContext(sessionKey: string, context: SessionContext): void {
   }
 }
 
-export function parseChameleonSessionKey(sessionKey: string): string | null {
+export type ParsedChameleonSessionKey = {
+  projectID: string;
+  issueID?: string;
+};
+
+function isPermanentOpenClawAgent(agentID: string): boolean {
+  const normalized = getTrimmedString(agentID).toLowerCase();
+  return normalized !== '' && PERMANENT_OPENCLAW_AGENTS.has(normalized);
+}
+
+export function isPermanentOpenClawAgentForTest(agentID: string): boolean {
+  return isPermanentOpenClawAgent(agentID);
+}
+
+export function parseChameleonSessionKey(sessionKey: string): ParsedChameleonSessionKey | null {
   const match = CHAMELEON_SESSION_KEY_PATTERN.exec(getTrimmedString(sessionKey));
   if (!match || !match[1]) {
     return null;
   }
-  return match[1].toLowerCase();
+  const projectID = match[1].toLowerCase();
+  const issueID = getTrimmedString(match[2]).toLowerCase();
+  if (issueID) {
+    return { projectID, issueID };
+  }
+  return { projectID };
 }
 
 export function isCanonicalChameleonSessionKey(sessionKey: string): boolean {
@@ -1403,9 +1474,9 @@ export function isCanonicalChameleonSessionKey(sessionKey: string): boolean {
 }
 
 function parseAgentIDFromSessionKey(sessionKey: string): string {
-  const chameleonAgentID = parseChameleonSessionKey(sessionKey);
-  if (chameleonAgentID) {
-    return chameleonAgentID;
+  const chameleonContext = parseChameleonSessionKey(sessionKey);
+  if (chameleonContext) {
+    return '';
   }
   const match = /^agent:([^:]+):/i.exec(sessionKey.trim());
   if (!match || !match[1]) {
@@ -1479,6 +1550,131 @@ function parseAgentSlotFromSessionKey(sessionKey: string): string {
   return candidate;
 }
 
+type DispatchSessionTarget = {
+  sessionKey: string;
+  routedAgentID: string;
+};
+
+function resolveMainDispatchSessionKey(rawSessionKey: string): string {
+  const sessionKey = getTrimmedString(rawSessionKey);
+  if (
+    sessionKey &&
+    /^agent:main:/i.test(sessionKey) &&
+    !PROJECT_ID_PATTERN.test(sessionKey) &&
+    !ISSUE_ID_PATTERN.test(sessionKey)
+  ) {
+    return sessionKey;
+  }
+  return MAIN_OPENCLAW_SESSION_KEY;
+}
+
+function resolveProjectChatDispatchTarget(
+  agentID: string,
+  projectID: string,
+  rawSessionKey: string,
+): DispatchSessionTarget {
+  const normalizedAgentID = getTrimmedString(agentID).toLowerCase();
+  const requestedSessionKey = getTrimmedString(rawSessionKey);
+  if (!normalizedAgentID) {
+    return { sessionKey: requestedSessionKey, routedAgentID: '' };
+  }
+
+  if (normalizedAgentID === 'main') {
+    return {
+      sessionKey: resolveMainDispatchSessionKey(requestedSessionKey),
+      routedAgentID: normalizedAgentID,
+    };
+  }
+
+  const routedAgentID = isPermanentOpenClawAgent(normalizedAgentID) ? normalizedAgentID : 'chameleon';
+  if (routedAgentID === 'chameleon') {
+    return {
+      sessionKey: `agent:chameleon:oc:${projectID}`,
+      routedAgentID,
+    };
+  }
+
+  return {
+    sessionKey: requestedSessionKey || `agent:${routedAgentID}:project:${projectID}`,
+    routedAgentID,
+  };
+}
+
+function resolveIssueCommentDispatchTarget(
+  agentID: string,
+  projectID: string,
+  issueID: string,
+  rawSessionKey: string,
+): DispatchSessionTarget {
+  const normalizedAgentID = getTrimmedString(agentID).toLowerCase();
+  const requestedSessionKey = getTrimmedString(rawSessionKey);
+  if (!normalizedAgentID) {
+    return { sessionKey: requestedSessionKey, routedAgentID: '' };
+  }
+
+  if (normalizedAgentID === 'main') {
+    return {
+      sessionKey: resolveMainDispatchSessionKey(requestedSessionKey),
+      routedAgentID: normalizedAgentID,
+    };
+  }
+
+  const routedAgentID = isPermanentOpenClawAgent(normalizedAgentID) ? normalizedAgentID : 'chameleon';
+  if (routedAgentID === 'chameleon') {
+    return {
+      sessionKey: `agent:chameleon:oc:${projectID}:${issueID}`,
+      routedAgentID,
+    };
+  }
+
+  return {
+    sessionKey: requestedSessionKey || `agent:${routedAgentID}:issue:${issueID}`,
+    routedAgentID,
+  };
+}
+
+function inferSessionContextFromKey(sessionKey: string): SessionContext | null {
+  const normalized = getTrimmedString(sessionKey);
+  if (!normalized) {
+    return null;
+  }
+
+  const chameleon = parseChameleonSessionKey(normalized);
+  if (chameleon) {
+    const fallbackOrgID = resolveConfiguredOtterCampOrgID();
+    if (chameleon.issueID) {
+      return {
+        kind: 'issue_comment',
+        ...(fallbackOrgID ? { orgID: fallbackOrgID } : {}),
+        projectID: chameleon.projectID,
+        issueID: chameleon.issueID,
+      };
+    }
+    return {
+      kind: 'project_chat',
+      ...(fallbackOrgID ? { orgID: fallbackOrgID } : {}),
+      projectID: chameleon.projectID,
+    };
+  }
+
+  const projectID = getTrimmedString(PROJECT_ID_PATTERN.exec(normalized)?.[1]);
+  const issueID = getTrimmedString(ISSUE_ID_PATTERN.exec(normalized)?.[1]);
+  if (!projectID && !issueID) {
+    return null;
+  }
+  if (issueID) {
+    return {
+      kind: 'issue_comment',
+      ...(projectID ? { projectID } : {}),
+      issueID,
+    };
+  }
+  return {
+    kind: 'project_chat',
+    projectID,
+  };
+}
+
 function normalizeUpdatedAt(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
     return Date.now();
@@ -1518,10 +1714,15 @@ function deriveActivityScope(session: OpenClawSession): AgentActivityScope | und
   }
 
   const context = sessionContexts.get(sessionKey);
+  const inferredContext = inferSessionContextFromKey(sessionKey);
   const deliveryContext = asRecord(session.deliveryContext);
 
-  const projectFromSession = PROJECT_ID_PATTERN.exec(sessionKey)?.[1];
-  const issueFromSession = ISSUE_ID_PATTERN.exec(sessionKey)?.[1];
+  const projectFromSession =
+    getTrimmedString(inferredContext?.projectID) ||
+    PROJECT_ID_PATTERN.exec(sessionKey)?.[1];
+  const issueFromSession =
+    getTrimmedString(inferredContext?.issueID) ||
+    ISSUE_ID_PATTERN.exec(sessionKey)?.[1];
   const projectID =
     projectFromSession ||
     getTrimmedString(context?.projectID) ||
@@ -2718,7 +2919,7 @@ function buildContextReminder(context: SessionContext): string {
       typeof context.issueNumber === 'number' && Number.isFinite(context.issueNumber)
         ? `#${context.issueNumber}`
         : context.issueID || 'unknown issue';
-    return `Issue thread ${issueLabel} (${context.projectID || 'unknown project'})`;
+    return `Issue ${issueLabel} (${context.projectID || 'unknown project'})`;
   }
   return `DM thread (${context.threadID || 'unknown thread'})`;
 }
@@ -3211,13 +3412,12 @@ async function resolveSessionIdentityMetadata(
   context: SessionContext,
   content: string,
 ): Promise<SessionIdentityMetadata | null> {
-  const canonicalChameleonAgentID = parseChameleonSessionKey(sessionKey);
+  const canonicalChameleonSession = parseChameleonSessionKey(sessionKey);
   const normalizedContextAgentID =
     getTrimmedString(context.agentID) ||
     getTrimmedString(context.responderAgentID);
   const fallbackAgentID = parseAgentIDFromSessionKey(sessionKey);
   const agentID = (
-    canonicalChameleonAgentID ||
     normalizedContextAgentID ||
     fallbackAgentID
   ).trim().toLowerCase();
@@ -3226,8 +3426,8 @@ async function resolveSessionIdentityMetadata(
   }
   const orgID = getTrimmedString(context.orgID) || OTTERCAMP_ORG_ID;
   const taskSummary = deriveTaskSummary(context, content);
-  const whoAmISessionKey = canonicalChameleonAgentID
-    ? sessionKey
+  const whoAmISessionKey = canonicalChameleonSession
+    ? undefined
     : (context.kind === 'dm' ? sessionKey : undefined);
 
   const compactPayload = await fetchWhoAmIProfile(agentID, whoAmISessionKey, orgID, 'compact');
@@ -3430,26 +3630,11 @@ async function withSessionContext(
     }
     return sections.join('\n\n');
   }
-  const reminderSections: string[] = [];
-  const shouldPersistIdentityPreamble = context.kind !== 'dm';
-  const identityPreamble = shouldPersistIdentityPreamble
-    ? getTrimmedString(context.identityMetadata?.preamble)
-    : '';
-  if (identityPreamble) {
-    reminderSections.push(identityPreamble);
-  }
-  const operatingGuideReminder = buildOtterCampOperatingGuideReminder(sessionKey);
-  if (operatingGuideReminder) {
-    reminderSections.push(operatingGuideReminder);
-  }
-  const actionDefaults = buildSurfaceActionDefaults(context);
-  if (actionDefaults) {
-    reminderSections.push(actionDefaults);
-  }
-  reminderSections.push(
-    `[OTTERCAMP_CONTEXT_REMINDER]\n- ${buildContextReminder(context)}\n[/OTTERCAMP_CONTEXT_REMINDER]`,
-  );
-  const reminder = reminderSections.join('\n\n');
+  const reminder = [
+    '[OTTERCAMP_CONTEXT_REMINDER]',
+    `- ${buildContextReminder(context)} | Refer to ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME} and ${OTTERCAMP_COMMAND_REFERENCE_FILENAME} for rules.`,
+    '[/OTTERCAMP_CONTEXT_REMINDER]',
+  ].join('\n');
   if (!includeUserContent) {
     return reminder;
   }
@@ -3507,6 +3692,10 @@ function extractMessageContent(value: unknown): string {
     getTrimmedString(record.body) ||
     ''
   );
+}
+
+function normalizeAssistantReplyForDedup(content: string): string {
+  return content.trim().replace(/\s+/g, ' ').slice(0, 200);
 }
 
 function normalizeQuestionnaireType(value: unknown): QuestionnaireQuestion['type'] | null {
@@ -3971,7 +4160,9 @@ async function pushActivityEventBatch(orgID: string, events: BridgeAgentActivity
     return true;
   }
 
-  const response = await fetchWithRetry(`${OTTERCAMP_URL}/api/activity/events`, {
+  // Use plain fetch (no retry) for activity events — retries block the event loop
+  // and prevent DM dispatch messages from being processed on the WS connection.
+  const response = await fetch(`${OTTERCAMP_URL}/api/activity/events`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -3986,7 +4177,7 @@ async function pushActivityEventBatch(orgID: string, events: BridgeAgentActivity
       org_id: orgID,
       events,
     }),
-  }, 'push activity events');
+  });
   if (!response.ok) {
     const snippet = (await response.text().catch(() => '')).slice(0, 240);
     console.error(
@@ -4053,11 +4244,19 @@ export function resetSessionContextsForTest(): void {
   contextPrimedSessions.clear();
   workspaceCacheByAgentSlot.clear();
   workspaceGuideCache = null;
+  lastPersistedReplyBySession.clear();
+  deliveredRunIDs.clear();
+  deliveredRunIDOrder.length = 0;
+  lastChatEmissionAtBySession.clear();
 }
 
 export function resetIngestedToolEventsForTest(): void {
   ingestedToolEventCountForTest = 0;
   lastIngestedToolEventForTest = null;
+}
+
+export function resetChatEmissionForwardingStateForTest(): void {
+  lastChatEmissionAtBySession.clear();
 }
 
 export function getIngestedToolEventsStateForTest(): {
@@ -4414,9 +4613,10 @@ async function sendMessageToSession(
   sessionKey: string,
   content: string,
   messageID?: string,
-  options?: { forceIdentityBootstrap?: boolean; attachments?: DMDispatchAttachment[] },
+  options?: { forceIdentityBootstrap?: boolean; attachments?: DMDispatchAttachment[]; preferAgentMethod?: boolean },
 ): Promise<void> {
   const forceIdentityBootstrap = options?.forceIdentityBootstrap === true;
+  const preferAgentMethod = options?.preferAgentMethod === true;
   const idempotencyKey =
     (messageID || '').trim() || `dm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const normalizedAttachments = (options?.attachments || []).filter(
@@ -4425,6 +4625,7 @@ async function sendMessageToSession(
   const hasAttachments = normalizedAttachments.length > 0;
   const isFirstDispatchForSession = forceIdentityBootstrap || !contextPrimedSessions.has(sessionKey);
   const isCanonicalChameleonSession = parseChameleonSessionKey(sessionKey) !== null;
+  const shouldUseAgentMethod = isCanonicalChameleonSession || preferAgentMethod;
   const trimmedContent = content.trim();
   const recallAwareContent = trimmedContent ? await withAutoRecallContext(sessionKey, trimmedContent) : '';
   if (!recallAwareContent && !hasAttachments) {
@@ -4452,7 +4653,7 @@ async function sendMessageToSession(
     }
   }
 
-  if (isCanonicalChameleonSession && recallAwareContent) {
+  if (shouldUseAgentMethod && recallAwareContent) {
     const extraSystemPrompt = await withSessionContext(sessionKey, recallAwareContent, {
       includeUserContent: false,
       forceIdentityBootstrap,
@@ -4507,10 +4708,26 @@ async function persistAssistantReplyToOtterCamp(params: {
     return;
   }
 
-  const context = sessionContexts.get(sessionKey);
+  // Suppress NO_REPLY / HEARTBEAT_OK responses — these are internal signals, not user-facing.
+  // Also suppress partial fragments ("NO", "NO_") that leak from streaming truncation.
+  const upperContent = content.toUpperCase().replace(/[^A-Z_]/g, '');
+  if (
+    upperContent === 'NO_REPLY' || upperContent === 'NOREPLY' ||
+    upperContent === 'HEARTBEAT_OK' || upperContent === 'HEARTBEATOK' ||
+    upperContent === 'NO' || upperContent === 'NO_'
+  ) {
+    return;
+  }
+
+  const existingContext = sessionContexts.get(sessionKey);
+  const inferredContext = inferSessionContextFromKey(sessionKey);
+  const context = existingContext || inferredContext;
   if (!context) {
     // Ignore non-DM assistant activity (e.g. cron/system sessions).
     return;
+  }
+  if (!existingContext && inferredContext) {
+    setSessionContext(sessionKey, inferredContext);
   }
   let persistedTarget = sessionKey;
 
@@ -4591,7 +4808,7 @@ async function persistAssistantReplyToOtterCamp(params: {
     }
     persistedTarget = threadID;
   } else if (context.kind === 'project_chat') {
-    const orgID = getTrimmedString(context.orgID);
+    const orgID = getTrimmedString(context.orgID) || resolveConfiguredOtterCampOrgID();
     const projectID = getTrimmedString(context.projectID);
     if (!orgID || !projectID) {
       return;
@@ -4621,7 +4838,7 @@ async function persistAssistantReplyToOtterCamp(params: {
     }
     persistedTarget = `project:${projectID}`;
   } else if (context.kind === 'issue_comment') {
-    const orgID = getTrimmedString(context.orgID);
+    const orgID = getTrimmedString(context.orgID) || resolveConfiguredOtterCampOrgID();
     const issueID = getTrimmedString(context.issueID);
     const responderAgentID = getTrimmedString(context.responderAgentID);
     if (!orgID || !issueID || !responderAgentID) {
@@ -5130,6 +5347,160 @@ async function enforceMutationToolPolicy(event: OpenClawToolEvent): Promise<void
   }
 }
 
+function normalizeChatEmissionSummary(summary: string): string {
+  return summary.replace(/\s+/g, ' ').trim().slice(0, 200);
+}
+
+function resolveChatEmissionRoute(
+  sessionKey: string,
+): { orgID: string; sourceID: string; scope?: Record<string, string> } | null {
+  let context = sessionContexts.get(sessionKey);
+  if (!context) {
+    const inferred = inferSessionContextFromKey(sessionKey);
+    if (inferred) {
+      setSessionContext(sessionKey, inferred);
+      context = inferred;
+    }
+  }
+
+  const orgID = getTrimmedString(context?.orgID) || resolveConfiguredOtterCampOrgID();
+  if (!orgID) {
+    return null;
+  }
+
+  if (context?.kind === 'dm') {
+    const threadID = getTrimmedString(context.threadID);
+    if (threadID) {
+      return {
+        orgID,
+        sourceID: `dm:${threadID}`,
+      };
+    }
+  }
+
+  if (context?.kind === 'project_chat') {
+    const projectID = getTrimmedString(context.projectID);
+    if (projectID) {
+      return {
+        orgID,
+        sourceID: `project:${projectID}`,
+        scope: { project_id: projectID },
+      };
+    }
+  }
+
+  if (context?.kind === 'issue_comment') {
+    const issueID = getTrimmedString(context.issueID);
+    const projectID = getTrimmedString(context.projectID);
+    if (issueID) {
+      return {
+        orgID,
+        sourceID: `issue:${issueID}`,
+        scope: {
+          ...(projectID ? { project_id: projectID } : {}),
+          issue_id: issueID,
+        },
+      };
+    }
+  }
+
+  return {
+    orgID,
+    sourceID: `session:${sessionKey}`,
+  };
+}
+
+function shouldThrottleChatEmission(sessionKey: string, nowMs = Date.now()): boolean {
+  const lastSentAt = lastChatEmissionAtBySession.get(sessionKey) ?? 0;
+  if (nowMs - lastSentAt < CHAT_EMISSION_THROTTLE_MS) {
+    return true;
+  }
+  lastChatEmissionAtBySession.set(sessionKey, nowMs);
+  if (lastChatEmissionAtBySession.size > 5000) {
+    const cutoff = nowMs - (5 * 60 * 1000);
+    for (const [key, value] of lastChatEmissionAtBySession) {
+      if (value < cutoff) {
+        lastChatEmissionAtBySession.delete(key);
+      }
+    }
+  }
+  return false;
+}
+
+async function forwardChatEmissionToOtterCamp(sessionKey: string, summary: string): Promise<void> {
+  const normalizedSummary = normalizeChatEmissionSummary(summary);
+  if (!normalizedSummary) {
+    return;
+  }
+  const route = resolveChatEmissionRoute(sessionKey);
+  if (!route) {
+    return;
+  }
+  if (shouldThrottleChatEmission(sessionKey)) {
+    return;
+  }
+
+  const response = await fetchWithRetry(
+    `${OTTERCAMP_URL}/api/emissions?org_id=${encodeURIComponent(route.orgID)}`,
+    {
+      method: 'POST',
+      headers: buildOtterCampAuthHeaders(true),
+      body: JSON.stringify({
+        emissions: [
+          {
+            source_type: 'bridge',
+            source_id: route.sourceID,
+            kind: 'status',
+            summary: normalizedSummary,
+            timestamp: new Date().toISOString(),
+            ...(route.scope ? { scope: route.scope } : {}),
+          },
+        ],
+      }),
+    },
+    'forward chat emission',
+  );
+  if (!response.ok) {
+    const snippet = (await response.text().catch(() => '')).slice(0, 300);
+    throw new Error(`chat emission forward failed: ${response.status} ${response.statusText} ${snippet}`.trim());
+  }
+}
+
+function summarizeToolEventForChatEmission(event: OpenClawToolEvent): string {
+  const tool = getTrimmedString(event.tool) || 'tool';
+  const target =
+    getTrimmedString(event.args?.path) ||
+    getTrimmedString(event.args?.file) ||
+    getTrimmedString(event.args?.command);
+  if (target) {
+    return `Running ${tool}: ${target}`;
+  }
+  return `Running ${tool}`;
+}
+
+function summarizeIntermediateChatState(
+  payload: Record<string, unknown>,
+  state: string,
+): string | null {
+  const messageRecord = asRecord(payload.message);
+  const content = extractMessageContent(
+    messageRecord?.content ?? payload.content ?? payload.status ?? payload.summary,
+  );
+  if (content) {
+    if (state === 'thinking') {
+      return `Thinking: ${content}`;
+    }
+    return content;
+  }
+  if (state === 'thinking') {
+    return 'Thinking...';
+  }
+  if (state === 'stream' || state === 'running' || state === 'working') {
+    return 'Working...';
+  }
+  return null;
+}
+
 async function handleOpenClawToolEvent(event: OpenClawToolEvent): Promise<void> {
   ingestedToolEventCountForTest += 1;
   lastIngestedToolEventForTest = {
@@ -5137,6 +5508,12 @@ async function handleOpenClawToolEvent(event: OpenClawToolEvent): Promise<void> 
     ...(event.args ? { args: { ...event.args } } : {}),
   };
   await enforceMutationToolPolicy(event);
+  if (event.phase === 'start') {
+    const summary = summarizeToolEventForChatEmission(event);
+    await forwardChatEmissionToOtterCamp(event.sessionKey, summary).catch((err) => {
+      console.warn(`[bridge] failed to forward tool emission for ${event.sessionKey}:`, err);
+    });
+  }
 }
 
 async function handleOpenClawEvent(message: Record<string, unknown>): Promise<void> {
@@ -5194,29 +5571,54 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
   }
 
   const state = getTrimmedString(payload.state).toLowerCase();
-  if (state !== 'final') {
-    return;
-  }
-
   const sessionKey = getTrimmedString(payload.sessionKey) || getTrimmedString(payload.session_key);
   if (!sessionKey) {
     return;
   }
   if (!sessionContexts.has(sessionKey)) {
-    // Attempt to reconstruct context from session key pattern so replies for
-    // sessions created after a project-chat reset (or any session where the
-    // dispatch context was lost) can still be persisted back to OtterCamp.
-    const inferred = inferSessionContextFromKey(sessionKey);
-    if (inferred) {
-      setSessionContext(sessionKey, inferred);
-    } else {
+    const inferredContext = inferSessionContextFromKey(sessionKey);
+    if (!inferredContext) {
       return;
     }
+    setSessionContext(sessionKey, inferredContext);
+  }
+
+  if (state !== 'final') {
+    const summary = summarizeIntermediateChatState(payload, state);
+    if (summary) {
+      await forwardChatEmissionToOtterCamp(sessionKey, summary).catch((err) => {
+        console.warn(`[bridge] failed to forward chat emission for ${sessionKey}:`, err);
+      });
+    }
+    return;
   }
 
   const runID = getTrimmedString(payload.runId) || getTrimmedString(payload.run_id);
   if (runID && deliveredRunIDs.has(runID)) {
     return;
+  }
+
+  // Content-based dedup: skip if same content was persisted for this session within 30s
+  const contentForDedup = extractMessageContent(
+    asRecord(payload.message)?.content ?? payload.content,
+  );
+  if (contentForDedup && sessionKey) {
+    const dedupKey = `${sessionKey}::${normalizeAssistantReplyForDedup(contentForDedup)}`;
+    const lastTime = lastPersistedReplyBySession.get(dedupKey);
+    if (lastTime && Date.now() - lastTime < 30_000) {
+      console.log(
+        `[bridge] deduped assistant final reply for ${sessionKey}${runID ? ` (run_id=${runID})` : ''}`,
+      );
+      return;
+    }
+    lastPersistedReplyBySession.set(dedupKey, Date.now());
+    // Prune old entries
+    if (lastPersistedReplyBySession.size > 200) {
+      const cutoff = Date.now() - 60_000;
+      for (const [k, v] of lastPersistedReplyBySession) {
+        if (v < cutoff) lastPersistedReplyBySession.delete(k);
+      }
+    }
   }
 
   const messageRecord = asRecord(payload.message);
@@ -5643,11 +6045,13 @@ async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
     throw err;
   }
 
-  try {
-    await syncWorkflowProjectsFromCronJobs(cronJobs);
-  } catch (err) {
-    console.error('[bridge] workflow project cron sync failed:', err);
-  }
+  // Disabled: cron→workflow project sync creates unwanted projects.
+  // Re-enable when OtterCamp has proper workflow UI.
+  // try {
+  //   await syncWorkflowProjectsFromCronJobs(cronJobs);
+  // } catch (err) {
+  //   console.error('[bridge] workflow project cron sync failed:', err);
+  // }
 }
 
 async function pullDispatchQueueJobs(limit = 50): Promise<DispatchQueueJob[]> {
@@ -5926,6 +6330,65 @@ export function ensureGatewayCallCredentials(args: string[], tokenRaw: string = 
     return sanitized;
   }
   return [...sanitized, '--token', token];
+}
+
+const ELLIE_INGESTION_SESSION_NAMESPACE = 'ellie-ingestion';
+const ELLIE_INGESTION_SESSION_TOKEN_PATTERN = /[^a-z0-9_-]+/g;
+
+function normalizeEllieIngestionSessionToken(raw: string, fallback: string): string {
+  const normalized = raw
+    .trim()
+    .toLowerCase()
+    .replace(ELLIE_INGESTION_SESSION_TOKEN_PATTERN, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '');
+  return normalized || fallback;
+}
+
+function deriveMemoryExtractAgentSlot(params: Record<string, unknown>): string {
+  const sessionKey = getTrimmedString(params.sessionKey);
+  const match = /^agent:([^:]+):/i.exec(sessionKey);
+  if (!match?.[1]) {
+    return 'elephant';
+  }
+  return normalizeEllieIngestionSessionToken(match[1], 'elephant');
+}
+
+function ensureMemoryExtractSessionReuseArgs(args: string[], orgIDRaw: string): string[] {
+  const normalized = normalizeDispatchArgs(args);
+  const orgToken = normalizeEllieIngestionSessionToken(orgIDRaw, '');
+  if (!orgToken) {
+    return normalized;
+  }
+  if (normalized.length < 3) {
+    return normalized;
+  }
+  if (normalized[0] !== 'gateway' || normalized[1] !== 'call' || normalized[2] !== 'agent') {
+    return normalized;
+  }
+
+  const paramsIndex = normalized.indexOf('--params');
+  if (paramsIndex < 0 || paramsIndex + 1 >= normalized.length) {
+    return normalized;
+  }
+
+  let parsedParams: Record<string, unknown> | null = null;
+  try {
+    parsedParams = asRecord(parseJSONValue(normalized[paramsIndex + 1]));
+  } catch {
+    return normalized;
+  }
+  if (!parsedParams) {
+    return normalized;
+  }
+
+  const stableSessionKey = `agent:${deriveMemoryExtractAgentSlot(parsedParams)}:main:${ELLIE_INGESTION_SESSION_NAMESPACE}:${orgToken}`;
+  const rewritten = [...normalized];
+  rewritten[paramsIndex + 1] = JSON.stringify({
+    ...parsedParams,
+    sessionKey: stableSessionKey,
+  });
+  return rewritten;
 }
 
 const MEMORY_EXTRACT_MAX_PAYLOAD_TEXT_CHARS = 8000;
@@ -6211,7 +6674,9 @@ async function handleMemoryExtractDispatchEvent(event: MemoryExtractDispatchEven
   }
 
   try {
-    const output = await runOpenClawCommandCapture(ensureGatewayCallCredentials(args));
+    const output = await runOpenClawCommandCapture(
+      ensureGatewayCallCredentials(ensureMemoryExtractSessionReuseArgs(args, orgID)),
+    );
     sendResponse({ ok: true, output: compactMemoryExtractOutput(output) });
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
@@ -6348,11 +6813,20 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
   });
 
   const outboundContent = formatIncrementalDMContent(content, incrementalContext);
+  if (messageID && hasDeliveredDMMessageID(messageID)) {
+    console.log(
+      `[bridge] skipped duplicate dm.message for ${sessionKey} (message_id=${messageID})`,
+    );
+    return;
+  }
   try {
     await sendMessageToSession(sessionKey, outboundContent, messageID || undefined, {
       forceIdentityBootstrap: injectIdentity,
       attachments,
     });
+    if (messageID) {
+      rememberDeliveredDMMessageID(messageID);
+    }
     console.log(
       `[bridge] delivered dm.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
@@ -6385,15 +6859,16 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
 async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): Promise<void> {
   const projectID = getTrimmedString(event.data?.project_id);
   const projectName = getTrimmedString(event.data?.project_name);
-  const agentID = getTrimmedString(event.data?.agent_id);
+  const requestedSessionKey = getTrimmedString(event.data?.session_key);
+  const agentID = getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(requestedSessionKey);
   const agentName = getTrimmedString(event.data?.agent_name);
   const content = getTrimmedString(event.data?.content);
   const questionnaire = normalizeQuestionnairePayload(event.data?.questionnaire);
   const orgID = getTrimmedString(event.org_id);
   const messageID = getTrimmedString(event.data?.message_id) || undefined;
-  const sessionKey =
-    getTrimmedString(event.data?.session_key) ||
-    (agentID && projectID ? `agent:${agentID}:project:${projectID}` : '');
+  const dispatchTarget = resolveProjectChatDispatchTarget(agentID, projectID, requestedSessionKey);
+  const sessionKey = dispatchTarget.sessionKey;
+  const useAgentMethod = dispatchTarget.routedAgentID === 'main';
   let outboundContent = content;
   if (questionnaire) {
     const formatted = formatQuestionnaireForFallback(questionnaire);
@@ -6416,7 +6891,9 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
   });
 
   try {
-    await sendMessageToSession(sessionKey, outboundContent, messageID);
+    await sendMessageToSession(sessionKey, outboundContent, messageID, {
+      preferAgentMethod: useAgentMethod,
+    });
     console.log(
       `[bridge] delivered project.chat.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
@@ -6449,7 +6926,8 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
 async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent): Promise<void> {
   const issueID = getTrimmedString(event.data?.issue_id);
   const projectID = getTrimmedString(event.data?.project_id);
-  const agentID = getTrimmedString(event.data?.agent_id);
+  const requestedSessionKey = getTrimmedString(event.data?.session_key);
+  const agentID = getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(requestedSessionKey);
   const agentName = getTrimmedString(event.data?.agent_name);
   const responderAgentID = getTrimmedString(event.data?.responder_agent_id);
   const issueTitle = getTrimmedString(event.data?.issue_title);
@@ -6460,9 +6938,9 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
   const messageID = getTrimmedString(event.data?.message_id) || undefined;
   const parsedIssueNumber = Number(event.data?.issue_number);
   const issueNumber = Number.isFinite(parsedIssueNumber) ? parsedIssueNumber : undefined;
-  const sessionKey =
-    getTrimmedString(event.data?.session_key) ||
-    (agentID && issueID ? `agent:${agentID}:issue:${issueID}` : '');
+  const dispatchTarget = resolveIssueCommentDispatchTarget(agentID, projectID, issueID, requestedSessionKey);
+  const sessionKey = dispatchTarget.sessionKey;
+  const useAgentMethod = dispatchTarget.routedAgentID === 'main';
   let outboundContent = content;
   if (questionnaire) {
     const formatted = formatQuestionnaireForFallback(questionnaire);
@@ -6489,7 +6967,9 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
   });
 
   try {
-    await sendMessageToSession(sessionKey, outboundContent, messageID);
+    await sendMessageToSession(sessionKey, outboundContent, messageID, {
+      preferAgentMethod: useAgentMethod,
+    });
     console.log(
       `[bridge] delivered issue.comment.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );

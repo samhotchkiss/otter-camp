@@ -59,6 +59,30 @@ const CHAT_DOCK_DEFAULT_WIDTH_PX = 384;
 const CHAT_DOCK_MIN_WIDTH_PX = 320;
 const CHAT_DOCK_MAX_WIDTH_PX = 960;
 const CHAT_DOCK_HANDLE_VISIBLE_PX = 16;
+const CHAT_DOCK_WIDTH_STORAGE_KEY = "otter-shell-width";
+
+function readStoredChatDockWidth(): number | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = (window.localStorage.getItem(CHAT_DOCK_WIDTH_STORAGE_KEY) ?? "").trim();
+    if (!raw) {
+      return null;
+    }
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function clampChatDockWidthForViewport(rawWidth: number, viewportWidth: number): number {
+  const viewportBound = Math.max(CHAT_DOCK_MIN_WIDTH_PX, Math.floor(viewportWidth - 220));
+  const maxWidth = Math.min(CHAT_DOCK_MAX_WIDTH_PX, viewportBound);
+  const normalized = Number.isFinite(rawWidth) ? Math.round(rawWidth) : CHAT_DOCK_DEFAULT_WIDTH_PX;
+  return Math.max(CHAT_DOCK_MIN_WIDTH_PX, Math.min(maxWidth, normalized));
+}
 
 function logOut() {
   document.cookie = "otter_auth=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
@@ -153,7 +177,12 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(true);
-  const [chatDockWidth, setChatDockWidth] = useState(CHAT_DOCK_DEFAULT_WIDTH_PX);
+  const [chatDockWidth, setChatDockWidth] = useState(() => {
+    const storedWidth = readStoredChatDockWidth();
+    const initialWidth = storedWidth ?? CHAT_DOCK_DEFAULT_WIDTH_PX;
+    const viewportWidth = typeof window === "undefined" ? CHAT_DOCK_MAX_WIDTH_PX : window.innerWidth;
+    return clampChatDockWidthForViewport(initialWidth, viewportWidth);
+  });
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
   const [sidebarInboxItems, setSidebarInboxItems] = useState<SidebarInboxItem[]>([]);
   const [sidebarProjectItems, setSidebarProjectItems] = useState<SidebarProjectItem[]>([]);
@@ -275,12 +304,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   }, [avatarMenuOpen]);
 
   const clampChatDockWidth = useCallback((rawWidth: number): number => {
-    const viewportBound = typeof window === "undefined"
-      ? CHAT_DOCK_MAX_WIDTH_PX
-      : Math.max(CHAT_DOCK_MIN_WIDTH_PX, Math.floor(window.innerWidth - 220));
-    const maxWidth = Math.min(CHAT_DOCK_MAX_WIDTH_PX, viewportBound);
-    const normalized = Number.isFinite(rawWidth) ? Math.round(rawWidth) : CHAT_DOCK_DEFAULT_WIDTH_PX;
-    return Math.max(CHAT_DOCK_MIN_WIDTH_PX, Math.min(maxWidth, normalized));
+    const viewportWidth = typeof window === "undefined" ? CHAT_DOCK_MAX_WIDTH_PX : window.innerWidth;
+    return clampChatDockWidthForViewport(rawWidth, viewportWidth);
   }, []);
 
   useEffect(() => {
@@ -294,6 +319,20 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, [clampChatDockWidth]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(
+        CHAT_DOCK_WIDTH_STORAGE_KEY,
+        String(clampChatDockWidth(chatDockWidth)),
+      );
+    } catch {
+      // Ignore localStorage write failures (private mode/quota/etc.).
+    }
+  }, [chatDockWidth, clampChatDockWidth]);
 
   const toggleChatDock = useCallback(() => {
     setChatOpen((open) => !open);
@@ -385,6 +424,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   }, []);
 
   const currentRouteLabel = useMemo(() => routeLabel(location.pathname), [location.pathname]);
+  const chatRailWidthPx = chatOpen ? chatDockWidth : CHAT_DOCK_HANDLE_VISIBLE_PX;
+  const contentShellClass = chatOpen
+    ? "mx-auto max-w-6xl space-y-4 md:space-y-6"
+    : "w-full max-w-none space-y-4 md:space-y-6";
 
   return (
     <div className="shell-layout flex h-screen overflow-hidden bg-stone-950 text-stone-200 font-sans" data-testid="shell-layout">
@@ -661,13 +704,13 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
         <div className="shell-workspace relative flex flex-1 overflow-hidden" data-testid="shell-workspace">
           <main className="shell-content min-w-0 flex-1 overflow-y-auto bg-stone-950 p-4 md:p-6" id="main-content">
-            <div className="mx-auto max-w-6xl space-y-4 md:space-y-6">{children}</div>
+            <div className={contentShellClass}>{children}</div>
           </main>
           <aside
             className="shell-chat-slot pointer-events-none absolute inset-y-0 right-0 z-20 max-lg:hidden"
             data-testid="shell-chat-slot"
             aria-hidden={!chatOpen}
-            style={{ width: `${chatDockWidth}px` }}
+            style={{ width: `${chatRailWidthPx}px` }}
           >
             <div className="pointer-events-auto relative h-full overflow-visible">
               <div
@@ -686,8 +729,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 >
                   <span aria-hidden="true">{chatOpen ? "›" : "‹"}</span>
                 </button>
-                <div className="h-full border-l border-stone-800 bg-stone-900 shadow-2xl shadow-black/40">
-                  <GlobalChatDock embedded />
+                <div className={`h-full border-l border-stone-800 bg-stone-900 ${chatOpen ? "shadow-2xl shadow-black/40" : ""}`}>
+                  <GlobalChatDock embedded onToggleRail={toggleChatDock} />
                 </div>
               </div>
             </div>

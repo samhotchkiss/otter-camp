@@ -42,16 +42,18 @@ git push   # pushes to otter.camp
 - **Descriptive messages.** "Add vector embedding benchmark results" not "update docs".
 - **Commit after every meaningful change.** Don't accumulate uncommitted work.
 
-## Issues
+## Tasks
 
-Every piece of work gets an issue with acceptance criteria.
+Every piece of work gets a task with acceptance criteria.
+Projects can define a default flow template; tasks inherit it unless explicitly assigned another flow.
+Each project should assign a project manager agent (`primary_agent_id`) as full-context owner for escalations.
 
 ```bash
-# List issues
+# List tasks
 otter issue list --project <name>
 
-# Create an issue
-otter issue create --project <name> "Issue title" --body "Description" --priority P1
+# Create a task
+otter issue create --project <name> "Task title" --body "Description" --priority P1
 
 # View, comment, close
 otter issue view --project <name> <number>
@@ -59,6 +61,10 @@ otter issue comment --project <name> <number> "Comment text"
 otter issue close --project <name> <number>
 ```
 
+### Blocker Escalation Rules
+- Sub-agent blocker -> escalate in task chat to project manager agent.
+- If unresolved by project manager -> escalate to human.
+- Human escalation moves task to inbox and `on_hold` until response.
 ## Documentation
 
 Every project has a `docs/` dir. See `project-docs-spec.md` for the full spec. The short version:
@@ -76,8 +82,11 @@ Every project has a `docs/` dir. See `project-docs-spec.md` for the full spec. T
 | Work product (code, content, designs) | OtterCamp project |
 | Project documentation | `<project>/docs/` |
 | Personal agent notes, memory files | `~/Documents/SamsBrain/Agents/<name>/` |
-| Issues and tracking | OtterCamp issues |
+| Tasks and tracking | OtterCamp tasks |
 
 ## Change Log
 
+- 2026-02-21: Documented project manager ownership and blocker escalation path (sub-agent -> PM -> human inbox/on-hold).
+- 2026-02-21: Renamed project work terminology from issues/subissues to tasks/subtasks in workflow guidance.
+- 2026-02-21: Documented default flow templates for tasks.
 - 2026-02-16: Created project workflow instructions.

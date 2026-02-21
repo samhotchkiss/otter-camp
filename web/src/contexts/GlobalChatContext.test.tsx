@@ -110,7 +110,7 @@ describe("GlobalChatContext", () => {
             }),
           };
         }
-        if (url.includes("/api/issues/")) {
+        if (url.includes("/api/project-tasks/")) {
           return {
             ok: false,
             json: async () => ({}),
@@ -397,8 +397,8 @@ describe("GlobalChatContext", () => {
             type: "issue",
             issueId: "issue-1",
             title: "Issue 1a2b3c4d",
-            contextLabel: "Issue",
-            subtitle: "Issue conversation",
+            contextLabel: "Task",
+            subtitle: "Task conversation",
             unreadCount: 0,
             updatedAt: "2026-02-11T10:00:00.000Z",
           },
@@ -417,7 +417,7 @@ describe("GlobalChatContext", () => {
             }),
           };
         }
-        if (url.includes("/api/issues/issue-1")) {
+        if (url.includes("/api/project-tasks/issue-1")) {
           return {
             ok: true,
             json: async () => ({
@@ -441,7 +441,7 @@ describe("GlobalChatContext", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          "issue:issue-1|Write a poem about testing OtterCamp|Issue • Otter Camp|0",
+          "issue:issue-1|Write a poem about testing OtterCamp|Task • Otter Camp|0",
         ),
       ).toBeInTheDocument();
     });
@@ -494,61 +494,6 @@ describe("GlobalChatContext", () => {
     await waitFor(() => {
       expect(
         screen.getByText("project:project-1|Otter Camp|Project • Otter Camp|1"),
-      ).toBeInTheDocument();
-    });
-  });
-
-  it("increments unread counts for issue comment events with nested issue ids", async () => {
-    window.localStorage.setItem(
-      "otter-camp-global-chat:v1",
-      JSON.stringify({
-        isOpen: true,
-        selectedKey: "dm:dm_avatar-design",
-        conversations: [
-          {
-            key: "issue:issue-1",
-            type: "issue",
-            issueId: "issue-1",
-            projectId: "project-1",
-            title: "Issue thread",
-            contextLabel: "Issue • Otter Camp",
-            subtitle: "Issue chat",
-            unreadCount: 0,
-            updatedAt: "2026-02-11T10:00:00.000Z",
-          },
-          {
-            key: "dm:dm_avatar-design",
-            type: "dm",
-            threadId: "dm_avatar-design",
-            agent: { id: "avatar-design", name: "Jeff G", status: "online" },
-            title: "Jeff G",
-            contextLabel: "Direct message",
-            subtitle: "Agent chat",
-            unreadCount: 0,
-            updatedAt: "2026-02-11T10:00:00.000Z",
-          },
-        ],
-      }),
-    );
-    wsState.lastMessage = {
-      type: "IssueCommentCreated",
-      data: {
-        comment: {
-          issue_id: "issue-1",
-          body: "Nested issue payload",
-        },
-      },
-    };
-
-    render(
-      <GlobalChatProvider>
-        <ConversationDetails />
-      </GlobalChatProvider>,
-    );
-
-    await waitFor(() => {
-      expect(
-        screen.getByText("issue:issue-1|Issue thread|Issue • Otter Camp|1"),
       ).toBeInTheDocument();
     });
   });

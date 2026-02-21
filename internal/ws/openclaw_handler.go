@@ -146,20 +146,32 @@ func (h *OpenClawHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Upgrade connection
+	if h.IsConnected() {
+		log.Printf("[openclaw-ws] Rejecting connection from %s: bridge already connected", r.RemoteAddr)
+		http.Error(w, "Bridge already connected", http.StatusConflict)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[openclaw-ws] Upgrade failed: %v", err)
 		return
 	}
 
-	var previous *websocket.Conn
 	h.mu.Lock()
-	previous = h.conn
+	if h.conn != nil {
+		h.mu.Unlock()
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "bridge already connected"),
+			time.Now().Add(writeWait),
+		)
+		_ = conn.Close()
+		log.Printf("[openclaw-ws] Closed duplicate upgraded connection from %s: bridge already connected", r.RemoteAddr)
+		return
+	}
 	h.conn = conn
 	h.mu.Unlock()
-	if previous != nil && previous != conn {
-		_ = previous.Close()
-	}
 
 	log.Printf("[openclaw-ws] OpenClaw connected from %s", r.RemoteAddr)
 
@@ -175,8 +187,34 @@ func (h *OpenClawHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeMu.Unlock()
 	}
 
-	// Start read pump
+	// Start read pump and ping loop
 	go h.readPump(conn)
+	go h.pingLoop(conn)
+}
+
+// pingLoop sends periodic WebSocket pings to keep the connection alive
+// through Railway's reverse proxy. Railway drops connections that appear
+// idle; ping every 5s to stay well under any timeout threshold.
+func (h *OpenClawHandler) pingLoop(conn *websocket.Conn) {
+	const bridgePingPeriod = 5 * time.Second
+	ticker := time.NewTicker(bridgePingPeriod)
+	defer ticker.Stop()
+	for {
+		<-ticker.C
+		h.mu.RLock()
+		current := h.conn
+		h.mu.RUnlock()
+		if current != conn {
+			return // connection replaced, stop pinging
+		}
+		h.writeMu.Lock()
+		_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
+		err := conn.WriteMessage(websocket.PingMessage, nil)
+		h.writeMu.Unlock()
+		if err != nil {
+			return
+		}
+	}
 }
 
 // readPump handles incoming messages from OpenClaw.

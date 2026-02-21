@@ -18,7 +18,7 @@ const TRIGGER_META: Record<string, TriggerMeta> = {
   "system.event": { icon: "🔧", label: "System" },
   "dispatch.dm": { icon: "📨", label: "DM Dispatch" },
   "dispatch.project_chat": { icon: "📨", label: "Project Dispatch" },
-  "dispatch.issue": { icon: "📨", label: "Issue Dispatch" },
+  "dispatch.issue": { icon: "📨", label: "Task Dispatch" },
 };
 
 const STATUS_STYLE: Record<string, string> = {

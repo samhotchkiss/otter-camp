@@ -7,7 +7,7 @@
 ## What Otter Camp Is
 
 Otter Camp is an agent-operations platform built around one workspace/org as the source of truth for:
-- Projects and issues
+- Projects and tasks
 - Agent identities and lifecycle
 - Conversation history and memory
 - Local and hosted operation with OpenClaw bridge support
@@ -71,9 +71,9 @@ Use this map:
 - Then read ingest (`initial-ingest.md`, `ongoing-ingest.md`), retrieval (`recall.md`), and embeddings (`vector-embedding.md`)
 - Experimental findings: `experiment-log.md`, `entity-synthesis.md`, `file-backed-memories.md`, `dedup.md`
 
-2. Project and issue subsystem: `docs/projects/`
+2. Project and task subsystem: `docs/projects/`
 - Start at `docs/projects/overview.md`
-- Then issue model and lifecycle (`how-issues-work.md`, `issue-flow.md`)
+- Then task model and lifecycle (`how-issues-work.md`, `issue-flow.md`)
 - Runtime split (`local-vs-bridge.md`) for deployment-dependent behavior
 - Hosted wildcard routing rollout (`hosted-wildcard-routing.md`) for DNS/TLS setup and verification
 
@@ -133,7 +133,7 @@ Primary implementation wave came through issue/commit streams around Spec #150-#
 - `internal/import`: OpenClaw migration and safety guardrails
 - `internal/scheduler`: recurring job execution
 - `internal/ws`: websocket hub + OpenClaw WS bridge endpoint
-- `cmd/otter`: CLI for auth, projects, issues, jobs, migration, local ops
+- `cmd/otter`: CLI for auth, projects, tasks, jobs, migration, local ops
 - `web/src`: frontend pages/components/contexts
 - `bridge/`: OpenClaw bridge runtime + monitor scripts
 
@@ -148,6 +148,7 @@ Primary implementation wave came through issue/commit streams around Spec #150-#
 
 ## Change Log
 
+- 2026-02-21: Updated project-work terminology from issues to tasks across navigation and subsystem guidance.
 - 2026-02-19: Fixed Spec 516 reviewer follow-ups for review-link fallback and issue/review test stability; updated regression coverage and test timing guards.
 - 2026-02-16: Added join waitlist fallback behavior for invalid invite codes and documented DB-backed + throttled `/api/waitlist` signup handling (Spec 315).
 - 2026-02-17: Bug fix in hosted CLI setup handoff conflict-resolution follow-up; no behavior change.

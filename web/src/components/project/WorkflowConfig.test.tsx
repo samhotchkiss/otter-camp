@@ -78,17 +78,17 @@ describe("WorkflowConfig", () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ workflowAgentID: "agent-2" }));
   });
 
-  it("updates issue template text fields", async () => {
+  it("updates task template text fields", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     renderWorkflowConfig(onChange);
 
-    await user.clear(screen.getByLabelText("Workflow issue title pattern"));
-    await user.type(screen.getByLabelText("Workflow issue title pattern"), "Morning Briefing - {{date}}");
-    await user.clear(screen.getByLabelText("Workflow issue body"));
-    await user.type(screen.getByLabelText("Workflow issue body"), "Summarize inbox and calendar");
-    await user.clear(screen.getByLabelText("Workflow issue labels"));
-    await user.type(screen.getByLabelText("Workflow issue labels"), "automated,briefing");
+    await user.clear(screen.getByLabelText("Workflow task title pattern"));
+    await user.type(screen.getByLabelText("Workflow task title pattern"), "Morning Briefing - {{date}}");
+    await user.clear(screen.getByLabelText("Workflow task body"));
+    await user.type(screen.getByLabelText("Workflow task body"), "Summarize inbox and calendar");
+    await user.clear(screen.getByLabelText("Workflow task labels"));
+    await user.type(screen.getByLabelText("Workflow task labels"), "automated,briefing");
 
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ titlePattern: expect.stringContaining("Morning Briefing") }),
@@ -102,7 +102,7 @@ describe("WorkflowConfig", () => {
     const onChange = vi.fn();
     renderWorkflowConfig(onChange);
 
-    await user.selectOptions(screen.getByLabelText("Workflow issue priority"), "P0");
+    await user.selectOptions(screen.getByLabelText("Workflow task priority"), "P0");
     await user.selectOptions(screen.getByLabelText("Workflow pipeline"), "standard");
     await user.click(screen.getByLabelText("Workflow auto close"));
 

@@ -210,6 +210,9 @@ func (w *EllieIngestionWorker) Start(ctx context.Context) {
 			continue
 		}
 		if result.ProcessedMessages > 0 {
+			if err := sleepWithContext(ctx, w.Interval); err != nil {
+				return
+			}
 			continue
 		}
 		if err := sleepWithContext(ctx, w.Interval); err != nil {

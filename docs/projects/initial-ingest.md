@@ -1,6 +1,6 @@
 # Projects: Initial Ingest
 
-> Summary: How project/issue/repo context enters Otter Camp from OpenClaw and GitHub.
+> Summary: How project/task/repo context enters Otter Camp from OpenClaw and GitHub.
 > Last updated: 2026-02-16
 > Audience: Agents building migration/import pathways.
 
@@ -10,7 +10,7 @@ Through `otter migrate from-openclaw`:
 - Agent roster import
 - Conversation history backfill
 - Ellie backfill
-- Project/issue discovery pass
+- Project/task discovery pass
 
 Core modules:
 - `internal/import/migration_runner.go`
@@ -18,7 +18,7 @@ Core modules:
 
 ## GitHub Import/Sync
 
-Project issue and repo ingest use:
+Project task and repo ingest use:
 - GitHub webhooks
 - Poll fallback
 - Manual sync endpoints
@@ -36,4 +36,5 @@ Core modules:
 
 ## Change Log
 
+- 2026-02-21: Renamed project issue terminology to project task terminology.
 - 2026-02-16: Created canonical documentation file and migrated relevant legacy content.

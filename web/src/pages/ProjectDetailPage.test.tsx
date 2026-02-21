@@ -1,261 +1,1005 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import ProjectDetailPage from "./ProjectDetailPage";
 
-const { projectMock, issuesMock, activityRecentMock } = vi.hoisted(() => ({
-  projectMock: vi.fn(),
-  issuesMock: vi.fn(),
-  activityRecentMock: vi.fn(),
+vi.mock("../components/project/ProjectFileBrowser", () => ({
+  default: ({ projectId }: { projectId: string }) => (
+    <div data-testid="project-file-browser-mock">File browser: {projectId}</div>
+  ),
 }));
 
-vi.mock("../lib/api", async () => {
-  const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
+vi.mock("../components/project/ProjectIssuesList", () => ({
+  default: () => <div data-testid="project-issues-list-mock" />,
+}));
+
+vi.mock("../components/project/IssueThreadPanel", () => ({
+  default: () => <div data-testid="issue-thread-panel-mock" />,
+}));
+
+const { upsertConversationMock, openConversationMock } = vi.hoisted(() => ({
+  upsertConversationMock: vi.fn(),
+  openConversationMock: vi.fn(),
+}));
+
+vi.mock("../contexts/GlobalChatContext", () => ({
+  useGlobalChat: () => ({
+    upsertConversation: upsertConversationMock,
+    openConversation: openConversationMock,
+  }),
+}));
+
+function mockJSONResponse(body: unknown, ok = true): Response {
   return {
-    ...actual,
-    default: {
-      ...actual.default,
-      project: projectMock,
-      issues: issuesMock,
-      activityRecent: activityRecentMock,
-    },
-  };
-});
-
-const PROJECT_PAYLOAD = {
-  id: "project-2",
-  name: "API Gateway",
-  description:
-    "Core API gateway handling authentication, rate limiting, and request routing for all services",
-  repo_url: "https://github.com/company/api-gateway",
-  taskCount: 9,
-  completedCount: 4,
-  updated_at: "2026-02-18T20:00:00Z",
-};
-
-const ISSUES_PAYLOAD = {
-  items: [
-    {
-      id: "issue-209",
-      issue_number: 209,
-      title: "Fix API rate limiting",
-      approval_state: "ready_for_review",
-      priority: "P1",
-      owner_agent_id: "Agent-007",
-      last_activity_at: "2026-02-18T20:01:00Z",
-      state: "open",
-      origin: "local",
-      kind: "issue",
-      project_id: "project-2",
-    },
-  ],
-  total: 1,
-};
-
-function renderProjectDetailPage(initialEntry = "/projects/project-2") {
-  return render(
-    <MemoryRouter initialEntries={[initialEntry]}>
-      <Routes>
-        <Route path="/projects/:id" element={<ProjectDetailPage />} />
-        <Route path="/issue/:issueId" element={<div data-testid="issue-detail-route" />} />
-        <Route path="/review/:documentId" element={<div data-testid="content-review-route" />} />
-      </Routes>
-    </MemoryRouter>,
-  );
+    ok,
+    json: async () => body,
+  } as Response;
 }
 
-describe("ProjectDetailPage", () => {
+function ProjectTaskRouteEcho() {
+  const { id, taskId } = useParams<{ id: string; taskId: string }>();
+  return <div data-testid="project-task-route">{id}:{taskId}</div>;
+}
+
+describe("ProjectDetailPage files tab", () => {
+  const fetchMock = vi.fn();
+
   beforeEach(() => {
-    projectMock.mockReset();
-    issuesMock.mockReset();
-    activityRecentMock.mockReset();
-    projectMock.mockResolvedValue(PROJECT_PAYLOAD);
-    issuesMock.mockResolvedValue(ISSUES_PAYLOAD);
-    activityRecentMock.mockResolvedValue({ items: [] });
+    vi.stubGlobal("fetch", fetchMock);
+    fetchMock.mockReset();
+    upsertConversationMock.mockReset();
+    openConversationMock.mockReset();
     localStorage.clear();
+    localStorage.setItem("otter-camp-org-id", "org-123");
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    localStorage.clear();
-  });
-
-  it("renders API-driven project metadata scaffold", async () => {
-    renderProjectDetailPage();
-
-    expect(await screen.findByRole("heading", { level: 1, name: "API Gateway" })).toBeInTheDocument();
-    expect(screen.getByText(/Core API gateway handling authentication/i)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /github\.com\/company\/api-gateway/i })).toBeInTheDocument();
-    expect(projectMock).toHaveBeenCalledWith("project-2");
-    expect(issuesMock).toHaveBeenCalledWith({ projectID: "project-2", state: "open", limit: 200 });
-  });
-
-  it("renders mapped project stats and open issues list", async () => {
-    renderProjectDetailPage();
-
-    const issueLink = await screen.findByRole("link", { name: /Fix API rate limiting/i });
-    expect(issueLink).toBeInTheDocument();
-    expect(screen.getByText("Branches")).toBeInTheDocument();
-    expect(screen.getByText("Commits")).toBeInTheDocument();
-    expect(screen.getByText("Contributors")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Open Issues" })).toBeInTheDocument();
-    expect(screen.getByText("approval needed")).toBeInTheDocument();
-  });
-
-  it("navigates to issue detail when an issue row is clicked", async () => {
+  it("shows Files tab, keeps chat as a header button, and renders ProjectFileBrowser when selected", async () => {
     const user = userEvent.setup();
-    renderProjectDetailPage();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+          description: "Long-form writing",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
 
-    await user.click(await screen.findByRole("link", { name: /Fix API rate limiting/i }));
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
 
-    expect(screen.getByTestId("issue-detail-route")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Chat" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "+ New Task" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Code" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Files" }));
+    expect(await screen.findByTestId("project-file-browser-mock")).toBeInTheDocument();
   });
 
-  it("keeps activity and file explorer in right rail position", async () => {
-    renderProjectDetailPage();
-
-    await screen.findByRole("heading", { name: "API Gateway" });
-    const rightRail = screen.getByTestId("project-detail-right-rail");
-    expect(rightRail).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Recent Activity" })).toBeInTheDocument();
-    expect(screen.getByTestId("project-detail-file-explorer")).toBeInTheDocument();
-    expect(screen.getByText("No recent activity yet.")).toBeInTheDocument();
-    expect(screen.getByText("No files indexed yet.")).toBeInTheDocument();
-  });
-
-  it("switches to kanban view and expands board to full width", async () => {
+  it("opens global chat when Chat button is clicked", async () => {
     const user = userEvent.setup();
-    renderProjectDetailPage();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
 
-    await screen.findByRole("heading", { name: "API Gateway" });
-    await user.click(screen.getByRole("button", { name: "Project issue kanban view" }));
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
 
-    expect(screen.getByTestId("project-kanban-board")).toBeInTheDocument();
-    expect(screen.getByTestId("project-kanban-full-width")).toBeInTheDocument();
-    expect(screen.queryByTestId("project-detail-right-rail")).not.toBeInTheDocument();
-    expect(screen.getByText("Issue Kanban")).toBeInTheDocument();
-    expect(screen.getByText("Approval")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Fix API rate limiting/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Chat" }));
+
+    expect(openConversationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "project",
+        projectId: "project-1",
+        title: "Technonymous",
+      }),
+      expect.objectContaining({ focus: true, openDock: true }),
+    );
   });
 
-  it("routes markdown review links from the live file explorer", async () => {
+  it("loads board data from project tasks and computes task-based header counts", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          agents: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440111",
+              name: "Derek",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440211",
+              issue_number: 11,
+              title: "Stuck issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: "550e8400-e29b-41d4-a716-446655440111",
+              work_status: "blocked",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "550e8400-e29b-41d4-a716-446655440212",
+              issue_number: 12,
+              title: "Active issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: "550e8400-e29b-41d4-a716-446655440111",
+              work_status: "in_progress",
+              priority: "P2",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "550e8400-e29b-41d4-a716-446655440213",
+              issue_number: 13,
+              title: "Completed issue",
+              state: "closed",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: "550e8400-e29b-41d4-a716-446655440111",
+              work_status: "done",
+              priority: "P3",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+
+    const fetchedURLs = fetchMock.mock.calls.map(([input]: [unknown]) => String(input));
+    expect(fetchedURLs.some((url) => url.includes("/api/project-tasks?"))).toBe(true);
+    expect(fetchedURLs.some((url) => url.includes("/api/tasks?"))).toBe(false);
+    expect(screen.getByText("1 item waiting on you")).toBeInTheDocument();
+    expect(screen.getByText("2 active tasks")).toBeInTheDocument();
+  });
+
+  it("groups issue work status values into board columns and removes legacy task controls", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-queued",
+              issue_number: 101,
+              title: "Queued issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "ready",
+              priority: "P2",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-planning",
+              issue_number: 102,
+              title: "Planning issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "planning",
+              priority: "P2",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-ready-for-work",
+              issue_number: 103,
+              title: "Ready for work issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "ready_for_work",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-in-progress",
+              issue_number: 104,
+              title: "In progress issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "in_progress",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-review",
+              issue_number: 105,
+              title: "Review issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "review",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-blocked",
+              issue_number: 106,
+              title: "Blocked issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "blocked",
+              priority: "P0",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-flagged",
+              issue_number: 107,
+              title: "Flagged issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "flagged",
+              priority: "P0",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-done",
+              issue_number: 108,
+              title: "Done issue",
+              state: "closed",
+              origin: "local",
+              kind: "issue",
+              work_status: "done",
+              priority: "P3",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-cancelled",
+              issue_number: 109,
+              title: "Cancelled issue",
+              state: "closed",
+              origin: "local",
+              kind: "issue",
+              work_status: "cancelled",
+              priority: "P3",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+
+    const planningColumn = screen.getByTestId("board-column-planning");
+    const queueColumn = screen.getByTestId("board-column-queue");
+    const inProgressColumn = screen.getByTestId("board-column-in_progress");
+    const reviewColumn = screen.getByTestId("board-column-review");
+    const doneColumn = screen.getByTestId("board-column-done");
+
+    expect(within(planningColumn).getByText("Planning issue")).toBeInTheDocument();
+    expect(within(queueColumn).getByText("Queued issue")).toBeInTheDocument();
+    expect(within(queueColumn).getByText("Ready for work issue")).toBeInTheDocument();
+    expect(within(inProgressColumn).getByText("In progress issue")).toBeInTheDocument();
+    expect(within(inProgressColumn).getByTestId("project-board-mini-issue-in-progress")).toBeInTheDocument();
+    expect(within(reviewColumn).getByText("Review issue")).toBeInTheDocument();
+    expect(within(reviewColumn).getByText("Blocked issue")).toBeInTheDocument();
+    expect(within(reviewColumn).getByText("Flagged issue")).toBeInTheDocument();
+    expect(within(doneColumn).getByText("Done issue")).toBeInTheDocument();
+    expect(within(doneColumn).getByText("Cancelled issue")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /\+ Add Task/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("No tasks")).not.toBeInTheDocument();
+  });
+
+  it("submits New Task request to project chat endpoint", async () => {
     const user = userEvent.setup();
-    localStorage.setItem("otter-camp-org-id", "org-1");
-    vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
+    localStorage.setItem("otter-camp-user-name", "Sam");
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          message: {
+            id: "msg-1",
+            project_id: "project-1",
+            author: "Sam",
+            body: "New task request",
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+          delivery: { delivered: true },
+        }),
+      );
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.type(screen.getByLabelText("New task"), "Add task creation workflow");
+    await user.click(screen.getByRole("button", { name: "New Task" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/projects/project-1/chat/messages?org_id=org-123"),
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const submitCall = fetchMock.mock.calls.find(
+      (args: unknown[]) =>
+        typeof args[0] === "string" &&
+        (args[0] as string).includes("/api/projects/project-1/chat/messages?org_id=org-123"),
+    );
+    expect(submitCall).toBeTruthy();
+    const submitBody = JSON.parse((submitCall?.[1] as RequestInit).body as string);
+    expect(submitBody.author).toBe("Sam");
+    expect(submitBody.body).toContain("New task request");
+    expect(submitBody.body).toContain("Title: Add task creation workflow");
+
+    expect(await screen.findByText("Task request sent to the project agent.")).toBeInTheDocument();
+    expect(openConversationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "project", projectId: "project-1" }),
+      expect.objectContaining({ focus: true, openDock: true }),
+    );
+  });
+
+  it("navigates to project task detail when a board task card is clicked", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440111",
+              issue_number: 40,
+              title: "Fix task detail routing",
+              work_status: "queued",
+              priority: "P1",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+          <Route path="/projects/:id/tasks/:taskId" element={<ProjectTaskRouteEcho />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.click(screen.getByText("Fix task detail routing"));
+    expect(await screen.findByTestId("project-task-route")).toHaveTextContent(
+      "project-1:550e8400-e29b-41d4-a716-446655440111",
+    );
+  });
+
+  it("navigates to project task detail when a list task row is clicked", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440112",
+              issue_number: 41,
+              title: "Verify list row click route",
+              work_status: "in_progress",
+              priority: "P2",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+          <Route path="/projects/:id/tasks/:taskId" element={<ProjectTaskRouteEcho />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "List" }));
+    await user.click(screen.getByText(/Verify list row click route/i));
+    expect(await screen.findByTestId("project-task-route")).toHaveTextContent(
+      "project-1:550e8400-e29b-41d4-a716-446655440112",
+    );
+  });
+
+  it("shows task status badges in the list tab", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-status-1",
+              issue_number: 301,
+              title: "Ship status column",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "in_progress",
+              priority: "P1",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "List" }));
+
+    expect(screen.getByText(/Ship status column/i)).toBeInTheDocument();
+    expect(screen.getByText("In Progress")).toBeInTheDocument();
+    expect(screen.getByTestId("project-list-mini-issue-status-1")).toBeInTheDocument();
+  });
+
+  it("shows issue list columns for status, assignee, and priority", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          agents: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440222",
+              name: "Ivy",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-501",
+              issue_number: 501,
+              title: "List columns should render",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: "550e8400-e29b-41d4-a716-446655440222",
+              work_status: "in_progress",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "List" }));
+
+    expect(screen.getByText("Status")).toBeInTheDocument();
+    expect(screen.getByText("Assignee")).toBeInTheDocument();
+    expect(screen.getByText("Priority")).toBeInTheDocument();
+    expect(screen.getByText(/List columns should render/i)).toBeInTheDocument();
+    expect(screen.getByText("Ivy")).toBeInTheDocument();
+    expect(screen.getByText("In Progress")).toBeInTheDocument();
+    expect(screen.getByText("P1")).toBeInTheDocument();
+  });
+
+  it("uses task-centric empty copy in list tab when no active tasks remain", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-closed",
+              issue_number: 520,
+              title: "Closed issue",
+              state: "closed",
+              origin: "local",
+              kind: "issue",
+              work_status: "done",
+              priority: "P3",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "List" }));
+
+    expect(screen.getByText("No active tasks")).toBeInTheDocument();
+    expect(screen.queryByText("No active issues")).not.toBeInTheDocument();
+  });
+
+  it("does not leak agent name mappings across project remounts", async () => {
+    const ownerID = "550e8400-e29b-41d4-a716-446655440abc";
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Project One",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          agents: [{ id: ownerID, name: "Ivy" }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-1",
+              issue_number: 101,
+              title: "Project one issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: ownerID,
+              work_status: "in_progress",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-2",
+          name: "Project Two",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-2",
+              issue_number: 202,
+              title: "Project two issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: ownerID,
+              work_status: "in_progress",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    const firstRender = render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Project One" })).toBeInTheDocument();
+    expect(screen.getByText("Ivy")).toBeInTheDocument();
+    firstRender.unmount();
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-2"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Project Two" })).toBeInTheDocument();
+    expect(screen.getByText("Project two issue")).toBeInTheDocument();
+    expect(screen.getByText("Unassigned")).toBeInTheDocument();
+    expect(screen.queryByText("Ivy")).not.toBeInTheDocument();
+  });
+
+  it("saves workflow config through project patch endpoint from settings tab", async () => {
+    const user = userEvent.setup();
+    const requests: Array<{ url: string; method: string; body?: string }> = [];
+    const workflowAgentID = "550e8400-e29b-41d4-a716-446655440222";
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/api/projects/project-2/tree")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              entries: [{ name: "README.md", path: "docs/README.md", type: "file" }],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
-        );
+      const method = init?.method || "GET";
+      const body = typeof init?.body === "string" ? init.body : undefined;
+      requests.push({ url, method, body });
+
+      if (url.includes("/api/projects/project-1") && method === "GET") {
+        return mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+          primary_agent_id: workflowAgentID,
+          workflow_enabled: true,
+          workflow_schedule: { kind: "cron", expr: "0 6 * * *", tz: "America/Denver" },
+          workflow_template: {
+            title_pattern: "Morning Briefing — {{date}}",
+            body: "Generate briefing",
+            priority: "P2",
+            labels: ["automated"],
+            auto_close: true,
+            pipeline: "none",
+          },
+          workflow_agent_id: workflowAgentID,
+        });
       }
-      if (url.includes("/api/projects/project-2/commits")) {
+      if (url.includes("/api/agents?") && method === "GET") {
+        return mockJSONResponse({
+          agents: [{ id: workflowAgentID, name: "Frank" }],
+        });
+      }
+      if (url.includes("/api/project-tasks?") && method === "GET") {
+        return mockJSONResponse({ items: [] });
+      }
+      if (url.includes("/api/activity/recent?") && method === "GET") {
+        return mockJSONResponse({ items: [] });
+      }
+      if (url.includes("/api/projects/project-1/settings") && method === "PATCH") {
+        return mockJSONResponse({
+          id: "project-1",
+          primary_agent_id: workflowAgentID,
+        });
+      }
+      if (url.includes("/api/projects/project-1?") && method === "PATCH") {
+        return mockJSONResponse({
+          id: "project-1",
+          workflow_enabled: true,
+          workflow_schedule: { kind: "every", everyMs: 600000 },
+          workflow_template: {
+            title_pattern: "Every run {{run_number}}",
+            body: "Run body",
+            priority: "P1",
+            labels: ["automated", "briefing"],
+            auto_close: true,
+            pipeline: "auto_close",
+          },
+          workflow_agent_id: workflowAgentID,
+        });
+      }
+
+      throw new Error(`Unexpected request: ${url} ${method}`);
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "Settings" })[1]);
+
+    await user.selectOptions(screen.getByLabelText("Workflow schedule type"), "every");
+    await user.clear(screen.getByLabelText("Workflow every milliseconds"));
+    await user.type(screen.getByLabelText("Workflow every milliseconds"), "600000");
+    await user.clear(screen.getByLabelText("Workflow task title pattern"));
+    await user.type(screen.getByLabelText("Workflow task title pattern"), "Every run pattern");
+    await user.clear(screen.getByLabelText("Workflow task body"));
+    await user.type(screen.getByLabelText("Workflow task body"), "Run body");
+    await user.selectOptions(screen.getByLabelText("Workflow task priority"), "P1");
+    await user.clear(screen.getByLabelText("Workflow task labels"));
+    await user.type(screen.getByLabelText("Workflow task labels"), "automated, briefing");
+    await user.selectOptions(screen.getByLabelText("Workflow pipeline"), "auto_close");
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+
+    expect(await screen.findByText("Project settings saved.")).toBeInTheDocument();
+
+    const workflowPatch = requests.find(
+      (request) => request.method === "PATCH" && request.url.includes("/api/projects/project-1?"),
+    );
+    expect(workflowPatch).toBeDefined();
+    const payload = JSON.parse(workflowPatch?.body || "{}");
+    expect(payload.workflow_enabled).toBe(true);
+    expect(payload.workflow_schedule).toEqual({ kind: "every", everyMs: 600000 });
+    expect(payload.workflow_template).toEqual({
+      title_pattern: "Every run pattern",
+      body: "Run body",
+      priority: "P1",
+      labels: ["automated", "briefing"],
+      auto_close: true,
+      pipeline: "auto_close",
+    });
+    expect(payload.workflow_agent_id).toBe(workflowAgentID);
+  });
+
+  it("re-syncs project settings when workflow save fails after primary settings patch", async () => {
+    const user = userEvent.setup();
+    const requests: Array<{ url: string; method: string; body?: string }> = [];
+    const workflowAgentID = "550e8400-e29b-41d4-a716-446655440222";
+    let projectGetCount = 0;
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || "GET";
+      const body = typeof init?.body === "string" ? init.body : undefined;
+      requests.push({ url, method, body });
+
+      if (url.includes("/api/projects/project-1") && method === "GET") {
+        projectGetCount += 1;
+        if (projectGetCount === 1) {
+          return mockJSONResponse({
+            id: "project-1",
+            name: "Technonymous",
+            status: "active",
+            primary_agent_id: workflowAgentID,
+            workflow_enabled: true,
+            workflow_schedule: { kind: "cron", expr: "0 6 * * *", tz: "America/Denver" },
+            workflow_template: {
+              title_pattern: "Morning Briefing — {{date}}",
+              body: "Generate briefing",
+              priority: "P2",
+              labels: ["automated"],
+              auto_close: true,
+              pipeline: "none",
+            },
+            workflow_agent_id: workflowAgentID,
+          });
+        }
+        return mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+          primary_agent_id: workflowAgentID,
+          workflow_enabled: true,
+          workflow_schedule: { kind: "cron", expr: "0 6 * * *", tz: "America/Denver" },
+          workflow_template: {
+            title_pattern: "Morning Briefing — {{date}}",
+            body: "Generate briefing",
+            priority: "P2",
+            labels: ["automated"],
+            auto_close: true,
+            pipeline: "none",
+          },
+          workflow_agent_id: workflowAgentID,
+        });
+      }
+      if (url.includes("/api/agents?") && method === "GET") {
+        return mockJSONResponse({
+          agents: [{ id: workflowAgentID, name: "Frank" }],
+        });
+      }
+      if (url.includes("/api/project-tasks?") && method === "GET") {
+        return mockJSONResponse({ items: [] });
+      }
+      if (url.includes("/api/activity/recent?") && method === "GET") {
+        return mockJSONResponse({ items: [] });
+      }
+      if (url.includes("/api/projects/project-1/settings") && method === "PATCH") {
+        return mockJSONResponse({
+          id: "project-1",
+          primary_agent_id: workflowAgentID,
+        });
+      }
+      if (url.includes("/api/projects/project-1?") && method === "PATCH") {
+        return {
+          ok: false,
+          json: async () => ({ error: "Failed to save workflow settings" }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected request: ${url} ${method}`);
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "Settings" })[1]);
+
+    expect(screen.getByLabelText("Workflow schedule type")).toHaveValue("cron");
+    await user.selectOptions(screen.getByLabelText("Workflow schedule type"), "every");
+    expect(screen.getByLabelText("Workflow schedule type")).toHaveValue("every");
+    const projectGetCountBeforeSave = projectGetCount;
+
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+
+    expect(await screen.findByText("Failed to save workflow settings")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Workflow schedule type")).toHaveValue("cron");
+    });
+    expect(projectGetCount > projectGetCountBeforeSave).toBe(true);
+    expect(
+      requests.some((request) => request.method === "PATCH" && request.url.includes("/api/projects/project-1/settings")),
+    ).toBe(true);
+    expect(
+      requests.some((request) => request.method === "PATCH" && request.url.includes("/api/projects/project-1?")),
+    ).toBe(true);
+  });
+
+  it("loads activity with project org_id when local org storage is empty", async () => {
+    localStorage.clear();
+
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/projects/project-1")) {
         return Promise.resolve(
-          new Response(JSON.stringify({ total: 0, items: [] }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
+          mockJSONResponse({
+            id: "project-1",
+            org_id: "org-from-project",
+            name: "Technonymous",
+            status: "active",
           }),
         );
       }
-      if (url.includes("/api/projects/project-2/repo/branches")) {
-        return Promise.resolve(
-          new Response(JSON.stringify({ branches: [] }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-        );
+      if (url.includes("/api/agents")) {
+        return Promise.resolve(mockJSONResponse({ agents: [] }));
       }
-      return Promise.resolve(new Response("{}", { status: 404 }));
-    });
-    renderProjectDetailPage();
-
-    await user.click(await screen.findByRole("link", { name: /README\.md/i }));
-
-    expect(screen.getByTestId("content-review-route")).toBeInTheDocument();
-  });
-
-  it("shows loading state while project detail requests are pending", () => {
-    projectMock.mockReturnValue(new Promise(() => {}));
-    issuesMock.mockReturnValue(new Promise(() => {}));
-
-    renderProjectDetailPage();
-
-    expect(screen.getByText("Loading issues...")).toBeInTheDocument();
-  });
-
-  it("shows error state and retries project detail loading", async () => {
-    projectMock.mockRejectedValueOnce(new Error("project detail failed"));
-    projectMock.mockResolvedValueOnce(PROJECT_PAYLOAD);
-
-    renderProjectDetailPage();
-
-    expect(await screen.findByText("project detail failed")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "API Gateway" })).toBeInTheDocument();
-  });
-
-  it("hydrates right-rail files/activity and stats from live endpoints when org context exists", async () => {
-    localStorage.setItem("otter-camp-org-id", "org-1");
-    activityRecentMock.mockResolvedValue({
-      items: [
-        {
-          agent_id: "Agent-321",
-          project_id: "project-2",
-          summary: "published release notes",
-          issue_number: 401,
-          created_at: "2026-02-18T20:01:00Z",
-        },
-      ],
+      if (url.includes("/api/project-tasks")) {
+        return Promise.resolve(mockJSONResponse({ items: [] }));
+      }
+      if (url.includes("/api/activity/recent")) {
+        return Promise.resolve(mockJSONResponse({ items: [] }));
+      }
+      return Promise.resolve(mockJSONResponse({}, false));
     });
 
-    vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/projects/project-2/tree")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              entries: [
-                { name: "architecture.md", path: "docs/architecture.md", type: "file" },
-              ],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
-        );
-      }
-      if (url.includes("/api/projects/project-2/commits")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              total: 42,
-              items: [{ author_name: "Agent-321" }, { author_name: "Agent-007" }],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
-        );
-      }
-      if (url.includes("/api/projects/project-2/repo/branches")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              branches: ["main", "release"],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
-        );
-      }
-      return Promise.resolve(new Response("{}", { status: 404 }));
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+
+    await waitFor(() => {
+      const fetchedURLs = fetchMock.mock.calls.map(([input]: [unknown]) => String(input));
+      const activityURL = fetchedURLs.find((url) => url.includes("/api/activity/recent?"));
+      expect(activityURL).toBeDefined();
+      expect(activityURL).toContain("org_id=org-from-project");
+      expect(activityURL).toContain("project_id=project-1");
     });
-
-    renderProjectDetailPage();
-
-    expect(await screen.findByText("Agent-321")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /architecture\.md/i })).toBeInTheDocument();
-    expect(screen.getByText("42")).toBeInTheDocument();
   });
 });

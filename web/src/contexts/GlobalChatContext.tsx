@@ -316,10 +316,11 @@ function looksLikeIssueIdentifierTitle(title: string): boolean {
   if (!trimmed) {
     return false;
   }
-  if (trimmed.toLowerCase() === "issue thread") {
+  const lower = trimmed.toLowerCase();
+  if (lower === "issue thread" || lower === "task thread") {
     return true;
   }
-  return /^issue\s+[a-f0-9-]{6,}$/i.test(trimmed);
+  return /^((issue)|(task))\s+[a-f0-9-]{6,}$/i.test(trimmed);
 }
 
 function looksLikeAgentSlotName(value: string): boolean {
@@ -523,7 +524,7 @@ function shouldPreferIncomingContextLabel(
   if (
     existing.type === "issue" &&
     incoming.type === "issue" &&
-    existingLabel === "Issue" &&
+    (existingLabel === "Issue" || existingLabel === "Task") &&
     incomingLabel.includes("•")
   ) {
     return true;
@@ -740,9 +741,9 @@ function toConversationFromThreadRecord(record: ChatThreadRecord): GlobalChatCon
     type: "issue",
     issueId,
     projectId: record.project_id,
-    title: record.title || "Issue thread",
-    contextLabel: "Issue",
-    subtitle: record.last_message_preview || "Issue conversation",
+    title: record.title || "Task thread",
+    contextLabel: "Task",
+    subtitle: record.last_message_preview || "Task conversation",
     unreadCount: 0,
     updatedAt,
   };
@@ -832,9 +833,9 @@ function toConversation(input: OpenConversationInput): GlobalChatConversation {
     type: "issue",
     issueId: input.issueId,
     projectId: input.projectId,
-    title: asString(input.title) || "Issue thread",
-    contextLabel: asString(input.contextLabel) || "Issue",
-    subtitle: asString(input.subtitle) || "Issue conversation",
+    title: asString(input.title) || "Task thread",
+    contextLabel: asString(input.contextLabel) || "Task",
+    subtitle: asString(input.subtitle) || "Task conversation",
     unreadCount: 0,
     updatedAt,
   };
@@ -967,7 +968,7 @@ function parseIncomingEvent(lastMessage: {
     const issueTitle =
       lookupIssueTitle(resolution?.issueTitlesByID, issueId) ||
       payloadIssueTitle ||
-      "Issue thread";
+      "Task thread";
 
     return {
       key: buildIssueKey(issueId),
@@ -978,8 +979,8 @@ function parseIncomingEvent(lastMessage: {
         issueId,
         projectId: projectId || undefined,
         title: issueTitle,
-        contextLabel: projectName ? `Issue • ${projectName}` : "Issue",
-        subtitle: "Issue thread",
+        contextLabel: projectName ? `Task • ${projectName}` : "Task",
+        subtitle: "Task thread",
         unreadCount: 0,
         updatedAt: new Date().toISOString(),
       },
@@ -1135,7 +1136,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       for (const issueID of issueIDsToHydrate) {
         const issueKey = issueID.toLowerCase();
         try {
-          const issueURL = new URL(`${API_URL}/api/issues/${encodeURIComponent(issueID)}`);
+          const issueURL = new URL(`${API_URL}/api/project-tasks/${encodeURIComponent(issueID)}`);
           issueURL.searchParams.set("org_id", orgID);
           const response = await fetch(issueURL.toString(), {
             headers,
@@ -1361,7 +1362,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
           const projectName = resolvedProjectId
             ? (projectNamesByID.get(resolvedProjectId) ?? "")
             : "";
-          const nextContextLabel = projectName ? `Issue • ${projectName}` : "Issue";
+          const nextContextLabel = projectName ? `Task • ${projectName}` : "Task";
           const nextTitle =
             resolvedIssueTitle && looksLikeIssueIdentifierTitle(conversation.title)
               ? resolvedIssueTitle
@@ -1377,7 +1378,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
               title: nextTitle,
               contextLabel: nextContextLabel,
               projectId: resolvedProjectId || conversation.projectId,
-              subtitle: conversation.subtitle || "Issue conversation",
+              subtitle: conversation.subtitle || "Task conversation",
             };
           }
           return conversation;
@@ -1413,7 +1414,9 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     }
 
     if (!selectedKey) {
-      setSelectedKey(conversations[0].key);
+      // Prefer a DM conversation (especially Frank/main) over project/issue chats
+      const dmConversation = conversations.find((c) => c.type === "dm") ?? conversations[0];
+      setSelectedKey(dmConversation.key);
       return;
     }
 

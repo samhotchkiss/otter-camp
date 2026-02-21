@@ -119,7 +119,7 @@ Commands:
   repo info        Show repo URL for project
   issue            Manage project issues
   room             Manage room stats
-  pipeline         Configure per-project pipeline settings
+  pipeline         Configure per-project pipeline settings and step chains
   deploy           Configure per-project deployment settings
   migrate          Run migration utilities
   version          Show CLI version`)
@@ -1887,7 +1887,18 @@ func handleClone(args []string) {
 		target = filepath.Join(root, project.Slug())
 	}
 
-	cmd := exec.Command("git", "clone", repoURL, target)
+	// Inject auth token into managed repo URLs so git clone works without
+	// interactive credential prompts.
+	cloneURL := repoURL
+	if cfg.Token != "" {
+		if parsed, parseErr := url.Parse(cloneURL); parseErr == nil && parsed.User == nil {
+			parsed.User = url.UserPassword("otter", cfg.Token)
+			cloneURL = parsed.String()
+		}
+	}
+
+	cmd := exec.Command("git", "clone", cloneURL, target)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	if !*jsonOut {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -2025,7 +2036,7 @@ func handleRepo(args []string) {
 
 func handleIssue(args []string) {
 	if len(args) == 0 {
-		fmt.Println("usage: otter issue <create|list|view|comment|ask|respond|assign|close|reopen> ...")
+		fmt.Println("usage: otter issue <create|list|view|comment|ask|respond|assign|close|reopen|step-done|step-reject|pipeline-status> ...")
 		os.Exit(1)
 	}
 
@@ -2428,8 +2439,88 @@ func handleIssue(args []string) {
 		}
 		fmt.Printf("Reopened issue #%d\n", updated.IssueNumber)
 
+	case "step-done":
+		flags := flag.NewFlagSet("issue step-done", flag.ExitOnError)
+		projectRef := flags.String("project", "", "project name or id (required for issue number)")
+		notes := flags.String("notes", "", "optional completion notes")
+		agentRef := flags.String("agent", "", "agent id/name/slug")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter issue step-done --project <project-name-or-id> <issue-id-or-number> [--notes <text>]")
+		}
+		issueRef := strings.TrimSpace(flags.Args()[0])
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		err = runIssueStepDoneCommand(
+			client,
+			strings.TrimSpace(*projectRef),
+			issueRef,
+			strings.TrimSpace(*notes),
+			strings.TrimSpace(*agentRef),
+			*jsonOut,
+			os.Stdout,
+		)
+		dieIf(err)
+
+	case "step-reject":
+		flags := flag.NewFlagSet("issue step-reject", flag.ExitOnError)
+		projectRef := flags.String("project", "", "project name or id (required for issue number)")
+		reason := flags.String("reason", "", "rejection reason (required)")
+		agentRef := flags.String("agent", "", "agent id/name/slug")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter issue step-reject --project <project-name-or-id> <issue-id-or-number> --reason <text>")
+		}
+		issueRef := strings.TrimSpace(flags.Args()[0])
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		err = runIssueStepRejectCommand(
+			client,
+			strings.TrimSpace(*projectRef),
+			issueRef,
+			strings.TrimSpace(*reason),
+			strings.TrimSpace(*agentRef),
+			*jsonOut,
+			os.Stdout,
+		)
+		dieIf(err)
+
+	case "pipeline-status":
+		flags := flag.NewFlagSet("issue pipeline-status", flag.ExitOnError)
+		projectRef := flags.String("project", "", "project name or id (required for issue number)")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter issue pipeline-status --project <project-name-or-id> <issue-id-or-number>")
+		}
+		issueRef := strings.TrimSpace(flags.Args()[0])
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		err = runIssuePipelineStatusCommand(
+			client,
+			strings.TrimSpace(*projectRef),
+			issueRef,
+			*jsonOut,
+			os.Stdout,
+		)
+		dieIf(err)
+
 	default:
-		fmt.Println("usage: otter issue <create|list|view|comment|ask|respond|assign|close|reopen> ...")
+		fmt.Println("usage: otter issue <create|list|view|comment|ask|respond|assign|close|reopen|step-done|step-reject|pipeline-status> ...")
 		os.Exit(1)
 	}
 }
@@ -2441,7 +2532,139 @@ func resolveAgentName(client *ottercli.Client, agentID string) string {
 	return agentID
 }
 
-func resolveIssueID(client *ottercli.Client, projectRef, issueRef string) (string, error) {
+type issueLookupClient interface {
+	FindProject(query string) (ottercli.Project, error)
+	ListIssues(projectID string, filters map[string]string) ([]ottercli.Issue, error)
+}
+
+type issuePipelineCommandClient interface {
+	issueLookupClient
+	ResolveAgent(query string) (ottercli.Agent, error)
+	IssuePipelineStepDone(issueID string, agentID *string, notes string) (ottercli.IssuePipelineActionResponse, error)
+	IssuePipelineStepReject(issueID string, agentID *string, reason string) (ottercli.IssuePipelineActionResponse, error)
+	GetIssuePipelineStatus(issueID string) (ottercli.IssuePipelineStatus, error)
+}
+
+func runIssueStepDoneCommand(
+	client issuePipelineCommandClient,
+	projectRef string,
+	issueRef string,
+	notes string,
+	agentRef string,
+	jsonOut bool,
+	out io.Writer,
+) error {
+	issueID, err := resolveIssueID(client, projectRef, issueRef)
+	if err != nil {
+		return err
+	}
+
+	var agentID *string
+	if strings.TrimSpace(agentRef) != "" {
+		agent, resolveErr := client.ResolveAgent(agentRef)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		agentID = &agent.ID
+	}
+
+	resp, err := client.IssuePipelineStepDone(issueID, agentID, notes)
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		printJSONTo(out, resp)
+		return nil
+	}
+
+	fmt.Fprintf(out, "Completed pipeline step for issue #%d\n", resp.Status.Issue.IssueNumber)
+	if resp.Result.CurrentPipelineStepID != nil {
+		fmt.Fprintf(out, "Current step id: %s\n", strings.TrimSpace(*resp.Result.CurrentPipelineStepID))
+	} else if resp.Result.CompletedPipeline {
+		fmt.Fprintln(out, "Pipeline completed.")
+	}
+	return nil
+}
+
+func runIssueStepRejectCommand(
+	client issuePipelineCommandClient,
+	projectRef string,
+	issueRef string,
+	reason string,
+	agentRef string,
+	jsonOut bool,
+	out io.Writer,
+) error {
+	if strings.TrimSpace(reason) == "" {
+		return errors.New("--reason is required")
+	}
+	issueID, err := resolveIssueID(client, projectRef, issueRef)
+	if err != nil {
+		return err
+	}
+
+	var agentID *string
+	if strings.TrimSpace(agentRef) != "" {
+		agent, resolveErr := client.ResolveAgent(agentRef)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		agentID = &agent.ID
+	}
+
+	resp, err := client.IssuePipelineStepReject(issueID, agentID, reason)
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		printJSONTo(out, resp)
+		return nil
+	}
+
+	fmt.Fprintf(out, "Rejected pipeline step for issue #%d\n", resp.Status.Issue.IssueNumber)
+	if resp.Result.CurrentPipelineStepID != nil {
+		fmt.Fprintf(out, "Routed to step id: %s\n", strings.TrimSpace(*resp.Result.CurrentPipelineStepID))
+	}
+	return nil
+}
+
+func runIssuePipelineStatusCommand(
+	client issuePipelineCommandClient,
+	projectRef string,
+	issueRef string,
+	jsonOut bool,
+	out io.Writer,
+) error {
+	issueID, err := resolveIssueID(client, projectRef, issueRef)
+	if err != nil {
+		return err
+	}
+	status, err := client.GetIssuePipelineStatus(issueID)
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		printJSONTo(out, status)
+		return nil
+	}
+
+	fmt.Fprintf(out, "Issue #%d: %s\n", status.Issue.IssueNumber, status.Issue.Title)
+	if status.Pipeline.CurrentStep != nil {
+		fmt.Fprintf(out, "Current step: %d. %s [%s]\n", status.Pipeline.CurrentStep.StepNumber, status.Pipeline.CurrentStep.Name, status.Pipeline.CurrentStep.StepType)
+	} else {
+		fmt.Fprintln(out, "Current step: none")
+	}
+	if status.Pipeline.PipelineStartedAt != nil {
+		fmt.Fprintf(out, "Started: %s\n", strings.TrimSpace(*status.Pipeline.PipelineStartedAt))
+	}
+	if status.Pipeline.PipelineCompletedAt != nil {
+		fmt.Fprintf(out, "Completed: %s\n", strings.TrimSpace(*status.Pipeline.PipelineCompletedAt))
+	}
+	fmt.Fprintf(out, "History entries: %d\n", len(status.Pipeline.History))
+	return nil
+}
+
+func resolveIssueID(client issueLookupClient, projectRef, issueRef string) (string, error) {
 	issueRef = strings.TrimSpace(issueRef)
 	if issueRef == "" {
 		return "", errors.New("issue reference is required")
@@ -2457,6 +2680,9 @@ func resolveIssueID(client *ottercli.Client, projectRef, issueRef string) (strin
 	}
 	if strings.TrimSpace(projectRef) == "" {
 		return "", errors.New("--project is required when issue reference is a number")
+	}
+	if client == nil {
+		return "", errors.New("issue lookup client is required")
 	}
 
 	project, err := client.FindProject(projectRef)

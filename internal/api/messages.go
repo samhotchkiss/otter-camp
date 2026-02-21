@@ -26,7 +26,7 @@ const (
 	maxThreadPageSize     = 100
 )
 
-var dmThreadAgentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
+var dmThreadAgentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._ -]{0,127}$`)
 
 // Message represents a task or DM message payload.
 type Message struct {
@@ -90,17 +90,17 @@ type openClawDMDispatchAttachment struct {
 }
 
 type openClawDMDispatchData struct {
-	MessageID          string `json:"message_id"`
-	ThreadID           string `json:"thread_id"`
-	AgentID            string `json:"agent_id"`
-	SessionKey         string `json:"session_key,omitempty"`
-	Content            string `json:"content"`
-	SenderID           string `json:"sender_id,omitempty"`
-	SenderType         string `json:"sender_type,omitempty"`
-	SenderName         string `json:"sender_name,omitempty"`
-	InjectIdentity     bool   `json:"inject_identity,omitempty"`
-	IncrementalContext string `json:"incremental_context,omitempty"`
-	Attachments []openClawDMDispatchAttachment `json:"attachments,omitempty"`
+	MessageID          string                         `json:"message_id"`
+	ThreadID           string                         `json:"thread_id"`
+	AgentID            string                         `json:"agent_id"`
+	SessionKey         string                         `json:"session_key,omitempty"`
+	Content            string                         `json:"content"`
+	SenderID           string                         `json:"sender_id,omitempty"`
+	SenderType         string                         `json:"sender_type,omitempty"`
+	SenderName         string                         `json:"sender_name,omitempty"`
+	InjectIdentity     bool                           `json:"inject_identity,omitempty"`
+	IncrementalContext string                         `json:"incremental_context,omitempty"`
+	Attachments        []openClawDMDispatchAttachment `json:"attachments,omitempty"`
 }
 
 type messageListResponse struct {
@@ -179,6 +179,21 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Suppress internal agent signals that should never be persisted
+	if req.SenderType != nil && *req.SenderType == "agent" {
+		upper := strings.ToUpper(strings.TrimSpace(req.Content))
+		if upper == "NO_REPLY" || upper == "NOREPLY" || upper == "NO REPLY" ||
+			upper == "HEARTBEAT_OK" || upper == "HEARTBEATOK" ||
+			upper == "NO_" || upper == "NO" {
+			sendJSON(w, http.StatusOK, map[string]interface{}{
+				"id":         "00000000-0000-0000-0000-000000000000",
+				"content":    req.Content,
+				"suppressed": true,
+			})
+			return
+		}
+	}
+
 	if req.AuthorID != nil && !uuidRegex.MatchString(*req.AuthorID) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid author_id"})
 		return
@@ -204,6 +219,30 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 	if dispatchErr != nil {
 		sendJSON(w, statusCode, errorResponse{Error: dispatchErr.Error()})
 		return
+	}
+
+	// Server-side dedup: reject duplicate agent messages (same thread + content within 30s)
+	if req.ThreadID != nil && req.SenderType != nil && *req.SenderType == "agent" {
+		var existingID string
+		dedupErr := db.QueryRowContext(r.Context(), `
+			SELECT id FROM comments
+			WHERE thread_id = $1
+			  AND sender_type = 'agent'
+			  AND content = $2
+			  AND created_at > NOW() - INTERVAL '30 seconds'
+			ORDER BY created_at DESC
+			LIMIT 1
+		`, *req.ThreadID, req.Content).Scan(&existingID)
+		if dedupErr == nil {
+			// Duplicate found — return the existing message as if we created it
+			log.Printf("[dedup] suppressed duplicate agent message in thread %s (existing: %s)", *req.ThreadID, existingID)
+			sendJSON(w, http.StatusOK, map[string]interface{}{
+				"id":      existingID,
+				"content": req.Content,
+				"deduped": true,
+			})
+			return
+		}
 	}
 
 	tx, err := db.BeginTx(r.Context(), nil)
@@ -863,12 +902,52 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 	}
 
 	agentID := parseDMThreadAgentID(*req.ThreadID)
+	if agentID == "" && uuidRegex.MatchString(*req.ThreadID) {
+		// thread_id is a chat record UUID — look up the thread_key in a
+		// transaction with org context set (for RLS).
+		var threadKey string
+		if tx, txErr := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true}); txErr == nil {
+			_, _ = tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL app.org_id = '%s'", orgID))
+			_ = tx.QueryRowContext(ctx, `SELECT COALESCE(thread_key, '') FROM chat_threads WHERE id = $1`, *req.ThreadID).Scan(&threadKey)
+			_ = tx.Rollback()
+		}
+		if threadKey != "" && strings.HasPrefix(threadKey, "dm:") {
+			agentID = parseDMThreadAgentID(strings.TrimPrefix(threadKey, "dm:"))
+		}
+	}
 	if agentID == "" {
 		return dmDispatchTarget{}, false, "", 0, nil
 	}
 
+	// Fast path: if we can resolve the agent slug from the agentRoles
+	// reverse map AND it's a routing-exempt agent, return the canonical
+	// session key directly without any DB queries (avoids RLS issues).
+	for slug, roleName := range agentRoles {
+		if strings.EqualFold(roleName, agentID) || strings.EqualFold(slug, agentID) {
+			if isDMRoutingExemptAgentSlug(slug) {
+				return dmDispatchTarget{
+					AgentID:    slug,
+					SessionKey: canonicalAgentMainSessionKey(slug),
+				}, true, "", 0, nil
+			}
+			// Resolved slug for a non-exempt agent — remap to chameleon below.
+			agentID = slug
+			break
+		}
+	}
+
+	// Use a transaction with org context for RLS-protected queries.
+	tx, txErr := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if txErr != nil {
+		return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
+	}
+	defer tx.Rollback()
+	if _, setErr := tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL app.org_id = '%s'", orgID)); setErr != nil {
+		return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
+	}
+
 	var target dmDispatchTarget
-	err := db.QueryRowContext(
+	err := tx.QueryRowContext(
 		ctx,
 		`SELECT id, COALESCE(session_key, '') FROM agent_sync_state WHERE org_id = $1 AND id = $2`,
 		orgID,
@@ -883,13 +962,41 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 		// stores agents by slug.
 		if uuidRegex.MatchString(agentID) {
 			var slug string
-			if slugErr := db.QueryRowContext(ctx,
+			if slugErr := tx.QueryRowContext(ctx,
 				`SELECT slug FROM agents WHERE org_id = $1 AND id = $2`,
 				orgID, agentID,
 			).Scan(&slug); slugErr == nil && slug != "" {
-				err = db.QueryRowContext(ctx,
+				err = tx.QueryRowContext(ctx,
 					`SELECT id, COALESCE(session_key, '') FROM agent_sync_state WHERE org_id = $1 AND id = $2`,
 					orgID, slug,
+				).Scan(&target.AgentID, &target.SessionKey)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
+				}
+			}
+		}
+		// Not a UUID — try resolving by agent name, role, or legacy
+		// agentRoles display name (handles DM thread keys like "Chief of Staff").
+		if err != nil || target.AgentID == "" {
+			// First, check the hardcoded agentRoles reverse map (legacy sync names).
+			resolvedSlug := ""
+			for slug, roleName := range agentRoles {
+				if strings.EqualFold(roleName, agentID) || strings.EqualFold(slug, agentID) {
+					resolvedSlug = slug
+					break
+				}
+			}
+			// If not found in agentRoles, try the agents table by name or role.
+			if resolvedSlug == "" {
+				_ = tx.QueryRowContext(ctx,
+					`SELECT COALESCE(slug, role, name) FROM agents WHERE org_id = $1 AND (name = $2 OR role = $2) LIMIT 1`,
+					orgID, agentID,
+				).Scan(&resolvedSlug)
+			}
+			if resolvedSlug != "" {
+				err = tx.QueryRowContext(ctx,
+					`SELECT id, COALESCE(session_key, '') FROM agent_sync_state WHERE org_id = $1 AND id = $2`,
+					orgID, resolvedSlug,
 				).Scan(&target.AgentID, &target.SessionKey)
 				if err != nil && !errors.Is(err, sql.ErrNoRows) {
 					return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
@@ -959,7 +1066,7 @@ func resolveDMThreadWorkspaceAgentID(
 		).Scan(&resolved)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return "", nil
+				return resolveDefaultDMWorkspaceAgentID(ctx, db, orgID)
 			}
 			return "", err
 		}
@@ -968,9 +1075,62 @@ func resolveDMThreadWorkspaceAgentID(
 
 	err := db.QueryRowContext(
 		ctx,
-		`SELECT id FROM agents WHERE org_id = $1 AND slug = $2`,
+		`SELECT id FROM agents WHERE org_id = $1 AND LOWER(slug) = LOWER($2)`,
 		orgID,
 		candidate,
+	).Scan(&resolved)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return resolveDefaultDMWorkspaceAgentID(ctx, db, orgID)
+		}
+		return "", err
+	}
+	return strings.TrimSpace(resolved), nil
+}
+
+func resolveDefaultDMWorkspaceAgentID(
+	ctx context.Context,
+	db *sql.DB,
+	orgID string,
+) (string, error) {
+	if strings.TrimSpace(orgID) == "" {
+		return "", nil
+	}
+
+	var resolved string
+	err := db.QueryRowContext(
+		ctx,
+		`SELECT a.id
+		 FROM agents a
+		 LEFT JOIN agent_sync_state ass
+		   ON ass.org_id = a.org_id
+		  AND (
+			LOWER(ass.id) = LOWER(a.slug)
+			OR LOWER(ass.id) = LOWER(a.id::text)
+		  )
+		 WHERE a.org_id = $1
+		   AND a.status = 'active'
+		 ORDER BY
+		   CASE LOWER(a.slug)
+		     WHEN 'main' THEN 0
+		     WHEN 'frank' THEN 1
+		     WHEN 'chameleon' THEN 2
+		     WHEN 'elephant' THEN 3
+		     ELSE 10
+		   END,
+		   CASE
+		     WHEN LOWER(a.display_name) LIKE '%frank%' THEN 0
+		     ELSE 1
+		   END,
+		   CASE
+		     WHEN LOWER(COALESCE(ass.status, '')) = 'online' THEN 0
+		     ELSE 1
+		   END,
+		   COALESCE(ass.updated_at, a.updated_at) DESC,
+		   a.updated_at DESC,
+		   a.display_name ASC
+		 LIMIT 1`,
+		orgID,
 	).Scan(&resolved)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1021,10 +1181,13 @@ func normalizeDMDispatchSessionKeyForAgentSlug(agentSlug string, agentID string,
 		return normalizedSessionKey
 	}
 
-	if isDMRoutingExemptAgentSlug(normalizedSlug) && ValidateChameleonSessionKey(normalizedSessionKey) {
+	// Exempt agents (main, elephant, lori) always route to their canonical
+	// main session, regardless of what sync state contains. The sync state
+	// may point to a cron or project session which is wrong for DMs.
+	if isDMRoutingExemptAgentSlug(normalizedSlug) {
 		return canonicalAgentMainSessionKey(normalizedSlug)
 	}
-	if normalizedSlug != "" && !isDMRoutingExemptAgentSlug(normalizedSlug) && strings.EqualFold(normalizedSessionKey, canonicalAgentMainSessionKey(normalizedSlug)) {
+	if normalizedSlug != "" && strings.EqualFold(normalizedSessionKey, canonicalAgentMainSessionKey(normalizedSlug)) {
 		return canonicalChameleonSessionKey(agentID)
 	}
 	return normalizedSessionKey
@@ -1079,14 +1242,27 @@ func resolveWorkspaceAgentSlugByID(
 	}
 
 	var slug string
-	err := db.QueryRowContext(
-		ctx,
-		`SELECT COALESCE(slug, '') FROM agents WHERE org_id = $1 AND id = $2`,
-		orgID,
-		agentID,
-	).Scan(&slug)
+	var err error
+	if uuidRegex.MatchString(agentID) {
+		err = db.QueryRowContext(
+			ctx,
+			`SELECT COALESCE(slug, '') FROM agents WHERE org_id = $1 AND id = $2`,
+			orgID,
+			agentID,
+		).Scan(&slug)
+	} else {
+		err = db.QueryRowContext(
+			ctx,
+			`SELECT COALESCE(slug, '') FROM agents WHERE org_id = $1 AND LOWER(slug) = LOWER($2)`,
+			orgID,
+			agentID,
+		).Scan(&slug)
+	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			if !uuidRegex.MatchString(agentID) && isDMRoutingExemptAgentSlug(agentID) {
+				return strings.ToLower(agentID), nil
+			}
 			return "", nil
 		}
 		return "", err
@@ -1469,8 +1645,19 @@ func (h *MessageHandler) touchDMChatThreadBestEffort(
 	}
 
 	var agentID *string
-	if parsed := parseDMThreadAgentID(threadID); uuidRegex.MatchString(parsed) {
-		agentID = &parsed
+	if parsed := parseDMThreadAgentID(threadID); parsed != "" {
+		if uuidRegex.MatchString(parsed) {
+			agentID = &parsed
+		} else if db != nil {
+			// Thread ID uses a name (e.g. "Chief of Staff") instead of UUID — resolve it.
+			var resolvedID string
+			if err := db.QueryRowContext(ctx,
+				`SELECT id::text FROM agents WHERE org_id = $1 AND (display_name ILIKE $2 OR role ILIKE $2) LIMIT 1`,
+				identity.OrgID, parsed,
+			).Scan(&resolvedID); err == nil && resolvedID != "" {
+				agentID = &resolvedID
+			}
+		}
 	}
 
 	workspaceCtx := context.WithValue(ctx, middleware.WorkspaceIDKey, identity.OrgID)
@@ -1494,14 +1681,9 @@ func resolveDMChatThreadTitle(
 	db *sql.DB,
 	orgID string,
 	agentID *string,
-	senderName *string,
+	_ *string, // senderName — unused; title should always be the agent's name, not the sender's
 ) string {
 	title := "Direct message"
-	if senderName != nil {
-		if trimmed := strings.TrimSpace(*senderName); trimmed != "" {
-			title = trimmed
-		}
-	}
 	if db == nil || agentID == nil {
 		return title
 	}

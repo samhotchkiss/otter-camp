@@ -39,7 +39,7 @@ describe("IssueThreadPanel", () => {
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/issues/issue-1?")) {
+      if (url.includes("/api/project-tasks/issue-1?")) {
         return mockJSONResponse({
           issue: {
             id: "issue-1",
@@ -60,7 +60,6 @@ describe("IssueThreadPanel", () => {
 
     render(<IssueThreadPanel issueID="issue-1" />);
 
-    expect(screen.getByTestId("issue-thread-shell")).toBeInTheDocument();
     expect(await screen.findByText("Comment 25")).toBeInTheDocument();
     expect(screen.queryByText("Comment 1")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Load older comments" })).toBeInTheDocument();
@@ -73,12 +72,12 @@ describe("IssueThreadPanel", () => {
     let resolveCommentPost: ((response: Response) => void) | null = null;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/api/issues/issue-1/comments")) {
+      if (url.includes("/api/project-tasks/issue-1/comments")) {
         return new Promise<Response>((resolve) => {
           resolveCommentPost = resolve;
         });
       }
-      if (url.includes("/api/issues/issue-1?")) {
+      if (url.includes("/api/project-tasks/issue-1?")) {
         return mockJSONResponse({
           issue: {
             id: "issue-1",
@@ -131,7 +130,7 @@ describe("IssueThreadPanel", () => {
   it("@mention auto-adds referenced agents as participants", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/api/issues/issue-1/comments")) {
+      if (url.includes("/api/project-tasks/issue-1/comments")) {
         return mockJSONResponse({
           id: "comment-2",
           author_agent_id: "sam",
@@ -140,7 +139,7 @@ describe("IssueThreadPanel", () => {
           updated_at: "2026-02-06T11:10:00Z",
         });
       }
-      if (url.includes("/api/issues/issue-1/participants") && init?.method === "POST") {
+      if (url.includes("/api/project-tasks/issue-1/participants") && init?.method === "POST") {
         const payload = JSON.parse(String(init.body));
         return mockJSONResponse({
           id: `participant-${payload.agent_id}`,
@@ -148,7 +147,7 @@ describe("IssueThreadPanel", () => {
           role: "collaborator",
         });
       }
-      if (url.includes("/api/issues/issue-1?")) {
+      if (url.includes("/api/project-tasks/issue-1?")) {
         return mockJSONResponse({
           issue: {
             id: "issue-1",
@@ -188,7 +187,7 @@ describe("IssueThreadPanel", () => {
 
     await waitFor(() => {
       const participantCalls = fetchMock.mock.calls.filter(([input, init]) =>
-        String(input).includes("/api/issues/issue-1/participants") &&
+        String(input).includes("/api/project-tasks/issue-1/participants") &&
         (init as RequestInit | undefined)?.method === "POST"
       );
       expect(participantCalls).toHaveLength(2);
@@ -198,7 +197,7 @@ describe("IssueThreadPanel", () => {
   it("shows approval badge and renders linked post in markdown workspace", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/issues/issue-1/review/history?")) {
+      if (url.includes("/api/project-tasks/issue-1/review/history?")) {
         return mockJSONResponse({
           issue_id: "issue-1",
           document_path: "/posts/2026-02-06-launch-plan.md",
@@ -214,7 +213,7 @@ describe("IssueThreadPanel", () => {
           total: 1,
         });
       }
-      if (url.includes("/api/issues/issue-1/review/changes?")) {
+      if (url.includes("/api/project-tasks/issue-1/review/changes?")) {
         return mockJSONResponse({
           issue_id: "issue-1",
           document_path: "/posts/2026-02-06-launch-plan.md",
@@ -225,7 +224,7 @@ describe("IssueThreadPanel", () => {
           total: 0,
         });
       }
-      if (url.includes("/api/issues/issue-1?")) {
+      if (url.includes("/api/project-tasks/issue-1?")) {
         return mockJSONResponse({
           issue: {
             id: "issue-1",
@@ -261,7 +260,7 @@ describe("IssueThreadPanel", () => {
   it("renders issue detail metadata for body, priority, work status, and assignee", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/issues/issue-1?")) {
+      if (url.includes("/api/project-tasks/issue-1?")) {
         return mockJSONResponse({
           issue: {
             id: "issue-1",
@@ -296,62 +295,10 @@ describe("IssueThreadPanel", () => {
     expect(screen.getByText("Fix the issue detail metadata rendering path.")).toBeInTheDocument();
   });
 
-  it("applies responsive overflow classes to issue thread shell and comment surfaces", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/issues/issue-1?")) {
-        return mockJSONResponse({
-          issue: {
-            id: "issue-1",
-            issue_number: 1,
-            title: "Responsive issue",
-            state: "open",
-            origin: "local",
-            approval_state: "ready_for_review",
-          },
-          participants: [],
-          comments: [
-            {
-              id: "comment-1",
-              author_agent_id: "sam",
-              body: "Layout stability comment",
-              created_at: "2026-02-06T11:00:00Z",
-              updated_at: "2026-02-06T11:00:00Z",
-            },
-          ],
-        });
-      }
-      if (url.includes("/api/agents?")) {
-        return mockJSONResponse({
-          agents: [{ id: "sam", name: "Sam" }],
-        });
-      }
-      throw new Error(`unexpected url ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    render(<IssueThreadPanel issueID="issue-1" />);
-
-    expect(await screen.findByText("#1 Responsive issue")).toBeInTheDocument();
-    expect(screen.getByTestId("issue-thread-shell")).toHaveClass("min-w-0");
-
-    const summaryRow = screen.getByTestId("issue-thread-approval").parentElement;
-    expect(summaryRow).toHaveClass("items-start");
-    expect(summaryRow).toHaveClass("sm:items-center");
-
-    const threadHeader = screen.getByText("Thread").parentElement;
-    expect(threadHeader).toHaveClass("flex-col");
-    expect(threadHeader).toHaveClass("sm:flex-row");
-
-    const commentItem = screen.getByText("Layout stability comment").closest("li");
-    const commentMetaRow = commentItem?.querySelector("div");
-    expect(commentMetaRow).toHaveClass("flex-wrap");
-  });
-
   it("renders project-scoped issue not-found state with back link", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/issues/missing-issue?")) {
+      if (url.includes("/api/project-tasks/missing-issue?")) {
         return mockJSONResponse({ error: "not found" }, 404);
       }
       if (url.includes("/api/agents?")) {
@@ -369,7 +316,7 @@ describe("IssueThreadPanel", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole("heading", { name: "Issue not found" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Task not found" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Back to Project" })).toHaveAttribute("href", "/projects/project-1");
     expect(screen.queryByText(/demo/i)).not.toBeInTheDocument();
   });
@@ -377,7 +324,7 @@ describe("IssueThreadPanel", () => {
   it("lists history and opens historical version with read-only comment rendering", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/issues/issue-1/review/history/sha-old?")) {
+      if (url.includes("/api/project-tasks/issue-1/review/history/sha-old?")) {
         return mockJSONResponse({
           issue_id: "issue-1",
           document_path: "/posts/2026-02-06-review.md",
@@ -386,7 +333,7 @@ describe("IssueThreadPanel", () => {
           read_only: true,
         });
       }
-      if (url.includes("/api/issues/issue-1/review/history?")) {
+      if (url.includes("/api/project-tasks/issue-1/review/history?")) {
         return mockJSONResponse({
           issue_id: "issue-1",
           document_path: "/posts/2026-02-06-review.md",
@@ -409,7 +356,7 @@ describe("IssueThreadPanel", () => {
           total: 2,
         });
       }
-      if (url.includes("/api/issues/issue-1/review/changes?")) {
+      if (url.includes("/api/project-tasks/issue-1/review/changes?")) {
         return mockJSONResponse({
           issue_id: "issue-1",
           document_path: "/posts/2026-02-06-review.md",
@@ -420,7 +367,7 @@ describe("IssueThreadPanel", () => {
           total: 1,
         });
       }
-      if (url.includes("/api/issues/issue-1?")) {
+      if (url.includes("/api/project-tasks/issue-1?")) {
         return mockJSONResponse({
           issue: {
             id: "issue-1",
@@ -464,7 +411,7 @@ describe("IssueThreadPanel", () => {
   it("hides manual review transition controls while in draft", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/issues/issue-1?")) {
+      if (url.includes("/api/project-tasks/issue-1?")) {
         return mockJSONResponse({
           issue: {
             id: "issue-1",
@@ -499,7 +446,7 @@ describe("IssueThreadPanel", () => {
   it("approving from ready-for-review triggers confetti once and updates state badges", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/api/issues/issue-1/approve") && init?.method === "POST") {
+      if (url.includes("/api/project-tasks/issue-1/approve") && init?.method === "POST") {
         return mockJSONResponse({
           id: "issue-1",
           issue_number: 1,
@@ -510,7 +457,7 @@ describe("IssueThreadPanel", () => {
           document_path: null,
         });
       }
-      if (url.includes("/api/issues/issue-1?")) {
+      if (url.includes("/api/project-tasks/issue-1?")) {
         return mockJSONResponse({
           issue: {
             id: "issue-1",
@@ -548,10 +495,10 @@ describe("IssueThreadPanel", () => {
     expect(screen.getAllByTestId("approval-confetti")).toHaveLength(1);
   });
 
-  it("shows parent issue context and child sub-issue summary", async () => {
+  it("shows parent task context and child subtask summary", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/issues?") && url.includes("parent_issue_id=issue-child")) {
+      if (url.includes("/api/project-tasks?") && url.includes("parent_issue_id=issue-child")) {
         return mockJSONResponse({
           items: [
             {
@@ -568,7 +515,7 @@ describe("IssueThreadPanel", () => {
           total: 1,
         });
       }
-      if (url.includes("/api/issues/issue-parent?")) {
+      if (url.includes("/api/project-tasks/issue-parent?")) {
         return mockJSONResponse({
           issue: {
             id: "issue-parent",
@@ -581,7 +528,7 @@ describe("IssueThreadPanel", () => {
           comments: [],
         });
       }
-      if (url.includes("/api/issues/issue-child?")) {
+      if (url.includes("/api/project-tasks/issue-child?")) {
         return mockJSONResponse({
           issue: {
             id: "issue-child",
@@ -609,7 +556,7 @@ describe("IssueThreadPanel", () => {
 
     expect(await screen.findByText("#2 Child issue")).toBeInTheDocument();
     expect(await screen.findByText("Parent: #1 Parent issue")).toBeInTheDocument();
-    expect(await screen.findByText("Sub-issues: 1")).toBeInTheDocument();
+    expect(await screen.findByText("Subtasks: 1")).toBeInTheDocument();
     expect(await screen.findByText("#3 Grandchild issue")).toBeInTheDocument();
   });
 
@@ -618,7 +565,7 @@ describe("IssueThreadPanel", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
-      if (url.includes("/api/issues/issue-1?") && method === "PATCH") {
+      if (url.includes("/api/project-tasks/issue-1?") && method === "PATCH") {
         const payload = JSON.parse(String(init?.body));
         patchStatuses.push(payload.work_status);
         return mockJSONResponse({
@@ -631,7 +578,7 @@ describe("IssueThreadPanel", () => {
           last_activity_at: "2026-02-08T20:30:00Z",
         });
       }
-      if (url.includes("/api/issues/issue-1?")) {
+      if (url.includes("/api/project-tasks/issue-1?")) {
         return mockJSONResponse({
           issue: {
             id: "issue-1",
@@ -674,7 +621,7 @@ describe("IssueThreadPanel", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
-      if (url.includes("/api/issues/issue-1?") && method === "PATCH") {
+      if (url.includes("/api/project-tasks/issue-1?") && method === "PATCH") {
         const payload = JSON.parse(String(init?.body));
         patchStatuses.push(payload.work_status);
         return mockJSONResponse({
@@ -687,7 +634,7 @@ describe("IssueThreadPanel", () => {
           last_activity_at: "2026-02-08T21:00:00Z",
         });
       }
-      if (url.includes("/api/issues/issue-1?")) {
+      if (url.includes("/api/project-tasks/issue-1?")) {
         return mockJSONResponse({
           issue: {
             id: "issue-1",

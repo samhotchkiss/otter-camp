@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -28,10 +29,15 @@ type IssuesHandler struct {
 	ChatThreadStore     *store.ChatThreadStore
 	QuestionnaireStore  *store.QuestionnaireStore
 	ProjectStore        *store.ProjectStore
+	PipelineStepStore   *store.PipelineStepStore
 	CommitStore         *store.ProjectCommitStore
 	ProjectRepos        *store.ProjectRepoStore
+	FlowStore           *store.ProjectFlowStore
+	FlowBlockerStore    *store.ProjectIssueFlowBlockerStore
+	PipelineRoleStore   *store.PipelineRoleStore
 	ComplianceReviewer  issueComplianceReviewer
 	EllieIngestionStore *store.EllieIngestionStore
+	EllieContextTrigger func(context.Context, store.ProjectIssue) error
 	DB                  *sql.DB
 	Hub                 *ws.Hub
 	OpenClawDispatcher  openClawMessageDispatcher
@@ -57,6 +63,9 @@ type issueSummaryPayload struct {
 	DueAt                    *string `json:"due_at,omitempty"`
 	NextStep                 *string `json:"next_step,omitempty"`
 	NextStepDueAt            *string `json:"next_step_due_at,omitempty"`
+	FlowTemplateID           *string `json:"flow_template_id,omitempty"`
+	FlowStepKey              *string `json:"flow_step_key,omitempty"`
+	FlowStepIndex            *int    `json:"flow_step_index,omitempty"`
 	LastActivityAt           string  `json:"last_activity_at"`
 	GitHubNumber             *int64  `json:"github_number,omitempty"`
 	GitHubURL                *string `json:"github_url,omitempty"`
@@ -152,7 +161,26 @@ type issuePatchRequest struct {
 	State         *string `json:"state,omitempty"`
 }
 
+type issueFlowBlockerPayload struct {
+	ID                            string  `json:"id"`
+	IssueID                       string  `json:"issue_id"`
+	ProjectID                     string  `json:"project_id"`
+	RaisedByAgentID               *string `json:"raised_by_agent_id,omitempty"`
+	AssignedProjectManagerAgentID *string `json:"assigned_project_manager_agent_id,omitempty"`
+	EscalationLevel               string  `json:"escalation_level"`
+	Status                        string  `json:"status"`
+	Summary                       string  `json:"summary"`
+	Detail                        *string `json:"detail,omitempty"`
+	ResolutionNote                *string `json:"resolution_note,omitempty"`
+	RaisedAt                      string  `json:"raised_at"`
+	EscalatedToHumanAt            *string `json:"escalated_to_human_at,omitempty"`
+	ResolvedAt                    *string `json:"resolved_at,omitempty"`
+	CreatedAt                     string  `json:"created_at"`
+	UpdatedAt                     string  `json:"updated_at"`
+}
+
 const maxLinkedIssueDocumentBytes = 512 * 1024
+const ellieContextGateBypassEnv = "OTTER_PIPELINE_ELLIE_CONTEXT_GATE_BYPASS"
 
 func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	if h.IssueStore == nil {
@@ -271,16 +299,17 @@ func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Title         string  `json:"title"`
-		Body          *string `json:"body"`
-		OwnerAgentID  *string `json:"owner_agent_id"`
-		Priority      string  `json:"priority"`
-		WorkStatus    string  `json:"work_status"`
-		State         string  `json:"state"`
-		ApprovalState string  `json:"approval_state"`
-		DueAt         *string `json:"due_at"`
-		NextStep      *string `json:"next_step"`
-		NextStepDueAt *string `json:"next_step_due_at"`
+		Title          string  `json:"title"`
+		Body           *string `json:"body"`
+		OwnerAgentID   *string `json:"owner_agent_id"`
+		Priority       string  `json:"priority"`
+		WorkStatus     string  `json:"work_status"`
+		State          string  `json:"state"`
+		ApprovalState  string  `json:"approval_state"`
+		DueAt          *string `json:"due_at"`
+		NextStep       *string `json:"next_step"`
+		NextStepDueAt  *string `json:"next_step_due_at"`
+		FlowTemplateID *string `json:"flow_template_id"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -311,20 +340,44 @@ func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		ownerAgentID = h.resolveDefaultIssueOwnerAgentID(r.Context(), projectID)
 	}
 
+	var flowTemplateID *string
+	var flowStepKey *string
+	var flowStepIndex *int
+	if h.FlowStore != nil {
+		template, steps, err := h.resolveIssueFlowTemplate(r.Context(), projectID, req.FlowTemplateID)
+		if err != nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			return
+		}
+		if template != nil && len(steps) > 0 {
+			flowTemplateID = &template.ID
+			step := steps[0]
+			flowStepKey = &step.StepKey
+			stepIndex := step.StepOrder
+			flowStepIndex = &stepIndex
+			if ownerAgentID == nil {
+				ownerAgentID = h.resolveFlowStepOwnerAgentID(r.Context(), projectID, step)
+			}
+		}
+	}
+
 	issue, err := h.IssueStore.CreateIssue(r.Context(), store.CreateProjectIssueInput{
-		ProjectID:     projectID,
-		Title:         title,
-		Body:          req.Body,
-		State:         req.State,
-		Origin:        "local",
-		DocumentPath:  nil,
-		ApprovalState: req.ApprovalState,
-		OwnerAgentID:  ownerAgentID,
-		WorkStatus:    req.WorkStatus,
-		Priority:      req.Priority,
-		DueAt:         dueAt,
-		NextStep:      req.NextStep,
-		NextStepDueAt: nextStepDueAt,
+		ProjectID:      projectID,
+		Title:          title,
+		Body:           req.Body,
+		State:          req.State,
+		Origin:         "local",
+		DocumentPath:   nil,
+		ApprovalState:  req.ApprovalState,
+		OwnerAgentID:   ownerAgentID,
+		WorkStatus:     req.WorkStatus,
+		Priority:       req.Priority,
+		DueAt:          dueAt,
+		NextStep:       req.NextStep,
+		NextStepDueAt:  nextStepDueAt,
+		FlowTemplateID: flowTemplateID,
+		FlowStepKey:    flowStepKey,
+		FlowStepIndex:  flowStepIndex,
 	})
 	if err != nil {
 		handleIssueStoreError(w, err)
@@ -395,15 +448,34 @@ func (h *IssuesHandler) CreateLinkedIssue(w http.ResponseWriter, r *http.Request
 	}
 
 	defaultOwnerAgentID := h.resolveDefaultIssueOwnerAgentID(r.Context(), projectID)
+	var flowTemplateID *string
+	var flowStepKey *string
+	var flowStepIndex *int
+	if h.FlowStore != nil {
+		template, steps, err := h.resolveIssueFlowTemplate(r.Context(), projectID, nil)
+		if err == nil && template != nil && len(steps) > 0 {
+			flowTemplateID = &template.ID
+			step := steps[0]
+			flowStepKey = &step.StepKey
+			stepIndex := step.StepOrder
+			flowStepIndex = &stepIndex
+			if defaultOwnerAgentID == nil {
+				defaultOwnerAgentID = h.resolveFlowStepOwnerAgentID(r.Context(), projectID, step)
+			}
+		}
+	}
 
 	issue, err := h.IssueStore.CreateIssue(r.Context(), store.CreateProjectIssueInput{
-		ProjectID:     projectID,
-		Title:         title,
-		State:         "open",
-		Origin:        "local",
-		DocumentPath:  &documentPath,
-		ApprovalState: req.ApprovalState,
-		OwnerAgentID:  defaultOwnerAgentID,
+		ProjectID:      projectID,
+		Title:          title,
+		State:          "open",
+		Origin:         "local",
+		DocumentPath:   &documentPath,
+		ApprovalState:  req.ApprovalState,
+		OwnerAgentID:   defaultOwnerAgentID,
+		FlowTemplateID: flowTemplateID,
+		FlowStepKey:    flowStepKey,
+		FlowStepIndex:  flowStepIndex,
 	})
 	if err != nil {
 		handleIssueStoreError(w, err)
@@ -948,6 +1020,539 @@ func (h *IssuesHandler) RemoveParticipant(w http.ResponseWriter, r *http.Request
 	sendJSON(w, http.StatusOK, map[string]bool{"removed": true})
 }
 
+func (h *IssuesHandler) AssignFlow(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil || h.FlowStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "flow system unavailable"})
+		return
+	}
+
+	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if issueID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id is required"})
+		return
+	}
+
+	var req struct {
+		FlowTemplateID string `json:"flow_template_id"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+	templateID := strings.TrimSpace(req.FlowTemplateID)
+	if templateID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "flow_template_id is required"})
+		return
+	}
+
+	issue, err := h.IssueStore.GetIssueByID(r.Context(), issueID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	template, err := h.FlowStore.GetTemplateByID(r.Context(), templateID)
+	if err != nil {
+		handleFlowTemplateStoreError(w, err)
+		return
+	}
+	if template.ProjectID != issue.ProjectID {
+		sendJSON(w, http.StatusForbidden, errorResponse{Error: "flow template does not belong to project"})
+		return
+	}
+
+	steps, err := h.FlowStore.ListTemplateSteps(r.Context(), template.ID)
+	if err != nil {
+		handleFlowTemplateStoreError(w, err)
+		return
+	}
+	if len(steps) == 0 {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "flow template has no steps"})
+		return
+	}
+
+	first := steps[0]
+	stepIndex := first.StepOrder
+	ownerAgentID := h.resolveFlowStepOwnerAgentID(r.Context(), issue.ProjectID, first)
+
+	updated, err := h.IssueStore.UpdateIssueFlow(r.Context(), store.UpdateProjectIssueFlowInput{
+		IssueID:         issueID,
+		FlowTemplateID:  &template.ID,
+		FlowStepKey:     &first.StepKey,
+		FlowStepIndex:   &stepIndex,
+		SetOwnerAgentID: true,
+		OwnerAgentID:    ownerAgentID,
+	})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	participants, err := h.IssueStore.ListParticipants(r.Context(), issueID, false)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{issueID})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
+}
+
+func (h *IssuesHandler) AdvanceFlow(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil || h.FlowStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "flow system unavailable"})
+		return
+	}
+
+	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if issueID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id is required"})
+		return
+	}
+
+	issue, err := h.IssueStore.GetIssueByID(r.Context(), issueID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(issue.WorkStatus), store.IssueWorkStatusOnHold) {
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "task flow is on hold waiting for human input"})
+		return
+	}
+	if issue.FlowTemplateID == nil {
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "issue has no flow template"})
+		return
+	}
+	if h.FlowBlockerStore != nil {
+		blocker, blockerErr := h.FlowBlockerStore.GetOpenByIssue(r.Context(), issueID)
+		if blockerErr == nil && blocker != nil {
+			sendJSON(w, http.StatusConflict, errorResponse{Error: "task has an open blocker; resolve it before advancing flow"})
+			return
+		}
+		if blockerErr != nil && !errors.Is(blockerErr, store.ErrNotFound) {
+			handleIssueStoreError(w, blockerErr)
+			return
+		}
+	}
+
+	steps, err := h.FlowStore.ListTemplateSteps(r.Context(), *issue.FlowTemplateID)
+	if err != nil {
+		handleFlowTemplateStoreError(w, err)
+		return
+	}
+	if len(steps) == 0 {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "flow template has no steps"})
+		return
+	}
+
+	var req struct {
+		Decision string `json:"decision"`
+	}
+	if r.Body != nil {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+			return
+		}
+	}
+	decision := strings.ToLower(strings.TrimSpace(req.Decision))
+	if decision == "" {
+		decision = "complete"
+	}
+	if decision != "complete" && decision != "approve" && decision != "reject" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "decision must be complete, approve, or reject"})
+		return
+	}
+
+	currentStep, err := resolveIssueCurrentFlowStep(*issue, steps)
+	if err != nil {
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "issue flow step is invalid"})
+		return
+	}
+
+	var targetStep *store.ProjectFlowTemplateStep
+	if decision == "reject" {
+		if currentStep.NodeType != store.FlowNodeTypeReview {
+			sendJSON(w, http.StatusConflict, errorResponse{Error: "reject is only valid for review nodes"})
+			return
+		}
+		if currentStep.RejectStepKey == nil {
+			sendJSON(w, http.StatusConflict, errorResponse{Error: "review node does not define reject_step_key"})
+			return
+		}
+		resolved := findFlowStepByKey(steps, *currentStep.RejectStepKey)
+		if resolved == nil {
+			sendJSON(w, http.StatusConflict, errorResponse{Error: "reject_step_key does not exist in flow template"})
+			return
+		}
+		targetStep = resolved
+	} else {
+		if currentStep.NextStepKey == nil {
+			sendJSON(w, http.StatusConflict, errorResponse{Error: "issue flow is already complete"})
+			return
+		}
+		resolved := findFlowStepByKey(steps, *currentStep.NextStepKey)
+		if resolved == nil {
+			sendJSON(w, http.StatusConflict, errorResponse{Error: "next_step_key does not exist in flow template"})
+			return
+		}
+		targetStep = resolved
+	}
+
+	if targetStep == nil {
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "unable to resolve next flow node"})
+		return
+	}
+	stepIndex := targetStep.StepOrder
+	ownerAgentID := h.resolveFlowStepOwnerAgentID(r.Context(), issue.ProjectID, *targetStep)
+
+	updated, err := h.IssueStore.UpdateIssueFlow(r.Context(), store.UpdateProjectIssueFlowInput{
+		IssueID:         issueID,
+		FlowTemplateID:  issue.FlowTemplateID,
+		FlowStepKey:     &targetStep.StepKey,
+		FlowStepIndex:   &stepIndex,
+		SetOwnerAgentID: true,
+		OwnerAgentID:    ownerAgentID,
+	})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	if targetStep.NodeType == store.FlowNodeTypeReview {
+		if _, err := h.IssueStore.UpdateIssueWorkTracking(r.Context(), store.UpdateProjectIssueWorkTrackingInput{
+			IssueID:       issueID,
+			SetWorkStatus: true,
+			WorkStatus:    store.IssueWorkStatusReview,
+		}); err != nil && !errors.Is(err, store.ErrConflict) {
+			handleIssueStoreError(w, err)
+			return
+		}
+	} else {
+		nextStatus := store.IssueWorkStatusInProgress
+		if targetStep.ActorType == store.FlowActorTypeHuman {
+			nextStatus = store.IssueWorkStatusOnHold
+		}
+		if _, err := h.IssueStore.UpdateIssueWorkTracking(r.Context(), store.UpdateProjectIssueWorkTrackingInput{
+			IssueID:       issueID,
+			SetWorkStatus: true,
+			WorkStatus:    nextStatus,
+		}); err != nil && !errors.Is(err, store.ErrConflict) {
+			handleIssueStoreError(w, err)
+			return
+		}
+	}
+
+	participants, err := h.IssueStore.ListParticipants(r.Context(), issueID, false)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{issueID})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
+}
+
+func (h *IssuesHandler) RaiseFlowBlocker(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil || h.FlowBlockerStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "flow blocker system unavailable"})
+		return
+	}
+
+	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if issueID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id is required"})
+		return
+	}
+
+	var req struct {
+		Summary         string  `json:"summary"`
+		Detail          *string `json:"detail"`
+		RaisedByAgentID *string `json:"raised_by_agent_id"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+
+	issue, err := h.IssueStore.GetIssueByID(r.Context(), issueID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	projectManagerAgentID := h.resolveDefaultIssueOwnerAgentID(r.Context(), issue.ProjectID)
+	blocker, err := h.FlowBlockerStore.Create(r.Context(), store.CreateProjectIssueFlowBlockerInput{
+		IssueID:                       issueID,
+		Summary:                       req.Summary,
+		Detail:                        req.Detail,
+		RaisedByAgentID:               req.RaisedByAgentID,
+		AssignedProjectManagerAgentID: projectManagerAgentID,
+	})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	patch := store.UpdateProjectIssueWorkTrackingInput{
+		IssueID:       issueID,
+		SetWorkStatus: true,
+		WorkStatus:    store.IssueWorkStatusBlocked,
+	}
+	if projectManagerAgentID != nil {
+		patch.SetOwnerAgentID = true
+		patch.OwnerAgentID = projectManagerAgentID
+	}
+	updatedIssue, err := h.IssueStore.UpdateIssueWorkTracking(r.Context(), patch)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	sendJSON(w, http.StatusCreated, map[string]any{
+		"blocker": mapIssueFlowBlockerPayload(*blocker),
+		"issue":   toIssueSummaryPayload(*updatedIssue, nil, nil),
+	})
+}
+
+func (h *IssuesHandler) EscalateFlowBlockerToHuman(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil || h.FlowBlockerStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "flow blocker system unavailable"})
+		return
+	}
+
+	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
+	blockerID := strings.TrimSpace(chi.URLParam(r, "blockerID"))
+	if issueID == "" || blockerID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id and blocker id are required"})
+		return
+	}
+
+	blocker, err := h.FlowBlockerStore.GetByID(r.Context(), blockerID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	if blocker.IssueID != issueID {
+		sendJSON(w, http.StatusForbidden, errorResponse{Error: "blocker does not belong to task"})
+		return
+	}
+
+	blocker, err = h.FlowBlockerStore.EscalateToHuman(r.Context(), blockerID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	updatedIssue, err := h.IssueStore.UpdateIssueWorkTracking(r.Context(), store.UpdateProjectIssueWorkTrackingInput{
+		IssueID:         issueID,
+		SetWorkStatus:   true,
+		WorkStatus:      store.IssueWorkStatusOnHold,
+		SetOwnerAgentID: true,
+		OwnerAgentID:    nil,
+	})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]any{
+		"blocker": mapIssueFlowBlockerPayload(*blocker),
+		"issue":   toIssueSummaryPayload(*updatedIssue, nil, nil),
+	})
+}
+
+func (h *IssuesHandler) ResolveFlowBlocker(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil || h.FlowBlockerStore == nil || h.FlowStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "flow blocker system unavailable"})
+		return
+	}
+
+	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
+	blockerID := strings.TrimSpace(chi.URLParam(r, "blockerID"))
+	if issueID == "" || blockerID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id and blocker id are required"})
+		return
+	}
+
+	var req struct {
+		ResolutionNote *string `json:"resolution_note"`
+		ResumeStatus   string  `json:"resume_status"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+
+	blocker, err := h.FlowBlockerStore.GetByID(r.Context(), blockerID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	if blocker.IssueID != issueID {
+		sendJSON(w, http.StatusForbidden, errorResponse{Error: "blocker does not belong to task"})
+		return
+	}
+
+	blocker, err = h.FlowBlockerStore.Resolve(r.Context(), blockerID, req.ResolutionNote)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	issue, err := h.IssueStore.GetIssueByID(r.Context(), issueID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	resumeStatus := strings.ToLower(strings.TrimSpace(req.ResumeStatus))
+	if resumeStatus == "" {
+		resumeStatus = store.IssueWorkStatusInProgress
+	}
+
+	var ownerAgentID *string
+	if issue.FlowTemplateID != nil {
+		if steps, listErr := h.FlowStore.ListTemplateSteps(r.Context(), *issue.FlowTemplateID); listErr == nil {
+			if currentStep, currentErr := resolveIssueCurrentFlowStep(*issue, steps); currentErr == nil {
+				ownerAgentID = h.resolveFlowStepOwnerAgentID(r.Context(), issue.ProjectID, *currentStep)
+			}
+		}
+	}
+
+	updatedIssue, err := h.IssueStore.UpdateIssueWorkTracking(r.Context(), store.UpdateProjectIssueWorkTrackingInput{
+		IssueID:         issueID,
+		SetWorkStatus:   true,
+		WorkStatus:      resumeStatus,
+		SetOwnerAgentID: true,
+		OwnerAgentID:    ownerAgentID,
+	})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]any{
+		"blocker": mapIssueFlowBlockerPayload(*blocker),
+		"issue":   toIssueSummaryPayload(*updatedIssue, nil, nil),
+	})
+}
+
+func resolveIssueCurrentFlowStep(
+	issue store.ProjectIssue,
+	steps []store.ProjectFlowTemplateStep,
+) (*store.ProjectFlowTemplateStep, error) {
+	if len(steps) == 0 {
+		return nil, errors.New("flow has no steps")
+	}
+
+	if issue.FlowStepKey != nil && strings.TrimSpace(*issue.FlowStepKey) != "" {
+		if step := findFlowStepByKey(steps, strings.TrimSpace(*issue.FlowStepKey)); step != nil {
+			return step, nil
+		}
+	}
+	if issue.FlowStepIndex != nil {
+		for i := range steps {
+			if steps[i].StepOrder == *issue.FlowStepIndex {
+				return &steps[i], nil
+			}
+		}
+	}
+	return nil, errors.New("flow step not found")
+}
+
+func findFlowStepByKey(
+	steps []store.ProjectFlowTemplateStep,
+	stepKey string,
+) *store.ProjectFlowTemplateStep {
+	key := strings.TrimSpace(stepKey)
+	for i := range steps {
+		if steps[i].StepKey == key {
+			return &steps[i]
+		}
+	}
+	return nil
+}
+
+func (h *IssuesHandler) resolveFlowStepOwnerAgentID(
+	ctx context.Context,
+	projectID string,
+	step store.ProjectFlowTemplateStep,
+) *string {
+	actorType := strings.ToLower(strings.TrimSpace(step.ActorType))
+	switch actorType {
+	case store.FlowActorTypeRole:
+		if step.ActorValue == nil {
+			return nil
+		}
+		return h.resolveFlowRoleOwnerAgentID(ctx, projectID, *step.ActorValue)
+	case store.FlowActorTypeProjectManager:
+		return h.resolveDefaultIssueOwnerAgentID(ctx, projectID)
+	case store.FlowActorTypeAgent:
+		if step.ActorValue == nil {
+			return nil
+		}
+		id := strings.TrimSpace(*step.ActorValue)
+		if id == "" {
+			return nil
+		}
+		return &id
+	case store.FlowActorTypeHuman:
+		return nil
+	default:
+		if step.Role != "" {
+			return h.resolveFlowRoleOwnerAgentID(ctx, projectID, step.Role)
+		}
+		return nil
+	}
+}
+
+func mapIssueFlowBlockerPayload(record store.ProjectIssueFlowBlocker) issueFlowBlockerPayload {
+	var escalatedAt *string
+	if record.EscalatedToHumanAt != nil {
+		formatted := record.EscalatedToHumanAt.UTC().Format(time.RFC3339)
+		escalatedAt = &formatted
+	}
+	var resolvedAt *string
+	if record.ResolvedAt != nil {
+		formatted := record.ResolvedAt.UTC().Format(time.RFC3339)
+		resolvedAt = &formatted
+	}
+
+	return issueFlowBlockerPayload{
+		ID:                            record.ID,
+		IssueID:                       record.IssueID,
+		ProjectID:                     record.ProjectID,
+		RaisedByAgentID:               record.RaisedByAgentID,
+		AssignedProjectManagerAgentID: record.AssignedProjectManagerAgentID,
+		EscalationLevel:               record.EscalationLevel,
+		Status:                        record.Status,
+		Summary:                       record.Summary,
+		Detail:                        record.Detail,
+		ResolutionNote:                record.ResolutionNote,
+		RaisedAt:                      record.RaisedAt.UTC().Format(time.RFC3339),
+		EscalatedToHumanAt:            escalatedAt,
+		ResolvedAt:                    resolvedAt,
+		CreatedAt:                     record.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:                     record.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
 func ownerAgentIDFromParticipants(participants []store.ProjectIssueParticipant) *string {
 	for _, participant := range participants {
 		if participant.Role == "owner" && participant.RemovedAt == nil {
@@ -1010,14 +1615,17 @@ func toIssueSummaryPayload(
 		DocumentPath:   issue.DocumentPath,
 		ApprovalState:  issue.ApprovalState,
 		Kind:           inferIssueKind(link),
-		OwnerAgentID:   ownerAgentIDFromParticipants(participants),
+		OwnerAgentID:   issue.OwnerAgentID,
 		WorkStatus:     issue.WorkStatus,
 		Priority:       issue.Priority,
 		NextStep:       issue.NextStep,
+		FlowTemplateID: issue.FlowTemplateID,
+		FlowStepKey:    issue.FlowStepKey,
+		FlowStepIndex:  issue.FlowStepIndex,
 		LastActivityAt: issue.UpdatedAt.UTC().Format(time.RFC3339),
 	}
-	if payload.OwnerAgentID == nil && issue.OwnerAgentID != nil {
-		payload.OwnerAgentID = issue.OwnerAgentID
+	if payload.OwnerAgentID == nil {
+		payload.OwnerAgentID = ownerAgentIDFromParticipants(participants)
 	}
 	if issue.DueAt != nil {
 		formatted := issue.DueAt.UTC().Format(time.RFC3339)
@@ -1085,6 +1693,79 @@ func (h *IssuesHandler) resolveDefaultIssueOwnerAgentID(ctx context.Context, pro
 		return nil
 	}
 	return &trimmed
+}
+
+func (h *IssuesHandler) resolveIssueFlowTemplate(
+	ctx context.Context,
+	projectID string,
+	requestedTemplateID *string,
+) (*store.ProjectFlowTemplate, []store.ProjectFlowTemplateStep, error) {
+	if h.FlowStore == nil {
+		return nil, nil, nil
+	}
+
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, nil, nil
+	}
+
+	var template *store.ProjectFlowTemplate
+	if requestedTemplateID != nil && strings.TrimSpace(*requestedTemplateID) != "" {
+		record, err := h.FlowStore.GetTemplateByID(ctx, strings.TrimSpace(*requestedTemplateID))
+		if err != nil {
+			return nil, nil, err
+		}
+		if record.ProjectID != projectID {
+			return nil, nil, errors.New("flow template does not belong to project")
+		}
+		template = record
+	} else {
+		record, err := h.FlowStore.GetDefaultTemplateForProject(ctx, projectID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, nil, nil
+			}
+			return nil, nil, err
+		}
+		template = record
+	}
+
+	if template == nil {
+		return nil, nil, nil
+	}
+
+	steps, err := h.FlowStore.ListTemplateSteps(ctx, template.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(steps) == 0 {
+		return nil, nil, errors.New("flow template has no steps")
+	}
+	return template, steps, nil
+}
+
+func (h *IssuesHandler) resolveFlowRoleOwnerAgentID(ctx context.Context, projectID string, role string) *string {
+	if h.PipelineRoleStore == nil {
+		return nil
+	}
+	role = strings.ToLower(strings.TrimSpace(role))
+	if role == "" || role == store.FlowRoleHuman || role == store.FlowRoleAgent {
+		return nil
+	}
+
+	assignments, err := h.PipelineRoleStore.ListByProject(ctx, projectID)
+	if err != nil {
+		return nil
+	}
+	for _, assignment := range assignments {
+		if assignment.Role == role && assignment.AgentID != nil {
+			id := strings.TrimSpace(*assignment.AgentID)
+			if id != "" {
+				return &id
+			}
+		}
+	}
+	return nil
 }
 
 func shouldAutoReadyForReview(workStatus string, approvalState string) bool {
@@ -1171,10 +1852,11 @@ func inferAutomaticIssueLabelNames(issue store.ProjectIssue) []string {
 	text := strings.ToLower(strings.Join(parts, " "))
 
 	labels := make([]string, 0, 6)
-	if strings.TrimSpace(strings.ToLower(issue.WorkStatus)) == store.IssueWorkStatusBlocked {
+	normalizedWorkStatus := strings.TrimSpace(strings.ToLower(issue.WorkStatus))
+	if normalizedWorkStatus == store.IssueWorkStatusBlocked || normalizedWorkStatus == store.IssueWorkStatusOnHold {
 		labels = append(labels, "blocked")
 	}
-	if strings.TrimSpace(strings.ToLower(issue.WorkStatus)) == store.IssueWorkStatusReview ||
+	if normalizedWorkStatus == store.IssueWorkStatusReview ||
 		strings.TrimSpace(strings.ToLower(issue.ApprovalState)) == store.IssueApprovalStateReadyForReview ||
 		strings.TrimSpace(strings.ToLower(issue.ApprovalState)) == store.IssueApprovalStateNeedsChanges {
 		labels = append(labels, "needs-review")
@@ -1259,6 +1941,106 @@ func buildIssueKickoffMessage(issue store.ProjectIssue) string {
 	return strings.Join(lines, "\n")
 }
 
+func (h *IssuesHandler) issuePipelineStepStore() *store.PipelineStepStore {
+	if h.PipelineStepStore != nil {
+		return h.PipelineStepStore
+	}
+	if h.DB == nil {
+		return nil
+	}
+	return store.NewPipelineStepStore(h.DB)
+}
+
+func (h *IssuesHandler) shouldBypassEllieContextGate() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(ellieContextGateBypassEnv))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *IssuesHandler) defaultEllieContextTrigger(ctx context.Context, issue store.ProjectIssue) error {
+	if h == nil || h.IssueStore == nil {
+		return fmt.Errorf("issue store unavailable")
+	}
+	authorAgentID, err := h.ensureEllieComplianceAuthorID(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = h.IssueStore.CreateComment(ctx, store.CreateProjectIssueCommentInput{
+		IssueID:       issue.ID,
+		AuthorAgentID: authorAgentID,
+		Body:          "Ellie context warmup complete for this issue.",
+	})
+	return err
+}
+
+func (h *IssuesHandler) runEllieContextGateBeforeKickoff(
+	ctx context.Context,
+	issue store.ProjectIssue,
+) bool {
+	stepStore := h.issuePipelineStepStore()
+	if stepStore == nil {
+		return true
+	}
+
+	steps, err := stepStore.ListStepsByProject(ctx, issue.ProjectID)
+	if err != nil {
+		log.Printf("issues: ellie context gate skipped for issue %s due to pipeline step lookup error: %v", issue.ID, err)
+		return true
+	}
+	if len(steps) == 0 {
+		return true
+	}
+
+	if state, stateErr := stepStore.GetIssuePipelineState(ctx, issue.ID); stateErr == nil && state != nil && state.EllieContextGateStatus != nil {
+		normalized := strings.ToLower(strings.TrimSpace(*state.EllieContextGateStatus))
+		if normalized == store.IssueEllieContextGateStatusSucceeded || normalized == store.IssueEllieContextGateStatusBypassed {
+			return true
+		}
+	}
+
+	now := time.Now().UTC()
+	if h.shouldBypassEllieContextGate() {
+		if err := stepStore.UpdateIssueEllieContextGate(ctx, store.UpdateIssueEllieContextGateInput{
+			IssueID:   issue.ID,
+			Status:    store.IssueEllieContextGateStatusBypassed,
+			CheckedAt: &now,
+		}); err != nil {
+			log.Printf("issues: failed to persist ellie context gate bypass for issue %s: %v", issue.ID, err)
+		}
+		return true
+	}
+
+	trigger := h.EllieContextTrigger
+	if trigger == nil {
+		trigger = h.defaultEllieContextTrigger
+	}
+	if err := trigger(ctx, issue); err != nil {
+		errorMessage := strings.TrimSpace(err.Error())
+		if updateErr := stepStore.UpdateIssueEllieContextGate(ctx, store.UpdateIssueEllieContextGateInput{
+			IssueID:   issue.ID,
+			Status:    store.IssueEllieContextGateStatusFailed,
+			Error:     &errorMessage,
+			CheckedAt: &now,
+		}); updateErr != nil {
+			log.Printf("issues: failed to persist ellie context gate failure for issue %s: %v", issue.ID, updateErr)
+		}
+		log.Printf("issues: ellie context gate blocked kickoff dispatch for issue %s: %v", issue.ID, err)
+		return false
+	}
+
+	if err := stepStore.UpdateIssueEllieContextGate(ctx, store.UpdateIssueEllieContextGateInput{
+		IssueID:   issue.ID,
+		Status:    store.IssueEllieContextGateStatusSucceeded,
+		CheckedAt: &now,
+	}); err != nil {
+		log.Printf("issues: failed to persist ellie context gate success for issue %s: %v", issue.ID, err)
+	}
+	return true
+}
+
 func (h *IssuesHandler) dispatchIssueKickoffBestEffort(
 	ctx context.Context,
 	issue store.ProjectIssue,
@@ -1270,6 +2052,9 @@ func (h *IssuesHandler) dispatchIssueKickoffBestEffort(
 
 	target, shouldDispatch, _, err := h.resolveIssueCommentDispatchTarget(ctx, issue.ID, "user")
 	if err != nil || !shouldDispatch {
+		return
+	}
+	if !h.runEllieContextGateBeforeKickoff(ctx, issue) {
 		return
 	}
 

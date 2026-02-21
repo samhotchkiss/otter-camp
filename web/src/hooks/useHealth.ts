@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { API_URL } from "../lib/api";
 
 type HealthResponse = {
   status?: string;
@@ -23,7 +24,7 @@ export default function useHealth(): UseHealthResult {
       setError(null);
 
       try {
-        const response = await fetch("/health");
+        const response = await fetch(`${API_URL}/health`);
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
         }

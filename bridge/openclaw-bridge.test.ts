@@ -22,6 +22,7 @@ import {
   formatQuestionnaireForFallback,
   isCompactWhoAmIInsufficient,
   isCanonicalChameleonSessionKey,
+  isPermanentOpenClawAgentForTest,
   normalizeQuestionnairePayload,
   parseAgentIDFromSessionKeyForTest,
   parseChameleonSessionKey,
@@ -39,10 +40,13 @@ import {
   resetPeriodicSyncGuardForTest,
   resetReconnectStateForTest,
   resolveOtterCampWSSecret,
+  resetChatEmissionForwardingStateForTest,
   resetSessionContextsForTest,
   resolveOpenClawCommandTimeoutMSForTest,
   setExecFileForTest,
   setOtterCampSocketForTest,
+  setOtterCampOrgIDForTest,
+  setSendRequestForTest,
   runSerializedSyncOperationForTest,
   setContinuousModeEnabledForTest,
   setPathWithinProjectRootForTest,
@@ -53,6 +57,7 @@ import {
   handleOpenClawEventForTest,
   getIngestedToolEventsStateForTest,
   getMutationEnforcementStateForTest,
+  resetWorkflowSyncStateForTest,
   validateMutationToolTargetsWithinProjectRootForTest,
   inferSessionContextFromKeyForTest,
   type QuestionnairePayload,
@@ -113,6 +118,7 @@ describe("bridge tool-event ingestion helpers", () => {
   beforeEach(() => {
     resetIngestedToolEventsForTest();
     resetMutationEnforcementStateForTest();
+    resetChatEmissionForwardingStateForTest();
     setMutationAbortForTest(async () => {});
   });
 
@@ -163,10 +169,139 @@ describe("bridge tool-event ingestion helpers", () => {
   });
 });
 
+describe("bridge chat emission forwarding", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    resetSessionContextsForTest();
+    resetChatEmissionForwardingStateForTest();
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  afterEach(() => {
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("forwards tool-stream events as chat emissions with dm source key", async () => {
+    const emissionBodies: string[] = [];
+    setSessionContextForTest("agent:main:main", {
+      kind: "dm",
+      orgID: "11111111-2222-3333-4444-555555555555",
+      threadID: "dm_main",
+      agentID: "main",
+    });
+
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("/api/emissions")) {
+        emissionBodies.push(String(init?.body ?? ""));
+        return new Response("{}", {
+          status: 202,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("{}", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await handleOpenClawEventForTest({
+      event: "agent",
+      payload: {
+        stream: "tool",
+        phase: "start",
+        sessionKey: "agent:main:main",
+        tool: "write",
+        args: {
+          path: "docs/plan.md",
+        },
+      },
+    });
+
+    assert.equal(emissionBodies.length, 1);
+    const payload = JSON.parse(emissionBodies[0]);
+    assert.equal(payload?.emissions?.[0]?.source_id, "dm:dm_main");
+    assert.equal(payload?.emissions?.[0]?.source_type, "bridge");
+    assert.match(String(payload?.emissions?.[0]?.summary ?? ""), /write/i);
+  });
+
+  it("throttles repeated intermediate events to one emission per second per session", async () => {
+    const emissionBodies: string[] = [];
+    setSessionContextForTest("agent:main:main", {
+      kind: "dm",
+      orgID: "11111111-2222-3333-4444-555555555555",
+      threadID: "dm_main",
+      agentID: "main",
+    });
+
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("/api/emissions")) {
+        emissionBodies.push(String(init?.body ?? ""));
+        return new Response("{}", {
+          status: 202,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("{}", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await handleOpenClawEventForTest({
+      event: "agent",
+      payload: {
+        stream: "tool",
+        phase: "start",
+        sessionKey: "agent:main:main",
+        tool: "read",
+      },
+    });
+
+    await handleOpenClawEventForTest({
+      event: "agent",
+      payload: {
+        stream: "tool",
+        phase: "start",
+        sessionKey: "agent:main:main",
+        tool: "write",
+      },
+    });
+
+    assert.equal(emissionBodies.length, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 1050));
+
+    await handleOpenClawEventForTest({
+      event: "agent",
+      payload: {
+        stream: "tool",
+        phase: "start",
+        sessionKey: "agent:main:main",
+        tool: "search",
+      },
+    });
+
+    assert.equal(emissionBodies.length, 2);
+  });
+});
+
 describe("bridge chameleon session key helpers", () => {
   it("validates canonical chameleon session keys", () => {
     assert.equal(
       isCanonicalChameleonSessionKey("agent:chameleon:oc:a1b2c3d4-5678-90ab-cdef-1234567890ab"),
+      true,
+    );
+    assert.equal(
+      isCanonicalChameleonSessionKey(
+        "agent:chameleon:oc:a1b2c3d4-5678-90ab-cdef-1234567890ab:11111111-2222-3333-4444-555555555555",
+      ),
       true,
     );
     assert.equal(
@@ -177,10 +312,21 @@ describe("bridge chameleon session key helpers", () => {
     assert.equal(isCanonicalChameleonSessionKey("agent:chameleon:oc:not-a-uuid"), false);
   });
 
-  it("extracts the agent UUID from canonical chameleon session keys", () => {
-    assert.equal(
+  it("extracts project/issue UUIDs from canonical chameleon session keys", () => {
+    assert.deepEqual(
       parseChameleonSessionKey("agent:chameleon:oc:A1B2C3D4-5678-90AB-CDEF-1234567890AB"),
-      "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+      {
+        projectID: "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+      },
+    );
+    assert.deepEqual(
+      parseChameleonSessionKey(
+        "agent:chameleon:oc:A1B2C3D4-5678-90AB-CDEF-1234567890AB:11111111-2222-3333-4444-555555555555",
+      ),
+      {
+        projectID: "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+        issueID: "11111111-2222-3333-4444-555555555555",
+      },
     );
     assert.equal(parseChameleonSessionKey("agent:main:slack"), null);
     assert.equal(parseChameleonSessionKey("agent:chameleon:oc:not-a-uuid"), null);
@@ -195,6 +341,441 @@ describe("bridge chameleon session key helpers", () => {
     );
     assert.equal(parseAgentIDFromSessionKeyForTest("agent:../../etc:main"), "");
     assert.equal(parseAgentIDFromSessionKeyForTest("agent:foo/bar:main"), "");
+    assert.equal(
+      parseAgentIDFromSessionKeyForTest("agent:chameleon:oc:a1b2c3d4-5678-90ab-cdef-1234567890ab"),
+      "",
+    );
+  });
+
+  it("tracks permanent OpenClaw agent IDs", () => {
+    assert.equal(isPermanentOpenClawAgentForTest("main"), true);
+    assert.equal(isPermanentOpenClawAgentForTest("elephant"), true);
+    assert.equal(isPermanentOpenClawAgentForTest("ellie-extractor"), true);
+    assert.equal(isPermanentOpenClawAgentForTest("lori"), true);
+    assert.equal(isPermanentOpenClawAgentForTest("chameleon"), true);
+    assert.equal(isPermanentOpenClawAgentForTest("technonymous"), false);
+  });
+});
+
+describe("bridge project dispatch routing", () => {
+  const rpcCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+
+  beforeEach(() => {
+    rpcCalls.length = 0;
+    resetSessionContextsForTest();
+    setSendRequestForTest(async (method, params) => {
+      rpcCalls.push({ method, params });
+      return {};
+    });
+  });
+
+  afterEach(() => {
+    setSendRequestForTest(null);
+  });
+
+  it("routes non-permanent project agents through chameleon session keys", async () => {
+    const projectID = "11111111-2222-3333-4444-555555555555";
+    await dispatchInboundEventForTest("project.chat.message", {
+      type: "project.chat.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "msg-1",
+        project_id: projectID,
+        project_name: "Spec 521",
+        agent_id: "technonymous",
+        agent_name: "Technonymous",
+        content: "Ship the patch.",
+      },
+    });
+
+    const dispatchCall = rpcCalls.find((call) => call.method === "agent");
+    assert.equal(dispatchCall?.method, "agent");
+    assert.equal(dispatchCall?.params.sessionKey, `agent:chameleon:oc:${projectID}`);
+
+    const context = getSessionContextForTest(`agent:chameleon:oc:${projectID}`);
+    assert.equal(context?.kind, "project_chat");
+    assert.equal(context?.agentID, "technonymous");
+    assert.equal(context?.agentName, "Technonymous");
+  });
+
+  it("routes main project dispatches to the main session via agent method", async () => {
+    await dispatchInboundEventForTest("project.chat.message", {
+      type: "project.chat.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "msg-main",
+        project_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        project_name: "Main routing",
+        agent_id: "main",
+        agent_name: "Frank",
+        content: "Please review this project update.",
+      },
+    });
+
+    const dispatchCall = rpcCalls.find((call) => call.method === "agent");
+    assert.equal(dispatchCall?.method, "agent");
+    assert.equal(dispatchCall?.params.sessionKey, "agent:main:main");
+  });
+});
+
+describe("bridge issue dispatch routing", () => {
+  const rpcCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+
+  beforeEach(() => {
+    rpcCalls.length = 0;
+    resetSessionContextsForTest();
+    setSendRequestForTest(async (method, params) => {
+      rpcCalls.push({ method, params });
+      return {};
+    });
+  });
+
+  afterEach(() => {
+    setSendRequestForTest(null);
+  });
+
+  it("routes non-permanent issue dispatches through compound chameleon keys", async () => {
+    const projectID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const issueID = "11111111-2222-3333-4444-555555555555";
+    await dispatchInboundEventForTest("issue.comment.message", {
+      type: "issue.comment.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "issue-msg-1",
+        project_id: projectID,
+        issue_id: issueID,
+        issue_number: 52,
+        issue_title: "Bridge routing",
+        agent_id: "technonymous",
+        responder_agent_id: "technonymous",
+        content: "Please update this issue thread.",
+      },
+    });
+
+    const dispatchCall = rpcCalls.find((call) => call.method === "agent");
+    assert.equal(dispatchCall?.method, "agent");
+    assert.equal(dispatchCall?.params.sessionKey, `agent:chameleon:oc:${projectID}:${issueID}`);
+
+    const context = getSessionContextForTest(`agent:chameleon:oc:${projectID}:${issueID}`);
+    assert.equal(context?.kind, "issue_comment");
+    assert.equal(context?.agentID, "technonymous");
+    assert.equal(context?.responderAgentID, "technonymous");
+    assert.equal(context?.issueID, issueID);
+    assert.equal(context?.projectID, projectID);
+  });
+
+  it("routes main issue dispatches to the main session via agent method", async () => {
+    await dispatchInboundEventForTest("issue.comment.message", {
+      type: "issue.comment.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "issue-msg-main",
+        project_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        issue_id: "66666666-7777-8888-9999-aaaaaaaaaaaa",
+        issue_number: 89,
+        issue_title: "Main issue routing",
+        agent_id: "main",
+        responder_agent_id: "main",
+        content: "Frank, please respond on this issue.",
+      },
+    });
+
+    const dispatchCall = rpcCalls.find((call) => call.method === "agent");
+    assert.equal(dispatchCall?.method, "agent");
+    assert.equal(dispatchCall?.params.sessionKey, "agent:main:main");
+  });
+});
+
+describe("bridge dm mid-turn dispatch", () => {
+  const rpcCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const originalFetch = globalThis.fetch;
+  let resolveFirstDispatch: (() => void) | null = null;
+  let firstDispatchCompleted = false;
+
+  beforeEach(() => {
+    rpcCalls.length = 0;
+    resolveFirstDispatch = null;
+    firstDispatchCompleted = false;
+    resetSessionContextsForTest();
+    setSendRequestForTest(async (method, params) => {
+      rpcCalls.push({ method, params });
+      if (method === "chat.send" && params.idempotencyKey === "msg-a") {
+        return new Promise<Record<string, unknown>>((resolve) => {
+          resolveFirstDispatch = () => {
+            firstDispatchCompleted = true;
+            resolve({});
+          };
+        });
+      }
+      return {};
+    });
+    globalThis.fetch = (async () =>
+      new Response('{"error":"memory agent_id is invalid"}', {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+  });
+
+  afterEach(() => {
+    setSendRequestForTest(null);
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("dispatches follow-up DM messages while the first dispatch is still unresolved", async () => {
+    const waitForChatSendCount = async (count: number): Promise<void> => {
+      const deadline = Date.now() + 1500;
+      while (rpcCalls.filter((call) => call.method === "chat.send").length < count) {
+        if (Date.now() > deadline) {
+          assert.fail(`timed out waiting for ${count} chat.send call(s)`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    };
+
+    const firstDispatch = dispatchInboundEventForTest("dm.message", {
+      type: "dm.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "msg-a",
+        session_key: "agent:test:session",
+        thread_id: "dm_test",
+        content: "Message A",
+      },
+    }, "replay");
+
+    await waitForChatSendCount(1);
+    assert.equal(rpcCalls.filter((call) => call.method === "chat.send").length, 1);
+
+    const secondDispatch = dispatchInboundEventForTest("dm.message", {
+      type: "dm.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "msg-b",
+        session_key: "agent:test:session",
+        thread_id: "dm_test",
+        content: "Message B",
+      },
+    }, "replay");
+
+    await waitForChatSendCount(2);
+
+    const chatCalls = rpcCalls.filter((call) => call.method === "chat.send");
+    assert.equal(chatCalls.length, 2);
+    assert.equal(chatCalls[0]?.params.idempotencyKey, "msg-a");
+    assert.equal(chatCalls[1]?.params.idempotencyKey, "msg-b");
+    assert.equal(firstDispatchCompleted, false);
+
+    assert.notEqual(resolveFirstDispatch, null);
+    resolveFirstDispatch?.();
+    await Promise.all([firstDispatch, secondDispatch]);
+    assert.equal(firstDispatchCompleted, true);
+  });
+});
+
+describe("bridge assistant final dedup", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    resetSessionContextsForTest();
+    resetWorkflowSyncStateForTest();
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  afterEach(() => {
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("dedups whitespace-variant final replies across distinct run IDs", async () => {
+    const sessionKey = "agent:main:main";
+    const persistedBodies: string[] = [];
+
+    setSessionContextForTest(sessionKey, {
+      kind: "dm",
+      orgID: "org-1",
+      threadID: "dm_dedup",
+      agentID: "main",
+    });
+
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("/api/messages")) {
+        persistedBodies.push(String(init?.body ?? ""));
+        return new Response(
+          JSON.stringify({
+            message: {
+              id: `msg-${persistedBodies.length}`,
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return new Response("{}", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await handleOpenClawEventForTest({
+      event: "chat",
+      payload: {
+        state: "final",
+        sessionKey,
+        runId: "run-dedup-1",
+        message: {
+          role: "assistant",
+          content: "Done.\n\nShipped fix.",
+        },
+      },
+    });
+
+    await handleOpenClawEventForTest({
+      event: "chat",
+      payload: {
+        state: "final",
+        sessionKey,
+        runId: "run-dedup-2",
+        message: {
+          role: "assistant",
+          content: "Done.  Shipped    fix.",
+        },
+      },
+    });
+
+    assert.equal(persistedBodies.length, 1);
+  });
+});
+
+describe("bridge chameleon identity + persistence fallbacks", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    setOtterCampOrgIDForTest(null);
+    resetSessionContextsForTest();
+  });
+
+  it("resolves whoami identity using context agent slug for chameleon sessions", async () => {
+    const projectID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const sessionKey = `agent:chameleon:oc:${projectID}`;
+    const fetchURLs: string[] = [];
+    globalThis.fetch = (async (input: URL | string) => {
+      fetchURLs.push(String(input));
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({
+          profile: "compact",
+          agent: { id: "technonymous", name: "Technonymous" },
+          soul_summary: "Focuses on delivery.",
+          identity_summary: "Bridges project context.",
+          instructions_summary: "Keep updates concise.",
+        }),
+        text: async () => "",
+      } as Response;
+    }) as typeof fetch;
+
+    setSessionContextForTest(sessionKey, {
+      kind: "project_chat",
+      orgID: "00000000-0000-0000-0000-000000000123",
+      projectID,
+      agentID: "technonymous",
+      agentName: "Technonymous",
+    });
+
+    await formatSessionContextMessageForTest(sessionKey, "Please plan the next step.");
+
+    assert.equal(fetchURLs.some((url) => url.includes("/api/agents/technonymous/whoami")), true);
+    assert.equal(fetchURLs.some((url) => url.includes(`/api/agents/${projectID}/whoami`)), false);
+  });
+
+  it("persists project replies for chameleon sessions using inferred project context", async () => {
+    const projectID = "bbbbbbbb-1111-2222-3333-444444444444";
+    const sessionKey = `agent:chameleon:oc:${projectID}`;
+    const fetchURLs: string[] = [];
+    globalThis.fetch = (async (input: URL | string, init?: RequestInit) => {
+      fetchURLs.push(String(input));
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({}),
+        text: async () => "",
+        ...(init ? { headers: init.headers } : {}),
+      } as Response;
+    }) as typeof fetch;
+    setOtterCampOrgIDForTest("00000000-0000-0000-0000-000000000123");
+
+    await handleOpenClawEventForTest({
+      event: "chat",
+      payload: {
+        state: "final",
+        sessionKey,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Project update from inferred context." }],
+        },
+      },
+    });
+
+    assert.equal(
+      fetchURLs.some((url) =>
+        url.includes(`/api/projects/${projectID}/chat/messages?org_id=00000000-0000-0000-0000-000000000123`)
+      ),
+      true,
+    );
+  });
+
+  it("persists issue replies for compound chameleon issue sessions", async () => {
+    const orgID = "00000000-0000-0000-0000-000000000123";
+    const projectID = "bbbbbbbb-1111-2222-3333-444444444444";
+    const issueID = "99999999-aaaa-bbbb-cccc-dddddddddddd";
+    const sessionKey = `agent:chameleon:oc:${projectID}:${issueID}`;
+    const fetchURLs: string[] = [];
+    globalThis.fetch = (async (input: URL | string, init?: RequestInit) => {
+      fetchURLs.push(String(input));
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({}),
+        text: async () => "",
+        ...(init ? { headers: init.headers } : {}),
+      } as Response;
+    }) as typeof fetch;
+
+    setSessionContextForTest(sessionKey, {
+      kind: "issue_comment",
+      orgID,
+      projectID,
+      issueID,
+      responderAgentID: "technonymous",
+      agentID: "technonymous",
+      agentName: "Technonymous",
+    });
+
+    await handleOpenClawEventForTest({
+      event: "chat",
+      payload: {
+        state: "final",
+        sessionKey,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Issue update from compound chameleon session." }],
+        },
+      },
+    });
+
+    assert.equal(fetchURLs.some((url) => url.includes(`/api/issues/${issueID}/comments?org_id=${orgID}`)), true);
   });
 });
 
@@ -249,6 +830,7 @@ describe("bridge identity preamble helpers", () => {
   const originalFetch = globalThis.fetch;
   const agentID = "a1b2c3d4-5678-90ab-cdef-1234567890ab";
   const sessionKey = `agent:chameleon:oc:${agentID}`;
+  const reminderGuidePointer = "Refer to OTTERCAMP.md and OTTER_COMMANDS.md for rules.";
 
   beforeEach(() => {
     resetSessionContextsForTest();
@@ -331,9 +913,10 @@ describe("bridge identity preamble helpers", () => {
 
     const secondPrompt = await formatSessionSystemPromptForTest(sessionKey, "next turn");
     assert.equal(secondPrompt.includes("[OtterCamp Identity Injection]"), false);
-    assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
-    assert.ok(secondPrompt.includes("[OTTERCAMP_ACTION_DEFAULTS]"));
     assert.ok(secondPrompt.includes("[OTTERCAMP_CONTEXT_REMINDER]"));
+    assert.ok(secondPrompt.includes(reminderGuidePointer));
+    assert.equal(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"), false);
+    assert.equal(secondPrompt.includes("[OTTERCAMP_ACTION_DEFAULTS]"), false);
     assert.equal(secondPrompt.includes("next turn"), false);
   });
 
@@ -403,9 +986,10 @@ describe("bridge identity preamble helpers", () => {
       assert.ok(firstPrompt.includes("`/projects/<project-id>/issues/<issue-id>`"));
 
       const secondPrompt = await formatSessionSystemPromptForTest(sessionKey, "next turn");
-      assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
-      assert.ok(secondPrompt.includes('Never self-identify as "Chameleon"'));
+      assert.ok(secondPrompt.includes("[OTTERCAMP_CONTEXT_REMINDER]"));
+      assert.ok(secondPrompt.includes(reminderGuidePointer));
       assert.equal(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE]"), false);
+      assert.equal(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"), false);
     } finally {
       if (originalConfigPath === undefined) {
         delete process.env.OPENCLAW_CONFIG_PATH;
@@ -468,9 +1052,10 @@ describe("bridge identity preamble helpers", () => {
       assert.ok(firstPrompt.includes("`/projects/<project-id>/issues/<issue-id>`"));
 
       const secondPrompt = await formatSessionSystemPromptForTest(elephantSessionKey, "next turn");
-      assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
-      assert.ok(secondPrompt.includes('Never self-identify as "Chameleon"'));
+      assert.ok(secondPrompt.includes("[OTTERCAMP_CONTEXT_REMINDER]"));
+      assert.ok(secondPrompt.includes(reminderGuidePointer));
       assert.equal(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE]"), false);
+      assert.equal(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"), false);
     } finally {
       if (originalConfigPath === undefined) {
         delete process.env.OPENCLAW_CONFIG_PATH;
@@ -479,6 +1064,23 @@ describe("bridge identity preamble helpers", () => {
       }
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
+  });
+
+  it("keeps UUID-only issue reminder payloads under 200 characters", async () => {
+    const issueSessionKey = "agent:main:issue:compact-reminder";
+    setSessionContextForTest(issueSessionKey, {
+      kind: "issue_comment",
+      projectID: "12345678-1234-1234-1234-123456789abc",
+      issueID: "87654321-4321-4321-4321-cba987654321",
+      orgID: "org-1",
+    });
+
+    await formatSessionSystemPromptForTest(issueSessionKey, "bootstrap turn");
+    const reminderPrompt = await formatSessionSystemPromptForTest(issueSessionKey, "next turn");
+
+    assert.ok(reminderPrompt.includes("[OTTERCAMP_CONTEXT_REMINDER]"));
+    assert.ok(reminderPrompt.includes(reminderGuidePointer));
+    assert.equal(reminderPrompt.length < 200, true);
   });
 
   it("syncs otter CLI auth config into the chameleon workspace home paths", () => {
@@ -1588,6 +2190,139 @@ describe("bridge memory extraction dispatch helpers", () => {
       "claude-haiku-4-5",
     );
     assert.equal(String(data.output || "").includes("systemPromptReport"), false);
+  });
+
+  it("rewrites memory.extract.request params sessionKey to an org-stable session key", async () => {
+    let capturedArgs: string[] = [];
+    setExecFileForTest((cmd, args, _options, callback) => {
+      assert.equal(cmd, "openclaw");
+      capturedArgs = [...args];
+      callback(
+        null,
+        '{"runId":"trace-session-reuse","status":"ok","result":{"payloads":[{"text":"{\\"candidates\\":[]}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"}}}}',
+        "",
+      );
+    });
+
+    await dispatchInboundEventForTest("memory.extract.request", {
+      type: "memory.extract.request",
+      org_id: "0D86D9E4-B8A1-46CF-AED1-C666123C2D1F",
+      data: {
+        request_id: "req-session-reuse-1",
+        args: [
+          "gateway",
+          "call",
+          "agent",
+          "--json",
+          "--params",
+          '{"sessionKey":"agent:elephant:main:ellie-ingestion:0d86d9e4-b8a1-46cf-aed1-c666123c2d1f-a1b2c3d4","idempotencyKey":"ellie-ingestion-a1b2c3d4","message":"extract"}',
+        ],
+      },
+    });
+
+    const paramsIndex = capturedArgs.indexOf("--params");
+    assert.notEqual(paramsIndex, -1);
+    const params = JSON.parse(capturedArgs[paramsIndex + 1] || "{}") as Record<string, unknown>;
+    assert.equal(
+      params.sessionKey,
+      "agent:elephant:main:ellie-ingestion:0d86d9e4-b8a1-46cf-aed1-c666123c2d1f",
+    );
+  });
+
+  it("keeps running when memory.extract.request params are malformed", async () => {
+    setExecFileForTest((_cmd, _args, _options, callback) => {
+      callback(
+        null,
+        '{"runId":"trace-malformed-params","status":"ok","result":{"payloads":[{"text":"{\\"candidates\\":[]}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"}}}}',
+        "",
+      );
+    });
+
+    await dispatchInboundEventForTest("memory.extract.request", {
+      type: "memory.extract.request",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        request_id: "req-malformed-params",
+        args: ["gateway", "call", "agent", "--json", "--params", "{not-json"],
+      },
+    });
+
+    assert.equal(sentMessages.length, 1);
+    const data = sentMessages[0]?.data as Record<string, unknown>;
+    assert.equal(data.request_id, "req-malformed-params");
+    assert.equal(data.ok, true);
+  });
+
+  it("keeps memory extraction session reuse bounded for 10 sequential requests", async () => {
+    const uniqueSessionKeys = new Set<string>();
+    setExecFileForTest((_cmd, args, _options, callback) => {
+      const paramsIndex = args.indexOf("--params");
+      if (paramsIndex >= 0 && paramsIndex + 1 < args.length) {
+        const params = JSON.parse(args[paramsIndex + 1] || "{}") as Record<string, unknown>;
+        uniqueSessionKeys.add(String(params.sessionKey || ""));
+      }
+      callback(
+        null,
+        '{"runId":"trace-session-reuse-10","status":"ok","result":{"payloads":[{"text":"{\\"candidates\\":[]}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"}}}}',
+        "",
+      );
+    });
+
+    for (let i = 0; i < 10; i += 1) {
+      await dispatchInboundEventForTest("memory.extract.request", {
+        type: "memory.extract.request",
+        org_id: "11111111-2222-3333-4444-555555555555",
+        data: {
+          request_id: `req-seq-10-${i}`,
+          args: [
+            "gateway",
+            "call",
+            "agent",
+            "--json",
+            "--params",
+            `{"sessionKey":"agent:elephant:main:ellie-ingestion:11111111-2222-3333-4444-555555555555-${i.toString(16).padStart(2, "0")}","idempotencyKey":"ellie-ingestion-${i}","message":"extract-${i}"}`,
+          ],
+        },
+      });
+    }
+
+    assert.equal(uniqueSessionKeys.size <= 2, true);
+  });
+
+  it("keeps memory extraction session reuse bounded for 100 sequential requests", async () => {
+    const uniqueSessionKeys = new Set<string>();
+    setExecFileForTest((_cmd, args, _options, callback) => {
+      const paramsIndex = args.indexOf("--params");
+      if (paramsIndex >= 0 && paramsIndex + 1 < args.length) {
+        const params = JSON.parse(args[paramsIndex + 1] || "{}") as Record<string, unknown>;
+        uniqueSessionKeys.add(String(params.sessionKey || ""));
+      }
+      callback(
+        null,
+        '{"runId":"trace-session-reuse-100","status":"ok","result":{"payloads":[{"text":"{\\"candidates\\":[]}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"}}}}',
+        "",
+      );
+    });
+
+    for (let i = 0; i < 100; i += 1) {
+      await dispatchInboundEventForTest("memory.extract.request", {
+        type: "memory.extract.request",
+        org_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        data: {
+          request_id: `req-seq-100-${i}`,
+          args: [
+            "gateway",
+            "call",
+            "agent",
+            "--json",
+            "--params",
+            `{"sessionKey":"agent:elephant:main:ellie-ingestion:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee-${i.toString(16).padStart(2, "0")}","idempotencyKey":"ellie-ingestion-${i}","message":"extract-${i}"}`,
+          ],
+        },
+      });
+    }
+
+    assert.equal(uniqueSessionKeys.size <= 5, true);
   });
 
   it("rejects unsupported memory.extract.request commands with error response", async () => {

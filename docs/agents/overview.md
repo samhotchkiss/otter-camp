@@ -36,11 +36,14 @@ Chameleon agents:
 | Aspect | OpenClaw (legacy) | OtterCamp |
 |---|---|---|
 | Agent count | 13+ always-running | 3 permanent + chameleon on-demand |
-| Identity | Fixed, persistent workspaces | Definitions loaded at runtime |
+| OpenClaw agents used | 13+ | Exactly 5 (main, elephant, ellie-extractor, lori, chameleon) |
+| Identity | Fixed, persistent workspaces | Definitions loaded at runtime into chameleon |
 | Lifecycle | Always on, heartbeat-monitored | Spun up when needed, dissolve when done |
 | Resource usage | High (13 concurrent agents) | Low (3 + burst capacity) |
 
-**Key insight:** The 13-agent OpenClaw roster (Frank, Josh S, Derek, Jeremy H, Jeff G, Nova, Stone, Ivy, Claudette, Beau H, Max, Penny, Pearl) was the precursor. In OtterCamp, only Frank stays as a permanent agent. Lori and Ellie are new permanent roles. Everyone else becomes a chameleon definition.
+**Key insight:** The 13-agent OpenClaw roster was the precursor. In OtterCamp, only Frank (main), Ellie (elephant + ellie-extractor), and Lori are permanent. Everyone else becomes a chameleon definition loaded on demand. The bridge must never create sessions under non-permanent agent IDs.
+
+**See `docs/agents/openclaw-bridge-routing.md` for the definitive routing specification.**
 
 ## Agent Model in Code
 
@@ -69,6 +72,7 @@ Source: `internal/api/onboarding.go`
 
 ## Related Docs
 
+- `docs/agents/openclaw-bridge-routing.md` — **How OtterCamp routes to OpenClaw** (five authorized agents, session key formats, routing rules)
 - `docs/agents/loris-role.md` — Lori's responsibilities
 - `docs/agents/hiring-and-firing.md` — Agent lifecycle operations
 - `docs/agents/runtime-modes.md` — Local vs hosted behavior
@@ -76,5 +80,6 @@ Source: `internal/api/onboarding.go`
 
 ## Change Log
 
+- 2026-02-19: Updated with five-agent OpenClaw model reference, linked to bridge routing doc.
 - 2026-02-16: Major rewrite. Documented three-permanent-agent model, chameleon concept, and distinction from OpenClaw's 13-agent roster.
 - 2026-02-16: Created canonical documentation file and migrated relevant legacy content.

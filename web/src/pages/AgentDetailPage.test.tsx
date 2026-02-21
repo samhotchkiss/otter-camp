@@ -3,6 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import AgentDetailPage from "./AgentDetailPage";
 
+vi.mock("../contexts/GlobalChatContext", async () => {
+  const actual = await vi.importActual<typeof import("../contexts/GlobalChatContext")>("../contexts/GlobalChatContext");
+  return {
+    ...actual,
+    useGlobalChat: () => ({ openConversation: vi.fn() }),
+  };
+});
+
 describe("AgentDetailPage", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
