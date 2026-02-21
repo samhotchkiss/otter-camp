@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import DataManagement from "../components/DataManagement";
 import GitHubSettings from "./settings/GitHubSettings";
+import { API_URL } from "../lib/api";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -973,11 +974,11 @@ export default function SettingsPage() {
       try {
         const [profileRes, notificationsRes, workspaceRes, integrationsRes, gitTokensRes] =
           await Promise.all([
-            fetch("/api/settings/profile"),
-            fetch("/api/settings/notifications"),
-            fetch("/api/settings/workspace"),
-            fetch("/api/settings/integrations"),
-            fetch("/api/git/tokens"),
+            fetch(`${API_URL}/api/settings/profile`),
+            fetch(`${API_URL}/api/settings/notifications`),
+            fetch(`${API_URL}/api/settings/workspace`),
+            fetch(`${API_URL}/api/settings/integrations`),
+            fetch(`${API_URL}/api/git/tokens`),
           ]);
 
         if (profileRes.ok) {
@@ -1107,7 +1108,7 @@ export default function SettingsPage() {
   const handleSaveProfile = useCallback(async () => {
     setSavingProfile(true);
     try {
-      await fetch("/api/settings/profile", {
+      await fetch(`${API_URL}/api/settings/profile`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(profile),
@@ -1120,7 +1121,7 @@ export default function SettingsPage() {
   const handleSaveNotifications = useCallback(async () => {
     setSavingNotifications(true);
     try {
-      await fetch("/api/settings/notifications", {
+      await fetch(`${API_URL}/api/settings/notifications`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(notifications),
@@ -1133,7 +1134,7 @@ export default function SettingsPage() {
   const handleSaveWorkspace = useCallback(async () => {
     setSavingWorkspace(true);
     try {
-      await fetch("/api/settings/workspace", {
+      await fetch(`${API_URL}/api/settings/workspace`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(workspace),
@@ -1146,7 +1147,7 @@ export default function SettingsPage() {
   const handleSaveIntegrations = useCallback(async () => {
     setSavingIntegrations(true);
     try {
-      await fetch("/api/settings/integrations", {
+      await fetch(`${API_URL}/api/settings/integrations`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(integrations),
@@ -1160,7 +1161,7 @@ export default function SettingsPage() {
     setGitTokenError(null);
     setGeneratedGitToken(null);
 
-    const projectsResponse = await fetch("/api/projects");
+    const projectsResponse = await fetch(`${API_URL}/api/projects`);
     if (!projectsResponse.ok) {
       const payload = await projectsResponse.json().catch(() => null);
       setGitTokenError(payload?.error ?? "Failed to load projects for git token creation.");
@@ -1179,7 +1180,7 @@ export default function SettingsPage() {
       return;
     }
 
-    const response = await fetch("/api/git/tokens", {
+    const response = await fetch(`${API_URL}/api/git/tokens`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
