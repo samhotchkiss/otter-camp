@@ -14,42 +14,48 @@ import (
 )
 
 type ProjectIssue struct {
-	ID            string     `json:"id"`
-	OrgID         string     `json:"org_id"`
-	ProjectID     string     `json:"project_id"`
-	IssueNumber   int64      `json:"issue_number"`
-	Title         string     `json:"title"`
-	Body          *string    `json:"body,omitempty"`
-	State         string     `json:"state"`
-	Origin        string     `json:"origin"`
-	DocumentPath  *string    `json:"document_path,omitempty"`
-	ApprovalState string     `json:"approval_state"`
-	OwnerAgentID  *string    `json:"owner_agent_id,omitempty"`
-	WorkStatus    string     `json:"work_status"`
-	Priority      string     `json:"priority"`
-	DueAt         *time.Time `json:"due_at,omitempty"`
-	NextStep      *string    `json:"next_step,omitempty"`
-	NextStepDueAt *time.Time `json:"next_step_due_at,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-	ClosedAt      *time.Time `json:"closed_at,omitempty"`
+	ID             string     `json:"id"`
+	OrgID          string     `json:"org_id"`
+	ProjectID      string     `json:"project_id"`
+	IssueNumber    int64      `json:"issue_number"`
+	Title          string     `json:"title"`
+	Body           *string    `json:"body,omitempty"`
+	State          string     `json:"state"`
+	Origin         string     `json:"origin"`
+	DocumentPath   *string    `json:"document_path,omitempty"`
+	ApprovalState  string     `json:"approval_state"`
+	OwnerAgentID   *string    `json:"owner_agent_id,omitempty"`
+	WorkStatus     string     `json:"work_status"`
+	Priority       string     `json:"priority"`
+	DueAt          *time.Time `json:"due_at,omitempty"`
+	NextStep       *string    `json:"next_step,omitempty"`
+	NextStepDueAt  *time.Time `json:"next_step_due_at,omitempty"`
+	FlowTemplateID *string    `json:"flow_template_id,omitempty"`
+	FlowStepKey    *string    `json:"flow_step_key,omitempty"`
+	FlowStepIndex  *int       `json:"flow_step_index,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	ClosedAt       *time.Time `json:"closed_at,omitempty"`
 }
 
 type CreateProjectIssueInput struct {
-	ProjectID     string
-	Title         string
-	Body          *string
-	State         string
-	Origin        string
-	DocumentPath  *string
-	ApprovalState string
-	OwnerAgentID  *string
-	WorkStatus    string
-	Priority      string
-	DueAt         *time.Time
-	NextStep      *string
-	NextStepDueAt *time.Time
-	ClosedAt      *time.Time
+	ProjectID      string
+	Title          string
+	Body           *string
+	State          string
+	Origin         string
+	DocumentPath   *string
+	ApprovalState  string
+	OwnerAgentID   *string
+	WorkStatus     string
+	Priority       string
+	DueAt          *time.Time
+	NextStep       *string
+	NextStepDueAt  *time.Time
+	FlowTemplateID *string
+	FlowStepKey    *string
+	FlowStepIndex  *int
+	ClosedAt       *time.Time
 }
 
 type UpdateProjectIssueWorkTrackingInput struct {
@@ -75,6 +81,17 @@ type UpdateProjectIssueWorkTrackingInput struct {
 
 	SetState bool
 	State    string
+}
+
+type UpdateProjectIssueFlowInput struct {
+	IssueID string
+
+	FlowTemplateID *string
+	FlowStepKey    *string
+	FlowStepIndex  *int
+
+	SetOwnerAgentID bool
+	OwnerAgentID    *string
 }
 
 type UpsertProjectIssueFromGitHubInput struct {
@@ -239,6 +256,7 @@ const (
 	IssueWorkStatusQueued     = "queued"
 	IssueWorkStatusInProgress = "in_progress"
 	IssueWorkStatusBlocked    = "blocked"
+	IssueWorkStatusOnHold     = "on_hold"
 	IssueWorkStatusReview     = "review"
 	IssueWorkStatusDone       = "done"
 	IssueWorkStatusCancelled  = "cancelled"
@@ -304,6 +322,7 @@ func isValidIssueWorkStatus(status string) bool {
 	case IssueWorkStatusQueued,
 		IssueWorkStatusInProgress,
 		IssueWorkStatusBlocked,
+		IssueWorkStatusOnHold,
 		IssueWorkStatusReview,
 		IssueWorkStatusDone,
 		IssueWorkStatusCancelled:
@@ -329,13 +348,15 @@ func canTransitionIssueWorkStatus(currentStatus, nextStatus string) bool {
 
 	switch current {
 	case IssueWorkStatusQueued:
-		return next == IssueWorkStatusInProgress || next == IssueWorkStatusBlocked || next == IssueWorkStatusCancelled || next == IssueWorkStatusDone
+		return next == IssueWorkStatusInProgress || next == IssueWorkStatusBlocked || next == IssueWorkStatusOnHold || next == IssueWorkStatusCancelled || next == IssueWorkStatusDone
 	case IssueWorkStatusInProgress:
-		return next == IssueWorkStatusReview || next == IssueWorkStatusBlocked || next == IssueWorkStatusCancelled || next == IssueWorkStatusDone
+		return next == IssueWorkStatusReview || next == IssueWorkStatusBlocked || next == IssueWorkStatusOnHold || next == IssueWorkStatusCancelled || next == IssueWorkStatusDone
 	case IssueWorkStatusBlocked:
-		return next == IssueWorkStatusInProgress || next == IssueWorkStatusCancelled
+		return next == IssueWorkStatusInProgress || next == IssueWorkStatusOnHold || next == IssueWorkStatusCancelled
+	case IssueWorkStatusOnHold:
+		return next == IssueWorkStatusInProgress || next == IssueWorkStatusBlocked || next == IssueWorkStatusCancelled
 	case IssueWorkStatusReview:
-		return next == IssueWorkStatusInProgress || next == IssueWorkStatusDone || next == IssueWorkStatusCancelled
+		return next == IssueWorkStatusInProgress || next == IssueWorkStatusOnHold || next == IssueWorkStatusDone || next == IssueWorkStatusCancelled
 	case IssueWorkStatusDone, IssueWorkStatusCancelled:
 		return next == IssueWorkStatusQueued
 	default:
@@ -519,9 +540,11 @@ func (s *ProjectIssueStore) CreateIssue(ctx context.Context, input CreateProject
 		ctx,
 		`INSERT INTO project_issues (
 			org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state,
-			owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, closed_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-		RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`,
+			owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at,
+			flow_template_id, flow_step_key, flow_step_index,
+			closed_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+		RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, flow_template_id, flow_step_key, flow_step_index, created_at, updated_at, closed_at`,
 		workspaceID,
 		projectID,
 		nextIssueNumber,
@@ -537,6 +560,9 @@ func (s *ProjectIssueStore) CreateIssue(ctx context.Context, input CreateProject
 		input.DueAt,
 		nullableString(nextStep),
 		nextStepDueAt,
+		nullableString(input.FlowTemplateID),
+		nullableString(input.FlowStepKey),
+		nullableInt32(input.FlowStepIndex),
 		input.ClosedAt,
 	))
 	if err != nil {
@@ -577,7 +603,7 @@ func (s *ProjectIssueStore) TransitionApprovalState(
 
 	current, err := scanProjectIssue(tx.QueryRowContext(
 		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, flow_template_id, flow_step_key, flow_step_index, created_at, updated_at, closed_at
 			FROM project_issues
 			WHERE id = $1
 			FOR UPDATE`,
@@ -604,17 +630,17 @@ func (s *ProjectIssueStore) TransitionApprovalState(
 	updated := current
 	if currentState != normalizedNext {
 		updateQuery := `UPDATE project_issues
-				SET approval_state = $2
-				WHERE id = $1
-				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`
+					SET approval_state = $2
+					WHERE id = $1
+					RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, flow_template_id, flow_step_key, flow_step_index, created_at, updated_at, closed_at`
 		if normalizedNext == IssueApprovalStateApproved {
 			updateQuery = `UPDATE project_issues
-				SET approval_state = $2,
-					state = 'closed',
-					work_status = CASE WHEN work_status = '` + IssueWorkStatusCancelled + `' THEN work_status ELSE '` + IssueWorkStatusDone + `' END,
-					closed_at = COALESCE(closed_at, NOW())
-				WHERE id = $1
-				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`
+					SET approval_state = $2,
+						state = 'closed',
+						work_status = CASE WHEN work_status = '` + IssueWorkStatusCancelled + `' THEN work_status ELSE '` + IssueWorkStatusDone + `' END,
+						closed_at = COALESCE(closed_at, NOW())
+					WHERE id = $1
+					RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, flow_template_id, flow_step_key, flow_step_index, created_at, updated_at, closed_at`
 		}
 
 		updated, err = scanProjectIssue(tx.QueryRowContext(
@@ -662,7 +688,7 @@ func (s *ProjectIssueStore) TransitionWorkStatus(
 
 	current, err := scanProjectIssue(tx.QueryRowContext(
 		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, flow_template_id, flow_step_key, flow_step_index, created_at, updated_at, closed_at
 			FROM project_issues
 			WHERE id = $1
 			FOR UPDATE`,
@@ -692,7 +718,7 @@ func (s *ProjectIssueStore) TransitionWorkStatus(
 	case IssueWorkStatusDone, IssueWorkStatusCancelled:
 		nextIssueState = "closed"
 		nextClosedAt = current.ClosedAt
-	case IssueWorkStatusQueued, IssueWorkStatusInProgress, IssueWorkStatusBlocked, IssueWorkStatusReview:
+	case IssueWorkStatusQueued, IssueWorkStatusInProgress, IssueWorkStatusBlocked, IssueWorkStatusOnHold, IssueWorkStatusReview:
 		nextIssueState = "open"
 		nextClosedAt = nil
 	}
@@ -705,7 +731,7 @@ func (s *ProjectIssueStore) TransitionWorkStatus(
 				ELSE $4
 			END
 		WHERE id = $1
-		RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`
+		RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, flow_template_id, flow_step_key, flow_step_index, created_at, updated_at, closed_at`
 	updated, err := scanProjectIssue(tx.QueryRowContext(
 		ctx,
 		updateQuery,
@@ -746,7 +772,7 @@ func (s *ProjectIssueStore) UpdateIssueWorkTracking(
 
 	current, err := scanProjectIssue(tx.QueryRowContext(
 		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, flow_template_id, flow_step_key, flow_step_index, created_at, updated_at, closed_at
 			FROM project_issues
 			WHERE id = $1
 			FOR UPDATE`,
@@ -870,7 +896,7 @@ func (s *ProjectIssueStore) UpdateIssueWorkTracking(
 					ELSE NULL
 				END
 			WHERE id = $1
-			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`,
+			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, flow_template_id, flow_step_key, flow_step_index, created_at, updated_at, closed_at`,
 		issueID,
 		nullableString(nextOwnerAgentID),
 		nextWorkStatus,
@@ -882,6 +908,86 @@ func (s *ProjectIssueStore) UpdateIssueWorkTracking(
 	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to update issue work tracking: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+func (s *ProjectIssueStore) UpdateIssueFlow(
+	ctx context.Context,
+	input UpdateProjectIssueFlowInput,
+) (*ProjectIssue, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	issueID := strings.TrimSpace(input.IssueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, fmt.Errorf("invalid issue_id")
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	current, err := scanProjectIssue(tx.QueryRowContext(
+		ctx,
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, flow_template_id, flow_step_key, flow_step_index, created_at, updated_at, closed_at
+			FROM project_issues
+			WHERE id = $1
+			FOR UPDATE`,
+		issueID,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to load issue: %w", err)
+	}
+	if current.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+
+	nextOwnerAgentID := current.OwnerAgentID
+	if input.SetOwnerAgentID {
+		normalizedOwner, err := normalizeOptionalIssueAgentID(input.OwnerAgentID)
+		if err != nil {
+			return nil, err
+		}
+		if normalizedOwner != nil {
+			if err := ensureAgentVisible(ctx, tx, *normalizedOwner); err != nil {
+				return nil, err
+			}
+		}
+		nextOwnerAgentID = normalizedOwner
+	}
+
+	query := `UPDATE project_issues
+		SET flow_template_id = $2,
+			flow_step_key = $3,
+			flow_step_index = $4`
+	args := []any{
+		issueID,
+		nullableString(input.FlowTemplateID),
+		nullableString(input.FlowStepKey),
+		nullableInt32(input.FlowStepIndex),
+	}
+	if input.SetOwnerAgentID {
+		query += `, owner_agent_id = $5`
+		args = append(args, nullableString(nextOwnerAgentID))
+	}
+	query += ` WHERE id = $1
+		RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, flow_template_id, flow_step_key, flow_step_index, created_at, updated_at, closed_at`
+
+	updated, err := scanProjectIssue(tx.QueryRowContext(ctx, query, args...))
+	if err != nil {
+		return nil, fmt.Errorf("failed to update issue flow: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -935,7 +1041,7 @@ func (s *ProjectIssueStore) UpsertIssueFromGitHub(
 
 	existingIssue, err := scanProjectIssue(tx.QueryRowContext(
 		ctx,
-		`SELECT i.id, i.org_id, i.project_id, i.issue_number, i.title, i.body, i.state, i.origin, i.document_path, i.approval_state, i.owner_agent_id, i.work_status, i.priority, i.due_at, i.next_step, i.next_step_due_at, i.created_at, i.updated_at, i.closed_at
+		`SELECT i.id, i.org_id, i.project_id, i.issue_number, i.title, i.body, i.state, i.origin, i.document_path, i.approval_state, i.owner_agent_id, i.work_status, i.priority, i.due_at, i.next_step, i.next_step_due_at, i.flow_template_id, i.flow_step_key, i.flow_step_index, i.created_at, i.updated_at, i.closed_at
 			FROM project_issues i
 			JOIN project_issue_github_links l ON l.issue_id = i.id
 			WHERE i.project_id = $1 AND l.repository_full_name = $2 AND l.github_number = $3
@@ -951,19 +1057,19 @@ func (s *ProjectIssueStore) UpsertIssueFromGitHub(
 		issue, err = scanProjectIssue(tx.QueryRowContext(
 			ctx,
 			`UPDATE project_issues
-				SET title = $2,
-					body = $3,
-					state = $4,
-					origin = 'github',
-					approval_state = $5,
-					work_status = CASE
-						WHEN $4 = 'closed' THEN '`+IssueWorkStatusDone+`'
-						WHEN work_status = '`+IssueWorkStatusDone+`' THEN '`+IssueWorkStatusQueued+`'
-						ELSE work_status
-					END,
-					closed_at = $6
-				WHERE id = $1
-				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`,
+					SET title = $2,
+						body = $3,
+						state = $4,
+						origin = 'github',
+						approval_state = $5,
+						work_status = CASE
+							WHEN $4 = 'closed' THEN '`+IssueWorkStatusDone+`'
+							WHEN work_status = '`+IssueWorkStatusDone+`' THEN '`+IssueWorkStatusQueued+`'
+							ELSE work_status
+						END,
+						closed_at = $6
+					WHERE id = $1
+					RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, flow_template_id, flow_step_key, flow_step_index, created_at, updated_at, closed_at`,
 			existingIssue.ID,
 			title,
 			nullableString(input.Body),
@@ -989,9 +1095,10 @@ func (s *ProjectIssueStore) UpsertIssueFromGitHub(
 		issue, err = scanProjectIssue(tx.QueryRowContext(
 			ctx,
 			`INSERT INTO project_issues (
-				org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, work_status, priority, closed_at
-			) VALUES ($1,$2,$3,$4,$5,$6,'github',NULL,$7,$8,$9,$10)
-			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`,
+					org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, work_status, priority, closed_at,
+					flow_template_id, flow_step_key, flow_step_index
+				) VALUES ($1,$2,$3,$4,$5,$6,'github',NULL,$7,$8,$9,$10,NULL,NULL,NULL)
+				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, flow_template_id, flow_step_key, flow_step_index, created_at, updated_at, closed_at`,
 			workspaceID,
 			projectID,
 			nextIssueNumber,
@@ -1078,7 +1185,7 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 		limit = 100
 	}
 
-	query := `SELECT i.id, i.org_id, i.project_id, i.issue_number, i.title, i.body, i.state, i.origin, i.document_path, i.approval_state, i.owner_agent_id, i.work_status, i.priority, i.due_at, i.next_step, i.next_step_due_at, i.created_at, i.updated_at, i.closed_at
+	query := `SELECT i.id, i.org_id, i.project_id, i.issue_number, i.title, i.body, i.state, i.origin, i.document_path, i.approval_state, i.owner_agent_id, i.work_status, i.priority, i.due_at, i.next_step, i.next_step_due_at, i.flow_template_id, i.flow_step_key, i.flow_step_index, i.created_at, i.updated_at, i.closed_at
 		FROM project_issues i
 		LEFT JOIN project_issue_github_links l ON l.issue_id = i.id
 		WHERE i.project_id = $1`
@@ -1278,7 +1385,7 @@ func (s *ProjectIssueStore) GetIssueByID(ctx context.Context, issueID string) (*
 
 	issue, err := scanProjectIssue(conn.QueryRowContext(
 		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, flow_template_id, flow_step_key, flow_step_index, created_at, updated_at, closed_at
 			FROM project_issues
 			WHERE id = $1`,
 		issueID,
@@ -1323,7 +1430,7 @@ func (s *ProjectIssueStore) ListIssuesByDocumentPath(
 
 	rows, err := conn.QueryContext(
 		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, flow_template_id, flow_step_key, flow_step_index, created_at, updated_at, closed_at
 			FROM project_issues
 			WHERE project_id = $1 AND document_path = $2
 			ORDER BY created_at ASC`,
@@ -1383,7 +1490,7 @@ func (s *ProjectIssueStore) UpdateIssueDocumentPath(
 		`UPDATE project_issues
 			SET document_path = $2
 			WHERE id = $1
-			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`,
+			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, flow_template_id, flow_step_key, flow_step_index, created_at, updated_at, closed_at`,
 		issueID,
 		nullableString(normalizedPath),
 	))
@@ -2402,6 +2509,9 @@ func scanProjectIssue(scanner interface{ Scan(...any) error }) (ProjectIssue, er
 	var dueAt sql.NullTime
 	var nextStep sql.NullString
 	var nextStepDueAt sql.NullTime
+	var flowTemplateID sql.NullString
+	var flowStepKey sql.NullString
+	var flowStepIndex sql.NullInt32
 	var closedAt sql.NullTime
 
 	err := scanner.Scan(
@@ -2421,6 +2531,9 @@ func scanProjectIssue(scanner interface{ Scan(...any) error }) (ProjectIssue, er
 		&dueAt,
 		&nextStep,
 		&nextStepDueAt,
+		&flowTemplateID,
+		&flowStepKey,
+		&flowStepIndex,
 		&issue.CreatedAt,
 		&issue.UpdatedAt,
 		&closedAt,
@@ -2457,6 +2570,16 @@ func scanProjectIssue(scanner interface{ Scan(...any) error }) (ProjectIssue, er
 	}
 	if nextStepDueAt.Valid {
 		issue.NextStepDueAt = &nextStepDueAt.Time
+	}
+	if flowTemplateID.Valid {
+		issue.FlowTemplateID = &flowTemplateID.String
+	}
+	if flowStepKey.Valid {
+		issue.FlowStepKey = &flowStepKey.String
+	}
+	if flowStepIndex.Valid {
+		value := int(flowStepIndex.Int32)
+		issue.FlowStepIndex = &value
 	}
 	if closedAt.Valid {
 		issue.ClosedAt = &closedAt.Time

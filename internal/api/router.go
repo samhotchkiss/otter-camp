@@ -130,6 +130,7 @@ func NewRouter() http.Handler {
 	labelsHandler := &LabelsHandler{}
 	taxonomyHandler := &TaxonomyHandler{}
 	agentActivityHandler := &AgentActivityHandler{DB: db, Hub: hub}
+	flowTemplatesHandler := &FlowTemplatesHandler{}
 	conversationTokenHandler := &ConversationTokenHandler{}
 	waitlistHandler := NewWaitlistHandler(db)
 	adminEllieIngestionHandler := &AdminEllieIngestionHandler{}
@@ -180,6 +181,9 @@ func NewRouter() http.Handler {
 		issuesHandler.ProjectRepos = projectRepoStore
 		issuesHandler.EllieIngestionStore = store.NewEllieIngestionStore(db)
 		issuesHandler.DB = db
+		issuesHandler.FlowStore = store.NewProjectFlowStore(db)
+		issuesHandler.FlowBlockerStore = store.NewProjectIssueFlowBlockerStore(db)
+		issuesHandler.PipelineRoleStore = store.NewPipelineRoleStore(db)
 		issuesHandler.ComplianceReviewer = newDefaultIssueComplianceReviewer(
 			store.NewComplianceRuleStore(db),
 			issuesHandler.CommitStore,
@@ -224,6 +228,7 @@ func NewRouter() http.Handler {
 		memoryHandler.Store = store.NewMemoryStore(db)
 		memoryHandler.DB = db
 		memoryEventsHandler.Store = store.NewMemoryEventsStore(db)
+		flowTemplatesHandler.FlowStore = store.NewProjectFlowStore(db)
 		complianceRulesHandler.Store = store.NewComplianceRuleStore(db)
 		adminEllieIngestionHandler.Store = store.NewEllieIngestionStore(db)
 	}
@@ -340,6 +345,12 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}/settings", projectsHandler.UpdateSettings)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pipeline-roles", pipelineRolesHandler.Get)
 		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/pipeline-roles", pipelineRolesHandler.Put)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/flow-templates", flowTemplatesHandler.List)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/flow-templates", flowTemplatesHandler.Create)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/flow-templates/{flowID}", flowTemplatesHandler.Get)
+		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}/flow-templates/{flowID}", flowTemplatesHandler.Update)
+		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}/flow-templates/{flowID}", flowTemplatesHandler.Delete)
+		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/flow-templates/{flowID}/steps", flowTemplatesHandler.UpdateSteps)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pipeline-steps", pipelineStepsHandler.List)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pipeline-steps", pipelineStepsHandler.Create)
 		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/pipeline-steps/reorder", pipelineStepsHandler.Reorder)
@@ -420,6 +431,16 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/participants", issuesHandler.AddParticipant)
 		r.With(middleware.OptionalWorkspace).Delete("/issues/{id}/participants/{agentID}", issuesHandler.RemoveParticipant)
 		r.With(middleware.OptionalWorkspace).Delete("/project-tasks/{id}/participants/{agentID}", issuesHandler.RemoveParticipant)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/flow/assign", issuesHandler.AssignFlow)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/flow/assign", issuesHandler.AssignFlow)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/flow/advance", issuesHandler.AdvanceFlow)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/flow/advance", issuesHandler.AdvanceFlow)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/flow/blockers", issuesHandler.RaiseFlowBlocker)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/flow/blockers", issuesHandler.RaiseFlowBlocker)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/flow/blockers/{blockerID}/escalate-human", issuesHandler.EscalateFlowBlockerToHuman)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/flow/blockers/{blockerID}/escalate-human", issuesHandler.EscalateFlowBlockerToHuman)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/flow/blockers/{blockerID}/resolve", issuesHandler.ResolveFlowBlocker)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/flow/blockers/{blockerID}/resolve", issuesHandler.ResolveFlowBlocker)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/issues", issuesHandler.CreateIssue)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/tasks", issuesHandler.CreateIssue)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/issues/link", issuesHandler.CreateLinkedIssue)

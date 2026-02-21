@@ -182,8 +182,17 @@ export interface Approval {
   createdAt: string;
 }
 
+export interface InboxItem extends Approval {
+  task_id?: string;
+  project_id?: string;
+  task_number?: number;
+  task_title?: string;
+  escalation_level?: string;
+  summary?: string;
+}
+
 export interface InboxResponse {
-  items: Approval[];
+  items: InboxItem[];
 }
 
 export interface HealthResponse {
@@ -510,6 +519,16 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ action: 'reject' }),
   }),
+  resolveTaskBlocker: (taskID: string, blockerID: string, resolutionNote?: string) =>
+    apiFetch<{ blocker?: unknown; issue?: unknown }>(
+      `/api/project-tasks/${encodeURIComponent(taskID)}/flow/blockers/${encodeURIComponent(blockerID)}/resolve`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          resolution_note: resolutionNote ?? "Resolved by human",
+        }),
+      },
+    ),
   
   // Task actions
   createTask: (input: CreateTaskInput) => apiFetch<CreateTaskResponse>('/api/tasks', {
