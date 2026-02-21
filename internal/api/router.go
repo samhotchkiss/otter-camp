@@ -109,6 +109,7 @@ func NewRouter() http.Handler {
 	adminConfigHandler := &AdminConfigHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	labelsHandler := &LabelsHandler{}
 	agentActivityHandler := &AgentActivityHandler{DB: db, Hub: hub}
+	flowTemplatesHandler := &FlowTemplatesHandler{}
 	// Settings uses standalone handler functions (no struct needed)
 	pipelineRolesHandler := &PipelineRolesHandler{}
 	deployConfigHandler := &DeployConfigHandler{}
@@ -146,6 +147,9 @@ func NewRouter() http.Handler {
 		issuesHandler.CommitStore = store.NewProjectCommitStore(db)
 		issuesHandler.ProjectRepos = projectRepoStore
 		issuesHandler.DB = db
+		issuesHandler.FlowStore = store.NewProjectFlowStore(db)
+		issuesHandler.FlowBlockerStore = store.NewProjectIssueFlowBlockerStore(db)
+		issuesHandler.PipelineRoleStore = store.NewPipelineRoleStore(db)
 		messageHandler.ChatThreadStore = chatThreadStore
 		projectCommitsHandler.ProjectStore = projectStore
 		projectCommitsHandler.CommitStore = store.NewProjectCommitStore(db)
@@ -172,6 +176,7 @@ func NewRouter() http.Handler {
 		memoryHandler.Store = store.NewMemoryStore(db)
 		memoryHandler.DB = db
 		memoryEventsHandler.Store = store.NewMemoryEventsStore(db)
+		flowTemplatesHandler.FlowStore = store.NewProjectFlowStore(db)
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db, ChatThreadStore: chatThreadStore}
 	workflowsHandler.ProjectStore = projectStore
@@ -252,6 +257,12 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}/settings", projectsHandler.UpdateSettings)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pipeline-roles", pipelineRolesHandler.Get)
 		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/pipeline-roles", pipelineRolesHandler.Put)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/flow-templates", flowTemplatesHandler.List)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/flow-templates", flowTemplatesHandler.Create)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/flow-templates/{flowID}", flowTemplatesHandler.Get)
+		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}/flow-templates/{flowID}", flowTemplatesHandler.Update)
+		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}/flow-templates/{flowID}", flowTemplatesHandler.Delete)
+		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/flow-templates/{flowID}/steps", flowTemplatesHandler.UpdateSteps)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/deploy-config", deployConfigHandler.Get)
 		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/deploy-config", deployConfigHandler.Put)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat", projectChatHandler.List)
@@ -292,28 +303,56 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pull-requests", githubPullRequestsHandler.ListByProject)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pull-requests", githubPullRequestsHandler.CreateForProject)
 		r.With(middleware.OptionalWorkspace).Get("/issues", issuesHandler.List)
+		r.With(middleware.OptionalWorkspace).Get("/project-tasks", issuesHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}", issuesHandler.Get)
+		r.With(middleware.OptionalWorkspace).Get("/project-tasks/{id}", issuesHandler.Get)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/comments", issuesHandler.CreateComment)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/comments", issuesHandler.CreateComment)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/questionnaire", questionnaireHandler.CreateIssueQuestionnaire)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/questionnaire", questionnaireHandler.CreateIssueQuestionnaire)
 		r.With(middleware.OptionalWorkspace).Post("/questionnaires/{id}/response", questionnaireHandler.Respond)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/approval-state", issuesHandler.TransitionApprovalState)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/approval-state", issuesHandler.TransitionApprovalState)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/approve", issuesHandler.Approve)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/approve", issuesHandler.Approve)
 		r.With(middleware.OptionalWorkspace).Patch("/issues/{id}", issuesHandler.PatchIssue)
+		r.With(middleware.OptionalWorkspace).Patch("/project-tasks/{id}", issuesHandler.PatchIssue)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/review/save", issuesHandler.SaveReview)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/review/save", issuesHandler.SaveReview)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/review/address", issuesHandler.AddressReview)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/review/address", issuesHandler.AddressReview)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/review/changes", issuesHandler.ReviewChanges)
+		r.With(middleware.OptionalWorkspace).Get("/project-tasks/{id}/review/changes", issuesHandler.ReviewChanges)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/review/history", issuesHandler.ReviewHistory)
+		r.With(middleware.OptionalWorkspace).Get("/project-tasks/{id}/review/history", issuesHandler.ReviewHistory)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/review/history/{sha}", issuesHandler.ReviewVersion)
+		r.With(middleware.OptionalWorkspace).Get("/project-tasks/{id}/review/history/{sha}", issuesHandler.ReviewVersion)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/participants", issuesHandler.AddParticipant)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/participants", issuesHandler.AddParticipant)
 		r.With(middleware.OptionalWorkspace).Delete("/issues/{id}/participants/{agentID}", issuesHandler.RemoveParticipant)
+		r.With(middleware.OptionalWorkspace).Delete("/project-tasks/{id}/participants/{agentID}", issuesHandler.RemoveParticipant)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/flow/assign", issuesHandler.AssignFlow)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/flow/assign", issuesHandler.AssignFlow)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/flow/advance", issuesHandler.AdvanceFlow)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/flow/advance", issuesHandler.AdvanceFlow)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/flow/blockers", issuesHandler.RaiseFlowBlocker)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/flow/blockers", issuesHandler.RaiseFlowBlocker)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/flow/blockers/{blockerID}/escalate-human", issuesHandler.EscalateFlowBlockerToHuman)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/flow/blockers/{blockerID}/escalate-human", issuesHandler.EscalateFlowBlockerToHuman)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/flow/blockers/{blockerID}/resolve", issuesHandler.ResolveFlowBlocker)
+		r.With(middleware.OptionalWorkspace).Post("/project-tasks/{id}/flow/blockers/{blockerID}/resolve", issuesHandler.ResolveFlowBlocker)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/issues", issuesHandler.CreateIssue)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/tasks", issuesHandler.CreateIssue)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/issues/link", issuesHandler.CreateLinkedIssue)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/tasks/link", issuesHandler.CreateLinkedIssue)
 		r.With(middleware.OptionalWorkspace).Get("/chats", chatsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/chats/{id}", chatsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Post("/chats/{id}/archive", chatsHandler.Archive)
 		r.With(middleware.OptionalWorkspace).Post("/chats/{id}/unarchive", chatsHandler.Unarchive)
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/issues/import", projectIssueSyncHandler.ManualImport)
+		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/tasks/import", projectIssueSyncHandler.ManualImport)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/issues/status", projectIssueSyncHandler.Status)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/tasks/status", projectIssueSyncHandler.Status)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/projects/{id}/repo/branches", githubIntegrationHandler.GetProjectBranches)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Put("/projects/{id}/repo/branches", githubIntegrationHandler.UpdateProjectBranches)
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/repo/conflicts/resolve", githubIntegrationHandler.ResolveProjectConflict)
@@ -336,8 +375,11 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/labels", labelsHandler.AddProjectLabels)
 		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}/labels/{lid}", labelsHandler.RemoveProjectLabel)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{pid}/issues/{iid}/labels", labelsHandler.ListIssueLabels)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{pid}/tasks/{iid}/labels", labelsHandler.ListIssueLabels)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{pid}/issues/{iid}/labels", labelsHandler.AddIssueLabels)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{pid}/tasks/{iid}/labels", labelsHandler.AddIssueLabels)
 		r.With(middleware.OptionalWorkspace).Delete("/projects/{pid}/issues/{iid}/labels/{lid}", labelsHandler.RemoveIssueLabel)
+		r.With(middleware.OptionalWorkspace).Delete("/projects/{pid}/tasks/{iid}/labels/{lid}", labelsHandler.RemoveIssueLabel)
 
 		r.With(middleware.OptionalWorkspace).Get("/settings/profile", HandleSettingsProfileGet)
 		r.With(middleware.OptionalWorkspace).Put("/settings/profile", HandleSettingsProfilePut)
