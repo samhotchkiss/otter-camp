@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import api, { type AdminAgentSummary, type Project } from "../lib/api";
 
 type AgentStatusTone = "online" | "busy" | "offline";
@@ -123,6 +124,7 @@ function primaryAgentTag(agent: AdminAgentSummary): string {
 }
 
 export default function AgentsPage() {
+  const navigate = useNavigate();
   const [agents, setAgents] = useState<AdminAgentSummary[]>([]);
   const [projectNamesByID, setProjectNamesByID] = useState<Record<string, string>>({});
   const [currentTaskByAgentID, setCurrentTaskByAgentID] = useState<Record<string, string>>({});
@@ -271,7 +273,7 @@ export default function AgentsPage() {
               const agentID = (agent.id ?? "").trim() || (agent.workspace_agent_id ?? "").trim();
 
               return (
-                <article key={agent.workspace_agent_id || agent.id || String(index)} className={`group relative overflow-hidden rounded-lg border bg-stone-900 p-5 ${accent.border}`}>
+                <article key={agent.workspace_agent_id || agent.id || String(index)} className={`group relative cursor-pointer overflow-hidden rounded-lg border bg-stone-900 p-5 ${accent.border}`} onClick={() => navigate(`/agents/${encodeURIComponent(agentID)}`)}>
                   <div className={`absolute inset-0 bg-gradient-to-br ${accent.gradient} opacity-50 transition-opacity group-hover:opacity-100`} />
                   <div className="relative z-10">
                     <div className="mb-4 flex items-start justify-between">
@@ -333,9 +335,10 @@ export default function AgentsPage() {
                 const projectID = (agent.project_id ?? "").trim();
                 const projectName = projectID ? (projectNamesByID[projectID] || projectID) : "";
                 const totalTokens = Math.max(0, agent.total_tokens ?? 0);
+                const agentID = (agent.id ?? "").trim() || (agent.workspace_agent_id ?? "").trim();
 
                 return (
-                  <article key={agent.workspace_agent_id || agent.id || String(index)} className="group flex items-center justify-between p-4 transition hover:bg-stone-800/30">
+                  <article key={agent.workspace_agent_id || agent.id || String(index)} className="group flex cursor-pointer items-center justify-between p-4 transition hover:bg-stone-800/30" onClick={() => navigate(`/agents/${encodeURIComponent(agentID)}`)}>
                     <div className="flex min-w-0 items-center gap-4">
                       <div
                         className={`flex h-8 w-8 shrink-0 items-center justify-center rounded border ${
