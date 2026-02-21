@@ -90,17 +90,17 @@ type openClawDMDispatchAttachment struct {
 }
 
 type openClawDMDispatchData struct {
-	MessageID          string `json:"message_id"`
-	ThreadID           string `json:"thread_id"`
-	AgentID            string `json:"agent_id"`
-	SessionKey         string `json:"session_key,omitempty"`
-	Content            string `json:"content"`
-	SenderID           string `json:"sender_id,omitempty"`
-	SenderType         string `json:"sender_type,omitempty"`
-	SenderName         string `json:"sender_name,omitempty"`
-	InjectIdentity     bool   `json:"inject_identity,omitempty"`
-	IncrementalContext string `json:"incremental_context,omitempty"`
-	Attachments []openClawDMDispatchAttachment `json:"attachments,omitempty"`
+	MessageID          string                         `json:"message_id"`
+	ThreadID           string                         `json:"thread_id"`
+	AgentID            string                         `json:"agent_id"`
+	SessionKey         string                         `json:"session_key,omitempty"`
+	Content            string                         `json:"content"`
+	SenderID           string                         `json:"sender_id,omitempty"`
+	SenderType         string                         `json:"sender_type,omitempty"`
+	SenderName         string                         `json:"sender_name,omitempty"`
+	InjectIdentity     bool                           `json:"inject_identity,omitempty"`
+	IncrementalContext string                         `json:"incremental_context,omitempty"`
+	Attachments        []openClawDMDispatchAttachment `json:"attachments,omitempty"`
 }
 
 type messageListResponse struct {
@@ -1242,14 +1242,27 @@ func resolveWorkspaceAgentSlugByID(
 	}
 
 	var slug string
-	err := db.QueryRowContext(
-		ctx,
-		`SELECT COALESCE(slug, '') FROM agents WHERE org_id = $1 AND id = $2`,
-		orgID,
-		agentID,
-	).Scan(&slug)
+	var err error
+	if uuidRegex.MatchString(agentID) {
+		err = db.QueryRowContext(
+			ctx,
+			`SELECT COALESCE(slug, '') FROM agents WHERE org_id = $1 AND id = $2`,
+			orgID,
+			agentID,
+		).Scan(&slug)
+	} else {
+		err = db.QueryRowContext(
+			ctx,
+			`SELECT COALESCE(slug, '') FROM agents WHERE org_id = $1 AND LOWER(slug) = LOWER($2)`,
+			orgID,
+			agentID,
+		).Scan(&slug)
+	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			if !uuidRegex.MatchString(agentID) && isDMRoutingExemptAgentSlug(agentID) {
+				return strings.ToLower(agentID), nil
+			}
 			return "", nil
 		}
 		return "", err

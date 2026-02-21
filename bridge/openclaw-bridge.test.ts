@@ -485,6 +485,94 @@ describe("bridge issue dispatch routing", () => {
   });
 });
 
+describe("bridge dm mid-turn dispatch", () => {
+  const rpcCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const originalFetch = globalThis.fetch;
+  let resolveFirstDispatch: (() => void) | null = null;
+  let firstDispatchCompleted = false;
+
+  beforeEach(() => {
+    rpcCalls.length = 0;
+    resolveFirstDispatch = null;
+    firstDispatchCompleted = false;
+    resetSessionContextsForTest();
+    setSendRequestForTest(async (method, params) => {
+      rpcCalls.push({ method, params });
+      if (method === "chat.send" && params.idempotencyKey === "msg-a") {
+        return new Promise<Record<string, unknown>>((resolve) => {
+          resolveFirstDispatch = () => {
+            firstDispatchCompleted = true;
+            resolve({});
+          };
+        });
+      }
+      return {};
+    });
+    globalThis.fetch = (async () =>
+      new Response('{"error":"memory agent_id is invalid"}', {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+  });
+
+  afterEach(() => {
+    setSendRequestForTest(null);
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("dispatches follow-up DM messages while the first dispatch is still unresolved", async () => {
+    const waitForChatSendCount = async (count: number): Promise<void> => {
+      const deadline = Date.now() + 1500;
+      while (rpcCalls.filter((call) => call.method === "chat.send").length < count) {
+        if (Date.now() > deadline) {
+          assert.fail(`timed out waiting for ${count} chat.send call(s)`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    };
+
+    const firstDispatch = dispatchInboundEventForTest("dm.message", {
+      type: "dm.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "msg-a",
+        session_key: "agent:test:session",
+        thread_id: "dm_test",
+        content: "Message A",
+      },
+    }, "replay");
+
+    await waitForChatSendCount(1);
+    assert.equal(rpcCalls.filter((call) => call.method === "chat.send").length, 1);
+
+    const secondDispatch = dispatchInboundEventForTest("dm.message", {
+      type: "dm.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "msg-b",
+        session_key: "agent:test:session",
+        thread_id: "dm_test",
+        content: "Message B",
+      },
+    }, "replay");
+
+    await waitForChatSendCount(2);
+
+    const chatCalls = rpcCalls.filter((call) => call.method === "chat.send");
+    assert.equal(chatCalls.length, 2);
+    assert.equal(chatCalls[0]?.params.idempotencyKey, "msg-a");
+    assert.equal(chatCalls[1]?.params.idempotencyKey, "msg-b");
+    assert.equal(firstDispatchCompleted, false);
+
+    assert.notEqual(resolveFirstDispatch, null);
+    resolveFirstDispatch?.();
+    await Promise.all([firstDispatch, secondDispatch]);
+    assert.equal(firstDispatchCompleted, true);
+  });
+});
+
 describe("bridge assistant final dedup", () => {
   const originalFetch = globalThis.fetch;
 
