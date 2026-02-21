@@ -189,12 +189,12 @@ func TestDMFallbackSessionKeyForAgentSlug(t *testing.T) {
 			agentSlug: "lori",
 			want:      "agent:lori:main",
 		},
-			{
-				name:      "no slug routes to chameleon",
-				agentSlug: "",
-				want:      canonicalChameleonSessionKey(agentID),
-			},
-		}
+		{
+			name:      "no slug routes to chameleon",
+			agentSlug: "",
+			want:      canonicalChameleonSessionKey(agentID),
+		},
+	}
 
 	for _, tt := range tests {
 		tt := tt
@@ -745,6 +745,87 @@ func TestCreateMessageDMDispatchesToOpenClaw(t *testing.T) {
 	err = db.QueryRow(`SELECT COUNT(*) FROM comments WHERE thread_id = 'dm_itsalive'`).Scan(&count)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
+}
+
+func TestCreateMessageDMSequentialSends(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-sequential-send-org")
+
+	_, err := db.Exec(
+		`INSERT INTO agent_sync_state (org_id, id, name, status, session_key, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, NOW())`,
+		orgID,
+		"itsalive",
+		"Ivy",
+		"online",
+		"agent:itsalive:main",
+	)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	postDM := func(content string) struct {
+		Message  Message          `json:"message"`
+		Delivery dmDeliveryStatus `json:"delivery"`
+	} {
+		t.Helper()
+		payload := map[string]any{
+			"org_id":      orgID,
+			"thread_id":   "dm_itsalive",
+			"content":     content,
+			"sender_id":   "sam-user",
+			"sender_type": "user",
+			"sender_name": "Sam",
+		}
+		body, marshalErr := json.Marshal(payload)
+		require.NoError(t, marshalErr)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.CreateMessage(rec, req)
+		require.Equalf(t, http.StatusOK, rec.Code, "response body: %s", rec.Body.String())
+
+		var resp struct {
+			Message  Message          `json:"message"`
+			Delivery dmDeliveryStatus `json:"delivery"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		return resp
+	}
+
+	first := postDM("First steer")
+	second := postDM("Second steer")
+
+	require.True(t, first.Delivery.Attempted)
+	require.True(t, first.Delivery.Delivered)
+	require.True(t, second.Delivery.Attempted)
+	require.True(t, second.Delivery.Delivered)
+	require.NotEqual(t, first.Message.ID, second.Message.ID)
+	require.NotNil(t, first.Message.ThreadID)
+	require.NotNil(t, second.Message.ThreadID)
+	require.Equal(t, "dm_itsalive", *first.Message.ThreadID)
+	require.Equal(t, "dm_itsalive", *second.Message.ThreadID)
+
+	require.Len(t, dispatcher.calls, 2)
+
+	firstEvent, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	secondEvent, ok := dispatcher.calls[1].(openClawDMDispatchEvent)
+	require.True(t, ok)
+
+	require.Equal(t, "First steer", firstEvent.Data.Content)
+	require.Equal(t, "Second steer", secondEvent.Data.Content)
+	require.NotEmpty(t, firstEvent.Data.MessageID)
+	require.NotEmpty(t, secondEvent.Data.MessageID)
+	require.NotEqual(t, firstEvent.Data.MessageID, secondEvent.Data.MessageID)
+	require.Equal(t, "dm_itsalive", firstEvent.Data.ThreadID)
+	require.Equal(t, "dm_itsalive", secondEvent.Data.ThreadID)
+
+	var messageCount int
+	err = db.QueryRow(`SELECT COUNT(*) FROM comments WHERE thread_id = 'dm_itsalive'`).Scan(&messageCount)
+	require.NoError(t, err)
+	require.Equal(t, 2, messageCount)
 }
 
 func TestCreateMessageDMDispatchIncludesAttachments(t *testing.T) {

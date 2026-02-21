@@ -592,6 +592,97 @@ describe("GlobalChatSurface", () => {
     });
   });
 
+  it("allows DM follow-up sends while prior turn is pending and updates delivery feedback per send", async () => {
+    const user = userEvent.setup();
+    const sentBodies: Array<Record<string, unknown>> = [];
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/messages?")) {
+        return {
+          ok: true,
+          json: async () => ({ messages: [] }),
+        };
+      }
+      if (url.endsWith("/api/messages") && init?.method === "POST") {
+        const parsedBody = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
+        sentBodies.push(parsedBody);
+        if (sentBodies.length === 1) {
+          return {
+            ok: true,
+            json: async () => ({
+              message: {
+                id: "msg-user-1",
+                thread_id: "dm_agent-stone",
+                sender_id: "user-1",
+                sender_name: "Sam",
+                sender_type: "user",
+                content: "Initial direction",
+                created_at: "2026-02-08T00:00:00.000Z",
+                updated_at: "2026-02-08T00:00:00.000Z",
+              },
+              delivery: {
+                delivered: false,
+                error: "OpenClaw delivery unavailable; message queued for retry",
+              },
+            }),
+          };
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            message: {
+              id: "msg-user-2",
+              thread_id: "dm_agent-stone",
+              sender_id: "user-1",
+              sender_name: "Sam",
+              sender_type: "user",
+              content: "Follow-up context",
+              created_at: "2026-02-08T00:00:01.000Z",
+              updated_at: "2026-02-08T00:00:01.000Z",
+            },
+            delivery: { delivered: true },
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({}),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<GlobalChatSurface conversation={baseConversation} />);
+    const composer = await screen.findByPlaceholderText("Message Stone...");
+    const sendButton = screen.getByRole("button", { name: "Send message" });
+
+    await user.type(composer, "Initial direction");
+    await user.click(sendButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("Saved; delivery pending")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(composer).toBeEnabled();
+    });
+
+    await user.type(composer, "Follow-up context");
+    await user.click(sendButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("Delivered to bridge")).toBeInTheDocument();
+    });
+    expect(sentBodies).toHaveLength(2);
+    expect(sentBodies[0]?.content).toBe("Initial direction");
+    expect(sentBodies[1]?.content).toBe("Follow-up context");
+
+    const userMessages = (lastMessageHistoryProps?.messages ?? []).filter(
+      (entry) => entry.senderType === "user",
+    );
+    expect(userMessages.some((entry) => entry.content === "Initial direction")).toBe(true);
+    expect(userMessages.some((entry) => entry.content === "Follow-up context")).toBe(true);
+  });
+
   it("applies issue websocket comments when issue_id is provided in nested comment payload", async () => {
     const issueConversation: GlobalIssueConversation = {
       key: "issue:issue-1",
