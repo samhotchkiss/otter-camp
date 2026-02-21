@@ -68,7 +68,8 @@ func NewRouter() http.Handler {
 			if strings.Contains(origin, "localhost") || strings.Contains(origin, "127.0.0.1") {
 				return true
 			}
-			return false
+			// Keep API accessible from custom hosts/environments by default.
+			return true
 		},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Org-ID", "X-Otter-Org", "X-Workspace-ID", "X-Session-Token"},
