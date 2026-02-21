@@ -749,17 +749,72 @@ func (h *OpenClawSyncHandler) AckDispatchQueue(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	ok, err := ackOpenClawDispatchJob(r.Context(), db, id, req.ClaimToken, req.Success, req.Error)
+	ackResult, err := ackOpenClawDispatchJob(r.Context(), db, id, req.ClaimToken, req.Success, req.Error)
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to acknowledge dispatch job"})
 		return
 	}
-	if !ok {
+	if !ackResult.Acknowledged {
 		sendJSON(w, http.StatusConflict, errorResponse{Error: "dispatch claim is invalid or expired"})
 		return
 	}
 
+	h.broadcastDMDispatchDeliveryUpdate(ackResult)
+
 	sendJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *OpenClawSyncHandler) broadcastDMDispatchDeliveryUpdate(result openClawDispatchAckResult) {
+	if h == nil || h.Hub == nil {
+		return
+	}
+
+	orgID := strings.TrimSpace(result.OrgID)
+	if orgID == "" {
+		return
+	}
+	if strings.TrimSpace(result.EventType) != "dm.message" {
+		return
+	}
+
+	status := strings.TrimSpace(result.Status)
+	if status != "delivered" && status != "failed" {
+		return
+	}
+
+	var payload struct {
+		Data struct {
+			MessageID string `json:"message_id"`
+			ThreadID  string `json:"thread_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return
+	}
+
+	messageID := strings.TrimSpace(payload.Data.MessageID)
+	threadID := strings.TrimSpace(payload.Data.ThreadID)
+	if messageID == "" || threadID == "" {
+		return
+	}
+
+	event := map[string]any{
+		"type": "DMMessageDeliveryUpdated",
+		"data": map[string]any{
+			"messageId":       messageID,
+			"message_id":      messageID,
+			"threadId":        threadID,
+			"thread_id":       threadID,
+			"deliveryStatus":  status,
+			"delivery_status": status,
+		},
+	}
+
+	raw, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	h.Hub.Broadcast(orgID, raw)
 }
 
 func requireOpenClawSyncAuth(ctx context.Context, db *sql.DB, r *http.Request) (int, error) {

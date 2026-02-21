@@ -808,6 +808,61 @@ describe("GlobalChatSurface", () => {
     });
   });
 
+  it("updates DM delivery indicator to failed when websocket reports terminal delivery failure", async () => {
+    const sendAt = "2026-02-08T00:00:00.000Z";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/messages?")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.endsWith("/api/messages")) {
+        return {
+          ok: true,
+          json: async () => ({
+            message: {
+              id: "msg-user-1",
+              threadId: "dm_agent-stone",
+              senderType: "user",
+              senderName: "Sam",
+              content: "Ship it",
+              createdAt: sendAt,
+              updatedAt: sendAt,
+            },
+            delivery: { delivered: false, error: "agent bridge unavailable; message queued" },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { rerender } = render(<GlobalChatSurface conversation={baseConversation} />);
+    await screen.findByPlaceholderText("Message Stone...");
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Message composer"), {
+        target: { value: "Ship it" },
+      });
+      fireEvent.click(screen.getByLabelText("Send message"));
+    });
+
+    expect(screen.getByText("Saved; delivery pending")).toBeInTheDocument();
+
+    wsState.lastMessage = {
+      type: "DMMessageDeliveryUpdated",
+      data: {
+        threadId: "dm_agent-stone",
+        messageId: "msg-user-1",
+        deliveryStatus: "failed",
+      },
+    };
+    act(() => {
+      rerender(<GlobalChatSurface conversation={baseConversation} />);
+    });
+
+    expect(screen.getByText("Delivery failed")).toBeInTheDocument();
+  });
+
   it("shows stalled emission warning after 120s when no emission or reply arrives after send", async () => {
     const sendAt = "2026-02-08T00:00:00.000Z";
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

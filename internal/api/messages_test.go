@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -50,6 +51,10 @@ func setupMessageTestDB(t *testing.T) *sql.DB {
 		_ = db.Close()
 	})
 
+	// Some down migrations temporarily tighten historical constraints; clear rows
+	// that are incompatible with older schemas before rolling migrations back.
+	_, _ = db.Exec(`TRUNCATE TABLE comments CASCADE`)
+
 	err = m.Down()
 	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		require.NoError(t, err)
@@ -63,6 +68,8 @@ func setupMessageTestDB(t *testing.T) *sql.DB {
 	require.NoError(t, os.Setenv("DATABASE_URL", connStr))
 	tasksDBOnce = sync.Once{}
 	tasksDBErr = nil
+	openClawDispatchQueueSchemaOnce = sync.Once{}
+	openClawDispatchQueueSchemaErr = nil
 	if tasksDB != nil {
 		_ = tasksDB.Close()
 		tasksDB = nil
@@ -149,6 +156,28 @@ func (f *fakeOpenClawDispatcher) IsConnected() bool {
 	return f.connected
 }
 
+func waitForOrgBroadcastEvent(
+	t *testing.T,
+	client *ws.Client,
+	eventType string,
+	timeout time.Duration,
+) map[string]any {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case raw := <-client.Send:
+			var event map[string]any
+			require.NoError(t, json.Unmarshal(raw, &event))
+			if event["type"] == eventType {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("expected websocket event type %s", eventType)
+		}
+	}
+}
+
 func TestDMRoutingExemptAgentSlug(t *testing.T) {
 	t.Parallel()
 
@@ -189,12 +218,12 @@ func TestDMFallbackSessionKeyForAgentSlug(t *testing.T) {
 			agentSlug: "lori",
 			want:      "agent:lori:main",
 		},
-			{
-				name:      "no slug routes to chameleon",
-				agentSlug: "",
-				want:      canonicalChameleonSessionKey(agentID),
-			},
-		}
+		{
+			name:      "no slug routes to chameleon",
+			agentSlug: "",
+			want:      canonicalChameleonSessionKey(agentID),
+		},
+	}
 
 	for _, tt := range tests {
 		tt := tt
@@ -669,7 +698,9 @@ func TestCreateMessageDMBridgeOfflinePersistsMessageWithDeliveryWarning(t *testi
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
 	handler.CreateMessage(rr, req)
-	require.Equal(t, http.StatusOK, rr.Code)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d: %s", rr.Code, rr.Body.String())
+	}
 
 	var createResp struct {
 		Message  Message          `json:"message"`
@@ -691,6 +722,165 @@ func TestCreateMessageDMBridgeOfflinePersistsMessageWithDeliveryWarning(t *testi
 	err = db.QueryRow(`SELECT COUNT(*) FROM openclaw_dispatch_queue WHERE event_type = 'dm.message'`).Scan(&queued)
 	require.NoError(t, err)
 	require.Equal(t, 1, queued)
+}
+
+func TestCreateMessageDMPendingThenDispatchAckBroadcastsDelivered(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-pending-then-delivered-org")
+
+	hub := ws.NewHub()
+	go hub.Run()
+	client := ws.NewClient(hub, nil)
+	client.SetOrgID(orgID)
+	hub.Register(client)
+	t.Cleanup(func() { hub.Unregister(client) })
+	time.Sleep(20 * time.Millisecond)
+
+	messageHandler := &MessageHandler{
+		OpenClawDispatcher: &fakeOpenClawDispatcher{connected: false},
+		Hub:                hub,
+	}
+	body, err := json.Marshal(map[string]any{
+		"org_id":      orgID,
+		"thread_id":   "dm_main",
+		"content":     "Queue this message",
+		"sender_type": "user",
+		"sender_name": "Sam",
+	})
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	messageHandler.CreateMessage(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var createResp struct {
+		Message  Message          `json:"message"`
+		Delivery dmDeliveryStatus `json:"delivery"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&createResp))
+	require.NotEmpty(t, createResp.Message.ID)
+	require.False(t, createResp.Delivery.Delivered)
+	require.Equal(t, openClawDispatchQueuedWarning, createResp.Delivery.Error)
+
+	syncHandler := &OpenClawSyncHandler{DB: db, Hub: hub}
+
+	pullReq := httptest.NewRequest(http.MethodGet, "/api/sync/openclaw/dispatch/pending?limit=5", nil)
+	pullReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	pullRec := httptest.NewRecorder()
+	syncHandler.PullDispatchQueue(pullRec, pullReq)
+	require.Equal(t, http.StatusOK, pullRec.Code)
+
+	var pullResp openClawDispatchQueuePullResponse
+	require.NoError(t, json.NewDecoder(pullRec.Body).Decode(&pullResp))
+	require.Len(t, pullResp.Jobs, 1)
+
+	ackBody := bytes.NewReader([]byte(`{"claim_token":"` + pullResp.Jobs[0].ClaimToken + `","success":true}`))
+	ackReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/sync/openclaw/dispatch/"+strconv.FormatInt(pullResp.Jobs[0].ID, 10)+"/ack",
+		ackBody,
+	)
+	ackReq = addRouteParam(ackReq, "id", strconv.FormatInt(pullResp.Jobs[0].ID, 10))
+	ackReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	ackRec := httptest.NewRecorder()
+	syncHandler.AckDispatchQueue(ackRec, ackReq)
+	require.Equal(t, http.StatusOK, ackRec.Code)
+
+	event := waitForOrgBroadcastEvent(t, client, "DMMessageDeliveryUpdated", 500*time.Millisecond)
+	data, ok := event["data"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, createResp.Message.ID, data["messageId"])
+	require.Equal(t, "dm_main", data["threadId"])
+	require.Equal(t, "delivered", data["deliveryStatus"])
+}
+
+func TestCreateMessageDMMaxRetryExhaustionBroadcastsFailed(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-pending-then-failed-org")
+
+	hub := ws.NewHub()
+	go hub.Run()
+	client := ws.NewClient(hub, nil)
+	client.SetOrgID(orgID)
+	hub.Register(client)
+	t.Cleanup(func() { hub.Unregister(client) })
+	time.Sleep(20 * time.Millisecond)
+
+	messageHandler := &MessageHandler{
+		OpenClawDispatcher: &fakeOpenClawDispatcher{connected: false},
+		Hub:                hub,
+	}
+	body, err := json.Marshal(map[string]any{
+		"org_id":      orgID,
+		"thread_id":   "dm_main",
+		"content":     "Queue this message",
+		"sender_type": "user",
+		"sender_name": "Sam",
+	})
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	messageHandler.CreateMessage(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var createResp struct {
+		Message  Message          `json:"message"`
+		Delivery dmDeliveryStatus `json:"delivery"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&createResp))
+	require.NotEmpty(t, createResp.Message.ID)
+	require.False(t, createResp.Delivery.Delivered)
+
+	dedupeKey := "dm.message:" + createResp.Message.ID
+	_, err = db.Exec(`UPDATE openclaw_dispatch_queue SET attempts = 19 WHERE dedupe_key = $1`, dedupeKey)
+	require.NoError(t, err)
+
+	syncHandler := &OpenClawSyncHandler{DB: db, Hub: hub}
+
+	pullReq := httptest.NewRequest(http.MethodGet, "/api/sync/openclaw/dispatch/pending?limit=5", nil)
+	pullReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	pullRec := httptest.NewRecorder()
+	syncHandler.PullDispatchQueue(pullRec, pullReq)
+	require.Equal(t, http.StatusOK, pullRec.Code)
+
+	var pullResp openClawDispatchQueuePullResponse
+	require.NoError(t, json.NewDecoder(pullRec.Body).Decode(&pullResp))
+	require.Len(t, pullResp.Jobs, 1)
+	require.Equal(t, 20, pullResp.Jobs[0].Attempts)
+
+	ackBody := bytes.NewReader([]byte(`{"claim_token":"` + pullResp.Jobs[0].ClaimToken + `","success":false,"error":"bridge timeout"}`))
+	ackReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/sync/openclaw/dispatch/"+strconv.FormatInt(pullResp.Jobs[0].ID, 10)+"/ack",
+		ackBody,
+	)
+	ackReq = addRouteParam(ackReq, "id", strconv.FormatInt(pullResp.Jobs[0].ID, 10))
+	ackReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	ackRec := httptest.NewRecorder()
+	syncHandler.AckDispatchQueue(ackRec, ackReq)
+	require.Equal(t, http.StatusOK, ackRec.Code)
+
+	event := waitForOrgBroadcastEvent(t, client, "DMMessageDeliveryUpdated", 500*time.Millisecond)
+	data, ok := event["data"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, createResp.Message.ID, data["messageId"])
+	require.Equal(t, "dm_main", data["threadId"])
+	require.Equal(t, "failed", data["deliveryStatus"])
+
+	var status string
+	err = db.QueryRow(`SELECT status FROM openclaw_dispatch_queue WHERE dedupe_key = $1`, dedupeKey).Scan(&status)
+	require.NoError(t, err)
+	require.Equal(t, "failed", status)
 }
 
 func TestCreateMessageDMDispatchesToOpenClaw(t *testing.T) {

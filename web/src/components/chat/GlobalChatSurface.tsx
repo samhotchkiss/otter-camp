@@ -1200,6 +1200,37 @@ export default function GlobalChatSurface({
       return;
     }
 
+    if (conversationType === "dm" && lastMessage.type === "DMMessageDeliveryUpdated") {
+      if (!lastMessage.data || typeof lastMessage.data !== "object") {
+        return;
+      }
+      const payload = lastMessage.data as Record<string, unknown>;
+      const eventThreadID =
+        (typeof payload.threadId === "string" && payload.threadId) ||
+        (typeof payload.thread_id === "string" && payload.thread_id) ||
+        "";
+      if (eventThreadID !== dmThreadID) {
+        return;
+      }
+
+      const deliveryStatus = (
+        (typeof payload.deliveryStatus === "string" && payload.deliveryStatus) ||
+        (typeof payload.delivery_status === "string" && payload.delivery_status) ||
+        ""
+      ).trim().toLowerCase();
+
+      if (deliveryStatus === "delivered") {
+        setDeliveryIndicator({ tone: "success", text: "Delivered to bridge" });
+        clearStalledTurnWarning();
+        return;
+      }
+      if (deliveryStatus === "failed") {
+        setDeliveryIndicator({ tone: "warning", text: "Delivery failed" });
+        clearStalledTurnWarning();
+      }
+      return;
+    }
+
     if (conversationType === "project" && lastMessage.type === "ProjectChatMessageCreated") {
       const normalized = normalizeProjectMessage(
         lastMessage.data,

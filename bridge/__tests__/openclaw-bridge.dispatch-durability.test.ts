@@ -2,10 +2,15 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   dispatchInboundEventForTest,
+  getDeliveredDMMessageIDsForTest,
   getDispatchReplayQueueStateForTest,
+  hasDeliveredDMMessageIDForTest,
   queueDispatchEventForReplay,
+  rememberDeliveredDMMessageIDForTest,
   replayQueuedDispatchEventsForTest,
+  resetDeliveredDMMessageIDsForTest,
   resetDispatchReplayQueueForTest,
+  setSendRequestForTest,
 } from '../openclaw-bridge';
 
 function buildDMDispatchPayload(messageID: string, content = 'hello'): Record<string, unknown> {
@@ -22,6 +27,8 @@ function buildDMDispatchPayload(messageID: string, content = 'hello'): Record<st
 describe('dispatch durability queue', () => {
   beforeEach(() => {
     resetDispatchReplayQueueForTest();
+    resetDeliveredDMMessageIDsForTest();
+    setSendRequestForTest(null);
   });
 
   it('enqueues dispatch events and deduplicates by event/message id', () => {
@@ -89,5 +96,30 @@ describe('dispatch durability queue', () => {
     const state = getDispatchReplayQueueStateForTest();
     expect(state.depth).toBe(0);
     expect(state.ids).toEqual([]);
+  });
+
+  it('suppresses duplicate dm.message dispatches by message_id after first successful send', async () => {
+    const sendMethods: string[] = [];
+    setSendRequestForTest(async (method) => {
+      sendMethods.push(method);
+      return { ok: true };
+    });
+
+    const payload = buildDMDispatchPayload('msg-dup', 'hello');
+    await expect(dispatchInboundEventForTest('dm.message', payload, 'replay')).resolves.toBeUndefined();
+    await expect(dispatchInboundEventForTest('dm.message', payload, 'replay')).resolves.toBeUndefined();
+
+    expect(sendMethods.filter((entry) => entry === 'chat.send' || entry === 'agent')).toHaveLength(1);
+    expect(hasDeliveredDMMessageIDForTest('msg-dup')).toBe(true);
+  });
+
+  it('evicts oldest delivered dm message ids when dedupe cache cap is exceeded', () => {
+    rememberDeliveredDMMessageIDForTest('msg-1', 2);
+    rememberDeliveredDMMessageIDForTest('msg-2', 2);
+    rememberDeliveredDMMessageIDForTest('msg-3', 2);
+
+    expect(getDeliveredDMMessageIDsForTest()).toEqual(['msg-2', 'msg-3']);
+    expect(hasDeliveredDMMessageIDForTest('msg-1')).toBe(false);
+    expect(hasDeliveredDMMessageIDForTest('msg-3')).toBe(true);
   });
 });
