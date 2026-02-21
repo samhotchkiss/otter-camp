@@ -1887,7 +1887,18 @@ func handleClone(args []string) {
 		target = filepath.Join(root, project.Slug())
 	}
 
-	cmd := exec.Command("git", "clone", repoURL, target)
+	// Inject auth token into managed repo URLs so git clone works without
+	// interactive credential prompts.
+	cloneURL := repoURL
+	if cfg.Token != "" {
+		if parsed, parseErr := url.Parse(cloneURL); parseErr == nil && parsed.User == nil {
+			parsed.User = url.UserPassword("otter", cfg.Token)
+			cloneURL = parsed.String()
+		}
+	}
+
+	cmd := exec.Command("git", "clone", cloneURL, target)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	if !*jsonOut {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
