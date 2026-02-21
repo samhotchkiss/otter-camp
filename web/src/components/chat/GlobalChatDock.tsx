@@ -505,10 +505,13 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
       const agentName = conversation.agent.name.toLowerCase();
       return (
         displayTitle.includes("frank") ||
+        displayTitle.includes("chief of staff") ||
         agentName.includes("frank") ||
+        agentName.includes("chief of staff") ||
         agentID === "main" ||
         agentID.includes("frank") ||
-        threadID.includes("frank")
+        threadID.includes("frank") ||
+        threadID.includes("chief of staff")
       );
     });
     return frankMatch ?? null;

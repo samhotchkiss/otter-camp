@@ -1509,8 +1509,22 @@ export default function GlobalChatSurface({
             postSendRefreshTimersRef.current.push(timerID);
           }
         } else if (typeof payload?.delivery?.error === "string" && payload.delivery.error.trim() !== "") {
-          setError(normalizeDeliveryErrorText(payload.delivery.error));
-          setDeliveryIndicator({ tone: "warning", text: "Saved; delivery pending" });
+          const errorText = payload.delivery.error.trim().toLowerCase();
+          const isQueued = errorText.includes("queued for delivery") || errorText.includes("queued for retry");
+          if (isQueued) {
+            // Message is queued and will be delivered — don't show as error
+            setDeliveryIndicator({ tone: "neutral", text: "Queued; will deliver shortly" });
+            // Start refresh timers to pick up the agent's reply
+            for (const delay of POST_SEND_REFRESH_DELAYS_MS) {
+              const timerID = window.setTimeout(() => {
+                void loadConversation({ silent: true });
+              }, delay);
+              postSendRefreshTimersRef.current.push(timerID);
+            }
+          } else {
+            setError(normalizeDeliveryErrorText(payload.delivery.error));
+            setDeliveryIndicator({ tone: "warning", text: "Saved; delivery pending" });
+          }
         } else {
           setDeliveryIndicator({ tone: "neutral", text: "Saved" });
         }
@@ -1555,8 +1569,20 @@ export default function GlobalChatSurface({
             postSendRefreshTimersRef.current.push(timerID);
           }
         } else if (typeof payload?.delivery?.error === "string" && payload.delivery.error.trim() !== "") {
-          setError(normalizeDeliveryErrorText(payload.delivery.error));
-          setDeliveryIndicator({ tone: "warning", text: "Saved; delivery pending" });
+          const projErrorText = payload.delivery.error.trim().toLowerCase();
+          const projIsQueued = projErrorText.includes("queued for delivery") || projErrorText.includes("queued for retry");
+          if (projIsQueued) {
+            setDeliveryIndicator({ tone: "neutral", text: "Queued; will deliver shortly" });
+            for (const delay of POST_SEND_REFRESH_DELAYS_MS) {
+              const timerID = window.setTimeout(() => {
+                void loadConversation({ silent: true });
+              }, delay);
+              postSendRefreshTimersRef.current.push(timerID);
+            }
+          } else {
+            setError(normalizeDeliveryErrorText(payload.delivery.error));
+            setDeliveryIndicator({ tone: "warning", text: "Saved; delivery pending" });
+          }
         } else {
           setDeliveryIndicator({ tone: "neutral", text: "Saved" });
         }
@@ -1610,8 +1636,20 @@ export default function GlobalChatSurface({
             postSendRefreshTimersRef.current.push(timerID);
           }
         } else if (typeof payload?.delivery?.error === "string" && payload.delivery.error.trim() !== "") {
-          setError(normalizeDeliveryErrorText(payload.delivery.error));
-          setDeliveryIndicator({ tone: "warning", text: "Saved; delivery pending" });
+          const issueErrorText = payload.delivery.error.trim().toLowerCase();
+          const issueIsQueued = issueErrorText.includes("queued for delivery") || issueErrorText.includes("queued for retry");
+          if (issueIsQueued) {
+            setDeliveryIndicator({ tone: "neutral", text: "Queued; will deliver shortly" });
+            for (const delay of POST_SEND_REFRESH_DELAYS_MS) {
+              const timerID = window.setTimeout(() => {
+                void loadConversation({ silent: true });
+              }, delay);
+              postSendRefreshTimersRef.current.push(timerID);
+            }
+          } else {
+            setError(normalizeDeliveryErrorText(payload.delivery.error));
+            setDeliveryIndicator({ tone: "warning", text: "Saved; delivery pending" });
+          }
         } else {
           setDeliveryIndicator({ tone: "neutral", text: "Saved" });
         }
