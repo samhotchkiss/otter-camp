@@ -239,7 +239,6 @@ export default function ProjectsPage() {
                     <span className={`h-2 w-2 shrink-0 rounded-full ${activityPriorityDot(activity.priority)}`} />
                     <div className="min-w-0 flex-1">
                       <div className="mb-0.5 flex min-w-0 items-center gap-2">
-                        <span className="shrink-0 font-mono text-[10px] text-stone-500">{activity.id}</span>
                         <p className="truncate text-sm font-medium text-stone-200 transition-colors group-hover:text-amber-400">
                           {activity.title}
                         </p>
