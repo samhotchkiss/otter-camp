@@ -1414,7 +1414,9 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     }
 
     if (!selectedKey) {
-      setSelectedKey(conversations[0].key);
+      // Prefer a DM conversation (especially Frank/main) over project/issue chats
+      const dmConversation = conversations.find((c) => c.type === "dm") ?? conversations[0];
+      setSelectedKey(dmConversation.key);
       return;
     }
 
