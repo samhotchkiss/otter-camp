@@ -47,6 +47,30 @@ Agents can perform meaningful work (project updates, tool execution, CLI and bro
 - RunArtifact: files/screenshots/log outputs produced by execution.
 - RunEvent: append-only timeline event for replay/debug.
 
+## Task and Flow Binding
+
+When a run executes in the context of a task, it carries:
+
+- `task_id`: the task this run is working on.
+- `flow_node_id`: the specific flow node this run is executing within.
+
+### Relationship Rules
+
+- A flow node can have **multiple runs**. An agent may need several runs to complete a step — working, discovering issues, querying Ellie, resuming after a blocker is resolved.
+- **Run completion does not advance the flow.** A run finishing is an execution event, not a workflow signal. The agent must explicitly signal that the flow step is done.
+- The agent signals step completion via a dedicated action (e.g., `project.flow.advance`). This is a control plane action subject to normal policy evaluation.
+- If the agent encounters an issue before completing the step, it files a blocking task (see 03-projects-and-task-flow.md Blockers and Escalation). The flow stays at the current node until the dependency is resolved.
+
+### Observability
+
+Because runs link to tasks and flow nodes, you can answer:
+
+- What runs happened for this task? For this flow node?
+- How many tool calls, model invocations, and tokens were spent on this step?
+- What artifacts were produced?
+- How long did the agent spend at this flow node (across all runs)?
+- Where in the run timeline did the agent file a blocker?
+
 ## Agent Principal Model
 
 Each action request includes:
@@ -155,6 +179,17 @@ On approval, the run resumes from the blocked step with a new `RunAttempt`.
 - Idempotency keys required for mutating operations.
 - Dead-letter handling for repeated execution failures.
 - Operator actions are also audited as control-plane events.
+
+### Failure State Repair and Task Scheduling
+
+The system must actively prevent tasks from getting stuck. A background supervisor process monitors for failure states and ensures work keeps moving:
+
+- **Stuck task detection**: periodically scan for tasks in `in_progress` or `blocked` whose associated runs have failed, timed out, or gone silent. Transition these tasks to a recoverable state.
+- **Queue drain**: when a concurrency slot frees up (global or per-provider), immediately check for queued tasks and dispatch the next one. No task should sit waiting when capacity is available.
+- **Orphaned runs**: detect runs that started but never completed (e.g., worker crash). Mark them as failed and make the associated task eligible for retry or reassignment.
+- **Blocker staleness**: flag blocking tasks that have been open beyond a configurable threshold. Escalate to the PM or human to prevent indefinite stalls.
+- **Retry policy**: configurable per task or flow node — auto-retry on transient failures (provider errors, timeouts) vs require manual intervention on permanent failures (policy denial, repeated crashes).
+- **Health heartbeat**: running agents emit periodic heartbeats. If heartbeats stop, the supervisor assumes failure and begins recovery.
 
 ## Observability Requirements
 

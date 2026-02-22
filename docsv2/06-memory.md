@@ -11,7 +11,7 @@
 - Working memory: short-lived session/task context.
 - Episodic memory: time-stamped events and outcomes.
 - Semantic memory: distilled facts/knowledge.
-- Procedural memory: reusable playbooks and heuristics.
+- Procedural memory: learned patterns and heuristics extracted from experience (distinct from skills, which are human-authored instruction documents — see 10-skills-integration.md).
 
 ## Core Memory Entities
 
@@ -40,9 +40,26 @@
 
 ## Retrieval Strategy
 
-- Hybrid retrieval (semantic + lexical + recency boost).
-- Hard scope filtering before ranking.
+Retrieval behavior depends on session mode (see 02-chat.md Session Modes).
+
+### Synchronous sessions (human present)
+
+- Ellie's passive injection runs automatically per turn.
+- Must be fast — scoped queries against structured memory records, lexical + recency ranking.
+- Top-k results injected into context without agent action.
+- Full semantic/vector search is a future optimization, not a day-one requirement.
+
+### Asynchronous sessions (autonomous agent work)
+
+- Agent can actively query Ellie across multiple turns for deeper retrieval.
+- Latency is acceptable — can afford more expensive search if available.
+- Agent drives its own context discovery via tools alongside memory retrieval.
+
+### Common
+
+- Hard scope filtering before ranking (task → project → org).
 - Budget-aware memory injection into prompts.
+- Ellie can be @mentioned for explicit, targeted retrieval in either mode.
 
 ## Memory Hygiene
 
