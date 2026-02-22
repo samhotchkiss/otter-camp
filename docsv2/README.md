@@ -28,6 +28,7 @@ This directory is the first full draft of OtterCamp V2.
 14. `14-open-questions-and-phasing.md`
 15. `15-migration-and-backward-compat.md`
 16. `16-agent-control-plane.md`
+17. `17-tools-and-secrets.md`
 
 ## The 10 Areas You Requested
 
