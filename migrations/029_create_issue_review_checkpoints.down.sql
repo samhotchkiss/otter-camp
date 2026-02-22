@@ -1,4 +1,0 @@
-DROP POLICY IF EXISTS project_issue_review_checkpoints_org_isolation ON project_issue_review_checkpoints;
-DROP TRIGGER IF EXISTS project_issue_review_checkpoints_updated_at_trg ON project_issue_review_checkpoints;
-DROP INDEX IF EXISTS project_issue_review_checkpoints_org_issue_idx;
-DROP TABLE IF EXISTS project_issue_review_checkpoints;
