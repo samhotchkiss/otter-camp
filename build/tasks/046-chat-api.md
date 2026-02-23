@@ -16,9 +16,7 @@ into REST routes. No new tables, no service logic — HTTP handler layer only.
 
 ### Must build
 
-> ⚠️ ISSUE #27 (AMBIGUOUS): All routes below use the `/v1/` prefix. Doc 12 is the authoritative
-> source for route paths. Doc 21's test examples use `/api/` prefix and `/sessions/` resource name —
-> treat those as pseudocode only. Do NOT implement an `/api/` prefix variant.
+> ✅ ISSUE #27 (RESOLVED): All routes use the `/v1/` prefix. Doc 12 is the authoritative source for route paths. Doc 21 examples have been corrected. Do NOT implement an `/api/` prefix variant.
 
 **Session endpoints:**
 - `POST /v1/chat-sessions` — create a new chat session
@@ -187,4 +185,4 @@ into REST routes. No new tables, no service logic — HTTP handler layer only.
 - Pagination for `GET /v1/chat-sessions/:id/messages` uses `sequence_number` as the cursor key. The opaque cursor is the base64-encoded sequence_number of the last returned message. `before_sequence` and `after_sequence` query params allow direct range queries (useful for SSE clients catching up after a reconnect).
 - All routes must be registered on the shared router from task 007 using the same middleware chain (auth, org-scoping, request logging, error handler). Chat routes do not need a separate router.
 
-> ⚠️ ISSUE #27 (AMBIGUOUS): Doc 21 test code uses `POST /api/sessions/{id}/turns` to send messages. The authoritative path is `POST /v1/chat-sessions/:id/messages`. Do not implement a `/turns` sub-resource or an `/api/` prefix. Doc 21 examples are pseudocode for the test scenarios only.
+> ✅ ISSUE #27 (RESOLVED): The authoritative path is `POST /v1/chat-sessions/:id/messages`. Doc 21 examples have been corrected. Do not implement a `/turns` sub-resource or an `/api/` prefix.

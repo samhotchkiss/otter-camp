@@ -93,6 +93,6 @@ Following the architecture in doc 21 (`OTTERCAMP_MODE=test`):
 - Route registration pattern: each domain's task registers its own routes by calling `server.RegisterRoutes(r chi.Router)`. The auth task establishes the pattern. All subsequent tasks follow the same pattern.
 - The `request_id` should be a UUID v4 string. If an incoming request already has `X-Request-ID`, reuse it (pass-through for reverse proxy tracing).
 - Async session refresh: call `auth.Service.RefreshSession` in a goroutine after the response is sent, not before. This avoids adding latency to every authenticated request. Errors from async refresh are logged at debug level.
-- Per doc 12 (ISSUE #27): all routes use `/v1/` prefix. Doc 21 test examples using `/api/` are pseudocode only. Implementers must use `/v1/`.
+- ✅ ISSUE #27 (RESOLVED): all routes use `/v1/` prefix (doc 12 authoritative). Doc 21 examples have been corrected.
 - The `api.JSON` helper should set `Content-Type: application/json` and use `json.NewEncoder(w).Encode(envelope)` — not `json.Marshal` + `w.Write` — to avoid double-allocating the response body for large payloads.
 - Local auth mode auto-login should only activate on routes protected by the auth middleware. Routes that are explicitly public (login, version, health) are unaffected.

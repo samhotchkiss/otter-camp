@@ -242,8 +242,8 @@ POST /v1/memory/query
 
 ## Implementer Notes
 
-**ISSUE #27 (path prefix):**
-All API calls use `/v1/` paths.
+**ISSUE #27 (RESOLVED — path prefix):**
+All API calls use `/v1/` paths (doc 12 authoritative).
 
 **Deterministic model responses and memory extraction:**
 In `OTTERCAMP_MODE=test`, the memory extraction pipeline uses a deterministic mode

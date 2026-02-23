@@ -246,8 +246,8 @@ Authorization: Bearer <token>
 
 ## Implementer Notes
 
-**ISSUE #27 (path prefix):**
-All API calls use `/v1/` paths.
+**ISSUE #27 (RESOLVED — path prefix):**
+All API calls use `/v1/` paths (doc 12 authoritative).
 
 **ISSUE #5 (lifecycle_status constraints):**
 The lifecycle_status machine enforcement is application-layer only. The test for

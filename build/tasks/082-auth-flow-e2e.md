@@ -229,8 +229,8 @@ Authorization: Bearer <org-b-token>
 
 ## Implementer Notes
 
-**ISSUE #27 (path prefix):**
-All API calls use `/v1/` paths (doc 12). Doc 21's `/api/` examples are pseudocode only.
+**ISSUE #27 (RESOLVED — path prefix):**
+All API calls use `/v1/` paths (doc 12). Doc 21 examples have been corrected.
 
 **Org isolation test setup:**
 The second org creation in `TestAuth_OrgIsolation` may require a special system-level

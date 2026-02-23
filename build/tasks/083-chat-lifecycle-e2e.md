@@ -271,9 +271,8 @@ POST /v1/chat-sessions/<session_id>/messages
 
 ## Implementer Notes
 
-**ISSUE #27 (path prefix):**
-All API calls use `/v1/` paths and resource names from doc 12. Doc 21's `/api/sessions/`
-examples are pseudocode only — use `/v1/chat-sessions/`.
+**ISSUE #27 (RESOLVED — path prefix):**
+All API calls use `/v1/` paths and resource names from doc 12. Use `/v1/chat-sessions/` (not `/sessions/`).
 
 **SSE client in tests:**
 The `SSEClient` helper must open a real HTTP connection with `Accept: text/event-stream`.

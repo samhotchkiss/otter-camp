@@ -262,19 +262,21 @@ For complex assertions (checking database state, verifying events, inspecting au
 
 REST API tests use a standard HTTP client. All requests include authentication (API key or session token).
 
+All API paths use the `/v1/` prefix. Doc 12 is the authoritative source for all route paths and resource names (e.g., `chat-sessions`, not `sessions`).
+
 ```
-# Create a chat turn
-POST /api/sessions/{id}/turns
+# Send a message to a chat session
+POST /v1/chat-sessions/{id}/messages
 Authorization: Bearer <api_key>
 {"content": "Hello Frank"}
 
 # Verify project was created
-GET /api/projects
+GET /v1/projects
 Authorization: Bearer <api_key>
 # Assert: response includes "TestProject"
 
 # Check audit trail
-GET /api/events?type=project.created
+GET /v1/events?type=project.created
 Authorization: Bearer <api_key>
 # Assert: event exists with correct metadata
 ```

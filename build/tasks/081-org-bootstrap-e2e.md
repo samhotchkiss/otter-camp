@@ -209,9 +209,8 @@ The E2E tests require the `ottercamp` binary to be pre-built (by `make build`) b
 the test suite runs. The `StartServer(t)` helper must wait for `GET /v1/health` to return
 200 before allowing tests to proceed. Use a 30-second timeout with a 250ms poll interval.
 
-**ISSUE #27 (path prefix):**
-All API calls in this test use `/v1/` paths as defined in doc 12. Doc 21's `/api/`
-examples are pseudocode only — do not use them.
+**ISSUE #27 (RESOLVED — path prefix):**
+All API calls use `/v1/` paths (doc 12). Doc 21 examples have been corrected.
 
 **ISSUE #22 (health endpoint path):**
 Use `GET /v1/health` as the health check path. If the server exposes `/health` (doc 08)

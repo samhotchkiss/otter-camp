@@ -283,8 +283,8 @@ GET /v1/control/runs/<slow_run_id>/events
 
 ## Implementer Notes
 
-**ISSUE #27 (path prefix):**
-All API calls use `/v1/` paths.
+**ISSUE #27 (RESOLVED — path prefix):**
+All API calls use `/v1/` paths (doc 12 authoritative).
 
 **Test-mode task title keywords:**
 The `[tool-call:file.write]`, `[tool-call:network.fetch]`, and `[slow-run]` title

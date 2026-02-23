@@ -294,8 +294,8 @@ GET /v1/health
 
 ## Implementer Notes
 
-**ISSUE #27 (path prefix):**
-All API calls use `/v1/` paths. Doc 21 examples are pseudocode.
+**ISSUE #27 (RESOLVED — path prefix):**
+All API calls use `/v1/` paths. Doc 21 examples have been corrected.
 
 **Test-mode task creation keyword:**
 The `[create-task]` prefix in the human message (step 9) is a test-mode contract. In

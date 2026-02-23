@@ -81,8 +81,7 @@ Running total after L2: **24**
 
 - [ ] 013: Agent schema — `agent` DDL (includes lifecycle_status combined column; tool allow/deny
   lists; memory_read_scopes; temp columns); `agent_profile_template` DDL + repositories;
-  **FLAG: ISSUE #1 BLOCKER — budget_cap_cents vs budget_cap_tokens; implement with budget_cap_tokens
-  pending spec resolution; ISSUE #5 — lifecycle_status cross-class constraint is app-layer only** — M
+  ✅ ISSUE #1 resolved: column is `budget_cap_tokens` (tokens only); ISSUE #5 — lifecycle_status cross-class constraint is app-layer only — M
 
 - [ ] 014: Agent service — staff lifecycle (draft → active → paused → retired/cancelled); temp
   lifecycle (active → expired/promoted); concurrent temp limit enforcement (organization.settings
@@ -101,7 +100,7 @@ Running total after L2: **24**
 - [ ] 017: Flow node schema — `flow_node` DDL with AUTHORITATIVE final schema: drop `skills jsonb`,
   keep `mcp_tools jsonb`, add `tool_domains jsonb`; self-references (next_node_id, reject_node_id);
   `flow_node_skill` join table DDL; repository layer;
-  **FLAG: ISSUE #16 BLOCKER — coordinate with Sam before finalizing DDL** — S
+  ✅ ISSUE #16 resolved: final DDL uses `mcp_tools jsonb` + `tool_domains jsonb`, no `skills jsonb` — S
 
 - [ ] 018: Project service — project CRUD; flow template CRUD + immutability enforcement (new
   version = new row, old gets is_current=false); task_schedule CRUD + cron validation +
@@ -591,9 +590,9 @@ Each of these should be flagged when writing the corresponding task file.
   injected vars" but does not list what project configuration variables are injected or how they
   are declared. Implementers will need to design the project configuration variable convention.
 
-- **Doc 12 (API), ISSUE #27:** API path prefix inconsistency between doc 12 (/v1/) and doc 21
-  test examples (/api/). Doc 12's /v1/ routes are authoritative. Implementers should treat doc 21
-  examples as pseudocode only.
+- **Doc 12 (API), ✅ ISSUE #27 RESOLVED:** Doc 12's `/v1/` prefix is authoritative. Doc 21
+  examples corrected to use `/v1/chat-sessions/`, `/v1/projects`, `/v1/events`. No `/api/`
+  prefix variant exists.
 
 - **Doc 13 (Observability):** trace_span table is "implied, not DDL-defined." The exact schema
   (column names, OTLP attribute mapping, partition strategy) is left to implementers. Only

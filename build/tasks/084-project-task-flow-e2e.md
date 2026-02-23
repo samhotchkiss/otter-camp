@@ -253,8 +253,8 @@ GET /v1/tasks/<task_id>/flow
 
 ## Implementer Notes
 
-**ISSUE #27 (path prefix):**
-All API calls use `/v1/` paths. Doc 21's `/api/projects` examples are pseudocode only.
+**ISSUE #27 (RESOLVED — path prefix):**
+All API calls use `/v1/` paths. Doc 21 examples have been corrected.
 
 **ISSUE #7 (archived_at trigger):**
 The test explicitly asserts that `archived_at` is null before deploy and non-null after

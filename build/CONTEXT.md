@@ -145,12 +145,13 @@ inline. Do not finalize the flagged design decision until Sam resolves the issue
 
 | Issue | Severity | Affects | Summary |
 |-------|----------|---------|---------|
-| #1 | BLOCKER | `agent` | `budget_cap_cents` (doc 05) vs `budget_cap_tokens` (doc 14) — column name unresolved |
-| #16 | BLOCKER | `flow_node` | `skills jsonb` must be dropped; `mcp_tools jsonb` + `tool_domains jsonb` must be added — docs 03/09/10 contradict |
-| #23 | BLOCKER | `agent`, token budget | Per-agent budget enforcement mechanism unspecified |
-| #21 | BLOCKER | `model_invocation` retention | 30-day retention (doc 07) vs 90-day (doc 14) — retention job period unresolved |
-| #26 | BLOCKER | browser tool catalog | Browser action allowlist/denylist schema not defined |
-| #27 | BLOCKER | all API tasks | `/api/sessions/` (doc 21) vs `/v1/chat-sessions/` (doc 12) path prefix contradiction |
+All BLOCKERs resolved. See `build/ISSUES.md` for full resolution notes on each:
+- #1 ✅ `budget_cap_tokens` (tokens only, never cents)
+- #16 ✅ `flow_node` final schema: no `skills`, has `mcp_tools` + `tool_domains`
+- #21 ✅ `model_invocation` retention = 90 days
+- #23 ✅ Budget enforcement is hierarchical/additive (agent → project → org)
+- #26 ✅ `browser.evaluate` confirmed; doc 11 §Scripted Execution defines it
+- #27 ✅ All API routes use `/v1/` prefix; doc 12 is authoritative; no `/api/` variant
 
 ---
 
