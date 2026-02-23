@@ -1858,7 +1858,7 @@ erDiagram
                 <span>context (jsonb)</span>
               </td>
               <td class="notes-text">
-                Append-only. Namespaced actions (auth.login, agent.created, policy.evaluated). principal_type: human / agent / system. Delegation trace via delegated_by. Indexed by (org, created_at), (org, action), (principal_type, principal_id).
+                Append-only. Namespaced actions (auth.login, agent.created, policy.evaluated). principal_type: human / agent / system. scope_type: org / project / task / session. Delegation trace via delegated_by. Indexed by (org, created_at), (org, action), (principal_type, principal_id).
               </td>
             </tr>
           </tbody>
@@ -1894,11 +1894,15 @@ erDiagram
           <p><strong style="color: var(--text);">Frank</strong> (Chief of Staff), <strong style="color: var(--text);">Lori</strong> (Agent Relations), <strong style="color: var(--text);">Ellie</strong> (Memory). Each gets identity metadata, prompt pack, tool policy, model policy.</p>
         </div>
         <div class="timeline-step active">
-          <h4>5. Create Org Session</h4>
+          <h4>5. Seed Provider Connections</h4>
+          <p>If <code>OTTERCAMP_MODEL_PROVIDER</code> and <code>OTTERCAMP_MODEL_API_KEY</code> are set, create provider connection, encrypt key, create default model profiles. Back-fill starter trio's <code>default_model_profile_id</code>.</p>
+        </div>
+        <div class="timeline-step active">
+          <h4>6. Create Org Session</h4>
           <p>The "General" chat session. Frank as default responder. Human + Frank + Lori + Ellie as participants.</p>
         </div>
         <div class="timeline-step">
-          <h4>6. Record Bootstrap Event</h4>
+          <h4>7. Record Bootstrap Event</h4>
           <p>Audit event: bootstrap completed. Records org ID, user ID, agent IDs created.</p>
         </div>
       </div>
