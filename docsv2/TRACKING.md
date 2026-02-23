@@ -21,7 +21,7 @@
 | 03 | Projects and Task Flow | 914 | 7 - Finished | 12-table schema, first-principles reviewed |
 | 03a | Shipping and Delivery | 344 | 7 - Finished | 2 new tables, 18 resolved decisions, first-principles reviewed |
 | 04 | Auth, Tenancy, and Identity | ~640 | 7 - Finished | DB-per-org isolation, no org_membership, RBAC on human_user, 22 resolved decisions, first-principles reviewed |
-| 05 | Agents, Staff, and Temps | 691 | 2 - Initial Draft | Starter trio, prompt assembly, lifecycle, schema |
+| 05 | Agents, Staff, and Temps | 848 | 3 - In Process with Sam | Workers temp by default, PMs always staff, cross-project memory, NDI, 230+ profile catalog, 37 resolved decisions |
 | 06 | Memory | 1072 | 7 - Finished | 9-table schema, 52 resolved decisions, first-principles reviewed |
 | 07 | Models and Inference | 714 | 2 - Initial Draft | Provider abstraction, model profiles, cost tracking, schema |
 | 08 | Deployment and Self-Hosting | 800 | 2 - Initial Draft | Three modes, Docker Compose, binary distribution, upgrades |
