@@ -862,8 +862,9 @@
     <p class="hero-desc">
       OtterCamp ships as a single Go binary that runs identically across all environments.
       Local laptop, remote VPS, or managed multi-tenant -- the mode is determined entirely by
-      configuration, not by building different artifacts. PostgreSQL is the only required
-      external dependency. Everything else has a built-in fallback.
+      configuration, not by building different artifacts. PostgreSQL (with pgvector) is the only
+      required external dependency. Managed mode uses database-per-org isolation -- every org gets
+      its own database, no shared data, no RLS. Everything else has a built-in fallback.
     </p>
     <div class="hero-prompt">
       <span class="text-green">$</span>
@@ -984,8 +985,9 @@
         <h3>Managed Multi-Tenant</h3>
         <div class="mode-audience">Users who do not want to manage infrastructure</div>
         <div class="mode-desc">
-          Multiple orgs on shared infrastructure. Row-level security, per-org
-          S3 path prefixing, horizontal API/Worker scaling, resource limits per tenant.
+          Multiple orgs on shared app infrastructure with <span class="text-amber">database-per-org isolation</span>.
+          Every org gets its own PostgreSQL database. A catalog database maps orgs to connections.
+          No shared data, no RLS needed -- isolation is architectural.
         </div>
         <div class="mode-diagram">         +-- Load Balancer (TLS) --+
          |                         |
@@ -995,11 +997,16 @@
   +------+------+   +------+------+
          |                  |
   +------+------------------+------+
-  |     PostgreSQL (RLS enabled)   |
-  |   per-org row-level security   |
-  +--------------+-----------------+
-                 |
-  +--------------+-----------------+
+  |       Catalog Database         |
+  |  org slug -> DB connection     |
+  +-+------------+------------+----+
+    |            |            |
+  +-+------+ +--+-------+ +--+-------+
+  | Org A  | | Org B    | | Org C    |
+  | DB     | | DB       | | DB       |
+  +--------+ +----------+ +----------+
+         |
+  +------+-------------------------+
   |  S3 (per-org path prefix)      |
   |  s3://bucket/org-{id}/...      |
   +--------------------------------+
@@ -1011,9 +1018,9 @@
         <ul class="mode-specs">
           <li><span class="spec-label">Process</span><span class="spec-value">Separate, scaled</span></li>
           <li><span class="spec-label">Storage</span><span class="spec-value">S3 (per-org prefix)</span></li>
-          <li><span class="spec-label">Queue</span><span class="spec-value">PostgreSQL</span></li>
-          <li><span class="spec-label">Isolation</span><span class="spec-value amber">RLS + app-layer</span></li>
-          <li><span class="spec-label">TLS</span><span class="spec-value">At load balancer</span></li>
+          <li><span class="spec-label">Queue</span><span class="spec-value">PostgreSQL (per-org)</span></li>
+          <li><span class="spec-label">Isolation</span><span class="spec-value amber">Database-per-org</span></li>
+          <li><span class="spec-label">Routing</span><span class="spec-value amber">Catalog DB</span></li>
           <li><span class="spec-label">Scaling</span><span class="spec-value amber">Horizontal</span></li>
           <li><span class="spec-label">Limits</span><span class="spec-value amber">Per-org enforced</span></li>
           <li><span class="spec-label">KMS</span><span class="spec-value amber">Cloud KMS</span></li>
@@ -1052,10 +1059,10 @@
         </thead>
         <tbody>
           <tr>
-            <td class="component-name">PostgreSQL</td>
-            <td><span class="dep-badge required">Required</span><span class="dep-note">Local or Docker</span></td>
+            <td class="component-name">PostgreSQL + pgvector</td>
+            <td><span class="dep-badge required">Required</span><span class="dep-note">pgvector/pgvector:pg16 or local</span></td>
             <td><span class="dep-badge required">Required</span><span class="dep-note">Local or managed (RDS, Neon)</span></td>
-            <td><span class="dep-badge required">Required</span><span class="dep-note">Managed + RLS enabled</span></td>
+            <td><span class="dep-badge required">Required</span><span class="dep-note">Database-per-org + catalog DB</span></td>
           </tr>
           <tr>
             <td class="component-name">Object Storage</td>
@@ -1071,9 +1078,9 @@
           </tr>
           <tr>
             <td class="component-name">Event Bus</td>
-            <td><span class="dep-badge fallback">PostgreSQL</span><span class="dep-note">Same as job queue</span></td>
-            <td><span class="dep-badge fallback">PostgreSQL</span><span class="dep-note">Same mechanism</span></td>
-            <td><span class="dep-badge fallback">PostgreSQL</span><span class="dep-note">Same mechanism</span></td>
+            <td><span class="dep-badge fallback">PostgreSQL</span><span class="dep-note">Durable table + LISTEN/NOTIFY</span></td>
+            <td><span class="dep-badge fallback">PostgreSQL</span><span class="dep-note">Durable table + LISTEN/NOTIFY</span></td>
+            <td><span class="dep-badge fallback">PostgreSQL</span><span class="dep-note">Per-org DB, durable table</span></td>
           </tr>
           <tr>
             <td class="component-name">TLS</td>
@@ -1107,6 +1114,58 @@
           </tr>
         </tbody>
       </table>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== MANAGED MODE ===================== -->
+<section id="managed">
+  <div class="container">
+    <h2 class="animate-in">// Managed Mode: Database-per-Org</h2>
+    <p class="animate-in text-dim" style="max-width: 680px; font-size: 0.85rem;">
+      Every organization gets its own PostgreSQL database. The catalog database
+      maps orgs to connections. No shared data, no RLS -- isolation is architectural.
+    </p>
+
+    <div class="modes-grid" style="grid-template-columns: repeat(2, 1fr); margin-top: 2rem;">
+      <div class="mode-card animate-in stagger-1">
+        <div class="mode-label">Infrastructure</div>
+        <h3>Catalog Database</h3>
+        <div class="mode-desc">
+          A small, shared database that maps tenant identifiers to org database connections.
+          One row per org, cached aggressively, changes infrequently.
+        </div>
+        <ul class="mode-specs">
+          <li><span class="spec-label">Contents</span><span class="spec-value">Org slug, DB connection, status</span></li>
+          <li><span class="spec-label">Uniqueness</span><span class="spec-value amber">Cross-tenant slug uniqueness</span></li>
+          <li><span class="spec-label">Cache</span><span class="spec-value">In-memory, short TTL</span></li>
+          <li><span class="spec-label">Provisioning</span><span class="spec-value amber">Tracks in-progress state</span></li>
+        </ul>
+      </div>
+      <div class="mode-card animate-in stagger-2">
+        <div class="mode-label">Request Flow</div>
+        <h3>Connection Routing</h3>
+        <div class="mode-desc">
+          Every request resolves an org database before any application logic runs.
+          The routing layer is a thin lookup from org slug to database connection.
+        </div>
+        <ul class="mode-specs">
+          <li><span class="spec-label">Step 1</span><span class="spec-value">Extract org from subdomain/URL</span></li>
+          <li><span class="spec-label">Step 2</span><span class="spec-value">Look up in catalog (cached)</span></li>
+          <li><span class="spec-label">Step 3</span><span class="spec-value">Connect to org database</span></li>
+          <li><span class="spec-label">Pooling</span><span class="spec-value amber">Per-org pools, global ceiling</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout animate-in" style="margin-top: 2rem;">
+      <div class="callout-label">Per-Org Migration Orchestration</div>
+      <p>
+        <code style="color:var(--green)">ottercamp migrate --catalog</code> iterates all
+        active tenants and runs pending migrations in parallel (configurable concurrency,
+        default 10). Progress tracked in catalog. Failures are per-org -- one org's failed
+        migration does not block others. New orgs start at the current schema version.
+      </p>
     </div>
   </div>
 </section>
@@ -1516,6 +1575,10 @@ flowchart TB
             <span class="security-detail-value">list/head bucket</span>
           </div>
           <div class="security-detail-row">
+            <span class="security-detail-label">pgvector check</span>
+            <span class="security-detail-value">SELECT vector('[0]'::vector)</span>
+          </div>
+          <div class="security-detail-row">
             <span class="security-detail-label">Migration check</span>
             <span class="security-detail-value">Schema version match</span>
           </div>
@@ -1591,7 +1654,7 @@ flowchart TB
    +-----+-----+--------+
    |            |        |
 +--+---+  +----+---+  +-+------+
-| pg:16|  |  minio |  | chrome |
+|pgvec|  |  minio |  | chrome |
 +------+  +--------+  |(opt.)  |
                        +--------+</div>
         <ul class="mode-specs">
@@ -1612,7 +1675,7 @@ flowchart TB
 +--------+---------+
          |
       +--+---+
-      | pg:16|
+      |pgvec|
       +------+</div>
         <ul class="mode-specs">
           <li><span class="spec-label">Containers</span><span class="spec-value amber">2</span></li>
@@ -1688,11 +1751,12 @@ flowchart TB
   <div class="container">
     <div class="footer-title">OtterCamp V2</div>
     <div class="footer-desc">
-      One binary. Three deployment modes. PostgreSQL is the only required dependency.
+      One binary. Three deployment modes. PostgreSQL + pgvector is the only required dependency. Database-per-org isolation in managed mode.
     </div>
     <div class="footer-links">
       <a href="#modes" class="footer-link">Deployment Modes</a>
       <a href="#dependencies" class="footer-link">Dependencies</a>
+      <a href="#managed" class="footer-link">Managed Mode</a>
       <a href="#config" class="footer-link">Configuration</a>
       <a href="#operations" class="footer-link">Operations</a>
       <a href="#security" class="footer-link">Security</a>
