@@ -109,11 +109,9 @@ assert messages older than 90 days are deleted; messages within 90 days are NOT 
 rows 91 days old; run retention job; assert these rows are deleted; verify cascade
 deletes `run_event`, `run_artifact` rows for the deleted runs.
 
-`TestRetention_ModelInvocations_Stub` — create `model_invocation` rows 91 days old;
-run retention job with the current configured retention period; assert behavior matches
-the configured value (documenting ISSUE #21 — retention period is either 30d or 90d
-depending on which doc wins). Test both values by parameterizing the threshold. Add a
-`// TODO(issue-21): update test expectation once retention period is decided` comment.
+`TestRetention_ModelInvocations_90Days` — create `model_invocation` rows 91 days old;
+run retention job; assert rows older than 90 days are deleted and rows within 90 days
+are preserved. `RetentionModelInvocationDays = 90` (ISSUE #21 resolved).
 
 `TestRetention_DomainEvents_90Days` — create `domain_event` rows 91 days old; run
 retention job; events older than 90 days deleted; events within 90 days preserved.
@@ -153,7 +151,7 @@ echoes it back.
 - [ ] All tests pass with `go test ./internal/security/... ./internal/observability/... -tags integration`
 - [ ] All 5 scrubber invariants have a dedicated test scenario
 - [ ] `TestScrubber_NoFalsePositives` passes at least 5 normal text samples through without scrubbing
-- [ ] `TestRetention_ModelInvocations_Stub` is parameterized for both 30d and 90d; includes ISSUE #21 comment
+- [ ] `TestRetention_ModelInvocations_90Days` deletes rows older than 90 days and preserves rows within 90 days
 - [ ] `TestRetention_RunRecords_90Days` verifies CASCADE deletes for run_step, run_attempt, run_event, run_artifact
 - [ ] `TestAudit_SecretAccess_Recorded` verifies the secret slug is in audit metadata but the plaintext value is NOT
 - [ ] `TestRequestID_Propagation` asserts the same request_id appears in at least 3 structured log lines
@@ -180,7 +178,7 @@ echoes it back.
 - `TestAudit_DelegatedAction`
 - `TestRetention_ChatMessages_90Days`
 - `TestRetention_RunRecords_90Days`
-- `TestRetention_ModelInvocations_Stub`
+- `TestRetention_ModelInvocations_90Days`
 - `TestRetention_DomainEvents_90Days`
 - `TestRetention_AuditEvents_1Year`
 - `TestRetention_ArchivedMemories_1Year`
@@ -200,16 +198,9 @@ echoes it back.
 - Model gateway: `MockProviderServer` only for scrubber invariant tests
 - Object storage: real filesystem adapter (temporary directory)
 
-**ISSUE #21 (model_invocation retention period):**
-`TestRetention_ModelInvocations_Stub` explicitly documents the BLOCKER. Parameterize
-the test to accept a `retentionDays` parameter and run it twice — once with 30 days,
-once with 90 days. One of them will fail depending on what the retention job implements.
-The failing case must be `t.Skip`-ped with the ISSUE #21 reference until the spec is
-resolved:
-```go
-t.Skipf("TODO(issue-21): model_invocation retention is %d days in the current "+
-    "implementation; spec conflict unresolved", currentRetentionDays)
-```
+**ISSUE #21 (RESOLVED):**
+`model_invocation` retention is 90 days. `TestRetention_ModelInvocations_90Days` tests
+the single correct value. No parameterization or `t.Skip` needed.
 
 **Audit event coverage principle:**
 These tests are not exhaustive — they verify the most critical audit events. The

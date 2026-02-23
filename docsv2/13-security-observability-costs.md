@@ -280,7 +280,7 @@ Retention policies are configurable per organization via `organization.settings`
 | Memory items (archived) | 1 year | Archived memories are preserved for provenance and temporal queries. After 1 year, they can be purged. |
 | Audit events | 1 year (self-hosted), 3 years (managed) | Audit events are the security compliance record. Longer retention for managed deployments where compliance requirements are stricter. |
 | Run records and events | 90 days | Execution history is useful for debugging and usage analysis. After 90 days, aggregate metrics are sufficient. |
-| Model invocation logs | 30 days | Detailed prompt/completion logs are large and sensitive. Token aggregates in `model_usage_rollup` are retained indefinitely. |
+| Model invocation logs | 90 days | Detailed prompt/completion logs are large and sensitive. Token aggregates in `model_usage_rollup` are retained indefinitely. |
 | Domain events | 90 days | Event bus records (see 12-api-events-and-realtime.md). Auto-purge after consumer cursors have advanced past. |
 | Trace spans | 7 days | Distributed tracing data. Partitioned by day for efficient cleanup. Configurable. |
 | Object storage artifacts | 90 days | Screenshots, generated files, log outputs. Artifacts linked to active tasks are exempt from retention until the task completes. |
@@ -438,7 +438,7 @@ Every model invocation already captures the full prompt and response to object s
 - **Evaluating model upgrades**: replay the same assembled context through a different model (see 07-models-and-inference.md Replay) with confidence that the input is identical.
 - **Memory retrieval quality assessment**: compare the memory injection manifest against what would have been ideal, identifying systematic retrieval gaps.
 
-**Retention**: context assembly metadata follows the same retention policy as `model_invocation` logs (default 30 days). The prompt and response in object storage follow the same policy. After retention expiry, only token-level aggregates in rollup tables survive.
+**Retention**: context assembly metadata follows the same retention policy as `model_invocation` logs (90 days). The prompt and response in object storage follow the same policy. After retention expiry, only token-level aggregates in rollup tables survive.
 
 This is not a separate system — it is structured metadata on existing `model_invocation` records, using infrastructure that already exists (prompt capture, object storage, metadata JSONB).
 
@@ -671,7 +671,7 @@ Token counts are the unit of measurement for budgets, dashboards, anomaly detect
 
 Raw per-invocation token counts are aggregated into doc 07's `model_usage_rollup` table for efficient querying. The rollup provides daily aggregations by connection, model, agent, and project with input/output token counts and invocation counts. See 07-models-and-inference.md for the authoritative schema.
 
-Raw `model_invocation` records are retained for 30 days (see Retention). After that, only the rollup summaries remain.
+Raw `model_invocation` records are retained for 90 days (see Retention). After that, only the rollup summaries remain.
 
 ### Budget System
 
@@ -766,7 +766,7 @@ The system detects unusual token usage patterns and alerts the operator:
 
 13. **Circuit breakers on all external dependencies.** Model providers, MCP servers, git remotes. Open after consecutive failures or high error rate. Half-open after configurable interval. Fail fast, not fail slow.
 
-14. **Token-based cost tracking, not USD.** The system tracks tokens per model per connection (see 07-models-and-inference.md). No provider pricing table at V2 launch — USD estimation can be added later as a UI layer on top of token counts using an optional provider pricing config. Raw invocation records retained for 30 days; `model_usage_rollup` summaries retained indefinitely.
+14. **Token-based cost tracking, not USD.** The system tracks tokens per model per connection (see 07-models-and-inference.md). No provider pricing table at V2 launch — USD estimation can be added later as a UI layer on top of token counts using an optional provider pricing config. Raw invocation records retained for 90 days; `model_usage_rollup` summaries retained indefinitely.
 
 15. **Anomaly detection via hourly token rate comparison.** 3x the 7-day average triggers an alert. Deduplicated to at most one alert per hour per org.
 
@@ -778,7 +778,7 @@ The system detects unusual token usage patterns and alerts the operator:
 
 19. **Master key rotation is supported without downtime.** Application supports reading secrets encrypted with any known key version. Background job re-encrypts all secrets with the new key.
 
-20. **Inference context replay via structured metadata on model_invocation.** Per-layer token counts, memory injection manifest, compression/truncation events stored in `model_invocation.metadata`. Combined with prompt/response capture in object storage, enables full reconstruction of what the agent saw when it made a decision. Follows same 30-day retention as invocation logs. Inspired by context engineering trace envelope patterns.
+20. **Inference context replay via structured metadata on model_invocation.** Per-layer token counts, memory injection manifest, compression/truncation events stored in `model_invocation.metadata`. Combined with prompt/response capture in object storage, enables full reconstruction of what the agent saw when it made a decision. Follows same 90-day retention as invocation logs. Inspired by context engineering trace envelope patterns.
 
 ## Open Questions
 

@@ -216,7 +216,7 @@ Retention policy table (execute each as a separate DELETE/DROP in its own transa
 | `run_artifact` | 90 days | `DELETE WHERE created_at < now() - interval '90 days'` (also delete object storage file) |
 | `trace_span` | 7 days | Detach + DROP old partitions older than 7 days |
 
-> ⚠️ ISSUE #21 (BLOCKER): Doc 13 says model invocations: 30 days. Doc 14 says 90 days. This task uses 90 days per doc 14 (resolved decisions are authoritative) but the config is expressed as a constant `RetentionModelInvocationDays = 90`. Sam must update doc 13 to confirm. To make this easy to change: load retention durations from `organization.settings.retention` jsonb where overrides exist; fall back to compiled defaults.
+> ✅ ISSUE #21 (RESOLVED): `model_invocation` retention is **90 days**. Doc 13 updated to match. `RetentionModelInvocationDays = 90` is correct — no confirmation needed.
 
 Emits `domain_event(event_type='system.retention.completed', payload={tables_processed, rows_deleted})` on success.
 

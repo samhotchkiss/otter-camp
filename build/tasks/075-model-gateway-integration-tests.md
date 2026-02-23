@@ -182,9 +182,8 @@ This allows `TestRouting_FallbackChain_OnFailure` to script exactly which calls 
 set (worker-domain call) and without (chat turn-loop call). Add a `// TODO(issue-18):`
 comment on the nullable case noting the ambiguity.
 
-**ISSUE #21 (model_invocation retention):**
-Retention tests are in task 080. The rollup integration tests here verify accuracy of
-rollup computation but do not test the retention delete job.
+**ISSUE #21 (RESOLVED):** `model_invocation` retention is 90 days (task 080).
+Rollup integration tests here verify accuracy of rollup computation only.
 
 **Concurrency test determinism:**
 `TestPriorityQueue_OrderingUnderLoad` and `TestPriorityQueue_SoftPreemption` rely on

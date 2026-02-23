@@ -133,7 +133,7 @@ and deterministic test mode. The `model_usage_rollup` table is created here.
 
 ## Implementer Notes
 
-> ⚠️ ISSUE #21 (BLOCKER): `model_invocation` retention policy is unresolved (30d vs 90d). The rollup aggregation job keeps rollup rows indefinitely (`rollups forever` per doc 14). The retention enforcement job for raw `model_invocation` rows is task 063. This task must not implement retention — add a `// TODO: ISSUE #21 — retention of model_invocation rows enforced in task 063` comment in the rollup worker.
+> ✅ ISSUE #21 (RESOLVED): `model_invocation` retention is **90 days**, enforced in task 063. Rollup rows are kept indefinitely. No TODO needed in this task.
 
 - The `model_usage_rollup` unique index must handle null `rollup_id`, null `model_name`, and null `invocation_purpose` dimensions. PostgreSQL treats NULLs as distinct in unique indexes by default, which would allow duplicate org-level total rows. Use `CREATE UNIQUE INDEX ... ON model_usage_rollup (organization_id, rollup_date, rollup_type, COALESCE(rollup_id::text,''), COALESCE(model_name,''), COALESCE(invocation_purpose,''))` or a generated column to avoid this.
 - Prompt/response capture writes are fire-and-forget: the gateway goroutine does not block waiting for object storage to confirm the write. Errors are logged with `level=warn` and the invocation is not retried due to a capture failure. The `prompt_storage_key` update is attempted with a short timeout (5s); if it fails, the column stays null.
