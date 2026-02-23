@@ -53,3 +53,12 @@
 | 049 | 049-tool-resolution.md | Tool Resolution Pipeline | L4 | M | 043, 013, 017, 020, 033, 055 | written |
 | 050 | 050-prompt-assembly.md | Prompt Assembly Engine | L4 | M | 043, 044, 045, 013, 011, 020, 038, 040, 049, 033 | written |
 | 051 | 051-chat-cli.md | Chat CLI Commands | L4 | S | 046, 047, 068 | written |
+| 052 | 052-control-plane-schema.md | Control Plane Schema — Run, Step, Attempt, Tool Execution, Artifact, Event | L4 | M | 003, 004, 013, 016, 027, 033, 043 | written |
+| 053 | 053-control-plane-service.md | Control Plane Service — Run Lifecycle, State Machine, Supervisor | L4 | M | 052, 033, 023, 024, 027, 028 | written |
+| 054 | 054-control-plane-api.md | Control Plane API Endpoints | L4 | S | 053, 052, 007, 047, 067 | written |
+| 055 | 055-tool-execution-service.md | Tool Execution Service and Dispatch Pipeline | L4 | M | 052, 053, 033, 020, 021, 024 | written |
+| 056 | 056-native-tools-tier1.md | Native Tools — Tier 1 (Read-Only) | L4 | M | 055, 003, 013, 027, 038, 040 | written |
+| 057 | 057-native-tools-tier2.md | Native Tools — Tier 2 (Mutation) | L4 | M | 056, 055, 033, 024, 027, 028, 030 | written |
+| 058 | 058-cli-execution.md | CLI Sandbox and Execution | L4 | M | 052, 053, 055, 056, 004, 027 | written |
+| 059 | 059-browser-execution.md | Browser Tool Execution | L4 | M | 052, 053, 055, 004, 027, 043 | written |
+| 060 | 060-tool-execution-audit-retry.md | Tool Execution Audit, Retry Logic, and Run Event Fan-Out | L4 | S | 052, 053, 055, 024, 047 | written |
