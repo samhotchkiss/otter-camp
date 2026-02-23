@@ -24,7 +24,7 @@
 | 05 | Agents, Staff, and Temps | 892 | 7 - Finished | Project-scoped temps, 4 scope types, temps get project access, NDI, 230+ profile catalog, 43 resolved decisions, first-principles reviewed |
 | 06 | Memory | 1072 | 7 - Finished | 9-table schema, 52 resolved decisions, first-principles reviewed |
 | 07 | Models and Inference | 714 | 2 - Initial Draft | Provider abstraction, model profiles, cost tracking, schema |
-| 08 | Deployment and Self-Hosting | 800 | 2 - Initial Draft | Three modes, Docker Compose, binary distribution, upgrades |
+| 08 | Deployment and Self-Hosting | 869 | 3 - In Process with Sam | Three modes, Docker Compose, binary distribution, db-per-org managed mode, pgvector, catalog DB, per-org migration orchestration |
 | 09 | MCP Integration | 659 | 2 - Initial Draft | Connection management, tool discovery, security, schema |
 | 10 | Skills Integration | 545 | 2 - Initial Draft | Skill format, storage, activation, catalog, schema |
 | 11 | System Integration (CLI and Browser) | 740 | 2 - Initial Draft | CLI sandboxing, browser actions, human handoff, artifacts |

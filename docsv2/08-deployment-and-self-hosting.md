@@ -3,7 +3,7 @@
 
 This spec defines how OtterCamp is packaged, deployed, configured, and operated across three deployment modes: Local Single-Node (developer laptop), VPS Single-Tenant (self-host), and Managed Multi-Tenant (hosted). The same Go binary is used in all modes -- the deployment mode is determined entirely by configuration, not by building different artifacts. The single most important architectural constraint is that PostgreSQL is the only required external dependency for self-hosting; everything else (object storage, job queue, event bus) has a built-in fallback that runs on PostgreSQL or the local filesystem.
 
-In single-node mode, one process runs both the API server (HTTP/WebSocket) and the background Worker (agent turns, memory pipeline, scheduled tasks) using goroutines, sharing a single database connection pool. For VPS deployments, a `--mode` flag allows splitting API and Worker into separate processes for resource isolation, coordinating through the PostgreSQL-backed job queue. The managed multi-tenant mode adds row-level security for cross-org data isolation, per-org resource limits, S3 with path-prefixed object isolation, and horizontal scaling of stateless API/Worker processes behind a load balancer. Docker Compose is the primary self-host distribution (as few as two containers: OtterCamp + PostgreSQL), while a standalone binary with zero runtime dependencies is also available via Homebrew, apt, or direct download.
+In single-node mode, one process runs both the API server (HTTP/WebSocket) and the background Worker (agent turns, memory pipeline, scheduled tasks) using goroutines, sharing a single database connection pool. For VPS deployments, a `--mode` flag allows splitting API and Worker into separate processes for resource isolation, coordinating through the PostgreSQL-backed job queue. The managed multi-tenant mode uses **database-per-org isolation** (consistent with 04-auth-tenancy-and-identity.md) — every organization gets its own PostgreSQL database, with a catalog database mapping org slugs to database connections. No shared databases, no RLS. Managed mode adds per-org resource limits, S3 with path-prefixed object isolation, per-org migration orchestration, connection routing, and horizontal scaling of stateless API/Worker processes behind a load balancer. Docker Compose is the primary self-host distribution (as few as two containers: OtterCamp + PostgreSQL with pgvector), while a standalone binary with zero runtime dependencies is also available via Homebrew, apt, or direct download.
 
 Configuration is entirely through environment variables with sensible defaults -- the only truly required user input is a model provider API key (e.g., `ANTHROPIC_API_KEY`). An optional YAML config file supports complex structures like MCP server definitions. Schema migrations are embedded in the binary and run automatically on startup (forward-only, transactional, backward-compatible for minor versions). Secrets (provider API keys, SSH keys, MCP credentials) are stored AES-256-GCM encrypted in a `secret` table, with a master key sourced from an environment variable, key file, or cloud KMS. The spec also covers backup/restore (single-command `ottercamp backup`/`restore` packaging both database and object storage), health check endpoints (`/health` for liveness, `/ready` for readiness), TLS options (reverse proxy, built-in ACME, or manual certs), the upgrade path (semantic versioning with automatic migration for minor releases), and the CLI command surface for server management.
 
@@ -28,7 +28,7 @@ The simplest possible deployment. One process, one database, local filesystem fo
 
 - **Target audience**: developers, personal use, evaluation, local development.
 - **Process model**: single Go binary runs both the API service and the Worker service in one process.
-- **Database**: PostgreSQL — local (via Docker, Homebrew, system package) or remote.
+- **Database**: PostgreSQL with pgvector extension — local (via Docker, Homebrew, system package) or remote. pgvector is required for the memory system's 1536-dimension embeddings (see 06-memory.md).
 - **Object storage**: local filesystem. A configured directory stores all artifacts, uploads, and binary content. No S3 setup required.
 - **Job queue**: PostgreSQL-backed (LISTEN/NOTIFY + polling). No Redis or external queue.
 - **Event bus**: PostgreSQL-backed (same mechanism as job queue).
@@ -44,7 +44,7 @@ The same binary, configured for a remote server with internet access. One operat
 
 - **Target audience**: self-hosters who want their own persistent OtterCamp instance.
 - **Process model**: single Go binary in combined mode, or optionally separate API and Worker processes for better resource isolation (same binary, different `--mode` flag).
-- **Database**: PostgreSQL — local on the VPS or a managed database (RDS, Supabase, Neon, etc.).
+- **Database**: PostgreSQL with pgvector — local on the VPS or a managed database (RDS, Supabase, Neon, etc.). Most managed PostgreSQL providers support pgvector natively.
 - **Object storage**: local filesystem (default) or S3-compatible (MinIO on the VPS, or a cloud provider like AWS S3, Cloudflare R2, Backblaze B2).
 - **Job queue**: PostgreSQL-backed. Same as local mode.
 - **Event bus**: PostgreSQL-backed. Same as local mode.
@@ -54,14 +54,14 @@ The same binary, configured for a remote server with internet access. One operat
 
 ### Managed Multi-Tenant (Hosted)
 
-Operated by us. Multiple organizations on shared infrastructure with full data isolation.
+Operated by us. Multiple organizations on shared application infrastructure with full database-level isolation (see 04-auth-tenancy-and-identity.md).
 
 - **Target audience**: users who do not want to manage infrastructure.
 - **Process model**: separate API and Worker processes. Workers can scale horizontally.
-- **Database**: managed PostgreSQL with row-level security enabled.
+- **Database**: managed PostgreSQL with **database-per-org isolation**. Every organization gets its own PostgreSQL database. A catalog database maps org slugs to database connections. No shared data between tenants, no RLS needed — isolation is architectural (see Managed Mode Specifics).
 - **Object storage**: S3 (or compatible). Per-org path prefixing for isolation.
-- **Job queue**: PostgreSQL-backed. Same implementation as self-host — PostgreSQL handles the scale.
-- **Event bus**: PostgreSQL-backed. Same implementation.
+- **Job queue**: PostgreSQL-backed, per-org database. Same implementation as self-host.
+- **Event bus**: PostgreSQL-backed, per-org database. Same implementation.
 - **Network**: load balancer (ALB or equivalent) in front of API processes. TLS terminated at the load balancer.
 - **Browser service**: pooled headless Chrome instances, allocated per-org.
 - **Orchestration**: Docker Compose + process manager (systemd, Supervisor) for initial launch. Kubernetes is NOT required. K8s support is added when operational complexity justifies it, not before.
@@ -148,7 +148,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
       - POSTGRES_USER=ottercamp
       - POSTGRES_PASSWORD=ottercamp
@@ -219,7 +219,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
       - POSTGRES_USER=ottercamp
       - POSTGRES_PASSWORD=ottercamp
@@ -479,6 +479,17 @@ ottercamp migrate --dry-run      # Show what would run without executing
 
 For migrations that modify large tables (adding an index on a table with millions of rows), the migration uses PostgreSQL's `CREATE INDEX CONCURRENTLY` or equivalent non-blocking DDL. The migration runner detects these and executes them outside a transaction (as PostgreSQL requires for concurrent index creation).
 
+### Managed Mode: Per-Org Migration Orchestration
+
+In managed hosting, every org has its own database. Migrations must run against every org database, not just one. The migration orchestrator handles this:
+
+1. **On deployment**: the deployment pipeline runs `ottercamp migrate --catalog` which iterates all active tenants in the catalog database and runs pending migrations against each org database. Migrations are parallelized up to a configurable concurrency limit (default: 10 databases at a time).
+2. **Progress tracking**: the catalog database tracks each org's current schema version. If the orchestrator is interrupted, it resumes from where it left off — only un-migrated databases are processed.
+3. **Failure handling**: if a migration fails for one org, the orchestrator logs the error and continues with other orgs. The failed org's database is not left in a broken state (transactions roll back) but is flagged for manual investigation.
+4. **New org provisioning**: when a new org is created, the provisioner creates a fresh database, runs all migrations from scratch, and runs the bootstrap flow. The new database starts at the current schema version.
+
+The catalog database itself has its own migration chain, separate from org database migrations. Catalog migrations are simple (the catalog schema is minimal) and run before org migrations.
+
 ## Backup and Restore
 
 ### What Needs to Be Backed Up
@@ -521,11 +532,12 @@ This command:
 
 ### Managed Mode Backups
 
-In managed mode, backups are handled by the infrastructure:
+In managed mode, database-per-org isolation makes per-tenant backup natural:
 
-- **Database**: managed PostgreSQL with automated daily snapshots and point-in-time recovery.
-- **Object storage**: S3 with versioning enabled. No manual backup needed.
-- **Tenant-level export**: an API endpoint allows an org owner to export their complete data (database + objects) as a portable archive. This is the same format as `ottercamp backup` produces, but scoped to one org.
+- **Per-org database backup**: each org's database is an independent PostgreSQL database. Automated daily snapshots and point-in-time recovery are configured per database via the managed PostgreSQL provider.
+- **Object storage**: S3 with versioning enabled. Per-org path prefixing (`s3://bucket/org-{org_id}/`) means each org's objects are independently restorable.
+- **Tenant-level export**: an API endpoint allows an org owner to export their complete data (database dump + objects) as a portable archive. This is the same format as `ottercamp backup` produces. Since each org has its own database, the export is a straightforward `pg_dump` of the org's database plus its S3 prefix — no cross-tenant filtering needed.
+- **Catalog database**: backed up separately. The catalog is small (one row per org) and recoverable from the set of provisioned databases if needed.
 
 ### Backup Schedule for Self-Host
 
@@ -592,11 +604,13 @@ Each major version ships with an upgrade guide that includes:
 
 In managed mode, upgrades are zero-downtime:
 
-- API and Worker processes are deployed behind a load balancer.
-- New version is deployed to a fresh set of processes.
-- Migrations run as part of the deployment pipeline (before traffic shifts).
-- Traffic shifts to the new version after health checks pass.
-- Old processes drain and terminate.
+1. **Catalog migration**: the catalog database is migrated first (if needed). This is fast — the catalog schema is minimal.
+2. **Per-org migration orchestration**: the deployment pipeline runs `ottercamp migrate --catalog` to iterate all org databases and run pending migrations. Parallelized up to the configured concurrency limit. Since migrations are backward-compatible for minor versions, the old binary can continue serving traffic against the new schema during this phase.
+3. **Process rollout**: new API and Worker processes are deployed behind the load balancer. Health checks verify the new processes can connect to org databases and serve requests.
+4. **Traffic shift**: traffic shifts to the new version after health checks pass.
+5. **Drain**: old processes drain and terminate.
+
+For orgs with large databases, the migration orchestrator can be configured to prioritize smaller databases first, ensuring the majority of tenants are migrated quickly while a few large tenants complete in the background.
 
 ## Secrets Management
 
@@ -753,12 +767,45 @@ TLS is terminated at the load balancer. Internal traffic between the load balanc
 
 ## Managed Mode Specifics
 
-### Multi-Tenant Data Isolation
+### Database-per-Org Isolation
 
-In managed mode, multiple organizations share the same PostgreSQL instance. Data isolation is enforced at two layers:
+Every organization gets its own PostgreSQL database — even in managed hosting. There is no shared database between tenants (see 04-auth-tenancy-and-identity.md Database-Level Isolation). This is the strongest possible isolation guarantee: cross-tenant data leaks are architecturally impossible because there is no other tenant's data in the database to leak. No RLS is needed.
 
-1. **Application layer**: every query includes `organization_id` in the WHERE clause. There is no code path that queries data without an org scope (see doc 04).
-2. **Database layer**: PostgreSQL row-level security (RLS) is enabled as defense-in-depth. Even if an application bug omits the org filter, RLS prevents cross-org data access.
+### Catalog Database
+
+Managed mode introduces one additional database: the **catalog**. This is a small, shared database that maps tenants to their org databases. It is not part of the per-org application — it is infrastructure.
+
+The catalog contains:
+
+- **Tenant registry**: org slug, database connection string (host, port, database name), org status (active, suspended, deleted), creation timestamp, current schema version.
+- **Slug uniqueness**: org slugs must be unique across all tenants. The catalog enforces this with a unique index — the per-org databases cannot enforce cross-tenant uniqueness.
+- **Provisioning state**: tracks in-progress database provisioning to prevent races and enable retry on failure.
+
+The catalog is the routing layer referenced in doc 04. It is simple, small (one row per org), and changes infrequently. It is not a performance bottleneck — routing lookups are cached in application memory with a short TTL.
+
+### Tenant Resolution and Connection Routing
+
+Every request in managed mode must resolve to an org database before any application logic runs:
+
+1. **Extract org identifier**: from subdomain (`acme.ottercamp.dev`) or URL path (`/org/acme/...`).
+2. **Look up in catalog**: map the org slug to a database connection. This lookup is cached in-process with a short TTL (e.g., 30 seconds). Cache misses hit the catalog database.
+3. **Connect to org database**: the request's database connection is routed to the correct org database. All subsequent queries for this request use this connection.
+4. **Connection pooling**: each API/Worker process maintains a connection pool per active org database. Idle pools are closed after a configurable timeout. A connection pooler (PgBouncer or built-in Go pool) manages connection limits across all org databases to prevent exhausting PostgreSQL connection slots.
+
+Self-hosted mode skips all of this — there is one hardcoded database connection. The routing layer is a managed-mode-only component.
+
+### Org Provisioning
+
+When a new org is created in managed mode:
+
+1. A new PostgreSQL database is created on the managed database cluster.
+2. The pgvector extension is enabled in the new database.
+3. All schema migrations run against the new database (bringing it to the current version).
+4. The bootstrap flow runs (creates org, admin user, starter trio, General session).
+5. The catalog is updated with the new org's database connection and schema version.
+6. The org is ready to serve requests.
+
+Provisioning is idempotent — if interrupted, it can be retried safely. The catalog tracks provisioning state to enable this.
 
 ### Per-Org Object Storage Isolation
 
@@ -768,10 +815,11 @@ Object storage uses per-org path prefixing: `s3://bucket/org-{org_id}/...`. Each
 
 The managed architecture supports horizontal scaling:
 
-- **API processes**: stateless. Add more behind the load balancer. Session state is in PostgreSQL, not in-process.
-- **Worker processes**: stateless. Add more to increase job throughput. The PostgreSQL-backed job queue handles coordination — each job is claimed by exactly one worker via `SELECT ... FOR UPDATE SKIP LOCKED`.
-- **PostgreSQL**: vertical scaling first (larger instance). Read replicas for read-heavy queries (analytics, dashboard, search). Write scaling via partitioning if needed.
+- **API processes**: stateless. Add more behind the load balancer. Session state is in per-org PostgreSQL databases, not in-process. The connection routing layer handles mapping requests to the correct org database.
+- **Worker processes**: stateless. Add more to increase job throughput. Each org's PostgreSQL-backed job queue is independent — workers poll the catalog for active orgs and claim jobs from each org's database via `SELECT ... FOR UPDATE SKIP LOCKED`.
+- **PostgreSQL**: each org database scales independently. Small orgs share a database cluster; large orgs can be moved to dedicated instances. The catalog tracks which cluster hosts each org. Read replicas per cluster for read-heavy queries.
 - **Object storage**: S3 scales transparently.
+- **Connection management**: the total number of org databases grows with the tenant count. Connection pooling (per-org pools with configurable max connections, idle timeout, and total connection ceiling) prevents exhausting database server resources.
 
 ### Tenant Resource Limits
 
@@ -782,7 +830,7 @@ In managed mode, per-org resource limits are enforced:
 - **Storage quota**: maximum object storage usage per org.
 - **API rate limits**: per-org rate limiting on API endpoints.
 
-These limits are stored in `organization.settings` (jsonb) and enforced by the application layer.
+These limits are stored in `organization.settings` (jsonb) within each org's database and enforced by the application layer. The catalog may also carry limit overrides for operational control (e.g., temporarily throttling a noisy tenant without connecting to its database).
 
 ## Resolved Decisions
 
@@ -801,11 +849,21 @@ These limits are stored in `organization.settings` (jsonb) and enforced by the a
 - **Docker Compose is the primary self-host packaging.** It is not the only option — the binary runs independently — but Docker Compose is what we optimize for, document first, and test most thoroughly.
 - **Master key for secrets encryption is the one external secret.** It is provided via environment variable or key file, never stored in the database. In managed mode, it is a KMS key reference.
 - **TLS is the operator's responsibility in self-host.** We provide three options (reverse proxy, built-in ACME, manual certs) but do not mandate a specific approach. Local mode does not require TLS.
-- **Managed mode uses RLS as defense-in-depth.** Application-layer org scoping is the primary isolation mechanism. RLS is a safety net, not a replacement for correct application code.
+- **Managed mode uses database-per-org isolation, not RLS.** Every org gets its own PostgreSQL database, consistent with doc 04's tenancy model. No shared databases, no row-level security. Cross-tenant data leaks are architecturally impossible. A catalog database maps org slugs to database connections.
+- **Catalog database is infrastructure, not application data.** The catalog is a small shared database that tracks tenants and their database connections. It is not part of the per-org application. One row per org, cached aggressively, changes infrequently.
+- **Per-org migration orchestration for managed mode.** Migrations must run against every org database. The orchestrator parallelizes this (configurable concurrency), tracks progress in the catalog, and handles failures per-org without blocking others.
+- **Connection pooling per-org with a global ceiling.** Each API/Worker process maintains connection pools to active org databases. Idle pools are closed after a timeout. A global connection ceiling prevents exhausting PostgreSQL connection slots across all tenants.
+- **pgvector is a required PostgreSQL extension.** The memory system (doc 06) uses `vector(1536)` columns for embeddings. Docker images use `pgvector/pgvector:pg16` instead of vanilla PostgreSQL. Managed database providers must have pgvector enabled.
 
 ## Open Questions
 
-- **Automatic backup scheduling**: should the binary include a built-in backup scheduler (e.g., `BACKUP_SCHEDULE=0 2 * * *`), or is cron sufficient for self-hosters? Built-in scheduling reduces setup for users unfamiliar with cron but adds maintenance surface.
-- **Telemetry and update checks**: should the binary check for new versions on startup (opt-out)? Should it send anonymous usage telemetry? Both are common in open-source tools but polarizing. Need to decide before GA.
-- **Embedded PostgreSQL**: should the binary optionally embed a PostgreSQL instance (via embedded Postgres libraries) for the absolute zero-dependency local experience? This eliminates the last external dependency but adds significant binary size and maintenance burden.
-- **Multi-architecture Docker images**: which architectures to support beyond `linux/amd64`? `linux/arm64` is increasingly important (Graviton, Apple Silicon via Rosetta). Binary distribution should cover `darwin/arm64`, `darwin/amd64`, `linux/amd64`, `linux/arm64` at minimum.
+_None currently outstanding._
+
+## Resolved Open Questions
+
+These were previously open and have been resolved:
+
+- **Automatic backup scheduling**: cron is sufficient. The binary does not include a built-in backup scheduler. Cron is universal, well-understood, and avoids adding maintenance surface. Documented in the Backup section with a cron example.
+- **Telemetry and update checks**: deferred to post-GA. Both are polarizing. The binary does not phone home. A `ottercamp version --check` command can check for updates on demand, but automatic checks are opt-in only.
+- **Embedded PostgreSQL**: no. The binary size increase (~100MB) and maintenance burden of bundling PostgreSQL outweigh the convenience. PostgreSQL is available via Docker, Homebrew, and system packages on all platforms. The Docker Compose two-container setup is the zero-configuration path.
+- **Multi-architecture Docker images**: `linux/amd64` and `linux/arm64` for Docker. Binary distribution covers `darwin/arm64`, `darwin/amd64`, `linux/amd64`, `linux/arm64`. These four cover the vast majority of deployment targets.
