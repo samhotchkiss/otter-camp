@@ -91,6 +91,7 @@ Frank is the human's right hand. He is the first agent the human talks to and th
 - **Strategic conversations**: brainstorming, long-term planning, "what should we build next?" conversations happen with Frank.
 - **Delegation**: Frank can hand off work to the right project or agent. The human says "I need a landing page" — Frank knows which project that belongs to and routes it to the right PM.
 - **Onboarding**: Frank guides new users through initial setup — creating their first project, understanding how OtterCamp works, introducing Lori and Ellie.
+- **Org-level skills**: Frank creates org-level skills when the human identifies cross-project standards (see doc 10).
 
 **What Frank does NOT do:**
 - Manage individual tasks or flow nodes. That's the PM's job.
@@ -192,7 +193,7 @@ Fields:
 
 Skills attached to the agent's profile (see 10-skills-integration.md). These are the agent's baseline competencies — always available, activated based on flow node context.
 
-- **skill_ids**: list of skill IDs attached to this agent. These represent the agent's learned expertise.
+- **skills**: linked via `agent_skill_attachment` join table (see doc 10). Not a direct column on the agent table.
 
 Activation rules: org/project default skills are always active. Agent-level skills are active when the flow node doesn't declare specific skills (fallback to full agent skill set). Flow node skills override when declared.
 
@@ -665,12 +666,16 @@ Links agents to their skills. This is the agent-level skill attachment — separ
 
 ```sql
 create table agent_skill_attachment (
-  id         uuid primary key default gen_random_uuid(),
-  agent_id   uuid not null references agent(id),
-  skill_id   uuid not null references skill(id),
+  id          uuid primary key default gen_random_uuid(),
+  agent_id    uuid not null references agent(id) on delete cascade,
+  skill_id    uuid not null references skill(id) on delete cascade,
+  purpose     text,                -- descriptive: "identity", "specialization", "project-default", etc.
+                                   -- 'identity' is a system-recognized value used by the activation algorithm
+                                   -- to filter agent identity skills; other values are purely descriptive.
+  priority    int not null default 100, -- lower = higher priority for budget/truncation ordering
   attached_by_type text not null check (attached_by_type in ('human', 'agent', 'system')),
   attached_by_id   uuid not null,
-  attached_at timestamptz not null default now(),
+  created_at  timestamptz not null default now(),
 
   unique (agent_id, skill_id)
 );
@@ -682,6 +687,8 @@ create index on agent_skill_attachment (skill_id);
 **Design notes:**
 
 - Skills attached here form the agent's baseline skill set. They are available for activation based on flow node context (see 10-skills-integration.md Activation vs Availability).
+- `purpose` is descriptive metadata that helps the PM understand why a skill is attached. The value `'identity'` is recognized by the activation algorithm to select agent identity skills when a flow node declares specific skills.
+- `priority` determines cut order when budget is tight -- lower priority value means higher precedence (kept first). Identity skills should have the lowest priority number.
 - `attached_by_type` + `attached_by_id`: who attached the skill. Usually Lori during agent creation or profile update.
 
 ## Agent Profile Catalog

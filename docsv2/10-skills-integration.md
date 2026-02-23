@@ -5,7 +5,7 @@ Skills are the mechanism by which agents in OtterCamp receive behavioral instruc
 
 Skills attach at four levels of specificity: org defaults (apply everywhere), project defaults (apply project-wide), agent-level (define an agent's identity and core competencies), and flow node-level (activated only for a specific workflow step). The activation system is designed for token budget efficiency -- when a flow node declares specific skills, only those (plus defaults and agent identity) are loaded, keeping prompts focused. When no node-level skills are declared, the agent gets its full skill set as a fallback. Conflict resolution follows specificity: flow node skills override agent-level, which override project defaults, which override org defaults. Skills always take precedence over procedural memory (from the memory system), which is advisory rather than prescriptive.
 
-The database schema consists of three tables: `skill` (the registry, pointing to file paths in repos), `agent_skill` (links agents to their profile-level skills with priority ordering), and `flow_node_skill` (links flow template nodes to required skills). Skill content is read from the git repo at prompt assembly time -- not cached in the database -- so changes take effect on the next turn after commit. Skills occupy layer 4 of the 7-layer prompt assembly pipeline, between scope context and memory. The PM agent manages all skill CRUD through conversation and git commits; there is no skill editor UI. V2 ships with bootstrap skills including identity skills for the starter trio (Frank, Lori, Ellie), a PM identity skill, org-wide safety/communication policies, and a library of project template skills available for adoption.
+The database schema consists of three tables: `skill` (the registry, pointing to file paths in repos), `agent_skill_attachment` (links agents to their profile-level skills with priority ordering and provenance tracking), and `flow_node_skill` (links flow template nodes to required skills). Skill content is read from the git repo at prompt assembly time -- not cached in the database -- so changes take effect on the next turn after commit. Skills occupy layer 4 of the 7-layer prompt assembly pipeline, between scope context and memory. The PM agent manages all skill CRUD through conversation and git commits; there is no skill editor UI. V2 ships with bootstrap skills including identity skills for the starter trio (Frank, Lori, Ellie), a PM identity skill, org-wide safety/communication policies, and a library of project template skills available for adoption.
 
 ---
 
@@ -74,12 +74,12 @@ justify it in the PR description. No vendoring -- use Go modules.
 
 | Field | Required | Type | Description |
 |---|---|---|---|
-| `name` | yes | string | Human-readable name. Displayed in skill catalog and management UI. |
+| `name` | yes | string | Human-readable name. Displayed in the read-only skill catalog UI. |
 | `slug` | yes | string | URL-safe identifier, unique within its scope (org or project). Used for references in flow nodes and agent profiles. |
 | `scope` | yes | string | `org` or `project`. Where this skill lives and how broadly it applies. |
 | `category` | no | string | Organizational grouping for the skill catalog. Examples: `engineering`, `content`, `operations`, `identity`, `review`. |
 | `description` | no | string | One-line description. Helps agents and humans understand what the skill covers without reading the full content. |
-| `default` | no | boolean | `true` if this skill should always be activated for its scope level. Default: `false`. See Org/Project Defaults. |
+| `is_default` | no | boolean | `true` if this skill should always be activated for its scope level. Default: `false`. See Org/Project Defaults. Maps to the `is_default` column on the `skill` table. |
 
 ### Format Constraints
 
@@ -135,7 +135,7 @@ Skills are created through conversation with the PM or the human working directl
 
 The PM is opinionated -- it doesn't ask "what format do you want?" It proposes a well-structured skill document based on the type of work. The human adjusts from there.
 
-Frank can also create org-level skills when the human identifies cross-project standards. Lori may suggest identity skills when staffing new agents.
+Frank can also create org-level skills when the human identifies cross-project standards. Lori may suggest identity skills when staffing new agents. The PM (or human) reviews the suggestion and creates the skill if appropriate.
 
 ### Editing
 
@@ -155,9 +155,9 @@ The PM knows what skills exist in its project. When designing flows, it can refe
 
 Skills can be attached at four levels, from broadest to narrowest:
 
-- **Org default skills**: apply to all work across all projects in the org. Set via `default: true` in the frontmatter of an org-scoped skill. Examples: safety policies, communication guidelines, org-wide coding conventions.
-- **Project default skills**: apply to all work within a project. Set via `default: true` in the frontmatter of a project-scoped skill. Examples: project-specific coding standards, architecture conventions, style guides.
-- **Agent-level skills**: part of the agent's profile. Define the agent's identity and core competencies. Linked in the `agent_skill` table. These are the skills that make Frank "Frank" and the PM "the PM."
+- **Org default skills**: apply to all work across all projects in the org. Set via `is_default: true` in the frontmatter of an org-scoped skill. Examples: safety policies, communication guidelines, org-wide coding conventions.
+- **Project default skills**: apply to all work within a project. Set via `is_default: true` in the frontmatter of a project-scoped skill. Examples: project-specific coding standards, architecture conventions, style guides.
+- **Agent-level skills**: part of the agent's profile. Define the agent's identity and core competencies. Linked in the `agent_skill_attachment` table. These are the skills that make Frank "Frank" and the PM "the PM."
 - **Flow node skills**: declared on a flow node in the flow template. Only activated when the agent is executing that specific node. Linked in the `flow_node_skill` table. These are the most targeted -- an agent writing a blog post gets blog-writing skills, not deployment skills.
 
 ## Activation vs Availability
@@ -169,9 +169,9 @@ An agent may have many skills available across its profile, project, and org. Bu
 **When a flow node declares skills** (the flow node has entries in `flow_node_skill`):
 
 1. Load the flow node's declared skills.
-2. Load org default skills (`default: true`, org scope).
-3. Load project default skills (`default: true`, project scope).
-4. Load agent identity skills (agent-level skills from `agent_skill`).
+2. Load org default skills (`is_default: true`, org scope).
+3. Load project default skills (`is_default: true`, project scope).
+4. Load agent identity skills (agent-level skills from `agent_skill_attachment`).
 5. That's it. Other agent-level skills that aren't defaults or declared on the node are NOT loaded.
 
 **When a flow node does NOT declare skills** (no `flow_node_skill` entries):
@@ -192,6 +192,8 @@ An agent may have many skills available across its profile, project, and org. Bu
 An agent assigned as a reviewer might have skills for code review, security review, and performance review. When the flow node says "do a code review," only the code review skill is loaded -- the agent doesn't waste context on security review instructions for this step. But the agent is still capable of security review when assigned to a node that declares it.
 
 This keeps agents versatile (many skills available) while keeping prompts focused (only relevant skills activated).
+
+When preparing context for flow node execution, only skills directly relevant to the task are included — the flow node's declared skills plus applicable defaults. Skill selection should be minimal and purposeful, not exhaustive.
 
 ## Resolution Order (for Conflicts)
 
@@ -226,7 +228,7 @@ During prompt assembly (see 05-agents-staff-and-temps.md, Assembly Process):
 2. **Fetch content**: read the skill files from the repo. The content (markdown body, excluding frontmatter) is what gets injected.
 3. **Order by precedence**: arrange skills in resolution order (org defaults first, flow node skills last). Later content has higher precedence -- agents give more weight to instructions that appear later in their prompt.
 4. **Budget check**: if the total skill content exceeds the token allocation for layer 4, apply truncation rules (see Token Budget).
-5. **Inject**: include the assembled skill content in the prompt between scope context (layer 3) and memory (layer 5).
+5. **Inject**: include the assembled skill content in the prompt between scope context (layer 3) and memory (layer 5). MCP prompts attached to the flow node (see doc 09) are also included at layer 4 alongside skills. Skills take precedence over MCP prompts on conflict. The combined token budget for layer 4 covers both skills and MCP prompts.
 
 Each skill is injected with a header identifying it:
 
@@ -248,7 +250,7 @@ Skills compete for prompt space alongside scope context, memory, conversation hi
 
 ### Budget Behavior
 
-- **Org and project default skills are never cut.** They are treated as near-mandatory (same priority tier as policies). If defaults alone exceed the skill budget, the system logs a warning -- this indicates the defaults are too large and need trimming.
+- **Org and project default skills have highest priority within layer 4** (lowest priority number) and are cut last, but they are not exempt from truncation. If the layer 4 budget is exhausted even after cutting all non-default skills, defaults are summarized starting from lowest priority. If defaults alone exceed the skill budget, the system logs a warning -- this indicates the defaults are too large and need trimming.
 - **Agent identity skills are high priority.** These define who the agent is. Cut only as a last resort.
 - **Flow node skills are medium priority.** They are specific to the current step and highly relevant, but can be summarized if budget is extremely tight.
 - **Non-default, non-identity agent skills** (only loaded in the fallback case where the flow node doesn't declare skills) are the first to be cut.
@@ -260,7 +262,7 @@ When the total activated skill content exceeds the layer 4 budget:
 1. Remove non-default, non-identity agent-level skills (lowest priority first, by attachment order).
 2. If still over budget, summarize flow node skills (LLM-powered, Haiku-class -- condense the instructions to their essentials).
 3. If still over budget, summarize agent identity skills.
-4. Never cut org/project defaults. If defaults alone exceed the budget, log a warning and compress conversation history or memory to make room.
+4. If still over budget, summarize org/project default skills starting from lowest priority. If default skills alone exceed the layer 4 budget, the excess is logged as a warning and the lowest-priority defaults are summarized. Layer 4 never borrows budget from conversation (layer 6) or memory (layer 5).
 
 This should rarely be needed in practice. The maximum recommended skill size exists to prevent this situation.
 
@@ -328,7 +330,7 @@ A default PM identity skill ships with the bootstrap dataset. When a project is 
 
 ### Org Default Skills
 
-These ship as org defaults (`default: true`) and apply to all work across all projects:
+These ship as org defaults (`is_default: true`) and apply to all work across all projects:
 
 **Safety and Communication Policies**
 - Rules for handling sensitive information (credentials, PII).
@@ -393,30 +395,39 @@ create index idx_skill_project on skill(project_id) where project_id is not null
 create index idx_skill_scope_default on skill(organization_id, scope, is_default) where is_default = true;
 ```
 
-### agent_skill
+### agent_skill_attachment
 
 ```sql
-create table agent_skill (
-  id         uuid primary key default gen_random_uuid(),
-  agent_id   uuid not null references agent(id),
-  skill_id   uuid not null references skill(id),
-  purpose    text,                                    -- why this skill is attached (e.g., "identity", "core competency")
-  priority   int not null default 0,                  -- ordering hint; higher = higher priority within agent skills
-  created_at timestamptz not null default now(),
+create table agent_skill_attachment (
+  id          uuid primary key default gen_random_uuid(),
+  agent_id    uuid not null references agent(id) on delete cascade,
+  skill_id    uuid not null references skill(id) on delete cascade,
+  purpose     text,                -- descriptive: "identity", "specialization", "project-default", etc.
+                                   -- 'identity' is a system-recognized value used by the activation algorithm
+                                   -- to filter agent identity skills; other values are purely descriptive.
+  priority    int not null default 100, -- lower = higher priority for budget/truncation ordering
+  attached_by_type text not null check (attached_by_type in ('human', 'agent', 'system')),
+  attached_by_id   uuid not null,
+  created_at  timestamptz not null default now(),
 
   unique (agent_id, skill_id)
 );
 
 -- Design notes:
 -- Links agents to their profile-level skills.
--- Identity skills (Frank's identity, PM's planning skill) are agent_skill entries.
+-- Identity skills (Frank's identity, PM's planning skill) are agent_skill_attachment entries.
 -- `purpose` is descriptive metadata, not a system enum. Helps the PM understand
--- why a skill is attached when managing agent profiles.
--- `priority` determines cut order when budget is tight -- lower priority skills
--- are removed first. Identity skills should have the highest priority.
+-- why a skill is attached when managing agent profiles. The value 'identity'
+-- is recognized by the activation algorithm to select agent identity skills
+-- when a flow node declares specific skills.
+-- `priority` determines cut order when budget is tight -- lower priority value
+-- means higher precedence (kept first). Identity skills should have the lowest
+-- priority number.
+-- `attached_by_type` + `attached_by_id`: who attached the skill. Usually Lori
+-- during agent creation or profile update.
 
-create index idx_agent_skill_agent on agent_skill(agent_id);
-create index idx_agent_skill_skill on agent_skill(skill_id);
+create index on agent_skill_attachment (agent_id);
+create index on agent_skill_attachment (skill_id);
 ```
 
 ### flow_node_skill
@@ -426,6 +437,7 @@ create table flow_node_skill (
   id           uuid primary key default gen_random_uuid(),
   flow_node_id uuid not null references flow_node(id),
   skill_id     uuid not null references skill(id),
+  position     int not null default 0,  -- ordering for truncation tie-breaking; lower = kept first
   created_at   timestamptz not null default now(),
 
   unique (flow_node_id, skill_id)
@@ -446,7 +458,7 @@ create index idx_flow_node_skill_skill on flow_node_skill(skill_id);
 
 The `flow_node` table (doc 03) currently has a `skills` jsonb column for skill references. With the `flow_node_skill` join table, this jsonb column is no longer needed -- the join table provides proper referential integrity and queryability. The `skills` jsonb column on `flow_node` should be dropped in favor of `flow_node_skill`.
 
-The `agent` table (doc 05) does not currently have a skills column. Agent-skill relationships are fully represented by the `agent_skill` join table.
+The `agent` table (doc 05) does not currently have a skills column. Agent-skill relationships are fully represented by the `agent_skill_attachment` join table.
 
 ## Skill Resolution at Runtime
 
@@ -457,9 +469,11 @@ When prompt assembly needs to resolve the active skills for a given agent turn, 
 ```
 inputs:
   agent_id        -- the agent taking this turn
-  session_scope   -- org, project, or task
   project_id      -- if project or task scoped (nullable)
   flow_node_id    -- if executing a flow node (nullable)
+
+derived:
+  org_id          -- derived from the agent's organization (agent.organization_id)
 ```
 
 ### Step 2: Resolve Active Skills
@@ -471,10 +485,12 @@ inputs:
        JOIN flow_node_skill fns ON fns.skill_id = s.id
        WHERE fns.flow_node_id = :flow_node_id
 
-2. agent_skills = SELECT s.* FROM skill s
-     JOIN agent_skill AS_ ON AS_.skill_id = s.id
-     WHERE AS_.agent_id = :agent_id
-     ORDER BY AS_.priority DESC
+2. agent_skills = SELECT s.*, asa.purpose FROM skill s
+     JOIN agent_skill_attachment asa ON asa.skill_id = s.id
+     WHERE asa.agent_id = :agent_id
+     ORDER BY asa.priority ASC
+
+   agent_identity_skills = agent_skills where purpose = 'identity'
 
 3. org_defaults = SELECT * FROM skill
      WHERE organization_id = :org_id
@@ -516,8 +532,8 @@ The PM and other agents manage skills through standard OtterCamp tools, not thro
 - **Create skill**: PM writes the file, commits to repo, creates the `skill` registry entry. One operation from the agent's perspective.
 - **Update skill**: PM edits the file, commits. The `skill.updated_at` timestamp is refreshed.
 - **Delete skill**: PM deletes the file, commits, removes the `skill` registry entry.
-- **Attach to agent**: PM creates an `agent_skill` entry.
-- **Detach from agent**: PM removes the `agent_skill` entry.
+- **Attach to agent**: PM creates an `agent_skill_attachment` entry.
+- **Detach from agent**: PM removes the `agent_skill_attachment` entry.
 - **Attach to flow node**: PM creates a `flow_node_skill` entry when designing or updating a flow template.
 - **Detach from flow node**: PM removes the `flow_node_skill` entry.
 - **List skills**: PM queries the `skill` table filtered by scope.
@@ -537,7 +553,7 @@ A periodic consistency check can scan the `skills/` directory in each repo and r
 2. **No skill versioning beyond git history.** Latest committed version on `main` wins. Git tracks changes naturally. No draft/published lifecycle.
 3. **Maximum recommended skill size: ~4,000 tokens.** Larger skills should be split. Guideline, not a hard limit.
 4. **Skills live as files in git repos.** Org skills in the org skills repo, project skills in the project repo. Consistent with "every project is a git repo" from doc 03.
-5. **Org and project default skills are never cut from the prompt.** They have the same priority as policies. If defaults alone exceed the skill budget, the system logs a warning.
+5. **Org and project default skills have highest priority within layer 4.** They are cut last but not exempt from truncation. If defaults alone exceed the skill budget, the system logs a warning.
 6. **The PM manages skills within a project.** Creates, edits, deletes, attaches, detaches -- all through conversation. The human can also write/edit skills directly.
 7. **Default skills ship as part of the bootstrap dataset.** Starter trio identity skills, PM identity skill, org-wide safety/communication policies, general work standards. Project template skills available but not pre-installed.
 8. **Skills win over procedural memory on conflict.** Skills are prescriptive (layer 4), procedural memory is advisory (layer 5). Always.

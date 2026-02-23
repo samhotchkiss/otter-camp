@@ -664,7 +664,7 @@ create table model_invocation (
   run_id              uuid references run(id),          -- control plane Run, if this call happened during a Run
   run_step_id         uuid references run_step(id),     -- specific RunStep within the Run
   run_attempt_id      uuid references run_attempt(id),  -- specific RunAttempt within the RunStep
-  invocation_purpose  text not null check (invocation_purpose in ('agent_turn', 'listening_eval', 'summarization', 'memory_extraction', 'memory_synthesis', 'memory_dedup', 'memory_reflection', 'memory_classification', 'memory_reranking', 'replay')),
+  invocation_purpose  text not null check (invocation_purpose in ('agent_turn', 'listening_eval', 'summarization', 'skill_summarization', 'memory_extraction', 'memory_synthesis', 'memory_dedup', 'memory_reflection', 'memory_classification', 'memory_reranking', 'replay')),
 
   -- request
   request_priority    text not null check (request_priority in ('sync_interactive', 'sync_system', 'async_agent', 'async_system')),
@@ -724,7 +724,7 @@ create index on model_invocation (fallback_of_invocation_id) where fallback_of_i
 
 - One row per model call. This is the most granular tracking record in the system.
 - `connection_id` records which specific connection served this request. Essential for the subscription dashboard and failover analysis.
-- `invocation_purpose` includes expanded values for memory pipeline operations (`memory_dedup`, `memory_reflection`, `memory_classification`, `memory_reranking`) beyond the basic extraction/synthesis. `memory_classification` and `memory_reranking` use the `memory_synthesis` system profile, same as `memory_dedup` and `memory_reflection`. `agent_turn` and `replay` use agent profiles, not system profiles.
+- `invocation_purpose` includes expanded values for memory pipeline operations (`memory_dedup`, `memory_reflection`, `memory_classification`, `memory_reranking`) beyond the basic extraction/synthesis. `memory_classification` and `memory_reranking` use the `memory_synthesis` system profile, same as `memory_dedup` and `memory_reflection`. `skill_summarization` uses the `summarization` system profile (for LLM-powered skill condensation when the layer 4 token budget is exceeded; see doc 10). `agent_turn` and `replay` use agent profiles, not system profiles.
 - `retry_of_invocation_id` and `fallback_of_invocation_id` are separate FK columns for unambiguous chain reconstruction. A retry points to the invocation it retried. A fallback points to the invocation that failed and triggered the fallback. No ambiguity about the chain structure.
 - `prompt_storage_ref` and `response_storage_ref` point to object storage (S3-compatible). Full prompts and responses are stored off-table to keep the invocation table lean and queryable.
 - `agent_id` is set for system profile invocations that are causally linked to an agent (e.g., summarization triggered by an agent's conversation), not just for direct agent turns. This enables accurate per-agent token attribution.

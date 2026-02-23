@@ -632,7 +632,7 @@ create table flow_node (
   position         int not null,      -- UI display ordering; execution order is determined by the graph edges (next_node_id, reject_node_id)
   next_node_id     uuid references flow_node(id),
   reject_node_id   uuid references flow_node(id),  -- review nodes only
-  skills           jsonb,             -- skill references for this node
+  -- Skills are linked via flow_node_skill join table (see doc 10)
   mcp_tools        jsonb,             -- MCP tool declarations: ["connection.tool_name", ...] (see 09-mcp-integration.md)
   metadata         jsonb not null default '{}',
   check (node_type = 'review' or reject_node_id is null),  -- only review nodes can have reject edges
