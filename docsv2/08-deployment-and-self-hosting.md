@@ -34,7 +34,7 @@ The simplest possible deployment. One process, one database, local filesystem fo
 - **Event bus**: PostgreSQL-backed. Domain events are written to a durable `domain_event` table (see 12-api-events-and-realtime.md) and fanned out via LISTEN/NOTIFY for realtime subscribers. The table is the source of truth — LISTEN/NOTIFY is a performance optimization for low-latency fanout, not a durability mechanism. Missed notifications are recovered by polling the event table.
 - **Network**: localhost only by default. No TLS required for local access.
 - **Browser service**: optional. If configured, connects to a locally running headless Chrome. If not configured, browser-based agent tools are unavailable (not an error — the feature is simply absent).
-- **Resource requirements**: 2 GB RAM, 2 CPU cores, 10 GB disk.
+- **Resource requirements**: 2 GB RAM, 2 CPU cores, 10 GB disk. MCP server subprocesses (each is a separate OS process, e.g., Node.js running an MCP server) consume additional resources beyond these base requirements.
 
 This mode exists so that a developer can run `ottercamp serve` and be productive in under a minute.
 
@@ -194,7 +194,7 @@ volumes:
 1. PostgreSQL starts and becomes healthy.
 2. MinIO starts (object storage).
 3. OtterCamp starts, connects to PostgreSQL, runs schema migrations automatically.
-4. If this is the first start (empty database), bootstrap runs: creates the org, prompts for or reads admin credentials from environment variables, seeds the starter trio (Frank, Lori, Ellie), creates the General session, and creates provider connections from any model provider API keys in environment variables (see Provider Connection Bootstrap). See doc 04 for full bootstrap flow.
+4. If this is the first start (empty database), bootstrap runs: creates the org, prompts for or reads admin credentials from environment variables, seeds the starter trio (Frank, Lori, Ellie), creates the General session, creates provider connections from any model provider environment variables (see Provider Connection Bootstrap), and records a bootstrap audit event. See doc 04 for full bootstrap flow.
 5. API server begins accepting connections on port 8080.
 6. Worker begins processing background jobs.
 7. The operator opens `http://localhost:8080` and logs in.
@@ -284,7 +284,7 @@ On first run, the binary:
 
 1. Connects to PostgreSQL.
 2. Runs schema migrations.
-3. Runs the bootstrap flow (creates org, prompts for admin credentials if not set via env vars, creates provider connections from any API key env vars).
+3. Runs the bootstrap flow (creates org, prompts for admin credentials if not set via env vars, creates provider connections from any model provider env vars, records a bootstrap audit event).
 4. Starts serving on `http://localhost:8080`.
 
 Object storage defaults to local filesystem (`~/.ottercamp/objects/` or configurable via `OBJECT_STORAGE_PATH`). No S3 setup required.
@@ -335,7 +335,7 @@ All configuration is via environment variables. No configuration file is require
 
 #### Required
 
-At least one model provider API key must be available during bootstrap so the system can create a provider connection (see Provider Connection Bootstrap below). If PostgreSQL is not on `localhost:5432`, `DATABASE_URL` is also needed. There is no other required configuration.
+At least one model provider connection must be available during bootstrap. This can be a cloud provider API key (e.g., `ANTHROPIC_API_KEY`) or a local OpenAI-compatible endpoint (e.g., `OPENAI_COMPAT_BASE_URL` pointing to Ollama). See Model Provider Bootstrap and Provider Connection Bootstrap below. If PostgreSQL is not on `localhost:5432`, `DATABASE_URL` is also needed. There is no other required configuration.
 
 #### Database
 
@@ -377,13 +377,26 @@ These environment variables are **bootstrap convenience** shortcuts. On first ru
 | `ANTHROPIC_API_KEY` | — | Creates an Anthropic provider connection on bootstrap. |
 | `OPENAI_API_KEY` | — | Creates an OpenAI provider connection on bootstrap. |
 | `GOOGLE_AI_API_KEY` | — | Creates a Google AI provider connection on bootstrap. |
+| `OPENAI_COMPAT_BASE_URL` | — | Creates an OpenAI-compatible provider connection on bootstrap. Required for local models (Ollama, vLLM, LM Studio) and third-party OpenAI-compatible APIs (Groq, Together, Fireworks). |
+| `OPENAI_COMPAT_API_KEY` | — | API key for the OpenAI-compatible endpoint. Optional — some local model servers (Ollama) do not require authentication. |
+| `OPENAI_COMPAT_LABEL` | `Local Model` | Human-readable label for the connection in the subscription dashboard. |
+
+A self-hoster running only local models (no cloud API keys) can bootstrap with just `OPENAI_COMPAT_BASE_URL`:
+
+```bash
+# Local-only self-host with Ollama — no cloud API keys needed
+export DATABASE_URL=postgres://user:pass@localhost:5432/ottercamp
+export OPENAI_COMPAT_BASE_URL=http://localhost:11434/v1
+export OPENAI_COMPAT_LABEL="Ollama"
+ottercamp serve
+```
 
 #### Model Gateway
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MODEL_CONCURRENCY_GLOBAL` | `10` | Maximum concurrent model sessions across all providers (see 07-models-and-inference.md Concurrency and Queuing). |
-| `MODEL_CONCURRENCY_PER_PROVIDER` | `5` | Maximum concurrent sessions per provider. Per-provider limits can be further constrained at the org level. |
+| `MODEL_CONCURRENCY_PER_PROVIDER` | `5` | Default maximum concurrent sessions per provider. This is the initial default; per-provider overrides can be configured through the subscription dashboard after bootstrap (e.g., Anthropic at 10, a local Ollama instance at 2). See 07-models-and-inference.md Per-Provider Concurrency Limit. |
 
 #### Worker
 
@@ -461,6 +474,16 @@ mcp_servers:
 Environment variables always override the config file. The config file is optional — everything can be done with env vars alone, though some configurations (like MCP servers with multiple fields) are more readable in YAML.
 
 Note: model profiles, provider connections, and model routing are NOT configured via this file. They are managed through the subscription dashboard and stored in the database (see 07-models-and-inference.md). The YAML config file is for infrastructure-level settings only.
+
+### Settings Managed via Application UI
+
+Some operational settings are configured through the application UI (org settings), not environment variables or config files. These are org-level policies stored in `organization.settings` (see 04-auth-tenancy-and-identity.md):
+
+- **Retention policies**: transcript retention (default 90 days), artifact retention (default 90 days), summary retention (indefinite). See 02-chat.md Session Lifecycle Cleanup.
+- **Per-provider concurrency overrides**: per-provider session limits beyond the instance-level `MODEL_CONCURRENCY_PER_PROVIDER` default. See 07-models-and-inference.md.
+- **Budget and cost controls**: per-org token budgets and spending limits. See 13-security-observability-costs.md.
+
+These are intentionally not environment variables — they are tenant-scoped policies that operators manage through the application, not infrastructure configuration.
 
 ## Database Management
 
@@ -649,10 +672,10 @@ For orgs with large databases, the migration orchestrator can be configured to p
 
 OtterCamp manages several categories of secrets:
 
-1. **Model provider API keys**: Anthropic, OpenAI, Google AI keys used for model inference.
+1. **Model provider API keys**: Anthropic, OpenAI, Google AI keys used for model inference. Stored via Provider Connection Bootstrap or the subscription dashboard.
 2. **SSH keys**: for cloning and pushing to git remotes (see doc 03).
 3. **MCP server credentials**: API tokens, OAuth credentials, and other authentication material for MCP connections (see doc 09).
-4. **External service credentials**: any credentials agents need for tool execution (GitHub tokens, Slack tokens, email service credentials).
+4. **External service credentials**: any credentials agents need for tool execution — GitHub tokens, Slack tokens, email service credentials, deploy platform API tokens (Vercel, Netlify — see doc 03a `project_remote.auth_config`), and git host deploy tokens.
 
 ### Storage
 
@@ -695,6 +718,7 @@ Secrets are decrypted at runtime when needed:
 
 - Model provider keys are decrypted when the model gateway makes an API call. The decrypted key is held in memory for the duration of the request, never written to disk or logs.
 - SSH keys are decrypted when cloning or pushing a git repository. The key is written to a temporary file with restrictive permissions (`0600`), used for the git operation, and deleted immediately after.
+- Deploy platform credentials (API tokens for Vercel, Netlify, etc.) are decrypted when the delivery system pushes to a project remote (see doc 03a). The token is held in memory for the duration of the push operation.
 - MCP credentials are decrypted when establishing or authenticating an MCP connection.
 - Secrets are NEVER included in log output. The logging layer redacts any string that matches a known secret pattern.
 
@@ -706,15 +730,16 @@ In **managed mode**, secrets are NEVER in environment variables. All secrets are
 
 ### Provider Connection Bootstrap
 
-When model provider API key environment variables are present during bootstrap (first run), the system creates the full provider connection infrastructure defined in 07-models-and-inference.md:
+When model provider environment variables are present during bootstrap (first run), the system creates the full provider connection infrastructure defined in 07-models-and-inference.md:
 
-1. **Register providers**: ensure `model_provider` records exist for each provider with an API key (Anthropic, OpenAI, Google). These are instance-level records — if they already exist (e.g., seeded in migrations), this step is a no-op.
-2. **Store secrets**: for each API key, create a `secret` table entry with the key encrypted (AES-256-GCM). The secret is categorized as `model_provider`.
-3. **Create provider connections**: for each API key, create a `provider_connection` record linking the org to the provider, with `api_key_secret_ref` pointing to the encrypted secret. The connection starts with `health_status = 'healthy'` and `failover_priority = 0`.
-4. **Create default model profiles**: create the default agent and system profiles for the org (see 07-models-and-inference.md Model Profiles). If Anthropic is present, it is the primary provider for all default profiles. System profiles (summarization, listening eval, memory extraction, memory synthesis) are created with appropriate model selections.
+1. **Register providers**: ensure `model_provider` records exist for each provider with a bootstrap env var. Each record includes `slug`, `adapter_type` (the Go adapter implementation: `anthropic`, `openai`, `google`, `openai_compat`), and `base_url` (the provider's default API endpoint). These are instance-level records seeded in the initial migration — this step verifies they exist.
+2. **Store secrets**: for each API key, create a `secret` table entry (referenced by `secret.id`, a UUID) with the key encrypted (AES-256-GCM). The secret is categorized as `model_provider`. For OpenAI-compatible endpoints where no API key is provided (e.g., local Ollama without auth), this step is skipped — the `provider_connection.api_key_secret_ref` is set to null.
+3. **Create provider connections**: for each bootstrapped provider, create a `provider_connection` record linking the org to the provider, with `api_key_secret_ref` pointing to the encrypted secret's UUID (or null for keyless endpoints). The connection starts with `health_status = 'healthy'` and `failover_priority = 0` (within-provider ordering; cross-provider failover uses fallback profiles, see doc 07). For OpenAI-compatible connections, `base_url_override` is set from `OPENAI_COMPAT_BASE_URL` and `label` from `OPENAI_COMPAT_LABEL`.
+4. **Create default model profiles**: create the default agent and system profiles for the org (see 07-models-and-inference.md Model Profiles). If Anthropic is present, it is the primary provider for all default profiles. If only an OpenAI-compatible endpoint is available, it becomes the primary provider. System profiles (summarization, listening eval, memory extraction, memory synthesis) are created with appropriate model selections (see 06-memory.md for extraction/synthesis model tier requirements).
 5. **Create org-level assignment**: create a `model_profile_assignment` with `scope_type = 'org'` pointing to the primary default profile, so all agents have a working model configuration immediately.
+6. **Record bootstrap audit event**: record that bootstrap completed, including the org ID, user ID, agent IDs created, and provider connections created (see 04-auth-tenancy-and-identity.md bootstrap flow step 6).
 
-After bootstrap, the operator manages provider connections through the subscription dashboard (see 07-models-and-inference.md Subscription Dashboard): adding connections, configuring failover chains, adjusting concurrency limits, and monitoring health. The environment variables are a one-time convenience — the database-stored provider connections are the runtime source of truth.
+After bootstrap, the operator manages provider connections through the subscription dashboard (see 07-models-and-inference.md Subscription Dashboard): adding connections, configuring failover chains, adjusting per-provider concurrency limits, and monitoring health. The environment variables are a one-time convenience — the database-stored provider connections are the runtime source of truth.
 
 ### Secret Lifecycle
 
@@ -847,7 +872,7 @@ When a new org is created in managed mode:
 1. A new PostgreSQL database is created on the managed database cluster.
 2. The pgvector extension is enabled in the new database.
 3. All schema migrations run against the new database (bringing it to the current version).
-4. The bootstrap flow runs (creates org, admin user, starter trio, General session).
+4. The bootstrap flow runs (creates org, admin user, starter trio, General session, provider connections, bootstrap audit event).
 5. The catalog is updated with the new org's database connection and schema version.
 6. The org is ready to serve requests.
 
@@ -890,7 +915,8 @@ These limits are stored in `organization.settings` (jsonb) within each org's dat
 - **Secrets stored encrypted in PostgreSQL, not in environment variables (managed mode).** Self-host can bootstrap from env vars for convenience, but the encrypted database copy becomes the source of truth. Managed mode never uses env vars for tenant secrets.
 - **Forward-only migrations.** No rollback migrations. Fixes go forward. This eliminates the class of bugs where rollback scripts are untested or out of sync.
 - **Health checks follow the liveness/readiness pattern.** `/health` for process liveness (no dependency checks), `/ready` for traffic readiness (checks database, storage, migrations). Non-critical dependencies do not affect readiness.
-- **A model provider API key is the only truly required user input.** Everything else has defaults. A developer can run OtterCamp with just an Anthropic key and a local PostgreSQL. The API key is a bootstrap convenience — on first run, the system creates the full provider connection infrastructure (provider_connection, encrypted secret, default model profiles, org-level assignment) described in doc 07. After bootstrap, provider connections are managed through the subscription dashboard, not environment variables.
+- **A model provider connection is the only truly required user input.** Everything else has defaults. A developer can bootstrap with a cloud API key (e.g., `ANTHROPIC_API_KEY`) or a local model endpoint (`OPENAI_COMPAT_BASE_URL` pointing at Ollama). No cloud API keys are required — a fully local self-hosted deployment is supported. On first run, the system creates the full provider connection infrastructure (provider_connection, encrypted secret, default model profiles, org-level assignment) described in doc 07. After bootstrap, provider connections are managed through the subscription dashboard, not environment variables.
+- **OpenAI-compatible endpoints are first-class for self-hosting.** `OPENAI_COMPAT_BASE_URL` (and optional `OPENAI_COMPAT_API_KEY`, `OPENAI_COMPAT_LABEL`) bootstrap a local model connection. Self-hosters running Ollama, vLLM, or LM Studio do not need any cloud provider keys. This aligns with doc 07's designation of OpenAI-compatible as "the self-hosting and long-tail provider path."
 - **Split mode is optional, not required.** Single process runs everything by default. Split API and Worker processes are available for VPS operators who want resource isolation but are not required.
 - **Docker Compose is the primary self-host packaging.** It is not the only option — the binary runs independently — but Docker Compose is what we optimize for, document first, and test most thoroughly.
 - **Master key for secrets encryption is the one external secret.** It is provided via environment variable or key file, never stored in the database. In managed mode, it is a KMS key reference.
