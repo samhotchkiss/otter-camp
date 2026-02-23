@@ -1,34 +1,358 @@
-# 05. Agents (Staff and Temps)
+---
+## Summary
+
+This spec defines the agent model for OtterCamp V2 -- how agents are created, classified, assigned to projects, and what they see at runtime. Agents are the workforce: every meaningful action (planning, coding, reviewing, triaging) is performed by an agent, while the human directs and decides. There are two agent classes: **staff** (durable, named, memory-building members of the org) and **temp** (ephemeral agents scoped to a task, session, or TTL that are auto-retired when done). Temps can be promoted to staff through Lori. Every org is bootstrapped with a "starter trio" of org-level staff agents: **Frank** (Chief of Staff, primary human touchpoint, cross-project coordinator, escalation endpoint -- explicitly NOT a project manager), **Lori** (Agent Relations Expert, creates and manages agents through conversation, recommends staffing), and **Ellie** (Memory system, dual role as background infrastructure and conversational agent, specified fully in doc 06).
+
+Agent profiles carry a rich shape: identity fields (name, slug, pronouns, role_title), a prompt pack (system_prompt + policy_addendum), tool policy (allow/deny lists), model policy (default model profile, allowed profiles, budget caps), memory policy (read scopes, write scope, private memory toggle), and skill attachments. Staff agents follow a lifecycle of draft -> active -> paused/retired, with human approval required at the draft stage. Temp agents skip draft review and are created immediately active, but are restricted by default (no secrets, no connectors, no private memory, no project-specific memory unless assigned, concurrent limit of 10 per org). Projects are staffed conversationally through Lori, with four roles: project_manager (exactly one per project, enforced by schema), worker, reviewer, and planner.
+
+The runtime model is a 7-layer prompt assembly pipeline that runs once per turn: (1) agent identity, (2) policies/constraints, (3) scope context, (4) skills instructions, (5) memory injection from Ellie, (6) conversation history, (7) tool descriptions. Layers 1-2 are never cut; layers 3-7 are budget-dependent and compressed as needed. Agent concurrency is stateless -- two simultaneous turns by the same agent are independent model calls with no shared mutable state, governed by global and per-provider rate limits rather than per-agent serialization. The database schema centers on three tables: `agent` (full profile with classification, prompt pack, tool/model/memory policies, and temp-specific fields), `agent_project_assignment` (maps agents to projects with roles, enforces one-PM-per-project via partial unique index), and `agent_skill_attachment` (links agents to baseline skills). Policy enforcement follows a strictly-tightening hierarchy: instance safety > org > project > agent profile.
+
+---
+
+# 05. Agents: Staff and Temps
+
+## Overview
+
+Agents are the workforce of OtterCamp. Every meaningful action in the system is performed by an agent — planning work, writing code, reviewing output, managing projects, triaging blockers, maintaining memory. The human operator directs, decides, and course-corrects. Agents do the work.
+
+This spec defines what an agent is, how agents are created and managed, how they get assigned to projects, and the runtime model that determines what an agent sees and does when it takes a turn.
 
 ## Agent Classes
 
-- Staff agents: durable, reusable, project-level or org-level defaults.
-- Temp agents: ephemeral, task- or session-scoped, auto-expiring.
+There are two classes of agent: **staff** and **temp**. The distinction is about durability and identity, not capability.
+
+### Staff Agents
+
+Staff agents are durable, named members of the organization. They persist across sessions, tasks, and projects. They accumulate history in Ellie's memory and develop working relationships with the human and other agents over time.
+
+Staff agents are the default. Most work is done by staff agents.
+
+Characteristics:
+- **Durable identity**: name, personality, role, and institutional knowledge persist indefinitely.
+- **Reusable**: assigned to multiple projects simultaneously. An agent can be the PM for one project and a reviewer for another.
+- **Memory-building**: Ellie captures memories about and from staff agents. Over time, the organization has rich context about how each agent works, what they're good at, and what they've learned.
+- **Org-level or project-level**: staff agents can be scoped to the org (available everywhere) or primarily associated with specific projects. Both are first-class citizens.
+
+### Temp Agents
+
+Temp agents are ephemeral, scoped to a specific task, session, or short-lived purpose. They are created for a job and cleaned up when the job is done.
+
+Temps exist for situations where creating a durable identity is overkill — a one-off experiment with a different prompt, a burst of parallelizable work, a specialized skill combination that doesn't warrant a permanent agent.
+
+Characteristics:
+- **Scoped lifetime**: tied to a task, session, or explicit TTL. When the scope ends, the temp is automatically retired.
+- **Lightweight identity**: has a name and role description but no deep personality or long-term relationship.
+- **Restricted by default**: inherits the org policy envelope but cannot exceed it. Limited connector access, no secrets access by default.
+- **Memory-light**: inherits org-level memory context through passive injection but does NOT receive project-specific memories unless explicitly assigned to a project. Temp agents do not build durable private memory — their contributions are captured by Ellie through the normal implicit extraction pipeline, but the memories are attributed to the task or project scope, not the temp agent's private scope.
+
+### When to Use Each
+
+**Use staff for:**
+- Any agent that will work on more than one task or project.
+- Agents with distinct expertise that the org will need repeatedly (PM, code reviewer, content writer, DevOps specialist).
+- Agents that need deep project context to do their job well.
+- Agents that the human wants to build a working relationship with.
+
+**Use temps for:**
+- One-off experiments ("try writing this blog post with a more formal tone").
+- Burst parallelism ("spin up 3 temps to research these 3 topics simultaneously").
+- Specialized combinations that don't warrant a permanent agent ("a temp that knows both Go and PostgreSQL internals for this migration task").
+- Controlled prompt experiments ("run this task with a modified system prompt and compare results").
+
+## The Starter Trio
+
+Every OtterCamp organization is seeded with three staff agents on bootstrap. These are not optional — they are the foundation of how OtterCamp works. They are org-level agents, available in every project and every session.
+
+### Frank — Chief of Staff
+
+**Pronouns**: he/him
+**Scope**: org-level
+**Role**: primary human touchpoint
+
+Frank is the human's right hand. He is the first agent the human talks to and the default responder in the org-level "General" session. Frank is NOT a project manager — he operates at the organizational level, above any individual project.
+
+**What Frank does:**
+- **First contact**: when the human opens OtterCamp, Frank is there. "What are we working on today?"
+- **Org-level coordination**: when projects need to interact — shared dependencies, conflicting priorities, resource allocation — Frank handles it.
+- **Escalation endpoint**: when a PM can't resolve a blocker, it escalates to Frank. If Frank can't resolve it, he escalates to the human. This is the escalation chain: agent -> PM -> Frank -> human (see 03-projects-and-task-flow.md Blockers and Escalation).
+- **Strategic conversations**: brainstorming, long-term planning, "what should we build next?" conversations happen with Frank.
+- **Delegation**: Frank can hand off work to the right project or agent. The human says "I need a landing page" — Frank knows which project that belongs to and routes it to the right PM.
+- **Onboarding**: Frank guides new users through initial setup — creating their first project, understanding how OtterCamp works, introducing Lori and Ellie.
+
+**What Frank does NOT do:**
+- Manage individual tasks or flow nodes. That's the PM's job.
+- Design flows or scope tasks. That's also the PM's job.
+- Hire or staff agents. That's Lori's job. Frank can @mention Lori when staffing needs arise.
+- Manage memory. That's Ellie's job.
+
+**Model profile**: Frank uses a high-capability model profile. He handles nuanced, context-heavy conversations and needs to understand the full organizational picture.
+
+### Lori — Agent Relations Expert
+
+**Pronouns**: she/her
+**Scope**: org-level
+**Role**: staffing and agent management
+
+Lori is responsible for the agent workforce. She creates staff agents, recommends agents for projects, manages agent lifecycle, and handles promotions from temp to staff.
+
+**What Lori does:**
+- **Creates staff agents**: when the org needs a new agent, Lori handles it. The human describes what they need ("I need a Go developer who's good at writing tests"), and Lori creates the agent — name, personality, system prompt, skill set, model profile, tool policy. All through conversation, never through a form.
+- **Staffs projects**: when a new project is created, the PM (or Frank) @mentions Lori to help staff it. Lori recommends existing staff agents for the planner, worker, and reviewer roles based on the project's needs. If no existing agent fits, she proposes creating a new one.
+- **Promotes temps to staff**: when a temp agent proves valuable and the human or PM wants to keep it around, Lori handles the promotion. She reviews the temp's configuration, proposes a durable identity, and creates the staff agent.
+- **Manages agent profiles**: updates to agent system prompts, skill sets, model profiles, and policies go through Lori. She understands the implications of changes ("if I change this agent's model to a cheaper one, it will affect code quality on complex tasks").
+- **Recommends changes**: Lori can proactively suggest staffing adjustments — "Agent X hasn't been used in 3 months, want to retire it?" or "This project would benefit from a dedicated reviewer instead of sharing one with Project Y."
+- **Agent directory**: Lori knows every agent in the org — their skills, current assignments, workload, and history. The human can ask "who's available to review Go code?" and Lori has the answer.
+
+**What Lori does NOT do:**
+- Assign agents to specific tasks or flow nodes. The PM does that.
+- Manage project workflow. The PM does that.
+- Make staffing decisions unilaterally. Lori recommends — the human approves.
+
+**Model profile**: Lori uses a capable model profile. Her work involves understanding nuanced role descriptions and making judgment calls about agent capabilities.
+
+### Ellie — Memory System
+
+**Scope**: org-level
+**Role**: memory infrastructure AND conversational agent
+
+Ellie is unique — she is both a background system and a conversational participant. Her dual role is fully specified in 06-memory.md. The key points relevant to agent management:
+
+- **Passive memory injection**: Ellie automatically injects relevant memories into every agent's context on every turn (layer 5 of prompt assembly). This happens without Ellie being explicitly invoked.
+- **Active memory queries**: any agent or human can @mention Ellie to ask questions about organizational knowledge, request deeper context, or trigger memory operations.
+- **Available everywhere**: Ellie is a participant in every session. She listens, captures relevant information, and can be called on when needed.
+
+Ellie's full specification — extraction pipeline, retrieval, consolidation, taxonomy, entity synthesis — is in 06-memory.md. This spec covers Ellie's identity and prompt assembly, not her memory operations.
 
 ## Agent Profile Shape
 
-- Identity metadata (name, slug, role, description).
-- Prompt pack (system prompt, policies, defaults).
-- Tool policy (allow/deny lists).
-- Model policy (allowed model profiles, budget caps).
-- Memory policy (read/write scopes).
+The agent profile is the complete definition of what an agent is. It determines identity, behavior, permissions, and resource allocation.
 
-## Lifecycle
+### Identity
 
-- `draft` -> `active` -> `paused` -> `retired`
-- Temp lifecycle includes automatic cleanup and archival summary.
+- **name**: display name. "Frank", "Lori", "Ellie", "Maven" (a code reviewer), etc.
+- **slug**: URL-safe identifier, unique within the org. `frank`, `lori`, `ellie`, `maven`.
+- **pronouns**: he/him, she/her, they/them, etc. Used in system messages and by other agents when referring to this agent.
+- **role_title**: short descriptor. "Chief of Staff", "Agent Relations Expert", "Senior Go Developer", "Code Reviewer".
+- **description**: longer description of the agent's purpose, expertise, and working style. Written by Lori during agent creation.
+- **avatar_url**: optional. Visual identity for UI rendering.
 
-## Assignment Rules
+### Prompt Pack
 
-- Project can assign planner/worker/reviewer staff agents.
-- Chat can invite staff or temp agents.
-- Task can override owner agent per flow step.
+The prompt pack is the agent's core behavioral definition — who it is and how it thinks.
 
-## Temp Agent Use Cases
+- **system_prompt**: the agent's identity prompt. Personality, expertise, communication style, domain knowledge. This is layer 1 in the prompt assembly pipeline. Written by Lori during agent creation.
+- **policy_addendum**: agent-specific policy instructions that supplement org and project policies. "Always ask before deploying to production." "Never modify database schemas without PM approval." This merges into layer 2 of prompt assembly.
 
-- Specialized one-off execution.
-- Burst support in large workflows.
-- Controlled experiments with custom prompts.
+### Tool Policy
+
+Controls which tools the agent can access. Interacts with the capability model in 16-agent-control-plane.md.
+
+- **tool_allow_list**: if set, the agent can ONLY use these tools. Whitelist mode.
+- **tool_deny_list**: if set, the agent can use any tool EXCEPT these. Blacklist mode.
+- **tool_tier_overrides**: per-tool overrides for the default tool tier behavior. For example, an agent that needs to write files without full control plane overhead could have a tier override.
+
+Only one of allow_list or deny_list should be set. If both are null, the agent inherits the org/project default tool policy. Allow-list is stricter and preferred for temp agents and restricted roles.
+
+### Model Policy
+
+Controls which models the agent uses and at what cost.
+
+- **default_model_profile_id**: the model profile this agent uses by default (see 07-models-and-inference.md). This is the model that runs when the agent takes a turn, unless overridden by a flow node.
+- **allowed_model_profiles**: optional list of model profile IDs the agent is permitted to use. If null, the agent can use any model profile available to the org.
+- **budget_cap**: optional per-agent cost cap. When reached, the agent's turns are queued until the next budget period. Budget caps are also enforced at the org and project level (see 13-security-observability-costs.md) — the most restrictive cap applies.
+
+### Memory Policy
+
+Controls how the agent interacts with Ellie's memory system.
+
+- **memory_read_scopes**: which memory scopes the agent can read from via passive injection and `memory.query`. Default: org + assigned projects + current task. Agent-private memories of other agents are never readable.
+- **memory_write_scope**: where the agent's captured memories are stored. Default: scoped to the current context (task-scoped during task work, project-scoped during project sessions, org-scoped during org sessions).
+- **private_memory_enabled**: whether the agent maintains private working notes (agent-private scope in 06-memory.md). Default: false. Enabled for agents with complex, ongoing responsibilities (PMs, Frank).
+
+### Skill Attachments
+
+Skills attached to the agent's profile (see 10-skills-integration.md). These are the agent's baseline competencies — always available, activated based on flow node context.
+
+- **skill_ids**: list of skill IDs attached to this agent. These represent the agent's learned expertise.
+
+Activation rules: org/project default skills are always active. Agent-level skills are active when the flow node doesn't declare specific skills (fallback to full agent skill set). Flow node skills override when declared.
+
+### Classification
+
+- **agent_class**: `staff` or `temp`.
+- **scope_level**: `org` or `project`. Org-level agents are available everywhere. Project-level agents are primarily associated with specific projects but can be assigned to others.
+- **temp_scope_type**: for temp agents only. `task`, `session`, or `ttl`.
+- **temp_scope_id**: for temp agents only. The task or session this temp is scoped to.
+- **temp_ttl**: for temp agents only when `temp_scope_type` is `ttl`. Duration after which the temp is auto-retired.
+
+## Agent Lifecycle
+
+### Staff Agent Lifecycle
+
+```
+         Lori creates
+              │
+              ▼
+           draft ──── human reviews ──── active
+              │                            │
+              │                       ┌────┴────┐
+              │                       │         │
+              ▼                       ▼         ▼
+          cancelled               paused    retired
+                                    │
+                                    │ (reactivated)
+                                    ▼
+                                  active
+```
+
+**States:**
+
+- **draft**: Lori has created the agent profile but it hasn't been activated yet. The human reviews the profile — name, role, system prompt, tool policy, model profile. The human can request changes ("make the system prompt more concise," "give it access to the shell"). Draft agents cannot participate in sessions or take turns.
+- **active**: the agent is live. It can participate in sessions, take turns, be assigned to projects, and execute tasks. This is the normal operating state.
+- **paused**: temporarily inactive. The agent retains its profile and all assignments but does not take turns. Useful for agents that are between projects or being modified. Pausing an agent does not remove it from sessions — it simply stops responding. Other agents and humans see "Agent X is paused" in participant lists.
+- **retired**: permanently deactivated. The agent's profile is preserved for audit and history, but it cannot be reactivated. Its project assignments are removed. Memories about this agent remain in Ellie's memory. Retiring is the right choice when an agent is no longer needed — not deletion, which would lose history.
+- **cancelled**: a draft that was rejected before ever being activated. Profile preserved for audit.
+
+**Transition rules:**
+
+- `draft` -> `active`: human approves the agent profile.
+- `draft` -> `cancelled`: human rejects the agent profile.
+- `active` -> `paused`: Lori or human pauses the agent. No active turns are interrupted — the pause takes effect on the next turn attempt.
+- `active` -> `retired`: Lori or human retires the agent. Active runs complete, then the agent stops accepting new work.
+- `paused` -> `active`: Lori or human reactivates the agent.
+- `paused` -> `retired`: Lori or human retires a paused agent.
+
+### Temp Agent Lifecycle
+
+```
+         created (by PM, agent, or human)
+              │
+              ▼
+           active
+              │
+         ┌────┴────┐
+         │         │
+         ▼         ▼
+      expired   promoted
+     (auto)     (to staff)
+```
+
+**States:**
+
+- **active**: the temp is live and working. Created and immediately active — no draft review step for temps. Temps are disposable by design; the overhead of review is not warranted.
+- **expired**: the temp's scope has ended (task completed, session closed, TTL elapsed). The system auto-transitions to expired. An archival summary is generated — Ellie captures a brief record of what the temp did, its configuration, and its outcomes. The temp's contributions (code, messages, artifacts) remain in the task/session they were part of.
+- **promoted**: the temp was promoted to a staff agent by Lori. The temp record is preserved with a reference to the new staff agent. Promotion copies the temp's configuration into a new staff agent profile, which then goes through the normal staff draft -> active lifecycle.
+
+**Temp agents skip the draft step.** They are created and immediately active. The org policy envelope (see Guardrails) constrains what they can do, so the risk of an unreviewed temp is bounded.
+
+**Archival summary on expiration:** When a temp expires, Ellie generates a brief summary: what the temp was created for, what it did, and whether the work succeeded. This is stored as an episodic memory at the task or project scope. It serves two purposes: (1) the org remembers that a temp was used and what happened, and (2) if the same kind of temp is needed again, Ellie can surface the prior experience.
+
+### Promotion: Temp to Staff
+
+Temp agents can be promoted to staff. This is Lori's job, initiated by the human or PM.
+
+The promotion flow:
+1. Human or PM says "This temp agent did great work — can we make it permanent?"
+2. Lori reviews the temp's configuration — system prompt, tool policy, model profile.
+3. Lori proposes a staff agent profile based on the temp: refines the name, writes a proper description, suggests skill attachments, recommends appropriate scope (org or project).
+4. Human reviews and approves the staff agent (normal draft -> active flow).
+5. The temp is marked `promoted` with a reference to the new staff agent ID.
+
+Promotion is not automatic. The human always decides whether a temp becomes permanent.
+
+## Project Staffing
+
+### How Projects Get Staffed
+
+Projects need agents to do work. The staffing process is conversational — Lori recommends, the human decides.
+
+**Initial staffing (project creation):**
+
+1. The PM is assigned first. Every project must have exactly one PM. The PM is a staff agent with the `project_manager` role for that project. Lori recommends an existing PM agent or proposes creating a new one.
+2. The PM and Lori then collaborate to staff the remaining roles — workers and reviewers. Lori checks the agent directory: "Agent Maven is a strong Go reviewer and is currently assigned to two other projects. Agent Kai specializes in frontend work. For this backend project, I'd recommend Maven as reviewer and a new worker agent for the implementation."
+3. The human approves or adjusts the staffing plan.
+4. Assignments are recorded in `agent_project_assignment`.
+
+**Ongoing staffing:**
+
+- The PM can @mention Lori at any time to request staffing changes. "We need a second worker for this sprint" or "Can we get a reviewer who knows database migrations?"
+- Lori can proactively suggest staffing changes based on workload patterns and project needs.
+- Staff agents can be assigned to or removed from projects at any time. No downtime required.
+
+### Project Roles
+
+Each agent assigned to a project has one or more roles for that project. Roles determine what the agent does within the project's workflow.
+
+- **project_manager**: one per project, mandatory. Designs flows, scopes tasks, triages blockers, manages the project. The PM is special — they have broad authority within the project including creating tasks, managing subtasks, advancing flows, and escalating blockers. The PM is the default responder in the project-scoped session (see 02-chat.md).
+- **worker**: executes task work. Assigned to flow nodes with `actor_type = 'role'` where the role is `worker`. Multiple workers per project is normal.
+- **reviewer**: reviews completed work at review nodes. Can approve or reject with feedback. Multiple reviewers per project is supported.
+- **planner**: assists the PM with task scoping and decomposition. Optional role — some PMs handle all planning themselves.
+
+An agent can hold multiple roles in the same project (e.g., a senior agent might be both worker and reviewer). An agent can hold different roles in different projects (worker in Project A, reviewer in Project B).
+
+### The PM is Special
+
+The project manager is not just another role — the PM has unique responsibilities and authorities within a project:
+
+- **Designs flows**: the PM proposes flow templates to the human. Flow design happens through conversation with the PM (see 03-projects-and-task-flow.md Flow Templates).
+- **Scopes tasks**: the PM is responsible for ensuring tasks have sufficient context before queuing — description, acceptance criteria, constraints, relevant files.
+- **Triages blockers**: when an agent files a blocker, it goes to the PM first. The PM decides whether to resolve it, escalate to Frank, or escalate to the human.
+- **Proactive supervision**: the PM monitors active work for stuck agents and intervenes when needed (see 03-projects-and-task-flow.md Proactive Supervision).
+- **Default responder**: the PM is the default responder in the project-scoped session and in task sync sessions.
+- **Private memory**: PMs have `private_memory_enabled = true` by default. They maintain working notes about project state, agent performance, and strategic context.
+
+Every project has exactly one PM. If a PM agent is retired, a new PM must be assigned before the project can continue. Lori handles this transition.
+
+### Flow Node Actor Resolution
+
+When a flow node begins execution, the system resolves which specific agent handles it. The `actor_type` on the flow node determines the resolution strategy:
+
+- **`role`**: resolve to the agent assigned to that role in the project's `agent_project_assignment`. If multiple agents have the role (e.g., two workers), the scheduler picks the one with the lowest current workload.
+- **`project_manager`**: resolve to the project's PM.
+- **`agent`**: resolve to a specific agent by ID (set on `flow_node.actor_id`). Used for flow steps that must be handled by a particular agent.
+- **`human`**: the flow node requires human action. An inbox item is created (see 03-projects-and-task-flow.md Inbox).
+
+### Model Override Per Flow Node
+
+Each agent has a default model profile. However, flow nodes can override the model profile for their execution. This allows cost optimization — a simple formatting task doesn't need the same model as an architecture design session.
+
+Override resolution order:
+1. Flow node model override (if set on the `flow_node.metadata`).
+2. Agent's default model profile.
+3. Project default model profile (if set).
+4. Org default model profile.
+
+The first non-null value wins.
+
+## Agent Concurrency
+
+Agents handle multiple sessions and tasks simultaneously. Each turn is an independent model call — there is no shared mutable state between sessions.
+
+### How It Works
+
+Two simultaneous Frank turns in different sessions are just two independent model calls using the same agent profile. Each call gets its own prompt assembly (7-layer pipeline), its own context window, and its own tool call loop. They don't share state, they don't coordinate, and they don't know about each other.
+
+This is possible because agent identity is stateless at the prompt level. Everything the agent needs to know is assembled fresh from the profile, scope context, memory injection, and conversation history on every turn. There is no "Frank runtime" holding state between turns.
+
+### Concurrency Limits
+
+Concurrency is governed by the infrastructure, not by per-agent limits:
+
+- **Global concurrency limits**: cap on total concurrent LLM calls across all agents and sessions (see 07-models-and-inference.md).
+- **Per-provider limits**: rate limits for the underlying model provider.
+- **Priority**: sync sessions (human waiting) get priority over async sessions (autonomous agent work). If the system is at capacity, async turns queue (see 07-models-and-inference.md Queuing Behavior).
+
+No per-agent serialization is needed. If two tasks need the same agent simultaneously, both proceed independently.
+
+### Memory Concurrency
+
+If an agent has private memory enabled and two concurrent turns both write to it, the memory pipeline handles concurrent writes via normal database transactional guarantees. Ellie's capture pipeline is event-driven and idempotent — concurrent events from the same agent are processed independently (see 06-memory.md).
+
+### Temp Agent Concurrency Limit
+
+Concurrent temp agents are configurable per org. Default: 10 active temp agents at a time. This prevents runaway temp creation — a PM that spins up 50 temps for parallelism burns through model budget rapidly.
+
+The limit applies to simultaneously active temps, not lifetime total. When a temp expires, the slot opens for a new one.
 
 ## Agent Runtime Model (Prompt Assembly)
 
@@ -43,14 +367,15 @@ When an agent gets a turn, OtterCamp assembles a prompt from these layers, in pr
    - The agent's core system prompt — who it is, how it thinks, its role.
 
 2. **Policies and constraints** (never cut)
-   - Source: org policy + project policy + agent tool policy + control plane capabilities.
+   - Source: org policy + project policy + agent policy_addendum + control plane capabilities.
    - What the agent is and isn't allowed to do. Safety-critical.
+   - Includes the agent's tool policy (allow/deny lists) communicated in natural language so the agent knows its own permissions.
 
 3. **Scope context**
    - Source: determined by session scope (see 02-chat.md Session Scoping).
    - Org scope: project portfolio summary, org-level priorities.
-   - Project scope: project description, task summaries, architecture decisions.
-   - Task scope: the task's structured context (files, decisions, acceptance criteria, dependencies).
+   - Project scope: project description, context block, task summaries, architecture decisions.
+   - Task scope: the task's structured context (description, acceptance criteria, constraints, relevant files, dependencies).
    - Always present in sync mode. In async mode, serves as the starting context — the agent can discover more via tools.
 
 4. **Skills instructions**
@@ -61,11 +386,11 @@ When an agent gets a turn, OtterCamp assembles a prompt from these layers, in pr
 5. **Memory** (budget-dependent)
    - Source: Ellie's passive retrieval, scoped to the session's scope.
    - In sync mode: top-k results injected automatically. k shrinks if budget is tight.
-   - In async mode: initial injection, supplemented by active Ellie queries on subsequent turns.
+   - In async mode: initial injection, supplemented by active Ellie queries on subsequent turns via the `memory.query` tool.
 
 6. **Conversation history** (budget-dependent)
    - Source: session messages.
-   - Recent turns in full, older turns summarized at checkpoints.
+   - Recent turns in full, older turns summarized at checkpoints (see 02-chat.md Session Continuity).
    - Compressed further if budget requires it.
 
 7. **Tool descriptions** (budget-dependent, lowest priority)
@@ -81,18 +406,297 @@ When an agent gets a turn, OtterCamp assembles a prompt from these layers, in pr
 
 ### Sync vs Async Differences
 
-- In **sync mode**, the full prompt is pre-assembled before the model call. Latency matters.
+- In **sync mode**, the full prompt is pre-assembled before the model call. Latency matters — every layer is prepared upfront.
 - In **async mode**, the first turn gets an assembled prompt, but the agent can then spend subsequent turns using tools to discover more context (reading files, querying Ellie, exploring the codebase). The initial prompt is a starting point, not the full picture.
+
+### When Assembly Runs
+
+The 7-layer pipeline runs **once at the start of each turn** (see 02-chat.md Context Assembly Per Turn). Within the turn's tool loop, each iteration just appends tool calls and results to the conversation — the model sees its own previous actions accumulating. The full pipeline is not re-run on every loop iteration.
 
 ## Guardrails
 
-- Temp agents cannot exceed default org policy envelope.
-- Restricted secret and connector access by default.
-- Auto-revoke credentials after TTL expiry.
+### Org Policy Envelope
+
+Every agent — staff and temp — operates within the org policy envelope. This is the outermost boundary of what any agent can do. It is enforced by the control plane (see 16-agent-control-plane.md Policy Evaluation).
+
+Policy layers, from most restrictive (highest priority) to least:
+
+1. **Instance safety policy**: hard limits baked into the OtterCamp deployment. Cannot be overridden.
+2. **Organization policy**: org-wide rules set by the human. All agents must comply.
+3. **Project policy**: project-specific rules that restrict further (never expand) within the org envelope.
+4. **Agent profile policy**: agent-specific restrictions from the tool policy and policy_addendum.
+
+Each layer can only tighten, never loosen. A project policy cannot grant permissions the org policy denies. An agent's tool allow-list cannot include tools the project policy blocks.
+
+### Temp Agent Restrictions
+
+Temp agents have additional restrictions beyond the org envelope:
+
+- **No secret access by default**: temps cannot read secrets or credentials unless explicitly granted by the human for the specific task.
+- **No connector access by default**: temps cannot use external MCP connections unless explicitly granted.
+- **Auto-revoke on expiration**: any credentials or grants given to a temp are automatically revoked when the temp expires. No stale access.
+- **Org-level memory only**: temps receive org-level memory through passive injection but do NOT receive project-specific memories unless they are assigned to a project via `agent_project_assignment`.
+- **No private memory**: temps do not maintain agent-private memory scope. Their contributions are captured at the task or project level.
+- **Concurrent limit**: max active temps per org is configurable (default 10).
+
+### Staff Agent Safeguards
+
+Staff agents have broader access but are still bounded:
+
+- **Tool policy enforcement**: the allow/deny list on the agent profile is enforced on every tool call.
+- **Model budget caps**: per-agent budget caps prevent runaway cost.
+- **Audit trail**: every action by every agent is logged through the control plane's immutable audit trail (see 16-agent-control-plane.md).
+- **Pausing**: any agent can be paused immediately if it's behaving unexpectedly. Active runs complete, but no new turns are started.
+
+## Database Schema
+
+### agent
+
+The core agent table. This extends the basic `agent` entity defined in 04-auth-tenancy-and-identity.md with the full profile shape.
+
+```sql
+create table agent (
+  id                      uuid primary key default gen_random_uuid(),
+  organization_id         uuid not null references organization(id),
+
+  -- Identity
+  name                    text not null,
+  slug                    text not null,
+  pronouns                text,                            -- he/him, she/her, they/them, etc.
+  role_title              text not null,
+  description             text,
+  avatar_url              text,
+
+  -- Classification
+  agent_class             text not null check (agent_class in ('staff', 'temp')),
+  scope_level             text not null default 'project' check (scope_level in ('org', 'project')),
+  lifecycle_status        text not null default 'draft'
+    check (lifecycle_status in ('draft', 'active', 'paused', 'retired', 'cancelled', 'expired', 'promoted')),
+
+  -- Prompt Pack
+  system_prompt           text not null,                   -- layer 1: identity prompt
+  policy_addendum         text,                            -- merges into layer 2: agent-specific policy
+
+  -- Tool Policy
+  tool_allow_list         text[],                          -- whitelist mode (if set, ONLY these tools)
+  tool_deny_list          text[],                          -- blacklist mode (if set, all EXCEPT these)
+  tool_tier_overrides     jsonb,                           -- per-tool tier overrides
+
+  -- Model Policy
+  default_model_profile_id uuid,                           -- references model_profile(id) — see doc 07
+  allowed_model_profiles  uuid[],                          -- nullable = any org-available profile allowed
+  budget_cap_cents        int,                             -- per-agent cost cap in cents per budget period
+  budget_period           text default 'monthly'
+    check (budget_period in ('daily', 'weekly', 'monthly')),
+
+  -- Memory Policy
+  memory_read_scopes      text[] not null default '{org}', -- which scopes the agent can read from
+  memory_write_scope      text not null default 'context', -- where captured memories go (context = current scope)
+  private_memory_enabled  boolean not null default false,
+
+  -- Temp-specific fields
+  temp_scope_type         text check (temp_scope_type in ('task', 'session', 'ttl')),
+  temp_scope_id           uuid,                            -- task or session this temp is scoped to
+  temp_ttl_seconds        int,                             -- TTL in seconds (for ttl-scoped temps)
+  temp_expires_at         timestamptz,                     -- computed: created_at + temp_ttl, or set by scope end
+  promoted_to_agent_id    uuid references agent(id),       -- set when temp is promoted to staff
+
+  -- Metadata
+  created_by_type         text not null check (created_by_type in ('human', 'agent', 'system')),
+  created_by_id           uuid,                            -- human_user.id or agent.id
+  created_at              timestamptz not null default now(),
+  updated_at              timestamptz not null default now(),
+  retired_at              timestamptz,
+  metadata                jsonb not null default '{}',
+
+  unique (organization_id, slug),
+  check (
+    (agent_class = 'staff' and temp_scope_type is null and temp_scope_id is null and temp_ttl_seconds is null)
+    or
+    (agent_class = 'temp' and temp_scope_type is not null)
+  ),
+  check (
+    (tool_allow_list is null or tool_deny_list is null)    -- only one of allow/deny can be set
+  )
+);
+
+-- Primary lookup patterns
+create index on agent (organization_id, lifecycle_status);
+create index on agent (organization_id, agent_class) where lifecycle_status = 'active';
+create index on agent (organization_id, slug);
+create index on agent (temp_scope_type, temp_scope_id) where agent_class = 'temp';
+create index on agent (temp_expires_at) where agent_class = 'temp' and lifecycle_status = 'active';
+```
+
+**Design notes:**
+
+- `scope_level` is about the agent's home scope, not about access. An org-level agent is available everywhere. A project-level agent is primarily associated with projects but can still participate in org sessions if invited.
+- `lifecycle_status` combines staff and temp states into one column. Staff agents use `draft`, `active`, `paused`, `retired`, `cancelled`. Temp agents use `active`, `expired`, `promoted`.
+- `memory_read_scopes` is a text array. Possible values: `org`, `assigned_projects`, `current_task`, `private`. Retrieval cascades upward within each scope (see 06-memory.md Scope Inheritance).
+- `memory_write_scope = 'context'` means "write to whatever scope the current session is in" — task scope during task work, project scope during project sessions, org scope during org sessions.
+- The check constraint on `tool_allow_list`/`tool_deny_list` prevents setting both simultaneously. If both are null, the agent inherits the org/project tool policy.
+- `budget_cap_cents` and `budget_period` are the per-agent budget. The org and project also have budgets (see 13-security-observability-costs.md). The most restrictive cap across all three levels applies.
+- `temp_expires_at` is pre-computed for TTL-scoped temps. For task-scoped and session-scoped temps, it is set when the task completes or session closes.
+
+### agent_project_assignment
+
+Maps agents to projects with their roles. An agent can be assigned to multiple projects with different roles. A project can have multiple agents.
+
+```sql
+create table agent_project_assignment (
+  id              uuid primary key default gen_random_uuid(),
+  agent_id        uuid not null references agent(id),
+  project_id      uuid not null references project(id),
+  role            text not null check (role in ('project_manager', 'worker', 'reviewer', 'planner')),
+  is_active       boolean not null default true,
+  assigned_by_type text not null check (assigned_by_type in ('human', 'agent')),
+  assigned_by_id  uuid not null,
+  assigned_at     timestamptz not null default now(),
+  removed_at      timestamptz,
+  metadata        jsonb not null default '{}',
+
+  unique (agent_id, project_id, role)
+);
+
+-- Lookup: which agents are assigned to a project?
+create index on agent_project_assignment (project_id, is_active);
+
+-- Lookup: which projects is an agent assigned to?
+create index on agent_project_assignment (agent_id, is_active);
+
+-- Enforce: exactly one active PM per project
+create unique index on agent_project_assignment (project_id)
+  where role = 'project_manager' and is_active = true;
+```
+
+**Design notes:**
+
+- The unique constraint on `(agent_id, project_id, role)` allows an agent to hold multiple roles in the same project (separate rows).
+- The partial unique index on `project_id` where `role = 'project_manager' and is_active = true` enforces the one-PM-per-project rule at the database level.
+- `is_active` + `removed_at` pattern: assignments are soft-deleted. The record is preserved for history. When an agent is removed from a project, `is_active = false` and `removed_at` is set.
+- `assigned_by_type` + `assigned_by_id`: who made the assignment. Usually Lori (agent) or the human.
+
+### agent_skill_attachment
+
+Links agents to their skills. This is the agent-level skill attachment — separate from org defaults, project defaults, and flow node skill declarations.
+
+```sql
+create table agent_skill_attachment (
+  id         uuid primary key default gen_random_uuid(),
+  agent_id   uuid not null references agent(id),
+  skill_id   uuid not null references skill(id),
+  attached_by_type text not null check (attached_by_type in ('human', 'agent')),
+  attached_by_id   uuid not null,
+  attached_at timestamptz not null default now(),
+
+  unique (agent_id, skill_id)
+);
+
+create index on agent_skill_attachment (agent_id);
+create index on agent_skill_attachment (skill_id);
+```
+
+**Design notes:**
+
+- Skills attached here form the agent's baseline skill set. They are available for activation based on flow node context (see 10-skills-integration.md Activation vs Availability).
+- `attached_by_type` + `attached_by_id`: who attached the skill. Usually Lori during agent creation or profile update.
+
+## Starter Trio Seed Data
+
+On organization bootstrap, the system creates three agent records with the following configurations. These are system-created (`created_by_type = 'system'`) and transition directly to `active` — no draft review for the starter trio.
+
+### Frank
+
+```
+name:               Frank
+slug:               frank
+pronouns:           he/him
+role_title:         Chief of Staff
+agent_class:        staff
+scope_level:        org
+system_prompt:      [Frank's identity prompt — organizational strategist,
+                     primary human touchpoint, cross-project coordinator,
+                     escalation handler, warm but direct communication style]
+private_memory:     true
+default_model:      [org's high-capability profile]
+memory_read_scopes: [org, assigned_projects]
+```
+
+### Lori
+
+```
+name:               Lori
+slug:               lori
+pronouns:           she/her
+role_title:         Agent Relations Expert
+agent_class:        staff
+scope_level:        org
+system_prompt:      [Lori's identity prompt — staffing expert, agent creator,
+                     workforce manager, understands agent capabilities and
+                     project needs, thoughtful and precise]
+private_memory:     false
+default_model:      [org's high-capability profile]
+memory_read_scopes: [org, assigned_projects]
+```
+
+### Ellie
+
+```
+name:               Ellie
+slug:               ellie
+pronouns:           she/her
+role_title:         Memory & Knowledge
+agent_class:        staff
+scope_level:        org
+system_prompt:      [Ellie's identity prompt — memory system, knowledge keeper,
+                     passive infrastructure + active conversational agent,
+                     precise, source-aware, transparent about confidence]
+private_memory:     true
+default_model:      [org's standard-capability profile for conversational turns;
+                     Haiku-class for background pipeline work]
+memory_read_scopes: [org, assigned_projects, current_task]
+```
+
+Ellie's memory pipeline operations (extraction, synthesis, dedup, consolidation) use separate model calls from her conversational turns. Pipeline work uses Haiku-class models for cost efficiency. Conversational turns (responding to @mentions, answering queries) use a standard model profile.
+
+## Cross-Entity Relationships
+
+- `agent.organization_id` -> `organization.id` (see 04-auth-tenancy-and-identity.md).
+- `agent_project_assignment.project_id` -> `project.id` (see 03-projects-and-task-flow.md).
+- `agent_project_assignment.agent_id` -> `agent.id`.
+- `agent_skill_attachment.skill_id` -> `skill.id` (see 10-skills-integration.md).
+- `agent.default_model_profile_id` -> `model_profile.id` (see 07-models-and-inference.md).
+- `chat_participant.participant_id` -> `agent.id` when `participant_type = 'agent'` (see 02-chat.md).
+- `flow_node.actor_id` -> `agent.id` when `actor_type = 'agent'` (see 03-projects-and-task-flow.md).
+- `memory.agent_id` -> `agent.id` for agent-private memory scope (see 06-memory.md).
+- `project_task_participant.participant_id` -> `agent.id` when `participant_type = 'agent'` (see 03-projects-and-task-flow.md).
+
+## Resolved Decisions
+
+1. **Two agent classes: staff and temp.** Staff agents are durable, named, memory-building members of the org. Temp agents are ephemeral, scoped, and disposable. The distinction is about durability and identity, not capability.
+2. **Temp agents CAN be promoted to staff.** Lori handles the promotion. The temp's configuration is copied into a new staff agent profile, which goes through normal draft -> active review. The temp is marked `promoted` with a reference to the new staff agent.
+3. **Temps inherit org-level memory but NOT project-specific memory** unless explicitly assigned to a project. This prevents temps from accessing project context they have no business seeing.
+4. **Concurrent temp agents: configurable per-org limit, default 10.** Prevents runaway temp creation and uncontrolled cost. Applies to simultaneously active temps, not lifetime total.
+5. **Staff agents are created by Lori through conversation.** No UI creation path. The human describes what they need, Lori builds the agent profile, the human approves.
+6. **No UI creation path for any agent.** Consistent with the product principle that everything happens through chat. The UI shows agent profiles read-only.
+7. **Agent model assignment: default model profile on the agent, overridable per flow node.** Resolution order: flow node override > agent default > project default > org default.
+8. **The PM is a staff agent role, one per project.** PM is special — designs flows, triages blockers, manages the project. Enforced by a partial unique index on `agent_project_assignment`.
+9. **Seven-layer prompt assembly pipeline.** Identity and policies are never cut. Skills, memory, conversation, and tool descriptions are budget-dependent. Assembly runs once per turn.
+10. **Agents handle multiple sessions concurrently via independent model calls.** No shared mutable state between sessions. No per-agent serialization. Concurrency governed by global and per-provider limits.
+11. **Temp agents skip draft review.** They are created and immediately active. Org policy envelope constrains them. Staff agents go through draft -> active with human approval.
+12. **Archival summary on temp expiration.** Ellie captures what the temp was created for, what it did, and the outcome. Stored as episodic memory at task or project scope.
+13. **Staff agent lifecycle: draft -> active -> paused -> retired.** No deletion. Retired agents preserved for audit. Paused agents retain assignments but stop responding.
+14. **Policy layers: instance safety > org > project > agent profile.** Each layer can only tighten, never loosen. Most restrictive wins.
+15. **Temp agent restrictions: no secrets, no connectors, no private memory, no project memory (unless assigned).** All grants auto-revoke on expiration.
+16. **The starter trio (Frank, Lori, Ellie) are seeded on bootstrap.** System-created, immediately active, org-level. They are not optional.
+17. **Frank is NOT a project manager.** He operates at the org level — cross-project coordination, strategic conversations, escalation endpoint. Individual project management is the PM's job.
+18. **Lori recommends, the human decides.** Lori proposes agents and staffing plans, but never makes unilateral staffing decisions.
+19. **Exactly one PM per project, enforced by schema.** If the PM is retired, a new PM must be assigned before the project continues.
+20. **Project roles: project_manager, worker, reviewer, planner.** An agent can hold multiple roles in the same project (separate rows) and different roles in different projects.
+21. **Agent identity is stateless at the prompt level.** Everything is assembled fresh from profile, context, memory, and history on every turn. No "agent runtime" holding state between turns.
+22. **Private memory for complex roles.** PMs and Frank have `private_memory_enabled = true` by default. Workers and reviewers default to false.
+23. **Skill attachments on agent profile are baseline competencies.** Activation depends on flow node context — agent skills are the fallback when no flow node skills are declared.
 
 ## Open Questions
 
-- Can temp agents become staff agents (“promote” flow)?
-- Should temps inherit memory context, and if so from where?
-- How many concurrent temp agents per org/project do we allow?
-
+_None currently outstanding._
