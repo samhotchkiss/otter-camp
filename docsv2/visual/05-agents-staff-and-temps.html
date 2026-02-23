@@ -1456,7 +1456,7 @@ flowchart TB
         <div class="pipeline-num">4</div>
         <div class="pipeline-content">
           <h4>Skills Instructions <span class="pipeline-badge badge-budget">budget-dependent</span></h4>
-          <p>Resolved from active skills only. Flow-node-relevant skills are loaded. Org/project defaults always included. An agent writing a blog post does not get deployment instructions.</p>
+          <p>Resolved from active skills only. Flow-node-relevant skills are loaded. Org/project defaults always included. MCP prompts attached to the flow node are included alongside skills (skills take precedence on conflict).</p>
         </div>
       </div>
       <div class="pipeline-layer budget-dep">
@@ -1477,7 +1477,7 @@ flowchart TB
         <div class="pipeline-num">7</div>
         <div class="pipeline-content">
           <h4>Tool Descriptions <span class="pipeline-badge badge-budget">lowest priority</span></h4>
-          <p>Available tools filtered by agent's tool policy + control plane capabilities. Rarely an issue &mdash; tool descriptions are small relative to other layers.</p>
+          <p>Available tools filtered by agent's tool policy + control plane capabilities. MCP tools use context-aware loading: eager connections include all schemas, flow-node-declared tools include declared schemas, others include lightweight summaries.</p>
         </div>
       </div>
     </div>
@@ -1926,7 +1926,6 @@ flowchart LR
           <tr><td>allowed_model_profiles</td><td>uuid[]</td><td>Permitted model profiles (null = any)</td></tr>
           <tr><td>budget_cap_cents</td><td>int</td><td>Per-agent cost cap per budget period</td></tr>
           <tr><td>memory_read_scopes</td><td>text[]</td><td>Default: {org, assigned_projects, current_task}. Staff and temps share the same default -- the difference is staff are assigned to multiple projects.</td></tr>
-          <tr><td>memory_write_scope</td><td>text</td><td>"context" = write to current scope</td></tr>
           <tr><td>private_memory_enabled</td><td>boolean</td><td>Working notes for complex roles (PMs, Frank, Lori, Ellie)</td></tr>
           <tr><td>temp_scope_type</td><td>text</td><td>project, task, session, or ttl (temps only)</td></tr>
           <tr><td>temp_scope_id</td><td>uuid</td><td>Project, task, or session reference (temps only)</td></tr>
@@ -1939,6 +1938,8 @@ flowchart LR
         Check constraints enforce: staff agents have no temp fields; temp agents have temp_scope_type set.
         Tool allow/deny lists are mutually exclusive. Unique on (organization_id, slug).
         memory_read_scopes default is {org, assigned_projects, current_task} for both staff and temp.
+        Private memory access is controlled by private_memory_enabled, not by the read_scopes array.
+        default_model_profile_id references model_profile.logical_profile_id (stable identity across versions).
       </div>
     </div>
 
@@ -1955,7 +1956,7 @@ flowchart LR
           <tr><td>project_id</td><td>uuid fk</td><td>References project</td></tr>
           <tr><td>role</td><td>text</td><td>project_manager, worker, reviewer, planner</td></tr>
           <tr><td>is_active</td><td>boolean</td><td>Soft-delete pattern (false + removed_at on removal)</td></tr>
-          <tr><td>assigned_by_type</td><td>text</td><td>human or agent (usually Lori)</td></tr>
+          <tr><td>assigned_by_type</td><td>text</td><td>human, agent, or system (usually Lori)</td></tr>
           <tr><td>assigned_by_id</td><td>uuid</td><td>Who made the assignment</td></tr>
         </tbody>
       </table>
