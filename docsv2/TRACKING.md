@@ -21,7 +21,7 @@
 | 03 | Projects and Task Flow | 914 | 7 - Finished | 12-table schema, first-principles reviewed |
 | 03a | Shipping and Delivery | 344 | 7 - Finished | 2 new tables, 18 resolved decisions, first-principles reviewed |
 | 04 | Auth, Tenancy, and Identity | ~640 | 7 - Finished | DB-per-org isolation, no org_membership, RBAC on human_user, 22 resolved decisions, first-principles reviewed |
-| 05 | Agents, Staff, and Temps | 890 | 5 - First Principles Review | Project-scoped temps, 4 scope types, temps get project access, NDI, 230+ profile catalog, 43 resolved decisions, first-principles reviewed |
+| 05 | Agents, Staff, and Temps | 892 | 6 - First Principles Review Completed | Project-scoped temps, 4 scope types, temps get project access, NDI, 230+ profile catalog, 43 resolved decisions, all review items resolved |
 | 06 | Memory | 1072 | 7 - Finished | 9-table schema, 52 resolved decisions, first-principles reviewed |
 | 07 | Models and Inference | 714 | 2 - Initial Draft | Provider abstraction, model profiles, cost tracking, schema |
 | 08 | Deployment and Self-Hosting | 800 | 2 - Initial Draft | Three modes, Docker Compose, binary distribution, upgrades |
@@ -44,7 +44,8 @@
 
 - **Finished:** 5 specs (02, 03, 03a, 04, 06)
 - **In Process:** 1 spec (01)
-- **Initial Draft:** 15 specs (05, 07, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
+- **First Principles Review Completed:** 1 spec (05)
+- **Initial Draft:** 14 specs (07, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
 - **Stubs:** 1 (UI Spec for Figma)
 - **Total:** 22 specs (+ README)
 - **Total lines:** ~16,600

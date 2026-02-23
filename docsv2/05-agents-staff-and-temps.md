@@ -838,6 +838,7 @@ create index on agent_profile_template (is_active) where organization_id is null
 - `project_task_participant.participant_id` -> `agent.id` when `participant_type = 'agent'` (see 03-projects-and-task-flow.md).
 - `agent_profile_template.organization_id` -> `organization.id` (null for system-shipped templates).
 - `agent_profile_template.source_agent_id` -> `agent.id` (when template was promoted from a live agent).
+- Deploy flow templates and environments are defined in 03a-shipping-and-delivery.md. The PM designs deploy flows; workers execute delivery steps.
 
 ## Resolved Decisions
 

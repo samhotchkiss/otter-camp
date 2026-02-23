@@ -68,6 +68,7 @@ The product principles are opinionated: chat is the primary interface where huma
 - Skill
 - ToolExecution
 - ExternalConnection
+- AgentProfileTemplate (catalog of 230+ pre-built agent profiles)
 - AuditEvent
 
 ## Strong Domain Boundaries

@@ -1928,7 +1928,7 @@ flowchart LR
         <div class="schema-table__desc">Core memory record with scope, kind, layer, status, confidence, temporal bounds, supersession chain, sensitivity, content hash, and 1536d embedding.</div>
         <div class="schema-table__cols">
           <span class="schema-col schema-col--pk">id</span>
-          <span class="schema-col schema-col--fk">org_id</span>
+          <span class="schema-col schema-col--fk">organization_id</span>
           <span class="schema-col schema-col--fk">project_id</span>
           <span class="schema-col schema-col--fk">task_id</span>
           <span class="schema-col">kind</span>
@@ -1946,7 +1946,7 @@ flowchart LR
         <div class="schema-table__desc">Global taxonomy tree. Org-level, not per-project. Materialized path for fast subtree queries. Managed autonomously by Ellie.</div>
         <div class="schema-table__cols">
           <span class="schema-col schema-col--pk">id</span>
-          <span class="schema-col schema-col--fk">org_id</span>
+          <span class="schema-col schema-col--fk">organization_id</span>
           <span class="schema-col schema-col--fk">parent_id</span>
           <span class="schema-col">name</span>
           <span class="schema-col">path</span>
@@ -1969,7 +1969,7 @@ flowchart LR
         <div class="schema-table__desc">Known entities: people, projects, tools, concepts. Canonical names with auto-discovered aliases. Links to current synthesis memory.</div>
         <div class="schema-table__cols">
           <span class="schema-col schema-col--pk">id</span>
-          <span class="schema-col schema-col--fk">org_id</span>
+          <span class="schema-col schema-col--fk">organization_id</span>
           <span class="schema-col">name</span>
           <span class="schema-col">entity_type</span>
           <span class="schema-col">aliases[]</span>
@@ -2015,7 +2015,7 @@ flowchart LR
         <div class="schema-table__desc">Tracks consolidation job runs. Types: dedup, synthesis, decay, distillation, reflection, task_completion, reembed.</div>
         <div class="schema-table__cols">
           <span class="schema-col schema-col--pk">id</span>
-          <span class="schema-col schema-col--fk">org_id</span>
+          <span class="schema-col schema-col--fk">organization_id</span>
           <span class="schema-col">run_type</span>
           <span class="schema-col">status</span>
           <span class="schema-col">memories_processed</span>
@@ -2028,7 +2028,7 @@ flowchart LR
         <div class="schema-table__desc">Tracks bulk import jobs from JSONL archives. Progress tracking with file counts, memory counts, duplicate counts, and error details.</div>
         <div class="schema-table__cols">
           <span class="schema-col schema-col--pk">id</span>
-          <span class="schema-col schema-col--fk">org_id</span>
+          <span class="schema-col schema-col--fk">organization_id</span>
           <span class="schema-col schema-col--fk">requested_by</span>
           <span class="schema-col">status</span>
           <span class="schema-col">memories_extracted</span>

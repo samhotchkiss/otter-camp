@@ -644,7 +644,7 @@ When `session_id` is absent, the importer groups messages by time proximity (con
 -- Core memory record
 create table memory (
   id            uuid primary key default gen_random_uuid(),
-  org_id        uuid not null references org(id),
+  organization_id uuid not null references organization(id),
   project_id    uuid references project(id),        -- null = org-scoped
   task_id       uuid references project_task(id),    -- null = project or org-scoped
   agent_id      uuid references agent(id),           -- non-null = agent-private scope
@@ -671,11 +671,11 @@ create table memory (
 );
 
 -- Design notes:
--- Scope is determined by the combination of org_id, project_id, task_id, agent_id:
---   org_id only                    = org scope
---   org_id + project_id            = project scope
---   org_id + project_id + task_id  = task scope
---   agent_id set                   = agent-private scope
+-- Scope is determined by the combination of organization_id, project_id, task_id, agent_id:
+--   organization_id only                           = org scope
+--   organization_id + project_id                   = project scope
+--   organization_id + project_id + task_id         = task scope
+--   agent_id set                                   = agent-private scope
 -- Embedding is 1536d — never truncate. V1 proved 1536d >> 768d (+20pp hit rate).
 -- confidence and utility are NOT used as retrieval weights (V1 proved importance weighting hurts -4pp).
 --   They are used for lifecycle decisions (promotion, decay, consolidation thresholds).
@@ -686,7 +686,7 @@ create table memory (
 -- No lowercasing or entity normalization — those change meaning. Hash catches exact duplicates;
 -- cosine similarity handles semantic duplicates.
 
-create index idx_memory_org_scope on memory(org_id, status) where status = 'active';
+create index idx_memory_org_scope on memory(organization_id, status) where status = 'active';
 create index idx_memory_project_scope on memory(project_id, status) where project_id is not null and status = 'active';
 create index idx_memory_task_scope on memory(task_id, status) where task_id is not null and status = 'active';
 create index idx_memory_agent_private on memory(agent_id, status) where agent_id is not null and status = 'active';
@@ -701,7 +701,7 @@ create index idx_memory_superseded on memory(superseded_by) where superseded_by 
 -- Global taxonomy tree (org-level, not per-project)
 create table memory_taxonomy_node (
   id            uuid primary key default gen_random_uuid(),
-  org_id        uuid not null references org(id),
+  organization_id uuid not null references organization(id),
   parent_id     uuid references memory_taxonomy_node(id),
   name          text not null,                        -- e.g., "deployment", "ci-pipelines"
   path          text not null,                        -- materialized path: "engineering > deployment > ci-pipelines"
@@ -710,7 +710,7 @@ create table memory_taxonomy_node (
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now(),
 
-  unique (org_id, path)
+  unique (organization_id, path)
 );
 
 -- Design notes:
@@ -718,9 +718,9 @@ create table memory_taxonomy_node (
 -- Ellie manages this tree — creates, merges, prunes nodes autonomously.
 -- Humans/PMs can also create/rename nodes conversationally.
 
-create index idx_taxonomy_node_org on memory_taxonomy_node(org_id);
+create index idx_taxonomy_node_org on memory_taxonomy_node(organization_id);
 create index idx_taxonomy_node_parent on memory_taxonomy_node(parent_id);
-create index idx_taxonomy_node_path on memory_taxonomy_node(org_id, path text_pattern_ops);
+create index idx_taxonomy_node_path on memory_taxonomy_node(organization_id, path text_pattern_ops);
 
 -- Many-to-many: memories tagged with taxonomy nodes
 create table memory_taxonomy_tag (
@@ -738,7 +738,7 @@ create index idx_taxonomy_tag_memory on memory_taxonomy_tag(memory_id);
 -- Known entities (people, projects, tools, concepts)
 create table memory_entity (
   id            uuid primary key default gen_random_uuid(),
-  org_id        uuid not null references org(id),
+  organization_id uuid not null references organization(id),
   name          text not null,                        -- canonical name
   entity_type   text not null,                        -- person, project, tool, concept, organization
   aliases       text[] not null default '{}',         -- alternative names/abbreviations
@@ -747,7 +747,7 @@ create table memory_entity (
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now(),
 
-  unique (org_id, entity_type, name)
+  unique (organization_id, entity_type, name)
 );
 
 -- Design notes:
@@ -759,7 +759,7 @@ create table memory_entity (
 --   Humans can also declare aliases via @mention Ellie.
 -- synthesis_memory_id links to the current entity_definition memory for this entity.
 
-create index idx_entity_org on memory_entity(org_id);
+create index idx_entity_org on memory_entity(organization_id);
 
 -- Many-to-many: which memories mention which entities
 create table memory_entity_mention (
@@ -820,7 +820,7 @@ create index idx_dedup_reviewed_b on memory_dedup_reviewed(memory_id_b);
 -- Tracks consolidation/compaction job runs
 create table memory_compaction_run (
   id            uuid primary key default gen_random_uuid(),
-  org_id        uuid not null references org(id),
+  organization_id uuid not null references organization(id),
   run_type      text not null,                        -- dedup, synthesis, decay, distillation, reflection, task_completion, reembed
   status        text not null default 'running',      -- running, completed, failed
   memories_processed int not null default 0,
@@ -832,12 +832,12 @@ create table memory_compaction_run (
   completed_at  timestamptz
 );
 
-create index idx_compaction_run_org on memory_compaction_run(org_id, started_at desc);
+create index idx_compaction_run_org on memory_compaction_run(organization_id, started_at desc);
 
 -- Tracks bulk import jobs
 create table memory_import (
   id            uuid primary key default gen_random_uuid(),
-  org_id        uuid not null references org(id),
+  organization_id uuid not null references organization(id),
   requested_by  uuid not null references human_user(id),
   source_filename text not null,
   source_size_bytes bigint,
@@ -853,7 +853,7 @@ create table memory_import (
   created_at    timestamptz not null default now()
 );
 
-create index idx_import_org on memory_import(org_id, created_at desc);
+create index idx_import_org on memory_import(organization_id, created_at desc);
 create index idx_import_status on memory_import(status) where status in ('pending', 'processing');
 ```
 
