@@ -31,7 +31,7 @@ The simplest possible deployment. One process, one database, local filesystem fo
 - **Database**: PostgreSQL with pgvector extension — local (via Docker, Homebrew, system package) or remote. pgvector is required for the memory system's 1536-dimension embeddings (see 06-memory.md).
 - **Object storage**: local filesystem. A configured directory stores all artifacts, uploads, and binary content. No S3 setup required.
 - **Job queue**: PostgreSQL-backed (LISTEN/NOTIFY + polling). No Redis or external queue.
-- **Event bus**: PostgreSQL-backed (same mechanism as job queue).
+- **Event bus**: PostgreSQL-backed. Domain events are written to a durable `domain_event` table (see 12-api-events-and-realtime.md) and fanned out via LISTEN/NOTIFY for realtime subscribers. The table is the source of truth — LISTEN/NOTIFY is a performance optimization for low-latency fanout, not a durability mechanism. Missed notifications are recovered by polling the event table.
 - **Network**: localhost only by default. No TLS required for local access.
 - **Browser service**: optional. If configured, connects to a locally running headless Chrome. If not configured, browser-based agent tools are unavailable (not an error — the feature is simply absent).
 - **Resource requirements**: 2 GB RAM, 2 CPU cores, 10 GB disk.
@@ -47,7 +47,7 @@ The same binary, configured for a remote server with internet access. One operat
 - **Database**: PostgreSQL with pgvector — local on the VPS or a managed database (RDS, Supabase, Neon, etc.). Most managed PostgreSQL providers support pgvector natively.
 - **Object storage**: local filesystem (default) or S3-compatible (MinIO on the VPS, or a cloud provider like AWS S3, Cloudflare R2, Backblaze B2).
 - **Job queue**: PostgreSQL-backed. Same as local mode.
-- **Event bus**: PostgreSQL-backed. Same as local mode.
+- **Event bus**: PostgreSQL-backed (durable table + LISTEN/NOTIFY fanout). Same as local mode.
 - **Network**: exposed to the internet (or a private network). TLS required — via reverse proxy (Caddy, Nginx) or the built-in ACME integration.
 - **Browser service**: optional. Docker Compose includes a headless Chrome container.
 - **Resource requirements**: 4 GB RAM, 2 CPU cores, 50 GB disk.
@@ -114,6 +114,8 @@ ottercamp serve                # runs both (default)
 ```
 
 Both processes connect to the same PostgreSQL database and the same object storage. The job queue in PostgreSQL coordinates work between them. No additional infrastructure is needed for the split.
+
+**WebSocket/SSE in split mode**: the API process handles all WebSocket/SSE connections. These are stateful within the process — each connection is a goroutine holding the open socket. In single-node mode this is trivial. In split mode with a single API process, it is also straightforward. If multiple API processes are run behind a load balancer (managed mode), sticky sessions are NOT required — the API process subscribes to PostgreSQL LISTEN/NOTIFY for realtime events and fans them out to all connected clients regardless of which process received the original event. Any API process can serve any client.
 
 ## Docker Compose Packaging
 
@@ -289,24 +291,39 @@ Object storage defaults to local filesystem (`~/.ottercamp/objects/` or configur
 ### CLI Commands
 
 ```bash
+# Server
 ottercamp serve                 # Start the server (API + Worker)
 ottercamp serve --mode api      # Start only the API server
 ottercamp serve --mode worker   # Start only the Worker
 ottercamp serve --port 9090     # Custom port
 
+# Database
 ottercamp migrate               # Run pending database migrations
 ottercamp migrate --status      # Show migration status
+ottercamp migrate --dry-run     # Show what would run without executing
+ottercamp migrate --catalog     # Migrate all org databases (managed mode)
 
+# Bootstrap
 ottercamp bootstrap             # Run bootstrap manually (create org, admin user, starter trio)
 ottercamp bootstrap --email operator@example.com --password <password>
 
+# Account management
 ottercamp reset-password --email operator@example.com
+ottercamp magic-link --email operator@example.com   # Generate single-use login URL
+ottercamp unlock-account --email operator@example.com
 
+# Backup and restore
 ottercamp backup --output backup.tar.gz    # Full backup (database + objects)
 ottercamp restore --input backup.tar.gz    # Full restore
 
+# Secrets
+ottercamp secret set --name "Anthropic Key" --category model_provider
+ottercamp secret list                      # List all secrets (names only, never values)
+ottercamp secret delete --name "Old Key"
+
+# Diagnostics
 ottercamp version               # Show version and build info
-ottercamp health                # Check service health (database, object storage, providers)
+ottercamp health                # Query /health and /ready endpoints, print results
 ```
 
 ## Configuration
@@ -386,6 +403,15 @@ That is the only required configuration when using the binary with a local Postg
 | `BROWSER_ENDPOINT` | — | WebSocket URL for headless Chrome (CDP endpoint). If unset, browser tools are disabled. |
 | `BROWSER_POOL_SIZE` | `2` | Number of browser instances to maintain. |
 
+#### Secrets
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OTTERCAMP_MASTER_KEY` | — | 32-byte hex-encoded encryption key for secrets at rest. Required if not using a key file or KMS. |
+| `OTTERCAMP_MASTER_KEY_FILE` | — | Path to a file containing the master key. Alternative to the env var. |
+| `OTTERCAMP_KMS_PROVIDER` | — | Cloud KMS provider: `aws`, `gcp`. Managed mode only. |
+| `OTTERCAMP_KMS_KEY_ID` | — | KMS key ID or ARN. Required when `KMS_PROVIDER` is set. |
+
 #### Observability
 
 | Variable | Default | Description |
@@ -399,6 +425,13 @@ That is the only required configuration when using the binary with a local Postg
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GIT_REPOS_PATH` | `~/.ottercamp/repos` | Local path for project git repositories. |
+
+#### Advanced
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OTTERCAMP_CONFIG_FILE` | `~/.ottercamp/config.yaml` | Path to optional YAML config file. |
+| `OTTERCAMP_CATALOG_URL` | — | Catalog database connection string. Managed mode only. |
 
 ### Configuration File (Optional)
 
@@ -436,10 +469,11 @@ Environment variables always override the config file. The config file is option
 
 ### Schema Migrations
 
-Migrations are embedded in the Go binary. They are forward-only SQL scripts, numbered sequentially.
+Migrations are embedded in the Go binary. They are forward-only SQL scripts, numbered sequentially. The first migration enables required extensions (`CREATE EXTENSION IF NOT EXISTS vector` for pgvector) before creating any tables.
 
 ```
 migrations/
+  000_extensions.sql          -- CREATE EXTENSION IF NOT EXISTS vector
   001_initial_schema.sql
   002_add_chat_tables.sql
   003_add_project_tables.sql
@@ -710,6 +744,7 @@ Returns 200 if the process is ready to serve traffic. Checks all critical depend
   "status": "ready",
   "checks": {
     "database": {"status": "ok", "latency_ms": 2},
+    "pgvector": {"status": "ok"},
     "object_storage": {"status": "ok", "latency_ms": 15},
     "migrations": {"status": "current", "version": 47}
   }
@@ -723,6 +758,7 @@ Returns 503 if any critical dependency is unavailable:
   "status": "not_ready",
   "checks": {
     "database": {"status": "ok", "latency_ms": 2},
+    "pgvector": {"status": "error", "message": "extension 'vector' not available"},
     "object_storage": {"status": "error", "message": "connection refused"},
     "migrations": {"status": "current", "version": 47}
   }
@@ -732,6 +768,7 @@ Returns 503 if any critical dependency is unavailable:
 Critical dependencies checked by `/ready`:
 
 - **Database**: can execute a simple query (`SELECT 1`).
+- **pgvector**: the `vector` extension is available (`SELECT 1 FROM pg_extension WHERE extname = 'vector'`). The memory system requires pgvector for 1536-dimension embeddings (see 06-memory.md). If pgvector is not installed, memory storage and retrieval will fail. The first migration enables the extension via `CREATE EXTENSION IF NOT EXISTS vector`, but `/ready` verifies it independently.
 - **Object storage**: can list/head the bucket (or check filesystem path exists and is writable).
 - **Migrations**: schema version matches the binary's expected version.
 
