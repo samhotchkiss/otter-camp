@@ -32,7 +32,7 @@
 | 13 | Security, Observability, Costs | 789 | 2 - Initial Draft | Threat model, secrets, retention, metrics, cost controls |
 | 14 | Open Questions and Phasing | 784 | 2 - Initial Draft | Expanded build phases, bootstrap dataset, risk areas |
 | 15 | Migration and Backward Compat | 368 | 2 - Initial Draft | Clean-room principles, JSONL import bridge, validation |
-| 16 | Agent Control Plane | 1371 | 2 - Initial Draft | Full schema, capability templates, execution lifecycle |
+| 16 | Agent Control Plane | ~1200 | 7 - Finished | Binary policy (allow/deny), 7-table schema, capability templates, 8-step execution lifecycle, human review is a flow node not a policy outcome, first-principles reviewed |
 | 17 | TUI | 813 | 2 - Initial Draft | Bubble Tea, layout, keyboard nav, command palette |
 | 18 | Web UI | 884 | 2 - Initial Draft | React SPA, three-panel layout, command bar, design system |
 | 19 | Mobile UI | 459 | 2 - Initial Draft | React Native, push notifications, quick actions |
@@ -57,9 +57,9 @@ Items discovered during review that belong to a spec not yet under active review
 
 ## Summary
 
-- **Finished:** 7 specs (02, 03, 03a, 04, 05, 06, 08)
+- **Finished:** 8 specs (02, 03, 03a, 04, 05, 06, 08, 16)
 - **In Process:** 1 spec (01)
-- **Initial Draft:** 13 specs (07, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
+- **Initial Draft:** 12 specs (07, 09, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20)
 - **Stubs:** 1 (UI Spec for Figma)
 - **Total:** 22 specs (+ README)
 - **Total lines:** ~16,600

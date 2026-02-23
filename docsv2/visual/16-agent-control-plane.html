@@ -28,7 +28,7 @@
     --text-code:     #a8d8ea;
     --deny-color:    #ff6b6b;
     --approve-color: #51cf66;
-    --approval-color:#ffd43b;
+    --audit-color:   #ffd43b;
     --grid-line:     rgba(0, 180, 216, 0.04);
     --grid-line-bright: rgba(0, 180, 216, 0.08);
     --font-heading:  'Barlow', sans-serif;
@@ -328,7 +328,7 @@
   .component-card.policy-api::before { background: var(--accent); }
   .component-card.exec-broker::before { background: #7c5bf5; }
   .component-card.worker-runtime::before { background: #51cf66; }
-  .component-card.approval-svc::before { background: #ffd43b; }
+  .component-card.audit-svc::before { background: #ffd43b; }
 
   .component-card .card-icon {
     width: 40px;
@@ -343,7 +343,7 @@
   .policy-api .card-icon { background: rgba(0, 180, 216, 0.12); border: 1px solid rgba(0, 180, 216, 0.3); }
   .exec-broker .card-icon { background: rgba(124, 91, 245, 0.12); border: 1px solid rgba(124, 91, 245, 0.3); }
   .worker-runtime .card-icon { background: rgba(81, 207, 102, 0.12); border: 1px solid rgba(81, 207, 102, 0.3); }
-  .approval-svc .card-icon { background: rgba(255, 212, 59, 0.12); border: 1px solid rgba(255, 212, 59, 0.3); }
+  .audit-svc .card-icon { background: rgba(255, 212, 59, 0.12); border: 1px solid rgba(255, 212, 59, 0.3); }
 
   .component-card .card-icon svg {
     width: 20px;
@@ -357,7 +357,7 @@
   .policy-api .card-icon svg { stroke: var(--accent); }
   .exec-broker .card-icon svg { stroke: #7c5bf5; }
   .worker-runtime .card-icon svg { stroke: #51cf66; }
-  .approval-svc .card-icon svg { stroke: #ffd43b; }
+  .audit-svc .card-icon svg { stroke: #ffd43b; }
 
   .component-card h3 {
     font-size: 1rem;
@@ -733,7 +733,6 @@
   }
 
   .rule-decision.deny { background: rgba(255, 107, 107, 0.15); color: #ff6b6b; border: 1px solid rgba(255, 107, 107, 0.25); }
-  .rule-decision.approval { background: rgba(255, 212, 59, 0.15); color: #ffd43b; border: 1px solid rgba(255, 212, 59, 0.25); }
   .rule-decision.allow { background: rgba(81, 207, 102, 0.15); color: #51cf66; border: 1px solid rgba(81, 207, 102, 0.25); }
 
   /* ───────────────────────────── Schema Section ───────────────────────────── */
@@ -929,19 +928,19 @@
 <section class="hero">
   <div class="container">
     <span class="label fade-up">OtterCamp V2 Specification / Doc 16</span>
-    <h1 class="fade-up d1">Nothing Bypasses the<br><span class="accent">Control Plane</span></h1>
+    <h1 class="fade-up d1">Permissive by Default.<br><span class="accent">Controlled by Policy.</span></h1>
     <p class="tagline fade-up d2">
       The single trusted execution layer through which every agent mutation flows.
-      No agent writes to the database, executes a command, or calls an external service
-      without passing through this system.
+      Agents are empowered to do real work. Policy is binary: allow or deny.
+      Restrictions are opt-in. Instance safety is the only default-deny layer.
     </p>
     <div class="stats-row fade-up d3">
       <div class="stat-block">
-        <span class="stat-value">4</span>
-        <span class="stat-label">Components</span>
+        <span class="stat-value">2</span>
+        <span class="stat-label">Policy Outcomes</span>
       </div>
       <div class="stat-block">
-        <span class="stat-value">9</span>
+        <span class="stat-value">7</span>
         <span class="stat-label">Tables</span>
       </div>
       <div class="stat-block">
@@ -963,9 +962,9 @@
       <span class="label">Architecture</span>
       <h2>Four-Component Execution Path</h2>
       <p>
-        Every tier 2 tool call flows through the Execution Broker. The Policy API is the single
-        authority for authorization. Workers are stateless sandboxed executors. Approvals integrate
-        with the inbox and never block the agent's turn.
+        Every tier 2 tool call flows through the Execution Broker. The Policy API returns
+        allow or deny. Workers are stateless sandboxed executors. Policy is binary --
+        no interception, no staging. Tools do what they say.
       </p>
     </div>
     <div class="mermaid-wrapper fade-up d2">
@@ -1001,9 +1000,8 @@ graph TB
 
   subgraph CP["CONTROL PLANE"]
     direction TB
-    POLICY["Policy API<br/><i>allow / deny / require_approval</i>"]
+    POLICY["Policy API<br/><i>allow / deny</i>"]
     BROKER["Execution Broker<br/><i>Admission + Run creation</i>"]
-    APPROVAL["Approval Service<br/><i>Inbox integration</i>"]
 
     subgraph WORKERS["Worker Runtime"]
       direction LR
@@ -1014,19 +1012,14 @@ graph TB
     end
   end
 
-  INBOX["Inbox<br/><i>Human acts</i>"]
   AUDIT["Audit Log<br/><i>Append-only</i>"]
-  DB[("Run / Step / Attempt<br/>+ 6 more tables")]
+  DB[("Run / Step / Attempt<br/>+ 4 more tables")]
 
   CHAT -->|"action request"| BROKER
   BROKER -->|"evaluate"| POLICY
-  POLICY -->|"decision"| BROKER
+  POLICY -->|"allow / deny"| BROKER
   BROKER -->|"allow"| WORKERS
-  BROKER -->|"require_approval"| APPROVAL
-  APPROVAL -->|"create item"| INBOX
-  INBOX -->|"approve / reject"| APPROVAL
-  APPROVAL -->|"resume run"| BROKER
-  BROKER -->|"deny: return error<br/>allow: return result"| CHAT
+  BROKER -->|"deny: error<br/>allow: result"| CHAT
   WORKERS -->|"result"| BROKER
   BROKER -->|"record"| DB
   BROKER -->|"emit"| AUDIT
@@ -1034,7 +1027,6 @@ graph TB
   classDef chatNode fill:#1b2838,stroke:#00b4d8,stroke-width:2px,color:#e0e0e0
   classDef brokerNode fill:#223344,stroke:#7c5bf5,stroke-width:2px,color:#e0e0e0
   classDef policyNode fill:#223344,stroke:#00b4d8,stroke-width:2px,color:#e0e0e0
-  classDef approvalNode fill:#223344,stroke:#ffd43b,stroke-width:2px,color:#e0e0e0
   classDef workerNode fill:#1b2838,stroke:#51cf66,stroke-width:1px,color:#e0e0e0
   classDef storageNode fill:#1b2838,stroke:#00b4d8,stroke-width:2px,color:#f0f4f8
   classDef auditNode fill:#1b2838,stroke:#868e96,stroke-width:1px,color:#9ab0c4
@@ -1042,10 +1034,8 @@ graph TB
   class CHAT chatNode
   class BROKER brokerNode
   class POLICY policyNode
-  class APPROVAL approvalNode
   class W_INT,W_CLI,W_BRW,W_MCP workerNode
   class DB storageNode
-  class INBOX approvalNode
   class AUDIT auditNode
         </pre>
       </div>
@@ -1060,7 +1050,7 @@ graph TB
         <h3>Policy API</h3>
         <p class="card-desc">
           Stateless evaluation engine. Given a principal, capability, scope, and context,
-          returns allow / deny / require_approval. Single authority for authorization.
+          returns allow / deny. Single authority for authorization.
         </p>
         <div class="card-detail">
           Cached aggressively. Org/project policies: short TTL.
@@ -1098,18 +1088,18 @@ graph TB
         </div>
       </div>
 
-      <div class="component-card approval-svc fade-up d7">
+      <div class="component-card audit-svc fade-up d7">
         <div class="card-icon">
-          <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>
+          <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         </div>
-        <h3>Approval Service</h3>
+        <h3>Audit / Event Log</h3>
         <p class="card-desc">
-          Human-in-the-loop via inbox. Pauses runs, creates inbox items,
-          resumes or cancels on human action. Supports session-wide grants.
+          Immutable record of decisions and outcomes. Every policy evaluation,
+          broker decision, and execution result is logged. Append-only and tamper-evident.
         </p>
         <div class="card-detail">
-          Non-blocking: returns "queued for review" immediately.
-          Agent's turn continues. No timeout on approvals.
+          Separate from run_event (execution timeline). Captures
+          policy decisions and access control events.
         </div>
       </div>
     </div>
@@ -1125,7 +1115,7 @@ graph TB
       <p>
         Every mutation maps to exactly one capability: <code>domain.resource.action</code>.
         Wildcards supported: <code>project.*</code> grants all project capabilities.
-        Default-deny -- an agent has zero capabilities until explicitly granted.
+        Agents receive generous grants from templates. Restrictions are opt-in.
       </p>
     </div>
     <div class="tree-container fade-up d2">
@@ -1205,8 +1195,8 @@ graph TB
         <div class="tree-domain">
           <div class="tree-domain-label">comms.*</div>
           <ul class="tree-items">
-            <li>comms.email.send</li>
             <li>comms.email.draft</li>
+            <li>comms.email.send</li>
             <li>comms.slack.post</li>
             <li>comms.github.pr.create</li>
             <li>comms.github.pr.comment</li>
@@ -1261,8 +1251,8 @@ graph TB
         <div class="template-header">
           <span class="template-badge">worker</span>
         </div>
-        <h3>Project Mutations + File I/O</h3>
-        <p class="template-desc">The standard template for agents doing work.</p>
+        <h3>Build, Test, Interact</h3>
+        <p class="template-desc">The standard template. Project mutations + file I/O + CLI + browser. No external comms.</p>
         <ul class="template-capabilities">
           <li class="inherited">reader (all)</li>
           <li>project.task.create</li>
@@ -1271,9 +1261,15 @@ graph TB
           <li>project.subtask.*</li>
           <li>project.flow.advance</li>
           <li>project.flow.blocker.raise</li>
+          <li>project.dependency.create</li>
+          <li>project.participant.add</li>
           <li>chat.message.write</li>
+          <li>chat.artifact.create</li>
           <li>memory.write</li>
+          <li>memory.entity.create</li>
           <li>system.file.write</li>
+          <li>system.cli.execute</li>
+          <li>system.browser.*</li>
         </ul>
       </div>
 
@@ -1281,15 +1277,11 @@ graph TB
         <div class="template-header">
           <span class="template-badge">deployer</span>
         </div>
-        <h3>+ System Tools + Browser</h3>
-        <p class="template-desc">Build, test, and deploy. Full system access.</p>
+        <h3>+ External Communications</h3>
+        <p class="template-desc">Worker + email, Slack, GitHub PRs. For agents that communicate externally.</p>
         <ul class="template-capabilities">
           <li class="inherited">worker (all)</li>
-          <li>system.cli.execute</li>
-          <li>system.browser.navigate</li>
-          <li>system.browser.interact</li>
-          <li>system.browser.screenshot</li>
-          <li>system.browser.extract</li>
+          <li>comms.*</li>
         </ul>
       </div>
 
@@ -1298,7 +1290,7 @@ graph TB
           <span class="template-badge">admin</span>
         </div>
         <h3>All Capabilities</h3>
-        <p class="template-desc">Reserved for PM and org-level agents (Frank, Lori).</p>
+        <p class="template-desc">The starter trio (Frank, Lori, Ellie) and org-level agents.</p>
         <div class="wildcard-grant">*</div>
         <p class="wildcard-note">Unrestricted within scope. Scoping still applies -- org-level admin is bounded by the org.</p>
       </div>
@@ -1315,8 +1307,8 @@ graph TB
       <h2>Five Layers, Most-Restrictive-Wins</h2>
       <p>
         Policies compose across five layers evaluated highest-priority-first.
-        A deny at any layer is absolute. A lower-priority layer can never grant
-        what a higher-priority layer denies.
+        Each layer can allow or deny. Deny at any layer is absolute.
+        Allow only when all applicable layers allow (or are silent).
       </p>
     </div>
 
@@ -1334,7 +1326,7 @@ graph TB
         <div class="policy-number">2</div>
         <div class="policy-content">
           <h3>Organization Policy</h3>
-          <p>Set by org owner/admin. Org-wide defaults for capabilities, budget limits, max concurrent runs. Example: "All comms.email.send actions require approval org-wide."</p>
+          <p>Set by org owner/admin. Org-wide restrictions via deny rules. Token budget limits, max concurrent runs. Example: "All comms.email.send actions denied for non-deployer agents."</p>
         </div>
         <span class="policy-priority">High</span>
       </div>
@@ -1343,7 +1335,7 @@ graph TB
         <div class="policy-number">3</div>
         <div class="policy-content">
           <h3>Project Policy</h3>
-          <p>Set by human or PM for a specific project. Project-specific overrides. Example: "In the billing project, system.cli.execute requires approval."</p>
+          <p>Set by human or PM for a specific project. Project-specific overrides. Example: "In the billing project, system.cli.execute denied."</p>
         </div>
         <span class="policy-priority">Medium</span>
       </div>
@@ -1361,7 +1353,7 @@ graph TB
         <div class="policy-number">5</div>
         <div class="policy-content">
           <h3>Request-Specific Overrides</h3>
-          <p>Applied at runtime based on context. Can only restrict, never expand. Example: agent at 80% daily budget -- expensive capabilities downgrade to require_approval.</p>
+          <p>Applied at runtime based on context. Can only restrict, never expand. Example: agent at hard token budget -- non-essential capabilities denied.</p>
         </div>
         <span class="policy-priority">Restrict Only</span>
       </div>
@@ -1373,10 +1365,6 @@ graph TB
         <div class="rule-item">
           <span class="rule-decision deny">deny</span>
           <span>At any layer = denied. Period. No lower layer can override.</span>
-        </div>
-        <div class="rule-item">
-          <span class="rule-decision approval">require_approval</span>
-          <span>At any layer + no deny above = require_approval. Approval requirements accumulate.</span>
         </div>
         <div class="rule-item">
           <span class="rule-decision allow">allow</span>
@@ -1433,12 +1421,7 @@ stateDiagram-v2
   [*] --> created : Broker receives<br/>action request
 
   created --> in_progress : Policy: ALLOW
-  created --> awaiting_approval : Policy: REQUIRE_APPROVAL
   created --> failed : Policy: DENY
-
-  awaiting_approval --> in_progress : Human approves
-  awaiting_approval --> failed : Human rejects
-  awaiting_approval --> cancelled : Context stale
 
   in_progress --> completed : All steps done
   in_progress --> failed : Step failed terminally
@@ -1464,10 +1447,10 @@ stateDiagram-v2
   <div class="container">
     <div class="section-header fade-up">
       <span class="label">Data Model</span>
-      <h2>9-Table Schema</h2>
+      <h2>7-Table Schema</h2>
       <p>
         Anchored by the <code>run</code> entity. Everything else links back to it.
-        The schema captures the complete execution record: who, what, when, why, and what happened.
+        Model invocations are tracked in doc 07's <code>model_invocation</code> table with control plane FKs.
       </p>
     </div>
 
@@ -1486,7 +1469,7 @@ stateDiagram-v2
           <li>capability, action_type, action_payload</li>
           <li>policy_decision, policy_decided_by</li>
           <li>status, failure_reason, failure_class</li>
-          <li>total_input_tokens, estimated_cost_usd</li>
+          <li>total_input_tokens, total_output_tokens</li>
           <li>idempotency_key, version</li>
         </ul>
       </div>
@@ -1501,7 +1484,7 @@ stateDiagram-v2
           <li>action_type, action_payload</li>
           <li>status, failure_reason</li>
           <li>output, output_summary</li>
-          <li>input_tokens, estimated_cost_usd</li>
+          <li>input_tokens, output_tokens</li>
         </ul>
       </div>
 
@@ -1512,23 +1495,21 @@ stateDiagram-v2
         <ul class="schema-columns">
           <li><span class="col-key">id</span> <span class="col-type">uuid pk</span></li>
           <li>run_step_id, attempt_number</li>
-          <li>trigger (initial/retry/approval/manual)</li>
+          <li>trigger (initial/transient_failure/manual)</li>
           <li>status, output, worker_type</li>
-          <li>input_tokens, estimated_cost_usd</li>
+          <li>input_tokens, output_tokens</li>
         </ul>
       </div>
 
-      <!-- model_invocation -->
+      <!-- model_invocation (cross-ref) -->
       <div class="schema-table fade-up d4">
-        <div class="schema-table-name">model_invocation</div>
-        <p class="table-desc">Per-LLM-call cost/latency tracking. Links to runs and/or chat turns.</p>
+        <div class="schema-table-name">model_invocation <span class="anchor-badge" style="background:rgba(255,169,77,0.15);color:#ffa94d;border-color:rgba(255,169,77,0.3);">Doc 07</span></div>
+        <p class="table-desc">Defined in doc 07. Carries run_id, run_step_id, run_attempt_id FKs for control plane context.</p>
         <ul class="schema-columns">
-          <li><span class="col-key">id</span> <span class="col-type">uuid pk</span></li>
-          <li>run_id, session_id, turn_id</li>
-          <li>provider, model_id</li>
-          <li>input_tokens, output_tokens, cost_usd</li>
-          <li>time_to_first_token_ms, duration_ms</li>
-          <li>purpose, is_retry, is_fallback</li>
+          <li>Owned by doc 07 (Models &amp; Inference)</li>
+          <li>FK: run_id, run_step_id, run_attempt_id</li>
+          <li>Token counts feed into budget enforcement</li>
+          <li>Control plane reads, does not write</li>
         </ul>
       </div>
 
@@ -1583,17 +1564,6 @@ stateDiagram-v2
         </ul>
       </div>
 
-      <!-- session_capability_grant -->
-      <div class="schema-table fade-up d9">
-        <div class="schema-table-name">session_capability_grant</div>
-        <p class="table-desc">Ephemeral runtime overrides. Session-scoped approval grants.</p>
-        <ul class="schema-columns">
-          <li><span class="col-key">id</span> <span class="col-type">uuid pk</span></li>
-          <li>session_id, agent_id, capability</li>
-          <li>granted_by, run_id</li>
-          <li>is_active, granted_at, revoked_at</li>
-        </ul>
-      </div>
 
     </div>
   </div>

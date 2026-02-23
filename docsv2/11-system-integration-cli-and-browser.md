@@ -44,7 +44,7 @@ Define how agents execute real-world actions through the terminal and web browse
 - **High-level actions, not raw automation code.** Agents express intent through structured action APIs, not by writing Playwright scripts or bash pipelines. This keeps prompts clean, actions auditable, and sandboxing enforceable.
 - **Least privilege by default.** Agents get the minimum access needed for their task. Working directory is scoped to the project repo. Environment variables are filtered. Network access is configurable. Browser contexts are isolated.
 - **Everything is recorded.** Every command, every browser action, every screenshot, every output is captured as a RunArtifact or RunEvent. Full replay capability for debugging and audit.
-- **Human stays in control.** Sensitive actions require pre-approval. The human can revoke agent access at any time. Browser state can be handed off to the human for manual completion.
+- **Human stays in control.** Sensitive actions are denied by default — permissions configured in advance. The human can revoke agent access at any time. Browser state can be handed off to the human for manual completion.
 
 ## Relationship to Control Plane
 
@@ -55,7 +55,7 @@ CLI and browser execution are capabilities gated by the control plane (doc 16):
 
 These capabilities follow the standard policy evaluation path (doc 16 Policy Evaluation). The control plane's execution broker admits the request, the worker runtime executes in a sandbox, and results flow back through RunEvents and RunArtifacts.
 
-CLI and browser tool calls originate within the turn loop (doc 02). The agent requests a tool call, the tool execution layer routes it to the control plane (tier 2), policy is evaluated, and if allowed, execution proceeds. The turn never blocks on approval — if policy returns `require_approval`, the action is queued for the human's inbox and the tool result tells the agent it's pending.
+CLI and browser tool calls originate within the turn loop (doc 02). The agent requests a tool call, the tool execution layer routes it to the control plane (tier 2), policy is evaluated, and if allowed, execution proceeds. The turn never blocks on approval — policy returns `allow` or `deny`, always immediate and binary. Permissions are configured in advance, not resolved at runtime.
 
 ---
 
@@ -73,7 +73,7 @@ Agent requests: cli.execute({command: "go test ./...", working_dir: "."})
 │   ├─ Check command against denylist
 │   ├─ Classify command risk level
 │   ├─ Check network policy if command implies network access
-│   └─ Decision: allow / deny / require_approval
+│   └─ Decision: allow / deny
 │
 ├─ If allow:
 │   ├─ Worker creates sandboxed process
@@ -86,12 +86,8 @@ Agent requests: cli.execute({command: "go test ./...", working_dir: "."})
 │   ├─ On completion: capture exit code, timing, output
 │   └─ Store output as RunArtifact (if above size threshold)
 │
-├─ If deny:
-│   └─ Return "not permitted: {reason}" as tool result
-│
-└─ If require_approval:
-    ├─ Create inbox item with command details and risk summary
-    └─ Return "pending approval" as tool result
+└─ If deny:
+    └─ Return "not permitted: {reason}" as tool result
 ```
 
 ### Command Request Structure
@@ -187,13 +183,13 @@ Within the project repo, the agent has full read/write access. Outside the repo:
 
 ### Risk Classification
 
-Every command is classified by risk level before execution. Risk level determines whether the command is allowed, requires approval, or is denied.
+Every command is classified by risk level before execution. Risk level determines whether the command is allowed or denied.
 
 **Risk levels:**
 
 - **`safe`**: read-only operations and standard development commands. Always allowed if the agent has `system.cli.execute`. Examples: `ls`, `cat`, `grep`, `go build`, `npm test`, `git status`, `git diff`.
-- **`normal`**: commands with side effects that are expected in development workflows. Allowed by default, configurable to require approval. Examples: `go run`, `npm install`, `pip install`, `make`, `git commit`, `git push` (to task branch remote).
-- **`sensitive`**: commands that could have significant impact. Require approval by default, configurable to allow. Examples: `curl` (network call), `wget`, `docker run`, package publishing commands, commands that modify system configuration.
+- **`normal`**: commands with side effects that are expected in development workflows. Allowed by default. Examples: `go run`, `npm install`, `pip install`, `make`, `git commit`, `git push` (to task branch remote).
+- **`sensitive`**: commands that could have significant impact. Denied by default, configurable to allow via org or project policy. Examples: `curl` (network call), `wget`, `docker run`, package publishing commands, commands that modify system configuration.
 - **`dangerous`**: commands that are destructive or affect system integrity. Denied by default. Examples: `rm -rf /`, `shutdown`, `reboot`, `kill -9 1`, `dd if=/dev/zero`, `chmod -R 777 /`, `mkfs`.
 
 ### Default Denylist
@@ -228,7 +224,7 @@ When a command is submitted:
 2. Check against the instance denylist. If matched, deny immediately.
 3. Look up the command in the risk classification table (populated from instance + org + project + agent policy layers).
 4. If no explicit classification, default to `normal`.
-5. Apply the risk level's action: `safe` = allow, `normal` = allow (or require_approval if configured), `sensitive` = require_approval (or allow if explicitly configured), `dangerous` = deny.
+5. Apply the risk level's action: `safe` = allow, `normal` = allow, `sensitive` = deny (or allow if explicitly configured via org/project policy), `dangerous` = deny.
 
 ### Compound Commands
 
@@ -335,7 +331,7 @@ Certain domains are classified as sensitive by default and require additional po
 - **Administrative**: cloud provider consoles (AWS, GCP, Azure), hosting control panels.
 - **Email**: webmail providers (unless the task specifically involves email).
 
-Navigating to a sensitive domain triggers `require_approval` by default. The org or project can override this for domains relevant to their work — a publishing project can allow `kdp.amazon.com` without approval.
+Navigating to a sensitive domain is denied by default. The org or project can allowlist specific domains relevant to their work — a publishing project can allow `kdp.amazon.com` in its domain policy.
 
 ### Credential Injection
 
@@ -398,12 +394,11 @@ If a future use case requires true multi-tab support, it can be added as a contr
 
 ### Purpose
 
-Some browser actions are too sensitive or too complex for full automation. Login flows with CAPTCHA or 2FA, payment processing, legal agreements, and any action the policy flags as `require_approval` may need the human to complete manually.
+Some browser actions are too sensitive or too complex for full automation. Login flows with CAPTCHA or 2FA, payment processing, and legal agreements may need the human to complete manually. Human handoff is agent-initiated — the agent recognizes it needs help and requests it, rather than policy intercepting the action.
 
 ### How It Works
 
 1. The agent reaches a point where it needs human intervention — either because:
-   - Policy returned `require_approval` for a browser action.
    - The agent explicitly recognizes it needs human help (e.g., "I've reached a CAPTCHA I can't solve").
    - A login flow requires interactive authentication the agent cannot complete.
 
@@ -595,7 +590,7 @@ create table cli_execution (
   command         text not null,          -- the command string executed
   working_dir     text not null,          -- resolved working directory (relative to repo root)
   risk_level      text not null,          -- safe, normal, sensitive, dangerous
-  policy_decision text not null,          -- allow, deny, require_approval
+  policy_decision text not null,          -- allow, deny
   exit_code       int,                    -- null if still running or cancelled
   stdout_preview  text,                   -- first N bytes of stdout (inline preview)
   stderr_preview  text,                   -- first N bytes of stderr (inline preview)
@@ -662,7 +657,7 @@ create table browser_action (
   error_message       text,
   screenshot_artifact_id uuid,            -- automatic post-action screenshot
   extracted_data      jsonb,              -- for extraction actions
-  policy_decision     text not null,      -- allow, deny, require_approval
+  policy_decision     text not null,      -- allow, deny
   duration_ms         int,
   created_at          timestamptz not null default now(),
   completed_at        timestamptz,
@@ -681,7 +676,7 @@ create table browser_handoff (
   browser_session_id  uuid not null references browser_session(id),
   inbox_item_id       uuid not null,      -- references inbox_item(id)
   run_id              uuid not null,      -- the run that was paused
-  reason              text not null,       -- captcha, two_factor, payment, policy_approval, agent_request
+  reason              text not null,       -- captcha, two_factor, payment, agent_request
   agent_description   text,               -- what the agent needs the human to do
   page_url            text not null,       -- URL at handoff time
   screenshot_artifact_id uuid,            -- screenshot at handoff time
@@ -732,7 +727,7 @@ These tables extend, not duplicate, the control plane's execution tracking:
 
 1. **Browser sessions are reusable per task, not per run.** Multiple runs within a task share the browser context (cookies, login state, history). This enables multi-step workflows that span multiple agent runs. Sessions are cleaned up when the task completes.
 2. **CLI sandbox model is process-level isolation with restricted working directory and environment.** Container-level isolation (each command in a lightweight container) is a future enhancement for managed multi-tenant deployments. Process isolation is sufficient for single-operator self-hosted deployments.
-3. **Human pre-approval is required by default for**: commands matching the denylist, browser actions on financial/auth domains, any action the policy flags as `require_approval`. These create inbox items (doc 03 Inbox).
+3. **Sensitive actions are denied by default.** Commands matching the denylist are denied. Browser actions on sensitive domains (financial, auth, admin) are denied by default — the org or project can allowlist specific domains. Policy is binary: allow or deny, configured in advance. Human handoff for browser actions (CAPTCHA, 2FA) is agent-initiated, not policy-triggered.
 4. **Browser action API is high-level.** Agents use structured actions (`navigate`, `click`, `type`, `screenshot`, `extract_text`, `extract_structured`, `wait_for`), not raw browser automation code. This keeps prompts clean, actions auditable, and sandboxing enforceable.
 5. **Compound CLI commands are decomposed for classification.** Pipes, chains, and subshells are broken down, and the overall risk is the maximum of all components. This prevents policy bypass via command chaining.
 6. **Automatic screenshots after every browser action.** Stored as RunArtifacts for human review, NOT returned inline to the agent (to avoid wasting tokens). The agent explicitly calls `browser.screenshot()` when it needs to see the page.

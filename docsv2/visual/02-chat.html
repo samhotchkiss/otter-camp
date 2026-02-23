@@ -1071,7 +1071,7 @@ flowchart TD
     E["For each tool call"]
     F{"Tier 1 or<br/>Tier 2?"}
     G["<b>Tier 1: Chat-layer</b><br/><small>permission check, execute directly,<br/>log as chat message</small>"]
-    H["<b>Tier 2: Control-plane</b><br/><small>policy eval: allow / deny / draft_review<br/>dispatch to broker, log as RunStep</small>"]
+    H["<b>Tier 2: Control-plane</b><br/><small>policy eval: allow / deny<br/>dispatch to broker, log as Run</small>"]
     I["Append tool calls +<br/>results to conversation"]
     J{"Stop condition<br/>hit?"}
     K["Turn complete<br/><small>final text, no tool calls</small>"]
@@ -1230,7 +1230,7 @@ flowchart TD
         <div class="pipeline-number">2</div>
         <div class="pipeline-content">
           <h4>Policies and Constraints</h4>
-          <div class="pipeline-desc">Permission boundaries, tool policies (allow/deny/draft_review), budget limits. Agent knows what it can and cannot do.</div>
+          <div class="pipeline-desc">Permission boundaries, tool policies (allow/deny), budget limits. Agent knows what it can and cannot do.</div>
           <span class="pipeline-tag tag-static">set once</span>
         </div>
       </div>

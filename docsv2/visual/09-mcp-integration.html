@@ -24,12 +24,16 @@
     --cyan: #00ccff;
     --cyan-dim: #009fcc;
     --cyan-glow: rgba(0, 204, 255, 0.3);
+    --green: #22cc88;
+    --green-dim: #1aa370;
+    --green-glow: rgba(34, 204, 136, 0.3);
     --text-primary: #e8e8f0;
     --text-secondary: #9090b0;
     --text-muted: #606080;
     --border-subtle: rgba(255, 255, 255, 0.06);
     --border-blue: rgba(0, 136, 255, 0.25);
     --border-orange: rgba(255, 102, 0, 0.25);
+    --border-green: rgba(34, 204, 136, 0.25);
     --success: #22cc88;
     --danger: #ff4466;
     --warning: #ffaa00;
@@ -56,7 +60,6 @@
     overflow-x: hidden;
   }
 
-  /* Circuit board background pattern */
   body::before {
     content: '';
     position: fixed;
@@ -67,7 +70,6 @@
     pointer-events: none;
     z-index: 0;
     background:
-      /* Horizontal traces */
       repeating-linear-gradient(
         0deg,
         transparent,
@@ -75,7 +77,6 @@
         rgba(0, 136, 255, 0.03) 79px,
         rgba(0, 136, 255, 0.03) 80px
       ),
-      /* Vertical traces */
       repeating-linear-gradient(
         90deg,
         transparent,
@@ -83,37 +84,8 @@
         rgba(0, 136, 255, 0.03) 79px,
         rgba(0, 136, 255, 0.03) 80px
       ),
-      /* Junction dots */
       radial-gradient(circle 1.5px at 80px 80px, rgba(0, 136, 255, 0.08) 100%, transparent 100%);
     background-size: 80px 80px;
-  }
-
-  /* Overlay subtle circuit traces */
-  body::after {
-    content: '';
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
-    z-index: 0;
-    background:
-      /* Diagonal trace accent */
-      repeating-linear-gradient(
-        45deg,
-        transparent,
-        transparent 159px,
-        rgba(255, 102, 0, 0.015) 159px,
-        rgba(255, 102, 0, 0.015) 160px
-      ),
-      repeating-linear-gradient(
-        -45deg,
-        transparent,
-        transparent 199px,
-        rgba(0, 204, 255, 0.012) 199px,
-        rgba(0, 204, 255, 0.012) 200px
-      );
   }
 
   .content-wrapper {
@@ -124,31 +96,16 @@
     padding: 0 24px;
   }
 
-  /* ---- Animations ---- */
   @keyframes fadeSlideUp {
-    from {
-      opacity: 0;
-      transform: translateY(30px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
+    from { opacity: 0; transform: translateY(30px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 
-  @keyframes glowPulse {
-    0%, 100% { opacity: 0.6; }
-    50% { opacity: 1; }
-  }
-
-  @keyframes traceFlow {
-    0% { background-position: 0% 0%; }
-    100% { background-position: 200% 0%; }
-  }
-
-  @keyframes circuitPulse {
-    0%, 100% { box-shadow: 0 0 8px var(--blue-glow), inset 0 0 8px rgba(0,136,255,0.05); }
-    50% { box-shadow: 0 0 20px var(--blue-glow-strong), inset 0 0 15px rgba(0,136,255,0.1); }
+  @keyframes traceFlowVert {
+    0% { top: -12px; opacity: 0; }
+    10% { opacity: 1; }
+    90% { opacity: 1; }
+    100% { top: 100%; opacity: 0; }
   }
 
   .stagger-1 { animation-delay: 0.1s; }
@@ -158,13 +115,14 @@
   .stagger-5 { animation-delay: 0.5s; }
   .stagger-6 { animation-delay: 0.6s; }
   .stagger-7 { animation-delay: 0.7s; }
+  .stagger-8 { animation-delay: 0.8s; }
 
   .animate-in {
     opacity: 0;
     animation: fadeSlideUp 0.7s ease-out forwards;
   }
 
-  /* ---- Hero Section ---- */
+  /* ---- Hero ---- */
   .hero {
     padding: 80px 0 60px;
     text-align: center;
@@ -222,6 +180,13 @@
     margin-right: auto;
   }
 
+  .hero-key-points {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
   .hero-key-point {
     display: inline-flex;
     align-items: center;
@@ -229,22 +194,32 @@
     background: var(--bg-card);
     border: 1px solid var(--border-blue);
     border-radius: 8px;
-    padding: 16px 28px;
+    padding: 14px 24px;
     font-family: var(--font-body);
-    font-size: 15px;
+    font-size: 13px;
     color: var(--text-primary);
-    box-shadow: 0 0 30px rgba(0, 136, 255, 0.1);
+    box-shadow: 0 0 20px rgba(0, 136, 255, 0.1);
   }
 
   .hero-key-point .arrow {
     color: var(--orange);
-    font-size: 18px;
+    font-size: 16px;
     font-weight: 600;
   }
 
   .hero-key-point strong {
     color: var(--blue);
     text-shadow: 0 0 8px var(--blue-glow);
+  }
+
+  .hero-key-point.context strong {
+    color: var(--green);
+    text-shadow: 0 0 8px var(--green-glow);
+  }
+
+  .hero-key-point.context {
+    border-color: var(--border-green);
+    box-shadow: 0 0 20px var(--green-glow);
   }
 
   /* ---- Section ---- */
@@ -365,6 +340,191 @@
     text-transform: uppercase;
   }
 
+  /* ---- Context Loading Cards ---- */
+  .loading-modes {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+  }
+
+  @media (max-width: 900px) {
+    .loading-modes {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .loading-card {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 28px;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+  }
+
+  .loading-card:hover {
+    transform: translateY(-4px);
+  }
+
+  .loading-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+  }
+
+  .loading-card.lazy {
+    border: 1px solid var(--border-blue);
+  }
+  .loading-card.lazy::before {
+    background: linear-gradient(90deg, var(--blue), var(--blue-dim));
+  }
+  .loading-card.lazy:hover {
+    box-shadow: 0 8px 40px rgba(0, 136, 255, 0.15);
+  }
+
+  .loading-card.preload {
+    border: 1px solid var(--border-green);
+  }
+  .loading-card.preload::before {
+    background: linear-gradient(90deg, var(--green), var(--green-dim));
+  }
+  .loading-card.preload:hover {
+    box-shadow: 0 8px 40px var(--green-glow);
+  }
+
+  .loading-card.eager {
+    border: 1px solid var(--border-orange);
+  }
+  .loading-card.eager::before {
+    background: linear-gradient(90deg, var(--orange), var(--orange-dim));
+  }
+  .loading-card.eager:hover {
+    box-shadow: 0 8px 40px rgba(255, 102, 0, 0.15);
+  }
+
+  .loading-badge {
+    display: inline-block;
+    font-family: var(--font-body);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 4px;
+    margin-bottom: 16px;
+  }
+
+  .lazy .loading-badge {
+    color: var(--blue);
+    background: rgba(0, 136, 255, 0.1);
+    border: 1px solid rgba(0, 136, 255, 0.3);
+  }
+
+  .preload .loading-badge {
+    color: var(--green);
+    background: rgba(34, 204, 136, 0.1);
+    border: 1px solid rgba(34, 204, 136, 0.3);
+  }
+
+  .eager .loading-badge {
+    color: var(--orange);
+    background: rgba(255, 102, 0, 0.1);
+    border: 1px solid rgba(255, 102, 0, 0.3);
+  }
+
+  .loading-card h3 {
+    font-family: var(--font-heading);
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 12px;
+  }
+
+  .lazy h3 { color: var(--blue); }
+  .preload h3 { color: var(--green); }
+  .eager h3 { color: var(--orange); }
+
+  .loading-card p {
+    color: var(--text-secondary);
+    font-size: 12.5px;
+    margin-bottom: 16px;
+    line-height: 1.8;
+  }
+
+  .loading-features {
+    list-style: none;
+    padding: 0;
+  }
+
+  .loading-features li {
+    position: relative;
+    padding-left: 18px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .loading-features li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 8px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  .lazy .loading-features li::before { background: var(--blue); box-shadow: 0 0 6px var(--blue-glow); }
+  .preload .loading-features li::before { background: var(--green); box-shadow: 0 0 6px var(--green-glow); }
+  .eager .loading-features li::before { background: var(--orange); box-shadow: 0 0 6px var(--orange-glow); }
+
+  .loading-example {
+    margin-top: 16px;
+    padding: 10px 14px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+    border-left: 2px solid;
+    line-height: 1.8;
+  }
+
+  .lazy .loading-example { border-left-color: var(--blue); }
+  .preload .loading-example { border-left-color: var(--green); }
+  .eager .loading-example { border-left-color: var(--orange); }
+
+  .loading-example code {
+    color: var(--cyan);
+    font-size: 11px;
+  }
+
+  .token-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    margin-top: 8px;
+  }
+
+  .lazy .token-badge {
+    color: var(--blue);
+    background: rgba(0, 136, 255, 0.12);
+  }
+
+  .preload .token-badge {
+    color: var(--green);
+    background: rgba(34, 204, 136, 0.12);
+  }
+
+  .eager .token-badge {
+    color: var(--warning);
+    background: rgba(255, 170, 0, 0.12);
+  }
+
   /* ---- Tier Cards ---- */
   .tier-grid {
     display: grid;
@@ -400,35 +560,17 @@
     height: 3px;
   }
 
-  .tier-card.tier-2 {
-    border: 1px solid var(--border-orange);
-  }
-  .tier-card.tier-2::before {
-    background: linear-gradient(90deg, var(--orange), var(--orange-dim));
-  }
-  .tier-card.tier-2:hover {
-    box-shadow: 0 8px 40px rgba(255, 102, 0, 0.15);
-  }
+  .tier-card.tier-2 { border: 1px solid var(--border-orange); }
+  .tier-card.tier-2::before { background: linear-gradient(90deg, var(--orange), var(--orange-dim)); }
+  .tier-card.tier-2:hover { box-shadow: 0 8px 40px rgba(255, 102, 0, 0.15); }
 
-  .tier-card.tier-1 {
-    border: 1px solid var(--border-blue);
-  }
-  .tier-card.tier-1::before {
-    background: linear-gradient(90deg, var(--blue), var(--blue-dim));
-  }
-  .tier-card.tier-1:hover {
-    box-shadow: 0 8px 40px rgba(0, 136, 255, 0.15);
-  }
+  .tier-card.tier-1 { border: 1px solid var(--border-blue); }
+  .tier-card.tier-1::before { background: linear-gradient(90deg, var(--blue), var(--blue-dim)); }
+  .tier-card.tier-1:hover { box-shadow: 0 8px 40px rgba(0, 136, 255, 0.15); }
 
-  .tier-card.tier-advisory {
-    border: 1px solid rgba(0, 204, 255, 0.2);
-  }
-  .tier-card.tier-advisory::before {
-    background: linear-gradient(90deg, var(--cyan), var(--cyan-dim));
-  }
-  .tier-card.tier-advisory:hover {
-    box-shadow: 0 8px 40px var(--cyan-glow);
-  }
+  .tier-card.tier-advisory { border: 1px solid rgba(0, 204, 255, 0.2); }
+  .tier-card.tier-advisory::before { background: linear-gradient(90deg, var(--cyan), var(--cyan-dim)); }
+  .tier-card.tier-advisory:hover { box-shadow: 0 8px 40px var(--cyan-glow); }
 
   .tier-badge {
     display: inline-block;
@@ -594,13 +736,6 @@
     animation: traceFlowVert 2s linear infinite;
   }
 
-  @keyframes traceFlowVert {
-    0% { top: -12px; opacity: 0; }
-    10% { opacity: 1; }
-    90% { opacity: 1; }
-    100% { top: 100%; opacity: 0; }
-  }
-
   .flow-content {
     flex: 1;
     padding: 12px 0;
@@ -658,7 +793,7 @@
     letter-spacing: 1px;
   }
 
-  /* ---- Discovery Flow ---- */
+  /* ---- Discovery Pipeline ---- */
   .discovery-pipeline {
     display: flex;
     align-items: stretch;
@@ -689,28 +824,18 @@
     transition: transform 0.3s ease, box-shadow 0.3s ease;
   }
 
-  .pipeline-stage:hover {
-    transform: translateY(-3px);
-  }
+  .pipeline-stage:hover { transform: translateY(-3px); }
 
-  .pipeline-stage.discover {
-    border: 1px solid var(--border-blue);
-  }
+  .pipeline-stage.discover { border: 1px solid var(--border-blue); }
   .pipeline-stage.discover:hover { box-shadow: 0 6px 30px rgba(0, 136, 255, 0.15); }
 
-  .pipeline-stage.deny {
-    border: 1px solid rgba(255, 68, 102, 0.3);
-  }
+  .pipeline-stage.deny { border: 1px solid rgba(255, 68, 102, 0.3); }
   .pipeline-stage.deny:hover { box-shadow: 0 6px 30px rgba(255, 68, 102, 0.15); }
 
-  .pipeline-stage.enable {
-    border: 1px solid rgba(34, 204, 136, 0.3);
-  }
+  .pipeline-stage.enable { border: 1px solid rgba(34, 204, 136, 0.3); }
   .pipeline-stage.enable:hover { box-shadow: 0 6px 30px rgba(34, 204, 136, 0.15); }
 
-  .pipeline-stage.policy {
-    border: 1px solid var(--border-orange);
-  }
+  .pipeline-stage.policy { border: 1px solid var(--border-orange); }
   .pipeline-stage.policy:hover { box-shadow: 0 6px 30px rgba(255, 102, 0, 0.15); }
 
   .pipeline-stage-icon {
@@ -763,7 +888,83 @@
     fill: none;
   }
 
-  /* ---- Schema Tables ---- */
+  /* ---- Transport Cards ---- */
+  .transport-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-top: 32px;
+  }
+
+  @media (max-width: 768px) {
+    .transport-row {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .transport-card {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 28px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .transport-card.stdio { border: 1px solid var(--border-blue); }
+  .transport-card.http { border: 1px solid var(--border-orange); }
+
+  .transport-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+  }
+
+  .transport-card.stdio::before { background: var(--blue); box-shadow: 0 0 10px var(--blue-glow); }
+  .transport-card.http::before { background: var(--orange); box-shadow: 0 0 10px var(--orange-glow); }
+
+  .transport-card h4 {
+    font-family: var(--font-heading);
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .transport-card.stdio h4 { color: var(--blue); }
+  .transport-card.http h4 { color: var(--orange); }
+
+  .transport-subtitle {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .transport-card p {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+    line-height: 1.8;
+  }
+
+  .transport-details {
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 6px;
+    padding: 12px 16px;
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.8;
+  }
+
+  .transport-details code {
+    color: var(--cyan);
+    font-size: 11px;
+  }
+
+  /* ---- Schema Cards ---- */
   .schema-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
@@ -835,6 +1036,12 @@
     border: 1px solid rgba(0, 204, 255, 0.3);
   }
 
+  .schema-card-header .table-icon.green {
+    background: rgba(34, 204, 136, 0.15);
+    color: var(--green);
+    border: 1px solid rgba(34, 204, 136, 0.3);
+  }
+
   .schema-card-body {
     padding: 16px 20px;
   }
@@ -860,28 +1067,11 @@
     border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   }
 
-  .schema-columns li:last-child {
-    border-bottom: none;
-  }
+  .schema-columns li:last-child { border-bottom: none; }
 
-  .col-name {
-    color: var(--cyan);
-    font-weight: 500;
-    min-width: 140px;
-    flex-shrink: 0;
-  }
-
-  .col-type {
-    color: var(--text-muted);
-    font-size: 10.5px;
-    min-width: 80px;
-    flex-shrink: 0;
-  }
-
-  .col-note {
-    color: var(--text-secondary);
-    font-size: 10.5px;
-  }
+  .col-name { color: var(--cyan); font-weight: 500; min-width: 140px; flex-shrink: 0; }
+  .col-type { color: var(--text-muted); font-size: 10.5px; min-width: 80px; flex-shrink: 0; }
+  .col-note { color: var(--text-secondary); font-size: 10.5px; }
 
   .col-pk {
     color: var(--orange);
@@ -905,91 +1095,42 @@
     flex-shrink: 0;
   }
 
-  /* ---- Transport Cards ---- */
-  .transport-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 24px;
-    margin-top: 32px;
-  }
-
-  @media (max-width: 768px) {
-    .transport-row {
-      grid-template-columns: 1fr;
-    }
-  }
-
-  .transport-card {
-    background: var(--bg-card);
-    border-radius: 12px;
-    padding: 28px;
-    position: relative;
-    overflow: hidden;
-  }
-
-  .transport-card.stdio {
-    border: 1px solid var(--border-blue);
-  }
-
-  .transport-card.http {
-    border: 1px solid var(--border-orange);
-  }
-
-  .transport-card::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 2px;
-  }
-
-  .transport-card.stdio::before {
-    background: var(--blue);
-    box-shadow: 0 0 10px var(--blue-glow);
-  }
-
-  .transport-card.http::before {
-    background: var(--orange);
-    box-shadow: 0 0 10px var(--orange-glow);
-  }
-
-  .transport-card h4 {
-    font-family: var(--font-heading);
-    font-size: 18px;
+  .col-new {
+    color: var(--green);
+    font-size: 9px;
     font-weight: 600;
-    margin-bottom: 4px;
-  }
-
-  .transport-card.stdio h4 { color: var(--blue); }
-  .transport-card.http h4 { color: var(--orange); }
-
-  .transport-subtitle {
-    font-size: 11px;
-    color: var(--text-muted);
-    margin-bottom: 16px;
     letter-spacing: 1px;
-    text-transform: uppercase;
+    background: rgba(34, 204, 136, 0.1);
+    padding: 1px 5px;
+    border-radius: 3px;
+    flex-shrink: 0;
   }
 
-  .transport-card p {
+  /* ---- Callout ---- */
+  .callout {
+    background: var(--bg-card);
+    border-left: 3px solid var(--orange);
+    border-radius: 0 8px 8px 0;
+    padding: 16px 20px;
+    margin: 24px 0;
     font-size: 12px;
     color: var(--text-secondary);
-    margin-bottom: 16px;
     line-height: 1.8;
   }
 
-  .transport-details {
-    background: rgba(0, 0, 0, 0.25);
-    border-radius: 6px;
-    padding: 12px 16px;
-    font-size: 11px;
-    color: var(--text-muted);
-    line-height: 1.8;
+  .callout strong { color: var(--orange); }
+
+  .callout.green-callout {
+    border-left-color: var(--green);
   }
 
-  .transport-details code {
+  .callout.green-callout strong { color: var(--green); }
+
+  .callout code {
     color: var(--cyan);
+    background: rgba(0, 204, 255, 0.08);
+    padding: 1px 5px;
+    border-radius: 3px;
     font-size: 11px;
   }
 
@@ -1023,40 +1164,11 @@
     opacity: 0.5;
   }
 
-  /* ---- Relationship Diagram ---- */
-  .relationship-container {
-    margin-top: 32px;
-  }
-
-  /* ---- Utility ---- */
   .neon-divider {
     height: 1px;
     background: linear-gradient(90deg, transparent, var(--blue), var(--orange), var(--cyan), transparent);
     margin: 48px 0;
     opacity: 0.4;
-  }
-
-  .callout {
-    background: var(--bg-card);
-    border-left: 3px solid var(--orange);
-    border-radius: 0 8px 8px 0;
-    padding: 16px 20px;
-    margin: 24px 0;
-    font-size: 12px;
-    color: var(--text-secondary);
-    line-height: 1.8;
-  }
-
-  .callout strong {
-    color: var(--orange);
-  }
-
-  .callout code {
-    color: var(--cyan);
-    background: rgba(0, 204, 255, 0.08);
-    padding: 1px 5px;
-    border-radius: 3px;
-    font-size: 11px;
   }
 </style>
 </head>
@@ -1069,18 +1181,125 @@
     <div class="hero-badge">Doc 09 -- MCP Integration</div>
     <h1>Model Context Protocol</h1>
     <p class="hero-subtitle">
-      Connect agents to external tools, resources, and prompts through a secure, policy-governed MCP client layer.
+      Connect agents to external tools, resources, and prompts through a secure, policy-governed MCP client layer &mdash; without bloating context windows.
     </p>
-    <div class="hero-key-point">
-      <span class="arrow">&gt;</span>
-      OtterCamp is always the <strong>CLIENT</strong> &mdash; it consumes, never serves
+    <div class="hero-key-points">
+      <div class="hero-key-point">
+        <span class="arrow">&gt;</span>
+        OtterCamp is always the <strong>CLIENT</strong> &mdash; it consumes, never serves
+      </div>
+      <div class="hero-key-point context">
+        <span class="arrow">&gt;</span>
+        <strong>Context-aware</strong> tool loading &mdash; lazy default, eager when declared
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CONTEXT-AWARE TOOL LOADING ============ -->
+  <section class="section animate-in stagger-2">
+    <div class="section-header">
+      <div class="section-number">01 // Context-Aware Loading</div>
+      <h2 class="section-title">Three Tool Loading Modes</h2>
+      <p class="section-desc">MCP tool schemas are only loaded into agent prompts when needed. No bloat, no wasted tokens, no discovery round-trips for planned work.</p>
+    </div>
+
+    <div class="loading-modes">
+
+      <div class="loading-card lazy">
+        <span class="loading-badge">Default</span>
+        <h3>Lazy Discovery</h3>
+        <p>Agents see only connection summaries in their prompt. Call <code style="font-size:10px;color:var(--cyan);">mcp.discover</code> to get tool schemas on demand.</p>
+        <ul class="loading-features">
+          <li>~20 tokens per connection in prompt</li>
+          <li>Full schemas loaded only when needed</li>
+          <li>Agent drives discovery as needed</li>
+          <li>Best for open-ended chat sessions</li>
+        </ul>
+        <div class="loading-example">
+          Prompt shows:<br>
+          <code>github</code> &mdash; GitHub repo management<br>
+          <code>slack</code> &mdash; Slack workspace messaging<br>
+          <br>
+          Agent calls <code>mcp.discover("github")</code> &rarr; gets full schemas
+        </div>
+        <div class="token-badge">~20 tokens/connection</div>
+      </div>
+
+      <div class="loading-card preload">
+        <span class="loading-badge">Flow Nodes</span>
+        <h3>Preloading</h3>
+        <p>Flow nodes declare required MCP tools. Schemas are preloaded into the worker's prompt at session start &mdash; no discovery needed.</p>
+        <ul class="loading-features">
+          <li>Declared in <code style="font-size:10px;color:var(--cyan);">flow_node.mcp_tools</code></li>
+          <li>Schemas loaded at layer 7 on spin-up</li>
+          <li>Zero round-trip for temp workers</li>
+          <li>PM configures via conversation</li>
+        </ul>
+        <div class="loading-example">
+          flow_node.mcp_tools:<br>
+          <code>["github.create_pull_request",</code><br>
+          <code>&nbsp;"github.add_labels",</code><br>
+          <code>&nbsp;"github.request_review"]</code>
+        </div>
+        <div class="token-badge">Only declared tools loaded</div>
+      </div>
+
+      <div class="loading-card eager">
+        <span class="loading-badge">Opt-In</span>
+        <h3>Full Toolset</h3>
+        <p>Small connections (&lt;10 tools) can opt in to eager loading. All enabled tool schemas included in every agent prompt.</p>
+        <ul class="loading-features">
+          <li>Set <code style="font-size:10px;color:var(--cyan);">eager_load = true</code> on connection</li>
+          <li>All enabled schemas in every prompt</li>
+          <li>Only for small tool sets</li>
+          <li>Admin configures via Frank</li>
+        </ul>
+        <div class="loading-example">
+          "Frank, set the Sentry connection to eager-load its tools."<br>
+          <br>
+          All 6 Sentry tools appear in every prompt for agents with access.
+        </div>
+        <div class="token-badge">Use sparingly &mdash; watch token cost</div>
+      </div>
+
+    </div>
+
+    <div class="callout green-callout" style="margin-top:32px;">
+      <strong>Why this matters:</strong> A naive MCP integration loads every tool schema into every prompt.
+      3 connections &times; 30 tools &times; ~100 tokens/schema = <strong>9,000 tokens</strong> of schemas the agent will never use.
+      Context-aware loading keeps this under control: ~60 tokens for 3 connections by default, plus only the schemas actually needed.
+    </div>
+
+    <!-- Flow Node Preloading Diagram -->
+    <div class="diagram-container" style="margin-top:24px;">
+      <div class="diagram-zoom-controls">
+        <button class="zoom-btn" onclick="zoomDiagram('preload', 1.2)" title="Zoom In">+</button>
+        <button class="zoom-btn" onclick="zoomDiagram('preload', 0.8)" title="Zoom Out">&minus;</button>
+        <button class="zoom-btn" onclick="zoomDiagram('preload', 0)" title="Reset">R</button>
+      </div>
+      <div class="diagram-wrapper" id="preload-wrapper">
+        <pre class="mermaid" id="preload">
+flowchart LR
+    FN["Flow Node\n(mcp_tools declared)"]:::node --> PA["Prompt\nAssembler"]:::assembler
+    PA --> CAT["mcp_tool_catalog\n(local lookup)"]:::catalog
+    CAT --> L7["Layer 7:\nTool Schemas"]:::layer
+    L7 --> TW["Temp Worker\n(ready to call tools)"]:::worker
+
+    classDef node fill:#1a1a33,stroke:#ff6600,stroke-width:2px,color:#ff6600
+    classDef assembler fill:#1a1a33,stroke:#0088ff,stroke-width:2px,color:#0088ff
+    classDef catalog fill:#1a1a33,stroke:#00ccff,stroke-width:2px,color:#00ccff
+    classDef layer fill:#1a1a33,stroke:#22cc88,stroke-width:2px,color:#22cc88
+    classDef worker fill:#1a1a33,stroke:#22cc88,stroke-width:2px,color:#22cc88
+        </pre>
+      </div>
+      <div class="diagram-label">Flow Node Preloading &mdash; No Discovery Round-Trip</div>
     </div>
   </section>
 
   <!-- ============ TRANSPORTS ============ -->
-  <section class="section animate-in stagger-2">
+  <section class="section animate-in stagger-3">
     <div class="section-header">
-      <div class="section-number">01 // Transports</div>
+      <div class="section-number">02 // Transports</div>
       <h2 class="section-title">Two Transport Modes</h2>
       <p class="section-desc">Every MCP connection uses one of two transport types, set at creation and fixed for the lifetime of the connection.</p>
     </div>
@@ -1109,9 +1328,9 @@
   </section>
 
   <!-- ============ CONNECTION LIFECYCLE ============ -->
-  <section class="section animate-in stagger-3">
+  <section class="section animate-in stagger-4">
     <div class="section-header">
-      <div class="section-number">02 // Lifecycle</div>
+      <div class="section-number">03 // Lifecycle</div>
       <h2 class="section-title">Connection Lifecycle</h2>
       <p class="section-desc">Each MCP connection moves through defined states. The connector runtime manages health checks, circuit breaking, and recovery automatically.</p>
     </div>
@@ -1165,16 +1384,18 @@ flowchart LR
     </div>
 
     <div class="callout">
-      <strong>Health checks</strong> run every <code>60s</code> by default. After <code>3</code> consecutive failures the connection enters <code>degraded</code>.
-      The circuit breaker trips after <code>5</code> failures in <code>60s</code>, blocking calls instantly.
-      Recovery is automatic: after <code>30s</code> a test request probes the server.
+      <strong>Three distinct timeouts:</strong>
+      Per-call timeout <code>30s</code> (how long an MCP call can take),
+      health check timeout <code>5s</code> (how long a probe can take),
+      circuit breaker recovery <code>30s</code> (how long before testing a tripped connection).
+      All independent, all configurable per connection.
     </div>
   </section>
 
   <!-- ============ TIERS ============ -->
-  <section class="section animate-in stagger-4">
+  <section class="section animate-in stagger-5">
     <div class="section-header">
-      <div class="section-number">03 // Classification</div>
+      <div class="section-number">04 // Classification</div>
       <h2 class="section-title">MCP Primitive Tiers</h2>
       <p class="section-desc">MCP exposes three primitive types. OtterCamp classifies each into tiers that determine the policy and execution path.</p>
     </div>
@@ -1188,7 +1409,7 @@ flowchart LR
           <li>Capability check: <code style="font-size:10px;color:var(--cyan);">mcp.connection.use</code></li>
           <li>Capability check: <code style="font-size:10px;color:var(--cyan);">mcp.tool.invoke</code></li>
           <li>Agent profile allow/deny list evaluation</li>
-          <li>Policy result: allow / deny / draft_review</li>
+          <li>Policy result: allow / deny / require_approval</li>
           <li>Full ToolExecution audit record</li>
           <li>Input validated against JSON Schema</li>
         </ul>
@@ -1207,7 +1428,7 @@ flowchart LR
           <li>Requires <code style="font-size:10px;color:var(--cyan);">mcp.connection.use</code> capability</li>
           <li>Can be cached (default TTL: 5 min)</li>
           <li>Injectible into agent context as data sources</li>
-          <li>Logged in mcp_execution_log</li>
+          <li>Logged in mcp_execution_log (policy_decision = null)</li>
         </ul>
         <div class="tier-example">
           <code>github.read_resource("repos/otter/schema")</code><br>
@@ -1235,9 +1456,9 @@ flowchart LR
   </section>
 
   <!-- ============ SECRET INJECTION ============ -->
-  <section class="section animate-in stagger-5">
+  <section class="section animate-in stagger-6">
     <div class="section-header">
-      <div class="section-number">04 // Secrets</div>
+      <div class="section-number">05 // Secrets</div>
       <h2 class="section-title">Secret Injection Flow</h2>
       <p class="section-desc">Secrets are stored encrypted, bound by reference, and injected at the transport layer. Agents never see credentials.</p>
     </div>
@@ -1252,7 +1473,7 @@ flowchart LR
         <div class="flow-content">
           <div class="flow-card">
             <h4>1. Encrypted Storage</h4>
-            <p>Secrets (API keys, tokens, OAuth credentials) are stored in the platform's encrypted secret store. Each secret is a <strong>named reference</strong>, never a raw value. The actual credential material is at rest, encrypted.</p>
+            <p>Secrets (API keys, tokens, OAuth credentials) are stored in the platform's encrypted secret store. Each secret is a <strong>named reference</strong>, never a raw value.</p>
           </div>
         </div>
       </div>
@@ -1314,9 +1535,9 @@ flowchart LR
   </section>
 
   <!-- ============ TOOL DISCOVERY ============ -->
-  <section class="section animate-in stagger-6">
+  <section class="section animate-in stagger-7">
     <div class="section-header">
-      <div class="section-number">05 // Discovery</div>
+      <div class="section-number">06 // Discovery</div>
       <h2 class="section-title">Tool Discovery and Enablement</h2>
       <p class="section-desc">Tools are discovered from the MCP server, cataloged as disabled, and only become available after explicit admin enablement and policy evaluation.</p>
     </div>
@@ -1335,7 +1556,7 @@ flowchart LR
       <div class="pipeline-stage deny">
         <span class="pipeline-stage-icon">X</span>
         <h4>Default Deny</h4>
-        <p>All discovered tools are cataloged with <code style="font-size:10px;color:var(--cyan);">is_enabled = false</code>. No tool is available to agents until explicitly enabled. Consistent with the default-deny posture.</p>
+        <p>All discovered tools are cataloged with <code style="font-size:10px;color:var(--cyan);">is_enabled = false</code>. No tool is available to agents until explicitly enabled.</p>
       </div>
 
       <div class="pipeline-arrow">
@@ -1345,7 +1566,7 @@ flowchart LR
       <div class="pipeline-stage enable">
         <span class="pipeline-stage-icon">+</span>
         <h4>Admin Enables</h4>
-        <p>The admin (via conversation with Frank or the PM) selectively enables tools. "Frank, enable create_issue and list_prs on the GitHub connection."</p>
+        <p>The admin (via conversation with Frank or the PM) selectively enables tools. "Frank, enable create_issue and list_prs on GitHub."</p>
       </div>
 
       <div class="pipeline-arrow">
@@ -1355,7 +1576,7 @@ flowchart LR
       <div class="pipeline-stage policy">
         <span class="pipeline-stage-icon">&amp;</span>
         <h4>Policy Evaluation</h4>
-        <p>Enabled tools pass through capability checks, agent profile allow/deny, and layered policy. Result: <strong style="color:var(--success);">allow</strong>, <strong style="color:var(--danger);">deny</strong>, or <strong style="color:var(--warning);">draft_review</strong>.</p>
+        <p>Enabled tools pass through capability checks, agent profile allow/deny, and layered policy. Result: <strong style="color:var(--success);">allow</strong>, <strong style="color:var(--danger);">deny</strong>, or <strong style="color:var(--warning);">require_approval</strong>.</p>
       </div>
     </div>
 
@@ -1367,9 +1588,9 @@ flowchart LR
   </section>
 
   <!-- ============ SCHEMA ============ -->
-  <section class="section animate-in stagger-7">
+  <section class="section animate-in stagger-8">
     <div class="section-header">
-      <div class="section-number">06 // Schema</div>
+      <div class="section-number">07 // Schema</div>
       <h2 class="section-title">Database Schema</h2>
       <p class="section-desc">Four tables form the MCP data layer. Secrets live in the encrypted store; capability grants live in control plane policy tables.</p>
     </div>
@@ -1383,7 +1604,7 @@ flowchart LR
           <h4>mcp_connection</h4>
         </div>
         <div class="schema-card-body">
-          <p class="schema-card-desc">Connection configuration, transport settings, health state, circuit breaker config. One row per MCP server link.</p>
+          <p class="schema-card-desc">Connection configuration, transport settings, health state, circuit breaker config, eager load flag. One row per MCP server link.</p>
           <ul class="schema-columns">
             <li><span class="col-name">id</span> <span class="col-pk">PK</span> <span class="col-type">uuid</span></li>
             <li><span class="col-name">organization_id</span> <span class="col-fk">FK</span> <span class="col-type">uuid</span></li>
@@ -1393,6 +1614,7 @@ flowchart LR
             <li><span class="col-name">transport_config</span> <span class="col-type">jsonb</span> <span class="col-note">endpoint/cmd+args</span></li>
             <li><span class="col-name">auth_method</span> <span class="col-type">text</span> <span class="col-note">none|api_key|bearer|oauth2|custom</span></li>
             <li><span class="col-name">status</span> <span class="col-type">text</span> <span class="col-note">configuring|active|degraded|disabled|failed</span></li>
+            <li><span class="col-name">eager_load</span> <span class="col-new">NEW</span> <span class="col-type">bool</span> <span class="col-note">default false; preload all tool schemas</span></li>
             <li><span class="col-name">health_config</span> <span class="col-type">jsonb</span> <span class="col-note">interval, timeout, threshold</span></li>
             <li><span class="col-name">circuit_breaker_config</span> <span class="col-type">jsonb</span> <span class="col-note">failure threshold/window/recovery</span></li>
             <li><span class="col-name">timeout_ms</span> <span class="col-type">int</span> <span class="col-note">default 30000</span></li>
@@ -1408,7 +1630,7 @@ flowchart LR
           <h4>mcp_tool_catalog</h4>
         </div>
         <div class="schema-card-body">
-          <p class="schema-card-desc">Discovered tools, resources, and prompts. The system's view of what each MCP server offers. Default-deny enablement.</p>
+          <p class="schema-card-desc">Discovered tools, resources, and prompts. The system's view of what each MCP server offers. Default-deny enablement. Schemas used by mcp.discover and flow node preloading.</p>
           <ul class="schema-columns">
             <li><span class="col-name">id</span> <span class="col-pk">PK</span> <span class="col-type">uuid</span></li>
             <li><span class="col-name">connection_id</span> <span class="col-fk">FK</span> <span class="col-type">uuid</span></li>
@@ -1443,7 +1665,8 @@ flowchart LR
             <li><span class="col-name">input_params</span> <span class="col-type">jsonb</span> <span class="col-note">secrets redacted</span></li>
             <li><span class="col-name">output</span> <span class="col-type">jsonb</span> <span class="col-note">secrets redacted</span></li>
             <li><span class="col-name">status</span> <span class="col-type">text</span> <span class="col-note">success|error|timeout|circuit_open|validation_error</span></li>
-            <li><span class="col-name">policy_decision</span> <span class="col-type">text</span> <span class="col-note">allow|deny|draft_review</span></li>
+            <li><span class="col-name">policy_decision</span> <span class="col-type">text?</span> <span class="col-note">allow|deny|require_approval (null for tier 1)</span></li>
+            <li><span class="col-name">connection_health_at_completion</span> <span class="col-new">NEW</span> <span class="col-type">text?</span> <span class="col-note">health state when call finished</span></li>
             <li><span class="col-name">duration_ms</span> <span class="col-type">int</span></li>
             <li><span class="col-name">retries</span> <span class="col-type">int</span> <span class="col-note">default 0</span></li>
           </ul>
@@ -1472,15 +1695,14 @@ flowchart LR
     </div>
 
     <!-- Relationships -->
-    <div class="relationship-container">
-      <div class="diagram-container" style="margin-top:32px;">
-        <div class="diagram-zoom-controls">
-          <button class="zoom-btn" onclick="zoomDiagram('rels', 1.2)" title="Zoom In">+</button>
-          <button class="zoom-btn" onclick="zoomDiagram('rels', 0.8)" title="Zoom Out">&minus;</button>
-          <button class="zoom-btn" onclick="zoomDiagram('rels', 0)" title="Reset">R</button>
-        </div>
-        <div class="diagram-wrapper" id="rels-wrapper">
-          <pre class="mermaid" id="rels">
+    <div class="diagram-container" style="margin-top:32px;">
+      <div class="diagram-zoom-controls">
+        <button class="zoom-btn" onclick="zoomDiagram('rels', 1.2)" title="Zoom In">+</button>
+        <button class="zoom-btn" onclick="zoomDiagram('rels', 0.8)" title="Zoom Out">&minus;</button>
+        <button class="zoom-btn" onclick="zoomDiagram('rels', 0)" title="Reset">R</button>
+      </div>
+      <div class="diagram-wrapper" id="rels-wrapper">
+        <pre class="mermaid" id="rels">
 erDiagram
     mcp_connection ||--o{ mcp_tool_catalog : "1:many"
     mcp_connection ||--o{ mcp_secret_binding : "1:many"
@@ -1489,10 +1711,10 @@ erDiagram
     mcp_connection }o--|| organization : "always"
     mcp_connection }o--o| project : "optional"
     mcp_execution_log }o--o| tool_execution : "tier 2 only"
-          </pre>
-        </div>
-        <div class="diagram-label">Cross-Entity Relationships</div>
+    flow_node }o--o{ mcp_tool_catalog : "preloads"
+        </pre>
       </div>
+      <div class="diagram-label">Cross-Entity Relationships (including flow_node preloading)</div>
     </div>
   </section>
 
@@ -1527,7 +1749,6 @@ erDiagram
       clusterBkg: '#1a1a33',
       clusterBorder: '#0088ff',
       nodeTextColor: '#e8e8f0',
-      /* ER diagram */
       er: {
         attributeBackgroundColorOdd: '#1a1a33',
         attributeBackgroundColorEven: '#161629',
@@ -1549,10 +1770,8 @@ erDiagram
     }
   });
 
-  // Wait for Mermaid to finish rendering, then apply styles
   await mermaid.run();
 
-  // Style the rendered SVGs
   document.querySelectorAll('.mermaid svg').forEach(svg => {
     svg.style.maxWidth = '100%';
     svg.style.height = 'auto';
@@ -1560,7 +1779,6 @@ erDiagram
 </script>
 
 <script>
-  // ---- Zoom Controls ----
   const zoomLevels = {};
 
   function zoomDiagram(id, factor) {
@@ -1582,7 +1800,6 @@ erDiagram
     svg.style.transition = 'transform 0.2s ease';
   }
 
-  // ---- Intersection Observer for staggered animations ----
   const observer = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
       if (entry.isIntersecting) {

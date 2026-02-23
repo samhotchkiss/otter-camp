@@ -336,7 +336,7 @@ DEFERRED (2)
 
 - **Task scoping review**: PM finished scoping a `requires_human_review` draft. Actions: Approve (→ queued), Request changes, Defer.
 - **Task work review**: task reached a review node with `human` actor type. Actions: Approve (→ advance flow), Reject with feedback (→ back to work), Defer.
-- **Draft action review**: agent staged an action under `draft_review` policy. Actions: Approve (execute), Edit then approve, Reject, Defer.
+- **Draft action review**: communication tool staged a draft for review (tool behavior, not policy). Actions: Approve (execute), Edit then approve, Reject, Defer.
 - **Escalation**: PM or Frank escalated a blocker. Actions: Open in context (jumps to chat), Decide inline, Defer.
 - **Capability approval**: agent needs human pre-authorization. Actions: Approve, Approve with constraints, Deny, Defer.
 

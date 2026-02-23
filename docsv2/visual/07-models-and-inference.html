@@ -80,7 +80,7 @@
       background: var(--overlay0);
     }
 
-    /* ── Utility ────────────────────────────────── */
+    /* -- Utility -- */
     .container {
       max-width: 1200px;
       margin: 0 auto;
@@ -95,39 +95,7 @@
       clip: rect(0,0,0,0);
     }
 
-    /* ── Line numbers gutter ───────────────────── */
-    .gutter-line {
-      position: relative;
-      padding-left: 56px;
-    }
-    .gutter-line::before {
-      content: attr(data-line);
-      position: absolute;
-      left: 0;
-      top: 0;
-      width: 40px;
-      text-align: right;
-      font-family: var(--font-body);
-      font-size: 12px;
-      color: var(--surface2);
-      user-select: none;
-      line-height: inherit;
-    }
-
-    /* ── Tab indicators ────────────────────────── */
-    .tab-row {
-      display: flex;
-      gap: 2px;
-      margin-bottom: 20px;
-    }
-    .tab-indicator {
-      width: 3px;
-      height: 18px;
-      border-radius: 2px;
-      opacity: 0.5;
-    }
-
-    /* ── Staggered animation ───────────────────── */
+    /* -- Staggered animation -- */
     .animate-in {
       opacity: 0;
       transform: translateY(20px);
@@ -138,7 +106,7 @@
       transform: translateY(0);
     }
 
-    /* ── HERO ───────────────────────────────────── */
+    /* -- HERO -- */
     .hero {
       position: relative;
       padding: 80px 0 64px;
@@ -260,7 +228,7 @@
       letter-spacing: 0.06em;
     }
 
-    /* ── SECTIONS ───────────────────────────────── */
+    /* -- SECTIONS -- */
     section {
       padding: 72px 0;
       border-bottom: 1px solid var(--surface0);
@@ -306,7 +274,7 @@
       line-height: 1.8;
     }
 
-    /* ── MERMAID CONTAINER ──────────────────────── */
+    /* -- MERMAID CONTAINER -- */
     .diagram-wrap {
       position: relative;
       background: var(--mantle);
@@ -370,7 +338,7 @@
       transform-origin: center center;
     }
 
-    /* ── PROFILE HIERARCHY ─────────────────────── */
+    /* -- PROFILE HIERARCHY -- */
     .hierarchy {
       display: flex;
       flex-direction: column;
@@ -449,78 +417,33 @@
     }
 
     /* Level colors */
-    .hierarchy-level:nth-child(1) .hierarchy-rank-num {
-      background: var(--mauve);
-      color: var(--crust);
-    }
+    .hierarchy-level:nth-child(1) .hierarchy-rank-num { background: var(--mauve); color: var(--crust); }
     .hierarchy-level:nth-child(1) .hierarchy-rank-line { background: var(--mauve); opacity: 0.3; }
-    .hierarchy-level:nth-child(1) .hierarchy-card {
-      background: color-mix(in srgb, var(--mauve) 6%, var(--surface0));
-      border-color: color-mix(in srgb, var(--mauve) 30%, var(--surface1));
-    }
+    .hierarchy-level:nth-child(1) .hierarchy-card { background: color-mix(in srgb, var(--mauve) 6%, var(--surface0)); border-color: color-mix(in srgb, var(--mauve) 30%, var(--surface1)); }
     .hierarchy-level:nth-child(1) .hierarchy-card:hover { border-color: var(--mauve); }
     .hierarchy-level:nth-child(1) .hierarchy-card-title { color: var(--mauve); }
-    .hierarchy-level:nth-child(1) .hierarchy-card-tag {
-      background: color-mix(in srgb, var(--mauve) 15%, transparent);
-      color: var(--mauve);
-    }
+    .hierarchy-level:nth-child(1) .hierarchy-card-tag { background: color-mix(in srgb, var(--mauve) 15%, transparent); color: var(--mauve); }
 
-    .hierarchy-level:nth-child(2) .hierarchy-rank-num {
-      background: var(--blue);
-      color: var(--crust);
-    }
+    .hierarchy-level:nth-child(2) .hierarchy-rank-num { background: var(--blue); color: var(--crust); }
     .hierarchy-level:nth-child(2) .hierarchy-rank-line { background: var(--blue); opacity: 0.3; }
-    .hierarchy-level:nth-child(2) .hierarchy-card {
-      background: color-mix(in srgb, var(--blue) 6%, var(--surface0));
-      border-color: color-mix(in srgb, var(--blue) 30%, var(--surface1));
-    }
+    .hierarchy-level:nth-child(2) .hierarchy-card { background: color-mix(in srgb, var(--blue) 6%, var(--surface0)); border-color: color-mix(in srgb, var(--blue) 30%, var(--surface1)); }
     .hierarchy-level:nth-child(2) .hierarchy-card:hover { border-color: var(--blue); }
     .hierarchy-level:nth-child(2) .hierarchy-card-title { color: var(--blue); }
-    .hierarchy-level:nth-child(2) .hierarchy-card-tag {
-      background: color-mix(in srgb, var(--blue) 15%, transparent);
-      color: var(--blue);
-    }
+    .hierarchy-level:nth-child(2) .hierarchy-card-tag { background: color-mix(in srgb, var(--blue) 15%, transparent); color: var(--blue); }
 
-    .hierarchy-level:nth-child(3) .hierarchy-rank-num {
-      background: var(--green);
-      color: var(--crust);
-    }
+    .hierarchy-level:nth-child(3) .hierarchy-rank-num { background: var(--green); color: var(--crust); }
     .hierarchy-level:nth-child(3) .hierarchy-rank-line { background: var(--green); opacity: 0.3; }
-    .hierarchy-level:nth-child(3) .hierarchy-card {
-      background: color-mix(in srgb, var(--green) 6%, var(--surface0));
-      border-color: color-mix(in srgb, var(--green) 30%, var(--surface1));
-    }
+    .hierarchy-level:nth-child(3) .hierarchy-card { background: color-mix(in srgb, var(--green) 6%, var(--surface0)); border-color: color-mix(in srgb, var(--green) 30%, var(--surface1)); }
     .hierarchy-level:nth-child(3) .hierarchy-card:hover { border-color: var(--green); }
     .hierarchy-level:nth-child(3) .hierarchy-card-title { color: var(--green); }
-    .hierarchy-level:nth-child(3) .hierarchy-card-tag {
-      background: color-mix(in srgb, var(--green) 15%, transparent);
-      color: var(--green);
-    }
+    .hierarchy-level:nth-child(3) .hierarchy-card-tag { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
 
-    .hierarchy-level:nth-child(4) .hierarchy-rank-num {
-      background: var(--peach);
-      color: var(--crust);
-    }
+    .hierarchy-level:nth-child(4) .hierarchy-rank-num { background: var(--peach); color: var(--crust); }
     .hierarchy-level:nth-child(4) .hierarchy-rank-line { background: var(--peach); opacity: 0.3; }
-    .hierarchy-level:nth-child(4) .hierarchy-card {
-      background: color-mix(in srgb, var(--peach) 6%, var(--surface0));
-      border-color: color-mix(in srgb, var(--peach) 30%, var(--surface1));
-    }
+    .hierarchy-level:nth-child(4) .hierarchy-card { background: color-mix(in srgb, var(--peach) 6%, var(--surface0)); border-color: color-mix(in srgb, var(--peach) 30%, var(--surface1)); }
     .hierarchy-level:nth-child(4) .hierarchy-card:hover { border-color: var(--peach); }
     .hierarchy-level:nth-child(4) .hierarchy-card-title { color: var(--peach); }
-    .hierarchy-level:nth-child(4) .hierarchy-card-tag {
-      background: color-mix(in srgb, var(--peach) 15%, transparent);
-      color: var(--peach);
-    }
-
-    .hierarchy-arrow {
-      text-align: center;
-      padding: 4px 0 4px 60px;
-      color: var(--overlay0);
-      font-size: 12px;
-      font-weight: 500;
-      letter-spacing: 0.04em;
-    }
+    .hierarchy-level:nth-child(4) .hierarchy-card-tag { background: color-mix(in srgb, var(--peach) 15%, transparent); color: var(--peach); }
 
     .hierarchy-note {
       margin-top: 20px;
@@ -536,7 +459,7 @@
       color: var(--yellow);
     }
 
-    /* ── PRIORITY QUEUE ────────────────────────── */
+    /* -- PRIORITY QUEUE -- */
     .priority-grid {
       display: grid;
       grid-template-columns: 1fr;
@@ -571,30 +494,12 @@
       font-size: 18px;
       flex-shrink: 0;
     }
-    .priority-tier:nth-child(1) .priority-badge {
-      background: color-mix(in srgb, var(--red) 20%, var(--surface0));
-      color: var(--red);
-      border: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
-    }
-    .priority-tier:nth-child(2) .priority-badge {
-      background: color-mix(in srgb, var(--peach) 20%, var(--surface0));
-      color: var(--peach);
-      border: 1px solid color-mix(in srgb, var(--peach) 40%, transparent);
-    }
-    .priority-tier:nth-child(3) .priority-badge {
-      background: color-mix(in srgb, var(--blue) 20%, var(--surface0));
-      color: var(--blue);
-      border: 1px solid color-mix(in srgb, var(--blue) 40%, transparent);
-    }
-    .priority-tier:nth-child(4) .priority-badge {
-      background: color-mix(in srgb, var(--overlay0) 20%, var(--surface0));
-      color: var(--overlay1);
-      border: 1px solid color-mix(in srgb, var(--overlay0) 40%, transparent);
-    }
+    .priority-tier:nth-child(1) .priority-badge { background: color-mix(in srgb, var(--red) 20%, var(--surface0)); color: var(--red); border: 1px solid color-mix(in srgb, var(--red) 40%, transparent); }
+    .priority-tier:nth-child(2) .priority-badge { background: color-mix(in srgb, var(--peach) 20%, var(--surface0)); color: var(--peach); border: 1px solid color-mix(in srgb, var(--peach) 40%, transparent); }
+    .priority-tier:nth-child(3) .priority-badge { background: color-mix(in srgb, var(--blue) 20%, var(--surface0)); color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 40%, transparent); }
+    .priority-tier:nth-child(4) .priority-badge { background: color-mix(in srgb, var(--overlay0) 20%, var(--surface0)); color: var(--overlay1); border: 1px solid color-mix(in srgb, var(--overlay0) 40%, transparent); }
 
-    .priority-info {
-      min-width: 0;
-    }
+    .priority-info { min-width: 0; }
     .priority-name {
       font-family: var(--font-heading);
       font-size: 15px;
@@ -657,172 +562,109 @@
       color: var(--sky);
     }
 
-    /* ── COST ATTRIBUTION ──────────────────────── */
-    .attribution-visual {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 24px;
-      align-items: flex-start;
-      max-width: 900px;
+    /* -- CONNECTION CARDS -- */
+    .connection-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 16px;
+      max-width: 1000px;
     }
-
-    .attribution-center {
-      flex: 1;
-      min-width: 280px;
+    .connection-card {
       background: var(--surface0);
       border: 1px solid var(--surface1);
-      border-radius: var(--radius-lg);
-      padding: 28px;
+      border-radius: var(--radius);
+      padding: 20px 24px;
       position: relative;
+      overflow: hidden;
+      transition: border-color 0.2s ease;
     }
-    .attribution-center::before {
+    .connection-card:hover { border-color: var(--surface2); }
+    .connection-card::before {
       content: '';
       position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 3px;
-      background: linear-gradient(90deg, var(--blue), var(--mauve), var(--peach));
-      border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+      top: 0; left: 0; right: 0;
+      height: 2px;
     }
-    .attribution-center-title {
-      font-family: var(--font-heading);
-      font-size: 16px;
-      font-weight: 600;
-      color: var(--text);
-      margin-bottom: 20px;
-    }
+    .connection-card--healthy::before { background: var(--green); }
+    .connection-card--degraded::before { background: var(--yellow); }
+    .connection-card--limited::before { background: var(--peach); }
+    .connection-card--unavailable::before { background: var(--red); }
 
-    .attribution-dim {
+    .connection-header {
       display: flex;
       align-items: center;
-      gap: 12px;
-      padding: 12px 16px;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .connection-name {
+      font-family: var(--font-heading);
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .connection-status {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .connection-status--healthy { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
+    .connection-status--degraded { background: color-mix(in srgb, var(--yellow) 15%, transparent); color: var(--yellow); }
+    .connection-status--limited { background: color-mix(in srgb, var(--peach) 15%, transparent); color: var(--peach); }
+    .connection-status--unavailable { background: color-mix(in srgb, var(--red) 15%, transparent); color: var(--red); }
+
+    .connection-provider {
+      font-size: 12px;
+      color: var(--overlay1);
+      margin-bottom: 16px;
+    }
+    .connection-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .connection-stat {
       background: var(--mantle);
       border: 1px solid var(--surface0);
-      border-radius: var(--radius);
-      margin-bottom: 8px;
-      transition: border-color 0.15s ease;
-    }
-    .attribution-dim:hover {
-      border-color: var(--surface2);
-    }
-    .attribution-dim:last-child {
-      margin-bottom: 0;
-    }
-    .attribution-dim-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-    .attribution-dim-name {
-      font-family: var(--font-heading);
-      font-size: 14px;
-      font-weight: 600;
-      flex: 1;
-    }
-    .attribution-dim-req {
-      font-size: 11px;
-      font-weight: 500;
-      padding: 2px 8px;
       border-radius: 4px;
+      padding: 8px 12px;
     }
-
-    .attribution-dim:nth-child(1) .attribution-dim-dot { background: var(--blue); }
-    .attribution-dim:nth-child(1) .attribution-dim-name { color: var(--blue); }
-    .attribution-dim:nth-child(1) .attribution-dim-req {
-      background: color-mix(in srgb, var(--blue) 15%, transparent);
-      color: var(--blue);
-    }
-
-    .attribution-dim:nth-child(2) .attribution-dim-dot { background: var(--green); }
-    .attribution-dim:nth-child(2) .attribution-dim-name { color: var(--green); }
-    .attribution-dim:nth-child(2) .attribution-dim-req {
-      background: color-mix(in srgb, var(--green) 15%, transparent);
-      color: var(--green);
-    }
-
-    .attribution-dim:nth-child(3) .attribution-dim-dot { background: var(--mauve); }
-    .attribution-dim:nth-child(3) .attribution-dim-name { color: var(--mauve); }
-    .attribution-dim:nth-child(3) .attribution-dim-req {
-      background: color-mix(in srgb, var(--mauve) 15%, transparent);
-      color: var(--mauve);
-    }
-
-    .attribution-dim:nth-child(4) .attribution-dim-dot { background: var(--peach); }
-    .attribution-dim:nth-child(4) .attribution-dim-name { color: var(--peach); }
-    .attribution-dim:nth-child(4) .attribution-dim-req {
-      background: color-mix(in srgb, var(--peach) 15%, transparent);
-      color: var(--peach);
-    }
-
-    .attribution-dim:nth-child(5) .attribution-dim-dot { background: var(--yellow); }
-    .attribution-dim:nth-child(5) .attribution-dim-name { color: var(--yellow); }
-    .attribution-dim:nth-child(5) .attribution-dim-req {
-      background: color-mix(in srgb, var(--yellow) 15%, transparent);
-      color: var(--yellow);
-    }
-
-    .attribution-questions {
-      flex: 1;
-      min-width: 260px;
-    }
-    .attribution-q {
-      padding: 14px 18px;
-      background: var(--surface0);
-      border: 1px solid var(--surface1);
-      border-radius: var(--radius);
-      margin-bottom: 10px;
-      font-size: 13px;
-      color: var(--subtext0);
-      line-height: 1.6;
-      position: relative;
-      padding-left: 42px;
-    }
-    .attribution-q::before {
-      content: '?';
-      position: absolute;
-      left: 14px;
-      top: 14px;
-      width: 20px;
-      height: 20px;
-      border-radius: 50%;
-      background: var(--surface1);
-      color: var(--overlay1);
+    .connection-stat-value {
       font-family: var(--font-heading);
+      font-size: 16px;
       font-weight: 700;
-      font-size: 12px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .attribution-q strong {
       color: var(--text);
     }
+    .connection-stat-label {
+      font-size: 10px;
+      color: var(--overlay0);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
 
-    /* ── BUDGET ENFORCEMENT ─────────────────────── */
-    .budget-flow {
+    /* -- FAILOVER FLOW -- */
+    .failover-flow {
       display: flex;
       flex-direction: column;
       gap: 0;
       max-width: 780px;
       position: relative;
     }
-
-    .budget-stage {
+    .failover-stage {
       display: flex;
       align-items: stretch;
       position: relative;
     }
-    .budget-connector {
+    .failover-connector {
       width: 48px;
       display: flex;
       flex-direction: column;
       align-items: center;
       flex-shrink: 0;
     }
-    .budget-connector-dot {
+    .failover-connector-dot {
       width: 16px;
       height: 16px;
       border-radius: 50%;
@@ -832,16 +674,14 @@
       position: relative;
       z-index: 1;
     }
-    .budget-connector-line {
+    .failover-connector-line {
       flex: 1;
       width: 2px;
       margin-top: 4px;
     }
-    .budget-stage:last-child .budget-connector-line {
-      display: none;
-    }
+    .failover-stage:last-child .failover-connector-line { display: none; }
 
-    .budget-card {
+    .failover-card {
       flex: 1;
       border: 1px solid var(--surface1);
       border-radius: var(--radius);
@@ -849,29 +689,24 @@
       margin: 6px 0;
       margin-left: 12px;
     }
-    .budget-card-header {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 8px;
-    }
-    .budget-card-title {
+    .failover-card-title {
       font-family: var(--font-heading);
       font-size: 15px;
       font-weight: 600;
+      margin-bottom: 8px;
     }
-    .budget-card-desc {
+    .failover-card-desc {
       font-size: 13px;
       color: var(--subtext0);
       line-height: 1.6;
     }
-    .budget-card-actions {
+    .failover-card-actions {
       margin-top: 12px;
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
     }
-    .budget-action {
+    .failover-action {
       font-size: 11px;
       font-weight: 600;
       padding: 4px 10px;
@@ -879,113 +714,36 @@
       letter-spacing: 0.02em;
     }
 
-    /* Budget colors */
-    .budget-stage--normal .budget-connector-dot { border-color: var(--green); }
-    .budget-stage--normal .budget-connector-line { background: var(--green); opacity: 0.3; }
-    .budget-stage--normal .budget-card {
-      background: color-mix(in srgb, var(--green) 5%, var(--surface0));
-      border-color: color-mix(in srgb, var(--green) 25%, var(--surface1));
-    }
-    .budget-stage--normal .budget-card-title { color: var(--green); }
+    /* Failover stage colors */
+    .failover-stage--try .failover-connector-dot { border-color: var(--green); }
+    .failover-stage--try .failover-connector-line { background: var(--green); opacity: 0.3; }
+    .failover-stage--try .failover-card { background: color-mix(in srgb, var(--green) 5%, var(--surface0)); border-color: color-mix(in srgb, var(--green) 25%, var(--surface1)); }
+    .failover-stage--try .failover-card-title { color: var(--green); }
 
-    .budget-stage--warn .budget-connector-dot { border-color: var(--yellow); }
-    .budget-stage--warn .budget-connector-line { background: var(--yellow); opacity: 0.3; }
-    .budget-stage--warn .budget-card {
-      background: color-mix(in srgb, var(--yellow) 5%, var(--surface0));
-      border-color: color-mix(in srgb, var(--yellow) 25%, var(--surface1));
-    }
-    .budget-stage--warn .budget-card-title { color: var(--yellow); }
-    .budget-stage--warn .budget-action {
-      background: color-mix(in srgb, var(--yellow) 15%, transparent);
-      color: var(--yellow);
-    }
+    .failover-stage--retry .failover-connector-dot { border-color: var(--yellow); }
+    .failover-stage--retry .failover-connector-line { background: var(--yellow); opacity: 0.3; }
+    .failover-stage--retry .failover-card { background: color-mix(in srgb, var(--yellow) 5%, var(--surface0)); border-color: color-mix(in srgb, var(--yellow) 25%, var(--surface1)); }
+    .failover-stage--retry .failover-card-title { color: var(--yellow); }
+    .failover-stage--retry .failover-action { background: color-mix(in srgb, var(--yellow) 15%, transparent); color: var(--yellow); }
 
-    .budget-stage--hard .budget-connector-dot { border-color: var(--red); }
-    .budget-stage--hard .budget-connector-line { background: var(--red); opacity: 0.3; }
-    .budget-stage--hard .budget-card {
-      background: color-mix(in srgb, var(--red) 5%, var(--surface0));
-      border-color: color-mix(in srgb, var(--red) 25%, var(--surface1));
-    }
-    .budget-stage--hard .budget-card-title { color: var(--red); }
-    .budget-stage--hard .budget-action {
-      background: color-mix(in srgb, var(--red) 15%, transparent);
-      color: var(--red);
-    }
+    .failover-stage--connection .failover-connector-dot { border-color: var(--peach); }
+    .failover-stage--connection .failover-connector-line { background: var(--peach); opacity: 0.3; }
+    .failover-stage--connection .failover-card { background: color-mix(in srgb, var(--peach) 5%, var(--surface0)); border-color: color-mix(in srgb, var(--peach) 25%, var(--surface1)); }
+    .failover-stage--connection .failover-card-title { color: var(--peach); }
+    .failover-stage--connection .failover-action { background: color-mix(in srgb, var(--peach) 15%, transparent); color: var(--peach); }
 
-    .budget-stage--resolve .budget-connector-dot { border-color: var(--blue); }
-    .budget-stage--resolve .budget-card {
-      background: color-mix(in srgb, var(--blue) 5%, var(--surface0));
-      border-color: color-mix(in srgb, var(--blue) 25%, var(--surface1));
-    }
-    .budget-stage--resolve .budget-card-title { color: var(--blue); }
-    .budget-stage--resolve .budget-action {
-      background: color-mix(in srgb, var(--blue) 15%, transparent);
-      color: var(--blue);
-    }
+    .failover-stage--profile .failover-connector-dot { border-color: var(--mauve); }
+    .failover-stage--profile .failover-connector-line { background: var(--mauve); opacity: 0.3; }
+    .failover-stage--profile .failover-card { background: color-mix(in srgb, var(--mauve) 5%, var(--surface0)); border-color: color-mix(in srgb, var(--mauve) 25%, var(--surface1)); }
+    .failover-stage--profile .failover-card-title { color: var(--mauve); }
+    .failover-stage--profile .failover-action { background: color-mix(in srgb, var(--mauve) 15%, transparent); color: var(--mauve); }
 
-    .budget-meter {
-      margin-top: 24px;
-      background: var(--surface0);
-      border: 1px solid var(--surface1);
-      border-radius: var(--radius);
-      padding: 20px 24px;
-      max-width: 780px;
-    }
-    .budget-meter-label {
-      font-size: 12px;
-      color: var(--overlay1);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      margin-bottom: 12px;
-    }
-    .budget-meter-bar {
-      height: 12px;
-      background: var(--mantle);
-      border-radius: 6px;
-      position: relative;
-      overflow: visible;
-      margin-bottom: 8px;
-    }
-    .budget-meter-fill {
-      height: 100%;
-      border-radius: 6px;
-      background: linear-gradient(90deg, var(--green) 0%, var(--green) 60%, var(--yellow) 78%, var(--red) 100%);
-      width: 85%;
-      position: relative;
-    }
-    .budget-meter-marker {
-      position: absolute;
-      top: -6px;
-      width: 2px;
-      height: 24px;
-      border-radius: 1px;
-    }
-    .budget-meter-marker--soft {
-      left: 70%;
-      background: var(--yellow);
-    }
-    .budget-meter-marker--hard {
-      left: 100%;
-      background: var(--red);
-    }
-    .budget-meter-labels {
-      display: flex;
-      justify-content: space-between;
-      font-size: 11px;
-      color: var(--overlay0);
-      position: relative;
-    }
-    .budget-meter-labels span:nth-child(2) {
-      position: absolute;
-      left: 70%;
-      transform: translateX(-50%);
-      color: var(--yellow);
-    }
-    .budget-meter-labels span:nth-child(3) {
-      color: var(--red);
-    }
+    .failover-stage--notify .failover-connector-dot { border-color: var(--blue); }
+    .failover-stage--notify .failover-card { background: color-mix(in srgb, var(--blue) 5%, var(--surface0)); border-color: color-mix(in srgb, var(--blue) 25%, var(--surface1)); }
+    .failover-stage--notify .failover-card-title { color: var(--blue); }
+    .failover-stage--notify .failover-action { background: color-mix(in srgb, var(--blue) 15%, transparent); color: var(--blue); }
 
-    /* ── SCHEMA TABLE ──────────────────────────── */
+    /* -- SCHEMA TABLE -- */
     .schema-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
@@ -998,9 +756,7 @@
       overflow: hidden;
       transition: border-color 0.2s ease;
     }
-    .schema-table:hover {
-      border-color: var(--surface2);
-    }
+    .schema-table:hover { border-color: var(--surface2); }
     .schema-table-header {
       display: flex;
       align-items: center;
@@ -1022,9 +778,7 @@
       text-transform: uppercase;
       letter-spacing: 0.06em;
     }
-    .schema-table-body {
-      padding: 14px 18px;
-    }
+    .schema-table-body { padding: 14px 18px; }
     .schema-col {
       display: flex;
       align-items: baseline;
@@ -1033,45 +787,23 @@
       font-size: 12px;
       line-height: 1.6;
     }
-    .schema-col-name {
-      color: var(--text);
-      font-weight: 500;
-      min-width: 140px;
-      flex-shrink: 0;
-    }
-    .schema-col-type {
-      color: var(--overlay1);
-      font-size: 11px;
-    }
-    .schema-col-pk {
-      color: var(--yellow);
-      font-size: 10px;
-      font-weight: 600;
-    }
-    .schema-col-fk {
-      color: var(--blue);
-      font-size: 10px;
-      font-weight: 600;
-    }
+    .schema-col-name { color: var(--text); font-weight: 500; min-width: 160px; flex-shrink: 0; }
+    .schema-col-type { color: var(--overlay1); font-size: 11px; }
+    .schema-col-pk { color: var(--yellow); font-size: 10px; font-weight: 600; }
+    .schema-col-fk { color: var(--blue); font-size: 10px; font-weight: 600; }
 
-    /* Table-specific accent colors */
     .schema-table[data-accent="blue"] .schema-table-name { color: var(--blue); }
     .schema-table[data-accent="blue"] .schema-table-badge { background: color-mix(in srgb, var(--blue) 15%, transparent); color: var(--blue); }
-
     .schema-table[data-accent="green"] .schema-table-name { color: var(--green); }
     .schema-table[data-accent="green"] .schema-table-badge { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
-
     .schema-table[data-accent="mauve"] .schema-table-name { color: var(--mauve); }
     .schema-table[data-accent="mauve"] .schema-table-badge { background: color-mix(in srgb, var(--mauve) 15%, transparent); color: var(--mauve); }
-
     .schema-table[data-accent="peach"] .schema-table-name { color: var(--peach); }
     .schema-table[data-accent="peach"] .schema-table-badge { background: color-mix(in srgb, var(--peach) 15%, transparent); color: var(--peach); }
-
     .schema-table[data-accent="yellow"] .schema-table-name { color: var(--yellow); }
     .schema-table[data-accent="yellow"] .schema-table-badge { background: color-mix(in srgb, var(--yellow) 15%, transparent); color: var(--yellow); }
-
-    .schema-table[data-accent="red"] .schema-table-name { color: var(--red); }
-    .schema-table[data-accent="red"] .schema-table-badge { background: color-mix(in srgb, var(--red) 15%, transparent); color: var(--red); }
+    .schema-table[data-accent="teal"] .schema-table-name { color: var(--teal); }
+    .schema-table[data-accent="teal"] .schema-table-badge { background: color-mix(in srgb, var(--teal) 15%, transparent); color: var(--teal); }
 
     .schema-desc {
       font-size: 12px;
@@ -1081,7 +813,7 @@
       border-top: 1px solid var(--surface0);
     }
 
-    /* ── FOOTER ─────────────────────────────────── */
+    /* -- FOOTER -- */
     .footer {
       padding: 48px 0;
       border-top: 1px solid var(--surface0);
@@ -1117,12 +849,12 @@
       color: var(--blue);
     }
 
-    /* ── RESPONSIVE ─────────────────────────────── */
+    /* -- RESPONSIVE -- */
     @media (max-width: 768px) {
       .hero { padding: 48px 0 40px; }
       .stat-grid { grid-template-columns: repeat(2, 1fr); }
       section { padding: 48px 0; }
-      .attribution-visual { flex-direction: column; }
+      .connection-grid { grid-template-columns: 1fr; }
       .priority-tier { grid-template-columns: auto 1fr; }
       .priority-timeout { grid-column: 2; }
       .schema-grid { grid-template-columns: 1fr; }
@@ -1134,7 +866,7 @@
       .priority-label-row { display: none; }
     }
 
-    /* ── Mermaid theme overrides ────────────────── */
+    /* -- Mermaid theme overrides -- */
     .mermaid {
       font-family: var(--font-body) !important;
     }
@@ -1142,7 +874,7 @@
 </head>
 <body>
 
-  <!-- ═══════════════════════════════════════════ HERO ═══ -->
+  <!-- HERO -->
   <header class="hero">
     <div class="container">
       <div class="hero-label">
@@ -1154,8 +886,8 @@
       </h1>
       <p class="hero-subtitle">
         Every LLM call in OtterCamp V2 flows through a single centralized gateway.
-        Agent chat, listening eval, summarization, memory extraction -- all routed,
-        queued, tracked, and budgeted through one system.
+        Multiple provider connections with automatic failover, token tracking,
+        and a subscription dashboard keep your agents running.
       </p>
       <div class="stat-grid">
         <div class="stat-card animate-in">
@@ -1167,8 +899,8 @@
           <div class="stat-label">Priority Tiers</div>
         </div>
         <div class="stat-card animate-in">
-          <div class="stat-value">Per-call</div>
-          <div class="stat-label">Cost Tracking</div>
+          <div class="stat-value">Auto</div>
+          <div class="stat-label">Failover</div>
         </div>
         <div class="stat-card animate-in">
           <div class="stat-value">3-deep</div>
@@ -1178,16 +910,16 @@
     </div>
   </header>
 
-  <!-- ═══════════════════════════════════════════ GATEWAY ARCHITECTURE ═══ -->
+  <!-- GATEWAY ARCHITECTURE -->
   <section id="gateway">
     <div class="container">
       <div class="section-header animate-in">
         <div class="section-number">01 // Architecture</div>
         <h2 class="section-title">Gateway Architecture</h2>
         <p class="section-desc">
-          All callers go through the gateway. The gateway resolves profiles, checks budgets,
-          manages concurrency, dispatches to provider adapters, handles retries and fallbacks,
-          and records every invocation.
+          All callers go through the gateway. The gateway resolves profiles, selects the best
+          connection, manages concurrency, dispatches to provider adapters, handles retries,
+          failover, and records every invocation.
         </p>
       </div>
 
@@ -1238,20 +970,21 @@ flowchart LR
   subgraph GW["&nbsp;&nbsp;Inference Gateway&nbsp;&nbsp;"]
     direction TB
     R["Profile Resolver"]
-    B["Budget Check"]
+    CS["Connection Selector"]
     Q["Concurrency Queue"]
     D["Dispatcher"]
     T["Invocation Tracker"]
-    R --> B --> Q --> D
+    R --> CS --> Q --> D
     D --> T
   end
 
-  subgraph Providers["&nbsp;&nbsp;Provider Adapters&nbsp;&nbsp;"]
+  subgraph Providers["&nbsp;&nbsp;Provider Connections&nbsp;&nbsp;"]
     direction TB
-    P1["Anthropic\n(primary)"]
+    P1["Anthropic Key 1\n(primary)"]
+    P1b["Anthropic Key 2\n(team)"]
     P2["OpenAI"]
     P3["Google"]
-    P4["OpenAI-Compatible\n(self-host)"]
+    P4["Ollama\n(local)"]
   end
 
   C1 --> R
@@ -1260,6 +993,7 @@ flowchart LR
   C4 --> R
   C5 --> R
   D --> P1
+  D --> P1b
   D --> P2
   D --> P3
   D --> P4
@@ -1270,11 +1004,12 @@ flowchart LR
   style C4 fill:#1e1e2e,stroke:#cba6f7,color:#cba6f7
   style C5 fill:#1e1e2e,stroke:#f5c2e7,color:#f5c2e7
   style R fill:#313244,stroke:#89b4fa,color:#89b4fa
-  style B fill:#313244,stroke:#f9e2af,color:#f9e2af
+  style CS fill:#313244,stroke:#a6e3a1,color:#a6e3a1
   style Q fill:#313244,stroke:#fab387,color:#fab387
   style D fill:#313244,stroke:#a6e3a1,color:#a6e3a1
   style T fill:#313244,stroke:#cba6f7,color:#cba6f7
   style P1 fill:#1e1e2e,stroke:#89b4fa,color:#89b4fa
+  style P1b fill:#1e1e2e,stroke:#74c7ec,color:#74c7ec
   style P2 fill:#1e1e2e,stroke:#a6e3a1,color:#a6e3a1
   style P3 fill:#1e1e2e,stroke:#fab387,color:#fab387
   style P4 fill:#1e1e2e,stroke:#9399b2,color:#9399b2
@@ -1288,26 +1023,22 @@ flowchart LR
           <div style="font-size: 12px; color: var(--subtext0); line-height: 1.6;">Walks the 4-level assignment hierarchy to find the right model profile for this call.</div>
         </div>
         <div style="background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius); padding: 16px;">
-          <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--yellow); margin-bottom: 6px;">Budget Check</div>
-          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.6;">Verifies org and project budgets. Hard limit hit = immediate rejection.</div>
+          <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--green); margin-bottom: 6px;">Connection Selector</div>
+          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.6;">Picks the healthiest connection for the resolved provider. Handles failover on failure.</div>
         </div>
         <div style="background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius); padding: 16px;">
           <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--peach); margin-bottom: 6px;">Concurrency Queue</div>
           <div style="font-size: 12px; color: var(--subtext0); line-height: 1.6;">4-tier priority queue with global + per-provider limits and soft preemption.</div>
         </div>
         <div style="background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius); padding: 16px;">
-          <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--green); margin-bottom: 6px;">Dispatcher</div>
-          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.6;">Sends to the correct provider adapter. Handles retry + fallback chain on failure.</div>
-        </div>
-        <div style="background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius); padding: 16px;">
           <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--mauve); margin-bottom: 6px;">Invocation Tracker</div>
-          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.6;">Records every call: tokens, cost, latency, attribution, prompt/response to object storage.</div>
+          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.6;">Records every call: tokens, latency, attribution, connection used, prompt/response to object storage.</div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ═══════════════════════════════════════════ PROFILE HIERARCHY ═══ -->
+  <!-- PROFILE HIERARCHY -->
   <section id="profiles">
     <div class="container">
       <div class="section-header animate-in">
@@ -1315,7 +1046,7 @@ flowchart LR
         <h2 class="section-title">Profile Hierarchy</h2>
         <p class="section-desc">
           Model profiles bundle provider + model + settings + fallback chain into a single
-          versioned entity. Resolution walks four levels -- the first non-null value wins.
+          versioned entity with a stable logical identity. Resolution walks four levels -- the first non-null value wins.
         </p>
       </div>
 
@@ -1383,25 +1114,120 @@ flowchart LR
 
       <div class="hierarchy-note animate-in">
         <strong>System profiles</strong> (summarization, listening eval, memory extraction/synthesis)
-        are resolved separately from this hierarchy. They are configured at the org level and are
-        not overridable per-project or per-agent. They are infrastructure, not creative choices.
+        are resolved separately from this hierarchy. They are configured at the org level with a
+        <code style="color: var(--yellow); background: var(--mantle); padding: 1px 4px; border-radius: 3px; font-size: 11px;">system_purpose</code>
+        field and are not overridable per-project or per-agent.
+      </div>
+    </div>
+  </section>
+
+  <!-- PROVIDER CONNECTIONS & DASHBOARD -->
+  <section id="connections">
+    <div class="container">
+      <div class="section-header animate-in">
+        <div class="section-number">03 // Connections</div>
+        <h2 class="section-title">Subscription Dashboard</h2>
+        <p class="section-desc">
+          Connect multiple API keys per provider. Each connection tracks its own health,
+          token usage, and rate limit state. The dashboard shows everything at a glance.
+        </p>
       </div>
 
-      <div style="margin-top: 32px;" class="animate-in">
+      <div class="connection-grid animate-in">
+        <div class="connection-card connection-card--healthy">
+          <div class="connection-header">
+            <span class="connection-name">Personal Anthropic</span>
+            <span class="connection-status connection-status--healthy">Healthy</span>
+          </div>
+          <div class="connection-provider">Anthropic // claude-sonnet-4, claude-opus-4</div>
+          <div class="connection-stats">
+            <div class="connection-stat">
+              <div class="connection-stat-value">1.2M</div>
+              <div class="connection-stat-label">Input Tokens Today</div>
+            </div>
+            <div class="connection-stat">
+              <div class="connection-stat-value">340K</div>
+              <div class="connection-stat-label">Output Tokens Today</div>
+            </div>
+            <div class="connection-stat">
+              <div class="connection-stat-value">847</div>
+              <div class="connection-stat-label">Invocations</div>
+            </div>
+            <div class="connection-stat">
+              <div class="connection-stat-value">0.2%</div>
+              <div class="connection-stat-label">Error Rate</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="connection-card connection-card--limited">
+          <div class="connection-header">
+            <span class="connection-name">Team Anthropic</span>
+            <span class="connection-status connection-status--limited">Rate Limited</span>
+          </div>
+          <div class="connection-provider">Anthropic // claude-sonnet-4, claude-opus-4</div>
+          <div class="connection-stats">
+            <div class="connection-stat">
+              <div class="connection-stat-value">4.8M</div>
+              <div class="connection-stat-label">Input Tokens Today</div>
+            </div>
+            <div class="connection-stat">
+              <div class="connection-stat-value">1.1M</div>
+              <div class="connection-stat-label">Output Tokens Today</div>
+            </div>
+            <div class="connection-stat">
+              <div class="connection-stat-value">2,341</div>
+              <div class="connection-stat-label">Invocations</div>
+            </div>
+            <div class="connection-stat">
+              <div class="connection-stat-value">~3min</div>
+              <div class="connection-stat-label">Reset In</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="connection-card connection-card--healthy">
+          <div class="connection-header">
+            <span class="connection-name">OpenAI Fallback</span>
+            <span class="connection-status connection-status--healthy">Healthy</span>
+          </div>
+          <div class="connection-provider">OpenAI // gpt-4o, gpt-4o-mini</div>
+          <div class="connection-stats">
+            <div class="connection-stat">
+              <div class="connection-stat-value">89K</div>
+              <div class="connection-stat-label">Input Tokens Today</div>
+            </div>
+            <div class="connection-stat">
+              <div class="connection-stat-value">22K</div>
+              <div class="connection-stat-label">Output Tokens Today</div>
+            </div>
+            <div class="connection-stat">
+              <div class="connection-stat-value">34</div>
+              <div class="connection-stat-label">Invocations</div>
+            </div>
+            <div class="connection-stat">
+              <div class="connection-stat-value">0%</div>
+              <div class="connection-stat-label">Error Rate</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 24px;" class="animate-in">
         <div class="diagram-wrap">
           <div class="diagram-titlebar">
             <div class="diagram-titlebar-dots">
               <span></span><span></span><span></span>
             </div>
-            <span>profile-versioning.mmd</span>
+            <span>token-usage-rollup.mmd</span>
             <div class="diagram-controls">
-              <button onclick="zoomDiagram('version-diagram', -0.15)">-</button>
-              <button onclick="zoomDiagram('version-diagram', 0)">Reset</button>
-              <button onclick="zoomDiagram('version-diagram', 0.15)">+</button>
+              <button onclick="zoomDiagram('rollup-diagram', -0.15)">-</button>
+              <button onclick="zoomDiagram('rollup-diagram', 0)">Reset</button>
+              <button onclick="zoomDiagram('rollup-diagram', 0.15)">+</button>
             </div>
           </div>
           <div class="diagram-viewport">
-            <pre id="version-diagram" class="mermaid">
+            <pre id="rollup-diagram" class="mermaid">
 %%{init: {
   'theme': 'base',
   'themeVariables': {
@@ -1416,23 +1242,23 @@ flowchart LR
   }
 }}%%
 flowchart LR
-  subgraph Profile["claude-sonnet-primary"]
-    V1["v1\nis_current: false"]
-    V2["v2\nis_current: false"]
-    V3["v3\nis_current: true"]
-  end
+  INV["model_invocation\n(per-call record)"]
+  INV --> |"atomic increment"| R1["Per-Connection\nDaily"]
+  INV --> |"atomic increment"| R2["Per-Model\nDaily"]
+  INV --> |"atomic increment"| R3["Per-Agent\nDaily"]
+  INV --> |"atomic increment"| R4["Per-Project\nDaily"]
 
-  TURN_A["Turn A\n(started with v2)"] -.-> V2
-  TURN_B["Turn B\n(new turn)"] --> V3
+  R1 --> DASH["Subscription\nDashboard"]
+  R2 --> DASH
+  R3 --> DASH
+  R4 --> DASH
 
-  PIN["Pinned Assignment\n(version = 2)"] --> V2
-
-  style V1 fill:#1e1e2e,stroke:#585b70,color:#6c7086
-  style V2 fill:#1e1e2e,stroke:#89b4fa,color:#89b4fa
-  style V3 fill:#313244,stroke:#a6e3a1,color:#a6e3a1
-  style TURN_A fill:#1e1e2e,stroke:#89b4fa,color:#89b4fa
-  style TURN_B fill:#1e1e2e,stroke:#a6e3a1,color:#a6e3a1
-  style PIN fill:#1e1e2e,stroke:#f9e2af,color:#f9e2af
+  style INV fill:#313244,stroke:#cba6f7,color:#cba6f7
+  style R1 fill:#1e1e2e,stroke:#a6e3a1,color:#a6e3a1
+  style R2 fill:#1e1e2e,stroke:#89b4fa,color:#89b4fa
+  style R3 fill:#1e1e2e,stroke:#fab387,color:#fab387
+  style R4 fill:#1e1e2e,stroke:#f9e2af,color:#f9e2af
+  style DASH fill:#313244,stroke:#89b4fa,color:#89b4fa
             </pre>
           </div>
         </div>
@@ -1440,15 +1266,15 @@ flowchart LR
     </div>
   </section>
 
-  <!-- ═══════════════════════════════════════════ PRIORITY QUEUE ═══ -->
+  <!-- PRIORITY QUEUE -->
   <section id="priority">
     <div class="container">
       <div class="section-header animate-in">
-        <div class="section-number">03 // Concurrency</div>
+        <div class="section-number">04 // Concurrency</div>
         <h2 class="section-title">Priority Queue</h2>
         <p class="section-desc">
           The gateway manages concurrency with global + per-provider limits and a four-tier
-          priority system. Within tiers, requests are FIFO. Sync work can soft-preempt async work.
+          priority system. Slots are held per-model-call, not per-turn. Sync work can soft-preempt async work.
         </p>
       </div>
 
@@ -1508,347 +1334,125 @@ flowchart LR
       </div>
 
       <div class="preemption-note animate-in">
-        <strong>Soft Preemption:</strong> When a sync request arrives and all slots are occupied by async work,
-        the most recently started async session is paused. Its current model call completes, but it is not
-        dispatched for the next tool loop iteration. It returns to the queue with its original priority and
-        resumes when a slot opens. This is pause, not cancellation.
+        <strong>Slot Holding:</strong> Concurrency slots are held per-model-call, not per-turn.
+        Between model calls (during tool execution), the slot is released. The session re-enters the
+        queue for its next model call. This makes preemption naturally efficient -- when a sync request
+        arrives, the most recently started async session finishes its current call, then pauses.
       </div>
     </div>
   </section>
 
-  <!-- ═══════════════════════════════════════════ COST ATTRIBUTION ═══ -->
-  <section id="cost">
+  <!-- FAILOVER -->
+  <section id="failover">
     <div class="container">
       <div class="section-header animate-in">
-        <div class="section-number">04 // Cost Tracking</div>
-        <h2 class="section-title">Multi-Dimensional Attribution</h2>
+        <div class="section-number">05 // Failover</div>
+        <h2 class="section-title">Connection Failover</h2>
         <p class="section-desc">
-          Every model invocation is attributed across five dimensions. Pre-computed daily rollups
-          enable fast dashboard queries. Cost is calculated from per-token pricing on the profile.
+          When a connection fails, the gateway tries same-provider alternatives first, then
+          cross-provider fallback profiles. Every failover event notifies the human in real-time.
         </p>
       </div>
 
-      <div class="attribution-visual animate-in">
-        <div class="attribution-center">
-          <div class="attribution-center-title">model_invocation Attribution</div>
-          <div class="attribution-dim">
-            <div class="attribution-dim-dot"></div>
-            <div class="attribution-dim-name">Organization</div>
-            <div class="attribution-dim-req">always present</div>
+      <div class="failover-flow animate-in">
+        <div class="failover-stage failover-stage--try">
+          <div class="failover-connector">
+            <div class="failover-connector-dot"></div>
+            <div class="failover-connector-line"></div>
           </div>
-          <div class="attribution-dim">
-            <div class="attribution-dim-dot"></div>
-            <div class="attribution-dim-name">Project</div>
-            <div class="attribution-dim-req">project-scoped</div>
-          </div>
-          <div class="attribution-dim">
-            <div class="attribution-dim-dot"></div>
-            <div class="attribution-dim-name">Agent</div>
-            <div class="attribution-dim-req">agent-triggered</div>
-          </div>
-          <div class="attribution-dim">
-            <div class="attribution-dim-dot"></div>
-            <div class="attribution-dim-name">Session</div>
-            <div class="attribution-dim-req">chat context</div>
-          </div>
-          <div class="attribution-dim">
-            <div class="attribution-dim-dot"></div>
-            <div class="attribution-dim-name">Task</div>
-            <div class="attribution-dim-req">task-scoped</div>
+          <div class="failover-card">
+            <div class="failover-card-title">1. Try Primary Connection</div>
+            <div class="failover-card-desc">
+              Gateway selects the healthiest connection for the resolved profile's provider.
+              If it succeeds, the request completes normally.
+            </div>
           </div>
         </div>
 
-        <div class="attribution-questions">
-          <div class="attribution-q">
-            <strong>"How much did Project X cost this month?"</strong><br>
-            Filter by project_id, aggregate over period.
+        <div class="failover-stage failover-stage--retry">
+          <div class="failover-connector">
+            <div class="failover-connector-dot"></div>
+            <div class="failover-connector-line"></div>
           </div>
-          <div class="attribution-q">
-            <strong>"Which agent is the most expensive?"</strong><br>
-            Group by agent_id, sort by total cost descending.
-          </div>
-          <div class="attribution-q">
-            <strong>"What is the cost split between chat and autonomous work?"</strong><br>
-            Group by invocation_purpose: agent_turn vs async work.
-          </div>
-          <div class="attribution-q">
-            <strong>"What did this specific task cost?"</strong><br>
-            Filter by task_id, sum all invocations.
+          <div class="failover-card">
+            <div class="failover-card-title">2. Retry on Failure</div>
+            <div class="failover-card-desc">
+              For retryable errors (rate_limited, overloaded, timeout, network_error), retry up to
+              2x with exponential backoff (1s, 2s) plus jitter. Rate-limited errors respect Retry-After.
+            </div>
+            <div class="failover-card-actions">
+              <span class="failover-action">Backoff: 1s, 2s</span>
+              <span class="failover-action">Jitter: 0-500ms</span>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div style="margin-top: 32px;" class="animate-in">
-        <div class="diagram-wrap">
-          <div class="diagram-titlebar">
-            <div class="diagram-titlebar-dots">
-              <span></span><span></span><span></span>
+        <div class="failover-stage failover-stage--connection">
+          <div class="failover-connector">
+            <div class="failover-connector-dot"></div>
+            <div class="failover-connector-line"></div>
+          </div>
+          <div class="failover-card">
+            <div class="failover-card-title">3. Same-Provider Failover</div>
+            <div class="failover-card-desc">
+              If the org has multiple connections to the same provider, try the next healthiest one.
+              Same model, different API key. Least disruptive path.
             </div>
-            <span>cost-rollup-flow.mmd</span>
-            <div class="diagram-controls">
-              <button onclick="zoomDiagram('rollup-diagram', -0.15)">-</button>
-              <button onclick="zoomDiagram('rollup-diagram', 0)">Reset</button>
-              <button onclick="zoomDiagram('rollup-diagram', 0.15)">+</button>
+            <div class="failover-card-actions">
+              <span class="failover-action">Same Model</span>
+              <span class="failover-action">Different Key</span>
             </div>
           </div>
-          <div class="diagram-viewport">
-            <pre id="rollup-diagram" class="mermaid">
-%%{init: {
-  'theme': 'base',
-  'themeVariables': {
-    'primaryColor': '#313244',
-    'primaryTextColor': '#cdd6f4',
-    'primaryBorderColor': '#585b70',
-    'lineColor': '#6c7086',
-    'secondaryColor': '#45475a',
-    'tertiaryColor': '#1e1e2e',
-    'fontFamily': 'Geist Mono, JetBrains Mono, monospace',
-    'fontSize': '13px'
-  }
-}}%%
-flowchart LR
-  INV["model_invocation\n(per-call record)"]
-  INV --> |"atomic increment"| R1["Per-Org Daily"]
-  INV --> |"atomic increment"| R2["Per-Project Daily"]
-  INV --> |"atomic increment"| R3["Per-Agent Daily"]
-  INV --> |"atomic increment"| R4["Per-Model Daily"]
+        </div>
 
-  R1 --> DASH["Dashboard\nQueries"]
-  R2 --> DASH
-  R3 --> DASH
-  R4 --> DASH
+        <div class="failover-stage failover-stage--profile">
+          <div class="failover-connector">
+            <div class="failover-connector-dot"></div>
+            <div class="failover-connector-line"></div>
+          </div>
+          <div class="failover-card">
+            <div class="failover-card-title">4. Cross-Provider Fallback</div>
+            <div class="failover-card-desc">
+              If all connections for the current provider are exhausted and the profile has a
+              fallback_profile_id, switch to a different provider entirely. Chain depth max: 3 profiles.
+            </div>
+            <div class="failover-card-actions">
+              <span class="failover-action">Different Provider</span>
+              <span class="failover-action">Max 3 Deep</span>
+            </div>
+          </div>
+        </div>
 
-  style INV fill:#313244,stroke:#cba6f7,color:#cba6f7
-  style R1 fill:#1e1e2e,stroke:#89b4fa,color:#89b4fa
-  style R2 fill:#1e1e2e,stroke:#a6e3a1,color:#a6e3a1
-  style R3 fill:#1e1e2e,stroke:#fab387,color:#fab387
-  style R4 fill:#1e1e2e,stroke:#f9e2af,color:#f9e2af
-  style DASH fill:#313244,stroke:#89b4fa,color:#89b4fa
-            </pre>
+        <div class="failover-stage failover-stage--notify">
+          <div class="failover-connector">
+            <div class="failover-connector-dot"></div>
+          </div>
+          <div class="failover-card">
+            <div class="failover-card-title">5. Notify Human</div>
+            <div class="failover-card-desc">
+              Every failover event generates a real-time notification: what happened, what the
+              system did, and the current connection state. Frequent failovers escalate to a prominent alert.
+            </div>
+            <div class="failover-card-actions">
+              <span class="failover-action">Inbox Notification</span>
+              <span class="failover-action">Real-time Event</span>
+              <span class="failover-action">Frequency Alert</span>
+            </div>
           </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ═══════════════════════════════════════════ BUDGET ENFORCEMENT ═══ -->
-  <section id="budget">
-    <div class="container">
-      <div class="section-header animate-in">
-        <div class="section-number">05 // Budgets</div>
-        <h2 class="section-title">Budget Enforcement</h2>
-        <p class="section-desc">
-          Two-level budget enforcement (org + project) with soft warn and hard block thresholds.
-          Budget checks are optimistic -- they verify current spend is below the hard limit at
-          routing time. In-progress calls may slightly exceed.
-        </p>
-      </div>
-
-      <div class="budget-flow animate-in">
-        <div class="budget-stage budget-stage--normal">
-          <div class="budget-connector">
-            <div class="budget-connector-dot"></div>
-            <div class="budget-connector-line"></div>
-          </div>
-          <div class="budget-card">
-            <div class="budget-card-header">
-              <div class="budget-card-title">Normal Operation</div>
-            </div>
-            <div class="budget-card-desc">
-              Spend is below the soft limit. All invocations proceed normally.
-              Cost is tracked per-invocation and rolled up incrementally.
-            </div>
-          </div>
-        </div>
-
-        <div class="budget-stage budget-stage--warn">
-          <div class="budget-connector">
-            <div class="budget-connector-dot"></div>
-            <div class="budget-connector-line"></div>
-          </div>
-          <div class="budget-card">
-            <div class="budget-card-header">
-              <div class="budget-card-title">Soft Limit Reached</div>
-            </div>
-            <div class="budget-card-desc">
-              Spend crosses the soft threshold. The system emits a warning event.
-              The operator, PM, and Frank receive notifications. Work continues uninterrupted.
-            </div>
-            <div class="budget-card-actions">
-              <span class="budget-action">Warning Event Emitted</span>
-              <span class="budget-action">Operator Notified</span>
-              <span class="budget-action">Work Continues</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="budget-stage budget-stage--hard">
-          <div class="budget-connector">
-            <div class="budget-connector-dot"></div>
-            <div class="budget-connector-line"></div>
-          </div>
-          <div class="budget-card">
-            <div class="budget-card-header">
-              <div class="budget-card-title">Hard Limit Reached</div>
-            </div>
-            <div class="budget-card-desc">
-              Spend crosses the hard threshold. All new model invocations are rejected.
-              In-progress calls complete. Queued invocations fail with <code style="color: var(--red); background: var(--mantle); padding: 1px 6px; border-radius: 3px; font-size: 12px;">budget_exhausted</code>.
-              Async work is paused, not cancelled.
-            </div>
-            <div class="budget-card-actions">
-              <span class="budget-action">New Calls Rejected</span>
-              <span class="budget-action">Queue Paused</span>
-              <span class="budget-action">PM Notified</span>
-              <span class="budget-action">Inbox Item Created</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="budget-stage budget-stage--resolve">
-          <div class="budget-connector">
-            <div class="budget-connector-dot"></div>
-          </div>
-          <div class="budget-card">
-            <div class="budget-card-header">
-              <div class="budget-card-title">Human Resolution</div>
-            </div>
-            <div class="budget-card-desc">
-              The human receives an inbox item: "Project X has reached its cost limit.
-              Increase the budget or cancel pending work." Two paths forward.
-            </div>
-            <div class="budget-card-actions">
-              <span class="budget-action">Increase Budget (work resumes)</span>
-              <span class="budget-action">Cancel Pending Tasks</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="budget-meter animate-in">
-        <div class="budget-meter-label">Example: Project Budget Visualization</div>
-        <div class="budget-meter-bar">
-          <div class="budget-meter-fill"></div>
-          <div class="budget-meter-marker budget-meter-marker--soft"></div>
-          <div class="budget-meter-marker budget-meter-marker--hard"></div>
-        </div>
-        <div class="budget-meter-labels">
-          <span>$0</span>
-          <span>Soft Limit</span>
-          <span>Hard Limit</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ═══════════════════════════════════════════ FALLBACK CHAINS ═══ -->
-  <section id="fallback">
-    <div class="container">
-      <div class="section-header animate-in">
-        <div class="section-number">06 // Reliability</div>
-        <h2 class="section-title">Retry and Fallback Chains</h2>
-        <p class="section-desc">
-          When a model invocation fails, the gateway retries with exponential backoff (max 2 retries),
-          then walks the fallback chain sequentially (max 3 profiles deep). The caller sees one
-          request and one result -- all recovery is internal.
-        </p>
-      </div>
-
-      <div class="diagram-wrap animate-in">
-        <div class="diagram-titlebar">
-          <div class="diagram-titlebar-dots">
-            <span></span><span></span><span></span>
-          </div>
-          <span>fallback-chain.mmd</span>
-          <div class="diagram-controls">
-            <button onclick="zoomDiagram('fallback-diagram', -0.15)">-</button>
-            <button onclick="zoomDiagram('fallback-diagram', 0)">Reset</button>
-            <button onclick="zoomDiagram('fallback-diagram', 0.15)">+</button>
-          </div>
-        </div>
-        <div class="diagram-viewport">
-          <pre id="fallback-diagram" class="mermaid">
-%%{init: {
-  'theme': 'base',
-  'themeVariables': {
-    'primaryColor': '#313244',
-    'primaryTextColor': '#cdd6f4',
-    'primaryBorderColor': '#585b70',
-    'lineColor': '#6c7086',
-    'secondaryColor': '#45475a',
-    'tertiaryColor': '#1e1e2e',
-    'fontFamily': 'Geist Mono, JetBrains Mono, monospace',
-    'fontSize': '13px'
-  }
-}}%%
-flowchart TD
-  REQ["Inference Request"] --> CALL_A["Profile A\n(Primary)"]
-  CALL_A --> |"Success"| OK["Return Response"]
-  CALL_A --> |"Retryable Error"| RETRY_A["Retry (2x)\nExponential Backoff\n+ Jitter"]
-  RETRY_A --> |"Success"| OK
-  RETRY_A --> |"Exhausted"| CHECK_B{"Fallback\nProfile B?"}
-  CHECK_B --> |"Yes + Compatible"| CALL_B["Profile B\n(Fallback 1)"]
-  CHECK_B --> |"No / Incompatible"| FAIL["Terminal Error\n+ Chain Details"]
-  CALL_B --> |"Success"| OK
-  CALL_B --> |"Retryable Error"| RETRY_B["Retry (2x)"]
-  RETRY_B --> |"Success"| OK
-  RETRY_B --> |"Exhausted"| CHECK_C{"Fallback\nProfile C?"}
-  CHECK_C --> |"Yes + Compatible"| CALL_C["Profile C\n(Fallback 2)"]
-  CHECK_C --> |"No / Max Depth"| FAIL
-  CALL_C --> |"Success"| OK
-  CALL_C --> |"Failed"| FAIL
-
-  style REQ fill:#313244,stroke:#89b4fa,color:#89b4fa
-  style CALL_A fill:#1e1e2e,stroke:#a6e3a1,color:#a6e3a1
-  style CALL_B fill:#1e1e2e,stroke:#fab387,color:#fab387
-  style CALL_C fill:#1e1e2e,stroke:#f9e2af,color:#f9e2af
-  style RETRY_A fill:#1e1e2e,stroke:#cba6f7,color:#cba6f7
-  style RETRY_B fill:#1e1e2e,stroke:#cba6f7,color:#cba6f7
-  style CHECK_B fill:#313244,stroke:#fab387,color:#fab387
-  style CHECK_C fill:#313244,stroke:#f9e2af,color:#f9e2af
-  style OK fill:#313244,stroke:#a6e3a1,color:#a6e3a1
-  style FAIL fill:#313244,stroke:#f38ba8,color:#f38ba8
-          </pre>
-        </div>
-      </div>
-
-      <div style="margin-top: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px;" class="animate-in">
-        <div style="background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius); padding: 16px 20px;">
-          <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--mauve); margin-bottom: 8px;">Retry Logic</div>
-          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.7;">
-            Max 2 retries per call. Base backoff: 1s with 2x multiplier (1s, 2s).
-            Random 0-500ms jitter added. Rate-limited errors use the provider's
-            <code style="color: var(--mauve); background: var(--mantle); padding: 1px 4px; border-radius: 3px; font-size: 11px;">Retry-After</code> header.
-          </div>
-        </div>
-        <div style="background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius); padding: 16px 20px;">
-          <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--peach); margin-bottom: 8px;">Fallback Constraints</div>
-          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.7;">
-            Context window must fit the prompt. Tool call policy must be compatible.
-            If fallback cannot fit the prompt (even after truncating history), it is skipped.
-            Circular references rejected at config time.
-          </div>
-        </div>
-        <div style="background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius); padding: 16px 20px;">
-          <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--red); margin-bottom: 8px;">Error Classification</div>
-          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.7;">
-            8 canonical error classes. Retryable: rate_limited, overloaded, timeout, network_error, provider_error.
-            Non-retryable: auth_failed, invalid_request, model_unavailable (triggers fallback instead).
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ═══════════════════════════════════════════ SCHEMA ═══ -->
+  <!-- SCHEMA -->
   <section id="schema">
     <div class="container">
       <div class="section-header animate-in">
-        <div class="section-number">07 // Schema</div>
+        <div class="section-number">06 // Schema</div>
         <h2 class="section-title">Database Schema</h2>
         <p class="section-desc">
-          Six tables covering provider registration, profile management, invocation tracking,
-          cost aggregation, and budget enforcement.
+          Six tables covering provider registration, multi-key connection management,
+          profile versioning with stable logical identity, invocation tracking, and token usage rollups.
         </p>
       </div>
 
@@ -1888,11 +1492,11 @@ flowchart TD
           </div>
         </div>
 
-        <!-- model_provider_config -->
+        <!-- provider_connection -->
         <div class="schema-table" data-accent="green">
           <div class="schema-table-header">
-            <span class="schema-table-name">model_provider_config</span>
-            <span class="schema-table-badge">Per-Org</span>
+            <span class="schema-table-name">provider_connection</span>
+            <span class="schema-table-badge">Multi-Key</span>
           </div>
           <div class="schema-table-body">
             <div class="schema-col">
@@ -1911,17 +1515,25 @@ flowchart TD
               <span class="schema-col-fk">FK</span>
             </div>
             <div class="schema-col">
-              <span class="schema-col-name">api_key_secret_ref</span>
+              <span class="schema-col-name">label</span>
               <span class="schema-col-type">text</span>
             </div>
             <div class="schema-col">
-              <span class="schema-col-name">max_concurrent</span>
-              <span class="schema-col-type">int nullable</span>
+              <span class="schema-col-name">health_status</span>
+              <span class="schema-col-type">text</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">failover_priority</span>
+              <span class="schema-col-type">int</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">total_input/output_tokens</span>
+              <span class="schema-col-type">bigint</span>
             </div>
           </div>
           <div class="schema-desc">
-            Per-org activation and credentials. API keys stored as encrypted secret references, never plaintext.
-            Unique constraint on (organization_id, provider_id).
+            Multiple connections per provider per org. Health tracking (healthy/degraded/rate_limited/unavailable),
+            failover priority ordering, cumulative stats, rate limit state. API keys stored as encrypted secret refs.
           </div>
         </div>
 
@@ -1938,6 +1550,10 @@ flowchart TD
               <span class="schema-col-pk">PK</span>
             </div>
             <div class="schema-col">
+              <span class="schema-col-name">logical_profile_id</span>
+              <span class="schema-col-type">uuid</span>
+            </div>
+            <div class="schema-col">
               <span class="schema-col-name">slug / version</span>
               <span class="schema-col-type">text / int</span>
             </div>
@@ -1951,22 +1567,18 @@ flowchart TD
               <span class="schema-col-type">int / int</span>
             </div>
             <div class="schema-col">
-              <span class="schema-col-name">temperature / top_p / top_k</span>
-              <span class="schema-col-type">numeric</span>
-            </div>
-            <div class="schema-col">
-              <span class="schema-col-name">pricing fields (4)</span>
-              <span class="schema-col-type">numeric(12,8)</span>
+              <span class="schema-col-name">system_purpose</span>
+              <span class="schema-col-type">text nullable</span>
             </div>
             <div class="schema-col">
               <span class="schema-col-name">fallback_profile_id</span>
               <span class="schema-col-type">uuid nullable</span>
-              <span class="schema-col-fk">FK self</span>
             </div>
           </div>
           <div class="schema-desc">
-            Core abstraction. Versioned profiles with generation settings, token limits, pricing,
-            tool/streaming policy, timeout, cost limit, retry count, and fallback chain. Unique on (org, slug, version).
+            Stable logical_profile_id across versions. Assignments and fallback chains reference logical ID.
+            Generation settings, token limits, tool/streaming policy, timeout, retry count. system_purpose for
+            programmatic lookup of system profiles.
           </div>
         </div>
 
@@ -1992,7 +1604,7 @@ flowchart TD
             </div>
             <div class="schema-col">
               <span class="schema-col-name">profile_id</span>
-              <span class="schema-col-type">uuid</span>
+              <span class="schema-col-type">uuid (logical)</span>
               <span class="schema-col-fk">FK</span>
             </div>
             <div class="schema-col">
@@ -2002,7 +1614,8 @@ flowchart TD
           </div>
           <div class="schema-desc">
             Implements the 4-level hierarchy: scope_type is one of org, project, agent, flow_node.
-            One assignment per scope (unique constraint). Pinned version locks to a specific profile version.
+            profile_id references logical_profile_id for stability. Single source of truth for all
+            model assignments including flow node overrides.
           </div>
         </div>
 
@@ -2019,6 +1632,11 @@ flowchart TD
               <span class="schema-col-pk">PK</span>
             </div>
             <div class="schema-col">
+              <span class="schema-col-name">connection_id</span>
+              <span class="schema-col-type">uuid</span>
+              <span class="schema-col-fk">FK</span>
+            </div>
+            <div class="schema-col">
               <span class="schema-col-name">attribution (5 dims)</span>
               <span class="schema-col-type">uuid nullable</span>
               <span class="schema-col-fk">FKs</span>
@@ -2028,64 +1646,60 @@ flowchart TD
               <span class="schema-col-type">int</span>
             </div>
             <div class="schema-col">
-              <span class="schema-col-name">estimated_cost_usd</span>
-              <span class="schema-col-type">numeric(10,6)</span>
-            </div>
-            <div class="schema-col">
               <span class="schema-col-name">prompt/response refs</span>
               <span class="schema-col-type">text (obj store)</span>
             </div>
             <div class="schema-col">
-              <span class="schema-col-name">parent_invocation_id</span>
+              <span class="schema-col-name">retry_of / fallback_of</span>
               <span class="schema-col-type">uuid nullable</span>
               <span class="schema-col-fk">FK self</span>
             </div>
           </div>
           <div class="schema-desc">
-            One row per model call. The most granular record in the system. Captures tokens, cost,
-            latency, attribution, outcome, error class, retry/fallback chain, and prompt capture references.
-            11 partial indexes for fast queries.
+            One row per model call. Captures tokens, latency, attribution, connection used, outcome, error class.
+            Separate retry_of and fallback_of FKs for unambiguous chain reconstruction.
+            System profile calls attributed to triggering agent.
           </div>
         </div>
 
-        <!-- model_cost_rollup + model_cost_budget -->
-        <div class="schema-table" data-accent="red">
+        <!-- model_usage_rollup -->
+        <div class="schema-table" data-accent="teal">
           <div class="schema-table-header">
-            <span class="schema-table-name">model_cost_rollup / budget</span>
-            <span class="schema-table-badge">Aggregation</span>
+            <span class="schema-table-name">model_usage_rollup</span>
+            <span class="schema-table-badge">Token Rollups</span>
           </div>
           <div class="schema-table-body">
             <div class="schema-col">
-              <span class="schema-col-name">rollup: rollup_type</span>
-              <span class="schema-col-type">org/project/agent/model</span>
+              <span class="schema-col-name">rollup_type</span>
+              <span class="schema-col-type">connection/model/agent/project</span>
             </div>
             <div class="schema-col">
-              <span class="schema-col-name">rollup: period_start/end</span>
+              <span class="schema-col-name">period_date</span>
               <span class="schema-col-type">date</span>
             </div>
             <div class="schema-col">
-              <span class="schema-col-name">rollup: total_cost_usd</span>
-              <span class="schema-col-type">numeric(12,4)</span>
+              <span class="schema-col-name">total_input_tokens</span>
+              <span class="schema-col-type">bigint</span>
             </div>
             <div class="schema-col">
-              <span class="schema-col-name">budget: soft/hard_limit</span>
-              <span class="schema-col-type">numeric(12,4)</span>
+              <span class="schema-col-name">total_output_tokens</span>
+              <span class="schema-col-type">bigint</span>
             </div>
             <div class="schema-col">
-              <span class="schema-col-name">budget: current_spend</span>
-              <span class="schema-col-type">numeric(12,4)</span>
+              <span class="schema-col-name">total_errors</span>
+              <span class="schema-col-type">int</span>
             </div>
           </div>
           <div class="schema-desc">
-            Pre-computed daily rollups (4 dimensions) updated atomically per invocation. Budget table
-            enforces soft warn + hard block at org and project levels. Monthly period with custom period option.
+            Pre-computed daily token rollups across 4 dimensions. Updated atomically per invocation.
+            Powers the subscription dashboard and usage analytics. All org-scoped. Includes cache token counts.
           </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ═══════════════════════════════════════════ FOOTER ═══ -->
+  <!-- FOOTER -->
   <footer class="footer">
     <div class="container">
       <div class="footer-inner">
@@ -2096,17 +1710,16 @@ flowchart TD
         <div class="footer-right">
           <a href="#gateway" class="footer-link">Gateway</a>
           <a href="#profiles" class="footer-link">Profiles</a>
+          <a href="#connections" class="footer-link">Connections</a>
           <a href="#priority" class="footer-link">Priority</a>
-          <a href="#cost" class="footer-link">Cost</a>
-          <a href="#budget" class="footer-link">Budgets</a>
-          <a href="#fallback" class="footer-link">Fallback</a>
+          <a href="#failover" class="footer-link">Failover</a>
           <a href="#schema" class="footer-link">Schema</a>
         </div>
       </div>
     </div>
   </footer>
 
-  <!-- ═══════════════════════════════════════════ SCRIPTS ═══ -->
+  <!-- SCRIPTS -->
   <script type="module">
     import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
 
@@ -2127,7 +1740,7 @@ flowchart TD
   </script>
 
   <script>
-    // ── Zoom controls ──────────────────────────────
+    // Zoom controls
     const diagramScales = {};
 
     window.zoomDiagram = function(id, delta) {
@@ -2145,7 +1758,7 @@ flowchart TD
       el.style.transform = `scale(${scale})`;
     };
 
-    // ── Intersection Observer for staggered animations ──
+    // Intersection Observer for staggered animations
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {

@@ -1,11 +1,11 @@
 ---
 ## Summary
 
-This is the meta-planning document for the OtterCamp V2 ground-up rewrite. It serves three purposes: (1) tracking the four-phase build plan with concrete deliverables, dependencies, and milestones for each phase; (2) recording the resolution of major product-level decisions; and (3) cataloging genuinely open questions, risk areas, and the complete bootstrap dataset that ships with a fresh install. The three biggest product decisions have been resolved: agent capabilities use a default-deny posture with allow/deny/draft_review policy outcomes and no mid-turn blocking; self-host ships first (Phases 1-2) with managed multi-tenant deferred to Phase 4; and the minimum bootstrap dataset includes the starter trio (Frank, Lori, Ellie), default model profiles, flow templates, skills, and policies so a fresh install is immediately usable.
+This is the meta-planning document for the OtterCamp V2 ground-up rewrite. It serves three purposes: (1) tracking the four-phase build plan with concrete deliverables, dependencies, and milestones for each phase; (2) recording the resolution of major product-level decisions; and (3) cataloging genuinely open questions, risk areas, and the complete bootstrap dataset that ships with a fresh install. The three biggest product decisions have been resolved: agent capabilities use a default-deny posture with binary allow/deny policy outcomes and no mid-turn blocking; self-host ships first (Phases 1-2) with managed multi-tenant deferred to Phase 4; and the minimum bootstrap dataset includes the starter trio (Frank, Lori, Ellie), default model profiles, flow templates, skills, and policies so a fresh install is immediately usable.
 
-The build phases are strictly sequential. Phase 0 (Foundation) delivers infrastructure with no user-facing product: PostgreSQL schema, auth/identity, model gateway with Anthropic adapter, event bus, 7-layer prompt assembly pipeline, control plane with default-deny capability model, two-tier tool framework, and the CLI bootstrap command. Phase 1 (Sync Chat + TUI) produces the first usable product where a human chats with agents via a terminal UI, including the full chat session system, starter trio agents with prompt packs, basic memory (Ellie's passive injection and implicit capture), skills foundation, and streaming model responses. Phase 2 (Projects + Tasks) adds autonomous work: projects as git repos, task lifecycle with flow templates and node progression, subtasks, scheduling with cron, async mode, merge queue, inbox, blocker escalation, temp agents, shipping/delivery, and memory hardening (dedup, entity synthesis, contradiction detection). Phase 3 (Self-Building) is where OtterCamp builds itself, delivering the web UI (React SPA), MCP integration for external tools, system integration (sandboxed CLI/browser), full control plane with approval workflows, multi-provider model routing, observability stack, complete memory pipeline (sleep-time reflection, taxonomy management, importer), and the REST API surface. Phase 4 (Hardening + Distribution) covers security audit, Docker Compose self-host packaging, mobile UI with push notifications, multi-tenant operations with RLS, additional model providers including local models, and migration tooling.
+The build phases are strictly sequential. Phase 0 (Foundation) delivers infrastructure with no user-facing product: PostgreSQL schema, auth/identity, model gateway with Anthropic adapter, event bus, 7-layer prompt assembly pipeline, control plane with default-deny capability model, two-tier tool framework, and the CLI bootstrap command. Phase 1 (Sync Chat + TUI) produces the first usable product where a human chats with agents via a terminal UI, including the full chat session system, starter trio agents with prompt packs, basic memory (Ellie's passive injection and implicit capture), skills foundation, and streaming model responses. Phase 2 (Projects + Tasks) adds autonomous work: projects as git repos, task lifecycle with flow templates and node progression, subtasks, scheduling with cron, async mode, merge queue, inbox, blocker escalation, temp agents, shipping/delivery, and memory hardening (dedup, entity synthesis, contradiction detection). Phase 3 (Self-Building) is where OtterCamp builds itself, delivering the web UI (React SPA), MCP integration for external tools, system integration (sandboxed CLI/browser), full control plane with binary policy enforcement, multi-provider model routing, observability stack, complete memory pipeline (sleep-time reflection, taxonomy management, importer), and the REST API surface. Phase 4 (Hardening + Distribution) covers security audit, Docker Compose self-host packaging, mobile UI with push notifications, multi-tenant operations with RLS, additional model providers including local models, and migration tooling.
 
-The document also catalogs approximately 25 genuinely open questions organized by domain (architecture, auth, control plane, system integration, MCP, tools, security, migration, UI), identifies five technically hardest challenges (prompt budget tuning, memory retrieval at scale, async agent reliability, git merge conflicts, MCP edge-case reliability), five plan-adjustment risks (provider API changes, context window economics, agent capability plateaus, self-host complexity, memory cold-start), and four "what could go wrong" scenarios. The bootstrap dataset section fully specifies the starter trio profiles (Frank as Chief of Staff, Lori as Agent Relations, Ellie as Memory), default skills (identity skills per agent, org-wide safety/work-standards skills, project template skills), three model profiles (high-capability/standard/haiku), four flow templates (single-step, work+review, work+code-review+human-review, research), default policies (instance safety baked in, org policy with draft_review for communication tools), the General chat session, and the 10-step idempotent bootstrap sequence. Finally, it provides a prioritized deep-dive order for the remaining 16 spec documents.
+The document also catalogs approximately 25 genuinely open questions organized by domain (architecture, auth, control plane, system integration, MCP, tools, security, migration, UI), identifies five technically hardest challenges (prompt budget tuning, memory retrieval at scale, async agent reliability, git merge conflicts, MCP edge-case reliability), five plan-adjustment risks (provider API changes, context window economics, agent capability plateaus, self-host complexity, memory cold-start), and four "what could go wrong" scenarios. The bootstrap dataset section fully specifies the starter trio profiles (Frank as Chief of Staff, Lori as Agent Relations, Ellie as Memory), default skills (identity skills per agent, org-wide safety/work-standards skills, project template skills), three model profiles (high-capability/standard/haiku), four flow templates (single-step, work+review, work+code-review+human-review, research), default policies (instance safety baked in, org policy with binary allow/deny — communication tools create drafts as tool behavior), the General chat session, and the 10-step idempotent bootstrap sequence. Finally, it provides a prioritized deep-dive order for the remaining 16 spec documents.
 
 ---
 
@@ -23,15 +23,14 @@ The original stub listed three "biggest open product decisions." All three are n
 
 ### 1. How strong is default human approval for risky actions?
 
-**Resolved: default-deny for agent capabilities, with three policy outcomes and no mid-turn blocking.**
+**Resolved: default-deny for agent capabilities, with binary policy outcomes (allow/deny) and no mid-turn blocking.**
 
-The control plane (doc 16) establishes a default-deny capability posture. Agents can only do what they are explicitly permitted to do. Every tier 2 tool call (doc 20) goes through policy evaluation with three possible outcomes:
+The control plane (doc 16) establishes a default-deny capability posture. Agents can only do what they are explicitly permitted to do. Every tier 2 tool call (doc 20) goes through policy evaluation with two possible outcomes:
 
 - **allow**: execute immediately.
 - **deny**: return "not permitted" as a tool result. The agent adapts.
-- **draft_review**: stage the action for human review in the inbox. The agent's turn continues without blocking. The human acts on the staged item when ready.
 
-The `draft_review` outcome is the primary mechanism for human oversight on sensitive actions. Communication tools (email, Slack) default to `draft_review` (doc 20). All other tool categories default to `allow` once the agent has the capability grant, but individual tools or categories can be set to `draft_review` per org, project, or agent policy (doc 16 policy layers).
+Policy is binary — always immediate, no runtime approval gating. Permissions are configured in advance. Communication tools (email, Slack) create drafts as their designed tool behavior, not as a policy outcome — the policy says "allow," and the tool itself stages a draft for human review (doc 20). Sensitive domains and commands are denied by default and must be explicitly allowlisted.
 
 Policy layers are strictly tightening (doc 05): instance safety > org > project > agent profile. Each layer can only restrict, never expand. The human configures the policy posture per their risk tolerance. The system ships with sensible defaults that are secure without being paralyzing.
 
@@ -119,7 +118,7 @@ Everything else depends on this. Phase 0 produces no user-facing product — it 
 - Token counting and budget enforcement per layer.
 
 **Control Plane Foundation (doc 16)**
-- Capability model: namespaced permissions, policy evaluation (allow/deny/require_approval).
+- Capability model: namespaced permissions, policy evaluation (allow/deny).
 - Policy layers: instance safety > org > project > agent profile.
 - Execution broker skeleton: Run, RunStep, ToolExecution entities.
 - Default-deny posture.
@@ -405,11 +404,10 @@ Development moves inside OtterCamp. The system is building its own features.
 
 **Full Control Plane (doc 16)**
 - Complete execution lifecycle: Run > RunStep > ToolExecution.
-- Approval workflow for `require_approval` outcomes.
 - Sandboxing and isolation for CLI, browser, and MCP execution.
 - Failure state repair: stuck task detection, queue drain, orphaned run recovery, blocker staleness alerts.
 - Health heartbeat from running agents.
-- Full observability: active/running/blocked runs, approval queue, failure rates.
+- Full observability: active/running/blocked runs, failure rates.
 
 **Model Routing Expansion (doc 07)**
 - OpenAI adapter, Google adapter, OpenAI-compatible adapter.
@@ -542,15 +540,13 @@ These are genuinely unresolved questions collected from across all specs. Questi
 
 ### Control Plane
 
-- **Approval requirements**: should approval requirements be static policy or dynamically risk-scored (doc 16)?
-- **Session-wide approval grants**: do we allow "approve all CLI executions in this session" or only action-by-action (doc 16)?
 - **Default capability templates**: what minimum set of capabilities ships as default templates for common agent roles — PM, worker, reviewer (doc 16)?
 
 ### System Integration
 
 - **Browser session isolation**: should browser execution be isolated per task or reusable per session (doc 11)?
 - **Minimum sandbox model**: what is the minimum required sandboxing for CLI execution — container, namespace, chroot, or process-level (doc 11)?
-- **Default pre-approval actions**: which system actions require human pre-approval by default vs which are allow-by-default with capability grant (doc 11)?
+- **Default sensitive action policy**: which system actions are denied by default vs allowed with capability grant (doc 11)?
 
 ### MCP
 
@@ -736,7 +732,7 @@ System-provided templates (null `project_id` on `flow_template`, doc 03). Availa
 - Cannot bypass authentication.
 
 **Default Org Policy** (configurable by human)
-- Communication tools (`email.compose`, `slack.post`) default to `draft_review`.
+- Communication tools (`email.compose`, `slack.post`) are allowed — they create drafts as their designed tool behavior (doc 20).
 - CLI execution requires `system.cli.execute` capability grant.
 - Browser control requires `system.browser.control` capability grant.
 - MCP tools require per-connection capability grants.

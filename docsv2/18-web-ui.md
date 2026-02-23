@@ -624,7 +624,7 @@ Configuration views for org-level and project-level settings. All settings are v
 
 - **Organization**: org name, default policies, global concurrency limits.
 - **Model profiles**: configured model profiles with provider, model ID, and cost tier. Which profiles are available and which are default.
-- **Tool policies**: org-level tool allow/deny lists, draft_review policies.
+- **Tool policies**: org-level tool allow/deny policies.
 - **Project settings**: per-project configuration (selected from a project picker). Context block, delivery mode, remotes, environments.
 - **Notification preferences**: per-urgency-tier delivery, per-scope filtering, per-event-type filtering (from 02-chat.md Notification Preferences).
 
