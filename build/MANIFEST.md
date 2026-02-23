@@ -44,3 +44,12 @@
 | 040 | 040-memory-retrieval.md | Memory Retrieval Pipeline | L3 | M | 038, 035, 013 | written |
 | 041 | 041-memory-compaction-import.md | Memory Compaction and Import | L3 | M | 038, 039, 040, 004, 024 | written |
 | 042 | 042-memory-api.md | Memory API Endpoints | L3 | S | 041, 040, 007 | written |
+| 043 | 043-chat-schema.md | Chat Session Schema | L4 | M | 003, 005, 013, 016, 027, 038 | written |
+| 044 | 044-chat-service.md | Chat Service | L4 | M | 043, 006, 014, 024, 033 | written |
+| 045 | 045-chat-summarization-retention.md | Chat Progressive Summarization and Retention | L4 | M | 043, 044, 035, 036, 024 | written |
+| 046 | 046-chat-api.md | Chat API Endpoints | L4 | S | 044, 045, 007, 067 | written |
+| 047 | 047-sse-websocket.md | SSE Realtime and WebSocket | L4 | M | 024, 043, 044, 007 | written |
+| 048 | 048-turn-engine.md | Turn Execution Engine | L4 | M | 043, 044, 045, 047, 049, 050, 035, 036, 033, 024 | written |
+| 049 | 049-tool-resolution.md | Tool Resolution Pipeline | L4 | M | 043, 013, 017, 020, 033, 055 | written |
+| 050 | 050-prompt-assembly.md | Prompt Assembly Engine | L4 | M | 043, 044, 045, 013, 011, 020, 038, 040, 049, 033 | written |
+| 051 | 051-chat-cli.md | Chat CLI Commands | L4 | S | 046, 047, 068 | written |
