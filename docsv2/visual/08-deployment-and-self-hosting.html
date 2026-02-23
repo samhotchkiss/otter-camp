@@ -1238,6 +1238,10 @@ DATABASE_MAX_CONNECTIONS=25</div>
             <div class="config-var-name">OPENAI_API_KEY</div>
             <div class="config-var-desc">Bootstrap: creates OpenAI provider connection. Optional.</div>
           </div>
+          <div class="config-var">
+            <div class="config-var-name">OPENAI_COMPAT_BASE_URL</div>
+            <div class="config-var-desc">Bootstrap: creates OpenAI-compatible connection (Ollama, vLLM, LM Studio, Groq, etc.). Local-only self-host needs just this.</div>
+          </div>
         </div>
       </div>
       <div class="config-cat">
@@ -1611,7 +1615,7 @@ flowchart TB
       <div class="secret-cat">
         <div class="secret-cat-icon">[E]</div>
         <div class="secret-cat-name">External Service</div>
-        <div class="secret-cat-example">GitHub, Slack, email tokens</div>
+        <div class="secret-cat-example">GitHub, Slack, email, deploy platform (Vercel, Netlify) tokens</div>
       </div>
     </div>
 
@@ -1624,10 +1628,13 @@ flowchart TB
   category        <span class="type">text</span> <span class="kw">not null check</span> (category <span class="kw">in</span>
     ('model_provider', 'ssh_key', 'mcp_credential', 'external_service')),
   encrypted_value <span class="type">bytea</span> <span class="kw">not null</span>,              <span class="comment">-- AES-256-GCM encrypted</span>
-  created_by_type <span class="type">text</span> <span class="kw">not null</span>,
-  created_by_id   <span class="type">uuid</span>,
+  nonce           <span class="type">bytea</span> <span class="kw">not null</span>,              <span class="comment">-- unique per encryption op</span>
+  key_version     <span class="type">int</span> <span class="kw">not null default</span> 1,       <span class="comment">-- master key version</span>
+  created_by_type <span class="type">text</span> <span class="kw">not null check</span> (... <span class="kw">in</span> ('human', 'agent', 'system')),
+  created_by_id   <span class="type">uuid</span> <span class="kw">not null</span>,
   last_rotated_at <span class="type">timestamptz</span>,
-  expires_at      <span class="type">timestamptz</span>,                 <span class="comment">-- optional expiry</span>
+  expires_at      <span class="type">timestamptz</span>,                 <span class="comment">-- informational, no auto-delete</span>
+  metadata        <span class="type">jsonb</span> <span class="kw">not null default</span> '{}',
   created_at      <span class="type">timestamptz</span> <span class="kw">not null default</span> now(),
   updated_at      <span class="type">timestamptz</span> <span class="kw">not null default</span> now(),
 
