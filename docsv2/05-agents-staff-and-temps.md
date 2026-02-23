@@ -207,7 +207,7 @@ Activation rules: org/project default skills are always active. Agent-level skil
   - `session` — expires when the session closes.
   - `ttl` — expires when the TTL elapses.
 - **temp_scope_id**: for temp agents only. The project, task, or session this temp is scoped to.
-- **temp_ttl**: for temp agents only when `temp_scope_type` is `ttl`. Duration after which the temp is auto-retired.
+- **temp_ttl_seconds**: for temp agents only when `temp_scope_type` is `ttl`. Duration in seconds after which the temp is auto-retired.
 
 ## Agent Lifecycle
 
@@ -367,7 +367,7 @@ When a flow node begins execution, the system resolves which specific agent hand
 Each agent has a default model profile. However, flow nodes can override the model profile for their execution. This allows cost optimization — a simple formatting task doesn't need the same model as an architecture design session.
 
 Override resolution order:
-1. Flow node model override (if set on the `flow_node.metadata`).
+1. Flow node model override (if set via `model_profile_assignment` with `scope_type = 'flow_node'`, see doc 07).
 2. Agent's default model profile.
 3. Project default model profile (if set).
 4. Org default model profile.
@@ -464,6 +464,7 @@ When an agent gets a turn, OtterCamp assembles a prompt from these layers, in pr
    - Source: resolved from active skills only (see 10-skills-integration.md Activation vs Availability).
    - Only skills relevant to the current flow node are loaded. An agent writing a blog post doesn't get deployment instructions.
    - Org/project default skills (e.g., coding standards, safety policies) are always included.
+   - MCP prompts attached to the flow node are included alongside skills. Skills take precedence over MCP prompts on conflict (see 09-mcp-integration.md Prompt Support).
 
 5. **Memory** (budget-dependent)
    - Source: Ellie's passive retrieval, scoped to the session's scope.
@@ -477,6 +478,7 @@ When an agent gets a turn, OtterCamp assembles a prompt from these layers, in pr
 
 7. **Tool descriptions** (budget-dependent, lowest priority)
    - Source: available tools filtered by agent's tool policy + control plane capabilities.
+   - MCP tools follow context-aware loading: connections with `eager_load = true` include all tool schemas; flow nodes declaring `mcp_tools` include only declared schemas; all other connections include a lightweight summary (~20 tokens each). See 09-mcp-integration.md Context-Aware Tool Loading.
    - Rarely an issue in practice — tool descriptions are small relative to other layers.
 
 ### Assembly Process
@@ -565,7 +567,7 @@ create table agent (
   tool_tier_overrides     jsonb,                           -- per-tool tier overrides
 
   -- Model Policy
-  default_model_profile_id uuid,                           -- references model_profile(id) — see doc 07
+  default_model_profile_id uuid,                           -- references model_profile.logical_profile_id (stable identity) — see doc 07
   allowed_model_profiles  uuid[],                          -- nullable = any org-available profile allowed
   budget_cap_cents        int,                             -- per-agent cost cap in cents per budget period
   budget_period           text default 'monthly'
@@ -580,12 +582,12 @@ create table agent (
   temp_scope_type         text check (temp_scope_type in ('project', 'task', 'session', 'ttl')),
   temp_scope_id           uuid,                            -- project, task, or session this temp is scoped to
   temp_ttl_seconds        int,                             -- TTL in seconds (for ttl-scoped temps)
-  temp_expires_at         timestamptz,                     -- computed: created_at + temp_ttl, or set by scope end
+  temp_expires_at         timestamptz,                     -- computed: created_at + temp_ttl_seconds, or set by scope end
   promoted_to_agent_id    uuid references agent(id),       -- set when temp is promoted to staff
 
   -- Metadata
   created_by_type         text not null check (created_by_type in ('human', 'agent', 'system')),
-  created_by_id           uuid,                            -- human_user.id or agent.id
+  created_by_id           uuid not null,                   -- human_user.id, agent.id, or sentinel UUID for system
   created_at              timestamptz not null default now(),
   updated_at              timestamptz not null default now(),
   retired_at              timestamptz,
@@ -632,7 +634,7 @@ create table agent_project_assignment (
   project_id      uuid not null references project(id),
   role            text not null check (role in ('project_manager', 'worker', 'reviewer', 'planner')),
   is_active       boolean not null default true,
-  assigned_by_type text not null check (assigned_by_type in ('human', 'agent')),
+  assigned_by_type text not null check (assigned_by_type in ('human', 'agent', 'system')),
   assigned_by_id  uuid not null,
   assigned_at     timestamptz not null default now(),
   removed_at      timestamptz,
@@ -668,7 +670,7 @@ create table agent_skill_attachment (
   id         uuid primary key default gen_random_uuid(),
   agent_id   uuid not null references agent(id),
   skill_id   uuid not null references skill(id),
-  attached_by_type text not null check (attached_by_type in ('human', 'agent')),
+  attached_by_type text not null check (attached_by_type in ('human', 'agent', 'system')),
   attached_by_id   uuid not null,
   attached_at timestamptz not null default now(),
 
@@ -831,7 +833,7 @@ create index on agent_profile_template (is_active) where organization_id is null
 - `agent_project_assignment.project_id` -> `project.id` (see 03-projects-and-task-flow.md).
 - `agent_project_assignment.agent_id` -> `agent.id`.
 - `agent_skill_attachment.skill_id` -> `skill.id` (see 10-skills-integration.md).
-- `agent.default_model_profile_id` -> `model_profile.id` (see 07-models-and-inference.md).
+- `agent.default_model_profile_id` -> `model_profile.logical_profile_id` (stable identity across versions; see 07-models-and-inference.md).
 - `chat_participant.participant_id` -> `agent.id` when `participant_type = 'agent'` (see 02-chat.md).
 - `flow_node.actor_id` -> `agent.id` when `actor_type = 'agent'` (see 03-projects-and-task-flow.md).
 - `memory.agent_id` -> `agent.id` for agent-private memory scope (see 06-memory.md).

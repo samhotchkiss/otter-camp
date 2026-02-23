@@ -1240,7 +1240,7 @@
               <div class="deliverable">
                 <span class="deliverable__spec">Doc 16</span>
                 <div class="deliverable__title">Control Plane Foundation</div>
-                <p class="deliverable__desc">Capability model with namespaced permissions. Policy layers: instance safety, org, project, agent. Default-deny posture.</p>
+                <p class="deliverable__desc">Capability model with namespaced permissions. Policy layers: instance safety, org, project, agent. Permissive via templates.</p>
               </div>
               <div class="deliverable">
                 <span class="deliverable__spec">Doc 20</span>
@@ -1598,7 +1598,7 @@
         <div class="bootstrap-step__num">9</div>
         <div class="bootstrap-step__content">
           <div class="bootstrap-step__title">Seed default org policy</div>
-          <p class="bootstrap-step__desc">Communication tools default to draft_review. CLI/browser/MCP require capability grants. Turn limits set.</p>
+          <p class="bootstrap-step__desc">Communication tools require explicit capability grants. CLI/browser/MCP require capability grants. Turn limits set.</p>
         </div>
       </div>
       <div class="bootstrap-step" data-stagger-child>
@@ -1625,14 +1625,13 @@
       <div class="decision-card" data-animate>
         <span class="decision-card__num">Decision 01</span>
         <div class="decision-card__question">How strong is default human approval for risky actions?</div>
-        <div class="decision-card__answer">Default-deny for agent capabilities with three policy outcomes and no mid-turn blocking.</div>
+        <div class="decision-card__answer">Permissive via templates with binary policy outcomes (allow/deny) and no mid-turn blocking.</div>
         <div class="decision-card__detail">
           <ul>
             <li><strong>allow</strong> -- execute immediately</li>
             <li><strong>deny</strong> -- return "not permitted" as a tool result, agent adapts</li>
-            <li><strong>draft_review</strong> -- stage for human review in inbox, turn continues without blocking</li>
           </ul>
-          <p style="margin-top: 0.75rem; margin-bottom: 0;">Policy layers are strictly tightening: instance safety > org > project > agent profile. Each layer can only restrict, never expand. No mid-turn approval gates exist -- the turn never blocks waiting for human input.</p>
+          <p style="margin-top: 0.75rem; margin-bottom: 0;">Policy layers are strictly tightening: instance safety > org > project > agent profile. Each layer can only restrict, never expand. No mid-turn approval gates exist -- the turn never blocks waiting for human input. Human review is a flow concern (review nodes), not a policy concern.</p>
         </div>
       </div>
 
@@ -1745,7 +1744,7 @@
         </div>
         <div class="dataset-item">
           <div class="dataset-item__name">Default Org Policy</div>
-          <p class="dataset-item__desc">Communication tools default to draft_review. CLI/browser/MCP require explicit capability grants. Max 50 tool calls/turn. Max 5min sync / 30min async turns.</p>
+          <p class="dataset-item__desc">Communication tools require deployer template. CLI/browser/MCP require explicit capability grants. Max 50 tool calls/turn. Max 5min sync / 30min async turns.</p>
         </div>
       </div>
 

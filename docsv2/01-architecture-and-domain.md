@@ -3,7 +3,7 @@
 
 This spec defines the foundational architecture and domain model for OtterCamp V2, a ground-up rewrite that eliminates the OpenClaw dependency in favor of direct in-app orchestration. The system is built as a **modular monolith** (not microservices), with two runtime processes: a primary API service (HTTP + WebSocket/SSE) and a worker process for background jobs, both sharing the same codebase. Microservice decomposition is explicitly deferred until scale or reliability triggers justify it. The storage strategy is Postgres for transactional data, object store for large artifacts, with an optional local filesystem mirror for single-node self-hosting.
 
-The core domain is organized around a small set of canonical entities: Organization, HumanUser, Agent, Session (chat thread), Message, Project, ProjectTask, FlowTemplate/FlowNode/FlowNodeExecution, MemoryItem, ModelProfile, Skill, ToolExecution, ExternalConnection, and AuditEvent. These are grouped into **five strong domain boundaries**: Chat (sessions, messages, participants), Project (tasks, flow progression, approvals), Agent (identity, lifecycle, capability policy), Memory (extraction, retrieval, retention), and Model (provider abstraction, routing, cost policy). The top-level runtime components include the API service, worker service, model gateway, memory pipeline, connector runtime (MCP + native integrations), control runtime (CLI + browser automation), and the storage layer.
+The core domain is organized around a small set of canonical entities: Organization, HumanUser, Agent, Session (chat thread), Message, Project, ProjectTask, FlowTemplate/FlowNode/FlowNodeExecution, Memory, ModelProfile, ProviderConnection, Skill, ToolExecution, McpConnection, and AuditEvent. These are grouped into **five strong domain boundaries**: Chat (sessions, messages, participants), Project (tasks, flow progression, approvals), Agent (identity, lifecycle, capability policy), Memory (extraction, retrieval, retention), and Model (provider abstraction, routing, cost policy). The top-level runtime components include the API service, worker service, model gateway, memory pipeline, connector runtime (MCP + native integrations), control runtime (CLI + browser automation), and the storage layer.
 
 The product principles are opinionated: chat is the primary interface where humans talk to agents who take action, UI surfaces are for viewing and reviewing rather than direct manipulation, agents have strong defaults and act as domain experts, and blocked progress creates persistent tasks rather than dismissible notifications. Progressive disclosure is a core UX pattern. The spec also establishes that V2 is a clean-room rebuild with no reuse of V1 runtime code, database schema, or migrated data -- V1 informs requirements only. Domain events are emitted on entity transitions, stored in a durable log for replay and debugging, and fanned out in realtime to subscribed clients.
 
@@ -63,11 +63,12 @@ The product principles are opinionated: chat is the primary interface where huma
 - FlowTemplate
 - FlowNode
 - FlowNodeExecution
-- MemoryItem
+- Memory
 - ModelProfile
+- ProviderConnection
 - Skill
 - ToolExecution
-- ExternalConnection
+- McpConnection
 - AgentProfileTemplate (catalog of 230+ pre-built agent profiles)
 - AuditEvent
 

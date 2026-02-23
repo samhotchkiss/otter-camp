@@ -3,7 +3,9 @@
 
 This spec defines how OtterCamp integrates with external systems via MCP (Model Context Protocol). OtterCamp acts strictly as an MCP **client** -- it connects to external MCP servers to consume their tools, resources, and prompts, but never exposes itself as an MCP server. The connector runtime is a top-level architectural component responsible for managing the full lifecycle of MCP connections: establishment, health monitoring, circuit breaking, secret injection, and execution brokering. Both stdio (subprocess) and HTTP/SSE (remote) transports are supported at launch.
 
-MCP tools are classified as tier 2 (external mutations) and follow the full control plane policy path: capability checks (`mcp.connection.use`, `mcp.tool.invoke`), agent profile allow/deny lists, and layered policy evaluation. The result is one of allow, deny, or draft_review (staged for human approval in the inbox). Every call produces a `ToolExecution` record and an `mcp_execution_log` entry with redacted inputs/outputs. Secrets (API keys, tokens) are stored in an encrypted secret store, bound to connections via `mcp_secret_binding`, and injected at runtime by the connector runtime -- agents never see credentials. Resources are read-only (tier 1) and prompts are advisory-only (yielding to OtterCamp skills on conflict).
+MCP tools are classified as tier 2 (external mutations) and follow the full control plane policy path: capability checks (`mcp.connection.use`, `mcp.tool.invoke`), agent profile allow/deny lists, and layered policy evaluation. The result is allow or deny. Every call produces a `ToolExecution` record and an `mcp_execution_log` entry with redacted inputs/outputs. Secrets (API keys, tokens) are stored in an encrypted secret store, bound to connections via `mcp_secret_binding`, and injected at runtime by the connector runtime -- agents never see credentials. Resources are read-only (tier 1) and prompts are advisory-only (yielding to OtterCamp skills on conflict).
+
+**Context-aware tool loading** prevents MCP from bloating agent context windows. By default, agents receive only lightweight connection summaries (~20 tokens each) -- not full tool schemas. Agents discover tool schemas on demand via `mcp.discover`. Flow nodes that require specific MCP tools declare them in `flow_node.mcp_tools`, and those schemas are preloaded into the worker's prompt at session start -- no discovery round-trip needed.
 
 Connections are scoped to either an organization or a project and are configured entirely through conversation with Frank (org-level) or the project PM (project-level) -- there is no MCP configuration UI. Tool discovery happens via the MCP `tools/list` endpoint, and all discovered tools default to disabled until an admin explicitly enables them (default-deny posture). The schema comprises four tables: `mcp_connection` (connection config, transport, health, circuit breaker settings), `mcp_tool_catalog` (discovered tools/resources/prompts with enablement flags), `mcp_execution_log` (full audit trail of every MCP interaction), and `mcp_secret_binding` (maps secret references to injection points). Reliability is handled through configurable health checks, a per-connection circuit breaker (closed/open/half-open states), timeout policies, and retry with exponential backoff.
 
@@ -13,7 +15,7 @@ Connections are scoped to either an organization or a project and are configured
 
 ## Goal
 
-Provide a first-class MCP (Model Context Protocol) client layer so agents can use external tools, resources, and prompts from third-party servers — safely, auditably, and through the same policy pipeline that governs every other agent action.
+Provide a first-class MCP (Model Context Protocol) client layer so agents can use external tools, resources, and prompts from third-party servers — safely, auditably, and through the same policy pipeline that governs every other agent action — without bloating agent context windows.
 
 ## What MCP Provides
 
@@ -40,10 +42,9 @@ Agent requests MCP tool call
 │   ├─ Capability check: mcp.connection.use:<connection_id>
 │   ├─ Capability check: mcp.tool.invoke:<connection_id>:<tool_name>
 │   ├─ Agent profile tool policy (allow/deny list)
-│   ├─ Result: allow / deny / draft_review
+│   ├─ Result: allow / deny
 │   │
 │   ├─ deny → return "not permitted" to agent
-│   ├─ draft_review → stage action for inbox, return "queued for review"
 │   └─ allow → dispatch to connector runtime
 │
 ├─ Connector runtime
@@ -62,6 +63,114 @@ Agent requests MCP tool call
 │   └─ Policy decision metadata
 │
 └─ Result returned to agent in turn loop
+```
+
+## Context-Aware Tool Loading
+
+### The Problem: Context Window Bloat
+
+A naive MCP integration loads every available tool schema into every agent's prompt. A single MCP connection can expose 20-50 tools, each with a JSON Schema that costs 50-200 tokens. Three connections at 30 tools each = 4,500-18,000 tokens of tool schemas in every prompt — most of which the agent will never use in that turn. This crowds out space for conversation history, memory, and skills that actually matter for the task at hand.
+
+OtterCamp solves this with **context-aware tool loading**: agents know what connections exist, but tool schemas are only loaded into the prompt when they're actually needed.
+
+### Three Loading Modes
+
+#### 1. Lazy Discovery (Default)
+
+The default for all agents. The agent's prompt includes a lightweight connection summary for each available MCP connection — just the connection name and a one-line description. This costs ~20 tokens per connection regardless of how many tools the connection offers.
+
+What the agent sees in its prompt (layer 7, tool descriptions):
+
+```
+Available MCP connections:
+  github — GitHub repository management (issues, PRs, branches)
+  slack — Slack workspace messaging
+  postgres_staging — Staging database queries
+
+Use mcp.discover("<connection>") to see available tools for a connection.
+```
+
+The agent does NOT see individual tool schemas until it actively discovers them. If the agent needs to use a GitHub tool, it first calls `mcp.discover("github")` to get the list of available tools and their schemas, then calls the specific tool it needs.
+
+This is ideal for staff agents working in open-ended chat sessions where the MCP tools they'll need aren't predictable in advance.
+
+#### 2. Flow Node Preloading (Eager When Declared)
+
+Flow nodes can declare which MCP tools they require. When a temp worker is spun up for that node, the declared tool schemas are preloaded into the worker's prompt at layer 7 — no discovery round-trip needed. The worker is immediately ready to use those tools.
+
+This is analogous to how `flow_node.skills` declares which OtterCamp skills a node needs (loaded at layer 4). MCP tools are declared in `flow_node.mcp_tools` and loaded at layer 7.
+
+Example: a "Create PR" work node declares:
+
+```json
+{
+  "mcp_tools": ["github.create_pull_request", "github.add_labels", "github.request_review"]
+}
+```
+
+When a temp worker spins up for this node, those three tool schemas are preloaded into its prompt alongside any native OtterCamp tools. The worker can immediately call `github.create_pull_request(...)` without a discovery step.
+
+This is the primary mode for temp workers executing flow nodes. The PM knows what tools the node needs and declares them at flow design time. The temp worker gets exactly the tools it needs, nothing more.
+
+#### 3. Full Toolset Loading (Opt-In per Connection)
+
+For connections with a small number of tools where discovery overhead isn't worth it, an admin can set `eager_load = true` on the connection. All enabled tools from that connection are loaded into every agent's prompt that has access to the connection.
+
+This should only be used for connections with fewer than ~10 tools. The admin sets this through conversation: "Frank, set the Sentry connection to eager-load its tools."
+
+### How It Works in Prompt Assembly
+
+Tool loading integrates with the 7-layer prompt assembly pipeline (see 05-agents-staff-and-temps.md):
+
+- **Layer 7 (tool descriptions)**: the assembly process checks each available MCP connection:
+  1. If the connection has `eager_load = true`: include all enabled tool schemas.
+  2. If the current flow node declares `mcp_tools` for this connection: include only the declared tool schemas.
+  3. Otherwise: include only the lightweight connection summary line.
+- **The `mcp.discover` tool** is always available (it's a native OtterCamp tool, not an MCP tool). It returns tool schemas from the catalog — no round-trip to the MCP server.
+
+The `mcp.discover` result appears in the conversation history as a tool_result message, making the schemas available for the agent's subsequent turns. This is "just-in-time" schema loading — the agent gets schemas when it needs them, and they persist in conversation context naturally.
+
+### Flow Node MCP Tool Declaration
+
+Flow nodes declare required MCP tools in the `flow_node.mcp_tools` JSONB column (see 03-projects-and-task-flow.md). The format is an array of namespaced tool names:
+
+```json
+["github.create_issue", "github.list_prs", "slack.send_message"]
+```
+
+Each entry uses the `<connection_slug>.<tool_name>` format, matching how tools are referenced throughout the system.
+
+At session start for a flow node execution:
+1. The prompt assembler reads `flow_node.mcp_tools`.
+2. For each declared tool, it looks up the full schema from `mcp_tool_catalog`.
+3. If the tool is enabled and the agent has the required capabilities, the schema is included in layer 7.
+4. If a declared tool is not found, disabled, or the connection is unhealthy, a warning is included in the prompt instead of the schema, and a domain event is emitted.
+
+The PM configures this through conversation when designing flows: "For the code review node, preload the GitHub PR review tools." The PM can also adjust it later: "Add `github.create_issue` to the bug triage node's MCP tools."
+
+### The mcp.discover Tool
+
+`mcp.discover` is a native OtterCamp utility tool (no policy evaluation, no network call) that returns tool information from the local catalog:
+
+```
+mcp.discover(connection: string, filter?: string) → Tool[]
+```
+
+- `connection`: the connection slug (e.g., `"github"`).
+- `filter`: optional substring filter on tool names (e.g., `"issue"` to see only issue-related tools).
+- Returns: array of `{name, description, input_schema}` for all enabled tools the agent has access to on that connection.
+
+The tool reads from `mcp_tool_catalog` — it does not make a network call to the MCP server. It's fast and free.
+
+Example agent interaction:
+```
+Agent: I need to create a GitHub issue for this bug.
+       [calls mcp.discover("github", "issue")]
+System: Found 3 tools:
+        - github.create_issue(title, body, labels, assignees)
+        - github.list_issues(state, labels, assignee)
+        - github.close_issue(issue_number, comment)
+Agent: [calls github.create_issue(title: "Auth timeout bug", body: "...", labels: ["bug"])]
 ```
 
 ## Connection Management
@@ -130,6 +239,7 @@ Each connection stores:
 - Scope (org or project + scope ID).
 - Health check configuration (interval, timeout, failure threshold).
 - Timeout and retry policy overrides.
+- Eager load flag (whether to preload all tool schemas into agent prompts — default false).
 
 ## Tool Discovery
 
@@ -154,7 +264,7 @@ OtterCamp does validate that agent-provided inputs match the declared JSON Schem
 Not all discovered tools are automatically available to agents. When tools are discovered:
 
 1. All tools are cataloged (stored in `mcp_tool_catalog`).
-2. The admin (through conversation) decides which tools to enable. By default, all tools are **disabled** until explicitly enabled. This is consistent with the default-deny capability posture (see 16-agent-control-plane.md).
+2. The admin (through conversation) decides which tools to enable. By default, all tools are **disabled** until explicitly enabled. This is an MCP-specific defense-in-depth layer — catalog enablement is independent of the capability posture in doc 16.
 3. Enabled tools become available for policy evaluation and agent use.
 
 The admin can change enablement at any time: "Frank, disable the `delete_repo` tool on the GitHub connection."
@@ -171,9 +281,15 @@ When tools change on a refresh, the system emits a domain event (`mcp.catalog.ch
 
 ### How MCP Tools Appear to Agents
 
-MCP tools appear in the agent's tool set alongside native OtterCamp tools. From the agent's perspective, calling an MCP tool is identical to calling any other tool — it requests the tool by name with parameters, and gets a result back.
+How MCP tools appear in an agent's prompt depends on the loading mode (see Context-Aware Tool Loading):
 
-The tool description in the agent's prompt (layer 7, tool descriptions — see 05-agents-staff-and-temps.md) includes the MCP tool's name, description, and parameter schema, prefixed with the connection name for disambiguation:
+**Lazy discovery (default)**: the agent sees a one-line connection summary. To use a tool, the agent first calls `mcp.discover("<connection>")` to get schemas, then calls the tool.
+
+**Flow node preloading**: tools declared in `flow_node.mcp_tools` appear in the agent's tool set alongside native OtterCamp tools. From the agent's perspective, calling an MCP tool is identical to calling any other tool — it requests the tool by name with parameters, and gets a result back.
+
+**Eager-load connections**: all enabled tools from the connection appear in the agent's tool set.
+
+In all cases, MCP tools are namespaced with the connection slug for disambiguation:
 
 ```
 github.create_issue(title: string, body: string, labels: string[]) → Creates a GitHub issue
@@ -192,7 +308,7 @@ An agent can use an MCP tool if all of the following are true:
 4. The agent has the capability `mcp.connection.use:<connection_id>`.
 5. The agent has the capability `mcp.tool.invoke:<connection_id>:<tool_name>` (or a wildcard grant for the connection).
 6. The agent's tool policy (allow/deny list on the agent profile) does not deny the tool.
-7. The control plane policy evaluation returns `allow` or `draft_review` (not `deny`).
+7. The control plane policy evaluation returns `allow` (not `deny`).
 
 ## Execution Flow
 
@@ -210,7 +326,6 @@ An agent can use an MCP tool if all of the following are true:
 
 4. **Policy decision.**
    - `deny`: return "not permitted" as the tool result. The agent sees this and adapts. The turn loop continues.
-   - `draft_review`: stage the MCP call (connection, tool, parameters) in the human's inbox. Return "queued for review" as the tool result. The turn loop continues.
    - `allow`: proceed to execution.
 
 5. **Connector runtime execution.**
@@ -219,7 +334,7 @@ An agent can use an MCP tool if all of the following are true:
    - Inject secrets into the request (authentication headers, API keys). Secrets are resolved at runtime from the secret store — they are never in the agent's prompt or the tool call parameters.
    - Validate the agent's input parameters against the tool's cataloged JSON Schema. Reject malformed inputs before they leave OtterCamp.
    - Execute the MCP tool call via the configured transport (stdio subprocess or HTTP/SSE request).
-   - Apply timeout policy. If the call exceeds the timeout, abort and return a timeout error.
+   - Apply timeout policy (default 30 seconds per call). If the call exceeds the timeout, abort and return a timeout error.
    - Receive the response. Sanitize output (redact any secrets that may have leaked into the response).
 
 6. **Record ToolExecution.** The control plane creates a `ToolExecution` record (see 16-agent-control-plane.md) capturing:
@@ -232,17 +347,17 @@ An agent can use an MCP tool if all of the following are true:
 
 7. **Return result to agent.** The tool result is returned to the agent in the turn loop as a standard tool_result message. The agent sees the output and continues reasoning.
 
-8. **Domain event emitted.** `mcp.tool.executed` event with connection ID, tool name, status, and duration. Consumed by observability, cost tracking, and notification systems.
+8. **Domain event emitted.** `mcp.tool.executed` event with connection ID, tool name, status, and duration. Consumed by observability and notification systems.
 
-### Approval Flow for draft_review
+### In-Flight Call Handling
 
-When policy evaluates to `draft_review`:
+When a connection goes unhealthy while an MCP call is already in flight:
 
-1. The MCP call payload (connection, tool, parameters, agent reasoning) is staged as an inbox item of type `draft_action_review`.
-2. The agent's turn continues — it is not blocked.
-3. The human sees the staged action in their inbox with full context: what tool, what parameters, why the agent wants to call it.
-4. The human can: approve (execute the call), edit parameters then approve, or reject.
-5. On approval, the system executes the MCP call outside the agent's turn context. The result is recorded and available for the agent's next turn if relevant.
+1. The in-flight call is allowed to complete (or timeout) — it is not preemptively cancelled. The call has already been dispatched to the MCP server; cancelling from OtterCamp's side doesn't cancel the server-side effect.
+2. The circuit breaker counts the in-flight call's outcome (success or failure) toward its failure threshold.
+3. If the call times out, the agent receives a timeout error. The timeout error includes context: "Connection [name] became degraded during this call."
+4. Subsequent calls to this connection are evaluated against the circuit breaker's current state — they may be rejected immediately if the breaker has opened.
+5. The `mcp_execution_log` entry records both the call status and the connection's health state at completion time.
 
 ## Security
 
@@ -254,7 +369,7 @@ MCP capabilities use the namespaced model from doc 16:
 - `mcp.tool.invoke:<connection_id>:<tool_name>` — agent can invoke this specific tool.
 - `mcp.tool.invoke:<connection_id>:*` — wildcard grant for all enabled tools on a connection.
 
-Capabilities follow the standard policy layers (instance → org → project → agent profile). Default posture is **deny** — agents have no MCP access unless explicitly granted.
+Capabilities follow the standard policy layers (instance → org → project → agent profile). MCP capabilities must be granted via templates or explicit policy rules — agents do not receive MCP access from the default capability templates (reader, worker, deployer grant only core capabilities).
 
 ### Per-Connection Tool Allowlists
 
@@ -280,7 +395,7 @@ Secrets (API keys, auth tokens, OAuth credentials) are critical for MCP connecti
 
 **Secret lifecycle:**
 
-1. **Storage**: secrets are stored in the platform's encrypted secret store (see 13-security-observability-costs.md). Each secret is a named reference, never a raw value.
+1. **Storage**: secrets are stored in the platform's encrypted secret store (see 08-deployment-and-self-hosting.md for the `secret` table schema, 13-security-observability-costs.md for the security model). Each secret is a named reference, never a raw value.
 2. **Binding**: the `mcp_secret_binding` table maps a connection to the secrets it needs, by named reference. A connection might need `auth_token`, `api_key`, etc.
 3. **Injection**: when the connector runtime executes an MCP call, it resolves secret references from the store and injects them into the outgoing request (as HTTP headers, query parameters, or environment variables for stdio). This happens at the transport layer, after the agent's input has been validated and logged.
 4. **Redaction**: if a secret value appears in the MCP server's response (which it should not, but defense in depth), the response sanitizer strips it before the result reaches the agent or is logged.
@@ -337,10 +452,18 @@ Default configuration:
 
 All values are configurable per connection.
 
-### Timeout and Retry
+### Timeout Structure
 
-- **Per-call timeout**: configurable per connection, default 30 seconds. If an MCP tool call does not respond within this window, the call is aborted and an error is returned to the agent.
-- **Retry policy**: configurable per connection. Default is 1 retry with exponential backoff (initial delay 1 second, max delay 10 seconds). Only retried on transient failures (network errors, timeouts). Permanent failures (4xx HTTP status, validation errors) are not retried.
+Three distinct timeout values govern different aspects of MCP reliability. They are independent and serve different purposes:
+
+- **Per-call timeout** (`timeout_ms`, default 30,000ms): maximum time for a single MCP tool call to complete. If the MCP server does not respond within this window, the call is aborted and the agent receives a timeout error. Configurable per connection.
+- **Health check timeout** (`health_config.check_timeout_sec`, default 5 seconds): maximum time for a health check probe. If the probe doesn't respond, it counts as a health check failure. Much shorter than the per-call timeout because health checks should be fast.
+- **Circuit breaker recovery interval** (`circuit_breaker_config.recovery_interval_sec`, default 30 seconds): how long the circuit breaker stays open before allowing a half-open test request. This is a waiting period, not a timeout.
+
+### Retry Policy
+
+- Configurable per connection. Default is 1 retry with exponential backoff (initial delay 1 second, max delay 10 seconds).
+- Only retried on transient failures (network errors, timeouts). Permanent failures (4xx HTTP status, validation errors) are not retried.
 - **Idempotency**: the system attaches an idempotency key to retried requests if the MCP server supports it. For servers that don't, retries are only safe for read-only tools. Write tools are not retried by default — the agent is informed of the failure and can decide to retry explicitly.
 
 ### Graceful Degradation
@@ -420,6 +543,7 @@ create table mcp_connection (
   auth_method     text check (auth_method in ('none', 'api_key', 'bearer_token', 'oauth2', 'custom')),
   status          text not null default 'configuring'
                   check (status in ('configuring', 'active', 'degraded', 'disabled', 'failed')),
+  eager_load      boolean not null default false,  -- if true, all enabled tool schemas loaded into agent prompts
   health_config   jsonb not null default '{
     "check_interval_sec": 60,
     "check_timeout_sec": 5,
@@ -438,9 +562,9 @@ create table mcp_connection (
     "recovery_interval_sec": 30
   }',
   last_health_check_at  timestamptz,
-  last_health_status    text,                      -- ok, degraded, failed
+  last_health_status    text check (last_health_status in ('ok', 'degraded', 'failed')),
   last_catalog_sync_at  timestamptz,
-  created_by_type text not null check (created_by_type in ('human', 'agent')),
+  created_by_type text not null check (created_by_type in ('human', 'agent', 'system')),
   created_by_id   uuid not null,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
@@ -454,6 +578,7 @@ create index on mcp_connection (project_id) where project_id is not null;
 ```
 
 - `project_id` is nullable. Null means org-level. Non-null means project-scoped.
+- `eager_load` defaults to false. When true, all enabled tool schemas from this connection are included in every agent prompt that has access to the connection. Only appropriate for connections with a small number of tools (<10).
 - `transport_config` structure varies by transport type:
   - stdio: `{"command": "node", "args": ["server.js"], "env": {"KEY": "ref:secret_name"}, "cwd": "/path"}`
   - http_sse: `{"endpoint": "https://mcp.example.com/github", "headers": {"Authorization": "ref:secret_name"}}`
@@ -490,7 +615,7 @@ create index on mcp_tool_catalog (connection_id, is_enabled) where is_enabled = 
 - Catalog entries are the system's view of what the MCP server offers.
 - `is_enabled = false` by default. Admin must explicitly enable tools through conversation.
 - `status = 'removed'` when a catalog refresh no longer finds the entry on the server. The row is preserved for audit trail (past executions reference this catalog entry).
-- `input_schema` is stored as-is from the MCP server. OtterCamp trusts the server's schema and validates agent inputs against it.
+- `input_schema` is stored as-is from the MCP server. OtterCamp trusts the server's schema and validates agent inputs against it. Also used by `mcp.discover` and flow node preloading to inject schemas into agent prompts.
 - The unique constraint on `(connection_id, entry_type, name)` prevents duplicate entries within a connection.
 
 ### mcp_execution_log
@@ -500,18 +625,20 @@ create table mcp_execution_log (
   id                uuid primary key default gen_random_uuid(),
   connection_id     uuid not null references mcp_connection(id),
   catalog_entry_id  uuid not null references mcp_tool_catalog(id),
-  tool_execution_id uuid references tool_execution(id),   -- link to control plane ToolExecution
-  run_id            uuid,                                  -- link to control plane Run
-  agent_id          uuid not null,
-  entry_type        text not null check (entry_type in ('tool', 'resource')),
+  tool_execution_id uuid references tool_execution(id),   -- link to control plane ToolExecution (tier 2 only)
+  run_id            uuid references run(id),                -- link to control plane Run (doc 16)
+  agent_id          uuid not null references agent(id),
+  entry_type        text not null check (entry_type in ('tool', 'resource', 'prompt')),
   tool_name         text not null,
   input_params      jsonb,                                 -- secrets redacted
   output            jsonb,                                 -- secrets redacted
   status            text not null check (status in ('success', 'error', 'timeout', 'circuit_open', 'validation_error')),
   error_message     text,
   duration_ms       int,
-  policy_decision   text not null check (policy_decision in ('allow', 'deny', 'draft_review')),
+  policy_decision   text check (policy_decision in ('allow', 'deny')),
+                    -- nullable: null for resource reads (tier 1, no policy evaluation)
   retries           int not null default 0,
+  connection_health_at_completion text,                    -- connection health state when call completed
   created_at        timestamptz not null default now(),
   metadata          jsonb not null default '{}'
 );
@@ -526,8 +653,9 @@ create index on mcp_execution_log (status);
 - Every MCP interaction (tool calls and resource reads) is logged here.
 - `tool_execution_id` links to the control plane's `ToolExecution` record for tool calls (tier 2). Null for resource reads (tier 1) which don't go through the control plane.
 - `input_params` and `output` are always secret-redacted. The raw values with secrets are never persisted.
-- `policy_decision` records what the policy evaluation returned, even for denied calls.
+- `policy_decision` records what the policy evaluation returned. **Nullable** — null for resource reads (tier 1) which bypass the control plane. For denied calls, the decision is recorded even though the call was not executed.
 - `status` captures the outcome: success, error (server returned an error), timeout, circuit_open (call rejected by circuit breaker), validation_error (input didn't match schema).
+- `connection_health_at_completion` captures the connection's health state when the call finished — useful for diagnosing failures that coincide with connection degradation.
 
 ### mcp_secret_binding
 
@@ -572,13 +700,18 @@ mcp_execution_log
 mcp_connection
   ├── → organization (always)
   └── → project (optional, for project-scoped connections)
+
+flow_node.mcp_tools → mcp_tool_catalog
+  (cross-spec: flow node declares required MCP tools by connection_slug.tool_name;
+   prompt assembler resolves these against the catalog at session start)
 ```
 
 ### What's NOT in the MCP Schema
 
 - **Agent capability grants**: live in the control plane's policy tables (doc 16). The MCP schema records connections and catalogs; who can use them is a policy concern.
-- **Secret values**: live in the encrypted secret store (doc 13). The MCP schema holds references only.
+- **Secret values**: live in the encrypted secret store (doc 08 for schema, doc 13 for security model). The MCP schema holds references only.
 - **Detailed run/step records**: live in the control plane's run/tool_execution tables (doc 16). The MCP execution log is the MCP-specific view with connection and tool metadata.
+- **Flow node MCP tool declarations**: live on `flow_node.mcp_tools` in doc 03. The MCP catalog provides the schemas; the flow node declares which ones to preload.
 
 ## Domain Events
 
@@ -592,6 +725,7 @@ MCP operations emit domain events for observability, notifications, and downstre
 | `mcp.catalog.changed` | connection_id, added_tools[], removed_tools[], added_resources[] | Catalog refresh found changes |
 | `mcp.tool.executed` | connection_id, tool_name, agent_id, status, duration_ms | Tool call completed |
 | `mcp.tool.denied` | connection_id, tool_name, agent_id, reason | Policy denied a tool call |
+| `mcp.tool.preload_failed` | connection_id, tool_name, flow_node_id, reason | Flow node declared an MCP tool that couldn't be preloaded |
 
 ## Observability
 
@@ -617,10 +751,7 @@ The admin can ask about MCP health conversationally ("Frank, how are our MCP con
 - Recent execution errors.
 - Latency trends.
 - Most-used tools and connections.
-
-### Cost Tracking
-
-MCP calls contribute to the cost accounting system (see 13-security-observability-costs.md). Each ToolExecution record carries timing and can be associated with cost if the MCP server charges per call. Cost attribution flows through the standard hierarchy: org → project → agent → task.
+- Context loading stats: how many tools are preloaded vs discovered on-demand.
 
 ## API Surface
 
@@ -629,7 +760,7 @@ MCP management endpoints (see 12-api-events-and-realtime.md):
 - `GET /mcp/connections` — list connections (filtered by scope).
 - `GET /mcp/connections/{id}` — connection detail with health status.
 - `POST /mcp/connections` — create connection (typically called by agents during conversational setup).
-- `PATCH /mcp/connections/{id}` — update connection configuration.
+- `PATCH /mcp/connections/{id}` — update connection configuration (includes `eager_load` toggle).
 - `DELETE /mcp/connections/{id}` — remove connection (cascades to catalog and secret bindings).
 - `POST /mcp/connections/{id}/refresh` — trigger catalog re-sync.
 - `POST /mcp/connections/{id}/test` — test connection health.
@@ -646,6 +777,7 @@ All endpoints require appropriate org/project authorization. Connection creation
 - **Cross-org connection sharing.** Each org has its own connections. No marketplace or shared connection registry.
 - **MCP sampling support.** The MCP sampling capability (server requesting the client to make an LLM call) is not supported at launch. This introduces complex trust and cost concerns that need separate design.
 - **Custom transport adapters.** Only stdio and HTTP/SSE. Additional transports (WebSocket, gRPC) are deferred.
+- **Automatic tool schema compression.** Tool schemas are loaded as-is from the MCP server. No token-level optimization (e.g., schema summarization, parameter pruning) at launch. Context-aware loading handles the bloat problem at the loading-decision level instead.
 
 ## Resolved Decisions
 
@@ -657,14 +789,28 @@ All endpoints require appropriate org/project authorization. Connection creation
 - **Each MCP tool call creates a ToolExecution record.** Full traceability through the control plane. MCP-specific metadata (connection, catalog entry, transport details) is captured in the `mcp_execution_log` for MCP-specific queries.
 - **Default-deny for discovered tools.** All tools are cataloged but disabled until the admin explicitly enables them. Consistent with the control plane's default-deny capability posture.
 - **Secrets are injected at runtime, never in agent prompts.** The connector runtime resolves secret references from the encrypted store at execution time. Agents never see credentials. Secrets are redacted from all logged inputs and outputs.
-- **Resource reads are tier 1 (chat-layer).** They are read-only and don't need full control plane overhead. They still require the `mcp.connection.use` capability for access control.
+- **Resource reads are tier 1 (chat-layer).** They are read-only and don't need full control plane overhead. They still require the `mcp.connection.use` capability for access control. `policy_decision` is nullable in the execution log for these reads.
 - **Connection health is the connector runtime's responsibility.** Health checks, circuit breakers, and status transitions are managed by the runtime. The admin is informed through conversation and events, not through a polling dashboard.
 - **Circuit breaker prevents cascading failures.** When a connection is unhealthy, calls are rejected at the circuit breaker before reaching the server. Agents receive a clear error and can adapt.
 - **Catalog refresh discovers changes, doesn't auto-enable.** When a server adds new tools, they appear in the catalog as disabled. The admin is notified and decides what to enable. Removed tools are marked `removed`, not deleted, for audit trail integrity.
 - **One unique slug per connection per org.** The slug serves as the tool name prefix for disambiguation. Two connections in the same org cannot have the same slug.
+- **Policy is binary: allow or deny.** Consistent with doc 16 (agent-control-plane.md). There is no runtime approval gating. MCP connections that should be accessible are allowed; those that should not are denied. Permissions are configured in advance.
+- **Context-aware tool loading: lazy by default, eager when declared.** Agents receive lightweight connection summaries (~20 tokens each) by default. Full tool schemas are loaded only when: (a) a flow node declares specific MCP tools in `flow_node.mcp_tools`, (b) the connection has `eager_load = true`, or (c) the agent calls `mcp.discover` to get schemas on demand. This prevents MCP from bloating context windows while ensuring workers have the tools they need without wasted round-trips.
+- **Flow node MCP tool declaration uses `flow_node.mcp_tools` JSONB.** Analogous to `flow_node.skills` for OtterCamp skills. Format is an array of `connection_slug.tool_name` strings. PM configures through conversation during flow design.
+- **`mcp.discover` is a native utility tool, not an MCP tool.** It reads from the local catalog, not from the MCP server. No policy evaluation, no network call. Always available to any agent with MCP connection access.
+- **In-flight calls are not preemptively cancelled.** When a connection degrades during an in-flight call, the call is allowed to complete (or timeout). Cancelling from OtterCamp doesn't cancel server-side effects. The circuit breaker counts the outcome.
+- **Three distinct timeout values with different purposes.** Per-call timeout (default 30s), health check timeout (default 5s), and circuit breaker recovery interval (default 30s) are independent configurations that govern different aspects of reliability.
 
 ## Open Questions
 
 - **MCP sampling**: should OtterCamp support the MCP sampling capability (server requests the client to make an LLM call on its behalf)? This has trust, cost, and security implications that need careful design. Deferred for now.
 - **Connection templates**: should we provide pre-built connection templates for popular MCP servers (GitHub, Slack, Postgres, etc.) to simplify setup? Or is conversational setup sufficient?
 - **Multi-server aggregation**: if multiple connections expose similar tools (e.g., two database connections both expose `run_query`), should the system provide any disambiguation beyond the connection prefix, such as routing hints or context-aware selection?
+
+## Cross-Spec Dependencies
+
+Changes in this doc that require updates in other specs:
+
+- **Doc 03 (Projects and Task Flow)**: add `mcp_tools jsonb` column to the `flow_node` table. Format: array of `connection_slug.tool_name` strings. Analogous to existing `skills` column.
+- **Doc 05 (Agents, Staff, and Temps)**: update layer 7 (tool descriptions) documentation in the prompt assembly section to describe the three MCP tool loading modes (lazy, flow node preload, eager-load connection). Update layer 4 to mention MCP prompts alongside skills.
+- **Doc 10 (Skills Integration)**: mention that MCP prompts integrate at layer 4 alongside skills, with skills taking precedence on conflict.

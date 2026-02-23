@@ -689,8 +689,8 @@ create table secret (
   slug            text not null,               -- machine-readable identifier ("anthropic_api_key")
   category        text not null check (category in ('model_provider', 'ssh_key', 'mcp_credential', 'external_service')),
   encrypted_value bytea not null,              -- AES-256-GCM encrypted
-  created_by_type text not null check (created_by_type in ('human', 'system')),
-  created_by_id   uuid,
+  created_by_type text not null check (created_by_type in ('human', 'agent', 'system')),
+  created_by_id   uuid not null,             -- sentinel UUID for system-created secrets
   last_rotated_at timestamptz,
   expires_at      timestamptz,                 -- optional expiry
   created_at      timestamptz not null default now(),
@@ -733,8 +733,8 @@ In **managed mode**, secrets are NEVER in environment variables. All secrets are
 When model provider environment variables are present during bootstrap (first run), the system creates the full provider connection infrastructure defined in 07-models-and-inference.md:
 
 1. **Register providers**: ensure `model_provider` records exist for each provider with a bootstrap env var. Each record includes `slug`, `adapter_type` (the Go adapter implementation: `anthropic`, `openai`, `google`, `openai_compat`), and `base_url` (the provider's default API endpoint). These are instance-level records seeded in the initial migration alongside the 230+ agent profile templates from the catalog (see 05-agents-staff-and-temps.md) — this step verifies they exist.
-2. **Store secrets**: for each API key, create a `secret` table entry (referenced by `secret.id`, a UUID) with the key encrypted (AES-256-GCM). The secret is categorized as `model_provider`. For OpenAI-compatible endpoints where no API key is provided (e.g., local Ollama without auth), this step is skipped — the `provider_connection.api_key_secret_ref` is set to null.
-3. **Create provider connections**: for each bootstrapped provider, create a `provider_connection` record linking the org to the provider, with `api_key_secret_ref` pointing to the encrypted secret's UUID (or null for keyless endpoints). The connection starts with `health_status = 'healthy'` and `failover_priority = 0` (within-provider ordering; cross-provider failover uses fallback profiles, see doc 07). For OpenAI-compatible connections, `base_url_override` is set from `OPENAI_COMPAT_BASE_URL` and `label` from `OPENAI_COMPAT_LABEL`.
+2. **Store secrets**: for each API key, create a `secret` table entry with the key encrypted (AES-256-GCM). The secret is categorized as `model_provider`. For OpenAI-compatible endpoints where no API key is provided (e.g., local Ollama without auth), this step is skipped — the `provider_connection.api_key_secret_ref` is set to null.
+3. **Create provider connections**: for each bootstrapped provider, create a `provider_connection` record linking the org to the provider, with `api_key_secret_ref` set to the secret's `slug` value (a named reference into the secret store, not a UUID FK — see doc 07) or null for keyless endpoints. The connection starts with `health_status = 'healthy'` and `failover_priority = 0` (within-provider ordering; cross-provider failover uses fallback profiles, see doc 07). For OpenAI-compatible connections, `base_url_override` is set from `OPENAI_COMPAT_BASE_URL` and `label` from `OPENAI_COMPAT_LABEL`.
 4. **Create default model profiles**: create the default agent and system profiles for the org (see 07-models-and-inference.md Model Profiles). If Anthropic is present, it is the primary provider for all default profiles. If only an OpenAI-compatible endpoint is available, it becomes the primary provider. System profiles (summarization, listening eval, memory extraction, memory synthesis) are created with appropriate model selections (see 06-memory.md for extraction/synthesis model tier requirements).
 5. **Create org-level assignment**: create a `model_profile_assignment` with `scope_type = 'org'` pointing to the primary default profile, so all agents have a working model configuration immediately.
 6. **Record bootstrap audit event**: record that bootstrap completed, including the org ID, user ID, agent IDs created, and provider connections created (see 04-auth-tenancy-and-identity.md bootstrap flow step 6).

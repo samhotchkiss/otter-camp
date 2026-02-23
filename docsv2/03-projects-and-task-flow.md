@@ -316,7 +316,7 @@ The inbox is the human's action-required queue. Every item requires a decision. 
 |------|--------|-------------------|
 | Task scoping review | PM finished scoping a `requires_human_review` draft | Approve (→ queued), Request changes, Defer |
 | Task work review | Task reached a review node with `human` actor type | Approve (→ advance flow), Reject with feedback (→ back to work), Defer |
-| Draft action review | Agent staged an action under `draft_review` policy (e.g., composed email) | Approve (execute), Edit then approve, Reject, Defer |
+| Draft action review | Communication tool staged a draft for human review (tool behavior, not policy) | Approve (execute), Edit then approve, Reject, Defer |
 | Escalation | PM or Frank escalated a blocker to the human | Respond (opens chat in context), Decide inline, Defer |
 | Capability approval | Agent requested a capability that requires human pre-auth | Approve, Approve with constraints, Deny, Defer |
 
@@ -330,7 +330,7 @@ No expiry. Items persist until the human deals with them. If something sits defe
 
 ### Mechanics
 
-- Items arrive via the event bus. When a domain event matches an inbox trigger (task reaches review node with human actor, policy returns `draft_review`, escalation targets human), an inbox item is created.
+- Items arrive via the event bus. When a domain event matches an inbox trigger (task reaches review node with human actor, communication tool stages a draft, escalation targets human), an inbox item is created.
 - Items are ordered by urgency then arrival time. Escalations and capability approvals sort above task reviews and draft actions.
 - Each item carries enough context to decide without leaving the inbox — task description, diff preview, agent reasoning, staged action payload. The human can always "Open in context" to see the full picture.
 - Acting on an item triggers the downstream action immediately. No additional confirmation step — the inbox itself is the confirmation.
@@ -579,12 +579,12 @@ create table project (
   description     text,
   context_block   text,          -- project context injected into every task's prompt
   repo_path       text,          -- path to the project's git repo
-  status          text not null default 'active',  -- active, archived
-  created_by_type text not null,  -- human, agent
+  status          text not null default 'active' check (status in ('active', 'archived')),
+  created_by_type text not null check (created_by_type in ('human', 'agent', 'system')),
   created_by_id   uuid not null,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
-  metadata        jsonb,
+  metadata        jsonb not null default '{}',
   unique (organization_id, slug)
 );
 ```
@@ -602,10 +602,10 @@ create table flow_template (
   version         int not null default 1,
   is_current      boolean not null default true,
   start_node_id   uuid,          -- references flow_node(id), set after nodes are created
-  created_by_type text not null,
+  created_by_type text not null check (created_by_type in ('human', 'agent', 'system')),
   created_by_id   uuid not null,
   created_at      timestamptz not null default now(),
-  metadata        jsonb
+  metadata        jsonb not null default '{}'
 );
 ```
 
@@ -620,15 +620,16 @@ create table flow_node (
   flow_template_id uuid not null references flow_template(id),
   name             text not null,
   description      text,
-  node_type        text not null,     -- work, review
-  actor_type       text not null,     -- role, project_manager, human, agent
+  node_type        text not null check (node_type in ('work', 'review')),
+  actor_type       text not null check (actor_type in ('role', 'project_manager', 'human', 'agent')),
   actor_role       text,              -- set when actor_type = role: worker, reviewer, planner
   actor_id         uuid,              -- set when actor_type = agent
   position         int not null,
   next_node_id     uuid references flow_node(id),
   reject_node_id   uuid references flow_node(id),  -- review nodes only
   skills           jsonb,             -- skill references for this node
-  metadata         jsonb,
+  mcp_tools        jsonb,             -- MCP tool declarations: ["connection.tool_name", ...] (see 09-mcp-integration.md)
+  metadata         jsonb not null default '{}',
   check (node_type = 'review' or reject_node_id is null),  -- only review nodes can have reject edges
   check (actor_type != 'role' or actor_role is not null)   -- role-typed nodes must specify which role
 );
@@ -645,20 +646,22 @@ create table project_task (
   description           text,
   acceptance_criteria   text,
   constraints           text,
-  work_status           text not null default 'draft',
-  priority              text not null default 'normal',  -- urgent, high, normal, low
+  work_status           text not null default 'draft'
+    check (work_status in ('draft', 'queued', 'in_progress', 'blocked', 'on_hold', 'review', 'done', 'cancelled')),
+  priority              text not null default 'normal'
+    check (priority in ('urgent', 'high', 'normal', 'low')),
   requires_human_review boolean not null default false,
   flow_template_id      uuid not null references flow_template(id),
   current_flow_node_id  uuid references flow_node(id),
   schedule_id           uuid references task_schedule(id),  -- set when created by a schedule
   branch_name           text,          -- task/<slug>, set when execution starts
   task_number           int not null,  -- sequential per project, auto-incremented
-  created_by_type       text not null,
+  created_by_type       text not null check (created_by_type in ('human', 'agent', 'system')),
   created_by_id         uuid not null,
   created_at            timestamptz not null default now(),
   updated_at            timestamptz not null default now(),
   completed_at          timestamptz,       -- set when task reaches done or cancelled
-  metadata              jsonb,
+  metadata              jsonb not null default '{}',
   unique (project_id, slug),
   unique (project_id, task_number)
 );
@@ -680,12 +683,13 @@ create table flow_node_execution (
   task_id      uuid not null references project_task(id),
   flow_node_id uuid not null references flow_node(id),
   visit        int not null default 1,    -- incremented on rejection loops
-  session_id   uuid,                      -- async work session for this execution (see 02-chat.md)
-  status       text not null default 'pending',  -- pending, active, blocked, completed
+  session_id   uuid references chat_session(id),  -- async work session for this execution (see 02-chat.md)
+  status       text not null default 'pending'
+    check (status in ('pending', 'active', 'blocked', 'completed')),
   commit_sha   text,                      -- branch state when this execution completed (for review diff base)
   started_at   timestamptz,
   completed_at timestamptz,
-  metadata     jsonb,
+  metadata     jsonb not null default '{}',
   unique (task_id, flow_node_id, visit)
 );
 
@@ -707,13 +711,15 @@ create table project_subtask (
   description            text,
   acceptance_criteria    text,
   constraints            text,
-  work_status            text not null default 'draft',  -- draft, queued, in_progress, blocked, done, cancelled
-  priority               text not null default 'normal',
-  assignee_type          text,       -- agent, human
+  work_status            text not null default 'draft'
+    check (work_status in ('draft', 'queued', 'in_progress', 'blocked', 'done', 'cancelled')),
+  priority               text not null default 'normal'
+    check (priority in ('urgent', 'high', 'normal', 'low')),
+  assignee_type          text check (assignee_type in ('agent', 'human')),
   assignee_id            uuid,
   created_at             timestamptz not null default now(),
   updated_at             timestamptz not null default now(),
-  metadata               jsonb
+  metadata               jsonb not null default '{}'
 );
 
 create index on project_subtask (task_id);
@@ -730,9 +736,9 @@ create index on project_subtask (task_id, work_status);
 ```sql
 create table project_task_dependency (
   id              uuid primary key default gen_random_uuid(),
-  source_type     text not null,     -- task, subtask
+  source_type     text not null check (source_type in ('task', 'subtask')),
   source_id       uuid not null,
-  depends_on_type text not null,     -- task, subtask
+  depends_on_type text not null check (depends_on_type in ('task', 'subtask')),
   depends_on_id   uuid not null,
   created_at      timestamptz not null default now(),
   unique (source_type, source_id, depends_on_type, depends_on_id)
@@ -751,9 +757,9 @@ create index on project_task_dependency (depends_on_type, depends_on_id);
 create table project_task_participant (
   id               uuid primary key default gen_random_uuid(),
   task_id          uuid not null references project_task(id),
-  participant_type text not null,     -- agent, human
+  participant_type text not null check (participant_type in ('agent', 'human')),
   participant_id   uuid not null,
-  role             text not null,     -- planner, worker, reviewer, observer
+  role             text not null check (role in ('planner', 'worker', 'reviewer', 'observer')),
   joined_at        timestamptz not null default now(),
   left_at          timestamptz,
   unique (task_id, participant_type, participant_id)
@@ -769,22 +775,22 @@ create table inbox_item (
   id                uuid primary key default gen_random_uuid(),
   organization_id   uuid not null references organization(id),
   target_user_id    uuid not null references human_user(id),  -- which human this item is for
-  item_type         text not null,    -- task_scoping_review, task_work_review, draft_action_review, escalation, capability_approval
-  status            text not null default 'pending',  -- pending, deferred, acted
+  item_type         text not null check (item_type in ('task_scoping_review', 'task_work_review', 'draft_action_review', 'escalation', 'capability_approval')),
+  status            text not null default 'pending' check (status in ('pending', 'deferred', 'acted')),
   source_project_id uuid references project(id),
   source_task_id    uuid references project_task(id),
   title             text not null,
   description       text,
   context           jsonb,            -- inline context for deciding without leaving inbox
   action_payload    jsonb,            -- what to execute on approval
-  created_by_type   text not null,
+  created_by_type   text not null check (created_by_type in ('human', 'agent', 'system')),
   created_by_id     uuid not null,
   acted_at          timestamptz,
-  action_taken      text,             -- approved, rejected, dismissed, responded (standardized values for queryability)
+  action_taken      text check (action_taken in ('approved', 'rejected', 'dismissed', 'responded')),
   action_notes      text,             -- feedback on rejection, constraints on approval
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
-  metadata          jsonb
+  metadata          jsonb not null default '{}'
 );
 
 create index on inbox_item (target_user_id, status);
@@ -799,14 +805,14 @@ create table merge_queue_entry (
   id               uuid primary key default gen_random_uuid(),
   project_id       uuid not null references project(id),
   task_id          uuid not null references project_task(id),
-  status           text not null default 'queued',  -- queued, merging, conflict, merged
+  status           text not null default 'queued' check (status in ('queued', 'merging', 'conflict', 'merged')),
   branch_name      text not null,
-  priority         text not null default 'normal',
+  priority         text not null default 'normal' check (priority in ('urgent', 'high', 'normal', 'low')),
   queued_at        timestamptz not null default now(),
   started_at       timestamptz,
   completed_at     timestamptz,
   conflict_details text,
-  metadata         jsonb,
+  metadata         jsonb not null default '{}',
   unique (task_id)  -- one entry per task at a time
 );
 
@@ -823,18 +829,18 @@ create table task_schedule (
   name              text not null,
   description       text,
   cron_expression   text not null,
-  overlap_policy    text not null default 'skip',  -- skip, queue, replace
+  overlap_policy    text not null default 'skip' check (overlap_policy in ('skip', 'queue', 'replace')),
   max_duration_ms   bigint,           -- max wall clock time per instance before auto-cancel
   task_context      text,             -- pre-scoped context injected into each created task
-  task_priority     text not null default 'normal',  -- priority for created tasks
-  status            text not null default 'active',  -- active, paused
+  task_priority     text not null default 'normal' check (task_priority in ('urgent', 'high', 'normal', 'low')),
+  status            text not null default 'active' check (status in ('active', 'paused')),
   last_run_at       timestamptz,
   next_run_at       timestamptz,
-  created_by_type   text not null,
+  created_by_type   text not null check (created_by_type in ('human', 'agent', 'system')),
   created_by_id     uuid not null,
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
-  metadata          jsonb
+  metadata          jsonb not null default '{}'
 );
 
 create index on task_schedule (project_id, status);
@@ -851,16 +857,16 @@ create index on task_schedule (status, next_run_at);  -- scheduler pickup query
 create table project_task_event (
   id              uuid primary key default gen_random_uuid(),
   task_id         uuid not null references project_task(id),
-  event_type      text not null,     -- status_change, flow_advance, flow_reject, blocked, unblocked, assigned, subtask_created, subtask_completed, merged, push_succeeded, push_failed, deployed, escalated, dependency_added, dependency_removed, schedule_cancelled
+  event_type      text not null check (event_type in ('status_change', 'flow_advance', 'flow_reject', 'blocked', 'unblocked', 'assigned', 'subtask_created', 'subtask_completed', 'merged', 'push_succeeded', 'push_failed', 'deployed', 'escalated', 'dependency_added', 'dependency_removed', 'schedule_cancelled')),
   from_status     text,              -- previous work_status (for status_change events)
   to_status       text,              -- new work_status (for status_change events)
   flow_node_id    uuid references flow_node(id),  -- which node this event relates to
   visit           int,               -- which visit of the node
-  actor_type      text not null,     -- human, agent, system
+  actor_type      text not null check (actor_type in ('human', 'agent', 'system')),
   actor_id        uuid not null,
   comment         text,              -- why this happened: rejection reason, blocker description, escalation context
   created_at      timestamptz not null default now(),
-  metadata        jsonb
+  metadata        jsonb not null default '{}'
 );
 
 create index on project_task_event (task_id, created_at);

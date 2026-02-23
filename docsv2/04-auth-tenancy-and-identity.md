@@ -42,7 +42,7 @@ The application still carries `organization_id` on tables for structural consist
 
 ### What Carries organization_id
 
-Most domain entities carry `organization_id` directly: `human_user`, `agent`, `chat_session`, `project`, `flow_template`, `memory_item`, `audit_event`, and others. Some entities omit it because they are always accessed through a parent that carries it (e.g., `chat_message` via `chat_session`, `auth_session` and `api_key` via `human_user`).
+Most domain entities carry `organization_id` directly: `human_user`, `agent`, `chat_session`, `project`, `flow_template`, `memory`, `audit_event`, and others. Some entities omit it because they are always accessed through a parent that carries it (e.g., `chat_message` via `chat_session`, `auth_session` and `api_key` via `human_user`).
 
 These columns exist for referential integrity and query consistency, not for tenant isolation (which is handled at the database level).
 
@@ -214,9 +214,9 @@ Agents do not have RBAC roles. Agents have **capabilities** — namespaced permi
 Key points from doc 16 relevant here:
 
 - Capabilities are namespaced: `project.task.read`, `system.cli.execute`, `mcp.tool.invoke:<connection_id>:<tool_name>`.
-- Policy evaluation outcomes: `allow`, `deny`, `require_approval`.
+- Policy evaluation outcomes: `allow`, `deny`.
 - Policy layers (highest priority first): instance safety > org policy > project policy > agent profile policy > request-specific overrides.
-- Default posture is **deny** — agents can only do what they are explicitly permitted to do.
+- Default posture is **permissive via templates** — agents receive generous capability grants from templates (reader, worker, deployer, admin). Instance safety (layer 1) is the only hardcoded deny layer. Admins add deny rules when they want restrictions.
 
 The relationship between docs 04 and 16: this document defines *who* agents and humans are (identity). Doc 16 defines *what agents can do* (capabilities and policy). RBAC roles (this doc) gate human access. Capabilities (doc 16) gate agent actions.
 
@@ -424,7 +424,7 @@ The `agent` table schema is defined authoritatively in 05-agents-staff-and-temps
 - Agents are scoped to an org (`organization_id`). They cannot exist outside one, and they cannot be shared across orgs — same scoping model as `human_user`.
 - `slug` is unique within the org — used for @mentions in chat (e.g., `@frank`, `@ellie`).
 - `agent_class`: `staff` agents are durable and reusable; `temp` agents are ephemeral and task-scoped.
-- `created_by_type = 'system'` with null `created_by_id` is used for the starter trio (Frank, Lori, Ellie) seeded during bootstrap.
+- `created_by_type = 'system'` with sentinel UUID (`00000000-0000-0000-0000-000000000000`) for `created_by_id` is used for the starter trio (Frank, Lori, Ellie) seeded during bootstrap, consistent with the system actor convention.
 - Agents do not authenticate themselves — the platform asserts their identity via execution context (see Agent Authentication above).
 - Retired agents are soft-deleted — their identity persists for audit trail integrity.
 
@@ -492,9 +492,9 @@ create table audit_event (
   organization_id uuid not null references organization(id),
   action          text not null,          -- namespaced action (e.g., 'auth.login', 'agent.created')
   principal_type  text not null check (principal_type in ('human', 'agent', 'system')),
-  principal_id    uuid,                   -- null for system actions
+  principal_id    uuid not null,          -- sentinel UUID 00000000-0000-0000-0000-000000000000 for system actions
   delegated_by    uuid references human_user(id),  -- set when an agent acts on behalf of a human
-  scope_type      text,                   -- optional: 'project', 'task', 'session'
+  scope_type      text check (scope_type in ('project', 'task', 'session')),
   scope_id        uuid,                   -- optional: the ID of the scoped entity
   context         jsonb not null default '{}', -- action-specific payload
   created_at      timestamptz not null default now()
@@ -508,7 +508,7 @@ create index on audit_event (principal_type, principal_id);
 **Design notes:**
 - Append-only. No `updated_at` — these rows never change.
 - `action` is a namespaced string following the same pattern as capabilities: `auth.login`, `auth.failed_login`, `agent.created`, `policy.evaluated`, `api_key.created`, `org.settings_changed`, etc.
-- `principal_type = 'system'` with null `principal_id` for system-initiated actions (bootstrap, scheduled cleanup, etc.).
+- `principal_type = 'system'` with sentinel UUID (`00000000-0000-0000-0000-000000000000`) for `principal_id` on system-initiated actions (bootstrap, scheduled cleanup, etc.), consistent with the system actor convention.
 - `delegated_by` is the delegation trace — records which human authorized an agent's action. Null for direct human actions and for agent actions without explicit delegation.
 - `scope_type` / `scope_id` is optional scoping for actions within a specific project, task, or session. Null for org-level actions (login, settings change).
 - `context` is the rich payload: IP address for auth events, old/new values for setting changes, policy inputs/outputs for evaluations. Structure varies by action type. The application defines a schema per action type; the database stores it as jsonb.
@@ -525,7 +525,7 @@ organization (one per database)
   ├── audit_event
   ├── chat_session (doc 02)
   ├── project (doc 03)
-  ├── memory_item (doc 06)
+  ├── memory (doc 06)
   └── ... (all other domain entities)
 ```
 

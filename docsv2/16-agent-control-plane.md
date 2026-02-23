@@ -1,11 +1,11 @@
 ---
 ## Summary
 
-This spec defines the Agent Control Plane, the single trusted execution layer through which every agent mutation in OtterCamp flows. No agent can write to the database, execute a shell command, call an external service, or perform any side-effecting action without passing through this system. The only exception is tier 1 (read-only) tool calls, which execute in the chat layer with a basic scope check. The control plane is built around four core components: the **Policy API** (stateless capability evaluation returning allow/deny/require_approval), the **Execution Broker** (synchronous admission control that creates Run records, evaluates policy, and dispatches to workers), the **Worker Runtime** (stateless sandboxed executors for internal mutations, CLI, browser, and MCP domains), and the **Approval Service** (human-in-the-loop workflow integrated with the inbox system from doc 03).
+This spec defines the Agent Control Plane, the single trusted execution layer through which every agent mutation in OtterCamp flows. No agent can write to the database, execute a shell command, call an external service, or perform any side-effecting action without passing through this system. The only exception is tier 1 (read-only) tool calls, which execute in the chat layer with a basic scope check. The control plane is built around four core components: the **Policy API** (stateless capability evaluation returning allow or deny), the **Execution Broker** (synchronous admission control that creates Run records, evaluates policy, and dispatches to workers), the **Worker Runtime** (stateless sandboxed executors for internal mutations, CLI, browser, and MCP domains), and the **Audit/Event Log** (immutable, append-only record of all decisions and outcomes).
 
-The capability model uses a hierarchical dot-separated namespace (`domain.resource.action`, e.g. `system.cli.execute`, `project.task.create`) with wildcard support. Agents start with no capabilities (default-deny) and receive grants via four templates: reader (read-only), worker (project mutations + file I/O), deployer (worker + system tools + browser), and admin (all). Policies compose across five layers -- instance safety (hardcoded, highest priority), organization, project, agent profile, and request-specific overrides (can only restrict, never expand) -- using a most-restrictive-wins principle. Approvals never block the agent's turn; `require_approval` returns "queued for review" immediately and the run resumes asynchronously when the human acts. Session-wide approval grants allow a human in a sync session to approve a capability for the session's duration, avoiding repeated approval friction.
+The capability model uses a hierarchical dot-separated namespace (`domain.resource.action`, e.g. `system.cli.execute`, `project.task.create`) with wildcard support. Agents receive generous capabilities from templates: reader (read-only), worker (project mutations + file I/O + CLI + browser + memory), deployer (worker + external comms), and admin (all). The default experience is permissive — agents are empowered to do their jobs. Admins add `deny` rules when they want restrictions. Policies compose across five layers — instance safety (hardcoded, highest priority), organization, project, agent profile, and request-specific overrides (can only restrict, never expand) — using a most-restrictive-wins principle. Policy evaluation is binary: `allow` (execute immediately) or `deny` (reject).
 
-The execution model is captured in a 9-table schema anchored by the `run` entity. A Run represents one end-to-end action with principal identity, capability, policy decision, and result. Runs decompose into RunSteps (sequential stages), RunAttempts (retry envelopes preserving failure history), ModelInvocations (per-LLM-call cost/latency tracking), ToolExecutions (per-tool-call records with policy decisions), RunArtifacts (files, screenshots, logs in object storage), and RunEvents (append-only timeline for replay, debugging, and health monitoring via heartbeats). Runs bind to tasks and flow nodes for observability, enabling per-task and per-flow-node cost breakdowns. The remaining tables are `capability_policy` (declarative policy rules) and `session_capability_grant` (ephemeral runtime overrides). Reliability is handled through idempotency keys, optimistic concurrency, explicit retry attempts, dead letter handling, a background supervisor for stuck/orphaned task detection, and soft/hard budget enforcement that downgrades or denies expensive capabilities as cost thresholds are reached.
+The execution model is captured in a 7-table schema anchored by the `run` entity. A Run represents one end-to-end action with principal identity, capability, policy decision, and result. Runs decompose into RunSteps (sequential stages), RunAttempts (retry envelopes preserving failure history), ToolExecutions (per-tool-call records with policy decisions), RunArtifacts (files, screenshots, logs in object storage), and RunEvents (append-only timeline for replay, debugging, and health monitoring via heartbeats). Model invocations are tracked in the `model_invocation` table defined in doc 07, which carries control plane FKs (`run_id`, `run_step_id`, `run_attempt_id`) for cross-referencing. Runs bind to tasks and flow nodes for observability, enabling per-task and per-flow-node token breakdowns. The remaining table is `capability_policy` (declarative policy rules with binary outcomes). Reliability is handled through idempotency keys, optimistic concurrency, explicit retry attempts, dead letter handling, a background supervisor for stuck/orphaned task detection, and soft/hard budget enforcement expressed in tokens (soft budget = notify admin, hard budget = deny).
 
 ---
 
@@ -26,8 +26,7 @@ Agents can perform meaningful work (project updates, tool execution, CLI and bro
   - Capability system (namespaced permissions, templates, grants)
   - Policy evaluation and risk gating (layered composition, conflict resolution)
   - Execution broker and worker orchestration (admission, dispatch, sandboxing)
-  - Approval workflows (inbox integration, session-wide grants)
-  - Cost accounting (model invocation tracking, budget enforcement)
+  - Token accounting (token aggregation, budget enforcement)
   - Reliability and failure repair (stuck detection, orphaned recovery, heartbeats)
   - Audit and observability requirements
   - Full execution entity schema
@@ -43,19 +42,19 @@ Agents can perform meaningful work (project updates, tool execution, CLI and bro
 
 2. **Every action has an accountable principal.** Human or agent identity is attached to every request. When a human delegates, the delegation chain is recorded. You can always answer "who caused this?"
 
-3. **Capability grants are explicit and minimally permissive.** Default-deny. An agent has no capabilities until granted. Grants are namespaced, scoped, and audited.
+3. **Capabilities are template-driven and generous by default.** Agents receive capabilities from templates that are designed to let them do real work. Restrictions are opt-in — admins add `deny` rules when they need guardrails, rather than allowlisting from zero. Grants are namespaced, scoped, and audited.
 
-4. **High-risk actions are gated by policy and can require human approval.** Policy evaluation is synchronous and deterministic. The outcome is always immediate: allow, deny, or draft_review. The agent's turn never blocks.
+4. **Policy evaluation is binary: allow or deny.** `allow` executes immediately. `deny` rejects immediately. The outcome is always immediate and deterministic.
 
-5. **Every action is replayable from immutable execution records.** Runs, steps, attempts, model invocations, tool executions, artifacts, and events form a complete audit trail. Nothing is lost.
+5. **Every action is replayable from immutable execution records.** Runs, steps, attempts, tool executions, artifacts, and events form a complete audit trail. Nothing is lost.
 
-6. **Predictability over intelligence.** Approval requirements are static policy, not dynamically risk-scored. The human knows exactly what will require approval because they set the policy. No surprises.
+6. **Predictability over intelligence.** Policy outcomes are deterministic based on static configuration. The human knows exactly what is allowed and denied because they set the policy. No surprises.
 
 ## Control Plane Components
 
 ### Policy API
 
-Stores and evaluates capability policies. Stateless evaluation — given a principal, capability, resource scope, and runtime context, it returns allow/deny/require_approval. Policy rules are stored in the database and cached aggressively.
+Stores and evaluates capability policies. Stateless evaluation — given a principal, capability, resource scope, and runtime context, it returns `allow` or `deny`. Policy rules are stored in the database and cached aggressively.
 
 The Policy API is the single authority for "can this principal do this thing?" Every other component defers to it. There is no second policy evaluation path.
 
@@ -66,7 +65,9 @@ Admission control for all requested actions. The broker is the front door of the
 1. Receives an action request from the chat layer (tier 2 tool call).
 2. Identifies the principal and requested capability.
 3. Calls the Policy API.
-4. Routes based on the decision: deny (return error), require_approval (pause and create inbox item), allow (dispatch to worker).
+4. Routes based on the decision:
+   - **deny**: return "not permitted" error to the agent.
+   - **allow**: dispatch to the appropriate worker for execution.
 5. Creates and manages Run/RunStep/RunAttempt records.
 6. Emits events to the realtime channel and audit log.
 
@@ -81,20 +82,9 @@ Executes approved actions in controlled sandboxes. Workers are stateless — the
 - **Browser worker**: browser automation in isolated contexts.
 - **MCP worker**: external service calls via MCP connections.
 
-### Approval Service
-
-Handles human-in-the-loop decisions. When a policy returns `require_approval`:
-
-1. The broker pauses the run (status: `awaiting_approval`).
-2. The Approval Service creates an inbox item (type: `capability_approval` or `draft_action_review`).
-3. The agent's turn continues — the tool result returns "queued for review" and the agent proceeds.
-4. When the human acts on the inbox item, the Approval Service resumes or cancels the paused run.
-
-The Approval Service also manages session-wide approval grants (see Approval Workflow below).
-
 ### Audit/Event Log
 
-Immutable record of decisions and outcomes. Every policy evaluation, every broker decision, every execution result, and every approval action is logged. This is append-only and tamper-evident.
+Immutable record of decisions and outcomes. Every policy evaluation, every broker decision, and every execution result is logged. This is append-only and tamper-evident.
 
 The audit log is separate from `run_event` (which tracks execution timeline). The audit log captures policy decisions and access control events that may not map 1:1 to runs.
 
@@ -126,16 +116,15 @@ Retry envelope for a step. When a step fails and is retried, a new attempt is cr
 
 Attempts are the mechanism for:
 - Transient failure retry (model call timed out, rate limited)
-- Approval resumption (human approved, step retries from where it paused)
 - Manual retry (operator triggers retry of a failed step)
 
-### ModelInvocation
+### ModelInvocation (Doc 07)
 
-One model call with cost/latency metadata. Every LLM call made during execution is captured as a ModelInvocation. This includes:
+Model invocations are tracked in the `model_invocation` table defined in doc 07. That table carries `run_id`, `run_step_id`, and `run_attempt_id` FK columns so that model calls made during control plane execution can be attributed back to specific runs. This includes:
 - The model call made by the chat layer during the turn (linked via turn_id)
 - Any model calls made by workers during execution (e.g., a browser worker using a vision model to analyze a screenshot)
 
-ModelInvocations feed into cost tracking (see Cost Accounting below) and are the raw data for the cost dashboards in doc 13.
+Model invocations feed into token tracking (see Token Accounting below) and are the raw data for the usage dashboards in doc 13.
 
 ### ToolExecution
 
@@ -179,7 +168,7 @@ Because runs link to tasks and flow nodes, you can answer:
 - What artifacts were produced?
 - How long did the agent spend at this flow node (across all runs)?
 - Where in the run timeline did the agent file a blocker?
-- What was the total cost of completing this task, broken down by flow node?
+- What was the total token usage for completing this task, broken down by flow node?
 
 ## Agent Principal Model
 
@@ -187,8 +176,8 @@ Each action request includes a principal context that identifies who is requesti
 
 ### Principal Fields
 
-- `principal_type`: `agent` or `human`
-- `principal_id`: the agent or human user ID
+- `principal_type`: `agent`, `human`, or `system`
+- `principal_id`: the agent or human user ID (sentinel UUID `00000000-0000-0000-0000-000000000000` for system actions)
 - `organization_id`: the org this action is happening within
 - `project_id`: the project scope (null for org-level actions)
 - `session_id`: the chat session this action originated from
@@ -294,8 +283,8 @@ Capabilities follow a hierarchical dot-separated namespace: `{domain}.{resource}
 
 | Capability | Description |
 |---|---|
+| `comms.email.draft` | Draft an email for human review |
 | `comms.email.send` | Send an email |
-| `comms.email.draft` | Draft an email (staged for review) |
 | `comms.slack.post` | Post to a Slack channel |
 | `comms.github.pr.create` | Create a GitHub pull request |
 | `comms.github.pr.comment` | Comment on a GitHub pull request |
@@ -324,7 +313,7 @@ agent.profile.read
 system.file.read
 ```
 
-**`worker`** — read access plus project mutations and file I/O. The standard template for agents doing work.
+**`worker`** — the standard template for agents doing real work. Includes project mutations, file I/O, CLI, browser, and memory. Workers can build, test, and interact with systems. No external communications.
 
 ```
 # Everything in reader, plus:
@@ -344,17 +333,18 @@ memory.write
 memory.entity.create
 system.file.read
 system.file.write
-```
-
-**`deployer`** — worker access plus system tools and browser. For agents that need to build, test, and deploy.
-
-```
-# Everything in worker, plus:
 system.cli.execute
 system.browser.navigate
 system.browser.interact
 system.browser.screenshot
 system.browser.extract
+```
+
+**`deployer`** — everything in worker plus external communications. For agents that need to send emails, post to Slack, or create PRs.
+
+```
+# Everything in worker, plus:
+comms.*
 ```
 
 **`admin`** — all capabilities. Reserved for the PM and org-level agents (Frank, Lori) who need unrestricted access within their scope.
@@ -363,7 +353,9 @@ system.browser.extract
 *
 ```
 
-Templates are starting points, not prisons. The human or PM can add or remove individual capabilities from any agent's effective set. The template just provides a sensible baseline.
+Templates are starting points, not prisons. The human or PM can add or remove individual capabilities from any agent's effective set. The template just provides a generous baseline.
+
+The default out-of-box experience is permissive. The starter trio (Frank, Lori, Ellie) get `admin`. Most task-working agents get `worker`. Agents that need to communicate externally get `deployer`.
 
 ### Capability Scoping
 
@@ -379,9 +371,10 @@ The narrowest scope wins. An agent with org-level `project.read` and no project-
 
 ### Policy Decision Outcomes
 
-- **`allow`**: execute the action immediately. Return result to the agent's turn loop.
+- **`allow`**: execute the action immediately. Dispatch to the worker. Return result to the agent's turn loop.
 - **`deny`**: reject the action. Return "not permitted" as the tool result. The agent sees this and can adapt. The run is created and immediately failed (for audit).
-- **`require_approval`**: pause the action. Create an inbox item. Return "queued for review" as the tool result. The agent's turn continues without blocking.
+
+Agents receive generous capabilities from templates. The default experience is permissive — agents can do real work out of the box. Admins add `deny` rules at the org or project layer when they want restrictions. The system trusts agents to do their jobs; guardrails are opt-in, not opt-out. Instance safety (layer 1) remains the hardcoded safety net for truly catastrophic actions — that is the only default-deny layer.
 
 ### Policy Inputs
 
@@ -391,12 +384,11 @@ The Policy API evaluates based on:
 - **Principal role**: the agent's role in this context (PM, worker, reviewer, etc.)
 - **Capability requested**: the namespaced capability string
 - **Target resource scope**: org, project, task, or specific resource ID
-- **Session context**: sync vs async, session-wide grants in effect
-- **Runtime budgets**: remaining token budget, time budget, cost budget for this org/project
+- **Runtime budgets**: remaining token budget and time budget for this org/project
 
 ### Policy Layers
 
-Policies compose across five layers. Each layer can allow, deny, or require approval for any capability. Layers are evaluated highest-priority-first:
+Policies compose across five layers. Each layer can allow or deny any capability. Layers are evaluated highest-priority-first:
 
 1. **Instance safety policy** (highest priority)
    - Hardcoded. Cannot be overridden by any lower layer.
@@ -405,14 +397,14 @@ Policies compose across five layers. Each layer can allow, deny, or require appr
 
 2. **Organization policy**
    - Set by the org owner/admin.
-   - Org-wide defaults: which capabilities are allowed by default, which require approval, which are denied.
-   - Budget limits: max spend per agent per day, max concurrent runs.
-   - Example: "All `comms.email.send` actions require approval org-wide."
+   - Org-wide restrictions: deny rules for specific capabilities.
+   - Budget limits: max tokens per agent per day, max concurrent runs.
+   - Example: "All `comms.email.send` actions denied org-wide unless the agent has the deployer template."
 
 3. **Project policy**
    - Set by the human or PM for a specific project.
    - Project-specific overrides: a project working with sensitive data might deny `system.cli.execute` even if the org allows it.
-   - Example: "In the billing project, `system.cli.execute` requires approval."
+   - Example: "In the billing project, `system.cli.execute` denied."
 
 4. **Agent profile policy**
    - Set on the agent's profile (doc 05).
@@ -421,29 +413,28 @@ Policies compose across five layers. Each layer can allow, deny, or require appr
 
 5. **Request-specific overrides** (lowest priority, most restrictive only)
    - Applied by the system at request time based on runtime context.
-   - Can only restrict, never expand. A request-specific override can downgrade `allow` to `require_approval` or `deny`, but never upgrade `deny` to `allow`.
-   - Example: agent has exceeded 80% of its daily cost budget — `system.cli.execute` (potentially expensive long-running commands) downgrades from `allow` to `require_approval`.
+   - Can only restrict, never expand. A request-specific override can downgrade `allow` to `deny`, but never upgrade `deny` to `allow`.
+   - Example: agent has exceeded the hard cost budget — non-essential capabilities denied.
 
 ### Composition Rules
 
 Policy layers compose using a **most-restrictive-wins** principle with clear precedence:
 
 1. Start with the agent profile policy (layer 4) as the base. This determines what capabilities the agent has been granted.
-2. Apply project policy (layer 3). If the project denies a capability the agent has, the project wins. If the project requires approval for something the agent can do freely, the project wins.
+2. Apply project policy (layer 3). If the project denies a capability the agent has, the project wins.
 3. Apply org policy (layer 2). Same logic — org restrictions override project permissions.
 4. Apply instance safety (layer 1). Absolute override. Nothing can override instance safety.
 5. Apply request-specific overrides (layer 5). Can only make things more restrictive.
 
 **A lower-priority layer can never grant what a higher-priority layer denies.** Project policy cannot allow something the org denies. Agent profile cannot allow something the project denies.
 
-**A lower-priority layer CAN be more restrictive.** An agent profile can deny capabilities the project allows (the agent simply does not have them). A project can require approval for something the org allows freely.
+**A lower-priority layer CAN be more restrictive.** An agent profile can deny capabilities the project allows (the agent simply does not have them). A project can deny something the org allows freely.
 
 ### Conflict Resolution
 
 When multiple layers express opinions about the same capability:
 
 - `deny` at any layer = deny. Period. No lower layer can override.
-- `require_approval` at any layer + no `deny` above = require_approval. Approval requirements accumulate.
 - `allow` only if all applicable layers allow (or are silent). Silence is not denial — if a layer has no opinion on a capability, it passes through.
 
 **Example walkthrough:**
@@ -451,32 +442,11 @@ When multiple layers express opinions about the same capability:
 Agent "CodeBot" requests `system.cli.execute` in the billing project:
 1. Instance safety: no opinion on `system.cli.execute` in general (it has specific command blocklists, but the capability itself is not blanket-denied). Pass.
 2. Org policy: `system.cli.execute` = `allow`. Pass.
-3. Project policy (billing): `system.cli.execute` = `require_approval`. Override to `require_approval`.
+3. Project policy (billing): `system.cli.execute` = `deny`. Override to `deny`.
 4. Agent profile: CodeBot has `deployer` template, which includes `system.cli.execute`. Has the capability.
 5. Request-specific: no overrides active.
 
-Result: `require_approval`. The billing project's policy dominates.
-
-### Session-Wide Approval Grants
-
-When a human is actively in a sync session and approves a capability, that approval can be granted for the remainder of the session rather than requiring per-action approval.
-
-**How it works:**
-
-1. An agent requests an action that requires approval.
-2. The tool result returns "queued for review."
-3. The human sees the inbox item (or is prompted inline in the sync session).
-4. The human approves and checks "approve for this session" (or the system offers this option for capabilities that are likely to recur).
-5. The Approval Service records a session-wide grant: this capability, for this agent, in this session, is now `allow` for the session's duration.
-6. Subsequent requests for the same capability in the same session skip the approval step.
-
-**Constraints:**
-
-- Session-wide grants expire when the session ends. They do not persist across sessions.
-- Session-wide grants only apply to the specific capability that was approved, not to broader wildcards. Approving `system.cli.execute` for one session does not approve `system.*`.
-- Session-wide grants are recorded in the audit log with the granting session ID.
-- The human can revoke a session-wide grant at any time during the session.
-- Session-wide grants are not available in async sessions (no human present to grant).
+Result: `deny`. The billing project's policy dominates.
 
 ### Policy Caching
 
@@ -485,12 +455,11 @@ Policy evaluation must be fast — it is in the hot path of every tier 2 tool ca
 - Org and project policies are cached with a short TTL (seconds, not minutes). Changes propagate quickly but not instantly.
 - Agent profile policies are cached per-session (rebuilt when the session starts or the agent's profile changes).
 - Instance safety rules are compiled into the broker at startup and refreshed on deploy.
-- Session-wide grants are held in memory for the session's lifetime.
 - Cache invalidation on policy write: the Policy API emits an event when a policy changes, and the broker invalidates its cache.
 
 ## Execution Lifecycle
 
-### The 9-Step Flow (Expanded)
+### The 8-Step Flow (Expanded)
 
 ```
 1. Agent requests an action (tier 2 tool call in the turn loop)
@@ -503,7 +472,6 @@ Policy evaluation must be fast — it is in the hot path of every tier 2 tool ca
 3. Broker evaluates policy
    │   - Calls Policy API with principal + capability + scope
    │   - Records policy decision as RunEvent
-   │   - Checks session-wide grants
    │
 4. If DENY:
    │   - Run status → failed
@@ -512,39 +480,27 @@ Policy evaluation must be fast — it is in the hot path of every tier 2 tool ca
    │   - Return "not permitted: {reason}" as tool result
    │   - Agent's turn continues
    │
-5. If REQUIRE_APPROVAL:
-   │   - Run status → awaiting_approval
-   │   - RunStep status → awaiting_approval
-   │   - Create inbox_item (type based on action: capability_approval or draft_action_review)
-   │   - RunEvent: approval_requested
-   │   - Return "queued for review" as tool result
-   │   - Agent's turn continues (does not block)
-   │   - [Later, when human acts on inbox item:]
-   │     - Approve → Run status → in_progress, create new RunAttempt, dispatch to worker (step 6)
-   │     - Reject → Run status → failed, RunEvent: approval_rejected
-   │
-6. If ALLOW:
+5. If ALLOW:
    │   - Run status → in_progress
    │   - RunStep status → in_progress
    │   - Create RunAttempt (attempt_number: 1)
    │   - Broker dispatches to appropriate worker based on action domain
    │
-7. Worker executes action in sandbox
+6. Worker executes action in sandbox
    │   - Worker receives: action type, arguments, sandbox config, timeout
    │   - Emits RunEvent updates during execution (started, progress, output)
-   │   - Captures ModelInvocations if the worker makes model calls
    │   - Captures ToolExecutions for any sub-tool calls
    │   - Stores artifacts (logs, screenshots, files) as RunArtifacts
    │
-8. Worker returns result
+7. Worker returns result
    │   - Success: RunStep status → completed, output captured
    │   - Failure (transient): RunStep status → failed, check retry policy
-   │     - If retries remain: create new RunAttempt, go to step 7
+   │     - If retries remain: create new RunAttempt, go to step 6
    │     - If no retries: RunStep status → failed (terminal)
    │   - Failure (permanent): RunStep status → failed (terminal)
    │   - Timeout: RunStep status → timed_out
    │
-9. Broker finalizes
+8. Broker finalizes
    │   - Run status → completed (all steps done) or failed (any step failed terminally)
    │   - Final RunEvent: run_completed or run_failed
    │   - Emit realtime update to the session
@@ -574,7 +530,7 @@ Policy evaluation must be fast — it is in the hot path of every tier 2 tool ca
 
 Three timeout levels, from inner to outer:
 
-1. **Worker execution timeout**: per-action-type timeout. CLI commands: configurable, default 5 minutes. Browser actions: 30 seconds per interaction. MCP calls: 60 seconds. Internal mutations: 10 seconds.
+1. **Worker execution timeout**: per-action-type timeout. CLI commands: configurable, default 5 minutes. Browser actions: 30 seconds per interaction. MCP calls: per-connection configurable, default 30 seconds (see doc 09 `mcp_connection.timeout_ms`). Internal mutations: 10 seconds.
 
 2. **RunStep timeout**: the maximum time a single step can take, including retries. Default: 3x the worker execution timeout.
 
@@ -602,66 +558,17 @@ Cancellation is graceful:
 6. All pending steps are marked `cancelled`.
 7. A RunEvent records the cancellation with the actor and reason.
 
-## Approval Workflow
+## Inbox Integration
 
-### Integration with Inbox (Doc 03)
+The inbox is the human's review surface for items that require human attention. Inbox items come from two sources: the flow engine (when a `review` flow node with `human` actor type activates) and conversational capability requests from agents. Policy does not push items to the inbox — policy is strictly binary (allow/deny).
 
-When a policy returns `require_approval`, the control plane creates an inbox item. The inbox item type depends on the action:
+Human review of agent actions (e.g., reviewing a draft email before sending) is handled by `review` flow nodes with `human` actor type in the task graph (see doc 03). When a flow reaches a `review` node (with `human` actor type), the flow engine creates an inbox item for the human. This is flow-driven, not policy-driven.
 
-**`capability_approval`** — the agent is requesting a capability it doesn't have blanket permission for:
-- Title: "{Agent name} wants to {action description}"
-- Context includes: the capability requested, the agent's current grants, what the action would do, why the policy flagged it.
-- Available actions: Approve, Approve for session, Approve with constraints, Deny.
+### Conversational Capability Requests (capability_approval)
 
-**`draft_action_review`** — the agent has composed an outbound action (email, PR, deployment) that is staged for review:
-- Title: "Review: {action description}"
-- Context includes: the full action payload (email body, PR description, deployment config), a diff or preview when available, the agent's reasoning for why it composed this.
-- Available actions: Approve (execute as-is), Edit then approve, Reject with feedback.
+Agents can conversationally request access to capabilities they don't have. For example, Frank might ask the human: "This task needs CLI access for the worker agent. Should I grant it?" If the human agrees, Frank (or the PM) creates a `capability_approval` inbox item for the admin to formalize.
 
-### Approval Payload
-
-Every approval request includes:
-
-```
-{
-  "run_id": "uuid",
-  "run_step_id": "uuid",
-  "capability": "comms.email.send",
-  "principal": { "type": "agent", "id": "uuid", "name": "Frank" },
-  "action_summary": "Send onboarding email to new hire",
-  "action_payload": { ... full action details ... },
-  "risk_factors": ["outbound_communication", "contains_pii"],
-  "expected_side_effects": ["Email delivered to external recipient"],
-  "preview": { "type": "email", "to": "...", "subject": "...", "body_preview": "..." },
-  "policy_layer": "org",
-  "policy_rule_id": "uuid",
-  "session_id": "uuid",
-  "task_context": { "task_id": "uuid", "task_title": "...", "flow_node": "..." }
-}
-```
-
-### Approval Timing
-
-- There is no automatic timeout on approvals. Items persist until the human acts (consistent with the inbox design in doc 03 — no expiry, PM nudges via chat if items sit too long).
-- The run stays in `awaiting_approval` indefinitely.
-- If the context becomes stale (e.g., the task was cancelled while awaiting approval), the system marks the inbox item as obsolete and auto-cancels the run.
-- The agent is not blocked — its turn continued when the tool result returned "queued for review." The agent can do other work. When the approval comes through, the run resumes asynchronously.
-
-### Post-Approval Resumption
-
-When the human approves:
-1. The inbox item transitions to `acted`.
-2. The Approval Service updates the run: status → `in_progress`.
-3. A new RunAttempt is created for the paused step.
-4. The broker dispatches to the worker.
-5. Execution proceeds from step 7 of the lifecycle.
-6. The result is emitted as a RunEvent — it does not re-enter the agent's original turn (which already completed). If the task is still in progress, the result is available to the agent on its next turn via context.
-
-When the human rejects:
-1. The inbox item transitions to `acted` with `action_taken: rejected`.
-2. The run status → `failed`, reason: `approval_rejected`.
-3. A RunEvent captures the rejection and any feedback the human provided.
-4. If the task is still in progress, the agent sees the rejection on its next turn. The agent may adapt (try a different approach, ask the human, file a blocker).
+This is agent-initiated, not policy-triggered. The agent noticed it lacked a capability (because the policy denied it), adapted conversationally, and routed the request to the human through normal communication channels. The inbox item is created by the agent's tool call (e.g., creating an inbox item), not by the policy engine.
 
 ## Sandboxing and Isolation
 
@@ -716,7 +623,7 @@ MCP calls run through the broker with additional validation:
 - **Per-tool capability checks**: optionally, individual tools can be gated with `mcp.tool.invoke:<connection_id>:<tool_name>`.
 - **Request schema validation**: the broker validates the tool call arguments against the tool's declared input schema before dispatching. Malformed requests are rejected.
 - **Response schema validation**: the worker validates the response against the tool's declared output schema. Unexpected responses are logged and flagged.
-- **Timeout per tool call**: configurable per connection, default 60 seconds.
+- **Timeout per tool call**: configurable per connection (`mcp_connection.timeout_ms`), default 30 seconds (see doc 09).
 - **Secret handling**: MCP connections may require authentication. Secrets are resolved at execution time and injected into the request. They are never exposed to the agent or persisted in the run payload.
 
 ### Internal Mutation Isolation
@@ -741,7 +648,7 @@ State transitions are guarded by version checks (optimistic concurrency). Two co
 
 Retries are explicit attempts, never silent overwrites. Every retry creates a new RunAttempt record with:
 - The attempt number (1, 2, 3, ...)
-- The trigger (transient_failure, approval_resumed, manual_retry)
+- The trigger (initial, transient_failure, manual_retry)
 - The previous attempt's failure reason
 - Timing for the new attempt
 
@@ -802,24 +709,20 @@ The system actively prevents tasks from getting stuck. A background **supervisor
 - The supervisor then follows the stuck task detection path.
 - Heartbeats are ephemeral — they are RunEvents tagged as `heartbeat` and can be purged after the run completes.
 
-## Cost Accounting
+## Token Accounting
 
 ### Model Invocation Tracking
 
-Every model call made during a run is captured as a ModelInvocation record:
+Model invocations are tracked in the `model_invocation` table defined in doc 07. That table carries `run_id`, `run_step_id`, and `run_attempt_id` FK columns so that model calls made during control plane execution can be attributed back to specific runs. The control plane reads from this table for token aggregation and budget enforcement — it does not own the table.
 
-- **Provider and model ID**: which model was used.
-- **Token counts**: input tokens, output tokens, total tokens.
-- **Cost estimate**: calculated from the provider's pricing at the time of the call. Stored as the estimated cost, not a billed amount.
-- **Latency**: time to first token, total duration.
-- **Context**: which run, step, and attempt triggered this call.
+Each model invocation captures provider, model ID, input/output token counts, latency, and execution context. See doc 07 for the canonical schema.
 
-### Cost Aggregation
+### Token Aggregation
 
-Costs roll up through the entity hierarchy:
+Token counts roll up through the entity hierarchy:
 
-- **Per ModelInvocation**: the raw cost of one model call.
-- **Per RunAttempt**: sum of all ModelInvocations in the attempt.
+- **Per model invocation**: the raw token count of one model call (doc 07).
+- **Per RunAttempt**: sum of all model invocations in the attempt.
 - **Per RunStep**: sum of all attempts (only the latest attempt counts — retries replace, not accumulate).
 - **Per Run**: sum of all steps.
 - **Per flow node execution**: sum of all runs at that node (across the task).
@@ -828,24 +731,24 @@ Costs roll up through the entity hierarchy:
 - **Per agent**: sum of all runs by that agent (across projects).
 - **Per org**: sum of all projects.
 
-These aggregations are materialized periodically (not real-time) for dashboard queries. Real-time cost is available per-run and per-task.
+These aggregations are materialized periodically (not real-time) for dashboard queries. Real-time token counts are available per-run and per-task.
 
 ### Budget Enforcement
 
-Budgets are configured at the org and project level (doc 13). The control plane enforces them:
+Budgets are configured at the org and project level (doc 13) and expressed in tokens. The control plane enforces them:
 
-- **Soft budget**: when an agent's cumulative cost reaches the soft limit, the request-specific policy override (layer 5) downgrades expensive capabilities from `allow` to `require_approval`. The human is alerted.
+- **Soft budget**: when an agent's cumulative token usage reaches the soft limit, the system notifies the admin (via inbox or notification). Work continues — the soft limit is a warning, not a gate.
 - **Hard budget**: when the hard limit is reached, all non-essential capabilities are denied. Essential capabilities (filing blockers, updating status) remain allowed to prevent tasks from getting stuck with no way to signal the problem.
 - Budget checks happen at the broker level during policy evaluation. They use the latest available aggregation (may be slightly stale — a few seconds).
 
-### Cost Dashboard Integration
+### Usage Dashboard Integration
 
-The control plane provides the raw data for cost dashboards (doc 13):
+The control plane provides the raw data for usage dashboards (doc 13):
 
-- Cost by org, project, agent, model, time period.
-- Cost by capability domain (how much are we spending on CLI vs browser vs MCP vs chat).
-- Cost anomaly detection: flag agents or tasks whose cost deviates significantly from historical averages.
-- Cost per task completion: average cost to complete a task, broken down by flow template type.
+- Token usage by org, project, agent, model, time period.
+- Token usage by capability domain (how much are we spending on CLI vs browser vs MCP vs chat).
+- Usage anomaly detection: flag agents or tasks whose token consumption deviates significantly from historical averages.
+- Tokens per task completion: average token usage to complete a task, broken down by flow template type.
 
 ## Observability Requirements
 
@@ -855,16 +758,17 @@ The control plane provides the raw data for cost dashboards (doc 13):
 - Principal identity and capability
 - Policy decision and reason (which layer, which rule)
 - Execution latency (wall clock, CPU time where applicable)
-- Token counts and cost metrics
+- Token counts (input, output)
 - Failure class (transient vs permanent) and error details
 - Artifact count and total size
 - Heartbeat history
 
 ### Per Model Invocation Capture
 
+Tracked in doc 07's `model_invocation` table with control plane FKs. Key fields:
+
 - Provider, model ID, model profile
 - Input/output token counts
-- Cost estimate
 - Latency (time to first token, total)
 - Whether this was a retry or fallback
 - The prompt hash (for dedup in eval pipelines, not the full prompt)
@@ -874,9 +778,8 @@ The control plane provides the raw data for cost dashboards (doc 13):
 Dashboards must support:
 
 - **Active runs**: currently executing, with agent, capability, duration, and progress.
-- **Approval queue**: pending approvals by age, capability type, and urgency.
 - **Failure rate**: by capability domain, by agent, by time period. Distinguish transient vs permanent.
-- **Cost**: by org, project, agent, model, time period. Budget utilization percentages.
+- **Token usage**: by org, project, agent, model, time period. Budget utilization percentages.
 - **Concurrency**: current slot utilization (global and per-provider). Queue depth.
 - **Latency**: p50, p95, p99 execution latency by capability domain.
 - **Supervisor activity**: stuck detections, orphan recoveries, escalations.
@@ -886,7 +789,6 @@ Dashboards must support:
 Configurable alerts for:
 
 - Run failure rate exceeds threshold (default: >10% in a 5-minute window).
-- Approval queue depth exceeds threshold (default: >10 items older than 1 hour).
 - Agent heartbeat loss.
 - Budget soft/hard limit reached.
 - Orphaned run detected.
@@ -894,12 +796,12 @@ Configurable alerts for:
 
 ## Security Requirements
 
-- **Default-deny capability posture.** An agent has no capabilities until explicitly granted. The `reader` template is the most permissive default — it grants only read access.
+- **Template-driven capability posture.** Agents receive capabilities from templates that default to generous grants. Instance safety (layer 1) is the only hardcoded deny layer. All other restrictions are opt-in via org, project, or agent-level policy rules.
 - **No privileged execution path outside broker/worker.** There is no way to execute a tier 2 action that bypasses the broker. The broker is the only entry point.
 - **Secret references resolved at execution time.** When an action needs a secret (API key, token, credential), the action payload contains a reference (secret ID), not the secret value. The worker resolves the reference at execution time from the secret store, injects it into the execution environment, and the secret is never persisted in run payloads, RunEvents, or audit logs.
 - **Tamper-evident audit trail.** Run and RunEvent records are append-only. Status transitions include the previous status for verification. The audit log supports hash chaining for tamper detection.
-- **Org isolation.** The broker verifies org_id on every request. A principal in Org A cannot create a run that accesses Org B's resources, regardless of capability grants. This is enforced at the database level (row-level security) in addition to the application level.
-- **Session binding.** Runs are bound to the session they originated from. A run cannot be transferred to a different session. Session-wide grants are bound to the granting session.
+- **Org isolation.** The broker verifies org_id on every request. A principal in Org A cannot create a run that accesses Org B's resources, regardless of capability grants. This is enforced at the database level (database-per-org isolation, see doc 04) in addition to the application level.
+- **Session binding.** Runs are bound to the session they originated from. A run cannot be transferred to a different session.
 - **Rate limiting.** The broker enforces rate limits on action requests per agent per time window to prevent abuse or runaway loops, independent of model-level concurrency limits.
 
 ## Database Schema
@@ -917,7 +819,7 @@ create table run (
   turn_id             uuid references chat_turn(id),
 
   -- Principal
-  principal_type      text not null check (principal_type in ('agent', 'human')),
+  principal_type      text not null check (principal_type in ('agent', 'human', 'system')),
   principal_id        uuid not null,
   delegated_by        uuid,                     -- human who delegated (if applicable)
 
@@ -928,20 +830,19 @@ create table run (
   idempotency_key     text,                      -- for deduplication
 
   -- Policy
-  policy_decision     text not null check (policy_decision in ('allow', 'deny', 'require_approval')),
+  policy_decision     text not null check (policy_decision in ('allow', 'deny')),
   policy_decided_by   text,                      -- which layer made the decision
   policy_rule_id      uuid,                      -- the specific rule that decided
 
   -- Status
   status              text not null default 'created'
-    check (status in ('created', 'in_progress', 'awaiting_approval', 'completed', 'failed', 'timed_out', 'cancelled', 'cancelling', 'dead_letter')),
+    check (status in ('created', 'in_progress', 'completed', 'failed', 'timed_out', 'cancelled', 'cancelling', 'dead_letter')),
   failure_reason      text,                      -- null unless failed
-  failure_class       text check (failure_class in ('transient', 'permanent', 'timeout', 'policy', 'approval_rejected', 'cancelled', 'orphaned')),
+  failure_class       text check (failure_class in ('transient', 'permanent', 'timeout', 'policy', 'cancelled', 'orphaned')),
 
-  -- Cost
+  -- Token counts (rollups from model_invocation in doc 07)
   total_input_tokens  int not null default 0,
   total_output_tokens int not null default 0,
-  estimated_cost_usd  numeric(12, 6) not null default 0,
 
   -- Timing
   created_at          timestamptz not null default now(),
@@ -959,7 +860,7 @@ create index on run (project_id, status) where project_id is not null;
 create index on run (task_id) where task_id is not null;
 create index on run (session_id) where session_id is not null;
 create index on run (principal_type, principal_id, created_at);
-create index on run (status, created_at) where status in ('in_progress', 'awaiting_approval');
+create index on run (status, created_at) where status = 'in_progress';
 create index on run (idempotency_key) where idempotency_key is not null;
 ```
 
@@ -968,7 +869,7 @@ create index on run (idempotency_key) where idempotency_key is not null;
 ```sql
 create table run_step (
   id              uuid primary key default gen_random_uuid(),
-  run_id          uuid not null references run(id),
+  run_id          uuid not null references run(id) on delete cascade,
   step_number     int not null,
   name            text not null,                 -- human-readable step name
   action_type     text not null,                 -- same domain as run, or sub-action
@@ -976,18 +877,17 @@ create table run_step (
 
   -- Status
   status          text not null default 'pending'
-    check (status in ('pending', 'in_progress', 'awaiting_approval', 'completed', 'failed', 'timed_out', 'cancelled', 'skipped')),
+    check (status in ('pending', 'in_progress', 'completed', 'failed', 'timed_out', 'cancelled', 'skipped')),
   failure_reason  text,
-  failure_class   text check (failure_class in ('transient', 'permanent', 'timeout', 'policy', 'approval_rejected', 'cancelled')),
+  failure_class   text check (failure_class in ('transient', 'permanent', 'timeout', 'policy', 'cancelled', 'orphaned')),
 
   -- Output
   output          jsonb,                         -- structured output from execution
   output_summary  text,                          -- human-readable summary of what happened
 
-  -- Cost (aggregated from attempts)
+  -- Token counts (aggregated from attempts)
   input_tokens    int not null default 0,
   output_tokens   int not null default 0,
-  estimated_cost_usd numeric(12, 6) not null default 0,
 
   -- Timing
   created_at      timestamptz not null default now(),
@@ -1001,7 +901,7 @@ create table run_step (
 );
 
 create index on run_step (run_id);
-create index on run_step (status) where status in ('in_progress', 'awaiting_approval');
+create index on run_step (status) where status = 'in_progress';
 ```
 
 ### run_attempt
@@ -1009,9 +909,9 @@ create index on run_step (status) where status in ('in_progress', 'awaiting_appr
 ```sql
 create table run_attempt (
   id               uuid primary key default gen_random_uuid(),
-  run_step_id      uuid not null references run_step(id),
+  run_step_id      uuid not null references run_step(id) on delete cascade,
   attempt_number   int not null,
-  trigger          text not null check (trigger in ('initial', 'transient_failure', 'approval_resumed', 'manual_retry')),
+  trigger          text not null check (trigger in ('initial', 'transient_failure', 'manual_retry')),
 
   -- Status
   status           text not null default 'in_progress'
@@ -1024,13 +924,12 @@ create table run_attempt (
   output_summary   text,
 
   -- Worker
-  worker_type      text,                        -- 'internal', 'cli', 'browser', 'mcp'
+  worker_type      text check (worker_type in ('internal', 'cli', 'browser', 'mcp')),
   worker_id        text,                        -- identifier of the worker instance
 
-  -- Cost
+  -- Token counts
   input_tokens     int not null default 0,
   output_tokens    int not null default 0,
-  estimated_cost_usd numeric(12, 6) not null default 0,
 
   -- Timing
   started_at       timestamptz not null default now(),
@@ -1046,79 +945,33 @@ create index on run_attempt (run_step_id);
 create index on run_attempt (status) where status = 'in_progress';
 ```
 
-### model_invocation
+### model_invocation (cross-reference to doc 07)
 
-```sql
-create table model_invocation (
-  id                uuid primary key default gen_random_uuid(),
-  organization_id   uuid not null references organization(id),
-
-  -- Context (at least one of these should be set)
-  run_id            uuid references run(id),
-  run_step_id       uuid references run_step(id),
-  run_attempt_id    uuid references run_attempt(id),
-  session_id        uuid references chat_session(id),
-  turn_id           uuid references chat_turn(id),
-
-  -- Principal
-  principal_type    text not null check (principal_type in ('agent', 'human', 'system')),
-  principal_id      uuid,
-
-  -- Model
-  provider          text not null,               -- 'anthropic', 'openai', 'google', 'local'
-  model_id          text not null,               -- e.g., 'claude-sonnet-4-20250514'
-  model_profile_id  uuid,                        -- reference to the model profile used
-
-  -- Usage
-  input_tokens      int not null,
-  output_tokens     int not null,
-  total_tokens      int not null,
-  estimated_cost_usd numeric(12, 6) not null,
-
-  -- Latency
-  time_to_first_token_ms int,
-  total_duration_ms      int not null,
-
-  -- Meta
-  purpose           text,                        -- 'chat_turn', 'listening_eval', 'summarization', 'tool_execution', 'browser_vision'
-  is_retry          boolean not null default false,
-  is_fallback       boolean not null default false,  -- used a fallback model
-  prompt_hash       text,                        -- hash for eval pipeline dedup
-
-  created_at        timestamptz not null default now(),
-  metadata          jsonb not null default '{}'
-);
-
-create index on model_invocation (organization_id, created_at);
-create index on model_invocation (run_id) where run_id is not null;
-create index on model_invocation (session_id, turn_id) where session_id is not null;
-create index on model_invocation (provider, model_id, created_at);
-create index on model_invocation (principal_type, principal_id, created_at);
-```
+Model invocations are tracked in the `model_invocation` table defined in doc 07. That table should include `run_id`, `run_step_id`, and `run_attempt_id` FK columns so that model calls made during control plane execution can be attributed back to specific runs. The control plane does not own this table — it reads from it for token aggregation and observability.
 
 ### tool_execution
 
 ```sql
 create table tool_execution (
   id                uuid primary key default gen_random_uuid(),
-  run_id            uuid not null references run(id),
-  run_step_id       uuid references run_step(id),
-  run_attempt_id    uuid references run_attempt(id),
+  run_id            uuid not null references run(id) on delete cascade,
+  run_step_id       uuid references run_step(id) on delete cascade,
+  run_attempt_id    uuid references run_attempt(id) on delete cascade,
 
   -- Tool
   tool_name         text not null,               -- e.g., 'create_task', 'cli_execute', 'mcp:github:create_pr'
-  tool_tier         text not null check (tool_tier in ('tier1', 'tier2')),
-  tool_domain       text not null,               -- 'project', 'chat', 'memory', 'system', 'mcp', 'comms', 'agent'
+  tool_tier         text not null check (tool_tier = 'tier2'),  -- only tier 2 calls go through the control plane
+  tool_domain       text not null check (tool_domain in ('project', 'chat', 'memory', 'system', 'mcp', 'comms', 'agent')),
 
   -- Capability
   capability        text not null,               -- the capability that was evaluated
-  policy_decision   text not null check (policy_decision in ('allow', 'deny', 'require_approval')),
+  policy_decision   text not null check (policy_decision in ('allow', 'deny')),
 
   -- Execution
   input             jsonb not null,              -- tool call arguments (secrets redacted)
   output            jsonb,                       -- tool result
   status            text not null default 'pending'
-    check (status in ('pending', 'in_progress', 'completed', 'failed', 'denied', 'queued_for_review', 'cancelled')),
+    check (status in ('pending', 'in_progress', 'completed', 'failed', 'denied', 'cancelled')),
   error_message     text,
 
   -- Timing
@@ -1141,13 +994,13 @@ create index on tool_execution (capability, policy_decision, created_at);
 ```sql
 create table run_artifact (
   id              uuid primary key default gen_random_uuid(),
-  run_id          uuid not null references run(id),
-  run_step_id     uuid references run_step(id),
-  run_attempt_id  uuid references run_attempt(id),
+  run_id          uuid not null references run(id) on delete cascade,
+  run_step_id     uuid references run_step(id) on delete cascade,
+  run_attempt_id  uuid references run_attempt(id) on delete cascade,
 
   -- Artifact
   name            text not null,                 -- human-readable name
-  artifact_type   text not null,                 -- 'log', 'screenshot', 'file', 'trace', 'diff'
+  artifact_type   text not null check (artifact_type in ('log', 'screenshot', 'file', 'trace', 'diff')),
   content_type    text not null,                 -- MIME type
   size_bytes      bigint not null,
   storage_path    text not null,                 -- object storage path
@@ -1169,19 +1022,19 @@ create index on run_artifact (run_step_id) where run_step_id is not null;
 ```sql
 create table run_event (
   id              uuid primary key default gen_random_uuid(),
-  run_id          uuid not null references run(id),
-  run_step_id     uuid references run_step(id),
-  run_attempt_id  uuid references run_attempt(id),
+  run_id          uuid not null references run(id) on delete cascade,
+  run_step_id     uuid references run_step(id) on delete cascade,
+  run_attempt_id  uuid references run_attempt(id) on delete cascade,
   sequence        int not null,                  -- monotonic within the run
 
   -- Event
-  event_type      text not null,
-    -- Lifecycle: 'created', 'started', 'completed', 'failed', 'timed_out', 'cancelled'
-    -- Policy: 'policy_evaluated', 'policy_denied', 'approval_requested', 'approval_granted', 'approval_rejected'
-    -- Execution: 'dispatched', 'worker_assigned', 'progress', 'output_chunk'
-    -- Health: 'heartbeat'
-    -- Supervisor: 'stuck_detected', 'orphan_detected', 'auto_retry', 'escalated'
-    -- Session: 'session_grant_applied', 'session_grant_revoked'
+  event_type      text not null check (event_type in (
+    'created', 'started', 'completed', 'failed', 'timed_out', 'cancelled',
+    'policy_evaluated', 'policy_denied',
+    'dispatched', 'worker_assigned', 'progress', 'output_chunk',
+    'heartbeat',
+    'stuck_detected', 'orphan_detected', 'auto_retry', 'escalated'
+  )),
   event_data      jsonb not null default '{}',   -- event-specific payload
   actor_type      text check (actor_type in ('agent', 'human', 'system', 'supervisor')),
   actor_id        uuid,
@@ -1206,17 +1059,17 @@ create table capability_policy (
   -- Scope
   policy_layer      text not null check (policy_layer in ('instance', 'org', 'project', 'agent_profile')),
   project_id        uuid references project(id),       -- set for project-layer policies
-  agent_id          uuid,                               -- set for agent_profile-layer policies
+  agent_id          uuid references agent(id),           -- set for agent_profile-layer policies
 
   -- Rule
   capability_pattern text not null,              -- e.g., 'system.cli.execute', 'project.task.*', 'comms.*'
-  decision          text not null check (decision in ('allow', 'deny', 'require_approval')),
+  decision          text not null check (decision in ('allow', 'deny')),
   priority          int not null default 0,      -- higher priority wins within the same layer
   conditions        jsonb,                       -- optional conditions (budget threshold, time window, etc.)
 
   -- Metadata
   description       text,                        -- why this policy exists
-  created_by_type   text not null,
+  created_by_type   text not null check (created_by_type in ('human', 'agent', 'system')),
   created_by_id     uuid not null,
   is_active         boolean not null default true,
   created_at        timestamptz not null default now(),
@@ -1230,35 +1083,14 @@ create index on capability_policy (agent_id, is_active) where agent_id is not nu
 create index on capability_policy (capability_pattern);
 ```
 
-### session_capability_grant
-
-```sql
-create table session_capability_grant (
-  id              uuid primary key default gen_random_uuid(),
-  session_id      uuid not null references chat_session(id),
-  agent_id        uuid not null,
-  capability      text not null,                 -- the specific capability granted
-  granted_by      uuid not null,                 -- human who granted
-  run_id          uuid references run(id),       -- the run that triggered the approval
-  is_active       boolean not null default true,  -- revoked = false
-  granted_at      timestamptz not null default now(),
-  revoked_at      timestamptz,
-
-  unique (session_id, agent_id, capability)
-);
-
-create index on session_capability_grant (session_id, agent_id, is_active);
-```
-
 ### Schema Design Notes
 
-- **9 tables** for the control plane domain.
+- **7 tables** for the control plane domain. Model invocations are tracked in doc 07's `model_invocation` table with FK columns back to `run`, `run_step`, and `run_attempt`.
 - `run` is the anchor entity. Everything else links back to it.
-- `model_invocation` is intentionally flexible in its context links — it can be linked to a run (control plane action triggered a model call), a session/turn (chat layer model call), or both. This supports the dual tracking noted in doc 02: chat turns carry aggregate token counts, while `model_invocation` has the per-call detail.
 - `tool_execution` records tier 2 tool calls (control plane path). Tier 1 tool calls (chat-layer reads) are recorded only as chat messages. A complete activity view requires joining both.
-- `capability_policy` stores declarative rules. The Policy API evaluates them. `session_capability_grant` stores runtime overrides that are inherently temporary.
-- `run_event` is append-only and serves as both the execution timeline (for replay) and the health monitoring data source (heartbeats). Heartbeat events are purged after run completion to keep the table manageable.
-- Cost fields on `run`, `run_step`, and `run_attempt` are denormalized rollups from `model_invocation`. They are updated asynchronously (not in the hot path) and may be slightly stale.
+- `capability_policy` stores declarative rules with binary outcomes (`allow`, `deny`). The Policy API evaluates them. There are no runtime overrides or session-scoped grants.
+- `run_event` is append-only and serves as both the execution timeline (for replay) and the health monitoring data source (heartbeats). Heartbeat events are purged after run completion to keep the table manageable. The `actor_type` check includes `supervisor` as a doc 16-specific extension of the principal convention — this distinguishes system-automated actions from supervisor-automated actions in the event log.
+- Token count fields on `run`, `run_step`, and `run_attempt` are denormalized rollups from `model_invocation` (doc 07). They are updated asynchronously (not in the hot path) and may be slightly stale.
 
 ## API Contract Surface
 
@@ -1272,13 +1104,6 @@ create index on session_capability_grant (session_id, agent_id, is_active);
 - `POST /control/runs/{id}/cancel` — cancel an in-progress run.
 - `POST /control/runs/{id}/retry` — manually retry a failed run (creates new attempt).
 
-### Approval Management
-
-- `GET /control/approvals` — list pending approvals (filtered by org, project, agent).
-- `GET /control/approvals/{id}` — approval detail with full context.
-- `POST /control/approvals/{id}/approve` — approve a pending action. Optional body: `{grant_for_session: true, constraints: {...}}`.
-- `POST /control/approvals/{id}/reject` — reject a pending action. Optional body: `{feedback: "..."}`.
-
 ### Policy Management
 
 - `GET /control/policies` — list policies (filtered by layer, project, agent).
@@ -1286,11 +1111,6 @@ create index on session_capability_grant (session_id, agent_id, is_active);
 - `PUT /control/policies/{id}` — update a policy rule.
 - `DELETE /control/policies/{id}` — deactivate a policy rule (soft delete via `is_active`).
 - `POST /control/policies/evaluate` — dry-run policy simulation. "What would happen if agent X tried capability Y in project Z?" Does not create a run.
-
-### Session Grants
-
-- `GET /control/sessions/{id}/grants` — list active session-wide grants.
-- `DELETE /control/sessions/{id}/grants/{grant_id}` — revoke a session-wide grant.
 
 ### Observability
 
@@ -1302,7 +1122,7 @@ create index on session_capability_grant (session_id, agent_id, is_active);
 
 ### Chat (Doc 02)
 
-The control plane executes all tier 2 tool calls from the chat turn loop. The turn loop calls the broker, gets an immediate response (allow → result, deny → error, require_approval → "queued for review"), and continues. Runs link back to the session and turn that triggered them.
+The control plane executes all tier 2 tool calls from the chat turn loop. The turn loop calls the broker, gets an immediate response (allow → result, deny → error), and continues. Policy is binary — allow or deny. Runs link back to the session and turn that triggered them.
 
 Chat messages (tool_call/tool_result) and control plane records (Run/ToolExecution) are complementary views of the same action — chat messages are the conversational context, control plane records are the execution detail.
 
@@ -1310,13 +1130,13 @@ Chat messages (tool_call/tool_result) and control plane records (Run/ToolExecuti
 
 Flow transitions (`project.flow.advance`) and blocker filing (`project.flow.blocker.raise`) are control plane actions subject to policy evaluation. The task scheduler queries for available concurrency slots and kicks off runs when tasks are ready.
 
-Inbox integration: `require_approval` creates `draft_action_review` or `capability_approval` inbox items. Approval/rejection on inbox items resumes or cancels the associated run.
+Inbox integration: human review of agent actions is handled by `review` flow nodes with `human` actor type in the task graph, not by the control plane. `capability_approval` inbox items are created conversationally by agents when they need human authorization.
 
 Proactive supervision: the PM receives signals from the supervisor (stuck tasks, orphaned runs) and applies judgment in the project session.
 
 ### Models and Inference (Doc 07)
 
-Model invocations during runs are tracked as `model_invocation` records with cost/latency. The model gateway (doc 07) handles routing, fallback, and concurrency limits. The control plane consumes these as execution events and feeds cost data into budget enforcement.
+Model invocations during runs are tracked in doc 07's `model_invocation` table with token counts and latency. The model gateway (doc 07) handles routing, fallback, and concurrency limits. The control plane reads from `model_invocation` for token aggregation and feeds usage data into budget enforcement.
 
 Concurrency limits from doc 07 (global max concurrent LLM sessions, per-provider limits) are respected by the task scheduler — it does not dispatch runs when the model gateway is at capacity.
 
@@ -1330,7 +1150,7 @@ CLI and browser actions require explicit capabilities (`system.cli.execute`, `sy
 
 ### Security and Observability (Doc 13)
 
-The control plane provides the raw execution data that powers observability dashboards and cost controls. Cost aggregations from `model_invocation` and `run` feed into the budget system. The audit trail (`run_event`, `capability_policy`) feeds into compliance reporting.
+The control plane provides the raw execution data that powers observability dashboards and token budget controls. Token aggregations from `model_invocation` (doc 07) and `run` feed into the budget system. The audit trail (`run_event`, `capability_policy`) feeds into compliance reporting.
 
 ### Tools and Tool Policy (Doc 20)
 
@@ -1341,21 +1161,23 @@ The capability model in this doc defines what permissions are needed. The tool r
 - **User-authored arbitrary policy scripting language.** Policies are declarative rules (capability pattern → decision). No embedded scripting engine, no custom logic functions. If the declarative model is insufficient, extend the rule schema — do not add a scripting runtime.
 - **Full cross-region distributed run scheduler.** V2 is single-region. Runs are dispatched locally. Multi-region scheduling is a scale concern, not a correctness concern.
 - **Peer-to-peer agent trust without central policy evaluation.** Every action goes through the broker. Agents do not trust each other directly. There is no "agent A vouches for agent B" mechanism.
-- **Dynamic risk scoring for approval decisions.** Approval requirements are static policy. The system does not analyze action content to determine risk. If an action requires approval, it always requires approval (unless a session-wide grant is active).
-- **Approval timeouts or automatic expiry.** Approvals persist until the human acts or the context becomes stale (task cancelled). The PM nudges — the system does not auto-expire.
 - **Cross-org capability grants.** Capabilities are always scoped within a single org. Multi-org collaboration is not in scope for V2.
 
 ## Resolved Decisions
 
-- **Approval requirements are static policy, not dynamically risk-scored.** Predictability matters more than intelligence here. The human sets the policy; the system enforces it deterministically. If `comms.email.send` requires approval, it always requires approval. No runtime analysis of email content to determine "risk level." The human can always change the policy if it's too restrictive or too permissive.
+- **Policy is binary: allow, deny.** `allow` executes immediately. `deny` rejects immediately. Policy outcomes are strictly binary — there is no intermediate "review" state at the policy level.
 
-- **Session-wide approval grants are supported.** When a human approves a capability during a sync session, they can grant it for the remainder of that session. This avoids the friction of approving the same action 10 times during a pairing session. Grants expire when the session ends, do not persist across sessions, apply only to the specific capability approved, and can be revoked at any time. Not available in async sessions.
+- **Human review is a flow concern, not a policy concern.** Review of agent actions (e.g., reviewing a draft email before sending) is modeled as `review` flow nodes with `human` actor type in the task graph (see doc 03). The control plane does not intercept or stage actions — policy is strictly binary. If you want a human to review an email before it's sent, the flow has: `[email.draft]` → `[review node, human actor]` → `[email.send]`. The tool always does what it says — `send` sends, `draft` drafts. Nothing is secretly intercepted by policy.
 
-- **Four default capability templates: reader, worker, deployer, admin.** These are the starting points for most agents. `reader` = read-only. `worker` = read + project mutations + file I/O. `deployer` = worker + system tools + browser. `admin` = all capabilities. Templates are customizable after assignment. Most agents start as `worker` or `deployer`.
+- **Default posture is permissive.** Agents receive generous capabilities from templates. The default experience empowers agents to do real work. Restrictions are opt-in — admins add `deny` rules at the org or project layer when they want guardrails. Instance safety (layer 1) is the only default-deny layer — it catches truly catastrophic actions. Everything else defaults to allowing what templates grant.
 
-- **Most-restrictive-wins policy composition.** Higher-priority layers always override lower ones. A deny at any layer is absolute. Require_approval accumulates. Allow only when all applicable layers agree (or are silent). This is simple, predictable, and safe.
+- **Soft budget = notify, hard budget = deny.** When the soft token budget is reached, the admin is notified. Work continues. When the hard limit is reached, non-essential capabilities are denied.
 
-- **No mid-turn blocking for approvals.** Consistent with doc 02's tool call policy. The agent's turn never waits for human input. `require_approval` returns "queued for review" immediately. The agent continues. The approval is asynchronous. When it arrives, the run resumes in a new context (not mid-turn).
+- **Capability approval is conversational.** When an agent needs a capability it doesn't have, it adapts conversationally — Frank or the PM asks the human, creates an inbox item. This is agent-initiated, not policy-triggered.
+
+- **Four default capability templates: reader, worker, deployer, admin.** These are generous starting points. `reader` = read-only. `worker` = read + project mutations + file I/O + CLI + browser + memory. `deployer` = worker + external comms. `admin` = all capabilities. The starter trio (Frank, Lori, Ellie) get `admin`. Most task-working agents get `worker`. Agents that need to communicate externally get `deployer`.
+
+- **Most-restrictive-wins policy composition.** Higher-priority layers always override lower ones. `deny` at any layer is absolute. `allow` only when all applicable layers allow (or are silent). This is simple, predictable, and safe.
 
 - **Container-based CLI sandboxing.** CLI commands run in lightweight containers with filesystem isolation (overlay mount of project workspace), process limits, network policy, and resource caps. This provides strong isolation without the complexity of full VMs.
 
@@ -1365,17 +1187,15 @@ The capability model in this doc defines what permissions are needed. The tool r
 
 - **Heartbeats as ephemeral RunEvents.** Running agents emit heartbeats as RunEvents tagged with type `heartbeat`. The supervisor monitors heartbeats for liveness detection. Heartbeat events are purged after run completion to keep the event table manageable.
 
-- **Cost aggregation is materialized, not real-time.** Per-run and per-task costs are available quickly (seconds). Cross-project and cross-org aggregations are materialized periodically for dashboard queries. This avoids expensive real-time aggregation queries in the hot path.
+- **Token aggregation is materialized, not real-time.** Per-run and per-task token counts are available quickly (seconds). Cross-project and cross-org aggregations are materialized periodically for dashboard queries. This avoids expensive real-time aggregation queries in the hot path.
 
-- **Budget enforcement uses soft and hard limits.** Soft limit: expensive capabilities downgrade to `require_approval`. Hard limit: non-essential capabilities denied. Essential capabilities (blocker filing, status updates) always remain available to prevent tasks from getting stuck.
+- **Budget enforcement uses soft and hard limits expressed in tokens.** Soft limit: notify admin. Hard limit: non-essential capabilities denied. Essential capabilities (blocker filing, status updates) always remain available to prevent tasks from getting stuck.
 
 - **Runs are bound to sessions and cannot be transferred.** This ensures the audit trail is clean — every run has exactly one session context. If work needs to move to a different session, start a new run in the new session.
 
 - **Idempotency keys required for all mutating operations.** The broker deduplicates by idempotency key within a 24-hour window. This prevents double-execution from retries, network hiccups, or duplicate dispatches.
 
-- **Session-wide grants stored in their own table.** Separate from `capability_policy` because they are fundamentally different: policies are declarative and durable, session grants are runtime and ephemeral. Mixing them would complicate the Policy API and create confusion about what persists.
-
-- **Model invocations tracked separately from runs.** A `model_invocation` can belong to a run (control plane action), a chat turn (conversation), or both. This flexibility is necessary because model calls happen in both contexts. The cost dashboard needs a unified view across both.
+- **Model invocations are owned by doc 07.** The `model_invocation` table is defined in doc 07 and carries `run_id`, `run_step_id`, and `run_attempt_id` FK columns for control plane context. A model invocation can belong to a run (control plane action), a chat turn (conversation), or both. The usage dashboard needs a unified view across both.
 
 ## Open Questions
 

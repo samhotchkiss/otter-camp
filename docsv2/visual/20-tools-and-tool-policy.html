@@ -786,7 +786,7 @@
     background: rgba(0,0,0,0.15);
   }
 
-  /* ===== draft_review Flow ===== */
+  /* ===== Human Review Flow ===== */
   .draft-review-flow {
     display: flex;
     align-items: stretch;
@@ -1169,7 +1169,7 @@
         <p>These change state or reach outside OtterCamp. Full control plane path with policy evaluation and audit trail.</p>
         <ul class="tier-props">
           <li>Writes, external calls, file modifications</li>
-          <li>Policy: allow / deny / draft_review</li>
+          <li>Policy: allow / deny</li>
           <li>Requires matching capability</li>
           <li>Logged as chat_message + RunStep</li>
           <li>10-60s timeouts (tool-dependent)</li>
@@ -1229,7 +1229,6 @@ flowchart LR
     C --> D{"Policy\nevaluation"}
     D -->|"allow"| E["Broker dispatch\n+ sandbox"]
     D -->|"deny"| F["Return:\nnot permitted"]
-    D -->|"draft_review"| G["Stage action\nin inbox"]
     E --> H["Execute +\ncapture result"]
     H --> I["Log as\nchat_message\n+ RunStep"]
 
@@ -1239,7 +1238,6 @@ flowchart LR
     style D fill:#162033,stroke:#f9731640,color:#f97316
     style E fill:#3d1d0d,stroke:#f97316,color:#f97316,stroke-width:2px
     style F fill:#162033,stroke:#ef444480,color:#ef4444
-    style G fill:#162033,stroke:#3b82f680,color:#3b82f6
     style H fill:#162033,stroke:#f9731640,color:#f97316
     style I fill:#162033,stroke:#f9731640,color:#f97316
         </pre>
@@ -1582,99 +1580,97 @@ flowchart LR
         <div class="domain-header" onclick="toggleDomain(this)">
           <div class="domain-header-left">
             <span class="domain-name" style="color: var(--tier2);">Communication</span>
-            <span class="domain-count">2 tools</span>
+            <span class="domain-count">3 tools</span>
           </div>
           <span class="domain-toggle">v</span>
         </div>
         <div class="domain-body">
           <div class="tool-row-header"><span>Tool</span><span>Description</span><span>Tier</span></div>
-          <div class="tool-row"><span class="tool-name t2">email.compose</span><span class="tool-desc">Compose and stage an email for review (draft_review)</span><span class="tool-tier t2">Tier 2</span></div>
-          <div class="tool-row"><span class="tool-name t2">slack.post</span><span class="tool-desc">Post a message to a Slack channel (draft_review)</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">email.draft</span><span class="tool-desc">Draft an email for human review</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">email.send</span><span class="tool-desc">Send an email (requires deployer template)</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">slack.post</span><span class="tool-desc">Post a message to a Slack channel</span><span class="tool-tier t2">Tier 2</span></div>
         </div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ===== DRAFT_REVIEW FLOW ===== -->
-<section id="draft-review">
+<!-- ===== HUMAN REVIEW FLOW ===== -->
+<section id="human-review">
   <div class="container">
     <span class="section-number">05 // Sensitive Action Handling</span>
-    <h2 class="fade-up">The draft_review Outcome</h2>
+    <h2 class="fade-up">Human Review as a Flow Node</h2>
     <p class="section-desc fade-up">
-      When a tool call results in <code>draft_review</code>, the action is staged in the human's inbox -- not executed. The agent's turn continues immediately without blocking. The human reviews, edits if needed, and approves or rejects. This is the primary mechanism for sensitive operations: emails, Slack posts, production deploys.
+      Human review is a <strong>flow concern</strong>, not a policy concern. Policy is strictly binary: allow or deny. When a human needs to review an agent's work (e.g., an email draft before sending), the task flow includes explicit <code>review</code> nodes with <code>human</code> actor type. The tool always does what it says -- <code>draft</code> drafts, <code>send</code> sends. Nothing is secretly intercepted by policy.
     </p>
 
     <div class="draft-review-flow fade-up">
       <div class="dr-step">
         <span class="dr-step-num">Step 1</span>
-        <span class="dr-step-label">Agent calls tool</span>
-        <span class="dr-step-detail">e.g., email.compose<br>with full payload</span>
+        <span class="dr-step-label">Agent drafts</span>
+        <span class="dr-step-detail">e.g., email.draft<br>creates the draft</span>
       </div>
       <span class="dr-arrow">--></span>
       <div class="dr-step highlight">
         <span class="dr-step-num">Step 2</span>
-        <span class="dr-step-label">Policy evaluates</span>
-        <span class="dr-step-detail">Result: draft_review<br>Action NOT executed</span>
+        <span class="dr-step-label">Flow advances</span>
+        <span class="dr-step-detail">Review node activates<br>(human actor type)</span>
       </div>
       <span class="dr-arrow">--></span>
       <div class="dr-step inbox-step">
         <span class="dr-step-num">Step 3</span>
-        <span class="dr-step-label">Staged in Inbox</span>
-        <span class="dr-step-detail">Payload + context<br>+ preview for human</span>
+        <span class="dr-step-label">Inbox item created</span>
+        <span class="dr-step-detail">Human reviews draft<br>+ context in inbox</span>
       </div>
       <span class="dr-arrow">--></span>
       <div class="dr-step">
         <span class="dr-step-num">Step 4</span>
-        <span class="dr-step-label">Agent continues</span>
-        <span class="dr-step-detail">Result: "queued for<br>review" -- no blocking</span>
+        <span class="dr-step-label">Human decides</span>
+        <span class="dr-step-detail">Approve: flow advances<br>Reject: flow loops back</span>
       </div>
       <span class="dr-arrow">--></span>
-      <div class="dr-step inbox-step">
+      <div class="dr-step">
         <span class="dr-step-num">Step 5</span>
-        <span class="dr-step-label">Human decides</span>
-        <span class="dr-step-detail">Approve / Edit+Approve<br>/ Reject</span>
+        <span class="dr-step-label">Agent sends</span>
+        <span class="dr-step-detail">email.send executes<br>at the next flow node</span>
       </div>
     </div>
 
     <div class="insight fade-up">
-      <p><strong>Not an error.</strong> The <code style="color: var(--tier2);">draft_review</code> result is a normal tool response. The agent acknowledges it and moves on. If the agent needs to know the outcome, it checks <code style="color: var(--tier1);">inbox.list</code> on a subsequent turn. Communication tools default to this policy -- the agent composes, the human approves.</p>
+      <p><strong>Flow-driven, not policy-driven.</strong> The flow graph models the review step explicitly: <code>[email.draft]</code> → <code>[review node, human actor]</code> → <code>[email.send]</code>. The inbox receives items from the flow engine when a review node activates, not from policy interception.</p>
     </div>
 
-    <!-- Mermaid: draft_review interaction -->
+    <!-- Mermaid: human review flow -->
     <div class="mermaid-wrapper fade-up" id="mermaid-dr-wrapper" style="margin-top: 1.5rem;">
       <div class="mermaid-controls">
         <button onclick="zoomMermaid('mermaid-dr', 1)" title="Zoom In">+</button>
         <button onclick="zoomMermaid('mermaid-dr', -1)" title="Zoom Out">-</button>
         <button onclick="zoomMermaid('mermaid-dr', 0)" title="Reset">R</button>
       </div>
-      <span class="mermaid-label">draft_review: agent composes, human approves</span>
+      <span class="mermaid-label">Human review: explicit flow node, not policy interception</span>
       <div class="mermaid-inner" id="mermaid-dr">
         <pre class="mermaid">
 %%{init: {'theme': 'dark', 'themeVariables': { 'primaryColor': '#162033', 'primaryTextColor': '#e2e8f0', 'primaryBorderColor': '#334155', 'lineColor': '#94a3b8', 'secondaryColor': '#1e293b', 'tertiaryColor': '#0f172a', 'edgeLabelBackground': '#0f172a', 'fontSize': '13px', 'fontFamily': 'Inter, sans-serif' }}}%%
 sequenceDiagram
     participant A as Agent
-    participant CP as Control Plane
+    participant FE as Flow Engine
     participant I as Inbox
     participant H as Human
 
-    A->>CP: email.compose(to, subject, body)
-    CP->>CP: Policy: draft_review
-    CP->>I: Stage action with payload + preview
-    CP-->>A: {status: "queued_for_review"}
-    Note over A: Turn continues normally
-    A->>A: Acknowledge + continue work
-    Note over I,H: Async -- may be minutes/hours later
-    H->>I: Review staged email
+    A->>FE: email.draft(to, subject, body)
+    FE->>FE: Work node completes
+    FE->>FE: Advance to review node (human actor)
+    FE->>I: Create inbox item for human
+    Note over I,H: Async -- human reviews when ready
+    H->>I: Review draft email
     alt Approve
-        H->>I: Approve
-        I->>CP: Execute email.compose
-    else Edit + Approve
-        H->>I: Edit body, then approve
-        I->>CP: Execute modified payload
+        H->>FE: Approve
+        FE->>FE: Advance to next node
+        A->>FE: email.send()
     else Reject
-        H->>I: Reject
-        I->>I: Discard action
+        H->>FE: Reject with feedback
+        FE->>FE: Loop back to work node
+        A->>A: Revise based on feedback
     end
         </pre>
       </div>

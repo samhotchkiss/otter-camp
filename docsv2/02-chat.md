@@ -3,7 +3,7 @@
 
 This spec defines OtterCamp's chat system, which is the primary interface for all human-agent and agent-agent interaction. Chat sessions are scoped to one of three levels -- org, project, or task -- and each scope gets exactly one persistent human-facing session (org has "General" with Frank, each project has one PM session, each task has one sync discussion session). Additionally, per-node async sessions are auto-created when agentic flow nodes execute, serving as agent work logs rather than human-facing chat. Sessions operate in either synchronous mode (human present, latency-sensitive, pre-assembled context) or asynchronous mode (autonomous agent work, quality-focused, tool-based discovery). Messages use a rich content block model (text, code, image, file_ref, artifact) stored as jsonb, with roles of human, agent, system, tool_call, and tool_result. Messages are append-only and follow strict state transitions (pending, streaming, final, failed, redacted).
 
-The core mechanic is the turn loop: a unified tool-call loop with two entry points (sync via human message, async via system kick). An agent reasons and acts through tool calls until it produces a final text response with no tool calls. Tools are split into two tiers -- Tier 1 (read-only, chat-layer, fast) and Tier 2 (mutations/external via control plane with full policy evaluation). Policy checks never block mid-turn; they return allow, deny, or draft_review immediately. Multi-party turn sequencing follows an atomic turn cycle: Phase 1 (responder turn), Phase 1.5 (agent-to-agent @mentions, one round only), Phase 2 (lightweight listening eval for non-responding agents), and Phase 3 (interjection turns from agents flagged in eval). Each session has a default responder (Frank for org, PM for project/task), and @mentions override who responds.
+The core mechanic is the turn loop: a unified tool-call loop with two entry points (sync via human message, async via system kick). An agent reasons and acts through tool calls until it produces a final text response with no tool calls. Tools are split into two tiers -- Tier 1 (read-only, chat-layer, fast) and Tier 2 (mutations/external via control plane with full policy evaluation). Policy checks never block mid-turn; they return allow or deny immediately. Communication tools that stage drafts do so as their designed tool behavior, not as a policy interception. Multi-party turn sequencing follows an atomic turn cycle: Phase 1 (responder turn), Phase 1.5 (agent-to-agent @mentions, one round only), Phase 2 (lightweight listening eval for non-responding agents), and Phase 3 (interjection turns from agents flagged in eval). Each session has a default responder (Frank for org, PM for project/task), and @mentions override who responds.
 
 The database schema centers on six tables: chat_session (scoped, with sync/async mode), chat_participant (with roles: default_responder, participant, listener), chat_turn (with cycle_id grouping turns per human message, trigger types, stop conditions), chat_message (one row per logical unit with sequence ordering and ephemeral flag for coordination noise), chat_artifact (object storage references for files/images), and chat_summary (progressive summarization covering message ranges). Supporting tables include chat_read_cursor for unread tracking and chat_message_reaction for bidirectional positive/negative sentiment signals that feed into Ellie's memory pipeline. Context assembly uses a 7-layer prompt pipeline run once per turn start, with progressive summarization to manage conversation history as sessions grow. The UI features a persistent chat pane (right panel) with a scope pill for zooming between task/project/org levels, a session sidebar (left), and main content (center), all independently navigable.
 
@@ -221,11 +221,12 @@ Policy check outcomes at runtime:
 
 - **allow**: execute the tool immediately, return result.
 - **deny**: return "not permitted" as the tool result. The agent sees this and can adapt.
-- **draft_review**: stage the action (e.g., a composed email), return "queued for review" as the tool result. The staged action goes to the human's inbox (see 03-projects-and-task-flow.md Inbox section). The agent's turn never blocks.
 
-In all three cases, the loop continues immediately.
+In both cases, the loop continues immediately. Policy is binary — there is no runtime approval gating.
 
-The agent is told in its prompt assembly (layer 2, policies & constraints) what its permissions are, including which are draft-review. A well-behaved agent won't attempt denied actions because it knows the policy. The deny path is a guardrail, not the primary mechanism.
+Communication tools (e.g., `email.compose`, `slack.post`) create drafts as their **designed behavior** when the policy allows execution. The tool succeeds and stages the action in the human's inbox (see 03-projects-and-task-flow.md Inbox section). This is tool behavior, not policy interception.
+
+The agent is told in its prompt assembly (layer 2, policies & constraints) what its permissions are. A well-behaved agent won't attempt denied actions because it knows the policy. The deny path is a guardrail, not the primary mechanism.
 
 ### Tool Execution Tiers
 
@@ -244,12 +245,12 @@ How the agent understands its environment. No side effects. Executed directly in
 
 **Tier 2: Control-plane tools (mutations, external, side effects)**
 
-These change state or reach outside OtterCamp. Full control plane path (see 16-agent-control-plane.md): policy evaluation (allow/deny/draft_review), execution via broker, RunStep audit trail, artifact capture.
+These change state or reach outside OtterCamp. Full control plane path (see 16-agent-control-plane.md): policy evaluation (allow/deny), execution via broker, Run audit trail, artifact capture.
 
 - **OtterCamp mutations**: create task (file blocker), update task status, advance flow, create memory items, invite agent to session. Policy-gated, but execution is fast (DB writes).
 - **System tools**: CLI execution, browser control, file writes. Sandboxed, potentially long-running, full execution tracking.
 - **External tools (MCP)**: calls to external services via MCP connections. Policy-gated per connection and per tool, schema validation, timeout/retry handling.
-- **Communication tools**: send email, post to Slack, create PR. Often in `draft_review` mode (staged for inbox).
+- **Communication tools**: compose email, post to Slack, create PR. Communication tools create drafts as their designed behavior — the tool stages the action in the human's inbox for review.
 
 **Routing within the turn loop:**
 
@@ -267,9 +268,8 @@ Agent requests tool call
 │   → Log as chat_message (tool_call + tool_result)
 │
 └─ Tier 2 (control-plane):
-    → Policy evaluation (allow / deny / draft_review)
+    → Policy evaluation (allow / deny)
     → If deny: return "not permitted"
-    → If draft_review: stage action, return "queued for review"
     → If allow: dispatch to broker → sandbox → execute
     → Return result
     → Log as chat_message AND as RunStep in control plane
@@ -399,7 +399,7 @@ Human sends message
 ├─ PHASE 1.5: Agent @mentions
 │   If the responder's output contained @mentions of other agents:
 │     For each mentioned agent (in mention order):
-│       → Create chat_turn (trigger: human_message)
+│       → Create chat_turn (trigger: agent_mention)
 │       → Full context assembly, tool loop, stream response
 │       → Finalize turn
 │   One round only — @mentions in these responses do NOT trigger more turns.
@@ -554,7 +554,9 @@ When conversation history exceeds ~50-60% of its allocated budget, summarize the
 When triggered:
 
 1. Select the oldest batch of unsummarized turns (batched for efficiency, not one at a time).
-2. Generate a summary via a lightweight model call (Haiku-tier): "Summarize these turns, preserving key decisions, outcomes, tool results, and open threads."
+2. Generate a summary via a lightweight model call (Haiku-tier): "Summarize these turns, preserving key decisions, outcomes, tool results, and open threads." The summarization prompt has two additional explicit preservation rules:
+   - **Preserve restorable references**: all file paths, URLs, artifact IDs, git refs, and entity names must survive summarization verbatim. Dropping content is acceptable; dropping the pointer to that content is not. This enables agents (or Ellie) to restore full context from references when needed, without re-reading the original turns.
+   - **Preserve failure evidence**: tool call failures, error messages, rejected approaches, and dead ends must be captured in summaries with enough detail that the agent understands what was tried and why it failed. Erasing failure evidence causes agents to repeat failed approaches; preserving it enables adaptation.
 3. Store as a `chat_summary` record covering that message sequence range.
 4. On the next turn's context assembly, the summary replaces the full messages for that range.
 
@@ -695,7 +697,7 @@ Notifications are a **consumer of the event bus** (see 12-api-events-and-realtim
 
 **Normal** — needs attention soon:
 - Task ready for review
-- Draft pending in inbox (agent staged an action under `draft_review` policy)
+- Draft pending in inbox (communication tool staged an action for review)
 - @mention in any session
 - Invited to a session
 
@@ -865,6 +867,27 @@ What is NOT ephemeral:
 - Blocker filings, escalations, decisions
 - Anything the human or an agent might want to reference later
 
+### Session Lifecycle Cleanup
+
+When a session closes (flow node completion, manual close, or session-level recovery), the following cleanup occurs:
+
+**Immediate (at close time):**
+- Session status transitions to `closed`, `closed_at` is set.
+- Ellie's extraction pipeline processes any remaining unprocessed events from the session (extraction is event-driven, but this ensures nothing is missed).
+- Active turns are finalized — any `in_progress` turn is marked `failed` with stop_reason `session_closed`.
+
+**Deferred (daily cleanup job):**
+- **Ephemeral message purge**: messages with `ephemeral = true` in closed sessions are deleted. Ephemeral messages in active sessions are retained until the session closes.
+- **Progressive summary consolidation**: for closed sessions with multiple `chat_summary` records, consolidate into a single final summary covering the entire session. This is the canonical compressed representation of the session, used by scope context (layer 3) when injecting session outcomes into future contexts.
+- **Tool result compaction**: tool call/result message pairs in closed sessions older than the retention threshold can have their `content` field truncated to metadata-only (tool name, status, output summary). Full content is preserved in object storage via the prompt capture on `model_invocation` if it was part of a model call.
+
+**Retention enforcement (via doc 13 daily retention job):**
+- Chat session transcripts follow org retention policy (default 90 days). After retention expiry, messages are archived to object storage (if archival is enabled) then deleted from PostgreSQL.
+- `chat_summary` records are retained indefinitely — they are the compressed knowledge of what happened, not raw transcript.
+- `chat_artifact` records follow object storage retention (default 90 days), except artifacts linked to active tasks which are exempt until the task completes.
+
+The session lifecycle ensures that valuable context is extracted (via Ellie's memory pipeline) and compressed (via progressive summarization) before raw data ages out. After retention expiry, the system retains: memories extracted from the session, the consolidated session summary, and aggregate metrics — but not the raw transcript.
+
 ### JSONL as Export Format
 
 JSONL is an optional export/import format for debugging and portability. It is NOT the storage layer. Format matches the line types: `message`, `tool_call`, `tool_result`, `summary`, `checkpoint`, `event`.
@@ -887,7 +910,7 @@ create table chat_session (
   mode            text not null check (mode in ('sync', 'async')) default 'sync',
   status          text not null check (status in ('active', 'closed')) default 'active',
   created_by_type text not null check (created_by_type in ('human', 'agent', 'system')),
-  created_by_id   uuid,
+  created_by_id   uuid not null,           -- sentinel UUID for system-created sessions
   message_seq     int not null default 0,
   created_at      timestamptz not null default now(),
   closed_at       timestamptz,
@@ -903,7 +926,7 @@ create index on chat_session (scope_type, scope_id);
 - `message_seq` — monotonic counter for assigning message sequence numbers. Atomically incremented via `UPDATE ... RETURNING`. Avoids gaps and race conditions.
 - `title` — nullable. When null, the UI displays the scope name (org name, project name, or task title). Human can override.
 - `status` is just active/closed. Sessions are cheap — close when done, create a new one if needed.
-- `created_by_type` + `created_by_id` — who created the session. For system-created sessions (auto-created for flow nodes), `created_by_type` is `'system'` and `created_by_id` is null.
+- `created_by_type` + `created_by_id` — who created the session. For system-created sessions (auto-created for flow nodes), `created_by_type` is `'system'` and `created_by_id` is the sentinel UUID (`00000000-0000-0000-0000-000000000000`).
 
 ### chat_participant
 
@@ -942,7 +965,7 @@ create table chat_turn (
   responding_type     text not null check (responding_type in ('human', 'agent')),
   responding_id       uuid not null,
   status              text not null check (status in ('in_progress', 'completed', 'failed', 'stopped')) default 'in_progress',
-  stop_reason         text,
+  stop_reason         text check (stop_reason in ('max_tool_calls', 'max_duration', 'user_cancelled', 'user_steered', 'model_error', 'session_closed')),
   tool_call_count     int not null default 0,
   model_id            text,
   input_tokens        int,
@@ -961,7 +984,7 @@ create index on chat_turn (session_id, status);
 - `cycle_id` — shared UUID across all turns in a single turn cycle (Phases 1, 1.5, 2, 3). All turns triggered by the same human message share a `cycle_id`. Null for async turns (`system_kick`, `continuation`) that aren't part of a human-triggered cycle.
 - `trigger` values: `human_message` (human sent a message), `system_kick` (system started an async agent turn), `agent_mention` (agent was @mentioned by another agent, Phase 1.5), `interjection` (listening agent flagged it had something to contribute, Phase 3), `continuation` (context was checkpointed, agent continues).
 - `status`: `in_progress` while the tool loop runs, `completed` on success, `failed` on error, `stopped` when a limit or cancel was hit.
-- `stop_reason` — null unless stopped/failed. Values: `max_tool_calls`, `max_duration`, `user_cancelled`, `user_steered`, `model_error`.
+- `stop_reason` — null unless stopped/failed. Values: `max_tool_calls`, `max_duration`, `user_cancelled`, `user_steered`, `model_error`, `session_closed`.
 - Token counts and duration are rollups across all model calls within this turn. Tracked for observability.
 - `chat_turn` is created at turn start and updated at completion.
 
@@ -1078,7 +1101,7 @@ create index on chat_summary (session_id, from_sequence);
 - **Sync/async session modes**: synchronous sessions (human present) pre-assemble context for low latency. Asynchronous sessions (autonomous agent work) allow tool-based discovery over multiple turns. Latency is acceptable in async; quality and thoroughness are the priority.
 - **Multi-agent coordination**: each scope has a default responder (Frank for org, PM for project, assigned agent for task). Other present agents listen and can interject via a lightweight eval pass when they have something urgent to contribute. No round-robin, no free-for-all.
 - **One loop, two entry points**: the tool-call loop is the agentic loop. Same mechanics sync and async, different triggers. Sync: human message. Async: system kick.
-- **No mid-turn approval**: permissions are pre-configured. Policy check at runtime returns allow, deny, or draft_review — all immediate. The turn never blocks waiting for human input. Actions needing review are staged for the inbox.
+- **No mid-turn approval**: permissions are pre-configured. Policy check at runtime returns allow or deny — always immediate and binary. The turn never blocks waiting for human input. Communication tools that create drafts do so as their designed behavior (tool-level, not policy-level).
 - **Stop conditions**: max tool calls (counter) and max turn duration (soft enforcement at loop boundaries). Tokens tracked but not a gate.
 - **Turn cycle is atomic**: three phases (responder → listening eval → interjections). One round of evals per human message. Interjections don't trigger more evals.
 - **Cancel is explicit**: sending a new message does not cancel the in-progress turn. New messages queue up and are processed serially.
@@ -1110,8 +1133,10 @@ create index on chat_summary (session_id, from_sequence);
 - **Agent is told when context is compressed**: continuation messages explicitly inform the agent that context was summarized and direct it to query Ellie for anything uncertain. Never pretend full history is present. Prevents hallucination to fill gaps.
 - **Summary threshold starts at 50-60%**: when conversation history exceeds ~50-60% of its layer 6 budget, summarize the oldest ~25-30% of unsummarized turns. Starting point, tuned from real usage.
 - **Crash recovery preserves all work**: every tool call and result is persisted immediately. A retry turn after a crash sees everything the agent did. No work lost.
-- **Two-tier tool execution**: read-only internal tools (file reads, memory queries, context lookups) execute in the chat layer with basic permission checks. Mutations, external calls, system tools, and communications go through the full control plane. Tier is set at tool registration, never a runtime decision. Keep tier 1 minimal — when in doubt, it's tier 2.
+- **Two-tier tool execution**: read-only internal tools (file reads, memory queries, context lookups) execute in the chat layer with basic permission checks. Mutations, external calls, system tools, and communications go through the full control plane (policy evaluation is binary: allow/deny). Tier is set at tool registration, never a runtime decision. Keep tier 1 minimal — when in doubt, it's tier 2.
 - **Sessions close when flow nodes complete**: always close the session, always open a new one for the next node. Valuable content from the closed session is extracted and injected into the new session's context via scope context (layer 3) and Ellie's memory — not by reopening the old session. If a reviewer rejects work and the flow loops back, the rework agent gets a fresh session with curated context (reviewer feedback, relevant extracts from the prior attempt) rather than inheriting a stale conversation.
+- **Session lifecycle cleanup is three-phase**: immediate (finalize turns, trigger extraction), deferred daily (ephemeral purge, summary consolidation, tool result compaction), and retention-enforced (doc 13 daily job, default 90 days). Summaries retained indefinitely. Valuable context extracted to memory before raw data ages out. Inspired by context engineering lifecycle garbage collection patterns.
+- **Summarization preserves restorable references and failure evidence**: the summarization prompt explicitly preserves file paths, URLs, artifact IDs, git refs, and entity names verbatim (enabling context restoration from references). Failures, errors, and rejected approaches are also preserved so agents don't repeat dead ends. Inspired by Manus restorable compression and failure evidence patterns.
 
 ## Open Questions
 
