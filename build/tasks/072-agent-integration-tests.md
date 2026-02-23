@@ -125,11 +125,8 @@ correctly; budget enforcement behavior is NOT tested here (blocked by ISSUE #23)
 - Clock: injected `clock.Fake` for TTL-expiry tests
 - Model gateway: not involved in agent tests
 
-**ISSUE #1 (BLOCKER — budget_cap_tokens vs budget_cap_cents):**
-`TestAgent_BudgetCap_Stub` tests only that the column exists and persists a value. The
-column name used in the test must match whatever the migration in task 013 created. If
-ISSUE #1 is still unresolved, use the interim column name from task 013 and add a
-`// TODO(issue-1): rename when spec resolved` comment.
+**ISSUE #1 (RESOLVED):**
+`TestAgent_BudgetCap_Stub` uses `budget_cap_tokens` (the resolved column name). No TODO needed.
 
 **ISSUE #23 (BLOCKER — budget enforcement path):**
 Budget cap enforcement (checking the cap before/during a run) is explicitly NOT tested

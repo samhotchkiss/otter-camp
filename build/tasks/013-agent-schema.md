@@ -113,7 +113,7 @@ only — lifecycle business logic lives in task 014.
 
 ## Implementer Notes
 
-> ⚠️ ISSUE #1 (BLOCKER): Doc 05 schema defines `budget_cap_cents` (integer, cents). Doc 14 resolved question #24 renames it to `budget_cap_tokens` (bigint, tokens). The doc 05 schema has NOT been updated. Implement the column as `budget_cap_tokens bigint` (tokens) pending Sam's resolution. Do not finalize the column name or type until Sam updates doc 05.
+> ✅ ISSUE #1 (RESOLVED): Column is `budget_cap_tokens bigint` (tokens). Doc 05 updated. Dollar/cent units are never used in the data layer.
 
 > ⚠️ ISSUE #23 (BLOCKER): The interaction between per-agent `budget_cap_tokens`/`budget_period` (this table) and the org/project `token_budget` table (task 023) is unspecified. Budget enforcement logic in the control plane cannot be implemented until Sam resolves the hierarchy rules (additive? most-restrictive? hierarchical?). This task delivers schema only; enforcement is blocked.
 
