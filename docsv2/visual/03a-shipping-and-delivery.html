@@ -1,0 +1,1320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- Shipping and Delivery Spec</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fragment+Mono:ital@0;1&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+<style>
+  /* ===== Custom Properties ===== */
+  :root {
+    --bg: #0a0a0a;
+    --bg-raised: #111111;
+    --bg-card: #0f0f0f;
+    --green: #00ff41;
+    --green-bright: #39ff14;
+    --green-dim: #00cc33;
+    --green-muted: #006622;
+    --green-ghost: #00ff4110;
+    --green-glow: #00ff4130;
+    --white: #c0c0c0;
+    --white-bright: #e0e0e0;
+    --border: #1a3a1a;
+    --border-bright: #00ff4140;
+    --font-heading: 'Fragment Mono', monospace;
+    --font-body: 'Fragment Mono', monospace;
+    --font-label: 'Space Mono', monospace;
+  }
+
+  /* ===== Reset ===== */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* ===== Scanline Overlay ===== */
+  body::after {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    z-index: 9999;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.08) 2px,
+      rgba(0, 0, 0, 0.08) 4px
+    );
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--white);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  /* ===== Scrollbar ===== */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--green-muted); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--green-dim); }
+
+  /* ===== Layout ===== */
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 2rem;
+  }
+
+  section {
+    padding: 4rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  section:last-of-type {
+    border-bottom: none;
+  }
+
+  /* ===== Typography ===== */
+  h1, h2, h3 {
+    font-family: var(--font-heading);
+    color: var(--green);
+    font-weight: 400;
+  }
+
+  h1 { font-size: 2rem; }
+  h2 { font-size: 1.4rem; margin-bottom: 1.5rem; }
+  h3 { font-size: 1.1rem; margin-bottom: 1rem; color: var(--green-dim); }
+
+  p { margin-bottom: 1rem; }
+
+  a {
+    color: var(--green);
+    text-decoration: none;
+    border-bottom: 1px solid var(--green-muted);
+  }
+
+  a:hover {
+    color: var(--green-bright);
+    border-bottom-color: var(--green-bright);
+  }
+
+  /* ===== Typewriter Animation ===== */
+  .typewriter {
+    overflow: hidden;
+    white-space: nowrap;
+    border-right: 2px solid var(--green);
+    width: 0;
+    animation: typewriter-expand 1.5s steps(40, end) forwards,
+               blink-caret 0.75s step-end 6;
+  }
+
+  @keyframes typewriter-expand {
+    from { width: 0; }
+    to { width: 100%; }
+  }
+
+  @keyframes blink-caret {
+    from, to { border-color: transparent; }
+    50% { border-color: var(--green); }
+  }
+
+  /* Delayed typewriter for subtitle */
+  .typewriter-delay {
+    overflow: hidden;
+    white-space: nowrap;
+    border-right: 2px solid var(--green-dim);
+    width: 0;
+    animation: typewriter-expand 1.2s steps(35, end) 1.6s forwards,
+               blink-caret-dim 0.75s step-end 1.6s 4;
+    opacity: 0;
+    animation-fill-mode: forwards;
+  }
+
+  .typewriter-delay {
+    animation: typewriter-delay-start 0s 1.5s forwards,
+               typewriter-expand 1.2s steps(35, end) 1.6s forwards,
+               blink-caret-dim 0.75s step-end 1.6s 4;
+  }
+
+  @keyframes typewriter-delay-start {
+    to { opacity: 1; }
+  }
+
+  @keyframes blink-caret-dim {
+    from, to { border-color: transparent; }
+    50% { border-color: var(--green-dim); }
+  }
+
+  /* ===== FadeUp Animation ===== */
+  .fade-up {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+  }
+
+  .fade-up.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ===== Hero ===== */
+  .hero {
+    padding: 6rem 0 4rem;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+
+  .hero::before {
+    content: '>';
+    position: absolute;
+    top: 2rem;
+    left: 2rem;
+    color: var(--green-muted);
+    font-family: var(--font-label);
+    font-size: 0.85rem;
+    animation: blink-caret 1s step-end infinite;
+  }
+
+  .hero-prefix {
+    font-family: var(--font-label);
+    font-size: 0.75rem;
+    color: var(--green-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3em;
+    margin-bottom: 1rem;
+    display: block;
+  }
+
+  .hero h1 {
+    font-size: 2.2rem;
+    display: inline-block;
+    margin-bottom: 0.75rem;
+  }
+
+  .hero-subtitle {
+    font-family: var(--font-body);
+    font-size: 0.95rem;
+    color: var(--green-dim);
+    display: inline-block;
+    margin-bottom: 3rem;
+  }
+
+  /* ===== Stat Pills ===== */
+  .stats {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    flex-wrap: wrap;
+  }
+
+  .stat {
+    border: 1px solid var(--border-bright);
+    background: var(--bg-card);
+    padding: 1.25rem 2rem;
+    text-align: center;
+    min-width: 160px;
+  }
+
+  .stat-value {
+    font-family: var(--font-label);
+    font-size: 2rem;
+    color: var(--green-bright);
+    display: block;
+    line-height: 1;
+    margin-bottom: 0.4rem;
+    text-shadow: 0 0 20px var(--green-glow);
+  }
+
+  .stat-label {
+    font-family: var(--font-label);
+    font-size: 0.7rem;
+    color: var(--green-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+  }
+
+  /* ===== Section Headers ===== */
+  .section-number {
+    font-family: var(--font-label);
+    font-size: 0.7rem;
+    color: var(--green-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    display: block;
+    margin-bottom: 0.5rem;
+  }
+
+  .section-desc {
+    color: var(--white);
+    font-size: 0.9rem;
+    max-width: 700px;
+    margin-bottom: 2rem;
+  }
+
+  /* ===== Mermaid Wrapper ===== */
+  .mermaid-wrapper {
+    position: relative;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    padding: 2rem;
+    margin: 1.5rem 0;
+    overflow: hidden;
+  }
+
+  .mermaid-wrapper .mermaid-inner {
+    overflow: auto;
+    max-height: 800px;
+    transition: transform 0.2s ease;
+    transform-origin: top left;
+  }
+
+  .mermaid-controls {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    display: flex;
+    gap: 0.25rem;
+    z-index: 10;
+  }
+
+  .mermaid-controls button {
+    width: 28px;
+    height: 28px;
+    background: var(--bg);
+    border: 1px solid var(--border-bright);
+    color: var(--green);
+    font-family: var(--font-label);
+    font-size: 0.85rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s, border-color 0.2s;
+  }
+
+  .mermaid-controls button:hover {
+    background: var(--green-ghost);
+    border-color: var(--green);
+  }
+
+  .mermaid-label {
+    font-family: var(--font-label);
+    font-size: 0.65rem;
+    color: var(--green-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    margin-bottom: 1rem;
+    display: block;
+  }
+
+  /* Mermaid theme overrides */
+  .mermaid svg {
+    max-width: 100%;
+  }
+
+  /* ===== Delivery Mode Cards ===== */
+  .modes-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+  }
+
+  .mode-card {
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    padding: 1.5rem;
+    position: relative;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+
+  .mode-card:hover {
+    border-color: var(--green-dim);
+    box-shadow: 0 0 30px var(--green-ghost);
+  }
+
+  .mode-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  .mode-badge {
+    font-family: var(--font-label);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 0.2rem 0.6rem;
+    border: 1px solid var(--green-dim);
+    color: var(--green);
+    background: var(--green-ghost);
+    white-space: nowrap;
+  }
+
+  .mode-card h3 {
+    font-size: 1rem;
+    color: var(--green);
+    margin-bottom: 0;
+  }
+
+  .mode-card p {
+    font-size: 0.85rem;
+    color: var(--white);
+    line-height: 1.6;
+    margin-bottom: 0.75rem;
+  }
+
+  .mode-trigger {
+    font-family: var(--font-label);
+    font-size: 0.7rem;
+    color: var(--green-muted);
+    border-top: 1px solid var(--border);
+    padding-top: 0.75rem;
+    margin-top: 0.5rem;
+  }
+
+  .mode-trigger strong {
+    color: var(--green-dim);
+  }
+
+  .mode-use-case {
+    font-family: var(--font-label);
+    font-size: 0.7rem;
+    color: var(--green-muted);
+    margin-top: 0.25rem;
+  }
+
+  .mode-use-case strong {
+    color: var(--green-dim);
+  }
+
+  /* ===== Environment Pipeline ===== */
+  .pipeline {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin: 2rem 0;
+    flex-wrap: wrap;
+  }
+
+  .pipeline-node {
+    border: 1px solid var(--border-bright);
+    background: var(--bg-card);
+    padding: 1.25rem 2rem;
+    text-align: center;
+    min-width: 200px;
+    position: relative;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+
+  .pipeline-node:hover {
+    border-color: var(--green);
+    box-shadow: 0 0 30px var(--green-ghost);
+  }
+
+  .pipeline-node-name {
+    font-family: var(--font-label);
+    font-size: 0.9rem;
+    color: var(--green);
+    display: block;
+    margin-bottom: 0.5rem;
+  }
+
+  .pipeline-node-detail {
+    font-family: var(--font-label);
+    font-size: 0.65rem;
+    color: var(--green-muted);
+    display: block;
+    line-height: 1.5;
+  }
+
+  .pipeline-arrow {
+    font-family: var(--font-label);
+    font-size: 1.2rem;
+    color: var(--green-dim);
+    padding: 0 1rem;
+    flex-shrink: 0;
+  }
+
+  .pipeline-source {
+    border-style: dashed;
+    border-color: var(--green-muted);
+  }
+
+  /* ===== Schema Tables ===== */
+  .schema-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+  }
+
+  @media (max-width: 800px) {
+    .schema-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .schema-block {
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    overflow: hidden;
+  }
+
+  .schema-block-header {
+    background: var(--green-ghost);
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .schema-block-header h3 {
+    font-family: var(--font-label);
+    font-size: 0.8rem;
+    color: var(--green);
+    margin-bottom: 0;
+    text-transform: none;
+  }
+
+  .schema-tag {
+    font-family: var(--font-label);
+    font-size: 0.55rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 0.15rem 0.5rem;
+    border: 1px solid var(--green-muted);
+    color: var(--green-muted);
+  }
+
+  .schema-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid #111;
+    font-size: 0.8rem;
+  }
+
+  .schema-row:last-child {
+    border-bottom: none;
+  }
+
+  .schema-col-name {
+    font-family: var(--font-label);
+    color: var(--green-dim);
+    flex: 1;
+  }
+
+  .schema-col-type {
+    font-family: var(--font-label);
+    color: var(--green-muted);
+    font-size: 0.7rem;
+    text-align: right;
+    flex: 1;
+  }
+
+  .schema-col-note {
+    font-family: var(--font-body);
+    color: #555;
+    font-size: 0.65rem;
+    text-align: right;
+    flex: 0.8;
+    padding-left: 0.5rem;
+  }
+
+  /* ===== Project Column Additions ===== */
+  .additions-block {
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    margin-top: 1.5rem;
+    overflow: hidden;
+  }
+
+  .additions-block .schema-block-header {
+    border-left: 3px solid var(--green-dim);
+  }
+
+  /* ===== Decisions List ===== */
+  .decisions-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    margin-top: 1.5rem;
+    border: 1px solid var(--border);
+  }
+
+  @media (max-width: 800px) {
+    .decisions-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .decision {
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid #111;
+    border-right: 1px solid #111;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: var(--white);
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .decision-num {
+    font-family: var(--font-label);
+    font-size: 0.7rem;
+    color: var(--green-muted);
+    flex-shrink: 0;
+    width: 2ch;
+    text-align: right;
+  }
+
+  .decision-text {
+    flex: 1;
+  }
+
+  .decision-text strong {
+    color: var(--green-dim);
+  }
+
+  /* ===== Rollback Section ===== */
+  .rollback-flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin: 2rem 0;
+    flex-wrap: wrap;
+  }
+
+  .rollback-step {
+    border: 1px solid var(--border-bright);
+    background: var(--bg-card);
+    padding: 1rem 1.5rem;
+    text-align: center;
+    min-width: 160px;
+  }
+
+  .rollback-step-num {
+    font-family: var(--font-label);
+    font-size: 0.6rem;
+    color: var(--green-muted);
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+
+  .rollback-step-label {
+    font-family: var(--font-label);
+    font-size: 0.75rem;
+    color: var(--green);
+  }
+
+  .rollback-arrow {
+    font-family: var(--font-label);
+    font-size: 1rem;
+    color: var(--green-dim);
+    padding: 0 0.75rem;
+    flex-shrink: 0;
+  }
+
+  .rollback-note {
+    text-align: center;
+    margin-top: 1rem;
+    font-family: var(--font-label);
+    font-size: 0.7rem;
+    color: var(--green-muted);
+  }
+
+  /* ===== Footer ===== */
+  footer {
+    padding: 3rem 0;
+    text-align: center;
+    border-top: 1px solid var(--border);
+  }
+
+  footer p {
+    font-family: var(--font-label);
+    font-size: 0.7rem;
+    color: var(--green-muted);
+    letter-spacing: 0.1em;
+  }
+
+  footer .footer-line {
+    margin-bottom: 0.5rem;
+  }
+
+  /* ===== New Events Section ===== */
+  .events-list {
+    margin-top: 1.5rem;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+  }
+
+  .event-row {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #111;
+    font-size: 0.8rem;
+  }
+
+  .event-row:last-child {
+    border-bottom: none;
+  }
+
+  .event-name {
+    font-family: var(--font-label);
+    color: var(--green);
+    font-size: 0.8rem;
+    flex-shrink: 0;
+    min-width: 140px;
+  }
+
+  .event-desc {
+    color: var(--white);
+    font-size: 0.8rem;
+  }
+
+  /* ===== Responsive ===== */
+  @media (max-width: 600px) {
+    .hero h1 { font-size: 1.4rem; }
+    .stats { gap: 1rem; }
+    .stat { min-width: 120px; padding: 1rem; }
+    .pipeline { flex-direction: column; }
+    .pipeline-arrow { transform: rotate(90deg); padding: 0.5rem 0; }
+    .rollback-flow { flex-direction: column; }
+    .rollback-arrow { transform: rotate(90deg); padding: 0.5rem 0; }
+    .schema-grid { grid-template-columns: 1fr; }
+    .modes-grid { grid-template-columns: 1fr; }
+    .container { padding: 0 1rem; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== HERO ===== -->
+<header class="hero">
+  <div class="container">
+    <span class="hero-prefix">OtterCamp V2 // Spec 03a</span>
+    <h1 class="typewriter">Shipping and Delivery</h1>
+    <br>
+    <span class="hero-subtitle typewriter-delay">Bridging "work complete" to "value realized"</span>
+
+    <div class="stats fade-up">
+      <div class="stat">
+        <span class="stat-value">2</span>
+        <span class="stat-label">Delivery Patterns</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">3</span>
+        <span class="stat-label">Delivery Modes</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">2</span>
+        <span class="stat-label">New Tables</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">18</span>
+        <span class="stat-label">Resolved Decisions</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ===== PATTERN 1 ===== -->
+<section id="pattern-1">
+  <div class="container">
+    <span class="section-number">01 // Delivery Pattern 1</span>
+    <h2 class="fade-up">Delivery During Flow</h2>
+    <p class="section-desc fade-up">
+      The common case. The delivery action is a flow node inside the task. The agent publishes the blog post, sends the email, changes the settings -- as part of the flow. By the time the task reaches <strong style="color:var(--green-dim)">done</strong>, value is already delivered.
+    </p>
+
+    <div class="mermaid-wrapper fade-up" id="mermaid-p1-wrapper">
+      <div class="mermaid-controls">
+        <button onclick="zoomMermaid('mermaid-p1', 1)" title="Zoom In">+</button>
+        <button onclick="zoomMermaid('mermaid-p1', -1)" title="Zoom Out">-</button>
+        <button onclick="zoomMermaid('mermaid-p1', 0)" title="Reset">R</button>
+      </div>
+      <span class="mermaid-label">Flow: task includes delivery node</span>
+      <div class="mermaid-inner" id="mermaid-p1">
+        <pre class="mermaid">
+%%{init: {'theme': 'dark', 'themeVariables': { 'primaryColor': '#0f0f0f', 'primaryTextColor': '#00ff41', 'primaryBorderColor': '#00ff4140', 'lineColor': '#00cc33', 'secondaryColor': '#111', 'tertiaryColor': '#0a0a0a', 'edgeLabelBackground': '#0a0a0a', 'clusterBkg': '#0f0f0f', 'clusterBorder': '#1a3a1a', 'fontSize': '13px', 'fontFamily': 'Fragment Mono, monospace' }}}%%
+flowchart LR
+    A["<b>Work Node</b><br/>Write / Draft / Research"] --> B["<b>Review Node</b><br/>Human or Agent Review"]
+    B --> C["<b>Deliver Node</b><br/>Publish / Send / Apply"]
+    C --> D["<b>Done</b><br/>Value Realized"]
+
+    style A fill:#0f0f0f,stroke:#00ff4140,color:#00ff41
+    style B fill:#0f0f0f,stroke:#00ff4140,color:#00ff41
+    style C fill:#0a1a0a,stroke:#00cc33,color:#39ff14,stroke-width:2px
+    style D fill:#0a1a0a,stroke:#00ff41,color:#39ff14,stroke-width:2px
+        </pre>
+      </div>
+    </div>
+
+    <div class="modes-grid fade-up" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+      <div class="mode-card">
+        <h3>Blog Post</h3>
+        <p style="font-family:var(--font-label);font-size:0.7rem;color:var(--green-muted);">Write --> Review --> Publish --> Done</p>
+      </div>
+      <div class="mode-card">
+        <h3>Email</h3>
+        <p style="font-family:var(--font-label);font-size:0.7rem;color:var(--green-muted);">Draft --> Review --> Send --> Done</p>
+      </div>
+      <div class="mode-card">
+        <h3>Smart Home</h3>
+        <p style="font-family:var(--font-label);font-size:0.7rem;color:var(--green-muted);">Research --> Apply Changes --> Done</p>
+      </div>
+      <div class="mode-card">
+        <h3>Media Server</h3>
+        <p style="font-family:var(--font-label);font-size:0.7rem;color:var(--green-muted);">Update Config --> Verify --> Done</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== PATTERN 2 ===== -->
+<section id="pattern-2">
+  <div class="container">
+    <span class="section-number">02 // Delivery Pattern 2</span>
+    <h2 class="fade-up">Delivery After Merge</h2>
+    <p class="section-desc fade-up">
+      When delivery depends on the integrated state of <strong style="color:var(--green-dim)">main</strong> -- the combined result of multiple tasks. Tasks merge independently. A separate deploy task ships the combined result. Deploy tasks reuse the existing task system with a deploy flow template.
+    </p>
+
+    <div class="mermaid-wrapper fade-up" id="mermaid-p2-wrapper">
+      <div class="mermaid-controls">
+        <button onclick="zoomMermaid('mermaid-p2', 1)" title="Zoom In">+</button>
+        <button onclick="zoomMermaid('mermaid-p2', -1)" title="Zoom Out">-</button>
+        <button onclick="zoomMermaid('mermaid-p2', 0)" title="Reset">R</button>
+      </div>
+      <span class="mermaid-label">Flow: work merges, deploy task ships combined result</span>
+      <div class="mermaid-inner" id="mermaid-p2">
+        <pre class="mermaid">
+%%{init: {'theme': 'dark', 'themeVariables': { 'primaryColor': '#0f0f0f', 'primaryTextColor': '#00ff41', 'primaryBorderColor': '#00ff4140', 'lineColor': '#00cc33', 'secondaryColor': '#111', 'tertiaryColor': '#0a0a0a', 'edgeLabelBackground': '#0a0a0a', 'clusterBkg': '#0f0f0f', 'clusterBorder': '#1a3a1a', 'fontSize': '13px', 'fontFamily': 'Fragment Mono, monospace' }}}%%
+flowchart TB
+    subgraph tasks ["Task Layer"]
+        direction LR
+        T1["Task A<br/><i>Code Review --> Done</i>"] --> M1["Merge to Main"]
+        T2["Task B<br/><i>Code Review --> Done</i>"] --> M2["Merge to Main"]
+        T3["Task C<br/><i>Code Review --> Done</i>"] --> M3["Merge to Main"]
+    end
+
+    subgraph events ["Event Bus"]
+        direction LR
+        E1["merge_event"] --> EH["Event Handler<br/><i>checks delivery config</i>"]
+    end
+
+    subgraph deploy ["Deploy Layer"]
+        direction LR
+        DT["<b>Deploy Task</b><br/>commit: abc123<br/>includes: A, B, C"] --> DS["Deploy to<br/>Staging"]
+        DS --> DV["Verify"]
+        DV --> DP["Deploy to<br/>Production"]
+        DP --> DD["<b>Done</b>"]
+    end
+
+    M1 --> E1
+    M2 --> E1
+    M3 --> E1
+    EH --> DT
+
+    style T1 fill:#0f0f0f,stroke:#00ff4140,color:#00ff41
+    style T2 fill:#0f0f0f,stroke:#00ff4140,color:#00ff41
+    style T3 fill:#0f0f0f,stroke:#00ff4140,color:#00ff41
+    style M1 fill:#0f0f0f,stroke:#00ff4140,color:#00cc33
+    style M2 fill:#0f0f0f,stroke:#00ff4140,color:#00cc33
+    style M3 fill:#0f0f0f,stroke:#00ff4140,color:#00cc33
+    style E1 fill:#0f0f0f,stroke:#006622,color:#00cc33
+    style EH fill:#0f0f0f,stroke:#006622,color:#00cc33
+    style DT fill:#0a1a0a,stroke:#00cc33,color:#39ff14,stroke-width:2px
+    style DS fill:#0f0f0f,stroke:#00ff4140,color:#00ff41
+    style DV fill:#0f0f0f,stroke:#00ff4140,color:#00ff41
+    style DP fill:#0f0f0f,stroke:#00ff4140,color:#00ff41
+    style DD fill:#0a1a0a,stroke:#00ff41,color:#39ff14,stroke-width:2px
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== REMOTE PUSH ===== -->
+<section id="remote-push">
+  <div class="container">
+    <span class="section-number">03 // Remote Push</span>
+    <h2 class="fade-up">Push as Infrastructure</h2>
+    <p class="section-desc fade-up">
+      Remote push is infrastructure, not a task. It fires as a merge queue hook after every merge to main. Auto-push retries 3 times with exponential backoff on failure. Subsequent merges still attempt push -- transient issues self-heal.
+    </p>
+
+    <div class="mermaid-wrapper fade-up" id="mermaid-push-wrapper">
+      <div class="mermaid-controls">
+        <button onclick="zoomMermaid('mermaid-push', 1)" title="Zoom In">+</button>
+        <button onclick="zoomMermaid('mermaid-push', -1)" title="Zoom Out">-</button>
+        <button onclick="zoomMermaid('mermaid-push', 0)" title="Reset">R</button>
+      </div>
+      <span class="mermaid-label">Flow: merge queue push with failure handling</span>
+      <div class="mermaid-inner" id="mermaid-push">
+        <pre class="mermaid">
+%%{init: {'theme': 'dark', 'themeVariables': { 'primaryColor': '#0f0f0f', 'primaryTextColor': '#00ff41', 'primaryBorderColor': '#00ff4140', 'lineColor': '#00cc33', 'secondaryColor': '#111', 'tertiaryColor': '#0a0a0a', 'edgeLabelBackground': '#0a0a0a', 'clusterBkg': '#0f0f0f', 'clusterBorder': '#1a3a1a', 'fontSize': '13px', 'fontFamily': 'Fragment Mono, monospace' }}}%%
+flowchart LR
+    MQ["Merge Queue<br/><i>branch merged to main</i>"] --> PC{"Push<br/>Configured?"}
+    PC -- "auto" --> PUSH["Push to<br/>Remote(s)"]
+    PC -- "manual" --> WAIT["Await<br/>Trigger"]
+    PUSH --> OK{"Success?"}
+    OK -- "yes" --> EVT_OK["push_succeeded<br/><i>event on task</i>"]
+    OK -- "no" --> RETRY{"Retries<br/>< 3?"}
+    RETRY -- "yes" --> BACK["Backoff<br/><i>exponential</i>"] --> PUSH
+    RETRY -- "no" --> EVT_FAIL["push_failed<br/><i>event + PM notified</i>"]
+    EVT_FAIL --> HEAL["Next merge<br/>re-attempts push<br/><i>self-healing</i>"]
+
+    style MQ fill:#0f0f0f,stroke:#00ff4140,color:#00ff41
+    style PC fill:#0f0f0f,stroke:#006622,color:#00cc33
+    style PUSH fill:#0a1a0a,stroke:#00cc33,color:#39ff14,stroke-width:2px
+    style WAIT fill:#0f0f0f,stroke:#00ff4140,color:#00cc33
+    style OK fill:#0f0f0f,stroke:#006622,color:#00cc33
+    style EVT_OK fill:#0f0f0f,stroke:#00ff41,color:#39ff14
+    style RETRY fill:#0f0f0f,stroke:#006622,color:#00cc33
+    style BACK fill:#0f0f0f,stroke:#00ff4140,color:#00ff41
+    style EVT_FAIL fill:#0f0f0f,stroke:#ff4141,color:#ff6666
+    style HEAL fill:#0f0f0f,stroke:#00ff4140,color:#00cc33
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== DELIVERY MODES ===== -->
+<section id="delivery-modes">
+  <div class="container">
+    <span class="section-number">04 // Pattern 2 Delivery Modes</span>
+    <h2 class="fade-up">Three Ways to Ship</h2>
+    <p class="section-desc fade-up">
+      For projects using Pattern 2, the PM configures one of three delivery modes. Each determines when and how deploy tasks are created from accumulated merges.
+    </p>
+
+    <div class="modes-grid">
+      <div class="mode-card fade-up">
+        <div class="mode-card-header">
+          <h3>Continuous</h3>
+          <span class="mode-badge">auto</span>
+        </div>
+        <p>Every merge to main triggers a deploy task. If a deploy is already running, the merge is implicitly batched -- when it completes, a follow-up fires if new merges landed.</p>
+        <div class="mode-trigger">
+          <strong>Trigger:</strong> merge event on event bus
+        </div>
+        <div class="mode-use-case">
+          <strong>Best for:</strong> internal tools, fast-iteration projects
+        </div>
+      </div>
+      <div class="mode-card fade-up">
+        <div class="mode-card-header">
+          <h3>Gated</h3>
+          <span class="mode-badge">manual</span>
+        </div>
+        <p>Merges accumulate. Human triggers a release via chat with the PM. The PM may proactively suggest deployment when merges pile up. All changes since last deploy ship together.</p>
+        <div class="mode-trigger">
+          <strong>Trigger:</strong> human via chat with PM
+        </div>
+        <div class="mode-use-case">
+          <strong>Best for:</strong> production services, client-facing work
+        </div>
+      </div>
+      <div class="mode-card fade-up">
+        <div class="mode-card-header">
+          <h3>Scheduled</h3>
+          <span class="mode-badge">cadence</span>
+        </div>
+        <p>Deployment runs on a cadence via doc 03's scheduled tasks system. Each deploy picks up all changes since the last deploy. Overlap policy: skip.</p>
+        <div class="mode-trigger">
+          <strong>Trigger:</strong> task schedule (cron-like)
+        </div>
+        <div class="mode-use-case">
+          <strong>Best for:</strong> regular release trains
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== ENVIRONMENTS ===== -->
+<section id="environments">
+  <div class="container">
+    <span class="section-number">05 // Environments</span>
+    <h2 class="fade-up">Promotion Pipeline</h2>
+    <p class="section-desc fade-up">
+      Optional, project-level. An ordered promotion path where each environment tracks its current deployed commit and previous commit (one-level rollback target). No environment branching -- main is the only long-lived branch.
+    </p>
+
+    <div class="pipeline fade-up">
+      <div class="pipeline-node pipeline-source">
+        <span class="pipeline-node-name">main</span>
+        <span class="pipeline-node-detail">source of truth<br>single long-lived branch</span>
+      </div>
+      <span class="pipeline-arrow">--></span>
+      <div class="pipeline-node">
+        <span class="pipeline-node-name">staging</span>
+        <span class="pipeline-node-detail">deployed_commit_sha<br>previous_commit_sha<br>deploy_task_id</span>
+      </div>
+      <span class="pipeline-arrow">--></span>
+      <div class="pipeline-node">
+        <span class="pipeline-node-name">production</span>
+        <span class="pipeline-node-detail">deployed_commit_sha<br>previous_commit_sha<br>deploy_task_id</span>
+      </div>
+    </div>
+
+    <h3 class="fade-up" style="margin-top: 2.5rem;">Rollback as Deploy Task</h3>
+    <p class="section-desc fade-up">
+      Rollback is modeled as a new deploy task targeting the previous commit -- not a state transition. Original tasks stay done. History is append-only.
+    </p>
+
+    <div class="rollback-flow fade-up">
+      <div class="rollback-step">
+        <span class="rollback-step-num">Step 1</span>
+        <span class="rollback-step-label">Decision to rollback</span>
+      </div>
+      <span class="rollback-arrow">--></span>
+      <div class="rollback-step">
+        <span class="rollback-step-num">Step 2</span>
+        <span class="rollback-step-label">Create deploy task<br><span style="font-size:0.6rem;color:var(--green-muted)">target: previous_commit_sha</span></span>
+      </div>
+      <span class="rollback-arrow">--></span>
+      <div class="rollback-step">
+        <span class="rollback-step-num">Step 3</span>
+        <span class="rollback-step-label">Run deploy flow<br><span style="font-size:0.6rem;color:var(--green-muted)">possibly emergency fast-path</span></span>
+      </div>
+      <span class="rollback-arrow">--></span>
+      <div class="rollback-step">
+        <span class="rollback-step-num">Step 4</span>
+        <span class="rollback-step-label">Environment reverted</span>
+      </div>
+    </div>
+    <p class="rollback-note fade-up">Original deploy task unmodified. Source tasks stay done. Append-only history.</p>
+  </div>
+</section>
+
+<!-- ===== SCHEMA ===== -->
+<section id="schema">
+  <div class="container">
+    <span class="section-number">06 // Database Schema</span>
+    <h2 class="fade-up">Two New Tables + Project Columns</h2>
+    <p class="section-desc fade-up">
+      Deliberately minimal. Deploy tasks reuse the existing task system. Deploy-specific data lives in task metadata. Two new tables and two new columns on the project table.
+    </p>
+
+    <div class="schema-grid fade-up">
+      <div class="schema-block">
+        <div class="schema-block-header">
+          <h3>project_remote</h3>
+          <span class="schema-tag">new table</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">id</span>
+          <span class="schema-col-type">uuid pk</span>
+          <span class="schema-col-note"></span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">project_id</span>
+          <span class="schema-col-type">uuid fk</span>
+          <span class="schema-col-note">project</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">name</span>
+          <span class="schema-col-type">text</span>
+          <span class="schema-col-note">unique w/ project</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">remote_type</span>
+          <span class="schema-col-type">text</span>
+          <span class="schema-col-note">git_host | ssh | deploy_platform</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">url</span>
+          <span class="schema-col-type">text</span>
+          <span class="schema-col-note"></span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">push_behavior</span>
+          <span class="schema-col-type">text</span>
+          <span class="schema-col-note">auto | manual</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">auth_config</span>
+          <span class="schema-col-type">jsonb</span>
+          <span class="schema-col-note">credential refs</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">position</span>
+          <span class="schema-col-type">int</span>
+          <span class="schema-col-note">push sequence order</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">metadata</span>
+          <span class="schema-col-type">jsonb</span>
+          <span class="schema-col-note"></span>
+        </div>
+      </div>
+
+      <div class="schema-block">
+        <div class="schema-block-header">
+          <h3>project_environment</h3>
+          <span class="schema-tag">new table</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">id</span>
+          <span class="schema-col-type">uuid pk</span>
+          <span class="schema-col-note"></span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">project_id</span>
+          <span class="schema-col-type">uuid fk</span>
+          <span class="schema-col-note">project</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">name</span>
+          <span class="schema-col-type">text</span>
+          <span class="schema-col-note">unique w/ project</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">position</span>
+          <span class="schema-col-type">int</span>
+          <span class="schema-col-note">promotion order</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">deployed_commit_sha</span>
+          <span class="schema-col-type">text</span>
+          <span class="schema-col-note">current commit</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">previous_commit_sha</span>
+          <span class="schema-col-type">text</span>
+          <span class="schema-col-note">rollback target</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">deployed_at</span>
+          <span class="schema-col-type">timestamptz</span>
+          <span class="schema-col-note"></span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">deploy_task_id</span>
+          <span class="schema-col-type">uuid fk</span>
+          <span class="schema-col-note">project_task</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">metadata</span>
+          <span class="schema-col-type">jsonb</span>
+          <span class="schema-col-note"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Project column additions -->
+    <div class="additions-block fade-up">
+      <div class="schema-block-header">
+        <h3>project (additions)</h3>
+        <span class="schema-tag">altered table</span>
+      </div>
+      <div class="schema-row">
+        <span class="schema-col-name">delivery_mode</span>
+        <span class="schema-col-type">text</span>
+        <span class="schema-col-note">null | continuous | gated | scheduled</span>
+      </div>
+      <div class="schema-row">
+        <span class="schema-col-name">deploy_flow_template_id</span>
+        <span class="schema-col-type">uuid fk</span>
+        <span class="schema-col-note">flow_template</span>
+      </div>
+    </div>
+
+    <!-- New Event Types -->
+    <h3 class="fade-up" style="margin-top: 2rem;">New Event Types on project_task_event</h3>
+    <div class="events-list fade-up">
+      <div class="event-row">
+        <span class="event-name">push_succeeded</span>
+        <span class="event-desc">Recorded on originating task after successful push. Metadata: remote name, URL.</span>
+      </div>
+      <div class="event-row">
+        <span class="event-name">push_failed</span>
+        <span class="event-desc">Recorded on originating task after failed push. Comment: error details. Metadata: remote name, URL, retry count.</span>
+      </div>
+      <div class="event-row">
+        <span class="event-name">deployed</span>
+        <span class="event-desc">Recorded on deploy task after successful deployment. Metadata: environment name, commit SHA.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== RESOLVED DECISIONS ===== -->
+<section id="decisions">
+  <div class="container">
+    <span class="section-number">07 // Resolved Decisions</span>
+    <h2 class="fade-up">18 Decisions, Zero Open Questions</h2>
+
+    <div class="decisions-grid fade-up">
+      <div class="decision">
+        <span class="decision-num">01</span>
+        <span class="decision-text"><strong>Two delivery patterns.</strong> Pattern 1: delivery during flow. Pattern 2: delivery after merge.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">02</span>
+        <span class="decision-text"><strong>Remote push is infrastructure.</strong> Merge queue hook. 3x retry with backoff. Self-healing.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">03</span>
+        <span class="decision-text"><strong>Deploy tasks reuse task system.</strong> No new entities. Context in task metadata.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">04</span>
+        <span class="decision-text"><strong>Three delivery modes.</strong> Continuous, gated, scheduled. PM configures.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">05</span>
+        <span class="decision-text"><strong>Environments optional, ordered.</strong> No branching. main only. Track current + previous SHA.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">06</span>
+        <span class="decision-text"><strong>Greenfield projects evolve.</strong> Delivery config updates as project matures.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">07</span>
+        <span class="decision-text"><strong>Done is truly done.</strong> Post-ship issues create new tasks.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">08</span>
+        <span class="decision-text"><strong>Rollback is a new deploy task.</strong> Not a state transition. Original tasks stay done.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">09</span>
+        <span class="decision-text"><strong>Existing event bus.</strong> All notifications through existing mechanisms. No new ones.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">10</span>
+        <span class="decision-text"><strong>Release notes auto-generated.</strong> PM drafts from included tasks. No release entity.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">11</span>
+        <span class="decision-text"><strong>Deploy tasks via event handlers.</strong> Not by merge queue directly. Clean separation.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">12</span>
+        <span class="decision-text"><strong>Continuous mode: implicit skip.</strong> No concurrent deploys. Follow-up on completion.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">13</span>
+        <span class="decision-text"><strong>Push outcomes as task events.</strong> push_succeeded and push_failed on originating task.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">14</span>
+        <span class="decision-text"><strong>PM is opinionated about Pattern 1.</strong> Proposes delivery nodes for standard project types.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">15</span>
+        <span class="decision-text"><strong>Deploy tasks get visual badge.</strong> Subtle distinction on task board, not a separate entity.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">16</span>
+        <span class="decision-text"><strong>Environment state via deploy completion.</strong> Monitoring is separate scheduled task.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">17</span>
+        <span class="decision-text"><strong>Gated deploys via chat.</strong> Human triggers through PM. PM may suggest proactively.</span>
+      </div>
+      <div class="decision">
+        <span class="decision-num">18</span>
+        <span class="decision-text"><strong>Content delivery edge case noted.</strong> Merge conflicts on published content resolved by PM.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer>
+  <div class="container">
+    <p class="footer-line">OtterCamp V2 // Spec 03a -- Shipping and Delivery</p>
+    <p class="footer-line">Status: Draft // Depends on: 03-projects-and-task-flow.md</p>
+    <p>Generated from docsv2/03a-shipping-and-delivery.md</p>
+  </div>
+</footer>
+
+<!-- ===== Mermaid.js ===== -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    fontFamily: 'Fragment Mono, monospace',
+    flowchart: {
+      useMaxWidth: true,
+      htmlLabels: true,
+      curve: 'basis'
+    },
+    themeVariables: {
+      darkMode: true,
+      background: '#0a0a0a',
+      primaryColor: '#0f0f0f',
+      primaryTextColor: '#00ff41',
+      primaryBorderColor: '#00ff4140',
+      lineColor: '#00cc33',
+      secondaryColor: '#111',
+      tertiaryColor: '#0a0a0a',
+      fontSize: '13px'
+    }
+  });
+</script>
+
+<!-- ===== Zoom Controls ===== -->
+<script>
+  const zoomLevels = {};
+
+  window.zoomMermaid = function(id, direction) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    if (!zoomLevels[id]) zoomLevels[id] = 1;
+
+    if (direction === 0) {
+      zoomLevels[id] = 1;
+    } else if (direction === 1) {
+      zoomLevels[id] = Math.min(zoomLevels[id] + 0.2, 3);
+    } else {
+      zoomLevels[id] = Math.max(zoomLevels[id] - 0.2, 0.4);
+    }
+
+    el.style.transform = 'scale(' + zoomLevels[id] + ')';
+    el.style.transformOrigin = 'top left';
+  };
+</script>
+
+<!-- ===== Scroll-triggered Fade-up ===== -->
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    var observer = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+        }
+      });
+    }, {
+      threshold: 0.1,
+      rootMargin: '0px 0px -40px 0px'
+    });
+
+    document.querySelectorAll('.fade-up').forEach(function(el) {
+      observer.observe(el);
+    });
+  });
+</script>
+
+</body>
+</html>

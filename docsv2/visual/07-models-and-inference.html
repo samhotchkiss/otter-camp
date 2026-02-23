@@ -1,0 +1,2173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OtterCamp V2 -- Models and Inference Gateway</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&family=Geist+Mono:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      /* Catppuccin Mocha */
+      --crust: #11111b;
+      --mantle: #181825;
+      --base: #1e1e2e;
+      --surface0: #313244;
+      --surface1: #45475a;
+      --surface2: #585b70;
+      --overlay0: #6c7086;
+      --overlay1: #7f849c;
+      --overlay2: #9399b2;
+      --subtext0: #a6adc8;
+      --subtext1: #bac2de;
+      --text: #cdd6f4;
+
+      --rosewater: #f5e0dc;
+      --flamingo: #f2cdcd;
+      --pink: #f5c2e7;
+      --mauve: #cba6f7;
+      --red: #f38ba8;
+      --maroon: #eba0ac;
+      --peach: #fab387;
+      --yellow: #f9e2af;
+      --green: #a6e3a1;
+      --teal: #94e2d5;
+      --sky: #89dceb;
+      --sapphire: #74c7ec;
+      --blue: #89b4fa;
+      --lavender: #b4befe;
+
+      --font-heading: 'Geist', 'Inter', system-ui, sans-serif;
+      --font-body: 'Geist Mono', 'JetBrains Mono', 'Fira Code', monospace;
+
+      --radius: 8px;
+      --radius-lg: 12px;
+    }
+
+    *, *::before, *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: var(--font-body);
+      font-size: 14px;
+      line-height: 1.7;
+      color: var(--text);
+      background: var(--base);
+      overflow-x: hidden;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: var(--mantle);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--surface2);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--overlay0);
+    }
+
+    /* ── Utility ────────────────────────────────── */
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0,0,0,0);
+    }
+
+    /* ── Line numbers gutter ───────────────────── */
+    .gutter-line {
+      position: relative;
+      padding-left: 56px;
+    }
+    .gutter-line::before {
+      content: attr(data-line);
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 40px;
+      text-align: right;
+      font-family: var(--font-body);
+      font-size: 12px;
+      color: var(--surface2);
+      user-select: none;
+      line-height: inherit;
+    }
+
+    /* ── Tab indicators ────────────────────────── */
+    .tab-row {
+      display: flex;
+      gap: 2px;
+      margin-bottom: 20px;
+    }
+    .tab-indicator {
+      width: 3px;
+      height: 18px;
+      border-radius: 2px;
+      opacity: 0.5;
+    }
+
+    /* ── Staggered animation ───────────────────── */
+    .animate-in {
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity 0.5s ease, transform 0.5s ease;
+    }
+    .animate-in.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* ── HERO ───────────────────────────────────── */
+    .hero {
+      position: relative;
+      padding: 80px 0 64px;
+      background: linear-gradient(180deg, var(--crust) 0%, var(--base) 100%);
+      border-bottom: 1px solid var(--surface0);
+      overflow: hidden;
+    }
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background:
+        repeating-linear-gradient(
+          0deg,
+          transparent,
+          transparent 23px,
+          var(--surface0) 23px,
+          var(--surface0) 24px
+        );
+      opacity: 0.15;
+      pointer-events: none;
+    }
+
+    .hero-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--font-body);
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--overlay1);
+      margin-bottom: 16px;
+    }
+    .hero-label-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .hero h1 {
+      font-family: var(--font-heading);
+      font-size: clamp(32px, 5vw, 56px);
+      font-weight: 800;
+      line-height: 1.1;
+      color: var(--text);
+      margin-bottom: 16px;
+      letter-spacing: -0.03em;
+    }
+    .hero h1 .accent {
+      background: linear-gradient(135deg, var(--blue), var(--mauve));
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero-subtitle {
+      font-family: var(--font-body);
+      font-size: 15px;
+      color: var(--subtext0);
+      max-width: 640px;
+      margin-bottom: 40px;
+      line-height: 1.8;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+      max-width: 800px;
+    }
+    .stat-card {
+      background: var(--surface0);
+      border: 1px solid var(--surface1);
+      border-radius: var(--radius);
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+    }
+    .stat-card:nth-child(1)::before { background: var(--blue); }
+    .stat-card:nth-child(2)::before { background: var(--green); }
+    .stat-card:nth-child(3)::before { background: var(--peach); }
+    .stat-card:nth-child(4)::before { background: var(--mauve); }
+
+    .stat-value {
+      font-family: var(--font-heading);
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+    .stat-card:nth-child(1) .stat-value { color: var(--blue); }
+    .stat-card:nth-child(2) .stat-value { color: var(--green); }
+    .stat-card:nth-child(3) .stat-value { color: var(--peach); }
+    .stat-card:nth-child(4) .stat-value { color: var(--mauve); }
+
+    .stat-label {
+      font-size: 12px;
+      color: var(--overlay1);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    /* ── SECTIONS ───────────────────────────────── */
+    section {
+      padding: 72px 0;
+      border-bottom: 1px solid var(--surface0);
+    }
+    section:last-of-type {
+      border-bottom: none;
+    }
+
+    .section-header {
+      margin-bottom: 40px;
+    }
+    .section-number {
+      font-family: var(--font-body);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--overlay0);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .section-number::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--surface1);
+      max-width: 200px;
+    }
+    .section-title {
+      font-family: var(--font-heading);
+      font-size: clamp(24px, 3vw, 36px);
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.02em;
+      margin-bottom: 12px;
+    }
+    .section-desc {
+      font-size: 14px;
+      color: var(--subtext0);
+      max-width: 600px;
+      line-height: 1.8;
+    }
+
+    /* ── MERMAID CONTAINER ──────────────────────── */
+    .diagram-wrap {
+      position: relative;
+      background: var(--mantle);
+      border: 1px solid var(--surface0);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+    .diagram-titlebar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      background: var(--crust);
+      border-bottom: 1px solid var(--surface0);
+      font-size: 12px;
+      color: var(--overlay1);
+    }
+    .diagram-titlebar-dots {
+      display: flex;
+      gap: 6px;
+    }
+    .diagram-titlebar-dots span {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+    .diagram-titlebar-dots span:nth-child(1) { background: var(--red); opacity: 0.7; }
+    .diagram-titlebar-dots span:nth-child(2) { background: var(--yellow); opacity: 0.7; }
+    .diagram-titlebar-dots span:nth-child(3) { background: var(--green); opacity: 0.7; }
+
+    .diagram-controls {
+      display: flex;
+      gap: 4px;
+    }
+    .diagram-controls button {
+      background: var(--surface0);
+      border: 1px solid var(--surface1);
+      border-radius: 4px;
+      color: var(--subtext0);
+      font-family: var(--font-body);
+      font-size: 12px;
+      padding: 3px 10px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .diagram-controls button:hover {
+      background: var(--surface1);
+      color: var(--text);
+    }
+
+    .diagram-viewport {
+      overflow: auto;
+      padding: 32px;
+      min-height: 300px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .diagram-viewport .mermaid {
+      transition: transform 0.2s ease;
+      transform-origin: center center;
+    }
+
+    /* ── PROFILE HIERARCHY ─────────────────────── */
+    .hierarchy {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      max-width: 700px;
+    }
+    .hierarchy-level {
+      display: flex;
+      align-items: stretch;
+      position: relative;
+    }
+    .hierarchy-rank {
+      width: 48px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding-top: 24px;
+      position: relative;
+      flex-shrink: 0;
+    }
+    .hierarchy-rank-num {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-heading);
+      font-weight: 700;
+      font-size: 14px;
+      position: relative;
+      z-index: 1;
+    }
+    .hierarchy-rank-line {
+      flex: 1;
+      width: 2px;
+      margin-top: 4px;
+    }
+    .hierarchy-level:last-child .hierarchy-rank-line {
+      display: none;
+    }
+
+    .hierarchy-card {
+      flex: 1;
+      border: 1px solid var(--surface1);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      margin: 6px 0;
+      margin-left: 12px;
+      position: relative;
+      transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+    .hierarchy-card:hover {
+      transform: translateX(4px);
+    }
+
+    .hierarchy-card-title {
+      font-family: var(--font-heading);
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .hierarchy-card-desc {
+      font-size: 13px;
+      color: var(--subtext0);
+      line-height: 1.6;
+    }
+    .hierarchy-card-tag {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-top: 8px;
+      letter-spacing: 0.04em;
+    }
+
+    /* Level colors */
+    .hierarchy-level:nth-child(1) .hierarchy-rank-num {
+      background: var(--mauve);
+      color: var(--crust);
+    }
+    .hierarchy-level:nth-child(1) .hierarchy-rank-line { background: var(--mauve); opacity: 0.3; }
+    .hierarchy-level:nth-child(1) .hierarchy-card {
+      background: color-mix(in srgb, var(--mauve) 6%, var(--surface0));
+      border-color: color-mix(in srgb, var(--mauve) 30%, var(--surface1));
+    }
+    .hierarchy-level:nth-child(1) .hierarchy-card:hover { border-color: var(--mauve); }
+    .hierarchy-level:nth-child(1) .hierarchy-card-title { color: var(--mauve); }
+    .hierarchy-level:nth-child(1) .hierarchy-card-tag {
+      background: color-mix(in srgb, var(--mauve) 15%, transparent);
+      color: var(--mauve);
+    }
+
+    .hierarchy-level:nth-child(2) .hierarchy-rank-num {
+      background: var(--blue);
+      color: var(--crust);
+    }
+    .hierarchy-level:nth-child(2) .hierarchy-rank-line { background: var(--blue); opacity: 0.3; }
+    .hierarchy-level:nth-child(2) .hierarchy-card {
+      background: color-mix(in srgb, var(--blue) 6%, var(--surface0));
+      border-color: color-mix(in srgb, var(--blue) 30%, var(--surface1));
+    }
+    .hierarchy-level:nth-child(2) .hierarchy-card:hover { border-color: var(--blue); }
+    .hierarchy-level:nth-child(2) .hierarchy-card-title { color: var(--blue); }
+    .hierarchy-level:nth-child(2) .hierarchy-card-tag {
+      background: color-mix(in srgb, var(--blue) 15%, transparent);
+      color: var(--blue);
+    }
+
+    .hierarchy-level:nth-child(3) .hierarchy-rank-num {
+      background: var(--green);
+      color: var(--crust);
+    }
+    .hierarchy-level:nth-child(3) .hierarchy-rank-line { background: var(--green); opacity: 0.3; }
+    .hierarchy-level:nth-child(3) .hierarchy-card {
+      background: color-mix(in srgb, var(--green) 6%, var(--surface0));
+      border-color: color-mix(in srgb, var(--green) 30%, var(--surface1));
+    }
+    .hierarchy-level:nth-child(3) .hierarchy-card:hover { border-color: var(--green); }
+    .hierarchy-level:nth-child(3) .hierarchy-card-title { color: var(--green); }
+    .hierarchy-level:nth-child(3) .hierarchy-card-tag {
+      background: color-mix(in srgb, var(--green) 15%, transparent);
+      color: var(--green);
+    }
+
+    .hierarchy-level:nth-child(4) .hierarchy-rank-num {
+      background: var(--peach);
+      color: var(--crust);
+    }
+    .hierarchy-level:nth-child(4) .hierarchy-rank-line { background: var(--peach); opacity: 0.3; }
+    .hierarchy-level:nth-child(4) .hierarchy-card {
+      background: color-mix(in srgb, var(--peach) 6%, var(--surface0));
+      border-color: color-mix(in srgb, var(--peach) 30%, var(--surface1));
+    }
+    .hierarchy-level:nth-child(4) .hierarchy-card:hover { border-color: var(--peach); }
+    .hierarchy-level:nth-child(4) .hierarchy-card-title { color: var(--peach); }
+    .hierarchy-level:nth-child(4) .hierarchy-card-tag {
+      background: color-mix(in srgb, var(--peach) 15%, transparent);
+      color: var(--peach);
+    }
+
+    .hierarchy-arrow {
+      text-align: center;
+      padding: 4px 0 4px 60px;
+      color: var(--overlay0);
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+    }
+
+    .hierarchy-note {
+      margin-top: 20px;
+      padding: 16px 20px;
+      background: var(--surface0);
+      border-left: 3px solid var(--yellow);
+      border-radius: 0 var(--radius) var(--radius) 0;
+      font-size: 13px;
+      color: var(--subtext0);
+      max-width: 700px;
+    }
+    .hierarchy-note strong {
+      color: var(--yellow);
+    }
+
+    /* ── PRIORITY QUEUE ────────────────────────── */
+    .priority-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+      max-width: 800px;
+    }
+    .priority-tier {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 20px;
+      padding: 20px 24px;
+      background: var(--surface0);
+      border-radius: var(--radius);
+      border: 1px solid var(--surface1);
+      position: relative;
+      transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+    .priority-tier:hover {
+      transform: translateX(4px);
+    }
+
+    .priority-badge {
+      width: 44px;
+      height: 44px;
+      border-radius: var(--radius);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-heading);
+      font-weight: 800;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    .priority-tier:nth-child(1) .priority-badge {
+      background: color-mix(in srgb, var(--red) 20%, var(--surface0));
+      color: var(--red);
+      border: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
+    }
+    .priority-tier:nth-child(2) .priority-badge {
+      background: color-mix(in srgb, var(--peach) 20%, var(--surface0));
+      color: var(--peach);
+      border: 1px solid color-mix(in srgb, var(--peach) 40%, transparent);
+    }
+    .priority-tier:nth-child(3) .priority-badge {
+      background: color-mix(in srgb, var(--blue) 20%, var(--surface0));
+      color: var(--blue);
+      border: 1px solid color-mix(in srgb, var(--blue) 40%, transparent);
+    }
+    .priority-tier:nth-child(4) .priority-badge {
+      background: color-mix(in srgb, var(--overlay0) 20%, var(--surface0));
+      color: var(--overlay1);
+      border: 1px solid color-mix(in srgb, var(--overlay0) 40%, transparent);
+    }
+
+    .priority-info {
+      min-width: 0;
+    }
+    .priority-name {
+      font-family: var(--font-heading);
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .priority-tier:nth-child(1) .priority-name { color: var(--red); }
+    .priority-tier:nth-child(2) .priority-name { color: var(--peach); }
+    .priority-tier:nth-child(3) .priority-name { color: var(--blue); }
+    .priority-tier:nth-child(4) .priority-name { color: var(--overlay1); }
+
+    .priority-desc {
+      font-size: 13px;
+      color: var(--subtext0);
+      line-height: 1.5;
+    }
+    .priority-timeout {
+      font-family: var(--font-body);
+      font-size: 13px;
+      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: var(--radius);
+      background: var(--mantle);
+      border: 1px solid var(--surface1);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .priority-tier:nth-child(1) .priority-timeout { color: var(--red); }
+    .priority-tier:nth-child(2) .priority-timeout { color: var(--peach); }
+    .priority-tier:nth-child(3) .priority-timeout { color: var(--blue); }
+    .priority-tier:nth-child(4) .priority-timeout { color: var(--overlay1); }
+
+    .priority-label-row {
+      display: flex;
+      justify-content: space-between;
+      max-width: 800px;
+      margin-bottom: 8px;
+      padding: 0 24px;
+    }
+    .priority-label-row span {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--overlay0);
+    }
+
+    .preemption-note {
+      margin-top: 20px;
+      padding: 16px 20px;
+      background: color-mix(in srgb, var(--sky) 6%, var(--surface0));
+      border: 1px solid color-mix(in srgb, var(--sky) 25%, var(--surface1));
+      border-radius: var(--radius);
+      font-size: 13px;
+      color: var(--subtext0);
+      max-width: 800px;
+      line-height: 1.7;
+    }
+    .preemption-note strong {
+      color: var(--sky);
+    }
+
+    /* ── COST ATTRIBUTION ──────────────────────── */
+    .attribution-visual {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 24px;
+      align-items: flex-start;
+      max-width: 900px;
+    }
+
+    .attribution-center {
+      flex: 1;
+      min-width: 280px;
+      background: var(--surface0);
+      border: 1px solid var(--surface1);
+      border-radius: var(--radius-lg);
+      padding: 28px;
+      position: relative;
+    }
+    .attribution-center::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--blue), var(--mauve), var(--peach));
+      border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    }
+    .attribution-center-title {
+      font-family: var(--font-heading);
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 20px;
+    }
+
+    .attribution-dim {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: var(--mantle);
+      border: 1px solid var(--surface0);
+      border-radius: var(--radius);
+      margin-bottom: 8px;
+      transition: border-color 0.15s ease;
+    }
+    .attribution-dim:hover {
+      border-color: var(--surface2);
+    }
+    .attribution-dim:last-child {
+      margin-bottom: 0;
+    }
+    .attribution-dim-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .attribution-dim-name {
+      font-family: var(--font-heading);
+      font-size: 14px;
+      font-weight: 600;
+      flex: 1;
+    }
+    .attribution-dim-req {
+      font-size: 11px;
+      font-weight: 500;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    .attribution-dim:nth-child(1) .attribution-dim-dot { background: var(--blue); }
+    .attribution-dim:nth-child(1) .attribution-dim-name { color: var(--blue); }
+    .attribution-dim:nth-child(1) .attribution-dim-req {
+      background: color-mix(in srgb, var(--blue) 15%, transparent);
+      color: var(--blue);
+    }
+
+    .attribution-dim:nth-child(2) .attribution-dim-dot { background: var(--green); }
+    .attribution-dim:nth-child(2) .attribution-dim-name { color: var(--green); }
+    .attribution-dim:nth-child(2) .attribution-dim-req {
+      background: color-mix(in srgb, var(--green) 15%, transparent);
+      color: var(--green);
+    }
+
+    .attribution-dim:nth-child(3) .attribution-dim-dot { background: var(--mauve); }
+    .attribution-dim:nth-child(3) .attribution-dim-name { color: var(--mauve); }
+    .attribution-dim:nth-child(3) .attribution-dim-req {
+      background: color-mix(in srgb, var(--mauve) 15%, transparent);
+      color: var(--mauve);
+    }
+
+    .attribution-dim:nth-child(4) .attribution-dim-dot { background: var(--peach); }
+    .attribution-dim:nth-child(4) .attribution-dim-name { color: var(--peach); }
+    .attribution-dim:nth-child(4) .attribution-dim-req {
+      background: color-mix(in srgb, var(--peach) 15%, transparent);
+      color: var(--peach);
+    }
+
+    .attribution-dim:nth-child(5) .attribution-dim-dot { background: var(--yellow); }
+    .attribution-dim:nth-child(5) .attribution-dim-name { color: var(--yellow); }
+    .attribution-dim:nth-child(5) .attribution-dim-req {
+      background: color-mix(in srgb, var(--yellow) 15%, transparent);
+      color: var(--yellow);
+    }
+
+    .attribution-questions {
+      flex: 1;
+      min-width: 260px;
+    }
+    .attribution-q {
+      padding: 14px 18px;
+      background: var(--surface0);
+      border: 1px solid var(--surface1);
+      border-radius: var(--radius);
+      margin-bottom: 10px;
+      font-size: 13px;
+      color: var(--subtext0);
+      line-height: 1.6;
+      position: relative;
+      padding-left: 42px;
+    }
+    .attribution-q::before {
+      content: '?';
+      position: absolute;
+      left: 14px;
+      top: 14px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--surface1);
+      color: var(--overlay1);
+      font-family: var(--font-heading);
+      font-weight: 700;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .attribution-q strong {
+      color: var(--text);
+    }
+
+    /* ── BUDGET ENFORCEMENT ─────────────────────── */
+    .budget-flow {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      max-width: 780px;
+      position: relative;
+    }
+
+    .budget-stage {
+      display: flex;
+      align-items: stretch;
+      position: relative;
+    }
+    .budget-connector {
+      width: 48px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .budget-connector-dot {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 3px solid;
+      background: var(--base);
+      margin-top: 24px;
+      position: relative;
+      z-index: 1;
+    }
+    .budget-connector-line {
+      flex: 1;
+      width: 2px;
+      margin-top: 4px;
+    }
+    .budget-stage:last-child .budget-connector-line {
+      display: none;
+    }
+
+    .budget-card {
+      flex: 1;
+      border: 1px solid var(--surface1);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      margin: 6px 0;
+      margin-left: 12px;
+    }
+    .budget-card-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .budget-card-title {
+      font-family: var(--font-heading);
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .budget-card-desc {
+      font-size: 13px;
+      color: var(--subtext0);
+      line-height: 1.6;
+    }
+    .budget-card-actions {
+      margin-top: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .budget-action {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 4px;
+      letter-spacing: 0.02em;
+    }
+
+    /* Budget colors */
+    .budget-stage--normal .budget-connector-dot { border-color: var(--green); }
+    .budget-stage--normal .budget-connector-line { background: var(--green); opacity: 0.3; }
+    .budget-stage--normal .budget-card {
+      background: color-mix(in srgb, var(--green) 5%, var(--surface0));
+      border-color: color-mix(in srgb, var(--green) 25%, var(--surface1));
+    }
+    .budget-stage--normal .budget-card-title { color: var(--green); }
+
+    .budget-stage--warn .budget-connector-dot { border-color: var(--yellow); }
+    .budget-stage--warn .budget-connector-line { background: var(--yellow); opacity: 0.3; }
+    .budget-stage--warn .budget-card {
+      background: color-mix(in srgb, var(--yellow) 5%, var(--surface0));
+      border-color: color-mix(in srgb, var(--yellow) 25%, var(--surface1));
+    }
+    .budget-stage--warn .budget-card-title { color: var(--yellow); }
+    .budget-stage--warn .budget-action {
+      background: color-mix(in srgb, var(--yellow) 15%, transparent);
+      color: var(--yellow);
+    }
+
+    .budget-stage--hard .budget-connector-dot { border-color: var(--red); }
+    .budget-stage--hard .budget-connector-line { background: var(--red); opacity: 0.3; }
+    .budget-stage--hard .budget-card {
+      background: color-mix(in srgb, var(--red) 5%, var(--surface0));
+      border-color: color-mix(in srgb, var(--red) 25%, var(--surface1));
+    }
+    .budget-stage--hard .budget-card-title { color: var(--red); }
+    .budget-stage--hard .budget-action {
+      background: color-mix(in srgb, var(--red) 15%, transparent);
+      color: var(--red);
+    }
+
+    .budget-stage--resolve .budget-connector-dot { border-color: var(--blue); }
+    .budget-stage--resolve .budget-card {
+      background: color-mix(in srgb, var(--blue) 5%, var(--surface0));
+      border-color: color-mix(in srgb, var(--blue) 25%, var(--surface1));
+    }
+    .budget-stage--resolve .budget-card-title { color: var(--blue); }
+    .budget-stage--resolve .budget-action {
+      background: color-mix(in srgb, var(--blue) 15%, transparent);
+      color: var(--blue);
+    }
+
+    .budget-meter {
+      margin-top: 24px;
+      background: var(--surface0);
+      border: 1px solid var(--surface1);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      max-width: 780px;
+    }
+    .budget-meter-label {
+      font-size: 12px;
+      color: var(--overlay1);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 12px;
+    }
+    .budget-meter-bar {
+      height: 12px;
+      background: var(--mantle);
+      border-radius: 6px;
+      position: relative;
+      overflow: visible;
+      margin-bottom: 8px;
+    }
+    .budget-meter-fill {
+      height: 100%;
+      border-radius: 6px;
+      background: linear-gradient(90deg, var(--green) 0%, var(--green) 60%, var(--yellow) 78%, var(--red) 100%);
+      width: 85%;
+      position: relative;
+    }
+    .budget-meter-marker {
+      position: absolute;
+      top: -6px;
+      width: 2px;
+      height: 24px;
+      border-radius: 1px;
+    }
+    .budget-meter-marker--soft {
+      left: 70%;
+      background: var(--yellow);
+    }
+    .budget-meter-marker--hard {
+      left: 100%;
+      background: var(--red);
+    }
+    .budget-meter-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--overlay0);
+      position: relative;
+    }
+    .budget-meter-labels span:nth-child(2) {
+      position: absolute;
+      left: 70%;
+      transform: translateX(-50%);
+      color: var(--yellow);
+    }
+    .budget-meter-labels span:nth-child(3) {
+      color: var(--red);
+    }
+
+    /* ── SCHEMA TABLE ──────────────────────────── */
+    .schema-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 16px;
+    }
+    .schema-table {
+      background: var(--surface0);
+      border: 1px solid var(--surface1);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: border-color 0.2s ease;
+    }
+    .schema-table:hover {
+      border-color: var(--surface2);
+    }
+    .schema-table-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px;
+      background: var(--mantle);
+      border-bottom: 1px solid var(--surface0);
+    }
+    .schema-table-name {
+      font-family: var(--font-body);
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .schema-table-badge {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .schema-table-body {
+      padding: 14px 18px;
+    }
+    .schema-col {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 4px 0;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .schema-col-name {
+      color: var(--text);
+      font-weight: 500;
+      min-width: 140px;
+      flex-shrink: 0;
+    }
+    .schema-col-type {
+      color: var(--overlay1);
+      font-size: 11px;
+    }
+    .schema-col-pk {
+      color: var(--yellow);
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .schema-col-fk {
+      color: var(--blue);
+      font-size: 10px;
+      font-weight: 600;
+    }
+
+    /* Table-specific accent colors */
+    .schema-table[data-accent="blue"] .schema-table-name { color: var(--blue); }
+    .schema-table[data-accent="blue"] .schema-table-badge { background: color-mix(in srgb, var(--blue) 15%, transparent); color: var(--blue); }
+
+    .schema-table[data-accent="green"] .schema-table-name { color: var(--green); }
+    .schema-table[data-accent="green"] .schema-table-badge { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
+
+    .schema-table[data-accent="mauve"] .schema-table-name { color: var(--mauve); }
+    .schema-table[data-accent="mauve"] .schema-table-badge { background: color-mix(in srgb, var(--mauve) 15%, transparent); color: var(--mauve); }
+
+    .schema-table[data-accent="peach"] .schema-table-name { color: var(--peach); }
+    .schema-table[data-accent="peach"] .schema-table-badge { background: color-mix(in srgb, var(--peach) 15%, transparent); color: var(--peach); }
+
+    .schema-table[data-accent="yellow"] .schema-table-name { color: var(--yellow); }
+    .schema-table[data-accent="yellow"] .schema-table-badge { background: color-mix(in srgb, var(--yellow) 15%, transparent); color: var(--yellow); }
+
+    .schema-table[data-accent="red"] .schema-table-name { color: var(--red); }
+    .schema-table[data-accent="red"] .schema-table-badge { background: color-mix(in srgb, var(--red) 15%, transparent); color: var(--red); }
+
+    .schema-desc {
+      font-size: 12px;
+      color: var(--subtext0);
+      line-height: 1.6;
+      padding: 10px 18px 14px;
+      border-top: 1px solid var(--surface0);
+    }
+
+    /* ── FOOTER ─────────────────────────────────── */
+    .footer {
+      padding: 48px 0;
+      border-top: 1px solid var(--surface0);
+      background: var(--crust);
+    }
+    .footer-inner {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+    .footer-left {
+      font-size: 13px;
+      color: var(--overlay0);
+    }
+    .footer-left strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+    .footer-right {
+      display: flex;
+      gap: 20px;
+    }
+    .footer-link {
+      font-size: 12px;
+      color: var(--overlay1);
+      text-decoration: none;
+      font-weight: 500;
+      transition: color 0.15s ease;
+    }
+    .footer-link:hover {
+      color: var(--blue);
+    }
+
+    /* ── RESPONSIVE ─────────────────────────────── */
+    @media (max-width: 768px) {
+      .hero { padding: 48px 0 40px; }
+      .stat-grid { grid-template-columns: repeat(2, 1fr); }
+      section { padding: 48px 0; }
+      .attribution-visual { flex-direction: column; }
+      .priority-tier { grid-template-columns: auto 1fr; }
+      .priority-timeout { grid-column: 2; }
+      .schema-grid { grid-template-columns: 1fr; }
+      .diagram-viewport { padding: 16px; }
+    }
+
+    @media (max-width: 480px) {
+      .stat-grid { grid-template-columns: 1fr; }
+      .priority-label-row { display: none; }
+    }
+
+    /* ── Mermaid theme overrides ────────────────── */
+    .mermaid {
+      font-family: var(--font-body) !important;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════════ HERO ═══ -->
+  <header class="hero">
+    <div class="container">
+      <div class="hero-label">
+        <span class="hero-label-dot"></span>
+        spec 07 // models and inference
+      </div>
+      <h1>
+        Inference <span class="accent">Gateway</span>
+      </h1>
+      <p class="hero-subtitle">
+        Every LLM call in OtterCamp V2 flows through a single centralized gateway.
+        Agent chat, listening eval, summarization, memory extraction -- all routed,
+        queued, tracked, and budgeted through one system.
+      </p>
+      <div class="stat-grid">
+        <div class="stat-card animate-in">
+          <div class="stat-value">6</div>
+          <div class="stat-label">Database Tables</div>
+        </div>
+        <div class="stat-card animate-in">
+          <div class="stat-value">4</div>
+          <div class="stat-label">Priority Tiers</div>
+        </div>
+        <div class="stat-card animate-in">
+          <div class="stat-value">Per-call</div>
+          <div class="stat-label">Cost Tracking</div>
+        </div>
+        <div class="stat-card animate-in">
+          <div class="stat-value">3-deep</div>
+          <div class="stat-label">Fallback Chains</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ═══════════════════════════════════════════ GATEWAY ARCHITECTURE ═══ -->
+  <section id="gateway">
+    <div class="container">
+      <div class="section-header animate-in">
+        <div class="section-number">01 // Architecture</div>
+        <h2 class="section-title">Gateway Architecture</h2>
+        <p class="section-desc">
+          All callers go through the gateway. The gateway resolves profiles, checks budgets,
+          manages concurrency, dispatches to provider adapters, handles retries and fallbacks,
+          and records every invocation.
+        </p>
+      </div>
+
+      <div class="diagram-wrap animate-in">
+        <div class="diagram-titlebar">
+          <div class="diagram-titlebar-dots">
+            <span></span><span></span><span></span>
+          </div>
+          <span>gateway-architecture.mmd</span>
+          <div class="diagram-controls">
+            <button onclick="zoomDiagram('gateway-diagram', -0.15)">-</button>
+            <button onclick="zoomDiagram('gateway-diagram', 0)">Reset</button>
+            <button onclick="zoomDiagram('gateway-diagram', 0.15)">+</button>
+          </div>
+        </div>
+        <div class="diagram-viewport">
+          <pre id="gateway-diagram" class="mermaid">
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#313244',
+    'primaryTextColor': '#cdd6f4',
+    'primaryBorderColor': '#585b70',
+    'lineColor': '#6c7086',
+    'secondaryColor': '#45475a',
+    'tertiaryColor': '#1e1e2e',
+    'fontFamily': 'Geist Mono, JetBrains Mono, monospace',
+    'fontSize': '13px',
+    'nodeBorder': '#585b70',
+    'clusterBkg': '#181825',
+    'clusterBorder': '#45475a',
+    'edgeLabelBackground': '#181825',
+    'noteTextColor': '#cdd6f4',
+    'noteBkgColor': '#313244',
+    'noteBorderColor': '#45475a'
+  }
+}}%%
+flowchart LR
+  subgraph Callers["&nbsp;&nbsp;Callers&nbsp;&nbsp;"]
+    direction TB
+    C1["Agent Chat Turn"]
+    C2["Listening Eval"]
+    C3["Summarization"]
+    C4["Memory Extraction"]
+    C5["Memory Synthesis"]
+  end
+
+  subgraph GW["&nbsp;&nbsp;Inference Gateway&nbsp;&nbsp;"]
+    direction TB
+    R["Profile Resolver"]
+    B["Budget Check"]
+    Q["Concurrency Queue"]
+    D["Dispatcher"]
+    T["Invocation Tracker"]
+    R --> B --> Q --> D
+    D --> T
+  end
+
+  subgraph Providers["&nbsp;&nbsp;Provider Adapters&nbsp;&nbsp;"]
+    direction TB
+    P1["Anthropic\n(primary)"]
+    P2["OpenAI"]
+    P3["Google"]
+    P4["OpenAI-Compatible\n(self-host)"]
+  end
+
+  C1 --> R
+  C2 --> R
+  C3 --> R
+  C4 --> R
+  C5 --> R
+  D --> P1
+  D --> P2
+  D --> P3
+  D --> P4
+
+  style C1 fill:#1e1e2e,stroke:#89b4fa,color:#89b4fa
+  style C2 fill:#1e1e2e,stroke:#a6e3a1,color:#a6e3a1
+  style C3 fill:#1e1e2e,stroke:#fab387,color:#fab387
+  style C4 fill:#1e1e2e,stroke:#cba6f7,color:#cba6f7
+  style C5 fill:#1e1e2e,stroke:#f5c2e7,color:#f5c2e7
+  style R fill:#313244,stroke:#89b4fa,color:#89b4fa
+  style B fill:#313244,stroke:#f9e2af,color:#f9e2af
+  style Q fill:#313244,stroke:#fab387,color:#fab387
+  style D fill:#313244,stroke:#a6e3a1,color:#a6e3a1
+  style T fill:#313244,stroke:#cba6f7,color:#cba6f7
+  style P1 fill:#1e1e2e,stroke:#89b4fa,color:#89b4fa
+  style P2 fill:#1e1e2e,stroke:#a6e3a1,color:#a6e3a1
+  style P3 fill:#1e1e2e,stroke:#fab387,color:#fab387
+  style P4 fill:#1e1e2e,stroke:#9399b2,color:#9399b2
+          </pre>
+        </div>
+      </div>
+
+      <div style="margin-top: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px;" class="animate-in">
+        <div style="background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius); padding: 16px;">
+          <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--blue); margin-bottom: 6px;">Profile Resolver</div>
+          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.6;">Walks the 4-level assignment hierarchy to find the right model profile for this call.</div>
+        </div>
+        <div style="background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius); padding: 16px;">
+          <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--yellow); margin-bottom: 6px;">Budget Check</div>
+          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.6;">Verifies org and project budgets. Hard limit hit = immediate rejection.</div>
+        </div>
+        <div style="background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius); padding: 16px;">
+          <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--peach); margin-bottom: 6px;">Concurrency Queue</div>
+          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.6;">4-tier priority queue with global + per-provider limits and soft preemption.</div>
+        </div>
+        <div style="background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius); padding: 16px;">
+          <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--green); margin-bottom: 6px;">Dispatcher</div>
+          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.6;">Sends to the correct provider adapter. Handles retry + fallback chain on failure.</div>
+        </div>
+        <div style="background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius); padding: 16px;">
+          <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--mauve); margin-bottom: 6px;">Invocation Tracker</div>
+          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.6;">Records every call: tokens, cost, latency, attribution, prompt/response to object storage.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════ PROFILE HIERARCHY ═══ -->
+  <section id="profiles">
+    <div class="container">
+      <div class="section-header animate-in">
+        <div class="section-number">02 // Profiles</div>
+        <h2 class="section-title">Profile Hierarchy</h2>
+        <p class="section-desc">
+          Model profiles bundle provider + model + settings + fallback chain into a single
+          versioned entity. Resolution walks four levels -- the first non-null value wins.
+        </p>
+      </div>
+
+      <div class="hierarchy animate-in">
+        <div class="hierarchy-level">
+          <div class="hierarchy-rank">
+            <div class="hierarchy-rank-num">1</div>
+            <div class="hierarchy-rank-line"></div>
+          </div>
+          <div class="hierarchy-card">
+            <div class="hierarchy-card-title">Flow Node Override</div>
+            <div class="hierarchy-card-desc">
+              A specific step in a task flow specifies a profile override. Use case: a code
+              review node that needs a strong reasoning model, or a triage node using a cheap model.
+            </div>
+            <span class="hierarchy-card-tag">Highest Priority</span>
+          </div>
+        </div>
+
+        <div class="hierarchy-level">
+          <div class="hierarchy-rank">
+            <div class="hierarchy-rank-num">2</div>
+            <div class="hierarchy-rank-line"></div>
+          </div>
+          <div class="hierarchy-card">
+            <div class="hierarchy-card-title">Agent Default</div>
+            <div class="hierarchy-card-desc">
+              The agent's own profile specifies a default model profile. This is
+              the standard model for that agent unless a flow node overrides it.
+            </div>
+            <span class="hierarchy-card-tag">Per-Agent</span>
+          </div>
+        </div>
+
+        <div class="hierarchy-level">
+          <div class="hierarchy-rank">
+            <div class="hierarchy-rank-num">3</div>
+            <div class="hierarchy-rank-line"></div>
+          </div>
+          <div class="hierarchy-card">
+            <div class="hierarchy-card-title">Project Default</div>
+            <div class="hierarchy-card-desc">
+              The project specifies a default profile for agents that don't have their own.
+              "All agents in this project use Claude Sonnet unless specified otherwise."
+            </div>
+            <span class="hierarchy-card-tag">Per-Project</span>
+          </div>
+        </div>
+
+        <div class="hierarchy-level">
+          <div class="hierarchy-rank">
+            <div class="hierarchy-rank-num">4</div>
+            <div class="hierarchy-rank-line"></div>
+          </div>
+          <div class="hierarchy-card">
+            <div class="hierarchy-card-title">Org Default</div>
+            <div class="hierarchy-card-desc">
+              The organization-level fallback. If no profile is found anywhere else in the
+              hierarchy, this is used. At least one org-level default is required.
+            </div>
+            <span class="hierarchy-card-tag">Lowest Priority</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="hierarchy-note animate-in">
+        <strong>System profiles</strong> (summarization, listening eval, memory extraction/synthesis)
+        are resolved separately from this hierarchy. They are configured at the org level and are
+        not overridable per-project or per-agent. They are infrastructure, not creative choices.
+      </div>
+
+      <div style="margin-top: 32px;" class="animate-in">
+        <div class="diagram-wrap">
+          <div class="diagram-titlebar">
+            <div class="diagram-titlebar-dots">
+              <span></span><span></span><span></span>
+            </div>
+            <span>profile-versioning.mmd</span>
+            <div class="diagram-controls">
+              <button onclick="zoomDiagram('version-diagram', -0.15)">-</button>
+              <button onclick="zoomDiagram('version-diagram', 0)">Reset</button>
+              <button onclick="zoomDiagram('version-diagram', 0.15)">+</button>
+            </div>
+          </div>
+          <div class="diagram-viewport">
+            <pre id="version-diagram" class="mermaid">
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#313244',
+    'primaryTextColor': '#cdd6f4',
+    'primaryBorderColor': '#585b70',
+    'lineColor': '#6c7086',
+    'secondaryColor': '#45475a',
+    'tertiaryColor': '#1e1e2e',
+    'fontFamily': 'Geist Mono, JetBrains Mono, monospace',
+    'fontSize': '13px'
+  }
+}}%%
+flowchart LR
+  subgraph Profile["claude-sonnet-primary"]
+    V1["v1\nis_current: false"]
+    V2["v2\nis_current: false"]
+    V3["v3\nis_current: true"]
+  end
+
+  TURN_A["Turn A\n(started with v2)"] -.-> V2
+  TURN_B["Turn B\n(new turn)"] --> V3
+
+  PIN["Pinned Assignment\n(version = 2)"] --> V2
+
+  style V1 fill:#1e1e2e,stroke:#585b70,color:#6c7086
+  style V2 fill:#1e1e2e,stroke:#89b4fa,color:#89b4fa
+  style V3 fill:#313244,stroke:#a6e3a1,color:#a6e3a1
+  style TURN_A fill:#1e1e2e,stroke:#89b4fa,color:#89b4fa
+  style TURN_B fill:#1e1e2e,stroke:#a6e3a1,color:#a6e3a1
+  style PIN fill:#1e1e2e,stroke:#f9e2af,color:#f9e2af
+            </pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════ PRIORITY QUEUE ═══ -->
+  <section id="priority">
+    <div class="container">
+      <div class="section-header animate-in">
+        <div class="section-number">03 // Concurrency</div>
+        <h2 class="section-title">Priority Queue</h2>
+        <p class="section-desc">
+          The gateway manages concurrency with global + per-provider limits and a four-tier
+          priority system. Within tiers, requests are FIFO. Sync work can soft-preempt async work.
+        </p>
+      </div>
+
+      <div class="priority-label-row animate-in">
+        <span>Highest Priority</span>
+        <span>Queue Timeout</span>
+      </div>
+
+      <div class="priority-grid animate-in">
+        <div class="priority-tier">
+          <div class="priority-badge">P1</div>
+          <div class="priority-info">
+            <div class="priority-name">Sync Interactive</div>
+            <div class="priority-desc">
+              Human is typing and waiting for a response. Latency directly impacts user experience.
+              Can preempt async work at full capacity.
+            </div>
+          </div>
+          <div class="priority-timeout">30s timeout</div>
+        </div>
+
+        <div class="priority-tier">
+          <div class="priority-badge">P2</div>
+          <div class="priority-info">
+            <div class="priority-name">Sync System</div>
+            <div class="priority-desc">
+              System calls supporting sync sessions: listening eval, summarization triggered
+              during a sync turn. Must be fast -- the human is indirectly waiting.
+            </div>
+          </div>
+          <div class="priority-timeout">15s timeout</div>
+        </div>
+
+        <div class="priority-tier">
+          <div class="priority-badge">P3</div>
+          <div class="priority-info">
+            <div class="priority-name">Async Agent</div>
+            <div class="priority-desc">
+              Autonomous agent work on tasks. Latency is acceptable. Can be soft-preempted by
+              sync requests -- paused, not cancelled, and resumed when a slot opens.
+            </div>
+          </div>
+          <div class="priority-timeout">5m timeout</div>
+        </div>
+
+        <div class="priority-tier">
+          <div class="priority-badge">P4</div>
+          <div class="priority-info">
+            <div class="priority-name">Async System</div>
+            <div class="priority-desc">
+              Background system operations: memory extraction, sleep-time reflection, scheduled
+              maintenance. Patient work that runs when resources are available.
+            </div>
+          </div>
+          <div class="priority-timeout">30m timeout</div>
+        </div>
+      </div>
+
+      <div class="preemption-note animate-in">
+        <strong>Soft Preemption:</strong> When a sync request arrives and all slots are occupied by async work,
+        the most recently started async session is paused. Its current model call completes, but it is not
+        dispatched for the next tool loop iteration. It returns to the queue with its original priority and
+        resumes when a slot opens. This is pause, not cancellation.
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════ COST ATTRIBUTION ═══ -->
+  <section id="cost">
+    <div class="container">
+      <div class="section-header animate-in">
+        <div class="section-number">04 // Cost Tracking</div>
+        <h2 class="section-title">Multi-Dimensional Attribution</h2>
+        <p class="section-desc">
+          Every model invocation is attributed across five dimensions. Pre-computed daily rollups
+          enable fast dashboard queries. Cost is calculated from per-token pricing on the profile.
+        </p>
+      </div>
+
+      <div class="attribution-visual animate-in">
+        <div class="attribution-center">
+          <div class="attribution-center-title">model_invocation Attribution</div>
+          <div class="attribution-dim">
+            <div class="attribution-dim-dot"></div>
+            <div class="attribution-dim-name">Organization</div>
+            <div class="attribution-dim-req">always present</div>
+          </div>
+          <div class="attribution-dim">
+            <div class="attribution-dim-dot"></div>
+            <div class="attribution-dim-name">Project</div>
+            <div class="attribution-dim-req">project-scoped</div>
+          </div>
+          <div class="attribution-dim">
+            <div class="attribution-dim-dot"></div>
+            <div class="attribution-dim-name">Agent</div>
+            <div class="attribution-dim-req">agent-triggered</div>
+          </div>
+          <div class="attribution-dim">
+            <div class="attribution-dim-dot"></div>
+            <div class="attribution-dim-name">Session</div>
+            <div class="attribution-dim-req">chat context</div>
+          </div>
+          <div class="attribution-dim">
+            <div class="attribution-dim-dot"></div>
+            <div class="attribution-dim-name">Task</div>
+            <div class="attribution-dim-req">task-scoped</div>
+          </div>
+        </div>
+
+        <div class="attribution-questions">
+          <div class="attribution-q">
+            <strong>"How much did Project X cost this month?"</strong><br>
+            Filter by project_id, aggregate over period.
+          </div>
+          <div class="attribution-q">
+            <strong>"Which agent is the most expensive?"</strong><br>
+            Group by agent_id, sort by total cost descending.
+          </div>
+          <div class="attribution-q">
+            <strong>"What is the cost split between chat and autonomous work?"</strong><br>
+            Group by invocation_purpose: agent_turn vs async work.
+          </div>
+          <div class="attribution-q">
+            <strong>"What did this specific task cost?"</strong><br>
+            Filter by task_id, sum all invocations.
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 32px;" class="animate-in">
+        <div class="diagram-wrap">
+          <div class="diagram-titlebar">
+            <div class="diagram-titlebar-dots">
+              <span></span><span></span><span></span>
+            </div>
+            <span>cost-rollup-flow.mmd</span>
+            <div class="diagram-controls">
+              <button onclick="zoomDiagram('rollup-diagram', -0.15)">-</button>
+              <button onclick="zoomDiagram('rollup-diagram', 0)">Reset</button>
+              <button onclick="zoomDiagram('rollup-diagram', 0.15)">+</button>
+            </div>
+          </div>
+          <div class="diagram-viewport">
+            <pre id="rollup-diagram" class="mermaid">
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#313244',
+    'primaryTextColor': '#cdd6f4',
+    'primaryBorderColor': '#585b70',
+    'lineColor': '#6c7086',
+    'secondaryColor': '#45475a',
+    'tertiaryColor': '#1e1e2e',
+    'fontFamily': 'Geist Mono, JetBrains Mono, monospace',
+    'fontSize': '13px'
+  }
+}}%%
+flowchart LR
+  INV["model_invocation\n(per-call record)"]
+  INV --> |"atomic increment"| R1["Per-Org Daily"]
+  INV --> |"atomic increment"| R2["Per-Project Daily"]
+  INV --> |"atomic increment"| R3["Per-Agent Daily"]
+  INV --> |"atomic increment"| R4["Per-Model Daily"]
+
+  R1 --> DASH["Dashboard\nQueries"]
+  R2 --> DASH
+  R3 --> DASH
+  R4 --> DASH
+
+  style INV fill:#313244,stroke:#cba6f7,color:#cba6f7
+  style R1 fill:#1e1e2e,stroke:#89b4fa,color:#89b4fa
+  style R2 fill:#1e1e2e,stroke:#a6e3a1,color:#a6e3a1
+  style R3 fill:#1e1e2e,stroke:#fab387,color:#fab387
+  style R4 fill:#1e1e2e,stroke:#f9e2af,color:#f9e2af
+  style DASH fill:#313244,stroke:#89b4fa,color:#89b4fa
+            </pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════ BUDGET ENFORCEMENT ═══ -->
+  <section id="budget">
+    <div class="container">
+      <div class="section-header animate-in">
+        <div class="section-number">05 // Budgets</div>
+        <h2 class="section-title">Budget Enforcement</h2>
+        <p class="section-desc">
+          Two-level budget enforcement (org + project) with soft warn and hard block thresholds.
+          Budget checks are optimistic -- they verify current spend is below the hard limit at
+          routing time. In-progress calls may slightly exceed.
+        </p>
+      </div>
+
+      <div class="budget-flow animate-in">
+        <div class="budget-stage budget-stage--normal">
+          <div class="budget-connector">
+            <div class="budget-connector-dot"></div>
+            <div class="budget-connector-line"></div>
+          </div>
+          <div class="budget-card">
+            <div class="budget-card-header">
+              <div class="budget-card-title">Normal Operation</div>
+            </div>
+            <div class="budget-card-desc">
+              Spend is below the soft limit. All invocations proceed normally.
+              Cost is tracked per-invocation and rolled up incrementally.
+            </div>
+          </div>
+        </div>
+
+        <div class="budget-stage budget-stage--warn">
+          <div class="budget-connector">
+            <div class="budget-connector-dot"></div>
+            <div class="budget-connector-line"></div>
+          </div>
+          <div class="budget-card">
+            <div class="budget-card-header">
+              <div class="budget-card-title">Soft Limit Reached</div>
+            </div>
+            <div class="budget-card-desc">
+              Spend crosses the soft threshold. The system emits a warning event.
+              The operator, PM, and Frank receive notifications. Work continues uninterrupted.
+            </div>
+            <div class="budget-card-actions">
+              <span class="budget-action">Warning Event Emitted</span>
+              <span class="budget-action">Operator Notified</span>
+              <span class="budget-action">Work Continues</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="budget-stage budget-stage--hard">
+          <div class="budget-connector">
+            <div class="budget-connector-dot"></div>
+            <div class="budget-connector-line"></div>
+          </div>
+          <div class="budget-card">
+            <div class="budget-card-header">
+              <div class="budget-card-title">Hard Limit Reached</div>
+            </div>
+            <div class="budget-card-desc">
+              Spend crosses the hard threshold. All new model invocations are rejected.
+              In-progress calls complete. Queued invocations fail with <code style="color: var(--red); background: var(--mantle); padding: 1px 6px; border-radius: 3px; font-size: 12px;">budget_exhausted</code>.
+              Async work is paused, not cancelled.
+            </div>
+            <div class="budget-card-actions">
+              <span class="budget-action">New Calls Rejected</span>
+              <span class="budget-action">Queue Paused</span>
+              <span class="budget-action">PM Notified</span>
+              <span class="budget-action">Inbox Item Created</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="budget-stage budget-stage--resolve">
+          <div class="budget-connector">
+            <div class="budget-connector-dot"></div>
+          </div>
+          <div class="budget-card">
+            <div class="budget-card-header">
+              <div class="budget-card-title">Human Resolution</div>
+            </div>
+            <div class="budget-card-desc">
+              The human receives an inbox item: "Project X has reached its cost limit.
+              Increase the budget or cancel pending work." Two paths forward.
+            </div>
+            <div class="budget-card-actions">
+              <span class="budget-action">Increase Budget (work resumes)</span>
+              <span class="budget-action">Cancel Pending Tasks</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="budget-meter animate-in">
+        <div class="budget-meter-label">Example: Project Budget Visualization</div>
+        <div class="budget-meter-bar">
+          <div class="budget-meter-fill"></div>
+          <div class="budget-meter-marker budget-meter-marker--soft"></div>
+          <div class="budget-meter-marker budget-meter-marker--hard"></div>
+        </div>
+        <div class="budget-meter-labels">
+          <span>$0</span>
+          <span>Soft Limit</span>
+          <span>Hard Limit</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════ FALLBACK CHAINS ═══ -->
+  <section id="fallback">
+    <div class="container">
+      <div class="section-header animate-in">
+        <div class="section-number">06 // Reliability</div>
+        <h2 class="section-title">Retry and Fallback Chains</h2>
+        <p class="section-desc">
+          When a model invocation fails, the gateway retries with exponential backoff (max 2 retries),
+          then walks the fallback chain sequentially (max 3 profiles deep). The caller sees one
+          request and one result -- all recovery is internal.
+        </p>
+      </div>
+
+      <div class="diagram-wrap animate-in">
+        <div class="diagram-titlebar">
+          <div class="diagram-titlebar-dots">
+            <span></span><span></span><span></span>
+          </div>
+          <span>fallback-chain.mmd</span>
+          <div class="diagram-controls">
+            <button onclick="zoomDiagram('fallback-diagram', -0.15)">-</button>
+            <button onclick="zoomDiagram('fallback-diagram', 0)">Reset</button>
+            <button onclick="zoomDiagram('fallback-diagram', 0.15)">+</button>
+          </div>
+        </div>
+        <div class="diagram-viewport">
+          <pre id="fallback-diagram" class="mermaid">
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#313244',
+    'primaryTextColor': '#cdd6f4',
+    'primaryBorderColor': '#585b70',
+    'lineColor': '#6c7086',
+    'secondaryColor': '#45475a',
+    'tertiaryColor': '#1e1e2e',
+    'fontFamily': 'Geist Mono, JetBrains Mono, monospace',
+    'fontSize': '13px'
+  }
+}}%%
+flowchart TD
+  REQ["Inference Request"] --> CALL_A["Profile A\n(Primary)"]
+  CALL_A --> |"Success"| OK["Return Response"]
+  CALL_A --> |"Retryable Error"| RETRY_A["Retry (2x)\nExponential Backoff\n+ Jitter"]
+  RETRY_A --> |"Success"| OK
+  RETRY_A --> |"Exhausted"| CHECK_B{"Fallback\nProfile B?"}
+  CHECK_B --> |"Yes + Compatible"| CALL_B["Profile B\n(Fallback 1)"]
+  CHECK_B --> |"No / Incompatible"| FAIL["Terminal Error\n+ Chain Details"]
+  CALL_B --> |"Success"| OK
+  CALL_B --> |"Retryable Error"| RETRY_B["Retry (2x)"]
+  RETRY_B --> |"Success"| OK
+  RETRY_B --> |"Exhausted"| CHECK_C{"Fallback\nProfile C?"}
+  CHECK_C --> |"Yes + Compatible"| CALL_C["Profile C\n(Fallback 2)"]
+  CHECK_C --> |"No / Max Depth"| FAIL
+  CALL_C --> |"Success"| OK
+  CALL_C --> |"Failed"| FAIL
+
+  style REQ fill:#313244,stroke:#89b4fa,color:#89b4fa
+  style CALL_A fill:#1e1e2e,stroke:#a6e3a1,color:#a6e3a1
+  style CALL_B fill:#1e1e2e,stroke:#fab387,color:#fab387
+  style CALL_C fill:#1e1e2e,stroke:#f9e2af,color:#f9e2af
+  style RETRY_A fill:#1e1e2e,stroke:#cba6f7,color:#cba6f7
+  style RETRY_B fill:#1e1e2e,stroke:#cba6f7,color:#cba6f7
+  style CHECK_B fill:#313244,stroke:#fab387,color:#fab387
+  style CHECK_C fill:#313244,stroke:#f9e2af,color:#f9e2af
+  style OK fill:#313244,stroke:#a6e3a1,color:#a6e3a1
+  style FAIL fill:#313244,stroke:#f38ba8,color:#f38ba8
+          </pre>
+        </div>
+      </div>
+
+      <div style="margin-top: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px;" class="animate-in">
+        <div style="background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius); padding: 16px 20px;">
+          <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--mauve); margin-bottom: 8px;">Retry Logic</div>
+          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.7;">
+            Max 2 retries per call. Base backoff: 1s with 2x multiplier (1s, 2s).
+            Random 0-500ms jitter added. Rate-limited errors use the provider's
+            <code style="color: var(--mauve); background: var(--mantle); padding: 1px 4px; border-radius: 3px; font-size: 11px;">Retry-After</code> header.
+          </div>
+        </div>
+        <div style="background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius); padding: 16px 20px;">
+          <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--peach); margin-bottom: 8px;">Fallback Constraints</div>
+          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.7;">
+            Context window must fit the prompt. Tool call policy must be compatible.
+            If fallback cannot fit the prompt (even after truncating history), it is skipped.
+            Circular references rejected at config time.
+          </div>
+        </div>
+        <div style="background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius); padding: 16px 20px;">
+          <div style="font-family: var(--font-heading); font-size: 13px; font-weight: 600; color: var(--red); margin-bottom: 8px;">Error Classification</div>
+          <div style="font-size: 12px; color: var(--subtext0); line-height: 1.7;">
+            8 canonical error classes. Retryable: rate_limited, overloaded, timeout, network_error, provider_error.
+            Non-retryable: auth_failed, invalid_request, model_unavailable (triggers fallback instead).
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════ SCHEMA ═══ -->
+  <section id="schema">
+    <div class="container">
+      <div class="section-header animate-in">
+        <div class="section-number">07 // Schema</div>
+        <h2 class="section-title">Database Schema</h2>
+        <p class="section-desc">
+          Six tables covering provider registration, profile management, invocation tracking,
+          cost aggregation, and budget enforcement.
+        </p>
+      </div>
+
+      <div class="schema-grid animate-in">
+        <!-- model_provider -->
+        <div class="schema-table" data-accent="blue">
+          <div class="schema-table-header">
+            <span class="schema-table-name">model_provider</span>
+            <span class="schema-table-badge">Instance-Level</span>
+          </div>
+          <div class="schema-table-body">
+            <div class="schema-col">
+              <span class="schema-col-name">id</span>
+              <span class="schema-col-type">uuid</span>
+              <span class="schema-col-pk">PK</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">slug</span>
+              <span class="schema-col-type">text unique</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">adapter_type</span>
+              <span class="schema-col-type">text</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">is_enabled</span>
+              <span class="schema-col-type">boolean</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">base_url</span>
+              <span class="schema-col-type">text nullable</span>
+            </div>
+          </div>
+          <div class="schema-desc">
+            Registered by the instance operator. Maps slugs (anthropic, openai, google, openai-compat)
+            to adapter implementations. base_url is the default API endpoint.
+          </div>
+        </div>
+
+        <!-- model_provider_config -->
+        <div class="schema-table" data-accent="green">
+          <div class="schema-table-header">
+            <span class="schema-table-name">model_provider_config</span>
+            <span class="schema-table-badge">Per-Org</span>
+          </div>
+          <div class="schema-table-body">
+            <div class="schema-col">
+              <span class="schema-col-name">id</span>
+              <span class="schema-col-type">uuid</span>
+              <span class="schema-col-pk">PK</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">organization_id</span>
+              <span class="schema-col-type">uuid</span>
+              <span class="schema-col-fk">FK</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">provider_id</span>
+              <span class="schema-col-type">uuid</span>
+              <span class="schema-col-fk">FK</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">api_key_secret_ref</span>
+              <span class="schema-col-type">text</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">max_concurrent</span>
+              <span class="schema-col-type">int nullable</span>
+            </div>
+          </div>
+          <div class="schema-desc">
+            Per-org activation and credentials. API keys stored as encrypted secret references, never plaintext.
+            Unique constraint on (organization_id, provider_id).
+          </div>
+        </div>
+
+        <!-- model_profile -->
+        <div class="schema-table" data-accent="mauve">
+          <div class="schema-table-header">
+            <span class="schema-table-name">model_profile</span>
+            <span class="schema-table-badge">Versioned</span>
+          </div>
+          <div class="schema-table-body">
+            <div class="schema-col">
+              <span class="schema-col-name">id</span>
+              <span class="schema-col-type">uuid</span>
+              <span class="schema-col-pk">PK</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">slug / version</span>
+              <span class="schema-col-type">text / int</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">provider_id / model_id</span>
+              <span class="schema-col-type">uuid / text</span>
+              <span class="schema-col-fk">FK</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">max_input / output_tokens</span>
+              <span class="schema-col-type">int / int</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">temperature / top_p / top_k</span>
+              <span class="schema-col-type">numeric</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">pricing fields (4)</span>
+              <span class="schema-col-type">numeric(12,8)</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">fallback_profile_id</span>
+              <span class="schema-col-type">uuid nullable</span>
+              <span class="schema-col-fk">FK self</span>
+            </div>
+          </div>
+          <div class="schema-desc">
+            Core abstraction. Versioned profiles with generation settings, token limits, pricing,
+            tool/streaming policy, timeout, cost limit, retry count, and fallback chain. Unique on (org, slug, version).
+          </div>
+        </div>
+
+        <!-- model_profile_assignment -->
+        <div class="schema-table" data-accent="peach">
+          <div class="schema-table-header">
+            <span class="schema-table-name">model_profile_assignment</span>
+            <span class="schema-table-badge">Hierarchy</span>
+          </div>
+          <div class="schema-table-body">
+            <div class="schema-col">
+              <span class="schema-col-name">id</span>
+              <span class="schema-col-type">uuid</span>
+              <span class="schema-col-pk">PK</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">scope_type</span>
+              <span class="schema-col-type">text</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">scope_id</span>
+              <span class="schema-col-type">uuid</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">profile_id</span>
+              <span class="schema-col-type">uuid</span>
+              <span class="schema-col-fk">FK</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">pinned_version</span>
+              <span class="schema-col-type">int nullable</span>
+            </div>
+          </div>
+          <div class="schema-desc">
+            Implements the 4-level hierarchy: scope_type is one of org, project, agent, flow_node.
+            One assignment per scope (unique constraint). Pinned version locks to a specific profile version.
+          </div>
+        </div>
+
+        <!-- model_invocation -->
+        <div class="schema-table" data-accent="yellow">
+          <div class="schema-table-header">
+            <span class="schema-table-name">model_invocation</span>
+            <span class="schema-table-badge">Per-Call Audit</span>
+          </div>
+          <div class="schema-table-body">
+            <div class="schema-col">
+              <span class="schema-col-name">id</span>
+              <span class="schema-col-type">uuid</span>
+              <span class="schema-col-pk">PK</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">attribution (5 dims)</span>
+              <span class="schema-col-type">uuid nullable</span>
+              <span class="schema-col-fk">FKs</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">token counts (4)</span>
+              <span class="schema-col-type">int</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">estimated_cost_usd</span>
+              <span class="schema-col-type">numeric(10,6)</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">prompt/response refs</span>
+              <span class="schema-col-type">text (obj store)</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">parent_invocation_id</span>
+              <span class="schema-col-type">uuid nullable</span>
+              <span class="schema-col-fk">FK self</span>
+            </div>
+          </div>
+          <div class="schema-desc">
+            One row per model call. The most granular record in the system. Captures tokens, cost,
+            latency, attribution, outcome, error class, retry/fallback chain, and prompt capture references.
+            11 partial indexes for fast queries.
+          </div>
+        </div>
+
+        <!-- model_cost_rollup + model_cost_budget -->
+        <div class="schema-table" data-accent="red">
+          <div class="schema-table-header">
+            <span class="schema-table-name">model_cost_rollup / budget</span>
+            <span class="schema-table-badge">Aggregation</span>
+          </div>
+          <div class="schema-table-body">
+            <div class="schema-col">
+              <span class="schema-col-name">rollup: rollup_type</span>
+              <span class="schema-col-type">org/project/agent/model</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">rollup: period_start/end</span>
+              <span class="schema-col-type">date</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">rollup: total_cost_usd</span>
+              <span class="schema-col-type">numeric(12,4)</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">budget: soft/hard_limit</span>
+              <span class="schema-col-type">numeric(12,4)</span>
+            </div>
+            <div class="schema-col">
+              <span class="schema-col-name">budget: current_spend</span>
+              <span class="schema-col-type">numeric(12,4)</span>
+            </div>
+          </div>
+          <div class="schema-desc">
+            Pre-computed daily rollups (4 dimensions) updated atomically per invocation. Budget table
+            enforces soft warn + hard block at org and project levels. Monthly period with custom period option.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════ FOOTER ═══ -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-inner">
+        <div class="footer-left">
+          <strong>OtterCamp V2</strong> // Models and Inference Gateway<br>
+          <span style="font-size: 12px;">Spec 07 -- Visual Explainer</span>
+        </div>
+        <div class="footer-right">
+          <a href="#gateway" class="footer-link">Gateway</a>
+          <a href="#profiles" class="footer-link">Profiles</a>
+          <a href="#priority" class="footer-link">Priority</a>
+          <a href="#cost" class="footer-link">Cost</a>
+          <a href="#budget" class="footer-link">Budgets</a>
+          <a href="#fallback" class="footer-link">Fallback</a>
+          <a href="#schema" class="footer-link">Schema</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- ═══════════════════════════════════════════ SCRIPTS ═══ -->
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      securityLevel: 'loose',
+      fontFamily: 'Geist Mono, JetBrains Mono, monospace',
+      flowchart: {
+        htmlLabels: true,
+        curve: 'basis',
+        padding: 16,
+        nodeSpacing: 40,
+        rankSpacing: 50,
+        useMaxWidth: true
+      }
+    });
+  </script>
+
+  <script>
+    // ── Zoom controls ──────────────────────────────
+    const diagramScales = {};
+
+    window.zoomDiagram = function(id, delta) {
+      const el = document.getElementById(id);
+      if (!el) return;
+
+      if (delta === 0) {
+        diagramScales[id] = 1;
+      } else {
+        diagramScales[id] = (diagramScales[id] || 1) + delta;
+      }
+
+      const scale = Math.max(0.3, Math.min(2.5, diagramScales[id]));
+      diagramScales[id] = scale;
+      el.style.transform = `scale(${scale})`;
+    };
+
+    // ── Intersection Observer for staggered animations ──
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('visible');
+            observer.unobserve(entry.target);
+          }
+        });
+      },
+      {
+        threshold: 0.1,
+        rootMargin: '0px 0px -40px 0px'
+      }
+    );
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const animateEls = document.querySelectorAll('.animate-in');
+      animateEls.forEach((el, i) => {
+        el.style.transitionDelay = `${i * 60}ms`;
+        observer.observe(el);
+      });
+    });
+  </script>
+</body>
+</html>

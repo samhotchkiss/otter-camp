@@ -1,0 +1,1783 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- Deployment and Self-Hosting</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0c0c0c;
+    --bg-elevated: #141414;
+    --bg-card: #1a1a1a;
+    --bg-card-hover: #222;
+    --green: #00ff41;
+    --green-dim: #00cc33;
+    --green-faint: rgba(0, 255, 65, 0.08);
+    --green-glow: rgba(0, 255, 65, 0.15);
+    --amber: #ffb000;
+    --amber-dim: #cc8d00;
+    --amber-faint: rgba(255, 176, 0, 0.08);
+    --amber-glow: rgba(255, 176, 0, 0.15);
+    --gray: #666;
+    --gray-dim: #444;
+    --gray-faint: #333;
+    --text: #ccc;
+    --text-dim: #888;
+    --border: #2a2a2a;
+    --font-heading: 'Space Mono', monospace;
+    --font-body: 'IBM Plex Mono', monospace;
+    --scanline-opacity: 0.03;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html {
+    font-size: 16px;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-weight: 400;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  /* CRT Scanline Effect */
+  body::after {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 9999;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, var(--scanline-opacity)) 2px,
+      rgba(0, 0, 0, var(--scanline-opacity)) 4px
+    );
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--gray-dim); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--gray); }
+
+  /* Layout */
+  .container {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 2rem;
+  }
+
+  section {
+    padding: 5rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  section:last-of-type {
+    border-bottom: none;
+  }
+
+  /* Typography */
+  h1, h2, h3, h4 {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  h1 { font-size: 2.5rem; line-height: 1.2; }
+  h2 { font-size: 1.6rem; line-height: 1.3; color: var(--green); margin-bottom: 1.5rem; }
+  h3 { font-size: 1.1rem; line-height: 1.4; }
+  h4 { font-size: 0.9rem; line-height: 1.4; text-transform: uppercase; letter-spacing: 0.08em; }
+
+  p { margin-bottom: 1rem; }
+
+  .text-amber { color: var(--amber); }
+  .text-green { color: var(--green); }
+  .text-dim { color: var(--text-dim); }
+  .text-gray { color: var(--gray); }
+
+  /* Animations */
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(30px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes terminalBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  @keyframes glowPulse {
+    0%, 100% { box-shadow: 0 0 20px var(--green-glow); }
+    50% { box-shadow: 0 0 40px var(--green-glow), 0 0 60px rgba(0, 255, 65, 0.05); }
+  }
+
+  @keyframes scanDown {
+    0% { transform: translateY(-100%); }
+    100% { transform: translateY(100vh); }
+  }
+
+  .animate-in {
+    opacity: 0;
+    transform: translateY(30px);
+    transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+  }
+
+  .animate-in.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ===================== HERO ===================== */
+  .hero {
+    padding: 8rem 0 6rem;
+    position: relative;
+    overflow: hidden;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background:
+      radial-gradient(ellipse at 20% 50%, var(--green-faint) 0%, transparent 60%),
+      radial-gradient(ellipse at 80% 30%, var(--amber-faint) 0%, transparent 50%);
+    pointer-events: none;
+  }
+
+  .hero-badge {
+    display: inline-block;
+    font-family: var(--font-body);
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--amber);
+    border: 1px solid var(--amber-dim);
+    padding: 0.35rem 1rem;
+    margin-bottom: 2rem;
+    background: var(--amber-faint);
+  }
+
+  .hero h1 {
+    color: var(--green);
+    margin-bottom: 0.5rem;
+    animation: fadeInUp 0.8s ease-out;
+  }
+
+  .hero-subtitle {
+    font-family: var(--font-heading);
+    font-size: 1.3rem;
+    color: var(--amber);
+    margin-bottom: 2rem;
+    animation: fadeInUp 0.8s ease-out 0.15s both;
+  }
+
+  .hero-desc {
+    max-width: 720px;
+    font-size: 0.95rem;
+    color: var(--text-dim);
+    animation: fadeInUp 0.8s ease-out 0.3s both;
+    line-height: 1.8;
+  }
+
+  .hero-prompt {
+    margin-top: 3rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: var(--font-body);
+    font-size: 0.85rem;
+    color: var(--gray);
+    animation: fadeInUp 0.8s ease-out 0.45s both;
+  }
+
+  .hero-prompt .cursor {
+    display: inline-block;
+    width: 8px;
+    height: 16px;
+    background: var(--green);
+    animation: terminalBlink 1s step-end infinite;
+  }
+
+  .hero-stats {
+    display: flex;
+    gap: 3rem;
+    margin-top: 3.5rem;
+    animation: fadeInUp 0.8s ease-out 0.6s both;
+  }
+
+  .hero-stat {
+    text-align: left;
+  }
+
+  .hero-stat-value {
+    font-family: var(--font-heading);
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--green);
+    line-height: 1;
+  }
+
+  .hero-stat-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--gray);
+    margin-top: 0.4rem;
+  }
+
+  /* ===================== DEPLOYMENT MODES ===================== */
+  .modes-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+    margin-top: 2rem;
+  }
+
+  .mode-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    padding: 2rem;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s, background 0.3s;
+  }
+
+  .mode-card:hover {
+    border-color: var(--gray);
+    background: var(--bg-card-hover);
+  }
+
+  .mode-card.highlight {
+    border-color: var(--amber-dim);
+  }
+
+  .mode-card.highlight:hover {
+    border-color: var(--amber);
+  }
+
+  .mode-label {
+    font-family: var(--font-body);
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--amber);
+    margin-bottom: 1rem;
+  }
+
+  .mode-card h3 {
+    color: var(--green);
+    margin-bottom: 0.75rem;
+    font-size: 1.15rem;
+  }
+
+  .mode-desc {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-bottom: 1.5rem;
+    line-height: 1.7;
+  }
+
+  .mode-audience {
+    font-size: 0.72rem;
+    color: var(--gray);
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .mode-diagram {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 1.25rem;
+    margin-bottom: 1.5rem;
+    font-family: var(--font-body);
+    font-size: 0.65rem;
+    line-height: 1.6;
+    color: var(--green-dim);
+    white-space: pre;
+    overflow-x: auto;
+  }
+
+  .mode-specs {
+    list-style: none;
+  }
+
+  .mode-specs li {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    padding: 0.4rem 0;
+    border-bottom: 1px solid rgba(42, 42, 42, 0.5);
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .mode-specs li:last-child {
+    border-bottom: none;
+  }
+
+  .mode-specs .spec-label {
+    color: var(--gray);
+  }
+
+  .mode-specs .spec-value {
+    color: var(--text);
+    text-align: right;
+  }
+
+  .mode-specs .spec-value.amber {
+    color: var(--amber);
+  }
+
+  /* ===================== DEPENDENCY MATRIX ===================== */
+  .dep-table-wrap {
+    overflow-x: auto;
+    margin-top: 2rem;
+  }
+
+  .dep-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+  }
+
+  .dep-table th,
+  .dep-table td {
+    padding: 0.8rem 1.2rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dep-table th {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--amber);
+    background: var(--bg-elevated);
+    border-bottom: 2px solid var(--amber-dim);
+  }
+
+  .dep-table td {
+    color: var(--text-dim);
+    vertical-align: top;
+  }
+
+  .dep-table tbody tr {
+    transition: background 0.2s;
+  }
+
+  .dep-table tbody tr:hover {
+    background: var(--bg-card);
+  }
+
+  .dep-table .component-name {
+    color: var(--green);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .dep-badge {
+    display: inline-block;
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 0.15rem 0.5rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .dep-badge.required {
+    color: var(--amber);
+    border: 1px solid var(--amber-dim);
+    background: var(--amber-faint);
+  }
+
+  .dep-badge.fallback {
+    color: var(--green);
+    border: 1px solid var(--green-dim);
+    background: var(--green-faint);
+  }
+
+  .dep-badge.na {
+    color: var(--gray);
+    border: 1px solid var(--gray-dim);
+  }
+
+  .dep-badge.optional {
+    color: var(--text-dim);
+    border: 1px solid var(--gray-dim);
+  }
+
+  .dep-note {
+    display: block;
+    font-size: 0.7rem;
+    color: var(--gray);
+    margin-top: 0.25rem;
+  }
+
+  /* Callout */
+  .callout {
+    border-left: 3px solid var(--amber);
+    background: var(--amber-faint);
+    padding: 1.25rem 1.5rem;
+    margin: 2rem 0;
+    font-size: 0.85rem;
+    color: var(--text);
+  }
+
+  .callout-label {
+    font-family: var(--font-heading);
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--amber);
+    margin-bottom: 0.5rem;
+  }
+
+  .callout p {
+    margin-bottom: 0;
+    color: var(--text-dim);
+  }
+
+  /* ===================== CONFIG HIERARCHY ===================== */
+  .config-flow {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    margin-top: 2.5rem;
+  }
+
+  .config-level {
+    flex: 1;
+    padding: 2rem 1.5rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    position: relative;
+    transition: border-color 0.3s;
+  }
+
+  .config-level:hover {
+    border-color: var(--gray);
+  }
+
+  .config-level:first-child {
+    border-right: none;
+  }
+  .config-level:nth-child(2) {
+    border-right: none;
+  }
+
+  .config-priority {
+    font-family: var(--font-heading);
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--green);
+    opacity: 0.3;
+    line-height: 1;
+    margin-bottom: 0.75rem;
+  }
+
+  .config-level.active .config-priority {
+    opacity: 1;
+  }
+
+  .config-level-title {
+    font-family: var(--font-heading);
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--green);
+    margin-bottom: 0.5rem;
+  }
+
+  .config-level-desc {
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    margin-bottom: 1rem;
+  }
+
+  .config-level-example {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 0.75rem 1rem;
+    font-size: 0.7rem;
+    color: var(--green-dim);
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  .config-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 3rem;
+    flex-shrink: 0;
+    color: var(--amber);
+    font-size: 1.2rem;
+    font-family: var(--font-body);
+  }
+
+  .override-label {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--amber);
+    margin-bottom: 0.75rem;
+  }
+
+  /* Config table */
+  .config-categories {
+    margin-top: 3rem;
+  }
+
+  .config-cat {
+    margin-bottom: 2.5rem;
+  }
+
+  .config-cat h4 {
+    color: var(--amber);
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .config-vars {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 0.75rem;
+  }
+
+  .config-var {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    padding: 0.75rem 1rem;
+    font-size: 0.75rem;
+    transition: border-color 0.2s;
+  }
+
+  .config-var:hover {
+    border-color: var(--gray);
+  }
+
+  .config-var-name {
+    font-weight: 600;
+    color: var(--green);
+    font-size: 0.72rem;
+    word-break: break-all;
+  }
+
+  .config-var-default {
+    color: var(--gray);
+    font-size: 0.68rem;
+    margin-top: 0.15rem;
+  }
+
+  .config-var-desc {
+    color: var(--text-dim);
+    font-size: 0.7rem;
+    margin-top: 0.25rem;
+  }
+
+  /* ===================== OPERATIONS FLOW ===================== */
+  .mermaid-container {
+    position: relative;
+    margin-top: 2rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+
+  .mermaid-viewport {
+    overflow: auto;
+    padding: 2rem;
+    cursor: grab;
+    min-height: 300px;
+  }
+
+  .mermaid-viewport:active {
+    cursor: grabbing;
+  }
+
+  .mermaid-viewport .mermaid {
+    display: flex;
+    justify-content: center;
+    transform-origin: top left;
+    transition: transform 0.2s ease;
+  }
+
+  .mermaid-controls {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    display: flex;
+    gap: 0.25rem;
+    z-index: 10;
+  }
+
+  .mermaid-btn {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--green);
+    font-family: var(--font-body);
+    font-size: 0.8rem;
+    width: 2rem;
+    height: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+  }
+
+  .mermaid-btn:hover {
+    border-color: var(--green);
+    background: var(--green-faint);
+  }
+
+  .mermaid-label {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--gray);
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elevated);
+  }
+
+  /* ===================== SECURITY ===================== */
+  .security-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.5rem;
+    margin-top: 2rem;
+  }
+
+  .security-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    padding: 2rem;
+    transition: border-color 0.3s;
+  }
+
+  .security-card:hover {
+    border-color: var(--gray);
+  }
+
+  .security-card h3 {
+    font-size: 1rem;
+    color: var(--amber);
+    margin-bottom: 0.75rem;
+  }
+
+  .security-card p {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    line-height: 1.7;
+  }
+
+  .security-detail {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .security-detail-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 0.75rem;
+    padding: 0.35rem 0;
+  }
+
+  .security-detail-label {
+    color: var(--gray);
+  }
+
+  .security-detail-value {
+    color: var(--green);
+    text-align: right;
+  }
+
+  .secret-categories {
+    margin-top: 2rem;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.75rem;
+  }
+
+  .secret-cat {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    padding: 1.25rem;
+    text-align: center;
+    transition: border-color 0.3s;
+  }
+
+  .secret-cat:hover {
+    border-color: var(--amber-dim);
+  }
+
+  .secret-cat-icon {
+    font-family: var(--font-heading);
+    font-size: 1.2rem;
+    color: var(--amber);
+    margin-bottom: 0.5rem;
+  }
+
+  .secret-cat-name {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 0.25rem;
+  }
+
+  .secret-cat-example {
+    font-size: 0.65rem;
+    color: var(--gray);
+  }
+
+  /* Schema block */
+  .schema-block {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 1.5rem;
+    margin-top: 1.5rem;
+    font-size: 0.72rem;
+    line-height: 1.7;
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  .schema-block .kw { color: var(--amber); }
+  .schema-block .type { color: var(--green-dim); }
+  .schema-block .comment { color: var(--gray); }
+
+  /* ===================== FOOTER ===================== */
+  .footer {
+    padding: 4rem 0 3rem;
+    text-align: center;
+    border-top: 1px solid var(--border);
+  }
+
+  .footer-title {
+    font-family: var(--font-heading);
+    font-size: 1rem;
+    color: var(--green);
+    margin-bottom: 0.5rem;
+  }
+
+  .footer-desc {
+    font-size: 0.75rem;
+    color: var(--gray);
+    max-width: 500px;
+    margin: 0 auto 2rem;
+  }
+
+  .footer-links {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    flex-wrap: wrap;
+  }
+
+  .footer-link {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-decoration: none;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    transition: color 0.2s;
+  }
+
+  .footer-link:hover {
+    color: var(--green);
+  }
+
+  .footer-bar {
+    margin-top: 3rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.65rem;
+    color: var(--gray-dim);
+  }
+
+  /* ===================== RESPONSIVE ===================== */
+  @media (max-width: 1024px) {
+    .modes-grid { grid-template-columns: 1fr; }
+    .config-flow { flex-direction: column; }
+    .config-level:first-child,
+    .config-level:nth-child(2) { border-right: 1px solid var(--border); }
+    .config-arrow { width: auto; height: 2rem; transform: rotate(90deg); }
+    .security-grid { grid-template-columns: 1fr; }
+    .secret-categories { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  @media (max-width: 640px) {
+    h1 { font-size: 1.8rem; }
+    .hero { padding: 5rem 0 3rem; }
+    .hero-stats { flex-direction: column; gap: 1.5rem; }
+    .container { padding: 0 1rem; }
+    section { padding: 3rem 0; }
+    .secret-categories { grid-template-columns: 1fr; }
+    .config-vars { grid-template-columns: 1fr; }
+  }
+
+  /* Stagger classes */
+  .stagger-1 { transition-delay: 0.1s; }
+  .stagger-2 { transition-delay: 0.2s; }
+  .stagger-3 { transition-delay: 0.3s; }
+  .stagger-4 { transition-delay: 0.4s; }
+  .stagger-5 { transition-delay: 0.5s; }
+  .stagger-6 { transition-delay: 0.6s; }
+</style>
+</head>
+<body>
+
+<!-- ===================== HERO ===================== -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-badge">Doc 08 -- Deployment and Self-Hosting</div>
+    <h1>One Binary, Three Modes</h1>
+    <div class="hero-subtitle">Same artifact. Configuration determines the deployment.</div>
+    <p class="hero-desc">
+      OtterCamp ships as a single Go binary that runs identically across all environments.
+      Local laptop, remote VPS, or managed multi-tenant -- the mode is determined entirely by
+      configuration, not by building different artifacts. PostgreSQL is the only required
+      external dependency. Everything else has a built-in fallback.
+    </p>
+    <div class="hero-prompt">
+      <span class="text-green">$</span>
+      <span>ottercamp serve</span>
+      <span class="cursor"></span>
+    </div>
+    <div class="hero-stats">
+      <div class="hero-stat">
+        <div class="hero-stat-value">1</div>
+        <div class="hero-stat-label">Go binary</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-value">3</div>
+        <div class="hero-stat-label">Deployment modes</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-value" style="color: var(--amber);">1</div>
+        <div class="hero-stat-label">Required dependency</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-value">0</div>
+        <div class="hero-stat-label">Runtime deps beyond pg</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== DEPLOYMENT MODES ===================== -->
+<section id="modes">
+  <div class="container">
+    <h2 class="animate-in">// Deployment Modes</h2>
+    <p class="animate-in text-dim" style="max-width: 680px; font-size: 0.85rem;">
+      The same binary adapts to three operational profiles. Configuration --
+      not compilation -- determines behavior.
+    </p>
+
+    <div class="modes-grid">
+      <!-- Local Single-Node -->
+      <div class="mode-card animate-in stagger-1">
+        <div class="mode-label">Mode 1</div>
+        <h3>Local Single-Node</h3>
+        <div class="mode-audience">Developers, personal use, evaluation</div>
+        <div class="mode-desc">
+          One process runs everything. API server and Worker share goroutines,
+          a single connection pool, and local filesystem storage. Under a minute to productive.
+        </div>
+        <div class="mode-diagram">+-----------------------------------+
+|        ottercamp serve            |
+|                                   |
+|  +------------+ +------------+   |
+|  | API Server | |   Worker   |   |
+|  | (HTTP+WS)  | |   (Jobs)   |   |
+|  +------+-----+ +-----+-----+   |
+|         |              |          |
+|  +------+--------------+------+  |
+|  |   Shared Application Core  |  |
+|  +-------------+------------- +  |
+|                |                  |
+|  +-------------+--------------+  |
+|  | PostgreSQL | Filesystem    |  |
+|  +----------------------------+  |
++-----------------------------------+</div>
+        <ul class="mode-specs">
+          <li><span class="spec-label">Process</span><span class="spec-value">Single (combined)</span></li>
+          <li><span class="spec-label">Storage</span><span class="spec-value">Local filesystem</span></li>
+          <li><span class="spec-label">Queue</span><span class="spec-value">PostgreSQL</span></li>
+          <li><span class="spec-label">Network</span><span class="spec-value">localhost only</span></li>
+          <li><span class="spec-label">TLS</span><span class="spec-value">Not required</span></li>
+          <li><span class="spec-label">RAM</span><span class="spec-value amber">2 GB</span></li>
+          <li><span class="spec-label">CPU</span><span class="spec-value amber">2 cores</span></li>
+          <li><span class="spec-label">Disk</span><span class="spec-value amber">10 GB</span></li>
+        </ul>
+      </div>
+
+      <!-- VPS Single-Tenant -->
+      <div class="mode-card animate-in stagger-2">
+        <div class="mode-label">Mode 2</div>
+        <h3>VPS Single-Tenant</h3>
+        <div class="mode-audience">Self-hosters, persistent remote instances</div>
+        <div class="mode-desc">
+          Same binary on a remote server. Optionally split API and Worker via
+          <code style="color:var(--green);">--mode</code> flag for resource isolation.
+          Both processes coordinate through the PostgreSQL job queue.
+        </div>
+        <div class="mode-diagram">+------------------+  +----------------+
+|  ottercamp serve |  | ottercamp serve|
+|   --mode api     |  |  --mode worker |
+|                  |  |                |
+|  +------------+  |  | +----------+  |
+|  | API Server |  |  | |  Worker  |  |
+|  | (HTTP+WS)  |  |  | |  (Jobs)  |  |
+|  +-----+------+  |  | +----+-----+  |
++--------|----------+  +------|--------+
+         |                    |
+  +------+--------------------+------+
+  |         PostgreSQL               |
+  |   (data + job queue + events)    |
+  +--------------+-------------------+
+                 |
+  +--------------+-------------------+
+  |  S3-compatible or Filesystem     |
+  +----------------------------------+</div>
+        <ul class="mode-specs">
+          <li><span class="spec-label">Process</span><span class="spec-value">Combined or split</span></li>
+          <li><span class="spec-label">Storage</span><span class="spec-value">Filesystem or S3</span></li>
+          <li><span class="spec-label">Queue</span><span class="spec-value">PostgreSQL</span></li>
+          <li><span class="spec-label">Network</span><span class="spec-value">Internet-facing</span></li>
+          <li><span class="spec-label">TLS</span><span class="spec-value">Required</span></li>
+          <li><span class="spec-label">RAM</span><span class="spec-value amber">4 GB</span></li>
+          <li><span class="spec-label">CPU</span><span class="spec-value amber">2 cores</span></li>
+          <li><span class="spec-label">Disk</span><span class="spec-value amber">50 GB</span></li>
+        </ul>
+      </div>
+
+      <!-- Managed Multi-Tenant -->
+      <div class="mode-card highlight animate-in stagger-3">
+        <div class="mode-label">Mode 3</div>
+        <h3>Managed Multi-Tenant</h3>
+        <div class="mode-audience">Users who do not want to manage infrastructure</div>
+        <div class="mode-desc">
+          Multiple orgs on shared infrastructure. Row-level security, per-org
+          S3 path prefixing, horizontal API/Worker scaling, resource limits per tenant.
+        </div>
+        <div class="mode-diagram">         +-- Load Balancer (TLS) --+
+         |                         |
+  +------+------+   +------+------+
+  | API (n)     |   | API (n)     |
+  | (stateless) |   | (stateless) |
+  +------+------+   +------+------+
+         |                  |
+  +------+------------------+------+
+  |     PostgreSQL (RLS enabled)   |
+  |   per-org row-level security   |
+  +--------------+-----------------+
+                 |
+  +--------------+-----------------+
+  |  S3 (per-org path prefix)      |
+  |  s3://bucket/org-{id}/...      |
+  +--------------------------------+
+         |
+  +------+------+   +------+------+
+  | Worker (n)  |   | Worker (n)  |
+  | (stateless) |   | (stateless) |
+  +-------------+   +-------------+</div>
+        <ul class="mode-specs">
+          <li><span class="spec-label">Process</span><span class="spec-value">Separate, scaled</span></li>
+          <li><span class="spec-label">Storage</span><span class="spec-value">S3 (per-org prefix)</span></li>
+          <li><span class="spec-label">Queue</span><span class="spec-value">PostgreSQL</span></li>
+          <li><span class="spec-label">Isolation</span><span class="spec-value amber">RLS + app-layer</span></li>
+          <li><span class="spec-label">TLS</span><span class="spec-value">At load balancer</span></li>
+          <li><span class="spec-label">Scaling</span><span class="spec-value amber">Horizontal</span></li>
+          <li><span class="spec-label">Limits</span><span class="spec-value amber">Per-org enforced</span></li>
+          <li><span class="spec-label">KMS</span><span class="spec-value amber">Cloud KMS</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== DEPENDENCY MATRIX ===================== -->
+<section id="dependencies">
+  <div class="container">
+    <h2 class="animate-in">// Dependency Matrix</h2>
+    <p class="animate-in text-dim" style="max-width: 680px; font-size: 0.85rem;">
+      PostgreSQL is the only required external dependency. Every other component
+      has a built-in fallback that runs on PostgreSQL or the local filesystem.
+    </p>
+
+    <div class="callout animate-in">
+      <div class="callout-label">Design Constraint</div>
+      <p>Every additional required service increases the barrier to self-hosting.
+        PostgreSQL is the only thing a self-hoster must provision. The job queue, event bus,
+        and object storage all fall back to PostgreSQL or filesystem -- no Redis, no S3, no
+        message broker required.</p>
+    </div>
+
+    <div class="dep-table-wrap animate-in">
+      <table class="dep-table">
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Local Single-Node</th>
+            <th>VPS Single-Tenant</th>
+            <th>Managed Multi-Tenant</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="component-name">PostgreSQL</td>
+            <td><span class="dep-badge required">Required</span><span class="dep-note">Local or Docker</span></td>
+            <td><span class="dep-badge required">Required</span><span class="dep-note">Local or managed (RDS, Neon)</span></td>
+            <td><span class="dep-badge required">Required</span><span class="dep-note">Managed + RLS enabled</span></td>
+          </tr>
+          <tr>
+            <td class="component-name">Object Storage</td>
+            <td><span class="dep-badge fallback">Filesystem</span><span class="dep-note">~/.ottercamp/objects/</span></td>
+            <td><span class="dep-badge fallback">Filesystem</span><span class="dep-note">or S3-compatible (MinIO, R2)</span></td>
+            <td><span class="dep-badge required">S3</span><span class="dep-note">Per-org path prefix</span></td>
+          </tr>
+          <tr>
+            <td class="component-name">Job Queue</td>
+            <td><span class="dep-badge fallback">PostgreSQL</span><span class="dep-note">LISTEN/NOTIFY + polling</span></td>
+            <td><span class="dep-badge fallback">PostgreSQL</span><span class="dep-note">Same mechanism</span></td>
+            <td><span class="dep-badge fallback">PostgreSQL</span><span class="dep-note">SELECT ... FOR UPDATE SKIP LOCKED</span></td>
+          </tr>
+          <tr>
+            <td class="component-name">Event Bus</td>
+            <td><span class="dep-badge fallback">PostgreSQL</span><span class="dep-note">Same as job queue</span></td>
+            <td><span class="dep-badge fallback">PostgreSQL</span><span class="dep-note">Same mechanism</span></td>
+            <td><span class="dep-badge fallback">PostgreSQL</span><span class="dep-note">Same mechanism</span></td>
+          </tr>
+          <tr>
+            <td class="component-name">TLS</td>
+            <td><span class="dep-badge na">N/A</span><span class="dep-note">localhost only</span></td>
+            <td><span class="dep-badge required">Required</span><span class="dep-note">Reverse proxy, ACME, or manual</span></td>
+            <td><span class="dep-badge required">Required</span><span class="dep-note">Load balancer termination</span></td>
+          </tr>
+          <tr>
+            <td class="component-name">Browser Service</td>
+            <td><span class="dep-badge optional">Optional</span><span class="dep-note">Headless Chrome for agent tools</span></td>
+            <td><span class="dep-badge optional">Optional</span><span class="dep-note">Docker container</span></td>
+            <td><span class="dep-badge optional">Optional</span><span class="dep-note">Pooled per-org</span></td>
+          </tr>
+          <tr>
+            <td class="component-name">Cloud KMS</td>
+            <td><span class="dep-badge na">N/A</span><span class="dep-note">Env var or key file</span></td>
+            <td><span class="dep-badge na">N/A</span><span class="dep-note">Env var or key file</span></td>
+            <td><span class="dep-badge required">Required</span><span class="dep-note">AWS KMS / GCP KMS</span></td>
+          </tr>
+          <tr>
+            <td class="component-name">Load Balancer</td>
+            <td><span class="dep-badge na">N/A</span></td>
+            <td><span class="dep-badge na">N/A</span></td>
+            <td><span class="dep-badge required">Required</span><span class="dep-note">ALB or equivalent</span></td>
+          </tr>
+          <tr>
+            <td class="component-name">Model Provider Key</td>
+            <td><span class="dep-badge required">Required</span><span class="dep-note">Only required user config</span></td>
+            <td><span class="dep-badge required">Required</span><span class="dep-note">Env var or secrets table</span></td>
+            <td><span class="dep-badge required">Required</span><span class="dep-note">Via UI/API, encrypted</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== CONFIGURATION ===================== -->
+<section id="config">
+  <div class="container">
+    <h2 class="animate-in">// Configuration Hierarchy</h2>
+    <p class="animate-in text-dim" style="max-width: 680px; font-size: 0.85rem;">
+      Environment variables override YAML config, which overrides built-in defaults.
+      Most variables can be omitted -- sensible defaults handle the common case.
+    </p>
+
+    <div class="config-flow animate-in">
+      <div class="config-level active">
+        <div class="override-label">Highest priority</div>
+        <div class="config-priority">01</div>
+        <div class="config-level-title">Environment Variables</div>
+        <div class="config-level-desc">
+          All configuration can be set via env vars. Always override the config file.
+          The only truly required input is a model provider API key.
+        </div>
+        <div class="config-level-example">ANTHROPIC_API_KEY=sk-ant-...
+DATABASE_URL=postgres://...
+PORT=8080</div>
+      </div>
+      <div class="config-arrow">--></div>
+      <div class="config-level">
+        <div class="override-label">Medium priority</div>
+        <div class="config-priority">02</div>
+        <div class="config-level-title">YAML Config File</div>
+        <div class="config-level-desc">
+          Optional. For complex structures that do not map well to flat env vars:
+          model routing overrides, MCP server definitions.
+        </div>
+        <div class="config-level-example"># ~/.ottercamp/config.yaml
+models:
+  anthropic:
+    default_model: claude-sonnet-4
+mcp_servers:
+  - name: github
+    transport: stdio</div>
+      </div>
+      <div class="config-arrow">--></div>
+      <div class="config-level">
+        <div class="override-label">Lowest priority</div>
+        <div class="config-priority">03</div>
+        <div class="config-level-title">Built-in Defaults</div>
+        <div class="config-level-desc">
+          Sensible defaults for everything. PostgreSQL on localhost:5432,
+          filesystem storage, port 8080, 5 worker concurrency, JSON logging.
+        </div>
+        <div class="config-level-example">PORT=8080
+HOST=0.0.0.0
+LOG_LEVEL=info
+WORKER_CONCURRENCY=5
+OBJECT_STORAGE_TYPE=filesystem
+DATABASE_MAX_CONNECTIONS=25</div>
+      </div>
+    </div>
+
+    <div class="config-categories animate-in">
+      <div class="config-cat">
+        <h4>Required</h4>
+        <div class="config-vars">
+          <div class="config-var">
+            <div class="config-var-name">ANTHROPIC_API_KEY</div>
+            <div class="config-var-desc">At least one model provider key. The only required user config.</div>
+          </div>
+        </div>
+      </div>
+      <div class="config-cat">
+        <h4>Database</h4>
+        <div class="config-vars">
+          <div class="config-var">
+            <div class="config-var-name">DATABASE_URL</div>
+            <div class="config-var-default">postgres://localhost:5432/ottercamp</div>
+            <div class="config-var-desc">PostgreSQL connection string</div>
+          </div>
+          <div class="config-var">
+            <div class="config-var-name">DATABASE_MAX_CONNECTIONS</div>
+            <div class="config-var-default">25</div>
+            <div class="config-var-desc">Maximum connection pool size</div>
+          </div>
+          <div class="config-var">
+            <div class="config-var-name">DATABASE_MIN_CONNECTIONS</div>
+            <div class="config-var-default">5</div>
+            <div class="config-var-desc">Minimum idle connections</div>
+          </div>
+        </div>
+      </div>
+      <div class="config-cat">
+        <h4>Server</h4>
+        <div class="config-vars">
+          <div class="config-var">
+            <div class="config-var-name">PORT</div>
+            <div class="config-var-default">8080</div>
+            <div class="config-var-desc">HTTP listen port</div>
+          </div>
+          <div class="config-var">
+            <div class="config-var-name">HOST</div>
+            <div class="config-var-default">0.0.0.0</div>
+            <div class="config-var-desc">HTTP listen address</div>
+          </div>
+          <div class="config-var">
+            <div class="config-var-name">BASE_URL</div>
+            <div class="config-var-default">http://localhost:8080</div>
+            <div class="config-var-desc">Public-facing URL for links, OAuth callbacks</div>
+          </div>
+          <div class="config-var">
+            <div class="config-var-name">TLS_ACME_DOMAIN</div>
+            <div class="config-var-default">--</div>
+            <div class="config-var-desc">Domain for automatic Let's Encrypt cert</div>
+          </div>
+        </div>
+      </div>
+      <div class="config-cat">
+        <h4>Worker</h4>
+        <div class="config-vars">
+          <div class="config-var">
+            <div class="config-var-name">WORKER_CONCURRENCY</div>
+            <div class="config-var-default">5</div>
+            <div class="config-var-desc">Max concurrent background jobs</div>
+          </div>
+          <div class="config-var">
+            <div class="config-var-name">WORKER_POLL_INTERVAL</div>
+            <div class="config-var-default">1s</div>
+            <div class="config-var-desc">Queue polling interval (+ LISTEN/NOTIFY)</div>
+          </div>
+        </div>
+      </div>
+      <div class="config-cat">
+        <h4>Object Storage</h4>
+        <div class="config-vars">
+          <div class="config-var">
+            <div class="config-var-name">OBJECT_STORAGE_TYPE</div>
+            <div class="config-var-default">filesystem</div>
+            <div class="config-var-desc">Storage backend: filesystem or s3</div>
+          </div>
+          <div class="config-var">
+            <div class="config-var-name">OBJECT_STORAGE_PATH</div>
+            <div class="config-var-default">~/.ottercamp/objects</div>
+            <div class="config-var-desc">Local path for filesystem storage</div>
+          </div>
+          <div class="config-var">
+            <div class="config-var-name">OBJECT_STORAGE_ENDPOINT</div>
+            <div class="config-var-default">--</div>
+            <div class="config-var-desc">S3-compatible endpoint URL</div>
+          </div>
+          <div class="config-var">
+            <div class="config-var-name">OBJECT_STORAGE_BUCKET</div>
+            <div class="config-var-default">ottercamp</div>
+            <div class="config-var-desc">S3 bucket name</div>
+          </div>
+        </div>
+      </div>
+      <div class="config-cat">
+        <h4>Observability</h4>
+        <div class="config-vars">
+          <div class="config-var">
+            <div class="config-var-name">LOG_LEVEL</div>
+            <div class="config-var-default">info</div>
+            <div class="config-var-desc">debug, info, warn, error</div>
+          </div>
+          <div class="config-var">
+            <div class="config-var-name">LOG_FORMAT</div>
+            <div class="config-var-default">json</div>
+            <div class="config-var-desc">json or text (human-readable)</div>
+          </div>
+          <div class="config-var">
+            <div class="config-var-name">METRICS_ENABLED</div>
+            <div class="config-var-default">false</div>
+            <div class="config-var-desc">Prometheus endpoint at /metrics</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== OPERATIONS FLOW ===================== -->
+<section id="operations">
+  <div class="container">
+    <h2 class="animate-in">// Operations Flow</h2>
+    <p class="animate-in text-dim" style="max-width: 680px; font-size: 0.85rem;">
+      Deploy, upgrade, backup, and restore -- all single-command operations.
+      Migrations run automatically. No manual steps for minor versions.
+    </p>
+
+    <!-- Deploy / Startup Flow -->
+    <div class="mermaid-container animate-in" style="margin-bottom: 2rem;">
+      <div class="mermaid-label">Startup Sequence</div>
+      <div class="mermaid-controls">
+        <button class="mermaid-btn" onclick="zoomMermaid('startup', 1.2)" title="Zoom in">+</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('startup', 0.8)" title="Zoom out">-</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('startup', 'reset')" title="Reset">R</button>
+      </div>
+      <div class="mermaid-viewport" id="startup-viewport">
+        <pre class="mermaid" id="startup">
+flowchart LR
+    A["ottercamp serve"] --> B["Connect to\nPostgreSQL"]
+    B --> C{"Schema\ncurrent?"}
+    C -->|"Pending"| D["Run migrations\n(transactional)"]
+    C -->|"Current"| E["Skip"]
+    C -->|"Newer than binary"| F["EXIT: version\nmismatch error"]
+    D --> G{"First\nstart?"}
+    E --> G
+    G -->|"Yes"| H["Bootstrap:\ncreate org,\nadmin user,\nstarter trio"]
+    G -->|"No"| I["Start API\nserver"]
+    H --> I
+    I --> J["Start Worker\n(background jobs)"]
+    J --> K["Ready on\n:8080"]
+        </pre>
+      </div>
+    </div>
+
+    <!-- Upgrade Flow -->
+    <div class="mermaid-container animate-in" style="margin-bottom: 2rem;">
+      <div class="mermaid-label">Upgrade Path (Docker Compose)</div>
+      <div class="mermaid-controls">
+        <button class="mermaid-btn" onclick="zoomMermaid('upgrade', 1.2)" title="Zoom in">+</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('upgrade', 0.8)" title="Zoom out">-</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('upgrade', 'reset')" title="Reset">R</button>
+      </div>
+      <div class="mermaid-viewport" id="upgrade-viewport">
+        <pre class="mermaid" id="upgrade">
+flowchart LR
+    A["docker compose\npull"] --> B["Pull new\nimage"]
+    B --> C["docker compose\nup -d"]
+    C --> D["New container\nstarts"]
+    D --> E["Auto-run\npending\nmigrations"]
+    E --> F["Health check\npasses"]
+    F --> G["Serving\nnew version"]
+
+    style A fill:#1a1a1a,stroke:#ffb000,color:#ffb000
+    style G fill:#1a1a1a,stroke:#00ff41,color:#00ff41
+        </pre>
+      </div>
+    </div>
+
+    <!-- Backup/Restore Flow -->
+    <div class="mermaid-container animate-in">
+      <div class="mermaid-label">Backup and Restore</div>
+      <div class="mermaid-controls">
+        <button class="mermaid-btn" onclick="zoomMermaid('backup', 1.2)" title="Zoom in">+</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('backup', 0.8)" title="Zoom out">-</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('backup', 'reset')" title="Reset">R</button>
+      </div>
+      <div class="mermaid-viewport" id="backup-viewport">
+        <pre class="mermaid" id="backup">
+flowchart TB
+    subgraph BAK ["ottercamp backup --output archive.tar.gz"]
+        direction LR
+        B1["pg_dump\n(compressed)"] --> B3["Package into\ntar.gz with\nmanifest"]
+        B2["Tarball objects\n(fs or S3 list)"] --> B3
+    end
+
+    subgraph RST ["ottercamp restore --input archive.tar.gz"]
+        direction LR
+        R1["Read manifest\n(version, schema,\ntimestamp)"] --> R2["Check\ncompatibility"]
+        R2 --> R3["pg_restore\n(drop + recreate)"]
+        R3 --> R4["Restore objects\nto storage"]
+        R4 --> R5["Run pending\nmigrations"]
+    end
+
+    BAK --> ARCHIVE["archive.tar.gz\n-- pg_dump\n-- objects/\n-- manifest.json"]
+    ARCHIVE --> RST
+        </pre>
+      </div>
+    </div>
+
+    <div class="callout animate-in" style="margin-top: 2rem;">
+      <div class="callout-label">Versioning Policy</div>
+      <p>
+        <strong style="color:var(--text)">PATCH</strong> (1.2.3 to 1.2.4): bug fixes, no schema changes, drop-in replacement.
+        <strong style="color:var(--text)">MINOR</strong> (1.2 to 1.3): new features, additive migrations, backward-compatible.
+        <strong style="color:var(--text)">MAJOR</strong> (1.x to 2.x): breaking changes, upgrade guide published.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== SECURITY ===================== -->
+<section id="security">
+  <div class="container">
+    <h2 class="animate-in">// Security Features</h2>
+    <p class="animate-in text-dim" style="max-width: 680px; font-size: 0.85rem;">
+      Embedded forward-only migrations, AES-256-GCM encrypted secrets, and a master
+      key architecture that keeps the one critical secret outside the database.
+    </p>
+
+    <div class="security-grid">
+      <div class="security-card animate-in stagger-1">
+        <h3>Embedded Migrations</h3>
+        <p>
+          Schema migrations are compiled into the Go binary. Forward-only SQL scripts,
+          numbered sequentially. No rollback migrations -- fixes go forward.
+          Each migration runs in its own transaction. A partial migration is not possible.
+        </p>
+        <div class="security-detail">
+          <div class="security-detail-row">
+            <span class="security-detail-label">Direction</span>
+            <span class="security-detail-value">Forward-only</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">Execution</span>
+            <span class="security-detail-value">Transactional per-migration</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">Compatibility</span>
+            <span class="security-detail-value">Backward-compat (minor)</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">Large tables</span>
+            <span class="security-detail-value">CONCURRENTLY DDL</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">Downgrade</span>
+            <span class="security-detail-value">Refused with error</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="security-card animate-in stagger-2">
+        <h3>Encrypted Secrets</h3>
+        <p>
+          All secrets (provider keys, SSH keys, MCP credentials) stored AES-256-GCM
+          encrypted in PostgreSQL. Each secret encrypted with a unique nonce. Decrypted
+          at runtime, held in memory only, never written to disk or logs.
+        </p>
+        <div class="security-detail">
+          <div class="security-detail-row">
+            <span class="security-detail-label">Algorithm</span>
+            <span class="security-detail-value">AES-256-GCM</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">Nonce</span>
+            <span class="security-detail-value">Unique per secret</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">Storage</span>
+            <span class="security-detail-value">PostgreSQL (secret table)</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">Log redaction</span>
+            <span class="security-detail-value">Pattern-matched</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">Key rotation</span>
+            <span class="security-detail-value">Background re-encrypt</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="security-card animate-in stagger-3">
+        <h3>Master Key Architecture</h3>
+        <p>
+          The master key is the one secret NOT stored in PostgreSQL. It is sourced
+          from an environment variable, a key file, or cloud KMS. All other secrets
+          are derived from it.
+        </p>
+        <div class="security-detail">
+          <div class="security-detail-row">
+            <span class="security-detail-label">Source 1</span>
+            <span class="security-detail-value">OTTERCAMP_MASTER_KEY env</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">Source 2</span>
+            <span class="security-detail-value">Key file path</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">Source 3</span>
+            <span class="security-detail-value">Cloud KMS (managed)</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">Format</span>
+            <span class="security-detail-value">32-byte hex-encoded</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">Rotation</span>
+            <span class="security-detail-value">Re-encrypt all + key history</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="security-card animate-in stagger-4">
+        <h3>Health Checks</h3>
+        <p>
+          Two endpoints following the liveness/readiness pattern. Non-critical
+          dependencies (model providers, browser, MCP) do not affect readiness.
+        </p>
+        <div class="security-detail">
+          <div class="security-detail-row">
+            <span class="security-detail-label">GET /health</span>
+            <span class="security-detail-value">Liveness (process up)</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">GET /ready</span>
+            <span class="security-detail-value">Readiness (deps OK)</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">DB check</span>
+            <span class="security-detail-value">SELECT 1</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">Storage check</span>
+            <span class="security-detail-value">list/head bucket</span>
+          </div>
+          <div class="security-detail-row">
+            <span class="security-detail-label">Migration check</span>
+            <span class="security-detail-value">Schema version match</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h3 class="animate-in" style="color: var(--amber); margin-top: 3rem; margin-bottom: 0.5rem; font-size: 0.95rem;">Secret Categories</h3>
+    <p class="animate-in text-dim" style="font-size: 0.8rem; margin-bottom: 1.5rem;">Four categories stored in the encrypted <code style="color:var(--green)">secret</code> table.</p>
+
+    <div class="secret-categories animate-in">
+      <div class="secret-cat">
+        <div class="secret-cat-icon">[K]</div>
+        <div class="secret-cat-name">Model Provider</div>
+        <div class="secret-cat-example">Anthropic, OpenAI, Google AI</div>
+      </div>
+      <div class="secret-cat">
+        <div class="secret-cat-icon">[S]</div>
+        <div class="secret-cat-name">SSH Keys</div>
+        <div class="secret-cat-example">Git clone/push credentials</div>
+      </div>
+      <div class="secret-cat">
+        <div class="secret-cat-icon">[M]</div>
+        <div class="secret-cat-name">MCP Credentials</div>
+        <div class="secret-cat-example">OAuth tokens, API keys</div>
+      </div>
+      <div class="secret-cat">
+        <div class="secret-cat-icon">[E]</div>
+        <div class="secret-cat-name">External Service</div>
+        <div class="secret-cat-example">GitHub, Slack, email tokens</div>
+      </div>
+    </div>
+
+    <div class="schema-block animate-in" style="margin-top: 2rem;">
+<span class="kw">create table</span> <span class="type">secret</span> (
+  id              <span class="type">uuid</span> <span class="kw">primary key default</span> gen_random_uuid(),
+  organization_id <span class="type">uuid</span> <span class="kw">not null references</span> organization(id),
+  name            <span class="type">text</span> <span class="kw">not null</span>,               <span class="comment">-- human-readable label</span>
+  slug            <span class="type">text</span> <span class="kw">not null</span>,               <span class="comment">-- machine-readable identifier</span>
+  category        <span class="type">text</span> <span class="kw">not null check</span> (category <span class="kw">in</span>
+    ('model_provider', 'ssh_key', 'mcp_credential', 'external_service')),
+  encrypted_value <span class="type">bytea</span> <span class="kw">not null</span>,              <span class="comment">-- AES-256-GCM encrypted</span>
+  created_by_type <span class="type">text</span> <span class="kw">not null</span>,
+  created_by_id   <span class="type">uuid</span>,
+  last_rotated_at <span class="type">timestamptz</span>,
+  expires_at      <span class="type">timestamptz</span>,                 <span class="comment">-- optional expiry</span>
+  created_at      <span class="type">timestamptz</span> <span class="kw">not null default</span> now(),
+  updated_at      <span class="type">timestamptz</span> <span class="kw">not null default</span> now(),
+
+  <span class="kw">unique</span> (organization_id, slug)
+);</div>
+  </div>
+</section>
+
+<!-- ===================== DOCKER COMPOSE ===================== -->
+<section id="docker">
+  <div class="container">
+    <h2 class="animate-in">// Docker Compose Distribution</h2>
+    <p class="animate-in text-dim" style="max-width: 680px; font-size: 0.85rem;">
+      The primary self-host packaging. As few as two containers: OtterCamp + PostgreSQL.
+      One file, one command, everything runs.
+    </p>
+
+    <div class="modes-grid" style="grid-template-columns: repeat(2, 1fr); margin-top: 2rem;">
+      <div class="mode-card animate-in stagger-1">
+        <div class="mode-label">Full Stack</div>
+        <h3>3 Containers</h3>
+        <div class="mode-desc">OtterCamp + PostgreSQL + MinIO (S3-compatible). Optional headless Chrome for browser agent tools.</div>
+        <div class="mode-diagram" style="font-size: 0.62rem;">+------------------+
+| ottercamp:latest |---> :8080
++--------+---------+
+         |
+   +-----+-----+--------+
+   |            |        |
++--+---+  +----+---+  +-+------+
+| pg:16|  |  minio |  | chrome |
++------+  +--------+  |(opt.)  |
+                       +--------+</div>
+        <ul class="mode-specs">
+          <li><span class="spec-label">Containers</span><span class="spec-value amber">3 (+ optional chrome)</span></li>
+          <li><span class="spec-label">Object storage</span><span class="spec-value">MinIO (S3)</span></li>
+          <li><span class="spec-label">Volumes</span><span class="spec-value">3 named volumes</span></li>
+        </ul>
+      </div>
+
+      <div class="mode-card animate-in stagger-2">
+        <div class="mode-label">Minimal</div>
+        <h3>2 Containers</h3>
+        <div class="mode-desc">OtterCamp + PostgreSQL only. Object storage uses local filesystem via a mounted volume. Smallest possible footprint.</div>
+        <div class="mode-diagram" style="font-size: 0.62rem;">+------------------+
+| ottercamp:latest |---> :8080
+|  OBJECT_STORAGE  |
+|  _TYPE=filesystem|
++--------+---------+
+         |
+      +--+---+
+      | pg:16|
+      +------+</div>
+        <ul class="mode-specs">
+          <li><span class="spec-label">Containers</span><span class="spec-value amber">2</span></li>
+          <li><span class="spec-label">Object storage</span><span class="spec-value">Filesystem</span></li>
+          <li><span class="spec-label">Volumes</span><span class="spec-value">2 named volumes</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout animate-in" style="margin-top: 2rem;">
+      <div class="callout-label">Binary Distribution</div>
+      <p>
+        For users who do not want Docker: a single Go binary with zero runtime dependencies
+        (beyond PostgreSQL). Available via Homebrew, apt, Arch (yay), direct download, or
+        <code style="color:var(--green)">go install</code>. Includes embedded migrations,
+        static web UI assets, and all application code.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== TLS ===================== -->
+<section id="tls">
+  <div class="container">
+    <h2 class="animate-in">// TLS Options</h2>
+    <p class="animate-in text-dim" style="max-width: 680px; font-size: 0.85rem;">
+      Three approaches to TLS for self-hosted deployments. Local mode does not require TLS.
+    </p>
+    <div class="modes-grid animate-in">
+      <div class="mode-card">
+        <div class="mode-label">Recommended</div>
+        <h3>Reverse Proxy</h3>
+        <div class="mode-desc">
+          Caddy, Nginx, or Traefik in front of OtterCamp. The proxy handles TLS termination,
+          cert renewal, and HTTPS redirects. OtterCamp listens on HTTP internally.
+        </div>
+        <ul class="mode-specs">
+          <li><span class="spec-label">Complexity</span><span class="spec-value">Low</span></li>
+          <li><span class="spec-label">Cert renewal</span><span class="spec-value">Proxy handles</span></li>
+        </ul>
+      </div>
+      <div class="mode-card">
+        <div class="mode-label">Built-in</div>
+        <h3>ACME / Let's Encrypt</h3>
+        <div class="mode-desc">
+          Set <code style="color:var(--green)">TLS_ACME_DOMAIN</code> and OtterCamp handles
+          certificate issuance and renewal automatically. Requires port 443 accessible from the internet.
+        </div>
+        <ul class="mode-specs">
+          <li><span class="spec-label">Complexity</span><span class="spec-value">Low</span></li>
+          <li><span class="spec-label">Cert renewal</span><span class="spec-value">Automatic</span></li>
+        </ul>
+      </div>
+      <div class="mode-card">
+        <div class="mode-label">Manual</div>
+        <h3>Custom Certificates</h3>
+        <div class="mode-desc">
+          Set <code style="color:var(--green)">TLS_CERT_FILE</code> and
+          <code style="color:var(--green)">TLS_KEY_FILE</code> to provide your own certs.
+          Renewal is the operator's responsibility.
+        </div>
+        <ul class="mode-specs">
+          <li><span class="spec-label">Complexity</span><span class="spec-value">Medium</span></li>
+          <li><span class="spec-label">Cert renewal</span><span class="spec-value">Manual</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== FOOTER ===================== -->
+<footer class="footer">
+  <div class="container">
+    <div class="footer-title">OtterCamp V2</div>
+    <div class="footer-desc">
+      One binary. Three deployment modes. PostgreSQL is the only required dependency.
+    </div>
+    <div class="footer-links">
+      <a href="#modes" class="footer-link">Deployment Modes</a>
+      <a href="#dependencies" class="footer-link">Dependencies</a>
+      <a href="#config" class="footer-link">Configuration</a>
+      <a href="#operations" class="footer-link">Operations</a>
+      <a href="#security" class="footer-link">Security</a>
+      <a href="#docker" class="footer-link">Docker Compose</a>
+      <a href="#tls" class="footer-link">TLS</a>
+    </div>
+    <div class="footer-bar">
+      Doc 08 -- Deployment and Self-Hosting -- OtterCamp V2 Spec -- Visual Explainer
+    </div>
+  </div>
+</footer>
+
+<!-- ===================== SCRIPTS ===================== -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      darkMode: true,
+      background: '#1a1a1a',
+      primaryColor: '#1a1a1a',
+      primaryTextColor: '#00ff41',
+      primaryBorderColor: '#333',
+      lineColor: '#666',
+      secondaryColor: '#1a1a1a',
+      tertiaryColor: '#141414',
+      fontFamily: 'IBM Plex Mono, monospace',
+      fontSize: '13px',
+      nodeBorder: '#444',
+      clusterBkg: '#141414',
+      clusterBorder: '#333',
+      edgeLabelBackground: '#1a1a1a',
+      nodeTextColor: '#00ff41',
+    },
+    flowchart: {
+      curve: 'basis',
+      padding: 20,
+      htmlLabels: true,
+      useMaxWidth: true,
+    },
+  });
+
+  // Intersection Observer for staggered animations
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+        }
+      });
+    },
+    { threshold: 0.1, rootMargin: '0px 0px -50px 0px' }
+  );
+
+  document.querySelectorAll('.animate-in').forEach((el) => observer.observe(el));
+</script>
+
+<script>
+  // Mermaid zoom controls
+  const zoomState = {};
+
+  function zoomMermaid(id, factor) {
+    const viewport = document.getElementById(id + '-viewport');
+    if (!viewport) return;
+    const mermaidEl = viewport.querySelector('.mermaid, svg');
+    if (!mermaidEl) return;
+
+    if (!zoomState[id]) zoomState[id] = 1;
+
+    if (factor === 'reset') {
+      zoomState[id] = 1;
+    } else {
+      zoomState[id] *= factor;
+      zoomState[id] = Math.max(0.3, Math.min(3, zoomState[id]));
+    }
+
+    mermaidEl.style.transform = 'scale(' + zoomState[id] + ')';
+    mermaidEl.style.transformOrigin = 'top left';
+  }
+
+  // Make zoomMermaid globally accessible
+  window.zoomMermaid = zoomMermaid;
+</script>
+
+</body>
+</html>

@@ -1,0 +1,2177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memory Management — Ellie V2 | OtterCamp</title>
+
+<!-- Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+  /* ── CSS Custom Properties ── */
+  :root {
+    --bg-deep:      #1a0533;
+    --bg-dark:      #0a1628;
+    --violet:       #bb86fc;
+    --cyan:         #03dac6;
+    --pink:         #cf6679;
+    --violet-dim:   rgba(187, 134, 252, 0.15);
+    --cyan-dim:     rgba(3, 218, 198, 0.12);
+    --pink-dim:     rgba(207, 102, 121, 0.12);
+    --violet-glow:  rgba(187, 134, 252, 0.35);
+    --cyan-glow:    rgba(3, 218, 198, 0.30);
+    --pink-glow:    rgba(207, 102, 121, 0.30);
+    --text:         #e8e0f0;
+    --text-dim:     #a098b0;
+    --text-muted:   #6e6880;
+    --surface:      rgba(255, 255, 255, 0.04);
+    --surface-hover:rgba(255, 255, 255, 0.07);
+    --border:       rgba(187, 134, 252, 0.12);
+    --border-cyan:  rgba(3, 218, 198, 0.15);
+    --font-heading: 'Sora', sans-serif;
+    --font-body:    'Inter', sans-serif;
+    --font-mono:    'JetBrains Mono', monospace;
+    --section-gap:  6rem;
+  }
+
+  /* ── Reset ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    font-family: var(--font-body);
+    color: var(--text);
+    line-height: 1.7;
+    min-height: 100vh;
+    overflow-x: hidden;
+
+    /* Gradient mesh background */
+    background:
+      radial-gradient(ellipse 80% 60% at 15% 20%, rgba(187,134,252,0.08) 0%, transparent 60%),
+      radial-gradient(ellipse 70% 50% at 85% 30%, rgba(3,218,198,0.06) 0%, transparent 55%),
+      radial-gradient(ellipse 60% 70% at 50% 80%, rgba(207,102,121,0.05) 0%, transparent 50%),
+      radial-gradient(ellipse 90% 40% at 30% 60%, rgba(187,134,252,0.04) 0%, transparent 50%),
+      linear-gradient(165deg, var(--bg-deep) 0%, #120a2a 25%, #0d1430 55%, var(--bg-dark) 100%);
+    background-attachment: fixed;
+  }
+
+  /* ── Global Layout ── */
+  .container {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 0 2rem;
+  }
+
+  section {
+    padding: var(--section-gap) 0;
+    position: relative;
+  }
+
+  /* ── Typography ── */
+  h1, h2, h3, h4 {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+  }
+
+  h2 {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+    background: linear-gradient(135deg, var(--violet) 0%, var(--cyan) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  h3 {
+    font-size: 1.25rem;
+    color: var(--text);
+    margin-bottom: 0.75rem;
+  }
+
+  .section-subtitle {
+    color: var(--text-dim);
+    font-size: 1.05rem;
+    max-width: 680px;
+    margin-bottom: 3rem;
+  }
+
+  /* ── Animations ── */
+  @keyframes fadeScale {
+    from { opacity: 0; transform: scale(0.88); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(32px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.6; }
+    50%      { opacity: 1; }
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-8px); }
+  }
+
+  @keyframes orbGlow {
+    0%, 100% { filter: brightness(1) drop-shadow(0 0 20px var(--glow-color)); }
+    50%      { filter: brightness(1.15) drop-shadow(0 0 40px var(--glow-color)); }
+  }
+
+  .fade-scale { animation: fadeScale 0.7s ease-out both; }
+  .fade-up    { animation: fadeUp 0.6s ease-out both; }
+
+  .stagger-1 { animation-delay: 0.1s; }
+  .stagger-2 { animation-delay: 0.25s; }
+  .stagger-3 { animation-delay: 0.4s; }
+  .stagger-4 { animation-delay: 0.55s; }
+  .stagger-5 { animation-delay: 0.7s; }
+  .stagger-6 { animation-delay: 0.85s; }
+
+  /* ── Intersection Observer reveal ── */
+  .reveal {
+    opacity: 0;
+    transform: translateY(32px);
+    transition: opacity 0.7s ease-out, transform 0.7s ease-out;
+  }
+  .reveal.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 2rem;
+    backdrop-filter: blur(12px);
+    transition: border-color 0.3s, box-shadow 0.3s, transform 0.3s;
+  }
+  .card:hover {
+    border-color: rgba(187,134,252,0.25);
+    box-shadow: 0 8px 40px rgba(187,134,252,0.08);
+    transform: translateY(-2px);
+  }
+
+  /* ── Glow badges ── */
+  .badge {
+    display: inline-block;
+    padding: 0.2em 0.7em;
+    border-radius: 20px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+  .badge--violet { background: var(--violet-dim); color: var(--violet); border: 1px solid rgba(187,134,252,0.25); }
+  .badge--cyan   { background: var(--cyan-dim);   color: var(--cyan);   border: 1px solid rgba(3,218,198,0.2); }
+  .badge--pink   { background: var(--pink-dim);   color: var(--pink);   border: 1px solid rgba(207,102,121,0.2); }
+
+  /* ── Code / Mono ── */
+  code, .mono {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+  }
+  code {
+    background: rgba(187,134,252,0.08);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    color: var(--violet);
+  }
+
+  /* ── Divider ── */
+  .divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent 0%, var(--border) 30%, var(--border) 70%, transparent 100%);
+    margin: 0.5rem 0;
+  }
+
+  /* ═══════════════════════════════════════════
+     SECTION 1 — HERO
+     ═══════════════════════════════════════════ */
+  .hero {
+    padding: 6rem 0 4rem;
+    text-align: center;
+    position: relative;
+  }
+
+  .hero__eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--cyan);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 1.2rem;
+    opacity: 0;
+    animation: fadeUp 0.6s 0.1s ease-out forwards;
+  }
+
+  .hero__title {
+    font-family: var(--font-heading);
+    font-size: clamp(2.2rem, 5vw, 3.8rem);
+    font-weight: 700;
+    line-height: 1.1;
+    margin-bottom: 1.2rem;
+    background: linear-gradient(135deg, var(--violet) 0%, #d4a5ff 30%, var(--cyan) 70%, #7fffd4 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    opacity: 0;
+    animation: fadeScale 0.8s 0.2s ease-out forwards;
+    position: relative;
+  }
+  .hero__title::after {
+    content: '';
+    position: absolute;
+    bottom: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 120px;
+    height: 3px;
+    background: linear-gradient(90deg, var(--violet), var(--cyan));
+    border-radius: 2px;
+    opacity: 0.6;
+  }
+
+  .hero__desc {
+    color: var(--text-dim);
+    font-size: 1.1rem;
+    max-width: 620px;
+    margin: 1.8rem auto 3rem;
+    opacity: 0;
+    animation: fadeUp 0.6s 0.35s ease-out forwards;
+  }
+
+  /* Hero stats row */
+  .hero-stats {
+    display: flex;
+    justify-content: center;
+    gap: 2.5rem;
+    flex-wrap: wrap;
+    opacity: 0;
+    animation: fadeUp 0.6s 0.5s ease-out forwards;
+  }
+  .hero-stat {
+    text-align: center;
+  }
+  .hero-stat__value {
+    font-family: var(--font-heading);
+    font-size: 2.4rem;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .hero-stat__value--violet { color: var(--violet); text-shadow: 0 0 30px var(--violet-glow); }
+  .hero-stat__value--cyan   { color: var(--cyan);   text-shadow: 0 0 30px var(--cyan-glow); }
+  .hero-stat__value--pink   { color: var(--pink);   text-shadow: 0 0 30px var(--pink-glow); }
+  .hero-stat__label {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-top: 0.4rem;
+  }
+
+  /* Ambient glow orbs behind hero */
+  .hero__glow {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(80px);
+    pointer-events: none;
+    z-index: -1;
+  }
+  .hero__glow--1 {
+    width: 400px; height: 400px;
+    background: rgba(187,134,252,0.12);
+    top: -80px; left: 10%;
+    animation: pulse 6s ease-in-out infinite;
+  }
+  .hero__glow--2 {
+    width: 300px; height: 300px;
+    background: rgba(3,218,198,0.08);
+    top: 60px; right: 5%;
+    animation: pulse 8s 2s ease-in-out infinite;
+  }
+  .hero__glow--3 {
+    width: 250px; height: 250px;
+    background: rgba(207,102,121,0.06);
+    bottom: -40px; left: 40%;
+    animation: pulse 7s 1s ease-in-out infinite;
+  }
+
+  /* ═══════════════════════════════════════════
+     SECTION 2 — DUAL ROLE
+     ═══════════════════════════════════════════ */
+  .dual-role-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    margin-top: 2rem;
+  }
+
+  .dual-card {
+    position: relative;
+    overflow: hidden;
+  }
+  .dual-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    border-radius: 16px 16px 0 0;
+  }
+  .dual-card--infra::before {
+    background: linear-gradient(90deg, var(--violet), rgba(187,134,252,0.2));
+  }
+  .dual-card--agent::before {
+    background: linear-gradient(90deg, var(--cyan), rgba(3,218,198,0.2));
+  }
+
+  .dual-card__icon {
+    width: 48px; height: 48px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.4rem;
+    margin-bottom: 1rem;
+  }
+  .dual-card--infra .dual-card__icon {
+    background: var(--violet-dim);
+    box-shadow: 0 0 20px var(--violet-glow);
+  }
+  .dual-card--agent .dual-card__icon {
+    background: var(--cyan-dim);
+    box-shadow: 0 0 20px var(--cyan-glow);
+  }
+
+  .dual-card__title {
+    font-family: var(--font-heading);
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+  }
+  .dual-card--infra .dual-card__title { color: var(--violet); }
+  .dual-card--agent .dual-card__title { color: var(--cyan); }
+
+  .dual-card ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .dual-card li {
+    font-size: 0.92rem;
+    color: var(--text-dim);
+    padding-left: 1.2rem;
+    position: relative;
+  }
+  .dual-card li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.55em;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+  }
+  .dual-card--infra li::before { background: var(--violet); box-shadow: 0 0 6px var(--violet-glow); }
+  .dual-card--agent li::before { background: var(--cyan); box-shadow: 0 0 6px var(--cyan-glow); }
+
+  /* ═══════════════════════════════════════════
+     SECTION 3 — THREE MEMORY LAYERS
+     ═══════════════════════════════════════════ */
+  .layers-container {
+    display: flex;
+    justify-content: center;
+    gap: 2.5rem;
+    flex-wrap: wrap;
+    margin-top: 2.5rem;
+    position: relative;
+  }
+
+  /* Connecting lines between orbs */
+  .layers-container::before,
+  .layers-container::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    height: 1px;
+    z-index: 0;
+  }
+  .layers-container::before {
+    left: calc(33.3% - 1rem);
+    width: calc(33.3% - 1.5rem);
+    background: linear-gradient(90deg, var(--violet-glow), var(--cyan-glow));
+    opacity: 0.4;
+  }
+  .layers-container::after {
+    left: calc(50% + 2rem);
+    width: calc(33.3% - 3rem);
+    background: linear-gradient(90deg, var(--cyan-glow), var(--pink-glow));
+    opacity: 0.4;
+  }
+
+  .layer-orb {
+    position: relative;
+    z-index: 1;
+    width: 300px;
+    text-align: center;
+    animation: fadeScale 0.8s ease-out both;
+  }
+
+  .layer-orb__sphere {
+    width: 130px; height: 130px;
+    border-radius: 50%;
+    margin: 0 auto 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    animation: float 6s ease-in-out infinite;
+    cursor: default;
+  }
+  .layer-orb:nth-child(2) .layer-orb__sphere { animation-delay: -2s; }
+  .layer-orb:nth-child(3) .layer-orb__sphere { animation-delay: -4s; }
+
+  .layer-orb__sphere::before {
+    content: '';
+    position: absolute;
+    inset: -6px;
+    border-radius: 50%;
+    opacity: 0.5;
+    animation: pulse 4s ease-in-out infinite;
+  }
+  .layer-orb__sphere::after {
+    content: '';
+    position: absolute;
+    inset: 4px;
+    border-radius: 50%;
+    background: inherit;
+    opacity: 0.4;
+    filter: blur(15px);
+  }
+
+  .layer-orb--episodic .layer-orb__sphere {
+    background: radial-gradient(circle at 35% 35%, rgba(187,134,252,0.6), rgba(187,134,252,0.15));
+    box-shadow: 0 0 40px var(--violet-glow), inset 0 0 30px rgba(187,134,252,0.1);
+    --glow-color: var(--violet-glow);
+  }
+  .layer-orb--episodic .layer-orb__sphere::before {
+    border: 1px solid rgba(187,134,252,0.25);
+  }
+
+  .layer-orb--semantic .layer-orb__sphere {
+    background: radial-gradient(circle at 35% 35%, rgba(3,218,198,0.6), rgba(3,218,198,0.15));
+    box-shadow: 0 0 40px var(--cyan-glow), inset 0 0 30px rgba(3,218,198,0.1);
+    --glow-color: var(--cyan-glow);
+  }
+  .layer-orb--semantic .layer-orb__sphere::before {
+    border: 1px solid rgba(3,218,198,0.25);
+  }
+
+  .layer-orb--procedural .layer-orb__sphere {
+    background: radial-gradient(circle at 35% 35%, rgba(207,102,121,0.6), rgba(207,102,121,0.15));
+    box-shadow: 0 0 40px var(--pink-glow), inset 0 0 30px rgba(207,102,121,0.1);
+    --glow-color: var(--pink-glow);
+  }
+  .layer-orb--procedural .layer-orb__sphere::before {
+    border: 1px solid rgba(207,102,121,0.25);
+  }
+
+  .layer-orb__icon {
+    font-size: 2.4rem;
+    position: relative;
+    z-index: 1;
+    filter: drop-shadow(0 0 8px currentColor);
+  }
+  .layer-orb--episodic  .layer-orb__icon { color: var(--violet); }
+  .layer-orb--semantic  .layer-orb__icon { color: var(--cyan); }
+  .layer-orb--procedural .layer-orb__icon { color: var(--pink); }
+
+  .layer-orb__name {
+    font-family: var(--font-heading);
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin-bottom: 0.3rem;
+  }
+  .layer-orb--episodic  .layer-orb__name { color: var(--violet); }
+  .layer-orb--semantic  .layer-orb__name { color: var(--cyan); }
+  .layer-orb--procedural .layer-orb__name { color: var(--pink); }
+
+  .layer-orb__question {
+    font-style: italic;
+    color: var(--text-muted);
+    font-size: 0.88rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .layer-orb__desc {
+    font-size: 0.88rem;
+    color: var(--text-dim);
+    margin-bottom: 0.8rem;
+  }
+
+  .layer-orb__decay {
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    padding: 0.3em 0.8em;
+    border-radius: 12px;
+    display: inline-block;
+  }
+  .layer-orb--episodic .layer-orb__decay {
+    background: var(--violet-dim);
+    color: var(--violet);
+  }
+  .layer-orb--semantic .layer-orb__decay {
+    background: var(--cyan-dim);
+    color: var(--cyan);
+  }
+  .layer-orb--procedural .layer-orb__decay {
+    background: var(--pink-dim);
+    color: var(--pink);
+  }
+
+  .layer-example {
+    margin-top: 1rem;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    background: rgba(0,0,0,0.2);
+    padding: 0.6rem 0.8rem;
+    border-radius: 8px;
+    border-left: 2px solid;
+    text-align: left;
+  }
+  .layer-orb--episodic  .layer-example { border-color: var(--violet); }
+  .layer-orb--semantic  .layer-example { border-color: var(--cyan); }
+  .layer-orb--procedural .layer-example { border-color: var(--pink); }
+
+  /* ═══════════════════════════════════════════
+     SECTION 4 — EXTRACTION PIPELINE (Mermaid)
+     ═══════════════════════════════════════════ */
+  .mermaid-wrapper {
+    position: relative;
+    background: rgba(0,0,0,0.2);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 2rem 1rem;
+    margin-top: 2rem;
+    overflow: hidden;
+  }
+
+  .mermaid-wrapper .mermaid {
+    display: flex;
+    justify-content: center;
+  }
+
+  /* Mermaid zoom controls */
+  .mermaid-controls {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    display: flex;
+    gap: 0.4rem;
+    z-index: 10;
+  }
+  .mermaid-controls button {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: rgba(0,0,0,0.4);
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    backdrop-filter: blur(8px);
+  }
+  .mermaid-controls button:hover {
+    border-color: var(--violet);
+    color: var(--violet);
+    background: rgba(187,134,252,0.1);
+  }
+
+  .mermaid-zoomable {
+    transition: transform 0.3s ease;
+    transform-origin: center center;
+  }
+
+  /* Pipeline stage labels */
+  .pipeline-legend {
+    display: flex;
+    justify-content: center;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    margin-top: 1.5rem;
+  }
+  .pipeline-legend__item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.82rem;
+    color: var(--text-dim);
+  }
+  .pipeline-legend__dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+  }
+
+  /* ═══════════════════════════════════════════
+     SECTION 5 — RETRIEVAL PIPELINE
+     ═══════════════════════════════════════════ */
+  .retrieval-flow {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-top: 2rem;
+    position: relative;
+  }
+
+  /* Connecting arrows between stages */
+  .retrieval-flow::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg,
+      var(--violet) 0%, var(--violet) 24%,
+      var(--cyan) 26%, var(--cyan) 49%,
+      var(--pink) 51%, var(--pink) 74%,
+      var(--violet) 76%, var(--violet) 100%
+    );
+    opacity: 0.2;
+    z-index: 0;
+  }
+
+  .retrieval-stage {
+    position: relative;
+    z-index: 1;
+    text-align: center;
+  }
+
+  .retrieval-stage__num {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+  }
+
+  .retrieval-stage__box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1.5rem 1rem;
+    transition: all 0.3s;
+    min-height: 180px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .retrieval-stage__box:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 12px 40px rgba(187,134,252,0.08);
+    border-color: rgba(187,134,252,0.25);
+  }
+
+  .retrieval-stage__icon {
+    width: 44px; height: 44px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.3rem;
+    flex-shrink: 0;
+  }
+
+  .retrieval-stage:nth-child(1) .retrieval-stage__icon {
+    background: var(--violet-dim);
+    box-shadow: 0 0 16px var(--violet-glow);
+    color: var(--violet);
+  }
+  .retrieval-stage:nth-child(2) .retrieval-stage__icon {
+    background: var(--cyan-dim);
+    box-shadow: 0 0 16px var(--cyan-glow);
+    color: var(--cyan);
+  }
+  .retrieval-stage:nth-child(3) .retrieval-stage__icon {
+    background: var(--pink-dim);
+    box-shadow: 0 0 16px var(--pink-glow);
+    color: var(--pink);
+  }
+  .retrieval-stage:nth-child(4) .retrieval-stage__icon {
+    background: var(--violet-dim);
+    box-shadow: 0 0 16px var(--violet-glow);
+    color: var(--violet);
+  }
+
+  .retrieval-stage__title {
+    font-family: var(--font-heading);
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .retrieval-stage__desc {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  .retrieval-stage__detail {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    background: rgba(0,0,0,0.25);
+    padding: 0.3em 0.6em;
+    border-radius: 6px;
+    margin-top: auto;
+  }
+
+  /* Arrow markers between stages */
+  .retrieval-arrow {
+    display: none;
+  }
+
+  /* ═══════════════════════════════════════════
+     SECTION 6 — ENTITY SYNTHESIS
+     ═══════════════════════════════════════════ */
+  .entity-diagram {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 2rem;
+    align-items: center;
+    margin-top: 2rem;
+  }
+
+  .entity-scattered {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.6rem;
+  }
+
+  .entity-shard {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.7rem 0.9rem;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    line-height: 1.4;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+  .entity-shard:hover {
+    border-color: rgba(187,134,252,0.3);
+    box-shadow: 0 0 20px rgba(187,134,252,0.06);
+  }
+
+  .entity-arrow-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .entity-arrow-svg {
+    width: 80px;
+    height: 40px;
+  }
+  .entity-arrow-svg line {
+    stroke: var(--cyan);
+    stroke-width: 2;
+    opacity: 0.5;
+  }
+  .entity-arrow-svg polygon {
+    fill: var(--cyan);
+    opacity: 0.7;
+  }
+
+  .entity-arrow-label {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--cyan);
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  .entity-synth-result {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .entity-synth-card {
+    background: linear-gradient(135deg, rgba(3,218,198,0.06), rgba(187,134,252,0.04));
+    border: 1px solid rgba(3,218,198,0.2);
+    border-radius: 14px;
+    padding: 1.5rem;
+    box-shadow: 0 0 30px rgba(3,218,198,0.06);
+  }
+  .entity-synth-card h4 {
+    color: var(--cyan);
+    font-size: 1rem;
+    margin-bottom: 0.6rem;
+  }
+  .entity-synth-card p {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  .entity-stats {
+    display: flex;
+    gap: 1.5rem;
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid rgba(3,218,198,0.1);
+  }
+  .entity-stat {
+    text-align: center;
+  }
+  .entity-stat__val {
+    font-family: var(--font-heading);
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--cyan);
+    line-height: 1;
+  }
+  .entity-stat__lbl {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-top: 0.2rem;
+  }
+
+  /* ═══════════════════════════════════════════
+     SECTION 7 — ANTI-PATTERNS
+     ═══════════════════════════════════════════ */
+  .anti-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.2rem;
+    margin-top: 2rem;
+  }
+
+  .anti-card {
+    background: rgba(207,102,121,0.03);
+    border: 1px solid rgba(207,102,121,0.15);
+    border-radius: 14px;
+    padding: 1.5rem;
+    position: relative;
+    overflow: hidden;
+  }
+  .anti-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--pink), transparent);
+  }
+
+  .anti-card__label {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--pink);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 0.4rem;
+  }
+
+  .anti-card__title {
+    font-family: var(--font-heading);
+    font-size: 1rem;
+    color: var(--text);
+    margin-bottom: 0.4rem;
+  }
+
+  .anti-card__impact {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--pink);
+    margin-bottom: 0.5rem;
+  }
+
+  .anti-card__reason {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+
+  /* ═══════════════════════════════════════════
+     SECTION 8 — LIFECYCLE EVENTS
+     ═══════════════════════════════════════════ */
+  .lifecycle-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    margin-top: 2rem;
+  }
+
+  .lifecycle-card {
+    position: relative;
+    overflow: hidden;
+  }
+  .lifecycle-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    border-radius: 16px 16px 0 0;
+  }
+  .lifecycle-card--task::before {
+    background: linear-gradient(90deg, var(--cyan), rgba(3,218,198,0.2));
+  }
+  .lifecycle-card--sleep::before {
+    background: linear-gradient(90deg, var(--violet), rgba(187,134,252,0.2));
+  }
+
+  .lifecycle-card__header {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    margin-bottom: 1.2rem;
+  }
+
+  .lifecycle-card__icon {
+    width: 44px; height: 44px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.3rem;
+    flex-shrink: 0;
+  }
+  .lifecycle-card--task .lifecycle-card__icon {
+    background: var(--cyan-dim);
+    box-shadow: 0 0 16px var(--cyan-glow);
+    color: var(--cyan);
+  }
+  .lifecycle-card--sleep .lifecycle-card__icon {
+    background: var(--violet-dim);
+    box-shadow: 0 0 16px var(--violet-glow);
+    color: var(--violet);
+  }
+
+  .lifecycle-card__title {
+    font-family: var(--font-heading);
+    font-size: 1.1rem;
+    font-weight: 600;
+  }
+  .lifecycle-card--task .lifecycle-card__title { color: var(--cyan); }
+  .lifecycle-card--sleep .lifecycle-card__title { color: var(--violet); }
+
+  .lifecycle-card__trigger {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .lifecycle-steps {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    counter-reset: step;
+  }
+  .lifecycle-steps li {
+    counter-increment: step;
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    font-size: 0.88rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+  .lifecycle-steps li::before {
+    content: counter(step);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    min-width: 24px; height: 24px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+  }
+  .lifecycle-card--task .lifecycle-steps li::before {
+    background: var(--cyan-dim);
+    color: var(--cyan);
+    border: 1px solid rgba(3,218,198,0.2);
+  }
+  .lifecycle-card--sleep .lifecycle-steps li::before {
+    background: var(--violet-dim);
+    color: var(--violet);
+    border: 1px solid rgba(187,134,252,0.2);
+  }
+
+  /* Memory state flow */
+  .state-flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 2.5rem;
+    flex-wrap: wrap;
+  }
+  .state-node {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    padding: 0.5em 1em;
+    border-radius: 10px;
+    border: 1px solid;
+    transition: all 0.3s;
+  }
+  .state-node--candidate {
+    background: rgba(207,102,121,0.06);
+    border-color: rgba(207,102,121,0.2);
+    color: var(--pink);
+  }
+  .state-node--active {
+    background: rgba(3,218,198,0.08);
+    border-color: rgba(3,218,198,0.25);
+    color: var(--cyan);
+    box-shadow: 0 0 12px rgba(3,218,198,0.12);
+  }
+  .state-node--consolidated {
+    background: rgba(187,134,252,0.08);
+    border-color: rgba(187,134,252,0.25);
+    color: var(--violet);
+  }
+  .state-node--archived {
+    background: rgba(255,255,255,0.02);
+    border-color: rgba(255,255,255,0.08);
+    color: var(--text-muted);
+  }
+  .state-arrow {
+    color: var(--text-muted);
+    font-size: 1.2rem;
+    font-family: var(--font-mono);
+  }
+
+  /* ═══════════════════════════════════════════
+     SECTION 9 — SCHEMA
+     ═══════════════════════════════════════════ */
+  .schema-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+
+  .schema-table {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.2rem;
+    transition: all 0.3s;
+  }
+  .schema-table:hover {
+    border-color: rgba(187,134,252,0.25);
+    box-shadow: 0 8px 32px rgba(187,134,252,0.06);
+    transform: translateY(-2px);
+  }
+
+  .schema-table__name {
+    font-family: var(--font-mono);
+    font-size: 0.88rem;
+    font-weight: 500;
+    margin-bottom: 0.4rem;
+  }
+  .schema-table:nth-child(1) .schema-table__name { color: var(--violet); }
+  .schema-table:nth-child(2) .schema-table__name { color: var(--cyan); }
+  .schema-table:nth-child(3) .schema-table__name { color: var(--cyan); }
+  .schema-table:nth-child(4) .schema-table__name { color: var(--pink); }
+  .schema-table:nth-child(5) .schema-table__name { color: var(--pink); }
+  .schema-table:nth-child(6) .schema-table__name { color: var(--violet); }
+  .schema-table:nth-child(7) .schema-table__name { color: var(--cyan); }
+  .schema-table:nth-child(8) .schema-table__name { color: var(--pink); }
+  .schema-table:nth-child(9) .schema-table__name { color: var(--violet); }
+
+  .schema-table__desc {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-bottom: 0.6rem;
+    line-height: 1.4;
+  }
+
+  .schema-table__cols {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+  .schema-col {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    background: rgba(0,0,0,0.25);
+    padding: 0.2em 0.5em;
+    border-radius: 4px;
+    color: var(--text-muted);
+  }
+  .schema-col--pk {
+    color: var(--violet);
+    background: var(--violet-dim);
+  }
+  .schema-col--fk {
+    color: var(--cyan);
+    background: var(--cyan-dim);
+  }
+  .schema-col--vec {
+    color: var(--pink);
+    background: var(--pink-dim);
+  }
+
+  /* ═══════════════════════════════════════════
+     SECTION 10 — TRUST TIERS
+     ═══════════════════════════════════════════ */
+  .trust-tiers {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin-top: 2rem;
+    max-width: 700px;
+  }
+
+  .trust-tier {
+    display: grid;
+    grid-template-columns: 200px 1fr 60px;
+    gap: 1rem;
+    align-items: center;
+    padding: 0.8rem 1.2rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    transition: all 0.3s;
+  }
+  .trust-tier:hover {
+    border-color: rgba(187,134,252,0.2);
+    background: var(--surface-hover);
+  }
+
+  .trust-tier__source {
+    font-size: 0.88rem;
+    color: var(--text);
+  }
+
+  .trust-tier__bar-wrap {
+    height: 6px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .trust-tier__bar {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.8s ease-out;
+  }
+  .trust-tier:nth-child(1) .trust-tier__bar { width: 100%; background: var(--cyan); box-shadow: 0 0 8px var(--cyan-glow); }
+  .trust-tier:nth-child(2) .trust-tier__bar { width: 90%;  background: var(--cyan); box-shadow: 0 0 8px var(--cyan-glow); }
+  .trust-tier:nth-child(3) .trust-tier__bar { width: 80%;  background: var(--violet); box-shadow: 0 0 8px var(--violet-glow); }
+  .trust-tier:nth-child(4) .trust-tier__bar { width: 70%;  background: var(--violet); box-shadow: 0 0 8px var(--violet-glow); }
+  .trust-tier:nth-child(5) .trust-tier__bar { width: 70%;  background: var(--violet); box-shadow: 0 0 8px var(--violet-glow); }
+  .trust-tier:nth-child(6) .trust-tier__bar { width: 60%;  background: var(--pink); box-shadow: 0 0 8px var(--pink-glow); }
+  .trust-tier:nth-child(7) .trust-tier__bar { width: 40%;  background: var(--pink); box-shadow: 0 0 8px var(--pink-glow); }
+
+  .trust-tier__cap {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    text-align: right;
+  }
+  .trust-tier:nth-child(1) .trust-tier__cap,
+  .trust-tier:nth-child(2) .trust-tier__cap { color: var(--cyan); }
+  .trust-tier:nth-child(3) .trust-tier__cap,
+  .trust-tier:nth-child(4) .trust-tier__cap,
+  .trust-tier:nth-child(5) .trust-tier__cap { color: var(--violet); }
+  .trust-tier:nth-child(6) .trust-tier__cap,
+  .trust-tier:nth-child(7) .trust-tier__cap { color: var(--pink); }
+
+  /* ═══════════════════════════════════════════
+     FOOTER
+     ═══════════════════════════════════════════ */
+  .footer {
+    text-align: center;
+    padding: 3rem 0 4rem;
+    border-top: 1px solid var(--border);
+  }
+  .footer__brand {
+    font-family: var(--font-heading);
+    font-size: 1rem;
+    font-weight: 600;
+    background: linear-gradient(135deg, var(--violet), var(--cyan));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 0.3rem;
+  }
+  .footer__sub {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+  }
+  .footer__spec {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-top: 0.6rem;
+    opacity: 0.6;
+  }
+
+  /* ═══════════════════════════════════════════
+     RESPONSIVE
+     ═══════════════════════════════════════════ */
+  @media (max-width: 900px) {
+    .dual-role-grid,
+    .lifecycle-grid { grid-template-columns: 1fr; }
+    .layers-container { flex-direction: column; align-items: center; }
+    .layers-container::before, .layers-container::after { display: none; }
+    .retrieval-flow { grid-template-columns: 1fr 1fr; }
+    .retrieval-flow::before { display: none; }
+    .entity-diagram { grid-template-columns: 1fr; }
+    .entity-arrow-col { transform: rotate(90deg); }
+    .anti-grid { grid-template-columns: 1fr; }
+    .schema-grid { grid-template-columns: 1fr 1fr; }
+    .trust-tier { grid-template-columns: 140px 1fr 50px; }
+  }
+
+  @media (max-width: 600px) {
+    :root { --section-gap: 4rem; }
+    .hero { padding: 4rem 0 3rem; }
+    .hero-stats { gap: 1.5rem; }
+    .retrieval-flow { grid-template-columns: 1fr; }
+    .schema-grid { grid-template-columns: 1fr; }
+    .trust-tier { grid-template-columns: 1fr; gap: 0.4rem; }
+    .trust-tier__cap { text-align: left; }
+  }
+</style>
+</head>
+
+<body>
+
+<!-- ============================================
+     HERO
+     ============================================ -->
+<section class="hero">
+  <div class="hero__glow hero__glow--1"></div>
+  <div class="hero__glow hero__glow--2"></div>
+  <div class="hero__glow hero__glow--3"></div>
+  <div class="container">
+    <p class="hero__eyebrow">OtterCamp V2 -- Spec 06</p>
+    <h1 class="hero__title">Memory Management<br>Ellie V2</h1>
+    <p class="hero__desc">
+      Durable, agent-owned memory with implicit capture, taxonomy-driven retrieval,
+      entity synthesis, and continuous consolidation. Ellie is both the infrastructure
+      and the conversational interface.
+    </p>
+    <div class="hero-stats">
+      <div class="hero-stat">
+        <div class="hero-stat__value hero-stat__value--violet">9</div>
+        <div class="hero-stat__label">Tables</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat__value hero-stat__value--cyan">3</div>
+        <div class="hero-stat__label">Memory Layers</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat__value hero-stat__value--pink">4</div>
+        <div class="hero-stat__label">Pipeline Stages</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat__value hero-stat__value--violet">1536d</div>
+        <div class="hero-stat__label">Embeddings</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat__value hero-stat__value--cyan">+15pp</div>
+        <div class="hero-stat__label">Entity Synth Gain</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================
+     ELLIE'S DUAL ROLE
+     ============================================ -->
+<section id="dual-role">
+  <div class="container">
+    <h2 class="reveal">Ellie's Dual Role</h2>
+    <p class="section-subtitle reveal">
+      Ellie is both the background memory infrastructure and a conversational agent.
+      This dual role gives the memory system agency -- it can proactively surface context,
+      ask clarifying questions, and explain its reasoning.
+    </p>
+    <div class="dual-role-grid">
+      <div class="card dual-card dual-card--infra reveal stagger-1">
+        <div class="dual-card__icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--violet)">
+            <rect x="2" y="2" width="20" height="8" rx="2"/>
+            <rect x="2" y="14" width="20" height="8" rx="2"/>
+            <circle cx="6" cy="6" r="1" fill="currentColor"/>
+            <circle cx="6" cy="18" r="1" fill="currentColor"/>
+          </svg>
+        </div>
+        <div class="dual-card__title">Background Infrastructure</div>
+        <ul>
+          <li>Extraction -- monitoring events, extracting structured claims</li>
+          <li>Taxonomy management -- creating, merging, pruning the global tree</li>
+          <li>Entity synthesis -- consolidating scattered facts into definitional memories</li>
+          <li>Deduplication -- periodic LLM-powered dedup for memory hygiene</li>
+          <li>Consolidation -- distillation, contradiction detection, decay</li>
+          <li>Import processing -- extracting memories from JSONL archives</li>
+        </ul>
+      </div>
+      <div class="card dual-card dual-card--agent reveal stagger-2">
+        <div class="dual-card__icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--cyan)">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+        </div>
+        <div class="dual-card__title">Conversational Agent (via @mention)</div>
+        <ul>
+          <li>Answer memory queries -- "What do we know about X?"</li>
+          <li>Explain retrieval -- "Why did you surface that?"</li>
+          <li>Show entity knowledge -- "Tell me everything about [entity]"</li>
+          <li>Show belief history -- traverse the supersession chain</li>
+          <li>Explicit capture -- "Remember this: [statement]"</li>
+          <li>Corrections -- "That's wrong, actually [correction]"</li>
+          <li>On-demand ops -- "Run dedup" / "Re-synthesize [entity]"</li>
+          <li>System health -- counts, extraction activity, friction signals</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================
+     THREE MEMORY LAYERS
+     ============================================ -->
+<section id="layers">
+  <div class="container">
+    <h2 class="reveal">Three Memory Layers</h2>
+    <p class="section-subtitle reveal">
+      Durable memory is organized into three layers with distinct decay characteristics.
+      Working memory (live context window) is NOT Ellie's domain --
+      it is handled by progressive summarization in the chat system.
+    </p>
+    <div class="layers-container">
+      <div class="layer-orb layer-orb--episodic fade-scale stagger-1">
+        <div class="layer-orb__sphere">
+          <svg class="layer-orb__icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12 6 12 12 16 14"/>
+          </svg>
+        </div>
+        <div class="layer-orb__name">Episodic</div>
+        <div class="layer-orb__question">"What happened and what was the result?"</div>
+        <div class="layer-orb__desc">
+          Time-stamped records of events, outcomes, decisions, conversations.
+          High fidelity when captured, compacted over time through consolidation.
+        </div>
+        <span class="layer-orb__decay">Decays unless reinforced</span>
+        <div class="layer-example">
+          "The deploy to production failed on Friday because the CI cache was stale."
+        </div>
+      </div>
+
+      <div class="layer-orb layer-orb--semantic fade-scale stagger-2">
+        <div class="layer-orb__sphere">
+          <svg class="layer-orb__icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+          </svg>
+        </div>
+        <div class="layer-orb__name">Semantic</div>
+        <div class="layer-orb__question">"What do we know to be true?"</div>
+        <div class="layer-orb__desc">
+          Distilled facts and typed claims: entity facts, relationships, preferences, conventions.
+          Includes entity synthesis memories.
+        </div>
+        <span class="layer-orb__decay">Durable -- no time decay</span>
+        <div class="layer-example">
+          "OtterCamp uses PostgreSQL for all persistent data."
+        </div>
+      </div>
+
+      <div class="layer-orb layer-orb--procedural fade-scale stagger-3">
+        <div class="layer-orb__sphere">
+          <svg class="layer-orb__icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+          </svg>
+        </div>
+        <div class="layer-orb__name">Procedural</div>
+        <div class="layer-orb__question">"How do we do things well?"</div>
+        <div class="layer-orb__desc">
+          Learned patterns and heuristics extracted from experience.
+          Advisory, not prescriptive -- distinct from human-authored skills.
+        </div>
+        <span class="layer-orb__decay">Decays without reinforcement</span>
+        <div class="layer-example">
+          "When deploying on Fridays, run the full test suite twice -- Friday deploys have a higher failure rate."
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================
+     EXTRACTION PIPELINE (Mermaid)
+     ============================================ -->
+<section id="extraction">
+  <div class="container">
+    <h2 class="reveal">Extraction Pipeline</h2>
+    <p class="section-subtitle reveal">
+      Raw events from the event bus pass through a four-stage pipeline before becoming
+      durable memories. All extraction runs in isolated contexts -- never inside an
+      agent's active session.
+    </p>
+    <div class="mermaid-wrapper reveal">
+      <div class="mermaid-controls">
+        <button onclick="mermaidZoom(1)" title="Zoom in">+</button>
+        <button onclick="mermaidZoom(-1)" title="Zoom out">&minus;</button>
+        <button onclick="mermaidZoom(0)" title="Reset zoom">R</button>
+      </div>
+      <div class="mermaid-zoomable" id="extraction-mermaid-zoom">
+        <pre class="mermaid">
+%%{init: {'theme': 'dark', 'themeVariables': {
+  'primaryColor': '#2a1a4a',
+  'primaryTextColor': '#e8e0f0',
+  'primaryBorderColor': '#bb86fc',
+  'lineColor': '#6e6880',
+  'secondaryColor': '#0d2a3a',
+  'tertiaryColor': '#2a1030',
+  'nodeTextColor': '#e8e0f0',
+  'edgeLabelBackground': '#1a0533',
+  'clusterBkg': 'rgba(187,134,252,0.04)',
+  'clusterBorder': 'rgba(187,134,252,0.15)',
+  'fontFamily': 'Inter, sans-serif',
+  'fontSize': '13px'
+}}}%%
+flowchart LR
+  subgraph SOURCES["Event Sources"]
+    direction TB
+    EB["Event Bus\n(implicit capture)"]
+    EX["@mention / memory.record\n(explicit capture)"]
+  end
+
+  subgraph S0["Stage 0: Garbage Rejection"]
+    direction TB
+    GR["Deterministic Filter"]
+    GR_D["Rejects:\n- Tool call sequences\n- Raw metrics/stats\n- Code blocks &gt;40% syntax\n- Tautologies\n- Formatting artifacts"]
+  end
+
+  subgraph S1["Stage 1: LLM Extraction"]
+    direction TB
+    LLM["Haiku-class LLM"]
+    LLM_D["Outputs per candidate:\n- Content (claim/fact)\n- Kind classification\n- Confidence 0.0-1.0\n- Entities mentioned\n- Temporal bounds\n- Source reference"]
+  end
+
+  subgraph S2["Stage 2: Scoring"]
+    direction TB
+    SC["Composite Score"]
+    SC_D["Threshold: 40\nBimodal peaks: 55-59, 65-69\nBelow threshold = discard"]
+  end
+
+  subgraph S3["Stage 3: Normalization"]
+    direction TB
+    NM["LLM Normalization"]
+    NM_D["- Standardize entity names\n- Cross-day state linking\n- Taxonomy node assignment"]
+  end
+
+  STORE[("PostgreSQL\npgvector 1536d\nEmbed + Dedup + Store")]
+
+  EB --> S0
+  EX -.->|bypass pre-filter| S1
+  S0 --> S1
+  S1 --> S2
+  S2 --> S3
+  S3 --> STORE
+
+  GR --- GR_D
+  LLM --- LLM_D
+  SC --- SC_D
+  NM --- NM_D
+
+  style SOURCES fill:rgba(187,134,252,0.06),stroke:rgba(187,134,252,0.2),stroke-width:1px
+  style S0 fill:rgba(207,102,121,0.06),stroke:rgba(207,102,121,0.2),stroke-width:1px
+  style S1 fill:rgba(187,134,252,0.06),stroke:rgba(187,134,252,0.2),stroke-width:1px
+  style S2 fill:rgba(3,218,198,0.06),stroke:rgba(3,218,198,0.2),stroke-width:1px
+  style S3 fill:rgba(187,134,252,0.06),stroke:rgba(187,134,252,0.2),stroke-width:1px
+  style STORE fill:rgba(3,218,198,0.1),stroke:rgba(3,218,198,0.3),stroke-width:2px,color:#03dac6
+  style EB fill:rgba(187,134,252,0.1),stroke:rgba(187,134,252,0.3),stroke-width:1px
+  style EX fill:rgba(3,218,198,0.1),stroke:rgba(3,218,198,0.3),stroke-width:1px
+  style GR fill:rgba(207,102,121,0.1),stroke:rgba(207,102,121,0.25),stroke-width:1px
+  style GR_D fill:none,stroke:none,color:#a098b0
+  style LLM fill:rgba(187,134,252,0.1),stroke:rgba(187,134,252,0.25),stroke-width:1px
+  style LLM_D fill:none,stroke:none,color:#a098b0
+  style SC fill:rgba(3,218,198,0.1),stroke:rgba(3,218,198,0.25),stroke-width:1px
+  style SC_D fill:none,stroke:none,color:#a098b0
+  style NM fill:rgba(187,134,252,0.1),stroke:rgba(187,134,252,0.25),stroke-width:1px
+  style NM_D fill:none,stroke:none,color:#a098b0
+        </pre>
+      </div>
+    </div>
+    <div class="pipeline-legend reveal">
+      <div class="pipeline-legend__item">
+        <div class="pipeline-legend__dot" style="background: var(--pink); box-shadow: 0 0 6px var(--pink-glow);"></div>
+        <span>Deterministic rejection</span>
+      </div>
+      <div class="pipeline-legend__item">
+        <div class="pipeline-legend__dot" style="background: var(--violet); box-shadow: 0 0 6px var(--violet-glow);"></div>
+        <span>LLM-powered stages</span>
+      </div>
+      <div class="pipeline-legend__item">
+        <div class="pipeline-legend__dot" style="background: var(--cyan); box-shadow: 0 0 6px var(--cyan-glow);"></div>
+        <span>Scoring and storage</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================
+     RETRIEVAL PIPELINE
+     ============================================ -->
+<section id="retrieval">
+  <div class="container">
+    <h2 class="reveal">Retrieval Pipeline</h2>
+    <p class="section-subtitle reveal">
+      Every retrieval query passes through four stages. Taxonomy classification doubles
+      as the query router -- different taxonomy branches naturally route to different
+      memory populations and retrieval strategies.
+    </p>
+    <div class="retrieval-flow">
+      <div class="retrieval-stage reveal stagger-1">
+        <div class="retrieval-stage__num">Stage 1</div>
+        <div class="retrieval-stage__box">
+          <div class="retrieval-stage__icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <path d="M3 9h18"/>
+              <path d="M9 3v18"/>
+            </svg>
+          </div>
+          <div class="retrieval-stage__title">Scope Filter</div>
+          <div class="retrieval-stage__desc">
+            Hard WHERE clause filtering to memories visible at the current scope level.
+            Scope inheritance cascades upward: task sees project and org.
+          </div>
+          <div class="retrieval-stage__detail">Hard isolation</div>
+        </div>
+      </div>
+
+      <div class="retrieval-stage reveal stagger-2">
+        <div class="retrieval-stage__num">Stage 2</div>
+        <div class="retrieval-stage__box">
+          <div class="retrieval-stage__icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 20h16"/>
+              <path d="M4 20V10l4-6h8l4 6v10"/>
+              <path d="M8 4v4h8V4"/>
+              <path d="M12 8v12"/>
+            </svg>
+          </div>
+          <div class="retrieval-stage__title">Taxonomy Classification</div>
+          <div class="retrieval-stage__desc">
+            Classify query into taxonomy nodes. Also serves as the query router --
+            different branches route to optimal strategies.
+          </div>
+          <div class="retrieval-stage__detail">Fallback: skip if low confidence</div>
+        </div>
+      </div>
+
+      <div class="retrieval-stage reveal stagger-3">
+        <div class="retrieval-stage__num">Stage 3</div>
+        <div class="retrieval-stage__box">
+          <div class="retrieval-stage__icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.35-4.35"/>
+            </svg>
+          </div>
+          <div class="retrieval-stage__title">Subtree Retrieval</div>
+          <div class="retrieval-stage__desc">
+            Pull all memories tagged with identified taxonomy nodes including children.
+            Narrows from thousands to a focused, topically relevant subset.
+          </div>
+          <div class="retrieval-stage__detail">Pre-filter for vector search</div>
+        </div>
+      </div>
+
+      <div class="retrieval-stage reveal stagger-4">
+        <div class="retrieval-stage__num">Stage 4</div>
+        <div class="retrieval-stage__box">
+          <div class="retrieval-stage__icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+              <line x1="3" y1="11" x2="21" y2="11"/>
+              <line x1="3" y1="16" x2="21" y2="16"/>
+            </svg>
+          </div>
+          <div class="retrieval-stage__title">Relevance Ranking</div>
+          <div class="retrieval-stage__desc">
+            Vector similarity (1536d cosine), recency, confidence, layer priority.
+            Active queries add cross-encoder reranking.
+          </div>
+          <div class="retrieval-stage__detail">Top-k within budget</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Three retrieval modes -->
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 2.5rem;">
+      <div class="card reveal stagger-3" style="padding: 1.3rem;">
+        <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.6rem;">
+          <span class="badge badge--violet">Passive Injection</span>
+        </div>
+        <p style="font-size: 0.82rem; color: var(--text-dim); line-height: 1.5;">
+          Automatic every turn. Budget-aware. Injection cooldown prevents repetition.
+          Most relevant memories injected last (attention-aware ordering).
+        </p>
+      </div>
+      <div class="card reveal stagger-4" style="padding: 1.3rem;">
+        <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.6rem;">
+          <span class="badge badge--cyan">Active Query</span>
+        </div>
+        <p style="font-size: 0.82rem; color: var(--text-dim); line-height: 1.5;">
+          Via @mention. Deeper search, broader scope. Cross-encoder reranking for precision.
+          Can cross scope boundaries with explicit request.
+        </p>
+      </div>
+      <div class="card reveal stagger-5" style="padding: 1.3rem;">
+        <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.6rem;">
+          <span class="badge badge--pink">memory.query Tool</span>
+        </div>
+        <p style="font-size: 0.82rem; color: var(--text-dim); line-height: 1.5;">
+          Agent-initiated. Fills the gap between passive and active. Only fires when
+          the agent recognizes uncertainty mid-turn. Excludes already-injected memories.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================
+     ENTITY SYNTHESIS
+     ============================================ -->
+<section id="entity-synthesis">
+  <div class="container">
+    <h2 class="reveal">Entity Synthesis</h2>
+    <p class="section-subtitle reveal">
+      The single biggest retrieval improvement proven in V1: +15pp hit rate (80% to 95%)
+      from just 30 synthesized memories. Scattered facts become consolidated,
+      directly-matchable definitional memories.
+    </p>
+    <div class="entity-diagram reveal">
+      <!-- Scattered memories -->
+      <div class="entity-scattered">
+        <div class="entity-shard">"ItsAlive uses CRDT-based conflict resolution"</div>
+        <div class="entity-shard">"ItsAlive is a real-time collaborative editor"</div>
+        <div class="entity-shard">"ItsAlive supports 50+ concurrent users"</div>
+        <div class="entity-shard">"ItsAlive uses Go and WebSockets"</div>
+        <div class="entity-shard">"ItsAlive stores data in PostgreSQL"</div>
+        <div class="entity-shard">"ItsAlive is in active development"</div>
+      </div>
+
+      <!-- Arrow -->
+      <div class="entity-arrow-col">
+        <div class="entity-arrow-label">Detect / Gather<br>Synthesize / Store</div>
+        <svg class="entity-arrow-svg" viewBox="0 0 80 40">
+          <line x1="5" y1="20" x2="65" y2="20"/>
+          <polygon points="65,14 77,20 65,26"/>
+        </svg>
+        <div class="entity-arrow-label" style="font-size: 0.68rem; color: var(--text-muted);">Periodic pipeline step</div>
+      </div>
+
+      <!-- Synthesized result -->
+      <div class="entity-synth-result">
+        <div class="entity-synth-card">
+          <h4>entity_definition: ItsAlive</h4>
+          <p>
+            ItsAlive is a real-time collaborative editor built with Go and WebSockets.
+            It supports 50+ concurrent users with CRDT-based conflict resolution and
+            uses PostgreSQL for persistence. Status: active development.
+          </p>
+          <div class="entity-stats">
+            <div class="entity-stat">
+              <div class="entity-stat__val">+15pp</div>
+              <div class="entity-stat__lbl">Hit rate gain</div>
+            </div>
+            <div class="entity-stat">
+              <div class="entity-stat__val">80%</div>
+              <div class="entity-stat__lbl">Before</div>
+            </div>
+            <div class="entity-stat">
+              <div class="entity-stat__val">95%</div>
+              <div class="entity-stat__lbl">After</div>
+            </div>
+          </div>
+        </div>
+        <div style="font-size: 0.8rem; color: var(--text-muted); padding: 0 0.5rem; line-height: 1.5;">
+          Source memories preserved -- synthesis adds a consolidated view,
+          does not replace originals. Sources linked via
+          <code>memory_entity_mention</code>.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================
+     EXPERIMENTALLY PROVEN ANTI-PATTERNS
+     ============================================ -->
+<section id="anti-patterns">
+  <div class="container">
+    <h2 class="reveal">Experimentally Prohibited</h2>
+    <p class="section-subtitle reveal">
+      V1's 48-hour experiment sprint on 13,000+ memories with a 20-query benchmark
+      produced hard constraints. These techniques were tested, measured, and rejected.
+    </p>
+    <div class="anti-grid">
+      <div class="anti-card reveal stagger-1">
+        <div class="anti-card__label">Prohibited</div>
+        <div class="anti-card__title">Hybrid BM25 + Vector</div>
+        <div class="anti-card__impact">-5pp (80% to 75%)</div>
+        <div class="anti-card__reason">
+          BM25 noise dilutes good vector matches on semantic queries.
+          Only helps exact keyword matches (proper nouns) but hurts everything else.
+        </div>
+      </div>
+      <div class="anti-card reveal stagger-2">
+        <div class="anti-card__label">Prohibited</div>
+        <div class="anti-card__title">Importance-Weighted Retrieval</div>
+        <div class="anti-card__impact">-4pp overall</div>
+        <div class="anti-card__reason">
+          Importance scores from extraction are unreliable as retrieval weights.
+          Confidence/utility used for lifecycle decisions only.
+        </div>
+      </div>
+      <div class="anti-card reveal stagger-3">
+        <div class="anti-card__label">Prohibited</div>
+        <div class="anti-card__title">Kind-Aware Filtering</div>
+        <div class="anti-card__impact">-2pp vs baseline</div>
+        <div class="anti-card__reason">
+          Marginal complexity for no gain. Kind is useful for taxonomy routing,
+          not retrieval filtering.
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; justify-content: center; gap: 1rem; margin-top: 1.5rem; flex-wrap: wrap;">
+      <div class="card reveal stagger-4" style="padding: 1rem 1.3rem; display: flex; align-items: center; gap: 0.8rem; max-width: 340px;">
+        <span class="badge badge--pink" style="white-space: nowrap;">-3pp</span>
+        <span style="font-size: 0.82rem; color: var(--text-dim);">File-only retrieval loses rich conversation context</span>
+      </div>
+      <div class="card reveal stagger-5" style="padding: 1rem 1.3rem; display: flex; align-items: center; gap: 0.8rem; max-width: 340px;">
+        <span class="badge badge--pink" style="white-space: nowrap;">-10pp</span>
+        <span style="font-size: 0.82rem; color: var(--text-dim);">Truncated 1536d to 768d embeddings -- never truncate</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================
+     LIFECYCLE EVENTS
+     ============================================ -->
+<section id="lifecycle">
+  <div class="container">
+    <h2 class="reveal">Lifecycle Events</h2>
+    <p class="section-subtitle reveal">
+      Consolidation is progressive and ongoing. Two key triggers drive the most
+      impactful memory processing: task completion and sleep-time reflection.
+    </p>
+
+    <div class="lifecycle-grid">
+      <div class="card lifecycle-card lifecycle-card--task reveal stagger-1">
+        <div class="lifecycle-card__header">
+          <div class="lifecycle-card__icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+              <polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
+          </div>
+          <div>
+            <div class="lifecycle-card__title">Task-Completion Consolidation</div>
+            <div class="lifecycle-card__trigger">Trigger: task reaches "done" status</div>
+          </div>
+        </div>
+        <ol class="lifecycle-steps">
+          <li><strong>Scope promotion</strong> -- evaluate task-scoped memories, promote valuable ones to project scope (set task_id = null, provenance preserved)</li>
+          <li><strong>Episodic distillation</strong> -- distill task episodic memories into semantic memories while context is freshest</li>
+          <li><strong>Execution summary</strong> -- generate procedural memory: what was done, how, tools used, decisions made</li>
+          <li><strong>Targeted entity synthesis</strong> -- run entity synthesis for entities heavily mentioned during the task</li>
+        </ol>
+      </div>
+
+      <div class="card lifecycle-card lifecycle-card--sleep reveal stagger-2">
+        <div class="lifecycle-card__header">
+          <div class="lifecycle-card__icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+            </svg>
+          </div>
+          <div>
+            <div class="lifecycle-card__title">Sleep-Time Reflection</div>
+            <div class="lifecycle-card__trigger">Trigger: low-activity periods + friction signals</div>
+          </div>
+        </div>
+        <ol class="lifecycle-steps">
+          <li><strong>Gather</strong> -- collect recent episodic memories (last N days, configurable)</li>
+          <li><strong>Group</strong> -- organize by project and taxonomy</li>
+          <li><strong>Reflect</strong> -- LLM pattern recognition: what patterns emerge, what connections, what trends</li>
+          <li><strong>Generate</strong> -- create new semantic or procedural memories from reflections</li>
+          <li><strong>Cross-connect</strong> -- identify cross-project connections (e.g., shared API rate limits)</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- State flow -->
+    <div style="text-align: center; margin-top: 2.5rem;">
+      <p style="font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-muted); margin-bottom: 1rem; letter-spacing: 0.06em;">MEMORY STATE LIFECYCLE</p>
+      <div class="state-flow reveal">
+        <div class="state-node state-node--candidate">candidate</div>
+        <div class="state-arrow">&rarr;</div>
+        <div class="state-node state-node--active">active</div>
+        <div class="state-arrow">&rarr;</div>
+        <div class="state-node state-node--consolidated">consolidated</div>
+        <div class="state-arrow">&rarr;</div>
+        <div class="state-node state-node--archived">archived</div>
+      </div>
+      <div style="display: flex; justify-content: center; gap: 2rem; margin-top: 1rem; flex-wrap: wrap;" class="reveal">
+        <span style="font-size: 0.78rem; color: var(--text-muted);">Quality gates for promotion</span>
+        <span style="font-size: 0.78rem; color: var(--text-muted);">Contradiction detection: 2-path (extraction + reflection)</span>
+        <span style="font-size: 0.78rem; color: var(--text-muted);">Supersession chain via FK</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================
+     SOURCE TRUST TIERS
+     ============================================ -->
+<section id="trust-tiers">
+  <div class="container">
+    <h2 class="reveal">Source Trust Tiers</h2>
+    <p class="section-subtitle reveal">
+      Memory confidence is capped by source trustworthiness. A memory can never have
+      higher confidence than its source allows. Corroboration from a higher-trust source
+      elevates the confidence cap.
+    </p>
+    <div class="trust-tiers reveal">
+      <div class="trust-tier">
+        <div class="trust-tier__source">Human direct statement</div>
+        <div class="trust-tier__bar-wrap"><div class="trust-tier__bar"></div></div>
+        <div class="trust-tier__cap">1.0</div>
+      </div>
+      <div class="trust-tier">
+        <div class="trust-tier__source">Human reaction/correction</div>
+        <div class="trust-tier__bar-wrap"><div class="trust-tier__bar"></div></div>
+        <div class="trust-tier__cap">0.9</div>
+      </div>
+      <div class="trust-tier">
+        <div class="trust-tier__source">Agent from conversation</div>
+        <div class="trust-tier__bar-wrap"><div class="trust-tier__bar"></div></div>
+        <div class="trust-tier__cap">0.8</div>
+      </div>
+      <div class="trust-tier">
+        <div class="trust-tier__source">Agent from task</div>
+        <div class="trust-tier__bar-wrap"><div class="trust-tier__bar"></div></div>
+        <div class="trust-tier__cap">0.7</div>
+      </div>
+      <div class="trust-tier">
+        <div class="trust-tier__source">File-backed (internal)</div>
+        <div class="trust-tier__bar-wrap"><div class="trust-tier__bar"></div></div>
+        <div class="trust-tier__cap">0.7</div>
+      </div>
+      <div class="trust-tier">
+        <div class="trust-tier__source">Imported historical data</div>
+        <div class="trust-tier__bar-wrap"><div class="trust-tier__bar"></div></div>
+        <div class="trust-tier__cap">0.6</div>
+      </div>
+      <div class="trust-tier">
+        <div class="trust-tier__source">External content</div>
+        <div class="trust-tier__bar-wrap"><div class="trust-tier__bar"></div></div>
+        <div class="trust-tier__cap">0.4</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================
+     SCHEMA OVERVIEW
+     ============================================ -->
+<section id="schema">
+  <div class="container">
+    <h2 class="reveal">9-Table Schema</h2>
+    <p class="section-subtitle reveal">
+      PostgreSQL with pgvector (1536d OpenAI embeddings, never truncated).
+      Scoped across four levels: org, project, task, and agent-private.
+      All memories require provenance -- no orphaned records.
+    </p>
+    <div class="schema-grid">
+
+      <div class="schema-table reveal stagger-1">
+        <div class="schema-table__name">memory</div>
+        <div class="schema-table__desc">Core memory record with scope, kind, layer, status, confidence, temporal bounds, supersession chain, sensitivity, content hash, and 1536d embedding.</div>
+        <div class="schema-table__cols">
+          <span class="schema-col schema-col--pk">id</span>
+          <span class="schema-col schema-col--fk">org_id</span>
+          <span class="schema-col schema-col--fk">project_id</span>
+          <span class="schema-col schema-col--fk">task_id</span>
+          <span class="schema-col">kind</span>
+          <span class="schema-col">layer</span>
+          <span class="schema-col">status</span>
+          <span class="schema-col">content</span>
+          <span class="schema-col">confidence</span>
+          <span class="schema-col schema-col--fk">superseded_by</span>
+          <span class="schema-col schema-col--vec">embedding(1536)</span>
+        </div>
+      </div>
+
+      <div class="schema-table reveal stagger-2">
+        <div class="schema-table__name">memory_taxonomy_node</div>
+        <div class="schema-table__desc">Global taxonomy tree. Org-level, not per-project. Materialized path for fast subtree queries. Managed autonomously by Ellie.</div>
+        <div class="schema-table__cols">
+          <span class="schema-col schema-col--pk">id</span>
+          <span class="schema-col schema-col--fk">org_id</span>
+          <span class="schema-col schema-col--fk">parent_id</span>
+          <span class="schema-col">name</span>
+          <span class="schema-col">path</span>
+          <span class="schema-col">depth</span>
+        </div>
+      </div>
+
+      <div class="schema-table reveal stagger-3">
+        <div class="schema-table__name">memory_taxonomy_tag</div>
+        <div class="schema-table__desc">Many-to-many link between memories and taxonomy nodes. Multi-label: a memory can belong to multiple nodes.</div>
+        <div class="schema-table__cols">
+          <span class="schema-col schema-col--pk">id</span>
+          <span class="schema-col schema-col--fk">memory_id</span>
+          <span class="schema-col schema-col--fk">taxonomy_node_id</span>
+        </div>
+      </div>
+
+      <div class="schema-table reveal stagger-4">
+        <div class="schema-table__name">memory_entity</div>
+        <div class="schema-table__desc">Known entities: people, projects, tools, concepts. Canonical names with auto-discovered aliases. Links to current synthesis memory.</div>
+        <div class="schema-table__cols">
+          <span class="schema-col schema-col--pk">id</span>
+          <span class="schema-col schema-col--fk">org_id</span>
+          <span class="schema-col">name</span>
+          <span class="schema-col">entity_type</span>
+          <span class="schema-col">aliases[]</span>
+          <span class="schema-col schema-col--fk">synthesis_memory_id</span>
+        </div>
+      </div>
+
+      <div class="schema-table reveal stagger-5">
+        <div class="schema-table__name">memory_entity_mention</div>
+        <div class="schema-table__desc">Many-to-many: which memories mention which entities. Provides lightweight graph-like traversal without a graph DB.</div>
+        <div class="schema-table__cols">
+          <span class="schema-col schema-col--pk">id</span>
+          <span class="schema-col schema-col--fk">memory_id</span>
+          <span class="schema-col schema-col--fk">entity_id</span>
+        </div>
+      </div>
+
+      <div class="schema-table reveal stagger-6">
+        <div class="schema-table__name">memory_source</div>
+        <div class="schema-table__desc">Provenance records. Every active memory must have at least one. Trust tier set at creation from source type and actor. Enforced by periodic maintenance.</div>
+        <div class="schema-table__cols">
+          <span class="schema-col schema-col--pk">id</span>
+          <span class="schema-col schema-col--fk">memory_id</span>
+          <span class="schema-col">source_type</span>
+          <span class="schema-col schema-col--fk">source_id</span>
+          <span class="schema-col">trust_tier</span>
+        </div>
+      </div>
+
+      <div class="schema-table reveal stagger-1">
+        <div class="schema-table__name">memory_dedup_reviewed</div>
+        <div class="schema-table__desc">Tracks reviewed dedup pairs. Canonical ordering (a &lt; b) prevents duplicate entries. V1 reviewed 26,395 pairs with zero rework.</div>
+        <div class="schema-table__cols">
+          <span class="schema-col schema-col--pk">id</span>
+          <span class="schema-col schema-col--fk">memory_id_a</span>
+          <span class="schema-col schema-col--fk">memory_id_b</span>
+          <span class="schema-col">decision</span>
+        </div>
+      </div>
+
+      <div class="schema-table reveal stagger-2">
+        <div class="schema-table__name">memory_compaction_run</div>
+        <div class="schema-table__desc">Tracks consolidation job runs. Types: dedup, synthesis, decay, distillation, reflection, task_completion, reembed.</div>
+        <div class="schema-table__cols">
+          <span class="schema-col schema-col--pk">id</span>
+          <span class="schema-col schema-col--fk">org_id</span>
+          <span class="schema-col">run_type</span>
+          <span class="schema-col">status</span>
+          <span class="schema-col">memories_processed</span>
+          <span class="schema-col">memories_archived</span>
+        </div>
+      </div>
+
+      <div class="schema-table reveal stagger-3">
+        <div class="schema-table__name">memory_import</div>
+        <div class="schema-table__desc">Tracks bulk import jobs from JSONL archives. Progress tracking with file counts, memory counts, duplicate counts, and error details.</div>
+        <div class="schema-table__cols">
+          <span class="schema-col schema-col--pk">id</span>
+          <span class="schema-col schema-col--fk">org_id</span>
+          <span class="schema-col schema-col--fk">requested_by</span>
+          <span class="schema-col">status</span>
+          <span class="schema-col">memories_extracted</span>
+          <span class="schema-col">duplicates_skipped</span>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Schema legend -->
+    <div style="display: flex; justify-content: center; gap: 1.5rem; margin-top: 1.5rem; flex-wrap: wrap;" class="reveal">
+      <div style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--text-muted);">
+        <span class="schema-col schema-col--pk" style="font-size: 0.68rem;">PK</span> Primary key
+      </div>
+      <div style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--text-muted);">
+        <span class="schema-col schema-col--fk" style="font-size: 0.68rem;">FK</span> Foreign key
+      </div>
+      <div style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--text-muted);">
+        <span class="schema-col schema-col--vec" style="font-size: 0.68rem;">VEC</span> pgvector column
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================
+     DEDUPLICATION
+     ============================================ -->
+<section id="dedup">
+  <div class="container">
+    <h2 class="reveal">Deduplication</h2>
+    <p class="section-subtitle reveal">
+      LLM-powered dedup improves result diversity, not hit rate. BM25+vector is
+      prohibited. Three proven mechanisms run periodically with cursor-based
+      progress tracking (zero rework, restartable).
+    </p>
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.2rem; margin-top: 2rem;">
+      <div class="card reveal stagger-1">
+        <h3 style="font-size: 1rem;">Semantic Pre-Screening</h3>
+        <p style="font-size: 0.85rem; color: var(--text-dim); margin-bottom: 0.6rem;">
+          Find candidate pairs above cosine similarity threshold.
+        </p>
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <span class="badge badge--violet">Threshold: 0.88</span>
+          <span style="font-size: 0.78rem; color: var(--text-muted);">272 extra pairs at 9% reduction</span>
+        </div>
+      </div>
+      <div class="card reveal stagger-2">
+        <h3 style="font-size: 1rem;">LLM Cluster Dedup</h3>
+        <p style="font-size: 0.85rem; color: var(--text-dim); margin-bottom: 0.6rem;">
+          Cluster connected pairs, Haiku-class model reviews each cluster: keep best, deprecate rest.
+        </p>
+        <div style="display: flex; flex-wrap: wrap; gap: 0.4rem;">
+          <span class="badge badge--cyan">5,159 deprecated</span>
+          <span class="badge badge--cyan">163 merged</span>
+          <span class="badge badge--cyan">0 false kills</span>
+        </div>
+      </div>
+      <div class="card reveal stagger-3">
+        <h3 style="font-size: 1rem;">Cursor-Based Progress</h3>
+        <p style="font-size: 0.85rem; color: var(--text-dim); margin-bottom: 0.6rem;">
+          Track reviewed pairs in <code>dedup_reviewed</code> table. No pair reviewed twice.
+        </p>
+        <div style="display: flex; flex-wrap: wrap; gap: 0.4rem;">
+          <span class="badge badge--pink">26,395 pairs reviewed</span>
+          <span class="badge badge--pink">Zero rework</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================
+     FOOTER
+     ============================================ -->
+<footer class="footer">
+  <div class="container">
+    <div class="footer__brand">OtterCamp V2</div>
+    <div class="footer__sub">Memory Management -- Ellie V2</div>
+    <div class="footer__spec">Source: docsv2/06-memory.md -- 52 resolved decisions, 0 open questions</div>
+  </div>
+</footer>
+
+<!-- ── Mermaid v11 ESM ── -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    securityLevel: 'loose',
+    flowchart: {
+      useMaxWidth: true,
+      htmlLabels: true,
+      curve: 'basis',
+      padding: 16,
+      nodeSpacing: 30,
+      rankSpacing: 50
+    },
+    themeVariables: {
+      darkMode: true,
+      background: '#1a0533',
+      fontFamily: 'Inter, sans-serif',
+      fontSize: '13px',
+      primaryColor: '#2a1a4a',
+      primaryTextColor: '#e8e0f0',
+      primaryBorderColor: '#bb86fc',
+      lineColor: '#6e6880',
+      secondaryColor: '#0d2a3a',
+      tertiaryColor: '#2a1030'
+    }
+  });
+</script>
+
+<!-- ── Mermaid Zoom Controls ── -->
+<script>
+  let mermaidScale = 1;
+  function mermaidZoom(dir) {
+    const el = document.getElementById('extraction-mermaid-zoom');
+    if (!el) return;
+    if (dir === 0) {
+      mermaidScale = 1;
+    } else {
+      mermaidScale = Math.max(0.4, Math.min(2.5, mermaidScale + dir * 0.2));
+    }
+    el.style.transform = 'scale(' + mermaidScale + ')';
+  }
+</script>
+
+<!-- ── Intersection Observer for reveal animations ── -->
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    var observer = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+        }
+      });
+    }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+
+    document.querySelectorAll('.reveal').forEach(function(el) {
+      observer.observe(el);
+    });
+  });
+</script>
+
+</body>
+</html>

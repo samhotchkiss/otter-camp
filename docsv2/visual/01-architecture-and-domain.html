@@ -1,0 +1,1055 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- Architecture and Domain Model</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* ───────────────────────────── Custom Properties ───────────────────────────── */
+  :root {
+    --bg-primary:    #0a1628;
+    --bg-secondary:  #0f1f3a;
+    --bg-card:       #111f38;
+    --border:        #1a3358;
+    --border-bright: #2a4a78;
+    --accent:        #4fc3f7;
+    --accent-dim:    #2196c4;
+    --accent-glow:   rgba(79, 195, 247, 0.15);
+    --text-primary:  #b3e5fc;
+    --text-secondary:#7bafc9;
+    --text-bright:   #e1f5fe;
+    --text-muted:    #4a7a96;
+    --highlight:     #29b6f6;
+    --grid-dot:      rgba(79, 195, 247, 0.06);
+    --grid-dot-bright: rgba(79, 195, 247, 0.12);
+    --font-heading:  'IBM Plex Sans', sans-serif;
+    --font-body:     'IBM Plex Mono', monospace;
+    --ease-out:      cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  /* ───────────────────────────── Reset & Base ───────────────────────────── */
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html {
+    font-size: 16px;
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-weight: 400;
+    line-height: 1.7;
+    min-height: 100vh;
+    overflow-x: hidden;
+    background-image:
+      radial-gradient(circle, var(--grid-dot-bright) 1px, transparent 1px),
+      radial-gradient(circle, var(--grid-dot) 1px, transparent 1px);
+    background-size: 48px 48px, 24px 24px;
+    background-position: 0 0, 12px 12px;
+  }
+
+  /* ───────────────────────────── Layout ───────────────────────────── */
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 2rem;
+  }
+
+  section {
+    padding: 4rem 0;
+  }
+
+  section + section {
+    border-top: 1px solid var(--border);
+  }
+
+  /* ───────────────────────────── Typography ───────────────────────────── */
+  h1, h2, h3, h4 {
+    font-family: var(--font-heading);
+    color: var(--text-bright);
+    letter-spacing: -0.02em;
+  }
+
+  h1 { font-size: 2.5rem; font-weight: 700; line-height: 1.15; }
+  h2 { font-size: 1.5rem; font-weight: 600; line-height: 1.3; margin-bottom: 1rem; }
+  h3 { font-size: 1.1rem; font-weight: 600; line-height: 1.4; }
+
+  p { margin-bottom: 0.75rem; }
+
+  .label {
+    font-family: var(--font-body);
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid var(--border);
+    transition: border-color 0.2s;
+  }
+  a:hover { border-color: var(--accent); }
+
+  /* ───────────────────────────── Hero ───────────────────────────── */
+  .hero {
+    padding: 6rem 0 4rem;
+    text-align: center;
+    position: relative;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, rgba(79, 195, 247, 0.04) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero .label {
+    margin-bottom: 1.5rem;
+    display: block;
+  }
+
+  .hero h1 {
+    margin-bottom: 1.5rem;
+  }
+
+  .hero h1 .accent {
+    color: var(--accent);
+  }
+
+  .hero .summary {
+    max-width: 720px;
+    margin: 0 auto;
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+    line-height: 1.8;
+  }
+
+  .hero .badge-row {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    margin-top: 2rem;
+    flex-wrap: wrap;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.85rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+  }
+
+  .badge .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  /* ───────────────────────────── Diagram Section ───────────────────────────── */
+  .diagram-section {
+    position: relative;
+  }
+
+  .diagram-section .section-header {
+    text-align: center;
+    margin-bottom: 2rem;
+  }
+
+  .mermaid-wrapper {
+    position: relative;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 2rem;
+    overflow: hidden;
+  }
+
+  .mermaid-viewport {
+    overflow: auto;
+    max-height: 700px;
+    display: flex;
+    justify-content: center;
+  }
+
+  .mermaid-viewport svg {
+    transition: transform 0.2s var(--ease-out);
+  }
+
+  .zoom-controls {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    z-index: 10;
+  }
+
+  .zoom-btn {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-card);
+    border: 1px solid var(--border-bright);
+    border-radius: 4px;
+    color: var(--accent);
+    font-family: var(--font-body);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    user-select: none;
+  }
+
+  .zoom-btn:hover {
+    background: var(--border);
+    border-color: var(--accent-dim);
+  }
+
+  /* ───────────────────────────── Domain Cards ───────────────────────────── */
+  .domains-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 1.25rem;
+    margin-top: 2rem;
+  }
+
+  .domain-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.75rem;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.25s, transform 0.25s var(--ease-out);
+  }
+
+  .domain-card:hover {
+    border-color: var(--border-bright);
+    transform: translateY(-2px);
+  }
+
+  .domain-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent-dim), var(--accent), var(--accent-dim));
+    opacity: 0.6;
+  }
+
+  .domain-card .domain-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent-glow);
+    border: 1px solid var(--border-bright);
+    border-radius: 6px;
+    margin-bottom: 1rem;
+    color: var(--accent);
+  }
+
+  .domain-card .domain-icon svg {
+    width: 20px;
+    height: 20px;
+    stroke: var(--accent);
+    fill: none;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .domain-card h3 {
+    margin-bottom: 0.5rem;
+    color: var(--text-bright);
+  }
+
+  .domain-card .domain-desc {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    margin-bottom: 1rem;
+    line-height: 1.6;
+  }
+
+  .entity-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .entity-tag {
+    display: inline-block;
+    padding: 0.2rem 0.55rem;
+    background: rgba(79, 195, 247, 0.06);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-family: var(--font-body);
+  }
+
+  /* ───────────────────────────── Principles ───────────────────────────── */
+  .principles-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.25rem;
+    margin-top: 2rem;
+  }
+
+  .principle-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.75rem;
+    transition: border-color 0.25s, transform 0.25s var(--ease-out);
+  }
+
+  .principle-card:hover {
+    border-color: var(--border-bright);
+    transform: translateY(-2px);
+  }
+
+  .principle-icon {
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent-glow);
+    border: 1px solid var(--border-bright);
+    border-radius: 8px;
+    margin-bottom: 1rem;
+  }
+
+  .principle-icon svg {
+    width: 22px;
+    height: 22px;
+    stroke: var(--accent);
+    fill: none;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .principle-card h3 {
+    margin-bottom: 0.5rem;
+    font-size: 1rem;
+  }
+
+  .principle-card p {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    line-height: 1.65;
+    margin-bottom: 0;
+  }
+
+  /* ───────────────────────────── Storage & Eventing ───────────────────────────── */
+  .storage-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.25rem;
+    margin-top: 2rem;
+  }
+
+  .storage-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.75rem;
+    transition: border-color 0.25s;
+  }
+
+  .storage-card:hover {
+    border-color: var(--border-bright);
+  }
+
+  .storage-card h3 {
+    margin-bottom: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  .storage-card h3 svg {
+    width: 18px;
+    height: 18px;
+    stroke: var(--accent);
+    fill: none;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .storage-card ul {
+    list-style: none;
+    padding: 0;
+  }
+
+  .storage-card li {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    padding: 0.35rem 0;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+
+  .storage-card li:last-child {
+    border-bottom: none;
+  }
+
+  .storage-card li::before {
+    content: '';
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    background: var(--accent-dim);
+    border-radius: 50%;
+    flex-shrink: 0;
+    position: relative;
+    top: -2px;
+  }
+
+  /* ───────────────────────────── Footer ───────────────────────────── */
+  .footer {
+    padding: 3rem 0;
+    border-top: 1px solid var(--border);
+    text-align: center;
+  }
+
+  .footer p {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  /* ───────────────────────────── Animations ───────────────────────────── */
+  @keyframes fadeUp {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .fade-up {
+    opacity: 0;
+    animation: fadeUp 0.6s var(--ease-out) forwards;
+  }
+
+  .fade-up.delay-1 { animation-delay: 0.08s; }
+  .fade-up.delay-2 { animation-delay: 0.16s; }
+  .fade-up.delay-3 { animation-delay: 0.24s; }
+  .fade-up.delay-4 { animation-delay: 0.32s; }
+  .fade-up.delay-5 { animation-delay: 0.40s; }
+  .fade-up.delay-6 { animation-delay: 0.48s; }
+  .fade-up.delay-7 { animation-delay: 0.56s; }
+  .fade-up.delay-8 { animation-delay: 0.64s; }
+
+  /* ───────────────────────────── Responsive ───────────────────────────── */
+  @media (max-width: 768px) {
+    h1 { font-size: 1.75rem; }
+    h2 { font-size: 1.25rem; }
+    section { padding: 2.5rem 0; }
+    .hero { padding: 3.5rem 0 2.5rem; }
+    .container { padding: 0 1.25rem; }
+    .domains-grid { grid-template-columns: 1fr; }
+    .principles-grid { grid-template-columns: 1fr; }
+    .storage-row { grid-template-columns: 1fr; }
+    .mermaid-wrapper { padding: 1rem; }
+  }
+
+  @media (max-width: 480px) {
+    h1 { font-size: 1.4rem; }
+    .badge-row { flex-direction: column; align-items: center; }
+  }
+
+  /* ───────────────────────────── Mermaid Theme Override ───────────────────────────── */
+  .mermaid-viewport .node rect,
+  .mermaid-viewport .node circle,
+  .mermaid-viewport .node polygon {
+    stroke: var(--accent-dim) !important;
+  }
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════ HERO ════════════════════════════ -->
+<section class="hero">
+  <div class="container">
+    <span class="label fade-up">OtterCamp V2 Specification / Doc 01</span>
+    <h1 class="fade-up delay-1">Architecture <span class="accent">&amp;</span> Domain Model</h1>
+    <p class="summary fade-up delay-2">
+      A modular monolith replacing OpenClaw with direct in-app orchestration.
+      Two runtime processes, five domain boundaries, one Postgres database.
+    </p>
+    <div class="badge-row fade-up delay-3">
+      <span class="badge"><span class="dot"></span> Modular Monolith</span>
+      <span class="badge"><span class="dot"></span> API + Worker</span>
+      <span class="badge"><span class="dot"></span> Postgres + Object Store</span>
+      <span class="badge"><span class="dot"></span> Clean-Room Rebuild</span>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ ARCHITECTURE DIAGRAM ════════════════════════════ -->
+<section class="diagram-section">
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label">System Overview</span>
+      <h2>Runtime Architecture</h2>
+    </div>
+    <div class="mermaid-wrapper fade-up delay-1">
+      <div class="zoom-controls">
+        <button class="zoom-btn" onclick="zoomIn()" title="Zoom in">+</button>
+        <button class="zoom-btn" onclick="zoomOut()" title="Zoom out">&minus;</button>
+        <button class="zoom-btn" onclick="zoomReset()" title="Reset zoom" style="font-size:0.65rem;">1:1</button>
+      </div>
+      <div class="mermaid-viewport" id="mermaid-viewport">
+        <pre class="mermaid">
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#111f38',
+    'primaryTextColor': '#b3e5fc',
+    'primaryBorderColor': '#2a4a78',
+    'lineColor': '#4fc3f7',
+    'secondaryColor': '#0f1f3a',
+    'tertiaryColor': '#0a1628',
+    'background': '#0a1628',
+    'mainBkg': '#111f38',
+    'nodeBorder': '#2a4a78',
+    'clusterBkg': '#0f1f3a',
+    'clusterBorder': '#1a3358',
+    'titleColor': '#e1f5fe',
+    'edgeLabelBackground': '#0f1f3a',
+    'nodeTextColor': '#b3e5fc',
+    'actorTextColor': '#b3e5fc',
+    'fontSize': '14px'
+  }
+}}%%
+graph TB
+  subgraph CLIENTS["Clients"]
+    direction LR
+    CLI["CLI / TUI"]
+    WEB["Web UI"]
+    MOB["Mobile"]
+  end
+
+  subgraph API_PROCESS["API Service Process"]
+    direction TB
+    HTTP["HTTP API<br/><i>REST + GraphQL</i>"]
+    RT["Realtime<br/><i>WebSocket / SSE</i>"]
+    MG["Model Gateway<br/><i>Provider Adapters + Routing</i>"]
+    CR["Connector Runtime<br/><i>MCP + Native Integrations</i>"]
+    CTRL["Control Runtime<br/><i>CLI Ops + Browser Automation</i>"]
+  end
+
+  subgraph WORKER_PROCESS["Worker Service Process"]
+    direction TB
+    BG["Background Runs<br/><i>Async Jobs + Tool Calls</i>"]
+    MP["Memory Pipeline<br/><i>Extract, Score, Store, Retrieve</i>"]
+    EV["Event Processor<br/><i>Domain Events + Fanout</i>"]
+  end
+
+  subgraph STORAGE["Storage Layer"]
+    direction LR
+    PG[("PostgreSQL<br/><i>Transactional Data</i>")]
+    OBJ[("Object Store<br/><i>Artifacts, Logs, Files</i>")]
+  end
+
+  subgraph PROVIDERS["Model Providers"]
+    direction LR
+    P1["Anthropic"]
+    P2["OpenAI"]
+    P3["Local / Ollama"]
+  end
+
+  CLI --> HTTP
+  WEB --> HTTP
+  WEB --> RT
+  MOB --> HTTP
+  MOB --> RT
+
+  HTTP --> PG
+  HTTP --> OBJ
+  RT --> EV
+
+  BG --> PG
+  BG --> OBJ
+  MP --> PG
+
+  MG --> P1
+  MG --> P2
+  MG --> P3
+
+  HTTP <-->|"shared codebase<br/>+ domain modules"| BG
+
+  EV -->|"realtime<br/>fanout"| RT
+
+  classDef clientNode fill:#111f38,stroke:#4fc3f7,stroke-width:1px,color:#b3e5fc
+  classDef apiNode fill:#0f2842,stroke:#2a4a78,stroke-width:1px,color:#b3e5fc
+  classDef workerNode fill:#0f2842,stroke:#2a4a78,stroke-width:1px,color:#b3e5fc
+  classDef storageNode fill:#1a2a48,stroke:#4fc3f7,stroke-width:2px,color:#e1f5fe
+  classDef providerNode fill:#111f38,stroke:#2a4a78,stroke-width:1px,color:#7bafc9
+
+  class CLI,WEB,MOB clientNode
+  class HTTP,RT,MG,CR,CTRL apiNode
+  class BG,MP,EV workerNode
+  class PG,OBJ storageNode
+  class P1,P2,P3 providerNode
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ DOMAIN BOUNDARIES ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div class="section-header fade-up" style="text-align:center; margin-bottom:0.5rem;">
+      <span class="label">Core Domains</span>
+      <h2>Five Domain Boundaries</h2>
+      <p style="color: var(--text-secondary); font-size: 0.85rem; max-width: 600px; margin: 0.5rem auto 0;">
+        Each domain owns its data, rules, and events. Cross-domain communication happens through well-defined interfaces.
+      </p>
+    </div>
+    <div class="domains-grid">
+
+      <!-- Chat Domain -->
+      <div class="domain-card fade-up delay-1">
+        <div class="domain-icon">
+          <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <h3>Chat</h3>
+        <p class="domain-desc">
+          Owns sessions, messages, and participant state. The primary interface
+          where humans talk to agents and agents take action.
+        </p>
+        <div class="entity-list">
+          <span class="entity-tag">Session</span>
+          <span class="entity-tag">Message</span>
+          <span class="entity-tag">Participant</span>
+          <span class="entity-tag">@mention trigger</span>
+          <span class="entity-tag">cycle_id</span>
+        </div>
+      </div>
+
+      <!-- Project Domain -->
+      <div class="domain-card fade-up delay-2">
+        <div class="domain-icon">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+        </div>
+        <h3>Project</h3>
+        <p class="domain-desc">
+          Owns tasks, flow progression, and approvals. Tasks are created through
+          conversation and persist until resolved.
+        </p>
+        <div class="entity-list">
+          <span class="entity-tag">Project</span>
+          <span class="entity-tag">ProjectTask</span>
+          <span class="entity-tag">FlowTemplate</span>
+          <span class="entity-tag">FlowNode</span>
+          <span class="entity-tag">FlowNodeExecution</span>
+        </div>
+      </div>
+
+      <!-- Agent Domain -->
+      <div class="domain-card fade-up delay-3">
+        <div class="domain-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>
+        </div>
+        <h3>Agent</h3>
+        <p class="domain-desc">
+          Owns identity, lifecycle, and capability policy. Each agent is an expert
+          in their domain with strong defaults.
+        </p>
+        <div class="entity-list">
+          <span class="entity-tag">Agent</span>
+          <span class="entity-tag">HumanUser</span>
+          <span class="entity-tag">Organization</span>
+          <span class="entity-tag">Skill</span>
+          <span class="entity-tag">ToolExecution</span>
+        </div>
+      </div>
+
+      <!-- Memory Domain -->
+      <div class="domain-card fade-up delay-4">
+        <div class="domain-icon">
+          <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/><line x1="10" y1="22" x2="14" y2="22"/></svg>
+        </div>
+        <h3>Memory</h3>
+        <p class="domain-desc">
+          Owns extraction, retrieval, and retention. Background infrastructure
+          with a conversational interface via @mention.
+        </p>
+        <div class="entity-list">
+          <span class="entity-tag">MemoryItem</span>
+          <span class="entity-tag">Extraction</span>
+          <span class="entity-tag">Scoring</span>
+          <span class="entity-tag">Retrieval</span>
+          <span class="entity-tag">Retention</span>
+        </div>
+      </div>
+
+      <!-- Model Domain -->
+      <div class="domain-card fade-up delay-5">
+        <div class="domain-icon">
+          <svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        </div>
+        <h3>Model</h3>
+        <p class="domain-desc">
+          Owns provider abstraction, routing, and cost policy. A gateway layer
+          that adapts to multiple inference providers.
+        </p>
+        <div class="entity-list">
+          <span class="entity-tag">ModelProfile</span>
+          <span class="entity-tag">Provider Adapter</span>
+          <span class="entity-tag">Routing Policy</span>
+          <span class="entity-tag">Cost Policy</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ DOMAIN CONNECTION DIAGRAM ════════════════════════════ -->
+<section class="diagram-section">
+  <div class="container">
+    <div class="section-header fade-up" style="text-align:center;">
+      <span class="label">Inter-Domain Communication</span>
+      <h2>How Domains Connect</h2>
+    </div>
+    <div class="mermaid-wrapper fade-up delay-1">
+      <div class="zoom-controls">
+        <button class="zoom-btn" onclick="zoomIn2()" title="Zoom in">+</button>
+        <button class="zoom-btn" onclick="zoomOut2()" title="Zoom out">&minus;</button>
+        <button class="zoom-btn" onclick="zoomReset2()" title="Reset zoom" style="font-size:0.65rem;">1:1</button>
+      </div>
+      <div class="mermaid-viewport" id="mermaid-viewport-2">
+        <pre class="mermaid">
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#111f38',
+    'primaryTextColor': '#b3e5fc',
+    'primaryBorderColor': '#4fc3f7',
+    'lineColor': '#4fc3f7',
+    'secondaryColor': '#0f1f3a',
+    'tertiaryColor': '#0a1628',
+    'background': '#0a1628',
+    'mainBkg': '#111f38',
+    'nodeBorder': '#4fc3f7',
+    'clusterBkg': '#0f1f3a',
+    'clusterBorder': '#1a3358',
+    'titleColor': '#e1f5fe',
+    'edgeLabelBackground': '#0f1f3a',
+    'nodeTextColor': '#b3e5fc',
+    'fontSize': '13px'
+  }
+}}%%
+graph LR
+  CHAT["Chat<br/><i>Sessions + Messages</i>"]
+  PROJECT["Project<br/><i>Tasks + Flows</i>"]
+  AGENT["Agent<br/><i>Identity + Policy</i>"]
+  MEMORY["Memory<br/><i>Extract + Retrieve</i>"]
+  MODEL["Model<br/><i>Routing + Inference</i>"]
+
+  CHAT -->|"blocked progress<br/>creates tasks"| PROJECT
+  CHAT -->|"@mention resolves<br/>agent identity"| AGENT
+  CHAT -->|"messages feed<br/>extraction pipeline"| MEMORY
+  CHAT -->|"inference requests<br/>via gateway"| MODEL
+
+  AGENT -->|"agents assigned<br/>to project tasks"| PROJECT
+  AGENT -->|"agent context<br/>enriched by memory"| MEMORY
+
+  PROJECT -->|"flow execution<br/>triggers inference"| MODEL
+  PROJECT -->|"task completion<br/>consolidates memory"| MEMORY
+
+  MEMORY -->|"retrieval augments<br/>model prompts"| MODEL
+
+  classDef domainNode fill:#111f38,stroke:#4fc3f7,stroke-width:2px,color:#e1f5fe,font-weight:600
+  class CHAT,PROJECT,AGENT,MEMORY,MODEL domainNode
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ PRODUCT PRINCIPLES ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div class="section-header fade-up" style="text-align:center; margin-bottom:0.5rem;">
+      <span class="label">Design Philosophy</span>
+      <h2>Product Principles</h2>
+    </div>
+    <div class="principles-grid">
+
+      <!-- Opinionated -->
+      <div class="principle-card fade-up delay-1">
+        <div class="principle-icon">
+          <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <h3>Opinionated, Not a Blank Canvas</h3>
+        <p>
+          Agents propose the right approach based on context.
+          Defaults are good enough that most users just say "yeah, go."
+          Override is possible, but the happy path is the default path.
+        </p>
+      </div>
+
+      <!-- Chat Primary -->
+      <div class="principle-card fade-up delay-2">
+        <div class="principle-icon">
+          <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <h3>Chat Is the Primary Interface</h3>
+        <p>
+          The human talks to agents; agents take action.
+          UI surfaces are for viewing and reviewing --
+          not for direct manipulation of system objects.
+          Everything happens through conversation.
+        </p>
+      </div>
+
+      <!-- Progressive Disclosure -->
+      <div class="principle-card fade-up delay-3">
+        <div class="principle-icon">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+        </div>
+        <h3>Progressive Disclosure</h3>
+        <p>
+          Show status at a glance, let the user drill in for detail.
+          Never overwhelm with information that is not needed
+          at the current level of zoom.
+        </p>
+      </div>
+
+      <!-- Strong Defaults -->
+      <div class="principle-card fade-up delay-4">
+        <div class="principle-icon">
+          <svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        </div>
+        <h3>Agents Have Strong Defaults</h3>
+        <p>
+          When the PM designs a flow, they recommend the right one.
+          When the PM scopes a task, they produce something ready to execute.
+          Each agent is an expert in their domain and acts like it.
+        </p>
+      </div>
+
+      <!-- Blocked Progress -->
+      <div class="principle-card fade-up delay-5">
+        <div class="principle-icon">
+          <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </div>
+        <h3>Blocked Progress Creates Tasks</h3>
+        <p>
+          When something requires action to keep a project moving,
+          the system creates a task assigned to the responsible party.
+          Notifications can be missed. Tasks persist until resolved.
+        </p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ STORAGE & EVENTING ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div class="section-header fade-up" style="text-align:center; margin-bottom:0.5rem;">
+      <span class="label">Infrastructure</span>
+      <h2>Storage and Eventing</h2>
+    </div>
+    <div class="storage-row">
+
+      <div class="storage-card fade-up delay-1">
+        <h3>
+          <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+          PostgreSQL
+        </h3>
+        <ul>
+          <li>All transactional entities (orgs, users, agents, sessions, tasks)</li>
+          <li>Durable event log table for replay and debugging</li>
+          <li>Domain events emitted on create/update transitions</li>
+        </ul>
+      </div>
+
+      <div class="storage-card fade-up delay-2">
+        <h3>
+          <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+          Object Store
+        </h3>
+        <ul>
+          <li>Large artifacts: session exports, screenshots, logs, files</li>
+          <li>Optional local filesystem mirror for single-node self-hosting</li>
+          <li>Decoupled from transactional path for performance</li>
+        </ul>
+      </div>
+
+      <div class="storage-card fade-up delay-3">
+        <h3>
+          <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          Eventing Model
+        </h3>
+        <ul>
+          <li>Domain events on entity state transitions</li>
+          <li>Durable log for replay, debugging, and audit</li>
+          <li>Realtime fanout to subscribed clients via WebSocket / SSE</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ FOOTER ════════════════════════════ -->
+<footer class="footer">
+  <div class="container">
+    <p>
+      OtterCamp V2 -- Architecture and Domain Model
+      &nbsp;/&nbsp;
+      Source: <a href="../01-architecture-and-domain.md">docsv2/01-architecture-and-domain.md</a>
+    </p>
+  </div>
+</footer>
+
+<!-- ════════════════════════════ SCRIPTS ════════════════════════════ -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    fontFamily: 'IBM Plex Mono, monospace',
+    flowchart: {
+      htmlLabels: true,
+      curve: 'basis',
+      padding: 16
+    },
+    themeVariables: {
+      primaryColor: '#111f38',
+      primaryTextColor: '#b3e5fc',
+      primaryBorderColor: '#2a4a78',
+      lineColor: '#4fc3f7',
+      background: '#0a1628',
+      mainBkg: '#111f38',
+      fontSize: '14px'
+    }
+  });
+</script>
+
+<script>
+  // ── Zoom controls for diagram 1 ──
+  let scale1 = 1;
+  const viewport1 = document.getElementById('mermaid-viewport');
+
+  function applyZoom1() {
+    const svg = viewport1.querySelector('svg');
+    if (svg) svg.style.transform = 'scale(' + scale1 + ')';
+  }
+
+  window.zoomIn = function() {
+    scale1 = Math.min(scale1 + 0.15, 3);
+    applyZoom1();
+  };
+
+  window.zoomOut = function() {
+    scale1 = Math.max(scale1 - 0.15, 0.3);
+    applyZoom1();
+  };
+
+  window.zoomReset = function() {
+    scale1 = 1;
+    applyZoom1();
+  };
+
+  // ── Zoom controls for diagram 2 ──
+  let scale2 = 1;
+  const viewport2 = document.getElementById('mermaid-viewport-2');
+
+  function applyZoom2() {
+    const svg = viewport2.querySelector('svg');
+    if (svg) svg.style.transform = 'scale(' + scale2 + ')';
+  }
+
+  window.zoomIn2 = function() {
+    scale2 = Math.min(scale2 + 0.15, 3);
+    applyZoom2();
+  };
+
+  window.zoomOut2 = function() {
+    scale2 = Math.max(scale2 - 0.15, 0.3);
+    applyZoom2();
+  };
+
+  window.zoomReset2 = function() {
+    scale2 = 1;
+    applyZoom2();
+  };
+
+  // ── Intersection Observer for scroll-triggered animations ──
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          entry.target.style.animationPlayState = 'running';
+        }
+      });
+    },
+    { threshold: 0.1, rootMargin: '0px 0px -40px 0px' }
+  );
+
+  document.querySelectorAll('.fade-up').forEach((el) => {
+    el.style.animationPlayState = 'paused';
+    observer.observe(el);
+  });
+
+  // Immediately play animations for elements already in viewport
+  requestAnimationFrame(() => {
+    document.querySelectorAll('.fade-up').forEach((el) => {
+      const rect = el.getBoundingClientRect();
+      if (rect.top < window.innerHeight) {
+        el.style.animationPlayState = 'running';
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

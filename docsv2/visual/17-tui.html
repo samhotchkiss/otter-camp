@@ -1,0 +1,1672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- Terminal UI (TUI) Spec</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=VT323&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  /* ===== Custom Properties ===== */
+  :root {
+    --bg: #000000;
+    --bg-raised: #0a0a0a;
+    --bg-card: #050505;
+    --green: #00ff88;
+    --green-bright: #33ffaa;
+    --green-dim: #00cc6a;
+    --green-muted: #006633;
+    --green-ghost: #00ff8810;
+    --green-glow: #00ff8830;
+    --amber: #ffb700;
+    --amber-dim: #cc9200;
+    --amber-muted: #664900;
+    --amber-ghost: #ffb70010;
+    --amber-glow: #ffb70030;
+    --white: #c8c8c8;
+    --white-bright: #e8e8e8;
+    --white-dim: #888888;
+    --red: #ff4444;
+    --red-dim: #cc2222;
+    --border: #1a2a1a;
+    --border-bright: #00ff8840;
+    --border-amber: #ffb70040;
+    --font-heading: 'VT323', monospace;
+    --font-body: 'IBM Plex Mono', monospace;
+  }
+
+  /* ===== Reset ===== */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* ===== CRT Scanline Overlay ===== */
+  body::after {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    z-index: 9999;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.06) 2px,
+      rgba(0, 0, 0, 0.06) 4px
+    );
+  }
+
+  /* ===== CRT Vignette ===== */
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    z-index: 9998;
+    background: radial-gradient(
+      ellipse at center,
+      transparent 60%,
+      rgba(0, 0, 0, 0.4) 100%
+    );
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--white);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  /* ===== Scrollbar ===== */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--green-muted); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--green-dim); }
+
+  /* ===== Layout ===== */
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 2rem;
+  }
+
+  section {
+    padding: 4rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  section:last-of-type {
+    border-bottom: none;
+  }
+
+  /* ===== Typography ===== */
+  h1, h2, h3 {
+    font-family: var(--font-heading);
+    color: var(--green);
+    font-weight: 400;
+  }
+
+  h1 { font-size: 2.8rem; letter-spacing: 0.05em; }
+  h2 { font-size: 1.8rem; margin-bottom: 1.5rem; letter-spacing: 0.03em; }
+  h3 { font-size: 1.4rem; margin-bottom: 1rem; color: var(--green-dim); letter-spacing: 0.02em; }
+
+  p { margin-bottom: 1rem; }
+
+  a {
+    color: var(--green);
+    text-decoration: none;
+    border-bottom: 1px solid var(--green-muted);
+  }
+
+  a:hover {
+    color: var(--green-bright);
+    border-bottom-color: var(--green-bright);
+  }
+
+  /* ===== Typewriter Animation ===== */
+  .typewriter {
+    overflow: hidden;
+    white-space: nowrap;
+    border-right: 3px solid var(--green);
+    width: 0;
+    animation: typewriter-expand 1.8s steps(24, end) forwards,
+               blink-caret 0.75s step-end 6;
+  }
+
+  @keyframes typewriter-expand {
+    from { width: 0; }
+    to { width: 100%; }
+  }
+
+  @keyframes blink-caret {
+    from, to { border-color: transparent; }
+    50% { border-color: var(--green); }
+  }
+
+  .typewriter-delay {
+    overflow: hidden;
+    white-space: nowrap;
+    border-right: 2px solid var(--amber);
+    width: 0;
+    opacity: 0;
+    animation: typewriter-delay-start 0s 1.9s forwards,
+               typewriter-expand 1.4s steps(40, end) 2.0s forwards,
+               blink-caret-amber 0.75s step-end 2.0s 4;
+  }
+
+  @keyframes typewriter-delay-start {
+    to { opacity: 1; }
+  }
+
+  @keyframes blink-caret-amber {
+    from, to { border-color: transparent; }
+    50% { border-color: var(--amber); }
+  }
+
+  /* ===== FadeUp Animation ===== */
+  .fade-up {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+  }
+
+  .fade-up.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ===== Hero ===== */
+  .hero {
+    padding: 6rem 0 4rem;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+
+  .hero::before {
+    content: '$ otter tui';
+    position: absolute;
+    top: 2rem;
+    left: 2rem;
+    color: var(--green-muted);
+    font-family: var(--font-body);
+    font-size: 0.85rem;
+    animation: blink-caret 1s step-end infinite;
+    border-right: 2px solid var(--green-muted);
+    padding-right: 4px;
+  }
+
+  .hero-prefix {
+    font-family: var(--font-body);
+    font-size: 0.75rem;
+    color: var(--green-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3em;
+    margin-bottom: 1rem;
+    display: block;
+  }
+
+  .hero h1 {
+    font-size: 3rem;
+    display: inline-block;
+    margin-bottom: 0.75rem;
+    text-shadow: 0 0 30px var(--green-glow), 0 0 60px var(--green-ghost);
+  }
+
+  .hero-subtitle {
+    font-family: var(--font-body);
+    font-size: 0.95rem;
+    color: var(--amber);
+    display: inline-block;
+    margin-bottom: 3rem;
+  }
+
+  /* ===== Stat Pills ===== */
+  .stats {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    flex-wrap: wrap;
+  }
+
+  .stat {
+    border: 1px solid var(--border-bright);
+    background: var(--bg-card);
+    padding: 1.25rem 2rem;
+    text-align: center;
+    min-width: 160px;
+  }
+
+  .stat-value {
+    font-family: var(--font-heading);
+    font-size: 2.4rem;
+    color: var(--green-bright);
+    display: block;
+    line-height: 1;
+    margin-bottom: 0.4rem;
+    text-shadow: 0 0 20px var(--green-glow);
+  }
+
+  .stat-label {
+    font-family: var(--font-body);
+    font-size: 0.65rem;
+    color: var(--green-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+  }
+
+  .stat--amber .stat-value {
+    color: var(--amber);
+    text-shadow: 0 0 20px var(--amber-glow);
+  }
+
+  .stat--amber {
+    border-color: var(--border-amber);
+  }
+
+  /* ===== Section Headers ===== */
+  .section-number {
+    font-family: var(--font-body);
+    font-size: 0.7rem;
+    color: var(--green-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    display: block;
+    margin-bottom: 0.5rem;
+  }
+
+  .section-desc {
+    color: var(--white);
+    font-size: 0.9rem;
+    max-width: 700px;
+    margin-bottom: 2rem;
+  }
+
+  /* ===== Terminal Block ===== */
+  .terminal-block {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    margin: 1.5rem 0;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .terminal-header {
+    background: #0a0a0a;
+    border-bottom: 1px solid var(--border);
+    padding: 0.5rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .terminal-dots {
+    display: flex;
+    gap: 6px;
+  }
+
+  .terminal-dots span {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: block;
+  }
+
+  .terminal-dots span:nth-child(1) { background: #ff5f56; }
+  .terminal-dots span:nth-child(2) { background: #ffbd2e; }
+  .terminal-dots span:nth-child(3) { background: #27c93f; }
+
+  .terminal-title {
+    font-family: var(--font-body);
+    font-size: 0.7rem;
+    color: var(--white-dim);
+    margin-left: 0.5rem;
+  }
+
+  .terminal-body {
+    padding: 1.25rem 1.5rem;
+    overflow-x: auto;
+  }
+
+  .terminal-body pre {
+    font-family: var(--font-body);
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: var(--green);
+    white-space: pre;
+    margin: 0;
+  }
+
+  .terminal-body .t-white { color: var(--white-bright); }
+  .terminal-body .t-dim { color: var(--white-dim); }
+  .terminal-body .t-green { color: var(--green); }
+  .terminal-body .t-green-dim { color: var(--green-dim); }
+  .terminal-body .t-amber { color: var(--amber); }
+  .terminal-body .t-amber-dim { color: var(--amber-dim); }
+  .terminal-body .t-red { color: var(--red); }
+  .terminal-body .t-bold { font-weight: 600; }
+
+  /* ===== Mode Comparison Cards ===== */
+  .modes-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+  }
+
+  .mode-card {
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    padding: 1.5rem;
+    position: relative;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+
+  .mode-card:hover {
+    border-color: var(--green-dim);
+    box-shadow: 0 0 30px var(--green-ghost);
+  }
+
+  .mode-card--amber:hover {
+    border-color: var(--amber-dim);
+    box-shadow: 0 0 30px var(--amber-ghost);
+  }
+
+  .mode-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  .mode-badge {
+    font-family: var(--font-body);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 0.2rem 0.6rem;
+    border: 1px solid var(--green-dim);
+    color: var(--green);
+    background: var(--green-ghost);
+    white-space: nowrap;
+  }
+
+  .mode-badge--amber {
+    border-color: var(--amber-dim);
+    color: var(--amber);
+    background: var(--amber-ghost);
+  }
+
+  .mode-card h3 {
+    font-size: 1.4rem;
+    color: var(--green);
+    margin-bottom: 0;
+  }
+
+  .mode-card--amber h3 {
+    color: var(--amber);
+  }
+
+  .mode-card p {
+    font-size: 0.85rem;
+    color: var(--white);
+    line-height: 1.6;
+    margin-bottom: 0.75rem;
+  }
+
+  .mode-card .mode-cmd {
+    font-family: var(--font-body);
+    font-size: 0.8rem;
+    color: var(--green);
+    background: var(--bg);
+    padding: 0.5rem 0.75rem;
+    margin: 0.75rem 0;
+    border-left: 2px solid var(--green-muted);
+  }
+
+  .mode-card--amber .mode-cmd {
+    color: var(--amber);
+    border-left-color: var(--amber-muted);
+  }
+
+  .mode-features {
+    list-style: none;
+    font-size: 0.8rem;
+    color: var(--white-dim);
+    line-height: 1.8;
+  }
+
+  .mode-features li::before {
+    content: '>';
+    color: var(--green-muted);
+    margin-right: 0.5rem;
+    font-family: var(--font-body);
+  }
+
+  .mode-card--amber .mode-features li::before {
+    color: var(--amber-muted);
+  }
+
+  /* ===== Keybindings Table ===== */
+  .keybindings-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+  }
+
+  .keybindings-group {
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    overflow: hidden;
+  }
+
+  .keybindings-group-header {
+    background: var(--green-ghost);
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-heading);
+    font-size: 1.1rem;
+    color: var(--green);
+    letter-spacing: 0.03em;
+  }
+
+  .keybindings-group-header--amber {
+    background: var(--amber-ghost);
+    color: var(--amber);
+  }
+
+  .kb-row {
+    display: flex;
+    align-items: baseline;
+    padding: 0.4rem 1rem;
+    border-bottom: 1px solid #0a0a0a;
+    font-size: 0.8rem;
+  }
+
+  .kb-row:last-child {
+    border-bottom: none;
+  }
+
+  .kb-key {
+    font-family: var(--font-body);
+    font-size: 0.75rem;
+    color: var(--amber);
+    background: #1a1200;
+    border: 1px solid var(--amber-muted);
+    padding: 0.1rem 0.4rem;
+    min-width: 80px;
+    text-align: center;
+    display: inline-block;
+    margin-right: 1rem;
+    flex-shrink: 0;
+  }
+
+  .kb-action {
+    color: var(--white);
+    font-size: 0.8rem;
+    flex: 1;
+  }
+
+  /* ===== Scope Switcher ===== */
+  .scope-vis {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin: 2rem 0;
+    flex-wrap: wrap;
+  }
+
+  .scope-pill {
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    padding: 1rem 1.5rem;
+    text-align: center;
+    min-width: 180px;
+    position: relative;
+    transition: border-color 0.3s, box-shadow 0.3s;
+    cursor: default;
+  }
+
+  .scope-pill--active {
+    border-color: var(--green);
+    box-shadow: 0 0 20px var(--green-ghost);
+    background: #001a0d;
+  }
+
+  .scope-pill-label {
+    font-family: var(--font-body);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--green-muted);
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+
+  .scope-pill--active .scope-pill-label {
+    color: var(--green-dim);
+  }
+
+  .scope-pill-name {
+    font-family: var(--font-heading);
+    font-size: 1.2rem;
+    color: var(--white-dim);
+    display: block;
+  }
+
+  .scope-pill--active .scope-pill-name {
+    color: var(--green);
+    text-shadow: 0 0 10px var(--green-glow);
+  }
+
+  .scope-arrow {
+    font-family: var(--font-body);
+    font-size: 1.2rem;
+    color: var(--green-dim);
+    padding: 0 1rem;
+    flex-shrink: 0;
+  }
+
+  .scope-hint {
+    text-align: center;
+    margin-top: 1rem;
+    font-family: var(--font-body);
+    font-size: 0.75rem;
+    color: var(--white-dim);
+  }
+
+  .scope-hint kbd {
+    background: #1a1200;
+    border: 1px solid var(--amber-muted);
+    color: var(--amber);
+    padding: 0.1rem 0.4rem;
+    font-family: var(--font-body);
+    font-size: 0.7rem;
+  }
+
+  /* ===== Mermaid Wrapper ===== */
+  .mermaid-wrapper {
+    position: relative;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    padding: 2rem;
+    margin: 1.5rem 0;
+    overflow: hidden;
+  }
+
+  .mermaid-wrapper .mermaid-inner {
+    overflow: auto;
+    max-height: 800px;
+    transition: transform 0.2s ease;
+    transform-origin: top left;
+  }
+
+  .mermaid-controls {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    display: flex;
+    gap: 0.25rem;
+    z-index: 10;
+  }
+
+  .mermaid-controls button {
+    width: 28px;
+    height: 28px;
+    background: var(--bg);
+    border: 1px solid var(--border-bright);
+    color: var(--green);
+    font-family: var(--font-body);
+    font-size: 0.85rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s, border-color 0.2s;
+  }
+
+  .mermaid-controls button:hover {
+    background: var(--green-ghost);
+    border-color: var(--green);
+  }
+
+  .mermaid-label {
+    font-family: var(--font-body);
+    font-size: 0.65rem;
+    color: var(--green-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    margin-bottom: 1rem;
+    display: block;
+  }
+
+  .mermaid svg {
+    max-width: 100%;
+  }
+
+  /* ===== Degradation Vis ===== */
+  .degrade-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+  }
+
+  .degrade-card {
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    padding: 1.25rem;
+    overflow: hidden;
+  }
+
+  .degrade-card-header {
+    font-family: var(--font-heading);
+    font-size: 1.1rem;
+    color: var(--amber);
+    margin-bottom: 0.25rem;
+  }
+
+  .degrade-card-sub {
+    font-family: var(--font-body);
+    font-size: 0.65rem;
+    color: var(--amber-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 0.75rem;
+    display: block;
+  }
+
+  .degrade-card pre {
+    font-family: var(--font-body);
+    font-size: 0.65rem;
+    line-height: 1.4;
+    color: var(--green);
+    white-space: pre;
+    margin: 0;
+  }
+
+  .degrade-card .d-dim { color: var(--white-dim); }
+  .degrade-card .d-amber { color: var(--amber); }
+
+  /* ===== Decisions List ===== */
+  .decisions-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    margin-top: 1.5rem;
+    border: 1px solid var(--border);
+  }
+
+  .decision {
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid #0a0a0a;
+    border-right: 1px solid #0a0a0a;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: var(--white);
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .decision-num {
+    font-family: var(--font-body);
+    font-size: 0.7rem;
+    color: var(--green-muted);
+    flex-shrink: 0;
+    width: 2ch;
+    text-align: right;
+  }
+
+  .decision-text {
+    flex: 1;
+  }
+
+  .decision-text strong {
+    color: var(--green-dim);
+  }
+
+  /* ===== Parity Table ===== */
+  .parity-table {
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    margin-top: 1.5rem;
+    overflow: hidden;
+  }
+
+  .parity-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    border-bottom: 1px solid #0a0a0a;
+    font-size: 0.8rem;
+  }
+
+  .parity-row:last-child {
+    border-bottom: none;
+  }
+
+  .parity-row--header {
+    background: var(--green-ghost);
+    font-family: var(--font-heading);
+    font-size: 1rem;
+    color: var(--green);
+    letter-spacing: 0.02em;
+  }
+
+  .parity-cell {
+    padding: 0.5rem 1rem;
+    border-right: 1px solid #0a0a0a;
+    color: var(--white);
+  }
+
+  .parity-cell:last-child {
+    border-right: none;
+  }
+
+  .parity-row--header .parity-cell {
+    color: var(--green);
+  }
+
+  .parity-yes {
+    color: var(--green);
+  }
+
+  .parity-no {
+    color: var(--white-dim);
+  }
+
+  .parity-detail {
+    color: var(--amber-dim);
+    font-size: 0.75rem;
+  }
+
+  /* ===== Footer ===== */
+  footer {
+    padding: 3rem 0;
+    text-align: center;
+    border-top: 1px solid var(--border);
+  }
+
+  footer p {
+    font-family: var(--font-body);
+    font-size: 0.7rem;
+    color: var(--green-muted);
+    letter-spacing: 0.1em;
+  }
+
+  footer .footer-line {
+    margin-bottom: 0.5rem;
+  }
+
+  /* ===== Phase Timeline ===== */
+  .phase-timeline {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    margin: 2rem 0;
+  }
+
+  .phase-block {
+    flex: 1;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    padding: 1.25rem;
+    position: relative;
+  }
+
+  .phase-block--active {
+    border-color: var(--green);
+    box-shadow: 0 0 20px var(--green-ghost);
+    background: #001a0d;
+  }
+
+  .phase-block + .phase-block {
+    border-left: none;
+  }
+
+  .phase-num {
+    font-family: var(--font-heading);
+    font-size: 1.6rem;
+    color: var(--green-muted);
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+
+  .phase-block--active .phase-num {
+    color: var(--green);
+    text-shadow: 0 0 10px var(--green-glow);
+  }
+
+  .phase-title {
+    font-family: var(--font-heading);
+    font-size: 1.1rem;
+    color: var(--white-dim);
+    display: block;
+    margin-bottom: 0.5rem;
+  }
+
+  .phase-block--active .phase-title {
+    color: var(--white-bright);
+  }
+
+  .phase-features {
+    list-style: none;
+    font-size: 0.75rem;
+    color: var(--white-dim);
+    line-height: 1.6;
+  }
+
+  .phase-features li::before {
+    content: '>';
+    color: var(--green-muted);
+    margin-right: 0.5rem;
+  }
+
+  .phase-block--active .phase-features li::before {
+    color: var(--green-dim);
+  }
+
+  .phase-block--active .phase-features li {
+    color: var(--white);
+  }
+
+  .phase-arrow {
+    display: flex;
+    align-items: center;
+    font-family: var(--font-body);
+    font-size: 1.2rem;
+    color: var(--green-dim);
+    padding: 0;
+    flex-shrink: 0;
+  }
+
+  /* ===== Responsive ===== */
+  @media (max-width: 800px) {
+    .modes-grid { grid-template-columns: 1fr; }
+    .keybindings-grid { grid-template-columns: 1fr; }
+    .degrade-grid { grid-template-columns: 1fr; }
+    .decisions-grid { grid-template-columns: 1fr; }
+    .phase-timeline { flex-direction: column; }
+    .phase-block + .phase-block { border-left: 1px solid var(--border); border-top: none; }
+    .scope-vis { flex-direction: column; }
+    .scope-arrow { transform: rotate(90deg); padding: 0.5rem 0; }
+  }
+
+  @media (max-width: 600px) {
+    .hero h1 { font-size: 2rem; }
+    .stats { gap: 1rem; }
+    .stat { min-width: 120px; padding: 1rem; }
+    .container { padding: 0 1rem; }
+    .parity-row { grid-template-columns: 1fr 1fr 1fr; font-size: 0.7rem; }
+    .parity-cell { padding: 0.4rem 0.5rem; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== HERO ===== -->
+<header class="hero">
+  <div class="container">
+    <span class="hero-prefix">OtterCamp V2 // Spec 17</span>
+    <h1 class="typewriter">The Primary Interface</h1>
+    <br>
+    <span class="hero-subtitle typewriter-delay">First and only UI for Phases 1-2 -- built with Bubble Tea (Go)</span>
+
+    <div class="stats fade-up">
+      <div class="stat">
+        <span class="stat-value">3</span>
+        <span class="stat-label">Panel Layout</span>
+      </div>
+      <div class="stat stat--amber">
+        <span class="stat-value">2</span>
+        <span class="stat-label">Interface Modes</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">100%</span>
+        <span class="stat-label">Feature Parity</span>
+      </div>
+      <div class="stat stat--amber">
+        <span class="stat-value">vim</span>
+        <span class="stat-label">Default Keybindings</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">SSE</span>
+        <span class="stat-label">Realtime Updates</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ===== THREE-PANEL LAYOUT ===== -->
+<section id="layout">
+  <div class="container">
+    <span class="section-number">01 // Layout</span>
+    <h2 class="fade-up">Three-Panel Terminal Layout</h2>
+    <p class="section-desc fade-up">
+      Chat is the primary interface, not a sidebar accessory. The chat pane gets <strong style="color:var(--amber)">40%</strong> of the screen. Main content gets <strong style="color:var(--amber)">40%</strong>. The sidebar navigator takes <strong style="color:var(--amber)">20%</strong>. Exactly one panel has focus at a time -- bright border on the focused panel, dim on the rest.
+    </p>
+
+    <div class="terminal-block fade-up">
+      <div class="terminal-header">
+        <div class="terminal-dots">
+          <span></span><span></span><span></span>
+        </div>
+        <span class="terminal-title">otter tui -- OtterCamp V2 -- 180x48 -- connected</span>
+      </div>
+      <div class="terminal-body">
+<pre><span class="t-dim">+--- Sidebar (20%) -----+--- Main Content (40%) ----------------+--- Chat Pane (40%) ----------------+</span>
+<span class="t-dim">|</span>                        <span class="t-dim">|</span>                                        <span class="t-dim">|</span>                                     <span class="t-dim">|</span>
+<span class="t-dim">|</span> <span class="t-green t-bold">General</span>                <span class="t-dim">|</span>  <span class="t-white t-bold">OTTERCAMP</span>                 Feb 22, 2026 <span class="t-dim">|</span> <span class="t-amber">[Task: Auth]</span> <span class="t-green t-bold">[Proj: OC V2]</span> [Org]  <span class="t-dim">|</span>
+<span class="t-dim">|</span> <span class="t-dim">-----------------------</span><span class="t-dim">|</span>  <span class="t-dim">-------------------------------------</span>  <span class="t-dim">|</span> <span class="t-dim">-------------------------------------</span><span class="t-dim">|</span>
+<span class="t-dim">|</span> <span class="t-green">OtterCamp V2</span>           <span class="t-dim">|</span>                                        <span class="t-dim">|</span>                                     <span class="t-dim">|</span>
+<span class="t-dim">|</span>   <span class="t-white">Define auth</span>          <span class="t-dim">|</span>  <span class="t-amber">INBOX (3 items)</span>                      <span class="t-dim">|</span> <span class="t-dim">+-- You --------------------------+</span>  <span class="t-dim">|</span>
+<span class="t-dim">|</span>   <span class="t-green-dim">Implement auth</span>  <span class="t-amber">*</span>    <span class="t-dim">|</span>  <span class="t-red">!</span> Escalation: Auth conflict       <span class="t-dim">|</span> <span class="t-dim">|</span> What's the status on auth?   <span class="t-dim">|</span>  <span class="t-dim">|</span>
+<span class="t-dim">|</span>   <span class="t-white">Write chat spec</span>      <span class="t-dim">|</span>    Task Scoping: Landing page       <span class="t-dim">|</span> <span class="t-dim">+-------------------------------+</span>  <span class="t-dim">|</span>
+<span class="t-dim">|</span>                        <span class="t-dim">|</span>    Draft Review: Welcome email      <span class="t-dim">|</span>                                     <span class="t-dim">|</span>
+<span class="t-dim">|</span> <span class="t-green">Client Portal</span>          <span class="t-dim">|</span>                                        <span class="t-dim">|</span> <span class="t-dim">+-- Frank (Chief of Staff) ----+</span>  <span class="t-dim">|</span>
+<span class="t-dim">|</span>   <span class="t-green-dim">Fix login bug</span>   <span class="t-amber">*</span>    <span class="t-dim">|</span>  <span class="t-white t-bold">PROJECTS</span>                             <span class="t-dim">|</span> <span class="t-dim">|</span> <span class="t-green">Auth middleware is in progress.</span><span class="t-dim">|</span>  <span class="t-dim">|</span>
+<span class="t-dim">|</span>   <span class="t-white">Plan Sprint 3</span>        <span class="t-dim">|</span>  OC V2      4 active  2 blocked       <span class="t-dim">|</span> <span class="t-dim">|</span>                              <span class="t-dim">|</span>  <span class="t-dim">|</span>
+<span class="t-dim">|</span>                        <span class="t-dim">|</span>  Client      2 active  1 review       <span class="t-dim">|</span> <span class="t-dim">|</span> <span class="t-green">- JWT validation: done</span>        <span class="t-dim">|</span>  <span class="t-dim">|</span>
+<span class="t-dim">|</span>                        <span class="t-dim">|</span>                                        <span class="t-dim">|</span> <span class="t-dim">|</span> <span class="t-amber">- Session cookies: in progress</span><span class="t-dim">|</span>  <span class="t-dim">|</span>
+<span class="t-dim">|</span>                        <span class="t-dim">|</span>  <span class="t-white t-bold">RECENT ACTIVITY</span>                      <span class="t-dim">|</span> <span class="t-dim">|</span> <span class="t-white">- Rate limiting: queued</span>       <span class="t-dim">|</span>  <span class="t-dim">|</span>
+<span class="t-dim">|</span>                        <span class="t-dim">|</span>  <span class="t-green">*</span> 2m  Token validation done          <span class="t-dim">|</span> <span class="t-dim">|</span>                              <span class="t-dim">|</span>  <span class="t-dim">|</span>
+<span class="t-dim">|</span>                        <span class="t-dim">|</span>  <span class="t-green">></span> 5m  Fix login merged               <span class="t-dim">|</span> <span class="t-dim">|</span> <span class="t-green">Worker expects to finish by</span>   <span class="t-dim">|</span>  <span class="t-dim">|</span>
+<span class="t-dim">|</span>                        <span class="t-dim">|</span>  <span class="t-red">!</span> 8m  Missing API creds              <span class="t-dim">|</span> <span class="t-dim">|</span> <span class="t-green">end of day.</span>                   <span class="t-dim">|</span>  <span class="t-dim">|</span>
+<span class="t-dim">|</span>                        <span class="t-dim">|</span>  <span class="t-dim">.</span> 12m Session management started      <span class="t-dim">|</span> <span class="t-dim">+-------------------------------+</span>  <span class="t-dim">|</span>
+<span class="t-dim">|</span>                        <span class="t-dim">|</span>                                        <span class="t-dim">|</span>                                     <span class="t-dim">|</span>
+<span class="t-dim">|</span> <span class="t-dim">[N] Notifs    [I] Inbox</span><span class="t-dim">|</span>                                        <span class="t-dim">|</span> <span class="t-dim">> _</span>                                <span class="t-dim">|</span>
+<span class="t-dim">+------------------------+----------------------------------------+-------------------------------------+</span>
+<span class="t-dim">[</span><span class="t-green">Connected</span><span class="t-dim">]  OC V2 > OC-5  |  Chat: Implement auth (task)  |  Inbox: 3  |  ?=help  :=cmd</span></pre>
+      </div>
+    </div>
+
+    <p class="fade-up" style="font-size:0.85rem; color:var(--white-dim); margin-top:1rem;">
+      <strong style="color:var(--amber)">Focus cycling:</strong> Tab / Shift-Tab cycles panels. Alt-1 / Alt-2 / Alt-3 jumps directly. The focused panel has a bright border and captures all keyboard input. Context-appropriate keybinding hints appear in the status bar.
+    </p>
+  </div>
+</section>
+
+<!-- ===== TWO MODES ===== -->
+<section id="modes">
+  <div class="container">
+    <span class="section-number">02 // Dual Modes</span>
+    <h2 class="fade-up">One Binary, Two Modes</h2>
+    <p class="section-desc fade-up">
+      The <code style="color:var(--green)">otter</code> binary serves two purposes. Both connect directly to the OtterCamp API via HTTP + SSE -- the TUI is an API client, same as the web UI will be.
+    </p>
+
+    <div class="modes-grid fade-up">
+      <div class="mode-card">
+        <div class="mode-card-header">
+          <h3>otter tui</h3>
+          <span class="mode-badge">interactive</span>
+        </div>
+        <div class="mode-cmd">$ otter tui</div>
+        <p>Full-screen, persistent, real-time. The sustained interaction mode for chatting with agents, monitoring work, reviewing tasks, and managing the operation.</p>
+        <ul class="mode-features">
+          <li>Three-panel layout with live updates</li>
+          <li>Streaming agent responses (SSE)</li>
+          <li>Vim-style navigation throughout</li>
+          <li>Command palette with fuzzy matching</li>
+          <li>Session state persists across launches</li>
+          <li>Markdown rendering via Glamour</li>
+        </ul>
+      </div>
+
+      <div class="mode-card mode-card--amber">
+        <div class="mode-card-header">
+          <h3>otter &lt;command&gt;</h3>
+          <span class="mode-badge mode-badge--amber">scriptable</span>
+        </div>
+        <div class="mode-cmd">$ otter send "deploy the landing page"</div>
+        <p>Quick, non-interactive, pipe-friendly. For scripting, automation, and quick one-off actions from the shell.</p>
+        <ul class="mode-features">
+          <li>Plain text output (default) or JSON (--json)</li>
+          <li>Composable with Unix tools (pipe, grep)</li>
+          <li>Integration with shell workflows</li>
+          <li>otter send, status, inbox, task, projects...</li>
+          <li>otter inbox approve &lt;id&gt;</li>
+          <li>Works in scripts, cron jobs, CI/CD</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="terminal-block fade-up" style="margin-top:1.5rem;">
+      <div class="terminal-header">
+        <div class="terminal-dots">
+          <span></span><span></span><span></span>
+        </div>
+        <span class="terminal-title">CLI command examples</span>
+      </div>
+      <div class="terminal-body">
+<pre><span class="t-dim">$</span> <span class="t-green">otter status</span>
+<span class="t-white">Inbox: 3 items  |  Active tasks: 6  |  Queue depth: 2  |  Connected</span>
+
+<span class="t-dim">$</span> <span class="t-green">otter inbox</span> <span class="t-amber">--json</span> <span class="t-dim">| jq '.[] | select(.urgency == "high")'</span>
+<span class="t-white">{ "id": "abc123", "type": "escalation", "title": "Auth conflict" }</span>
+
+<span class="t-dim">$</span> <span class="t-green">otter send</span> <span class="t-amber">--to frank</span> <span class="t-white">"$(git log --oneline -5)"</span>
+<span class="t-dim">Message sent to Frank (org session)</span>
+
+<span class="t-dim">$</span> <span class="t-green">otter task OC-5</span>
+<span class="t-white">OC-5: Implement Auth Middleware     [HIGH]  [in_progress]
+Branch: task/implement-auth
+Subtasks: 2/3 done  |  Flow: [x Design]->[* Implement]->[ Review]->[ Final]</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== KEYBINDINGS ===== -->
+<section id="keybindings">
+  <div class="container">
+    <span class="section-number">03 // Keyboard Navigation</span>
+    <h2 class="fade-up">Vim-Native Keybindings</h2>
+    <p class="section-desc fade-up">
+      Vim-style keybindings as the default throughout. All keybindings listed in a help overlay accessible with <kbd style="background:#1a1200;border:1px solid var(--amber-muted);color:var(--amber);padding:0.1rem 0.4rem;font-family:var(--font-body);font-size:0.75rem;">?</kbd>. Keybindings are customizable.
+    </p>
+
+    <div class="keybindings-grid fade-up">
+      <div class="keybindings-group">
+        <div class="keybindings-group-header">Global</div>
+        <div class="kb-row"><span class="kb-key">Tab</span><span class="kb-action">Focus next panel</span></div>
+        <div class="kb-row"><span class="kb-key">Shift-Tab</span><span class="kb-action">Focus previous panel</span></div>
+        <div class="kb-row"><span class="kb-key">Alt-1/2/3</span><span class="kb-action">Jump to sidebar / main / chat</span></div>
+        <div class="kb-row"><span class="kb-key">:</span><span class="kb-action">Open command palette</span></div>
+        <div class="kb-row"><span class="kb-key">/</span><span class="kb-action">Search (context-dependent)</span></div>
+        <div class="kb-row"><span class="kb-key">?</span><span class="kb-action">Show keybinding help overlay</span></div>
+        <div class="kb-row"><span class="kb-key">Ctrl-C</span><span class="kb-action">Quit TUI</span></div>
+      </div>
+
+      <div class="keybindings-group">
+        <div class="keybindings-group-header">Sidebar</div>
+        <div class="kb-row"><span class="kb-key">j / k</span><span class="kb-action">Navigate up / down</span></div>
+        <div class="kb-row"><span class="kb-key">Enter</span><span class="kb-action">Select session (loads in chat)</span></div>
+        <div class="kb-row"><span class="kb-key">l / h</span><span class="kb-action">Expand / collapse project group</span></div>
+        <div class="kb-row"><span class="kb-key">n</span><span class="kb-action">Jump to notifications</span></div>
+        <div class="kb-row"><span class="kb-key">i</span><span class="kb-action">Jump to inbox</span></div>
+      </div>
+
+      <div class="keybindings-group">
+        <div class="keybindings-group-header">Main Content</div>
+        <div class="kb-row"><span class="kb-key">j / k</span><span class="kb-action">Next / previous item in list</span></div>
+        <div class="kb-row"><span class="kb-key">h / l</span><span class="kb-action">Previous / next column (task board)</span></div>
+        <div class="kb-row"><span class="kb-key">Enter</span><span class="kb-action">Drill into selected item</span></div>
+        <div class="kb-row"><span class="kb-key">Esc</span><span class="kb-action">Go back / up one level</span></div>
+        <div class="kb-row"><span class="kb-key">g / G</span><span class="kb-action">Go to top / bottom of list</span></div>
+        <div class="kb-row"><span class="kb-key">r</span><span class="kb-action">Refresh current view</span></div>
+      </div>
+
+      <div class="keybindings-group">
+        <div class="keybindings-group-header keybindings-group-header--amber">Chat Pane</div>
+        <div class="kb-row"><span class="kb-key">Enter</span><span class="kb-action">Send message</span></div>
+        <div class="kb-row"><span class="kb-key">Shift-Enter</span><span class="kb-action">Newline in input</span></div>
+        <div class="kb-row"><span class="kb-key">Esc</span><span class="kb-action">Cancel current agent turn</span></div>
+        <div class="kb-row"><span class="kb-key">[ / ]</span><span class="kb-action">Switch scope level (prev / next)</span></div>
+        <div class="kb-row"><span class="kb-key">@</span><span class="kb-action">Agent mention autocomplete</span></div>
+        <div class="kb-row"><span class="kb-key">+ / -</span><span class="kb-action">Positive / negative reaction</span></div>
+        <div class="kb-row"><span class="kb-key">Ctrl-U / D</span><span class="kb-action">Scroll up / down in history</span></div>
+        <div class="kb-row"><span class="kb-key">e / s</span><span class="kb-action">Edit / steer queued message</span></div>
+      </div>
+    </div>
+
+    <!-- Command Palette -->
+    <h3 class="fade-up" style="margin-top:2rem;">Command Palette</h3>
+    <p class="section-desc fade-up">
+      The <kbd style="background:#1a1200;border:1px solid var(--amber-muted);color:var(--amber);padding:0.1rem 0.4rem;font-family:var(--font-body);font-size:0.75rem;">:</kbd> prefix opens a command palette with fuzzy matching. Tab completes, arrow keys navigate suggestions.
+    </p>
+
+    <div class="terminal-block fade-up">
+      <div class="terminal-header">
+        <div class="terminal-dots">
+          <span></span><span></span><span></span>
+        </div>
+        <span class="terminal-title">command palette</span>
+      </div>
+      <div class="terminal-body">
+<pre><span class="t-amber">:</span><span class="t-white">proj otter</span><span class="t-dim">  -->  :project OtterCamp V2</span>
+
+<span class="t-dim">Navigation               Session                  Action</span>
+<span class="t-green">:dashboard</span>               <span class="t-green">:chat &lt;session&gt;</span>          <span class="t-green">:send &lt;message&gt;</span>
+<span class="t-green">:project &lt;name&gt;</span>          <span class="t-green">:general</span>                 <span class="t-green">:mention &lt;agent&gt;</span>
+<span class="t-green">:task &lt;id&gt;</span>               <span class="t-green">:scope org|project|task</span>  <span class="t-green">:cancel</span>
+<span class="t-green">:inbox</span>                                            <span class="t-green">:refresh</span>
+<span class="t-green">:activity</span>                <span class="t-dim">System</span>
+<span class="t-green">:agents</span>                  <span class="t-green">:theme &lt;name&gt;</span>
+<span class="t-green">:schedules</span>               <span class="t-green">:resize &lt;panel&gt; &lt;cols&gt;</span>
+<span class="t-green">:merges</span>                  <span class="t-green">:quit</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== SCOPE SWITCHING ===== -->
+<section id="scope">
+  <div class="container">
+    <span class="section-number">04 // Scope Switching</span>
+    <h2 class="fade-up">Context Without Navigation</h2>
+    <p class="section-desc fade-up">
+      The scope indicator at the top of the chat pane lets the operator switch between org, project, and task scopes using <kbd style="background:#1a1200;border:1px solid var(--amber-muted);color:var(--amber);padding:0.1rem 0.4rem;font-family:var(--font-body);font-size:0.75rem;">[</kbd> and <kbd style="background:#1a1200;border:1px solid var(--amber-muted);color:var(--amber);padding:0.1rem 0.4rem;font-family:var(--font-body);font-size:0.75rem;">]</kbd> keys -- without changing the main content view. Talk to Frank at org scope while looking at a task detail.
+    </p>
+
+    <div class="scope-vis fade-up">
+      <div class="scope-pill">
+        <span class="scope-pill-label">Task</span>
+        <span class="scope-pill-name">Implement Auth</span>
+      </div>
+      <span class="scope-arrow">&lt;--</span>
+      <div class="scope-pill scope-pill--active">
+        <span class="scope-pill-label">Project</span>
+        <span class="scope-pill-name">OtterCamp V2</span>
+      </div>
+      <span class="scope-arrow">--&gt;</span>
+      <div class="scope-pill">
+        <span class="scope-pill-label">Org</span>
+        <span class="scope-pill-name">General</span>
+      </div>
+    </div>
+
+    <p class="scope-hint fade-up">
+      <kbd>[</kbd> narrows scope (org -> project -> task)&nbsp;&nbsp;&nbsp;&nbsp;<kbd>]</kbd> widens scope (task -> project -> org)
+    </p>
+
+    <div class="terminal-block fade-up" style="margin-top:1.5rem;">
+      <div class="terminal-header">
+        <div class="terminal-dots">
+          <span></span><span></span><span></span>
+        </div>
+        <span class="terminal-title">scope indicator in chat pane</span>
+      </div>
+      <div class="terminal-body">
+<pre><span class="t-dim">+-- Chat Pane ------------------------------------------------+</span>
+<span class="t-dim">|</span>                                                              <span class="t-dim">|</span>
+<span class="t-dim">|</span>  <span class="t-dim">[Task: Implement auth]</span>  <span class="t-green t-bold">[Proj: OtterCamp V2]</span>  <span class="t-dim">[Org: General]</span><span class="t-dim">|</span>
+<span class="t-dim">|</span>                              <span class="t-green">^active</span>                         <span class="t-dim">|</span>
+<span class="t-dim">|</span>  <span class="t-dim">-----------------------------------------------------------</span> <span class="t-dim">|</span>
+<span class="t-dim">|</span>                                                              <span class="t-dim">|</span>
+<span class="t-dim">|</span>  <span class="t-dim">Switching scope changes the chat session.</span>                   <span class="t-dim">|</span>
+<span class="t-dim">|</span>  <span class="t-dim">Main content view stays unchanged.</span>                         <span class="t-dim">|</span>
+<span class="t-dim">|</span>                                                              <span class="t-dim">|</span>
+<span class="t-dim">+--------------------------------------------------------------+</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== REALTIME ARCHITECTURE ===== -->
+<section id="realtime">
+  <div class="container">
+    <span class="section-number">05 // Realtime Updates</span>
+    <h2 class="fade-up">SSE Event Stream</h2>
+    <p class="section-desc fade-up">
+      The TUI maintains a persistent SSE connection to the OtterCamp API. Events drive UI updates without polling. Auto-reconnect with exponential backoff. Missed events recovered via sequence-based catch-up.
+    </p>
+
+    <div class="mermaid-wrapper fade-up" id="mermaid-sse-wrapper">
+      <div class="mermaid-controls">
+        <button onclick="zoomMermaid('mermaid-sse', 1)" title="Zoom In">+</button>
+        <button onclick="zoomMermaid('mermaid-sse', -1)" title="Zoom Out">-</button>
+        <button onclick="zoomMermaid('mermaid-sse', 0)" title="Reset">R</button>
+      </div>
+      <span class="mermaid-label">SSE connection lifecycle with auto-reconnect</span>
+      <div class="mermaid-inner" id="mermaid-sse">
+        <pre class="mermaid">
+%%{init: {'theme': 'dark', 'themeVariables': { 'primaryColor': '#050505', 'primaryTextColor': '#00ff88', 'primaryBorderColor': '#00ff8840', 'lineColor': '#00cc6a', 'secondaryColor': '#0a0a0a', 'tertiaryColor': '#000000', 'edgeLabelBackground': '#000000', 'clusterBkg': '#050505', 'clusterBorder': '#1a2a1a', 'fontSize': '13px', 'fontFamily': 'IBM Plex Mono, monospace' }}}%%
+flowchart LR
+    AUTH["Authenticate<br/><i>otter login</i>"] --> CONNECT["Open SSE<br/>Connection"]
+    CONNECT --> STREAM["Receive<br/>Events"]
+    STREAM --> RENDER["Update<br/>UI Panels"]
+    RENDER --> STREAM
+
+    STREAM --> DROP{"Connection<br/>Dropped?"}
+    DROP -- "yes" --> BACKOFF["Exponential<br/>Backoff"]
+    BACKOFF --> RECON["Reconnect +<br/>Catch-up"]
+    RECON --> STREAM
+    DROP -- "no" --> STREAM
+
+    style AUTH fill:#050505,stroke:#00ff8840,color:#00ff88
+    style CONNECT fill:#050505,stroke:#00ff8840,color:#00ff88
+    style STREAM fill:#001a0d,stroke:#00cc6a,color:#33ffaa,stroke-width:2px
+    style RENDER fill:#050505,stroke:#00ff8840,color:#00ff88
+    style DROP fill:#050505,stroke:#ffb70040,color:#ffb700
+    style BACKOFF fill:#050505,stroke:#ffb70040,color:#ffb700
+    style RECON fill:#050505,stroke:#00cc6a,color:#00ff88
+        </pre>
+      </div>
+    </div>
+
+    <!-- Event mapping -->
+    <h3 class="fade-up" style="margin-top:2rem;">SSE Event Mapping</h3>
+
+    <div class="terminal-block fade-up">
+      <div class="terminal-header">
+        <div class="terminal-dots">
+          <span></span><span></span><span></span>
+        </div>
+        <span class="terminal-title">event types --> UI updates</span>
+      </div>
+      <div class="terminal-body">
+<pre><span class="t-amber">Event Type                        Panel Updated</span>
+<span class="t-dim">-----------------------------------------------------------</span>
+<span class="t-green">chat.message.created</span>       <span class="t-dim">--></span>  <span class="t-white">Chat pane (or unread indicator)</span>
+<span class="t-green">chat.message.delta</span>         <span class="t-dim">--></span>  <span class="t-white">Chat pane (streaming text)</span>
+<span class="t-green">chat.message.finalized</span>     <span class="t-dim">--></span>  <span class="t-white">Chat pane (message state final)</span>
+<span class="t-green">chat.turn.started</span>          <span class="t-dim">--></span>  <span class="t-white">Active turn indicator shown</span>
+<span class="t-green">chat.turn.completed</span>        <span class="t-dim">--></span>  <span class="t-white">Turn indicator cleared</span>
+<span class="t-amber">task.status.changed</span>        <span class="t-dim">--></span>  <span class="t-white">Task board, task detail, dashboard</span>
+<span class="t-amber">task.flow.advanced</span>         <span class="t-dim">--></span>  <span class="t-white">Flow stepper updates</span>
+<span class="t-amber">inbox.item.created</span>         <span class="t-dim">--></span>  <span class="t-white">Inbox count + sidebar badge</span>
+<span class="t-amber">agent.run.started</span>          <span class="t-dim">--></span>  <span class="t-white">Agent status view</span>
+<span class="t-amber">agent.run.completed</span>        <span class="t-dim">--></span>  <span class="t-white">Agent status view</span>
+<span class="t-amber">merge.status.changed</span>       <span class="t-dim">--></span>  <span class="t-white">Merge queue view</span>
+
+<span class="t-dim">Connection status:  </span><span class="t-green">[*] connected</span>   <span class="t-amber">[*] reconnecting</span>   <span class="t-red">[*] disconnected</span></pre>
+      </div>
+    </div>
+
+    <p class="fade-up" style="font-size:0.85rem; color:var(--white-dim); margin-top:1rem;">
+      The TUI subscribes to the same event types as the web UI. Sequence-based catch-up: the TUI tracks the last event sequence it received and requests missed events on reconnect.
+    </p>
+  </div>
+</section>
+
+<!-- ===== GRACEFUL DEGRADATION ===== -->
+<section id="degradation">
+  <div class="container">
+    <span class="section-number">06 // Responsive Layout</span>
+    <h2 class="fade-up">Graceful Degradation</h2>
+    <p class="section-desc fade-up">
+      Three breakpoints. The layout adapts to terminal width, never breaking. At the narrowest, the TUI switches to single-panel mode -- full-screen swap on Tab.
+    </p>
+
+    <div class="degrade-grid fade-up">
+      <div class="degrade-card">
+        <div class="degrade-card-header">120+ columns</div>
+        <span class="degrade-card-sub">Full three-panel layout</span>
+<pre><span class="d-dim">+---------+----------------+----------------+</span>
+<span class="d-dim">|</span>         <span class="d-dim">|</span>                <span class="d-dim">|</span>                <span class="d-dim">|</span>
+<span class="d-dim">|</span> <span class="d-amber">Sidebar</span> <span class="d-dim">|</span>  Main Content  <span class="d-dim">|</span>   Chat Pane    <span class="d-dim">|</span>
+<span class="d-dim">|</span>  <span>20%</span>    <span class="d-dim">|</span>     40%        <span class="d-dim">|</span>     40%        <span class="d-dim">|</span>
+<span class="d-dim">|</span>         <span class="d-dim">|</span>                <span class="d-dim">|</span>                <span class="d-dim">|</span>
+<span class="d-dim">+---------+----------------+----------------+</span>
+Full names, all sessions visible</pre>
+      </div>
+
+      <div class="degrade-card">
+        <div class="degrade-card-header">100 - 119 columns</div>
+        <span class="degrade-card-sub">Sidebar abbreviated</span>
+<pre><span class="d-dim">+-----+------------------+------------------+</span>
+<span class="d-dim">|</span>     <span class="d-dim">|</span>                  <span class="d-dim">|</span>                  <span class="d-dim">|</span>
+<span class="d-dim">|</span> <span class="d-amber">Nav</span> <span class="d-dim">|</span>   Main Content   <span class="d-dim">|</span>    Chat Pane     <span class="d-dim">|</span>
+<span class="d-dim">|</span>     <span class="d-dim">|</span>                  <span class="d-dim">|</span>                  <span class="d-dim">|</span>
+<span class="d-dim">|</span>     <span class="d-dim">|</span>                  <span class="d-dim">|</span>                  <span class="d-dim">|</span>
+<span class="d-dim">+-----+------------------+------------------+</span>
+Icons/abbreviations, truncated names</pre>
+      </div>
+
+      <div class="degrade-card">
+        <div class="degrade-card-header">&lt; 100 columns</div>
+        <span class="degrade-card-sub">Sidebar hidden</span>
+<pre><span class="d-dim">+--------------------------+--------------------------+</span>
+<span class="d-dim">|</span>                          <span class="d-dim">|</span>                          <span class="d-dim">|</span>
+<span class="d-dim">|</span>      Main Content        <span class="d-dim">|</span>       Chat Pane           <span class="d-dim">|</span>
+<span class="d-dim">|</span>          50%             <span class="d-dim">|</span>          50%              <span class="d-dim">|</span>
+<span class="d-dim">|</span>                          <span class="d-dim">|</span>                          <span class="d-dim">|</span>
+<span class="d-dim">+--------------------------+--------------------------+</span>
+Toggle sidebar with keybinding</pre>
+      </div>
+    </div>
+
+    <div class="terminal-block fade-up" style="margin-top:1.5rem;">
+      <div class="terminal-header">
+        <div class="terminal-dots">
+          <span></span><span></span><span></span>
+        </div>
+        <span class="terminal-title">&lt; 80 columns -- single-panel mode</span>
+      </div>
+      <div class="terminal-body">
+<pre><span class="t-dim">+----------------------------------------------+</span>
+<span class="t-dim">|</span>                                              <span class="t-dim">|</span>
+<span class="t-dim">|</span>  <span class="t-white t-bold">Only the focused panel is visible.</span>          <span class="t-dim">|</span>
+<span class="t-dim">|</span>  <span class="t-white">Tab switches between panels.</span>                <span class="t-dim">|</span>
+<span class="t-dim">|</span>  <span class="t-white">Full-screen swap -- no split view.</span>          <span class="t-dim">|</span>
+<span class="t-dim">|</span>                                              <span class="t-dim">|</span>
+<span class="t-dim">|</span>  <span class="t-green">Currently showing: Chat Pane</span>                <span class="t-dim">|</span>
+<span class="t-dim">|</span>  <span class="t-dim">Press Tab for: Main Content</span>                <span class="t-dim">|</span>
+<span class="t-dim">|</span>                                              <span class="t-dim">|</span>
+<span class="t-dim">+----------------------------------------------+</span>
+<span class="t-dim">[</span><span class="t-green">Connected</span><span class="t-dim">]  Single-panel mode  |  Tab=switch  ?=help</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== CHAT FEATURES ===== -->
+<section id="chat">
+  <div class="container">
+    <span class="section-number">07 // Chat Pane Detail</span>
+    <h2 class="fade-up">Streaming, Queuing, Reacting</h2>
+    <p class="section-desc fade-up">
+      The chat pane is the core of the TUI. Streaming responses arrive token by token via SSE. Tool calls render inline. A message queue lets the operator stack messages during an active turn with edit/steer/delete controls.
+    </p>
+
+    <div class="terminal-block fade-up">
+      <div class="terminal-header">
+        <div class="terminal-dots">
+          <span></span><span></span><span></span>
+        </div>
+        <span class="terminal-title">streaming response with tool calls + message queue</span>
+      </div>
+      <div class="terminal-body">
+<pre><span class="t-dim">+-- You -----------------------------------------------+</span>
+<span class="t-dim">|</span> <span class="t-white">What's the status on the auth implementation?</span>         <span class="t-dim">|</span>
+<span class="t-dim">+-------------------------------------------------------+</span>
+
+<span class="t-dim">+-- Frank (Chief of Staff) --- streaming... --- [3.2s] --+</span>
+<span class="t-dim">|</span> <span class="t-green">Looking at the auth module now...</span>                      <span class="t-dim">|</span>
+<span class="t-dim">|</span>                                                        <span class="t-dim">|</span>
+<span class="t-dim">|</span>   <span class="t-amber">&gt;</span> <span class="t-white">read_file(src/auth/handler.go)</span> <span class="t-green">... done</span>            <span class="t-dim">|</span>
+<span class="t-dim">|</span>   <span class="t-amber">&gt;</span> <span class="t-white">search_code("validateToken")</span> <span class="t-green">... done (3 results)</span>  <span class="t-dim">|</span>
+<span class="t-dim">|</span>   <span class="t-amber">&gt;</span> <span class="t-white">search_code("rateLimiter")</span> <span class="t-amber">... running</span>             <span class="t-dim">|</span>
+<span class="t-dim">|</span>                                                        <span class="t-dim">|</span>
+<span class="t-dim">|</span> <span class="t-green">The JWT validation layer is complete. Session</span>          <span class="t-dim">|</span>
+<span class="t-dim">|</span> <span class="t-green">cookies are in progress on subtask OC-5.2...</span><span class="t-amber">_</span>          <span class="t-dim">|</span>
+<span class="t-dim">+-------------------------------------------------------+</span>
+                                            <span class="t-dim">[Esc to cancel]</span>
+
+<span class="t-amber">-- queued -----------------------------------------------</span>
+<span class="t-white">You: "What about the error handling?"</span>       <span class="t-dim">[</span><span class="t-amber">e</span><span class="t-dim">]dit [</span><span class="t-amber">s</span><span class="t-dim">]teer</span>
+<span class="t-white">You: "Also check the logging setup"</span>         <span class="t-dim">[</span><span class="t-amber">e</span><span class="t-dim">]dit [</span><span class="t-amber">s</span><span class="t-dim">]teer</span></pre>
+      </div>
+    </div>
+
+    <!-- Reactions -->
+    <div class="modes-grid fade-up" style="margin-top:1.5rem; grid-template-columns: 1fr 1fr 1fr;">
+      <div class="mode-card">
+        <h3 style="font-size:1.2rem;">Message Types</h3>
+        <ul class="mode-features" style="margin-top:0.75rem;">
+          <li>Human messages (labeled "You")</li>
+          <li>Agent messages (streaming)</li>
+          <li>Tool calls (inline, collapsible)</li>
+          <li>System messages (de-emphasized)</li>
+          <li>Interjections (distinct header)</li>
+        </ul>
+      </div>
+      <div class="mode-card">
+        <h3 style="font-size:1.2rem;">Rich Content</h3>
+        <ul class="mode-features" style="margin-top:0.75rem;">
+          <li>Markdown via Glamour</li>
+          <li>Syntax-highlighted code blocks</li>
+          <li>[Image: name.png] references</li>
+          <li>[File: path @ sha] references</li>
+          <li>[Artifact: name (size)] links</li>
+        </ul>
+      </div>
+      <div class="mode-card">
+        <h3 style="font-size:1.2rem;">Reactions</h3>
+        <ul class="mode-features" style="margin-top:0.75rem;">
+          <li><span style="color:var(--amber)">+</span> positive reaction on message</li>
+          <li><span style="color:var(--amber)">-</span> negative reaction + note</li>
+          <li>Shown as [+1] or [-1 "note"]</li>
+          <li>Agent reactions shown subtly</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FRAMEWORK + ECOSYSTEM ===== -->
+<section id="framework">
+  <div class="container">
+    <span class="section-number">08 // Framework</span>
+    <h2 class="fade-up">Bubble Tea + Charm Ecosystem</h2>
+    <p class="section-desc fade-up">
+      Built with Bubble Tea (Go). Elm architecture (model-update-view) maps cleanly to reactive UI patterns. The Charm ecosystem provides the full component and styling toolkit.
+    </p>
+
+    <div class="mermaid-wrapper fade-up" id="mermaid-fw-wrapper">
+      <div class="mermaid-controls">
+        <button onclick="zoomMermaid('mermaid-fw', 1)" title="Zoom In">+</button>
+        <button onclick="zoomMermaid('mermaid-fw', -1)" title="Zoom Out">-</button>
+        <button onclick="zoomMermaid('mermaid-fw', 0)" title="Reset">R</button>
+      </div>
+      <span class="mermaid-label">Charm ecosystem component map</span>
+      <div class="mermaid-inner" id="mermaid-fw">
+        <pre class="mermaid">
+%%{init: {'theme': 'dark', 'themeVariables': { 'primaryColor': '#050505', 'primaryTextColor': '#00ff88', 'primaryBorderColor': '#00ff8840', 'lineColor': '#00cc6a', 'secondaryColor': '#0a0a0a', 'tertiaryColor': '#000000', 'edgeLabelBackground': '#000000', 'clusterBkg': '#050505', 'clusterBorder': '#1a2a1a', 'fontSize': '13px', 'fontFamily': 'IBM Plex Mono, monospace' }}}%%
+flowchart TB
+    subgraph tui ["OtterCamp TUI"]
+        direction TB
+        BT["<b>Bubble Tea</b><br/>Framework / Elm Architecture<br/><i>Model - Update - View</i>"]
+    end
+
+    subgraph charm ["Charm Ecosystem"]
+        direction LR
+        LG["<b>Lip Gloss</b><br/>Styling, Layout<br/>Borders, Colors"]
+        BB["<b>Bubbles</b><br/>Text Input, Viewport<br/>List, Spinner, Table"]
+        GL["<b>Glamour</b><br/>Markdown Rendering<br/>Agent Responses"]
+        HH["<b>Huh</b><br/>Interactive Forms<br/>Inline Editing"]
+    end
+
+    subgraph api ["API Layer"]
+        direction LR
+        HTTP["HTTP Client<br/><i>REST API</i>"]
+        SSE["SSE Client<br/><i>Event Stream</i>"]
+    end
+
+    BT --> LG
+    BT --> BB
+    BT --> GL
+    BT --> HH
+    BT --> HTTP
+    BT --> SSE
+
+    style BT fill:#001a0d,stroke:#00cc6a,color:#33ffaa,stroke-width:2px
+    style LG fill:#050505,stroke:#00ff8840,color:#00ff88
+    style BB fill:#050505,stroke:#00ff8840,color:#00ff88
+    style GL fill:#050505,stroke:#00ff8840,color:#00ff88
+    style HH fill:#050505,stroke:#00ff8840,color:#00ff88
+    style HTTP fill:#050505,stroke:#ffb70040,color:#ffb700
+    style SSE fill:#050505,stroke:#ffb70040,color:#ffb700
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== PHASE DELIVERY ===== -->
+<section id="phases">
+  <div class="container">
+    <span class="section-number">09 // Phase Delivery</span>
+    <h2 class="fade-up">Phased Rollout</h2>
+    <p class="section-desc fade-up">
+      The TUI is the sole interface for Phases 1 and 2. The web UI arrives in Phase 3 and adds visual richness -- but the TUI continues to be maintained with no features removed.
+    </p>
+
+    <div class="phase-timeline fade-up">
+      <div class="phase-block phase-block--active">
+        <span class="phase-num">Phase 1</span>
+        <span class="phase-title">Synchronous Chat</span>
+        <ul class="phase-features">
+          <li>Three-panel layout + dashboard</li>
+          <li>Chat: streaming, @mentions</li>
+          <li>Org session (Frank)</li>
+          <li>Scope indicator (org only)</li>
+          <li>vim keybindings + command palette</li>
+          <li>SSE for realtime streaming</li>
+          <li>CLI: otter send, status, login</li>
+        </ul>
+      </div>
+      <div class="phase-block phase-block--active">
+        <span class="phase-num">Phase 2</span>
+        <span class="phase-title">Projects + Tasks</span>
+        <ul class="phase-features">
+          <li>Task board (text kanban)</li>
+          <li>Task detail with flow stepper</li>
+          <li>Inbox with action keybindings</li>
+          <li>Activity feed (realtime)</li>
+          <li>Agent status + merge queue</li>
+          <li>Scope switching ([ / ])</li>
+          <li>CLI: task, tasks, inbox approve...</li>
+        </ul>
+      </div>
+      <div class="phase-block">
+        <span class="phase-num">Phase 3</span>
+        <span class="phase-title">Web UI Arrives</span>
+        <ul class="phase-features">
+          <li>TUI maintained alongside web UI</li>
+          <li>No features removed from TUI</li>
+          <li>Web adds: flow diagrams</li>
+          <li>Web adds: drag-and-drop</li>
+          <li>Web adds: inline images</li>
+          <li>Web adds: rich media previews</li>
+          <li>TUI remains preferred for terminal users</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- TUI vs Web parity -->
+    <h3 class="fade-up" style="margin-top:2rem;">TUI vs Web UI Parity</h3>
+
+    <div class="parity-table fade-up">
+      <div class="parity-row parity-row--header">
+        <div class="parity-cell">Capability</div>
+        <div class="parity-cell">TUI</div>
+        <div class="parity-cell">Web UI</div>
+      </div>
+      <div class="parity-row">
+        <div class="parity-cell">Chat (full streaming)</div>
+        <div class="parity-cell parity-yes">Yes</div>
+        <div class="parity-cell parity-yes">Yes</div>
+      </div>
+      <div class="parity-row">
+        <div class="parity-cell">@mentions, multi-agent turns</div>
+        <div class="parity-cell parity-yes">Yes</div>
+        <div class="parity-cell parity-yes">Yes</div>
+      </div>
+      <div class="parity-row">
+        <div class="parity-cell">Scope switching</div>
+        <div class="parity-cell"><span class="parity-yes">Yes</span> <span class="parity-detail">[ ] keys</span></div>
+        <div class="parity-cell"><span class="parity-yes">Yes</span> <span class="parity-detail">scope pill</span></div>
+      </div>
+      <div class="parity-row">
+        <div class="parity-cell">Task board</div>
+        <div class="parity-cell"><span class="parity-yes">Yes</span> <span class="parity-detail">text kanban</span></div>
+        <div class="parity-cell"><span class="parity-yes">Yes</span> <span class="parity-detail">visual + drag</span></div>
+      </div>
+      <div class="parity-row">
+        <div class="parity-cell">Flow visualization</div>
+        <div class="parity-cell"><span class="parity-yes">Yes</span> <span class="parity-detail">[x]->[*]->[ ]</span></div>
+        <div class="parity-cell"><span class="parity-yes">Yes</span> <span class="parity-detail">node graphics</span></div>
+      </div>
+      <div class="parity-row">
+        <div class="parity-cell">Image preview</div>
+        <div class="parity-cell"><span class="parity-no">External</span></div>
+        <div class="parity-cell"><span class="parity-yes">Inline</span></div>
+      </div>
+      <div class="parity-row">
+        <div class="parity-cell">File uploads</div>
+        <div class="parity-cell"><span class="parity-yes">Yes</span> <span class="parity-detail">file path</span></div>
+        <div class="parity-cell"><span class="parity-yes">Yes</span> <span class="parity-detail">drag-and-drop</span></div>
+      </div>
+      <div class="parity-row">
+        <div class="parity-cell">Pipe-friendly output</div>
+        <div class="parity-cell parity-yes">Yes (CLI mode)</div>
+        <div class="parity-cell parity-no">No</div>
+      </div>
+      <div class="parity-row">
+        <div class="parity-cell">Works over SSH</div>
+        <div class="parity-cell parity-yes">Yes</div>
+        <div class="parity-cell parity-no">No</div>
+      </div>
+      <div class="parity-row">
+        <div class="parity-cell">Zero browser overhead</div>
+        <div class="parity-cell parity-yes">Yes</div>
+        <div class="parity-cell parity-no">No</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer>
+  <div class="container">
+    <p class="footer-line">OtterCamp V2 // Spec 17 -- Terminal UI (TUI)</p>
+    <p class="footer-line">Status: Draft // Framework: Bubble Tea (Go) // Charm Ecosystem</p>
+    <p>Generated from docsv2/17-tui.md</p>
+  </div>
+</footer>
+
+<!-- ===== Mermaid.js ===== -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    fontFamily: 'IBM Plex Mono, monospace',
+    flowchart: {
+      useMaxWidth: true,
+      htmlLabels: true,
+      curve: 'basis'
+    },
+    themeVariables: {
+      darkMode: true,
+      background: '#000000',
+      primaryColor: '#050505',
+      primaryTextColor: '#00ff88',
+      primaryBorderColor: '#00ff8840',
+      lineColor: '#00cc6a',
+      secondaryColor: '#0a0a0a',
+      tertiaryColor: '#000000',
+      fontSize: '13px'
+    }
+  });
+</script>
+
+<!-- ===== Zoom Controls ===== -->
+<script>
+  const zoomLevels = {};
+
+  window.zoomMermaid = function(id, direction) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    if (!zoomLevels[id]) zoomLevels[id] = 1;
+
+    if (direction === 0) {
+      zoomLevels[id] = 1;
+    } else if (direction === 1) {
+      zoomLevels[id] = Math.min(zoomLevels[id] + 0.2, 3);
+    } else {
+      zoomLevels[id] = Math.max(zoomLevels[id] - 0.2, 0.4);
+    }
+
+    el.style.transform = 'scale(' + zoomLevels[id] + ')';
+    el.style.transformOrigin = 'top left';
+  };
+</script>
+
+<!-- ===== Scroll-triggered Fade-up ===== -->
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    var observer = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+        }
+      });
+    }, {
+      threshold: 0.1,
+      rootMargin: '0px 0px -40px 0px'
+    });
+
+    document.querySelectorAll('.fade-up').forEach(function(el) {
+      observer.observe(el);
+    });
+  });
+</script>
+
+</body>
+</html>

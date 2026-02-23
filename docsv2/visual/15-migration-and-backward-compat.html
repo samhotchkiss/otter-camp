@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- Migration and Backward Compatibility</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;500;600;700&family=Nunito:wght@300;400;500;600;700&family=Fira+Code:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  /* ───────────────────────────── Custom Properties ───────────────────────────── */
+  :root {
+    --bg:            #fefefe;
+    --bg-card:       #fafaf8;
+    --bg-warm:       #f8f6f2;
+    --stroke:        #333;
+    --stroke-light:  #888;
+    --stroke-faint:  #ccc;
+    --v1-red:        #e74c3c;
+    --v1-red-bg:     #fef0ee;
+    --v1-red-border: #f5c6c0;
+    --v2-green:      #27ae60;
+    --v2-green-bg:   #edf9f0;
+    --v2-green-border:#b8e6c8;
+    --accent-amber:  #e67e22;
+    --accent-blue:   #3498db;
+    --text:          #333;
+    --text-secondary:#666;
+    --text-muted:    #999;
+    --font-heading:  'Caveat', cursive;
+    --font-body:     'Nunito', sans-serif;
+    --font-code:     'Fira Code', monospace;
+    --ease-out:      cubic-bezier(0.22, 1, 0.36, 1);
+    --sketch-radius: 12px 8px 14px 6px;
+  }
+
+  /* ───────────────────────────── Reset & Base ───────────────────────────── */
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html {
+    font-size: 16px;
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-weight: 400;
+    line-height: 1.7;
+    min-height: 100vh;
+    overflow-x: hidden;
+    /* Faint grid paper effect */
+    background-image:
+      linear-gradient(var(--stroke-faint) 1px, transparent 1px),
+      linear-gradient(90deg, var(--stroke-faint) 1px, transparent 1px);
+    background-size: 40px 40px;
+    background-position: -1px -1px;
+    background-attachment: fixed;
+    opacity: 1;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: rgba(254, 254, 254, 0.88);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ───────────────────────────── Layout ───────────────────────────── */
+  .container {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 0 2rem;
+    position: relative;
+    z-index: 1;
+  }
+
+  section {
+    padding: 4rem 0;
+    position: relative;
+    z-index: 1;
+  }
+
+  section + section {
+    border-top: 2px dashed var(--stroke-faint);
+  }
+
+  /* ───────────────────────────── Typography ───────────────────────────── */
+  h1, h2, h3, h4 {
+    font-family: var(--font-heading);
+    color: var(--stroke);
+    letter-spacing: -0.01em;
+  }
+
+  h1 { font-size: 3.5rem; font-weight: 700; line-height: 1.1; }
+  h2 { font-size: 2.2rem; font-weight: 600; line-height: 1.2; margin-bottom: 0.75rem; }
+  h3 { font-size: 1.6rem; font-weight: 600; line-height: 1.3; }
+
+  p { margin-bottom: 0.75rem; font-size: 0.95rem; }
+
+  code {
+    font-family: var(--font-code);
+    font-size: 0.82rem;
+    background: var(--bg-warm);
+    border: 1px dashed var(--stroke-faint);
+    border-radius: 4px;
+    padding: 0.15rem 0.4rem;
+  }
+
+  .label {
+    font-family: var(--font-body);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  /* ───────────────────────────── Sketch Card Base ───────────────────────────── */
+  .sketch-card {
+    background: var(--bg-card);
+    border: 2px solid var(--stroke);
+    border-radius: var(--sketch-radius);
+    padding: 1.75rem;
+    position: relative;
+    transition: transform 0.25s var(--ease-out), box-shadow 0.25s;
+  }
+
+  .sketch-card:hover {
+    transform: translateY(-3px) rotate(-0.3deg);
+    box-shadow: 4px 4px 0 var(--stroke-faint);
+  }
+
+  .sketch-card--dashed {
+    border-style: dashed;
+  }
+
+  /* ───────────────────────────── Hero ───────────────────────────── */
+  .hero {
+    padding: 5rem 0 3.5rem;
+    text-align: center;
+    position: relative;
+  }
+
+  .hero .label {
+    display: block;
+    margin-bottom: 1rem;
+  }
+
+  .hero h1 {
+    margin-bottom: 0.5rem;
+  }
+
+  .hero h1 .struck {
+    text-decoration: line-through;
+    text-decoration-color: var(--v1-red);
+    text-decoration-thickness: 3px;
+    color: var(--v1-red);
+    opacity: 0.6;
+  }
+
+  .hero .subtitle {
+    font-family: var(--font-heading);
+    font-size: 1.6rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+    margin-bottom: 1.5rem;
+  }
+
+  .hero .summary {
+    max-width: 640px;
+    margin: 0 auto;
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+    line-height: 1.8;
+  }
+
+  .hero .badge-row {
+    display: flex;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-top: 2rem;
+    flex-wrap: wrap;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.9rem;
+    background: var(--bg-warm);
+    border: 2px dashed var(--stroke-light);
+    border-radius: 20px 16px 22px 14px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+  }
+
+  .badge .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--v2-green);
+  }
+
+  .badge--red .dot {
+    background: var(--v1-red);
+  }
+
+  /* ───────────────────────────── V1 vs V2 Comparison ───────────────────────────── */
+  .comparison-grid {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 1.5rem;
+    align-items: start;
+    margin-top: 2rem;
+  }
+
+  .comparison-col {
+    padding: 2rem;
+    border-radius: var(--sketch-radius);
+    border-width: 2.5px;
+    border-style: solid;
+  }
+
+  .comparison-col--v1 {
+    background: var(--v1-red-bg);
+    border-color: var(--v1-red);
+    transform: rotate(-0.5deg);
+  }
+
+  .comparison-col--v2 {
+    background: var(--v2-green-bg);
+    border-color: var(--v2-green);
+    transform: rotate(0.5deg);
+  }
+
+  .comparison-col h3 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .comparison-col--v1 h3 { color: var(--v1-red); }
+  .comparison-col--v2 h3 { color: var(--v2-green); }
+
+  .comparison-col ul {
+    list-style: none;
+    padding: 0;
+  }
+
+  .comparison-col li {
+    font-size: 0.88rem;
+    color: var(--text);
+    padding: 0.5rem 0;
+    border-bottom: 1px dashed rgba(0,0,0,0.1);
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    line-height: 1.5;
+  }
+
+  .comparison-col li:last-child { border-bottom: none; }
+
+  .comparison-col--v1 li::before {
+    content: 'x';
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--v1-red);
+    color: white;
+    font-size: 0.65rem;
+    font-weight: 700;
+    flex-shrink: 0;
+    font-family: var(--font-code);
+  }
+
+  .comparison-col--v2 li::before {
+    content: '';
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--v2-green);
+    flex-shrink: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E");
+    background-size: 12px 12px;
+    background-repeat: no-repeat;
+    background-position: center;
+  }
+
+  .comparison-divider {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding-top: 3rem;
+    color: var(--text-muted);
+    font-family: var(--font-heading);
+    font-size: 1.8rem;
+    font-weight: 700;
+  }
+
+  .comparison-divider .arrow-line {
+    width: 2px;
+    height: 40px;
+    background: repeating-linear-gradient(
+      to bottom,
+      var(--stroke-faint) 0px,
+      var(--stroke-faint) 6px,
+      transparent 6px,
+      transparent 12px
+    );
+  }
+
+  /* ───────────────────────────── Mermaid / Diagram ───────────────────────────── */
+  .diagram-section .section-header {
+    text-align: center;
+    margin-bottom: 2rem;
+  }
+
+  .mermaid-wrapper {
+    position: relative;
+    background: var(--bg-card);
+    border: 2px solid var(--stroke);
+    border-radius: 16px 10px 14px 12px;
+    padding: 2rem;
+    overflow: hidden;
+  }
+
+  .mermaid-viewport {
+    overflow: auto;
+    max-height: 800px;
+    display: flex;
+    justify-content: center;
+  }
+
+  .mermaid-viewport svg {
+    transition: transform 0.2s var(--ease-out);
+  }
+
+  .zoom-controls {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    z-index: 10;
+  }
+
+  .zoom-btn {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    border: 2px solid var(--stroke);
+    border-radius: 8px 6px 10px 5px;
+    color: var(--stroke);
+    font-family: var(--font-code);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.15s;
+    user-select: none;
+  }
+
+  .zoom-btn:hover {
+    background: var(--bg-warm);
+    transform: scale(1.1);
+  }
+
+  /* ───────────────────────────── "Does NOT Carry Over" ───────────────────────────── */
+  .no-carry-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+
+  .no-carry-item {
+    background: var(--v1-red-bg);
+    border: 2px dashed var(--v1-red-border);
+    border-radius: 10px 14px 8px 16px;
+    padding: 1.25rem 1.5rem;
+    text-align: center;
+    position: relative;
+    transition: transform 0.2s var(--ease-out);
+  }
+
+  .no-carry-item:nth-child(odd) { transform: rotate(-0.8deg); }
+  .no-carry-item:nth-child(even) { transform: rotate(0.6deg); }
+  .no-carry-item:hover { transform: rotate(0deg) scale(1.03); }
+
+  .no-carry-item .x-mark {
+    position: absolute;
+    top: -10px;
+    right: -8px;
+    width: 28px;
+    height: 28px;
+    background: var(--v1-red);
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-code);
+    font-size: 0.75rem;
+    font-weight: 700;
+    border: 2px solid var(--bg);
+  }
+
+  .no-carry-item h4 {
+    font-size: 1.3rem;
+    color: var(--v1-red);
+    text-decoration: line-through;
+    text-decoration-thickness: 2.5px;
+    margin-bottom: 0.25rem;
+  }
+
+  .no-carry-item p {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-bottom: 0;
+    line-height: 1.5;
+  }
+
+  /* ───────────────────────────── Cutover Process ───────────────────────────── */
+  .cutover-flow {
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+    margin-top: 2.5rem;
+    overflow-x: auto;
+    padding: 1rem 0;
+  }
+
+  .cutover-step {
+    flex: 0 0 auto;
+    width: 180px;
+    text-align: center;
+    position: relative;
+  }
+
+  .cutover-step .step-circle {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    border: 3px solid var(--v2-green);
+    background: var(--v2-green-bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 0.75rem;
+    font-family: var(--font-heading);
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--v2-green);
+  }
+
+  .cutover-step .step-circle--optional {
+    border-style: dashed;
+    border-color: var(--accent-amber);
+    background: #fef9f0;
+    color: var(--accent-amber);
+  }
+
+  .cutover-step h4 {
+    font-size: 1.2rem;
+    color: var(--stroke);
+    margin-bottom: 0.25rem;
+  }
+
+  .cutover-step p {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    margin-bottom: 0;
+  }
+
+  .cutover-step .optional-label {
+    font-family: var(--font-code);
+    font-size: 0.65rem;
+    color: var(--accent-amber);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 0.3rem;
+    display: block;
+  }
+
+  .cutover-arrow {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    padding-top: 16px;
+    color: var(--stroke-light);
+  }
+
+  .cutover-arrow svg {
+    width: 36px;
+    height: 24px;
+  }
+
+  /* ───────────────────────────── Principle Cards ───────────────────────────── */
+  .principles-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+    margin-top: 2rem;
+  }
+
+  .principle-card {
+    background: var(--bg-card);
+    border: 2px solid var(--stroke);
+    border-radius: 14px 8px 12px 10px;
+    padding: 1.75rem;
+    transition: transform 0.25s var(--ease-out), box-shadow 0.25s;
+    position: relative;
+  }
+
+  .principle-card:nth-child(1) { transform: rotate(-0.6deg); }
+  .principle-card:nth-child(2) { transform: rotate(0.4deg); }
+  .principle-card:nth-child(3) { transform: rotate(-0.3deg); }
+
+  .principle-card:hover {
+    transform: translateY(-4px) rotate(0deg);
+    box-shadow: 5px 5px 0 var(--stroke-faint);
+  }
+
+  .principle-icon {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px dashed var(--stroke-light);
+    border-radius: 12px 8px 14px 10px;
+    margin-bottom: 1rem;
+    background: var(--bg-warm);
+  }
+
+  .principle-icon svg {
+    width: 24px;
+    height: 24px;
+    stroke: var(--stroke);
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .principle-card h3 {
+    margin-bottom: 0.5rem;
+    font-size: 1.4rem;
+  }
+
+  .principle-card p {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.65;
+    margin-bottom: 0;
+  }
+
+  .principle-card .highlight-code {
+    display: inline-block;
+    margin-top: 0.5rem;
+    font-family: var(--font-code);
+    font-size: 0.75rem;
+    background: var(--bg-warm);
+    border: 1px dashed var(--stroke-faint);
+    border-radius: 4px;
+    padding: 0.2rem 0.5rem;
+    color: var(--text);
+  }
+
+  /* ───────────────────────────── Trust Tier Callout ───────────────────────────── */
+  .trust-callout {
+    display: flex;
+    align-items: center;
+    gap: 2rem;
+    margin-top: 2rem;
+    padding: 1.75rem 2rem;
+    background: var(--bg-warm);
+    border: 2px dashed var(--stroke-light);
+    border-radius: 16px 10px 14px 12px;
+  }
+
+  .trust-meter {
+    flex: 0 0 auto;
+    text-align: center;
+  }
+
+  .trust-meter .meter-bar {
+    width: 200px;
+    height: 18px;
+    background: #eee;
+    border: 2px solid var(--stroke);
+    border-radius: 10px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .trust-meter .meter-fill {
+    height: 100%;
+    border-radius: 8px;
+    transition: width 0.6s var(--ease-out);
+  }
+
+  .trust-meter .meter-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 0.3rem;
+    font-size: 0.65rem;
+    font-family: var(--font-code);
+    color: var(--text-muted);
+  }
+
+  .trust-meter .meter-value {
+    font-family: var(--font-heading);
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: var(--accent-amber);
+    margin-bottom: 0.3rem;
+  }
+
+  .trust-callout .trust-text h3 {
+    color: var(--accent-amber);
+    margin-bottom: 0.3rem;
+  }
+
+  .trust-callout .trust-text p {
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+    margin-bottom: 0;
+  }
+
+  /* ───────────────────────────── Footer ───────────────────────────── */
+  .footer {
+    padding: 3rem 0;
+    border-top: 2px dashed var(--stroke-faint);
+    text-align: center;
+    position: relative;
+    z-index: 1;
+  }
+
+  .footer p {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+
+  .footer a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    border-bottom: 1px dashed var(--stroke-faint);
+    transition: border-color 0.2s;
+  }
+
+  .footer a:hover { border-color: var(--stroke); }
+
+  /* ───────────────────────────── Annotations (hand-drawn feel) ───────────────────────────── */
+  .annotation {
+    font-family: var(--font-heading);
+    font-size: 1rem;
+    color: var(--v1-red);
+    position: absolute;
+    transform: rotate(-6deg);
+    pointer-events: none;
+  }
+
+  .annotation--green { color: var(--v2-green); }
+
+  .hand-underline {
+    text-decoration: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='8' viewBox='0 0 120 8'%3E%3Cpath d='M2 5 Q30 2 60 5 Q90 8 118 4' stroke='%23e74c3c' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: repeat-x;
+    background-position: bottom;
+    background-size: 120px 8px;
+    padding-bottom: 4px;
+  }
+
+  /* ───────────────────────────── Animations ───────────────────────────── */
+  @keyframes fadeUp {
+    from {
+      opacity: 0;
+      transform: translateY(28px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes sketchIn {
+    from {
+      opacity: 0;
+      transform: translateY(20px) rotate(-1deg);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) rotate(0deg);
+    }
+  }
+
+  .fade-up {
+    opacity: 0;
+    animation: fadeUp 0.6s var(--ease-out) forwards;
+  }
+
+  .sketch-in {
+    opacity: 0;
+    animation: sketchIn 0.5s var(--ease-out) forwards;
+  }
+
+  .delay-1 { animation-delay: 0.08s; }
+  .delay-2 { animation-delay: 0.16s; }
+  .delay-3 { animation-delay: 0.24s; }
+  .delay-4 { animation-delay: 0.32s; }
+  .delay-5 { animation-delay: 0.40s; }
+  .delay-6 { animation-delay: 0.48s; }
+  .delay-7 { animation-delay: 0.56s; }
+  .delay-8 { animation-delay: 0.64s; }
+  .delay-9 { animation-delay: 0.72s; }
+  .delay-10 { animation-delay: 0.80s; }
+
+  /* ───────────────────────────── Responsive ───────────────────────────── */
+  @media (max-width: 900px) {
+    .comparison-grid {
+      grid-template-columns: 1fr;
+    }
+    .comparison-divider {
+      flex-direction: row;
+      padding-top: 0;
+    }
+    .comparison-divider .arrow-line {
+      width: 40px;
+      height: 2px;
+      background: repeating-linear-gradient(
+        to right,
+        var(--stroke-faint) 0px,
+        var(--stroke-faint) 6px,
+        transparent 6px,
+        transparent 12px
+      );
+    }
+    .comparison-col--v1,
+    .comparison-col--v2 {
+      transform: rotate(0deg);
+    }
+    .principles-grid {
+      grid-template-columns: 1fr;
+    }
+    .principle-card:nth-child(n) { transform: rotate(0deg); }
+    .cutover-flow {
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+    .cutover-arrow { display: none; }
+    .cutover-step { width: 140px; }
+  }
+
+  @media (max-width: 768px) {
+    h1 { font-size: 2.4rem; }
+    h2 { font-size: 1.8rem; }
+    section { padding: 2.5rem 0; }
+    .hero { padding: 3rem 0 2rem; }
+    .container { padding: 0 1.25rem; }
+    .no-carry-grid { grid-template-columns: repeat(2, 1fr); }
+    .trust-callout { flex-direction: column; text-align: center; }
+  }
+
+  @media (max-width: 480px) {
+    h1 { font-size: 2rem; }
+    .badge-row { flex-direction: column; align-items: center; }
+    .no-carry-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════ HERO ════════════════════════════ -->
+<section class="hero">
+  <div class="container">
+    <span class="label fade-up">OtterCamp V2 Specification / Doc 15</span>
+    <h1 class="fade-up delay-1">Clean Room<br>Rebuild</h1>
+    <p class="subtitle fade-up delay-2">This is <span class="hand-underline">NOT a migration</span></p>
+    <p class="summary fade-up delay-3">
+      V2 is a ground-up rewrite that shares no code, schema, or data with V1.
+      V1 was architecturally bound to OpenClaw -- V2 replaces it entirely.
+      The only bridge is an optional memory import. Everything else starts fresh.
+    </p>
+    <div class="badge-row fade-up delay-4">
+      <span class="badge badge--red"><span class="dot" style="background:var(--v1-red)"></span> No V1 Code Reused</span>
+      <span class="badge badge--red"><span class="dot" style="background:var(--v1-red)"></span> No Schema Migration</span>
+      <span class="badge"><span class="dot"></span> Fresh Database</span>
+      <span class="badge"><span class="dot"></span> Human-Initiated Cutover</span>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ V1 vs V2 COMPARISON ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div style="text-align:center; margin-bottom: 0.5rem;" class="fade-up">
+      <span class="label">Architecture Comparison</span>
+      <h2>V1 vs V2: Different Worlds</h2>
+      <p style="color: var(--text-secondary); font-size: 0.9rem; max-width: 580px; margin: 0.5rem auto 0;">
+        V1 and V2 are fundamentally different architectures. There is no incremental path between them.
+      </p>
+    </div>
+    <div class="comparison-grid">
+
+      <!-- V1 Column -->
+      <div class="comparison-col comparison-col--v1 fade-up delay-2">
+        <h3>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+          V1 -- Archived
+        </h3>
+        <ul>
+          <li>Built on OpenClaw orchestration</li>
+          <li>Schema mirrored OpenClaw's entity model</li>
+          <li>API proxied OpenClaw interfaces</li>
+          <li>Two separate memory taxonomies</li>
+          <li>No scope isolation on memories</li>
+          <li>No entity synthesis table</li>
+          <li>No dedup tracking</li>
+          <li>No flow template or node tables</li>
+          <li>No control plane or policy engine</li>
+          <li>Cannot run without OpenClaw</li>
+        </ul>
+      </div>
+
+      <!-- Divider -->
+      <div class="comparison-divider fade-up delay-3">
+        <div class="arrow-line"></div>
+        vs
+        <div class="arrow-line"></div>
+      </div>
+
+      <!-- V2 Column -->
+      <div class="comparison-col comparison-col--v2 fade-up delay-4">
+        <h3>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          V2 -- Ground Up
+        </h3>
+        <ul>
+          <li>Direct in-app orchestration</li>
+          <li>New domain model from first principles</li>
+          <li>Entirely new API design</li>
+          <li>Unified memory taxonomy (doc 06)</li>
+          <li>Org/project/task scope with foreign keys</li>
+          <li>Entity synthesis as core schema</li>
+          <li>Cursor-based dedup tracking</li>
+          <li>Full task flow system (doc 03)</li>
+          <li>Policy engine with layered evaluation</li>
+          <li>Zero external dependencies for orchestration</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ THE ONE BRIDGE ════════════════════════════ -->
+<section class="diagram-section">
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label">The One Bridge</span>
+      <h2>JSONL Memory Import Flow</h2>
+      <p style="color: var(--text-secondary); font-size: 0.9rem; max-width: 600px; margin: 0.5rem auto 0;">
+        The JSONL importer is V2's standard bulk import facility. It is not a migration tool --
+        it just happens to accept the format V1 exports produce. No stages are skipped.
+      </p>
+    </div>
+    <div class="mermaid-wrapper fade-up delay-1">
+      <div class="zoom-controls">
+        <button class="zoom-btn" onclick="zoomIn1()" title="Zoom in">+</button>
+        <button class="zoom-btn" onclick="zoomOut1()" title="Zoom out">&minus;</button>
+        <button class="zoom-btn" onclick="zoomReset1()" title="Reset zoom" style="font-size:0.65rem;">1:1</button>
+      </div>
+      <div class="mermaid-viewport" id="mermaid-viewport-1">
+        <pre class="mermaid">
+%%{init: {
+  'theme': 'base',
+  'look': 'handDrawn',
+  'themeVariables': {
+    'primaryColor': '#f8f6f2',
+    'primaryTextColor': '#333',
+    'primaryBorderColor': '#333',
+    'lineColor': '#666',
+    'secondaryColor': '#fef0ee',
+    'tertiaryColor': '#edf9f0',
+    'background': '#fefefe',
+    'mainBkg': '#f8f6f2',
+    'nodeBorder': '#333',
+    'clusterBkg': '#fafaf8',
+    'clusterBorder': '#999',
+    'titleColor': '#333',
+    'edgeLabelBackground': '#fefefe',
+    'nodeTextColor': '#333',
+    'fontSize': '14px'
+  }
+}}%%
+flowchart LR
+  subgraph V1_ARCHIVE["V1 Archive (Cold Storage)"]
+    EXPORT["V1 Memory Export\n(conversation transcripts)"]
+  end
+
+  JSONL["JSONL Files\n(.jsonl in .zip)"]
+
+  subgraph V2_PIPELINE["V2 Extraction Pipeline (Full -- No Shortcuts)"]
+    S0["Stage 0\nGarbage Rejection"]
+    S1["Stage 1\nLLM Extraction"]
+    S2["Stage 2\nScoring >= 40"]
+    S3["Stage 3\nNormalization"]
+    S4["Stage 4\nEmbed + Dedup"]
+  end
+
+  subgraph V2_MEMORY["V2 Memory Store"]
+    MEM["Imported Memory\nsource_type = 'import'\ntrust_tier = 0.6"]
+  end
+
+  ELLIE["Ellie Reports\nResults to Human"]
+
+  EXPORT -->|"Human exports"| JSONL
+  JSONL -->|"Human uploads\nvia chat or API"| S0
+  S0 --> S1
+  S1 --> S2
+  S2 --> S3
+  S3 --> S4
+  S4 --> MEM
+  MEM --> ELLIE
+
+  style EXPORT fill:#fef0ee,stroke:#e74c3c,stroke-width:2px,color:#333
+  style JSONL fill:#fef9f0,stroke:#e67e22,stroke-width:2px,color:#333
+  style S0 fill:#f8f6f2,stroke:#333,stroke-width:1.5px,color:#333
+  style S1 fill:#f8f6f2,stroke:#333,stroke-width:1.5px,color:#333
+  style S2 fill:#f8f6f2,stroke:#333,stroke-width:1.5px,color:#333
+  style S3 fill:#f8f6f2,stroke:#333,stroke-width:1.5px,color:#333
+  style S4 fill:#f8f6f2,stroke:#333,stroke-width:1.5px,color:#333
+  style MEM fill:#edf9f0,stroke:#27ae60,stroke-width:2px,color:#333
+  style ELLIE fill:#edf9f0,stroke:#27ae60,stroke-width:2px,color:#333
+        </pre>
+      </div>
+    </div>
+
+    <!-- Trust Tier Callout -->
+    <div class="trust-callout fade-up delay-3">
+      <div class="trust-meter">
+        <div class="meter-value">0.6</div>
+        <div class="meter-bar">
+          <div class="meter-fill" style="width: 60%; background: linear-gradient(90deg, var(--v1-red), var(--accent-amber));"></div>
+        </div>
+        <div class="meter-labels">
+          <span>0.0</span>
+          <span>trust_tier</span>
+          <span>1.0</span>
+        </div>
+      </div>
+      <div class="trust-text">
+        <h3>Medium-Low Trust</h3>
+        <p>
+          Imported V1 memories start with a confidence cap of <code>0.6</code> -- lower than
+          V2-native conversations (<code>0.8</code>) or human statements (<code>1.0</code>).
+          Historical data has not been verified in V2's context. Memories can be promoted
+          through corroboration: if a V2 conversation confirms an imported fact, the confidence
+          cap rises based on the new, higher-trust source.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ WHAT DOES NOT CARRY OVER ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div style="text-align:center; margin-bottom: 0.5rem;" class="fade-up">
+      <span class="label">Left Behind</span>
+      <h2>What Does NOT Carry Over</h2>
+      <p style="color: var(--text-secondary); font-size: 0.9rem; max-width: 580px; margin: 0.5rem auto 0;">
+        Only memory crosses the bridge. Everything else is structural data
+        that can be quickly recreated through conversation.
+      </p>
+    </div>
+    <div class="no-carry-grid">
+      <div class="no-carry-item fade-up delay-1">
+        <span class="x-mark">X</span>
+        <h4>Chat History</h4>
+        <p>V2's chat schema is fundamentally different. History is valuable only as a memory source (which JSONL import covers).</p>
+      </div>
+      <div class="no-carry-item fade-up delay-2">
+        <span class="x-mark">X</span>
+        <h4>Projects</h4>
+        <p>Structural data, not knowledge. Recreating project structure takes minutes through conversation with Frank.</p>
+      </div>
+      <div class="no-carry-item fade-up delay-3">
+        <span class="x-mark">X</span>
+        <h4>Tasks</h4>
+        <p>Incompatible schemas between V1 and V2. V2 introduces flow templates, nodes, and execution tracking.</p>
+      </div>
+      <div class="no-carry-item fade-up delay-4">
+        <span class="x-mark">X</span>
+        <h4>Agent Configs</h4>
+        <p>V2 agents have new prompt packs, tool policies, model policies, and memory policies. V1 configs are not compatible.</p>
+      </div>
+      <div class="no-carry-item fade-up delay-5">
+        <span class="x-mark">X</span>
+        <h4>API Keys</h4>
+        <p>V1 API keys do not work in V2. New keys must be created through V2's key management system.</p>
+      </div>
+      <div class="no-carry-item fade-up delay-6">
+        <span class="x-mark">X</span>
+        <h4>Integrations</h4>
+        <p>MCP connections, webhooks, scripts, and external UIs must all be rebuilt for V2's new API.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ CUTOVER PROCESS ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div style="text-align:center; margin-bottom: 0.5rem;" class="fade-up">
+      <span class="label">Cutover</span>
+      <h2>The Human-Initiated Cutover</h2>
+      <p style="color: var(--text-secondary); font-size: 0.9rem; max-width: 580px; margin: 0.5rem auto 0;">
+        No automated migration phase. No parallel-run reconciliation. No cutover script.
+        The human installs V2 and starts working.
+      </p>
+    </div>
+    <div class="cutover-flow fade-up delay-2">
+
+      <div class="cutover-step sketch-in delay-2">
+        <div class="step-circle">1</div>
+        <h4>Install V2</h4>
+        <p>Deploy V2 with an empty database. Schema migrations run on startup.</p>
+      </div>
+
+      <div class="cutover-arrow sketch-in delay-3">
+        <svg viewBox="0 0 36 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 12 Q12 8 22 12 Q26 13 30 12"/>
+          <polyline points="26 8 30 12 26 16"/>
+        </svg>
+      </div>
+
+      <div class="cutover-step sketch-in delay-3">
+        <div class="step-circle">2</div>
+        <h4>Bootstrap</h4>
+        <p>Starter trio seeded. Flow templates, safety policy, model profile created.</p>
+      </div>
+
+      <div class="cutover-arrow sketch-in delay-4">
+        <svg viewBox="0 0 36 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 12 Q12 8 22 12 Q26 13 30 12"/>
+          <polyline points="26 8 30 12 26 16"/>
+        </svg>
+      </div>
+
+      <div class="cutover-step sketch-in delay-4">
+        <div class="step-circle step-circle--optional">3</div>
+        <h4>Import Memories</h4>
+        <p>Upload V1 JSONL exports. Full pipeline processes them.</p>
+        <span class="optional-label">optional</span>
+      </div>
+
+      <div class="cutover-arrow sketch-in delay-5">
+        <svg viewBox="0 0 36 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 12 Q12 8 22 12 Q26 13 30 12"/>
+          <polyline points="26 8 30 12 26 16"/>
+        </svg>
+      </div>
+
+      <div class="cutover-step sketch-in delay-5">
+        <div class="step-circle">4</div>
+        <h4>Validate</h4>
+        <p>Run pre-launch checklist. Confirm core workflows function.</p>
+      </div>
+
+      <div class="cutover-arrow sketch-in delay-6">
+        <svg viewBox="0 0 36 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 12 Q12 8 22 12 Q26 13 30 12"/>
+          <polyline points="26 8 30 12 26 16"/>
+        </svg>
+      </div>
+
+      <div class="cutover-step sketch-in delay-6">
+        <div class="step-circle">5</div>
+        <h4>Switch</h4>
+        <p>Start using V2. Direct all new work here. V1 is archived.</p>
+      </div>
+
+      <div class="cutover-arrow sketch-in delay-7">
+        <svg viewBox="0 0 36 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 12 Q12 16 22 12 Q26 11 30 12"/>
+          <polyline points="26 8 30 12 26 16"/>
+        </svg>
+      </div>
+
+      <div class="cutover-step sketch-in delay-7">
+        <div class="step-circle" style="border-color: var(--stroke); background: var(--bg-warm); color: var(--stroke);">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+        </div>
+        <h4>Forward Only</h4>
+        <p>If issues arise, fix them in V2. V1 rollback is last resort only.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ KEY PRINCIPLES ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div style="text-align:center; margin-bottom: 0.5rem;" class="fade-up">
+      <span class="label">Guiding Principles</span>
+      <h2>Three Rules for the Clean Break</h2>
+    </div>
+    <div class="principles-grid">
+
+      <!-- Clean Room -->
+      <div class="principle-card fade-up delay-1">
+        <div class="principle-icon">
+          <svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        </div>
+        <h3>Clean-Room Rebuild</h3>
+        <p>
+          No V1 code, schema, or data is reused. V1 informs requirements, not implementation.
+          V2's domain model, agent runtime, memory system, and control plane are all designed
+          from first principles. V1 is read for reference only -- no function, module, or
+          package is imported.
+        </p>
+        <span class="highlight-code">V1 informs requirements, not implementation</span>
+      </div>
+
+      <!-- Forward Only -->
+      <div class="principle-card fade-up delay-2">
+        <div class="principle-icon">
+          <svg viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        </div>
+        <h3>Forward-Only Recovery</h3>
+        <p>
+          If V2 has issues, fix them in V2. V1 restoration is a documented last resort
+          that depends on OpenClaw availability and loses all V2-era data. The modular
+          monolith architecture and Docker Compose deployment are designed for rapid iteration.
+          Bugs are fixed and deployed, not recovered by reverting.
+        </p>
+        <span class="highlight-code">Fix forward, don't roll back</span>
+      </div>
+
+      <!-- Human Initiated -->
+      <div class="principle-card fade-up delay-3">
+        <div class="principle-icon">
+          <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        </div>
+        <h3>Human-Initiated Cutover</h3>
+        <p>
+          There is no automated migration phase, no parallel-run reconciliation, and no
+          cutover script. The human installs V2, bootstraps it, optionally imports V1
+          memories, and starts working. Migration is not a phase -- it is the absence
+          of one.
+        </p>
+        <span class="highlight-code">No cutover script. Just start using V2.</span>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ FOOTER ════════════════════════════ -->
+<footer class="footer">
+  <div class="container">
+    <p>
+      OtterCamp V2 -- Migration and Backward Compatibility
+      &nbsp;/&nbsp;
+      Source: <a href="../15-migration-and-backward-compat.md">docsv2/15-migration-and-backward-compat.md</a>
+    </p>
+  </div>
+</footer>
+
+<!-- ════════════════════════════ SCRIPTS ════════════════════════════ -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    look: 'handDrawn',
+    fontFamily: "'Nunito', sans-serif",
+    flowchart: {
+      htmlLabels: true,
+      curve: 'basis',
+      padding: 16
+    },
+    themeVariables: {
+      primaryColor: '#f8f6f2',
+      primaryTextColor: '#333',
+      primaryBorderColor: '#333',
+      lineColor: '#666',
+      background: '#fefefe',
+      mainBkg: '#f8f6f2',
+      fontSize: '14px'
+    }
+  });
+</script>
+
+<script>
+  // ── Zoom controls for diagram 1 ──
+  let scale1 = 1;
+  const viewport1 = document.getElementById('mermaid-viewport-1');
+
+  function applyZoom1() {
+    const svg = viewport1.querySelector('svg');
+    if (svg) svg.style.transform = 'scale(' + scale1 + ')';
+  }
+
+  window.zoomIn1 = function() {
+    scale1 = Math.min(scale1 + 0.15, 3);
+    applyZoom1();
+  };
+
+  window.zoomOut1 = function() {
+    scale1 = Math.max(scale1 - 0.15, 0.3);
+    applyZoom1();
+  };
+
+  window.zoomReset1 = function() {
+    scale1 = 1;
+    applyZoom1();
+  };
+
+  // ── Intersection Observer for scroll-triggered animations ──
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          entry.target.style.animationPlayState = 'running';
+        }
+      });
+    },
+    { threshold: 0.1, rootMargin: '0px 0px -40px 0px' }
+  );
+
+  document.querySelectorAll('.fade-up, .sketch-in').forEach((el) => {
+    el.style.animationPlayState = 'paused';
+    observer.observe(el);
+  });
+
+  // Immediately play animations for elements already in viewport
+  requestAnimationFrame(() => {
+    document.querySelectorAll('.fade-up, .sketch-in').forEach((el) => {
+      const rect = el.getBoundingClientRect();
+      if (rect.top < window.innerHeight) {
+        el.style.animationPlayState = 'running';
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

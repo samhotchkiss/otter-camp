@@ -1,0 +1,2089 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- Mobile UI Spec</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ===== Custom Properties ===== */
+  :root {
+    --bg: #fafafa;
+    --bg-white: #ffffff;
+    --bg-frosted: rgba(255, 255, 255, 0.72);
+    --bg-frosted-strong: rgba(255, 255, 255, 0.88);
+
+    --coral: #ff6b6b;
+    --coral-light: #ffa07a;
+    --coral-soft: #fff0ed;
+    --lavender: #a78bfa;
+    --lavender-light: #c4b5fd;
+    --lavender-soft: #f3f0ff;
+    --mint: #6ee7b7;
+    --mint-light: #a7f3d0;
+    --mint-soft: #ecfdf5;
+
+    --text: #1a1a2e;
+    --text-secondary: #64648c;
+    --text-muted: #9494b8;
+    --text-inverse: #ffffff;
+
+    --border: rgba(0, 0, 0, 0.06);
+    --border-strong: rgba(0, 0, 0, 0.1);
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.03);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.06), 0 2px 6px rgba(0, 0, 0, 0.04);
+    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.04);
+    --shadow-phone: 0 24px 80px rgba(0, 0, 0, 0.12), 0 8px 24px rgba(0, 0, 0, 0.06);
+
+    --radius-sm: 10px;
+    --radius-md: 16px;
+    --radius-lg: 24px;
+    --radius-xl: 32px;
+
+    --font-heading: 'Geist', -apple-system, 'SF Pro Display', sans-serif;
+    --font-body: 'Inter', -apple-system, 'SF Pro Text', sans-serif;
+
+    --red: #ef4444;
+    --orange: #f59e0b;
+    --amber: #fbbf24;
+    --green-status: #22c55e;
+    --gray-pill: #e5e5e5;
+  }
+
+  /* ===== Reset ===== */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.65;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* ===== Gradient Mesh Backgrounds ===== */
+  .mesh-bg {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    z-index: -1;
+    overflow: hidden;
+  }
+
+  .mesh-blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(120px);
+    opacity: 0.35;
+  }
+
+  .mesh-blob.coral {
+    width: 600px; height: 600px;
+    background: linear-gradient(135deg, var(--coral), var(--coral-light));
+    top: -100px; right: -100px;
+    animation: float-slow 20s ease-in-out infinite;
+  }
+
+  .mesh-blob.lavender {
+    width: 500px; height: 500px;
+    background: linear-gradient(135deg, var(--lavender), var(--lavender-light));
+    top: 40%; left: -120px;
+    animation: float-slow 25s ease-in-out infinite reverse;
+  }
+
+  .mesh-blob.mint {
+    width: 550px; height: 550px;
+    background: linear-gradient(135deg, var(--mint), var(--mint-light));
+    bottom: -80px; right: 10%;
+    animation: float-slow 22s ease-in-out infinite 5s;
+  }
+
+  .mesh-blob.coral-2 {
+    width: 400px; height: 400px;
+    background: linear-gradient(135deg, var(--coral-light), #ffcccb);
+    bottom: 20%; left: 20%;
+    animation: float-slow 18s ease-in-out infinite 3s;
+  }
+
+  @keyframes float-slow {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(30px, -20px) scale(1.05); }
+    66% { transform: translate(-20px, 15px) scale(0.95); }
+  }
+
+  /* ===== Scrollbar ===== */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.12); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.2); }
+
+  /* ===== Layout ===== */
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 2rem;
+  }
+
+  section {
+    padding: 5rem 0;
+    position: relative;
+  }
+
+  /* ===== Typography ===== */
+  h1, h2, h3 {
+    font-family: var(--font-heading);
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+
+  h1 {
+    font-size: 3rem;
+    font-weight: 700;
+    line-height: 1.1;
+  }
+
+  h2 {
+    font-size: 1.75rem;
+    font-weight: 600;
+    margin-bottom: 1.25rem;
+  }
+
+  h3 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+  }
+
+  p {
+    margin-bottom: 1rem;
+    color: var(--text-secondary);
+  }
+
+  .section-label {
+    font-family: var(--font-heading);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--lavender);
+    margin-bottom: 0.75rem;
+    display: block;
+  }
+
+  /* ===== Frosted Glass Card ===== */
+  .glass-card {
+    background: var(--bg-frosted);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 2rem;
+    box-shadow: var(--shadow-md);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+  }
+
+  .glass-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lg);
+  }
+
+  /* ===== Staggered Fade-In ===== */
+  .fade-in {
+    opacity: 0;
+    transform: translateY(24px);
+    animation: fadeInUp 0.7s ease forwards;
+  }
+
+  @keyframes fadeInUp {
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .stagger-1 { animation-delay: 0.1s; }
+  .stagger-2 { animation-delay: 0.2s; }
+  .stagger-3 { animation-delay: 0.3s; }
+  .stagger-4 { animation-delay: 0.4s; }
+  .stagger-5 { animation-delay: 0.5s; }
+  .stagger-6 { animation-delay: 0.6s; }
+  .stagger-7 { animation-delay: 0.7s; }
+  .stagger-8 { animation-delay: 0.8s; }
+
+  /* ===== Hero ===== */
+  .hero {
+    min-height: 60vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 6rem 2rem;
+    position: relative;
+  }
+
+  .hero-inner {
+    max-width: 700px;
+  }
+
+  .hero h1 {
+    margin-bottom: 1.5rem;
+  }
+
+  .hero h1 .gradient-text {
+    background: linear-gradient(135deg, var(--coral), var(--lavender), var(--mint));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .hero .subtitle {
+    font-size: 1.2rem;
+    color: var(--text-secondary);
+    margin-bottom: 2rem;
+    line-height: 1.6;
+  }
+
+  .phase-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--bg-frosted-strong);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    padding: 0.6rem 1.4rem;
+    font-family: var(--font-heading);
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .phase-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--lavender), var(--coral));
+  }
+
+  /* ===== Phone Mockup ===== */
+  .phone-section {
+    display: flex;
+    justify-content: center;
+    padding: 4rem 0 5rem;
+  }
+
+  .phone-carousel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2rem;
+    width: 100%;
+  }
+
+  .phone-wrapper {
+    position: relative;
+  }
+
+  .phone-frame {
+    width: 300px;
+    height: 620px;
+    background: #0f0f0f;
+    border-radius: 44px;
+    padding: 14px;
+    box-shadow: var(--shadow-phone),
+                inset 0 0 0 2px rgba(255,255,255,0.08);
+    position: relative;
+  }
+
+  .phone-frame::before {
+    content: '';
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 100px;
+    height: 28px;
+    background: #0f0f0f;
+    border-radius: 0 0 16px 16px;
+    z-index: 10;
+  }
+
+  .phone-screen {
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    border-radius: 34px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* Phone Status Bar */
+  .phone-statusbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 20px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text);
+    height: 40px;
+  }
+
+  .phone-statusbar .time { font-size: 13px; font-weight: 700; }
+  .phone-statusbar .icons { display: flex; gap: 4px; align-items: center; }
+  .phone-statusbar .icons span { font-size: 10px; }
+
+  /* Phone Nav Tabs */
+  .phone-tabs {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: space-around;
+    padding: 6px 8px 14px;
+    background: var(--bg-frosted-strong);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-top: 1px solid var(--border);
+  }
+
+  .phone-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    font-size: 8.5px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: default;
+  }
+
+  .phone-tab.active { color: var(--coral); }
+
+  .phone-tab-icon {
+    width: 22px; height: 22px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .phone-tab.active .phone-tab-icon {
+    background: linear-gradient(135deg, var(--coral), var(--coral-light));
+    color: white;
+  }
+
+  /* Phone Content Area */
+  .phone-content {
+    padding: 4px 14px 60px;
+    overflow-y: auto;
+    height: calc(100% - 40px);
+  }
+
+  .phone-content h4 {
+    font-family: var(--font-heading);
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 12px;
+    color: var(--text);
+  }
+
+  /* Notification Items */
+  .notif-item {
+    display: flex;
+    gap: 8px;
+    padding: 10px;
+    margin-bottom: 6px;
+    border-radius: 12px;
+    background: var(--bg-white);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+    align-items: flex-start;
+  }
+
+  .notif-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-top: 4px;
+    flex-shrink: 0;
+  }
+
+  .notif-dot.critical { background: var(--red); }
+  .notif-dot.high { background: var(--orange); }
+  .notif-dot.medium { background: var(--text-muted); }
+  .notif-dot.low { background: var(--gray-pill); }
+
+  .notif-text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .notif-title {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.3;
+    margin-bottom: 2px;
+  }
+
+  .notif-desc {
+    font-size: 9px;
+    color: var(--text-muted);
+    line-height: 1.3;
+  }
+
+  .notif-time {
+    font-size: 8px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .notif-group-label {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 10px 0 6px;
+  }
+
+  /* Screen Selector Tabs */
+  .screen-selector {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .screen-btn {
+    padding: 0.5rem 1.1rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 100px;
+    background: var(--bg-frosted-strong);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    font-family: var(--font-body);
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.25s ease;
+  }
+
+  .screen-btn:hover, .screen-btn.active {
+    background: var(--text);
+    color: var(--text-inverse);
+    border-color: var(--text);
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* ===== Screen Cards ===== */
+  .screens-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 1.5rem;
+    margin-top: 1rem;
+  }
+
+  .screen-card {
+    background: var(--bg-frosted);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-md);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+  }
+
+  .screen-card:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .screen-card-header {
+    padding: 1.5rem 1.5rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .screen-icon {
+    width: 40px; height: 40px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    font-weight: 700;
+    color: white;
+    flex-shrink: 0;
+  }
+
+  .screen-icon.notifications { background: linear-gradient(135deg, var(--coral), var(--coral-light)); }
+  .screen-icon.dashboard { background: linear-gradient(135deg, var(--lavender), var(--lavender-light)); }
+  .screen-icon.inbox { background: linear-gradient(135deg, var(--coral), var(--lavender)); }
+  .screen-icon.chat { background: linear-gradient(135deg, var(--mint), var(--mint-light)); }
+  .screen-icon.task { background: linear-gradient(135deg, var(--lavender-light), var(--coral-light)); }
+  .screen-icon.project { background: linear-gradient(135deg, var(--mint), var(--lavender)); }
+
+  .screen-card-header h3 {
+    margin-bottom: 0;
+  }
+
+  .screen-card-header .screen-type {
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .screen-card-body {
+    padding: 0 1.5rem 1.5rem;
+  }
+
+  .screen-card-body p {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin-bottom: 1rem;
+  }
+
+  .feature-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .feature-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  .feature-list li::before {
+    content: '';
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--coral), var(--lavender));
+    margin-top: 7px;
+    flex-shrink: 0;
+  }
+
+  .capability-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .badge-rw {
+    background: var(--mint-soft);
+    color: #047857;
+  }
+
+  .badge-ro {
+    background: var(--lavender-soft);
+    color: #6d28d9;
+  }
+
+  .badge-home {
+    background: var(--coral-soft);
+    color: #dc2626;
+  }
+
+  /* ===== Push Notification Tiers ===== */
+  .tiers-section {
+    position: relative;
+  }
+
+  .tier-row {
+    display: grid;
+    grid-template-columns: 120px 1fr 1fr auto;
+    gap: 1.5rem;
+    align-items: start;
+    padding: 1.5rem;
+    border-radius: var(--radius-md);
+    margin-bottom: 1rem;
+    background: var(--bg-frosted);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .tier-row:hover {
+    transform: translateX(4px);
+    box-shadow: var(--shadow-md);
+  }
+
+  .tier-name {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+
+  .tier-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .tier-dot.critical { background: var(--red); box-shadow: 0 0 8px rgba(239, 68, 68, 0.4); }
+  .tier-dot.high { background: var(--orange); box-shadow: 0 0 8px rgba(245, 158, 11, 0.4); }
+  .tier-dot.medium { background: var(--text-muted); }
+  .tier-dot.low { background: var(--gray-pill); }
+
+  .tier-behavior {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+  }
+
+  .tier-examples {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
+  .tier-push-badge {
+    padding: 4px 10px;
+    border-radius: 100px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+
+  .push-yes {
+    background: linear-gradient(135deg, var(--coral-soft), #fef2f2);
+    color: var(--red);
+  }
+
+  .push-no {
+    background: #f5f5f5;
+    color: var(--text-muted);
+  }
+
+  /* ===== Lock Screen Notification Mockup ===== */
+  .lockscreen-mockup {
+    max-width: 340px;
+    margin: 2rem auto;
+  }
+
+  .lockscreen-notif {
+    background: var(--bg-frosted-strong);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 14px;
+    box-shadow: var(--shadow-md);
+    margin-bottom: 10px;
+  }
+
+  .lockscreen-notif-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .lockscreen-app-icon {
+    width: 20px; height: 20px;
+    border-radius: 5px;
+    background: linear-gradient(135deg, var(--coral), var(--lavender));
+  }
+
+  .lockscreen-app-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    flex: 1;
+  }
+
+  .lockscreen-time {
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  .lockscreen-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 2px;
+  }
+
+  .lockscreen-body {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    line-height: 1.4;
+  }
+
+  .lockscreen-actions {
+    display: flex;
+    gap: 6px;
+  }
+
+  .lockscreen-action-btn {
+    padding: 5px 12px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    border: none;
+    cursor: default;
+  }
+
+  .lockscreen-action-btn.approve {
+    background: linear-gradient(135deg, var(--mint), var(--mint-light));
+    color: #065f46;
+  }
+
+  .lockscreen-action-btn.open {
+    background: #f0f0f0;
+    color: var(--text-secondary);
+  }
+
+  /* ===== Not-On-Mobile Section ===== */
+  .not-mobile-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+
+  .not-mobile-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 1.25rem;
+    border-radius: var(--radius-md);
+    background: var(--bg-frosted);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+    position: relative;
+  }
+
+  .not-mobile-item .strikethrough-line {
+    position: absolute;
+    top: 50%;
+    left: 1rem;
+    right: 1rem;
+    height: 2px;
+    background: linear-gradient(90deg, var(--coral), var(--coral-light));
+    opacity: 0.5;
+    transform: rotate(-1deg);
+  }
+
+  .not-mobile-icon {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f5f5f5;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    opacity: 0.5;
+  }
+
+  .not-mobile-text {
+    opacity: 0.55;
+  }
+
+  .not-mobile-text h4 {
+    font-family: var(--font-heading);
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 2px;
+    text-decoration: line-through;
+    text-decoration-color: var(--coral);
+    text-decoration-thickness: 2px;
+  }
+
+  .not-mobile-text p {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin: 0;
+  }
+
+  /* ===== Offline Section ===== */
+  .offline-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-top: 1rem;
+  }
+
+  @media (max-width: 640px) {
+    .offline-grid { grid-template-columns: 1fr; }
+  }
+
+  .offline-col h3 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .offline-status-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+  }
+
+  .offline-status-dot.available { background: var(--green-status); }
+  .offline-status-dot.required { background: var(--coral); }
+
+  .offline-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .offline-list li {
+    padding: 0.75rem 1rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    background: var(--bg-frosted);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  .offline-list.available li {
+    border-left: 3px solid var(--mint);
+  }
+
+  .offline-list.required li {
+    border-left: 3px solid var(--coral);
+  }
+
+  .offline-note {
+    margin-top: 1.5rem;
+    padding: 1rem 1.25rem;
+    border-radius: var(--radius-md);
+    background: var(--lavender-soft);
+    border: 1px solid rgba(167, 139, 250, 0.15);
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+  }
+
+  .offline-note strong {
+    color: var(--lavender);
+  }
+
+  /* ===== Auth Section ===== */
+  .auth-flow {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-top: 1.5rem;
+    max-width: 500px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .auth-step {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+    border-radius: var(--radius-md);
+    background: var(--bg-frosted-strong);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+    position: relative;
+  }
+
+  .auth-step:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    bottom: -12px;
+    left: 24px;
+    width: 2px;
+    height: 12px;
+    background: linear-gradient(to bottom, var(--lavender-light), transparent);
+  }
+
+  .auth-step-num {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: white;
+    background: linear-gradient(135deg, var(--lavender), var(--coral-light));
+    flex-shrink: 0;
+  }
+
+  .auth-step-text {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+  }
+
+  .auth-step-text strong {
+    color: var(--text);
+  }
+
+  /* ===== Deep Link URL Scheme ===== */
+  .deeplink-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 1rem;
+  }
+
+  .deeplink-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 1rem;
+    border-radius: var(--radius-sm);
+    background: var(--bg-frosted);
+    border: 1px solid var(--border);
+    font-family: 'Geist', monospace;
+    font-size: 0.82rem;
+    color: var(--lavender);
+    letter-spacing: -0.01em;
+  }
+
+  .deeplink-arrow {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+  }
+
+  .deeplink-screen {
+    font-family: var(--font-body);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+
+  /* ===== Tech Stack Row ===== */
+  .tech-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+  }
+
+  .tech-pill {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    border-radius: 100px;
+    background: var(--bg-frosted-strong);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--border);
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .tech-pill-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+  }
+
+  .tech-pill-dot.coral { background: var(--coral); }
+  .tech-pill-dot.lavender { background: var(--lavender); }
+  .tech-pill-dot.mint { background: var(--mint); }
+
+  /* ===== Footer ===== */
+  .footer {
+    text-align: center;
+    padding: 3rem 2rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .footer p {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+  }
+
+  .footer .spec-ref {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    color: var(--lavender);
+    font-size: 0.85rem;
+  }
+
+  /* ===== Responsive ===== */
+  @media (max-width: 800px) {
+    h1 { font-size: 2.2rem; }
+    h2 { font-size: 1.4rem; }
+
+    .tier-row {
+      grid-template-columns: 1fr;
+      gap: 0.5rem;
+    }
+
+    .tier-push-badge { align-self: flex-start; }
+
+    .screens-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .not-mobile-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .container { padding: 0 1.25rem; }
+  }
+
+  /* ===== Interaction Flow ===== */
+  .flow-diagram {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin: 2.5rem 0;
+    flex-wrap: wrap;
+  }
+
+  .flow-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 1rem;
+    min-width: 120px;
+  }
+
+  .flow-step-circle {
+    width: 48px; height: 48px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: white;
+    box-shadow: var(--shadow-md);
+  }
+
+  .flow-step-circle.step-1 { background: linear-gradient(135deg, var(--coral), var(--coral-light)); }
+  .flow-step-circle.step-2 { background: linear-gradient(135deg, var(--lavender), var(--lavender-light)); }
+  .flow-step-circle.step-3 { background: linear-gradient(135deg, var(--mint), var(--mint-light)); }
+  .flow-step-circle.step-4 { background: linear-gradient(135deg, var(--lavender), var(--coral)); }
+
+  .flow-step-label {
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    text-align: center;
+    max-width: 100px;
+  }
+
+  .flow-arrow {
+    font-size: 1.2rem;
+    color: var(--text-muted);
+    margin-top: -1rem;
+  }
+
+  /* ===== Dashboard Mini-card inside phone ===== */
+  .mini-project-card {
+    background: var(--bg-white);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .mini-project-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+
+  .mini-project-stats {
+    display: flex;
+    gap: 6px;
+  }
+
+  .mini-stat {
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 8px;
+    font-weight: 600;
+  }
+
+  .mini-stat.progress { background: #dbeafe; color: #1d4ed8; }
+  .mini-stat.blocked { background: #fee2e2; color: #dc2626; }
+  .mini-stat.review { background: #fef3c7; color: #92400e; }
+  .mini-stat.queued { background: #f3f4f6; color: #6b7280; }
+
+  .mini-inbox-badge {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: linear-gradient(135deg, var(--coral-soft), #fff5f5);
+    border: 1px solid rgba(255, 107, 107, 0.15);
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+  }
+
+  .mini-inbox-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+
+  .mini-inbox-count {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--coral), var(--coral-light));
+    color: white;
+    font-size: 13px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Phone screen content variants */
+  .phone-content-notifications .notif-group-label:first-child { margin-top: 2px; }
+
+  /* ===== Inline action buttons (inbox phone screen) ===== */
+  .mini-action-row {
+    display: flex;
+    gap: 4px;
+    margin-top: 6px;
+  }
+
+  .mini-action-btn {
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 8px;
+    font-weight: 600;
+    border: none;
+    cursor: default;
+  }
+
+  .mini-action-btn.approve { background: var(--mint-soft); color: #047857; }
+  .mini-action-btn.reject { background: #fef2f2; color: var(--red); }
+  .mini-action-btn.defer { background: #f5f5f5; color: var(--text-muted); }
+
+  /* ===== Section Divider ===== */
+  .section-divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border-strong), transparent);
+    margin: 0;
+  }
+</style>
+</head>
+<body>
+
+<div class="mesh-bg">
+  <div class="mesh-blob coral"></div>
+  <div class="mesh-blob lavender"></div>
+  <div class="mesh-blob mint"></div>
+  <div class="mesh-blob coral-2"></div>
+</div>
+
+<!-- ===== HERO ===== -->
+<section class="hero">
+  <div class="hero-inner fade-in">
+    <div class="phase-badge stagger-1">
+      <span class="phase-dot"></span>
+      Phase 4 -- Hardening and Distribution
+    </div>
+    <h1 style="margin-top: 1.5rem">
+      The <span class="gradient-text">30-Second<br>Remote Control</span>
+    </h1>
+    <p class="subtitle stagger-2">
+      A native mobile app for monitoring and triage.
+      Not a portable web UI -- a lightweight interface for
+      interruption-driven interactions. A push notification arrives,
+      you tap, you act, you leave.
+    </p>
+
+    <div class="flow-diagram fade-in stagger-3">
+      <div class="flow-step">
+        <div class="flow-step-circle step-1">1</div>
+        <div class="flow-step-label">Push notification arrives</div>
+      </div>
+      <div class="flow-arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="flow-step-circle step-2">2</div>
+        <div class="flow-step-label">Tap to deep link</div>
+      </div>
+      <div class="flow-arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="flow-step-circle step-3">3</div>
+        <div class="flow-step-label">Act: approve, reject, reply</div>
+      </div>
+      <div class="flow-arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="flow-step-circle step-4">4</div>
+        <div class="flow-step-label">Done. Phone down.</div>
+      </div>
+    </div>
+
+    <div class="tech-row fade-in stagger-4" style="justify-content: center;">
+      <div class="tech-pill"><span class="tech-pill-dot coral"></span> React Native</div>
+      <div class="tech-pill"><span class="tech-pill-dot lavender"></span> iOS + Android</div>
+      <div class="tech-pill"><span class="tech-pill-dot mint"></span> Shared REST / WebSocket API</div>
+      <div class="tech-pill"><span class="tech-pill-dot coral"></span> Biometric Auth</div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ===== PHONE MOCKUP ===== -->
+<section class="phone-section">
+  <div class="container">
+    <div class="phone-carousel fade-in">
+      <div style="text-align: center;">
+        <span class="section-label">Interactive Mockup</span>
+        <h2>Six Core Screens</h2>
+        <p style="max-width: 500px; margin: 0 auto 1.5rem;">Every screen serves the 30-second pattern. Tap a tab below to switch the phone view.</p>
+      </div>
+
+      <div class="phone-wrapper">
+        <div class="phone-frame">
+          <div class="phone-screen">
+            <div class="phone-statusbar">
+              <span class="time">9:41</span>
+              <span class="icons">
+                <span>&#9679;&#9679;&#9679;&#9679;</span>
+                <span style="margin-left: 2px;">&#9608;</span>
+              </span>
+            </div>
+
+            <!-- Notifications Screen (default) -->
+            <div class="phone-content phone-content-notifications" id="screen-notifications">
+              <h4>Notifications</h4>
+              <div class="notif-group-label">Today</div>
+              <div class="notif-item">
+                <div class="notif-dot critical"></div>
+                <div class="notif-text">
+                  <div class="notif-title">Escalation: Auth token conflict</div>
+                  <div class="notif-desc">Frank escalated -- needs your call</div>
+                </div>
+                <div class="notif-time">2m</div>
+              </div>
+              <div class="notif-item">
+                <div class="notif-dot high"></div>
+                <div class="notif-text">
+                  <div class="notif-title">Review needed: OC-42</div>
+                  <div class="notif-desc">PM finished scoping landing page</div>
+                </div>
+                <div class="notif-time">18m</div>
+              </div>
+              <div class="notif-item">
+                <div class="notif-dot high"></div>
+                <div class="notif-text">
+                  <div class="notif-title">@mention in Auth Project</div>
+                  <div class="notif-desc">Frank asked for your input</div>
+                </div>
+                <div class="notif-time">1h</div>
+              </div>
+              <div class="notif-group-label">Yesterday</div>
+              <div class="notif-item">
+                <div class="notif-dot medium"></div>
+                <div class="notif-text">
+                  <div class="notif-title">OC-38 completed</div>
+                  <div class="notif-desc">API rate limiter implemented</div>
+                </div>
+                <div class="notif-time">1d</div>
+              </div>
+              <div class="notif-item">
+                <div class="notif-dot low"></div>
+                <div class="notif-text">
+                  <div class="notif-title">4 tasks updated</div>
+                  <div class="notif-desc">OtterCamp V2 project</div>
+                </div>
+                <div class="notif-time">1d</div>
+              </div>
+            </div>
+
+            <!-- Dashboard Screen -->
+            <div class="phone-content" id="screen-dashboard" style="display: none;">
+              <h4>Dashboard</h4>
+              <div class="mini-inbox-badge">
+                <span class="mini-inbox-label">Pending Inbox Items</span>
+                <span class="mini-inbox-count">3</span>
+              </div>
+              <div class="mini-project-card">
+                <div class="mini-project-name">OtterCamp V2</div>
+                <div class="mini-project-stats">
+                  <span class="mini-stat progress">4 active</span>
+                  <span class="mini-stat blocked">1 blocked</span>
+                  <span class="mini-stat review">2 review</span>
+                </div>
+                <div style="font-size: 8px; color: #9494b8; margin-top: 4px;">12 min ago</div>
+              </div>
+              <div class="mini-project-card">
+                <div class="mini-project-name">Auth Service</div>
+                <div class="mini-project-stats">
+                  <span class="mini-stat progress">2 active</span>
+                  <span class="mini-stat queued">3 queued</span>
+                </div>
+                <div style="font-size: 8px; color: #9494b8; margin-top: 4px;">34 min ago</div>
+              </div>
+              <div class="mini-project-card">
+                <div class="mini-project-name">Landing Page</div>
+                <div class="mini-project-stats">
+                  <span class="mini-stat review">1 review</span>
+                  <span class="mini-stat queued">2 queued</span>
+                </div>
+                <div style="font-size: 8px; color: #9494b8; margin-top: 4px;">1h ago</div>
+              </div>
+              <div style="margin-top: 14px; text-align: center;">
+                <div style="font-size: 9px; color: #9494b8;">Pull to refresh</div>
+              </div>
+            </div>
+
+            <!-- Inbox Screen -->
+            <div class="phone-content" id="screen-inbox" style="display: none;">
+              <h4>Inbox</h4>
+              <div style="display: flex; gap: 6px; margin-bottom: 12px;">
+                <span style="padding: 3px 10px; border-radius: 20px; background: var(--text); color: white; font-size: 9px; font-weight: 600;">Active (3)</span>
+                <span style="padding: 3px 10px; border-radius: 20px; background: #f0f0f0; color: var(--text-muted); font-size: 9px; font-weight: 600;">Deferred (1)</span>
+              </div>
+              <div class="notif-item" style="flex-direction: column; gap: 4px;">
+                <div style="display: flex; gap: 8px; width: 100%;">
+                  <div class="notif-dot critical" style="margin-top: 2px;"></div>
+                  <div class="notif-text">
+                    <div class="notif-title">Escalation: Auth conflict</div>
+                    <div class="notif-desc">Frank needs human judgment</div>
+                  </div>
+                </div>
+                <div class="mini-action-row">
+                  <span class="mini-action-btn approve">Open Chat</span>
+                  <span class="mini-action-btn defer">Defer</span>
+                </div>
+              </div>
+              <div class="notif-item" style="flex-direction: column; gap: 4px;">
+                <div style="display: flex; gap: 8px; width: 100%;">
+                  <div class="notif-dot high" style="margin-top: 2px;"></div>
+                  <div class="notif-text">
+                    <div class="notif-title">Review: OC-42 Scoping</div>
+                    <div class="notif-desc">Landing page design scoped by PM</div>
+                  </div>
+                </div>
+                <div class="mini-action-row">
+                  <span class="mini-action-btn approve">Approve</span>
+                  <span class="mini-action-btn reject">Changes</span>
+                  <span class="mini-action-btn defer">Defer</span>
+                </div>
+              </div>
+              <div class="notif-item" style="flex-direction: column; gap: 4px;">
+                <div style="display: flex; gap: 8px; width: 100%;">
+                  <div class="notif-dot high" style="margin-top: 2px;"></div>
+                  <div class="notif-text">
+                    <div class="notif-title">Capability: File system write</div>
+                    <div class="notif-desc">Agent requests write access</div>
+                  </div>
+                </div>
+                <div class="mini-action-row">
+                  <span class="mini-action-btn approve">Approve</span>
+                  <span class="mini-action-btn" style="background: var(--lavender-soft); color: #6d28d9;">Constrain</span>
+                  <span class="mini-action-btn reject">Deny</span>
+                  <span class="mini-action-btn defer">Defer</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Chat Screen -->
+            <div class="phone-content" id="screen-chat" style="display: none;">
+              <h4>Chat</h4>
+              <div style="font-size: 9px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;">General / Frank</div>
+              <div style="display: flex; flex-direction: column; gap: 8px;">
+                <div style="align-self: flex-end; max-width: 75%; background: linear-gradient(135deg, var(--coral), var(--coral-light)); color: white; padding: 8px 12px; border-radius: 14px 14px 4px 14px; font-size: 10.5px; line-height: 1.4;">Frank, is anything blocked right now?</div>
+                <div style="align-self: flex-start; max-width: 80%; background: var(--bg-white); border: 1px solid var(--border); padding: 8px 12px; border-radius: 14px 14px 14px 4px; font-size: 10.5px; line-height: 1.4; color: var(--text-secondary);">
+                  <div style="font-size: 8px; font-weight: 600; color: var(--lavender); margin-bottom: 3px;">Frank</div>
+                  One blocker: OC-41 is waiting on your auth token decision from the escalation. Everything else is flowing. Two tasks are in review in your inbox.
+                </div>
+                <div style="align-self: flex-end; max-width: 75%; background: linear-gradient(135deg, var(--coral), var(--coral-light)); color: white; padding: 8px 12px; border-radius: 14px 14px 4px 14px; font-size: 10.5px; line-height: 1.4;">Got it, I'll handle the escalation now.</div>
+                <div style="align-self: flex-start; max-width: 80%; background: var(--bg-white); border: 1px solid var(--border); padding: 8px 12px; border-radius: 14px 14px 14px 4px; font-size: 10.5px; line-height: 1.4; color: var(--text-secondary);">
+                  <div style="font-size: 8px; font-weight: 600; color: var(--lavender); margin-bottom: 3px;">Frank</div>
+                  Sounds good. I will let the team know you are looking at it.
+                </div>
+              </div>
+              <div style="position: absolute; bottom: 54px; left: 14px; right: 14px; display: flex; gap: 6px; align-items: center; padding: 8px 12px; background: var(--bg-white); border: 1px solid var(--border); border-radius: 20px;">
+                <span style="flex: 1; font-size: 10px; color: var(--text-muted);">Message...</span>
+                <span style="width: 24px; height: 24px; border-radius: 50%; background: linear-gradient(135deg, var(--coral), var(--coral-light)); display: flex; align-items: center; justify-content: center; color: white; font-size: 10px; font-weight: 700;">&uarr;</span>
+              </div>
+            </div>
+
+            <!-- Task Detail Screen -->
+            <div class="phone-content" id="screen-task" style="display: none;">
+              <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+                <span style="font-size: 10px; color: var(--lavender); font-weight: 600;">&larr; Back</span>
+              </div>
+              <h4 style="font-size: 16px;">OC-42: Landing Page</h4>
+              <div style="display: flex; gap: 6px; margin-bottom: 12px;">
+                <span class="mini-stat review">In Review</span>
+                <span style="padding: 2px 6px; border-radius: 4px; font-size: 8px; font-weight: 600; background: #fef3c7; color: #92400e;">P2</span>
+                <span style="padding: 2px 6px; border-radius: 4px; font-size: 8px; font-weight: 500; background: #f3f4f6; color: #6b7280;">PM</span>
+              </div>
+              <!-- Flow stepper -->
+              <div style="display: flex; gap: 4px; align-items: center; margin-bottom: 14px; overflow-x: auto;">
+                <span style="padding: 3px 8px; border-radius: 6px; font-size: 7px; font-weight: 600; background: var(--mint-soft); color: #047857;">Scope</span>
+                <span style="font-size: 8px; color: var(--text-muted);">&rarr;</span>
+                <span style="padding: 3px 8px; border-radius: 6px; font-size: 7px; font-weight: 600; background: var(--mint-soft); color: #047857;">Design</span>
+                <span style="font-size: 8px; color: var(--text-muted);">&rarr;</span>
+                <span style="padding: 3px 8px; border-radius: 6px; font-size: 7px; font-weight: 600; background: var(--coral-soft); color: var(--red); border: 1px solid rgba(255,107,107,0.2);">Review</span>
+                <span style="font-size: 8px; color: var(--text-muted);">&rarr;</span>
+                <span style="padding: 3px 8px; border-radius: 6px; font-size: 7px; font-weight: 600; background: #f3f4f6; color: #9ca3af;">Deploy</span>
+              </div>
+              <div style="background: var(--coral-soft); border: 1px solid rgba(255,107,107,0.15); border-radius: 10px; padding: 8px 10px; margin-bottom: 12px; font-size: 9px; color: var(--coral); font-weight: 500;">This task is awaiting your review. <span style="text-decoration: underline;">View in Inbox</span></div>
+              <div style="font-size: 9px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;">Recent Activity</div>
+              <div style="font-size: 9.5px; color: var(--text-secondary); line-height: 1.8; border-left: 2px solid var(--border); padding-left: 10px;">
+                <div>2h ago -- PM submitted for review</div>
+                <div>5h ago -- PM started design phase</div>
+                <div>1d ago -- Scoping approved by operator</div>
+              </div>
+            </div>
+
+            <!-- Project Status Screen -->
+            <div class="phone-content" id="screen-project" style="display: none;">
+              <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+                <span style="font-size: 10px; color: var(--lavender); font-weight: 600;">&larr; Dashboard</span>
+              </div>
+              <h4 style="font-size: 16px;">OtterCamp V2</h4>
+              <p style="font-size: 9px; margin-bottom: 12px;">Ground-up rewrite of the platform</p>
+              <!-- Status bar -->
+              <div style="display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin-bottom: 14px;">
+                <div style="width: 35%; background: #3b82f6;"></div>
+                <div style="width: 10%; background: var(--red);"></div>
+                <div style="width: 15%; background: var(--orange);"></div>
+                <div style="width: 25%; background: #d1d5db;"></div>
+                <div style="width: 15%; background: var(--green-status);"></div>
+              </div>
+              <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px;">
+                <span class="mini-stat progress">4 active</span>
+                <span class="mini-stat blocked">1 blocked</span>
+                <span class="mini-stat review">2 review</span>
+                <span class="mini-stat queued">3 queued</span>
+                <span style="padding: 2px 6px; border-radius: 4px; font-size: 8px; font-weight: 600; background: var(--mint-soft); color: #047857;">2 done</span>
+              </div>
+              <div style="font-size: 9px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;">Tasks</div>
+              <div class="mini-project-card" style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <div class="mini-project-name">OC-41 Auth Tokens</div>
+                  <span class="mini-stat blocked" style="margin-top: 2px;">blocked</span>
+                </div>
+                <span style="font-size: 8px; color: var(--text-muted);">P1</span>
+              </div>
+              <div class="mini-project-card" style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <div class="mini-project-name">OC-42 Landing Page</div>
+                  <span class="mini-stat review" style="margin-top: 2px;">review</span>
+                </div>
+                <span style="font-size: 8px; color: var(--text-muted);">P2</span>
+              </div>
+              <div class="mini-project-card" style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <div class="mini-project-name">OC-43 API Rate Limiter</div>
+                  <span class="mini-stat progress" style="margin-top: 2px;">active</span>
+                </div>
+                <span style="font-size: 8px; color: var(--text-muted);">P2</span>
+              </div>
+            </div>
+
+            <!-- Tab Bar -->
+            <div class="phone-tabs">
+              <div class="phone-tab active" onclick="showScreen('notifications')">
+                <div class="phone-tab-icon">N</div>
+                <span>Notifs</span>
+              </div>
+              <div class="phone-tab" onclick="showScreen('dashboard')">
+                <div class="phone-tab-icon">D</div>
+                <span>Dash</span>
+              </div>
+              <div class="phone-tab" onclick="showScreen('inbox')">
+                <div class="phone-tab-icon">I</div>
+                <span>Inbox</span>
+              </div>
+              <div class="phone-tab" onclick="showScreen('chat')">
+                <div class="phone-tab-icon">C</div>
+                <span>Chat</span>
+              </div>
+              <div class="phone-tab" onclick="showScreen('task')">
+                <div class="phone-tab-icon">T</div>
+                <span>Task</span>
+              </div>
+              <div class="phone-tab" onclick="showScreen('project')">
+                <div class="phone-tab-icon">P</div>
+                <span>Project</span>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <div class="screen-selector">
+        <button class="screen-btn active" onclick="showScreen('notifications')">Notifications</button>
+        <button class="screen-btn" onclick="showScreen('dashboard')">Dashboard</button>
+        <button class="screen-btn" onclick="showScreen('inbox')">Inbox</button>
+        <button class="screen-btn" onclick="showScreen('chat')">Chat</button>
+        <button class="screen-btn" onclick="showScreen('task')">Task Detail</button>
+        <button class="screen-btn" onclick="showScreen('project')">Project Status</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ===== SIX SCREENS CARDS ===== -->
+<section>
+  <div class="container">
+    <span class="section-label fade-in">Screen Breakdown</span>
+    <h2 class="fade-in stagger-1">Six Screens, One Purpose</h2>
+    <p class="fade-in stagger-2" style="max-width: 600px;">Every screen is designed around the 30-second interaction pattern. Get in, get the information, act, get out.</p>
+
+    <div class="screens-grid" style="margin-top: 2rem;">
+
+      <div class="screen-card fade-in stagger-1">
+        <div class="screen-card-header">
+          <div class="screen-icon notifications">N</div>
+          <div>
+            <span class="screen-type"><span class="capability-badge badge-home">Home Screen</span></span>
+            <h3>Notifications</h3>
+          </div>
+        </div>
+        <div class="screen-card-body">
+          <p>Primary entry point. Reverse chronological feed grouped by time. Push notifications land here.</p>
+          <ul class="feature-list">
+            <li>Urgency indicators with color and icon (not color alone)</li>
+            <li>Grouped by Today, Yesterday, Earlier, Older</li>
+            <li>Tap navigates directly to the relevant item</li>
+            <li>Swipe to dismiss, swipe to open</li>
+            <li>Unread/read visual state; badge count on app icon</li>
+            <li>Critical items pinned to top regardless of scroll</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen-card fade-in stagger-2">
+        <div class="screen-card-header">
+          <div class="screen-icon dashboard">D</div>
+          <div>
+            <span class="screen-type"><span class="capability-badge badge-ro">Read-Only</span></span>
+            <h3>Dashboard</h3>
+          </div>
+        </div>
+        <div class="screen-card-body">
+          <p>Project health at a glance. Answers: "Is everything okay? Does anything need me?"</p>
+          <ul class="feature-list">
+            <li>Prominent inbox badge -- the single most important number</li>
+            <li>Project cards with task counts by status</li>
+            <li>Blocked item count highlighted if greater than zero</li>
+            <li>Last activity timestamp per project</li>
+            <li>Quick stats: active tasks, completed today, pending inbox</li>
+            <li>Pull-to-refresh for manual update</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen-card fade-in stagger-3">
+        <div class="screen-card-header">
+          <div class="screen-icon inbox">I</div>
+          <div>
+            <span class="screen-type"><span class="capability-badge badge-rw">Read-Write</span></span>
+            <h3>Inbox</h3>
+          </div>
+        </div>
+        <div class="screen-card-body">
+          <p>The action-required queue. Every item here blocks progress somewhere.</p>
+          <ul class="feature-list">
+            <li>Active and Deferred sections with toggle</li>
+            <li>Inline action buttons: Approve, Reject, Defer, Request Changes</li>
+            <li>Escalations open directly to the relevant chat</li>
+            <li>Work reviews link to web for full diff view</li>
+            <li>Capability approvals with "Approve with Constraints" option</li>
+            <li>Swipe-to-defer for quick triage</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen-card fade-in stagger-4">
+        <div class="screen-card-header">
+          <div class="screen-icon chat">C</div>
+          <div>
+            <span class="screen-type"><span class="capability-badge badge-rw">Read-Write</span></span>
+            <h3>Chat</h3>
+          </div>
+        </div>
+        <div class="screen-card-body">
+          <p>Lightweight text sessions. Quick questions and simple instructions to agents.</p>
+          <ul class="feature-list">
+            <li>Session list grouped by scope: org, project, task</li>
+            <li>Streaming agent responses with typing indicator</li>
+            <li>@mention autocomplete from session participants</li>
+            <li>Tool calls collapsed to "Agent is working..." indicator</li>
+            <li>No file uploads, no steer, no reactions, no voice</li>
+            <li>Stop button visible during agent turns</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen-card fade-in stagger-5">
+        <div class="screen-card-header">
+          <div class="screen-icon task">T</div>
+          <div>
+            <span class="screen-type"><span class="capability-badge badge-ro">Read-Only</span></span>
+            <h3>Task Detail</h3>
+          </div>
+        </div>
+        <div class="screen-card-body">
+          <p>Full task context when you need to understand what is happening before acting.</p>
+          <ul class="feature-list">
+            <li>Status, priority, assignee, and project displayed</li>
+            <li>Compact horizontal flow stepper (scrollable)</li>
+            <li>Subtask summary list with status indicators</li>
+            <li>Collapsible description and acceptance criteria</li>
+            <li>Dependencies: "depends on" and "blocks" links</li>
+            <li>Banner links to inbox if task is awaiting your review</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="screen-card fade-in stagger-6">
+        <div class="screen-card-header">
+          <div class="screen-icon project">P</div>
+          <div>
+            <span class="screen-type"><span class="capability-badge badge-ro">Read-Only</span></span>
+            <h3>Project Status</h3>
+          </div>
+        </div>
+        <div class="screen-card-body">
+          <p>Drill-down from the dashboard. Full picture of a single project's state.</p>
+          <ul class="feature-list">
+            <li>Task counts visualized as a compact status bar</li>
+            <li>Task list sorted by urgency: blocked and review first</li>
+            <li>Merge queue section if entries exist</li>
+            <li>Active schedules with last run and next run</li>
+            <li>Tap any task to navigate to task detail</li>
+            <li>Tap a schedule to see recent task instances</li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ===== PUSH NOTIFICATION TIERS ===== -->
+<section class="tiers-section">
+  <div class="container">
+    <span class="section-label fade-in">Push Notifications</span>
+    <h2 class="fade-in stagger-1">Four Urgency Tiers</h2>
+    <p class="fade-in stagger-2" style="max-width: 600px;">Push notifications are the primary entry point. Only Critical and High push by default. The operator configures the rest.</p>
+
+    <div style="margin-top: 2rem;">
+      <div class="tier-row fade-in stagger-3">
+        <div class="tier-name">
+          <span class="tier-dot critical"></span>
+          Critical
+        </div>
+        <div class="tier-behavior">Always pushes. Always in-app. Critical items pin to the top of the notification list regardless of scroll.</div>
+        <div class="tier-examples">Escalation reached human, agent failure (unrecoverable), blocker requiring human judgment</div>
+        <span class="tier-push-badge push-yes">Always Push</span>
+      </div>
+
+      <div class="tier-row fade-in stagger-4">
+        <div class="tier-name">
+          <span class="tier-dot high"></span>
+          High
+        </div>
+        <div class="tier-behavior">Pushes by default. Always in-app. Standard prominence in the notification list.</div>
+        <div class="tier-examples">Task ready for review, draft pending, @mention in any session, capability approval request</div>
+        <span class="tier-push-badge push-yes">Always Push</span>
+      </div>
+
+      <div class="tier-row fade-in stagger-5">
+        <div class="tier-name">
+          <span class="tier-dot medium"></span>
+          Medium
+        </div>
+        <div class="tier-behavior">No push by default. Visible in-app. Neutral styling in the notification list.</div>
+        <div class="tier-examples">Task completed, task status changed, agent started work</div>
+        <span class="tier-push-badge push-no">No Push</span>
+      </div>
+
+      <div class="tier-row fade-in stagger-6">
+        <div class="tier-name">
+          <span class="tier-dot low"></span>
+          Low
+        </div>
+        <div class="tier-behavior">No push. Available in feed. Subdued styling. Batched into groups.</div>
+        <div class="tier-examples">Routine status updates, agent activity ("4 tasks updated in OtterCamp V2")</div>
+        <span class="tier-push-badge push-no">No Push</span>
+      </div>
+    </div>
+
+    <div style="margin-top: 3rem;">
+      <h3 class="fade-in">Rich Notifications -- Act from the Lock Screen</h3>
+      <p class="fade-in stagger-1" style="max-width: 560px;">iOS and Android rich notifications include inline action buttons. The operator can approve a task review, open a chat, or approve a draft directly from the lock screen -- without opening the app.</p>
+
+      <div class="lockscreen-mockup fade-in stagger-2">
+        <div class="lockscreen-notif">
+          <div class="lockscreen-notif-header">
+            <div class="lockscreen-app-icon"></div>
+            <div class="lockscreen-app-name">OtterCamp</div>
+            <div class="lockscreen-time">2m ago</div>
+          </div>
+          <div class="lockscreen-title">Review needed: OC-42</div>
+          <div class="lockscreen-body">PM finished scoping landing page design. Ready for your approval.</div>
+          <div class="lockscreen-actions">
+            <span class="lockscreen-action-btn approve">Approve</span>
+            <span class="lockscreen-action-btn open">Open</span>
+          </div>
+        </div>
+
+        <div class="lockscreen-notif">
+          <div class="lockscreen-notif-header">
+            <div class="lockscreen-app-icon"></div>
+            <div class="lockscreen-app-name">OtterCamp</div>
+            <div class="lockscreen-time">8m ago</div>
+          </div>
+          <div class="lockscreen-title">Escalation: Auth token conflict</div>
+          <div class="lockscreen-body">Frank escalated -- needs your call on token rotation strategy.</div>
+          <div class="lockscreen-actions">
+            <span class="lockscreen-action-btn open">Open Chat</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: 2rem;" class="fade-in">
+      <h3>User Configuration</h3>
+      <p style="max-width: 560px;">The operator controls what pushes and when. Configuration syncs between mobile and web.</p>
+      <div class="tech-row" style="margin-top: 1rem;">
+        <div class="tech-pill"><span class="tech-pill-dot coral"></span> Per urgency tier</div>
+        <div class="tech-pill"><span class="tech-pill-dot lavender"></span> Per project override</div>
+        <div class="tech-pill"><span class="tech-pill-dot mint"></span> Quiet hours (non-critical suppressed)</div>
+        <div class="tech-pill"><span class="tech-pill-dot coral"></span> Per event type (granular)</div>
+      </div>
+      <p style="margin-top: 1rem; font-size: 0.85rem; color: var(--text-muted);"><strong style="color: var(--text-secondary);">Deduplication:</strong> If the operator has the app open and is viewing the relevant screen, the push is suppressed. The in-app notification is sufficient.</p>
+    </div>
+
+    <div style="margin-top: 2rem;" class="fade-in">
+      <h3>Delivery Infrastructure</h3>
+      <div class="tech-row">
+        <div class="tech-pill"><span class="tech-pill-dot coral"></span> iOS: Apple Push Notification Service (APNs)</div>
+        <div class="tech-pill"><span class="tech-pill-dot mint"></span> Android: Firebase Cloud Messaging (FCM)</div>
+      </div>
+    </div>
+
+    <div style="margin-top: 2rem;" class="fade-in">
+      <h3>Deep Link URL Scheme</h3>
+      <p style="max-width: 560px; font-size: 0.9rem;">Every notification includes a deep link. Tap navigates directly to the right screen with no intermediate navigation.</p>
+      <div class="deeplink-list">
+        <div class="deeplink-item">
+          ottercamp://inbox/{inbox_item_id}
+          <span class="deeplink-arrow">&rarr;</span>
+          <span class="deeplink-screen">Inbox Item</span>
+        </div>
+        <div class="deeplink-item">
+          ottercamp://task/{project_slug}/{task_number}
+          <span class="deeplink-arrow">&rarr;</span>
+          <span class="deeplink-screen">Task Detail</span>
+        </div>
+        <div class="deeplink-item">
+          ottercamp://project/{project_slug}
+          <span class="deeplink-arrow">&rarr;</span>
+          <span class="deeplink-screen">Project Status</span>
+        </div>
+        <div class="deeplink-item">
+          ottercamp://chat/{session_id}
+          <span class="deeplink-arrow">&rarr;</span>
+          <span class="deeplink-screen">Chat Session</span>
+        </div>
+        <div class="deeplink-item">
+          ottercamp://notifications
+          <span class="deeplink-arrow">&rarr;</span>
+          <span class="deeplink-screen">Notification List</span>
+        </div>
+        <div class="deeplink-item">
+          ottercamp://dashboard
+          <span class="deeplink-arrow">&rarr;</span>
+          <span class="deeplink-screen">Dashboard</span>
+        </div>
+      </div>
+      <p style="margin-top: 0.75rem; font-size: 0.82rem; color: var(--text-muted);">Universal links (<code style="font-family: var(--font-heading); font-size: 0.8rem;">https://app.ottercamp.dev/...</code>) provide web fallback when the app is not installed.</p>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ===== WHAT'S NOT ON MOBILE ===== -->
+<section>
+  <div class="container">
+    <span class="section-label fade-in">Boundaries</span>
+    <h2 class="fade-in stagger-1">What Stays on Desktop</h2>
+    <p class="fade-in stagger-2" style="max-width: 560px;">Mobile is for reacting, not creating. If the action requires more than a text input and a button tap, it belongs on the web UI or TUI.</p>
+
+    <div class="not-mobile-grid" style="margin-top: 2rem;">
+      <div class="not-mobile-item fade-in stagger-2">
+        <div class="not-mobile-icon">+</div>
+        <div class="not-mobile-text">
+          <h4>Task Creation</h4>
+          <p>Requires conversation with agents and full context</p>
+        </div>
+        <div class="strikethrough-line"></div>
+      </div>
+
+      <div class="not-mobile-item fade-in stagger-3">
+        <div class="not-mobile-icon">F</div>
+        <div class="not-mobile-text">
+          <h4>Flow Design</h4>
+          <p>Extended conversational design with the PM</p>
+        </div>
+        <div class="strikethrough-line"></div>
+      </div>
+
+      <div class="not-mobile-item fade-in stagger-4">
+        <div class="not-mobile-icon">&lt;&gt;</div>
+        <div class="not-mobile-text">
+          <h4>Code Diff Review</h4>
+          <p>Diffs need a large screen to be useful</p>
+        </div>
+        <div class="strikethrough-line"></div>
+      </div>
+
+      <div class="not-mobile-item fade-in stagger-5">
+        <div class="not-mobile-icon">A</div>
+        <div class="not-mobile-text">
+          <h4>Agent Management</h4>
+          <p>Hiring, firing, profiles -- through Lori on desktop</p>
+        </div>
+        <div class="strikethrough-line"></div>
+      </div>
+
+      <div class="not-mobile-item fade-in stagger-6">
+        <div class="not-mobile-icon">S</div>
+        <div class="not-mobile-text">
+          <h4>Skill Editing</h4>
+          <p>Skill documents need a proper text editor</p>
+        </div>
+        <div class="strikethrough-line"></div>
+      </div>
+
+      <div class="not-mobile-item fade-in stagger-7">
+        <div class="not-mobile-icon">C</div>
+        <div class="not-mobile-text">
+          <h4>Configuration</h4>
+          <p>Org settings, MCP, model profiles require full UI</p>
+        </div>
+        <div class="strikethrough-line"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ===== OFFLINE BEHAVIOR ===== -->
+<section>
+  <div class="container">
+    <span class="section-label fade-in">Connectivity</span>
+    <h2 class="fade-in stagger-1">Offline Behavior</h2>
+    <p class="fade-in stagger-2" style="max-width: 560px;">The mobile app has limited offline capability. It caches enough state to be useful when connectivity is intermittent, but all actions require the server.</p>
+
+    <div class="offline-grid" style="margin-top: 2rem;">
+      <div class="offline-col glass-card fade-in stagger-3">
+        <h3>
+          <span class="offline-status-dot available"></span>
+          Works Offline
+        </h3>
+        <ul class="offline-list available">
+          <li><strong>Dashboard</strong> -- last-known project health, inbox count, task statuses with "Last updated X min ago" indicator</li>
+          <li><strong>Notification history</strong> -- recently received notifications cached and viewable</li>
+          <li><strong>Recent chat</strong> -- last N messages in recently accessed sessions cached locally</li>
+        </ul>
+      </div>
+
+      <div class="offline-col glass-card fade-in stagger-4">
+        <h3>
+          <span class="offline-status-dot required"></span>
+          Requires Connection
+        </h3>
+        <ul class="offline-list required">
+          <li><strong>All actions</strong> -- approve, reject, defer, send chat, unblock. Server mutations cannot be performed offline</li>
+          <li><strong>Real-time updates</strong> -- streaming chat, live notifications, dashboard refresh</li>
+          <li><strong>Uncached items</strong> -- navigating to an item not in cache shows a "Connecting..." state</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="offline-note fade-in stagger-5">
+      <strong>Future consideration:</strong> Queued offline actions (approve, send message) submitted when connectivity returns. For the initial release, the app shows a clear "No connection" indicator and disables action buttons when offline. Simplicity over cleverness.
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ===== AUTH SECTION ===== -->
+<section>
+  <div class="container">
+    <span class="section-label fade-in">Security</span>
+    <h2 class="fade-in stagger-1">Biometric Authentication</h2>
+    <p class="fade-in stagger-2" style="max-width: 560px;">Face ID, Touch ID, fingerprint -- supporting the 30-second pattern. No password typing on every notification response. Session tokens stored in the platform keychain.</p>
+
+    <div class="auth-flow fade-in stagger-3">
+      <div class="auth-step">
+        <div class="auth-step-num">1</div>
+        <div class="auth-step-text"><strong>First login:</strong> email and password, same credentials as web UI. Session created.</div>
+      </div>
+      <div class="auth-step">
+        <div class="auth-step-num">2</div>
+        <div class="auth-step-text"><strong>Token stored:</strong> session token saved in iOS Keychain or Android Keystore.</div>
+      </div>
+      <div class="auth-step">
+        <div class="auth-step-num">3</div>
+        <div class="auth-step-text"><strong>Subsequent opens:</strong> biometric prompt, keychain access, API requests begin.</div>
+      </div>
+      <div class="auth-step">
+        <div class="auth-step-num">4</div>
+        <div class="auth-step-text"><strong>Biometric fails 3x:</strong> fallback to password entry.</div>
+      </div>
+      <div class="auth-step">
+        <div class="auth-step-num">5</div>
+        <div class="auth-step-text"><strong>Session expires (30-day sliding window):</strong> full re-authentication required.</div>
+      </div>
+    </div>
+
+    <div style="margin-top: 2rem;" class="fade-in stagger-4">
+      <h3>Sensitive Action Re-confirmation</h3>
+      <p style="max-width: 500px; font-size: 0.9rem;">Certain actions require biometric re-confirmation even when the app is already unlocked:</p>
+      <div class="tech-row">
+        <div class="tech-pill"><span class="tech-pill-dot coral"></span> Capability approvals</div>
+        <div class="tech-pill"><span class="tech-pill-dot lavender"></span> Approve with constraints</div>
+        <div class="tech-pill"><span class="tech-pill-dot mint"></span> Org-configured sensitive actions</div>
+      </div>
+      <p style="margin-top: 0.75rem; font-size: 0.82rem; color: var(--text-muted);">Standard actions (approve a task review, defer an inbox item, send a chat message) do not require re-confirmation. The initial biometric unlock is sufficient.</p>
+    </div>
+
+    <div style="margin-top: 2rem;" class="fade-in stagger-5">
+      <h3>Session Management</h3>
+      <ul class="feature-list" style="max-width: 500px;">
+        <li>Same auth session as web and TUI -- mobile does not invalidate other sessions</li>
+        <li>30-day sliding window; active use extends the session</li>
+        <li>Explicit logout revokes the session token</li>
+        <li>Password change from any client revokes all sessions, including mobile</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ===== FOOTER ===== -->
+<footer class="footer">
+  <div class="container">
+    <p class="spec-ref">OtterCamp V2 / Doc 19 -- Mobile UI</p>
+    <p>Phase 4: Hardening and Distribution</p>
+    <p style="margin-top: 0.75rem;">React Native for iOS and Android -- lightweight remote control, not a portable web UI.<br>
+    30-second interactions. Push-driven. Biometric auth. Six screens. No task creation.</p>
+  </div>
+</footer>
+
+<script>
+  // Screen switcher for the phone mockup
+  function showScreen(screenName) {
+    var screens = ['notifications', 'dashboard', 'inbox', 'chat', 'task', 'project'];
+    screens.forEach(function(s) {
+      var el = document.getElementById('screen-' + s);
+      if (el) el.style.display = s === screenName ? 'block' : 'none';
+    });
+
+    // Update tab bar
+    var tabs = document.querySelectorAll('.phone-tab');
+    tabs.forEach(function(tab, i) {
+      if (screens[i] === screenName) {
+        tab.classList.add('active');
+      } else {
+        tab.classList.remove('active');
+      }
+    });
+
+    // Update selector buttons
+    var btns = document.querySelectorAll('.screen-btn');
+    btns.forEach(function(btn) {
+      if (btn.textContent.toLowerCase().replace(/\s+/g, '').indexOf(screenName) !== -1 ||
+          (screenName === 'notifications' && btn.textContent === 'Notifications') ||
+          (screenName === 'dashboard' && btn.textContent === 'Dashboard') ||
+          (screenName === 'inbox' && btn.textContent === 'Inbox') ||
+          (screenName === 'chat' && btn.textContent === 'Chat') ||
+          (screenName === 'task' && btn.textContent === 'Task Detail') ||
+          (screenName === 'project' && btn.textContent === 'Project Status')) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+  }
+
+  // Intersection Observer for staggered fade-in
+  (function() {
+    var observer = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          entry.target.style.animationPlayState = 'running';
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.1, rootMargin: '0px 0px -50px 0px' });
+
+    document.querySelectorAll('.fade-in').forEach(function(el) {
+      el.style.animationPlayState = 'paused';
+      observer.observe(el);
+    });
+
+    // Unpause hero elements immediately
+    document.querySelectorAll('.hero .fade-in').forEach(function(el) {
+      el.style.animationPlayState = 'running';
+    });
+  })();
+</script>
+
+</body>
+</html>

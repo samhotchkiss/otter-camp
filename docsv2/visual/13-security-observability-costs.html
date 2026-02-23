@@ -1,0 +1,1930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- Security, Observability, and Cost Controls</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Lexend:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* ───────────────────────────── Custom Properties ───────────────────────────── */
+  :root {
+    --bg-primary:    #0a0a0f;
+    --bg-secondary:  #0f0f18;
+    --bg-card:       #12121c;
+    --border:        #1e1e2e;
+    --border-bright: #2a2a3e;
+    --border-glow:   #3a3a52;
+
+    /* Three-pillar colors */
+    --security:       #ef4444;
+    --security-dim:   #b91c1c;
+    --security-glow:  rgba(239, 68, 68, 0.12);
+    --security-faint: rgba(239, 68, 68, 0.06);
+
+    --observability:       #06b6d4;
+    --observability-dim:   #0891b2;
+    --observability-glow:  rgba(6, 182, 212, 0.12);
+    --observability-faint: rgba(6, 182, 212, 0.06);
+
+    --costs:       #f59e0b;
+    --costs-dim:   #d97706;
+    --costs-glow:  rgba(245, 158, 11, 0.12);
+    --costs-faint: rgba(245, 158, 11, 0.06);
+
+    --text-primary:  #c8c8d8;
+    --text-secondary:#8888a0;
+    --text-bright:   #e8e8f0;
+    --text-muted:    #5a5a72;
+
+    --grid-dot:      rgba(200, 200, 216, 0.03);
+    --grid-dot-bright: rgba(200, 200, 216, 0.06);
+
+    --font-heading:  'Lexend', sans-serif;
+    --font-body:     'IBM Plex Mono', monospace;
+    --ease-out:      cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  /* ───────────────────────────── Reset & Base ───────────────────────────── */
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html {
+    font-size: 16px;
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-weight: 400;
+    line-height: 1.7;
+    min-height: 100vh;
+    overflow-x: hidden;
+    background-image:
+      radial-gradient(circle, var(--grid-dot-bright) 1px, transparent 1px),
+      radial-gradient(circle, var(--grid-dot) 1px, transparent 1px);
+    background-size: 48px 48px, 24px 24px;
+    background-position: 0 0, 12px 12px;
+  }
+
+  /* ───────────────────────────── Layout ───────────────────────────── */
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 2rem;
+  }
+
+  section {
+    padding: 4rem 0;
+  }
+
+  section + section {
+    border-top: 1px solid var(--border);
+  }
+
+  /* ───────────────────────────── Typography ───────────────────────────── */
+  h1, h2, h3, h4 {
+    font-family: var(--font-heading);
+    color: var(--text-bright);
+    letter-spacing: -0.02em;
+  }
+
+  h1 { font-size: 2.5rem; font-weight: 700; line-height: 1.15; }
+  h2 { font-size: 1.5rem; font-weight: 600; line-height: 1.3; margin-bottom: 1rem; }
+  h3 { font-size: 1.1rem; font-weight: 600; line-height: 1.4; }
+
+  p { margin-bottom: 0.75rem; }
+
+  .label {
+    font-family: var(--font-body);
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .label--security { color: var(--security); }
+  .label--observability { color: var(--observability); }
+  .label--costs { color: var(--costs); }
+  .label--neutral { color: var(--text-muted); }
+
+  a {
+    color: var(--observability);
+    text-decoration: none;
+    border-bottom: 1px solid var(--border);
+    transition: border-color 0.2s;
+  }
+  a:hover { border-color: var(--observability); }
+
+  /* ───────────────────────────── Hero ───────────────────────────── */
+  .hero {
+    padding: 6rem 0 4rem;
+    text-align: center;
+    position: relative;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: 30%;
+    left: 20%;
+    width: 400px;
+    height: 400px;
+    background: radial-gradient(circle, var(--security-faint) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero::after {
+    content: '';
+    position: absolute;
+    top: 40%;
+    right: 15%;
+    width: 350px;
+    height: 350px;
+    background: radial-gradient(circle, var(--observability-faint) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero .label {
+    margin-bottom: 1.5rem;
+    display: block;
+    color: var(--text-muted);
+  }
+
+  .hero h1 {
+    margin-bottom: 1.5rem;
+    position: relative;
+  }
+
+  .hero h1 .sec { color: var(--security); }
+  .hero h1 .obs { color: var(--observability); }
+  .hero h1 .cost { color: var(--costs); }
+
+  .hero .summary {
+    max-width: 720px;
+    margin: 0 auto;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    line-height: 1.8;
+    position: relative;
+  }
+
+  /* ───────────────────────────── KPI Strip ───────────────────────────── */
+  .kpi-strip {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    margin-top: 2.5rem;
+    flex-wrap: wrap;
+    position: relative;
+  }
+
+  .kpi-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 1.25rem 2rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    min-width: 200px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .kpi-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+  }
+
+  .kpi-card--security::before { background: linear-gradient(90deg, transparent, var(--security), transparent); }
+  .kpi-card--observability::before { background: linear-gradient(90deg, transparent, var(--observability), transparent); }
+  .kpi-card--costs::before { background: linear-gradient(90deg, transparent, var(--costs), transparent); }
+
+  .kpi-value {
+    font-family: var(--font-heading);
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .kpi-card--security .kpi-value { color: var(--security); }
+  .kpi-card--observability .kpi-value { color: var(--observability); }
+  .kpi-card--costs .kpi-value { color: var(--costs); }
+
+  .kpi-label {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  /* ───────────────────────────── Diagram Sections ───────────────────────────── */
+  .diagram-section {
+    position: relative;
+  }
+
+  .section-header {
+    text-align: center;
+    margin-bottom: 2rem;
+  }
+
+  .mermaid-wrapper {
+    position: relative;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 2rem;
+    overflow: hidden;
+  }
+
+  .mermaid-wrapper--security { border-color: rgba(239, 68, 68, 0.2); }
+  .mermaid-wrapper--observability { border-color: rgba(6, 182, 212, 0.2); }
+  .mermaid-wrapper--costs { border-color: rgba(245, 158, 11, 0.2); }
+
+  .mermaid-viewport {
+    overflow: auto;
+    max-height: 700px;
+    display: flex;
+    justify-content: center;
+  }
+
+  .mermaid-viewport svg {
+    transition: transform 0.2s var(--ease-out);
+  }
+
+  .zoom-controls {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    z-index: 10;
+  }
+
+  .zoom-btn {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-card);
+    border: 1px solid var(--border-bright);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    user-select: none;
+  }
+
+  .zoom-btn:hover {
+    background: var(--border);
+    border-color: var(--border-glow);
+  }
+
+  /* ───────────────────────────── Defense-in-Depth Concentric Layers ───────────────────────────── */
+  .depth-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 2rem 0;
+  }
+
+  .depth-rings {
+    position: relative;
+    width: 620px;
+    height: 620px;
+  }
+
+  .depth-ring {
+    position: absolute;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.3s var(--ease-out), box-shadow 0.3s;
+    cursor: default;
+  }
+
+  .depth-ring:hover {
+    transform: scale(1.02);
+  }
+
+  .depth-ring--1 {
+    width: 620px; height: 620px;
+    top: 0; left: 0;
+    border: 2px solid rgba(239, 68, 68, 0.15);
+    background: rgba(239, 68, 68, 0.02);
+  }
+  .depth-ring--1:hover { box-shadow: 0 0 40px rgba(239, 68, 68, 0.08); }
+
+  .depth-ring--2 {
+    width: 510px; height: 510px;
+    top: 55px; left: 55px;
+    border: 2px solid rgba(239, 68, 68, 0.20);
+    background: rgba(239, 68, 68, 0.03);
+  }
+  .depth-ring--2:hover { box-shadow: 0 0 35px rgba(239, 68, 68, 0.10); }
+
+  .depth-ring--3 {
+    width: 400px; height: 400px;
+    top: 110px; left: 110px;
+    border: 2px solid rgba(239, 68, 68, 0.25);
+    background: rgba(239, 68, 68, 0.04);
+  }
+  .depth-ring--3:hover { box-shadow: 0 0 30px rgba(239, 68, 68, 0.12); }
+
+  .depth-ring--4 {
+    width: 290px; height: 290px;
+    top: 165px; left: 165px;
+    border: 2px solid rgba(239, 68, 68, 0.32);
+    background: rgba(239, 68, 68, 0.05);
+  }
+  .depth-ring--4:hover { box-shadow: 0 0 25px rgba(239, 68, 68, 0.15); }
+
+  .depth-ring--5 {
+    width: 190px; height: 190px;
+    top: 215px; left: 215px;
+    border: 2px solid rgba(239, 68, 68, 0.40);
+    background: rgba(239, 68, 68, 0.06);
+  }
+  .depth-ring--5:hover { box-shadow: 0 0 20px rgba(239, 68, 68, 0.18); }
+
+  .depth-ring--6 {
+    width: 100px; height: 100px;
+    top: 260px; left: 260px;
+    border: 2px solid var(--security);
+    background: rgba(239, 68, 68, 0.10);
+    box-shadow: 0 0 30px rgba(239, 68, 68, 0.15);
+  }
+  .depth-ring--6:hover { box-shadow: 0 0 40px rgba(239, 68, 68, 0.25); }
+
+  .depth-label {
+    position: absolute;
+    font-family: var(--font-body);
+    font-size: 0.68rem;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .depth-label--num {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    font-size: 0.8rem;
+    color: var(--security);
+    margin-right: 0.3rem;
+  }
+
+  .depth-label--text {
+    color: var(--text-secondary);
+  }
+
+  .depth-label--1 { top: -8px; left: 50%; transform: translateX(-50%); }
+  .depth-label--2 { top: 47px; left: 50%; transform: translateX(-50%); }
+  .depth-label--3 { top: 102px; left: 50%; transform: translateX(-50%); }
+  .depth-label--4 { top: 157px; left: 50%; transform: translateX(-50%); }
+  .depth-label--5 { top: 208px; left: 50%; transform: translateX(-50%); }
+
+  .depth-label--center {
+    font-size: 0.6rem;
+    color: var(--security);
+    text-align: center;
+    line-height: 1.4;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  /* Layer detail cards alongside rings */
+  .depth-layout {
+    display: flex;
+    gap: 3rem;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .depth-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    max-width: 380px;
+  }
+
+  .depth-detail-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    border-left: 3px solid var(--security);
+    transition: border-color 0.2s, background 0.2s;
+  }
+
+  .depth-detail-card:hover {
+    border-color: var(--border-bright);
+    background: var(--bg-secondary);
+  }
+
+  .depth-detail-num {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: var(--security);
+    min-width: 1.2rem;
+    flex-shrink: 0;
+  }
+
+  .depth-detail-content h4 {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 0.15rem;
+  }
+
+  .depth-detail-content p {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-bottom: 0;
+  }
+
+  /* ───────────────────────────── Secret Lifecycle ───────────────────────────── */
+  .secret-flow {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    margin-top: 2rem;
+    overflow-x: auto;
+    padding-bottom: 1rem;
+  }
+
+  .secret-step {
+    flex: 1;
+    min-width: 160px;
+    padding: 1.5rem 1.25rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 0.5rem;
+  }
+
+  .secret-step:first-child {
+    border-radius: 8px 0 0 8px;
+  }
+
+  .secret-step:last-child {
+    border-radius: 0 8px 8px 0;
+  }
+
+  .secret-step::after {
+    content: '';
+    position: absolute;
+    right: -12px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-top: 10px solid transparent;
+    border-bottom: 10px solid transparent;
+    border-left: 12px solid var(--security-dim);
+    z-index: 2;
+  }
+
+  .secret-step:last-child::after {
+    display: none;
+  }
+
+  .secret-step-icon {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--security-glow);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .secret-step-icon svg {
+    width: 18px;
+    height: 18px;
+    stroke: var(--security);
+    fill: none;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .secret-step h4 {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-bright);
+  }
+
+  .secret-step p {
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-bottom: 0;
+  }
+
+  /* "Never Touches" cards */
+  .never-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+  }
+
+  .never-card {
+    padding: 1rem;
+    background: var(--bg-card);
+    border: 1px solid rgba(239, 68, 68, 0.15);
+    border-radius: 6px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .never-card::before {
+    content: 'X';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-family: var(--font-heading);
+    font-size: 3rem;
+    font-weight: 700;
+    color: rgba(239, 68, 68, 0.06);
+    pointer-events: none;
+  }
+
+  .never-card .never-label {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 0.25rem;
+  }
+
+  .never-card .never-value {
+    font-size: 0.78rem;
+    color: var(--security);
+    font-weight: 500;
+  }
+
+  /* ───────────────────────────── Observability Stack ───────────────────────────── */
+  .obs-pipeline {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.25rem;
+    margin-top: 2rem;
+  }
+
+  .obs-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.25s, transform 0.25s var(--ease-out);
+  }
+
+  .obs-card:hover {
+    border-color: rgba(6, 182, 212, 0.3);
+    transform: translateY(-2px);
+  }
+
+  .obs-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--observability), transparent);
+    opacity: 0.5;
+  }
+
+  .obs-card-step {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    font-size: 0.65rem;
+    color: var(--observability);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 0.75rem;
+  }
+
+  .obs-card-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--observability-glow);
+    border: 1px solid rgba(6, 182, 212, 0.25);
+    border-radius: 8px;
+    margin-bottom: 0.75rem;
+  }
+
+  .obs-card-icon svg {
+    width: 20px;
+    height: 20px;
+    stroke: var(--observability);
+    fill: none;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .obs-card h3 {
+    font-size: 0.95rem;
+    margin-bottom: 0.5rem;
+    color: var(--text-bright);
+  }
+
+  .obs-card p {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 0.75rem;
+  }
+
+  .obs-tag-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .obs-tag {
+    padding: 0.15rem 0.5rem;
+    background: var(--observability-faint);
+    border: 1px solid rgba(6, 182, 212, 0.15);
+    border-radius: 3px;
+    font-size: 0.65rem;
+    color: var(--observability-dim);
+  }
+
+  /* ───────────────────────────── Cost Dimensions ───────────────────────────── */
+  .cost-dims {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+    margin-top: 2rem;
+  }
+
+  .cost-dim-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.25s, transform 0.25s var(--ease-out);
+  }
+
+  .cost-dim-card:hover {
+    border-color: rgba(245, 158, 11, 0.3);
+    transform: translateY(-2px);
+  }
+
+  .cost-dim-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--costs), transparent);
+    opacity: 0.5;
+  }
+
+  .cost-dim-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--costs-glow);
+    border: 1px solid rgba(245, 158, 11, 0.25);
+    border-radius: 8px;
+    margin-bottom: 0.75rem;
+  }
+
+  .cost-dim-icon svg {
+    width: 20px;
+    height: 20px;
+    stroke: var(--costs);
+    fill: none;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .cost-dim-card h3 {
+    font-size: 0.95rem;
+    margin-bottom: 0.5rem;
+    color: var(--text-bright);
+  }
+
+  .cost-dim-card p {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 0.75rem;
+  }
+
+  .cost-dim-card .dim-metrics {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .dim-metric {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+  }
+
+  .dim-metric::before {
+    content: '';
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--costs-dim);
+    flex-shrink: 0;
+  }
+
+  /* ───────────────────────────── Budget Enforcement Flow ───────────────────────────── */
+  .budget-flow {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    margin-top: 2rem;
+    overflow-x: auto;
+    padding-bottom: 1rem;
+  }
+
+  .budget-step {
+    flex: 1;
+    min-width: 180px;
+    padding: 1.5rem 1.25rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 0.5rem;
+  }
+
+  .budget-step:first-child {
+    border-radius: 8px 0 0 8px;
+  }
+
+  .budget-step:last-child {
+    border-radius: 0 8px 8px 0;
+  }
+
+  .budget-step::after {
+    content: '';
+    position: absolute;
+    right: -12px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-top: 10px solid transparent;
+    border-bottom: 10px solid transparent;
+    border-left: 12px solid var(--costs-dim);
+    z-index: 2;
+  }
+
+  .budget-step:last-child::after {
+    display: none;
+  }
+
+  .budget-step-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .budget-step--normal .budget-step-icon {
+    background: var(--costs-faint);
+    border: 1px solid rgba(245, 158, 11, 0.2);
+  }
+
+  .budget-step--warn .budget-step-icon {
+    background: var(--costs-glow);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+  }
+
+  .budget-step--block .budget-step-icon {
+    background: var(--security-glow);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+  }
+
+  .budget-step--anomaly .budget-step-icon {
+    background: rgba(168, 85, 247, 0.12);
+    border: 1px solid rgba(168, 85, 247, 0.4);
+  }
+
+  .budget-step-icon svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .budget-step--normal .budget-step-icon svg { stroke: var(--costs); }
+  .budget-step--warn .budget-step-icon svg { stroke: var(--costs); }
+  .budget-step--block .budget-step-icon svg { stroke: var(--security); }
+  .budget-step--anomaly .budget-step-icon svg { stroke: #a855f7; }
+
+  .budget-step h4 {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-bright);
+  }
+
+  .budget-step p {
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-bottom: 0;
+  }
+
+  .budget-tag {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    font-size: 0.6rem;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .budget-tag--ok {
+    background: rgba(34, 197, 94, 0.12);
+    color: #22c55e;
+    border: 1px solid rgba(34, 197, 94, 0.2);
+  }
+
+  .budget-tag--warn {
+    background: var(--costs-faint);
+    color: var(--costs);
+    border: 1px solid rgba(245, 158, 11, 0.2);
+  }
+
+  .budget-tag--block {
+    background: var(--security-faint);
+    color: var(--security);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+  }
+
+  .budget-tag--detect {
+    background: rgba(168, 85, 247, 0.08);
+    color: #a855f7;
+    border: 1px solid rgba(168, 85, 247, 0.2);
+  }
+
+  /* ───────────────────────────── Retention Table ───────────────────────────── */
+  .retention-table-wrapper {
+    margin-top: 2rem;
+    overflow-x: auto;
+  }
+
+  .retention-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+  }
+
+  .retention-table thead th {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0.75rem 1rem;
+    text-align: left;
+    border-bottom: 2px solid var(--border-bright);
+    background: var(--bg-secondary);
+  }
+
+  .retention-table tbody td {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-secondary);
+    vertical-align: top;
+  }
+
+  .retention-table tbody tr:hover td {
+    background: var(--bg-card);
+  }
+
+  .retention-table .data-type {
+    color: var(--text-bright);
+    font-weight: 500;
+  }
+
+  .retention-table .retention-value {
+    font-weight: 500;
+  }
+
+  .retention-value--short { color: var(--costs); }
+  .retention-value--medium { color: var(--observability); }
+  .retention-value--long { color: #22c55e; }
+  .retention-value--indefinite { color: var(--text-bright); }
+
+  /* ───────────────────────────── GDPR Section ───────────────────────────── */
+  .gdpr-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+
+  .gdpr-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    text-align: center;
+    transition: border-color 0.25s;
+  }
+
+  .gdpr-card:hover {
+    border-color: var(--border-bright);
+  }
+
+  .gdpr-card h4 {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 0.35rem;
+  }
+
+  .gdpr-card p {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-bottom: 0;
+  }
+
+  /* ───────────────────────────── Footer ───────────────────────────── */
+  .footer {
+    padding: 3rem 0;
+    border-top: 1px solid var(--border);
+    text-align: center;
+  }
+
+  .footer p {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  /* ───────────────────────────── Animations ───────────────────────────── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes countUp {
+    from { opacity: 0; transform: scale(0.8); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  @keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.15); }
+    50% { box-shadow: 0 0 35px rgba(239, 68, 68, 0.25); }
+  }
+
+  .fade-up {
+    opacity: 0;
+    animation: fadeUp 0.6s var(--ease-out) forwards;
+  }
+
+  .fade-up.delay-1 { animation-delay: 0.08s; }
+  .fade-up.delay-2 { animation-delay: 0.16s; }
+  .fade-up.delay-3 { animation-delay: 0.24s; }
+  .fade-up.delay-4 { animation-delay: 0.32s; }
+  .fade-up.delay-5 { animation-delay: 0.40s; }
+  .fade-up.delay-6 { animation-delay: 0.48s; }
+  .fade-up.delay-7 { animation-delay: 0.56s; }
+  .fade-up.delay-8 { animation-delay: 0.64s; }
+
+  .kpi-value {
+    animation: countUp 0.8s var(--ease-out) forwards;
+    animation-delay: 0.3s;
+    opacity: 0;
+  }
+
+  .depth-ring--6 {
+    animation: pulse-glow 3s ease-in-out infinite;
+  }
+
+  /* ───────────────────────────── Section Divider Accents ───────────────────────────── */
+  .section-divider--security {
+    border-top-color: rgba(239, 68, 68, 0.15);
+  }
+
+  .section-divider--observability {
+    border-top-color: rgba(6, 182, 212, 0.15);
+  }
+
+  .section-divider--costs {
+    border-top-color: rgba(245, 158, 11, 0.15);
+  }
+
+  /* ───────────────────────────── Responsive ───────────────────────────── */
+  @media (max-width: 1024px) {
+    .depth-layout {
+      flex-direction: column;
+    }
+    .obs-pipeline {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    .cost-dims {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    .gdpr-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    .never-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+
+  @media (max-width: 768px) {
+    h1 { font-size: 1.75rem; }
+    h2 { font-size: 1.25rem; }
+    section { padding: 2.5rem 0; }
+    .hero { padding: 3.5rem 0 2.5rem; }
+    .container { padding: 0 1.25rem; }
+    .kpi-strip { flex-direction: column; align-items: center; }
+    .obs-pipeline { grid-template-columns: 1fr; }
+    .cost-dims { grid-template-columns: 1fr; }
+    .gdpr-grid { grid-template-columns: 1fr; }
+    .never-grid { grid-template-columns: repeat(2, 1fr); }
+    .mermaid-wrapper { padding: 1rem; }
+
+    .depth-rings {
+      width: 340px;
+      height: 340px;
+    }
+    .depth-ring--1 { width: 340px; height: 340px; top: 0; left: 0; }
+    .depth-ring--2 { width: 280px; height: 280px; top: 30px; left: 30px; }
+    .depth-ring--3 { width: 220px; height: 220px; top: 60px; left: 60px; }
+    .depth-ring--4 { width: 160px; height: 160px; top: 90px; left: 90px; }
+    .depth-ring--5 { width: 105px; height: 105px; top: 117px; left: 117px; }
+    .depth-ring--6 { width: 60px; height: 60px; top: 140px; left: 140px; }
+    .depth-label { font-size: 0.55rem; }
+    .depth-label--num { font-size: 0.65rem; }
+    .depth-label--center { font-size: 0.48rem; }
+    .depth-label--1 { top: -6px; }
+    .depth-label--2 { top: 24px; }
+    .depth-label--3 { top: 54px; }
+    .depth-label--4 { top: 84px; }
+    .depth-label--5 { top: 112px; }
+
+    .secret-flow, .budget-flow {
+      flex-direction: column;
+    }
+    .secret-step:first-child, .budget-step:first-child {
+      border-radius: 8px 8px 0 0;
+    }
+    .secret-step:last-child, .budget-step:last-child {
+      border-radius: 0 0 8px 8px;
+    }
+    .secret-step::after, .budget-step::after {
+      right: auto;
+      bottom: -12px;
+      top: auto;
+      left: 50%;
+      transform: translateX(-50%);
+      border-top: 12px solid var(--security-dim);
+      border-left: 10px solid transparent;
+      border-right: 10px solid transparent;
+      border-bottom: none;
+    }
+    .budget-step::after {
+      border-top-color: var(--costs-dim);
+    }
+  }
+
+  @media (max-width: 480px) {
+    h1 { font-size: 1.4rem; }
+    .never-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ───────────────────────────── Mermaid Theme Override ───────────────────────────── */
+  .mermaid-viewport .node rect,
+  .mermaid-viewport .node circle,
+  .mermaid-viewport .node polygon {
+    stroke: var(--border-bright) !important;
+  }
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════ HERO ════════════════════════════ -->
+<section class="hero">
+  <div class="container">
+    <span class="label label--neutral fade-up">OtterCamp V2 Specification / Doc 13</span>
+    <h1 class="fade-up delay-1"><span class="sec">Security</span>, <span class="obs">Observability</span>, <span class="cost">Costs</span></h1>
+    <p class="summary fade-up delay-2">
+      Three cross-cutting concerns that apply to every other spec.
+      Protecting the operator from rogue agent behavior, providing visibility into what agents are doing, and ensuring spend stays under control.
+    </p>
+
+    <div class="kpi-strip fade-up delay-3">
+      <div class="kpi-card kpi-card--security">
+        <span class="kpi-value" data-target="6" data-suffix="">0</span>
+        <span class="kpi-label">Security Layers</span>
+      </div>
+      <div class="kpi-card kpi-card--observability">
+        <span class="kpi-value" data-target="4" data-suffix="">0</span>
+        <span class="kpi-label">Built-in Dashboards</span>
+      </div>
+      <div class="kpi-card kpi-card--costs">
+        <span class="kpi-value kpi-value--text" data-text="Per-Invocation">...</span>
+        <span class="kpi-label">Cost Tracking</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ DEFENSE IN DEPTH ════════════════════════════ -->
+<section class="section-divider--security">
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label label--security">Security</span>
+      <h2>Defense in Depth -- Six Concentric Layers</h2>
+      <p style="color: var(--text-secondary); font-size: 0.85rem; max-width: 640px; margin: 0.5rem auto 0;">
+        No single mechanism is the sole defense. Every layer assumes the one above it might fail. The threat model centers on rogue agent behavior, not external attackers.
+      </p>
+    </div>
+
+    <div class="depth-layout fade-up delay-1">
+      <div class="depth-container">
+        <div class="depth-rings">
+          <!-- Layer 1: Org Isolation -->
+          <div class="depth-ring depth-ring--1">
+            <div class="depth-label depth-label--1">
+              <span class="depth-label--num">1</span>
+              <span class="depth-label--text">Org Isolation</span>
+            </div>
+          </div>
+          <!-- Layer 2: Authentication -->
+          <div class="depth-ring depth-ring--2">
+            <div class="depth-label depth-label--2">
+              <span class="depth-label--num">2</span>
+              <span class="depth-label--text">Authentication</span>
+            </div>
+          </div>
+          <!-- Layer 3: Authorization -->
+          <div class="depth-ring depth-ring--3">
+            <div class="depth-label depth-label--3">
+              <span class="depth-label--num">3</span>
+              <span class="depth-label--text">Authorization (RBAC + Capabilities)</span>
+            </div>
+          </div>
+          <!-- Layer 4: Control Plane -->
+          <div class="depth-ring depth-ring--4">
+            <div class="depth-label depth-label--4">
+              <span class="depth-label--num">4</span>
+              <span class="depth-label--text">Control Plane Gating</span>
+            </div>
+          </div>
+          <!-- Layer 5: Agent Sandboxing -->
+          <div class="depth-ring depth-ring--5">
+            <div class="depth-label depth-label--5">
+              <span class="depth-label--num">5</span>
+              <span class="depth-label--text">Agent Sandboxing</span>
+            </div>
+          </div>
+          <!-- Layer 6: Audit Trail (core) -->
+          <div class="depth-ring depth-ring--6">
+            <span class="depth-label--center">6<br>Audit<br>Trail</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="depth-details">
+        <div class="depth-detail-card">
+          <span class="depth-detail-num">1</span>
+          <div class="depth-detail-content">
+            <h4>Org Isolation (Perimeter)</h4>
+            <p>Hermetic organization_id scoping on every query. RLS in PostgreSQL. Cross-org data sharing does not exist.</p>
+          </div>
+        </div>
+        <div class="depth-detail-card">
+          <span class="depth-detail-num">2</span>
+          <div class="depth-detail-content">
+            <h4>Authentication</h4>
+            <p>Email + password (bcrypt) or scoped API keys. Agents have no credentials -- identity is asserted by the platform.</p>
+          </div>
+        </div>
+        <div class="depth-detail-card">
+          <span class="depth-detail-num">3</span>
+          <div class="depth-detail-content">
+            <h4>Authorization</h4>
+            <p>RBAC roles for humans, capability-based for agents. Default-deny posture. Three outcomes: allow, deny, require_approval.</p>
+          </div>
+        </div>
+        <div class="depth-detail-card">
+          <span class="depth-detail-num">4</span>
+          <div class="depth-detail-content">
+            <h4>Control Plane Gating</h4>
+            <p>All agent mutations pass through the execution broker. No privileged path outside broker/worker. High-risk actions require human approval.</p>
+          </div>
+        </div>
+        <div class="depth-detail-card">
+          <span class="depth-detail-num">5</span>
+          <div class="depth-detail-content">
+            <h4>Agent Sandboxing</h4>
+            <p>Constrained CLI, isolated browser contexts, per-connection MCP capability checks. Domain allowlists/denylists.</p>
+          </div>
+        </div>
+        <div class="depth-detail-card">
+          <span class="depth-detail-num">6</span>
+          <div class="depth-detail-content">
+            <h4>Audit Trail</h4>
+            <p>Immutable, append-only audit events. Answers: who did what, when, where, and who authorized it.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ SECRET LIFECYCLE ════════════════════════════ -->
+<section class="section-divider--security">
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label label--security">Secret Management</span>
+      <h2>Secret Lifecycle -- AES-256-GCM Encrypted at Rest</h2>
+      <p style="color: var(--text-secondary); font-size: 0.85rem; max-width: 640px; margin: 0.5rem auto 0;">
+        Master key provided by operator (env var or KMS). Per-secret unique nonce. Key version tracking for zero-downtime rotation.
+      </p>
+    </div>
+
+    <div class="secret-flow fade-up delay-1">
+      <div class="secret-step">
+        <div class="secret-step-icon">
+          <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <h4>Storage</h4>
+        <p>AES-256-GCM encrypted in PostgreSQL. Unique nonce per secret. Plaintext never written to disk.</p>
+      </div>
+      <div class="secret-step">
+        <div class="secret-step-icon">
+          <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </div>
+        <h4>Decryption</h4>
+        <p>Control plane worker decrypts in memory at execution time. Plaintext held only for operation duration.</p>
+      </div>
+      <div class="secret-step">
+        <div class="secret-step-icon">
+          <svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        </div>
+        <h4>Injection</h4>
+        <p>Injected into sandboxed execution environment. Agent references secret by ID; platform resolves at runtime.</p>
+      </div>
+      <div class="secret-step">
+        <div class="secret-step-icon">
+          <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </div>
+        <h4>Discard</h4>
+        <p>Plaintext discarded after operation completes. No caching. No persistence outside encrypted column.</p>
+      </div>
+    </div>
+
+    <h3 class="fade-up delay-2" style="text-align: center; margin-top: 2rem; font-size: 0.85rem; color: var(--security);">Five Codebase-Wide Invariants: Secrets Never Touch</h3>
+
+    <div class="never-grid fade-up delay-3">
+      <div class="never-card">
+        <div class="never-label">Rule 1</div>
+        <div class="never-value">Prompts</div>
+      </div>
+      <div class="never-card">
+        <div class="never-label">Rule 2</div>
+        <div class="never-value">Logs</div>
+      </div>
+      <div class="never-card">
+        <div class="never-label">Rule 3</div>
+        <div class="never-value">API Responses</div>
+      </div>
+      <div class="never-card">
+        <div class="never-label">Rule 4</div>
+        <div class="never-value">Audit Events</div>
+      </div>
+      <div class="never-card">
+        <div class="never-label">Rule 5</div>
+        <div class="never-value">Memory</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ OBSERVABILITY STACK ════════════════════════════ -->
+<section class="section-divider--observability">
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label label--observability">Observability</span>
+      <h2>Built-in Observability Stack</h2>
+      <p style="color: var(--text-secondary); font-size: 0.85rem; max-width: 640px; margin: 0.5rem auto 0;">
+        Built into the platform, not bolted on. Answers three questions: What are my agents doing? Is something wrong? What did it cost?
+      </p>
+    </div>
+
+    <div class="obs-pipeline fade-up delay-1">
+      <div class="obs-card">
+        <div class="obs-card-step">Layer 1</div>
+        <div class="obs-card-icon">
+          <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        </div>
+        <h3>Structured Logging</h3>
+        <p>JSON format with mandatory trace_id, component, and timestamp. Secret scrubbing before write. Output to stdout for infrastructure routing.</p>
+        <div class="obs-tag-list">
+          <span class="obs-tag">trace_id</span>
+          <span class="obs-tag">component</span>
+          <span class="obs-tag">org_id</span>
+          <span class="obs-tag">principal</span>
+          <span class="obs-tag">secret scrub</span>
+        </div>
+      </div>
+
+      <div class="obs-card">
+        <div class="obs-card-step">Layer 2</div>
+        <div class="obs-card-icon">
+          <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <h3>Distributed Tracing</h3>
+        <p>OpenTelemetry-compatible. Follows requests through API, worker, model calls, tool executions. 100% default sampling; errors always captured.</p>
+        <div class="obs-tag-list">
+          <span class="obs-tag">OTLP</span>
+          <span class="obs-tag">trace_span table</span>
+          <span class="obs-tag">Jaeger</span>
+          <span class="obs-tag">Zipkin</span>
+        </div>
+      </div>
+
+      <div class="obs-card">
+        <div class="obs-card-step">Layer 3</div>
+        <div class="obs-card-icon">
+          <svg viewBox="0 0 24 24"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
+        </div>
+        <h3>Prometheus Metrics</h3>
+        <p>Exposed at /metrics endpoint (pull model). Four categories: API, model, queue/execution, and memory metrics. Optional OTLP push for managed deployments.</p>
+        <div class="obs-tag-list">
+          <span class="obs-tag">API latency</span>
+          <span class="obs-tag">model cost</span>
+          <span class="obs-tag">queue depth</span>
+          <span class="obs-tag">memory retrieval</span>
+        </div>
+      </div>
+
+      <div class="obs-card">
+        <div class="obs-card-step">Layer 4</div>
+        <div class="obs-card-icon">
+          <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        </div>
+        <h3>4 Built-in Dashboards</h3>
+        <p>Overview, Cost, Performance, and Agents dashboards in the web UI. Self-hosted operators can also export to Grafana or Datadog.</p>
+        <div class="obs-tag-list">
+          <span class="obs-tag">Overview</span>
+          <span class="obs-tag">Cost</span>
+          <span class="obs-tag">Performance</span>
+          <span class="obs-tag">Agents</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ OBSERVABILITY TRACE DIAGRAM ════════════════════════════ -->
+<section class="diagram-section section-divider--observability">
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label label--observability">Tracing</span>
+      <h2>Distributed Trace Structure</h2>
+    </div>
+    <div class="mermaid-wrapper mermaid-wrapper--observability fade-up delay-1">
+      <div class="zoom-controls">
+        <button class="zoom-btn" onclick="zoomDiagram('trace', 0.15)" title="Zoom in">+</button>
+        <button class="zoom-btn" onclick="zoomDiagram('trace', -0.15)" title="Zoom out">&minus;</button>
+        <button class="zoom-btn" onclick="resetDiagram('trace')" title="Reset zoom" style="font-size:0.65rem;">1:1</button>
+      </div>
+      <div class="mermaid-viewport" id="viewport-trace">
+        <pre class="mermaid">
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#12121c',
+    'primaryTextColor': '#c8c8d8',
+    'primaryBorderColor': '#06b6d4',
+    'lineColor': '#06b6d4',
+    'secondaryColor': '#0f0f18',
+    'tertiaryColor': '#0a0a0f',
+    'background': '#0a0a0f',
+    'mainBkg': '#12121c',
+    'nodeBorder': '#06b6d4',
+    'clusterBkg': '#0f0f18',
+    'clusterBorder': '#1e1e2e',
+    'titleColor': '#e8e8f0',
+    'edgeLabelBackground': '#0f0f18',
+    'nodeTextColor': '#c8c8d8',
+    'fontSize': '13px'
+  }
+}}%%
+graph TB
+  API["API Request<br/><i>HTTP handler</i>"]
+  POLICY["Control Plane<br/><i>Policy Evaluation</i>"]
+  WORKER["Worker<br/><i>Run Execution</i>"]
+  MODEL1["Model Gateway<br/><i>Invocation 1</i>"]
+  PROV1["Provider<br/><i>API Call</i>"]
+  TOOL_CLI["Tool Execution<br/><i>CLI Command</i>"]
+  TOOL_MCP["Tool Execution<br/><i>MCP Call</i>"]
+  MCP_EXT["MCP Server<br/><i>External Request</i>"]
+  MEM["Memory<br/><i>Passive Retrieval</i>"]
+  MODEL2["Model Gateway<br/><i>Invocation 2</i>"]
+  PROV2["Provider<br/><i>API Call</i>"]
+
+  API --> POLICY
+  API --> WORKER
+  WORKER --> MODEL1
+  MODEL1 --> PROV1
+  WORKER --> TOOL_CLI
+  WORKER --> TOOL_MCP
+  TOOL_MCP --> MCP_EXT
+  WORKER --> MEM
+  WORKER --> MODEL2
+  MODEL2 --> PROV2
+
+  classDef apiNode fill:#12121c,stroke:#06b6d4,stroke-width:2px,color:#e8e8f0
+  classDef workerNode fill:#12121c,stroke:#0891b2,stroke-width:1px,color:#c8c8d8
+  classDef extNode fill:#12121c,stroke:#2a2a3e,stroke-width:1px,color:#8888a0
+
+  class API,POLICY apiNode
+  class WORKER,MODEL1,MODEL2,TOOL_CLI,TOOL_MCP,MEM workerNode
+  class PROV1,PROV2,MCP_EXT extNode
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ COST TRACKING DIMENSIONS ════════════════════════════ -->
+<section class="section-divider--costs">
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label label--costs">Cost Controls</span>
+      <h2>Multi-Dimensional Cost Attribution</h2>
+      <p style="color: var(--text-secondary); font-size: 0.85rem; max-width: 640px; margin: 0.5rem auto 0;">
+        Every ModelInvocation records per-request cost using a provider pricing table. Costs are aggregated into hourly, daily, and monthly summaries.
+      </p>
+    </div>
+
+    <div class="cost-dims fade-up delay-1">
+      <div class="cost-dim-card">
+        <div class="cost-dim-icon">
+          <svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        </div>
+        <h3>Per-Invocation Tracking</h3>
+        <p>Every model call records provider, model, input/output tokens, and cost estimate in USD. Calculated at invocation time from pricing table.</p>
+        <div class="dim-metrics">
+          <span class="dim-metric">provider + model</span>
+          <span class="dim-metric">input_tokens / output_tokens</span>
+          <span class="dim-metric">cost_estimate (USD)</span>
+          <span class="dim-metric">org_id / project_id / agent_id / run_id</span>
+        </div>
+      </div>
+
+      <div class="cost-dim-card">
+        <div class="cost-dim-icon">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        </div>
+        <h3>Time-Series Aggregation</h3>
+        <p>Background jobs roll up raw invocations into hourly, daily, and monthly summaries. Raw records retained 30 days; summaries retained indefinitely.</p>
+        <div class="dim-metrics">
+          <span class="dim-metric">Hourly -- computed every hour</span>
+          <span class="dim-metric">Daily -- from hourly summaries</span>
+          <span class="dim-metric">Monthly -- from daily summaries</span>
+        </div>
+      </div>
+
+      <div class="cost-dim-card">
+        <div class="cost-dim-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/></svg>
+        </div>
+        <h3>Attribution Dimensions</h3>
+        <p>Costs are sliceable by organization, project, agent, provider, and model. Interactive drill-down in the Cost dashboard.</p>
+        <div class="dim-metrics">
+          <span class="dim-metric">By organization (total cap)</span>
+          <span class="dim-metric">By project (project cap)</span>
+          <span class="dim-metric">By agent (top consumers)</span>
+          <span class="dim-metric">By provider + model</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ BUDGET ENFORCEMENT FLOW ════════════════════════════ -->
+<section class="section-divider--costs">
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label label--costs">Budget Enforcement</span>
+      <h2>Threshold / Soft Warn / Hard Block / Anomaly Detection</h2>
+      <p style="color: var(--text-secondary); font-size: 0.85rem; max-width: 700px; margin: 0.5rem auto 0;">
+        Hard limits fail closed -- they block execution and notify the human. They do NOT silently degrade to cheaper models. The human makes model selection decisions consciously.
+      </p>
+    </div>
+
+    <div class="budget-flow fade-up delay-1">
+      <div class="budget-step budget-step--normal">
+        <div class="budget-step-icon">
+          <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <h4>Pre-Check</h4>
+        <p>Broker checks current period spend against org + project budgets before dispatching.</p>
+        <span class="budget-tag budget-tag--ok">Under Limit</span>
+      </div>
+
+      <div class="budget-step budget-step--warn">
+        <div class="budget-step-icon">
+          <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </div>
+        <h4>Soft Warn</h4>
+        <p>Spend exceeds soft limit. Run proceeds. Warning emitted once per budget per period.</p>
+        <span class="budget-tag budget-tag--warn">Warn Once</span>
+      </div>
+
+      <div class="budget-step budget-step--block">
+        <div class="budget-step-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+        </div>
+        <h4>Hard Block</h4>
+        <p>Spend exceeds hard limit. Run blocked with budget_exceeded. Inbox item created for operator.</p>
+        <span class="budget-tag budget-tag--block">Fail Closed</span>
+      </div>
+
+      <div class="budget-step budget-step--anomaly">
+        <div class="budget-step-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </div>
+        <h4>Anomaly Detection</h4>
+        <p>Every 15 min: if hourly spend exceeds 3x the 7-day average, alert the operator. Deduped to 1/hr/org.</p>
+        <span class="budget-tag budget-tag--detect">3x Spike</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ COST ENFORCEMENT MERMAID ════════════════════════════ -->
+<section class="diagram-section section-divider--costs">
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label label--costs">Enforcement Pipeline</span>
+      <h2>Budget Check in the Control Plane</h2>
+    </div>
+    <div class="mermaid-wrapper mermaid-wrapper--costs fade-up delay-1">
+      <div class="zoom-controls">
+        <button class="zoom-btn" onclick="zoomDiagram('budget', 0.15)" title="Zoom in">+</button>
+        <button class="zoom-btn" onclick="zoomDiagram('budget', -0.15)" title="Zoom out">&minus;</button>
+        <button class="zoom-btn" onclick="resetDiagram('budget')" title="Reset zoom" style="font-size:0.65rem;">1:1</button>
+      </div>
+      <div class="mermaid-viewport" id="viewport-budget">
+        <pre class="mermaid">
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#12121c',
+    'primaryTextColor': '#c8c8d8',
+    'primaryBorderColor': '#f59e0b',
+    'lineColor': '#f59e0b',
+    'secondaryColor': '#0f0f18',
+    'tertiaryColor': '#0a0a0f',
+    'background': '#0a0a0f',
+    'mainBkg': '#12121c',
+    'nodeBorder': '#f59e0b',
+    'clusterBkg': '#0f0f18',
+    'clusterBorder': '#1e1e2e',
+    'titleColor': '#e8e8f0',
+    'edgeLabelBackground': '#0f0f18',
+    'nodeTextColor': '#c8c8d8',
+    'fontSize': '13px'
+  }
+}}%%
+flowchart TD
+  REQ["Agent Requests<br/>Model Invocation"]
+  BROKER["Execution Broker<br/>Pre-Check"]
+  Q_ORG{"Org Budget<br/>Exceeded?"}
+  Q_PROJ{"Project Budget<br/>Exceeded?"}
+  SOFT{"Soft Limit<br/>Reached?"}
+  DISPATCH["Dispatch to<br/>Model Gateway"]
+  WARN["Emit Warning<br/>(once per period)"]
+  BLOCK["BLOCK Execution<br/>budget_exceeded"]
+  INBOX["Create Inbox Item<br/>for Operator"]
+  ANOMALY["Anomaly Job<br/>(every 15 min)"]
+  ALERT["Spike Alert<br/>(3x 7-day avg)"]
+
+  REQ --> BROKER
+  BROKER --> Q_ORG
+  Q_ORG -->|Hard limit hit| BLOCK
+  Q_ORG -->|Under hard limit| Q_PROJ
+  Q_PROJ -->|Hard limit hit| BLOCK
+  Q_PROJ -->|Under hard limit| SOFT
+  SOFT -->|Yes| WARN
+  SOFT -->|No| DISPATCH
+  WARN --> DISPATCH
+  BLOCK --> INBOX
+  ANOMALY -->|Spike detected| ALERT
+
+  classDef actionNode fill:#12121c,stroke:#f59e0b,stroke-width:2px,color:#e8e8f0
+  classDef checkNode fill:#12121c,stroke:#d97706,stroke-width:1px,color:#c8c8d8
+  classDef blockNode fill:#1a0808,stroke:#ef4444,stroke-width:2px,color:#ef4444
+  classDef warnNode fill:#1a1408,stroke:#f59e0b,stroke-width:1px,color:#f59e0b
+  classDef anomalyNode fill:#12081a,stroke:#a855f7,stroke-width:1px,color:#a855f7
+
+  class REQ,DISPATCH actionNode
+  class BROKER,Q_ORG,Q_PROJ,SOFT checkNode
+  class BLOCK,INBOX blockNode
+  class WARN warnNode
+  class ANOMALY,ALERT anomalyNode
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ RETENTION POLICY ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label label--neutral">Privacy &amp; Retention</span>
+      <h2>Configurable Retention Policies</h2>
+      <p style="color: var(--text-secondary); font-size: 0.85rem; max-width: 640px; margin: 0.5rem auto 0;">
+        Configurable per organization. Enforced by a daily background job. Audit events are archived before deletion -- never hard-deleted without archival.
+      </p>
+    </div>
+
+    <div class="retention-table-wrapper fade-up delay-1">
+      <table class="retention-table">
+        <thead>
+          <tr>
+            <th>Data Type</th>
+            <th>Default Retention</th>
+            <th>Rationale</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="data-type">Chat session transcripts</td>
+            <td><span class="retention-value retention-value--medium">90 days</span></td>
+            <td>Voluminous. Valuable context is extracted to memory. Raw transcripts useful for debugging, not indefinitely.</td>
+          </tr>
+          <tr>
+            <td class="data-type">Memory items (active)</td>
+            <td><span class="retention-value retention-value--indefinite">Indefinite</span></td>
+            <td>Distilled org knowledge. Own lifecycle (decay, consolidation, archival). Not deleted by retention policy.</td>
+          </tr>
+          <tr>
+            <td class="data-type">Memory items (archived)</td>
+            <td><span class="retention-value retention-value--long">1 year</span></td>
+            <td>Preserved for provenance and temporal queries. Purged after 1 year.</td>
+          </tr>
+          <tr>
+            <td class="data-type">Audit events</td>
+            <td><span class="retention-value retention-value--long">1 yr (self-hosted) / 3 yr (managed)</span></td>
+            <td>Security compliance record. Longer retention where compliance requirements are stricter.</td>
+          </tr>
+          <tr>
+            <td class="data-type">Run records and events</td>
+            <td><span class="retention-value retention-value--medium">90 days</span></td>
+            <td>Execution history for debugging and cost analysis. After 90d, aggregate metrics suffice.</td>
+          </tr>
+          <tr>
+            <td class="data-type">Model invocation logs</td>
+            <td><span class="retention-value retention-value--short">30 days</span></td>
+            <td>Large and sensitive (contain prompts/completions). Token/cost aggregates retained indefinitely.</td>
+          </tr>
+          <tr>
+            <td class="data-type">Object storage artifacts</td>
+            <td><span class="retention-value retention-value--medium">90 days</span></td>
+            <td>Screenshots, generated files, log outputs. Artifacts linked to active tasks are exempt until task completes.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- GDPR -->
+    <h3 class="fade-up delay-2" style="text-align: center; margin-top: 3rem; margin-bottom: 0.5rem; font-size: 1rem; color: var(--text-bright);">GDPR-Aware Design</h3>
+    <p class="fade-up delay-2" style="text-align: center; font-size: 0.8rem; color: var(--text-secondary); max-width: 600px; margin: 0 auto 1.5rem;">
+      Not certified at GA. Architecture supports compliance when needed.
+    </p>
+
+    <div class="gdpr-grid fade-up delay-3">
+      <div class="gdpr-card">
+        <h4>Right to Access</h4>
+        <p>Export API generates JSON archive of all data associated with a human user via (principal_type, principal_id) convention.</p>
+      </div>
+      <div class="gdpr-card">
+        <h4>Right to Erasure</h4>
+        <p>Data deletion workflow across all tables. Audit events retained (legitimate interest) but can be anonymized.</p>
+      </div>
+      <div class="gdpr-card">
+        <h4>Data Portability</h4>
+        <p>Machine-readable JSON export: chat transcripts, memories, project data, and agent configurations.</p>
+      </div>
+      <div class="gdpr-card">
+        <h4>Data Minimization</h4>
+        <p>Retention policies ensure data is not kept longer than needed. Model invocation logs have shortest retention.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ FOOTER ════════════════════════════ -->
+<footer class="footer">
+  <div class="container">
+    <p>
+      OtterCamp V2 -- Security, Observability, and Cost Controls
+      &nbsp;/&nbsp;
+      Source: <a href="../13-security-observability-costs.md">docsv2/13-security-observability-costs.md</a>
+    </p>
+  </div>
+</footer>
+
+<!-- ════════════════════════════ SCRIPTS ════════════════════════════ -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    fontFamily: 'IBM Plex Mono, monospace',
+    flowchart: {
+      htmlLabels: true,
+      curve: 'basis',
+      padding: 16
+    },
+    themeVariables: {
+      primaryColor: '#12121c',
+      primaryTextColor: '#c8c8d8',
+      primaryBorderColor: '#2a2a3e',
+      lineColor: '#06b6d4',
+      background: '#0a0a0f',
+      mainBkg: '#12121c',
+      fontSize: '13px'
+    }
+  });
+</script>
+
+<script>
+  // ── Zoom controls (generic) ──
+  const diagramScales = {};
+
+  window.zoomDiagram = function(id, delta) {
+    if (!diagramScales[id]) diagramScales[id] = 1;
+    diagramScales[id] = Math.min(Math.max(diagramScales[id] + delta, 0.3), 3);
+    applyDiagramZoom(id);
+  };
+
+  window.resetDiagram = function(id) {
+    diagramScales[id] = 1;
+    applyDiagramZoom(id);
+  };
+
+  function applyDiagramZoom(id) {
+    var viewport = document.getElementById('viewport-' + id);
+    if (!viewport) return;
+    var svg = viewport.querySelector('svg');
+    if (svg) svg.style.transform = 'scale(' + diagramScales[id] + ')';
+  }
+
+  // ── KPI Counter Animations ──
+  function animateCounters() {
+    document.querySelectorAll('.kpi-value').forEach(function(el) {
+      // Handle text-based KPI
+      if (el.dataset.text) {
+        setTimeout(function() {
+          el.textContent = el.dataset.text;
+          el.style.opacity = '1';
+          el.style.transform = 'scale(1)';
+        }, 600);
+        return;
+      }
+
+      var target = parseInt(el.dataset.target, 10);
+      var suffix = el.dataset.suffix || '';
+      var duration = 1200;
+      var start = null;
+      var current = 0;
+
+      function step(timestamp) {
+        if (!start) start = timestamp;
+        var progress = Math.min((timestamp - start) / duration, 1);
+        // Ease out cubic
+        var eased = 1 - Math.pow(1 - progress, 3);
+        current = Math.round(eased * target);
+        el.textContent = current + suffix;
+        el.style.opacity = '1';
+        el.style.transform = 'scale(1)';
+        if (progress < 1) {
+          requestAnimationFrame(step);
+        }
+      }
+
+      // Start after a delay to match the fade-in
+      setTimeout(function() {
+        requestAnimationFrame(step);
+      }, 500);
+    });
+  }
+
+  // ── Intersection Observer for scroll-triggered animations ──
+  var observer = new IntersectionObserver(
+    function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          entry.target.style.animationPlayState = 'running';
+        }
+      });
+    },
+    { threshold: 0.1, rootMargin: '0px 0px -40px 0px' }
+  );
+
+  document.querySelectorAll('.fade-up').forEach(function(el) {
+    el.style.animationPlayState = 'paused';
+    observer.observe(el);
+  });
+
+  // Immediately play animations for elements already in viewport
+  requestAnimationFrame(function() {
+    document.querySelectorAll('.fade-up').forEach(function(el) {
+      var rect = el.getBoundingClientRect();
+      if (rect.top < window.innerHeight) {
+        el.style.animationPlayState = 'running';
+      }
+    });
+  });
+
+  // Trigger KPI counters when the hero is visible
+  var kpiObserver = new IntersectionObserver(
+    function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          animateCounters();
+          kpiObserver.disconnect();
+        }
+      });
+    },
+    { threshold: 0.3 }
+  );
+
+  var kpiStrip = document.querySelector('.kpi-strip');
+  if (kpiStrip) kpiObserver.observe(kpiStrip);
+</script>
+
+</body>
+</html>

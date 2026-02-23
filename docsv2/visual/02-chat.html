@@ -1,0 +1,1584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- Chat Spec Visual Explainer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-card: #1c2333;
+    --bg-card-hover: #222d3f;
+    --border: #30363d;
+    --border-glow: #30363d88;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+    --cyan: #00e5ff;
+    --magenta: #ff00e5;
+    --green: #00ff88;
+    --yellow: #ffcc00;
+    --orange: #ff8800;
+    --cyan-dim: #00e5ff33;
+    --magenta-dim: #ff00e533;
+    --green-dim: #00ff8833;
+    --glow-cyan: 0 0 20px #00e5ff44, 0 0 40px #00e5ff22;
+    --glow-magenta: 0 0 20px #ff00e544, 0 0 40px #ff00e522;
+    --glow-green: 0 0 20px #00ff8844, 0 0 40px #00ff8822;
+    --font-heading: 'Space Grotesk', sans-serif;
+    --font-body: 'JetBrains Mono', monospace;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.6;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg-primary); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+  /* ── Utility ── */
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  .section {
+    padding: 80px 0;
+  }
+
+  .section-label {
+    font-family: var(--font-body);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--cyan);
+    margin-bottom: 8px;
+  }
+
+  .section-title {
+    font-family: var(--font-heading);
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 12px;
+  }
+
+  .section-subtitle {
+    font-size: 14px;
+    color: var(--text-secondary);
+    max-width: 640px;
+    margin-bottom: 48px;
+    line-height: 1.7;
+  }
+
+  /* ── Fade-up animation ── */
+  .fade-up {
+    opacity: 0;
+    transform: translateY(30px);
+    transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+  }
+
+  .fade-up.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ── Grid scanline bg effect ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        #00e5ff03 2px,
+        #00e5ff03 4px
+      );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ══════════════════════════════════
+     HERO
+  ══════════════════════════════════ */
+  .hero {
+    padding: 100px 0 60px;
+    text-align: center;
+    position: relative;
+  }
+
+  .hero::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 80%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--cyan-dim), var(--magenta-dim), transparent);
+  }
+
+  .hero-badge {
+    display: inline-block;
+    font-family: var(--font-body);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--cyan);
+    border: 1px solid var(--cyan-dim);
+    padding: 6px 16px;
+    border-radius: 100px;
+    margin-bottom: 24px;
+    background: var(--cyan-dim);
+  }
+
+  .hero h1 {
+    font-family: var(--font-heading);
+    font-size: clamp(36px, 6vw, 64px);
+    font-weight: 700;
+    line-height: 1.1;
+    margin-bottom: 16px;
+    background: linear-gradient(135deg, var(--text-primary) 0%, var(--cyan) 50%, var(--magenta) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .hero-desc {
+    font-size: 16px;
+    color: var(--text-secondary);
+    max-width: 600px;
+    margin: 0 auto 48px;
+    line-height: 1.7;
+  }
+
+  /* ── KPI strip ── */
+  .kpi-strip {
+    display: flex;
+    justify-content: center;
+    gap: 48px;
+    flex-wrap: wrap;
+  }
+
+  .kpi {
+    text-align: center;
+  }
+
+  .kpi-number {
+    font-family: var(--font-heading);
+    font-size: 48px;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .kpi-number.cyan { color: var(--cyan); text-shadow: var(--glow-cyan); }
+  .kpi-number.magenta { color: var(--magenta); text-shadow: var(--glow-magenta); }
+  .kpi-number.green { color: var(--green); text-shadow: var(--glow-green); }
+
+  .kpi-label {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-secondary);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  /* ══════════════════════════════════
+     SCOPE LEVELS
+  ══════════════════════════════════ */
+  .scope-diagram {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    flex-wrap: wrap;
+  }
+
+  .scope-card {
+    position: relative;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 32px 28px;
+    background: var(--bg-card);
+    width: 280px;
+    transition: all 0.3s ease;
+  }
+
+  .scope-card:hover {
+    background: var(--bg-card-hover);
+    transform: translateY(-4px);
+  }
+
+  .scope-card.org {
+    border-color: var(--cyan-dim);
+    box-shadow: var(--glow-cyan);
+  }
+
+  .scope-card.project {
+    border-color: var(--magenta-dim);
+    box-shadow: var(--glow-magenta);
+  }
+
+  .scope-card.task {
+    border-color: var(--green-dim);
+    box-shadow: var(--glow-green);
+  }
+
+  .scope-card-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 16px;
+  }
+
+  .scope-card.org .scope-card-icon {
+    background: var(--cyan-dim);
+    color: var(--cyan);
+    border: 1px solid var(--cyan-dim);
+  }
+
+  .scope-card.project .scope-card-icon {
+    background: var(--magenta-dim);
+    color: var(--magenta);
+    border: 1px solid var(--magenta-dim);
+  }
+
+  .scope-card.task .scope-card-icon {
+    background: var(--green-dim);
+    color: var(--green);
+    border: 1px solid var(--green-dim);
+  }
+
+  .scope-card h3 {
+    font-family: var(--font-heading);
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  .scope-card.org h3 { color: var(--cyan); }
+  .scope-card.project h3 { color: var(--magenta); }
+  .scope-card.task h3 { color: var(--green); }
+
+  .scope-card p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 16px;
+  }
+
+  .scope-detail {
+    font-size: 11px;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+    line-height: 1.7;
+  }
+
+  .scope-detail strong {
+    color: var(--text-secondary);
+  }
+
+  .scope-arrow {
+    font-size: 28px;
+    color: var(--text-muted);
+    margin: 0 12px;
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 960px) {
+    .scope-diagram {
+      flex-direction: column;
+      gap: 16px;
+    }
+    .scope-arrow {
+      transform: rotate(90deg);
+      margin: 8px 0;
+    }
+    .scope-card {
+      width: 100%;
+      max-width: 400px;
+    }
+  }
+
+  /* ══════════════════════════════════
+     SESSION MODES
+  ══════════════════════════════════ */
+  .modes-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+
+  @media (max-width: 700px) {
+    .modes-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .mode-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 32px;
+    background: var(--bg-card);
+    transition: all 0.3s ease;
+  }
+
+  .mode-card:hover {
+    background: var(--bg-card-hover);
+    transform: translateY(-2px);
+  }
+
+  .mode-card.sync-mode {
+    border-color: var(--cyan-dim);
+  }
+
+  .mode-card.async-mode {
+    border-color: var(--magenta-dim);
+  }
+
+  .mode-tag {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 4px;
+    margin-bottom: 16px;
+  }
+
+  .sync-mode .mode-tag {
+    background: var(--cyan-dim);
+    color: var(--cyan);
+    border: 1px solid var(--cyan-dim);
+  }
+
+  .async-mode .mode-tag {
+    background: var(--magenta-dim);
+    color: var(--magenta);
+    border: 1px solid var(--magenta-dim);
+  }
+
+  .mode-card h3 {
+    font-family: var(--font-heading);
+    font-size: 22px;
+    font-weight: 600;
+    margin-bottom: 12px;
+  }
+
+  .sync-mode h3 { color: var(--cyan); }
+  .async-mode h3 { color: var(--magenta); }
+
+  .mode-card p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+    line-height: 1.7;
+  }
+
+  .mode-props {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .mode-props li {
+    font-size: 12px;
+    color: var(--text-secondary);
+    padding-left: 16px;
+    position: relative;
+  }
+
+  .mode-props li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 7px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  .sync-mode .mode-props li::before { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+  .async-mode .mode-props li::before { background: var(--magenta); box-shadow: 0 0 6px var(--magenta); }
+
+  .mode-props li strong {
+    color: var(--text-primary);
+  }
+
+  /* ══════════════════════════════════
+     TURN LOOP (Mermaid)
+  ══════════════════════════════════ */
+  .mermaid-wrapper {
+    position: relative;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-card);
+    padding: 24px;
+    overflow: hidden;
+  }
+
+  .mermaid-wrapper .mermaid-inner {
+    overflow: auto;
+    max-height: 700px;
+    cursor: grab;
+  }
+
+  .mermaid-wrapper .mermaid-inner:active {
+    cursor: grabbing;
+  }
+
+  .mermaid-wrapper .mermaid-inner svg {
+    display: block;
+    margin: 0 auto;
+    transition: transform 0.15s ease;
+  }
+
+  /* ── Zoom controls ── */
+  .zoom-controls {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    gap: 4px;
+    z-index: 10;
+  }
+
+  .zoom-btn {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-family: var(--font-body);
+    font-size: 16px;
+    transition: all 0.2s;
+  }
+
+  .zoom-btn:hover {
+    background: var(--bg-card-hover);
+    color: var(--text-primary);
+    border-color: var(--cyan-dim);
+  }
+
+  /* ══════════════════════════════════
+     CONTEXT PIPELINE
+  ══════════════════════════════════ */
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-width: 640px;
+    margin: 0 auto;
+  }
+
+  .pipeline-layer {
+    display: flex;
+    align-items: stretch;
+    min-height: 60px;
+    position: relative;
+  }
+
+  .pipeline-number {
+    width: 48px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-heading);
+    font-size: 18px;
+    font-weight: 700;
+    position: relative;
+  }
+
+  .pipeline-number::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 2px;
+    height: 100%;
+    z-index: 0;
+  }
+
+  .pipeline-layer:last-child .pipeline-number::after {
+    display: none;
+  }
+
+  .pipeline-layer:nth-child(1) .pipeline-number { color: var(--cyan); }
+  .pipeline-layer:nth-child(1) .pipeline-number::after { background: linear-gradient(to bottom, var(--cyan), var(--cyan)); }
+  .pipeline-layer:nth-child(2) .pipeline-number { color: var(--cyan); }
+  .pipeline-layer:nth-child(2) .pipeline-number::after { background: linear-gradient(to bottom, var(--cyan), var(--magenta)); }
+  .pipeline-layer:nth-child(3) .pipeline-number { color: var(--magenta); }
+  .pipeline-layer:nth-child(3) .pipeline-number::after { background: linear-gradient(to bottom, var(--magenta), var(--magenta)); }
+  .pipeline-layer:nth-child(4) .pipeline-number { color: var(--magenta); }
+  .pipeline-layer:nth-child(4) .pipeline-number::after { background: linear-gradient(to bottom, var(--magenta), var(--green)); }
+  .pipeline-layer:nth-child(5) .pipeline-number { color: var(--green); }
+  .pipeline-layer:nth-child(5) .pipeline-number::after { background: linear-gradient(to bottom, var(--green), var(--green)); }
+  .pipeline-layer:nth-child(6) .pipeline-number { color: var(--green); }
+  .pipeline-layer:nth-child(6) .pipeline-number::after { background: linear-gradient(to bottom, var(--green), var(--yellow)); }
+  .pipeline-layer:nth-child(7) .pipeline-number { color: var(--yellow); }
+
+  .pipeline-content {
+    flex: 1;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 16px 20px;
+    margin: 4px 0;
+    margin-left: 12px;
+    background: var(--bg-card);
+    transition: all 0.3s ease;
+  }
+
+  .pipeline-content:hover {
+    background: var(--bg-card-hover);
+    transform: translateX(4px);
+  }
+
+  .pipeline-layer:nth-child(1) .pipeline-content { border-left: 3px solid var(--cyan); }
+  .pipeline-layer:nth-child(2) .pipeline-content { border-left: 3px solid var(--cyan); }
+  .pipeline-layer:nth-child(3) .pipeline-content { border-left: 3px solid var(--magenta); }
+  .pipeline-layer:nth-child(4) .pipeline-content { border-left: 3px solid var(--magenta); }
+  .pipeline-layer:nth-child(5) .pipeline-content { border-left: 3px solid var(--green); }
+  .pipeline-layer:nth-child(6) .pipeline-content { border-left: 3px solid var(--green); }
+  .pipeline-layer:nth-child(7) .pipeline-content { border-left: 3px solid var(--yellow); }
+
+  .pipeline-content h4 {
+    font-family: var(--font-heading);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+  }
+
+  .pipeline-content .pipeline-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  .pipeline-content .pipeline-tag {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-top: 6px;
+  }
+
+  .tag-static {
+    background: #30363d44;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+  }
+
+  .tag-grows {
+    background: var(--green-dim);
+    color: var(--green);
+    border: 1px solid var(--green-dim);
+  }
+
+  /* ══════════════════════════════════
+     SCHEMA TABLE
+  ══════════════════════════════════ */
+  .schema-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 20px;
+  }
+
+  .schema-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-card);
+    overflow: hidden;
+    transition: all 0.3s ease;
+  }
+
+  .schema-card:hover {
+    background: var(--bg-card-hover);
+    transform: translateY(-2px);
+  }
+
+  .schema-card-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .schema-card-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .schema-card:nth-child(1) .schema-card-dot { background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+  .schema-card:nth-child(2) .schema-card-dot { background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+  .schema-card:nth-child(3) .schema-card-dot { background: var(--magenta); box-shadow: 0 0 8px var(--magenta); }
+  .schema-card:nth-child(4) .schema-card-dot { background: var(--magenta); box-shadow: 0 0 8px var(--magenta); }
+  .schema-card:nth-child(5) .schema-card-dot { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .schema-card:nth-child(6) .schema-card-dot { background: var(--green); box-shadow: 0 0 8px var(--green); }
+
+  .schema-card-name {
+    font-family: var(--font-body);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .schema-card-body {
+    padding: 16px 20px;
+  }
+
+  .schema-card-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    line-height: 1.6;
+  }
+
+  .schema-cols {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .schema-cols li {
+    font-size: 11px;
+    font-family: var(--font-body);
+    color: var(--text-muted);
+    padding: 4px 8px;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .schema-cols li .col-name {
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+
+  .schema-cols li .col-type {
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+
+  /* ══════════════════════════════════
+     CONTENT BLOCKS
+  ══════════════════════════════════ */
+  .blocks-grid {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .block-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px 20px;
+    background: var(--bg-card);
+    transition: all 0.3s ease;
+  }
+
+  .block-chip:hover {
+    background: var(--bg-card-hover);
+    transform: translateY(-2px);
+  }
+
+  .block-chip-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .block-chip:nth-child(1) .block-chip-dot { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+  .block-chip:nth-child(2) .block-chip-dot { background: var(--magenta); box-shadow: 0 0 6px var(--magenta); }
+  .block-chip:nth-child(3) .block-chip-dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .block-chip:nth-child(4) .block-chip-dot { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+  .block-chip:nth-child(5) .block-chip-dot { background: var(--orange); box-shadow: 0 0 6px var(--orange); }
+
+  .block-chip-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .block-chip-desc {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  /* ══════════════════════════════════
+     FOOTER
+  ══════════════════════════════════ */
+  .footer {
+    border-top: 1px solid var(--border);
+    padding: 32px 0;
+    text-align: center;
+  }
+
+  .footer p {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.8;
+  }
+
+  .footer a {
+    color: var(--cyan);
+    text-decoration: none;
+  }
+
+  .footer a:hover {
+    text-decoration: underline;
+  }
+
+  /* ── Dividers ── */
+  .divider {
+    width: 100%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border-glow), transparent);
+    margin: 0 auto;
+  }
+
+  /* ── Mermaid theme overrides ── */
+  .mermaid-wrapper .mermaid-inner {
+    --mermaid-font-family: 'JetBrains Mono', monospace;
+  }
+
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════
+     HERO
+═══════════════════════════════════════ -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-badge">OtterCamp V2 Spec</div>
+    <h1>Chat System</h1>
+    <p class="hero-desc">
+      Chat is the primary interface for all human-agent and agent-agent interaction.
+      Everything flows through chat -- commands, collaboration, autonomous work, and oversight.
+    </p>
+    <div class="kpi-strip">
+      <div class="kpi">
+        <div class="kpi-number cyan" data-target="6">0</div>
+        <div class="kpi-label">Core Tables</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-number magenta" data-target="3">0</div>
+        <div class="kpi-label">Scope Levels</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-number green" data-target="2">0</div>
+        <div class="kpi-label">Session Modes</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-number cyan" data-target="7">0</div>
+        <div class="kpi-label">Context Layers</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-number magenta" data-target="4">0</div>
+        <div class="kpi-label">Turn Phases</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-number green" data-target="5">0</div>
+        <div class="kpi-label">Block Types</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ═══════════════════════════════════════
+     SCOPE LEVELS
+═══════════════════════════════════════ -->
+<section class="section" id="scope">
+  <div class="container">
+    <div class="section-label">Session Scoping</div>
+    <div class="section-title fade-up">Three Scope Levels</div>
+    <div class="section-subtitle fade-up">
+      Every chat session has exactly one scope. The scope determines context injection,
+      agent availability, and available actions. One persistent session per scope -- no ambiguity.
+    </div>
+
+    <div class="scope-diagram">
+      <div class="scope-card org fade-up">
+        <div class="scope-card-icon">O</div>
+        <h3>Org</h3>
+        <p>
+          General-purpose conversations not tied to a project or task.
+          Brainstorming with Frank, hiring via Lori, org-wide queries to Ellie.
+        </p>
+        <div class="scope-detail">
+          <strong>Session:</strong> one persistent ("General")<br>
+          <strong>Default responder:</strong> Frank<br>
+          <strong>Agents:</strong> starter trio + org-level staff<br>
+          <strong>Context:</strong> org memory, project summaries
+        </div>
+      </div>
+
+      <div class="scope-arrow fade-up">&#8594;</div>
+
+      <div class="scope-card project fade-up">
+        <div class="scope-card-icon">P</div>
+        <h3>Project</h3>
+        <p>
+          Conversations about a project as a whole -- blocker triage, progress reviews,
+          staffing decisions, quick PM questions.
+        </p>
+        <div class="scope-detail">
+          <strong>Session:</strong> one persistent per project<br>
+          <strong>Default responder:</strong> project PM<br>
+          <strong>Agents:</strong> trio + project staff + temps<br>
+          <strong>Context:</strong> project + org memory, task summaries
+        </div>
+      </div>
+
+      <div class="scope-arrow fade-up">&#8594;</div>
+
+      <div class="scope-card task fade-up">
+        <div class="scope-card-icon">T</div>
+        <h3>Task</h3>
+        <p>
+          Conversations about a specific unit of work -- requirements, deliverables review,
+          feedback, and resolving blockers.
+        </p>
+        <div class="scope-detail">
+          <strong>Session:</strong> one sync + per-node async work logs<br>
+          <strong>Default responder:</strong> PM / task lead<br>
+          <strong>Agents:</strong> PM + task agents + Ellie<br>
+          <strong>Context:</strong> task files, decisions, criteria + project + org
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ═══════════════════════════════════════
+     SESSION MODES
+═══════════════════════════════════════ -->
+<section class="section" id="modes">
+  <div class="container">
+    <div class="section-label">Session Modes</div>
+    <div class="section-title fade-up">Sync vs Async</div>
+    <div class="section-subtitle fade-up">
+      Sessions operate in one of two modes, determining context assembly strategy
+      and latency expectations. Same core turn loop, different optimization priorities.
+    </div>
+
+    <div class="modes-grid">
+      <div class="mode-card sync-mode fade-up">
+        <div class="mode-tag">Synchronous</div>
+        <h3>Human Present</h3>
+        <p>
+          Active human participation -- chatting with Frank, reviewing work, making decisions.
+          Latency matters. Context is pre-assembled for speed.
+        </p>
+        <ul class="mode-props">
+          <li><strong>Identity/personality:</strong> pre-loaded, always in prompt</li>
+          <li><strong>Memory:</strong> Ellie injects top-k results passively per turn</li>
+          <li><strong>Scope context:</strong> pre-assembled, re-injected every turn</li>
+          <li><strong>Token budget:</strong> tight -- curated context</li>
+          <li><strong>Default for:</strong> org and project sessions</li>
+        </ul>
+      </div>
+
+      <div class="mode-card async-mode fade-up">
+        <div class="mode-tag">Asynchronous</div>
+        <h3>Autonomous Agent Work</h3>
+        <p>
+          Agent executing a task autonomously. Human is not waiting.
+          Quality and thoroughness matter more than speed.
+        </p>
+        <ul class="mode-props">
+          <li><strong>Identity/personality:</strong> pre-loaded, always in prompt</li>
+          <li><strong>Memory:</strong> agent actively queries Ellie across turns</li>
+          <li><strong>Scope context:</strong> injected once, agent discovers via tools</li>
+          <li><strong>Token budget:</strong> relaxed -- many turns, context resets between steps</li>
+          <li><strong>Default for:</strong> task-scoped flow node sessions</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ═══════════════════════════════════════
+     TURN LOOP SEQUENCE
+═══════════════════════════════════════ -->
+<section class="section" id="turn-loop">
+  <div class="container">
+    <div class="section-label">Multi-Party Sequencing</div>
+    <div class="section-title fade-up">Turn Cycle</div>
+    <div class="section-subtitle fade-up">
+      When a human sends a message, the system runs an atomic turn cycle through four phases:
+      responder turn, agent-to-agent @mentions, listener eval, and interjection turns.
+      The cycle completes fully before the next human message is processed.
+    </div>
+
+    <div class="mermaid-wrapper fade-up" id="turn-loop-diagram">
+      <div class="zoom-controls">
+        <button class="zoom-btn" data-action="zoom-in" title="Zoom in">+</button>
+        <button class="zoom-btn" data-action="zoom-out" title="Zoom out">-</button>
+        <button class="zoom-btn" data-action="zoom-reset" title="Reset zoom">R</button>
+      </div>
+      <div class="mermaid-inner" id="turn-loop-inner">
+        <pre class="mermaid">
+sequenceDiagram
+    participant H as Human
+    participant S as System
+    participant R as Responder
+    participant M as @Mentioned
+    participant L as Listeners
+
+    rect rgba(0,229,255,0.06)
+    Note over H,L: Phase 1 -- Responder Turn
+    H->>S: sends message
+    S->>S: @mention check
+    alt has @mention
+        S->>M: route to @mentioned agent
+    else no @mention
+        S->>R: route to default responder
+    end
+    R->>R: 7-layer context assembly
+    loop Tool Loop
+        R->>R: model call
+        R->>R: tool calls + results
+    end
+    R->>S: final text response (no tool calls)
+    end
+
+    rect rgba(255,0,229,0.06)
+    Note over H,L: Phase 1.5 -- Agent @Mentions (one round)
+    S->>S: scan responder output for @mentions
+    opt agent @mentioned
+        S->>M: full turn for mentioned agent
+        M->>M: context assembly + tool loop
+        M->>S: final response
+        Note right of M: @mentions in THIS response<br/>do NOT trigger more turns
+    end
+    end
+
+    rect rgba(0,255,136,0.06)
+    Note over H,L: Phase 2 -- Listening Eval
+    S->>L: lightweight eval (Haiku-tier)
+    Note right of L: "Do you need to contribute?"
+    L->>S: yes/no + relevance score
+    L->>S: optional reaction (near-zero cost)
+    end
+
+    rect rgba(255,204,0,0.06)
+    Note over H,L: Phase 3 -- Interjection Turns
+    opt any listener flagged yes
+        S->>L: full turn (descending relevance)
+        L->>L: context assembly + tool loop
+        L->>S: interjection response
+    end
+    Note over H,L: Cycle complete
+    end
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ═══════════════════════════════════════
+     CORE TURN LOOP (inner loop)
+═══════════════════════════════════════ -->
+<section class="section" id="core-loop">
+  <div class="container">
+    <div class="section-label">Agent Execution</div>
+    <div class="section-title fade-up">Core Turn Loop</div>
+    <div class="section-subtitle fade-up">
+      The tool-call loop IS the agentic loop. One loop, two entry points (sync via human message,
+      async via system kick). The agent reasons and acts through tool calls until it produces
+      a final text response with no tool calls. Two tool tiers route execution appropriately.
+    </div>
+
+    <div class="mermaid-wrapper fade-up" id="core-loop-diagram">
+      <div class="zoom-controls">
+        <button class="zoom-btn" data-action="zoom-in" title="Zoom in">+</button>
+        <button class="zoom-btn" data-action="zoom-out" title="Zoom out">-</button>
+        <button class="zoom-btn" data-action="zoom-reset" title="Reset zoom">R</button>
+      </div>
+      <div class="mermaid-inner" id="core-loop-inner">
+        <pre class="mermaid">
+flowchart TD
+    A["Message arrives<br/><small>human message or system kick</small>"]
+    B["Assemble context<br/><small>7-layer pipeline</small>"]
+    C["Call model"]
+    D{"Response has<br/>tool calls?"}
+    E["For each tool call"]
+    F{"Tier 1 or<br/>Tier 2?"}
+    G["<b>Tier 1: Chat-layer</b><br/><small>permission check, execute directly,<br/>log as chat message</small>"]
+    H["<b>Tier 2: Control-plane</b><br/><small>policy eval: allow / deny / draft_review<br/>dispatch to broker, log as RunStep</small>"]
+    I["Append tool calls +<br/>results to conversation"]
+    J{"Stop condition<br/>hit?"}
+    K["Turn complete<br/><small>final text, no tool calls</small>"]
+    L["Turn stopped<br/><small>max_tool_calls / max_duration /<br/>user_cancelled / user_steered</small>"]
+
+    A --> B --> C --> D
+    D -- "Yes" --> E --> F
+    F -- "Read-only / internal" --> G
+    F -- "Mutations / external" --> H
+    G --> I
+    H --> I
+    I --> J
+    J -- "No" --> C
+    J -- "Yes" --> L
+    D -- "No (final text)" --> K
+
+    style A fill:#1c2333,stroke:#00e5ff,color:#e6edf3
+    style B fill:#1c2333,stroke:#00e5ff,color:#e6edf3
+    style C fill:#1c2333,stroke:#ff00e5,color:#e6edf3
+    style D fill:#1c2333,stroke:#ffcc00,color:#e6edf3
+    style E fill:#1c2333,stroke:#ff00e5,color:#e6edf3
+    style F fill:#1c2333,stroke:#ffcc00,color:#e6edf3
+    style G fill:#1c2333,stroke:#00e5ff,color:#e6edf3
+    style H fill:#1c2333,stroke:#ff00e5,color:#e6edf3
+    style I fill:#1c2333,stroke:#30363d,color:#e6edf3
+    style J fill:#1c2333,stroke:#ffcc00,color:#e6edf3
+    style K fill:#1c2333,stroke:#00ff88,color:#e6edf3
+    style L fill:#1c2333,stroke:#ff8800,color:#e6edf3
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ═══════════════════════════════════════
+     RICH CONTENT BLOCKS
+═══════════════════════════════════════ -->
+<section class="section" id="blocks">
+  <div class="container">
+    <div class="section-label">Message Model</div>
+    <div class="section-title fade-up">Rich Content Blocks</div>
+    <div class="section-subtitle fade-up">
+      Messages use structured content blocks stored as jsonb, not plain text.
+      Five roles (human, agent, system, tool_call, tool_result) with five block types
+      for human-facing messages. Append-only with strict state transitions.
+    </div>
+
+    <div class="blocks-grid fade-up">
+      <div class="block-chip">
+        <div class="block-chip-dot"></div>
+        <div>
+          <div class="block-chip-label">text</div>
+          <div class="block-chip-desc">Markdown, rendered with formatting</div>
+        </div>
+      </div>
+      <div class="block-chip">
+        <div class="block-chip-dot"></div>
+        <div>
+          <div class="block-chip-label">code</div>
+          <div class="block-chip-desc">Syntax-highlighted with language tag</div>
+        </div>
+      </div>
+      <div class="block-chip">
+        <div class="block-chip-dot"></div>
+        <div>
+          <div class="block-chip-label">image</div>
+          <div class="block-chip-desc">Ref to chat_artifact, rendered inline</div>
+        </div>
+      </div>
+      <div class="block-chip">
+        <div class="block-chip-dot"></div>
+        <div>
+          <div class="block-chip-label">file_ref</div>
+          <div class="block-chip-desc">Git repo file at specific ref</div>
+        </div>
+      </div>
+      <div class="block-chip">
+        <div class="block-chip-dot"></div>
+        <div>
+          <div class="block-chip-label">artifact</div>
+          <div class="block-chip-desc">Downloadable/previewable embed</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: 40px; display: flex; gap: 16px; flex-wrap: wrap; justify-content: center;">
+      <div class="fade-up" style="
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 20px 24px;
+        background: var(--bg-card);
+        max-width: 320px;
+      ">
+        <div style="font-size: 11px; color: var(--text-muted); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px;">Message States</div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+          <span style="font-size: 12px; padding: 3px 10px; border-radius: 4px; background: var(--cyan-dim); color: var(--cyan); border: 1px solid var(--cyan-dim);">pending</span>
+          <span style="font-size: 12px; color: var(--text-muted);">&#8594;</span>
+          <span style="font-size: 12px; padding: 3px 10px; border-radius: 4px; background: var(--magenta-dim); color: var(--magenta); border: 1px solid var(--magenta-dim);">streaming</span>
+          <span style="font-size: 12px; color: var(--text-muted);">&#8594;</span>
+          <span style="font-size: 12px; padding: 3px 10px; border-radius: 4px; background: var(--green-dim); color: var(--green); border: 1px solid var(--green-dim);">final</span>
+        </div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;">
+          <span style="font-size: 12px; padding: 3px 10px; border-radius: 4px; background: #ff880033; color: var(--orange); border: 1px solid #ff880033;">failed</span>
+          <span style="font-size: 12px; padding: 3px 10px; border-radius: 4px; background: #ff000033; color: #ff6666; border: 1px solid #ff000033;">redacted</span>
+        </div>
+      </div>
+
+      <div class="fade-up" style="
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 20px 24px;
+        background: var(--bg-card);
+        max-width: 320px;
+      ">
+        <div style="font-size: 11px; color: var(--text-muted); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px;">Message Roles</div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+          <span style="font-size: 12px; padding: 3px 10px; border-radius: 4px; background: var(--cyan-dim); color: var(--cyan); border: 1px solid var(--cyan-dim);">human</span>
+          <span style="font-size: 12px; padding: 3px 10px; border-radius: 4px; background: var(--magenta-dim); color: var(--magenta); border: 1px solid var(--magenta-dim);">agent</span>
+          <span style="font-size: 12px; padding: 3px 10px; border-radius: 4px; background: #30363d88; color: var(--text-secondary); border: 1px solid var(--border);">system</span>
+          <span style="font-size: 12px; padding: 3px 10px; border-radius: 4px; background: var(--green-dim); color: var(--green); border: 1px solid var(--green-dim);">tool_call</span>
+          <span style="font-size: 12px; padding: 3px 10px; border-radius: 4px; background: #ffcc0033; color: var(--yellow); border: 1px solid #ffcc0033;">tool_result</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ═══════════════════════════════════════
+     CONTEXT ASSEMBLY PIPELINE
+═══════════════════════════════════════ -->
+<section class="section" id="context">
+  <div class="container">
+    <div class="section-label">Prompt Assembly</div>
+    <div class="section-title fade-up">7-Layer Context Pipeline</div>
+    <div class="section-subtitle fade-up">
+      Run once at the start of each turn. Within the tool loop, each iteration appends tool calls
+      and results -- the full pipeline is not re-run. Only Layer 6 grows during a turn.
+      Progressive summarization manages history as sessions grow.
+    </div>
+
+    <div class="pipeline">
+      <div class="pipeline-layer fade-up">
+        <div class="pipeline-number">1</div>
+        <div class="pipeline-content">
+          <h4>Agent Identity</h4>
+          <div class="pipeline-desc">Personality, role, behavioral guidelines. Pre-loaded, always present. Defines who the agent is.</div>
+          <span class="pipeline-tag tag-static">set once</span>
+        </div>
+      </div>
+
+      <div class="pipeline-layer fade-up">
+        <div class="pipeline-number">2</div>
+        <div class="pipeline-content">
+          <h4>Policies and Constraints</h4>
+          <div class="pipeline-desc">Permission boundaries, tool policies (allow/deny/draft_review), budget limits. Agent knows what it can and cannot do.</div>
+          <span class="pipeline-tag tag-static">set once</span>
+        </div>
+      </div>
+
+      <div class="pipeline-layer fade-up">
+        <div class="pipeline-number">3</div>
+        <div class="pipeline-content">
+          <h4>Scope Context</h4>
+          <div class="pipeline-desc">Task files, acceptance criteria, project state, decisions. Sync: re-injected every turn. Async: first turn only, agent discovers via tools.</div>
+          <span class="pipeline-tag tag-static">set once</span>
+        </div>
+      </div>
+
+      <div class="pipeline-layer fade-up">
+        <div class="pipeline-number">4</div>
+        <div class="pipeline-content">
+          <h4>Skills</h4>
+          <div class="pipeline-desc">Agent-specific skills, capabilities, and specialized instructions relevant to the current scope.</div>
+          <span class="pipeline-tag tag-static">set once</span>
+        </div>
+      </div>
+
+      <div class="pipeline-layer fade-up">
+        <div class="pipeline-number">5</div>
+        <div class="pipeline-content">
+          <h4>Memory (Ellie Passive)</h4>
+          <div class="pipeline-desc">Top-k relevant memories injected automatically per turn. Semantic retrieval based on scope and conversation content. No explicit invocation needed.</div>
+          <span class="pipeline-tag tag-static">injected once</span>
+        </div>
+      </div>
+
+      <div class="pipeline-layer fade-up">
+        <div class="pipeline-number">6</div>
+        <div class="pipeline-content">
+          <h4>Conversation History</h4>
+          <div class="pipeline-desc">Recent turns in full + summaries of older turns. Progressive summarization keeps this within budget. The only layer that grows within a turn.</div>
+          <span class="pipeline-tag tag-grows">grows during turn</span>
+        </div>
+      </div>
+
+      <div class="pipeline-layer fade-up">
+        <div class="pipeline-number">7</div>
+        <div class="pipeline-content">
+          <h4>Tool Descriptions</h4>
+          <div class="pipeline-desc">Available tools with signatures, descriptions, and usage patterns. Tier 1 (read-only, chat-layer) and Tier 2 (mutations, control-plane) tools listed.</div>
+          <span class="pipeline-tag tag-static">set once</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ═══════════════════════════════════════
+     DATABASE SCHEMA
+═══════════════════════════════════════ -->
+<section class="section" id="schema">
+  <div class="container">
+    <div class="section-label">Database Schema</div>
+    <div class="section-title fade-up">6 Core Tables</div>
+    <div class="section-subtitle fade-up">
+      PostgreSQL is the source of truth. Messages are append-only. Artifacts in object storage.
+      Supporting tables include chat_read_cursor for unread tracking and chat_message_reaction
+      for bidirectional sentiment signals.
+    </div>
+
+    <div class="schema-grid">
+      <div class="schema-card fade-up">
+        <div class="schema-card-header">
+          <div class="schema-card-dot"></div>
+          <div class="schema-card-name">chat_session</div>
+        </div>
+        <div class="schema-card-body">
+          <div class="schema-card-desc">
+            One session per scope. Carries sync/async mode, org binding, and a monotonic message sequence counter.
+          </div>
+          <ul class="schema-cols">
+            <li><span class="col-name">scope_type</span><span class="col-type">org | project | task</span></li>
+            <li><span class="col-name">scope_id</span><span class="col-type">uuid (polymorphic FK)</span></li>
+            <li><span class="col-name">mode</span><span class="col-type">sync | async</span></li>
+            <li><span class="col-name">status</span><span class="col-type">active | closed</span></li>
+            <li><span class="col-name">message_seq</span><span class="col-type">int (atomic counter)</span></li>
+            <li><span class="col-name">title</span><span class="col-type">text (nullable, scope name fallback)</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="schema-card fade-up">
+        <div class="schema-card-header">
+          <div class="schema-card-dot"></div>
+          <div class="schema-card-name">chat_participant</div>
+        </div>
+        <div class="schema-card-body">
+          <div class="schema-card-desc">
+            Human or agent membership in a session, with role and granular permissions. Append-only -- left_at marks departure.
+          </div>
+          <ul class="schema-cols">
+            <li><span class="col-name">participant_type</span><span class="col-type">human | agent</span></li>
+            <li><span class="col-name">role</span><span class="col-type">default_responder | participant | listener</span></li>
+            <li><span class="col-name">permissions</span><span class="col-type">text[] (read, write, mention...)</span></li>
+            <li><span class="col-name">joined_at / left_at</span><span class="col-type">timestamptz</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="schema-card fade-up">
+        <div class="schema-card-header">
+          <div class="schema-card-dot"></div>
+          <div class="schema-card-name">chat_turn</div>
+        </div>
+        <div class="schema-card-body">
+          <div class="schema-card-desc">
+            Groups messages into complete cycles. Tracks trigger type, stop conditions, token usage, and duration. cycle_id links all turns from one human message.
+          </div>
+          <ul class="schema-cols">
+            <li><span class="col-name">cycle_id</span><span class="col-type">uuid (groups turns per human msg)</span></li>
+            <li><span class="col-name">trigger</span><span class="col-type">human_message | system_kick | agent_mention | interjection | continuation</span></li>
+            <li><span class="col-name">status</span><span class="col-type">in_progress | completed | failed | stopped</span></li>
+            <li><span class="col-name">stop_reason</span><span class="col-type">max_tool_calls | max_duration | user_cancelled | ...</span></li>
+            <li><span class="col-name">tool_call_count</span><span class="col-type">int</span></li>
+            <li><span class="col-name">input_tokens / output_tokens</span><span class="col-type">int</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="schema-card fade-up">
+        <div class="schema-card-header">
+          <div class="schema-card-dot"></div>
+          <div class="schema-card-name">chat_message</div>
+        </div>
+        <div class="schema-card-body">
+          <div class="schema-card-desc">
+            One row per logical unit. Append-only with strict state transitions. Content varies by role -- rich blocks for human/agent, structured data for tool protocol.
+          </div>
+          <ul class="schema-cols">
+            <li><span class="col-name">role</span><span class="col-type">human | agent | system | tool_call | tool_result</span></li>
+            <li><span class="col-name">content</span><span class="col-type">jsonb (blocks or tool data)</span></li>
+            <li><span class="col-name">state</span><span class="col-type">pending | streaming | final | failed | redacted</span></li>
+            <li><span class="col-name">sequence</span><span class="col-type">int (per-session monotonic)</span></li>
+            <li><span class="col-name">ephemeral</span><span class="col-type">boolean (purged by daily cleanup)</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="schema-card fade-up">
+        <div class="schema-card-header">
+          <div class="schema-card-dot"></div>
+          <div class="schema-card-name">chat_artifact</div>
+        </div>
+        <div class="schema-card-body">
+          <div class="schema-card-desc">
+            Files, screenshots, logs in object storage (S3-compatible). Referenced from message content blocks. Session denormalized for efficient queries.
+          </div>
+          <ul class="schema-cols">
+            <li><span class="col-name">name</span><span class="col-type">text</span></li>
+            <li><span class="col-name">content_type</span><span class="col-type">text (MIME type)</span></li>
+            <li><span class="col-name">size_bytes</span><span class="col-type">bigint</span></li>
+            <li><span class="col-name">storage_path</span><span class="col-type">text (object store location)</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="schema-card fade-up">
+        <div class="schema-card-header">
+          <div class="schema-card-dot"></div>
+          <div class="schema-card-name">chat_summary</div>
+        </div>
+        <div class="schema-card-body">
+          <div class="schema-card-desc">
+            Progressive summarization for context management. Covers message ranges, replaces full content in the context window. Immutable -- newer summaries take precedence.
+          </div>
+          <ul class="schema-cols">
+            <li><span class="col-name">from_sequence / to_sequence</span><span class="col-type">int (message range)</span></li>
+            <li><span class="col-name">content</span><span class="col-type">text (summary text)</span></li>
+            <li><span class="col-name">model_id</span><span class="col-type">text (Haiku-tier)</span></li>
+            <li><span class="col-name">token_count</span><span class="col-type">int (budget tracking)</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ═══════════════════════════════════════
+     FOOTER
+═══════════════════════════════════════ -->
+<footer class="footer">
+  <div class="container">
+    <p>
+      OtterCamp V2 -- Chat Spec Visual Explainer<br>
+      Source: <a href="../02-chat.md">docsv2/02-chat.md</a><br>
+      <span style="color: var(--text-muted);">Generated from the V2 product specification</span>
+    </p>
+  </div>
+</footer>
+
+<!-- ═══════════════════════════════════════
+     SCRIPTS
+═══════════════════════════════════════ -->
+<script type="module">
+  // ── Mermaid ──
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      darkMode: true,
+      background: '#0d1117',
+      primaryColor: '#1c2333',
+      primaryTextColor: '#e6edf3',
+      primaryBorderColor: '#30363d',
+      lineColor: '#8b949e',
+      secondaryColor: '#161b22',
+      tertiaryColor: '#1c2333',
+      noteBkgColor: '#1c2333',
+      noteTextColor: '#e6edf3',
+      noteBorderColor: '#30363d',
+      actorBkg: '#1c2333',
+      actorBorder: '#00e5ff',
+      actorTextColor: '#e6edf3',
+      actorLineColor: '#30363d',
+      signalColor: '#8b949e',
+      signalTextColor: '#e6edf3',
+      labelBoxBkgColor: '#1c2333',
+      labelBoxBorderColor: '#30363d',
+      labelTextColor: '#e6edf3',
+      loopTextColor: '#8b949e',
+      activationBorderColor: '#00e5ff',
+      activationBkgColor: '#0d1117',
+      sequenceNumberColor: '#0d1117',
+      fontFamily: '"JetBrains Mono", monospace',
+      fontSize: '13px',
+    },
+    sequence: {
+      diagramMarginX: 20,
+      diagramMarginY: 20,
+      actorMargin: 80,
+      width: 180,
+      height: 50,
+      boxMargin: 6,
+      boxTextMargin: 8,
+      noteMargin: 10,
+      messageMargin: 40,
+      mirrorActors: false,
+      useMaxWidth: false,
+    },
+    flowchart: {
+      useMaxWidth: false,
+      htmlLabels: true,
+      curve: 'basis',
+      padding: 16,
+      nodeSpacing: 40,
+      rankSpacing: 50,
+    },
+  });
+
+  // ── Zoom controls ──
+  function setupZoom(wrapperId, innerId) {
+    const wrapper = document.getElementById(wrapperId);
+    const inner = document.getElementById(innerId);
+    if (!wrapper || !inner) return;
+
+    let scale = 1;
+    const STEP = 0.15;
+    const MIN = 0.3;
+    const MAX = 2.5;
+
+    function applyScale() {
+      const svg = inner.querySelector('svg');
+      if (svg) {
+        svg.style.transform = `scale(${scale})`;
+        svg.style.transformOrigin = 'top center';
+      }
+    }
+
+    wrapper.querySelectorAll('.zoom-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const action = btn.dataset.action;
+        if (action === 'zoom-in') scale = Math.min(MAX, scale + STEP);
+        if (action === 'zoom-out') scale = Math.max(MIN, scale - STEP);
+        if (action === 'zoom-reset') scale = 1;
+        applyScale();
+      });
+    });
+  }
+
+  // Wait for Mermaid to render, then hook zoom
+  setTimeout(() => {
+    setupZoom('turn-loop-diagram', 'turn-loop-inner');
+    setupZoom('core-loop-diagram', 'core-loop-inner');
+  }, 1500);
+
+
+  // ── Fade-up on scroll ──
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+        }
+      });
+    },
+    { threshold: 0.1, rootMargin: '0px 0px -40px 0px' }
+  );
+
+  document.querySelectorAll('.fade-up').forEach(el => observer.observe(el));
+
+
+  // ── Count-up animation for KPIs ──
+  function animateKPIs() {
+    document.querySelectorAll('.kpi-number').forEach(el => {
+      const target = parseInt(el.dataset.target, 10);
+      const duration = 1200;
+      const start = performance.now();
+
+      function step(now) {
+        const elapsed = now - start;
+        const progress = Math.min(elapsed / duration, 1);
+        // Ease-out cubic
+        const eased = 1 - Math.pow(1 - progress, 3);
+        el.textContent = Math.round(eased * target);
+        if (progress < 1) requestAnimationFrame(step);
+      }
+
+      requestAnimationFrame(step);
+    });
+  }
+
+  // Trigger KPI animation when hero is in view
+  const heroObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          animateKPIs();
+          heroObserver.disconnect();
+        }
+      });
+    },
+    { threshold: 0.3 }
+  );
+
+  const kpiStrip = document.querySelector('.kpi-strip');
+  if (kpiStrip) heroObserver.observe(kpiStrip);
+</script>
+
+</body>
+</html>

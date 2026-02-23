@@ -1,0 +1,2547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- Web UI Spec Visual Explainer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600&family=Fira+Code:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #282a36;
+    --bg-current: #44475a;
+    --bg-darker: #1e1f29;
+    --bg-card: #2d2f3d;
+    --bg-card-hover: #363849;
+    --fg: #f8f8f2;
+    --comment: #6272a4;
+    --purple: #bd93f9;
+    --cyan: #8be9fd;
+    --green: #50fa7b;
+    --orange: #ffb86c;
+    --pink: #ff79c6;
+    --red: #ff5555;
+    --yellow: #f1fa8c;
+    --purple-dim: #bd93f922;
+    --cyan-dim: #8be9fd22;
+    --green-dim: #50fa7b22;
+    --pink-dim: #ff79c622;
+    --orange-dim: #ffb86c22;
+    --border: #44475a;
+    --border-subtle: #383a4a;
+    --glow-purple: 0 0 20px #bd93f933, 0 0 40px #bd93f918;
+    --glow-cyan: 0 0 20px #8be9fd33, 0 0 40px #8be9fd18;
+    --glow-green: 0 0 20px #50fa7b33, 0 0 40px #50fa7b18;
+    --glow-pink: 0 0 20px #ff79c633, 0 0 40px #ff79c618;
+    --font-heading: 'Plus Jakarta Sans', sans-serif;
+    --font-body: 'Inter', sans-serif;
+    --font-code: 'Fira Code', monospace;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --radius-xs: 4px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg-darker);
+    color: var(--fg);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.6;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg-darker); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--comment); }
+
+  /* ── Utility ── */
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  .section {
+    padding: 80px 0;
+    position: relative;
+  }
+
+  .section + .section {
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .section-label {
+    font-family: var(--font-code);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--purple);
+    margin-bottom: 8px;
+  }
+
+  .section-title {
+    font-family: var(--font-heading);
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--fg);
+    margin-bottom: 12px;
+  }
+
+  .section-subtitle {
+    font-family: var(--font-body);
+    font-size: 14px;
+    color: var(--comment);
+    max-width: 680px;
+    margin-bottom: 48px;
+    line-height: 1.7;
+  }
+
+  /* ── Animations ── */
+  .fade-up {
+    opacity: 0;
+    transform: translateY(30px);
+    transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+  }
+  .fade-up.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .stagger-1 { transition-delay: 0.05s; }
+  .stagger-2 { transition-delay: 0.1s; }
+  .stagger-3 { transition-delay: 0.15s; }
+  .stagger-4 { transition-delay: 0.2s; }
+  .stagger-5 { transition-delay: 0.25s; }
+  .stagger-6 { transition-delay: 0.3s; }
+  .stagger-7 { transition-delay: 0.35s; }
+  .stagger-8 { transition-delay: 0.4s; }
+
+  /* ── Scanline overlay ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        #bd93f902 2px,
+        #bd93f902 4px
+      );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ══════════════════════════════════
+     HERO
+  ══════════════════════════════════ */
+  .hero {
+    padding: 100px 0 70px;
+    text-align: center;
+    position: relative;
+    background: radial-gradient(ellipse at 50% 0%, #bd93f912 0%, transparent 60%);
+  }
+
+  .hero::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 80%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--purple-dim), var(--pink-dim), transparent);
+  }
+
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-code);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--cyan);
+    background: var(--cyan-dim);
+    border: 1px solid #8be9fd33;
+    padding: 6px 16px;
+    border-radius: 20px;
+    margin-bottom: 24px;
+  }
+
+  .hero-badge .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--cyan);
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+  }
+
+  .hero h1 {
+    font-family: var(--font-heading);
+    font-size: 56px;
+    font-weight: 800;
+    line-height: 1.1;
+    margin-bottom: 20px;
+    background: linear-gradient(135deg, var(--fg) 0%, var(--purple) 50%, var(--pink) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .hero-description {
+    font-family: var(--font-body);
+    font-size: 16px;
+    color: var(--comment);
+    max-width: 640px;
+    margin: 0 auto 36px;
+    line-height: 1.7;
+  }
+
+  .hero-tags {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .hero-tag {
+    font-family: var(--font-code);
+    font-size: 12px;
+    padding: 5px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg);
+  }
+  .hero-tag.purple { color: var(--purple); border-color: #bd93f944; background: var(--purple-dim); }
+  .hero-tag.pink { color: var(--pink); border-color: #ff79c644; background: var(--pink-dim); }
+  .hero-tag.cyan { color: var(--cyan); border-color: #8be9fd44; background: var(--cyan-dim); }
+  .hero-tag.green { color: var(--green); border-color: #50fa7b44; background: var(--green-dim); }
+  .hero-tag.orange { color: var(--orange); border-color: #ffb86c44; background: var(--orange-dim); }
+
+  /* ══════════════════════════════════
+     THREE-PANEL LAYOUT WIREFRAME
+  ══════════════════════════════════ */
+  .wireframe-container {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--glow-purple);
+  }
+
+  .wireframe-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    background: var(--bg-current);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .wireframe-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+  }
+  .wireframe-dot.red { background: var(--red); }
+  .wireframe-dot.yellow { background: var(--yellow); }
+  .wireframe-dot.green { background: var(--green); }
+
+  .wireframe-titlebar-text {
+    font-family: var(--font-code);
+    font-size: 12px;
+    color: var(--comment);
+    margin-left: 8px;
+  }
+
+  .wireframe-body {
+    display: grid;
+    grid-template-columns: 200px 1fr 320px;
+    min-height: 480px;
+  }
+
+  .wireframe-sidebar {
+    background: var(--bg-darker);
+    border-right: 1px solid var(--border);
+    padding: 16px 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .wireframe-sidebar-header {
+    padding: 0 16px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 12px;
+  }
+
+  .wireframe-logo {
+    font-family: var(--font-heading);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--fg);
+    margin-bottom: 12px;
+  }
+
+  .wireframe-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    font-family: var(--font-code);
+    font-size: 11px;
+    color: var(--comment);
+  }
+
+  .wireframe-search kbd {
+    margin-left: auto;
+    font-family: var(--font-code);
+    font-size: 10px;
+    color: var(--comment);
+    background: var(--bg-current);
+    padding: 1px 5px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+  }
+
+  .wireframe-nav {
+    padding: 0 8px;
+    margin-bottom: 16px;
+  }
+
+  .wireframe-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-family: var(--font-body);
+    font-size: 12px;
+    color: var(--comment);
+    cursor: default;
+    transition: background 0.15s;
+  }
+
+  .wireframe-nav-item.active {
+    background: var(--bg-current);
+    color: var(--fg);
+  }
+
+  .wireframe-nav-item .icon {
+    font-size: 14px;
+    width: 18px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  .wireframe-nav-item .badge {
+    margin-left: auto;
+    font-family: var(--font-code);
+    font-size: 10px;
+    background: var(--pink);
+    color: var(--bg-darker);
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-weight: 600;
+  }
+
+  .wireframe-sessions {
+    padding: 0 8px;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .wireframe-sessions-label {
+    font-family: var(--font-code);
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--comment);
+    padding: 0 10px;
+    margin-bottom: 6px;
+  }
+
+  .wireframe-session {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: 11px;
+    color: var(--comment);
+    cursor: default;
+  }
+
+  .wireframe-session.active {
+    background: var(--bg-current);
+    color: var(--fg);
+  }
+
+  .wireframe-session.nested {
+    padding-left: 26px;
+    font-size: 11px;
+  }
+
+  .wireframe-session .unread {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--pink);
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  /* Main content panel */
+  .wireframe-main {
+    background: var(--bg);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    overflow: hidden;
+  }
+
+  .wireframe-main-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .wireframe-main-title {
+    font-family: var(--font-heading);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--fg);
+  }
+
+  .wireframe-tabs {
+    display: flex;
+    gap: 2px;
+    margin-left: auto;
+  }
+
+  .wireframe-tab {
+    font-family: var(--font-code);
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    color: var(--comment);
+    cursor: default;
+  }
+  .wireframe-tab.active {
+    background: var(--bg-current);
+    color: var(--fg);
+  }
+
+  /* Kanban columns in main */
+  .wireframe-kanban {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    flex: 1;
+  }
+
+  .wireframe-column {
+    background: var(--bg-darker);
+    border-radius: 8px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .wireframe-column-header {
+    font-family: var(--font-code);
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--comment);
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .wireframe-column-header .count {
+    font-size: 10px;
+    color: var(--comment);
+  }
+
+  .wireframe-card {
+    background: var(--bg);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    padding: 10px;
+    font-size: 11px;
+  }
+
+  .wireframe-card-title {
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--fg);
+    margin-bottom: 6px;
+  }
+
+  .wireframe-card-progress {
+    display: flex;
+    gap: 3px;
+    margin-bottom: 6px;
+  }
+
+  .wireframe-card-progress .step {
+    width: 16px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border);
+  }
+  .wireframe-card-progress .step.done { background: var(--green); }
+  .wireframe-card-progress .step.active { background: var(--purple); }
+  .wireframe-card-progress .step.blocked { background: var(--orange); }
+
+  .wireframe-card-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: var(--font-code);
+    font-size: 10px;
+    color: var(--comment);
+  }
+
+  .wireframe-card-meta .priority {
+    color: var(--orange);
+    font-weight: 600;
+  }
+  .wireframe-card-meta .priority.normal { color: var(--cyan); }
+
+  /* Chat pane */
+  .wireframe-chat {
+    background: var(--bg-darker);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .wireframe-chat-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .wireframe-scope-pill {
+    display: flex;
+    gap: 2px;
+    background: var(--bg);
+    padding: 3px;
+    border-radius: 6px;
+    width: fit-content;
+  }
+
+  .wireframe-scope-segment {
+    font-family: var(--font-code);
+    font-size: 10px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    color: var(--comment);
+    cursor: default;
+  }
+  .wireframe-scope-segment.active {
+    background: var(--bg-current);
+    color: var(--fg);
+  }
+
+  .wireframe-chat-messages {
+    flex: 1;
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+  }
+
+  .wireframe-msg {
+    max-width: 90%;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .wireframe-msg.agent {
+    background: var(--bg);
+    border: 1px solid var(--border-subtle);
+    color: var(--fg);
+    align-self: flex-start;
+  }
+
+  .wireframe-msg.human {
+    background: var(--purple-dim);
+    border: 1px solid #bd93f933;
+    color: var(--fg);
+    align-self: flex-end;
+  }
+
+  .wireframe-msg .sender {
+    font-family: var(--font-code);
+    font-size: 10px;
+    font-weight: 600;
+    margin-bottom: 3px;
+  }
+  .wireframe-msg.agent .sender { color: var(--cyan); }
+  .wireframe-msg.human .sender { color: var(--purple); }
+
+  .wireframe-msg .tool-call {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-code);
+    font-size: 10px;
+    color: var(--comment);
+    margin-top: 4px;
+    padding: 3px 6px;
+    background: var(--bg-darker);
+    border-radius: 4px;
+  }
+  .wireframe-msg .tool-call .ok { color: var(--green); }
+
+  .wireframe-chat-input {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .wireframe-input-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-family: var(--font-body);
+    font-size: 11px;
+    color: var(--comment);
+  }
+
+  .wireframe-input-box .send-hint {
+    margin-left: auto;
+    font-family: var(--font-code);
+    font-size: 10px;
+    color: var(--border);
+  }
+
+  /* Panel labels */
+  .panel-label {
+    position: absolute;
+    font-family: var(--font-code);
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 3px;
+    z-index: 10;
+    pointer-events: none;
+  }
+  .panel-label.sidebar-label { color: var(--cyan); background: var(--cyan-dim); }
+  .panel-label.main-label { color: var(--green); background: var(--green-dim); }
+  .panel-label.chat-label { color: var(--pink); background: var(--pink-dim); }
+
+  /* wireframe overlay labels */
+  .wireframe-body-wrapper {
+    position: relative;
+  }
+
+  .wireframe-overlay-labels {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+  }
+
+  .wireframe-overlay-label {
+    font-family: var(--font-code);
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .wireframe-overlay-label.left { color: var(--cyan); text-align: left; width: 200px; padding-left: 10px; }
+  .wireframe-overlay-label.center { color: var(--green); text-align: center; flex: 1; }
+  .wireframe-overlay-label.right { color: var(--pink); text-align: right; width: 320px; padding-right: 10px; }
+
+  /* ══════════════════════════════════
+     VIEWS GALLERY
+  ══════════════════════════════════ */
+  .views-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+  }
+
+  .view-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+  }
+  .view-card:hover {
+    border-color: var(--purple);
+    box-shadow: var(--glow-purple);
+    transform: translateY(-2px);
+  }
+
+  .view-card-header {
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .view-card-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .view-card-icon.purple { background: var(--purple-dim); color: var(--purple); border: 1px solid #bd93f933; }
+  .view-card-icon.cyan { background: var(--cyan-dim); color: var(--cyan); border: 1px solid #8be9fd33; }
+  .view-card-icon.green { background: var(--green-dim); color: var(--green); border: 1px solid #50fa7b33; }
+  .view-card-icon.pink { background: var(--pink-dim); color: var(--pink); border: 1px solid #ff79c633; }
+  .view-card-icon.orange { background: var(--orange-dim); color: var(--orange); border: 1px solid #ffb86c33; }
+
+  .view-card-name {
+    font-family: var(--font-heading);
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+  .view-card-body {
+    padding: 16px 20px 20px;
+  }
+
+  .view-card-desc {
+    font-size: 13px;
+    color: var(--comment);
+    margin-bottom: 14px;
+    line-height: 1.6;
+  }
+
+  .view-card-features {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .view-card-features li {
+    font-family: var(--font-code);
+    font-size: 11px;
+    color: var(--fg);
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .view-card-features li::before {
+    content: '\203A';
+    color: var(--purple);
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  /* ── Wireframe inside view cards ── */
+  .view-card-wireframe {
+    background: var(--bg-darker);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    padding: 10px;
+    margin-bottom: 14px;
+    font-family: var(--font-code);
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--comment);
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  /* ══════════════════════════════════
+     NO DIRECT CREATION
+  ══════════════════════════════════ */
+  .no-creation-layout {
+    display: grid;
+    grid-template-columns: 1fr 60px 1fr;
+    gap: 0;
+    align-items: center;
+  }
+
+  .no-creation-panel {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px;
+  }
+
+  .no-creation-panel.wrong {
+    border-color: var(--red);
+    opacity: 0.55;
+    position: relative;
+  }
+
+  .no-creation-panel.wrong::after {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: var(--radius);
+    border: 2px solid var(--red);
+    pointer-events: none;
+  }
+
+  .no-creation-panel.right {
+    border-color: var(--green);
+    box-shadow: var(--glow-green);
+  }
+
+  .no-creation-label {
+    font-family: var(--font-heading);
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .no-creation-label .x-mark { color: var(--red); font-size: 20px; font-weight: 700; }
+  .no-creation-label .check { color: var(--green); font-size: 20px; font-weight: 700; }
+
+  .no-creation-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-code);
+    font-size: 24px;
+    color: var(--comment);
+  }
+
+  .no-creation-demo {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .no-creation-btn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-family: var(--font-body);
+    font-size: 13px;
+  }
+
+  .no-creation-btn.disabled {
+    background: var(--bg-current);
+    border: 1px solid var(--border);
+    color: var(--comment);
+    text-decoration: line-through;
+    opacity: 0.6;
+  }
+
+  .no-creation-btn.disabled .btn-icon {
+    color: var(--red);
+    text-decoration: none;
+  }
+
+  .no-creation-chat-example {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .no-creation-chat-msg {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .no-creation-chat-msg.human-msg {
+    background: var(--purple-dim);
+    border: 1px solid #bd93f933;
+    color: var(--fg);
+    align-self: flex-end;
+    max-width: 90%;
+  }
+
+  .no-creation-chat-msg.agent-msg {
+    background: var(--bg-current);
+    border: 1px solid var(--border-subtle);
+    color: var(--fg);
+    align-self: flex-start;
+    max-width: 90%;
+  }
+
+  .no-creation-chat-msg .msg-sender {
+    font-family: var(--font-code);
+    font-size: 10px;
+    font-weight: 600;
+    margin-bottom: 3px;
+  }
+  .no-creation-chat-msg.human-msg .msg-sender { color: var(--purple); }
+  .no-creation-chat-msg.agent-msg .msg-sender { color: var(--cyan); }
+
+  /* ══════════════════════════════════
+     COMMAND BAR MOCKUP
+  ══════════════════════════════════ */
+  .cmdk-backdrop {
+    background: var(--bg);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    box-shadow: var(--glow-purple), 0 24px 48px rgba(0,0,0,0.4);
+    max-width: 580px;
+    margin: 0 auto;
+    overflow: hidden;
+  }
+
+  .cmdk-input-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .cmdk-input-icon {
+    font-size: 16px;
+    color: var(--purple);
+    flex-shrink: 0;
+  }
+
+  .cmdk-input-text {
+    font-family: var(--font-body);
+    font-size: 15px;
+    color: var(--fg);
+    flex: 1;
+  }
+
+  .cmdk-shortcut {
+    font-family: var(--font-code);
+    font-size: 11px;
+    color: var(--comment);
+    background: var(--bg-current);
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  .cmdk-results {
+    padding: 8px;
+  }
+
+  .cmdk-group-label {
+    font-family: var(--font-code);
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--comment);
+    padding: 6px 10px 4px;
+  }
+
+  .cmdk-result {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--fg);
+    cursor: default;
+  }
+  .cmdk-result.active {
+    background: var(--bg-current);
+  }
+
+  .cmdk-result-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  .cmdk-result-icon.purple { background: var(--purple-dim); color: var(--purple); }
+  .cmdk-result-icon.cyan { background: var(--cyan-dim); color: var(--cyan); }
+  .cmdk-result-icon.green { background: var(--green-dim); color: var(--green); }
+  .cmdk-result-icon.pink { background: var(--pink-dim); color: var(--pink); }
+  .cmdk-result-icon.orange { background: var(--orange-dim); color: var(--orange); }
+
+  .cmdk-result-text {
+    flex: 1;
+  }
+
+  .cmdk-result-text .title {
+    font-family: var(--font-body);
+    font-size: 13px;
+  }
+
+  .cmdk-result-text .subtitle {
+    font-family: var(--font-code);
+    font-size: 10px;
+    color: var(--comment);
+    margin-top: 1px;
+  }
+
+  .cmdk-result .cmdk-action-hint {
+    font-family: var(--font-code);
+    font-size: 10px;
+    color: var(--comment);
+  }
+
+  .cmdk-footer {
+    padding: 8px 18px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 16px;
+    font-family: var(--font-code);
+    font-size: 10px;
+    color: var(--comment);
+  }
+
+  .cmdk-footer span {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .cmdk-footer kbd {
+    font-family: var(--font-code);
+    font-size: 10px;
+    background: var(--bg-current);
+    padding: 1px 5px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    color: var(--fg);
+  }
+
+  /* ══════════════════════════════════
+     TECH STACK
+  ══════════════════════════════════ */
+  .tech-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 16px;
+    margin-bottom: 40px;
+  }
+
+  .tech-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .tech-card:hover {
+    border-color: var(--cyan);
+    box-shadow: var(--glow-cyan);
+  }
+
+  .tech-card-label {
+    font-family: var(--font-code);
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .tech-card-label.purple { color: var(--purple); }
+  .tech-card-label.cyan { color: var(--cyan); }
+  .tech-card-label.green { color: var(--green); }
+  .tech-card-label.pink { color: var(--pink); }
+  .tech-card-label.orange { color: var(--orange); }
+
+  .tech-card-title {
+    font-family: var(--font-heading);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--fg);
+    margin-bottom: 6px;
+  }
+
+  .tech-card-desc {
+    font-size: 12px;
+    color: var(--comment);
+    line-height: 1.6;
+  }
+
+  /* Design system component tokens */
+  .design-tokens {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+  }
+
+  .design-tokens-title {
+    font-family: var(--font-heading);
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--fg);
+    margin-bottom: 16px;
+  }
+
+  .token-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 0;
+  }
+  .token-row + .token-row {
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .token-swatch {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .token-name {
+    font-family: var(--font-code);
+    font-size: 12px;
+    color: var(--fg);
+    width: 120px;
+    flex-shrink: 0;
+  }
+
+  .token-usage {
+    font-family: var(--font-body);
+    font-size: 12px;
+    color: var(--comment);
+    flex: 1;
+  }
+
+  /* ── Mermaid ── */
+  .mermaid-wrapper {
+    position: relative;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    overflow: hidden;
+  }
+
+  .mermaid-wrapper .mermaid-diagram {
+    display: flex;
+    justify-content: center;
+    overflow: auto;
+    transition: transform 0.2s ease;
+    transform-origin: center center;
+  }
+
+  .mermaid-controls {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    gap: 4px;
+    z-index: 10;
+  }
+
+  .mermaid-controls button {
+    width: 28px;
+    height: 28px;
+    background: var(--bg-current);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--fg);
+    font-family: var(--font-code);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .mermaid-controls button:hover {
+    background: var(--bg-card-hover);
+    border-color: var(--purple);
+  }
+
+  /* ══════════════════════════════════
+     RESPONSIVE BREAKDOWN
+  ══════════════════════════════════ */
+  .responsive-demo {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    align-items: end;
+  }
+
+  .responsive-frame {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    transition: box-shadow 0.2s;
+  }
+  .responsive-frame:hover {
+    box-shadow: var(--glow-purple);
+  }
+
+  .responsive-frame-bar {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 8px 12px;
+    background: var(--bg-current);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .responsive-frame-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--border);
+  }
+
+  .responsive-frame-label {
+    font-family: var(--font-code);
+    font-size: 10px;
+    color: var(--comment);
+    margin-left: auto;
+  }
+
+  .responsive-frame-body {
+    padding: 12px;
+    min-height: 200px;
+    display: flex;
+    gap: 6px;
+  }
+
+  .responsive-panel {
+    border-radius: 4px;
+    border: 1px dashed var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-code);
+    font-size: 9px;
+    color: var(--comment);
+    text-align: center;
+    padding: 4px;
+    line-height: 1.3;
+  }
+  .responsive-panel.sidebar-p { background: var(--cyan-dim); border-color: #8be9fd33; color: var(--cyan); }
+  .responsive-panel.main-p { background: var(--green-dim); border-color: #50fa7b33; color: var(--green); flex: 1; }
+  .responsive-panel.chat-p { background: var(--pink-dim); border-color: #ff79c633; color: var(--pink); }
+  .responsive-panel.icon-p { background: var(--cyan-dim); border-color: #8be9fd33; color: var(--cyan); width: 24px; }
+  .responsive-panel.full-p { flex: 1; }
+  .responsive-panel.toggle-p {
+    background: var(--bg-current);
+    border: 1px solid var(--border);
+    color: var(--comment);
+    height: 20px;
+    font-size: 8px;
+  }
+
+  /* ══════════════════════════════════
+     KEYBOARD SHORTCUTS TABLE
+  ══════════════════════════════════ */
+  .shortcuts-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  .shortcuts-table th {
+    font-family: var(--font-code);
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--comment);
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .shortcuts-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--fg);
+  }
+
+  .shortcuts-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .shortcuts-table .key {
+    font-family: var(--font-code);
+    font-size: 12px;
+    background: var(--bg-current);
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    color: var(--purple);
+    white-space: nowrap;
+  }
+
+  .shortcuts-table .action {
+    color: var(--comment);
+  }
+
+  /* ══════════════════════════════════
+     FOOTER
+  ══════════════════════════════════ */
+  .footer {
+    padding: 48px 0;
+    text-align: center;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .footer-text {
+    font-family: var(--font-code);
+    font-size: 12px;
+    color: var(--comment);
+    margin-bottom: 8px;
+  }
+
+  .footer-spec-ref {
+    font-family: var(--font-code);
+    font-size: 11px;
+    color: var(--border);
+  }
+
+  /* ── Resolved decisions list ── */
+  .decisions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 12px;
+  }
+
+  .decision-item {
+    display: flex;
+    gap: 12px;
+    padding: 14px 16px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    transition: border-color 0.2s;
+  }
+  .decision-item:hover {
+    border-color: var(--purple);
+  }
+
+  .decision-number {
+    font-family: var(--font-code);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--purple);
+    flex-shrink: 0;
+    width: 24px;
+    text-align: right;
+  }
+
+  .decision-text {
+    font-size: 12px;
+    color: var(--comment);
+    line-height: 1.6;
+  }
+  .decision-text strong {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  /* ── SSE Event Flow ── */
+  .sse-flow {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .sse-event-group {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+  }
+
+  .sse-event-pipe {
+    width: 2px;
+    background: var(--border);
+    align-self: stretch;
+    margin-left: 11px;
+    flex-shrink: 0;
+  }
+
+  .sse-event-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-top: 6px;
+  }
+  .sse-event-dot.cyan { background: var(--cyan); }
+  .sse-event-dot.green { background: var(--green); }
+  .sse-event-dot.pink { background: var(--pink); }
+  .sse-event-dot.orange { background: var(--orange); }
+  .sse-event-dot.purple { background: var(--purple); }
+
+  .sse-event-content {
+    padding: 4px 0 16px;
+  }
+
+  .sse-event-name {
+    font-family: var(--font-code);
+    font-size: 12px;
+    color: var(--fg);
+  }
+
+  .sse-event-desc {
+    font-size: 11px;
+    color: var(--comment);
+    margin-top: 2px;
+  }
+
+  @media (max-width: 1024px) {
+    .wireframe-body { grid-template-columns: 160px 1fr 260px; }
+    .wireframe-kanban { grid-template-columns: repeat(2, 1fr); }
+    .no-creation-layout { grid-template-columns: 1fr; gap: 20px; }
+    .no-creation-arrow { transform: rotate(90deg); }
+    .responsive-demo { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 768px) {
+    .hero h1 { font-size: 36px; }
+    .wireframe-body { grid-template-columns: 1fr; min-height: auto; }
+    .wireframe-sidebar { display: none; }
+    .wireframe-chat { border-left: none; border-top: 1px solid var(--border); min-height: 240px; }
+    .views-grid { grid-template-columns: 1fr; }
+    .tech-grid { grid-template-columns: 1fr; }
+    .decisions-grid { grid-template-columns: 1fr; }
+    .wireframe-overlay-labels { flex-direction: column; gap: 4px; }
+    .wireframe-overlay-label { width: auto !important; text-align: left !important; padding-left: 10px !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════
+     HERO
+═══════════════════════════════════════ -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-badge fade-up"><span class="dot"></span> Spec 18 -- Phase 3</div>
+    <h1 class="fade-up stagger-1">Chat-Primary<br>Web Experience</h1>
+    <p class="hero-description fade-up stagger-2">
+      A React + TypeScript SPA introduced in Phase 3, after the TUI ships.
+      Chat is the primary interface -- a persistent right pane through which everything flows.
+      The UI is built around the conversation, not the other way around.
+    </p>
+    <div class="hero-tags fade-up stagger-3">
+      <span class="hero-tag purple">React + TypeScript</span>
+      <span class="hero-tag cyan">SSE Realtime</span>
+      <span class="hero-tag pink">Single Operator</span>
+      <span class="hero-tag green">No Separate Deploy</span>
+      <span class="hero-tag orange">Dark Mode Default</span>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════
+     THREE-PANEL LAYOUT
+═══════════════════════════════════════ -->
+<section class="section" id="layout">
+  <div class="container">
+    <div class="section-label fade-up">Layout</div>
+    <h2 class="section-title fade-up stagger-1">Three-Panel Architecture</h2>
+    <p class="section-subtitle fade-up stagger-2">
+      Collapsible sidebar for navigation and session switching. Main content area for views.
+      Persistent chat pane on the right -- always visible, never hidden behind a drawer or modal.
+    </p>
+
+    <div class="wireframe-overlay-labels fade-up stagger-3">
+      <span class="wireframe-overlay-label left">Sidebar (collapsible)</span>
+      <span class="wireframe-overlay-label center">Main Content (scrolls independently)</span>
+      <span class="wireframe-overlay-label right">Chat Pane (always visible)</span>
+    </div>
+
+    <div class="wireframe-container fade-up stagger-4">
+      <div class="wireframe-titlebar">
+        <span class="wireframe-dot red"></span>
+        <span class="wireframe-dot yellow"></span>
+        <span class="wireframe-dot green"></span>
+        <span class="wireframe-titlebar-text">OtterCamp -- localhost:8080</span>
+      </div>
+      <div class="wireframe-body">
+        <!-- SIDEBAR -->
+        <div class="wireframe-sidebar">
+          <div class="wireframe-sidebar-header">
+            <div class="wireframe-logo">OtterCamp</div>
+            <div class="wireframe-search">
+              <span>Search...</span>
+              <kbd>Cmd-K</kbd>
+            </div>
+          </div>
+          <div class="wireframe-nav">
+            <div class="wireframe-nav-item active">
+              <span class="icon">~</span> Dashboard
+            </div>
+            <div class="wireframe-nav-item">
+              <span class="icon">!</span> Inbox
+              <span class="badge">3</span>
+            </div>
+            <div class="wireframe-nav-item">
+              <span class="icon">#</span> Projects
+            </div>
+            <div class="wireframe-nav-item">
+              <span class="icon">@</span> Agents
+            </div>
+            <div class="wireframe-nav-item">
+              <span class="icon">&gt;</span> Schedules
+            </div>
+            <div class="wireframe-nav-item">
+              <span class="icon">%</span> Observability
+            </div>
+            <div class="wireframe-nav-item">
+              <span class="icon">*</span> Settings
+            </div>
+          </div>
+          <div class="wireframe-sessions">
+            <div class="wireframe-sessions-label">Sessions</div>
+            <div class="wireframe-session">General (Frank)</div>
+            <div class="wireframe-session" style="color: var(--comment); font-size: 10px; padding-top: 8px;">OtterCamp V2</div>
+            <div class="wireframe-session nested">Define auth arch</div>
+            <div class="wireframe-session nested active">Implement auth</div>
+            <div class="wireframe-session nested">Write chat spec <span class="unread"></span></div>
+            <div class="wireframe-session" style="color: var(--comment); font-size: 10px; padding-top: 8px;">Client Portal</div>
+            <div class="wireframe-session nested">Fix login bug <span class="unread"></span></div>
+          </div>
+        </div>
+
+        <!-- MAIN CONTENT -->
+        <div class="wireframe-main">
+          <div class="wireframe-main-header">
+            <span class="wireframe-main-title">OtterCamp V2</span>
+            <div class="wireframe-tabs">
+              <span class="wireframe-tab active">Board</span>
+              <span class="wireframe-tab">List</span>
+              <span class="wireframe-tab">Feed</span>
+              <span class="wireframe-tab">Queue</span>
+            </div>
+          </div>
+          <div class="wireframe-kanban">
+            <div class="wireframe-column">
+              <div class="wireframe-column-header">queued <span class="count">2</span></div>
+              <div class="wireframe-card">
+                <div class="wireframe-card-title">Write chat spec</div>
+                <div class="wireframe-card-progress">
+                  <span class="step"></span><span class="step"></span><span class="step"></span>
+                </div>
+                <div class="wireframe-card-meta"><span class="priority normal">Normal</span> @Maven</div>
+              </div>
+              <div class="wireframe-card">
+                <div class="wireframe-card-title">Design memory schema</div>
+                <div class="wireframe-card-progress">
+                  <span class="step"></span><span class="step"></span><span class="step"></span><span class="step"></span>
+                </div>
+                <div class="wireframe-card-meta"><span class="priority normal">Normal</span> @Ellie</div>
+              </div>
+            </div>
+            <div class="wireframe-column">
+              <div class="wireframe-column-header">in_progress <span class="count">2</span></div>
+              <div class="wireframe-card">
+                <div class="wireframe-card-title">Build auth system</div>
+                <div class="wireframe-card-progress">
+                  <span class="step done"></span><span class="step active"></span><span class="step"></span><span class="step"></span>
+                </div>
+                <div class="wireframe-card-meta"><span class="priority">High</span> @Maven</div>
+              </div>
+              <div class="wireframe-card">
+                <div class="wireframe-card-title">Implement SSE</div>
+                <div class="wireframe-card-progress">
+                  <span class="step done"></span><span class="step done"></span><span class="step active"></span>
+                </div>
+                <div class="wireframe-card-meta"><span class="priority normal">Normal</span> @Maven</div>
+              </div>
+            </div>
+            <div class="wireframe-column">
+              <div class="wireframe-column-header">review <span class="count">1</span></div>
+              <div class="wireframe-card">
+                <div class="wireframe-card-title">Define auth arch</div>
+                <div class="wireframe-card-progress">
+                  <span class="step done"></span><span class="step done"></span><span class="step active"></span>
+                </div>
+                <div class="wireframe-card-meta"><span class="priority">High</span> @You</div>
+              </div>
+            </div>
+            <div class="wireframe-column">
+              <div class="wireframe-column-header">done <span class="count">3</span></div>
+              <div class="wireframe-card">
+                <div class="wireframe-card-title">Setup project repo</div>
+                <div class="wireframe-card-progress">
+                  <span class="step done"></span><span class="step done"></span>
+                </div>
+                <div class="wireframe-card-meta"><span class="priority normal">Normal</span> @Maven</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- CHAT PANE -->
+        <div class="wireframe-chat">
+          <div class="wireframe-chat-header">
+            <div class="wireframe-scope-pill">
+              <span class="wireframe-scope-segment active">Implement Auth</span>
+              <span class="wireframe-scope-segment">OtterCamp V2</span>
+              <span class="wireframe-scope-segment">General</span>
+            </div>
+          </div>
+          <div class="wireframe-chat-messages">
+            <div class="wireframe-msg human">
+              <div class="sender">You</div>
+              How is the auth implementation going?
+            </div>
+            <div class="wireframe-msg agent">
+              <div class="sender">Maven</div>
+              I've set up the JWT middleware and token validation. Currently working on the session store. Here's what I've done:
+              <div class="tool-call"><span class="ok">ok</span> read_file(src/auth/handler.go)</div>
+              <div class="tool-call"><span class="ok">ok</span> read_file(src/auth/middleware.go)</div>
+              <div class="tool-call"><span class="ok">ok</span> write_file(src/auth/session.go)</div>
+            </div>
+            <div class="wireframe-msg human">
+              <div class="sender">You</div>
+              Make sure to handle token refresh
+            </div>
+            <div class="wireframe-msg agent">
+              <div class="sender">Maven</div>
+              Good call. I'll add refresh token rotation with sliding window expiry...
+            </div>
+          </div>
+          <div class="wireframe-chat-input">
+            <div class="wireframe-input-box">
+              Message Maven...
+              <span class="send-hint">Cmd+Enter</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Responsive behavior -->
+    <div style="margin-top: 48px;">
+      <h3 style="font-family: var(--font-heading); font-size: 20px; font-weight: 600; color: var(--fg); margin-bottom: 8px;" class="fade-up">Responsive Degradation</h3>
+      <p style="font-size: 13px; color: var(--comment); margin-bottom: 24px; max-width: 640px;" class="fade-up stagger-1">The three-panel layout adapts gracefully. Tablets get swappable panels. Mobile is functional but not optimized until Phase 4.</p>
+
+      <div class="responsive-demo fade-up stagger-2">
+        <div class="responsive-frame">
+          <div class="responsive-frame-bar">
+            <span class="responsive-frame-dot"></span>
+            <span class="responsive-frame-dot"></span>
+            <span class="responsive-frame-dot"></span>
+            <span class="responsive-frame-label">Desktop (1280px+)</span>
+          </div>
+          <div class="responsive-frame-body">
+            <div class="responsive-panel sidebar-p" style="width: 50px;">Side<br>bar</div>
+            <div class="responsive-panel main-p">Main Content</div>
+            <div class="responsive-panel chat-p" style="width: 80px;">Chat<br>Pane</div>
+          </div>
+        </div>
+
+        <div class="responsive-frame">
+          <div class="responsive-frame-bar">
+            <span class="responsive-frame-dot"></span>
+            <span class="responsive-frame-dot"></span>
+            <span class="responsive-frame-dot"></span>
+            <span class="responsive-frame-label">Tablet (768-1023px)</span>
+          </div>
+          <div class="responsive-frame-body" style="flex-direction: column; gap: 6px;">
+            <div style="display: flex; gap: 4px; justify-content: center;">
+              <div class="responsive-panel toggle-p" style="flex: 1;">[Main]</div>
+              <div class="responsive-panel toggle-p" style="flex: 1; background: var(--pink-dim); color: var(--pink); border-color: #ff79c633;">[Chat]</div>
+            </div>
+            <div class="responsive-panel main-p full-p" style="min-height: 150px;">Swappable Full-Width View</div>
+          </div>
+        </div>
+
+        <div class="responsive-frame">
+          <div class="responsive-frame-bar">
+            <span class="responsive-frame-dot"></span>
+            <span class="responsive-frame-dot"></span>
+            <span class="responsive-frame-dot"></span>
+            <span class="responsive-frame-label">Mobile (&lt;768px)</span>
+          </div>
+          <div class="responsive-frame-body" style="flex-direction: column; gap: 6px;">
+            <div class="responsive-panel main-p full-p" style="min-height: 140px; font-size: 8px;">Functional but not optimized<br>Phase 4 = dedicated mobile app</div>
+            <div style="display: flex; gap: 3px; justify-content: center;">
+              <div class="responsive-panel toggle-p" style="flex: 1; font-size: 7px;">Home</div>
+              <div class="responsive-panel toggle-p" style="flex: 1; font-size: 7px;">Chat</div>
+              <div class="responsive-panel toggle-p" style="flex: 1; font-size: 7px;">Inbox</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════
+     VIEWS GALLERY
+═══════════════════════════════════════ -->
+<section class="section" id="views">
+  <div class="container">
+    <div class="section-label fade-up">Core Views</div>
+    <h2 class="section-title fade-up stagger-1">Key Views Gallery</h2>
+    <p class="section-subtitle fade-up stagger-2">
+      Seven primary views, each designed for a specific operator workflow.
+      All views render in the main content panel -- the chat pane persists alongside.
+    </p>
+
+    <div class="views-grid">
+      <!-- Dashboard -->
+      <div class="view-card fade-up stagger-1">
+        <div class="view-card-header">
+          <div class="view-card-icon purple">~</div>
+          <div class="view-card-name">Dashboard</div>
+        </div>
+        <div class="view-card-body">
+          <div class="view-card-wireframe">Action Items (from Inbox)              (3)
+  ! Escalation: Auth conflict     OtterCamp V2
+  > Task Review: Landing page     Client Portal
+  > Draft Review: Welcome email   Client Portal
+
+Project Health
+  OtterCamp V2   12 tasks  3 active  1 blocked
+  Client Portal   8 tasks  2 active  0 blocked
+
+Activity Feed (live via SSE)
+  2m  ok  Subtask "Token validation" completed
+  5m  ->  Task "Fix login bug" merged to main
+  8m  !!  Blocker: "Missing API creds"</div>
+          <div class="view-card-desc">The landing page. Shows what needs attention and what is happening. Action items pulled from inbox, project health at a glance, and a real-time activity feed across all projects.</div>
+          <ul class="view-card-features">
+            <li>Top 5-10 urgent inbox items surfaced</li>
+            <li>Project health with task counts by status</li>
+            <li>Live activity feed via SSE</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Project View -->
+      <div class="view-card fade-up stagger-2">
+        <div class="view-card-header">
+          <div class="view-card-icon cyan">#</div>
+          <div class="view-card-name">Project View</div>
+        </div>
+        <div class="view-card-body">
+          <div class="view-card-wireframe">[Board] [List] [Feed] [Queue] [Sched] [Env]
+
+  queued     | in_progress | review  | done
+  -----------+-------------+---------+------
+  Write spec | Build auth  | Define  | Setup
+  Design mem | Impl SSE    |  arch   |  repo
+
+Cards show: title, flow progress, priority,
+assignee avatar, subtask count.
+NOT draggable -- status changes via agents.</div>
+          <div class="view-card-desc">The hub for a single project. Kanban task board (default), task list, activity feed, flow templates, merge queue, schedules, environments, and project settings as sub-views.</div>
+          <ul class="view-card-features">
+            <li>Kanban columns by work status</li>
+            <li>Cards with flow progress bar and subtask summary</li>
+            <li>Merge queue with conflict detection</li>
+            <li>Schedule table with cadence and run history</li>
+            <li>Environment deployment status</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Task Detail -->
+      <div class="view-card fade-up stagger-3">
+        <div class="view-card-header">
+          <div class="view-card-icon green">&gt;</div>
+          <div class="view-card-name">Task Detail</div>
+        </div>
+        <div class="view-card-body">
+          <div class="view-card-wireframe">OC-42: Build Auth System    [in_progress]
+Branch: task/build-auth-system
+
+[ok Design]->[** Implement]->[.. Review]->[.. Final]
+                  ^ current
+             3 subtasks (2 done, 1 active)
+
+  ok  Auth middleware           done
+  **  Token validation     in_progress
+  ..  Session mgmt         queued
+
+[View Diff] [View Work Log] [History]</div>
+          <div class="view-card-desc">Progressive disclosure: board card to task detail to work log. Flow stepper shows node-by-node progress. Diff viewer for code review at review nodes. Full event history audit trail.</div>
+          <ul class="view-card-features">
+            <li>Horizontal flow stepper with node status</li>
+            <li>Subtask list per node with dependency info</li>
+            <li>Syntax-highlighted diff viewer (unified/split)</li>
+            <li>Work log with tool call traces per step</li>
+            <li>Approve / Reject actions at review nodes</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Inbox -->
+      <div class="view-card fade-up stagger-4">
+        <div class="view-card-header">
+          <div class="view-card-icon pink">!</div>
+          <div class="view-card-name">Inbox</div>
+        </div>
+        <div class="view-card-body">
+          <div class="view-card-wireframe">INBOX (3)
+  ! Escalation: Auth conflict
+    Frank escalated -- needs your call
+    [Open in Context] [Defer]
+
+  > Task Scoping: Landing page design
+    PM finished scoping -- ready for review
+    [Approve] [Request Changes] [Defer]
+
+DEFERRED (1)
+  > Blog post series -- deferred 3d ago
+    [Restore]</div>
+          <div class="view-card-desc">The operator's action-required queue. Every item blocks progress somewhere. Inline approve/reject/defer for task reviews, draft reviews, escalations, and capability approvals. Ordered by urgency.</div>
+          <ul class="view-card-features">
+            <li>Inline actions -- decide without leaving inbox</li>
+            <li>Enough context to decide in place</li>
+            <li>Defer section for items to revisit later</li>
+            <li>Actions are immediate -- no extra confirmation</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Agent Directory -->
+      <div class="view-card fade-up stagger-5">
+        <div class="view-card-header">
+          <div class="view-card-icon orange">@</div>
+          <div class="view-card-name">Agent Directory</div>
+        </div>
+        <div class="view-card-body">
+          <div class="view-card-wireframe">Agents                   [Staff: 5  Temps: 2]
+
+Name    Role              Status  Projects
+Frank   Chief of Staff    active  (org-level)
+Lori    Agent Relations   active  (org-level)
+Ellie   Memory            active  (org-level)
+Maven   Senior Go Dev     active  OtterCamp V2
+Kai     Frontend Dev      active  Client Portal</div>
+          <div class="view-card-desc">List of all agents in the organization. Click an agent for full profile, current assignments, activity summary, model profile, and skills. All editing via Lori in chat.</div>
+          <ul class="view-card-features">
+            <li>Agent class (staff/temp), lifecycle status</li>
+            <li>Project assignments and current workload</li>
+            <li>Read-only -- profile edits via Lori</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Observability -->
+      <div class="view-card fade-up stagger-6">
+        <div class="view-card-header">
+          <div class="view-card-icon cyan">%</div>
+          <div class="view-card-name">Observability</div>
+        </div>
+        <div class="view-card-body">
+          <div class="view-card-wireframe">Recent Runs
+  ok   Maven  OC-42: Build Auth  12m  45k  $0.34
+  ok   Maven  OC-42: Build Auth   3m  12k  $0.09
+  fail Kai    CP-8: Fix Login     0m   2k  $0.01
+  run  Maven  OC-45: Update docs  --   --    --
+
+Cost: $12.40 today | Queue: 2 waiting, 1 active</div>
+          <div class="view-card-desc">Run history with full tool call traces, cost tracking by agent/project/model with trend charts, and queue depth showing concurrency utilization and wait times.</div>
+          <ul class="view-card-features">
+            <li>Run history with expandable tool call traces</li>
+            <li>Cost breakdown by agent, project, and model</li>
+            <li>Queue depth and rate limit utilization</li>
+            <li>Budget status with anomaly highlighting</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Settings -->
+      <div class="view-card fade-up stagger-7">
+        <div class="view-card-header">
+          <div class="view-card-icon purple">*</div>
+          <div class="view-card-name">Settings</div>
+        </div>
+        <div class="view-card-body">
+          <div class="view-card-wireframe">Organization: OtterCamp
+Concurrency Limit: 4
+
+Model Profiles:
+  default    GPT-4o      standard
+  fast       Claude 3.5  budget
+  reasoning  o3          premium
+
+Tool Policies: 12 allowed, 2 draft_review
+Notification Prefs: urgent=immediate</div>
+          <div class="view-card-desc">Configuration for org, model profiles, tool policies, project settings, and notification preferences. Everything visible, nothing directly editable -- changes go through Frank or the project PM via chat.</div>
+          <ul class="view-card-features">
+            <li>Org settings and global concurrency limits</li>
+            <li>Model profiles with provider and cost tier</li>
+            <li>Tool allow/deny lists and draft_review policies</li>
+            <li>Viewable only -- edits via agents in chat</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════
+     NO DIRECT CREATION
+═══════════════════════════════════════ -->
+<section class="section" id="no-creation">
+  <div class="container">
+    <div class="section-label fade-up">Product Principle</div>
+    <h2 class="section-title fade-up stagger-1">No Direct Creation</h2>
+    <p class="section-subtitle fade-up stagger-2">
+      The UI does not have "New Task" buttons, creation forms, or drag-to-reorder cards.
+      All entity creation and editing flows through chat and agents.
+      The UI is for viewing, navigating, reviewing, and monitoring.
+    </p>
+
+    <div class="no-creation-layout fade-up stagger-3">
+      <!-- WRONG: Traditional UI -->
+      <div class="no-creation-panel wrong">
+        <div class="no-creation-label"><span class="x-mark">X</span> Traditional UI Approach</div>
+        <div class="no-creation-demo">
+          <div class="no-creation-btn disabled">
+            <span class="btn-icon">+</span> New Task
+          </div>
+          <div class="no-creation-btn disabled">
+            <span class="btn-icon">+</span> New Agent
+          </div>
+          <div class="no-creation-btn disabled">
+            <span class="btn-icon">+</span> New Schedule
+          </div>
+          <div class="no-creation-btn disabled">
+            <span class="btn-icon">+</span> New Flow Template
+          </div>
+          <div style="font-family: var(--font-code); font-size: 11px; color: var(--red); margin-top: 8px; padding: 8px; background: #ff555511; border-radius: 6px;">
+            These buttons do not exist in OtterCamp.
+          </div>
+        </div>
+      </div>
+
+      <div class="no-creation-arrow">--&gt;</div>
+
+      <!-- RIGHT: Chat-driven -->
+      <div class="no-creation-panel right">
+        <div class="no-creation-label"><span class="check">ok</span> OtterCamp: Chat-Driven</div>
+        <div class="no-creation-chat-example">
+          <div class="no-creation-chat-msg human-msg">
+            <div class="msg-sender">You</div>
+            We need an auth system for the API. JWT tokens with refresh rotation and middleware.
+          </div>
+          <div class="no-creation-chat-msg agent-msg">
+            <div class="msg-sender">PM Agent</div>
+            I'll scope that. Created task OC-42: "Build Auth System" with a 4-node flow: Design, Implement, Code Review, Final Review. Assigned to Maven. Priority: High.
+          </div>
+          <div class="no-creation-chat-msg human-msg">
+            <div class="msg-sender">You</div>
+            @Lori we need a frontend developer for the client portal project
+          </div>
+          <div class="no-creation-chat-msg agent-msg">
+            <div class="msg-sender">Lori</div>
+            I'll draft a profile for a frontend developer. React + TypeScript focus, project-scoped to Client Portal. I'll have a proposal in your inbox for review.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════
+     COMMAND BAR
+═══════════════════════════════════════ -->
+<section class="section" id="command-bar">
+  <div class="container">
+    <div class="section-label fade-up">Navigation</div>
+    <h2 class="section-title fade-up stagger-1">Command Bar (Cmd-K)</h2>
+    <p class="section-subtitle fade-up stagger-2">
+      Superhuman-style command palette for keyboard-driven navigation.
+      Fuzzy search across projects, tasks, agents, and sessions.
+      Quick actions for navigation, session switching, and filters.
+    </p>
+
+    <div class="cmdk-backdrop fade-up stagger-3">
+      <div class="cmdk-input-row">
+        <span class="cmdk-input-icon">/</span>
+        <span class="cmdk-input-text">auth</span>
+        <span class="cmdk-shortcut">Esc to close</span>
+      </div>
+      <div class="cmdk-results">
+        <div class="cmdk-group-label">Tasks</div>
+        <div class="cmdk-result active">
+          <div class="cmdk-result-icon green">&gt;</div>
+          <div class="cmdk-result-text">
+            <div class="title">OC-42: Build Auth System</div>
+            <div class="subtitle">OtterCamp V2 -- in_progress -- Maven</div>
+          </div>
+          <span class="cmdk-action-hint">Enter to open</span>
+        </div>
+        <div class="cmdk-result">
+          <div class="cmdk-result-icon green">&gt;</div>
+          <div class="cmdk-result-text">
+            <div class="title">OC-18: Define Auth Architecture</div>
+            <div class="subtitle">OtterCamp V2 -- review -- waiting for you</div>
+          </div>
+        </div>
+
+        <div class="cmdk-group-label">Sessions</div>
+        <div class="cmdk-result">
+          <div class="cmdk-result-icon pink">~</div>
+          <div class="cmdk-result-text">
+            <div class="title">Talk to Frank about auth approach</div>
+            <div class="subtitle">Org session -- General</div>
+          </div>
+        </div>
+
+        <div class="cmdk-group-label">Actions</div>
+        <div class="cmdk-result">
+          <div class="cmdk-result-icon purple">&gt;</div>
+          <div class="cmdk-result-text">
+            <div class="title">Show blocked tasks in OtterCamp V2</div>
+            <div class="subtitle">Filter -- Task Board</div>
+          </div>
+        </div>
+      </div>
+      <div class="cmdk-footer">
+        <span><kbd>Up</kbd> <kbd>Down</kbd> navigate</span>
+        <span><kbd>Enter</kbd> select</span>
+        <span><kbd>Esc</kbd> close</span>
+      </div>
+    </div>
+
+    <!-- Keyboard shortcuts table -->
+    <div style="margin-top: 48px;" class="fade-up stagger-4">
+      <h3 style="font-family: var(--font-heading); font-size: 20px; font-weight: 600; color: var(--fg); margin-bottom: 16px;">Keyboard Shortcuts</h3>
+      <div style="background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;">
+        <table class="shortcuts-table">
+          <thead>
+            <tr>
+              <th style="width: 200px;">Shortcut</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="key">Cmd-K</span></td>
+              <td class="action">Open command bar</td>
+            </tr>
+            <tr>
+              <td><span class="key">Escape</span></td>
+              <td class="action">Close overlay / Cancel agent turn / Dismiss</td>
+            </tr>
+            <tr>
+              <td><span class="key">Cmd-Enter</span></td>
+              <td class="action">Send message in chat pane</td>
+            </tr>
+            <tr>
+              <td><span class="key">Cmd-Shift-C</span></td>
+              <td class="action">Toggle sidebar collapsed / expanded</td>
+            </tr>
+            <tr>
+              <td><span class="key">Cmd-1</span> ... <span class="key">Cmd-9</span></td>
+              <td class="action">Switch to session by sidebar position</td>
+            </tr>
+            <tr>
+              <td><span class="key">Cmd-[</span> / <span class="key">Cmd-]</span></td>
+              <td class="action">Navigate scope pill (zoom out / zoom in)</td>
+            </tr>
+            <tr>
+              <td><span class="key">Cmd-I</span></td>
+              <td class="action">Focus inbox</td>
+            </tr>
+            <tr>
+              <td><span class="key">Cmd-D</span></td>
+              <td class="action">Focus dashboard</td>
+            </tr>
+            <tr>
+              <td><span class="key">/</span></td>
+              <td class="action">Focus chat input</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════
+     REALTIME (SSE)
+═══════════════════════════════════════ -->
+<section class="section" id="realtime">
+  <div class="container">
+    <div class="section-label fade-up">Realtime</div>
+    <h2 class="section-title fade-up stagger-1">SSE Event Stream</h2>
+    <p class="section-subtitle fade-up stagger-2">
+      All live updates via Server-Sent Events. No polling. No WebSocket.
+      Client mutations go through REST. SSE delivers the results back.
+      Unidirectional by design.
+    </p>
+
+    <div class="mermaid-wrapper fade-up stagger-3">
+      <div class="mermaid-controls">
+        <button onclick="zoomMermaid(this, 1.2)" title="Zoom in">+</button>
+        <button onclick="zoomMermaid(this, 0.8)" title="Zoom out">-</button>
+        <button onclick="resetMermaid(this)" title="Reset zoom">o</button>
+      </div>
+      <div class="mermaid-diagram" data-zoom="1">
+        <pre class="mermaid">
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#bd93f9', 'primaryTextColor': '#f8f8f2', 'primaryBorderColor': '#6272a4', 'lineColor': '#6272a4', 'secondaryColor': '#44475a', 'tertiaryColor': '#282a36', 'background': '#282a36', 'mainBkg': '#44475a', 'nodeBorder': '#6272a4', 'clusterBkg': '#282a36', 'clusterBorder': '#44475a', 'titleColor': '#f8f8f2', 'edgeLabelBackground': '#282a36', 'nodeTextColor': '#f8f8f2'}}}%%
+flowchart LR
+    subgraph Client ["Web UI (Browser)"]
+        direction TB
+        REST["REST API Calls\n(mutations)"]
+        SSE["SSE Connection\n(live events)"]
+        UI["React SPA\nRoutes events to panels"]
+    end
+
+    subgraph Server ["OtterCamp API Service"]
+        direction TB
+        API["REST Endpoints"]
+        EventBus["Event Bus"]
+        SSEServer["SSE Server"]
+        Static["Static SPA\nAssets"]
+    end
+
+    REST -->|"POST /chat/messages\nPOST /inbox/actions\nPATCH /tasks"| API
+    API --> EventBus
+    EventBus --> SSEServer
+    SSEServer -->|"chat.message.delta\ntask.status.changed\ninbox.item.created\nagent.run.started"| SSE
+    SSE --> UI
+    Static -->|"HTML, JS, CSS"| Client
+        </pre>
+      </div>
+    </div>
+
+    <div style="margin-top: 32px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;" class="fade-up stagger-4">
+      <div style="padding: 16px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);">
+        <div style="font-family: var(--font-code); font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--cyan); margin-bottom: 8px;">Chat Events</div>
+        <div style="font-family: var(--font-code); font-size: 11px; color: var(--fg); line-height: 1.8;">
+          chat.turn.started<br>
+          chat.message.created<br>
+          chat.message.delta<br>
+          chat.message.finalized<br>
+          chat.turn.completed
+        </div>
+      </div>
+      <div style="padding: 16px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);">
+        <div style="font-family: var(--font-code); font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--green); margin-bottom: 8px;">Task Events</div>
+        <div style="font-family: var(--font-code); font-size: 11px; color: var(--fg); line-height: 1.8;">
+          task.status.changed<br>
+          task.flow.advanced<br>
+          task.flow.rejected<br>
+          merge_queue.entry.updated<br>
+          schedule.task.created
+        </div>
+      </div>
+      <div style="padding: 16px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);">
+        <div style="font-family: var(--font-code); font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--pink); margin-bottom: 8px;">System Events</div>
+        <div style="font-family: var(--font-code); font-size: 11px; color: var(--fg); line-height: 1.8;">
+          inbox.item.created<br>
+          agent.run.started<br>
+          agent.run.completed<br>
+          notification.created<br>
+          project.push.succeeded
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════
+     TECHNOLOGY STACK
+═══════════════════════════════════════ -->
+<section class="section" id="tech">
+  <div class="container">
+    <div class="section-label fade-up">Technology</div>
+    <h2 class="section-title fade-up stagger-1">Stack and Design System</h2>
+    <p class="section-subtitle fade-up stagger-2">
+      Mature tooling chosen for complex interactive UIs. Served as static assets from the OtterCamp API --
+      no separate frontend deployment. Self-hosters get it automatically.
+    </p>
+
+    <div class="tech-grid">
+      <div class="tech-card fade-up stagger-1">
+        <div class="tech-card-label cyan">Framework</div>
+        <div class="tech-card-title">React + TypeScript</div>
+        <div class="tech-card-desc">Component model maps to three-panel layout with independently updating regions. TypeScript enforces type safety across the API contract.</div>
+      </div>
+      <div class="tech-card fade-up stagger-2">
+        <div class="tech-card-label green">Realtime</div>
+        <div class="tech-card-title">Server-Sent Events</div>
+        <div class="tech-card-desc">Unidirectional server-to-client. Auto-reconnects natively. Works over standard HTTP. No WebSocket complexity.</div>
+      </div>
+      <div class="tech-card fade-up stagger-3">
+        <div class="tech-card-label pink">Deployment</div>
+        <div class="tech-card-title">Static SPA Bundle</div>
+        <div class="tech-card-desc">Embedded in the API service binary. No separate frontend server. Production build ships with OtterCamp distribution.</div>
+      </div>
+      <div class="tech-card fade-up stagger-4">
+        <div class="tech-card-label purple">Rendering</div>
+        <div class="tech-card-title">SPA, Not SSR</div>
+        <div class="tech-card-desc">Behind authentication. No public content or SEO. SPA provides better interactivity for real-time streaming-heavy UI.</div>
+      </div>
+      <div class="tech-card fade-up stagger-5">
+        <div class="tech-card-label orange">Performance</div>
+        <div class="tech-card-title">Virtualized + Lazy</div>
+        <div class="tech-card-desc">Virtualized lists for chat history, run history, activity feeds. Code splitting loads views on demand. SSE event batching prevents UI thrashing.</div>
+      </div>
+      <div class="tech-card fade-up stagger-6">
+        <div class="tech-card-label cyan">Libraries</div>
+        <div class="tech-card-title">Rich Ecosystem</div>
+        <div class="tech-card-desc">Diff viewer, syntax highlighting, virtualized lists, markdown rendering, drag-and-drop -- all leveraging React's mature library ecosystem.</div>
+      </div>
+    </div>
+
+    <!-- Design system tokens -->
+    <div class="design-tokens fade-up stagger-7">
+      <div class="design-tokens-title">Design System -- Color Tokens</div>
+      <div class="token-row">
+        <div class="token-swatch" style="background: var(--green);"></div>
+        <div class="token-name">Green</div>
+        <div class="token-usage">Done, success, completed, healthy</div>
+      </div>
+      <div class="token-row">
+        <div class="token-swatch" style="background: var(--cyan);"></div>
+        <div class="token-name">Cyan / Blue</div>
+        <div class="token-usage">In progress, active, normal priority</div>
+      </div>
+      <div class="token-row">
+        <div class="token-swatch" style="background: var(--orange);"></div>
+        <div class="token-name">Amber / Orange</div>
+        <div class="token-usage">Blocked, warning, high priority</div>
+      </div>
+      <div class="token-row">
+        <div class="token-swatch" style="background: var(--red);"></div>
+        <div class="token-name">Red</div>
+        <div class="token-usage">Failed, error, urgent priority</div>
+      </div>
+      <div class="token-row">
+        <div class="token-swatch" style="background: var(--comment);"></div>
+        <div class="token-name">Gray</div>
+        <div class="token-usage">Pending, queued, cancelled, low priority</div>
+      </div>
+      <div class="token-row">
+        <div class="token-swatch" style="background: var(--purple);"></div>
+        <div class="token-name">Purple</div>
+        <div class="token-usage">Primary accent, interactive elements, links</div>
+      </div>
+      <div class="token-row">
+        <div class="token-swatch" style="background: var(--pink);"></div>
+        <div class="token-name">Pink</div>
+        <div class="token-usage">Notifications, unread indicators, badges</div>
+      </div>
+    </div>
+
+    <!-- Information density callout -->
+    <div style="margin-top: 24px; padding: 20px 24px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); border-left: 3px solid var(--purple);" class="fade-up stagger-8">
+      <div style="font-family: var(--font-heading); font-size: 14px; font-weight: 700; color: var(--fg); margin-bottom: 8px;">Information Density: Power User Design</div>
+      <div style="font-size: 13px; color: var(--comment); line-height: 1.7;">
+        Dense tables with compact row heights. Minimal whitespace -- every pixel earns its place.
+        Progressive disclosure everywhere: collapsed sections, expandable details, "show more" for large content.
+        No decorative illustrations, hero images, or marketing copy. Every element serves a functional purpose.
+        Dark mode default. Monospace for code and technical content. Proportional font for prose.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════
+     KEY INTERACTIONS (Mermaid)
+═══════════════════════════════════════ -->
+<section class="section" id="interactions">
+  <div class="container">
+    <div class="section-label fade-up">Workflows</div>
+    <h2 class="section-title fade-up stagger-1">Key Interaction Flows</h2>
+    <p class="section-subtitle fade-up stagger-2">
+      The four primary operator workflows: reviewing agent work, approving inbox items,
+      monitoring agent activity, and understanding task progress through flow visualization.
+    </p>
+
+    <div class="mermaid-wrapper fade-up stagger-3" style="margin-bottom: 24px;">
+      <div class="mermaid-controls">
+        <button onclick="zoomMermaid(this, 1.2)" title="Zoom in">+</button>
+        <button onclick="zoomMermaid(this, 0.8)" title="Zoom out">-</button>
+        <button onclick="resetMermaid(this)" title="Reset zoom">o</button>
+      </div>
+      <div class="mermaid-diagram" data-zoom="1">
+        <pre class="mermaid">
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#bd93f9', 'primaryTextColor': '#f8f8f2', 'primaryBorderColor': '#6272a4', 'lineColor': '#6272a4', 'secondaryColor': '#44475a', 'tertiaryColor': '#282a36', 'background': '#282a36', 'mainBkg': '#44475a', 'nodeBorder': '#6272a4', 'clusterBkg': '#282a36', 'clusterBorder': '#44475a', 'titleColor': '#f8f8f2', 'edgeLabelBackground': '#282a36', 'nodeTextColor': '#f8f8f2'}}}%%
+flowchart TD
+    A["Inbox notification or\nTask Board card"] --> B["Task Detail opens\nin main content"]
+    B --> C["Flow stepper shows\nreview node active"]
+    C --> D["Diff view loads:\ntask branch vs\nprevious commit SHA"]
+    D --> E{"Operator reviews diff,\nchecks subtask summary,\nasks questions in chat"}
+    E -->|Approve| F["Flow advances\nto next node"]
+    E -->|Reject + Feedback| G["Flow loops back\nto work node"]
+    G --> H["Agent receives feedback\nin task event comment"]
+    H --> I["Agent resumes work\non the same node"]
+    I --> C
+
+    style A fill:#44475a,stroke:#6272a4,color:#f8f8f2
+    style B fill:#44475a,stroke:#6272a4,color:#f8f8f2
+    style C fill:#44475a,stroke:#bd93f9,color:#f8f8f2
+    style D fill:#44475a,stroke:#8be9fd,color:#f8f8f2
+    style E fill:#44475a,stroke:#ffb86c,color:#f8f8f2
+    style F fill:#44475a,stroke:#50fa7b,color:#f8f8f2
+    style G fill:#44475a,stroke:#ff79c6,color:#f8f8f2
+    style H fill:#44475a,stroke:#ff79c6,color:#f8f8f2
+    style I fill:#44475a,stroke:#6272a4,color:#f8f8f2
+        </pre>
+      </div>
+    </div>
+
+    <div style="text-align: center; font-family: var(--font-code); font-size: 11px; color: var(--comment); margin-bottom: 32px;" class="fade-up stagger-4">
+      Code Review Flow -- the primary review workflow at review nodes
+    </div>
+
+    <div class="mermaid-wrapper fade-up stagger-5">
+      <div class="mermaid-controls">
+        <button onclick="zoomMermaid(this, 1.2)" title="Zoom in">+</button>
+        <button onclick="zoomMermaid(this, 0.8)" title="Zoom out">-</button>
+        <button onclick="resetMermaid(this)" title="Reset zoom">o</button>
+      </div>
+      <div class="mermaid-diagram" data-zoom="1">
+        <pre class="mermaid">
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#bd93f9', 'primaryTextColor': '#f8f8f2', 'primaryBorderColor': '#6272a4', 'lineColor': '#6272a4', 'secondaryColor': '#44475a', 'tertiaryColor': '#282a36', 'background': '#282a36', 'mainBkg': '#44475a', 'nodeBorder': '#6272a4', 'clusterBkg': '#282a36', 'clusterBorder': '#44475a', 'titleColor': '#f8f8f2', 'edgeLabelBackground': '#282a36', 'nodeTextColor': '#f8f8f2'}}}%%
+flowchart LR
+    subgraph phase1 ["Phase 1-2"]
+        TUI["TUI Only\n(Terminal)"]
+    end
+
+    subgraph phase3 ["Phase 3"]
+        WEB["Web UI\n(Visual + Review)"]
+        TUI2["TUI\n(Chat + Quick Actions)"]
+    end
+
+    subgraph phase4 ["Phase 4+"]
+        WEB2["Web UI"]
+        TUI3["TUI"]
+        MOB["Mobile App"]
+    end
+
+    API["OtterCamp\nREST API\n+ SSE"]
+
+    TUI --> API
+    WEB --> API
+    TUI2 --> API
+    WEB2 --> API
+    TUI3 --> API
+    MOB --> API
+
+    style API fill:#bd93f9,stroke:#6272a4,color:#282a36
+    style TUI fill:#44475a,stroke:#8be9fd,color:#f8f8f2
+    style WEB fill:#44475a,stroke:#50fa7b,color:#f8f8f2
+    style TUI2 fill:#44475a,stroke:#8be9fd,color:#f8f8f2
+    style WEB2 fill:#44475a,stroke:#50fa7b,color:#f8f8f2
+    style TUI3 fill:#44475a,stroke:#8be9fd,color:#f8f8f2
+    style MOB fill:#44475a,stroke:#ffb86c,color:#f8f8f2
+    style phase1 fill:#282a36,stroke:#44475a,color:#6272a4
+    style phase3 fill:#282a36,stroke:#44475a,color:#6272a4
+    style phase4 fill:#282a36,stroke:#44475a,color:#6272a4
+        </pre>
+      </div>
+    </div>
+
+    <div style="text-align: center; font-family: var(--font-code); font-size: 11px; color: var(--comment); margin-top: 16px;" class="fade-up stagger-6">
+      Client Evolution -- all clients are sibling consumers of the same API
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════
+     RESOLVED DECISIONS
+═══════════════════════════════════════ -->
+<section class="section" id="decisions">
+  <div class="container">
+    <div class="section-label fade-up">Decisions</div>
+    <h2 class="section-title fade-up stagger-1">Resolved Architectural Decisions</h2>
+    <p class="section-subtitle fade-up stagger-2">
+      18 key decisions locked down in the spec. Each shapes how the web UI behaves
+      and what it deliberately does not do.
+    </p>
+
+    <div class="decisions-grid">
+      <div class="decision-item fade-up stagger-1">
+        <div class="decision-number">1</div>
+        <div class="decision-text"><strong>React + TypeScript SPA.</strong> Mature ecosystem, strong tooling for diff viewers, virtualized lists, syntax highlighting.</div>
+      </div>
+      <div class="decision-item fade-up stagger-1">
+        <div class="decision-number">2</div>
+        <div class="decision-text"><strong>SPA, not SSR.</strong> Behind auth, no SEO. Better interactivity for streaming-heavy realtime UI.</div>
+      </div>
+      <div class="decision-item fade-up stagger-2">
+        <div class="decision-number">3</div>
+        <div class="decision-text"><strong>SSE, not WebSocket.</strong> Unidirectional data flow. Client mutations go through REST.</div>
+      </div>
+      <div class="decision-item fade-up stagger-2">
+        <div class="decision-number">4</div>
+        <div class="decision-text"><strong>Mobile-responsive is sufficient for Phase 3.</strong> Dedicated mobile app waits for Phase 4.</div>
+      </div>
+      <div class="decision-item fade-up stagger-3">
+        <div class="decision-number">5</div>
+        <div class="decision-text"><strong>Dark mode default.</strong> Developer audience. Light mode available as toggle.</div>
+      </div>
+      <div class="decision-item fade-up stagger-3">
+        <div class="decision-number">6</div>
+        <div class="decision-text"><strong>Chat pane always visible.</strong> Not a drawer or modal. Persistent panel.</div>
+      </div>
+      <div class="decision-item fade-up stagger-4">
+        <div class="decision-number">7</div>
+        <div class="decision-text"><strong>No direct object creation.</strong> No "new task" buttons. Everything through chat/agents.</div>
+      </div>
+      <div class="decision-item fade-up stagger-4">
+        <div class="decision-number">8</div>
+        <div class="decision-text"><strong>Sidebar is collapsible.</strong> Defaults expanded. Icon-only when collapsed.</div>
+      </div>
+      <div class="decision-item fade-up stagger-5">
+        <div class="decision-number">9</div>
+        <div class="decision-text"><strong>Chat pane is resizable.</strong> Drag left edge. Minimum width enforced. Persisted.</div>
+      </div>
+      <div class="decision-item fade-up stagger-5">
+        <div class="decision-number">10</div>
+        <div class="decision-text"><strong>Cmd-K is primary keyboard nav.</strong> Fuzzy search, quick actions, session switching.</div>
+      </div>
+      <div class="decision-item fade-up stagger-6">
+        <div class="decision-number">11</div>
+        <div class="decision-text"><strong>Diff view for code review.</strong> Incremental review at review nodes. Unified/split toggle.</div>
+      </div>
+      <div class="decision-item fade-up stagger-6">
+        <div class="decision-number">12</div>
+        <div class="decision-text"><strong>Feature parity with TUI is not a goal.</strong> Each client plays to its medium's strengths.</div>
+      </div>
+      <div class="decision-item fade-up stagger-7">
+        <div class="decision-number">13</div>
+        <div class="decision-text"><strong>Static SPA served by API service.</strong> No separate frontend server. Ships with OtterCamp.</div>
+      </div>
+      <div class="decision-item fade-up stagger-7">
+        <div class="decision-number">14</div>
+        <div class="decision-text"><strong>Notification center is sidebar overlay.</strong> Quick access. Not a separate page.</div>
+      </div>
+      <div class="decision-item fade-up stagger-8">
+        <div class="decision-number">15</div>
+        <div class="decision-text"><strong>Settings viewable, editable through chat.</strong> Transparency without inline edit forms.</div>
+      </div>
+      <div class="decision-item fade-up stagger-8">
+        <div class="decision-number">16</div>
+        <div class="decision-text"><strong>View state in local storage.</strong> Session, view, sidebar, chat width, theme persisted.</div>
+      </div>
+      <div class="decision-item fade-up stagger-8">
+        <div class="decision-number">17</div>
+        <div class="decision-text"><strong>Activity feed is core.</strong> Dashboard and project-scoped. Live via SSE.</div>
+      </div>
+      <div class="decision-item fade-up stagger-8">
+        <div class="decision-number">18</div>
+        <div class="decision-text"><strong>Virtualized rendering.</strong> Chat, run history, activity feeds use virtual scrolling.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════
+     FOOTER
+═══════════════════════════════════════ -->
+<footer class="footer">
+  <div class="container">
+    <div class="footer-text">OtterCamp V2 -- Web UI Spec Visual Explainer</div>
+    <div class="footer-spec-ref">Source: docsv2/18-web-ui.md -- Phase 3: "OtterCamp Builds Itself"</div>
+  </div>
+</footer>
+
+<!-- ═══════════════════════════════════════
+     SCRIPTS
+═══════════════════════════════════════ -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      primaryColor: '#bd93f9',
+      primaryTextColor: '#f8f8f2',
+      primaryBorderColor: '#6272a4',
+      lineColor: '#6272a4',
+      secondaryColor: '#44475a',
+      tertiaryColor: '#282a36',
+      background: '#282a36',
+      mainBkg: '#44475a',
+      nodeBorder: '#6272a4',
+      clusterBkg: '#282a36',
+      clusterBorder: '#44475a',
+      titleColor: '#f8f8f2',
+      edgeLabelBackground: '#282a36',
+      nodeTextColor: '#f8f8f2'
+    },
+    flowchart: {
+      htmlLabels: true,
+      curve: 'basis'
+    }
+  });
+</script>
+
+<script>
+  // ── Intersection Observer for fade-up animations ──
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+      }
+    });
+  }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+
+  document.querySelectorAll('.fade-up').forEach(el => observer.observe(el));
+
+  // ── Mermaid zoom controls ──
+  window.zoomMermaid = function(btn, factor) {
+    const wrapper = btn.closest('.mermaid-wrapper');
+    const diagram = wrapper.querySelector('.mermaid-diagram');
+    let currentZoom = parseFloat(diagram.dataset.zoom) || 1;
+    currentZoom = Math.max(0.3, Math.min(3, currentZoom * factor));
+    diagram.dataset.zoom = currentZoom;
+    diagram.style.transform = `scale(${currentZoom})`;
+  };
+
+  window.resetMermaid = function(btn) {
+    const wrapper = btn.closest('.mermaid-wrapper');
+    const diagram = wrapper.querySelector('.mermaid-diagram');
+    diagram.dataset.zoom = 1;
+    diagram.style.transform = 'scale(1)';
+  };
+</script>
+
+</body>
+</html>

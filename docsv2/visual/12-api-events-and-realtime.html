@@ -1,0 +1,1669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- API, Events, and Realtime</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #111827;
+    --bg-card: #1f2937;
+    --bg-card-alt: #1a2332;
+    --bg-surface: #374151;
+    --border: #374151;
+    --border-light: #4b5563;
+    --text: #f9fafb;
+    --text-muted: #9ca3af;
+    --text-dim: #6b7280;
+    --blue: #3b82f6;
+    --blue-dim: #1e3a5f;
+    --blue-glow: rgba(59, 130, 246, 0.15);
+    --green: #10b981;
+    --green-dim: #064e3b;
+    --green-glow: rgba(16, 185, 129, 0.15);
+    --orange: #f59e0b;
+    --orange-dim: #78350f;
+    --orange-glow: rgba(245, 158, 11, 0.15);
+    --gray: #6b7280;
+    --gray-dim: #374151;
+    --gray-glow: rgba(107, 114, 128, 0.15);
+    --red: #ef4444;
+    --purple: #a78bfa;
+    --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+    --radius: 8px;
+    --radius-lg: 12px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html {
+    scroll-behavior: smooth;
+    font-size: 15px;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* --- Layout --- */
+  .container {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  section {
+    padding: 56px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  section:last-of-type { border-bottom: none; }
+
+  .section-label {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .section-label.blue { color: var(--blue); }
+  .section-label.green { color: var(--green); }
+  .section-label.orange { color: var(--orange); }
+  .section-label.gray { color: var(--gray); }
+
+  h2 {
+    font-size: 1.65rem;
+    font-weight: 800;
+    margin-bottom: 8px;
+    letter-spacing: -0.02em;
+  }
+
+  h3 {
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: 6px;
+    letter-spacing: -0.01em;
+  }
+
+  .section-desc {
+    color: var(--text-muted);
+    font-size: 0.88rem;
+    max-width: 680px;
+    margin-bottom: 28px;
+    line-height: 1.65;
+  }
+
+  /* --- Hero --- */
+  .hero {
+    padding: 72px 0 56px;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -120px;
+    right: -80px;
+    width: 500px;
+    height: 500px;
+    background: radial-gradient(circle, rgba(59,130,246,0.08) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 5px 14px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-bottom: 20px;
+  }
+
+  .hero-badge .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--green);
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .hero h1 {
+    font-size: 2.8rem;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+    margin-bottom: 14px;
+  }
+
+  .hero h1 .accent { color: var(--blue); }
+
+  .hero-sub {
+    color: var(--text-muted);
+    font-size: 1.05rem;
+    max-width: 640px;
+    line-height: 1.6;
+    margin-bottom: 36px;
+  }
+
+  .stat-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 22px;
+    min-width: 150px;
+    flex: 1;
+    max-width: 220px;
+  }
+
+  .stat-card .stat-num {
+    font-size: 1.9rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .stat-card .stat-label {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .stat-card.blue { border-color: var(--blue-dim); }
+  .stat-card.blue .stat-num { color: var(--blue); }
+  .stat-card.green { border-color: var(--green-dim); }
+  .stat-card.green .stat-num { color: var(--green); }
+  .stat-card.orange { border-color: var(--orange-dim); }
+  .stat-card.orange .stat-num { color: var(--orange); }
+  .stat-card.gray { border-color: var(--gray-dim); }
+  .stat-card.gray .stat-num { color: var(--gray); }
+
+  /* --- Grids --- */
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .grid-3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+  }
+
+  .grid-4 {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+  }
+
+  @media (max-width: 1024px) {
+    .grid-3 { grid-template-columns: 1fr 1fr; }
+    .grid-4 { grid-template-columns: 1fr 1fr; }
+  }
+
+  @media (max-width: 768px) {
+    .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+    .hero h1 { font-size: 2rem; }
+    .stat-row { gap: 8px; }
+    .stat-card { min-width: 120px; }
+  }
+
+  /* --- Cards --- */
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    transition: border-color 0.2s;
+  }
+
+  .card:hover { border-color: var(--border-light); }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .card-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .card-icon.blue { background: var(--blue-glow); color: var(--blue); border: 1px solid var(--blue-dim); }
+  .card-icon.green { background: var(--green-glow); color: var(--green); border: 1px solid var(--green-dim); }
+  .card-icon.orange { background: var(--orange-glow); color: var(--orange); border: 1px solid var(--orange-dim); }
+  .card-icon.gray { background: var(--gray-glow); color: var(--gray); border: 1px solid var(--gray-dim); }
+
+  .card h3 { margin-bottom: 0; }
+
+  .endpoint-list {
+    list-style: none;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    line-height: 1.9;
+  }
+
+  .endpoint-list li {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 2px 0;
+    border-bottom: 1px solid rgba(55, 65, 81, 0.5);
+  }
+
+  .endpoint-list li:last-child { border-bottom: none; }
+
+  .method {
+    display: inline-block;
+    width: 46px;
+    text-align: center;
+    font-weight: 600;
+    font-size: 0.62rem;
+    padding: 1px 0;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  .method.get { color: var(--green); background: var(--green-glow); }
+  .method.post { color: var(--blue); background: var(--blue-glow); }
+  .method.patch { color: var(--orange); background: var(--orange-glow); }
+  .method.delete { color: var(--red); background: rgba(239, 68, 68, 0.12); }
+
+  .endpoint-path { color: var(--text-muted); }
+  .endpoint-desc {
+    color: var(--text-dim);
+    font-family: var(--font-body);
+    font-size: 0.7rem;
+    margin-left: auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .command-badge {
+    font-size: 0.56rem;
+    font-weight: 600;
+    color: var(--orange);
+    background: var(--orange-glow);
+    padding: 0 5px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  /* --- Event Domain Grid --- */
+  .event-domain {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    transition: border-color 0.2s;
+  }
+
+  .event-domain:hover { border-color: var(--border-light); }
+
+  .event-domain-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+
+  .event-domain-name {
+    font-weight: 700;
+    font-size: 0.85rem;
+  }
+
+  .event-domain-count {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--green);
+    background: var(--green-glow);
+    padding: 1px 7px;
+    border-radius: 10px;
+  }
+
+  .event-type-list {
+    list-style: none;
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    line-height: 1.85;
+    color: var(--text-muted);
+  }
+
+  .event-type-list .action { color: var(--green); }
+
+  /* --- Mermaid --- */
+  .mermaid-wrapper {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 24px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .mermaid-controls {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    gap: 6px;
+    z-index: 10;
+  }
+
+  .mermaid-controls button {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-light);
+    color: var(--text-muted);
+    border-radius: 6px;
+    width: 30px;
+    height: 30px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .mermaid-controls button:hover {
+    background: var(--border-light);
+    color: var(--text);
+  }
+
+  .mermaid-viewport {
+    overflow: auto;
+    max-height: 520px;
+  }
+
+  .mermaid-viewport svg {
+    display: block;
+    margin: 0 auto;
+    transition: transform 0.2s ease;
+  }
+
+  /* --- Priority Tiers --- */
+  .tier-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .tier-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 4px;
+    height: 100%;
+  }
+
+  .tier-card.critical::before { background: var(--red); }
+  .tier-card.standard::before { background: var(--blue); }
+  .tier-card.background::before { background: var(--green); }
+  .tier-card.maintenance::before { background: var(--gray); }
+
+  .tier-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+
+  .tier-priority {
+    font-family: var(--font-mono);
+    font-size: 1.5rem;
+    font-weight: 800;
+    line-height: 1;
+  }
+
+  .tier-card.critical .tier-priority { color: var(--red); }
+  .tier-card.standard .tier-priority { color: var(--blue); }
+  .tier-card.background .tier-priority { color: var(--green); }
+  .tier-card.maintenance .tier-priority { color: var(--gray); }
+
+  .tier-name {
+    font-weight: 700;
+    font-size: 0.9rem;
+  }
+
+  .tier-desc {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    margin-bottom: 10px;
+    line-height: 1.55;
+  }
+
+  .tier-jobs {
+    list-style: none;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    line-height: 1.8;
+  }
+
+  .tier-jobs li::before {
+    content: '';
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    margin-right: 8px;
+    position: relative;
+    top: -1px;
+  }
+
+  .tier-card.critical .tier-jobs li::before { background: var(--red); }
+  .tier-card.standard .tier-jobs li::before { background: var(--blue); }
+  .tier-card.background .tier-jobs li::before { background: var(--green); }
+  .tier-card.maintenance .tier-jobs li::before { background: var(--gray); }
+
+  /* --- Comparison Table --- */
+  .compare-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .compare-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 24px;
+    position: relative;
+  }
+
+  .compare-card .tag {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .compare-card.sse .tag { background: var(--orange-glow); color: var(--orange); border: 1px solid var(--orange-dim); }
+  .compare-card.ws .tag { background: var(--purple); color: #1f2937; border: 1px solid var(--purple); }
+
+  .compare-card h3 { margin-bottom: 10px; }
+
+  .compare-props {
+    list-style: none;
+    font-size: 0.8rem;
+    line-height: 1.8;
+  }
+
+  .compare-props li {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(55, 65, 81, 0.4);
+  }
+
+  .compare-props li:last-child { border-bottom: none; }
+
+  .prop-key {
+    color: var(--text-dim);
+    font-size: 0.72rem;
+    min-width: 110px;
+    flex-shrink: 0;
+  }
+
+  .prop-val {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+  }
+
+  .compare-endpoint {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin: 14px 0;
+    color: var(--text-muted);
+    word-break: break-all;
+  }
+
+  .compare-usecases {
+    margin-top: 12px;
+  }
+
+  .compare-usecases h4 {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 6px;
+  }
+
+  .compare-usecases ul {
+    list-style: none;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    line-height: 1.75;
+  }
+
+  .compare-usecases ul li::before {
+    content: '--';
+    font-family: var(--font-mono);
+    color: var(--text-dim);
+    margin-right: 6px;
+  }
+
+  /* --- Schema --- */
+  .schema-table-wrap {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    margin-bottom: 16px;
+    overflow-x: auto;
+  }
+
+  .schema-table-name {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 0.95rem;
+    margin-bottom: 4px;
+  }
+
+  .schema-table-desc {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-bottom: 14px;
+  }
+
+  table.schema {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.76rem;
+  }
+
+  table.schema th {
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-dim);
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  table.schema td {
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(55, 65, 81, 0.4);
+    vertical-align: top;
+  }
+
+  table.schema tr:last-child td { border-bottom: none; }
+
+  table.schema .col-name {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+  }
+
+  table.schema .col-type {
+    font-family: var(--font-mono);
+    color: var(--blue);
+    font-size: 0.7rem;
+    white-space: nowrap;
+  }
+
+  table.schema .col-note {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+  }
+
+  .pk-badge {
+    font-family: var(--font-mono);
+    font-size: 0.56rem;
+    font-weight: 600;
+    color: var(--orange);
+    background: var(--orange-glow);
+    padding: 0 5px;
+    border-radius: 3px;
+    margin-left: 6px;
+  }
+
+  /* --- Envelope Section --- */
+  .envelope-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 14px;
+  }
+
+  @media (max-width: 900px) {
+    .envelope-grid { grid-template-columns: 1fr; }
+    .compare-grid { grid-template-columns: 1fr; }
+  }
+
+  .envelope-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+
+  .envelope-card h4 {
+    font-size: 0.78rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+
+  .code-block {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    line-height: 1.7;
+    color: var(--text-muted);
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  .code-block .key { color: var(--blue); }
+  .code-block .str { color: var(--green); }
+  .code-block .num { color: var(--orange); }
+  .code-block .bool { color: var(--purple); }
+  .code-block .null-val { color: var(--text-dim); }
+  .code-block .comment { color: var(--text-dim); font-style: italic; }
+
+  /* --- Infra strip --- */
+  .infra-strip {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+  }
+
+  .infra-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+
+  .infra-chip .chip-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* --- Footer --- */
+  footer {
+    padding: 36px 0;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+  }
+
+  footer a {
+    color: var(--blue);
+    text-decoration: none;
+  }
+
+  /* --- Animations --- */
+  .anim-in {
+    opacity: 0;
+    transform: translateY(18px);
+    transition: opacity 0.5s ease, transform 0.5s ease;
+  }
+
+  .anim-in.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* Stagger delays applied via JS */
+
+  /* --- Scrollbar --- */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ============================================ -->
+<!-- HERO                                         -->
+<!-- ============================================ -->
+<div class="hero">
+  <div class="container">
+    <div class="hero-badge"><span class="dot"></span> Doc 12 -- Spec Visualizer</div>
+    <h1>API, Events &amp;<br><span class="accent">Realtime Contracts</span></h1>
+    <p class="hero-sub">
+      The API is the backbone -- all clients connect through it. The event system is the nervous system --
+      domain events drive realtime updates, memory capture, notification delivery, and internal reactions.
+    </p>
+    <div class="stat-row">
+      <div class="stat-card blue anim-in">
+        <div class="stat-num">18</div>
+        <div class="stat-label">Endpoint Families</div>
+      </div>
+      <div class="stat-card green anim-in">
+        <div class="stat-num">~70</div>
+        <div class="stat-label">Domain Events</div>
+      </div>
+      <div class="stat-card orange anim-in">
+        <div class="stat-num">4</div>
+        <div class="stat-label">Priority Tiers</div>
+      </div>
+      <div class="stat-card gray anim-in">
+        <div class="stat-num">3</div>
+        <div class="stat-label">New Tables</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================ -->
+<!-- API PRINCIPLES                               -->
+<!-- ============================================ -->
+<section>
+  <div class="container">
+    <div class="section-label blue">API Surface</div>
+    <h2>REST for CRUD, Commands for Actions</h2>
+    <p class="section-desc">
+      All routes under <code style="font-family:var(--font-mono);color:var(--blue);font-size:0.85rem">/v1/</code>.
+      Standard REST for resource CRUD. Explicit verb-noun POST routes for operations with side effects.
+      JSON throughout, cursor-based pagination, consistent response envelope.
+    </p>
+
+    <div class="infra-strip" style="margin-bottom:24px;">
+      <div class="infra-chip"><span class="chip-dot" style="background:var(--blue)"></span> Versioned: /v1/ prefix</div>
+      <div class="infra-chip"><span class="chip-dot" style="background:var(--green)"></span> Cursor pagination</div>
+      <div class="infra-chip"><span class="chip-dot" style="background:var(--orange)"></span> Idempotency keys</div>
+      <div class="infra-chip"><span class="chip-dot" style="background:var(--gray)"></span> Bearer + Session auth</div>
+      <div class="infra-chip"><span class="chip-dot" style="background:var(--purple)"></span> Org-scoped access</div>
+    </div>
+
+    <div class="grid-3">
+
+      <!-- Auth & Org -->
+      <div class="card anim-in">
+        <div class="card-header">
+          <div class="card-icon blue">A</div>
+          <h3>Auth &amp; Org</h3>
+        </div>
+        <ul class="endpoint-list">
+          <li><span class="method post">POST</span><span class="endpoint-path">/auth/login</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/auth/logout</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/auth/refresh</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/auth/me</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/organizations/:id</span></li>
+          <li><span class="method patch">PATCH</span><span class="endpoint-path">/organizations/:id</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/.../api-keys</span></li>
+          <li><span class="method delete">DEL</span><span class="endpoint-path">/.../api-keys/:kid</span></li>
+        </ul>
+      </div>
+
+      <!-- Chat Sessions -->
+      <div class="card anim-in">
+        <div class="card-header">
+          <div class="card-icon blue">C</div>
+          <h3>Chat Sessions</h3>
+        </div>
+        <ul class="endpoint-list">
+          <li><span class="method post">POST</span><span class="endpoint-path">/chat-sessions</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/chat-sessions</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/chat-sessions/:id</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/close</span><span class="command-badge">CMD</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/messages</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:mid/steer</span><span class="command-badge">CMD</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/cancel-turn</span><span class="command-badge">CMD</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/:id/participants</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/read-cursor</span></li>
+        </ul>
+      </div>
+
+      <!-- Projects -->
+      <div class="card anim-in">
+        <div class="card-header">
+          <div class="card-icon blue">P</div>
+          <h3>Projects</h3>
+        </div>
+        <ul class="endpoint-list">
+          <li><span class="method post">POST</span><span class="endpoint-path">/projects</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/projects</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/projects/:id</span></li>
+          <li><span class="method patch">PATCH</span><span class="endpoint-path">/projects/:id</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/archive</span><span class="command-badge">CMD</span></li>
+        </ul>
+      </div>
+
+      <!-- Tasks & Flow -->
+      <div class="card anim-in">
+        <div class="card-header">
+          <div class="card-icon blue">T</div>
+          <h3>Tasks &amp; Flow</h3>
+        </div>
+        <ul class="endpoint-list">
+          <li><span class="method post">POST</span><span class="endpoint-path">/:pid/tasks</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/:pid/tasks</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/tasks/:id</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/advance-flow</span><span class="command-badge">CMD</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/approve-review</span><span class="command-badge">CMD</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/reject-review</span><span class="command-badge">CMD</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/hold</span><span class="command-badge">CMD</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/resume</span><span class="command-badge">CMD</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/cancel</span><span class="command-badge">CMD</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/:id/subtasks</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/:id/dependencies</span></li>
+        </ul>
+      </div>
+
+      <!-- Agents -->
+      <div class="card anim-in">
+        <div class="card-header">
+          <div class="card-icon blue">Ag</div>
+          <h3>Agents</h3>
+        </div>
+        <ul class="endpoint-list">
+          <li><span class="method post">POST</span><span class="endpoint-path">/agents</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/agents</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/agents/:id</span></li>
+          <li><span class="method patch">PATCH</span><span class="endpoint-path">/agents/:id</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/activate</span><span class="command-badge">CMD</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/pause</span><span class="command-badge">CMD</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/retire</span><span class="command-badge">CMD</span></li>
+        </ul>
+      </div>
+
+      <!-- Memory -->
+      <div class="card anim-in">
+        <div class="card-header">
+          <div class="card-icon blue">M</div>
+          <h3>Memory</h3>
+        </div>
+        <ul class="endpoint-list">
+          <li><span class="method post">POST</span><span class="endpoint-path">/memory/query</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/memory/items</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/memory/items/:id</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/feedback</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/memory/entities</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/memory/taxonomy</span></li>
+        </ul>
+      </div>
+
+      <!-- Control Plane -->
+      <div class="card anim-in">
+        <div class="card-header">
+          <div class="card-icon blue">CP</div>
+          <h3>Control Plane</h3>
+        </div>
+        <ul class="endpoint-list">
+          <li><span class="method post">POST</span><span class="endpoint-path">/control/runs</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/control/runs/:id</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/control/runs/:id/events</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/cancel</span><span class="command-badge">CMD</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/approve</span><span class="command-badge">CMD</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/reject</span><span class="command-badge">CMD</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/policies/evaluate</span></li>
+        </ul>
+      </div>
+
+      <!-- Inbox / Merge / Schedule -->
+      <div class="card anim-in">
+        <div class="card-header">
+          <div class="card-icon blue">Q</div>
+          <h3>Inbox / Merge / Schedule</h3>
+        </div>
+        <ul class="endpoint-list">
+          <li><span class="method get">GET</span><span class="endpoint-path">/inbox</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/inbox/:id/act</span><span class="command-badge">CMD</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/:pid/merge-queue</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:pid/schedules</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/:pid/schedules</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/pause</span><span class="command-badge">CMD</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/resume</span><span class="command-badge">CMD</span></li>
+        </ul>
+      </div>
+
+      <!-- Models / MCP / Skills / Tools / Delivery / System -->
+      <div class="card anim-in">
+        <div class="card-header">
+          <div class="card-icon blue">+</div>
+          <h3>Models, MCP, Skills, Delivery</h3>
+        </div>
+        <ul class="endpoint-list">
+          <li><span class="method get">GET</span><span class="endpoint-path">/model-profiles</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/mcp-connections</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:id/test</span><span class="command-badge">CMD</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/skills</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/tools</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/tool-policies</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/:pid/environments</span></li>
+          <li><span class="method post">POST</span><span class="endpoint-path">/:rid/push</span><span class="command-badge">CMD</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/health</span></li>
+          <li><span class="method get">GET</span><span class="endpoint-path">/version</span></li>
+        </ul>
+      </div>
+
+    </div>
+
+    <!-- Response Envelope -->
+    <h3 style="margin-top:32px;margin-bottom:14px;">Response Envelope</h3>
+    <div class="envelope-grid">
+      <div class="envelope-card anim-in">
+        <h4 style="color:var(--green)">Success (single)</h4>
+        <div class="code-block">{
+  <span class="key">"data"</span>: { ... },
+  <span class="key">"meta"</span>: {
+    <span class="key">"request_id"</span>: <span class="str">"req_abc123"</span>,
+    <span class="key">"timestamp"</span>: <span class="str">"2026-02-22T..."</span>
+  }
+}</div>
+      </div>
+      <div class="envelope-card anim-in">
+        <h4 style="color:var(--blue)">Success (list)</h4>
+        <div class="code-block">{
+  <span class="key">"data"</span>: [ ... ],
+  <span class="key">"meta"</span>: {
+    <span class="key">"pagination"</span>: {
+      <span class="key">"cursor"</span>: <span class="str">"eyJpZ..."</span>,
+      <span class="key">"has_more"</span>: <span class="bool">true</span>,
+      <span class="key">"page_size"</span>: <span class="num">50</span>
+    }
+  }
+}</div>
+      </div>
+      <div class="envelope-card anim-in">
+        <h4 style="color:var(--red)">Error</h4>
+        <div class="code-block">{
+  <span class="key">"error"</span>: {
+    <span class="key">"code"</span>: <span class="str">"task_invalid_transition"</span>,
+    <span class="key">"message"</span>: <span class="str">"Cannot..."</span>,
+    <span class="key">"details"</span>: { ... }
+  },
+  <span class="key">"meta"</span>: { ... }
+}</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================ -->
+<!-- EVENT SYSTEM                                  -->
+<!-- ============================================ -->
+<section>
+  <div class="container">
+    <div class="section-label green">Event System</div>
+    <h2>~70 Domain Events Across 11 Domains</h2>
+    <p class="section-desc">
+      Every significant state change emits a domain event into a durable PostgreSQL table. Events follow
+      <code style="font-family:var(--font-mono);color:var(--green);font-size:0.85rem">{domain}.{entity}.{action}</code>
+      naming. The outbox pattern guarantees at-least-once delivery to four consumer categories.
+    </p>
+
+    <!-- Mermaid: Event Flow -->
+    <div class="mermaid-wrapper anim-in" style="margin-bottom:28px;">
+      <div class="mermaid-controls">
+        <button onclick="mermaidZoom(1.15)" title="Zoom in">+</button>
+        <button onclick="mermaidZoom(0.87)" title="Zoom out">&minus;</button>
+        <button onclick="mermaidZoom(0)" title="Reset">R</button>
+      </div>
+      <div class="mermaid-viewport" id="mermaid-viewport">
+        <pre class="mermaid" id="event-flow-diagram">
+%%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1e3a5f', 'primaryTextColor': '#f9fafb', 'primaryBorderColor': '#3b82f6', 'lineColor': '#4b5563', 'secondaryColor': '#064e3b', 'tertiaryColor': '#374151', 'fontFamily': 'Inter', 'fontSize': '13px', 'darkMode': true}}}%%
+flowchart LR
+    A["Domain Action\n(API / Command)"] -->|"same tx"| B["domain_event\ntable (PG)"]
+    B -->|"poll unpublished\n100-500ms"| C["Event\nDispatcher"]
+    C -->|"fan out"| D["Realtime Push\n(SSE / WebSocket)"]
+    C -->|"fan out"| E["Memory Capture\n(Ellie)"]
+    C -->|"fan out"| F["Notification\nDelivery"]
+    C -->|"fan out"| G["Reaction Handlers\n(inbox, merge,\ndeps, deploy)"]
+    C -->|"mark published"| B
+
+    style A fill:#1e3a5f,stroke:#3b82f6,color:#f9fafb
+    style B fill:#064e3b,stroke:#10b981,color:#f9fafb
+    style C fill:#374151,stroke:#6b7280,color:#f9fafb
+    style D fill:#78350f,stroke:#f59e0b,color:#f9fafb
+    style E fill:#064e3b,stroke:#10b981,color:#f9fafb
+    style F fill:#1e3a5f,stroke:#3b82f6,color:#f9fafb
+    style G fill:#374151,stroke:#6b7280,color:#f9fafb
+        </pre>
+      </div>
+    </div>
+
+    <!-- Event domains grid -->
+    <div class="grid-3">
+
+      <div class="event-domain anim-in">
+        <div class="event-domain-header">
+          <span class="event-domain-name">Chat</span>
+          <span class="event-domain-count">15 events</span>
+        </div>
+        <ul class="event-type-list">
+          <li>chat.session.<span class="action">created</span></li>
+          <li>chat.session.<span class="action">closed</span></li>
+          <li>chat.session.<span class="action">mode_changed</span></li>
+          <li>chat.message.<span class="action">created</span></li>
+          <li>chat.message.<span class="action">delta</span></li>
+          <li>chat.message.<span class="action">finalized</span></li>
+          <li>chat.message.<span class="action">failed</span></li>
+          <li>chat.message.<span class="action">redacted</span></li>
+          <li>chat.turn.<span class="action">started</span></li>
+          <li>chat.turn.<span class="action">completed</span></li>
+          <li>chat.listening_eval.<span class="action">completed</span></li>
+          <li>chat.participant.<span class="action">joined</span></li>
+          <li>chat.participant.<span class="action">left</span></li>
+          <li>chat.reaction.<span class="action">created / updated / deleted</span></li>
+        </ul>
+      </div>
+
+      <div class="event-domain anim-in">
+        <div class="event-domain-header">
+          <span class="event-domain-name">Task</span>
+          <span class="event-domain-count">14 events</span>
+        </div>
+        <ul class="event-type-list">
+          <li>task.<span class="action">created</span></li>
+          <li>task.<span class="action">updated</span></li>
+          <li>task.<span class="action">status_changed</span></li>
+          <li>task.<span class="action">queued</span></li>
+          <li>task.<span class="action">started</span></li>
+          <li>task.<span class="action">blocked / unblocked</span></li>
+          <li>task.<span class="action">held / resumed</span></li>
+          <li>task.<span class="action">review_started</span></li>
+          <li>task.<span class="action">completed / cancelled</span></li>
+          <li>task.subtask.<span class="action">created</span></li>
+          <li>task.subtask.<span class="action">status_changed</span></li>
+          <li>task.subtask.<span class="action">completed</span></li>
+        </ul>
+      </div>
+
+      <div class="event-domain anim-in">
+        <div class="event-domain-header">
+          <span class="event-domain-name">Flow</span>
+          <span class="event-domain-count">5 events</span>
+        </div>
+        <ul class="event-type-list">
+          <li>task.flow.<span class="action">advanced</span></li>
+          <li>task.flow.<span class="action">rejected</span></li>
+          <li>task.flow.<span class="action">node_started</span></li>
+          <li>task.flow.<span class="action">node_completed</span></li>
+          <li>task.flow.<span class="action">node_blocked</span></li>
+        </ul>
+      </div>
+
+      <div class="event-domain anim-in">
+        <div class="event-domain-header">
+          <span class="event-domain-name">Dependency</span>
+          <span class="event-domain-count">4 events</span>
+        </div>
+        <ul class="event-type-list">
+          <li>task.dependency.<span class="action">added</span></li>
+          <li>task.dependency.<span class="action">removed</span></li>
+          <li>task.dependency.<span class="action">resolved</span></li>
+          <li>task.dependency.<span class="action">cancelled</span></li>
+        </ul>
+      </div>
+
+      <div class="event-domain anim-in">
+        <div class="event-domain-header">
+          <span class="event-domain-name">Agent</span>
+          <span class="event-domain-count">6 events</span>
+        </div>
+        <ul class="event-type-list">
+          <li>agent.<span class="action">created</span></li>
+          <li>agent.<span class="action">activated</span></li>
+          <li>agent.<span class="action">paused</span></li>
+          <li>agent.<span class="action">retired</span></li>
+          <li>agent.<span class="action">profile_updated</span></li>
+          <li>agent.<span class="action">assigned</span></li>
+        </ul>
+      </div>
+
+      <div class="event-domain anim-in">
+        <div class="event-domain-header">
+          <span class="event-domain-name">Memory</span>
+          <span class="event-domain-count">6 events</span>
+        </div>
+        <ul class="event-type-list">
+          <li>memory.item.<span class="action">created</span></li>
+          <li>memory.item.<span class="action">updated</span></li>
+          <li>memory.item.<span class="action">archived</span></li>
+          <li>memory.item.<span class="action">superseded</span></li>
+          <li>memory.entity.<span class="action">synthesized</span></li>
+          <li>memory.dedup.<span class="action">completed</span></li>
+        </ul>
+      </div>
+
+      <div class="event-domain anim-in">
+        <div class="event-domain-header">
+          <span class="event-domain-name">Model</span>
+          <span class="event-domain-count">6 events</span>
+        </div>
+        <ul class="event-type-list">
+          <li>model.request.<span class="action">started</span></li>
+          <li>model.request.<span class="action">completed</span></li>
+          <li>model.request.<span class="action">failed</span></li>
+          <li>model.request.<span class="action">fallback</span></li>
+          <li>model.budget.<span class="action">warning</span></li>
+          <li>model.budget.<span class="action">exceeded</span></li>
+        </ul>
+      </div>
+
+      <div class="event-domain anim-in">
+        <div class="event-domain-header">
+          <span class="event-domain-name">Control Plane</span>
+          <span class="event-domain-count">8 events</span>
+        </div>
+        <ul class="event-type-list">
+          <li>control.run.<span class="action">created</span></li>
+          <li>control.run.<span class="action">started</span></li>
+          <li>control.run.<span class="action">completed / failed / cancelled</span></li>
+          <li>control.approval.<span class="action">requested</span></li>
+          <li>control.approval.<span class="action">approved / rejected</span></li>
+          <li>control.policy.<span class="action">evaluated</span></li>
+        </ul>
+      </div>
+
+      <div class="event-domain anim-in">
+        <div class="event-domain-header">
+          <span class="event-domain-name">Project / Merge / Delivery</span>
+          <span class="event-domain-count">11 events</span>
+        </div>
+        <ul class="event-type-list">
+          <li>project.<span class="action">created / updated / archived</span></li>
+          <li>project.merge.<span class="action">queued / started</span></li>
+          <li>project.merge.<span class="action">completed / conflict</span></li>
+          <li>project.push.<span class="action">succeeded / failed</span></li>
+          <li>project.deploy.<span class="action">started / completed</span></li>
+          <li>project.deploy.<span class="action">failed / rollback</span></li>
+        </ul>
+      </div>
+
+      <div class="event-domain anim-in">
+        <div class="event-domain-header">
+          <span class="event-domain-name">System</span>
+          <span class="event-domain-count">6 events</span>
+        </div>
+        <ul class="event-type-list">
+          <li>system.health.<span class="action">degraded / recovered</span></li>
+          <li>system.schedule.<span class="action">fired / skipped</span></li>
+          <li>system.job.<span class="action">started / completed</span></li>
+          <li>system.job.<span class="action">failed / dead_lettered</span></li>
+        </ul>
+      </div>
+
+      <div class="event-domain anim-in">
+        <div class="event-domain-header">
+          <span class="event-domain-name">Inbox</span>
+          <span class="event-domain-count">3 events</span>
+        </div>
+        <ul class="event-type-list">
+          <li>inbox.item.<span class="action">created</span></li>
+          <li>inbox.item.<span class="action">acted</span></li>
+          <li>inbox.item.<span class="action">deferred</span></li>
+        </ul>
+      </div>
+
+    </div>
+
+    <!-- Event Structure -->
+    <h3 style="margin-top:32px;margin-bottom:14px;">Event Structure</h3>
+    <div class="grid-2">
+      <div class="envelope-card anim-in">
+        <h4 style="color:var(--green)">Uniform Event Envelope</h4>
+        <div class="code-block">{
+  <span class="key">"id"</span>: <span class="str">"evt_01H2X3Y4Z5..."</span>,
+  <span class="key">"type"</span>: <span class="str">"task.flow.advanced"</span>,
+  <span class="key">"timestamp"</span>: <span class="str">"2026-02-22T14:30:00.123Z"</span>,
+  <span class="key">"actor"</span>: {
+    <span class="key">"type"</span>: <span class="str">"agent"</span>,  <span class="comment">// human | agent | system</span>
+    <span class="key">"id"</span>: <span class="str">"uuid-of-agent"</span>
+  },
+  <span class="key">"scope"</span>: {
+    <span class="key">"organization_id"</span>: <span class="str">"uuid"</span>,
+    <span class="key">"project_id"</span>: <span class="str">"uuid"</span>,
+    <span class="key">"task_id"</span>: <span class="str">"uuid"</span>,
+    <span class="key">"session_id"</span>: <span class="null-val">null</span>
+  },
+  <span class="key">"payload"</span>: { <span class="comment">// type-specific</span> },
+  <span class="key">"metadata"</span>: { <span class="comment">// operational</span> }
+}</div>
+      </div>
+      <div class="envelope-card anim-in">
+        <h4 style="color:var(--text-dim)">Dispatch Guarantees</h4>
+        <div style="font-size:0.82rem;color:var(--text-muted);line-height:1.8;">
+          <p style="margin-bottom:10px"><strong style="color:var(--text)">Outbox Pattern</strong> -- Events are written in the same database transaction as the domain operation. No event is lost on crash.</p>
+          <p style="margin-bottom:10px"><strong style="color:var(--text)">At-Least-Once Delivery</strong> -- Consumers may receive the same event more than once. All consumers must be idempotent.</p>
+          <p style="margin-bottom:10px"><strong style="color:var(--text)">Poll Interval</strong> -- 100-500ms for low latency on realtime push. Batched under load.</p>
+          <p style="margin-bottom:10px"><strong style="color:var(--text)">Append-Only</strong> -- Events are never updated or deleted during normal operation. 90-day default retention.</p>
+          <p><strong style="color:var(--text)">Scope Denormalized</strong> -- org_id, project_id, task_id, session_id are columns, enabling efficient subscription filtering without JSON parsing.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================ -->
+<!-- JOB QUEUE / PRIORITY TIERS                   -->
+<!-- ============================================ -->
+<section>
+  <div class="container">
+    <div class="section-label gray">Infrastructure</div>
+    <h2>Job Queue -- Four Priority Tiers</h2>
+    <p class="section-desc">
+      PostgreSQL-backed job queue. No Redis. Workers claim jobs via
+      <code style="font-family:var(--font-mono);color:var(--text);font-size:0.82rem">SELECT ... FOR UPDATE SKIP LOCKED</code>
+      for concurrent claiming without contention. Exponential backoff retries, dead letter handling, stale claim recovery.
+    </p>
+
+    <div class="grid-4">
+      <div class="tier-card critical anim-in">
+        <div class="tier-header">
+          <span class="tier-name">Sync / Human-Waiting</span>
+          <span class="tier-priority">100</span>
+        </div>
+        <p class="tier-desc">Human is actively waiting for a result. Picked first.</p>
+        <ul class="tier-jobs">
+          <li>Agent turns (sync sessions)</li>
+          <li>Steer/cancel operations</li>
+          <li>Approval actions</li>
+        </ul>
+      </div>
+
+      <div class="tier-card standard anim-in">
+        <div class="tier-header">
+          <span class="tier-name">Standard Async</span>
+          <span class="tier-priority">50</span>
+        </div>
+        <p class="tier-desc">Normal asynchronous work. Runs promptly, not urgently.</p>
+        <ul class="tier-jobs">
+          <li>Agent turns (async)</li>
+          <li>Flow node starts</li>
+          <li>Merge execution</li>
+          <li>Push execution</li>
+        </ul>
+      </div>
+
+      <div class="tier-card background anim-in">
+        <div class="tier-header">
+          <span class="tier-name">Background</span>
+          <span class="tier-priority">25</span>
+        </div>
+        <p class="tier-desc">Processing that can tolerate some delay.</p>
+        <ul class="tier-jobs">
+          <li>Memory extraction</li>
+          <li>Notification dispatch</li>
+          <li>Summary generation</li>
+          <li>Deploy task creation</li>
+        </ul>
+      </div>
+
+      <div class="tier-card maintenance anim-in">
+        <div class="tier-header">
+          <span class="tier-name">Maintenance</span>
+          <span class="tier-priority">10</span>
+        </div>
+        <p class="tier-desc">Housekeeping. Runs when capacity allows.</p>
+        <ul class="tier-jobs">
+          <li>Ephemeral message cleanup</li>
+          <li>Idempotency key purge</li>
+          <li>Event log retention</li>
+          <li>Memory consolidation</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Retry / Dead Letter info -->
+    <div class="grid-2" style="margin-top:16px;">
+      <div class="card anim-in">
+        <h3 style="margin-bottom:8px;">Retry Policy</h3>
+        <div style="font-size:0.8rem;color:var(--text-muted);line-height:1.75;">
+          <p>Exponential backoff: <code style="font-family:var(--font-mono);color:var(--orange);font-size:0.78rem">base_delay * 2^(attempts - 1)</code> with jitter</p>
+          <p>Base delay: 5s. Max delay: 5 min. Default max attempts: 3.</p>
+          <p>When <code style="font-family:var(--font-mono);color:var(--text);font-size:0.78rem">attempts >= max_attempts</code>, the job moves to <code style="font-family:var(--font-mono);color:var(--red);font-size:0.78rem">dead_letter</code> status.</p>
+        </div>
+      </div>
+      <div class="card anim-in">
+        <h3 style="margin-bottom:8px;">Stale Claim Recovery</h3>
+        <div style="font-size:0.8rem;color:var(--text-muted);line-height:1.75;">
+          <p>Background monitor watches for claimed jobs that exceed their timeout.</p>
+          <p>Agent turns: 30 min timeout. Lightweight jobs: 5 min timeout.</p>
+          <p>Stale jobs are reset to <code style="font-family:var(--font-mono);color:var(--text);font-size:0.78rem">pending</code> (if retries remain) or <code style="font-family:var(--font-mono);color:var(--red);font-size:0.78rem">dead_letter</code>. A <code style="font-family:var(--font-mono);color:var(--green);font-size:0.78rem">system.job.failed</code> event is emitted.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================ -->
+<!-- REALTIME                                      -->
+<!-- ============================================ -->
+<section>
+  <div class="container">
+    <div class="section-label orange">Realtime Transport</div>
+    <h2>SSE Default, WebSocket Opt-In</h2>
+    <p class="section-desc">
+      Server-Sent Events is the primary transport for server-to-client push. WebSocket is available for bidirectional
+      needs. Clients subscribe to hierarchical scopes and receive filtered events from the durable log.
+    </p>
+
+    <div class="compare-grid">
+      <!-- SSE -->
+      <div class="compare-card sse anim-in">
+        <span class="tag">Default</span>
+        <h3>Server-Sent Events (SSE)</h3>
+        <div class="compare-endpoint">GET /v1/events/stream?scopes=org:uuid,project:uuid,session:uuid</div>
+        <ul class="compare-props">
+          <li><span class="prop-key">Direction</span><span class="prop-val">Server to client (unidirectional)</span></li>
+          <li><span class="prop-key">Protocol</span><span class="prop-val">Standard HTTP -- works through proxies, CDNs, load balancers</span></li>
+          <li><span class="prop-key">Reconnection</span><span class="prop-val">Built-in via Last-Event-ID; replays missed events from durable log</span></li>
+          <li><span class="prop-key">Auth</span><span class="prop-val">Bearer token or session cookie</span></li>
+          <li><span class="prop-key">Keepalive</span><span class="prop-val">:keepalive comment every 15 seconds</span></li>
+          <li><span class="prop-key">Scope changes</span><span class="prop-val">Requires new connection (seamless via reconnect)</span></li>
+          <li><span class="prop-key">Backpressure</span><span class="prop-val">Buffer up to 1000 events; overflow drops connection</span></li>
+        </ul>
+        <div class="compare-usecases">
+          <h4>Primary use cases</h4>
+          <ul>
+            <li>Streaming agent responses (message deltas)</li>
+            <li>Task status updates and flow progression</li>
+            <li>Notification delivery</li>
+            <li>Dashboard and project view updates</li>
+            <li>Merge queue and deploy status</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- WebSocket -->
+      <div class="compare-card ws anim-in">
+        <span class="tag">Opt-in</span>
+        <h3>WebSocket</h3>
+        <div class="compare-endpoint">GET /v1/ws?scopes=org:uuid,project:uuid -- Upgrade: websocket</div>
+        <ul class="compare-props">
+          <li><span class="prop-key">Direction</span><span class="prop-val">Bidirectional (client and server)</span></li>
+          <li><span class="prop-key">Protocol</span><span class="prop-val">Protocol upgrade from HTTP; may need proxy config</span></li>
+          <li><span class="prop-key">Reconnection</span><span class="prop-val">Client-managed; replay via event log query</span></li>
+          <li><span class="prop-key">Auth</span><span class="prop-val">Same as SSE (Bearer / session cookie)</span></li>
+          <li><span class="prop-key">Client messages</span><span class="prop-val">subscribe, unsubscribe, typing indicators</span></li>
+          <li><span class="prop-key">Scope changes</span><span class="prop-val">Dynamic via client messages on same connection</span></li>
+          <li><span class="prop-key">Backpressure</span><span class="prop-val">Same buffer overflow model as SSE</span></li>
+        </ul>
+        <div class="compare-usecases">
+          <h4>Specialized use cases</h4>
+          <ul>
+            <li>Typing indicators ("user is typing")</li>
+            <li>Interactive tool sessions (live pairing)</li>
+            <li>Future: voice-to-text streaming</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scope hierarchy -->
+    <h3 style="margin-top:28px;margin-bottom:14px;">Scope Hierarchy</h3>
+    <div class="grid-4">
+      <div class="card anim-in" style="border-color:var(--orange-dim);">
+        <div style="font-family:var(--font-mono);font-size:0.82rem;color:var(--orange);font-weight:600;margin-bottom:6px;">org:{id}</div>
+        <div style="font-size:0.78rem;color:var(--text-muted);">Broadest scope. All events in the org. Includes all projects, tasks, sessions. Used by dashboards.</div>
+      </div>
+      <div class="card anim-in" style="border-color:var(--orange-dim);">
+        <div style="font-family:var(--font-mono);font-size:0.82rem;color:var(--orange);font-weight:600;margin-bottom:6px;">project:{id}</div>
+        <div style="font-size:0.78rem;color:var(--text-muted);">All events for a project: tasks, flow, merge, deploy. Used by project views.</div>
+      </div>
+      <div class="card anim-in" style="border-color:var(--orange-dim);">
+        <div style="font-family:var(--font-mono);font-size:0.82rem;color:var(--orange);font-weight:600;margin-bottom:6px;">task:{id}</div>
+        <div style="font-size:0.78rem;color:var(--text-muted);">Single task: status, flow, subtasks. Used by task detail views.</div>
+      </div>
+      <div class="card anim-in" style="border-color:var(--orange-dim);">
+        <div style="font-family:var(--font-mono);font-size:0.82rem;color:var(--orange);font-weight:600;margin-bottom:6px;">session:{id}</div>
+        <div style="font-size:0.78rem;color:var(--text-muted);">Single chat session: messages, deltas, turns, reactions. Used by the chat pane.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================ -->
+<!-- DATABASE SCHEMA                               -->
+<!-- ============================================ -->
+<section>
+  <div class="container">
+    <div class="section-label gray">Database Schema</div>
+    <h2>Three New Tables</h2>
+    <p class="section-desc">
+      Infrastructure tables that coordinate, dispatch, and ensure reliability. They do not duplicate domain
+      data -- they are the system's plumbing.
+    </p>
+
+    <!-- domain_event -->
+    <div class="schema-table-wrap anim-in">
+      <div class="schema-table-name" style="color:var(--green);">domain_event</div>
+      <div class="schema-table-desc">Durable event log. Append-only. Events are written transactionally with domain operations and dispatched via the outbox pattern.</div>
+      <table class="schema">
+        <thead>
+          <tr><th>Column</th><th>Type</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="col-name">id <span class="pk-badge">PK</span></td><td class="col-type">uuid</td><td class="col-note">gen_random_uuid()</td></tr>
+          <tr><td class="col-name">type</td><td class="col-type">text</td><td class="col-note">Dot-namespaced event type (e.g. task.flow.advanced)</td></tr>
+          <tr><td class="col-name">timestamp</td><td class="col-type">timestamptz</td><td class="col-note">When the event was created (UTC)</td></tr>
+          <tr><td class="col-name">actor_type</td><td class="col-type">text</td><td class="col-note">human | agent | system</td></tr>
+          <tr><td class="col-name">actor_id</td><td class="col-type">uuid</td><td class="col-note">Nullable for system events</td></tr>
+          <tr><td class="col-name">organization_id</td><td class="col-type">uuid</td><td class="col-note">Always present. Indexed for scope filtering.</td></tr>
+          <tr><td class="col-name">project_id</td><td class="col-type">uuid</td><td class="col-note">Nullable. Partial index where not null.</td></tr>
+          <tr><td class="col-name">task_id</td><td class="col-type">uuid</td><td class="col-note">Nullable. Partial index where not null.</td></tr>
+          <tr><td class="col-name">session_id</td><td class="col-type">uuid</td><td class="col-note">Nullable. Partial index where not null.</td></tr>
+          <tr><td class="col-name">payload</td><td class="col-type">jsonb</td><td class="col-note">Type-specific event data</td></tr>
+          <tr><td class="col-name">metadata</td><td class="col-type">jsonb</td><td class="col-note">Operational: idempotency_key, request_id, trace_id</td></tr>
+          <tr><td class="col-name">published</td><td class="col-type">boolean</td><td class="col-note">Outbox dispatch flag. Default false. Indexed for unpublished polling.</td></tr>
+          <tr><td class="col-name">created_at</td><td class="col-type">timestamptz</td><td class="col-note">Indexed for retention management</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- job_queue -->
+    <div class="schema-table-wrap anim-in">
+      <div class="schema-table-name" style="color:var(--blue);">job_queue</div>
+      <div class="schema-table-desc">PostgreSQL-backed job queue. Workers claim via SELECT FOR UPDATE SKIP LOCKED. Priority integer ordering, exponential backoff, dead letter support.</div>
+      <table class="schema">
+        <thead>
+          <tr><th>Column</th><th>Type</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="col-name">id <span class="pk-badge">PK</span></td><td class="col-type">uuid</td><td class="col-note">gen_random_uuid()</td></tr>
+          <tr><td class="col-name">job_type</td><td class="col-type">text</td><td class="col-note">agent_turn, flow_node_start, memory_extraction, etc.</td></tr>
+          <tr><td class="col-name">priority</td><td class="col-type">int</td><td class="col-note">Higher = picked first. 100/50/25/10 tiers.</td></tr>
+          <tr><td class="col-name">payload</td><td class="col-type">jsonb</td><td class="col-note">Job-specific parameters</td></tr>
+          <tr><td class="col-name">status</td><td class="col-type">text</td><td class="col-note">pending | claimed | running | completed | failed | dead_letter</td></tr>
+          <tr><td class="col-name">attempts</td><td class="col-type">int</td><td class="col-note">Current attempt count. Default 0.</td></tr>
+          <tr><td class="col-name">max_attempts</td><td class="col-type">int</td><td class="col-note">Default 3. Configurable per job type.</td></tr>
+          <tr><td class="col-name">claimed_by</td><td class="col-type">text</td><td class="col-note">Worker instance ID</td></tr>
+          <tr><td class="col-name">claimed_at</td><td class="col-type">timestamptz</td><td class="col-note">For stale claim detection</td></tr>
+          <tr><td class="col-name">run_after</td><td class="col-type">timestamptz</td><td class="col-note">For delayed/scheduled jobs and retry backoff</td></tr>
+          <tr><td class="col-name">error_message</td><td class="col-type">text</td><td class="col-note">Last failure message</td></tr>
+          <tr><td class="col-name">result</td><td class="col-type">jsonb</td><td class="col-note">Completion result payload</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- idempotency_key -->
+    <div class="schema-table-wrap anim-in">
+      <div class="schema-table-name" style="color:var(--orange);">idempotency_key</div>
+      <div class="schema-table-desc">Stores idempotency keys for mutation replay safety. Org-scoped, 24-hour TTL. Prevents accidental duplicate operations.</div>
+      <table class="schema">
+        <thead>
+          <tr><th>Column</th><th>Type</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="col-name">key <span class="pk-badge">PK</span></td><td class="col-type">text</td><td class="col-note">Client-generated unique string (UUID recommended)</td></tr>
+          <tr><td class="col-name">organization_id <span class="pk-badge">PK</span></td><td class="col-type">uuid</td><td class="col-note">Composite PK with key. Org-scoped.</td></tr>
+          <tr><td class="col-name">method</td><td class="col-type">text</td><td class="col-note">HTTP method (POST, PATCH, DELETE)</td></tr>
+          <tr><td class="col-name">path</td><td class="col-type">text</td><td class="col-note">Request path</td></tr>
+          <tr><td class="col-name">request_hash</td><td class="col-type">text</td><td class="col-note">SHA-256 of canonical request body</td></tr>
+          <tr><td class="col-name">response_status</td><td class="col-type">int</td><td class="col-note">Stored HTTP status code</td></tr>
+          <tr><td class="col-name">response_body</td><td class="col-type">jsonb</td><td class="col-note">Stored response for replay</td></tr>
+          <tr><td class="col-name">expires_at</td><td class="col-type">timestamptz</td><td class="col-note">24-hour TTL. Indexed for periodic cleanup.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Rate Limiting -->
+    <h3 style="margin-top:28px;margin-bottom:14px;">Rate Limiting</h3>
+    <div class="grid-2">
+      <div class="card anim-in">
+        <h3 style="color:var(--green);margin-bottom:10px;">Self-Hosted</h3>
+        <div style="font-family:var(--font-mono);font-size:0.82rem;line-height:2;color:var(--text-muted);">
+          <div>Requests/min: <span style="color:var(--text);font-weight:600;">10,000</span></div>
+          <div>Per-endpoint/min: <span style="color:var(--text);font-weight:600;">2,000</span></div>
+          <div>SSE connections: <span style="color:var(--text);font-weight:600;">50</span></div>
+        </div>
+        <div style="font-size:0.72rem;color:var(--text-dim);margin-top:8px;">Generous -- operator owns the infrastructure.</div>
+      </div>
+      <div class="card anim-in">
+        <h3 style="color:var(--blue);margin-bottom:10px;">Managed</h3>
+        <div style="font-family:var(--font-mono);font-size:0.82rem;line-height:2;color:var(--text-muted);">
+          <div>Requests/min: <span style="color:var(--text);font-weight:600;">1,000</span></div>
+          <div>Per-endpoint/min: <span style="color:var(--text);font-weight:600;">200</span></div>
+          <div>SSE connections: <span style="color:var(--text);font-weight:600;">10</span></div>
+        </div>
+        <div style="font-size:0.72rem;color:var(--text-dim);margin-top:8px;">Stricter -- protects shared infrastructure.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================ -->
+<!-- FOOTER                                        -->
+<!-- ============================================ -->
+<footer>
+  <div class="container">
+    <p>OtterCamp V2 -- Doc 12: API, Events, and Realtime Contracts</p>
+    <p style="margin-top:4px;">Spec status: Draft. Webhooks deferred to V2.1.</p>
+  </div>
+</footer>
+
+<!-- ============================================ -->
+<!-- SCRIPTS                                       -->
+<!-- ============================================ -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    fontFamily: 'Inter, sans-serif',
+    flowchart: {
+      curve: 'basis',
+      padding: 16,
+      htmlLabels: true,
+      useMaxWidth: true,
+    },
+  });
+</script>
+
+<script>
+  // --- Mermaid zoom controls ---
+  let currentScale = 1;
+  window.mermaidZoom = function(factor) {
+    const viewport = document.getElementById('mermaid-viewport');
+    const svg = viewport.querySelector('svg');
+    if (!svg) return;
+    if (factor === 0) {
+      currentScale = 1;
+    } else {
+      currentScale *= factor;
+      currentScale = Math.max(0.3, Math.min(3, currentScale));
+    }
+    svg.style.transform = 'scale(' + currentScale + ')';
+    svg.style.transformOrigin = 'center top';
+  };
+
+  // --- Staggered scroll-in animations ---
+  function initAnimations() {
+    const items = document.querySelectorAll('.anim-in');
+    const observer = new IntersectionObserver(function(entries) {
+      const visible = [];
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          visible.push(entry.target);
+          observer.unobserve(entry.target);
+        }
+      });
+      visible.forEach(function(el, i) {
+        setTimeout(function() {
+          el.classList.add('visible');
+        }, i * 60);
+      });
+    }, {
+      threshold: 0.08,
+      rootMargin: '0px 0px -30px 0px'
+    });
+
+    items.forEach(function(item) {
+      observer.observe(item);
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initAnimations);
+  } else {
+    initAnimations();
+  }
+</script>
+
+</body>
+</html>

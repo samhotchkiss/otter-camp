@@ -1,0 +1,1928 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- Tools and Tool Policy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ===== Custom Properties ===== */
+  :root {
+    --bg: #0f172a;
+    --bg-raised: #1e293b;
+    --bg-card: #162033;
+    --bg-deep: #0b1120;
+
+    --tier1: #14b8a6;
+    --tier1-dim: #0d9488;
+    --tier1-ghost: #14b8a610;
+    --tier1-glow: #14b8a630;
+    --tier1-border: #14b8a640;
+
+    --tier2: #f97316;
+    --tier2-dim: #ea580c;
+    --tier2-ghost: #f9731610;
+    --tier2-glow: #f9731630;
+    --tier2-border: #f9731640;
+
+    --native: #3b82f6;
+    --native-dim: #2563eb;
+    --native-ghost: #3b82f610;
+    --native-border: #3b82f640;
+
+    --system: #8b5cf6;
+    --system-dim: #7c3aed;
+    --system-ghost: #8b5cf610;
+    --system-border: #8b5cf640;
+
+    --browser: #ec4899;
+    --browser-dim: #db2777;
+    --browser-ghost: #ec489910;
+    --browser-border: #ec489940;
+
+    --mcp: #06b6d4;
+    --mcp-dim: #0891b2;
+    --mcp-ghost: #06b6d410;
+    --mcp-border: #06b6d440;
+
+    --white: #cbd5e1;
+    --white-bright: #e2e8f0;
+    --white-dim: #94a3b8;
+    --border: #1e3a5f;
+    --border-bright: #334155;
+    --accent: #14b8a6;
+
+    --font-heading: 'Space Grotesk', sans-serif;
+    --font-body: 'Inter', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  /* ===== Reset ===== */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--white);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  /* ===== Scrollbar ===== */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--white-dim); }
+
+  /* ===== Grid Background ===== */
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    z-index: 0;
+    background-image:
+      linear-gradient(rgba(30,58,95,0.15) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(30,58,95,0.15) 1px, transparent 1px);
+    background-size: 60px 60px;
+  }
+
+  /* ===== Layout ===== */
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 2rem;
+    position: relative;
+    z-index: 1;
+  }
+
+  section {
+    padding: 4rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  section:last-of-type {
+    border-bottom: none;
+  }
+
+  /* ===== Typography ===== */
+  h1, h2, h3 {
+    font-family: var(--font-heading);
+    color: var(--white-bright);
+    font-weight: 600;
+  }
+
+  h1 { font-size: 2.4rem; letter-spacing: -0.02em; }
+  h2 { font-size: 1.5rem; margin-bottom: 1.5rem; letter-spacing: -0.01em; }
+  h3 { font-size: 1.1rem; margin-bottom: 1rem; color: var(--white-dim); font-weight: 500; }
+
+  p { margin-bottom: 1rem; }
+
+  code, .mono {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+  }
+
+  /* ===== FadeUp Animation ===== */
+  .fade-up {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+  }
+
+  .fade-up.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ===== Staggered Animations ===== */
+  .stagger-1 { transition-delay: 0.05s; }
+  .stagger-2 { transition-delay: 0.1s; }
+  .stagger-3 { transition-delay: 0.15s; }
+  .stagger-4 { transition-delay: 0.2s; }
+  .stagger-5 { transition-delay: 0.25s; }
+  .stagger-6 { transition-delay: 0.3s; }
+  .stagger-7 { transition-delay: 0.35s; }
+  .stagger-8 { transition-delay: 0.4s; }
+
+  /* ===== Hero ===== */
+  .hero {
+    padding: 5rem 0 4rem;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 800px;
+    height: 800px;
+    background: radial-gradient(ellipse, rgba(20,184,166,0.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero-prefix {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--white-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.3em;
+    margin-bottom: 1rem;
+    display: block;
+  }
+
+  .hero h1 {
+    margin-bottom: 0.75rem;
+    position: relative;
+  }
+
+  .hero-subtitle {
+    font-family: var(--font-body);
+    font-size: 1rem;
+    color: var(--white-dim);
+    font-weight: 300;
+    display: block;
+    margin-bottom: 3rem;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+    line-height: 1.6;
+  }
+
+  /* ===== Stat Pills ===== */
+  .stats {
+    display: flex;
+    justify-content: center;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+  }
+
+  .stat {
+    border: 1px solid var(--border-bright);
+    background: var(--bg-card);
+    padding: 1.25rem 2rem;
+    text-align: center;
+    min-width: 160px;
+    border-radius: 8px;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+
+  .stat:hover {
+    border-color: var(--accent);
+    box-shadow: 0 0 30px var(--tier1-ghost);
+  }
+
+  .stat-value {
+    font-family: var(--font-heading);
+    font-size: 2rem;
+    font-weight: 700;
+    display: block;
+    line-height: 1;
+    margin-bottom: 0.4rem;
+  }
+
+  .stat-value.tier1-color { color: var(--tier1); }
+  .stat-value.native-color { color: var(--native); }
+  .stat-value.system-color { color: var(--system); }
+
+  .stat-label {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--white-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+  }
+
+  /* ===== Section Headers ===== */
+  .section-number {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--white-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    display: block;
+    margin-bottom: 0.5rem;
+  }
+
+  .section-desc {
+    color: var(--white);
+    font-size: 0.9rem;
+    max-width: 750px;
+    margin-bottom: 2rem;
+    font-weight: 300;
+    line-height: 1.8;
+  }
+
+  /* ===== Two-Tier Comparison ===== */
+  .tier-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+  }
+
+  .tier-card {
+    border-radius: 8px;
+    padding: 1.75rem;
+    position: relative;
+    overflow: hidden;
+    transition: box-shadow 0.3s;
+  }
+
+  .tier-card.tier1 {
+    background: var(--bg-card);
+    border: 1px solid var(--tier1-border);
+  }
+
+  .tier-card.tier1:hover {
+    box-shadow: 0 0 40px var(--tier1-ghost);
+  }
+
+  .tier-card.tier2 {
+    background: var(--bg-card);
+    border: 1px solid var(--tier2-border);
+  }
+
+  .tier-card.tier2:hover {
+    box-shadow: 0 0 40px var(--tier2-ghost);
+  }
+
+  .tier-badge {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    padding: 0.2rem 0.7rem;
+    border-radius: 4px;
+    display: inline-block;
+    margin-bottom: 1rem;
+  }
+
+  .tier-badge.t1 {
+    background: var(--tier1-ghost);
+    color: var(--tier1);
+    border: 1px solid var(--tier1-border);
+  }
+
+  .tier-badge.t2 {
+    background: var(--tier2-ghost);
+    color: var(--tier2);
+    border: 1px solid var(--tier2-border);
+  }
+
+  .tier-card h3 {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+
+  .tier-card.tier1 h3 { color: var(--tier1); }
+  .tier-card.tier2 h3 { color: var(--tier2); }
+
+  .tier-card p {
+    font-size: 0.85rem;
+    color: var(--white);
+    line-height: 1.6;
+    margin-bottom: 1rem;
+  }
+
+  .tier-props {
+    list-style: none;
+    margin: 0.75rem 0;
+  }
+
+  .tier-props li {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--white-dim);
+    padding: 0.3rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .tier-props li::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .tier-card.tier1 .tier-props li::before { background: var(--tier1-dim); }
+  .tier-card.tier2 .tier-props li::before { background: var(--tier2-dim); }
+
+  .tier-ratio {
+    font-family: var(--font-heading);
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin: 1rem 0 0.25rem;
+  }
+
+  .tier-card.tier1 .tier-ratio { color: var(--tier1); }
+  .tier-card.tier2 .tier-ratio { color: var(--tier2); }
+
+  .tier-ratio-label {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--white-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  /* ===== Mermaid Wrapper ===== */
+  .mermaid-wrapper {
+    position: relative;
+    border: 1px solid var(--border);
+    background: var(--bg-deep);
+    padding: 2rem;
+    margin: 1.5rem 0;
+    overflow: hidden;
+    border-radius: 8px;
+  }
+
+  .mermaid-wrapper .mermaid-inner {
+    overflow: auto;
+    max-height: 800px;
+    transition: transform 0.2s ease;
+    transform-origin: top left;
+  }
+
+  .mermaid-controls {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    display: flex;
+    gap: 0.25rem;
+    z-index: 10;
+  }
+
+  .mermaid-controls button {
+    width: 28px;
+    height: 28px;
+    background: var(--bg);
+    border: 1px solid var(--border-bright);
+    color: var(--white-dim);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+  }
+
+  .mermaid-controls button:hover {
+    background: var(--bg-raised);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .mermaid-label {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--white-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    margin-bottom: 1rem;
+    display: block;
+  }
+
+  .mermaid svg {
+    max-width: 100%;
+  }
+
+  /* ===== Category Cards ===== */
+  .category-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.25rem;
+    margin-top: 1.5rem;
+  }
+
+  .cat-card {
+    border-radius: 8px;
+    padding: 1.5rem;
+    position: relative;
+    overflow: hidden;
+    transition: box-shadow 0.3s, transform 0.2s;
+  }
+
+  .cat-card:hover {
+    transform: translateY(-2px);
+  }
+
+  .cat-card.cat-native {
+    background: var(--bg-card);
+    border: 1px solid var(--native-border);
+  }
+  .cat-card.cat-native:hover { box-shadow: 0 4px 30px var(--native-ghost); }
+
+  .cat-card.cat-system {
+    background: var(--bg-card);
+    border: 1px solid var(--system-border);
+  }
+  .cat-card.cat-system:hover { box-shadow: 0 4px 30px var(--system-ghost); }
+
+  .cat-card.cat-browser {
+    background: var(--bg-card);
+    border: 1px solid var(--browser-border);
+  }
+  .cat-card.cat-browser:hover { box-shadow: 0 4px 30px var(--browser-ghost); }
+
+  .cat-card.cat-mcp {
+    background: var(--bg-card);
+    border: 1px solid var(--mcp-border);
+  }
+  .cat-card.cat-mcp:hover { box-shadow: 0 4px 30px var(--mcp-ghost); }
+
+  .cat-number {
+    font-family: var(--font-heading);
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 0.75rem;
+    opacity: 0.15;
+    position: absolute;
+    top: 1rem;
+    right: 1.25rem;
+  }
+
+  .cat-card.cat-native .cat-number { color: var(--native); }
+  .cat-card.cat-system .cat-number { color: var(--system); }
+  .cat-card.cat-browser .cat-number { color: var(--browser); }
+  .cat-card.cat-mcp .cat-number { color: var(--mcp); }
+
+  .cat-badge {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    display: inline-block;
+    margin-bottom: 0.75rem;
+  }
+
+  .cat-card.cat-native .cat-badge { background: var(--native-ghost); color: var(--native); border: 1px solid var(--native-border); }
+  .cat-card.cat-system .cat-badge { background: var(--system-ghost); color: var(--system); border: 1px solid var(--system-border); }
+  .cat-card.cat-browser .cat-badge { background: var(--browser-ghost); color: var(--browser); border: 1px solid var(--browser-border); }
+  .cat-card.cat-mcp .cat-badge { background: var(--mcp-ghost); color: var(--mcp); border: 1px solid var(--mcp-border); }
+
+  .cat-card h3 {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .cat-card.cat-native h3 { color: var(--native); }
+  .cat-card.cat-system h3 { color: var(--system); }
+  .cat-card.cat-browser h3 { color: var(--browser); }
+  .cat-card.cat-mcp h3 { color: var(--mcp); }
+
+  .cat-card p {
+    font-size: 0.8rem;
+    color: var(--white);
+    line-height: 1.6;
+    margin-bottom: 0.75rem;
+  }
+
+  .cat-examples {
+    border-top: 1px solid rgba(255,255,255,0.06);
+    padding-top: 0.6rem;
+    margin-top: 0.25rem;
+  }
+
+  .cat-examples span {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--white-dim);
+    display: block;
+    padding: 0.15rem 0;
+  }
+
+  .cat-tier-note {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .cat-card.cat-native .cat-tier-note { color: var(--tier1-dim); }
+  .cat-card.cat-system .cat-tier-note { color: var(--tier2-dim); }
+  .cat-card.cat-browser .cat-tier-note { color: var(--tier2); }
+  .cat-card.cat-mcp .cat-tier-note { color: var(--tier2); }
+
+  /* ===== Resolution Pipeline ===== */
+  .pipeline {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    gap: 0;
+    margin: 2rem 0;
+  }
+
+  .pipeline-stage {
+    flex: 1;
+    max-width: 240px;
+    border: 1px solid var(--border-bright);
+    background: var(--bg-card);
+    padding: 1.5rem 1.25rem;
+    text-align: center;
+    position: relative;
+    border-radius: 8px;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+
+  .pipeline-stage:hover {
+    border-color: var(--accent);
+    box-shadow: 0 0 30px var(--tier1-ghost);
+  }
+
+  .pipeline-stage-num {
+    font-family: var(--font-heading);
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: var(--accent);
+    opacity: 0.2;
+    position: absolute;
+    top: 0.5rem;
+    right: 0.75rem;
+  }
+
+  .pipeline-stage-name {
+    font-family: var(--font-heading);
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--white-bright);
+    display: block;
+    margin-bottom: 0.5rem;
+  }
+
+  .pipeline-stage-desc {
+    font-size: 0.8rem;
+    color: var(--white);
+    line-height: 1.5;
+    margin-bottom: 0.5rem;
+  }
+
+  .pipeline-stage-detail {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--white-dim);
+    line-height: 1.5;
+  }
+
+  .pipeline-arrow {
+    display: flex;
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: 1.4rem;
+    color: var(--white-dim);
+    padding: 0 0.75rem;
+    flex-shrink: 0;
+  }
+
+  .pipeline-funnel {
+    text-align: center;
+    margin-top: 1rem;
+  }
+
+  .funnel-bar {
+    height: 4px;
+    margin: 0.5rem auto;
+    border-radius: 2px;
+    transition: width 0.8s ease;
+  }
+
+  .funnel-label {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--white-dim);
+    display: block;
+    margin-top: 0.15rem;
+    margin-bottom: 0.5rem;
+  }
+
+  /* ===== Native Tool Catalog ===== */
+  .catalog-section {
+    margin-top: 1.5rem;
+  }
+
+  .domain-block {
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 1rem;
+  }
+
+  .domain-header {
+    background: rgba(59,130,246,0.05);
+    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .domain-header:hover {
+    background: rgba(59,130,246,0.08);
+  }
+
+  .domain-header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .domain-name {
+    font-family: var(--font-heading);
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--native);
+  }
+
+  .domain-count {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--white-dim);
+    background: rgba(255,255,255,0.05);
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+  }
+
+  .domain-toggle {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--white-dim);
+    transition: transform 0.2s;
+  }
+
+  .domain-body {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.4s ease;
+  }
+
+  .domain-block.open .domain-body {
+    max-height: 1000px;
+  }
+
+  .domain-block.open .domain-toggle {
+    transform: rotate(180deg);
+  }
+
+  .tool-row {
+    display: grid;
+    grid-template-columns: 200px 1fr 100px;
+    align-items: baseline;
+    padding: 0.5rem 1.25rem;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    font-size: 0.8rem;
+    transition: background 0.15s;
+  }
+
+  .tool-row:hover {
+    background: rgba(255,255,255,0.02);
+  }
+
+  .tool-row:last-child {
+    border-bottom: none;
+  }
+
+  .tool-name {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 500;
+  }
+
+  .tool-name.t1 { color: var(--tier1); }
+  .tool-name.t2 { color: var(--tier2); }
+
+  .tool-desc {
+    color: var(--white);
+    font-size: 0.8rem;
+  }
+
+  .tool-tier {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    text-align: right;
+    font-weight: 500;
+  }
+
+  .tool-tier.t1 { color: var(--tier1-dim); }
+  .tool-tier.t2 { color: var(--tier2-dim); }
+
+  .tool-row-header {
+    display: grid;
+    grid-template-columns: 200px 1fr 100px;
+    padding: 0.4rem 1.25rem;
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--white-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    border-bottom: 1px solid var(--border);
+    background: rgba(0,0,0,0.15);
+  }
+
+  /* ===== draft_review Flow ===== */
+  .draft-review-flow {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    margin: 2rem 0;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .dr-step {
+    border: 1px solid var(--border-bright);
+    background: var(--bg-card);
+    padding: 1.25rem 1.5rem;
+    text-align: center;
+    min-width: 170px;
+    max-width: 200px;
+    flex: 1;
+    border-radius: 8px;
+    transition: border-color 0.3s;
+  }
+
+  .dr-step:hover {
+    border-color: var(--tier2);
+  }
+
+  .dr-step-num {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--white-dim);
+    display: block;
+    margin-bottom: 0.25rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  .dr-step-label {
+    font-family: var(--font-heading);
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--white-bright);
+    display: block;
+    margin-bottom: 0.35rem;
+  }
+
+  .dr-step-detail {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--white-dim);
+    line-height: 1.4;
+  }
+
+  .dr-step.highlight {
+    border-color: var(--tier2);
+    background: rgba(249,115,22,0.04);
+  }
+
+  .dr-step.inbox-step {
+    border-color: var(--native-border);
+    background: rgba(59,130,246,0.04);
+  }
+
+  .dr-step.inbox-step .dr-step-label {
+    color: var(--native);
+  }
+
+  .dr-arrow {
+    display: flex;
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: 1.2rem;
+    color: var(--white-dim);
+    padding: 0 0.5rem;
+    flex-shrink: 0;
+  }
+
+  /* ===== Schema Tables ===== */
+  .schema-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+  }
+
+  .schema-block {
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    overflow: hidden;
+    border-radius: 8px;
+  }
+
+  .schema-block-header {
+    background: rgba(20,184,166,0.05);
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .schema-block-header h3 {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 0;
+  }
+
+  .schema-tag {
+    font-family: var(--font-mono);
+    font-size: 0.55rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 0.15rem 0.5rem;
+    border: 1px solid var(--border-bright);
+    color: var(--white-dim);
+    border-radius: 3px;
+  }
+
+  .schema-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 0.45rem 1rem;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    font-size: 0.8rem;
+  }
+
+  .schema-row:last-child {
+    border-bottom: none;
+  }
+
+  .schema-col-name {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--white-bright);
+    flex: 1;
+  }
+
+  .schema-col-type {
+    font-family: var(--font-mono);
+    color: var(--white-dim);
+    font-size: 0.7rem;
+    text-align: right;
+    flex: 0.8;
+  }
+
+  .schema-col-note {
+    font-family: var(--font-body);
+    color: var(--white-dim);
+    font-size: 0.65rem;
+    text-align: right;
+    flex: 1;
+    padding-left: 0.5rem;
+    opacity: 0.6;
+  }
+
+  /* ===== Capability Map ===== */
+  .cap-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+    font-size: 0.8rem;
+  }
+
+  .cap-table th {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--white-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    text-align: left;
+    padding: 0.6rem 1rem;
+    background: rgba(0,0,0,0.2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .cap-table td {
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    vertical-align: top;
+  }
+
+  .cap-table tr:hover td {
+    background: rgba(255,255,255,0.02);
+  }
+
+  .cap-table .tool-col {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--tier2);
+  }
+
+  .cap-table .cap-col {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--white-dim);
+  }
+
+  /* ===== Agent Profile Defaults ===== */
+  .agent-profiles {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+    margin-top: 1.5rem;
+  }
+
+  .agent-profile-card {
+    border: 1px solid var(--border-bright);
+    background: var(--bg-card);
+    border-radius: 8px;
+    padding: 1.25rem;
+    transition: border-color 0.3s;
+  }
+
+  .agent-profile-card:hover {
+    border-color: var(--accent);
+  }
+
+  .agent-profile-name {
+    font-family: var(--font-heading);
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--white-bright);
+    margin-bottom: 0.25rem;
+  }
+
+  .agent-profile-role {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--white-dim);
+    margin-bottom: 0.75rem;
+    display: block;
+  }
+
+  .agent-tools-list {
+    list-style: none;
+  }
+
+  .agent-tools-list li {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--tier1);
+    padding: 0.2rem 0;
+  }
+
+  .agent-tools-list li.denied {
+    color: var(--tier2-dim);
+    text-decoration: line-through;
+    opacity: 0.5;
+  }
+
+  /* ===== Footer ===== */
+  footer {
+    padding: 3rem 0;
+    text-align: center;
+    border-top: 1px solid var(--border);
+  }
+
+  footer p {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--white-dim);
+    letter-spacing: 0.1em;
+  }
+
+  footer .footer-line {
+    margin-bottom: 0.5rem;
+  }
+
+  /* ===== Key Insight Box ===== */
+  .insight {
+    border-left: 3px solid var(--accent);
+    background: rgba(20,184,166,0.04);
+    padding: 1rem 1.25rem;
+    margin: 1.5rem 0;
+    border-radius: 0 8px 8px 0;
+  }
+
+  .insight p {
+    font-size: 0.85rem;
+    color: var(--white);
+    margin: 0;
+    line-height: 1.6;
+  }
+
+  .insight strong {
+    color: var(--accent);
+  }
+
+  /* ===== Responsive ===== */
+  @media (max-width: 900px) {
+    .tier-grid { grid-template-columns: 1fr; }
+    .category-grid { grid-template-columns: 1fr 1fr; }
+    .pipeline { flex-direction: column; align-items: center; }
+    .pipeline-arrow { transform: rotate(90deg); padding: 0.5rem 0; }
+    .schema-grid { grid-template-columns: 1fr; }
+    .agent-profiles { grid-template-columns: 1fr; }
+    .tool-row { grid-template-columns: 140px 1fr 80px; }
+  }
+
+  @media (max-width: 600px) {
+    .hero h1 { font-size: 1.6rem; }
+    .stats { gap: 0.75rem; }
+    .stat { min-width: 120px; padding: 1rem; }
+    .category-grid { grid-template-columns: 1fr; }
+    .container { padding: 0 1rem; }
+    .draft-review-flow { flex-direction: column; align-items: center; }
+    .dr-arrow { transform: rotate(90deg); padding: 0.5rem 0; }
+    .tool-row { grid-template-columns: 1fr; gap: 0.25rem; }
+    .tool-row-header { display: none; }
+    .tool-tier { text-align: left; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== HERO ===== -->
+<header class="hero">
+  <div class="container">
+    <span class="hero-prefix">OtterCamp V2 // Spec 20</span>
+    <h1>Tools and Tool Policy</h1>
+    <span class="hero-subtitle">
+      How agents discover, access, and execute tools. A two-tier execution model, four-stage resolution pipeline, and a unified policy system that transforms agents from conversation partners into operators.
+    </span>
+
+    <div class="stats">
+      <div class="stat fade-up stagger-1">
+        <span class="stat-value tier1-color">2</span>
+        <span class="stat-label">Execution Tiers</span>
+      </div>
+      <div class="stat fade-up stagger-2">
+        <span class="stat-value native-color">4</span>
+        <span class="stat-label">Tool Categories</span>
+      </div>
+      <div class="stat fade-up stagger-3">
+        <span class="stat-value system-color">~40</span>
+        <span class="stat-label">Native Tools</span>
+      </div>
+      <div class="stat fade-up stagger-4">
+        <span class="stat-value" style="color: var(--tier2);">7</span>
+        <span class="stat-label">Tool Domains</span>
+      </div>
+      <div class="stat fade-up stagger-5">
+        <span class="stat-value" style="color: var(--browser);">4</span>
+        <span class="stat-label">Resolution Stages</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ===== TWO-TIER MODEL ===== -->
+<section id="two-tier">
+  <div class="container">
+    <span class="section-number">01 // Execution Model</span>
+    <h2 class="fade-up">Two-Tier Execution</h2>
+    <p class="section-desc fade-up">
+      Every tool is assigned a static tier at registration. Tier 1 tools execute directly in the chat layer -- fast and lightweight. Tier 2 tools route through the full control plane -- policy evaluation, broker execution, sandboxing, and RunStep audit trail. Default is tier 2. Tier 1 is a strict whitelist. Migration only goes one direction: tier 1 to tier 2, never the reverse.
+    </p>
+
+    <div class="tier-grid">
+      <div class="tier-card tier1 fade-up stagger-1">
+        <span class="tier-badge t1">Tier 1</span>
+        <h3>Chat-Layer Tools (Read-Only)</h3>
+        <p>How the agent understands its environment. No side effects. Executed directly with a basic scope check.</p>
+        <ul class="tier-props">
+          <li>Read-only operations on scoped data</li>
+          <li>No state changes, no external calls</li>
+          <li>Scope check, not policy check</li>
+          <li>Logged as chat_message only</li>
+          <li>5-second default timeout</li>
+          <li>Parallel execution allowed</li>
+        </ul>
+        <div class="tier-ratio">22</div>
+        <div class="tier-ratio-label">Tier 1 tools in native catalog</div>
+      </div>
+
+      <div class="tier-card tier2 fade-up stagger-2">
+        <span class="tier-badge t2">Tier 2</span>
+        <h3>Control-Plane Tools (Mutations)</h3>
+        <p>These change state or reach outside OtterCamp. Full control plane path with policy evaluation and audit trail.</p>
+        <ul class="tier-props">
+          <li>Writes, external calls, file modifications</li>
+          <li>Policy: allow / deny / draft_review</li>
+          <li>Requires matching capability</li>
+          <li>Logged as chat_message + RunStep</li>
+          <li>10-60s timeouts (tool-dependent)</li>
+          <li>Sequential execution only</li>
+        </ul>
+        <div class="tier-ratio">~18+</div>
+        <div class="tier-ratio-label">Tier 2 tools (native + all MCP)</div>
+      </div>
+    </div>
+
+    <div class="insight fade-up">
+      <p><strong>Why two tiers?</strong> In a typical async turn, an agent does ~30 reads and ~3 writes. Running 30 reads through the full broker pipeline adds substantial overhead for operations that will always be allowed within scope. Reads stay fast; mutations get full rigor.</p>
+    </div>
+
+    <!-- Tier 1 Execution Flowchart -->
+    <div class="mermaid-wrapper fade-up" id="mermaid-t1-wrapper" style="margin-top: 2rem;">
+      <div class="mermaid-controls">
+        <button onclick="zoomMermaid('mermaid-t1', 1)" title="Zoom In">+</button>
+        <button onclick="zoomMermaid('mermaid-t1', -1)" title="Zoom Out">-</button>
+        <button onclick="zoomMermaid('mermaid-t1', 0)" title="Reset">R</button>
+      </div>
+      <span class="mermaid-label">Tier 1 Execution Path (fast, in-process)</span>
+      <div class="mermaid-inner" id="mermaid-t1">
+        <pre class="mermaid">
+%%{init: {'theme': 'dark', 'themeVariables': { 'primaryColor': '#162033', 'primaryTextColor': '#14b8a6', 'primaryBorderColor': '#14b8a640', 'lineColor': '#0d9488', 'secondaryColor': '#1e293b', 'tertiaryColor': '#0f172a', 'edgeLabelBackground': '#0f172a', 'fontSize': '13px', 'fontFamily': 'Inter, sans-serif' }}}%%
+flowchart LR
+    A["Agent requests\ntool call"] --> B{"Tool registry\nlookup"}
+    B -->|"Tier 1"| C["Scope check:\nagent's scope\nincludes resource?"]
+    C -->|"Yes"| D["Execute directly\n(in-process, no broker)"]
+    D --> E["Return result"]
+    E --> F["Log as\nchat_message"]
+
+    style A fill:#162033,stroke:#14b8a640,color:#14b8a6
+    style B fill:#162033,stroke:#14b8a640,color:#14b8a6
+    style C fill:#162033,stroke:#14b8a640,color:#14b8a6
+    style D fill:#0d3d38,stroke:#14b8a6,color:#14b8a6,stroke-width:2px
+    style E fill:#162033,stroke:#14b8a640,color:#14b8a6
+    style F fill:#162033,stroke:#14b8a640,color:#14b8a6
+        </pre>
+      </div>
+    </div>
+
+    <!-- Tier 2 Execution Flowchart -->
+    <div class="mermaid-wrapper fade-up" id="mermaid-t2-wrapper">
+      <div class="mermaid-controls">
+        <button onclick="zoomMermaid('mermaid-t2', 1)" title="Zoom In">+</button>
+        <button onclick="zoomMermaid('mermaid-t2', -1)" title="Zoom Out">-</button>
+        <button onclick="zoomMermaid('mermaid-t2', 0)" title="Reset">R</button>
+      </div>
+      <span class="mermaid-label">Tier 2 Execution Path (full control plane)</span>
+      <div class="mermaid-inner" id="mermaid-t2">
+        <pre class="mermaid">
+%%{init: {'theme': 'dark', 'themeVariables': { 'primaryColor': '#162033', 'primaryTextColor': '#f97316', 'primaryBorderColor': '#f9731640', 'lineColor': '#ea580c', 'secondaryColor': '#1e293b', 'tertiaryColor': '#0f172a', 'edgeLabelBackground': '#0f172a', 'fontSize': '13px', 'fontFamily': 'Inter, sans-serif' }}}%%
+flowchart LR
+    A["Agent requests\ntool call"] --> B{"Tool registry\nlookup"}
+    B -->|"Tier 2"| C["Route to\ncontrol plane"]
+    C --> D{"Policy\nevaluation"}
+    D -->|"allow"| E["Broker dispatch\n+ sandbox"]
+    D -->|"deny"| F["Return:\nnot permitted"]
+    D -->|"draft_review"| G["Stage action\nin inbox"]
+    E --> H["Execute +\ncapture result"]
+    H --> I["Log as\nchat_message\n+ RunStep"]
+
+    style A fill:#162033,stroke:#f9731640,color:#f97316
+    style B fill:#162033,stroke:#f9731640,color:#f97316
+    style C fill:#162033,stroke:#f9731640,color:#f97316
+    style D fill:#162033,stroke:#f9731640,color:#f97316
+    style E fill:#3d1d0d,stroke:#f97316,color:#f97316,stroke-width:2px
+    style F fill:#162033,stroke:#ef444480,color:#ef4444
+    style G fill:#162033,stroke:#3b82f680,color:#3b82f6
+    style H fill:#162033,stroke:#f9731640,color:#f97316
+    style I fill:#162033,stroke:#f9731640,color:#f97316
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FOUR TOOL CATEGORIES ===== -->
+<section id="categories">
+  <div class="container">
+    <span class="section-number">02 // Tool Taxonomy</span>
+    <h2 class="fade-up">Four Tool Categories</h2>
+    <p class="section-desc fade-up">
+      Every tool in OtterCamp falls into exactly one of four categories. The category determines where the tool comes from, how it is registered, and what execution path it follows.
+    </p>
+
+    <div class="category-grid">
+      <div class="cat-card cat-native fade-up stagger-1">
+        <span class="cat-number">1</span>
+        <span class="cat-badge">Native</span>
+        <h3>OtterCamp Native</h3>
+        <p>Ship with OtterCamp. Operate on domain entities -- tasks, projects, flows, memory, sessions, agents.</p>
+        <div class="cat-examples">
+          <span>task.create</span>
+          <span>memory.query</span>
+          <span>flow.advance</span>
+        </div>
+        <div class="cat-tier-note">Tier 1 (reads) + Tier 2 (mutations)</div>
+      </div>
+
+      <div class="cat-card cat-system fade-up stagger-2">
+        <span class="cat-number">2</span>
+        <span class="cat-badge">System</span>
+        <h3>System Tools</h3>
+        <p>Filesystem and CLI access within sandboxed workspaces scoped to the project's git repo.</p>
+        <div class="cat-examples">
+          <span>file.read, file.write</span>
+          <span>cli.execute</span>
+          <span>git.commit</span>
+        </div>
+        <div class="cat-tier-note">Tier 1 (reads) + Tier 2 (writes/CLI)</div>
+      </div>
+
+      <div class="cat-card cat-browser fade-up stagger-3">
+        <span class="cat-number">3</span>
+        <span class="cat-badge">Browser</span>
+        <h3>Browser Tools</h3>
+        <p>Web interaction in isolated browser contexts. Distinct from system tools due to different isolation and risk profile.</p>
+        <div class="cat-examples">
+          <span>browser.navigate</span>
+          <span>browser.click</span>
+          <span>browser.screenshot</span>
+        </div>
+        <div class="cat-tier-note">Always Tier 2 -- no exceptions</div>
+      </div>
+
+      <div class="cat-card cat-mcp fade-up stagger-4">
+        <span class="cat-number">4</span>
+        <span class="cat-badge">MCP</span>
+        <h3>MCP Tools</h3>
+        <p>Dynamically discovered from connected MCP servers. External services outside OtterCamp's control.</p>
+        <div class="cat-examples">
+          <span>mcp:&lt;conn_id&gt;:search</span>
+          <span>mcp:&lt;conn_id&gt;:create</span>
+          <span>(schema from server)</span>
+        </div>
+        <div class="cat-tier-note">Always Tier 2 -- no exceptions</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== RESOLUTION PIPELINE ===== -->
+<section id="resolution">
+  <div class="container">
+    <span class="section-number">03 // Tool Resolution</span>
+    <h2 class="fade-up">Four-Stage Resolution Pipeline</h2>
+    <p class="section-desc fade-up">
+      When an agent takes a turn, the tool set is determined by a four-stage pipeline that runs once at the start of each turn. Each stage narrows the set. The result is cached per session for stability -- tools do not appear or disappear between turns.
+    </p>
+
+    <div class="pipeline fade-up">
+      <div class="pipeline-stage">
+        <span class="pipeline-stage-num">1</span>
+        <span class="pipeline-stage-name">Universe</span>
+        <p class="pipeline-stage-desc">Start with all registered tools.</p>
+        <span class="pipeline-stage-detail">Full native catalog + all active MCP connections in agent's scope. Unhealthy connections excluded.</span>
+      </div>
+      <span class="pipeline-arrow">--></span>
+      <div class="pipeline-stage">
+        <span class="pipeline-stage-num">2</span>
+        <span class="pipeline-stage-name">Agent Profile Filter</span>
+        <p class="pipeline-stage-desc">Allow/deny lists with glob patterns.</p>
+        <span class="pipeline-stage-detail">project.* | file.write | mcp.* | browser.*<br>Deny always wins over allow.</span>
+      </div>
+      <span class="pipeline-arrow">--></span>
+      <div class="pipeline-stage">
+        <span class="pipeline-stage-num">3</span>
+        <span class="pipeline-stage-name">Flow Node Filter</span>
+        <p class="pipeline-stage-desc">Soft deprioritization, not hard gate.</p>
+        <span class="pipeline-stage-detail">Prompt budget optimization. Tools outside declared domains dropped first when budget is tight.</span>
+      </div>
+      <span class="pipeline-arrow">--></span>
+      <div class="pipeline-stage">
+        <span class="pipeline-stage-num">4</span>
+        <span class="pipeline-stage-name">Capability Gate</span>
+        <p class="pipeline-stage-desc">Tier 2 tools require matching capability.</p>
+        <span class="pipeline-stage-detail">Tier 1 tools bypass this gate. Missing capability = excluded from tool set entirely.</span>
+      </div>
+    </div>
+
+    <!-- Funnel visualization -->
+    <div class="pipeline-funnel fade-up">
+      <div class="funnel-bar" style="width: 90%; background: linear-gradient(90deg, var(--native), var(--mcp));"></div>
+      <span class="funnel-label">Universe: native catalog + MCP tools</span>
+      <div class="funnel-bar" style="width: 65%; background: linear-gradient(90deg, var(--tier1), var(--native));"></div>
+      <span class="funnel-label">After profile filter: agent-specific subset</span>
+      <div class="funnel-bar" style="width: 50%; background: linear-gradient(90deg, var(--tier1), var(--system));"></div>
+      <span class="funnel-label">After flow node filter: relevant tools prioritized</span>
+      <div class="funnel-bar" style="width: 35%; background: var(--accent);"></div>
+      <span class="funnel-label">Final tool set: resolved for this turn</span>
+    </div>
+
+    <!-- Agent profile defaults -->
+    <h3 class="fade-up" style="margin-top: 2.5rem;">Starter Trio Tool Profiles</h3>
+    <div class="agent-profiles fade-up">
+      <div class="agent-profile-card">
+        <div class="agent-profile-name">Frank</div>
+        <span class="agent-profile-role">Chief of Staff -- org-level coordinator</span>
+        <ul class="agent-tools-list">
+          <li>project.*</li>
+          <li>task.*, subtask.*</li>
+          <li>flow.*</li>
+          <li>session.*</li>
+          <li>memory.*</li>
+          <li>agent.*</li>
+          <li>inbox.*, schedule.*</li>
+          <li class="denied">system.* (denied)</li>
+          <li class="denied">browser.* (denied)</li>
+          <li class="denied">mcp.* (denied)</li>
+        </ul>
+      </div>
+      <div class="agent-profile-card">
+        <div class="agent-profile-name">Lori</div>
+        <span class="agent-profile-role">Agent Relations -- staffing/hiring</span>
+        <ul class="agent-tools-list">
+          <li>agent.*</li>
+          <li>project.list, project.get</li>
+          <li>task.list, task.get</li>
+          <li>memory.query</li>
+          <li class="denied">system.* (denied)</li>
+          <li class="denied">browser.* (denied)</li>
+          <li class="denied">flow.* (denied)</li>
+        </ul>
+      </div>
+      <div class="agent-profile-card">
+        <div class="agent-profile-name">Ellie</div>
+        <span class="agent-profile-role">Memory -- reads broadly, never mutates</span>
+        <ul class="agent-tools-list">
+          <li>memory.*</li>
+          <li>session.history</li>
+          <li>file.read, file.search</li>
+          <li class="denied">task.* mutations (denied)</li>
+          <li class="denied">browser.* (denied)</li>
+          <li class="denied">cli.* (denied)</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Capability map -->
+    <h3 class="fade-up" style="margin-top: 2.5rem;">Capability Gate Map (Tier 2 Only)</h3>
+    <div class="domain-block fade-up" style="margin-top: 1rem;">
+      <table class="cap-table">
+        <thead>
+          <tr>
+            <th>Tool(s)</th>
+            <th>Required Capability</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="tool-col">task.create, task.update</td><td class="cap-col">project.task.update</td></tr>
+          <tr><td class="tool-col">flow.advance, flow.review_decision</td><td class="cap-col">project.flow.advance</td></tr>
+          <tr><td class="tool-col">file.write, file.delete, git.commit</td><td class="cap-col">system.file.write</td></tr>
+          <tr><td class="tool-col">cli.execute</td><td class="cap-col">system.cli.execute</td></tr>
+          <tr><td class="tool-col">browser.*</td><td class="cap-col">system.browser.control</td></tr>
+          <tr><td class="tool-col">session.create, session.invite_agent</td><td class="cap-col">chat.participant.manage</td></tr>
+          <tr><td class="tool-col">message.send</td><td class="cap-col">chat.message.write</td></tr>
+          <tr><td class="tool-col">memory.record</td><td class="cap-col">memory.write</td></tr>
+          <tr><td class="tool-col">agent.create_temp</td><td class="cap-col">agent.manage</td></tr>
+          <tr><td class="tool-col">email.compose, slack.post</td><td class="cap-col">communication.send</td></tr>
+          <tr><td class="tool-col">MCP tools</td><td class="cap-col">mcp.tool.invoke:&lt;conn_id&gt;:&lt;tool&gt;</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ===== NATIVE TOOL CATALOG ===== -->
+<section id="catalog">
+  <div class="container">
+    <span class="section-number">04 // Native Tool Catalog</span>
+    <h2 class="fade-up">~40 Tools Across 7 Domains</h2>
+    <p class="section-desc fade-up">
+      The complete set that ships with OtterCamp. Every tool maps to a real operation. No convenience bundles. No runtime tool creation. Agents cannot create new tools -- they are either native (shipped) or MCP (discovered from servers).
+    </p>
+
+    <div class="catalog-section">
+      <!-- Project and Task Domain -->
+      <div class="domain-block fade-up stagger-1" data-domain>
+        <div class="domain-header" onclick="toggleDomain(this)">
+          <div class="domain-header-left">
+            <span class="domain-name">Project and Task</span>
+            <span class="domain-count">18 tools</span>
+          </div>
+          <span class="domain-toggle">v</span>
+        </div>
+        <div class="domain-body">
+          <div class="tool-row-header"><span>Tool</span><span>Description</span><span>Tier</span></div>
+          <div class="tool-row"><span class="tool-name t1">project.list</span><span class="tool-desc">List projects the agent has access to</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t1">project.get</span><span class="tool-desc">Get project details, context block, repo info</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t1">task.list</span><span class="tool-desc">List tasks, filterable by status/priority/assignee</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t1">task.get</span><span class="tool-desc">Get task details: description, criteria, flow state</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t2">task.create</span><span class="tool-desc">Create a new task with title, description, flow template</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">task.update</span><span class="tool-desc">Update task fields: description, criteria, priority</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">task.add_dependency</span><span class="tool-desc">Add a dependency link between tasks or subtasks</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">task.remove_dependency</span><span class="tool-desc">Remove a dependency link</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t1">subtask.list</span><span class="tool-desc">List subtasks for a flow node execution</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t1">subtask.get</span><span class="tool-desc">Get subtask details</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t2">subtask.create</span><span class="tool-desc">Create a subtask within a flow node execution</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">subtask.update</span><span class="tool-desc">Update subtask fields</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t1">flow.get_template</span><span class="tool-desc">Get flow template structure: nodes, edges, skills</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t1">flow.get_execution</span><span class="tool-desc">Get current flow state: active node, visit, status</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t2">flow.advance</span><span class="tool-desc">Signal current flow node complete, advance to next</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">flow.review_decision</span><span class="tool-desc">Submit approve or reject at a review node</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t1">inbox.list</span><span class="tool-desc">List pending inbox items for the human</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t1">merge_queue.status</span><span class="tool-desc">Get merge queue status for a project</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t1">schedule.list</span><span class="tool-desc">List task schedules for a project</span><span class="tool-tier t1">Tier 1</span></div>
+        </div>
+      </div>
+
+      <!-- Chat and Session Domain -->
+      <div class="domain-block fade-up stagger-2" data-domain>
+        <div class="domain-header" onclick="toggleDomain(this)">
+          <div class="domain-header-left">
+            <span class="domain-name">Chat and Session</span>
+            <span class="domain-count">5 tools</span>
+          </div>
+          <span class="domain-toggle">v</span>
+        </div>
+        <div class="domain-body">
+          <div class="tool-row-header"><span>Tool</span><span>Description</span><span>Tier</span></div>
+          <div class="tool-row"><span class="tool-name t1">session.get</span><span class="tool-desc">Get session metadata: scope, mode, participants</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t1">session.history</span><span class="tool-desc">Read conversation history from a session</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t2">session.create</span><span class="tool-desc">Create a new session at a scope</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">session.invite_agent</span><span class="tool-desc">Invite an agent to participate in a session</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">message.send</span><span class="tool-desc">Send a message (agent-to-agent coordination)</span><span class="tool-tier t2">Tier 2</span></div>
+        </div>
+      </div>
+
+      <!-- Memory Domain -->
+      <div class="domain-block fade-up stagger-3" data-domain>
+        <div class="domain-header" onclick="toggleDomain(this)">
+          <div class="domain-header-left">
+            <span class="domain-name">Memory</span>
+            <span class="domain-count">2 tools</span>
+          </div>
+          <span class="domain-toggle">v</span>
+        </div>
+        <div class="domain-body">
+          <div class="tool-row-header"><span>Tool</span><span>Description</span><span>Tier</span></div>
+          <div class="tool-row"><span class="tool-name t1">memory.query</span><span class="tool-desc">Query Ellie's memory system with natural language. Four-stage retrieval pipeline. Excludes already-injected memories.</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t2">memory.record</span><span class="tool-desc">Explicitly record a memory item via Ellie. Bypasses event pre-filter.</span><span class="tool-tier t2">Tier 2</span></div>
+        </div>
+      </div>
+
+      <!-- Agent Management Domain -->
+      <div class="domain-block fade-up stagger-4" data-domain>
+        <div class="domain-header" onclick="toggleDomain(this)">
+          <div class="domain-header-left">
+            <span class="domain-name">Agent Management</span>
+            <span class="domain-count">3 tools</span>
+          </div>
+          <span class="domain-toggle">v</span>
+        </div>
+        <div class="domain-body">
+          <div class="tool-row-header"><span>Tool</span><span>Description</span><span>Tier</span></div>
+          <div class="tool-row"><span class="tool-name t1">agent.list</span><span class="tool-desc">List agents available in the current scope</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t1">agent.get</span><span class="tool-desc">Get agent profile details: role, skills, tool policy</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t2">agent.create_temp</span><span class="tool-desc">Create a temporary agent for specialized work</span><span class="tool-tier t2">Tier 2</span></div>
+        </div>
+      </div>
+
+      <!-- System Domain -->
+      <div class="domain-block fade-up stagger-5" data-domain>
+        <div class="domain-header" onclick="toggleDomain(this)">
+          <div class="domain-header-left">
+            <span class="domain-name">System</span>
+            <span class="domain-count">10 tools</span>
+          </div>
+          <span class="domain-toggle">v</span>
+        </div>
+        <div class="domain-body">
+          <div class="tool-row-header"><span>Tool</span><span>Description</span><span>Tier</span></div>
+          <div class="tool-row"><span class="tool-name t1">file.read</span><span class="tool-desc">Read file contents from the project workspace</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t1">file.list</span><span class="tool-desc">List files in a directory within the project workspace</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t1">file.search</span><span class="tool-desc">Search file contents (grep/ripgrep equivalent)</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t2">file.write</span><span class="tool-desc">Write or update a file in the project workspace</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">file.delete</span><span class="tool-desc">Delete a file from the project workspace</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">cli.execute</span><span class="tool-desc">Execute a shell command in the sandbox (60s timeout)</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t1">git.status</span><span class="tool-desc">Get git status of the project workspace</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t1">git.diff</span><span class="tool-desc">Get diff of working changes or between refs</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t1">git.log</span><span class="tool-desc">Get commit history</span><span class="tool-tier t1">Tier 1</span></div>
+          <div class="tool-row"><span class="tool-name t2">git.commit</span><span class="tool-desc">Commit staged changes to the task branch</span><span class="tool-tier t2">Tier 2</span></div>
+        </div>
+      </div>
+
+      <!-- Browser Domain -->
+      <div class="domain-block fade-up stagger-6" data-domain>
+        <div class="domain-header" onclick="toggleDomain(this)">
+          <div class="domain-header-left">
+            <span class="domain-name" style="color: var(--browser);">Browser</span>
+            <span class="domain-count">6 tools</span>
+          </div>
+          <span class="domain-toggle">v</span>
+        </div>
+        <div class="domain-body">
+          <div class="tool-row-header"><span>Tool</span><span>Description</span><span>Tier</span></div>
+          <div class="tool-row"><span class="tool-name t2">browser.navigate</span><span class="tool-desc">Navigate to a URL in the browser context</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">browser.click</span><span class="tool-desc">Click an element on the page</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">browser.type</span><span class="tool-desc">Type text into a form field</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">browser.screenshot</span><span class="tool-desc">Capture a screenshot of the current page</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">browser.extract</span><span class="tool-desc">Extract structured content from the page</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">browser.evaluate</span><span class="tool-desc">Execute JavaScript in the page context</span><span class="tool-tier t2">Tier 2</span></div>
+        </div>
+      </div>
+
+      <!-- Communication Domain -->
+      <div class="domain-block fade-up stagger-7" data-domain>
+        <div class="domain-header" onclick="toggleDomain(this)">
+          <div class="domain-header-left">
+            <span class="domain-name" style="color: var(--tier2);">Communication</span>
+            <span class="domain-count">2 tools</span>
+          </div>
+          <span class="domain-toggle">v</span>
+        </div>
+        <div class="domain-body">
+          <div class="tool-row-header"><span>Tool</span><span>Description</span><span>Tier</span></div>
+          <div class="tool-row"><span class="tool-name t2">email.compose</span><span class="tool-desc">Compose and stage an email for review (draft_review)</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">slack.post</span><span class="tool-desc">Post a message to a Slack channel (draft_review)</span><span class="tool-tier t2">Tier 2</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== DRAFT_REVIEW FLOW ===== -->
+<section id="draft-review">
+  <div class="container">
+    <span class="section-number">05 // Sensitive Action Handling</span>
+    <h2 class="fade-up">The draft_review Outcome</h2>
+    <p class="section-desc fade-up">
+      When a tool call results in <code>draft_review</code>, the action is staged in the human's inbox -- not executed. The agent's turn continues immediately without blocking. The human reviews, edits if needed, and approves or rejects. This is the primary mechanism for sensitive operations: emails, Slack posts, production deploys.
+    </p>
+
+    <div class="draft-review-flow fade-up">
+      <div class="dr-step">
+        <span class="dr-step-num">Step 1</span>
+        <span class="dr-step-label">Agent calls tool</span>
+        <span class="dr-step-detail">e.g., email.compose<br>with full payload</span>
+      </div>
+      <span class="dr-arrow">--></span>
+      <div class="dr-step highlight">
+        <span class="dr-step-num">Step 2</span>
+        <span class="dr-step-label">Policy evaluates</span>
+        <span class="dr-step-detail">Result: draft_review<br>Action NOT executed</span>
+      </div>
+      <span class="dr-arrow">--></span>
+      <div class="dr-step inbox-step">
+        <span class="dr-step-num">Step 3</span>
+        <span class="dr-step-label">Staged in Inbox</span>
+        <span class="dr-step-detail">Payload + context<br>+ preview for human</span>
+      </div>
+      <span class="dr-arrow">--></span>
+      <div class="dr-step">
+        <span class="dr-step-num">Step 4</span>
+        <span class="dr-step-label">Agent continues</span>
+        <span class="dr-step-detail">Result: "queued for<br>review" -- no blocking</span>
+      </div>
+      <span class="dr-arrow">--></span>
+      <div class="dr-step inbox-step">
+        <span class="dr-step-num">Step 5</span>
+        <span class="dr-step-label">Human decides</span>
+        <span class="dr-step-detail">Approve / Edit+Approve<br>/ Reject</span>
+      </div>
+    </div>
+
+    <div class="insight fade-up">
+      <p><strong>Not an error.</strong> The <code style="color: var(--tier2);">draft_review</code> result is a normal tool response. The agent acknowledges it and moves on. If the agent needs to know the outcome, it checks <code style="color: var(--tier1);">inbox.list</code> on a subsequent turn. Communication tools default to this policy -- the agent composes, the human approves.</p>
+    </div>
+
+    <!-- Mermaid: draft_review interaction -->
+    <div class="mermaid-wrapper fade-up" id="mermaid-dr-wrapper" style="margin-top: 1.5rem;">
+      <div class="mermaid-controls">
+        <button onclick="zoomMermaid('mermaid-dr', 1)" title="Zoom In">+</button>
+        <button onclick="zoomMermaid('mermaid-dr', -1)" title="Zoom Out">-</button>
+        <button onclick="zoomMermaid('mermaid-dr', 0)" title="Reset">R</button>
+      </div>
+      <span class="mermaid-label">draft_review: agent composes, human approves</span>
+      <div class="mermaid-inner" id="mermaid-dr">
+        <pre class="mermaid">
+%%{init: {'theme': 'dark', 'themeVariables': { 'primaryColor': '#162033', 'primaryTextColor': '#e2e8f0', 'primaryBorderColor': '#334155', 'lineColor': '#94a3b8', 'secondaryColor': '#1e293b', 'tertiaryColor': '#0f172a', 'edgeLabelBackground': '#0f172a', 'fontSize': '13px', 'fontFamily': 'Inter, sans-serif' }}}%%
+sequenceDiagram
+    participant A as Agent
+    participant CP as Control Plane
+    participant I as Inbox
+    participant H as Human
+
+    A->>CP: email.compose(to, subject, body)
+    CP->>CP: Policy: draft_review
+    CP->>I: Stage action with payload + preview
+    CP-->>A: {status: "queued_for_review"}
+    Note over A: Turn continues normally
+    A->>A: Acknowledge + continue work
+    Note over I,H: Async -- may be minutes/hours later
+    H->>I: Review staged email
+    alt Approve
+        H->>I: Approve
+        I->>CP: Execute email.compose
+    else Edit + Approve
+        H->>I: Edit body, then approve
+        I->>CP: Execute modified payload
+    else Reject
+        H->>I: Reject
+        I->>I: Discard action
+    end
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== SCHEMA ===== -->
+<section id="schema">
+  <div class="container">
+    <span class="section-number">06 // Database Schema</span>
+    <h2 class="fade-up">Two Key Tables</h2>
+    <p class="section-desc fade-up">
+      <code>tool_definition</code> stores native tool metadata, populated at startup from code. <code>session_tool_set</code> caches the resolved tool set per agent per session for debugging and observability. MCP tools live in <code>mcp_tool_catalog</code> (doc 09).
+    </p>
+
+    <div class="schema-grid fade-up">
+      <div class="schema-block">
+        <div class="schema-block-header">
+          <h3>tool_definition</h3>
+          <span class="schema-tag">startup-populated</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">id</span>
+          <span class="schema-col-type">uuid pk</span>
+          <span class="schema-col-note"></span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">name</span>
+          <span class="schema-col-type">text unique</span>
+          <span class="schema-col-note">e.g., "task.create"</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">domain</span>
+          <span class="schema-col-type">text</span>
+          <span class="schema-col-note">project | chat | memory | agent | system | browser | communication</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">category</span>
+          <span class="schema-col-type">text</span>
+          <span class="schema-col-note">native | system | browser | communication</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">tier</span>
+          <span class="schema-col-type">int</span>
+          <span class="schema-col-note">1 = read, 2 = mutation</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">description</span>
+          <span class="schema-col-type">text</span>
+          <span class="schema-col-note">for prompt inclusion</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">parameter_schema</span>
+          <span class="schema-col-type">jsonb</span>
+          <span class="schema-col-note">JSON Schema format</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">return_schema</span>
+          <span class="schema-col-type">jsonb</span>
+          <span class="schema-col-note">optional</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">required_capability</span>
+          <span class="schema-col-type">text</span>
+          <span class="schema-col-note">null for tier 1</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">is_active</span>
+          <span class="schema-col-type">boolean</span>
+          <span class="schema-col-note">feature flags / rollout</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">version</span>
+          <span class="schema-col-type">int</span>
+          <span class="schema-col-note">bumped on schema changes</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">created_at</span>
+          <span class="schema-col-type">timestamptz</span>
+          <span class="schema-col-note"></span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">updated_at</span>
+          <span class="schema-col-type">timestamptz</span>
+          <span class="schema-col-note"></span>
+        </div>
+      </div>
+
+      <div class="schema-block">
+        <div class="schema-block-header">
+          <h3>session_tool_set</h3>
+          <span class="schema-tag">per-session cache</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">id</span>
+          <span class="schema-col-type">uuid pk</span>
+          <span class="schema-col-note"></span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">session_id</span>
+          <span class="schema-col-type">uuid fk</span>
+          <span class="schema-col-note">chat_session</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">agent_id</span>
+          <span class="schema-col-type">uuid</span>
+          <span class="schema-col-note">unique w/ session_id</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">tool_names</span>
+          <span class="schema-col-type">text[]</span>
+          <span class="schema-col-note">resolved set, prompt order</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">tool_versions</span>
+          <span class="schema-col-type">jsonb</span>
+          <span class="schema-col-note">{tool_name: version}</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">mcp_tools</span>
+          <span class="schema-col-type">jsonb</span>
+          <span class="schema-col-note">[{conn_id, name, schema_hash}]</span>
+        </div>
+        <div class="schema-row">
+          <span class="schema-col-name">resolved_at</span>
+          <span class="schema-col-type">timestamptz</span>
+          <span class="schema-col-note"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="insight fade-up" style="margin-top: 1.5rem;">
+      <p><strong>Observability, not critical path.</strong> <code>session_tool_set</code> is for debugging and after-the-fact analysis. The resolved tool set is held in memory during the session. One row per agent per session -- different agents in the same session may have different tool sets.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer>
+  <div class="container">
+    <p class="footer-line">OtterCamp V2 // Spec 20 -- Tools and Tool Policy</p>
+    <p class="footer-line">Status: Draft // Depends on: 05 (agents), 09 (MCP), 11 (system), 16 (control plane)</p>
+    <p>Generated from docsv2/20-tools-and-tool-policy.md</p>
+  </div>
+</footer>
+
+<!-- ===== Mermaid.js ===== -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    fontFamily: 'Inter, sans-serif',
+    flowchart: {
+      useMaxWidth: true,
+      htmlLabels: true,
+      curve: 'basis'
+    },
+    sequence: {
+      useMaxWidth: true,
+      actorMargin: 60,
+      noteMargin: 10,
+      messageMargin: 40,
+      mirrorActors: false
+    },
+    themeVariables: {
+      darkMode: true,
+      background: '#0f172a',
+      primaryColor: '#162033',
+      primaryTextColor: '#e2e8f0',
+      primaryBorderColor: '#334155',
+      lineColor: '#94a3b8',
+      secondaryColor: '#1e293b',
+      tertiaryColor: '#0f172a',
+      fontSize: '13px',
+      actorTextColor: '#e2e8f0',
+      actorBkg: '#162033',
+      actorBorder: '#334155',
+      signalColor: '#94a3b8',
+      noteBkgColor: '#1e293b',
+      noteTextColor: '#94a3b8',
+      noteBorderColor: '#334155',
+      activationBkgColor: '#162033',
+      activationBorderColor: '#14b8a640'
+    }
+  });
+</script>
+
+<!-- ===== Zoom Controls ===== -->
+<script>
+  const zoomLevels = {};
+
+  window.zoomMermaid = function(id, direction) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    if (!zoomLevels[id]) zoomLevels[id] = 1;
+
+    if (direction === 0) {
+      zoomLevels[id] = 1;
+    } else if (direction === 1) {
+      zoomLevels[id] = Math.min(zoomLevels[id] + 0.2, 3);
+    } else {
+      zoomLevels[id] = Math.max(zoomLevels[id] - 0.2, 0.4);
+    }
+
+    el.style.transform = 'scale(' + zoomLevels[id] + ')';
+    el.style.transformOrigin = 'top left';
+  };
+</script>
+
+<!-- ===== Domain Toggle ===== -->
+<script>
+  window.toggleDomain = function(header) {
+    var block = header.closest('[data-domain]');
+    if (block) {
+      block.classList.toggle('open');
+    }
+  };
+
+  // Open first two domains by default
+  document.addEventListener('DOMContentLoaded', function() {
+    var domains = document.querySelectorAll('[data-domain]');
+    if (domains.length > 0) domains[0].classList.add('open');
+    if (domains.length > 1) domains[1].classList.add('open');
+  });
+</script>
+
+<!-- ===== Scroll-triggered Fade-up ===== -->
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    var observer = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+        }
+      });
+    }, {
+      threshold: 0.1,
+      rootMargin: '0px 0px -40px 0px'
+    });
+
+    document.querySelectorAll('.fade-up').forEach(function(el) {
+      observer.observe(el);
+    });
+  });
+</script>
+
+</body>
+</html>

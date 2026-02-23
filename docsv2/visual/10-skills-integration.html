@@ -1,0 +1,1391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OtterCamp V2 -- Skills Integration</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Serif+Display:ital@0;1&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --color-bg: #ffffff;
+      --color-text: #1d1d1f;
+      --color-text-secondary: #6e6e73;
+      --color-accent: #4f46e5;
+      --color-accent-light: #e0e7ff;
+      --color-accent-subtle: #f5f3ff;
+      --color-warm-gray: #78716c;
+      --color-warm-gray-light: #f5f5f4;
+      --color-border: #e5e5e5;
+      --color-border-light: #f0f0f0;
+      --color-code-bg: #fafaf9;
+      --font-heading: 'DM Serif Display', Georgia, serif;
+      --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-code: 'Fira Code', 'SF Mono', Consolas, monospace;
+      --max-width: 920px;
+      --section-gap: 120px;
+    }
+
+    *, *::before, *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      font-size: 16px;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+      font-family: var(--font-body);
+      color: var(--color-text);
+      background: var(--color-bg);
+      line-height: 1.7;
+      overflow-x: hidden;
+    }
+
+    /* --- Layout --- */
+
+    .container {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      padding: 0 32px;
+    }
+
+    section {
+      padding: 0 0 var(--section-gap);
+    }
+
+    /* --- Typography --- */
+
+    h1 {
+      font-family: var(--font-heading);
+      font-weight: 400;
+      font-size: 3.25rem;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+      color: var(--color-text);
+    }
+
+    h2 {
+      font-family: var(--font-heading);
+      font-weight: 400;
+      font-size: 2rem;
+      line-height: 1.25;
+      letter-spacing: -0.01em;
+      color: var(--color-text);
+      margin-bottom: 16px;
+    }
+
+    h3 {
+      font-family: var(--font-body);
+      font-weight: 600;
+      font-size: 1.05rem;
+      line-height: 1.4;
+      color: var(--color-text);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    p {
+      font-size: 1.05rem;
+      color: var(--color-text-secondary);
+      max-width: 640px;
+    }
+
+    p + p {
+      margin-top: 16px;
+    }
+
+    .label {
+      font-family: var(--font-body);
+      font-weight: 600;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--color-accent);
+    }
+
+    /* --- FadeUp Animation --- */
+
+    .fade-up {
+      opacity: 0;
+      transform: translateY(28px);
+      transition: opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+                  transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    .fade-up.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* --- Hero --- */
+
+    .hero {
+      padding: 100px 0 var(--section-gap);
+      border-bottom: 1px solid var(--color-border);
+    }
+
+    .hero .label {
+      margin-bottom: 20px;
+      display: block;
+    }
+
+    .hero h1 {
+      margin-bottom: 28px;
+    }
+
+    .hero .subtitle {
+      font-size: 1.25rem;
+      line-height: 1.6;
+      color: var(--color-text-secondary);
+      max-width: 600px;
+    }
+
+    .key-concept {
+      margin-top: 48px;
+      padding: 28px 32px;
+      background: var(--color-accent-subtle);
+      border-left: 3px solid var(--color-accent);
+      border-radius: 0 8px 8px 0;
+    }
+
+    .key-concept p {
+      color: var(--color-text);
+      font-size: 1rem;
+      max-width: none;
+    }
+
+    .key-concept strong {
+      color: var(--color-accent);
+    }
+
+    /* --- Section Header --- */
+
+    .section-header {
+      margin-bottom: 40px;
+    }
+
+    .section-header .label {
+      margin-bottom: 12px;
+      display: block;
+    }
+
+    .section-header p {
+      margin-top: 12px;
+    }
+
+    /* --- Skill Anatomy --- */
+
+    .skill-file {
+      background: var(--color-code-bg);
+      border: 1px solid var(--color-border);
+      border-radius: 10px;
+      overflow: hidden;
+      font-family: var(--font-code);
+      font-size: 0.82rem;
+      line-height: 1.75;
+    }
+
+    .skill-file-tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      background: var(--color-warm-gray-light);
+      border-bottom: 1px solid var(--color-border);
+      font-family: var(--font-body);
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--color-warm-gray);
+    }
+
+    .skill-file-tab .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--color-border);
+      display: inline-block;
+    }
+
+    .skill-file-content {
+      padding: 20px 24px;
+      overflow-x: auto;
+    }
+
+    .skill-file-content .frontmatter {
+      color: var(--color-accent);
+    }
+
+    .skill-file-content .fence {
+      color: var(--color-warm-gray);
+    }
+
+    .skill-file-content .key {
+      color: #0f766e;
+    }
+
+    .skill-file-content .value {
+      color: var(--color-text);
+    }
+
+    .skill-file-content .body {
+      color: var(--color-text);
+    }
+
+    .skill-file-content .heading {
+      color: var(--color-text);
+      font-weight: 600;
+    }
+
+    .skill-file-content .comment {
+      color: var(--color-warm-gray);
+    }
+
+    .annotation-row {
+      display: flex;
+      gap: 24px;
+      margin-top: 32px;
+    }
+
+    .annotation {
+      flex: 1;
+      padding: 20px 24px;
+      border-radius: 8px;
+      border: 1px solid var(--color-border);
+    }
+
+    .annotation h3 {
+      font-size: 0.72rem;
+      margin-bottom: 6px;
+    }
+
+    .annotation p {
+      font-size: 0.92rem;
+      line-height: 1.55;
+    }
+
+    .annotation.frontmatter-ann {
+      border-left: 3px solid var(--color-accent);
+    }
+
+    .annotation.body-ann {
+      border-left: 3px solid #0f766e;
+    }
+
+    /* --- Attachment Levels --- */
+
+    .cascade-diagram {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      margin-top: 8px;
+    }
+
+    .cascade-level {
+      display: flex;
+      align-items: stretch;
+      position: relative;
+    }
+
+    .cascade-connector {
+      width: 48px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .cascade-connector .line {
+      width: 2px;
+      flex: 1;
+      background: var(--color-border);
+    }
+
+    .cascade-connector .node {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--color-accent);
+      border: 3px solid var(--color-accent-light);
+      flex-shrink: 0;
+      z-index: 1;
+    }
+
+    .cascade-level:first-child .cascade-connector .line:first-child,
+    .cascade-level:last-child .cascade-connector .line:last-child {
+      background: transparent;
+    }
+
+    .cascade-card {
+      flex: 1;
+      padding: 24px 28px;
+      margin: 6px 0;
+      border: 1px solid var(--color-border);
+      border-radius: 10px;
+      background: var(--color-bg);
+      transition: box-shadow 0.3s ease, border-color 0.3s ease;
+    }
+
+    .cascade-card:hover {
+      border-color: var(--color-accent);
+      box-shadow: 0 4px 24px rgba(79, 70, 229, 0.08);
+    }
+
+    .cascade-card .level-label {
+      font-family: var(--font-body);
+      font-size: 0.65rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--color-accent);
+      margin-bottom: 6px;
+    }
+
+    .cascade-card .level-name {
+      font-family: var(--font-heading);
+      font-size: 1.3rem;
+      margin-bottom: 6px;
+    }
+
+    .cascade-card .level-desc {
+      font-size: 0.92rem;
+      color: var(--color-text-secondary);
+      line-height: 1.55;
+      max-width: none;
+    }
+
+    .cascade-card .level-example {
+      margin-top: 10px;
+      font-family: var(--font-code);
+      font-size: 0.78rem;
+      color: var(--color-warm-gray);
+      background: var(--color-warm-gray-light);
+      padding: 6px 12px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+
+    .scope-arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 0 0 48px;
+    }
+
+    .scope-arrow .arrow-line {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--color-warm-gray);
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .scope-arrow .arrow-line::before,
+    .scope-arrow .arrow-line::after {
+      content: '';
+      width: 60px;
+      height: 1px;
+      background: var(--color-border);
+    }
+
+    /* --- Specificity Resolution --- */
+
+    .specificity-visual {
+      margin-top: 8px;
+    }
+
+    .conflict-scenario {
+      border: 1px solid var(--color-border);
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 32px;
+    }
+
+    .conflict-header {
+      padding: 16px 24px;
+      background: var(--color-warm-gray-light);
+      border-bottom: 1px solid var(--color-border);
+      font-weight: 500;
+      font-size: 0.92rem;
+      color: var(--color-text);
+    }
+
+    .conflict-body {
+      padding: 24px;
+    }
+
+    .conflict-layers {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .conflict-layer {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 12px 16px;
+      border-radius: 8px;
+      background: var(--color-warm-gray-light);
+      transition: all 0.3s ease;
+    }
+
+    .conflict-layer.winner {
+      background: var(--color-accent-subtle);
+      border: 1px solid var(--color-accent);
+    }
+
+    .conflict-layer.loser {
+      opacity: 0.45;
+    }
+
+    .conflict-layer .layer-rank {
+      font-family: var(--font-heading);
+      font-size: 1.4rem;
+      color: var(--color-warm-gray);
+      width: 28px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .conflict-layer.winner .layer-rank {
+      color: var(--color-accent);
+    }
+
+    .conflict-layer .layer-source {
+      font-weight: 600;
+      font-size: 0.88rem;
+      min-width: 140px;
+      flex-shrink: 0;
+    }
+
+    .conflict-layer .layer-instruction {
+      font-family: var(--font-code);
+      font-size: 0.8rem;
+      color: var(--color-text-secondary);
+      flex: 1;
+    }
+
+    .conflict-layer.winner .layer-instruction {
+      color: var(--color-accent);
+      font-weight: 500;
+    }
+
+    .conflict-layer .layer-badge {
+      font-size: 0.68rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 3px 10px;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+
+    .conflict-layer.winner .layer-badge {
+      background: var(--color-accent);
+      color: white;
+    }
+
+    .conflict-layer.loser .layer-badge {
+      background: var(--color-border);
+      color: var(--color-warm-gray);
+    }
+
+    .resolution-rule {
+      margin-top: 24px;
+      padding: 20px 24px;
+      background: var(--color-accent-subtle);
+      border-radius: 8px;
+      font-size: 0.95rem;
+      color: var(--color-text);
+      line-height: 1.6;
+    }
+
+    .resolution-rule strong {
+      color: var(--color-accent);
+    }
+
+    /* --- Prompt Assembly (7 Layers) --- */
+
+    .prompt-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 8px;
+    }
+
+    .prompt-layer {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 14px 20px;
+      border-radius: 8px;
+      background: var(--color-warm-gray-light);
+      transition: all 0.3s ease;
+    }
+
+    .prompt-layer.highlighted {
+      background: var(--color-accent);
+      color: white;
+      box-shadow: 0 4px 20px rgba(79, 70, 229, 0.2);
+      transform: scale(1.02);
+    }
+
+    .prompt-layer .layer-num {
+      font-family: var(--font-heading);
+      font-size: 1.5rem;
+      width: 32px;
+      text-align: center;
+      flex-shrink: 0;
+      opacity: 0.5;
+    }
+
+    .prompt-layer.highlighted .layer-num {
+      opacity: 1;
+    }
+
+    .prompt-layer .layer-name {
+      font-weight: 600;
+      font-size: 0.92rem;
+      flex: 1;
+    }
+
+    .prompt-layer .layer-note {
+      font-size: 0.78rem;
+      color: var(--color-warm-gray);
+      text-align: right;
+    }
+
+    .prompt-layer.highlighted .layer-note {
+      color: rgba(255, 255, 255, 0.75);
+    }
+
+    .prompt-detail {
+      margin-top: 32px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    .prompt-detail-card {
+      padding: 24px;
+      border: 1px solid var(--color-border);
+      border-radius: 10px;
+    }
+
+    .prompt-detail-card h3 {
+      font-size: 0.68rem;
+      margin-bottom: 10px;
+    }
+
+    .prompt-detail-card p {
+      font-size: 0.9rem;
+      line-height: 1.55;
+    }
+
+    .prompt-detail-card code {
+      font-family: var(--font-code);
+      font-size: 0.82rem;
+      background: var(--color-warm-gray-light);
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+
+    /* --- Mermaid --- */
+
+    .mermaid-wrapper {
+      position: relative;
+      margin-top: 8px;
+      border: 1px solid var(--color-border);
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--color-bg);
+    }
+
+    .mermaid-controls {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      display: flex;
+      gap: 4px;
+      z-index: 10;
+    }
+
+    .mermaid-controls button {
+      width: 32px;
+      height: 32px;
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      background: white;
+      color: var(--color-text-secondary);
+      font-size: 1rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+      font-family: var(--font-body);
+      font-weight: 500;
+    }
+
+    .mermaid-controls button:hover {
+      border-color: var(--color-accent);
+      color: var(--color-accent);
+      background: var(--color-accent-subtle);
+    }
+
+    .mermaid-viewport {
+      overflow: hidden;
+      padding: 40px 24px;
+      min-height: 300px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .mermaid-viewport .mermaid-inner {
+      transition: transform 0.2s ease;
+      transform-origin: center center;
+    }
+
+    .mermaid-viewport .mermaid-inner svg {
+      max-width: 100%;
+      height: auto;
+    }
+
+    /* --- Bootstrap Skills --- */
+
+    .skill-cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-top: 8px;
+    }
+
+    .skill-card {
+      padding: 28px 24px;
+      border: 1px solid var(--color-border);
+      border-radius: 10px;
+      transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .skill-card:hover {
+      border-color: var(--color-accent);
+      box-shadow: 0 4px 24px rgba(79, 70, 229, 0.06);
+    }
+
+    .skill-card .card-type {
+      font-family: var(--font-body);
+      font-size: 0.62rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--color-accent);
+      margin-bottom: 10px;
+      display: block;
+    }
+
+    .skill-card .card-name {
+      font-family: var(--font-heading);
+      font-size: 1.2rem;
+      margin-bottom: 4px;
+    }
+
+    .skill-card .card-role {
+      font-size: 0.82rem;
+      color: var(--color-warm-gray);
+      margin-bottom: 12px;
+      font-style: italic;
+    }
+
+    .skill-card .card-desc {
+      font-size: 0.88rem;
+      color: var(--color-text-secondary);
+      line-height: 1.55;
+    }
+
+    .skill-card .card-traits {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--color-border-light);
+      list-style: none;
+    }
+
+    .skill-card .card-traits li {
+      font-size: 0.82rem;
+      color: var(--color-text-secondary);
+      padding: 3px 0;
+      padding-left: 14px;
+      position: relative;
+    }
+
+    .skill-card .card-traits li::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 10px;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--color-accent);
+      opacity: 0.5;
+    }
+
+    .system-skills {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .system-skill-card {
+      padding: 28px 24px;
+      background: var(--color-warm-gray-light);
+      border-radius: 10px;
+      border: 1px solid var(--color-border-light);
+    }
+
+    .system-skill-card .card-type {
+      font-family: var(--font-body);
+      font-size: 0.62rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--color-warm-gray);
+      margin-bottom: 10px;
+      display: block;
+    }
+
+    .system-skill-card .card-name {
+      font-family: var(--font-heading);
+      font-size: 1.15rem;
+      margin-bottom: 8px;
+    }
+
+    .system-skill-card .card-desc {
+      font-size: 0.88rem;
+      color: var(--color-text-secondary);
+      line-height: 1.55;
+    }
+
+    .system-skill-card .card-items {
+      margin-top: 12px;
+      list-style: none;
+    }
+
+    .system-skill-card .card-items li {
+      font-size: 0.82rem;
+      color: var(--color-text-secondary);
+      padding: 3px 0 3px 14px;
+      position: relative;
+    }
+
+    .system-skill-card .card-items li::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 10px;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--color-warm-gray);
+      opacity: 0.4;
+    }
+
+    /* --- Divider --- */
+
+    .section-divider {
+      border: none;
+      border-top: 1px solid var(--color-border);
+      margin: 0 0 var(--section-gap);
+    }
+
+    /* --- Footer --- */
+
+    footer {
+      padding: 48px 0;
+      border-top: 1px solid var(--color-border);
+    }
+
+    footer .footer-inner {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    footer .footer-label {
+      font-size: 0.82rem;
+      color: var(--color-warm-gray);
+    }
+
+    footer .footer-meta {
+      font-size: 0.75rem;
+      color: var(--color-border);
+      text-align: right;
+    }
+
+    /* --- Responsive --- */
+
+    @media (max-width: 768px) {
+      :root {
+        --section-gap: 80px;
+      }
+
+      h1 {
+        font-size: 2.2rem;
+      }
+
+      h2 {
+        font-size: 1.6rem;
+      }
+
+      .annotation-row {
+        flex-direction: column;
+      }
+
+      .skill-cards {
+        grid-template-columns: 1fr;
+      }
+
+      .system-skills {
+        grid-template-columns: 1fr;
+      }
+
+      .prompt-detail {
+        grid-template-columns: 1fr;
+      }
+
+      .conflict-layer .layer-source {
+        min-width: auto;
+      }
+
+      .conflict-layer .layer-instruction {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ====== HERO ====== -->
+  <section class="hero">
+    <div class="container">
+      <div class="fade-up">
+        <span class="label">Doc 10 -- Skills Integration</span>
+        <h1>Skills Integration</h1>
+        <p class="subtitle">
+          Skills are markdown instruction documents that get loaded into an agent's prompt when relevant. They shape how the agent behaves for a specific type of work.
+        </p>
+      </div>
+
+      <div class="key-concept fade-up">
+        <p>
+          <strong>Instructions, Not Code.</strong> A skill is a plain markdown file with YAML frontmatter. No executable logic, no templating, no imports. Skills are documents that tell an agent how to do something -- nothing more.
+        </p>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ====== SKILL ANATOMY ====== -->
+  <section>
+    <div class="container">
+      <div class="section-header fade-up">
+        <span class="label">Anatomy</span>
+        <h2>What a skill file looks like</h2>
+        <p>YAML frontmatter carries metadata. The markdown body carries the instructions that get injected into the agent's prompt at runtime.</p>
+      </div>
+
+      <div class="skill-file fade-up">
+        <div class="skill-file-tab">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span style="margin-left: 8px;">skills/go-coding-standards.md</span>
+        </div>
+        <div class="skill-file-content">
+<pre><span class="fence">---</span>
+<span class="key">name:</span> <span class="value">Go Coding Standards</span>
+<span class="key">slug:</span> <span class="value">go-coding-standards</span>
+<span class="key">scope:</span> <span class="value">project</span>
+<span class="key">category:</span> <span class="value">engineering</span>
+<span class="key">description:</span> <span class="value">Conventions and patterns for Go code in this project.</span>
+<span class="fence">---</span>
+
+<span class="heading">## Error Handling</span>
+
+<span class="body">Always return errors rather than panicking. Use `fmt.Errorf` with `%w`</span>
+<span class="body">for wrapping. Never silently discard errors.</span>
+
+<span class="heading">## Naming</span>
+
+<span class="body">Use camelCase for unexported identifiers, PascalCase for exported.</span>
+<span class="body">Package names are lowercase, single-word. No underscores.</span>
+
+<span class="heading">## Testing</span>
+
+<span class="body">Every exported function has at least one test. Table-driven tests for</span>
+<span class="body">functions with multiple input cases.</span></pre>
+        </div>
+      </div>
+
+      <div class="annotation-row fade-up">
+        <div class="annotation frontmatter-ann">
+          <h3>YAML Frontmatter</h3>
+          <p>Metadata only: name, slug, scope, category, description, and an optional <code style="font-family: var(--font-code); font-size: 0.85em; background: var(--color-warm-gray-light); padding: 1px 5px; border-radius: 3px;">default: true</code> flag. This data lives in the skill registry table, not the prompt.</p>
+        </div>
+        <div class="annotation body-ann">
+          <h3>Markdown Body</h3>
+          <p>The actual instructions. This is the content that gets loaded into the agent's prompt at runtime. Plain markdown -- no templating, no conditionals, no executable code.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="section-divider">
+
+  <!-- ====== ATTACHMENT LEVELS ====== -->
+  <section>
+    <div class="container">
+      <div class="section-header fade-up">
+        <span class="label">Attachment</span>
+        <h2>Four levels of specificity</h2>
+        <p>Skills attach at four levels, from broadest to narrowest. Each level narrows the scope and increases the specificity of the instructions.</p>
+      </div>
+
+      <div class="scope-arrow fade-up">
+        <div class="arrow-line">Broadest scope</div>
+      </div>
+
+      <div class="cascade-diagram fade-up">
+        <!-- Level 1: Org Defaults -->
+        <div class="cascade-level">
+          <div class="cascade-connector">
+            <div class="line" style="background: transparent;"></div>
+            <div class="node"></div>
+            <div class="line"></div>
+          </div>
+          <div class="cascade-card">
+            <div class="level-label">Level 1</div>
+            <div class="level-name">Org Defaults</div>
+            <div class="level-desc">Apply to all work across all projects in the organization. Set via <code style="font-family: var(--font-code); font-size: 0.85em;">default: true</code> in an org-scoped skill. Never cut from the prompt.</div>
+            <span class="level-example">Safety policies, communication guidelines</span>
+          </div>
+        </div>
+
+        <!-- Level 2: Project Defaults -->
+        <div class="cascade-level">
+          <div class="cascade-connector">
+            <div class="line"></div>
+            <div class="node"></div>
+            <div class="line"></div>
+          </div>
+          <div class="cascade-card">
+            <div class="level-label">Level 2</div>
+            <div class="level-name">Project Defaults</div>
+            <div class="level-desc">Apply to all work within a single project. Set via <code style="font-family: var(--font-code); font-size: 0.85em;">default: true</code> in a project-scoped skill. Never cut from the prompt.</div>
+            <span class="level-example">Coding standards, architecture conventions</span>
+          </div>
+        </div>
+
+        <!-- Level 3: Agent-Level -->
+        <div class="cascade-level">
+          <div class="cascade-connector">
+            <div class="line"></div>
+            <div class="node"></div>
+            <div class="line"></div>
+          </div>
+          <div class="cascade-card">
+            <div class="level-label">Level 3</div>
+            <div class="level-name">Agent-Level</div>
+            <div class="level-desc">Part of the agent's profile. Define the agent's identity and core competencies. Linked via the <code style="font-family: var(--font-code); font-size: 0.85em;">agent_skill</code> table. High priority in budget allocation.</div>
+            <span class="level-example">Frank identity, PM planning skill</span>
+          </div>
+        </div>
+
+        <!-- Level 4: Flow Node -->
+        <div class="cascade-level">
+          <div class="cascade-connector">
+            <div class="line"></div>
+            <div class="node"></div>
+            <div class="line" style="background: transparent;"></div>
+          </div>
+          <div class="cascade-card">
+            <div class="level-label">Level 4</div>
+            <div class="level-name">Flow Node</div>
+            <div class="level-desc">Activated only for a specific workflow step. The most targeted: an agent writing a blog post gets blog-writing skills, not deployment skills. Linked via the <code style="font-family: var(--font-code); font-size: 0.85em;">flow_node_skill</code> table.</div>
+            <span class="level-example">Code review checklist, blog writing guidelines</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="scope-arrow fade-up" style="margin-top: 4px;">
+        <div class="arrow-line">Most specific</div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="section-divider">
+
+  <!-- ====== ACTIVATION ====== -->
+  <section>
+    <div class="container">
+      <div class="section-header fade-up">
+        <span class="label">Activation</span>
+        <h2>Token budget efficiency</h2>
+        <p>An agent may have many skills available, but only relevant ones are activated and loaded into the prompt. This keeps prompts focused and respects the context window budget.</p>
+      </div>
+
+      <div class="mermaid-wrapper fade-up" id="activation-diagram">
+        <div class="mermaid-controls">
+          <button onclick="zoomMermaid('activation-diagram', 0.1)" title="Zoom in">+</button>
+          <button onclick="zoomMermaid('activation-diagram', -0.1)" title="Zoom out">&minus;</button>
+          <button onclick="resetMermaid('activation-diagram')" title="Reset zoom">R</button>
+        </div>
+        <div class="mermaid-viewport">
+          <div class="mermaid-inner" data-scale="1">
+            <pre class="mermaid">
+flowchart TD
+    A["Agent takes a turn"] --> B{"Flow node declares\nspecific skills?"}
+    B -- Yes --> C["Load node-declared skills"]
+    C --> D["Add org defaults"]
+    D --> E["Add project defaults"]
+    E --> F["Add agent identity skills"]
+    F --> G(["Focused prompt\nOnly relevant skills loaded"])
+
+    B -- No --> H["Load ALL agent-level skills"]
+    H --> I["Add org defaults"]
+    I --> J["Add project defaults"]
+    J --> K(["Full fallback\nAgent gets its complete skill set"])
+
+    style A fill:#f5f3ff,stroke:#4f46e5,color:#1d1d1f
+    style B fill:#ffffff,stroke:#4f46e5,color:#1d1d1f
+    style C fill:#e0e7ff,stroke:#4f46e5,color:#1d1d1f
+    style D fill:#e0e7ff,stroke:#4f46e5,color:#1d1d1f
+    style E fill:#e0e7ff,stroke:#4f46e5,color:#1d1d1f
+    style F fill:#e0e7ff,stroke:#4f46e5,color:#1d1d1f
+    style G fill:#4f46e5,stroke:#4f46e5,color:#ffffff
+    style H fill:#f5f5f4,stroke:#78716c,color:#1d1d1f
+    style I fill:#f5f5f4,stroke:#78716c,color:#1d1d1f
+    style J fill:#f5f5f4,stroke:#78716c,color:#1d1d1f
+    style K fill:#78716c,stroke:#78716c,color:#ffffff
+            </pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="prompt-detail fade-up">
+        <div class="prompt-detail-card">
+          <h3>Content Source</h3>
+          <p>Skill content is read from the git repo at prompt assembly time. Not cached in the database. Changes take effect on the next turn after commit.</p>
+        </div>
+        <div class="prompt-detail-card">
+          <h3>Management</h3>
+          <p>The PM agent manages all skill CRUD through conversation and git commits. There is no skill editor UI. Everything happens through chat.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="section-divider">
+
+  <!-- ====== SPECIFICITY RESOLUTION ====== -->
+  <section>
+    <div class="container">
+      <div class="section-header fade-up">
+        <span class="label">Conflicts</span>
+        <h2>Specificity resolution</h2>
+        <p>When multiple activated skills contain conflicting instructions, the most specific wins. The agent is told the resolution order in its prompt so it knows which instruction takes priority.</p>
+      </div>
+
+      <div class="specificity-visual fade-up">
+        <div class="conflict-scenario">
+          <div class="conflict-header">
+            Example: Indentation style conflict
+          </div>
+          <div class="conflict-body">
+            <div class="conflict-layers">
+              <div class="conflict-layer winner">
+                <div class="layer-rank">1</div>
+                <div class="layer-source">Flow Node Skill</div>
+                <div class="layer-instruction">"Use tabs for indentation in generated config files"</div>
+                <div class="layer-badge">Wins</div>
+              </div>
+              <div class="conflict-layer loser">
+                <div class="layer-rank">2</div>
+                <div class="layer-source">Agent-Level Skill</div>
+                <div class="layer-instruction">"Default to 4-space indentation"</div>
+                <div class="layer-badge">Overridden</div>
+              </div>
+              <div class="conflict-layer loser">
+                <div class="layer-rank">3</div>
+                <div class="layer-source">Project Default</div>
+                <div class="layer-instruction">"Use 2-space indentation"</div>
+                <div class="layer-badge">Overridden</div>
+              </div>
+              <div class="conflict-layer loser">
+                <div class="layer-rank">4</div>
+                <div class="layer-source">Org Default</div>
+                <div class="layer-instruction">"Follow standard formatting"</div>
+                <div class="layer-badge">Overridden</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="resolution-rule">
+          <strong>Skills always win over procedural memory.</strong> Skills (layer 4) are prescriptive directives. Procedural memory (layer 5) is advisory -- the agent can use it or ignore it. If they conflict, the skill wins. Always.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="section-divider">
+
+  <!-- ====== PROMPT ASSEMBLY ====== -->
+  <section>
+    <div class="container">
+      <div class="section-header fade-up">
+        <span class="label">Prompt Assembly</span>
+        <h2>Layer 4 of 7</h2>
+        <p>Skills occupy layer 4 in the prompt assembly pipeline -- after scope context, before memory. Content is ordered by precedence: org defaults first, flow node skills last (later content has higher weight).</p>
+      </div>
+
+      <div class="prompt-stack fade-up">
+        <div class="prompt-layer">
+          <div class="layer-num">1</div>
+          <div class="layer-name">Agent Identity</div>
+          <div class="layer-note">Never cut</div>
+        </div>
+        <div class="prompt-layer">
+          <div class="layer-num">2</div>
+          <div class="layer-name">Policies and Constraints</div>
+          <div class="layer-note">Never cut</div>
+        </div>
+        <div class="prompt-layer">
+          <div class="layer-num">3</div>
+          <div class="layer-name">Scope Context</div>
+          <div class="layer-note">Org, project, or task context</div>
+        </div>
+        <div class="prompt-layer highlighted">
+          <div class="layer-num">4</div>
+          <div class="layer-name">Skills Instructions</div>
+          <div class="layer-note">This layer -- activated skills from git</div>
+        </div>
+        <div class="prompt-layer">
+          <div class="layer-num">5</div>
+          <div class="layer-name">Memory</div>
+          <div class="layer-note">Advisory, defers to skills</div>
+        </div>
+        <div class="prompt-layer">
+          <div class="layer-num">6</div>
+          <div class="layer-name">Conversation History</div>
+          <div class="layer-note">Budget-managed</div>
+        </div>
+        <div class="prompt-layer">
+          <div class="layer-num">7</div>
+          <div class="layer-name">Tool Descriptions</div>
+          <div class="layer-note">Available capabilities</div>
+        </div>
+      </div>
+
+      <div class="prompt-detail fade-up" style="margin-top: 40px;">
+        <div class="prompt-detail-card">
+          <h3>Injection Format</h3>
+          <p>Each skill is injected with a header identifying its source and level: <code>=== Skill: Go Coding Standards (project default) ===</code> so the agent can reason about conflicts.</p>
+        </div>
+        <div class="prompt-detail-card">
+          <h3>Token Budget</h3>
+          <p>Recommended maximum of ~4,000 tokens per skill. Org/project defaults are never cut. Identity skills are high priority. Non-default agent skills are cut first when budget is tight.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="section-divider">
+
+  <!-- ====== BOOTSTRAP SKILLS ====== -->
+  <section>
+    <div class="container">
+      <div class="section-header fade-up">
+        <span class="label">Bootstrap</span>
+        <h2>Skills that ship on day one</h2>
+        <p>V2 ships with identity skills for the starter trio, a PM identity skill, and org-wide system skills. Project template skills are available for adoption but not pre-installed.</p>
+      </div>
+
+      <h3 class="fade-up" style="margin-bottom: 16px; margin-top: 8px;">Starter Trio Identity Skills</h3>
+      <div class="skill-cards fade-up">
+        <!-- Frank -->
+        <div class="skill-card">
+          <span class="card-type">Agent Identity Skill</span>
+          <div class="card-name">Frank</div>
+          <div class="card-role">Chief of Staff</div>
+          <div class="card-desc">Primary human touchpoint. Org-level coordination and cross-project oversight.</div>
+          <ul class="card-traits">
+            <li>Direct, concise, proactive</li>
+            <li>Triage and escalation</li>
+            <li>Daily summaries</li>
+            <li>Explicitly not a project manager</li>
+          </ul>
+        </div>
+
+        <!-- Lori -->
+        <div class="skill-card">
+          <span class="card-type">Agent Identity Skill</span>
+          <div class="card-name">Lori</div>
+          <div class="card-role">Agent Relations</div>
+          <div class="card-desc">Staffing, hiring/retiring agents, capability assessment and fit evaluation.</div>
+          <ul class="card-traits">
+            <li>Thoughtful, thorough</li>
+            <li>Agent capability assessment</li>
+            <li>Recommends agents for projects</li>
+            <li>Suggests new agent profiles</li>
+          </ul>
+        </div>
+
+        <!-- Ellie -->
+        <div class="skill-card">
+          <span class="card-type">Agent Identity Skill</span>
+          <div class="card-name">Ellie</div>
+          <div class="card-role">Memory</div>
+          <div class="card-desc">Dual role: memory infrastructure and conversational agent. Precise, citation-heavy, transparent about confidence.</div>
+          <ul class="card-traits">
+            <li>Retrieval, capture, synthesis</li>
+            <li>Dedup and taxonomy management</li>
+            <li>Active queries via @mention</li>
+            <li>Explicit capture/forget/correct</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3 class="fade-up" style="margin-bottom: 16px; margin-top: 40px;">Org Default Skills</h3>
+      <div class="system-skills fade-up">
+        <div class="system-skill-card">
+          <span class="card-type">Org Default -- Always Active</span>
+          <div class="card-name">Safety and Communication Policies</div>
+          <div class="card-desc">Rules for handling sensitive information, escalation behavior, and communication boundaries.</div>
+          <ul class="card-items">
+            <li>Credentials and PII handling</li>
+            <li>When to escalate and how</li>
+            <li>External communication boundaries</li>
+          </ul>
+        </div>
+
+        <div class="system-skill-card">
+          <span class="card-type">Org Default -- Always Active</span>
+          <div class="card-name">General Work Standards</div>
+          <div class="card-desc">Foundational conventions for how all agents work across the organization.</div>
+          <ul class="card-items">
+            <li>Commit message conventions</li>
+            <li>Handle ambiguity: ask, don't guess</li>
+            <li>Blocker vs workaround decisions</li>
+            <li>Signaling "step done" vs "I need help"</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ====== FOOTER ====== -->
+  <footer>
+    <div class="container">
+      <div class="footer-inner">
+        <div class="footer-label">OtterCamp V2 -- Skills Integration Visual Explainer</div>
+        <div class="footer-meta">Source: docsv2/10-skills-integration.md</div>
+      </div>
+    </div>
+  </footer>
+
+
+  <!-- ====== SCRIPTS ====== -->
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        primaryColor: '#e0e7ff',
+        primaryTextColor: '#1d1d1f',
+        primaryBorderColor: '#4f46e5',
+        lineColor: '#4f46e5',
+        secondaryColor: '#f5f5f4',
+        tertiaryColor: '#ffffff',
+        fontFamily: 'DM Sans, -apple-system, sans-serif',
+        fontSize: '13px',
+        nodeBorder: '#4f46e5',
+        clusterBkg: '#f5f3ff',
+        edgeLabelBackground: '#ffffff'
+      },
+      flowchart: {
+        curve: 'monotoneY',
+        padding: 16,
+        htmlLabels: true,
+        useMaxWidth: true
+      }
+    });
+  </script>
+
+  <script>
+    // Fade-up intersection observer
+    document.addEventListener('DOMContentLoaded', () => {
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              entry.target.classList.add('visible');
+            }
+          });
+        },
+        {
+          threshold: 0.08,
+          rootMargin: '0px 0px -40px 0px'
+        }
+      );
+
+      document.querySelectorAll('.fade-up').forEach((el) => {
+        observer.observe(el);
+      });
+    });
+
+    // Mermaid zoom controls
+    const mermaidScales = {};
+
+    function zoomMermaid(id, delta) {
+      const wrapper = document.getElementById(id);
+      if (!wrapper) return;
+      const inner = wrapper.querySelector('.mermaid-inner');
+      if (!inner) return;
+
+      if (!mermaidScales[id]) mermaidScales[id] = 1;
+      mermaidScales[id] = Math.max(0.3, Math.min(2.5, mermaidScales[id] + delta));
+      inner.style.transform = 'scale(' + mermaidScales[id] + ')';
+    }
+
+    function resetMermaid(id) {
+      const wrapper = document.getElementById(id);
+      if (!wrapper) return;
+      const inner = wrapper.querySelector('.mermaid-inner');
+      if (!inner) return;
+
+      mermaidScales[id] = 1;
+      inner.style.transform = 'scale(1)';
+    }
+
+    // Expose to global scope for inline onclick
+    window.zoomMermaid = zoomMermaid;
+    window.resetMermaid = resetMermaid;
+  </script>
+
+</body>
+</html>

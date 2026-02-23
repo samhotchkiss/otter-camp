@@ -1,0 +1,2040 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OtterCamp V2 -- Auth, Tenancy &amp; Identity</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,200..800&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* ===== Custom Properties ===== */
+    :root {
+      --base: #2c3e50;
+      --base-dark: #0d1b2a;
+      --base-deeper: #091420;
+      --accent: #5dade2;
+      --accent-bright: #85c1e9;
+      --accent-dim: #2e86c1;
+      --text: #ecf0f1;
+      --text-dim: #99aab5;
+      --text-muted: #5d6d7e;
+      --surface: rgba(44, 62, 80, 0.35);
+      --surface-solid: #1a2a3a;
+      --border: rgba(93, 173, 226, 0.2);
+      --border-bright: rgba(93, 173, 226, 0.5);
+      --grid-dot: rgba(93, 173, 226, 0.08);
+      --grid-dot-bright: rgba(93, 173, 226, 0.15);
+      --font-heading: 'Bricolage Grotesque', sans-serif;
+      --font-body: 'IBM Plex Mono', monospace;
+      --owner-color: #e74c3c;
+      --admin-color: #f39c12;
+      --member-color: #27ae60;
+      --viewer-color: #8e44ad;
+    }
+
+    /* ===== Reset & Base ===== */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html {
+      scroll-behavior: smooth;
+      font-size: 16px;
+    }
+
+    body {
+      font-family: var(--font-body);
+      background: var(--base-dark);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+      position: relative;
+    }
+
+    /* ===== Blueprint Grid Background ===== */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: -2;
+      background:
+        radial-gradient(circle at 1px 1px, var(--grid-dot) 1px, transparent 1px),
+        radial-gradient(circle at 1px 1px, var(--grid-dot-bright) 0.5px, transparent 0.5px);
+      background-size: 24px 24px, 120px 120px;
+      background-position: 0 0, 0 0;
+    }
+
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      background:
+        linear-gradient(180deg,
+          rgba(13, 27, 42, 0.3) 0%,
+          transparent 30%,
+          transparent 70%,
+          rgba(13, 27, 42, 0.5) 100%
+        );
+      pointer-events: none;
+    }
+
+    /* ===== Container ===== */
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 2rem;
+    }
+
+    /* ===== Section ===== */
+    section {
+      padding: 4rem 0;
+      position: relative;
+    }
+
+    section + section {
+      border-top: 1px solid var(--border);
+    }
+
+    /* ===== Typography ===== */
+    h1, h2, h3, h4 {
+      font-family: var(--font-heading);
+      color: var(--text);
+      letter-spacing: -0.02em;
+    }
+
+    h1 { font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 800; line-height: 1.1; }
+    h2 { font-size: clamp(1.5rem, 3vw, 2rem); font-weight: 700; margin-bottom: 1rem; }
+    h3 { font-size: 1.15rem; font-weight: 600; margin-bottom: 0.5rem; }
+
+    p { color: var(--text-dim); max-width: 70ch; }
+
+    .label {
+      font-family: var(--font-body);
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    .section-label {
+      font-family: var(--font-body);
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--accent-dim);
+      margin-bottom: 0.5rem;
+      display: block;
+    }
+
+    code {
+      font-family: var(--font-body);
+      font-size: 0.85em;
+      background: rgba(93, 173, 226, 0.1);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 0.1em 0.4em;
+      color: var(--accent-bright);
+    }
+
+    /* ===== Animations ===== */
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(30px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    @keyframes slideInLeft {
+      from { opacity: 0; transform: translateX(-40px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+
+    @keyframes slideInRight {
+      from { opacity: 0; transform: translateX(40px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+
+    @keyframes drawLine {
+      from { stroke-dashoffset: 1000; }
+      to { stroke-dashoffset: 0; }
+    }
+
+    @keyframes pulseGlow {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(93, 173, 226, 0); }
+      50% { box-shadow: 0 0 20px 2px rgba(93, 173, 226, 0.15); }
+    }
+
+    .animate {
+      opacity: 0;
+    }
+
+    .animate.visible {
+      animation: fadeInUp 0.7s ease-out forwards;
+    }
+
+    .animate-delay-1.visible { animation-delay: 0.1s; }
+    .animate-delay-2.visible { animation-delay: 0.2s; }
+    .animate-delay-3.visible { animation-delay: 0.3s; }
+    .animate-delay-4.visible { animation-delay: 0.4s; }
+    .animate-delay-5.visible { animation-delay: 0.5s; }
+    .animate-delay-6.visible { animation-delay: 0.6s; }
+    .animate-delay-7.visible { animation-delay: 0.7s; }
+    .animate-delay-8.visible { animation-delay: 0.8s; }
+
+    /* ===== Hero ===== */
+    .hero {
+      min-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 6rem 0 4rem;
+      position: relative;
+    }
+
+    .hero .doc-number {
+      font-family: var(--font-body);
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--accent-dim);
+      margin-bottom: 1.5rem;
+      opacity: 0;
+      animation: fadeIn 0.6s ease-out 0.2s forwards;
+    }
+
+    .hero h1 {
+      margin-bottom: 1.5rem;
+      opacity: 0;
+      animation: fadeInUp 0.8s ease-out 0.3s forwards;
+    }
+
+    .hero h1 .accent {
+      color: var(--accent);
+      position: relative;
+    }
+
+    .hero h1 .accent::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      bottom: -4px;
+      width: 100%;
+      height: 2px;
+      background: var(--accent);
+      opacity: 0.4;
+    }
+
+    .hero .subtitle {
+      font-size: 1.05rem;
+      color: var(--text-dim);
+      max-width: 60ch;
+      margin-bottom: 3rem;
+      opacity: 0;
+      animation: fadeInUp 0.8s ease-out 0.5s forwards;
+    }
+
+    .hero-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1.5rem;
+      max-width: 900px;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      opacity: 0;
+      animation: fadeInUp 0.6s ease-out forwards;
+    }
+
+    .stat-card:nth-child(1) { animation-delay: 0.6s; }
+    .stat-card:nth-child(2) { animation-delay: 0.7s; }
+    .stat-card:nth-child(3) { animation-delay: 0.8s; }
+    .stat-card:nth-child(4) { animation-delay: 0.9s; }
+    .stat-card:nth-child(5) { animation-delay: 1.0s; }
+
+    .stat-card .stat-value {
+      font-family: var(--font-heading);
+      font-size: 1.8rem;
+      font-weight: 800;
+      color: var(--accent);
+      line-height: 1;
+      margin-bottom: 0.4rem;
+    }
+
+    .stat-card .stat-label {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      letter-spacing: 0.05em;
+    }
+
+    /* ===== Isolation Diagram ===== */
+    .isolation-diagram {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 2rem;
+      margin-top: 2rem;
+    }
+
+    .routing-layer {
+      background: linear-gradient(135deg, rgba(93, 173, 226, 0.08), rgba(93, 173, 226, 0.02));
+      border: 1px dashed var(--accent-dim);
+      border-radius: 12px;
+      padding: 1.5rem 2rem;
+      text-align: center;
+      position: relative;
+    }
+
+    .routing-layer .layer-title {
+      font-family: var(--font-heading);
+      font-weight: 700;
+      font-size: 1rem;
+      color: var(--accent);
+      margin-bottom: 0.3rem;
+    }
+
+    .routing-layer .layer-desc {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .routing-layer::after {
+      content: '';
+      position: absolute;
+      bottom: -2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 2px;
+      height: 2rem;
+      background: repeating-linear-gradient(
+        to bottom,
+        var(--accent-dim) 0px,
+        var(--accent-dim) 4px,
+        transparent 4px,
+        transparent 8px
+      );
+    }
+
+    .org-databases {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1.5rem;
+      margin-top: 1rem;
+    }
+
+    .org-db {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.5rem;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.3s ease, transform 0.3s ease;
+    }
+
+    .org-db:hover {
+      border-color: var(--border-bright);
+      transform: translateY(-2px);
+    }
+
+    .org-db::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--accent);
+      opacity: 0.6;
+    }
+
+    .org-db .db-icon {
+      width: 36px;
+      height: 36px;
+      background: rgba(93, 173, 226, 0.1);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 0.75rem;
+    }
+
+    .org-db .db-icon svg {
+      width: 20px;
+      height: 20px;
+      stroke: var(--accent);
+      fill: none;
+      stroke-width: 1.5;
+    }
+
+    .org-db .db-name {
+      font-family: var(--font-heading);
+      font-weight: 700;
+      font-size: 0.95rem;
+      color: var(--text);
+      margin-bottom: 0.3rem;
+    }
+
+    .org-db .db-slug {
+      font-size: 0.7rem;
+      color: var(--accent-dim);
+      margin-bottom: 1rem;
+    }
+
+    .org-db .db-tables {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+
+    .org-db .db-table {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      padding: 0.25rem 0.5rem;
+      background: rgba(93, 173, 226, 0.04);
+      border-radius: 3px;
+      border-left: 2px solid var(--border);
+    }
+
+    .isolation-note {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      background: rgba(231, 76, 60, 0.05);
+      border: 1px solid rgba(231, 76, 60, 0.2);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin-top: 1.5rem;
+    }
+
+    .isolation-note .note-icon {
+      flex-shrink: 0;
+      width: 20px;
+      height: 20px;
+      stroke: #e74c3c;
+      fill: none;
+      stroke-width: 2;
+      margin-top: 2px;
+    }
+
+    .isolation-note p {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+    }
+
+    .isolation-note strong {
+      color: #e74c3c;
+    }
+
+    /* ===== Deployment Modes ===== */
+    .deployment-modes {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      margin-top: 2rem;
+    }
+
+    @media (max-width: 768px) {
+      .deployment-modes {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .deploy-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.75rem;
+      position: relative;
+    }
+
+    .deploy-card .deploy-badge {
+      display: inline-block;
+      font-size: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 0.2rem 0.6rem;
+      border-radius: 3px;
+      margin-bottom: 0.75rem;
+    }
+
+    .deploy-card.self-hosted .deploy-badge {
+      background: rgba(39, 174, 96, 0.15);
+      color: #27ae60;
+      border: 1px solid rgba(39, 174, 96, 0.3);
+    }
+
+    .deploy-card.managed .deploy-badge {
+      background: rgba(93, 173, 226, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(93, 173, 226, 0.3);
+    }
+
+    .deploy-card h3 { color: var(--text); margin-bottom: 0.5rem; }
+
+    .deploy-card p {
+      font-size: 0.8rem;
+      margin-bottom: 1rem;
+    }
+
+    .deploy-card ul {
+      list-style: none;
+      padding: 0;
+    }
+
+    .deploy-card li {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      padding: 0.3rem 0;
+      padding-left: 1rem;
+      position: relative;
+    }
+
+    .deploy-card li::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0.65rem;
+      width: 4px;
+      height: 4px;
+      background: var(--accent-dim);
+      border-radius: 50%;
+    }
+
+    /* ===== Mermaid Diagrams ===== */
+    .diagram-wrapper {
+      position: relative;
+      margin: 2rem 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .diagram-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      background: rgba(93, 173, 226, 0.03);
+    }
+
+    .diagram-title {
+      font-family: var(--font-heading);
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: var(--text);
+    }
+
+    .diagram-controls {
+      display: flex;
+      gap: 0.4rem;
+    }
+
+    .diagram-controls button {
+      background: rgba(93, 173, 226, 0.1);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-dim);
+      font-family: var(--font-body);
+      font-size: 0.7rem;
+      padding: 0.3rem 0.6rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .diagram-controls button:hover {
+      background: rgba(93, 173, 226, 0.2);
+      color: var(--text);
+      border-color: var(--border-bright);
+    }
+
+    .diagram-body {
+      padding: 2rem;
+      overflow: auto;
+      position: relative;
+    }
+
+    .diagram-body .mermaid {
+      display: flex;
+      justify-content: center;
+      transition: transform 0.2s ease;
+      transform-origin: center center;
+    }
+
+    /* ===== Principal Model ===== */
+    .principal-grid {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 2rem;
+      align-items: start;
+      margin-top: 2rem;
+    }
+
+    @media (max-width: 900px) {
+      .principal-grid {
+        grid-template-columns: 1fr;
+      }
+      .principal-connector {
+        display: none;
+      }
+    }
+
+    .principal-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.75rem;
+      position: relative;
+    }
+
+    .principal-card.human {
+      border-top: 3px solid var(--accent);
+    }
+
+    .principal-card.agent {
+      border-top: 3px solid #f39c12;
+    }
+
+    .principal-card .card-badge {
+      display: inline-block;
+      font-size: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 0.2rem 0.6rem;
+      border-radius: 3px;
+      margin-bottom: 0.75rem;
+    }
+
+    .principal-card.human .card-badge {
+      background: rgba(93, 173, 226, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(93, 173, 226, 0.3);
+    }
+
+    .principal-card.agent .card-badge {
+      background: rgba(243, 156, 18, 0.15);
+      color: #f39c12;
+      border: 1px solid rgba(243, 156, 18, 0.3);
+    }
+
+    .principal-card h3 {
+      font-size: 1.1rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .principal-card p {
+      font-size: 0.8rem;
+      margin-bottom: 1rem;
+    }
+
+    .principal-attrs {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .principal-attr {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+    }
+
+    .principal-attr .attr-key {
+      color: var(--accent-dim);
+      min-width: 100px;
+    }
+
+    .principal-connector {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding-top: 4rem;
+      gap: 0.5rem;
+    }
+
+    .connector-line {
+      width: 60px;
+      height: 2px;
+      background: var(--border);
+      position: relative;
+    }
+
+    .connector-label {
+      font-size: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      text-align: center;
+      background: var(--base-dark);
+      padding: 0.3rem 0.6rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+
+    .system-actor {
+      margin-top: 1.5rem;
+      background: rgba(93, 173, 226, 0.04);
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }
+
+    .system-actor-icon {
+      flex-shrink: 0;
+      width: 32px;
+      height: 32px;
+      background: rgba(93, 173, 226, 0.08);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .system-actor-icon svg {
+      width: 16px;
+      height: 16px;
+      stroke: var(--text-muted);
+      fill: none;
+      stroke-width: 1.5;
+    }
+
+    .system-actor .sa-title {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 0.2rem;
+    }
+
+    .system-actor .sa-desc {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+
+    .system-actor .sa-uuid {
+      font-size: 0.65rem;
+      color: var(--accent-dim);
+      margin-top: 0.3rem;
+    }
+
+    /* ===== RBAC Cards ===== */
+    .rbac-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 1.25rem;
+      margin-top: 2rem;
+    }
+
+    .rbac-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.5rem;
+      position: relative;
+      transition: transform 0.3s ease, border-color 0.3s ease;
+    }
+
+    .rbac-card:hover {
+      transform: translateY(-2px);
+    }
+
+    .rbac-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      border-radius: 10px 10px 0 0;
+    }
+
+    .rbac-card.owner::before { background: var(--owner-color); }
+    .rbac-card.admin::before { background: var(--admin-color); }
+    .rbac-card.member::before { background: var(--member-color); }
+    .rbac-card.viewer::before { background: var(--viewer-color); }
+
+    .rbac-card.owner:hover { border-color: rgba(231, 76, 60, 0.4); }
+    .rbac-card.admin:hover { border-color: rgba(243, 156, 18, 0.4); }
+    .rbac-card.member:hover { border-color: rgba(39, 174, 96, 0.4); }
+    .rbac-card.viewer:hover { border-color: rgba(142, 68, 173, 0.4); }
+
+    .rbac-card .role-name {
+      font-family: var(--font-heading);
+      font-weight: 700;
+      font-size: 1.1rem;
+      margin-bottom: 0.3rem;
+    }
+
+    .rbac-card.owner .role-name { color: var(--owner-color); }
+    .rbac-card.admin .role-name { color: var(--admin-color); }
+    .rbac-card.member .role-name { color: var(--member-color); }
+    .rbac-card.viewer .role-name { color: var(--viewer-color); }
+
+    .rbac-card .role-desc {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      margin-bottom: 1rem;
+    }
+
+    .rbac-card .role-typical {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      font-style: italic;
+      margin-bottom: 1rem;
+    }
+
+    .rbac-perms {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+
+    .perm-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.7rem;
+      color: var(--text-dim);
+    }
+
+    .perm-check {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .perm-check.yes {
+      background: rgba(39, 174, 96, 0.15);
+      border: 1px solid rgba(39, 174, 96, 0.3);
+    }
+
+    .perm-check.yes svg {
+      width: 8px;
+      height: 8px;
+      stroke: #27ae60;
+      fill: none;
+      stroke-width: 3;
+    }
+
+    .perm-check.no {
+      background: rgba(231, 76, 60, 0.08);
+      border: 1px solid rgba(231, 76, 60, 0.15);
+    }
+
+    .perm-check.no svg {
+      width: 8px;
+      height: 8px;
+      stroke: rgba(231, 76, 60, 0.4);
+      fill: none;
+      stroke-width: 3;
+    }
+
+    /* ===== Schema Table ===== */
+    .schema-table-wrapper {
+      margin-top: 2rem;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .schema-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8rem;
+      min-width: 700px;
+    }
+
+    .schema-table thead th {
+      font-family: var(--font-heading);
+      font-weight: 600;
+      font-size: 0.7rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent-dim);
+      text-align: left;
+      padding: 0.75rem 1rem;
+      border-bottom: 2px solid var(--border);
+      white-space: nowrap;
+    }
+
+    .schema-table tbody td {
+      padding: 0.6rem 1rem;
+      border-bottom: 1px solid rgba(93, 173, 226, 0.06);
+      vertical-align: top;
+    }
+
+    .schema-table tbody tr {
+      transition: background 0.2s ease;
+    }
+
+    .schema-table tbody tr:hover {
+      background: rgba(93, 173, 226, 0.04);
+    }
+
+    .schema-table .table-name {
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    .schema-table .col-list {
+      color: var(--text-dim);
+      font-size: 0.75rem;
+      line-height: 1.8;
+    }
+
+    .schema-table .col-list span {
+      display: inline-block;
+      background: rgba(93, 173, 226, 0.06);
+      border: 1px solid rgba(93, 173, 226, 0.1);
+      border-radius: 3px;
+      padding: 0.05rem 0.35rem;
+      margin: 0.1rem 0.15rem;
+      white-space: nowrap;
+    }
+
+    .schema-table .col-list span.pk {
+      border-color: rgba(243, 156, 18, 0.3);
+      background: rgba(243, 156, 18, 0.08);
+      color: #f39c12;
+    }
+
+    .schema-table .col-list span.fk {
+      border-color: rgba(39, 174, 96, 0.3);
+      background: rgba(39, 174, 96, 0.08);
+      color: #27ae60;
+    }
+
+    .schema-table .notes-text {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    .table-group-header td {
+      padding-top: 1.5rem !important;
+      font-weight: 600;
+      color: var(--text-muted) !important;
+      font-size: 0.65rem !important;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border) !important;
+    }
+
+    /* ===== Session & Key Info ===== */
+    .info-cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      margin-top: 2rem;
+    }
+
+    @media (max-width: 768px) {
+      .info-cards {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .info-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.5rem;
+    }
+
+    .info-card h3 {
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .info-card h3 svg {
+      width: 18px;
+      height: 18px;
+      stroke: var(--accent);
+      fill: none;
+      stroke-width: 1.5;
+    }
+
+    .info-item {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      padding: 0.4rem 0;
+      font-size: 0.8rem;
+      border-bottom: 1px solid rgba(93, 173, 226, 0.05);
+    }
+
+    .info-item:last-child { border-bottom: none; }
+
+    .info-item .info-key {
+      color: var(--text-muted);
+      min-width: 120px;
+      flex-shrink: 0;
+      font-size: 0.7rem;
+    }
+
+    .info-item .info-val {
+      color: var(--text-dim);
+    }
+
+    /* ===== API Key Format ===== */
+    .key-format {
+      margin-top: 1.5rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.5rem 2rem;
+    }
+
+    .key-example {
+      font-family: var(--font-body);
+      font-size: 0.95rem;
+      color: var(--text);
+      margin: 1rem 0;
+      padding: 1rem;
+      background: rgba(0,0,0,0.3);
+      border-radius: 6px;
+      border: 1px solid rgba(93, 173, 226, 0.1);
+      overflow-x: auto;
+    }
+
+    .key-example .prefix { color: var(--accent); }
+    .key-example .scope { color: #f39c12; }
+    .key-example .sep { color: var(--text-muted); }
+    .key-example .random { color: var(--text-dim); }
+
+    .key-scopes {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .key-scope {
+      font-size: 0.7rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: rgba(93, 173, 226, 0.05);
+    }
+
+    .key-scope .scope-name {
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    .key-scope .scope-desc {
+      color: var(--text-muted);
+      margin-left: 0.3rem;
+    }
+
+    /* ===== Bootstrap Timeline ===== */
+    .bootstrap-timeline {
+      margin-top: 2rem;
+      position: relative;
+      padding-left: 2rem;
+    }
+
+    .bootstrap-timeline::before {
+      content: '';
+      position: absolute;
+      left: 7px;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--border);
+    }
+
+    .timeline-step {
+      position: relative;
+      padding-bottom: 1.5rem;
+      padding-left: 1.5rem;
+    }
+
+    .timeline-step:last-child { padding-bottom: 0; }
+
+    .timeline-step::before {
+      content: '';
+      position: absolute;
+      left: -1.95rem;
+      top: 0.3rem;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--base-dark);
+      border: 2px solid var(--accent-dim);
+    }
+
+    .timeline-step.active::before {
+      background: var(--accent);
+      border-color: var(--accent);
+      box-shadow: 0 0 8px rgba(93, 173, 226, 0.4);
+    }
+
+    .timeline-step h4 {
+      font-family: var(--font-heading);
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 0.2rem;
+    }
+
+    .timeline-step p {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    /* ===== Footer ===== */
+    footer {
+      padding: 3rem 0;
+      border-top: 1px solid var(--border);
+      text-align: center;
+    }
+
+    footer .footer-title {
+      font-family: var(--font-heading);
+      font-weight: 700;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    footer .footer-sub {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      opacity: 0.6;
+    }
+
+    footer .footer-links {
+      display: flex;
+      justify-content: center;
+      gap: 2rem;
+      margin-top: 1rem;
+    }
+
+    footer .footer-links a {
+      font-size: 0.65rem;
+      color: var(--accent-dim);
+      text-decoration: none;
+      letter-spacing: 0.05em;
+      transition: color 0.2s ease;
+    }
+
+    footer .footer-links a:hover {
+      color: var(--accent);
+    }
+
+    /* ===== Eliminated Note ===== */
+    .eliminated-note {
+      margin-top: 1.5rem;
+      background: rgba(39, 174, 96, 0.05);
+      border: 1px solid rgba(39, 174, 96, 0.2);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }
+
+    .eliminated-note svg {
+      flex-shrink: 0;
+      width: 18px;
+      height: 18px;
+      stroke: #27ae60;
+      fill: none;
+      stroke-width: 2;
+      margin-top: 2px;
+    }
+
+    .eliminated-note .note-content {
+      font-size: 0.8rem;
+    }
+
+    .eliminated-note .note-content strong {
+      color: #27ae60;
+    }
+
+    .eliminated-note .note-content p {
+      color: var(--text-dim);
+      font-size: 0.8rem;
+    }
+
+    /* ===== Responsive ===== */
+    @media (max-width: 600px) {
+      .container { padding: 0 1rem; }
+      section { padding: 3rem 0; }
+      .hero { min-height: auto; padding: 4rem 0 3rem; }
+      .hero-stats { grid-template-columns: 1fr 1fr; }
+      .principal-grid { grid-template-columns: 1fr; gap: 1rem; }
+      .rbac-grid { grid-template-columns: 1fr; }
+      .org-databases { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- =============== HERO =============== -->
+  <section class="hero">
+    <div class="container">
+      <div class="doc-number">Doc 04 / OtterCamp V2 Specification</div>
+      <h1>
+        <span class="accent">Database-Per-Org</span><br>
+        Auth, Tenancy &amp; Identity
+      </h1>
+      <p class="subtitle">
+        Every organization gets its own PostgreSQL database. No shared databases between tenants -- not even in managed hosting. Cross-tenant data leaks are architecturally impossible.
+      </p>
+      <div class="hero-stats">
+        <div class="stat-card">
+          <div class="stat-value">1:1</div>
+          <div class="stat-label">Org-to-Database Ratio</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">5</div>
+          <div class="stat-label">Core Tables</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">4</div>
+          <div class="stat-label">RBAC Roles</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">30d</div>
+          <div class="stat-label">Sliding Session Window</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">3</div>
+          <div class="stat-label">API Key Scopes</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============== ISOLATION MODEL =============== -->
+  <section id="isolation">
+    <div class="container">
+      <span class="section-label animate animate-delay-1">Section 01</span>
+      <h2 class="animate animate-delay-2">Database-Level Isolation</h2>
+      <p class="animate animate-delay-3" style="margin-bottom: 1rem;">
+        The organization is the top-level tenant. Every org gets its own PostgreSQL database, containing exactly one organization's data. No RLS needed -- the database boundary IS the security boundary.
+      </p>
+
+      <div class="isolation-diagram animate animate-delay-4">
+        <div class="routing-layer">
+          <div class="layer-title">Managed Hosting Routing Layer</div>
+          <div class="layer-desc">Thin lookup: org slug (subdomain / URL path) --> database connection. Infrastructure only -- not part of org data.</div>
+        </div>
+
+        <div class="org-databases">
+          <div class="org-db animate animate-delay-5">
+            <div class="db-icon">
+              <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            </div>
+            <div class="db-name">Acme Corp</div>
+            <div class="db-slug">acme.ottercamp.app</div>
+            <div class="db-tables">
+              <div class="db-table">organization</div>
+              <div class="db-table">human_user (with role)</div>
+              <div class="db-table">agent</div>
+              <div class="db-table">auth_session</div>
+              <div class="db-table">api_key</div>
+              <div class="db-table">audit_event</div>
+              <div class="db-table">chat_session, project, ...</div>
+            </div>
+          </div>
+
+          <div class="org-db animate animate-delay-6">
+            <div class="db-icon">
+              <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            </div>
+            <div class="db-name">Startup Labs</div>
+            <div class="db-slug">startuplabs.ottercamp.app</div>
+            <div class="db-tables">
+              <div class="db-table">organization</div>
+              <div class="db-table">human_user (with role)</div>
+              <div class="db-table">agent</div>
+              <div class="db-table">auth_session</div>
+              <div class="db-table">api_key</div>
+              <div class="db-table">audit_event</div>
+              <div class="db-table">chat_session, project, ...</div>
+            </div>
+          </div>
+
+          <div class="org-db animate animate-delay-7">
+            <div class="db-icon">
+              <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            </div>
+            <div class="db-name">Solo Operator</div>
+            <div class="db-slug">self-hosted (single DB)</div>
+            <div class="db-tables">
+              <div class="db-table">organization</div>
+              <div class="db-table">human_user (with role)</div>
+              <div class="db-table">agent</div>
+              <div class="db-table">auth_session</div>
+              <div class="db-table">api_key</div>
+              <div class="db-table">audit_event</div>
+              <div class="db-table">chat_session, project, ...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="isolation-note animate animate-delay-8">
+        <svg class="note-icon" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M5.07 19H19a2 2 0 001.75-2.97L13.75 4a2 2 0 00-3.5 0L3.32 16.03A2 2 0 005.07 19z"/></svg>
+        <p><strong>No RLS needed.</strong> Row-level security is unnecessary because the isolation boundary is the database itself, not rows within a shared database. Cross-tenant data leaks are architecturally impossible -- there is no other tenant's data in the database to leak.</p>
+      </div>
+
+      <div class="eliminated-note animate animate-delay-8">
+        <svg viewBox="0 0 24 24"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+        <div class="note-content">
+          <p><strong>org_membership table eliminated.</strong> With database-per-org isolation, the role lives directly on <code>human_user</code>. No join table needed. One org per database means the membership relationship is implicit.</p>
+        </div>
+      </div>
+
+      <!-- Deployment Modes -->
+      <h3 style="margin-top: 2.5rem; margin-bottom: 0.5rem;" class="animate animate-delay-3">Deployment Modes</h3>
+      <div class="deployment-modes">
+        <div class="deploy-card self-hosted animate animate-delay-4">
+          <span class="deploy-badge">Self-Hosted</span>
+          <h3>Single Instance</h3>
+          <p>One instance, one database, one org. The operator runs OtterCamp on their own infrastructure.</p>
+          <ul>
+            <li>Hardcoded database connection</li>
+            <li>No routing layer needed</li>
+            <li>Org created during bootstrap</li>
+            <li>CLI-based password reset</li>
+            <li>Optional password-less local auth</li>
+          </ul>
+        </div>
+        <div class="deploy-card managed animate animate-delay-5">
+          <span class="deploy-badge">Managed Hosting</span>
+          <h3>Shared Infrastructure</h3>
+          <p>Shared application infrastructure, separate database per org. Fully isolated tenants.</p>
+          <ul>
+            <li>Routing layer maps slug to database</li>
+            <li>Tenant resolved BEFORE app logic</li>
+            <li>Cross-tenant slug uniqueness enforced</li>
+            <li>Email-based password reset</li>
+            <li>Org suspension/deletion via status field</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============== AUTH FLOW =============== -->
+  <section id="auth-flow">
+    <div class="container">
+      <span class="section-label animate animate-delay-1">Section 02</span>
+      <h2 class="animate animate-delay-2">Authentication Flow</h2>
+      <p class="animate animate-delay-3">
+        Tenant resolution happens first -- before any application logic. Then email+password auth creates a 30-day sliding session with hashed tokens.
+      </p>
+
+      <div class="diagram-wrapper animate animate-delay-4" id="auth-flow-diagram">
+        <div class="diagram-header">
+          <span class="diagram-title">Login Sequence (Email + Password)</span>
+          <div class="diagram-controls">
+            <button onclick="zoomDiagram('auth-flow-diagram', 0.9)">-</button>
+            <button onclick="zoomDiagram('auth-flow-diagram', 1.0)">Reset</button>
+            <button onclick="zoomDiagram('auth-flow-diagram', 1.1)">+</button>
+          </div>
+        </div>
+        <div class="diagram-body">
+          <pre class="mermaid">
+sequenceDiagram
+    participant C as Client
+    participant R as Routing Layer
+    participant S as Server
+    participant D as Org Database
+
+    Note over C,R: Step 1: Tenant Resolution
+    C->>R: Request (subdomain / slug)
+    R->>R: Lookup org slug
+    R->>D: Connect to org database
+    R-->>S: Connection established
+
+    Note over C,D: Step 2: Authentication
+    C->>S: POST /auth/login {email, password}
+    S->>D: SELECT human_user WHERE email = ?
+    D-->>S: user record (password_hash, role, status)
+
+    alt Invalid credentials
+        S->>D: INSERT audit_event (auth.failed_login)
+        S-->>C: 401 Unauthorized
+        Note over S: Increment fail counter (in-memory)
+        Note over S: Exponential backoff delay
+    else Valid credentials
+        Note over S: Step 3: Session Creation
+        S->>S: Generate 256-bit token
+        S->>S: SHA-256 hash token
+        S->>D: INSERT auth_session (token_hash, user_id, expires_at)
+        S->>D: INSERT audit_event (auth.login)
+        S-->>C: Set-Cookie: session_token (HttpOnly, Secure, SameSite=Lax)
+    end
+
+    Note over C: Token stored as cookie (web) or file/keychain (CLI)
+    Note over C,D: Subsequent requests: token hash lookup, 30-day sliding window
+          </pre>
+        </div>
+      </div>
+
+      <div class="info-cards animate animate-delay-5">
+        <div class="info-card">
+          <h3>
+            <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+            Sessions
+          </h3>
+          <div class="info-item">
+            <span class="info-key">Token</span>
+            <span class="info-val">256-bit, base64url, stored as SHA-256 hash</span>
+          </div>
+          <div class="info-item">
+            <span class="info-key">Lifetime</span>
+            <span class="info-val">30 days, sliding window (configurable)</span>
+          </div>
+          <div class="info-item">
+            <span class="info-key">Cookie</span>
+            <span class="info-val">HttpOnly, Secure, SameSite=Lax</span>
+          </div>
+          <div class="info-item">
+            <span class="info-key">Concurrent</span>
+            <span class="info-val">Unlimited sessions per user</span>
+          </div>
+          <div class="info-item">
+            <span class="info-key">Revocation</span>
+            <span class="info-val">Logout, password change, or admin action</span>
+          </div>
+          <div class="info-item">
+            <span class="info-key">Cleanup</span>
+            <span class="info-val">Daily job purges expired/revoked sessions</span>
+          </div>
+        </div>
+        <div class="info-card">
+          <h3>
+            <svg viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+            API Keys
+          </h3>
+          <div class="info-item">
+            <span class="info-key">Format</span>
+            <span class="info-val"><code>oc_&lt;scope&gt;_&lt;random&gt;</code></span>
+          </div>
+          <div class="info-item">
+            <span class="info-key">Random</span>
+            <span class="info-val">32 bytes, base62-encoded</span>
+          </div>
+          <div class="info-item">
+            <span class="info-key">Storage</span>
+            <span class="info-val">SHA-256 hash only (shown once)</span>
+          </div>
+          <div class="info-item">
+            <span class="info-key">Rate limit</span>
+            <span class="info-val">60 mutations/min, 300 reads/min per key</span>
+          </div>
+          <div class="info-item">
+            <span class="info-key">Org limit</span>
+            <span class="info-val">600 req/min aggregate across all keys</span>
+          </div>
+          <div class="info-item">
+            <span class="info-key">Expiry</span>
+            <span class="info-val">Optional, daily cleanup job for expired keys</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="key-format animate animate-delay-6">
+        <span class="section-label">API Key Format</span>
+        <div class="key-example">
+          <span class="prefix">oc</span><span class="sep">_</span><span class="scope">full</span><span class="sep">_</span><span class="random">a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6</span>
+        </div>
+        <div class="key-scopes">
+          <div class="key-scope">
+            <span class="scope-name">full</span>
+            <span class="scope-desc">-- same permissions as user's role</span>
+          </div>
+          <div class="key-scope">
+            <span class="scope-name">read</span>
+            <span class="scope-desc">-- read-only access</span>
+          </div>
+          <div class="key-scope">
+            <span class="scope-name">chat</span>
+            <span class="scope-desc">-- read + send messages</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============== PRINCIPAL MODEL =============== -->
+  <section id="principal">
+    <div class="container">
+      <span class="section-label animate animate-delay-1">Section 03</span>
+      <h2 class="animate animate-delay-2">The Principal Model</h2>
+      <p class="animate animate-delay-3">
+        Two first-class identity types: human users and agents. Both are org-scoped and referenced throughout the system via a polymorphic <code>(principal_type, principal_id)</code> convention. No unified principal table -- it is a convention, not a join.
+      </p>
+
+      <div class="principal-grid animate animate-delay-4">
+        <div class="principal-card human">
+          <span class="card-badge">principal_type = 'human'</span>
+          <h3>Human User</h3>
+          <p>Real people who interact with OtterCamp. Authenticated via email+password or API key. Assigned RBAC roles.</p>
+          <div class="principal-attrs">
+            <div class="principal-attr">
+              <span class="attr-key">Auth</span>
+              <span>Email + password (bcrypt, wf12)</span>
+            </div>
+            <div class="principal-attr">
+              <span class="attr-key">Sessions</span>
+              <span>Server-side, 30-day sliding</span>
+            </div>
+            <div class="principal-attr">
+              <span class="attr-key">Role</span>
+              <span>owner / admin / member / viewer</span>
+            </div>
+            <div class="principal-attr">
+              <span class="attr-key">API access</span>
+              <span>Via scoped API keys</span>
+            </div>
+            <div class="principal-attr">
+              <span class="attr-key">SSO</span>
+              <span>Schema ready, deferred to post-GA</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="principal-connector">
+          <div class="connector-label">Polymorphic<br>Convention</div>
+          <svg width="60" height="80" viewBox="0 0 60 80">
+            <line x1="30" y1="0" x2="30" y2="80" stroke="var(--border)" stroke-width="1" stroke-dasharray="4 4"/>
+            <line x1="0" y1="40" x2="60" y2="40" stroke="var(--border)" stroke-width="1" stroke-dasharray="4 4"/>
+          </svg>
+          <div class="connector-label" style="font-size: 0.55rem; color: var(--accent-dim);">(principal_type, principal_id)</div>
+        </div>
+
+        <div class="principal-card agent">
+          <span class="card-badge">principal_type = 'agent'</span>
+          <h3>Agent</h3>
+          <p>AI entities that perform work. First-class identities -- not sub-accounts of humans. Platform-asserted identity.</p>
+          <div class="principal-attrs">
+            <div class="principal-attr">
+              <span class="attr-key">Auth</span>
+              <span>None -- platform asserts identity</span>
+            </div>
+            <div class="principal-attr">
+              <span class="attr-key">Context</span>
+              <span>Execution context has agent_id</span>
+            </div>
+            <div class="principal-attr">
+              <span class="attr-key">Permissions</span>
+              <span>Capabilities, not RBAC roles</span>
+            </div>
+            <div class="principal-attr">
+              <span class="attr-key">Credentials</span>
+              <span>No credentials to leak or rotate</span>
+            </div>
+            <div class="principal-attr">
+              <span class="attr-key">External</span>
+              <span>Secrets resolved at execution time</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="system-actor animate animate-delay-5">
+        <div class="system-actor-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        </div>
+        <div>
+          <div class="sa-title">System Actor</div>
+          <div class="sa-desc">For automated actions (scheduled tasks, flow advancement, session cleanup), the convention is actor_type = 'system' with a sentinel UUID. Every action always has an actor.</div>
+          <div class="sa-uuid"><code>00000000-0000-0000-0000-000000000000</code></div>
+        </div>
+      </div>
+
+      <div style="margin-top: 2rem;" class="animate animate-delay-6">
+        <h3 style="margin-bottom: 0.5rem;">Delegation Trace</h3>
+        <p style="font-size: 0.8rem;">When a human authorizes an agent action, the audit trail records both: the <strong style="color: var(--text);">agent</strong> as performer (<code>principal_type</code> / <code>principal_id</code>) and the <strong style="color: var(--text);">human</strong> as delegator (<code>delegated_by</code>). You can always answer: "who actually approved this?"</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============== RBAC =============== -->
+  <section id="rbac">
+    <div class="container">
+      <span class="section-label animate animate-delay-1">Section 04</span>
+      <h2 class="animate animate-delay-2">RBAC Roles</h2>
+      <p class="animate animate-delay-3">
+        Four roles on <code>human_user.role</code>. Only owner is used at V2 GA -- the others exist in schema for near-term multi-user support. No migration needed to add collaborators.
+      </p>
+
+      <div class="rbac-grid">
+        <div class="rbac-card owner animate animate-delay-4">
+          <div class="role-name">Owner</div>
+          <div class="role-desc">Full control. Manage billing, delete org, manage all members.</div>
+          <div class="role-typical">The operator (always). V2 GA: the only role in use.</div>
+          <div class="rbac-perms">
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Manage org settings</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Manage billing</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Delete org</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Manage members</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Manage agents</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Create projects</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Chat with agents</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> View audit log</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Manage API keys</div>
+          </div>
+        </div>
+
+        <div class="rbac-card admin animate animate-delay-5">
+          <div class="role-name">Admin</div>
+          <div class="role-desc">Manage agents, projects, settings. Cannot delete org or manage billing.</div>
+          <div class="role-typical">Trusted collaborator (future).</div>
+          <div class="rbac-perms">
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Manage org settings</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Manage billing</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Delete org</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Manage members</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Manage agents</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Create projects</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Chat with agents</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> View audit log</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Manage API keys</div>
+          </div>
+        </div>
+
+        <div class="rbac-card member animate animate-delay-6">
+          <div class="role-name">Member</div>
+          <div class="role-desc">Use the system: chat, view projects, interact with agents. Cannot change settings.</div>
+          <div class="role-typical">Day-to-day user (future).</div>
+          <div class="rbac-perms">
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Manage org settings</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Manage billing</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Delete org</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Manage members</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Manage agents</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Create projects</div>
+            <div class="perm-row"><span class="perm-check yes"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span> Chat with agents</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> View audit log</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Manage API keys</div>
+          </div>
+        </div>
+
+        <div class="rbac-card viewer animate animate-delay-7">
+          <div class="role-name">Viewer</div>
+          <div class="role-desc">Read-only access. View projects, tasks, chat history. No mutations.</div>
+          <div class="role-typical">Observer (future).</div>
+          <div class="rbac-perms">
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Manage org settings</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Manage billing</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Delete org</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Manage members</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Manage agents</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Create projects</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Chat with agents</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> View audit log</div>
+            <div class="perm-row"><span class="perm-check no"><svg viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></span> Manage API keys</div>
+          </div>
+        </div>
+      </div>
+
+      <p class="animate animate-delay-8" style="margin-top: 1.5rem; font-size: 0.75rem; color: var(--text-muted);">
+        Note: Agents do not have RBAC roles. Agents have <strong style="color: var(--text-dim);">capabilities</strong> -- namespaced permissions evaluated by the control plane's policy engine (see doc 16). Default posture is deny.
+      </p>
+    </div>
+  </section>
+
+  <!-- =============== SCHEMA =============== -->
+  <section id="schema">
+    <div class="container">
+      <span class="section-label animate animate-delay-1">Section 05</span>
+      <h2 class="animate animate-delay-2">Database Schema</h2>
+      <p class="animate animate-delay-3">
+        Five tables define the auth, tenancy, and identity model. The agent table schema lives authoritatively in doc 05 but is referenced here for the identity relationship.
+      </p>
+
+      <div class="diagram-wrapper animate animate-delay-4" id="schema-er-diagram">
+        <div class="diagram-header">
+          <span class="diagram-title">Entity Relationship</span>
+          <div class="diagram-controls">
+            <button onclick="zoomDiagram('schema-er-diagram', 0.9)">-</button>
+            <button onclick="zoomDiagram('schema-er-diagram', 1.0)">Reset</button>
+            <button onclick="zoomDiagram('schema-er-diagram', 1.1)">+</button>
+          </div>
+        </div>
+        <div class="diagram-body">
+          <pre class="mermaid">
+erDiagram
+    organization ||--o{ human_user : "has members"
+    organization ||--o{ agent : "has agents"
+    organization ||--o{ audit_event : "logs"
+    human_user ||--o{ auth_session : "has sessions"
+    human_user ||--o{ api_key : "owns keys"
+
+    organization {
+        uuid id PK
+        text name
+        text slug UK
+        jsonb settings
+        text status
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    human_user {
+        uuid id PK
+        uuid organization_id FK
+        text email UK
+        text display_name
+        text password_hash
+        text role
+        text external_auth_provider
+        text external_auth_id
+        text status
+        timestamptz last_login_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    auth_session {
+        uuid id PK
+        uuid user_id FK
+        text token_hash UK
+        inet ip_address
+        text user_agent
+        timestamptz expires_at
+        timestamptz revoked_at
+        timestamptz created_at
+        timestamptz last_active_at
+    }
+
+    api_key {
+        uuid id PK
+        uuid user_id FK
+        text name
+        text key_hash UK
+        text key_prefix
+        text scope
+        timestamptz expires_at
+        timestamptz revoked_at
+        timestamptz last_used_at
+        timestamptz created_at
+    }
+
+    audit_event {
+        uuid id PK
+        uuid organization_id FK
+        text action
+        text principal_type
+        uuid principal_id
+        uuid delegated_by
+        text scope_type
+        uuid scope_id
+        jsonb context
+        timestamptz created_at
+    }
+
+    agent {
+        uuid id PK
+        uuid organization_id FK
+        text slug UK
+        text agent_class
+        text display_name
+        text status
+    }
+          </pre>
+        </div>
+      </div>
+
+      <div class="schema-table-wrapper animate animate-delay-5">
+        <table class="schema-table">
+          <thead>
+            <tr>
+              <th>Table</th>
+              <th>Key Columns</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="table-name">organization</td>
+              <td class="col-list">
+                <span class="pk">id (uuid PK)</span>
+                <span>name</span>
+                <span>slug (unique)</span>
+                <span>settings (jsonb)</span>
+                <span>status</span>
+              </td>
+              <td class="notes-text">
+                Root of tenant tree. One per database. Status: active / suspended / deleted. Settings bag for retention, budgets, model defaults, auth config.
+              </td>
+            </tr>
+            <tr>
+              <td class="table-name">human_user</td>
+              <td class="col-list">
+                <span class="pk">id (uuid PK)</span>
+                <span class="fk">organization_id (FK)</span>
+                <span>email (unique)</span>
+                <span>display_name</span>
+                <span>password_hash</span>
+                <span>role</span>
+                <span>external_auth_provider</span>
+                <span>external_auth_id</span>
+                <span>status</span>
+              </td>
+              <td class="notes-text">
+                Role directly on user (no org_membership table). Role: owner / admin / member / viewer. Password nullable for future SSO-only. Partial unique index on (provider, external_id).
+              </td>
+            </tr>
+            <tr>
+              <td class="table-name">auth_session</td>
+              <td class="col-list">
+                <span class="pk">id (uuid PK)</span>
+                <span class="fk">user_id (FK)</span>
+                <span>token_hash (unique)</span>
+                <span>ip_address</span>
+                <span>user_agent</span>
+                <span>expires_at</span>
+                <span>revoked_at</span>
+                <span>last_active_at</span>
+              </td>
+              <td class="notes-text">
+                Server-side sessions. No org_id needed (org implicit from database). Sliding window: expires_at updated on use. last_active_at batched (every ~5 min). Partial index on expires_at where not revoked.
+              </td>
+            </tr>
+            <tr>
+              <td class="table-name">api_key</td>
+              <td class="col-list">
+                <span class="pk">id (uuid PK)</span>
+                <span class="fk">user_id (FK)</span>
+                <span>name</span>
+                <span>key_hash (unique)</span>
+                <span>key_prefix</span>
+                <span>scope</span>
+                <span>expires_at</span>
+                <span>revoked_at</span>
+                <span>last_used_at</span>
+              </td>
+              <td class="notes-text">
+                Bearer tokens for programmatic access. Scope: full / read / chat. key_prefix = first 8 chars for lookup optimization. Full key shown once at creation. Tied to a specific human_user.
+              </td>
+            </tr>
+            <tr>
+              <td class="table-name">audit_event</td>
+              <td class="col-list">
+                <span class="pk">id (uuid PK)</span>
+                <span class="fk">organization_id (FK)</span>
+                <span>action</span>
+                <span>principal_type</span>
+                <span>principal_id</span>
+                <span>delegated_by</span>
+                <span>scope_type</span>
+                <span>scope_id</span>
+                <span>context (jsonb)</span>
+              </td>
+              <td class="notes-text">
+                Append-only. Namespaced actions (auth.login, agent.created, policy.evaluated). principal_type: human / agent / system. Delegation trace via delegated_by. Indexed by (org, created_at), (org, action), (principal_type, principal_id).
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============== BOOTSTRAP =============== -->
+  <section id="bootstrap">
+    <div class="container">
+      <span class="section-label animate animate-delay-1">Section 06</span>
+      <h2 class="animate animate-delay-2">Bootstrap Flow</h2>
+      <p class="animate animate-delay-3">
+        First install with an empty database triggers the bootstrap sequence. Idempotent -- skipped if an org already exists.
+      </p>
+
+      <div class="bootstrap-timeline animate animate-delay-4">
+        <div class="timeline-step active">
+          <h4>1. Run Migrations</h4>
+          <p>Create all database tables.</p>
+        </div>
+        <div class="timeline-step active">
+          <h4>2. Create Organization</h4>
+          <p>Default org created. Name defaults to "My Organization" (configurable). Self-hosted: the only org.</p>
+        </div>
+        <div class="timeline-step active">
+          <h4>3. Create First User</h4>
+          <p>Operator provides email and password (CLI prompt or env vars). Created as <strong style="color: var(--owner-color);">owner</strong>.</p>
+        </div>
+        <div class="timeline-step active">
+          <h4>4. Seed Starter Trio</h4>
+          <p><strong style="color: var(--text);">Frank</strong> (Chief of Staff), <strong style="color: var(--text);">Lori</strong> (Agent Relations), <strong style="color: var(--text);">Ellie</strong> (Memory). Each gets identity metadata, prompt pack, tool policy, model policy.</p>
+        </div>
+        <div class="timeline-step active">
+          <h4>5. Create Org Session</h4>
+          <p>The "General" chat session. Frank as default responder. Human + Frank + Lori + Ellie as participants.</p>
+        </div>
+        <div class="timeline-step">
+          <h4>6. Record Bootstrap Event</h4>
+          <p>Audit event: bootstrap completed. Records org ID, user ID, agent IDs created.</p>
+        </div>
+      </div>
+
+      <div style="margin-top: 2rem; font-size: 0.75rem; color: var(--text-muted);" class="animate animate-delay-5">
+        <p><strong style="color: var(--text-dim);">CLI:</strong> <code>ottercamp bootstrap --email operator@example.com --password &lt;pw&gt; --org-name "My Workspace"</code></p>
+        <p style="margin-top: 0.5rem;">All flags optional -- prompts interactively if omitted. Env vars supported: <code>OTTERCAMP_ADMIN_EMAIL</code>, <code>OTTERCAMP_ADMIN_PASSWORD</code>, <code>OTTERCAMP_ORG_NAME</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============== FOOTER =============== -->
+  <footer>
+    <div class="container">
+      <div class="footer-title">OtterCamp V2 -- Auth, Tenancy &amp; Identity</div>
+      <div class="footer-sub">Visual specification explainer -- Doc 04</div>
+      <div class="footer-links">
+        <a href="#isolation">Isolation</a>
+        <a href="#auth-flow">Auth Flow</a>
+        <a href="#principal">Principal</a>
+        <a href="#rbac">RBAC</a>
+        <a href="#schema">Schema</a>
+        <a href="#bootstrap">Bootstrap</a>
+      </div>
+    </div>
+  </footer>
+
+  <!-- =============== SCRIPTS =============== -->
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      themeVariables: {
+        primaryColor: '#1a3a4a',
+        primaryTextColor: '#ecf0f1',
+        primaryBorderColor: '#5dade2',
+        lineColor: '#5dade2',
+        secondaryColor: '#2c3e50',
+        tertiaryColor: '#1a2a3a',
+        noteBkgColor: '#1a2a3a',
+        noteTextColor: '#99aab5',
+        noteBorderColor: '#5dade2',
+        actorBkg: '#1a3a4a',
+        actorBorder: '#5dade2',
+        actorTextColor: '#ecf0f1',
+        actorLineColor: '#5dade2',
+        signalColor: '#ecf0f1',
+        signalTextColor: '#ecf0f1',
+        labelBoxBkgColor: '#1a3a4a',
+        labelBoxBorderColor: '#5dade2',
+        labelTextColor: '#ecf0f1',
+        loopTextColor: '#99aab5',
+        activationBorderColor: '#5dade2',
+        activationBkgColor: '#1a3a4a',
+        sequenceNumberColor: '#ecf0f1',
+        fontFamily: 'IBM Plex Mono, monospace',
+        fontSize: '13px',
+        entityRelationship: {
+          fontSize: '12px'
+        }
+      },
+      sequence: {
+        diagramMarginX: 20,
+        diagramMarginY: 20,
+        actorMargin: 60,
+        width: 180,
+        height: 50,
+        boxMargin: 10,
+        boxTextMargin: 5,
+        noteMargin: 10,
+        messageMargin: 40,
+        mirrorActors: false,
+        useMaxWidth: true
+      },
+      er: {
+        diagramPadding: 20,
+        layoutDirection: 'TB',
+        minEntityWidth: 100,
+        minEntityHeight: 50,
+        entityPadding: 15,
+        useMaxWidth: true,
+        fontSize: 12
+      }
+    });
+  </script>
+
+  <script>
+    // ===== Scroll Animation Observer =====
+    const observerOptions = {
+      root: null,
+      rootMargin: '0px 0px -60px 0px',
+      threshold: 0.1
+    };
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, observerOptions);
+
+    document.querySelectorAll('.animate').forEach(el => {
+      observer.observe(el);
+    });
+
+    // ===== Mermaid Zoom Controls =====
+    const diagramScales = {};
+
+    function zoomDiagram(wrapperId, scaleDelta) {
+      const wrapper = document.getElementById(wrapperId);
+      if (!wrapper) return;
+
+      const mermaidEl = wrapper.querySelector('.mermaid');
+      if (!mermaidEl) return;
+
+      if (!diagramScales[wrapperId]) {
+        diagramScales[wrapperId] = 1;
+      }
+
+      if (scaleDelta === 1.0) {
+        diagramScales[wrapperId] = 1;
+      } else if (scaleDelta > 1) {
+        diagramScales[wrapperId] = Math.min(diagramScales[wrapperId] * 1.15, 2.5);
+      } else {
+        diagramScales[wrapperId] = Math.max(diagramScales[wrapperId] * 0.85, 0.3);
+      }
+
+      mermaidEl.style.transform = 'scale(' + diagramScales[wrapperId] + ')';
+    }
+
+    // expose to onclick handlers
+    window.zoomDiagram = zoomDiagram;
+  </script>
+</body>
+</html>

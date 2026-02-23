@@ -1,0 +1,1567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- Projects and Task Flow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #faf8f5;
+    --bg-alt: #f3f0eb;
+    --text: #1a1a1a;
+    --text-muted: #6b6560;
+    --text-light: #958e87;
+    --terracotta: #c75b39;
+    --terracotta-light: #e8a08c;
+    --terracotta-bg: #fdf0ec;
+    --sage: #5d7a64;
+    --sage-light: #a3bfa8;
+    --sage-bg: #eef4ef;
+    --border: #e0dbd5;
+    --border-dark: #c8c1b8;
+    --font-serif: 'Instrument Serif', Georgia, serif;
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+    --max-width: 1200px;
+    --section-gap: 6rem;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: var(--font-sans);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* ---- Layout ---- */
+  .container {
+    max-width: var(--max-width);
+    margin: 0 auto;
+    padding: 0 2rem;
+  }
+
+  section {
+    padding: 0 0 var(--section-gap);
+  }
+
+  /* ---- Typography ---- */
+  h1, h2, h3 {
+    font-family: var(--font-serif);
+    font-weight: 400;
+    letter-spacing: -0.02em;
+  }
+
+  h1 { font-size: clamp(2.5rem, 5vw, 4rem); line-height: 1.1; }
+  h2 { font-size: clamp(1.8rem, 3vw, 2.6rem); line-height: 1.2; margin-bottom: 1.5rem; }
+  h3 { font-size: clamp(1.3rem, 2vw, 1.6rem); line-height: 1.3; margin-bottom: 1rem; }
+
+  p { max-width: 65ch; }
+  p + p { margin-top: 1rem; }
+
+  .label {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--terracotta);
+  }
+
+  .muted { color: var(--text-muted); }
+  .light { color: var(--text-light); }
+
+  /* ---- Divider ---- */
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: var(--section-gap) 0;
+  }
+
+  .divider-thin {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 2rem 0;
+  }
+
+  /* ---- Animations ---- */
+  .fade-up {
+    opacity: 0;
+    transform: translateY(28px);
+    transition: opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+                transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .fade-up.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ---- Hero ---- */
+  .hero {
+    padding: 5rem 0 3rem;
+    border-bottom: 2px solid var(--text);
+    margin-bottom: var(--section-gap);
+  }
+
+  .hero .label { margin-bottom: 1.5rem; display: block; }
+
+  .hero h1 {
+    margin-bottom: 1.5rem;
+  }
+
+  .hero h1 em {
+    font-style: italic;
+    color: var(--terracotta);
+  }
+
+  .hero-subtitle {
+    font-size: 1.15rem;
+    color: var(--text-muted);
+    max-width: 60ch;
+    line-height: 1.7;
+    margin-bottom: 3rem;
+  }
+
+  .stats-row {
+    display: flex;
+    gap: 3rem;
+    flex-wrap: wrap;
+  }
+
+  .stat {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .stat-value {
+    font-family: var(--font-serif);
+    font-size: 2.8rem;
+    line-height: 1;
+    color: var(--terracotta);
+  }
+
+  .stat-label {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    margin-top: 0.4rem;
+  }
+
+  /* ---- Principle Cards ---- */
+  .principles-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.5rem;
+    margin-top: 2rem;
+  }
+
+  .principle-card {
+    border: 1px solid var(--border);
+    padding: 1.5rem 1.75rem;
+    background: var(--bg);
+    transition: border-color 0.3s ease;
+  }
+
+  .principle-card:hover {
+    border-color: var(--border-dark);
+  }
+
+  .principle-card h3 {
+    font-size: 1.2rem;
+    margin-bottom: 0.6rem;
+  }
+
+  .principle-card p {
+    font-size: 0.92rem;
+    color: var(--text-muted);
+    line-height: 1.65;
+  }
+
+  .principle-number {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--terracotta);
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    display: block;
+    margin-bottom: 0.75rem;
+  }
+
+  /* ---- Mermaid Sections ---- */
+  .diagram-section {
+    position: relative;
+  }
+
+  .diagram-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+
+  .diagram-header p {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+  }
+
+  .diagram-wrapper {
+    position: relative;
+    background: #fff;
+    border: 1px solid var(--border);
+    padding: 2.5rem 2rem;
+    overflow: hidden;
+  }
+
+  .diagram-inner {
+    overflow: auto;
+    max-width: 100%;
+    cursor: grab;
+    transition: transform 0.1s ease;
+    display: flex;
+    justify-content: center;
+  }
+
+  .diagram-inner:active {
+    cursor: grabbing;
+  }
+
+  .diagram-inner svg {
+    transition: transform 0.2s ease;
+  }
+
+  .zoom-controls {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    display: flex;
+    gap: 0.25rem;
+    z-index: 10;
+  }
+
+  .zoom-btn {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    color: var(--text);
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+
+  .zoom-btn:hover {
+    background: var(--bg-alt);
+    border-color: var(--border-dark);
+  }
+
+  /* ---- Legend ---- */
+  .legend {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    margin-top: 1.25rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.82rem;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+  }
+
+  .legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+
+  .legend-dot.work { background: var(--sage); }
+  .legend-dot.review { background: var(--terracotta); }
+  .legend-dot.terminal { background: var(--text); }
+  .legend-dot.blocked { background: var(--terracotta-light); }
+  .legend-dot.active { background: var(--sage); }
+  .legend-dot.queued { background: var(--border-dark); }
+  .legend-dot.draft { background: var(--text-light); }
+  .legend-dot.approve { background: var(--sage); }
+  .legend-dot.reject { background: var(--terracotta); }
+
+  /* ---- Merge Queue Visual ---- */
+  .merge-queue-visual {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 2rem;
+  }
+
+  .merge-main-line {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    position: relative;
+    padding: 2rem 0;
+  }
+
+  .merge-diagram {
+    width: 100%;
+    background: #fff;
+    border: 1px solid var(--border);
+    padding: 2.5rem 2rem;
+    overflow-x: auto;
+  }
+
+  .merge-track {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-width: 600px;
+  }
+
+  .merge-row {
+    display: grid;
+    grid-template-columns: 160px 1fr 120px;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    font-size: 0.88rem;
+    transition: border-color 0.2s ease;
+  }
+
+  .merge-row:hover {
+    border-color: var(--border-dark);
+  }
+
+  .merge-row.active-merge {
+    border-color: var(--sage);
+    border-width: 2px;
+    background: var(--sage-bg);
+  }
+
+  .merge-row.conflict-merge {
+    border-color: var(--terracotta);
+    border-width: 2px;
+    background: var(--terracotta-bg);
+  }
+
+  .merge-branch {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .merge-progress {
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .merge-progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.6s ease;
+  }
+
+  .merge-progress-fill.merged { background: var(--sage); width: 100%; }
+  .merge-progress-fill.merging { background: var(--sage-light); width: 60%; animation: pulse-width 2s ease-in-out infinite; }
+  .merge-progress-fill.queued { background: var(--border-dark); width: 0%; }
+  .merge-progress-fill.conflict { background: var(--terracotta); width: 45%; }
+
+  @keyframes pulse-width {
+    0%, 100% { width: 55%; }
+    50% { width: 65%; }
+  }
+
+  .merge-status {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    text-align: right;
+  }
+
+  .merge-status.merged { color: var(--sage); }
+  .merge-status.merging { color: var(--sage); }
+  .merge-status.queued { color: var(--text-light); }
+  .merge-status.conflict { color: var(--terracotta); }
+
+  .merge-main-label {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 1.25rem;
+    padding-top: 1.25rem;
+    border-top: 2px solid var(--text);
+  }
+
+  .merge-main-label span {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text);
+  }
+
+  .merge-main-label .arrow-down {
+    font-size: 1.2rem;
+    line-height: 1;
+  }
+
+  /* ---- Schema Table ---- */
+  .schema-table-wrapper {
+    overflow-x: auto;
+    margin-top: 2rem;
+    border: 1px solid var(--border);
+  }
+
+  .schema-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+    min-width: 720px;
+  }
+
+  .schema-table thead {
+    background: var(--text);
+    color: var(--bg);
+  }
+
+  .schema-table th {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    text-align: left;
+    padding: 0.9rem 1.25rem;
+  }
+
+  .schema-table td {
+    padding: 0.85rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  .schema-table tbody tr {
+    transition: background 0.2s ease;
+  }
+
+  .schema-table tbody tr:hover {
+    background: var(--bg-alt);
+  }
+
+  .schema-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  .schema-table .table-name {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--terracotta);
+    white-space: nowrap;
+  }
+
+  .schema-table .table-desc {
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+
+  .schema-table .table-cols {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-light);
+    line-height: 1.8;
+  }
+
+  .schema-table .table-group {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    white-space: nowrap;
+  }
+
+  .schema-table .table-group.core { color: var(--sage); }
+  .schema-table .table-group.flow { color: var(--terracotta); }
+  .schema-table .table-group.ops { color: var(--text-muted); }
+
+  /* ---- Callout ---- */
+  .callout {
+    border-left: 3px solid var(--terracotta);
+    padding: 1.25rem 1.5rem;
+    margin: 2rem 0;
+    background: var(--terracotta-bg);
+  }
+
+  .callout p {
+    font-size: 0.92rem;
+    color: var(--text);
+    line-height: 1.65;
+  }
+
+  .callout .callout-label {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--terracotta);
+    margin-bottom: 0.5rem;
+    display: block;
+  }
+
+  .callout.sage {
+    border-left-color: var(--sage);
+    background: var(--sage-bg);
+  }
+
+  .callout.sage .callout-label {
+    color: var(--sage);
+  }
+
+  /* ---- Flow Template Visual ---- */
+  .flow-template-desc {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    margin-top: 2rem;
+  }
+
+  @media (max-width: 768px) {
+    .flow-template-desc {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .flow-detail-card {
+    border: 1px solid var(--border);
+    padding: 1.5rem 1.75rem;
+    background: #fff;
+  }
+
+  .flow-detail-card h3 {
+    font-size: 1.1rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .flow-detail-card p {
+    font-size: 0.88rem;
+    color: var(--text-muted);
+    line-height: 1.65;
+  }
+
+  .flow-detail-card .tag {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0.2rem 0.5rem;
+    margin-bottom: 0.75rem;
+    border-radius: 2px;
+  }
+
+  .flow-detail-card .tag.work {
+    background: var(--sage-bg);
+    color: var(--sage);
+  }
+
+  .flow-detail-card .tag.review {
+    background: var(--terracotta-bg);
+    color: var(--terracotta);
+  }
+
+  /* ---- Subtask Visual ---- */
+  .subtask-visual {
+    margin-top: 2rem;
+    background: #fff;
+    border: 1px solid var(--border);
+    padding: 2rem;
+  }
+
+  .subtask-node-label {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--sage);
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .subtask-node-label .node-dot {
+    width: 8px;
+    height: 8px;
+    background: var(--sage);
+    border-radius: 2px;
+  }
+
+  .subtask-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-left: 1.5rem;
+    border-left: 2px solid var(--border);
+    padding-left: 1.5rem;
+  }
+
+  .subtask-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 1rem;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    font-size: 0.85rem;
+    transition: border-color 0.2s ease;
+  }
+
+  .subtask-item:hover {
+    border-color: var(--border-dark);
+  }
+
+  .subtask-item .id {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-light);
+    min-width: 60px;
+  }
+
+  .subtask-item .name {
+    flex: 1;
+    color: var(--text);
+  }
+
+  .subtask-item .status {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0.2rem 0.5rem;
+    border-radius: 2px;
+  }
+
+  .subtask-item .status.done { background: var(--sage-bg); color: var(--sage); }
+  .subtask-item .status.in-progress { background: #fff8e1; color: #9e8400; }
+  .subtask-item .status.queued { background: var(--bg-alt); color: var(--text-light); }
+  .subtask-item .status.blocked { background: var(--terracotta-bg); color: var(--terracotta); }
+
+  .subtask-dep {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--text-light);
+    margin-left: 1.5rem;
+    padding-left: 1.5rem;
+    border-left: 2px solid var(--border);
+    margin-top: -0.25rem;
+    padding-top: 0.25rem;
+    padding-bottom: 0.25rem;
+  }
+
+  /* ---- Inbox Visual ---- */
+  .inbox-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+
+  .inbox-card {
+    border: 1px solid var(--border);
+    padding: 1.25rem 1.5rem;
+    background: #fff;
+    transition: border-color 0.2s ease;
+  }
+
+  .inbox-card:hover {
+    border-color: var(--border-dark);
+  }
+
+  .inbox-card .type {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--terracotta);
+    margin-bottom: 0.5rem;
+    display: block;
+  }
+
+  .inbox-card .title {
+    font-family: var(--font-serif);
+    font-size: 1.05rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .inbox-card .actions {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+  }
+
+  .inbox-card .actions strong {
+    color: var(--sage);
+    font-weight: 600;
+  }
+
+  /* ---- Git Visual ---- */
+  .git-concept {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+    margin-top: 2rem;
+  }
+
+  @media (max-width: 768px) {
+    .git-concept {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .git-card {
+    border: 1px solid var(--border);
+    background: #fff;
+    padding: 1.5rem;
+  }
+
+  .git-card h3 {
+    font-size: 1.1rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .git-card p {
+    font-size: 0.88rem;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+
+  .git-card .mono {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    background: var(--bg-alt);
+    padding: 0.15rem 0.4rem;
+    border-radius: 2px;
+  }
+
+  /* ---- Footer ---- */
+  footer {
+    border-top: 2px solid var(--text);
+    padding: 3rem 0;
+    margin-top: 2rem;
+  }
+
+  footer .footer-inner {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 2rem;
+  }
+
+  footer .footer-title {
+    font-family: var(--font-serif);
+    font-size: 1.4rem;
+  }
+
+  footer .footer-meta {
+    font-size: 0.82rem;
+    color: var(--text-light);
+    text-align: right;
+  }
+
+  footer .footer-meta a {
+    color: var(--terracotta);
+    text-decoration: none;
+  }
+
+  footer .footer-meta a:hover {
+    text-decoration: underline;
+  }
+
+  /* ---- TOC Nav ---- */
+  .toc-nav {
+    position: fixed;
+    top: 50%;
+    right: 1.5rem;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    z-index: 100;
+  }
+
+  .toc-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--border);
+    border: none;
+    cursor: pointer;
+    transition: background 0.3s ease, transform 0.2s ease;
+    padding: 0;
+    position: relative;
+  }
+
+  .toc-dot:hover {
+    background: var(--terracotta-light);
+    transform: scale(1.3);
+  }
+
+  .toc-dot.active {
+    background: var(--terracotta);
+    transform: scale(1.3);
+  }
+
+  .toc-dot .tooltip {
+    position: absolute;
+    right: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--text);
+    color: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    padding: 0.3rem 0.6rem;
+    white-space: nowrap;
+    border-radius: 2px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+
+  .toc-dot:hover .tooltip {
+    opacity: 1;
+  }
+
+  @media (max-width: 900px) {
+    .toc-nav { display: none; }
+    .container { padding: 0 1.25rem; }
+  }
+
+  /* ---- Section Number ---- */
+  .section-number {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--terracotta);
+    margin-bottom: 0.75rem;
+    display: block;
+  }
+</style>
+</head>
+<body>
+
+<!-- TOC Navigation -->
+<nav class="toc-nav" aria-label="Section navigation">
+  <button class="toc-dot" data-target="hero"><span class="tooltip">Overview</span></button>
+  <button class="toc-dot" data-target="principles"><span class="tooltip">Principles</span></button>
+  <button class="toc-dot" data-target="state-machine"><span class="tooltip">Task States</span></button>
+  <button class="toc-dot" data-target="flow-templates"><span class="tooltip">Flow Templates</span></button>
+  <button class="toc-dot" data-target="subtasks"><span class="tooltip">Subtasks</span></button>
+  <button class="toc-dot" data-target="merge-queue"><span class="tooltip">Merge Queue</span></button>
+  <button class="toc-dot" data-target="inbox"><span class="tooltip">Inbox</span></button>
+  <button class="toc-dot" data-target="schema"><span class="tooltip">Schema</span></button>
+</nav>
+
+<div class="container">
+
+  <!-- ============ HERO ============ -->
+  <header class="hero" id="hero">
+    <span class="label">OtterCamp V2 / Spec 03</span>
+    <h1 class="fade-up">Projects and<br><em>Task Flow</em></h1>
+    <p class="hero-subtitle fade-up" style="transition-delay: 0.08s">
+      The core system for how work gets planned, executed, reviewed, and delivered. Every project is backed by a git repository. Tasks move through an explicit state machine, governed by immutable flow templates, with a merge queue serializing delivery to main.
+    </p>
+    <div class="stats-row fade-up" style="transition-delay: 0.16s">
+      <div class="stat">
+        <span class="stat-value">12</span>
+        <span class="stat-label">Database Tables</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">5</span>
+        <span class="stat-label">Primary Task States</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">8</span>
+        <span class="stat-label">Total Work Statuses</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">2</span>
+        <span class="stat-label">Flow Node Types</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">3</span>
+        <span class="stat-label">Overlap Policies</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============ PRINCIPLES ============ -->
+  <section id="principles">
+    <span class="section-number fade-up">01 / Core Principles</span>
+    <h2 class="fade-up" style="transition-delay: 0.06s">Foundational design decisions</h2>
+    <p class="muted fade-up" style="transition-delay: 0.1s">
+      The project and task domain is built on a set of opinionated principles that shape every interaction.
+    </p>
+    <div class="principles-grid">
+      <div class="principle-card fade-up" style="transition-delay: 0.14s">
+        <span class="principle-number">01</span>
+        <h3>Chat-created, never UI</h3>
+        <p>Tasks are always created through agents or chat. No "new task" buttons. The UI is for viewing, navigating, and reviewing -- not for creation.</p>
+      </div>
+      <div class="principle-card fade-up" style="transition-delay: 0.2s">
+        <span class="principle-number">02</span>
+        <h3>Every project is a repo</h3>
+        <p>Git is the canonical store for all project files. One repo per project. Main branch is the source of truth, task branches isolate work.</p>
+      </div>
+      <div class="principle-card fade-up" style="transition-delay: 0.26s">
+        <span class="principle-number">03</span>
+        <h3>Tasks are flat</h3>
+        <p>No parent-child hierarchy between tasks. Large efforts are modeled as multiple tasks connected by dependencies forming a DAG.</p>
+      </div>
+      <div class="principle-card fade-up" style="transition-delay: 0.32s">
+        <span class="principle-number">04</span>
+        <h3>Explicit flow progression</h3>
+        <p>Agents must signal "step done" to advance. Run completion does not auto-advance. Multiple runs per flow node is normal.</p>
+      </div>
+      <div class="principle-card fade-up" style="transition-delay: 0.38s">
+        <span class="principle-number">05</span>
+        <h3>Blocked progress creates tasks</h3>
+        <p>There is no separate blocker entity. When progress is blocked, the system creates a task. Notifications can be missed -- tasks persist until resolved.</p>
+      </div>
+      <div class="principle-card fade-up" style="transition-delay: 0.44s">
+        <span class="principle-number">06</span>
+        <h3>Immutable flow templates</h3>
+        <p>Once a task is using a flow template, it is locked. Changes create new versions. In-progress tasks keep their original flow.</p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- ============ STATE MACHINE ============ -->
+  <section id="state-machine" class="diagram-section">
+    <span class="section-number fade-up">02 / Task State Machine</span>
+    <div class="diagram-header">
+      <div>
+        <h2 class="fade-up" style="transition-delay: 0.06s">Work status lifecycle</h2>
+        <p class="fade-up" style="transition-delay: 0.1s">
+          Eight states govern task progression. The primary path flows from draft through queued, in_progress, review, and into done. Blocked, on_hold, and cancelled serve as auxiliary states. Both done and cancelled are terminal -- if work needs revisiting, create a new task.
+        </p>
+      </div>
+    </div>
+
+    <div class="diagram-wrapper fade-up" style="transition-delay: 0.16s">
+      <div class="zoom-controls">
+        <button class="zoom-btn" data-action="zoom-in" data-target="state-diagram" title="Zoom in">+</button>
+        <button class="zoom-btn" data-action="zoom-out" data-target="state-diagram" title="Zoom out">-</button>
+        <button class="zoom-btn" data-action="zoom-reset" data-target="state-diagram" title="Reset zoom">1:1</button>
+      </div>
+      <div class="diagram-inner" id="state-diagram">
+        <pre class="mermaid">
+stateDiagram-v2
+    direction LR
+
+    classDef primary fill:#5d7a64,color:#fff,stroke:#4a6550,stroke-width:1px,font-family:JetBrains Mono
+    classDef gate fill:#c75b39,color:#fff,stroke:#a84a2e,stroke-width:1px,font-family:JetBrains Mono
+    classDef hold fill:#958e87,color:#fff,stroke:#7a746e,stroke-width:1px,font-family:JetBrains Mono
+    classDef terminal fill:#1a1a1a,color:#faf8f5,stroke:#333,stroke-width:1px,font-family:JetBrains Mono
+    classDef start fill:#e0dbd5,color:#1a1a1a,stroke:#c8c1b8,stroke-width:1px,font-family:JetBrains Mono
+
+    [*] --> draft
+    draft --> queued: PM scopes & queues
+    draft --> cancelled
+
+    queued --> in_progress: Scheduler picks up
+    queued --> on_hold
+    queued --> cancelled
+
+    in_progress --> review: Agent signals step done
+    in_progress --> blocked: Dependency added
+    in_progress --> on_hold
+    in_progress --> cancelled
+
+    blocked --> in_progress: Dependency resolved
+    blocked --> on_hold
+    blocked --> cancelled
+
+    on_hold --> queued: Resumed
+    on_hold --> cancelled
+
+    review --> done: Approved
+    review --> in_progress: Rejected
+    review --> cancelled
+
+    done --> [*]
+    cancelled --> [*]
+
+    class draft start
+    class queued start
+    class in_progress primary
+    class review gate
+    class blocked gate
+    class on_hold hold
+    class done terminal
+    class cancelled terminal
+        </pre>
+      </div>
+      <div class="legend">
+        <div class="legend-item"><span class="legend-dot draft"></span> Draft / Queued</div>
+        <div class="legend-item"><span class="legend-dot active"></span> In Progress (active)</div>
+        <div class="legend-item"><span class="legend-dot review"></span> Review / Blocked (gated)</div>
+        <div class="legend-item"><span class="legend-dot" style="background: #958e87"></span> On Hold</div>
+        <div class="legend-item"><span class="legend-dot terminal"></span> Terminal (done / cancelled)</div>
+      </div>
+    </div>
+
+    <div class="callout sage fade-up" style="transition-delay: 0.22s; margin-top: 2rem;">
+      <span class="callout-label">Scheduling note</span>
+      <p>A queued task with unresolved dependencies remains queued but is ineligible for scheduler pickup. Only tasks already in_progress transition to blocked when a new dependency is added mid-execution. The dependency is visible via the dependency table, not via work status.</p>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- ============ FLOW TEMPLATES ============ -->
+  <section id="flow-templates" class="diagram-section">
+    <span class="section-number fade-up">03 / Flow Templates</span>
+    <div class="diagram-header">
+      <div>
+        <h2 class="fade-up" style="transition-delay: 0.06s">Immutable DAGs of work and review</h2>
+        <p class="fade-up" style="transition-delay: 0.1s">
+          Each task is governed by a flow template -- a directed graph of work and review nodes. The PM designs these conversationally. Review nodes gate quality with approve/reject decisions. Rejection loops create new execution records, preserving full audit history per attempt.
+        </p>
+      </div>
+    </div>
+
+    <div class="diagram-wrapper fade-up" style="transition-delay: 0.16s">
+      <div class="zoom-controls">
+        <button class="zoom-btn" data-action="zoom-in" data-target="flow-diagram" title="Zoom in">+</button>
+        <button class="zoom-btn" data-action="zoom-out" data-target="flow-diagram" title="Zoom out">-</button>
+        <button class="zoom-btn" data-action="zoom-reset" data-target="flow-diagram" title="Reset zoom">1:1</button>
+      </div>
+      <div class="diagram-inner" id="flow-diagram">
+        <pre class="mermaid">
+stateDiagram-v2
+    direction LR
+
+    classDef workNode fill:#5d7a64,color:#fff,stroke:#4a6550,stroke-width:2px,font-family:JetBrains Mono
+    classDef reviewNode fill:#c75b39,color:#fff,stroke:#a84a2e,stroke-width:2px,font-family:JetBrains Mono
+    classDef doneNode fill:#1a1a1a,color:#faf8f5,stroke:#333,stroke-width:2px,font-family:JetBrains Mono
+
+    state "Write Code" as wc
+    state "Code Review" as cr
+    state "Revise" as rv
+    state "Final Review" as fr
+    state "Done" as dn
+
+    [*] --> wc
+    wc --> cr: Step done
+    cr --> rv: Reject (visit n+1)
+    cr --> fr: Approve
+    rv --> cr: Step done
+    fr --> dn: Approve
+    fr --> wc: Reject (back to start)
+    dn --> [*]
+
+    class wc workNode
+    class rv workNode
+    class cr reviewNode
+    class fr reviewNode
+    class dn doneNode
+        </pre>
+      </div>
+      <div class="legend">
+        <div class="legend-item"><span class="legend-dot work"></span> Work node</div>
+        <div class="legend-item"><span class="legend-dot review"></span> Review node</div>
+        <div class="legend-item"><span class="legend-dot terminal"></span> Terminal</div>
+        <div class="legend-item"><span class="legend-dot approve"></span> Approve edge</div>
+        <div class="legend-item"><span class="legend-dot reject"></span> Reject edge (loops back)</div>
+      </div>
+    </div>
+
+    <div class="flow-template-desc fade-up" style="transition-delay: 0.22s">
+      <div class="flow-detail-card">
+        <span class="tag work">Work Node</span>
+        <h3>Execution by agents</h3>
+        <p>Work nodes are where agents perform tasks. They commit to the task branch, create subtasks if needed, and must explicitly signal "step done" to advance. Multiple runs at a single node is normal -- the agent may need several sessions to complete the work.</p>
+      </div>
+      <div class="flow-detail-card">
+        <span class="tag review">Review Node</span>
+        <h3>Quality gate</h3>
+        <p>Review nodes require an explicit approve or reject decision. The reviewer sees a scoped diff: task branch vs the commit_sha from the previous node's execution. Rejection loops create new flow_node_execution records with incremented visit counters.</p>
+      </div>
+    </div>
+
+    <div class="callout fade-up" style="transition-delay: 0.28s; margin-top: 2rem;">
+      <span class="callout-label">Immutability rule</span>
+      <p>Flow templates are immutable once a task is using them. If the flow needs to change, the PM creates a new version. In-progress tasks keep their original flow. New tasks pick up the updated template. This avoids the problem of a flow changing under a task mid-execution.</p>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- ============ SUBTASKS ============ -->
+  <section id="subtasks">
+    <span class="section-number fade-up">04 / Subtasks</span>
+    <h2 class="fade-up" style="transition-delay: 0.06s">Scoped to flow node execution</h2>
+    <p class="muted fade-up" style="transition-delay: 0.1s">
+      Subtasks are the smallest unit of work, scoped to a specific task and flow node execution. They run sequentially on the task branch to avoid git conflicts. A flow node with subtasks cannot advance until all subtasks are done or cancelled. If a subtask would need its own flow, the parent task is too big and should be split.
+    </p>
+
+    <div class="subtask-visual fade-up" style="transition-delay: 0.16s">
+      <div style="font-family: var(--font-serif); font-size: 1.3rem; margin-bottom: 0.3rem;">Task: Implement Auth Middleware</div>
+      <div style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-light); margin-bottom: 1.5rem;">OC-5 / Branch: task/implement-auth-middleware</div>
+
+      <div class="subtask-node-label">
+        <span class="node-dot"></span>
+        Flow Node: Write Code (visit 1)
+      </div>
+
+      <div class="subtask-list">
+        <div class="subtask-item">
+          <span class="id">OC-5.1</span>
+          <span class="name">JWT validation layer</span>
+          <span class="status done">Done</span>
+        </div>
+        <div class="subtask-dep">OC-5.2 depends on OC-5.1</div>
+        <div class="subtask-item">
+          <span class="id">OC-5.2</span>
+          <span class="name">Session cookie handling</span>
+          <span class="status in-progress">In Progress</span>
+        </div>
+        <div class="subtask-item">
+          <span class="id">OC-5.3</span>
+          <span class="name">Rate limiting middleware</span>
+          <span class="status queued">Queued</span>
+        </div>
+      </div>
+
+      <div class="divider-thin"></div>
+
+      <div style="display: flex; gap: 2rem; flex-wrap: wrap; font-size: 0.82rem; color: var(--text-muted); margin-top: 0.5rem;">
+        <div><strong style="color: var(--text)">Execution:</strong> Sequential (shared branch)</div>
+        <div><strong style="color: var(--text)">Status set:</strong> <span style="font-family: var(--font-mono); font-size: 0.78rem;">draft, queued, in_progress, blocked, done, cancelled</span></div>
+        <div><strong style="color: var(--text)">Depth:</strong> One level only</div>
+      </div>
+    </div>
+
+    <div class="callout sage fade-up" style="transition-delay: 0.22s; margin-top: 2rem;">
+      <span class="callout-label">Sizing principle</span>
+      <p>A task is a measurable output with a flow. A subtask is the smallest unit of work within a flow node. Subtasks cannot have their own flows or subtasks. If a subtask would need its own flow, the PM should split the parent task into multiple tasks with dependencies instead.</p>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- ============ MERGE QUEUE ============ -->
+  <section id="merge-queue">
+    <span class="section-number fade-up">05 / Merge Queue</span>
+    <h2 class="fade-up" style="transition-delay: 0.06s">Serializing delivery to main</h2>
+    <p class="muted fade-up" style="transition-delay: 0.1s">
+      When tasks complete, their branches enter the project merge queue rather than merging immediately. The queue serializes merges in priority-then-FIFO order. Trivial conflicts are auto-resolved; non-trivial conflicts are escalated to the PM. Merge state lives on merge_queue_entry, not on the task itself.
+    </p>
+
+    <div class="merge-diagram fade-up" style="transition-delay: 0.16s">
+      <div class="merge-track">
+        <div class="merge-row" style="opacity: 0.55;">
+          <span class="merge-branch">task/fix-nav-links</span>
+          <div class="merge-progress"><div class="merge-progress-fill merged"></div></div>
+          <span class="merge-status merged">Merged</span>
+        </div>
+        <div class="merge-row active-merge">
+          <span class="merge-branch">task/add-auth-flow</span>
+          <div class="merge-progress"><div class="merge-progress-fill merging"></div></div>
+          <span class="merge-status merging">Merging</span>
+        </div>
+        <div class="merge-row conflict-merge">
+          <span class="merge-branch">task/update-config</span>
+          <div class="merge-progress"><div class="merge-progress-fill conflict"></div></div>
+          <span class="merge-status conflict">Conflict</span>
+        </div>
+        <div class="merge-row">
+          <span class="merge-branch">task/add-logging</span>
+          <div class="merge-progress"><div class="merge-progress-fill queued"></div></div>
+          <span class="merge-status queued">Queued</span>
+        </div>
+        <div class="merge-row">
+          <span class="merge-branch">task/refactor-api</span>
+          <div class="merge-progress"><div class="merge-progress-fill queued"></div></div>
+          <span class="merge-status queued">Queued</span>
+        </div>
+      </div>
+      <div class="merge-main-label">
+        <span class="arrow-down">&#8595;</span>
+        <span>main</span>
+      </div>
+    </div>
+
+    <div class="callout fade-up" style="transition-delay: 0.22s; margin-top: 2rem;">
+      <span class="callout-label">Conflict resolution</span>
+      <p>Trivial conflicts -- non-overlapping changes to the same file -- are auto-resolved. Non-trivial conflicts are escalated to the PM, who can assign an agent to rebase the task branch. Proactive divergence detection (warning before conflicts materialize) is a future optimization.</p>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- ============ INBOX ============ -->
+  <section id="inbox">
+    <span class="section-number fade-up">06 / Inbox</span>
+    <h2 class="fade-up" style="transition-delay: 0.06s">Action-required queue for humans</h2>
+    <p class="muted fade-up" style="transition-delay: 0.1s">
+      The inbox is distinct from notifications. Every item requires a decision and blocks progress somewhere until the human acts. Items persist until acted on -- no expiry, no auto-dismiss. If something sits deferred too long, the PM nudges via chat.
+    </p>
+
+    <div class="inbox-grid fade-up" style="transition-delay: 0.16s">
+      <div class="inbox-card">
+        <span class="type">Task Scoping Review</span>
+        <div class="title">Landing page design for product launch</div>
+        <div class="actions"><strong>Approve</strong> to queue / Request changes / Defer</div>
+      </div>
+      <div class="inbox-card">
+        <span class="type">Task Work Review</span>
+        <div class="title">Auth middleware implementation</div>
+        <div class="actions"><strong>Approve</strong> to advance / Reject with feedback / Defer</div>
+      </div>
+      <div class="inbox-card">
+        <span class="type">Draft Action Review</span>
+        <div class="title">Composed email to vendor</div>
+        <div class="actions"><strong>Approve</strong> / Edit then approve / Reject / Defer</div>
+      </div>
+      <div class="inbox-card">
+        <span class="type">Escalation</span>
+        <div class="title">Cross-project API conflict</div>
+        <div class="actions"><strong>Respond</strong> in context / Decide inline / Defer</div>
+      </div>
+      <div class="inbox-card">
+        <span class="type">Capability Approval</span>
+        <div class="title">Agent requests database write access</div>
+        <div class="actions"><strong>Approve</strong> / Approve with constraints / Deny / Defer</div>
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 2rem; flex-wrap: wrap; margin-top: 2rem; font-size: 0.85rem; color: var(--text-muted);" class="fade-up" style="transition-delay: 0.22s">
+      <div><strong style="color: var(--text)">Lifecycle:</strong> pending, deferred, acted</div>
+      <div><strong style="color: var(--text)">Ordering:</strong> Urgency, then arrival time</div>
+      <div><strong style="color: var(--text)">Context:</strong> Enough to decide without leaving the inbox</div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- ============ GIT STRATEGY ============ -->
+  <section id="git-strategy">
+    <span class="section-number fade-up">07 / Git Strategy</span>
+    <h2 class="fade-up" style="transition-delay: 0.06s">Every project backed by a repository</h2>
+    <p class="muted fade-up" style="transition-delay: 0.1s">
+      Git is the canonical store for all project files -- code, documents, configs, versioned artifacts. This applies whether the project is software, content, or anything else.
+    </p>
+
+    <div class="git-concept fade-up" style="transition-delay: 0.16s">
+      <div class="git-card">
+        <h3>One repo per project</h3>
+        <p>Created when the project is created. The PM (or system during setup) initializes it. <span class="mono">main</span> is the source of truth.</p>
+      </div>
+      <div class="git-card">
+        <h3>Task branches</h3>
+        <p>When a task starts execution, a branch is created: <span class="mono">task/&lt;slug&gt;</span>. All work happens here. Subtasks share the same branch -- no sub-branches.</p>
+      </div>
+      <div class="git-card">
+        <h3>Review as diff</h3>
+        <p>Reviewers see task branch vs the <span class="mono">commit_sha</span> from the previous node -- each reviewer sees only changes since the last completed step.</p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- ============ SCHEMA ============ -->
+  <section id="schema">
+    <span class="section-number fade-up">08 / Database Schema</span>
+    <h2 class="fade-up" style="transition-delay: 0.06s">12 tables for the project domain</h2>
+    <p class="muted fade-up" style="transition-delay: 0.1s">
+      Tasks are flat -- no parent-child between tasks. Subtasks are contained within tasks, scoped to flow nodes. The dependency table is polymorphic. Merge state lives on its own table, not duplicated on the task.
+    </p>
+
+    <div class="schema-table-wrapper fade-up" style="transition-delay: 0.16s">
+      <table class="schema-table">
+        <thead>
+          <tr>
+            <th>Table</th>
+            <th>Purpose</th>
+            <th>Key Columns</th>
+            <th>Group</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="table-name">project</td>
+            <td class="table-desc">Container for all work. Backed by a git repo. Has an org-unique slug used as prefix for task numbering.</td>
+            <td class="table-cols">slug, context_block, repo_path, status</td>
+            <td><span class="table-group core">Core</span></td>
+          </tr>
+          <tr>
+            <td class="table-name">project_task</td>
+            <td class="table-desc">Primary work unit. Flat at the project level. Governed by a flow template with an 8-state work status lifecycle.</td>
+            <td class="table-cols">work_status, priority, flow_template_id, current_flow_node_id, branch_name, task_number</td>
+            <td><span class="table-group core">Core</span></td>
+          </tr>
+          <tr>
+            <td class="table-name">project_subtask</td>
+            <td class="table-desc">Smallest unit of work, scoped to a task and flow node execution. Sequential on the task branch. Reduced status set.</td>
+            <td class="table-cols">flow_node_execution_id, subtask_number, work_status, assignee_id</td>
+            <td><span class="table-group core">Core</span></td>
+          </tr>
+          <tr>
+            <td class="table-name">project_task_participant</td>
+            <td class="table-desc">Tracks agents and humans involved in a task, with their role (planner, worker, reviewer, observer).</td>
+            <td class="table-cols">participant_type, participant_id, role</td>
+            <td><span class="table-group core">Core</span></td>
+          </tr>
+          <tr>
+            <td class="table-name">project_task_dependency</td>
+            <td class="table-desc">Polymorphic dependency links forming a DAG. Handles task-to-task, subtask-to-subtask, and cross-level dependencies.</td>
+            <td class="table-cols">source_type, source_id, depends_on_type, depends_on_id</td>
+            <td><span class="table-group core">Core</span></td>
+          </tr>
+          <tr>
+            <td class="table-name">project_task_event</td>
+            <td class="table-desc">Append-only audit trail. Every state transition, flow advancement, rejection, blocker, and escalation recorded with actor and comment.</td>
+            <td class="table-cols">event_type, from_status, to_status, actor_type, comment</td>
+            <td><span class="table-group core">Core</span></td>
+          </tr>
+          <tr>
+            <td class="table-name">flow_template</td>
+            <td class="table-desc">Immutable DAG definition. Versioned -- new versions create new rows, old rows marked not current. Designed conversationally through the PM.</td>
+            <td class="table-cols">version, is_current, start_node_id</td>
+            <td><span class="table-group flow">Flow</span></td>
+          </tr>
+          <tr>
+            <td class="table-name">flow_node</td>
+            <td class="table-desc">Work or review node within a flow template. Defines actor type, skill references, and edges (next_node, reject_node).</td>
+            <td class="table-cols">node_type, actor_type, next_node_id, reject_node_id, skills</td>
+            <td><span class="table-group flow">Flow</span></td>
+          </tr>
+          <tr>
+            <td class="table-name">flow_node_execution</td>
+            <td class="table-desc">Per-task state of each flow node. Tracks visits (rejection loops), session references, and commit_sha for review diff base.</td>
+            <td class="table-cols">visit, status, commit_sha, session_id</td>
+            <td><span class="table-group flow">Flow</span></td>
+          </tr>
+          <tr>
+            <td class="table-name">task_schedule</td>
+            <td class="table-desc">Cron-based recurring task creation. Three overlap policies (skip, queue, replace). Max duration enforcement prevents zombie pileup.</td>
+            <td class="table-cols">cron_expression, overlap_policy, max_duration_ms, status</td>
+            <td><span class="table-group ops">Ops</span></td>
+          </tr>
+          <tr>
+            <td class="table-name">inbox_item</td>
+            <td class="table-desc">Human's action-required queue. Five item types. Carries enough context for inline decisions. Items persist until acted on.</td>
+            <td class="table-cols">item_type, status, context, action_payload, action_taken</td>
+            <td><span class="table-group ops">Ops</span></td>
+          </tr>
+          <tr>
+            <td class="table-name">merge_queue_entry</td>
+            <td class="table-desc">Serializes completed task branches merging to main. Priority-then-FIFO ordering. Tracks conflict state separately from task status.</td>
+            <td class="table-cols">status, branch_name, priority, conflict_details</td>
+            <td><span class="table-group ops">Ops</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ FOOTER ============ -->
+  <footer>
+    <div class="footer-inner">
+      <div>
+        <div class="footer-title">OtterCamp V2</div>
+        <p class="light" style="font-size: 0.88rem; margin-top: 0.4rem;">Projects and Task Flow -- Visual Explainer</p>
+      </div>
+      <div class="footer-meta">
+        <div>Spec 03 of 20</div>
+        <div style="margin-top: 0.3rem;">Source: <a href="../03-projects-and-task-flow.md">03-projects-and-task-flow.md</a></div>
+        <div style="margin-top: 0.3rem; color: var(--text-light);">Generated Feb 2026</div>
+      </div>
+    </div>
+  </footer>
+
+</div>
+
+<!-- Mermaid v11 via ESM CDN -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      primaryColor: '#5d7a64',
+      primaryTextColor: '#faf8f5',
+      primaryBorderColor: '#4a6550',
+      secondaryColor: '#c75b39',
+      tertiaryColor: '#f3f0eb',
+      lineColor: '#958e87',
+      textColor: '#1a1a1a',
+      fontSize: '14px',
+      fontFamily: 'JetBrains Mono, monospace',
+      stateBorder: '#c8c1b8',
+      stateBkg: '#f3f0eb',
+      labelBackgroundColor: '#faf8f5'
+    },
+    stateDiagram: {
+      useMaxWidth: false
+    }
+  });
+
+  // -- Zoom controls --
+  const zoomState = {};
+
+  function getZoom(targetId) {
+    if (!zoomState[targetId]) {
+      zoomState[targetId] = { scale: 1 };
+    }
+    return zoomState[targetId];
+  }
+
+  function applyZoom(targetId) {
+    const container = document.getElementById(targetId);
+    if (!container) return;
+    const svg = container.querySelector('svg');
+    if (!svg) return;
+    const state = getZoom(targetId);
+    svg.style.transform = `scale(${state.scale})`;
+    svg.style.transformOrigin = 'center top';
+  }
+
+  document.querySelectorAll('.zoom-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const action = btn.dataset.action;
+      const targetId = btn.dataset.target;
+      const state = getZoom(targetId);
+
+      if (action === 'zoom-in') {
+        state.scale = Math.min(state.scale + 0.15, 2.5);
+      } else if (action === 'zoom-out') {
+        state.scale = Math.max(state.scale - 0.15, 0.4);
+      } else if (action === 'zoom-reset') {
+        state.scale = 1;
+      }
+      applyZoom(targetId);
+    });
+  });
+
+  // -- Scroll-triggered fade-up animations (staggered) --
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        observer.unobserve(entry.target);
+      }
+    });
+  }, {
+    threshold: 0.08,
+    rootMargin: '0px 0px -40px 0px'
+  });
+
+  document.querySelectorAll('.fade-up').forEach((el, i) => {
+    observer.observe(el);
+  });
+
+  // -- TOC active state --
+  const sections = document.querySelectorAll('section[id], header[id]');
+  const tocDots = document.querySelectorAll('.toc-dot');
+
+  const sectionObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const id = entry.target.id;
+        tocDots.forEach(dot => {
+          dot.classList.toggle('active', dot.dataset.target === id);
+        });
+      }
+    });
+  }, {
+    threshold: 0.3,
+    rootMargin: '-10% 0px -60% 0px'
+  });
+
+  sections.forEach(section => sectionObserver.observe(section));
+
+  tocDots.forEach(dot => {
+    dot.addEventListener('click', () => {
+      const target = document.getElementById(dot.dataset.target);
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  });
+
+  // -- Pan/drag for diagram containers --
+  document.querySelectorAll('.diagram-inner').forEach(container => {
+    let isDragging = false;
+    let startX, startY, scrollLeft, scrollTop;
+
+    container.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      startX = e.pageX - container.offsetLeft;
+      startY = e.pageY - container.offsetTop;
+      scrollLeft = container.scrollLeft;
+      scrollTop = container.scrollTop;
+    });
+
+    container.addEventListener('mouseleave', () => { isDragging = false; });
+    container.addEventListener('mouseup', () => { isDragging = false; });
+
+    container.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      e.preventDefault();
+      const x = e.pageX - container.offsetLeft;
+      const y = e.pageY - container.offsetTop;
+      container.scrollLeft = scrollLeft - (x - startX);
+      container.scrollTop = scrollTop - (y - startY);
+    });
+  });
+</script>
+
+</body>
+</html>

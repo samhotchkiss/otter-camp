@@ -1,0 +1,1863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- System Integration (CLI and Browser)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Source+Code+Pro:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ───────────────────────────── Custom Properties ───────────────────────────── */
+  :root {
+    --bg-primary:    #1a2332;
+    --bg-secondary:  #1e2a3d;
+    --bg-card:       #212f44;
+    --bg-inset:      #162030;
+    --border:        #2c3e57;
+    --border-bright: #3d5474;
+    --border-dim:    #243248;
+    --accent:        #4a90d9;
+    --accent-light:  #6aabef;
+    --accent-dim:    #3670b0;
+    --accent-glow:   rgba(74, 144, 217, 0.12);
+    --text-primary:  #c8d6e5;
+    --text-secondary:#8a9bb5;
+    --text-bright:   #e8eff7;
+    --text-muted:    #5a6f8a;
+    --text-code:     #a3c4e8;
+    --risk-safe:     #2ecc71;
+    --risk-normal:   #f39c12;
+    --risk-sensitive:#e67e22;
+    --risk-dangerous:#e74c3c;
+    --risk-safe-bg:    rgba(46, 204, 113, 0.08);
+    --risk-normal-bg:  rgba(243, 156, 18, 0.08);
+    --risk-sensitive-bg: rgba(230, 126, 34, 0.08);
+    --risk-dangerous-bg: rgba(231, 76, 60, 0.08);
+    --grid-line:     rgba(74, 144, 217, 0.04);
+    --grid-line-bright: rgba(74, 144, 217, 0.08);
+    --schematic:     rgba(74, 144, 217, 0.15);
+    --font-heading:  'Archivo', sans-serif;
+    --font-body:     'Source Code Pro', monospace;
+    --ease-out:      cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  /* ───────────────────────────── Reset & Base ───────────────────────────── */
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html {
+    font-size: 16px;
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-weight: 400;
+    font-size: 0.875rem;
+    line-height: 1.7;
+    min-height: 100vh;
+    overflow-x: hidden;
+    background-image:
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px),
+      linear-gradient(var(--grid-line-bright) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line-bright) 1px, transparent 1px);
+    background-size: 60px 60px, 60px 60px, 300px 300px, 300px 300px;
+    background-position: -1px -1px, -1px -1px, -1px -1px, -1px -1px;
+  }
+
+  /* ───────────────────────────── Layout ───────────────────────────── */
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 2rem;
+  }
+
+  section {
+    padding: 4.5rem 0;
+    position: relative;
+  }
+
+  section + section {
+    border-top: 1px solid var(--border-dim);
+  }
+
+  /* ───────────────────────────── Typography ───────────────────────────── */
+  h1, h2, h3, h4 {
+    font-family: var(--font-heading);
+    color: var(--text-bright);
+    letter-spacing: -0.02em;
+  }
+
+  h1 { font-size: 2.6rem; font-weight: 800; line-height: 1.1; }
+  h2 { font-size: 1.5rem; font-weight: 700; line-height: 1.3; margin-bottom: 1rem; }
+  h3 { font-size: 1.05rem; font-weight: 600; line-height: 1.4; }
+
+  p { margin-bottom: 0.75rem; }
+
+  .label {
+    font-family: var(--font-body);
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  code, .mono {
+    font-family: var(--font-body);
+    color: var(--text-code);
+    font-size: 0.82rem;
+  }
+
+  a {
+    color: var(--accent-light);
+    text-decoration: none;
+    border-bottom: 1px solid var(--border);
+    transition: border-color 0.2s;
+  }
+  a:hover { border-color: var(--accent); }
+
+  /* ───────────────────────────── Hero ───────────────────────────── */
+  .hero {
+    padding: 6rem 0 4rem;
+    text-align: center;
+    position: relative;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 700px;
+    height: 500px;
+    background: radial-gradient(ellipse, rgba(74, 144, 217, 0.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero .label {
+    margin-bottom: 1.5rem;
+    display: block;
+  }
+
+  .hero h1 {
+    margin-bottom: 1.5rem;
+  }
+
+  .hero h1 .accent {
+    color: var(--accent);
+  }
+
+  .hero .summary {
+    max-width: 740px;
+    margin: 0 auto;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    line-height: 1.8;
+  }
+
+  .pillar-row {
+    display: flex;
+    justify-content: center;
+    gap: 1.5rem;
+    margin-top: 2.5rem;
+    flex-wrap: wrap;
+  }
+
+  .pillar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem 1.5rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    min-width: 240px;
+    transition: border-color 0.25s;
+  }
+
+  .pillar:hover {
+    border-color: var(--accent-dim);
+  }
+
+  .pillar-icon {
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent-glow);
+    border: 1px solid var(--border-bright);
+    border-radius: 8px;
+    flex-shrink: 0;
+  }
+
+  .pillar-icon svg {
+    width: 22px;
+    height: 22px;
+    stroke: var(--accent);
+    fill: none;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .pillar-text {
+    text-align: left;
+  }
+
+  .pillar-text h3 {
+    font-size: 0.95rem;
+    margin-bottom: 0.15rem;
+  }
+
+  .pillar-text p {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  .badge-row {
+    display: flex;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+    flex-wrap: wrap;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.75rem;
+    background: var(--bg-inset);
+    border: 1px solid var(--border-dim);
+    border-radius: 3px;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-family: var(--font-body);
+  }
+
+  .badge .dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent-dim);
+  }
+
+  /* ───────────────────────────── Section Header ───────────────────────────── */
+  .section-header {
+    text-align: center;
+    margin-bottom: 2rem;
+  }
+
+  .section-header p {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    max-width: 640px;
+    margin: 0.5rem auto 0;
+    line-height: 1.7;
+  }
+
+  /* ───────────────────────────── Risk Classification Matrix ───────────────────────────── */
+  .risk-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+
+  .risk-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.25s, transform 0.25s var(--ease-out);
+  }
+
+  .risk-card:hover {
+    transform: translateY(-2px);
+  }
+
+  .risk-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+  }
+
+  .risk-card.safe { background: var(--risk-safe-bg); }
+  .risk-card.safe::before { background: var(--risk-safe); }
+  .risk-card.safe:hover { border-color: var(--risk-safe); }
+  .risk-card.safe .risk-level { color: var(--risk-safe); }
+  .risk-card.safe .risk-indicator { background: var(--risk-safe); }
+
+  .risk-card.normal { background: var(--risk-normal-bg); }
+  .risk-card.normal::before { background: var(--risk-normal); }
+  .risk-card.normal:hover { border-color: var(--risk-normal); }
+  .risk-card.normal .risk-level { color: var(--risk-normal); }
+  .risk-card.normal .risk-indicator { background: var(--risk-normal); }
+
+  .risk-card.sensitive { background: var(--risk-sensitive-bg); }
+  .risk-card.sensitive::before { background: var(--risk-sensitive); }
+  .risk-card.sensitive:hover { border-color: var(--risk-sensitive); }
+  .risk-card.sensitive .risk-level { color: var(--risk-sensitive); }
+  .risk-card.sensitive .risk-indicator { background: var(--risk-sensitive); }
+
+  .risk-card.dangerous { background: var(--risk-dangerous-bg); }
+  .risk-card.dangerous::before { background: var(--risk-dangerous); }
+  .risk-card.dangerous:hover { border-color: var(--risk-dangerous); }
+  .risk-card.dangerous .risk-level { color: var(--risk-dangerous); }
+  .risk-card.dangerous .risk-indicator { background: var(--risk-dangerous); }
+
+  .risk-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .risk-indicator {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .risk-level {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .risk-policy {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.75rem;
+    padding: 0.35rem 0.6rem;
+    background: var(--bg-inset);
+    border: 1px solid var(--border-dim);
+    border-radius: 3px;
+    display: inline-block;
+  }
+
+  .risk-examples {
+    list-style: none;
+    padding: 0;
+    margin-top: 0.75rem;
+  }
+
+  .risk-examples li {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    padding: 0.25rem 0;
+    font-family: var(--font-body);
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    line-height: 1.5;
+  }
+
+  .risk-examples li::before {
+    content: '>';
+    color: var(--text-muted);
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+
+  .risk-desc {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 0;
+  }
+
+  /* ───────────────────────────── Policy Layer Stack ───────────────────────────── */
+  .policy-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 2rem;
+    max-width: 700px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .policy-layer {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 1.5rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    position: relative;
+  }
+
+  .policy-layer:first-child {
+    border-radius: 8px 8px 0 0;
+  }
+
+  .policy-layer:last-child {
+    border-bottom: 1px solid var(--border);
+    border-radius: 0 0 8px 8px;
+  }
+
+  .policy-layer .layer-num {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent-glow);
+    border: 1px solid var(--border-bright);
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .policy-layer .layer-info {
+    flex: 1;
+  }
+
+  .policy-layer .layer-info h4 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 0.15rem;
+  }
+
+  .policy-layer .layer-info p {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  .policy-layer .layer-badge {
+    font-size: 0.65rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 3px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+  }
+
+  .layer-badge.highest {
+    background: rgba(231, 76, 60, 0.15);
+    color: var(--risk-dangerous);
+    border: 1px solid rgba(231, 76, 60, 0.3);
+  }
+
+  .layer-badge.high {
+    background: rgba(230, 126, 34, 0.12);
+    color: var(--risk-sensitive);
+    border: 1px solid rgba(230, 126, 34, 0.25);
+  }
+
+  .layer-badge.medium {
+    background: rgba(243, 156, 18, 0.12);
+    color: var(--risk-normal);
+    border: 1px solid rgba(243, 156, 18, 0.25);
+  }
+
+  .layer-badge.low {
+    background: rgba(46, 204, 113, 0.12);
+    color: var(--risk-safe);
+    border: 1px solid rgba(46, 204, 113, 0.25);
+  }
+
+  .policy-note {
+    text-align: center;
+    margin-top: 1rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
+  /* ───────────────────────────── Diagram Section ───────────────────────────── */
+  .diagram-section {
+    position: relative;
+  }
+
+  .mermaid-wrapper {
+    position: relative;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 2rem;
+    overflow: hidden;
+  }
+
+  .mermaid-viewport {
+    overflow: auto;
+    max-height: 750px;
+    display: flex;
+    justify-content: center;
+  }
+
+  .mermaid-viewport svg {
+    transition: transform 0.2s var(--ease-out);
+  }
+
+  .zoom-controls {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    z-index: 10;
+  }
+
+  .zoom-btn {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-card);
+    border: 1px solid var(--border-bright);
+    border-radius: 4px;
+    color: var(--accent);
+    font-family: var(--font-body);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    user-select: none;
+  }
+
+  .zoom-btn:hover {
+    background: var(--border);
+    border-color: var(--accent-dim);
+  }
+
+  /* ───────────────────────────── Browser Action Cards ───────────────────────────── */
+  .action-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+
+  .action-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.25s, transform 0.25s var(--ease-out);
+  }
+
+  .action-card:hover {
+    border-color: var(--accent-dim);
+    transform: translateY(-2px);
+  }
+
+  .action-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent-dim), var(--accent), var(--accent-dim));
+    opacity: 0.5;
+  }
+
+  .action-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent-glow);
+    border: 1px solid var(--border-bright);
+    border-radius: 6px;
+    margin-bottom: 1rem;
+  }
+
+  .action-icon svg {
+    width: 20px;
+    height: 20px;
+    stroke: var(--accent);
+    fill: none;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .action-card h3 {
+    margin-bottom: 0.5rem;
+    font-size: 0.95rem;
+  }
+
+  .action-card .action-desc {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 0.75rem;
+  }
+
+  .api-list {
+    list-style: none;
+    padding: 0;
+  }
+
+  .api-list li {
+    font-size: 0.72rem;
+    padding: 0.2rem 0;
+    color: var(--text-code);
+    font-family: var(--font-body);
+    display: flex;
+    align-items: baseline;
+    gap: 0.35rem;
+  }
+
+  .api-list li::before {
+    content: '';
+    display: inline-block;
+    width: 3px;
+    height: 3px;
+    background: var(--accent-dim);
+    border-radius: 50%;
+    flex-shrink: 0;
+    position: relative;
+    top: -2px;
+  }
+
+  /* ───────────────────────────── CLI Sandbox Detail Cards ───────────────────────────── */
+  .sandbox-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+
+  .sandbox-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    transition: border-color 0.25s;
+  }
+
+  .sandbox-card:hover {
+    border-color: var(--border-bright);
+  }
+
+  .sandbox-card h3 {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.9rem;
+  }
+
+  .sandbox-card h3 svg {
+    width: 18px;
+    height: 18px;
+    stroke: var(--accent);
+    fill: none;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    flex-shrink: 0;
+  }
+
+  .sandbox-card ul {
+    list-style: none;
+    padding: 0;
+  }
+
+  .sandbox-card li {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--border-dim);
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    line-height: 1.6;
+  }
+
+  .sandbox-card li:last-child {
+    border-bottom: none;
+  }
+
+  .sandbox-card li::before {
+    content: '';
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    background: var(--accent-dim);
+    border-radius: 50%;
+    flex-shrink: 0;
+    position: relative;
+    top: -2px;
+  }
+
+  /* ───────────────────────────── Output Handling ───────────────────────────── */
+  .output-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-top: 2rem;
+    align-items: start;
+  }
+
+  .output-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.75rem;
+    transition: border-color 0.25s;
+  }
+
+  .output-card:hover {
+    border-color: var(--border-bright);
+  }
+
+  .output-card h3 {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.95rem;
+  }
+
+  .output-card h3 svg {
+    width: 18px;
+    height: 18px;
+    stroke: var(--accent);
+    fill: none;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    flex-shrink: 0;
+  }
+
+  .output-stat {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--border-dim);
+    font-size: 0.78rem;
+  }
+
+  .output-stat:last-child {
+    border-bottom: none;
+  }
+
+  .output-stat .stat-label {
+    color: var(--text-secondary);
+  }
+
+  .output-stat .stat-value {
+    color: var(--accent-light);
+    font-weight: 500;
+  }
+
+  /* ───────────────────────────── Schema Tables ───────────────────────────── */
+  .schema-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+    margin-top: 2rem;
+  }
+
+  .schema-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: border-color 0.25s;
+  }
+
+  .schema-card:hover {
+    border-color: var(--border-bright);
+  }
+
+  .schema-header {
+    padding: 1rem 1.25rem;
+    background: var(--bg-inset);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  .schema-header .table-icon {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent-glow);
+    border: 1px solid var(--border-bright);
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  .schema-header .table-icon svg {
+    width: 14px;
+    height: 14px;
+    stroke: var(--accent);
+    fill: none;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .schema-header h3 {
+    font-size: 0.9rem;
+    font-family: var(--font-body);
+    color: var(--text-code);
+    font-weight: 600;
+  }
+
+  .schema-header .scope-tag {
+    margin-left: auto;
+    font-size: 0.62rem;
+    padding: 0.15rem 0.45rem;
+    background: var(--accent-glow);
+    border: 1px solid var(--border-bright);
+    border-radius: 3px;
+    color: var(--accent);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .schema-body {
+    padding: 1rem 1.25rem;
+  }
+
+  .schema-body p {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 0.75rem;
+  }
+
+  .column-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .column-tag {
+    display: inline-block;
+    padding: 0.15rem 0.45rem;
+    background: var(--bg-inset);
+    border: 1px solid var(--border-dim);
+    border-radius: 3px;
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    font-family: var(--font-body);
+  }
+
+  .column-tag.pk {
+    border-color: var(--accent-dim);
+    color: var(--accent);
+  }
+
+  .column-tag.fk {
+    border-color: var(--border-bright);
+    color: var(--text-code);
+  }
+
+  /* ───────────────────────────── Schematic Connection Lines ───────────────────────────── */
+  .schematic-connector {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 0.5rem 0;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    gap: 0.5rem;
+  }
+
+  .schematic-connector .line {
+    flex: 1;
+    max-width: 80px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--schematic), transparent);
+  }
+
+  /* ───────────────────────────── Footer ───────────────────────────── */
+  .footer {
+    padding: 3rem 0;
+    border-top: 1px solid var(--border-dim);
+    text-align: center;
+  }
+
+  .footer p {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+  }
+
+  /* ───────────────────────────── Animations ───────────────────────────── */
+  @keyframes fadeUp {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .fade-up {
+    opacity: 0;
+    animation: fadeUp 0.6s var(--ease-out) forwards;
+  }
+
+  .fade-up.d1  { animation-delay: 0.06s; }
+  .fade-up.d2  { animation-delay: 0.12s; }
+  .fade-up.d3  { animation-delay: 0.18s; }
+  .fade-up.d4  { animation-delay: 0.24s; }
+  .fade-up.d5  { animation-delay: 0.30s; }
+  .fade-up.d6  { animation-delay: 0.36s; }
+  .fade-up.d7  { animation-delay: 0.42s; }
+  .fade-up.d8  { animation-delay: 0.48s; }
+  .fade-up.d9  { animation-delay: 0.54s; }
+  .fade-up.d10 { animation-delay: 0.60s; }
+
+  /* ───────────────────────────── Responsive ───────────────────────────── */
+  @media (max-width: 1024px) {
+    .risk-grid { grid-template-columns: repeat(2, 1fr); }
+    .action-grid { grid-template-columns: repeat(2, 1fr); }
+    .schema-grid { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 768px) {
+    h1 { font-size: 1.8rem; }
+    h2 { font-size: 1.25rem; }
+    section { padding: 2.5rem 0; }
+    .hero { padding: 3.5rem 0 2.5rem; }
+    .container { padding: 0 1.25rem; }
+    .risk-grid { grid-template-columns: 1fr; }
+    .action-grid { grid-template-columns: 1fr; }
+    .sandbox-grid { grid-template-columns: 1fr; }
+    .output-row { grid-template-columns: 1fr; }
+    .schema-grid { grid-template-columns: 1fr; }
+    .pillar-row { flex-direction: column; align-items: center; }
+    .pillar { min-width: 0; width: 100%; max-width: 400px; }
+    .mermaid-wrapper { padding: 1rem; }
+    .policy-stack { margin-left: 0; margin-right: 0; }
+  }
+
+  @media (max-width: 480px) {
+    h1 { font-size: 1.4rem; }
+    .badge-row { flex-direction: column; align-items: center; }
+    .policy-layer { flex-direction: column; text-align: center; gap: 0.5rem; }
+  }
+
+  /* ───────────────────────────── Mermaid Theme Override ───────────────────────────── */
+  .mermaid-viewport .node rect,
+  .mermaid-viewport .node circle,
+  .mermaid-viewport .node polygon {
+    stroke: var(--accent-dim) !important;
+  }
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════ HERO ════════════════════════════ -->
+<section class="hero">
+  <div class="container">
+    <span class="label fade-up">OtterCamp V2 Specification / Doc 11</span>
+    <h1 class="fade-up d1">System Integration<br><span class="accent">CLI + Browser</span></h1>
+    <p class="summary fade-up d2">
+      Two tier-2 execution surfaces that let agents interact with the world beyond OtterCamp.
+      Every invocation routes through the control plane for policy evaluation, sandboxing, and audit.
+      High-level intent, not raw automation.
+    </p>
+    <div class="pillar-row fade-up d3">
+      <div class="pillar">
+        <div class="pillar-icon">
+          <svg viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        </div>
+        <div class="pillar-text">
+          <h3>CLI Execution</h3>
+          <p>Structured command requests, risk-classified, sandboxed to project repo on task branch</p>
+        </div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">
+          <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        </div>
+        <div class="pillar-text">
+          <h3>Browser Control</h3>
+          <p>Structured action API with task-scoped sessions, domain policy, credential injection</p>
+        </div>
+      </div>
+    </div>
+    <div class="badge-row fade-up d4">
+      <span class="badge"><span class="dot"></span> Tier 2 Tools</span>
+      <span class="badge"><span class="dot"></span> Control Plane Gated</span>
+      <span class="badge"><span class="dot"></span> 4 Risk Levels</span>
+      <span class="badge"><span class="dot"></span> 4 Schema Tables</span>
+      <span class="badge"><span class="dot"></span> Full Audit Trail</span>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ RISK CLASSIFICATION ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label">CLI Command Policy</span>
+      <h2>Risk Classification Matrix</h2>
+      <p>Every CLI command is classified by risk level before execution. Risk determines whether the command is allowed, requires approval, or is denied outright. Compound commands are decomposed and classified by their riskiest component.</p>
+    </div>
+
+    <div class="risk-grid">
+      <div class="risk-card safe fade-up d1">
+        <div class="risk-header">
+          <span class="risk-indicator"></span>
+          <span class="risk-level">Safe</span>
+        </div>
+        <span class="risk-policy">Default: Always allowed</span>
+        <p class="risk-desc">Read-only operations and standard development commands. No side effects.</p>
+        <ul class="risk-examples">
+          <li><code>ls</code>, <code>cat</code>, <code>grep</code></li>
+          <li><code>go build</code>, <code>npm test</code></li>
+          <li><code>git status</code>, <code>git diff</code></li>
+          <li><code>git log</code>, <code>git show</code></li>
+        </ul>
+      </div>
+
+      <div class="risk-card normal fade-up d2">
+        <div class="risk-header">
+          <span class="risk-indicator"></span>
+          <span class="risk-level">Normal</span>
+        </div>
+        <span class="risk-policy">Default: Allowed (configurable)</span>
+        <p class="risk-desc">Commands with side effects expected in development workflows.</p>
+        <ul class="risk-examples">
+          <li><code>go run</code>, <code>npm install</code></li>
+          <li><code>pip install</code>, <code>make</code></li>
+          <li><code>git commit</code></li>
+          <li><code>git push</code> (task branch)</li>
+        </ul>
+      </div>
+
+      <div class="risk-card sensitive fade-up d3">
+        <div class="risk-header">
+          <span class="risk-indicator"></span>
+          <span class="risk-level">Sensitive</span>
+        </div>
+        <span class="risk-policy">Default: Requires approval</span>
+        <p class="risk-desc">Commands that could have significant impact. Network calls, containers, publishing.</p>
+        <ul class="risk-examples">
+          <li><code>curl</code>, <code>wget</code></li>
+          <li><code>docker run</code></li>
+          <li>Package publishing commands</li>
+          <li>System config modifications</li>
+        </ul>
+      </div>
+
+      <div class="risk-card dangerous fade-up d4">
+        <div class="risk-header">
+          <span class="risk-indicator"></span>
+          <span class="risk-level">Dangerous</span>
+        </div>
+        <span class="risk-policy">Default: Denied</span>
+        <p class="risk-desc">Destructive or system-integrity commands. Never allowed by default. Denylist enforced.</p>
+        <ul class="risk-examples">
+          <li><code>rm -rf /</code>, <code>mkfs</code></li>
+          <li><code>shutdown</code>, <code>reboot</code></li>
+          <li><code>sudo</code>, <code>su</code>, <code>chmod +s</code></li>
+          <li><code>kill -9 1</code>, <code>iptables</code></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="schematic-connector fade-up d5">
+      <span class="line"></span>
+      Policy Layer Hierarchy
+      <span class="line"></span>
+    </div>
+
+    <div class="policy-stack fade-up d6">
+      <div class="policy-layer">
+        <span class="layer-num">1</span>
+        <div class="layer-info">
+          <h4>Instance Safety Policy</h4>
+          <p>Default denylist. Cannot be overridden by any lower layer.</p>
+        </div>
+        <span class="layer-badge highest">Highest</span>
+      </div>
+      <div class="policy-layer">
+        <span class="layer-num">2</span>
+        <div class="layer-info">
+          <h4>Organization Policy</h4>
+          <p>Org-wide additions to denylist or risk classification adjustments.</p>
+        </div>
+        <span class="layer-badge high">High</span>
+      </div>
+      <div class="policy-layer">
+        <span class="layer-num">3</span>
+        <div class="layer-info">
+          <h4>Project Policy</h4>
+          <p>Project-specific overrides. A deploy project might allow docker build at normal risk.</p>
+        </div>
+        <span class="layer-badge medium">Medium</span>
+      </div>
+      <div class="policy-layer">
+        <span class="layer-num">4</span>
+        <div class="layer-info">
+          <h4>Agent Profile Policy</h4>
+          <p>Per-agent restrictions. A content writer has no business running docker.</p>
+        </div>
+        <span class="layer-badge low">Lowest</span>
+      </div>
+    </div>
+    <p class="policy-note fade-up d7">Lower layers can only restrict, never loosen, what higher layers have denied.</p>
+  </div>
+</section>
+
+<!-- ════════════════════════════ CLI EXECUTION FLOW ════════════════════════════ -->
+<section class="diagram-section">
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label">CLI Execution Model</span>
+      <h2>Command Lifecycle Flow</h2>
+      <p>From agent tool call through policy evaluation, sandboxed execution, streaming output, to final capture in RunArtifacts. Compound commands are decomposed and each component classified independently.</p>
+    </div>
+    <div class="mermaid-wrapper fade-up d1">
+      <div class="zoom-controls">
+        <button class="zoom-btn" onclick="zoom('cli', 1)" title="Zoom in">+</button>
+        <button class="zoom-btn" onclick="zoom('cli', -1)" title="Zoom out">&minus;</button>
+        <button class="zoom-btn" onclick="zoom('cli', 0)" title="Reset zoom" style="font-size:0.65rem;">1:1</button>
+      </div>
+      <div class="mermaid-viewport" id="vp-cli">
+        <pre class="mermaid">
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#212f44',
+    'primaryTextColor': '#c8d6e5',
+    'primaryBorderColor': '#3d5474',
+    'lineColor': '#4a90d9',
+    'secondaryColor': '#1e2a3d',
+    'tertiaryColor': '#1a2332',
+    'background': '#1a2332',
+    'mainBkg': '#212f44',
+    'nodeBorder': '#3d5474',
+    'clusterBkg': '#1e2a3d',
+    'clusterBorder': '#2c3e57',
+    'titleColor': '#e8eff7',
+    'edgeLabelBackground': '#1e2a3d',
+    'nodeTextColor': '#c8d6e5',
+    'fontSize': '13px'
+  }
+}}%%
+flowchart TD
+    A["Agent calls cli.execute\n{command, working_dir, timeout_ms}"]
+    B{"Compound\ncommand?"}
+    C["Decompose into\ncomponents"]
+    D["Parse command:\nexecutable + args"]
+    E{"Instance\ndenylist?"}
+    F["DENY\nnot permitted"]
+    G["Classify risk level\nsafe / normal / sensitive / dangerous"]
+    H{"Policy\ndecision?"}
+    I["Create inbox item\nwith command details"]
+    J["PENDING\nawaiting approval"]
+    K["Create sandboxed process"]
+    L["Working dir: project repo\nat task branch HEAD"]
+    M["Env: constructed\nnot inherited"]
+    N["Network: per project\npolicy applied"]
+    O["Execute command\nwith timeout enforced"]
+    P["Stream stdout/stderr\nvia RunEvents"]
+    Q["Capture exit code\nduration, output"]
+    R{"Output >\n50KB?"}
+    S["Return inline\nin tool result"]
+    T["Store full output\nas RunArtifact"]
+    U["Return truncated +\nartifact_id reference"]
+
+    A --> B
+    B -->|"yes"| C
+    B -->|"no"| D
+    C --> D
+    D --> E
+    E -->|"matched"| F
+    E -->|"clear"| G
+    G --> H
+    H -->|"deny"| F
+    H -->|"require_approval"| I
+    I --> J
+    H -->|"allow"| K
+    K --> L
+    K --> M
+    K --> N
+    L --> O
+    M --> O
+    N --> O
+    O --> P
+    P --> Q
+    Q --> R
+    R -->|"no"| S
+    R -->|"yes"| T
+    T --> U
+
+    classDef startNode fill:#212f44,stroke:#4a90d9,stroke-width:2px,color:#e8eff7
+    classDef decisionNode fill:#1e2a3d,stroke:#4a90d9,stroke-width:1.5px,color:#c8d6e5
+    classDef processNode fill:#212f44,stroke:#3d5474,stroke-width:1px,color:#c8d6e5
+    classDef denyNode fill:#2a1a1a,stroke:#e74c3c,stroke-width:1.5px,color:#e74c3c
+    classDef pendingNode fill:#2a2a1a,stroke:#f39c12,stroke-width:1.5px,color:#f39c12
+    classDef outputNode fill:#1a2a2a,stroke:#2ecc71,stroke-width:1.5px,color:#2ecc71
+
+    class A startNode
+    class B,E,H,R decisionNode
+    class C,D,G,K,L,M,N,O,P,Q processNode
+    class F denyNode
+    class I,J pendingNode
+    class S,T,U outputNode
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ CLI SANDBOX DETAILS ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label">Sandboxing</span>
+      <h2>CLI Execution Environment</h2>
+      <p>The execution environment is constructed, not inherited. Agents get the minimum access needed for their task, with full isolation from the host system and other projects.</p>
+    </div>
+
+    <div class="sandbox-grid">
+      <div class="sandbox-card fade-up d1">
+        <h3>
+          <svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          Working Directory
+        </h3>
+        <ul>
+          <li>Scoped to project git repo at task branch HEAD</li>
+          <li>Path traversal outside repo is rejected</li>
+          <li>No access to other projects or host filesystem</li>
+          <li>Read: repo + system packages + temp dirs</li>
+          <li>Write: repo + designated temp dirs only</li>
+        </ul>
+      </div>
+
+      <div class="sandbox-card fade-up d2">
+        <h3>
+          <svg viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+          Constructed Environment
+        </h3>
+        <ul>
+          <li><code>HOME</code> = temp dir, <code>TERM</code> = dumb</li>
+          <li><code>PATH</code> restricted to standard + project tools</li>
+          <li>Project vars injected encrypted at runtime</li>
+          <li>Org secrets resolved from secret store</li>
+          <li>Model provider keys blocked (OPENAI, ANTHROPIC)</li>
+        </ul>
+      </div>
+
+      <div class="sandbox-card fade-up d3">
+        <h3>
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          Network Policy
+        </h3>
+        <ul>
+          <li><code>allow_all</code> -- unrestricted outbound (default)</li>
+          <li><code>deny_all</code> -- no network connections</li>
+          <li><code>allowlist</code> -- specified hosts/CIDRs only</li>
+          <li>Enforced at process level (iptables or equivalent)</li>
+        </ul>
+      </div>
+
+      <div class="sandbox-card fade-up d4">
+        <h3>
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Time Limits
+        </h3>
+        <ul>
+          <li>Default per-command timeout: 5 minutes</li>
+          <li>Max allowed timeout: 30 minutes (org config)</li>
+          <li>Enforcement: SIGTERM then SIGKILL after 10s</li>
+          <li>Counts against turn max_duration budget</li>
+        </ul>
+      </div>
+
+      <div class="sandbox-card fade-up d5">
+        <h3>
+          <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          Process Isolation
+        </h3>
+        <ul>
+          <li>Dedicated OS process, restricted privileges</li>
+          <li>Service user with no elevation</li>
+          <li>Max memory: 2GB default (configurable)</li>
+          <li>Child processes tracked and terminated on exit</li>
+          <li>No persistent background daemons</li>
+        </ul>
+      </div>
+
+      <div class="sandbox-card fade-up d6">
+        <h3>
+          <svg viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          Git Branch Rules
+        </h3>
+        <ul>
+          <li>Work on task branch: add, commit, stash, rebase</li>
+          <li>Read-only on any branch: log, diff, show, blame</li>
+          <li>Denied: push to main, force push, branch -D</li>
+          <li>Push to task remote: sensitive (policy tracked)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ BROWSER ACTION TYPES ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label">Browser Action API</span>
+      <h2>Structured Browser Actions</h2>
+      <p>Agents express intent through structured actions, not raw Playwright or Puppeteer code. This keeps prompts clean, actions auditable, and sandboxing enforceable. Automatic screenshots after every action provide a full visual audit trail.</p>
+    </div>
+
+    <div class="action-grid">
+      <div class="action-card fade-up d1">
+        <div class="action-icon">
+          <svg viewBox="0 0 24 24"><path d="M3 3h18v18H3z" fill="none"/><path d="M9 5l7 7-7 7"/></svg>
+        </div>
+        <h3>Navigate</h3>
+        <p class="action-desc">Control browser navigation with domain policy enforcement. Redirects to blocked domains are caught and halted.</p>
+        <ul class="api-list">
+          <li><code>browser.navigate({url})</code></li>
+          <li><code>browser.back()</code></li>
+          <li><code>browser.forward()</code></li>
+          <li><code>browser.refresh()</code></li>
+        </ul>
+      </div>
+
+      <div class="action-card fade-up d2">
+        <div class="action-icon">
+          <svg viewBox="0 0 24 24"><path d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5"/></svg>
+        </div>
+        <h3>Interact</h3>
+        <p class="action-desc">Click elements, type text, select options, hover, scroll. CSS selector or accessibility-based locators.</p>
+        <ul class="api-list">
+          <li><code>browser.click({selector})</code></li>
+          <li><code>browser.type({selector, text})</code></li>
+          <li><code>browser.select({selector, value})</code></li>
+          <li><code>browser.hover({selector})</code></li>
+          <li><code>browser.scroll({direction})</code></li>
+          <li><code>browser.press_key({key})</code></li>
+        </ul>
+      </div>
+
+      <div class="action-card fade-up d3">
+        <div class="action-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        </div>
+        <h3>Observe</h3>
+        <p class="action-desc">Screenshot capture, text extraction, structured data scraping, and page state inspection for the agent.</p>
+        <ul class="api-list">
+          <li><code>browser.screenshot({full_page})</code></li>
+          <li><code>browser.extract_text({selector})</code></li>
+          <li><code>browser.extract_structured({schema})</code></li>
+          <li><code>browser.get_page_info()</code></li>
+        </ul>
+      </div>
+
+      <div class="action-card fade-up d4">
+        <div class="action-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <h3>Wait</h3>
+        <p class="action-desc">Wait for elements or navigation to complete. Prevents acting on pages that have not finished loading.</p>
+        <ul class="api-list">
+          <li><code>browser.wait_for({selector, state})</code></li>
+          <li><code>browser.wait_for_navigation()</code></li>
+          <li>States: visible, hidden, interactive</li>
+          <li>Default timeout: 30s interactions, 60s nav</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="sandbox-grid" style="margin-top: 2rem;">
+      <div class="sandbox-card fade-up d5">
+        <h3>
+          <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          Domain Policy
+        </h3>
+        <ul>
+          <li><code>allow_all</code> -- any domain (default)</li>
+          <li><code>denylist</code> -- block specific domains</li>
+          <li><code>allowlist</code> -- only specified domains</li>
+          <li>Sensitive domains (financial, auth, admin, email) require approval by default</li>
+        </ul>
+      </div>
+
+      <div class="sandbox-card fade-up d6">
+        <h3>
+          <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          Credential Injection
+        </h3>
+        <ul>
+          <li>Agents never see credentials in prompts</li>
+          <li>Cookies/tokens injected at session creation</li>
+          <li>Resolved from org secret store at runtime</li>
+          <li>Audit trail never contains raw secrets</li>
+        </ul>
+      </div>
+
+      <div class="sandbox-card fade-up d7">
+        <h3>
+          <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          Session Lifecycle
+        </h3>
+        <ul>
+          <li>Task-scoped: persists across runs within a task</li>
+          <li>One active session per task at a time</li>
+          <li>Idle timeout: 1 hour (configurable)</li>
+          <li>Cleanup on task done, cancelled, or revoked</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ HANDOFF FLOW ════════════════════════════ -->
+<section class="diagram-section">
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label">Human Handoff</span>
+      <h2>CAPTCHA / 2FA / Payment Handoff Flow</h2>
+      <p>When automation hits limits -- CAPTCHA, two-factor auth, payment, or policy-flagged actions -- the browser session is handed to the human. The agent pauses, the human completes the sensitive action, and the agent resumes from the human-modified state.</p>
+    </div>
+    <div class="mermaid-wrapper fade-up d1">
+      <div class="zoom-controls">
+        <button class="zoom-btn" onclick="zoom('handoff', 1)" title="Zoom in">+</button>
+        <button class="zoom-btn" onclick="zoom('handoff', -1)" title="Zoom out">&minus;</button>
+        <button class="zoom-btn" onclick="zoom('handoff', 0)" title="Reset zoom" style="font-size:0.65rem;">1:1</button>
+      </div>
+      <div class="mermaid-viewport" id="vp-handoff">
+        <pre class="mermaid">
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#212f44',
+    'primaryTextColor': '#c8d6e5',
+    'primaryBorderColor': '#3d5474',
+    'lineColor': '#4a90d9',
+    'secondaryColor': '#1e2a3d',
+    'tertiaryColor': '#1a2332',
+    'background': '#1a2332',
+    'mainBkg': '#212f44',
+    'nodeBorder': '#3d5474',
+    'clusterBkg': '#1e2a3d',
+    'clusterBorder': '#2c3e57',
+    'titleColor': '#e8eff7',
+    'edgeLabelBackground': '#1e2a3d',
+    'nodeTextColor': '#c8d6e5',
+    'actorBkg': '#212f44',
+    'actorBorder': '#4a90d9',
+    'actorTextColor': '#e8eff7',
+    'signalColor': '#4a90d9',
+    'signalTextColor': '#c8d6e5',
+    'activationBkgColor': '#2c3e57',
+    'activationBorderColor': '#4a90d9',
+    'noteBkgColor': '#1e2a3d',
+    'noteBorderColor': '#3d5474',
+    'noteTextColor': '#c8d6e5',
+    'fontSize': '13px'
+  }
+}}%%
+sequenceDiagram
+    participant A as Agent
+    participant CP as Control Plane
+    participant BS as Browser Session
+    participant I as Inbox
+    participant H as Human
+
+    A->>CP: browser.navigate(login_page)
+    CP->>BS: Execute navigation
+    BS-->>A: Page loaded (login form visible)
+
+    A->>CP: browser.type(username)
+    CP->>BS: Type credentials (injected)
+    BS-->>A: Success
+
+    A->>CP: browser.click(submit)
+    CP->>BS: Click submit
+    BS-->>A: 2FA challenge detected
+
+    Note over A,BS: Agent recognizes<br/>automation limit
+
+    A->>CP: Request human handoff
+    CP->>BS: Capture screenshot
+    CP->>I: Create handoff inbox item<br/>with URL + screenshot + description
+
+    Note over A: Agent run paused<br/>awaiting handoff
+
+    I-->>H: Notification: "Complete 2FA login"
+    H->>BS: Opens browser session<br/>(remote streaming or takeover)
+    H->>BS: Completes 2FA manually
+    H->>I: Signals completion: "done"
+
+    I->>CP: Handoff completed
+    CP->>BS: Capture post-handoff screenshot
+    CP-->>A: Control returned<br/>browser state updated
+
+    A->>CP: browser.get_page_info()
+    CP->>BS: Get current state
+    BS-->>A: Authenticated dashboard visible
+
+    Note over A: Agent resumes work<br/>from human-modified state
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ OUTPUT HANDLING ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label">Artifact Management</span>
+      <h2>Output Handling and Artifacts</h2>
+      <p>Every execution surface produces artifacts. CLI output is truncated in tool results with full content stored in RunArtifacts. Browser screenshots are captured automatically after every action for the human audit trail.</p>
+    </div>
+
+    <div class="output-row">
+      <div class="output-card fade-up d1">
+        <h3>
+          <svg viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          CLI Output
+        </h3>
+        <div class="output-stat">
+          <span class="stat-label">Inline limit (tool result)</span>
+          <span class="stat-value">50 KB per stream</span>
+        </div>
+        <div class="output-stat">
+          <span class="stat-label">Total capture limit</span>
+          <span class="stat-value">10 MB per command</span>
+        </div>
+        <div class="output-stat">
+          <span class="stat-label">Streaming events</span>
+          <span class="stat-value">cli.stdout, cli.stderr, cli.exit</span>
+        </div>
+        <div class="output-stat">
+          <span class="stat-label">Overflow handling</span>
+          <span class="stat-value">Truncated + artifact_id ref</span>
+        </div>
+        <div class="output-stat">
+          <span class="stat-label">Artifact types</span>
+          <span class="stat-value">cli_output, build_output, test_report</span>
+        </div>
+        <div class="output-stat">
+          <span class="stat-label">Retention (after task)</span>
+          <span class="stat-value">30 days default</span>
+        </div>
+      </div>
+
+      <div class="output-card fade-up d2">
+        <h3>
+          <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          Browser Artifacts
+        </h3>
+        <div class="output-stat">
+          <span class="stat-label">Auto screenshots</span>
+          <span class="stat-value">After every action</span>
+        </div>
+        <div class="output-stat">
+          <span class="stat-label">Screenshot storage</span>
+          <span class="stat-value">RunArtifact (not inline)</span>
+        </div>
+        <div class="output-stat">
+          <span class="stat-label">Explicit screenshot</span>
+          <span class="stat-value">Returned inline to agent (vision)</span>
+        </div>
+        <div class="output-stat">
+          <span class="stat-label">Max download size</span>
+          <span class="stat-value">100 MB per project (configurable)</span>
+        </div>
+        <div class="output-stat">
+          <span class="stat-label">Artifact types</span>
+          <span class="stat-value">screenshot, download, extracted_data</span>
+        </div>
+        <div class="output-stat">
+          <span class="stat-label">Retention (after task)</span>
+          <span class="stat-value">90 days default</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ SCHEMA ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label">Database Schema</span>
+      <h2>Four Domain Tables</h2>
+      <p>These tables extend the control plane's Run/RunStep/RunArtifact framework with CLI and browser domain-specific detail. They reference the generic execution schema by ID without duplicating it.</p>
+    </div>
+
+    <div class="schema-grid">
+      <div class="schema-card fade-up d1">
+        <div class="schema-header">
+          <div class="table-icon">
+            <svg viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          </div>
+          <h3>cli_execution</h3>
+          <span class="scope-tag">Run-scoped</span>
+        </div>
+        <div class="schema-body">
+          <p>Full command lifecycle from policy evaluation through execution to output capture. Complements RunStep with CLI-specific detail.</p>
+          <div class="column-list">
+            <span class="column-tag pk">id</span>
+            <span class="column-tag fk">run_id</span>
+            <span class="column-tag fk">run_step_id</span>
+            <span class="column-tag fk">task_id</span>
+            <span class="column-tag fk">project_id</span>
+            <span class="column-tag fk">agent_id</span>
+            <span class="column-tag">command</span>
+            <span class="column-tag">working_dir</span>
+            <span class="column-tag">risk_level</span>
+            <span class="column-tag">policy_decision</span>
+            <span class="column-tag">exit_code</span>
+            <span class="column-tag">stdout_preview</span>
+            <span class="column-tag">stderr_preview</span>
+            <span class="column-tag fk">stdout_artifact_id</span>
+            <span class="column-tag fk">stderr_artifact_id</span>
+            <span class="column-tag">duration_ms</span>
+            <span class="column-tag">status</span>
+            <span class="column-tag">env_vars</span>
+            <span class="column-tag">network_policy</span>
+            <span class="column-tag">timeout_ms</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="schema-card fade-up d2">
+        <div class="schema-header">
+          <div class="table-icon">
+            <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          </div>
+          <h3>browser_session</h3>
+          <span class="scope-tag">Task-scoped</span>
+        </div>
+        <div class="schema-body">
+          <p>Task-scoped, not run-scoped. Persists across runs within a task for multi-step workflows. Tracks domain policy and credential references.</p>
+          <div class="column-list">
+            <span class="column-tag pk">id</span>
+            <span class="column-tag fk">task_id</span>
+            <span class="column-tag fk">project_id</span>
+            <span class="column-tag fk">agent_id</span>
+            <span class="column-tag">status</span>
+            <span class="column-tag">domain_policy</span>
+            <span class="column-tag">domain_rules</span>
+            <span class="column-tag">credential_refs</span>
+            <span class="column-tag">current_url</span>
+            <span class="column-tag">current_title</span>
+            <span class="column-tag">last_action_at</span>
+            <span class="column-tag">close_reason</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="schema-card fade-up d3">
+        <div class="schema-header">
+          <div class="table-icon">
+            <svg viewBox="0 0 24 24"><path d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5"/></svg>
+          </div>
+          <h3>browser_action</h3>
+          <span class="scope-tag">Run-scoped</span>
+        </div>
+        <div class="schema-body">
+          <p>Fine-grained record of every browser interaction. Linked to both browser session (for context) and run/run_step (for control plane linkage).</p>
+          <div class="column-list">
+            <span class="column-tag pk">id</span>
+            <span class="column-tag fk">browser_session_id</span>
+            <span class="column-tag fk">run_id</span>
+            <span class="column-tag fk">run_step_id</span>
+            <span class="column-tag">action_type</span>
+            <span class="column-tag">action_params</span>
+            <span class="column-tag">description</span>
+            <span class="column-tag">page_url_before</span>
+            <span class="column-tag">page_url_after</span>
+            <span class="column-tag">success</span>
+            <span class="column-tag">error_message</span>
+            <span class="column-tag fk">screenshot_artifact_id</span>
+            <span class="column-tag">extracted_data</span>
+            <span class="column-tag">policy_decision</span>
+            <span class="column-tag">duration_ms</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="schema-card fade-up d4">
+        <div class="schema-header">
+          <div class="table-icon">
+            <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </div>
+          <h3>browser_handoff</h3>
+          <span class="scope-tag">Session-scoped</span>
+        </div>
+        <div class="schema-body">
+          <p>Tracks the human handoff lifecycle. Bridges browser and inbox domains. Handoffs expire after 24 hours by default.</p>
+          <div class="column-list">
+            <span class="column-tag pk">id</span>
+            <span class="column-tag fk">browser_session_id</span>
+            <span class="column-tag fk">inbox_item_id</span>
+            <span class="column-tag fk">run_id</span>
+            <span class="column-tag">reason</span>
+            <span class="column-tag">agent_description</span>
+            <span class="column-tag">page_url</span>
+            <span class="column-tag fk">screenshot_artifact_id</span>
+            <span class="column-tag">status</span>
+            <span class="column-tag">human_completed_at</span>
+            <span class="column-tag fk">post_handoff_screenshot_id</span>
+            <span class="column-tag">expires_at</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ FOOTER ════════════════════════════ -->
+<footer class="footer">
+  <div class="container">
+    <p>
+      OtterCamp V2 -- System Integration (CLI and Browser Control)
+      &nbsp;/&nbsp;
+      Source: <a href="../11-system-integration-cli-and-browser.md">docsv2/11-system-integration-cli-and-browser.md</a>
+      &nbsp;/&nbsp;
+      Depends on: 01, 02, 03, 03a, 16, 20
+    </p>
+  </div>
+</footer>
+
+<!-- ════════════════════════════ SCRIPTS ════════════════════════════ -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    fontFamily: 'Source Code Pro, monospace',
+    flowchart: {
+      htmlLabels: true,
+      curve: 'basis',
+      padding: 16
+    },
+    sequence: {
+      diagramMarginX: 20,
+      diagramMarginY: 20,
+      actorMargin: 80,
+      width: 180,
+      height: 50,
+      boxMargin: 8,
+      boxTextMargin: 5,
+      noteMargin: 10,
+      messageMargin: 40,
+      mirrorActors: false,
+      useMaxWidth: false
+    },
+    themeVariables: {
+      primaryColor: '#212f44',
+      primaryTextColor: '#c8d6e5',
+      primaryBorderColor: '#3d5474',
+      lineColor: '#4a90d9',
+      background: '#1a2332',
+      mainBkg: '#212f44',
+      fontSize: '13px'
+    }
+  });
+</script>
+
+<script>
+  // ── Generic zoom control system ──
+  const viewports = {};
+
+  function getViewport(id) {
+    if (!viewports[id]) {
+      viewports[id] = { scale: 1, el: document.getElementById('vp-' + id) };
+    }
+    return viewports[id];
+  }
+
+  function applyZoom(id) {
+    const vp = getViewport(id);
+    const svg = vp.el.querySelector('svg');
+    if (svg) {
+      svg.style.transform = 'scale(' + vp.scale + ')';
+      svg.style.transformOrigin = 'top center';
+    }
+  }
+
+  window.zoom = function(id, dir) {
+    const vp = getViewport(id);
+    if (dir === 0) {
+      vp.scale = 1;
+    } else if (dir > 0) {
+      vp.scale = Math.min(vp.scale + 0.15, 3);
+    } else {
+      vp.scale = Math.max(vp.scale - 0.15, 0.3);
+    }
+    applyZoom(id);
+  };
+
+  // ── Intersection Observer for scroll-triggered staggered animations ──
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.style.animationPlayState = 'running';
+          observer.unobserve(entry.target);
+        }
+      });
+    },
+    { threshold: 0.08, rootMargin: '0px 0px -30px 0px' }
+  );
+
+  document.querySelectorAll('.fade-up').forEach((el) => {
+    el.style.animationPlayState = 'paused';
+    observer.observe(el);
+  });
+
+  // Immediately play animations for elements already in viewport on load
+  requestAnimationFrame(() => {
+    document.querySelectorAll('.fade-up').forEach((el) => {
+      const rect = el.getBoundingClientRect();
+      if (rect.top < window.innerHeight) {
+        el.style.animationPlayState = 'running';
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

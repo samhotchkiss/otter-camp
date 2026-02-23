@@ -1,0 +1,1681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- Agents: Staff and Temps</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Playfair+Display:ital,wght@0,400;0,600;0,700;0,800;1,400;1,600&family=Source+Serif+4:ital,opsz,wght@0,8..60,300;0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --parchment: #f5f0e8;
+    --parchment-dark: #ebe4d6;
+    --ink: #2c2416;
+    --ink-light: #4a3d2e;
+    --ink-faint: #7a6e5f;
+    --sienna: #a0522d;
+    --sienna-light: #c4774e;
+    --sienna-faded: rgba(160, 82, 45, 0.12);
+    --sienna-border: rgba(160, 82, 45, 0.3);
+    --teal: #1a5c5c;
+    --teal-light: #2a7a7a;
+    --teal-faded: rgba(26, 92, 92, 0.10);
+    --teal-border: rgba(26, 92, 92, 0.25);
+    --shadow-sm: 0 1px 3px rgba(44, 36, 22, 0.08);
+    --shadow-md: 0 3px 12px rgba(44, 36, 22, 0.10);
+    --shadow-lg: 0 8px 30px rgba(44, 36, 22, 0.12);
+    --radius: 6px;
+    --radius-lg: 10px;
+    --font-heading: 'Playfair Display', Georgia, serif;
+    --font-body: 'Source Serif 4', 'Source Serif Pro', Georgia, serif;
+    --font-mono: 'Fira Code', 'Consolas', monospace;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: var(--font-body);
+    color: var(--ink);
+    line-height: 1.7;
+    font-size: 17px;
+    font-weight: 400;
+    background-color: var(--parchment);
+    background-image:
+      radial-gradient(ellipse at 20% 50%, rgba(160, 82, 45, 0.03) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 20%, rgba(26, 92, 92, 0.03) 0%, transparent 50%),
+      radial-gradient(circle at 50% 50%, rgba(44, 36, 22, 0.015) 0%, transparent 70%);
+    min-height: 100vh;
+    position: relative;
+  }
+
+  /* Paper texture noise overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background-image:
+      url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    background-size: 256px 256px;
+    opacity: 0.6;
+  }
+
+  .page-wrapper {
+    position: relative;
+    z-index: 1;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 28px 80px;
+  }
+
+  /* ---- Typography ---- */
+  h1, h2, h3, h4 { font-family: var(--font-heading); font-weight: 700; line-height: 1.25; }
+  h1 { font-size: 2.8rem; letter-spacing: -0.02em; }
+  h2 { font-size: 1.9rem; color: var(--sienna); margin-bottom: 0.6em; letter-spacing: -0.01em; }
+  h3 { font-size: 1.35rem; color: var(--teal); margin-bottom: 0.5em; }
+  h4 { font-size: 1.1rem; color: var(--ink-light); margin-bottom: 0.4em; }
+  p { margin-bottom: 0.9em; }
+  strong { font-weight: 600; }
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+    background: rgba(44, 36, 22, 0.06);
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    font-weight: 500;
+  }
+
+  /* ---- Section Spacing ---- */
+  .section {
+    margin-top: 72px;
+    opacity: 0;
+    transform: translateY(28px);
+    transition: opacity 0.7s ease, transform 0.7s ease;
+  }
+  .section.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .section-divider {
+    border: none;
+    height: 1px;
+    background: linear-gradient(to right, transparent, var(--sienna-border), var(--teal-border), transparent);
+    margin: 72px 0 0;
+  }
+
+  /* ---- Hero ---- */
+  .hero {
+    text-align: center;
+    padding: 80px 20px 56px;
+    opacity: 0;
+    transform: translateY(28px);
+    transition: opacity 0.7s ease, transform 0.7s ease;
+  }
+  .hero.visible { opacity: 1; transform: translateY(0); }
+  .hero-badge {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--teal);
+    border: 1px solid var(--teal-border);
+    background: var(--teal-faded);
+    padding: 4px 14px;
+    border-radius: 20px;
+    margin-bottom: 20px;
+  }
+  .hero h1 { color: var(--ink); margin-bottom: 16px; }
+  .hero h1 span.accent { color: var(--sienna); }
+  .hero-tagline {
+    font-family: var(--font-heading);
+    font-style: italic;
+    font-size: 1.35rem;
+    color: var(--ink-light);
+    max-width: 600px;
+    margin: 0 auto 28px;
+    font-weight: 400;
+  }
+  .hero-sub {
+    font-size: 1.02rem;
+    color: var(--ink-faint);
+    max-width: 640px;
+    margin: 0 auto;
+    line-height: 1.65;
+  }
+
+  /* ---- Comparison Cards ---- */
+  .comparison-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 28px;
+    margin-top: 32px;
+  }
+  @media (max-width: 700px) {
+    .comparison-grid { grid-template-columns: 1fr; }
+  }
+  .compare-card {
+    background: white;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+    overflow: hidden;
+    border: 1px solid rgba(44, 36, 22, 0.06);
+  }
+  .compare-card-header {
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid rgba(44, 36, 22, 0.06);
+  }
+  .compare-card-header.staff {
+    background: linear-gradient(135deg, var(--teal-faded), rgba(26, 92, 92, 0.04));
+    border-bottom-color: var(--teal-border);
+  }
+  .compare-card-header.temp {
+    background: linear-gradient(135deg, var(--sienna-faded), rgba(160, 82, 45, 0.04));
+    border-bottom-color: var(--sienna-border);
+  }
+  .compare-card-header h3 { margin-bottom: 4px; }
+  .compare-card-header.staff h3 { color: var(--teal); }
+  .compare-card-header.temp h3 { color: var(--sienna); }
+  .compare-card-header .subtitle {
+    font-size: 0.92rem;
+    color: var(--ink-faint);
+    font-style: italic;
+    font-family: var(--font-heading);
+  }
+  .compare-card-body { padding: 20px 24px 24px; }
+  .compare-card-body ul { list-style: none; padding: 0; }
+  .compare-card-body li {
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(44, 36, 22, 0.04);
+    font-size: 0.95rem;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .compare-card-body li:last-child { border-bottom: none; }
+  .li-marker {
+    flex-shrink: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-top: 9px;
+  }
+  .staff .li-marker { background: var(--teal); }
+  .temp .li-marker { background: var(--sienna); }
+  .use-cases {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px dashed rgba(44, 36, 22, 0.1);
+  }
+  .use-cases h4 {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--ink-faint);
+    margin-bottom: 8px;
+  }
+  .use-cases p {
+    font-size: 0.9rem;
+    color: var(--ink-light);
+    margin-bottom: 0;
+    line-height: 1.55;
+  }
+
+  /* ---- Trio Profile Cards ---- */
+  .trio-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+    margin-top: 32px;
+  }
+  @media (max-width: 800px) {
+    .trio-grid { grid-template-columns: 1fr; }
+  }
+  .trio-card {
+    background: white;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+    overflow: hidden;
+    border: 1px solid rgba(44, 36, 22, 0.06);
+    display: flex;
+    flex-direction: column;
+  }
+  .trio-card-top {
+    padding: 24px 22px 18px;
+    text-align: center;
+    border-bottom: 1px solid rgba(44, 36, 22, 0.06);
+  }
+  .trio-avatar {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 12px;
+    font-family: var(--font-heading);
+    font-weight: 800;
+    font-size: 1.6rem;
+    color: white;
+  }
+  .trio-card.frank .trio-avatar { background: linear-gradient(135deg, var(--teal), var(--teal-light)); }
+  .trio-card.lori .trio-avatar { background: linear-gradient(135deg, var(--sienna), var(--sienna-light)); }
+  .trio-card.ellie .trio-avatar { background: linear-gradient(135deg, #5a4a8a, #7a6aaa); }
+  .trio-card-top h3 { font-size: 1.3rem; color: var(--ink); margin-bottom: 2px; }
+  .trio-pronouns {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--ink-faint);
+    margin-bottom: 4px;
+  }
+  .trio-role {
+    font-family: var(--font-heading);
+    font-style: italic;
+    font-size: 0.95rem;
+    color: var(--ink-light);
+  }
+  .trio-scope-badge {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--teal);
+    border: 1px solid var(--teal-border);
+    background: var(--teal-faded);
+    padding: 2px 10px;
+    border-radius: 12px;
+    margin-top: 10px;
+  }
+  .trio-card-body {
+    padding: 18px 22px 22px;
+    flex: 1;
+    font-size: 0.9rem;
+  }
+  .trio-does, .trio-doesnt {
+    margin-bottom: 14px;
+  }
+  .trio-does h4, .trio-doesnt h4 {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    margin-bottom: 6px;
+  }
+  .trio-does h4 { color: var(--teal); }
+  .trio-doesnt h4 { color: var(--sienna); }
+  .trio-does ul, .trio-doesnt ul {
+    list-style: none;
+    padding: 0;
+  }
+  .trio-does li, .trio-doesnt li {
+    padding: 3px 0;
+    font-size: 0.87rem;
+    color: var(--ink-light);
+    line-height: 1.45;
+    padding-left: 14px;
+    position: relative;
+  }
+  .trio-does li::before {
+    content: '+';
+    position: absolute;
+    left: 0;
+    color: var(--teal);
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+  .trio-doesnt li::before {
+    content: '\2013';
+    position: absolute;
+    left: 0;
+    color: var(--sienna);
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+  .trio-config {
+    margin-top: auto;
+    padding-top: 14px;
+    border-top: 1px dashed rgba(44, 36, 22, 0.1);
+  }
+  .config-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 0;
+    font-size: 0.8rem;
+  }
+  .config-label {
+    font-family: var(--font-mono);
+    color: var(--ink-faint);
+    font-size: 0.72rem;
+  }
+  .config-value {
+    color: var(--ink-light);
+    font-weight: 500;
+  }
+  .config-value.yes { color: var(--teal); }
+  .config-value.no { color: var(--ink-faint); }
+
+  /* ---- Prompt Assembly Pipeline ---- */
+  .pipeline-stack {
+    max-width: 680px;
+    margin: 32px auto 0;
+  }
+  .pipeline-layer {
+    display: flex;
+    align-items: stretch;
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-bottom: 10px;
+    box-shadow: var(--shadow-sm);
+    border: 1px solid rgba(44, 36, 22, 0.06);
+    background: white;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+  .pipeline-layer:hover {
+    transform: translateX(4px);
+    box-shadow: var(--shadow-md);
+  }
+  .pipeline-num {
+    width: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-heading);
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: white;
+    flex-shrink: 0;
+  }
+  .pipeline-layer.never-cut .pipeline-num { background: var(--teal); }
+  .pipeline-layer.budget-dep .pipeline-num { background: var(--sienna); }
+  .pipeline-content {
+    padding: 14px 18px;
+    flex: 1;
+  }
+  .pipeline-content h4 {
+    font-size: 1rem;
+    margin-bottom: 3px;
+    color: var(--ink);
+  }
+  .pipeline-content p {
+    font-size: 0.88rem;
+    color: var(--ink-light);
+    margin-bottom: 0;
+    line-height: 1.5;
+  }
+  .pipeline-badge {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-left: 8px;
+    position: relative;
+    top: -1px;
+  }
+  .badge-never {
+    color: var(--teal);
+    background: var(--teal-faded);
+    border: 1px solid var(--teal-border);
+  }
+  .badge-budget {
+    color: var(--sienna);
+    background: var(--sienna-faded);
+    border: 1px solid var(--sienna-border);
+  }
+  .pipeline-note {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 0.88rem;
+    color: var(--ink-faint);
+    font-style: italic;
+    font-family: var(--font-heading);
+  }
+  .assembly-steps {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-top: 28px;
+    max-width: 680px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  @media (max-width: 700px) {
+    .assembly-steps { grid-template-columns: 1fr 1fr; }
+  }
+  .asm-step {
+    background: white;
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    box-shadow: var(--shadow-sm);
+    border: 1px solid rgba(44, 36, 22, 0.06);
+    text-align: center;
+  }
+  .asm-step-num {
+    font-family: var(--font-heading);
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--sienna);
+    margin-bottom: 6px;
+  }
+  .asm-step-label {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink);
+    margin-bottom: 4px;
+  }
+  .asm-step-desc {
+    font-size: 0.78rem;
+    color: var(--ink-faint);
+    line-height: 1.4;
+  }
+
+  /* ---- Capability Model ---- */
+  .cap-intro {
+    max-width: 680px;
+    margin: 0 auto;
+  }
+  .cap-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-top: 28px;
+  }
+  @media (max-width: 700px) {
+    .cap-grid { grid-template-columns: 1fr; }
+  }
+  .cap-card {
+    background: white;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    border: 1px solid rgba(44, 36, 22, 0.06);
+    overflow: hidden;
+  }
+  .cap-card-header {
+    padding: 14px 18px 10px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    border-bottom: 1px solid rgba(44, 36, 22, 0.06);
+  }
+  .cap-card-body { padding: 14px 18px 18px; }
+  .policy-layer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    font-size: 0.88rem;
+    border-bottom: 1px solid rgba(44, 36, 22, 0.04);
+  }
+  .policy-layer:last-child { border-bottom: none; }
+  .policy-number {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 0.78rem;
+    color: var(--teal);
+    width: 20px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .policy-name { color: var(--ink); font-weight: 500; }
+  .policy-note {
+    font-size: 0.78rem;
+    color: var(--ink-faint);
+    margin-left: auto;
+    font-style: italic;
+    font-family: var(--font-heading);
+  }
+  .restrict-list {
+    list-style: none;
+    padding: 0;
+  }
+  .restrict-list li {
+    padding: 5px 0;
+    font-size: 0.87rem;
+    color: var(--ink-light);
+    padding-left: 16px;
+    position: relative;
+  }
+  .restrict-list li::before {
+    content: '\00D7';
+    position: absolute;
+    left: 0;
+    color: var(--sienna);
+    font-weight: 700;
+    font-size: 1rem;
+  }
+
+  /* ---- Lifecycle Mermaid ---- */
+  .mermaid-container {
+    margin-top: 28px;
+    position: relative;
+    background: white;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+    border: 1px solid rgba(44, 36, 22, 0.06);
+    overflow: visible;
+    width: 100%;
+  }
+  .mermaid-inner {
+    padding: 32px 24px;
+    overflow-x: auto;
+    overflow-y: auto;
+    cursor: grab;
+    min-height: 400px;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .mermaid-inner:active { cursor: grabbing; }
+  .mermaid-inner svg { width: 100%; height: auto; min-width: 600px; }
+  .mermaid-controls {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    gap: 6px;
+    z-index: 2;
+  }
+  .mermaid-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius);
+    border: 1px solid var(--teal-border);
+    background: var(--parchment);
+    color: var(--teal);
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .mermaid-btn:hover { background: var(--teal); color: white; }
+  .mermaid-label {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    padding: 12px 24px;
+    border-top: 1px solid rgba(44, 36, 22, 0.06);
+    background: rgba(44, 36, 22, 0.015);
+  }
+  .mermaid-label span {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-faint);
+  }
+
+  /* ---- Schema Tables ---- */
+  .schema-table-wrap {
+    overflow-x: auto;
+    margin-top: 20px;
+    background: white;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+    border: 1px solid rgba(44, 36, 22, 0.06);
+  }
+  .schema-table-name {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--teal);
+    padding: 14px 20px 10px;
+    border-bottom: 1px solid rgba(44, 36, 22, 0.06);
+    background: var(--teal-faded);
+  }
+  table.schema {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+  table.schema th {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--ink-faint);
+    text-align: left;
+    padding: 10px 16px;
+    border-bottom: 2px solid rgba(44, 36, 22, 0.08);
+    white-space: nowrap;
+  }
+  table.schema td {
+    padding: 8px 16px;
+    border-bottom: 1px solid rgba(44, 36, 22, 0.04);
+    vertical-align: top;
+  }
+  table.schema tr:last-child td { border-bottom: none; }
+  table.schema td:first-child {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: 0.82rem;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  table.schema td:nth-child(2) {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--teal);
+  }
+  table.schema td:nth-child(3) {
+    color: var(--ink-light);
+    font-size: 0.82rem;
+    line-height: 1.4;
+  }
+  .schema-note {
+    padding: 12px 20px;
+    font-size: 0.82rem;
+    color: var(--ink-faint);
+    border-top: 1px solid rgba(44, 36, 22, 0.06);
+    background: rgba(44, 36, 22, 0.015);
+    line-height: 1.5;
+  }
+
+  /* ---- Footer ---- */
+  .footer {
+    margin-top: 80px;
+    text-align: center;
+    padding: 40px 20px;
+    border-top: 1px solid rgba(44, 36, 22, 0.08);
+    color: var(--ink-faint);
+    font-size: 0.85rem;
+  }
+  .footer-title {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: var(--ink-light);
+    margin-bottom: 6px;
+  }
+  .footer-links {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+  }
+  .footer-links a {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--teal);
+    text-decoration: none;
+    border-bottom: 1px dashed var(--teal-border);
+    transition: color 0.15s;
+  }
+  .footer-links a:hover { color: var(--sienna); border-bottom-color: var(--sienna-border); }
+
+  /* ---- Mermaid theme overrides ---- */
+  .mermaid-inner .node rect,
+  .mermaid-inner .node circle,
+  .mermaid-inner .node polygon {
+    stroke: var(--teal) !important;
+    fill: white !important;
+  }
+</style>
+</head>
+<body>
+
+<div class="page-wrapper">
+
+  <!-- ======== HERO ======== -->
+  <section class="hero" id="hero">
+    <div class="hero-badge">OtterCamp V2 &mdash; Spec 05</div>
+    <h1>Agents: <span class="accent">Staff</span> &amp; Temps</h1>
+    <p class="hero-tagline">"Staff build relationships. Temps get things done."</p>
+    <p class="hero-sub">
+      Agents are the workforce of OtterCamp. Every meaningful action &mdash; planning, coding, reviewing, triaging &mdash;
+      is performed by an agent. The human directs and decides. Agents do the work.
+      Two classes, one principle: durability determines identity.
+    </p>
+  </section>
+
+  <!-- ======== STAFF vs TEMPS ======== -->
+  <hr class="section-divider">
+  <section class="section" id="comparison">
+    <h2>Two Agent Classes</h2>
+    <p>The distinction is about <strong>durability and identity</strong>, not capability.
+       Staff agents persist, accumulate memory, and develop working relationships.
+       Temp agents are scoped to a task, session, or TTL &mdash; created for a job, cleaned up when done.</p>
+
+    <div class="comparison-grid">
+      <!-- Staff Card -->
+      <div class="compare-card staff">
+        <div class="compare-card-header staff">
+          <h3>Staff Agents</h3>
+          <div class="subtitle">Durable, named members of the org</div>
+        </div>
+        <div class="compare-card-body">
+          <ul>
+            <li><span class="li-marker"></span><span><strong>Durable identity</strong> &mdash; name, personality, role, and institutional knowledge persist indefinitely</span></li>
+            <li><span class="li-marker"></span><span><strong>Reusable</strong> &mdash; assigned to multiple projects simultaneously with different roles</span></li>
+            <li><span class="li-marker"></span><span><strong>Memory-building</strong> &mdash; Ellie captures memories about and from staff agents over time</span></li>
+            <li><span class="li-marker"></span><span><strong>Org or project scoped</strong> &mdash; org-level agents available everywhere; project-level agents primarily associated with specific projects</span></li>
+            <li><span class="li-marker"></span><span><strong>Lifecycle</strong> &mdash; draft &rarr; active &rarr; paused &rarr; retired (human approval at draft)</span></li>
+            <li><span class="li-marker"></span><span><strong>Private memory</strong> &mdash; available for complex roles (PMs, Frank)</span></li>
+          </ul>
+          <div class="use-cases">
+            <h4>Best for</h4>
+            <p>Agents working across tasks/projects, distinct expertise needed repeatedly, deep project context, building working relationships with the human.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Temp Card -->
+      <div class="compare-card temp">
+        <div class="compare-card-header temp">
+          <h3>Temp Agents</h3>
+          <div class="subtitle">Ephemeral, scoped to a specific purpose</div>
+        </div>
+        <div class="compare-card-body">
+          <ul>
+            <li><span class="li-marker"></span><span><strong>Scoped lifetime</strong> &mdash; tied to a task, session, or explicit TTL; auto-retired when scope ends</span></li>
+            <li><span class="li-marker"></span><span><strong>Lightweight identity</strong> &mdash; has name and role but no deep personality or long-term relationship</span></li>
+            <li><span class="li-marker"></span><span><strong>Restricted by default</strong> &mdash; no secrets, no connectors, no private memory, org-level memory only</span></li>
+            <li><span class="li-marker"></span><span><strong>Memory-light</strong> &mdash; inherits org context via passive injection; contributions attributed to task/project scope</span></li>
+            <li><span class="li-marker"></span><span><strong>Lifecycle</strong> &mdash; created &rarr; active &rarr; expired or promoted (no draft review)</span></li>
+            <li><span class="li-marker"></span><span><strong>Concurrent limit</strong> &mdash; max 10 active per org (configurable)</span></li>
+          </ul>
+          <div class="use-cases">
+            <h4>Best for</h4>
+            <p>One-off experiments, burst parallelism, specialized skill combos, controlled prompt experiments. Promotable to staff via Lori.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======== STARTER TRIO ======== -->
+  <hr class="section-divider">
+  <section class="section" id="trio">
+    <h2>The Starter Trio</h2>
+    <p>Every OtterCamp organization is seeded with three staff agents on bootstrap.
+       They are not optional &mdash; they are the foundation. System-created, immediately active, org-level.</p>
+
+    <div class="trio-grid">
+      <!-- Frank -->
+      <div class="trio-card frank">
+        <div class="trio-card-top">
+          <div class="trio-avatar">F</div>
+          <h3>Frank</h3>
+          <div class="trio-pronouns">he / him</div>
+          <div class="trio-role">Chief of Staff</div>
+          <div class="trio-scope-badge">org-level</div>
+        </div>
+        <div class="trio-card-body">
+          <div class="trio-does">
+            <h4>What Frank does</h4>
+            <ul>
+              <li>Primary human touchpoint</li>
+              <li>Org-level coordination across projects</li>
+              <li>Escalation endpoint (PM &rarr; Frank &rarr; human)</li>
+              <li>Strategic conversations and brainstorming</li>
+              <li>Delegation to the right project/agent</li>
+              <li>Onboarding new users</li>
+            </ul>
+          </div>
+          <div class="trio-doesnt">
+            <h4>What Frank does not do</h4>
+            <ul>
+              <li>Manage individual tasks or flow nodes</li>
+              <li>Design flows or scope tasks</li>
+              <li>Hire or staff agents (Lori's job)</li>
+              <li>Manage memory (Ellie's job)</li>
+            </ul>
+          </div>
+          <div class="trio-config">
+            <div class="config-row">
+              <span class="config-label">model</span>
+              <span class="config-value">high-capability</span>
+            </div>
+            <div class="config-row">
+              <span class="config-label">private memory</span>
+              <span class="config-value yes">enabled</span>
+            </div>
+            <div class="config-row">
+              <span class="config-label">read scopes</span>
+              <span class="config-value">org, assigned projects</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lori -->
+      <div class="trio-card lori">
+        <div class="trio-card-top">
+          <div class="trio-avatar">L</div>
+          <h3>Lori</h3>
+          <div class="trio-pronouns">she / her</div>
+          <div class="trio-role">Agent Relations Expert</div>
+          <div class="trio-scope-badge">org-level</div>
+        </div>
+        <div class="trio-card-body">
+          <div class="trio-does">
+            <h4>What Lori does</h4>
+            <ul>
+              <li>Creates staff agents through conversation</li>
+              <li>Staffs projects with the right agents</li>
+              <li>Promotes temps to staff</li>
+              <li>Manages agent profiles and policies</li>
+              <li>Proactively recommends staffing changes</li>
+              <li>Maintains the agent directory</li>
+            </ul>
+          </div>
+          <div class="trio-doesnt">
+            <h4>What Lori does not do</h4>
+            <ul>
+              <li>Assign agents to specific tasks or nodes</li>
+              <li>Manage project workflow</li>
+              <li>Make unilateral staffing decisions</li>
+            </ul>
+          </div>
+          <div class="trio-config">
+            <div class="config-row">
+              <span class="config-label">model</span>
+              <span class="config-value">high-capability</span>
+            </div>
+            <div class="config-row">
+              <span class="config-label">private memory</span>
+              <span class="config-value no">disabled</span>
+            </div>
+            <div class="config-row">
+              <span class="config-label">read scopes</span>
+              <span class="config-value">org, assigned projects</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ellie -->
+      <div class="trio-card ellie">
+        <div class="trio-card-top">
+          <div class="trio-avatar">E</div>
+          <h3>Ellie</h3>
+          <div class="trio-pronouns">she / her</div>
+          <div class="trio-role">Memory &amp; Knowledge</div>
+          <div class="trio-scope-badge">org-level</div>
+        </div>
+        <div class="trio-card-body">
+          <div class="trio-does">
+            <h4>What Ellie does</h4>
+            <ul>
+              <li>Passive memory injection (every turn, every agent)</li>
+              <li>Active memory queries via @mention</li>
+              <li>Participant in every session</li>
+              <li>Extraction, synthesis, dedup, consolidation</li>
+              <li>Background infrastructure role</li>
+              <li>Conversational agent role</li>
+            </ul>
+          </div>
+          <div class="trio-doesnt">
+            <h4>Dual model usage</h4>
+            <ul>
+              <li>Conversational turns: standard-capability</li>
+              <li>Pipeline work: Haiku-class (cost-efficient)</li>
+            </ul>
+          </div>
+          <div class="trio-config">
+            <div class="config-row">
+              <span class="config-label">model</span>
+              <span class="config-value">standard + Haiku-class</span>
+            </div>
+            <div class="config-row">
+              <span class="config-label">private memory</span>
+              <span class="config-value yes">enabled</span>
+            </div>
+            <div class="config-row">
+              <span class="config-label">read scopes</span>
+              <span class="config-value">org, projects, task</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======== AGENT PROFILE SHAPE ======== -->
+  <hr class="section-divider">
+  <section class="section" id="profile">
+    <h2>Rich Agent Profile</h2>
+    <p>The agent profile is the complete definition of what an agent is &mdash; identity, behavior, permissions, and resource allocation.
+       All configured conversationally through Lori, never through a form.</p>
+
+    <div class="cap-grid">
+      <div class="cap-card">
+        <div class="cap-card-header" style="color: var(--teal);">Identity</div>
+        <div class="cap-card-body">
+          <div class="policy-layer"><span class="policy-number">1</span><span class="policy-name">name</span><span class="policy-note">display name</span></div>
+          <div class="policy-layer"><span class="policy-number">2</span><span class="policy-name">slug</span><span class="policy-note">URL-safe, unique per org</span></div>
+          <div class="policy-layer"><span class="policy-number">3</span><span class="policy-name">pronouns</span><span class="policy-note">he/him, she/her, etc.</span></div>
+          <div class="policy-layer"><span class="policy-number">4</span><span class="policy-name">role_title</span><span class="policy-note">short descriptor</span></div>
+          <div class="policy-layer"><span class="policy-number">5</span><span class="policy-name">description</span><span class="policy-note">purpose and working style</span></div>
+          <div class="policy-layer"><span class="policy-number">6</span><span class="policy-name">avatar_url</span><span class="policy-note">optional, for UI</span></div>
+        </div>
+      </div>
+      <div class="cap-card">
+        <div class="cap-card-header" style="color: var(--sienna);">Prompt Pack</div>
+        <div class="cap-card-body">
+          <div class="policy-layer"><span class="policy-number">1</span><span class="policy-name">system_prompt</span><span class="policy-note">core identity (layer 1)</span></div>
+          <div class="policy-layer"><span class="policy-number">2</span><span class="policy-name">policy_addendum</span><span class="policy-note">agent-specific rules (layer 2)</span></div>
+        </div>
+      </div>
+      <div class="cap-card">
+        <div class="cap-card-header" style="color: var(--teal);">Tool Policy</div>
+        <div class="cap-card-body">
+          <div class="policy-layer"><span class="policy-number">A</span><span class="policy-name">allow_list</span><span class="policy-note">whitelist mode</span></div>
+          <div class="policy-layer"><span class="policy-number">B</span><span class="policy-name">deny_list</span><span class="policy-note">blacklist mode</span></div>
+          <div class="policy-layer"><span class="policy-number">C</span><span class="policy-name">tier_overrides</span><span class="policy-note">per-tool tier tweaks</span></div>
+          <p style="font-size: 0.82rem; color: var(--ink-faint); margin-top: 8px; margin-bottom: 0;">Only one of allow or deny can be set. Null inherits org/project defaults.</p>
+        </div>
+      </div>
+      <div class="cap-card">
+        <div class="cap-card-header" style="color: var(--sienna);">Model Policy</div>
+        <div class="cap-card-body">
+          <div class="policy-layer"><span class="policy-number">1</span><span class="policy-name">default_model_profile</span><span class="policy-note">primary model</span></div>
+          <div class="policy-layer"><span class="policy-number">2</span><span class="policy-name">allowed_profiles</span><span class="policy-note">null = any available</span></div>
+          <div class="policy-layer"><span class="policy-number">3</span><span class="policy-name">budget_cap</span><span class="policy-note">cents per period</span></div>
+          <div class="policy-layer"><span class="policy-number">4</span><span class="policy-name">budget_period</span><span class="policy-note">daily / weekly / monthly</span></div>
+        </div>
+      </div>
+      <div class="cap-card">
+        <div class="cap-card-header" style="color: var(--teal);">Memory Policy</div>
+        <div class="cap-card-body">
+          <div class="policy-layer"><span class="policy-number">R</span><span class="policy-name">read_scopes</span><span class="policy-note">org, projects, task, private</span></div>
+          <div class="policy-layer"><span class="policy-number">W</span><span class="policy-name">write_scope</span><span class="policy-note">"context" = current scope</span></div>
+          <div class="policy-layer"><span class="policy-number">P</span><span class="policy-name">private_memory</span><span class="policy-note">working notes (PMs, Frank)</span></div>
+        </div>
+      </div>
+      <div class="cap-card">
+        <div class="cap-card-header" style="color: var(--sienna);">Classification</div>
+        <div class="cap-card-body">
+          <div class="policy-layer"><span class="policy-number">1</span><span class="policy-name">agent_class</span><span class="policy-note">staff or temp</span></div>
+          <div class="policy-layer"><span class="policy-number">2</span><span class="policy-name">scope_level</span><span class="policy-note">org or project</span></div>
+          <div class="policy-layer"><span class="policy-number">3</span><span class="policy-name">temp_scope_type</span><span class="policy-note">task / session / ttl</span></div>
+          <div class="policy-layer"><span class="policy-number">4</span><span class="policy-name">skill_ids</span><span class="policy-note">baseline competencies</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======== 7-LAYER PROMPT ASSEMBLY ======== -->
+  <hr class="section-divider">
+  <section class="section" id="prompt-assembly">
+    <h2>7-Layer Prompt Assembly</h2>
+    <p>When an agent takes a turn, OtterCamp assembles the prompt from seven layers in priority order.
+       Layers 1&ndash;2 are never cut. Layers 3&ndash;7 are budget-dependent and compressed as needed.
+       Assembly runs <strong>once per turn</strong> &mdash; within the tool loop, iterations just append.</p>
+
+    <div class="pipeline-stack">
+      <div class="pipeline-layer never-cut">
+        <div class="pipeline-num">1</div>
+        <div class="pipeline-content">
+          <h4>Agent Identity <span class="pipeline-badge badge-never">never cut</span></h4>
+          <p>Core system prompt from the agent profile &mdash; who it is, how it thinks, its role. The agent's personality and expertise.</p>
+        </div>
+      </div>
+      <div class="pipeline-layer never-cut">
+        <div class="pipeline-num">2</div>
+        <div class="pipeline-content">
+          <h4>Policies &amp; Constraints <span class="pipeline-badge badge-never">never cut</span></h4>
+          <p>Org policy + project policy + agent policy_addendum + control plane capabilities. Safety-critical. Includes tool allow/deny communicated in natural language.</p>
+        </div>
+      </div>
+      <div class="pipeline-layer budget-dep">
+        <div class="pipeline-num">3</div>
+        <div class="pipeline-content">
+          <h4>Scope Context <span class="pipeline-badge badge-budget">budget-dependent</span></h4>
+          <p>Determined by session scope: org (portfolio summary, priorities), project (description, architecture decisions), or task (acceptance criteria, constraints, relevant files).</p>
+        </div>
+      </div>
+      <div class="pipeline-layer budget-dep">
+        <div class="pipeline-num">4</div>
+        <div class="pipeline-content">
+          <h4>Skills Instructions <span class="pipeline-badge badge-budget">budget-dependent</span></h4>
+          <p>Resolved from active skills only. Flow-node-relevant skills are loaded. Org/project defaults always included. An agent writing a blog post does not get deployment instructions.</p>
+        </div>
+      </div>
+      <div class="pipeline-layer budget-dep">
+        <div class="pipeline-num">5</div>
+        <div class="pipeline-content">
+          <h4>Memory <span class="pipeline-badge badge-budget">budget-dependent</span></h4>
+          <p>Ellie's passive retrieval, scoped to the session. Top-k results injected automatically. In async mode, supplemented by active <code>memory.query</code> tool calls.</p>
+        </div>
+      </div>
+      <div class="pipeline-layer budget-dep">
+        <div class="pipeline-num">6</div>
+        <div class="pipeline-content">
+          <h4>Conversation History <span class="pipeline-badge badge-budget">budget-dependent</span></h4>
+          <p>Session messages: recent turns in full, older turns summarized at checkpoints. Compressed further if budget requires.</p>
+        </div>
+      </div>
+      <div class="pipeline-layer budget-dep">
+        <div class="pipeline-num">7</div>
+        <div class="pipeline-content">
+          <h4>Tool Descriptions <span class="pipeline-badge badge-budget">lowest priority</span></h4>
+          <p>Available tools filtered by agent's tool policy + control plane capabilities. Rarely an issue &mdash; tool descriptions are small relative to other layers.</p>
+        </div>
+      </div>
+    </div>
+
+    <p class="pipeline-note">Highest priority at top. Identity and policies are sacrosanct &mdash; everything else bends to the token budget.</p>
+
+    <h3 style="margin-top: 36px; text-align: center;">Assembly Process</h3>
+    <div class="assembly-steps">
+      <div class="asm-step">
+        <div class="asm-step-num">Step 1</div>
+        <div class="asm-step-label">Reserve</div>
+        <div class="asm-step-desc">Calculate fixed-cost layers (identity + policies). These always go in.</div>
+      </div>
+      <div class="asm-step">
+        <div class="asm-step-num">Step 2</div>
+        <div class="asm-step-label">Allocate</div>
+        <div class="asm-step-desc">Remaining token budget splits between scope, skills, memory, conversation, tools.</div>
+      </div>
+      <div class="asm-step">
+        <div class="asm-step-num">Step 3</div>
+        <div class="asm-step-label">Fill</div>
+        <div class="asm-step-desc">Populate each layer up to allocation. Unused budget flows to lower-priority layers.</div>
+      </div>
+      <div class="asm-step">
+        <div class="asm-step-num">Step 4</div>
+        <div class="asm-step-label">Compress</div>
+        <div class="asm-step-desc">If over budget: summarize history, then reduce memory. Identity and policies are never cut.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======== CAPABILITY MODEL ======== -->
+  <hr class="section-divider">
+  <section class="section" id="capability">
+    <h2>Default-Deny Capability Model</h2>
+    <div class="cap-intro">
+      <p>Every agent operates within the <strong>org policy envelope</strong> &mdash; the outermost boundary of what any agent can do.
+         Policy layers stack from most restrictive (highest priority) to least. Each layer can only <strong>tighten</strong>, never loosen.</p>
+    </div>
+
+    <div class="cap-grid">
+      <div class="cap-card">
+        <div class="cap-card-header" style="color: var(--teal);">Policy Hierarchy (strictly tightening)</div>
+        <div class="cap-card-body">
+          <div class="policy-layer">
+            <span class="policy-number">1</span>
+            <span class="policy-name">Instance Safety</span>
+            <span class="policy-note">hard limits, cannot override</span>
+          </div>
+          <div class="policy-layer">
+            <span class="policy-number">2</span>
+            <span class="policy-name">Organization Policy</span>
+            <span class="policy-note">org-wide, human-set</span>
+          </div>
+          <div class="policy-layer">
+            <span class="policy-number">3</span>
+            <span class="policy-name">Project Policy</span>
+            <span class="policy-note">project-specific, restricts further</span>
+          </div>
+          <div class="policy-layer">
+            <span class="policy-number">4</span>
+            <span class="policy-name">Agent Profile</span>
+            <span class="policy-note">tool policy + policy_addendum</span>
+          </div>
+        </div>
+      </div>
+      <div class="cap-card">
+        <div class="cap-card-header" style="color: var(--sienna);">Temp Agent Restrictions</div>
+        <div class="cap-card-body">
+          <ul class="restrict-list">
+            <li>No secret/credential access by default</li>
+            <li>No external connector access by default</li>
+            <li>No private memory scope</li>
+            <li>Org-level memory only (unless project-assigned)</li>
+            <li>All grants auto-revoke on expiration</li>
+            <li>Concurrent limit: 10 active per org (configurable)</li>
+          </ul>
+        </div>
+      </div>
+      <div class="cap-card">
+        <div class="cap-card-header" style="color: var(--teal);">Staff Agent Safeguards</div>
+        <div class="cap-card-body">
+          <ul class="restrict-list">
+            <li>Tool policy enforced on every tool call</li>
+            <li>Per-agent model budget caps</li>
+            <li>Immutable audit trail on all actions</li>
+            <li>Immediate pause capability (active runs complete)</li>
+          </ul>
+        </div>
+      </div>
+      <div class="cap-card">
+        <div class="cap-card-header" style="color: var(--sienna);">Model Override Resolution</div>
+        <div class="cap-card-body">
+          <div class="policy-layer"><span class="policy-number">1</span><span class="policy-name">Flow node override</span><span class="policy-note">highest priority</span></div>
+          <div class="policy-layer"><span class="policy-number">2</span><span class="policy-name">Agent default profile</span><span class="policy-note"></span></div>
+          <div class="policy-layer"><span class="policy-number">3</span><span class="policy-name">Project default profile</span><span class="policy-note"></span></div>
+          <div class="policy-layer"><span class="policy-number">4</span><span class="policy-name">Org default profile</span><span class="policy-note">fallback</span></div>
+          <p style="font-size: 0.82rem; color: var(--ink-faint); margin-top: 8px; margin-bottom: 0;">First non-null value wins.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======== AGENT LIFECYCLE ======== -->
+  <hr class="section-divider">
+  <section class="section" id="lifecycle">
+    <h2>Agent Lifecycle</h2>
+    <p>Staff agents go through human-approved stages. Temp agents skip review and are created immediately active.
+       Both converge at retirement &mdash; or a temp can be promoted to staff through Lori.</p>
+
+    <h3 style="margin-top: 24px;">Staff Agent Lifecycle</h3>
+    <div class="mermaid-container" id="mermaid-staff-container">
+      <div class="mermaid-controls">
+        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-staff', 1.2)" title="Zoom in">+</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-staff', 0.8)" title="Zoom out">&minus;</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-staff', 0, true)" title="Reset">R</button>
+      </div>
+      <div class="mermaid-inner" id="mermaid-staff-inner">
+        <pre class="mermaid" id="mermaid-staff">
+stateDiagram-v2
+    direction LR
+    [*] --> Draft : Lori creates
+    Draft --> Active : Human approves
+    Draft --> Cancelled : Human rejects
+    Active --> Paused : Pause agent
+    Active --> Retired : Retire agent
+    Paused --> Active : Reactivate
+    Paused --> Retired : Retire while paused
+
+    note right of Draft
+        Human reviews profile --
+        name, role, prompt,
+        tool policy, model
+    end note
+    note right of Active
+        Normal operating state.
+        Can take turns, execute
+        tasks, hold assignments.
+    end note
+    note right of Retired
+        Profile preserved for audit.
+        Memories retained in Ellie.
+        Assignments removed.
+    end note
+        </pre>
+      </div>
+      <div class="mermaid-label">
+        <span>Draft requires human approval</span>
+        <span>Retired agents are never deleted</span>
+      </div>
+    </div>
+
+    <h3 style="margin-top: 36px;">Temp Agent Lifecycle</h3>
+    <div class="mermaid-container" id="mermaid-temp-container">
+      <div class="mermaid-controls">
+        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-temp', 1.2)" title="Zoom in">+</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-temp', 0.8)" title="Zoom out">&minus;</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-temp', 0, true)" title="Reset">R</button>
+      </div>
+      <div class="mermaid-inner" id="mermaid-temp-inner">
+        <pre class="mermaid" id="mermaid-temp">
+stateDiagram-v2
+    direction LR
+    [*] --> Active : Created (no draft review)
+    Active --> Expired : Scope ends (auto)
+    Active --> Promoted : Lori promotes to staff
+
+    note right of Active
+        Immediately active.
+        No human approval needed.
+        Org policy constrains.
+    end note
+    note right of Expired
+        Archival summary by Ellie.
+        Contributions remain in
+        task/session. Slot freed.
+    end note
+    note right of Promoted
+        Config copied to new
+        staff agent profile.
+        Goes through draft review.
+    end note
+        </pre>
+      </div>
+      <div class="mermaid-label">
+        <span>No draft review for temps</span>
+        <span>Promotion goes through normal staff lifecycle</span>
+      </div>
+    </div>
+
+    <h3 style="margin-top: 36px;">Promotion: Temp to Staff</h3>
+    <div class="mermaid-container" id="mermaid-promote-container">
+      <div class="mermaid-controls">
+        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-promote', 1.2)" title="Zoom in">+</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-promote', 0.8)" title="Zoom out">&minus;</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-promote', 0, true)" title="Reset">R</button>
+      </div>
+      <div class="mermaid-inner" id="mermaid-promote-inner">
+        <pre class="mermaid" id="mermaid-promote">
+flowchart LR
+    A["Human or PM says<br/>Make this temp permanent"] --> B["Lori reviews<br/>temp config"]
+    B --> C["Lori proposes staff profile<br/>name, description, skills,<br/>scope, model profile"]
+    C --> D["Human reviews<br/>and approves"]
+    D --> E["Staff agent created<br/>draft then active"]
+    D --> F["Temp marked promoted<br/>with staff agent ref"]
+
+    style A fill:#fff,stroke:#1a5c5c,color:#2c2416
+    style B fill:#fff,stroke:#a0522d,color:#2c2416
+    style C fill:#fff,stroke:#a0522d,color:#2c2416
+    style D fill:#fff,stroke:#1a5c5c,color:#2c2416
+    style E fill:#f5f0e8,stroke:#1a5c5c,stroke-width:2px,color:#2c2416
+    style F fill:#f5f0e8,stroke:#a0522d,stroke-width:2px,color:#2c2416
+        </pre>
+      </div>
+      <div class="mermaid-label">
+        <span>Promotion is never automatic -- the human always decides</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======== PROJECT STAFFING ======== -->
+  <hr class="section-divider">
+  <section class="section" id="staffing">
+    <h2>Project Staffing &amp; Roles</h2>
+    <p>Projects are staffed conversationally through Lori. She recommends agents, the human approves.
+       Each agent assigned to a project holds one or more roles.</p>
+
+    <div class="cap-grid">
+      <div class="cap-card">
+        <div class="cap-card-header" style="color: var(--teal);">Four Project Roles</div>
+        <div class="cap-card-body">
+          <div class="policy-layer">
+            <span class="policy-number" style="color: var(--sienna);">PM</span>
+            <span class="policy-name">project_manager</span>
+            <span class="policy-note">exactly one, mandatory</span>
+          </div>
+          <div class="policy-layer">
+            <span class="policy-number">W</span>
+            <span class="policy-name">worker</span>
+            <span class="policy-note">executes task work</span>
+          </div>
+          <div class="policy-layer">
+            <span class="policy-number">R</span>
+            <span class="policy-name">reviewer</span>
+            <span class="policy-note">reviews completed work</span>
+          </div>
+          <div class="policy-layer">
+            <span class="policy-number">P</span>
+            <span class="policy-name">planner</span>
+            <span class="policy-note">assists PM with scoping (optional)</span>
+          </div>
+          <p style="font-size: 0.82rem; color: var(--ink-faint); margin-top: 8px; margin-bottom: 0;">
+            An agent can hold multiple roles in the same project and different roles across projects.
+          </p>
+        </div>
+      </div>
+      <div class="cap-card">
+        <div class="cap-card-header" style="color: var(--sienna);">The PM Is Special</div>
+        <div class="cap-card-body">
+          <ul class="restrict-list" style="list-style: none;">
+            <li style="padding-left: 0;">Designs flow templates for the project</li>
+            <li style="padding-left: 0;">Scopes tasks with sufficient context</li>
+            <li style="padding-left: 0;">Triages blockers (agent &rarr; PM &rarr; Frank &rarr; human)</li>
+            <li style="padding-left: 0;">Proactive supervision of stuck agents</li>
+            <li style="padding-left: 0;">Default responder in project sessions</li>
+            <li style="padding-left: 0;">Private memory enabled by default</li>
+          </ul>
+          <p style="font-size: 0.82rem; color: var(--ink-faint); margin-top: 8px; margin-bottom: 0;">
+            Enforced at database level: partial unique index on <code>agent_project_assignment</code>.
+          </p>
+        </div>
+      </div>
+      <div class="cap-card" style="grid-column: span 2;">
+        <div class="cap-card-header" style="color: var(--teal);">Flow Node Actor Resolution</div>
+        <div class="cap-card-body">
+          <div class="policy-layer">
+            <span class="policy-number">1</span>
+            <span class="policy-name" style="min-width: 120px;"><code>role</code></span>
+            <span class="policy-note" style="margin-left: 0;">Resolve to the agent assigned to that role. Multiple agents? Lowest workload wins.</span>
+          </div>
+          <div class="policy-layer">
+            <span class="policy-number">2</span>
+            <span class="policy-name" style="min-width: 120px;"><code>project_manager</code></span>
+            <span class="policy-note" style="margin-left: 0;">Resolve to the project's PM.</span>
+          </div>
+          <div class="policy-layer">
+            <span class="policy-number">3</span>
+            <span class="policy-name" style="min-width: 120px;"><code>agent</code></span>
+            <span class="policy-note" style="margin-left: 0;">Resolve to a specific agent by ID.</span>
+          </div>
+          <div class="policy-layer">
+            <span class="policy-number">4</span>
+            <span class="policy-name" style="min-width: 120px;"><code>human</code></span>
+            <span class="policy-note" style="margin-left: 0;">Creates an inbox item for human action.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======== SCHEMA ======== -->
+  <hr class="section-divider">
+  <section class="section" id="schema">
+    <h2>Database Schema</h2>
+    <p>Three tables form the agent data model. The <code>agent</code> table carries the full profile;
+       <code>agent_project_assignment</code> maps agents to projects with roles;
+       <code>agent_skill_attachment</code> links agents to baseline skills.</p>
+
+    <!-- agent table -->
+    <div class="schema-table-wrap" style="margin-top: 28px;">
+      <div class="schema-table-name">agent</div>
+      <table class="schema">
+        <thead>
+          <tr><th>Column</th><th>Type</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>id</td><td>uuid pk</td><td>Primary key</td></tr>
+          <tr><td>organization_id</td><td>uuid fk</td><td>References organization</td></tr>
+          <tr><td>name, slug</td><td>text</td><td>Display name + URL-safe identifier (unique per org)</td></tr>
+          <tr><td>pronouns</td><td>text</td><td>he/him, she/her, they/them, etc.</td></tr>
+          <tr><td>role_title</td><td>text</td><td>Short descriptor: "Chief of Staff", "Code Reviewer"</td></tr>
+          <tr><td>description</td><td>text</td><td>Longer purpose/expertise/style description</td></tr>
+          <tr><td>agent_class</td><td>text</td><td>staff or temp (check constraint)</td></tr>
+          <tr><td>scope_level</td><td>text</td><td>org or project</td></tr>
+          <tr><td>lifecycle_status</td><td>text</td><td>draft, active, paused, retired, cancelled, expired, promoted</td></tr>
+          <tr><td>system_prompt</td><td>text</td><td>Layer 1: identity prompt</td></tr>
+          <tr><td>policy_addendum</td><td>text</td><td>Merges into layer 2: agent-specific policy</td></tr>
+          <tr><td>tool_allow_list</td><td>text[]</td><td>Whitelist mode (mutually exclusive with deny)</td></tr>
+          <tr><td>tool_deny_list</td><td>text[]</td><td>Blacklist mode</td></tr>
+          <tr><td>tool_tier_overrides</td><td>jsonb</td><td>Per-tool tier behavior overrides</td></tr>
+          <tr><td>default_model_profile_id</td><td>uuid fk</td><td>Default model for this agent's turns</td></tr>
+          <tr><td>allowed_model_profiles</td><td>uuid[]</td><td>Permitted model profiles (null = any)</td></tr>
+          <tr><td>budget_cap_cents</td><td>int</td><td>Per-agent cost cap per budget period</td></tr>
+          <tr><td>memory_read_scopes</td><td>text[]</td><td>org, assigned_projects, current_task, private</td></tr>
+          <tr><td>memory_write_scope</td><td>text</td><td>"context" = write to current scope</td></tr>
+          <tr><td>private_memory_enabled</td><td>boolean</td><td>Working notes for complex roles</td></tr>
+          <tr><td>temp_scope_type</td><td>text</td><td>task, session, or ttl (temps only)</td></tr>
+          <tr><td>temp_scope_id</td><td>uuid</td><td>Task or session reference (temps only)</td></tr>
+          <tr><td>temp_ttl_seconds</td><td>int</td><td>TTL duration (ttl-scoped temps only)</td></tr>
+          <tr><td>temp_expires_at</td><td>timestamptz</td><td>Pre-computed expiration</td></tr>
+          <tr><td>promoted_to_agent_id</td><td>uuid fk</td><td>Set when temp is promoted to staff</td></tr>
+        </tbody>
+      </table>
+      <div class="schema-note">
+        Check constraints enforce: staff agents have no temp fields; temp agents have temp_scope_type set.
+        Tool allow/deny lists are mutually exclusive. Unique on (organization_id, slug).
+      </div>
+    </div>
+
+    <!-- agent_project_assignment table -->
+    <div class="schema-table-wrap" style="margin-top: 24px;">
+      <div class="schema-table-name">agent_project_assignment</div>
+      <table class="schema">
+        <thead>
+          <tr><th>Column</th><th>Type</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>id</td><td>uuid pk</td><td>Primary key</td></tr>
+          <tr><td>agent_id</td><td>uuid fk</td><td>References agent</td></tr>
+          <tr><td>project_id</td><td>uuid fk</td><td>References project</td></tr>
+          <tr><td>role</td><td>text</td><td>project_manager, worker, reviewer, planner</td></tr>
+          <tr><td>is_active</td><td>boolean</td><td>Soft-delete pattern (false + removed_at on removal)</td></tr>
+          <tr><td>assigned_by_type</td><td>text</td><td>human or agent (usually Lori)</td></tr>
+          <tr><td>assigned_by_id</td><td>uuid</td><td>Who made the assignment</td></tr>
+        </tbody>
+      </table>
+      <div class="schema-note">
+        Unique on (agent_id, project_id, role) -- allows multiple roles per agent per project.
+        Partial unique index enforces exactly one active PM per project.
+      </div>
+    </div>
+
+    <!-- agent_skill_attachment table -->
+    <div class="schema-table-wrap" style="margin-top: 24px;">
+      <div class="schema-table-name">agent_skill_attachment</div>
+      <table class="schema">
+        <thead>
+          <tr><th>Column</th><th>Type</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>id</td><td>uuid pk</td><td>Primary key</td></tr>
+          <tr><td>agent_id</td><td>uuid fk</td><td>References agent</td></tr>
+          <tr><td>skill_id</td><td>uuid fk</td><td>References skill</td></tr>
+          <tr><td>attached_by_type</td><td>text</td><td>human or agent (usually Lori)</td></tr>
+          <tr><td>attached_by_id</td><td>uuid</td><td>Who attached the skill</td></tr>
+          <tr><td>attached_at</td><td>timestamptz</td><td>When the skill was attached</td></tr>
+        </tbody>
+      </table>
+      <div class="schema-note">
+        Unique on (agent_id, skill_id). Baseline competencies -- activation depends on flow node context.
+        Org/project defaults always active; agent skills are fallback when no node skills declared.
+      </div>
+    </div>
+  </section>
+
+  <!-- ======== CONCURRENCY ======== -->
+  <hr class="section-divider">
+  <section class="section" id="concurrency">
+    <h2>Agent Concurrency</h2>
+    <p>Agent identity is <strong>stateless at the prompt level</strong>. Two simultaneous turns by the same agent
+       are independent model calls with no shared mutable state. There is no "Frank runtime" holding state between turns.</p>
+
+    <div class="cap-grid" style="grid-template-columns: repeat(3, 1fr);">
+      <div class="cap-card">
+        <div class="cap-card-header" style="color: var(--teal);">Stateless Identity</div>
+        <div class="cap-card-body">
+          <p style="font-size: 0.88rem; color: var(--ink-light); margin-bottom: 0; line-height: 1.5;">
+            Everything assembled fresh from profile, scope context, memory injection, and conversation history on every turn.
+            No coordination needed between concurrent sessions.
+          </p>
+        </div>
+      </div>
+      <div class="cap-card">
+        <div class="cap-card-header" style="color: var(--sienna);">Concurrency Limits</div>
+        <div class="cap-card-body">
+          <div class="policy-layer"><span class="policy-number">G</span><span class="policy-name">Global cap</span><span class="policy-note">total concurrent LLM calls</span></div>
+          <div class="policy-layer"><span class="policy-number">P</span><span class="policy-name">Per-provider</span><span class="policy-note">model provider rate limits</span></div>
+          <div class="policy-layer"><span class="policy-number">Q</span><span class="policy-name">Priority queue</span><span class="policy-note">sync > async</span></div>
+        </div>
+      </div>
+      <div class="cap-card">
+        <div class="cap-card-header" style="color: var(--teal);">Memory Concurrency</div>
+        <div class="cap-card-body">
+          <p style="font-size: 0.88rem; color: var(--ink-light); margin-bottom: 0; line-height: 1.5;">
+            Concurrent private-memory writes handled by database transactions.
+            Ellie's capture pipeline is event-driven and idempotent.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======== FOOTER ======== -->
+  <footer class="footer">
+    <div class="footer-title">OtterCamp V2 &mdash; Agents: Staff and Temps</div>
+    <p>Spec 05 of the OtterCamp V2 product specification. Agents are the workforce &mdash; the human directs and decides.</p>
+    <div class="footer-links">
+      <a href="#comparison">Staff vs Temps</a>
+      <a href="#trio">Starter Trio</a>
+      <a href="#profile">Agent Profile</a>
+      <a href="#prompt-assembly">Prompt Assembly</a>
+      <a href="#capability">Capability Model</a>
+      <a href="#lifecycle">Lifecycle</a>
+      <a href="#staffing">Staffing &amp; Roles</a>
+      <a href="#schema">Schema</a>
+      <a href="#concurrency">Concurrency</a>
+    </div>
+  </footer>
+
+</div>
+
+<!-- Mermaid.js via ESM CDN -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      primaryColor: '#ffffff',
+      primaryBorderColor: '#1a5c5c',
+      primaryTextColor: '#2c2416',
+      lineColor: '#a0522d',
+      secondaryColor: '#f5f0e8',
+      tertiaryColor: '#f5f0e8',
+      noteBkgColor: '#f5f0e8',
+      noteBorderColor: '#1a5c5c',
+      noteTextColor: '#2c2416',
+      fontFamily: 'Source Serif 4, Georgia, serif',
+      fontSize: '16px',
+      stateBkg: '#ffffff',
+      stateBorder: '#1a5c5c',
+      transitionColor: '#a0522d',
+      transitionLabelColor: '#2c2416',
+      nodeTextColor: '#2c2416',
+      edgeLabelBackground: '#f5f0e8',
+    },
+    stateDiagram: {
+      padding: 24,
+      useMaxWidth: false,
+    },
+    flowchart: {
+      padding: 24,
+      htmlLabels: true,
+      curve: 'basis',
+      useMaxWidth: false,
+    },
+    securityLevel: 'loose',
+  });
+</script>
+
+<script>
+  // ---- Staggered fadeUp on scroll ----
+  function initScrollAnimations() {
+    const hero = document.querySelector('.hero');
+    const sections = document.querySelectorAll('.section');
+    const allAnimatable = [hero, ...sections];
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry, i) => {
+        if (entry.isIntersecting) {
+          const delay = entry.target.classList.contains('hero') ? 0 : 0;
+          setTimeout(() => {
+            entry.target.classList.add('visible');
+          }, delay);
+          observer.unobserve(entry.target);
+        }
+      });
+    }, {
+      threshold: 0.08,
+      rootMargin: '0px 0px -40px 0px',
+    });
+
+    allAnimatable.forEach(el => {
+      if (el) observer.observe(el);
+    });
+  }
+
+  // Stagger child elements within sections (exclude mermaid-container to avoid tiny render)
+  function staggerChildren() {
+    const sections = document.querySelectorAll('.section');
+    const staggerSelector = '.compare-card, .trio-card, .pipeline-layer, .cap-card, .asm-step, .schema-table-wrap';
+    sections.forEach(section => {
+      const cards = section.querySelectorAll(staggerSelector);
+      cards.forEach((card, i) => {
+        card.style.opacity = '0';
+        card.style.transform = 'translateY(18px)';
+        card.style.transition = `opacity 0.5s ease ${i * 0.08}s, transform 0.5s ease ${i * 0.08}s`;
+      });
+
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const children = entry.target.querySelectorAll(staggerSelector);
+            children.forEach(child => {
+              child.style.opacity = '1';
+              child.style.transform = 'translateY(0)';
+            });
+            observer.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.05 });
+
+      observer.observe(section);
+    });
+  }
+
+  // ---- Mermaid Zoom Controls ----
+  const mermaidScales = {};
+
+  window.zoomMermaid = function(id, factor, reset) {
+    const inner = document.getElementById(id + '-inner');
+    if (!inner) return;
+    const svg = inner.querySelector('svg');
+    if (!svg) return;
+
+    if (reset) {
+      mermaidScales[id] = 1;
+    } else {
+      mermaidScales[id] = (mermaidScales[id] || 1) * factor;
+    }
+
+    const scale = mermaidScales[id];
+    svg.style.transform = `scale(${scale})`;
+    svg.style.transformOrigin = 'center center';
+    svg.style.transition = 'transform 0.2s ease';
+  };
+
+  // ---- Mermaid pan (drag) ----
+  function initMermaidPan() {
+    document.querySelectorAll('.mermaid-inner').forEach(inner => {
+      let isDown = false;
+      let startX, startY, scrollLeft, scrollTop;
+
+      inner.addEventListener('mousedown', (e) => {
+        isDown = true;
+        inner.style.cursor = 'grabbing';
+        startX = e.pageX - inner.offsetLeft;
+        startY = e.pageY - inner.offsetTop;
+        scrollLeft = inner.scrollLeft;
+        scrollTop = inner.scrollTop;
+      });
+      inner.addEventListener('mouseleave', () => { isDown = false; inner.style.cursor = 'grab'; });
+      inner.addEventListener('mouseup', () => { isDown = false; inner.style.cursor = 'grab'; });
+      inner.addEventListener('mousemove', (e) => {
+        if (!isDown) return;
+        e.preventDefault();
+        const x = e.pageX - inner.offsetLeft;
+        const y = e.pageY - inner.offsetTop;
+        inner.scrollLeft = scrollLeft - (x - startX);
+        inner.scrollTop = scrollTop - (y - startY);
+      });
+    });
+  }
+
+  // ---- Init ----
+  document.addEventListener('DOMContentLoaded', () => {
+    initScrollAnimations();
+    staggerChildren();
+    initMermaidPan();
+  });
+</script>
+
+</body>
+</html>

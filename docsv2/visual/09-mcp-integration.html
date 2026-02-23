@@ -1,0 +1,1604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 - MCP Integration Visual Explainer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-primary: #0f0f1a;
+    --bg-secondary: #161629;
+    --bg-card: #1a1a33;
+    --bg-card-hover: #1e1e3a;
+    --blue: #0088ff;
+    --blue-dim: #0066cc;
+    --blue-glow: rgba(0, 136, 255, 0.4);
+    --blue-glow-strong: rgba(0, 136, 255, 0.7);
+    --orange: #ff6600;
+    --orange-dim: #cc5200;
+    --orange-glow: rgba(255, 102, 0, 0.4);
+    --orange-glow-strong: rgba(255, 102, 0, 0.7);
+    --cyan: #00ccff;
+    --cyan-dim: #009fcc;
+    --cyan-glow: rgba(0, 204, 255, 0.3);
+    --text-primary: #e8e8f0;
+    --text-secondary: #9090b0;
+    --text-muted: #606080;
+    --border-subtle: rgba(255, 255, 255, 0.06);
+    --border-blue: rgba(0, 136, 255, 0.25);
+    --border-orange: rgba(255, 102, 0, 0.25);
+    --success: #22cc88;
+    --danger: #ff4466;
+    --warning: #ffaa00;
+    --font-heading: 'Outfit', sans-serif;
+    --font-body: 'Fira Code', monospace;
+  }
+
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  /* Circuit board background pattern */
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 0;
+    background:
+      /* Horizontal traces */
+      repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 79px,
+        rgba(0, 136, 255, 0.03) 79px,
+        rgba(0, 136, 255, 0.03) 80px
+      ),
+      /* Vertical traces */
+      repeating-linear-gradient(
+        90deg,
+        transparent,
+        transparent 79px,
+        rgba(0, 136, 255, 0.03) 79px,
+        rgba(0, 136, 255, 0.03) 80px
+      ),
+      /* Junction dots */
+      radial-gradient(circle 1.5px at 80px 80px, rgba(0, 136, 255, 0.08) 100%, transparent 100%);
+    background-size: 80px 80px;
+  }
+
+  /* Overlay subtle circuit traces */
+  body::after {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 0;
+    background:
+      /* Diagonal trace accent */
+      repeating-linear-gradient(
+        45deg,
+        transparent,
+        transparent 159px,
+        rgba(255, 102, 0, 0.015) 159px,
+        rgba(255, 102, 0, 0.015) 160px
+      ),
+      repeating-linear-gradient(
+        -45deg,
+        transparent,
+        transparent 199px,
+        rgba(0, 204, 255, 0.012) 199px,
+        rgba(0, 204, 255, 0.012) 200px
+      );
+  }
+
+  .content-wrapper {
+    position: relative;
+    z-index: 1;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  /* ---- Animations ---- */
+  @keyframes fadeSlideUp {
+    from {
+      opacity: 0;
+      transform: translateY(30px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes glowPulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+  }
+
+  @keyframes traceFlow {
+    0% { background-position: 0% 0%; }
+    100% { background-position: 200% 0%; }
+  }
+
+  @keyframes circuitPulse {
+    0%, 100% { box-shadow: 0 0 8px var(--blue-glow), inset 0 0 8px rgba(0,136,255,0.05); }
+    50% { box-shadow: 0 0 20px var(--blue-glow-strong), inset 0 0 15px rgba(0,136,255,0.1); }
+  }
+
+  .stagger-1 { animation-delay: 0.1s; }
+  .stagger-2 { animation-delay: 0.2s; }
+  .stagger-3 { animation-delay: 0.3s; }
+  .stagger-4 { animation-delay: 0.4s; }
+  .stagger-5 { animation-delay: 0.5s; }
+  .stagger-6 { animation-delay: 0.6s; }
+  .stagger-7 { animation-delay: 0.7s; }
+
+  .animate-in {
+    opacity: 0;
+    animation: fadeSlideUp 0.7s ease-out forwards;
+  }
+
+  /* ---- Hero Section ---- */
+  .hero {
+    padding: 80px 0 60px;
+    text-align: center;
+    position: relative;
+  }
+
+  .hero::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 60%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--blue), var(--orange), transparent);
+  }
+
+  .hero-badge {
+    display: inline-block;
+    font-family: var(--font-body);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--orange);
+    border: 1px solid var(--border-orange);
+    border-radius: 4px;
+    padding: 6px 16px;
+    margin-bottom: 24px;
+    background: rgba(255, 102, 0, 0.06);
+    text-shadow: 0 0 10px var(--orange-glow);
+  }
+
+  .hero h1 {
+    font-family: var(--font-heading);
+    font-size: 48px;
+    font-weight: 800;
+    letter-spacing: -1px;
+    line-height: 1.15;
+    margin-bottom: 16px;
+    background: linear-gradient(135deg, var(--blue), var(--cyan), var(--blue));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .hero-subtitle {
+    font-family: var(--font-heading);
+    font-size: 20px;
+    font-weight: 400;
+    color: var(--text-secondary);
+    margin-bottom: 32px;
+    max-width: 700px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .hero-key-point {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-blue);
+    border-radius: 8px;
+    padding: 16px 28px;
+    font-family: var(--font-body);
+    font-size: 15px;
+    color: var(--text-primary);
+    box-shadow: 0 0 30px rgba(0, 136, 255, 0.1);
+  }
+
+  .hero-key-point .arrow {
+    color: var(--orange);
+    font-size: 18px;
+    font-weight: 600;
+  }
+
+  .hero-key-point strong {
+    color: var(--blue);
+    text-shadow: 0 0 8px var(--blue-glow);
+  }
+
+  /* ---- Section ---- */
+  .section {
+    padding: 60px 0;
+    position: relative;
+  }
+
+  .section + .section {
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .section-header {
+    text-align: center;
+    margin-bottom: 48px;
+  }
+
+  .section-number {
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--orange);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    text-shadow: 0 0 8px var(--orange-glow);
+  }
+
+  .section-title {
+    font-family: var(--font-heading);
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+  }
+
+  .section-desc {
+    font-family: var(--font-body);
+    font-size: 13px;
+    color: var(--text-secondary);
+    max-width: 650px;
+    margin: 0 auto;
+  }
+
+  /* ---- Mermaid Diagram ---- */
+  .diagram-container {
+    position: relative;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-blue);
+    border-radius: 12px;
+    padding: 32px;
+    overflow: hidden;
+    margin-bottom: 32px;
+  }
+
+  .diagram-container::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--blue), var(--orange), var(--cyan));
+  }
+
+  .diagram-wrapper {
+    overflow: auto;
+    position: relative;
+    min-height: 200px;
+  }
+
+  .diagram-wrapper svg {
+    display: block;
+    margin: 0 auto;
+    max-width: 100%;
+    height: auto;
+  }
+
+  .diagram-zoom-controls {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    gap: 6px;
+    z-index: 10;
+  }
+
+  .zoom-btn {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-card);
+    border: 1px solid var(--border-blue);
+    border-radius: 6px;
+    color: var(--blue);
+    font-family: var(--font-body);
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    user-select: none;
+  }
+
+  .zoom-btn:hover {
+    background: rgba(0, 136, 255, 0.1);
+    box-shadow: 0 0 10px var(--blue-glow);
+  }
+
+  .diagram-label {
+    font-family: var(--font-body);
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: center;
+    margin-top: 12px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  /* ---- Tier Cards ---- */
+  .tier-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+  }
+
+  @media (max-width: 768px) {
+    .tier-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .tier-card {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 28px;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+  }
+
+  .tier-card:hover {
+    transform: translateY(-4px);
+  }
+
+  .tier-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+  }
+
+  .tier-card.tier-2 {
+    border: 1px solid var(--border-orange);
+  }
+  .tier-card.tier-2::before {
+    background: linear-gradient(90deg, var(--orange), var(--orange-dim));
+  }
+  .tier-card.tier-2:hover {
+    box-shadow: 0 8px 40px rgba(255, 102, 0, 0.15);
+  }
+
+  .tier-card.tier-1 {
+    border: 1px solid var(--border-blue);
+  }
+  .tier-card.tier-1::before {
+    background: linear-gradient(90deg, var(--blue), var(--blue-dim));
+  }
+  .tier-card.tier-1:hover {
+    box-shadow: 0 8px 40px rgba(0, 136, 255, 0.15);
+  }
+
+  .tier-card.tier-advisory {
+    border: 1px solid rgba(0, 204, 255, 0.2);
+  }
+  .tier-card.tier-advisory::before {
+    background: linear-gradient(90deg, var(--cyan), var(--cyan-dim));
+  }
+  .tier-card.tier-advisory:hover {
+    box-shadow: 0 8px 40px var(--cyan-glow);
+  }
+
+  .tier-badge {
+    display: inline-block;
+    font-family: var(--font-body);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 4px;
+    margin-bottom: 16px;
+  }
+
+  .tier-2 .tier-badge {
+    color: var(--orange);
+    background: rgba(255, 102, 0, 0.1);
+    border: 1px solid rgba(255, 102, 0, 0.3);
+  }
+
+  .tier-1 .tier-badge {
+    color: var(--blue);
+    background: rgba(0, 136, 255, 0.1);
+    border: 1px solid rgba(0, 136, 255, 0.3);
+  }
+
+  .tier-advisory .tier-badge {
+    color: var(--cyan);
+    background: rgba(0, 204, 255, 0.1);
+    border: 1px solid rgba(0, 204, 255, 0.3);
+  }
+
+  .tier-card h3 {
+    font-family: var(--font-heading);
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 12px;
+  }
+
+  .tier-2 h3 { color: var(--orange); }
+  .tier-1 h3 { color: var(--blue); }
+  .tier-advisory h3 { color: var(--cyan); }
+
+  .tier-card p {
+    color: var(--text-secondary);
+    font-size: 12.5px;
+    margin-bottom: 16px;
+    line-height: 1.8;
+  }
+
+  .tier-features {
+    list-style: none;
+    padding: 0;
+  }
+
+  .tier-features li {
+    position: relative;
+    padding-left: 18px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .tier-features li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 8px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  .tier-2 .tier-features li::before { background: var(--orange); box-shadow: 0 0 6px var(--orange-glow); }
+  .tier-1 .tier-features li::before { background: var(--blue); box-shadow: 0 0 6px var(--blue-glow); }
+  .tier-advisory .tier-features li::before { background: var(--cyan); box-shadow: 0 0 6px var(--cyan-glow); }
+
+  .tier-example {
+    margin-top: 16px;
+    padding: 10px 14px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+    border-left: 2px solid;
+  }
+
+  .tier-2 .tier-example { border-left-color: var(--orange); }
+  .tier-1 .tier-example { border-left-color: var(--blue); }
+  .tier-advisory .tier-example { border-left-color: var(--cyan); }
+
+  .tier-example code {
+    color: var(--text-primary);
+    font-size: 11px;
+  }
+
+  /* ---- Secret Injection Flow ---- */
+  .flow-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+
+  .flow-step {
+    display: flex;
+    align-items: stretch;
+    gap: 20px;
+    position: relative;
+  }
+
+  .flow-line-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 48px;
+    flex-shrink: 0;
+  }
+
+  .flow-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--bg-primary);
+    border: 2px solid var(--blue);
+    box-shadow: 0 0 10px var(--blue-glow);
+    flex-shrink: 0;
+    margin-top: 20px;
+    position: relative;
+    z-index: 2;
+  }
+
+  .flow-step.secret .flow-dot {
+    border-color: var(--orange);
+    box-shadow: 0 0 10px var(--orange-glow);
+  }
+
+  .flow-connector {
+    width: 2px;
+    flex-grow: 1;
+    background: linear-gradient(180deg, var(--blue-dim), var(--blue-dim));
+    position: relative;
+  }
+
+  .flow-step.secret .flow-connector {
+    background: linear-gradient(180deg, var(--orange-dim), var(--blue-dim));
+  }
+
+  .flow-connector.animated {
+    overflow: hidden;
+  }
+
+  .flow-connector.animated::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -1px;
+    width: 4px;
+    height: 12px;
+    border-radius: 2px;
+    background: var(--blue);
+    box-shadow: 0 0 8px var(--blue-glow-strong);
+    animation: traceFlowVert 2s linear infinite;
+  }
+
+  @keyframes traceFlowVert {
+    0% { top: -12px; opacity: 0; }
+    10% { opacity: 1; }
+    90% { opacity: 1; }
+    100% { top: 100%; opacity: 0; }
+  }
+
+  .flow-content {
+    flex: 1;
+    padding: 12px 0;
+  }
+
+  .flow-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-blue);
+    border-radius: 10px;
+    padding: 20px 24px;
+    position: relative;
+  }
+
+  .flow-step.secret .flow-card {
+    border-color: var(--border-orange);
+  }
+
+  .flow-card h4 {
+    font-family: var(--font-heading);
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--blue);
+  }
+
+  .flow-step.secret .flow-card h4 {
+    color: var(--orange);
+  }
+
+  .flow-card p {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.8;
+  }
+
+  .flow-card code {
+    font-size: 11px;
+    color: var(--cyan);
+    background: rgba(0, 204, 255, 0.08);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+
+  .flow-card .redacted {
+    color: var(--danger);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 1px;
+  }
+
+  .flow-card .safe {
+    color: var(--success);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 1px;
+  }
+
+  /* ---- Discovery Flow ---- */
+  .discovery-pipeline {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    overflow-x: auto;
+    padding: 20px 0;
+  }
+
+  @media (max-width: 900px) {
+    .discovery-pipeline {
+      flex-direction: column;
+      align-items: center;
+    }
+    .pipeline-arrow {
+      transform: rotate(90deg) !important;
+      margin: 8px 0 !important;
+    }
+  }
+
+  .pipeline-stage {
+    flex: 1;
+    min-width: 180px;
+    background: var(--bg-card);
+    border-radius: 10px;
+    padding: 24px 20px;
+    text-align: center;
+    position: relative;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+  }
+
+  .pipeline-stage:hover {
+    transform: translateY(-3px);
+  }
+
+  .pipeline-stage.discover {
+    border: 1px solid var(--border-blue);
+  }
+  .pipeline-stage.discover:hover { box-shadow: 0 6px 30px rgba(0, 136, 255, 0.15); }
+
+  .pipeline-stage.deny {
+    border: 1px solid rgba(255, 68, 102, 0.3);
+  }
+  .pipeline-stage.deny:hover { box-shadow: 0 6px 30px rgba(255, 68, 102, 0.15); }
+
+  .pipeline-stage.enable {
+    border: 1px solid rgba(34, 204, 136, 0.3);
+  }
+  .pipeline-stage.enable:hover { box-shadow: 0 6px 30px rgba(34, 204, 136, 0.15); }
+
+  .pipeline-stage.policy {
+    border: 1px solid var(--border-orange);
+  }
+  .pipeline-stage.policy:hover { box-shadow: 0 6px 30px rgba(255, 102, 0, 0.15); }
+
+  .pipeline-stage-icon {
+    font-family: var(--font-body);
+    font-size: 24px;
+    font-weight: 700;
+    margin-bottom: 12px;
+    display: block;
+  }
+
+  .pipeline-stage.discover .pipeline-stage-icon { color: var(--blue); }
+  .pipeline-stage.deny .pipeline-stage-icon { color: var(--danger); }
+  .pipeline-stage.enable .pipeline-stage-icon { color: var(--success); }
+  .pipeline-stage.policy .pipeline-stage-icon { color: var(--orange); }
+
+  .pipeline-stage h4 {
+    font-family: var(--font-heading);
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  .pipeline-stage.discover h4 { color: var(--blue); }
+  .pipeline-stage.deny h4 { color: var(--danger); }
+  .pipeline-stage.enable h4 { color: var(--success); }
+  .pipeline-stage.policy h4 { color: var(--orange); }
+
+  .pipeline-stage p {
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.7;
+  }
+
+  .pipeline-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    flex-shrink: 0;
+    color: var(--text-muted);
+    font-size: 20px;
+    font-weight: 300;
+  }
+
+  .pipeline-arrow svg {
+    width: 24px;
+    height: 24px;
+    stroke: var(--text-muted);
+    stroke-width: 2;
+    fill: none;
+  }
+
+  /* ---- Schema Tables ---- */
+  .schema-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
+  }
+
+  @media (max-width: 768px) {
+    .schema-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .schema-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-blue);
+    border-radius: 12px;
+    overflow: hidden;
+    transition: box-shadow 0.3s ease;
+  }
+
+  .schema-card:hover {
+    box-shadow: 0 4px 30px rgba(0, 136, 255, 0.1);
+  }
+
+  .schema-card-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: rgba(0, 136, 255, 0.04);
+  }
+
+  .schema-card-header h4 {
+    font-family: var(--font-body);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--blue);
+    text-shadow: 0 0 8px var(--blue-glow);
+  }
+
+  .schema-card-header .table-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .schema-card-header .table-icon.blue {
+    background: rgba(0, 136, 255, 0.15);
+    color: var(--blue);
+    border: 1px solid rgba(0, 136, 255, 0.3);
+  }
+
+  .schema-card-header .table-icon.orange {
+    background: rgba(255, 102, 0, 0.15);
+    color: var(--orange);
+    border: 1px solid rgba(255, 102, 0, 0.3);
+  }
+
+  .schema-card-header .table-icon.cyan {
+    background: rgba(0, 204, 255, 0.15);
+    color: var(--cyan);
+    border: 1px solid rgba(0, 204, 255, 0.3);
+  }
+
+  .schema-card-body {
+    padding: 16px 20px;
+  }
+
+  .schema-card-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 14px;
+    line-height: 1.7;
+  }
+
+  .schema-columns {
+    list-style: none;
+    padding: 0;
+  }
+
+  .schema-columns li {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 5px 0;
+    font-size: 11.5px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  }
+
+  .schema-columns li:last-child {
+    border-bottom: none;
+  }
+
+  .col-name {
+    color: var(--cyan);
+    font-weight: 500;
+    min-width: 140px;
+    flex-shrink: 0;
+  }
+
+  .col-type {
+    color: var(--text-muted);
+    font-size: 10.5px;
+    min-width: 80px;
+    flex-shrink: 0;
+  }
+
+  .col-note {
+    color: var(--text-secondary);
+    font-size: 10.5px;
+  }
+
+  .col-pk {
+    color: var(--orange);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    background: rgba(255, 102, 0, 0.1);
+    padding: 1px 5px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  .col-fk {
+    color: var(--blue);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    background: rgba(0, 136, 255, 0.1);
+    padding: 1px 5px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  /* ---- Transport Cards ---- */
+  .transport-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-top: 32px;
+  }
+
+  @media (max-width: 768px) {
+    .transport-row {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .transport-card {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 28px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .transport-card.stdio {
+    border: 1px solid var(--border-blue);
+  }
+
+  .transport-card.http {
+    border: 1px solid var(--border-orange);
+  }
+
+  .transport-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+  }
+
+  .transport-card.stdio::before {
+    background: var(--blue);
+    box-shadow: 0 0 10px var(--blue-glow);
+  }
+
+  .transport-card.http::before {
+    background: var(--orange);
+    box-shadow: 0 0 10px var(--orange-glow);
+  }
+
+  .transport-card h4 {
+    font-family: var(--font-heading);
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .transport-card.stdio h4 { color: var(--blue); }
+  .transport-card.http h4 { color: var(--orange); }
+
+  .transport-subtitle {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .transport-card p {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+    line-height: 1.8;
+  }
+
+  .transport-details {
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 6px;
+    padding: 12px 16px;
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.8;
+  }
+
+  .transport-details code {
+    color: var(--cyan);
+    font-size: 11px;
+  }
+
+  /* ---- Footer ---- */
+  .footer {
+    padding: 48px 0 32px;
+    text-align: center;
+    border-top: 1px solid var(--border-subtle);
+    margin-top: 20px;
+  }
+
+  .footer-line {
+    font-family: var(--font-body);
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+  }
+
+  .footer-line a {
+    color: var(--blue);
+    text-decoration: none;
+  }
+
+  .footer-line a:hover {
+    text-shadow: 0 0 8px var(--blue-glow);
+  }
+
+  .footer-spec-ref {
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: 0.5;
+  }
+
+  /* ---- Relationship Diagram ---- */
+  .relationship-container {
+    margin-top: 32px;
+  }
+
+  /* ---- Utility ---- */
+  .neon-divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--blue), var(--orange), var(--cyan), transparent);
+    margin: 48px 0;
+    opacity: 0.4;
+  }
+
+  .callout {
+    background: var(--bg-card);
+    border-left: 3px solid var(--orange);
+    border-radius: 0 8px 8px 0;
+    padding: 16px 20px;
+    margin: 24px 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.8;
+  }
+
+  .callout strong {
+    color: var(--orange);
+  }
+
+  .callout code {
+    color: var(--cyan);
+    background: rgba(0, 204, 255, 0.08);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 11px;
+  }
+</style>
+</head>
+<body>
+
+<div class="content-wrapper">
+
+  <!-- ============ HERO ============ -->
+  <section class="hero animate-in stagger-1">
+    <div class="hero-badge">Doc 09 -- MCP Integration</div>
+    <h1>Model Context Protocol</h1>
+    <p class="hero-subtitle">
+      Connect agents to external tools, resources, and prompts through a secure, policy-governed MCP client layer.
+    </p>
+    <div class="hero-key-point">
+      <span class="arrow">&gt;</span>
+      OtterCamp is always the <strong>CLIENT</strong> &mdash; it consumes, never serves
+    </div>
+  </section>
+
+  <!-- ============ TRANSPORTS ============ -->
+  <section class="section animate-in stagger-2">
+    <div class="section-header">
+      <div class="section-number">01 // Transports</div>
+      <h2 class="section-title">Two Transport Modes</h2>
+      <p class="section-desc">Every MCP connection uses one of two transport types, set at creation and fixed for the lifetime of the connection.</p>
+    </div>
+    <div class="transport-row">
+      <div class="transport-card stdio">
+        <h4>stdio</h4>
+        <div class="transport-subtitle">Subprocess Transport</div>
+        <p>OtterCamp spawns the MCP server as a child process and communicates via stdin/stdout. Ideal for local tool servers, language-specific SDKs, and self-hosted environments.</p>
+        <div class="transport-details">
+          Config: <code>command</code> + <code>args</code> + <code>env</code> + <code>cwd</code><br>
+          Secrets injected as environment variables<br>
+          Sandboxed: restricted filesystem, constrained network, resource limits
+        </div>
+      </div>
+      <div class="transport-card http">
+        <h4>HTTP/SSE</h4>
+        <div class="transport-subtitle">Streamable HTTP Transport</div>
+        <p>OtterCamp connects to a remote HTTP service. Standard HTTP for requests, Server-Sent Events for streaming responses. Best for cloud-hosted and multi-tenant MCP providers.</p>
+        <div class="transport-details">
+          Config: <code>endpoint</code> URL + <code>headers</code><br>
+          Secrets injected as HTTP headers or query params<br>
+          SSRF protection: requests constrained to registered endpoint only
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CONNECTION LIFECYCLE ============ -->
+  <section class="section animate-in stagger-3">
+    <div class="section-header">
+      <div class="section-number">02 // Lifecycle</div>
+      <h2 class="section-title">Connection Lifecycle</h2>
+      <p class="section-desc">Each MCP connection moves through defined states. The connector runtime manages health checks, circuit breaking, and recovery automatically.</p>
+    </div>
+    <div class="diagram-container">
+      <div class="diagram-zoom-controls">
+        <button class="zoom-btn" onclick="zoomDiagram('lifecycle', 1.2)" title="Zoom In">+</button>
+        <button class="zoom-btn" onclick="zoomDiagram('lifecycle', 0.8)" title="Zoom Out">&minus;</button>
+        <button class="zoom-btn" onclick="zoomDiagram('lifecycle', 0)" title="Reset">R</button>
+      </div>
+      <div class="diagram-wrapper" id="lifecycle-wrapper">
+        <pre class="mermaid" id="lifecycle">
+flowchart LR
+    A["configuring"]:::stateConfig --> B["active"]:::stateActive
+    B --> C["degraded"]:::stateDegraded
+    C --> B
+    C -->|exceeded threshold| E["failed"]:::stateFailed
+    B -->|manual disable| D["disabled"]:::stateDisabled
+    D -->|re-enabled| B
+    E -->|reconfigured| A
+
+    classDef stateConfig fill:#1a1a33,stroke:#ff6600,stroke-width:2px,color:#ff6600
+    classDef stateActive fill:#1a1a33,stroke:#22cc88,stroke-width:2px,color:#22cc88
+    classDef stateDegraded fill:#1a1a33,stroke:#ffaa00,stroke-width:2px,color:#ffaa00
+    classDef stateDisabled fill:#1a1a33,stroke:#606080,stroke-width:2px,color:#606080
+    classDef stateFailed fill:#1a1a33,stroke:#ff4466,stroke-width:2px,color:#ff4466
+        </pre>
+      </div>
+      <div class="diagram-label">Connection State Machine</div>
+    </div>
+
+    <div class="diagram-container" style="margin-top:24px;">
+      <div class="diagram-zoom-controls">
+        <button class="zoom-btn" onclick="zoomDiagram('circuit', 1.2)" title="Zoom In">+</button>
+        <button class="zoom-btn" onclick="zoomDiagram('circuit', 0.8)" title="Zoom Out">&minus;</button>
+        <button class="zoom-btn" onclick="zoomDiagram('circuit', 0)" title="Reset">R</button>
+      </div>
+      <div class="diagram-wrapper" id="circuit-wrapper">
+        <pre class="mermaid" id="circuit">
+flowchart LR
+    CL["CLOSED\n(normal)"]:::closed -->|"5 failures\nin 60s"| OP["OPEN\n(tripped)"]:::opened
+    OP -->|"wait 30s"| HO["HALF-OPEN\n(testing)"]:::halfopen
+    HO -->|"test succeeds"| CL
+    HO -->|"test fails"| OP
+
+    classDef closed fill:#1a1a33,stroke:#22cc88,stroke-width:2px,color:#22cc88
+    classDef opened fill:#1a1a33,stroke:#ff4466,stroke-width:2px,color:#ff4466
+    classDef halfopen fill:#1a1a33,stroke:#ffaa00,stroke-width:2px,color:#ffaa00
+        </pre>
+      </div>
+      <div class="diagram-label">Circuit Breaker States</div>
+    </div>
+
+    <div class="callout">
+      <strong>Health checks</strong> run every <code>60s</code> by default. After <code>3</code> consecutive failures the connection enters <code>degraded</code>.
+      The circuit breaker trips after <code>5</code> failures in <code>60s</code>, blocking calls instantly.
+      Recovery is automatic: after <code>30s</code> a test request probes the server.
+    </div>
+  </section>
+
+  <!-- ============ TIERS ============ -->
+  <section class="section animate-in stagger-4">
+    <div class="section-header">
+      <div class="section-number">03 // Classification</div>
+      <h2 class="section-title">MCP Primitive Tiers</h2>
+      <p class="section-desc">MCP exposes three primitive types. OtterCamp classifies each into tiers that determine the policy and execution path.</p>
+    </div>
+    <div class="tier-grid">
+
+      <div class="tier-card tier-2">
+        <span class="tier-badge">Tier 2 -- External Mutations</span>
+        <h3>Tools</h3>
+        <p>Callable functions with typed inputs/outputs. External mutations by definition -- every call goes through the full control plane policy path.</p>
+        <ul class="tier-features">
+          <li>Capability check: <code style="font-size:10px;color:var(--cyan);">mcp.connection.use</code></li>
+          <li>Capability check: <code style="font-size:10px;color:var(--cyan);">mcp.tool.invoke</code></li>
+          <li>Agent profile allow/deny list evaluation</li>
+          <li>Policy result: allow / deny / draft_review</li>
+          <li>Full ToolExecution audit record</li>
+          <li>Input validated against JSON Schema</li>
+        </ul>
+        <div class="tier-example">
+          <code>github.create_issue(title, body, labels)</code><br>
+          <code>slack.send_message(channel, text)</code>
+        </div>
+      </div>
+
+      <div class="tier-card tier-1">
+        <span class="tier-badge">Tier 1 -- Read-Only</span>
+        <h3>Resources</h3>
+        <p>Read-only data from the server. No control plane overhead -- handled at the chat layer. Still requires the connection-use capability.</p>
+        <ul class="tier-features">
+          <li>Accessed via synthetic <code style="font-size:10px;color:var(--cyan);">read_resource(uri)</code></li>
+          <li>Requires <code style="font-size:10px;color:var(--cyan);">mcp.connection.use</code> capability</li>
+          <li>Can be cached (default TTL: 5 min)</li>
+          <li>Injectible into agent context as data sources</li>
+          <li>Logged in mcp_execution_log</li>
+        </ul>
+        <div class="tier-example">
+          <code>github.read_resource("repos/otter/schema")</code><br>
+          Database schemas, config files, repo listings
+        </div>
+      </div>
+
+      <div class="tier-card tier-advisory">
+        <span class="tier-badge">Advisory Only</span>
+        <h3>Prompts</h3>
+        <p>Reusable prompt templates from the server. Advisory guidance only -- they do not trigger tool calls or autonomous actions. Skills always take precedence.</p>
+        <ul class="tier-features">
+          <li>Cataloged with <code style="font-size:10px;color:var(--cyan);">entry_type = 'prompt'</code></li>
+          <li>Attachable to flow nodes as supplementary instructions</li>
+          <li>Loaded into agent context at layer 4 (skills)</li>
+          <li>Yield to OtterCamp skills on conflict</li>
+          <li>Server-managed versioning</li>
+        </ul>
+        <div class="tier-example">
+          Code review template, data analysis workflow,<br>
+          troubleshooting guide
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SECRET INJECTION ============ -->
+  <section class="section animate-in stagger-5">
+    <div class="section-header">
+      <div class="section-number">04 // Secrets</div>
+      <h2 class="section-title">Secret Injection Flow</h2>
+      <p class="section-desc">Secrets are stored encrypted, bound by reference, and injected at the transport layer. Agents never see credentials.</p>
+    </div>
+
+    <div class="flow-container">
+
+      <div class="flow-step">
+        <div class="flow-line-col">
+          <div class="flow-dot"></div>
+          <div class="flow-connector animated"></div>
+        </div>
+        <div class="flow-content">
+          <div class="flow-card">
+            <h4>1. Encrypted Storage</h4>
+            <p>Secrets (API keys, tokens, OAuth credentials) are stored in the platform's encrypted secret store. Each secret is a <strong>named reference</strong>, never a raw value. The actual credential material is at rest, encrypted.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-step">
+        <div class="flow-line-col">
+          <div class="flow-dot"></div>
+          <div class="flow-connector animated"></div>
+        </div>
+        <div class="flow-content">
+          <div class="flow-card">
+            <h4>2. Reference Binding</h4>
+            <p>The <code>mcp_secret_binding</code> table maps connections to their required secrets by named reference. A binding specifies: the logical key (e.g. <code>github_token</code>), the secret reference, and the injection method (<code>header</code>, <code>env_var</code>, <code>query_param</code>, <code>body_field</code>).</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-step secret">
+        <div class="flow-line-col">
+          <div class="flow-dot"></div>
+          <div class="flow-connector animated"></div>
+        </div>
+        <div class="flow-content">
+          <div class="flow-card">
+            <h4>3. Runtime Injection</h4>
+            <p>At execution time, the connector runtime resolves the <code>ref:secret_name</code> references from the secret store and injects them into the outgoing request. This happens at the <strong>transport layer</strong>, after the agent's input has been validated and logged.</p>
+            <p style="margin-top:8px;"><span class="safe">INJECTED AFTER LOGGING</span> -- the secret never appears in any log entry or prompt.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-step secret">
+        <div class="flow-line-col">
+          <div class="flow-dot"></div>
+          <div class="flow-connector animated"></div>
+        </div>
+        <div class="flow-content">
+          <div class="flow-card">
+            <h4>4. Response Redaction</h4>
+            <p>If a secret value appears in the MCP server's response (defense in depth), the response sanitizer strips it before the result reaches the agent or is logged.</p>
+            <p style="margin-top:8px;"><span class="redacted">REDACTED</span> -- any leaked credential is caught and removed.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-step">
+        <div class="flow-line-col">
+          <div class="flow-dot"></div>
+        </div>
+        <div class="flow-content">
+          <div class="flow-card">
+            <h4>5. Rotation Without Disruption</h4>
+            <p>Secrets can be rotated in the store without reconfiguring the connection. The binding still points to the same named reference -- only the underlying value changes. Zero downtime credential rotation.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ TOOL DISCOVERY ============ -->
+  <section class="section animate-in stagger-6">
+    <div class="section-header">
+      <div class="section-number">05 // Discovery</div>
+      <h2 class="section-title">Tool Discovery and Enablement</h2>
+      <p class="section-desc">Tools are discovered from the MCP server, cataloged as disabled, and only become available after explicit admin enablement and policy evaluation.</p>
+    </div>
+
+    <div class="discovery-pipeline">
+      <div class="pipeline-stage discover">
+        <span class="pipeline-stage-icon">{..}</span>
+        <h4>Discover</h4>
+        <p>Connector runtime calls <code style="font-size:10px;color:var(--cyan);">tools/list</code> on the MCP server. Each tool's name, description, and JSON Schema are fetched and stored in the catalog.</p>
+      </div>
+
+      <div class="pipeline-arrow">
+        <svg viewBox="0 0 24 24"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </div>
+
+      <div class="pipeline-stage deny">
+        <span class="pipeline-stage-icon">X</span>
+        <h4>Default Deny</h4>
+        <p>All discovered tools are cataloged with <code style="font-size:10px;color:var(--cyan);">is_enabled = false</code>. No tool is available to agents until explicitly enabled. Consistent with the default-deny posture.</p>
+      </div>
+
+      <div class="pipeline-arrow">
+        <svg viewBox="0 0 24 24"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </div>
+
+      <div class="pipeline-stage enable">
+        <span class="pipeline-stage-icon">+</span>
+        <h4>Admin Enables</h4>
+        <p>The admin (via conversation with Frank or the PM) selectively enables tools. "Frank, enable create_issue and list_prs on the GitHub connection."</p>
+      </div>
+
+      <div class="pipeline-arrow">
+        <svg viewBox="0 0 24 24"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </div>
+
+      <div class="pipeline-stage policy">
+        <span class="pipeline-stage-icon">&amp;</span>
+        <h4>Policy Evaluation</h4>
+        <p>Enabled tools pass through capability checks, agent profile allow/deny, and layered policy. Result: <strong style="color:var(--success);">allow</strong>, <strong style="color:var(--danger);">deny</strong>, or <strong style="color:var(--warning);">draft_review</strong>.</p>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>Catalog refresh</strong> happens on connection establishment, manual refresh, and periodic health checks.
+      New tools are always <code>disabled</code> by default. Removed tools are marked <code>status = 'removed'</code> (never deleted) for audit trail integrity.
+      A <code>mcp.catalog.changed</code> domain event notifies the admin of changes.
+    </div>
+  </section>
+
+  <!-- ============ SCHEMA ============ -->
+  <section class="section animate-in stagger-7">
+    <div class="section-header">
+      <div class="section-number">06 // Schema</div>
+      <h2 class="section-title">Database Schema</h2>
+      <p class="section-desc">Four tables form the MCP data layer. Secrets live in the encrypted store; capability grants live in control plane policy tables.</p>
+    </div>
+
+    <div class="schema-grid">
+
+      <!-- mcp_connection -->
+      <div class="schema-card">
+        <div class="schema-card-header">
+          <div class="table-icon blue">C</div>
+          <h4>mcp_connection</h4>
+        </div>
+        <div class="schema-card-body">
+          <p class="schema-card-desc">Connection configuration, transport settings, health state, circuit breaker config. One row per MCP server link.</p>
+          <ul class="schema-columns">
+            <li><span class="col-name">id</span> <span class="col-pk">PK</span> <span class="col-type">uuid</span></li>
+            <li><span class="col-name">organization_id</span> <span class="col-fk">FK</span> <span class="col-type">uuid</span></li>
+            <li><span class="col-name">project_id</span> <span class="col-fk">FK</span> <span class="col-type">uuid?</span> <span class="col-note">null = org-level</span></li>
+            <li><span class="col-name">name, slug</span> <span class="col-type">text</span> <span class="col-note">slug = tool prefix</span></li>
+            <li><span class="col-name">transport_type</span> <span class="col-type">text</span> <span class="col-note">stdio | http_sse</span></li>
+            <li><span class="col-name">transport_config</span> <span class="col-type">jsonb</span> <span class="col-note">endpoint/cmd+args</span></li>
+            <li><span class="col-name">auth_method</span> <span class="col-type">text</span> <span class="col-note">none|api_key|bearer|oauth2|custom</span></li>
+            <li><span class="col-name">status</span> <span class="col-type">text</span> <span class="col-note">configuring|active|degraded|disabled|failed</span></li>
+            <li><span class="col-name">health_config</span> <span class="col-type">jsonb</span> <span class="col-note">interval, timeout, threshold</span></li>
+            <li><span class="col-name">circuit_breaker_config</span> <span class="col-type">jsonb</span> <span class="col-note">failure threshold/window/recovery</span></li>
+            <li><span class="col-name">timeout_ms</span> <span class="col-type">int</span> <span class="col-note">default 30000</span></li>
+            <li><span class="col-name">retry_config</span> <span class="col-type">jsonb</span> <span class="col-note">retries, backoff, write safety</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- mcp_tool_catalog -->
+      <div class="schema-card">
+        <div class="schema-card-header">
+          <div class="table-icon orange">T</div>
+          <h4>mcp_tool_catalog</h4>
+        </div>
+        <div class="schema-card-body">
+          <p class="schema-card-desc">Discovered tools, resources, and prompts. The system's view of what each MCP server offers. Default-deny enablement.</p>
+          <ul class="schema-columns">
+            <li><span class="col-name">id</span> <span class="col-pk">PK</span> <span class="col-type">uuid</span></li>
+            <li><span class="col-name">connection_id</span> <span class="col-fk">FK</span> <span class="col-type">uuid</span></li>
+            <li><span class="col-name">entry_type</span> <span class="col-type">text</span> <span class="col-note">tool | resource | prompt</span></li>
+            <li><span class="col-name">name</span> <span class="col-type">text</span> <span class="col-note">tool identifier</span></li>
+            <li><span class="col-name">description</span> <span class="col-type">text</span></li>
+            <li><span class="col-name">input_schema</span> <span class="col-type">jsonb</span> <span class="col-note">JSON Schema from server</span></li>
+            <li><span class="col-name">is_enabled</span> <span class="col-type">bool</span> <span class="col-note">default false</span></li>
+            <li><span class="col-name">status</span> <span class="col-type">text</span> <span class="col-note">active | removed</span></li>
+            <li><span class="col-name">resource_uri</span> <span class="col-type">text?</span> <span class="col-note">resources only</span></li>
+            <li><span class="col-name">prompt_arguments</span> <span class="col-type">jsonb?</span> <span class="col-note">prompts only</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- mcp_execution_log -->
+      <div class="schema-card">
+        <div class="schema-card-header">
+          <div class="table-icon cyan">L</div>
+          <h4>mcp_execution_log</h4>
+        </div>
+        <div class="schema-card-body">
+          <p class="schema-card-desc">Full audit trail of every MCP interaction. Inputs and outputs are always secret-redacted. Links to control plane ToolExecution for tier 2 calls.</p>
+          <ul class="schema-columns">
+            <li><span class="col-name">id</span> <span class="col-pk">PK</span> <span class="col-type">uuid</span></li>
+            <li><span class="col-name">connection_id</span> <span class="col-fk">FK</span> <span class="col-type">uuid</span></li>
+            <li><span class="col-name">catalog_entry_id</span> <span class="col-fk">FK</span> <span class="col-type">uuid</span></li>
+            <li><span class="col-name">tool_execution_id</span> <span class="col-fk">FK</span> <span class="col-type">uuid?</span> <span class="col-note">tier 2 only</span></li>
+            <li><span class="col-name">agent_id</span> <span class="col-type">uuid</span></li>
+            <li><span class="col-name">entry_type</span> <span class="col-type">text</span> <span class="col-note">tool | resource</span></li>
+            <li><span class="col-name">tool_name</span> <span class="col-type">text</span></li>
+            <li><span class="col-name">input_params</span> <span class="col-type">jsonb</span> <span class="col-note">secrets redacted</span></li>
+            <li><span class="col-name">output</span> <span class="col-type">jsonb</span> <span class="col-note">secrets redacted</span></li>
+            <li><span class="col-name">status</span> <span class="col-type">text</span> <span class="col-note">success|error|timeout|circuit_open|validation_error</span></li>
+            <li><span class="col-name">policy_decision</span> <span class="col-type">text</span> <span class="col-note">allow|deny|draft_review</span></li>
+            <li><span class="col-name">duration_ms</span> <span class="col-type">int</span></li>
+            <li><span class="col-name">retries</span> <span class="col-type">int</span> <span class="col-note">default 0</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- mcp_secret_binding -->
+      <div class="schema-card">
+        <div class="schema-card-header">
+          <div class="table-icon orange">S</div>
+          <h4>mcp_secret_binding</h4>
+        </div>
+        <div class="schema-card-body">
+          <p class="schema-card-desc">Maps secret references to injection points. The actual secret values live in the encrypted secret store -- this table holds references only.</p>
+          <ul class="schema-columns">
+            <li><span class="col-name">id</span> <span class="col-pk">PK</span> <span class="col-type">uuid</span></li>
+            <li><span class="col-name">connection_id</span> <span class="col-fk">FK</span> <span class="col-type">uuid</span></li>
+            <li><span class="col-name">binding_key</span> <span class="col-type">text</span> <span class="col-note">logical name (e.g. github_token)</span></li>
+            <li><span class="col-name">secret_ref</span> <span class="col-type">text</span> <span class="col-note">reference to encrypted store</span></li>
+            <li><span class="col-name">inject_as</span> <span class="col-type">text</span> <span class="col-note">header|query_param|env_var|body_field</span></li>
+            <li><span class="col-name">inject_target</span> <span class="col-type">text</span> <span class="col-note">header name, env var, etc.</span></li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Relationships -->
+    <div class="relationship-container">
+      <div class="diagram-container" style="margin-top:32px;">
+        <div class="diagram-zoom-controls">
+          <button class="zoom-btn" onclick="zoomDiagram('rels', 1.2)" title="Zoom In">+</button>
+          <button class="zoom-btn" onclick="zoomDiagram('rels', 0.8)" title="Zoom Out">&minus;</button>
+          <button class="zoom-btn" onclick="zoomDiagram('rels', 0)" title="Reset">R</button>
+        </div>
+        <div class="diagram-wrapper" id="rels-wrapper">
+          <pre class="mermaid" id="rels">
+erDiagram
+    mcp_connection ||--o{ mcp_tool_catalog : "1:many"
+    mcp_connection ||--o{ mcp_secret_binding : "1:many"
+    mcp_connection ||--o{ mcp_execution_log : "1:many"
+    mcp_execution_log }o--|| mcp_tool_catalog : "references"
+    mcp_connection }o--|| organization : "always"
+    mcp_connection }o--o| project : "optional"
+    mcp_execution_log }o--o| tool_execution : "tier 2 only"
+          </pre>
+        </div>
+        <div class="diagram-label">Cross-Entity Relationships</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FOOTER ============ -->
+  <footer class="footer">
+    <p class="footer-line">OtterCamp V2 -- MCP Integration Visual Explainer</p>
+    <p class="footer-line">Source: <a href="../09-mcp-integration.md">docsv2/09-mcp-integration.md</a></p>
+    <p class="footer-spec-ref">Doc 09 of 20 -- OtterCamp V2 Product Specification</p>
+  </footer>
+
+</div>
+
+<!-- Mermaid.js v11 ESM CDN -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      darkMode: true,
+      background: '#161629',
+      primaryColor: '#1a1a33',
+      primaryTextColor: '#e8e8f0',
+      primaryBorderColor: '#0088ff',
+      lineColor: '#0088ff',
+      secondaryColor: '#1a1a33',
+      tertiaryColor: '#1a1a33',
+      fontFamily: 'Fira Code, monospace',
+      fontSize: '13px',
+      edgeLabelBackground: '#161629',
+      clusterBkg: '#1a1a33',
+      clusterBorder: '#0088ff',
+      nodeTextColor: '#e8e8f0',
+      /* ER diagram */
+      er: {
+        attributeBackgroundColorOdd: '#1a1a33',
+        attributeBackgroundColorEven: '#161629',
+      }
+    },
+    flowchart: {
+      htmlLabels: true,
+      curve: 'basis',
+      padding: 16,
+      nodeSpacing: 50,
+      rankSpacing: 60,
+    },
+    er: {
+      layoutDirection: 'TB',
+      minEntityWidth: 100,
+      minEntityHeight: 30,
+      entityPadding: 15,
+      useMaxWidth: true,
+    }
+  });
+
+  // Wait for Mermaid to finish rendering, then apply styles
+  await mermaid.run();
+
+  // Style the rendered SVGs
+  document.querySelectorAll('.mermaid svg').forEach(svg => {
+    svg.style.maxWidth = '100%';
+    svg.style.height = 'auto';
+  });
+</script>
+
+<script>
+  // ---- Zoom Controls ----
+  const zoomLevels = {};
+
+  function zoomDiagram(id, factor) {
+    const wrapper = document.getElementById(id + '-wrapper');
+    const svg = wrapper.querySelector('svg');
+    if (!svg) return;
+
+    if (!zoomLevels[id]) zoomLevels[id] = 1;
+
+    if (factor === 0) {
+      zoomLevels[id] = 1;
+    } else {
+      zoomLevels[id] *= factor;
+      zoomLevels[id] = Math.max(0.3, Math.min(3, zoomLevels[id]));
+    }
+
+    svg.style.transform = `scale(${zoomLevels[id]})`;
+    svg.style.transformOrigin = 'center top';
+    svg.style.transition = 'transform 0.2s ease';
+  }
+
+  // ---- Intersection Observer for staggered animations ----
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.style.animationPlayState = 'running';
+        observer.unobserve(entry.target);
+      }
+    });
+  }, {
+    threshold: 0.1,
+    rootMargin: '0px 0px -50px 0px'
+  });
+
+  document.querySelectorAll('.animate-in').forEach(el => {
+    observer.observe(el);
+  });
+</script>
+
+</body>
+</html>

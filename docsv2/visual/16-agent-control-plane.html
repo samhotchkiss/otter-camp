@@ -1,0 +1,1693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- Agent Control Plane</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700;800&family=Barlow+Condensed:wght@300;400;500;600;700&family=Fira+Code:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ───────────────────────────── Custom Properties ───────────────────────────── */
+  :root {
+    --bg-base:       #0d1b2a;
+    --bg-layer-1:    #1b2838;
+    --bg-layer-2:    #223344;
+    --bg-layer-3:    #2a4a6b;
+    --border-dim:    #1e3450;
+    --border-mid:    #2a4a6b;
+    --border-bright: #3a6a9b;
+    --accent:        #00b4d8;
+    --accent-dim:    #0090b0;
+    --accent-glow:   rgba(0, 180, 216, 0.12);
+    --accent-glow-strong: rgba(0, 180, 216, 0.25);
+    --text-primary:  #e0e0e0;
+    --text-secondary:#9ab0c4;
+    --text-bright:   #f0f4f8;
+    --text-muted:    #5a7a94;
+    --text-code:     #a8d8ea;
+    --deny-color:    #ff6b6b;
+    --approve-color: #51cf66;
+    --approval-color:#ffd43b;
+    --grid-line:     rgba(0, 180, 216, 0.04);
+    --grid-line-bright: rgba(0, 180, 216, 0.08);
+    --font-heading:  'Barlow', sans-serif;
+    --font-label:    'Barlow Condensed', sans-serif;
+    --font-code:     'Fira Code', monospace;
+    --ease-out:      cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-spring:   cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  /* ───────────────────────────── Reset & Base ───────────────────────────── */
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html {
+    font-size: 16px;
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    font-family: var(--font-code);
+    font-weight: 400;
+    line-height: 1.7;
+    min-height: 100vh;
+    overflow-x: hidden;
+    /* Blueprint grid background */
+    background-image:
+      linear-gradient(var(--grid-line-bright) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line-bright) 1px, transparent 1px),
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 96px 96px, 96px 96px, 24px 24px, 24px 24px;
+    background-position: -1px -1px, -1px -1px, -1px -1px, -1px -1px;
+  }
+
+  /* ───────────────────────────── Layout ───────────────────────────── */
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 2rem;
+  }
+
+  section {
+    padding: 4.5rem 0;
+  }
+
+  section + section {
+    border-top: 1px solid var(--border-dim);
+  }
+
+  /* ───────────────────────────── Typography ───────────────────────────── */
+  h1, h2, h3, h4 {
+    font-family: var(--font-heading);
+    color: var(--text-bright);
+    letter-spacing: -0.02em;
+  }
+
+  h1 { font-size: 2.75rem; font-weight: 800; line-height: 1.1; }
+  h2 { font-size: 1.6rem; font-weight: 700; line-height: 1.3; margin-bottom: 1rem; }
+  h3 { font-size: 1.15rem; font-weight: 600; line-height: 1.4; }
+
+  p { margin-bottom: 0.75rem; }
+
+  .label {
+    font-family: var(--font-label);
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  code, .code {
+    font-family: var(--font-code);
+    color: var(--text-code);
+  }
+
+  a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid var(--border-dim);
+    transition: border-color 0.2s;
+  }
+  a:hover { border-color: var(--accent); }
+
+  /* ───────────────────────────── Hero ───────────────────────────── */
+  .hero {
+    padding: 7rem 0 5rem;
+    text-align: center;
+    position: relative;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: 40%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 800px;
+    height: 600px;
+    background: radial-gradient(ellipse, rgba(0, 180, 216, 0.06) 0%, transparent 65%);
+    pointer-events: none;
+  }
+
+  .hero .label {
+    margin-bottom: 1.5rem;
+    display: block;
+  }
+
+  .hero h1 {
+    margin-bottom: 1rem;
+  }
+
+  .hero h1 .accent {
+    color: var(--accent);
+  }
+
+  .hero .tagline {
+    font-family: var(--font-heading);
+    font-size: 1.15rem;
+    font-weight: 400;
+    color: var(--text-secondary);
+    margin-bottom: 2rem;
+    max-width: 640px;
+    margin-left: auto;
+    margin-right: auto;
+    line-height: 1.6;
+  }
+
+  .hero .stats-row {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    margin-top: 2.5rem;
+    flex-wrap: wrap;
+  }
+
+  .stat-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 1rem 1.5rem;
+    background: var(--bg-layer-1);
+    border: 1px solid var(--border-dim);
+    border-radius: 6px;
+    min-width: 140px;
+    position: relative;
+  }
+
+  .stat-block::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    border-radius: 6px 6px 0 0;
+  }
+
+  .stat-value {
+    font-family: var(--font-heading);
+    font-size: 2rem;
+    font-weight: 800;
+    color: var(--accent);
+    line-height: 1;
+  }
+
+  .stat-label {
+    font-family: var(--font-label);
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  /* ───────────────────────────── Diagram Sections ───────────────────────────── */
+  .diagram-section {
+    position: relative;
+  }
+
+  .section-header {
+    text-align: center;
+    margin-bottom: 2rem;
+  }
+
+  .section-header p {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    max-width: 640px;
+    margin: 0.5rem auto 0;
+  }
+
+  .mermaid-wrapper {
+    position: relative;
+    background: var(--bg-layer-1);
+    border: 1px solid var(--border-dim);
+    border-radius: 8px;
+    padding: 2rem;
+    overflow: hidden;
+  }
+
+  .mermaid-wrapper::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent 10%, var(--accent-dim) 50%, transparent 90%);
+    opacity: 0.4;
+  }
+
+  .mermaid-viewport {
+    overflow: auto;
+    max-height: 700px;
+    display: flex;
+    justify-content: center;
+  }
+
+  .mermaid-viewport svg {
+    transition: transform 0.2s var(--ease-out);
+    transform-origin: center center;
+  }
+
+  .zoom-controls {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    z-index: 10;
+  }
+
+  .zoom-btn {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-layer-2);
+    border: 1px solid var(--border-mid);
+    border-radius: 4px;
+    color: var(--accent);
+    font-family: var(--font-code);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    user-select: none;
+  }
+
+  .zoom-btn:hover {
+    background: var(--border-mid);
+    border-color: var(--accent-dim);
+  }
+
+  /* ───────────────────────────── Component Cards (4 across) ───────────────────────────── */
+  .components-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+
+  .component-card {
+    background: var(--bg-layer-1);
+    border: 1px solid var(--border-dim);
+    border-radius: 8px;
+    padding: 1.5rem;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.25s, transform 0.25s var(--ease-out), box-shadow 0.25s;
+  }
+
+  .component-card:hover {
+    border-color: var(--border-bright);
+    transform: translateY(-3px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  }
+
+  .component-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    border-radius: 8px 8px 0 0;
+  }
+
+  .component-card.policy-api::before { background: var(--accent); }
+  .component-card.exec-broker::before { background: #7c5bf5; }
+  .component-card.worker-runtime::before { background: #51cf66; }
+  .component-card.approval-svc::before { background: #ffd43b; }
+
+  .component-card .card-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    margin-bottom: 1rem;
+  }
+
+  .policy-api .card-icon { background: rgba(0, 180, 216, 0.12); border: 1px solid rgba(0, 180, 216, 0.3); }
+  .exec-broker .card-icon { background: rgba(124, 91, 245, 0.12); border: 1px solid rgba(124, 91, 245, 0.3); }
+  .worker-runtime .card-icon { background: rgba(81, 207, 102, 0.12); border: 1px solid rgba(81, 207, 102, 0.3); }
+  .approval-svc .card-icon { background: rgba(255, 212, 59, 0.12); border: 1px solid rgba(255, 212, 59, 0.3); }
+
+  .component-card .card-icon svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .policy-api .card-icon svg { stroke: var(--accent); }
+  .exec-broker .card-icon svg { stroke: #7c5bf5; }
+  .worker-runtime .card-icon svg { stroke: #51cf66; }
+  .approval-svc .card-icon svg { stroke: #ffd43b; }
+
+  .component-card h3 {
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+    color: var(--text-bright);
+  }
+
+  .component-card .card-desc {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 0.75rem;
+  }
+
+  .component-card .card-detail {
+    font-family: var(--font-code);
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    padding: 0.5rem 0.65rem;
+    background: var(--bg-base);
+    border: 1px solid var(--border-dim);
+    border-radius: 4px;
+    line-height: 1.6;
+  }
+
+  /* ───────────────────────────── Capability Tree ───────────────────────────── */
+  .tree-container {
+    background: var(--bg-layer-1);
+    border: 1px solid var(--border-dim);
+    border-radius: 8px;
+    padding: 2rem;
+    margin-top: 2rem;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .tree-container::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent 10%, var(--accent-dim) 50%, transparent 90%);
+    opacity: 0.4;
+  }
+
+  .tree-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1.5rem;
+  }
+
+  .tree-domain {
+    position: relative;
+  }
+
+  .tree-domain-label {
+    font-family: var(--font-label);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.6rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--border-dim);
+  }
+
+  .tree-items {
+    list-style: none;
+    padding: 0;
+  }
+
+  .tree-items li {
+    font-family: var(--font-code);
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    padding: 0.25rem 0;
+    padding-left: 1rem;
+    position: relative;
+    line-height: 1.5;
+  }
+
+  .tree-items li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.55rem;
+    width: 6px;
+    height: 6px;
+    border-left: 1px solid var(--border-mid);
+    border-bottom: 1px solid var(--border-mid);
+  }
+
+  .tree-items li:last-child::after {
+    content: none;
+  }
+
+  .tree-items .wildcard {
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  /* ───────────────────────────── Template Cards ───────────────────────────── */
+  .templates-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+
+  .template-card {
+    background: var(--bg-layer-1);
+    border: 1px solid var(--border-dim);
+    border-radius: 8px;
+    padding: 1.5rem;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.25s, transform 0.25s var(--ease-out);
+  }
+
+  .template-card:hover {
+    border-color: var(--border-bright);
+    transform: translateY(-2px);
+  }
+
+  .template-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    border-radius: 8px 8px 0 0;
+  }
+
+  .template-card.tpl-reader::before { background: #74c0fc; }
+  .template-card.tpl-worker::before { background: #51cf66; }
+  .template-card.tpl-deployer::before { background: #ffa94d; }
+  .template-card.tpl-admin::before { background: #ff6b6b; }
+
+  .template-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .template-badge {
+    font-family: var(--font-label);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.2rem 0.55rem;
+    border-radius: 3px;
+  }
+
+  .tpl-reader .template-badge { background: rgba(116, 192, 252, 0.15); color: #74c0fc; border: 1px solid rgba(116, 192, 252, 0.3); }
+  .tpl-worker .template-badge { background: rgba(81, 207, 102, 0.15); color: #51cf66; border: 1px solid rgba(81, 207, 102, 0.3); }
+  .tpl-deployer .template-badge { background: rgba(255, 169, 77, 0.15); color: #ffa94d; border: 1px solid rgba(255, 169, 77, 0.3); }
+  .tpl-admin .template-badge { background: rgba(255, 107, 107, 0.15); color: #ff6b6b; border: 1px solid rgba(255, 107, 107, 0.3); }
+
+  .template-card h3 {
+    font-size: 1rem;
+    margin-bottom: 0;
+  }
+
+  .template-card .template-desc {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-bottom: 0.75rem;
+  }
+
+  .template-capabilities {
+    list-style: none;
+    padding: 0;
+  }
+
+  .template-capabilities li {
+    font-family: var(--font-code);
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    padding: 0.2rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .template-capabilities li::before {
+    content: '+';
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 0.7rem;
+    flex-shrink: 0;
+  }
+
+  .template-capabilities .inherited {
+    opacity: 0.5;
+  }
+
+  .template-capabilities .inherited::before {
+    content: '';
+    width: 8px;
+    height: 1px;
+    background: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .template-card .wildcard-grant {
+    font-family: var(--font-code);
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: #ff6b6b;
+    text-align: center;
+    padding: 1rem 0;
+    line-height: 1;
+  }
+
+  .template-card .wildcard-note {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-align: center;
+  }
+
+  /* ───────────────────────────── Policy Layers ───────────────────────────── */
+  .policy-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 2rem;
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .policy-layer {
+    display: grid;
+    grid-template-columns: 48px 1fr auto;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 1.5rem;
+    background: var(--bg-layer-1);
+    border: 1px solid var(--border-dim);
+    position: relative;
+    transition: border-color 0.2s, background 0.2s;
+  }
+
+  .policy-layer:first-child {
+    border-radius: 8px 8px 0 0;
+  }
+
+  .policy-layer:last-child {
+    border-radius: 0 0 8px 8px;
+  }
+
+  .policy-layer + .policy-layer {
+    border-top: none;
+  }
+
+  .policy-layer:hover {
+    border-color: var(--border-mid);
+    background: var(--bg-layer-2);
+    z-index: 1;
+  }
+
+  .policy-layer::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 3px;
+  }
+
+  .policy-layer.layer-1::before { background: #ff6b6b; }
+  .policy-layer.layer-2::before { background: #ffa94d; }
+  .policy-layer.layer-3::before { background: #ffd43b; }
+  .policy-layer.layer-4::before { background: #74c0fc; }
+  .policy-layer.layer-5::before { background: #868e96; }
+
+  .policy-number {
+    font-family: var(--font-heading);
+    font-size: 1.5rem;
+    font-weight: 800;
+    line-height: 1;
+    text-align: center;
+  }
+
+  .layer-1 .policy-number { color: #ff6b6b; }
+  .layer-2 .policy-number { color: #ffa94d; }
+  .layer-3 .policy-number { color: #ffd43b; }
+  .layer-4 .policy-number { color: #74c0fc; }
+  .layer-5 .policy-number { color: #868e96; }
+
+  .policy-content h3 {
+    font-size: 0.95rem;
+    margin-bottom: 0.2rem;
+    color: var(--text-bright);
+  }
+
+  .policy-content p {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    margin-bottom: 0;
+    line-height: 1.5;
+  }
+
+  .policy-priority {
+    font-family: var(--font-label);
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.2rem 0.5rem;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+
+  .layer-1 .policy-priority { background: rgba(255, 107, 107, 0.15); color: #ff6b6b; }
+  .layer-2 .policy-priority { background: rgba(255, 169, 77, 0.15); color: #ffa94d; }
+  .layer-3 .policy-priority { background: rgba(255, 212, 59, 0.15); color: #ffd43b; }
+  .layer-4 .policy-priority { background: rgba(116, 192, 252, 0.15); color: #74c0fc; }
+  .layer-5 .policy-priority { background: rgba(134, 142, 150, 0.15); color: #868e96; }
+
+  .composition-rule {
+    margin-top: 1.5rem;
+    padding: 1.25rem 1.5rem;
+    background: var(--bg-layer-1);
+    border: 1px solid var(--border-dim);
+    border-radius: 8px;
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .composition-rule h4 {
+    font-family: var(--font-label);
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.75rem;
+  }
+
+  .rule-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .rule-item {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  .rule-decision {
+    font-family: var(--font-code);
+    font-size: 0.72rem;
+    font-weight: 500;
+    padding: 0.15rem 0.45rem;
+    border-radius: 3px;
+    flex-shrink: 0;
+    min-width: 110px;
+    text-align: center;
+  }
+
+  .rule-decision.deny { background: rgba(255, 107, 107, 0.15); color: #ff6b6b; border: 1px solid rgba(255, 107, 107, 0.25); }
+  .rule-decision.approval { background: rgba(255, 212, 59, 0.15); color: #ffd43b; border: 1px solid rgba(255, 212, 59, 0.25); }
+  .rule-decision.allow { background: rgba(81, 207, 102, 0.15); color: #51cf66; border: 1px solid rgba(81, 207, 102, 0.25); }
+
+  /* ───────────────────────────── Schema Section ───────────────────────────── */
+  .schema-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+
+  .schema-table {
+    background: var(--bg-layer-1);
+    border: 1px solid var(--border-dim);
+    border-radius: 8px;
+    padding: 1.25rem;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s, transform 0.2s var(--ease-out);
+  }
+
+  .schema-table:hover {
+    border-color: var(--border-mid);
+    transform: translateY(-2px);
+  }
+
+  .schema-table::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--accent);
+    opacity: 0.4;
+  }
+
+  .schema-table.anchor::before {
+    opacity: 1;
+    height: 3px;
+  }
+
+  .schema-table-name {
+    font-family: var(--font-code);
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .schema-table-name .anchor-badge {
+    font-family: var(--font-label);
+    font-size: 0.6rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.1rem 0.4rem;
+    background: var(--accent-glow);
+    color: var(--accent);
+    border: 1px solid rgba(0, 180, 216, 0.3);
+    border-radius: 3px;
+  }
+
+  .schema-table .table-desc {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-bottom: 0.6rem;
+    line-height: 1.5;
+  }
+
+  .schema-columns {
+    list-style: none;
+    padding: 0;
+    border-top: 1px solid var(--border-dim);
+    padding-top: 0.5rem;
+  }
+
+  .schema-columns li {
+    font-family: var(--font-code);
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    padding: 0.15rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .col-key {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .col-type {
+    color: var(--text-muted);
+    font-size: 0.6rem;
+  }
+
+  /* ───────────────────────────── Footer ───────────────────────────── */
+  .footer {
+    padding: 3rem 0;
+    border-top: 1px solid var(--border-dim);
+    text-align: center;
+  }
+
+  .footer p {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  /* ───────────────────────────── Animations ───────────────────────────── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(28px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes slideInLeft {
+    from { opacity: 0; transform: translateX(-24px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+
+  .fade-up {
+    opacity: 0;
+    animation: fadeUp 0.7s var(--ease-out) forwards;
+  }
+
+  .slide-left {
+    opacity: 0;
+    animation: slideInLeft 0.6s var(--ease-out) forwards;
+  }
+
+  .fade-up.d1  { animation-delay: 0.06s; }
+  .fade-up.d2  { animation-delay: 0.12s; }
+  .fade-up.d3  { animation-delay: 0.18s; }
+  .fade-up.d4  { animation-delay: 0.24s; }
+  .fade-up.d5  { animation-delay: 0.30s; }
+  .fade-up.d6  { animation-delay: 0.36s; }
+  .fade-up.d7  { animation-delay: 0.42s; }
+  .fade-up.d8  { animation-delay: 0.48s; }
+  .fade-up.d9  { animation-delay: 0.54s; }
+  .fade-up.d10 { animation-delay: 0.60s; }
+  .fade-up.d11 { animation-delay: 0.66s; }
+  .fade-up.d12 { animation-delay: 0.72s; }
+
+  .slide-left.d1 { animation-delay: 0.08s; }
+  .slide-left.d2 { animation-delay: 0.16s; }
+  .slide-left.d3 { animation-delay: 0.24s; }
+  .slide-left.d4 { animation-delay: 0.32s; }
+  .slide-left.d5 { animation-delay: 0.40s; }
+
+  /* ───────────────────────────── Responsive ───────────────────────────── */
+  @media (max-width: 1024px) {
+    .components-grid { grid-template-columns: repeat(2, 1fr); }
+    .templates-grid { grid-template-columns: repeat(2, 1fr); }
+    .schema-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  @media (max-width: 768px) {
+    h1 { font-size: 1.85rem; }
+    h2 { font-size: 1.3rem; }
+    section { padding: 3rem 0; }
+    .hero { padding: 4rem 0 3rem; }
+    .container { padding: 0 1.25rem; }
+    .components-grid { grid-template-columns: 1fr; }
+    .templates-grid { grid-template-columns: 1fr; }
+    .schema-grid { grid-template-columns: 1fr; }
+    .tree-grid { grid-template-columns: repeat(2, 1fr); }
+    .hero .stats-row { gap: 1rem; }
+    .stat-block { min-width: 110px; padding: 0.75rem 1rem; }
+    .mermaid-wrapper { padding: 1rem; }
+    .policy-layer { grid-template-columns: 36px 1fr; }
+    .policy-priority { display: none; }
+  }
+
+  @media (max-width: 480px) {
+    h1 { font-size: 1.5rem; }
+    .hero .stats-row { flex-direction: column; align-items: center; }
+    .tree-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ───────────────────────────── Mermaid Theme Override ───────────────────────────── */
+  .mermaid-viewport .node rect,
+  .mermaid-viewport .node circle,
+  .mermaid-viewport .node polygon {
+    stroke: var(--accent-dim) !important;
+  }
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════ HERO ════════════════════════════ -->
+<section class="hero">
+  <div class="container">
+    <span class="label fade-up">OtterCamp V2 Specification / Doc 16</span>
+    <h1 class="fade-up d1">Nothing Bypasses the<br><span class="accent">Control Plane</span></h1>
+    <p class="tagline fade-up d2">
+      The single trusted execution layer through which every agent mutation flows.
+      No agent writes to the database, executes a command, or calls an external service
+      without passing through this system.
+    </p>
+    <div class="stats-row fade-up d3">
+      <div class="stat-block">
+        <span class="stat-value">4</span>
+        <span class="stat-label">Components</span>
+      </div>
+      <div class="stat-block">
+        <span class="stat-value">9</span>
+        <span class="stat-label">Tables</span>
+      </div>
+      <div class="stat-block">
+        <span class="stat-value">5</span>
+        <span class="stat-label">Policy Layers</span>
+      </div>
+      <div class="stat-block">
+        <span class="stat-value">7</span>
+        <span class="stat-label">Capability Domains</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ ARCHITECTURE DIAGRAM ════════════════════════════ -->
+<section class="diagram-section">
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label">Architecture</span>
+      <h2>Four-Component Execution Path</h2>
+      <p>
+        Every tier 2 tool call flows through the Execution Broker. The Policy API is the single
+        authority for authorization. Workers are stateless sandboxed executors. Approvals integrate
+        with the inbox and never block the agent's turn.
+      </p>
+    </div>
+    <div class="mermaid-wrapper fade-up d2">
+      <div class="zoom-controls">
+        <button class="zoom-btn" onclick="zoom('arch', 0.15)" title="Zoom in">+</button>
+        <button class="zoom-btn" onclick="zoom('arch', -0.15)" title="Zoom out">&minus;</button>
+        <button class="zoom-btn" onclick="zoomReset('arch')" title="Reset zoom" style="font-size:0.65rem;">1:1</button>
+      </div>
+      <div class="mermaid-viewport" id="vp-arch">
+        <pre class="mermaid">
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#1b2838',
+    'primaryTextColor': '#e0e0e0',
+    'primaryBorderColor': '#2a4a6b',
+    'lineColor': '#00b4d8',
+    'secondaryColor': '#223344',
+    'tertiaryColor': '#0d1b2a',
+    'background': '#0d1b2a',
+    'mainBkg': '#1b2838',
+    'nodeBorder': '#2a4a6b',
+    'clusterBkg': '#0d1b2a',
+    'clusterBorder': '#1e3450',
+    'titleColor': '#f0f4f8',
+    'edgeLabelBackground': '#1b2838',
+    'nodeTextColor': '#e0e0e0',
+    'fontSize': '13px'
+  }
+}}%%
+graph TB
+  CHAT["Chat Layer<br/><i>Tier 2 tool call</i>"]
+
+  subgraph CP["CONTROL PLANE"]
+    direction TB
+    POLICY["Policy API<br/><i>allow / deny / require_approval</i>"]
+    BROKER["Execution Broker<br/><i>Admission + Run creation</i>"]
+    APPROVAL["Approval Service<br/><i>Inbox integration</i>"]
+
+    subgraph WORKERS["Worker Runtime"]
+      direction LR
+      W_INT["Internal<br/><i>DB mutations</i>"]
+      W_CLI["CLI<br/><i>Containers</i>"]
+      W_BRW["Browser<br/><i>Isolated ctx</i>"]
+      W_MCP["MCP<br/><i>External calls</i>"]
+    end
+  end
+
+  INBOX["Inbox<br/><i>Human acts</i>"]
+  AUDIT["Audit Log<br/><i>Append-only</i>"]
+  DB[("Run / Step / Attempt<br/>+ 6 more tables")]
+
+  CHAT -->|"action request"| BROKER
+  BROKER -->|"evaluate"| POLICY
+  POLICY -->|"decision"| BROKER
+  BROKER -->|"allow"| WORKERS
+  BROKER -->|"require_approval"| APPROVAL
+  APPROVAL -->|"create item"| INBOX
+  INBOX -->|"approve / reject"| APPROVAL
+  APPROVAL -->|"resume run"| BROKER
+  BROKER -->|"deny: return error<br/>allow: return result"| CHAT
+  WORKERS -->|"result"| BROKER
+  BROKER -->|"record"| DB
+  BROKER -->|"emit"| AUDIT
+
+  classDef chatNode fill:#1b2838,stroke:#00b4d8,stroke-width:2px,color:#e0e0e0
+  classDef brokerNode fill:#223344,stroke:#7c5bf5,stroke-width:2px,color:#e0e0e0
+  classDef policyNode fill:#223344,stroke:#00b4d8,stroke-width:2px,color:#e0e0e0
+  classDef approvalNode fill:#223344,stroke:#ffd43b,stroke-width:2px,color:#e0e0e0
+  classDef workerNode fill:#1b2838,stroke:#51cf66,stroke-width:1px,color:#e0e0e0
+  classDef storageNode fill:#1b2838,stroke:#00b4d8,stroke-width:2px,color:#f0f4f8
+  classDef auditNode fill:#1b2838,stroke:#868e96,stroke-width:1px,color:#9ab0c4
+
+  class CHAT chatNode
+  class BROKER brokerNode
+  class POLICY policyNode
+  class APPROVAL approvalNode
+  class W_INT,W_CLI,W_BRW,W_MCP workerNode
+  class DB storageNode
+  class INBOX approvalNode
+  class AUDIT auditNode
+        </pre>
+      </div>
+    </div>
+
+    <!-- Component detail cards below the diagram -->
+    <div class="components-grid">
+      <div class="component-card policy-api fade-up d4">
+        <div class="card-icon">
+          <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <h3>Policy API</h3>
+        <p class="card-desc">
+          Stateless evaluation engine. Given a principal, capability, scope, and context,
+          returns allow / deny / require_approval. Single authority for authorization.
+        </p>
+        <div class="card-detail">
+          Cached aggressively. Org/project policies: short TTL.
+          Agent profiles: per-session. Instance safety: compiled at startup.
+        </div>
+      </div>
+
+      <div class="component-card exec-broker fade-up d5">
+        <div class="card-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <h3>Execution Broker</h3>
+        <p class="card-desc">
+          Synchronous admission control. The front door. Creates Run records,
+          evaluates policy, dispatches to workers, emits events.
+        </p>
+        <div class="card-detail">
+          Not a queue -- synchronous admission. Queuing happens
+          at the scheduler and model gateway level.
+        </div>
+      </div>
+
+      <div class="component-card worker-runtime fade-up d6">
+        <div class="card-icon">
+          <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        </div>
+        <h3>Worker Runtime</h3>
+        <p class="card-desc">
+          Stateless sandboxed executors. Four domains: internal (DB ops),
+          CLI (containers), browser (isolated contexts), MCP (external calls).
+        </p>
+        <div class="card-detail">
+          Container-based CLI isolation. Per-run browser contexts.
+          Per-connection MCP capability checks. Resource limits enforced.
+        </div>
+      </div>
+
+      <div class="component-card approval-svc fade-up d7">
+        <div class="card-icon">
+          <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>
+        </div>
+        <h3>Approval Service</h3>
+        <p class="card-desc">
+          Human-in-the-loop via inbox. Pauses runs, creates inbox items,
+          resumes or cancels on human action. Supports session-wide grants.
+        </p>
+        <div class="card-detail">
+          Non-blocking: returns "queued for review" immediately.
+          Agent's turn continues. No timeout on approvals.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ CAPABILITY NAMESPACE ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label">Capability Model</span>
+      <h2>Hierarchical Dot-Separated Namespace</h2>
+      <p>
+        Every mutation maps to exactly one capability: <code>domain.resource.action</code>.
+        Wildcards supported: <code>project.*</code> grants all project capabilities.
+        Default-deny -- an agent has zero capabilities until explicitly granted.
+      </p>
+    </div>
+    <div class="tree-container fade-up d2">
+      <div class="tree-grid">
+
+        <div class="tree-domain">
+          <div class="tree-domain-label">project.*</div>
+          <ul class="tree-items">
+            <li>project.read</li>
+            <li>project.update</li>
+            <li>project.task.create</li>
+            <li>project.task.read</li>
+            <li>project.task.update</li>
+            <li>project.task.status.update</li>
+            <li>project.task.assign</li>
+            <li>project.task.cancel</li>
+            <li>project.subtask.create</li>
+            <li>project.subtask.update</li>
+            <li>project.subtask.status.update</li>
+            <li>project.flow.advance</li>
+            <li>project.flow.blocker.raise</li>
+            <li>project.dependency.create</li>
+            <li>project.dependency.remove</li>
+            <li>project.participant.add</li>
+            <li>project.participant.remove</li>
+            <li>project.schedule.<span class="wildcard">*</span></li>
+            <li>project.merge.<span class="wildcard">*</span></li>
+          </ul>
+        </div>
+
+        <div class="tree-domain">
+          <div class="tree-domain-label">chat.*</div>
+          <ul class="tree-items">
+            <li>chat.session.create</li>
+            <li>chat.session.read</li>
+            <li>chat.session.close</li>
+            <li>chat.message.write</li>
+            <li>chat.participant.add</li>
+            <li>chat.participant.remove</li>
+            <li>chat.artifact.create</li>
+          </ul>
+        </div>
+
+        <div class="tree-domain">
+          <div class="tree-domain-label">memory.*</div>
+          <ul class="tree-items">
+            <li>memory.read</li>
+            <li>memory.write</li>
+            <li>memory.entity.create</li>
+            <li>memory.entity.update</li>
+            <li>memory.entity.merge</li>
+          </ul>
+        </div>
+
+        <div class="tree-domain">
+          <div class="tree-domain-label">system.*</div>
+          <ul class="tree-items">
+            <li>system.file.read</li>
+            <li>system.file.write</li>
+            <li>system.cli.execute</li>
+            <li>system.browser.navigate</li>
+            <li>system.browser.interact</li>
+            <li>system.browser.screenshot</li>
+            <li>system.browser.extract</li>
+          </ul>
+        </div>
+
+        <div class="tree-domain">
+          <div class="tree-domain-label">mcp.*</div>
+          <ul class="tree-items">
+            <li>mcp.connection.use:&lt;id&gt;</li>
+            <li>mcp.tool.invoke:&lt;id&gt;:&lt;tool&gt;</li>
+            <li>mcp.tool.invoke:&lt;id&gt;:<span class="wildcard">*</span></li>
+          </ul>
+        </div>
+
+        <div class="tree-domain">
+          <div class="tree-domain-label">comms.*</div>
+          <ul class="tree-items">
+            <li>comms.email.send</li>
+            <li>comms.email.draft</li>
+            <li>comms.slack.post</li>
+            <li>comms.github.pr.create</li>
+            <li>comms.github.pr.comment</li>
+          </ul>
+        </div>
+
+        <div class="tree-domain">
+          <div class="tree-domain-label">agent.*</div>
+          <ul class="tree-items">
+            <li>agent.profile.read</li>
+            <li>agent.profile.update</li>
+            <li>agent.temp.create</li>
+            <li>agent.temp.retire</li>
+          </ul>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ CAPABILITY TEMPLATES ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label">Templates</span>
+      <h2>Four Capability Templates</h2>
+      <p>
+        Predefined capability sets for common agent roles. Templates are starting points,
+        not prisons -- the human or PM can add or remove individual capabilities after assignment.
+      </p>
+    </div>
+    <div class="templates-grid">
+
+      <div class="template-card tpl-reader fade-up d2">
+        <div class="template-header">
+          <span class="template-badge">reader</span>
+        </div>
+        <h3>Read-Only</h3>
+        <p class="template-desc">Safe for any agent that only needs to observe.</p>
+        <ul class="template-capabilities">
+          <li>project.read</li>
+          <li>project.task.read</li>
+          <li>chat.session.read</li>
+          <li>memory.read</li>
+          <li>agent.profile.read</li>
+          <li>system.file.read</li>
+        </ul>
+      </div>
+
+      <div class="template-card tpl-worker fade-up d3">
+        <div class="template-header">
+          <span class="template-badge">worker</span>
+        </div>
+        <h3>Project Mutations + File I/O</h3>
+        <p class="template-desc">The standard template for agents doing work.</p>
+        <ul class="template-capabilities">
+          <li class="inherited">reader (all)</li>
+          <li>project.task.create</li>
+          <li>project.task.update</li>
+          <li>project.task.status.update</li>
+          <li>project.subtask.*</li>
+          <li>project.flow.advance</li>
+          <li>project.flow.blocker.raise</li>
+          <li>chat.message.write</li>
+          <li>memory.write</li>
+          <li>system.file.write</li>
+        </ul>
+      </div>
+
+      <div class="template-card tpl-deployer fade-up d4">
+        <div class="template-header">
+          <span class="template-badge">deployer</span>
+        </div>
+        <h3>+ System Tools + Browser</h3>
+        <p class="template-desc">Build, test, and deploy. Full system access.</p>
+        <ul class="template-capabilities">
+          <li class="inherited">worker (all)</li>
+          <li>system.cli.execute</li>
+          <li>system.browser.navigate</li>
+          <li>system.browser.interact</li>
+          <li>system.browser.screenshot</li>
+          <li>system.browser.extract</li>
+        </ul>
+      </div>
+
+      <div class="template-card tpl-admin fade-up d5">
+        <div class="template-header">
+          <span class="template-badge">admin</span>
+        </div>
+        <h3>All Capabilities</h3>
+        <p class="template-desc">Reserved for PM and org-level agents (Frank, Lori).</p>
+        <div class="wildcard-grant">*</div>
+        <p class="wildcard-note">Unrestricted within scope. Scoping still applies -- org-level admin is bounded by the org.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ POLICY COMPOSITION ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label">Policy Evaluation</span>
+      <h2>Five Layers, Most-Restrictive-Wins</h2>
+      <p>
+        Policies compose across five layers evaluated highest-priority-first.
+        A deny at any layer is absolute. A lower-priority layer can never grant
+        what a higher-priority layer denies.
+      </p>
+    </div>
+
+    <div class="policy-stack">
+      <div class="policy-layer layer-1 slide-left d1">
+        <div class="policy-number">1</div>
+        <div class="policy-content">
+          <h3>Instance Safety</h3>
+          <p>Hardcoded. Cannot be overridden. Prevents catastrophic actions: no rm -rf /, no accessing other orgs' data. The "even if everything else is misconfigured, this saves you" layer.</p>
+        </div>
+        <span class="policy-priority">Highest</span>
+      </div>
+
+      <div class="policy-layer layer-2 slide-left d2">
+        <div class="policy-number">2</div>
+        <div class="policy-content">
+          <h3>Organization Policy</h3>
+          <p>Set by org owner/admin. Org-wide defaults for capabilities, budget limits, max concurrent runs. Example: "All comms.email.send actions require approval org-wide."</p>
+        </div>
+        <span class="policy-priority">High</span>
+      </div>
+
+      <div class="policy-layer layer-3 slide-left d3">
+        <div class="policy-number">3</div>
+        <div class="policy-content">
+          <h3>Project Policy</h3>
+          <p>Set by human or PM for a specific project. Project-specific overrides. Example: "In the billing project, system.cli.execute requires approval."</p>
+        </div>
+        <span class="policy-priority">Medium</span>
+      </div>
+
+      <div class="policy-layer layer-4 slide-left d4">
+        <div class="policy-number">4</div>
+        <div class="policy-content">
+          <h3>Agent Profile Policy</h3>
+          <p>The agent's personal capability set, assigned via a template. The base grant that determines what the agent can do before any higher-layer restrictions.</p>
+        </div>
+        <span class="policy-priority">Low</span>
+      </div>
+
+      <div class="policy-layer layer-5 slide-left d5">
+        <div class="policy-number">5</div>
+        <div class="policy-content">
+          <h3>Request-Specific Overrides</h3>
+          <p>Applied at runtime based on context. Can only restrict, never expand. Example: agent at 80% daily budget -- expensive capabilities downgrade to require_approval.</p>
+        </div>
+        <span class="policy-priority">Restrict Only</span>
+      </div>
+    </div>
+
+    <div class="composition-rule fade-up d6">
+      <h4>Conflict Resolution</h4>
+      <div class="rule-items">
+        <div class="rule-item">
+          <span class="rule-decision deny">deny</span>
+          <span>At any layer = denied. Period. No lower layer can override.</span>
+        </div>
+        <div class="rule-item">
+          <span class="rule-decision approval">require_approval</span>
+          <span>At any layer + no deny above = require_approval. Approval requirements accumulate.</span>
+        </div>
+        <div class="rule-item">
+          <span class="rule-decision allow">allow</span>
+          <span>Only if all applicable layers allow (or are silent). Silence is not denial.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ RUN LIFECYCLE ════════════════════════════ -->
+<section class="diagram-section">
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label">Execution Model</span>
+      <h2>Run Lifecycle</h2>
+      <p>
+        A Run is one end-to-end unit of work. Created by the broker, it captures admission,
+        policy evaluation, execution, and result. Runs decompose into Steps and Attempts.
+      </p>
+    </div>
+    <div class="mermaid-wrapper fade-up d2">
+      <div class="zoom-controls">
+        <button class="zoom-btn" onclick="zoom('lifecycle', 0.15)" title="Zoom in">+</button>
+        <button class="zoom-btn" onclick="zoom('lifecycle', -0.15)" title="Zoom out">&minus;</button>
+        <button class="zoom-btn" onclick="zoomReset('lifecycle')" title="Reset zoom" style="font-size:0.65rem;">1:1</button>
+      </div>
+      <div class="mermaid-viewport" id="vp-lifecycle">
+        <pre class="mermaid">
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#1b2838',
+    'primaryTextColor': '#e0e0e0',
+    'primaryBorderColor': '#2a4a6b',
+    'lineColor': '#00b4d8',
+    'secondaryColor': '#223344',
+    'tertiaryColor': '#0d1b2a',
+    'background': '#0d1b2a',
+    'mainBkg': '#1b2838',
+    'nodeBorder': '#2a4a6b',
+    'labelBoxBkgColor': '#1b2838',
+    'labelBoxBorderColor': '#2a4a6b',
+    'labelTextColor': '#e0e0e0',
+    'altBackground': '#223344',
+    'compositeBackground': '#0d1b2a',
+    'compositeBorder': '#1e3450',
+    'fontSize': '13px'
+  }
+}}%%
+stateDiagram-v2
+  direction LR
+
+  [*] --> created : Broker receives<br/>action request
+
+  created --> in_progress : Policy: ALLOW
+  created --> awaiting_approval : Policy: REQUIRE_APPROVAL
+  created --> failed : Policy: DENY
+
+  awaiting_approval --> in_progress : Human approves
+  awaiting_approval --> failed : Human rejects
+  awaiting_approval --> cancelled : Context stale
+
+  in_progress --> completed : All steps done
+  in_progress --> failed : Step failed terminally
+  in_progress --> timed_out : Run timeout
+  in_progress --> cancelling : Cancel requested
+  in_progress --> dead_letter : Max retries exceeded
+
+  cancelling --> cancelled : Worker exits
+
+  completed --> [*]
+  failed --> [*]
+  timed_out --> [*]
+  cancelled --> [*]
+  dead_letter --> [*]
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ SCHEMA OVERVIEW ════════════════════════════ -->
+<section>
+  <div class="container">
+    <div class="section-header fade-up">
+      <span class="label">Data Model</span>
+      <h2>9-Table Schema</h2>
+      <p>
+        Anchored by the <code>run</code> entity. Everything else links back to it.
+        The schema captures the complete execution record: who, what, when, why, and what happened.
+      </p>
+    </div>
+
+    <div class="schema-grid">
+
+      <!-- run (anchor) -->
+      <div class="schema-table anchor fade-up d1">
+        <div class="schema-table-name">
+          run <span class="anchor-badge">Anchor</span>
+        </div>
+        <p class="table-desc">One end-to-end unit of work with principal, capability, policy decision, and result.</p>
+        <ul class="schema-columns">
+          <li><span class="col-key">id</span> <span class="col-type">uuid pk</span></li>
+          <li>organization_id, project_id, task_id</li>
+          <li>principal_type, principal_id, delegated_by</li>
+          <li>capability, action_type, action_payload</li>
+          <li>policy_decision, policy_decided_by</li>
+          <li>status, failure_reason, failure_class</li>
+          <li>total_input_tokens, estimated_cost_usd</li>
+          <li>idempotency_key, version</li>
+        </ul>
+      </div>
+
+      <!-- run_step -->
+      <div class="schema-table fade-up d2">
+        <div class="schema-table-name">run_step</div>
+        <p class="table-desc">One sequential stage inside a run. Simple actions: 1 step. Compound: multiple.</p>
+        <ul class="schema-columns">
+          <li><span class="col-key">id</span> <span class="col-type">uuid pk</span></li>
+          <li>run_id, step_number, name</li>
+          <li>action_type, action_payload</li>
+          <li>status, failure_reason</li>
+          <li>output, output_summary</li>
+          <li>input_tokens, estimated_cost_usd</li>
+        </ul>
+      </div>
+
+      <!-- run_attempt -->
+      <div class="schema-table fade-up d3">
+        <div class="schema-table-name">run_attempt</div>
+        <p class="table-desc">Retry envelope for a step. Preserves full failure history.</p>
+        <ul class="schema-columns">
+          <li><span class="col-key">id</span> <span class="col-type">uuid pk</span></li>
+          <li>run_step_id, attempt_number</li>
+          <li>trigger (initial/retry/approval/manual)</li>
+          <li>status, output, worker_type</li>
+          <li>input_tokens, estimated_cost_usd</li>
+        </ul>
+      </div>
+
+      <!-- model_invocation -->
+      <div class="schema-table fade-up d4">
+        <div class="schema-table-name">model_invocation</div>
+        <p class="table-desc">Per-LLM-call cost/latency tracking. Links to runs and/or chat turns.</p>
+        <ul class="schema-columns">
+          <li><span class="col-key">id</span> <span class="col-type">uuid pk</span></li>
+          <li>run_id, session_id, turn_id</li>
+          <li>provider, model_id</li>
+          <li>input_tokens, output_tokens, cost_usd</li>
+          <li>time_to_first_token_ms, duration_ms</li>
+          <li>purpose, is_retry, is_fallback</li>
+        </ul>
+      </div>
+
+      <!-- tool_execution -->
+      <div class="schema-table fade-up d5">
+        <div class="schema-table-name">tool_execution</div>
+        <p class="table-desc">Per-tool-call records with policy decisions. Tier 2 calls only.</p>
+        <ul class="schema-columns">
+          <li><span class="col-key">id</span> <span class="col-type">uuid pk</span></li>
+          <li>run_id, run_step_id</li>
+          <li>tool_name, tool_tier, tool_domain</li>
+          <li>capability, policy_decision</li>
+          <li>input, output, status</li>
+        </ul>
+      </div>
+
+      <!-- run_artifact -->
+      <div class="schema-table fade-up d6">
+        <div class="schema-table-name">run_artifact</div>
+        <p class="table-desc">Files, screenshots, logs in object storage. Distinct from chat artifacts.</p>
+        <ul class="schema-columns">
+          <li><span class="col-key">id</span> <span class="col-type">uuid pk</span></li>
+          <li>run_id, run_step_id</li>
+          <li>name, artifact_type, content_type</li>
+          <li>size_bytes, storage_path</li>
+          <li>is_primary</li>
+        </ul>
+      </div>
+
+      <!-- run_event -->
+      <div class="schema-table fade-up d7">
+        <div class="schema-table-name">run_event</div>
+        <p class="table-desc">Append-only timeline for replay, debugging, and health monitoring.</p>
+        <ul class="schema-columns">
+          <li><span class="col-key">id</span> <span class="col-type">uuid pk</span></li>
+          <li>run_id, run_step_id, sequence</li>
+          <li>event_type (lifecycle/policy/exec/health)</li>
+          <li>event_data, actor_type, actor_id</li>
+        </ul>
+      </div>
+
+      <!-- capability_policy -->
+      <div class="schema-table fade-up d8">
+        <div class="schema-table-name">capability_policy</div>
+        <p class="table-desc">Declarative policy rules. Capability pattern to decision mapping.</p>
+        <ul class="schema-columns">
+          <li><span class="col-key">id</span> <span class="col-type">uuid pk</span></li>
+          <li>organization_id, policy_layer</li>
+          <li>project_id, agent_id</li>
+          <li>capability_pattern, decision, priority</li>
+          <li>conditions, is_active</li>
+        </ul>
+      </div>
+
+      <!-- session_capability_grant -->
+      <div class="schema-table fade-up d9">
+        <div class="schema-table-name">session_capability_grant</div>
+        <p class="table-desc">Ephemeral runtime overrides. Session-scoped approval grants.</p>
+        <ul class="schema-columns">
+          <li><span class="col-key">id</span> <span class="col-type">uuid pk</span></li>
+          <li>session_id, agent_id, capability</li>
+          <li>granted_by, run_id</li>
+          <li>is_active, granted_at, revoked_at</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════ FOOTER ════════════════════════════ -->
+<footer class="footer">
+  <div class="container">
+    <p>
+      OtterCamp V2 -- Agent Control Plane
+      &nbsp;/&nbsp;
+      Source: <a href="../16-agent-control-plane.md">docsv2/16-agent-control-plane.md</a>
+    </p>
+  </div>
+</footer>
+
+<!-- ════════════════════════════ SCRIPTS ════════════════════════════ -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    fontFamily: 'Fira Code, monospace',
+    flowchart: {
+      htmlLabels: true,
+      curve: 'basis',
+      padding: 16
+    },
+    stateDiagram: {
+      htmlLabels: true
+    },
+    themeVariables: {
+      primaryColor: '#1b2838',
+      primaryTextColor: '#e0e0e0',
+      primaryBorderColor: '#2a4a6b',
+      lineColor: '#00b4d8',
+      background: '#0d1b2a',
+      mainBkg: '#1b2838',
+      fontSize: '13px'
+    }
+  });
+</script>
+
+<script>
+  // ── Generic zoom controls ──
+  const scales = {};
+
+  window.zoom = function(id, delta) {
+    if (!scales[id]) scales[id] = 1;
+    scales[id] = Math.min(Math.max(scales[id] + delta, 0.3), 3);
+    applyZoom(id);
+  };
+
+  window.zoomReset = function(id) {
+    scales[id] = 1;
+    applyZoom(id);
+  };
+
+  function applyZoom(id) {
+    const vp = document.getElementById('vp-' + id);
+    if (!vp) return;
+    const svg = vp.querySelector('svg');
+    if (svg) svg.style.transform = 'scale(' + scales[id] + ')';
+  }
+
+  // ── Intersection Observer for scroll-triggered animations ──
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          entry.target.style.animationPlayState = 'running';
+        }
+      });
+    },
+    { threshold: 0.08, rootMargin: '0px 0px -30px 0px' }
+  );
+
+  document.querySelectorAll('.fade-up, .slide-left').forEach((el) => {
+    el.style.animationPlayState = 'paused';
+    observer.observe(el);
+  });
+
+  // Immediately play animations for elements already in viewport
+  requestAnimationFrame(() => {
+    document.querySelectorAll('.fade-up, .slide-left').forEach((el) => {
+      const rect = el.getBoundingClientRect();
+      if (rect.top < window.innerHeight) {
+        el.style.animationPlayState = 'running';
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

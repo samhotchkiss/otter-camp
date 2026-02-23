@@ -1,0 +1,2160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp V2 -- Open Questions and Build Phasing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bitter:wght@400;500;600;700&family=Nunito+Sans:wght@300;400;500;600;700&family=Fira+Code:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  /* ───────────────────────────── Custom Properties ───────────────────────────── */
+  :root {
+    --bg-primary:     #faf6f0;
+    --bg-card:        #ffffff;
+    --bg-card-alt:    #f5f0e8;
+    --bg-hero:        #1e3a5f;
+    --border:         #d4cbbe;
+    --border-light:   #e8e0d4;
+    --accent:         #1e3a5f;
+    --accent-light:   #2a5080;
+    --copper:         #b87333;
+    --copper-light:   #d4944e;
+    --copper-dark:    #8f5a28;
+    --copper-bg:      rgba(184, 115, 51, 0.08);
+    --accent-bg:      rgba(30, 58, 95, 0.06);
+    --text-primary:   #2d2926;
+    --text-secondary: #5a524a;
+    --text-muted:     #8a7f74;
+    --text-inverse:   #faf6f0;
+    --shadow-sm:      0 1px 3px rgba(45, 41, 38, 0.06);
+    --shadow-md:      0 4px 12px rgba(45, 41, 38, 0.08);
+    --shadow-lg:      0 8px 30px rgba(45, 41, 38, 0.10);
+    --font-heading:   'Bitter', serif;
+    --font-body:      'Nunito Sans', sans-serif;
+    --font-code:      'Fira Code', monospace;
+    --ease-out:       cubic-bezier(0.22, 1, 0.36, 1);
+    --radius:         6px;
+    --radius-lg:      12px;
+  }
+
+  /* ───────────────────────────── Reset & Base ───────────────────────────── */
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html {
+    font-size: 16px;
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-weight: 400;
+    line-height: 1.7;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ───────────────────────────── Layout ───────────────────────────── */
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 2rem;
+  }
+
+  .container--wide {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 2rem;
+  }
+
+  section {
+    padding: 4rem 0;
+  }
+
+  section + section {
+    border-top: 1px solid var(--border-light);
+  }
+
+  /* ───────────────────────────── Typography ───────────────────────────── */
+  h1, h2, h3, h4 {
+    font-family: var(--font-heading);
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+  }
+
+  h1 { font-size: 2.5rem; font-weight: 700; line-height: 1.15; }
+  h2 { font-size: 1.75rem; font-weight: 600; line-height: 1.25; margin-bottom: 1.5rem; }
+  h3 { font-size: 1.25rem; font-weight: 600; line-height: 1.35; margin-bottom: 0.75rem; }
+  h4 { font-size: 1.05rem; font-weight: 600; line-height: 1.4; }
+
+  p {
+    margin-bottom: 1rem;
+    color: var(--text-secondary);
+  }
+
+  code {
+    font-family: var(--font-code);
+    font-size: 0.85em;
+    background: var(--bg-card-alt);
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    color: var(--copper-dark);
+  }
+
+  a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid var(--border);
+    transition: border-color 0.2s ease;
+  }
+
+  a:hover {
+    border-color: var(--copper);
+    color: var(--copper-dark);
+  }
+
+  /* ───────────────────────────── Hero ───────────────────────────── */
+  .hero {
+    background: var(--bg-hero);
+    color: var(--text-inverse);
+    padding: 5rem 0 4rem;
+    position: relative;
+    overflow: hidden;
+    border-top: none;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background:
+      repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 39px,
+        rgba(184, 115, 51, 0.06) 39px,
+        rgba(184, 115, 51, 0.06) 40px
+      ),
+      repeating-linear-gradient(
+        90deg,
+        transparent,
+        transparent 39px,
+        rgba(184, 115, 51, 0.06) 39px,
+        rgba(184, 115, 51, 0.06) 40px
+      );
+    pointer-events: none;
+  }
+
+  .hero::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, var(--copper), var(--copper-light), var(--copper));
+  }
+
+  .hero .container {
+    position: relative;
+    z-index: 1;
+  }
+
+  .hero__label {
+    font-family: var(--font-code);
+    font-size: 0.8rem;
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--copper-light);
+    margin-bottom: 1rem;
+    display: block;
+    opacity: 0;
+    animation: fadeInUp 0.6s var(--ease-out) 0.1s forwards;
+  }
+
+  .hero h1 {
+    color: var(--text-inverse);
+    font-size: 2.75rem;
+    margin-bottom: 0.75rem;
+    opacity: 0;
+    animation: fadeInUp 0.6s var(--ease-out) 0.2s forwards;
+  }
+
+  .hero__subtitle {
+    font-size: 1.2rem;
+    color: rgba(250, 246, 240, 0.7);
+    font-weight: 300;
+    max-width: 640px;
+    line-height: 1.6;
+    opacity: 0;
+    animation: fadeInUp 0.6s var(--ease-out) 0.35s forwards;
+  }
+
+  .hero__stats {
+    display: flex;
+    gap: 2.5rem;
+    margin-top: 2.5rem;
+    flex-wrap: wrap;
+    opacity: 0;
+    animation: fadeInUp 0.6s var(--ease-out) 0.5s forwards;
+  }
+
+  .hero__stat {
+    text-align: center;
+  }
+
+  .hero__stat-value {
+    font-family: var(--font-heading);
+    font-size: 2.25rem;
+    font-weight: 700;
+    color: var(--copper-light);
+    line-height: 1;
+    display: block;
+  }
+
+  .hero__stat-label {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: rgba(250, 246, 240, 0.55);
+    margin-top: 0.35rem;
+    display: block;
+  }
+
+  /* ───────────────────────────── Section Headers ───────────────────────────── */
+  .section-header {
+    text-align: center;
+    margin-bottom: 3rem;
+  }
+
+  .section-header__label {
+    font-family: var(--font-code);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--copper);
+    display: block;
+    margin-bottom: 0.5rem;
+  }
+
+  .section-header p {
+    max-width: 640px;
+    margin: 0.75rem auto 0;
+    color: var(--text-muted);
+    font-size: 1.05rem;
+  }
+
+  /* ───────────────────────────── Phase Timeline (Overview) ───────────────────────────── */
+  .timeline-overview {
+    padding: 4.5rem 0;
+    background: var(--bg-card-alt);
+  }
+
+  .timeline-track {
+    display: flex;
+    align-items: flex-start;
+    position: relative;
+    padding: 2rem 0;
+    overflow-x: auto;
+  }
+
+  .timeline-track::before {
+    content: '';
+    position: absolute;
+    top: 50px;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--copper));
+    z-index: 0;
+  }
+
+  .timeline-node {
+    flex: 1;
+    min-width: 180px;
+    text-align: center;
+    position: relative;
+    z-index: 1;
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  .timeline-node.visible {
+    animation: fadeInUp 0.5s var(--ease-out) forwards;
+  }
+
+  .timeline-dot {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--bg-primary);
+    border: 3px solid var(--accent);
+    margin: 0 auto 1rem;
+    position: relative;
+    transition: all 0.3s ease;
+  }
+
+  .timeline-dot::after {
+    content: '';
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--copper);
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+  }
+
+  .timeline-node:hover .timeline-dot {
+    border-color: var(--copper);
+    box-shadow: 0 0 0 6px var(--copper-bg);
+  }
+
+  .timeline-phase-num {
+    font-family: var(--font-code);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--copper);
+    margin-bottom: 0.25rem;
+  }
+
+  .timeline-phase-title {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 1rem;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+    line-height: 1.3;
+  }
+
+  .timeline-phase-desc {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+    padding: 0 0.75rem;
+  }
+
+  /* ───────────────────────────── Phase Detail Cards ───────────────────────────── */
+  .phase-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+  }
+
+  .phase-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(24px);
+    transition: box-shadow 0.3s ease;
+  }
+
+  .phase-card.visible {
+    animation: fadeInUp 0.6s var(--ease-out) forwards;
+  }
+
+  .phase-card:hover {
+    box-shadow: var(--shadow-md);
+  }
+
+  .phase-card__header {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    padding: 1.5rem 2rem;
+    cursor: pointer;
+    user-select: none;
+    border-bottom: 1px solid transparent;
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+
+  .phase-card__header:hover {
+    background: var(--accent-bg);
+  }
+
+  .phase-card.open .phase-card__header {
+    border-bottom-color: var(--border-light);
+  }
+
+  .phase-card__number {
+    font-family: var(--font-heading);
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1;
+    min-width: 48px;
+  }
+
+  .phase-card__title-group {
+    flex: 1;
+  }
+
+  .phase-card__title {
+    font-family: var(--font-heading);
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+  }
+
+  .phase-card__tagline {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin: 0.15rem 0 0;
+  }
+
+  .phase-card__toggle {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    transition: transform 0.3s var(--ease-out);
+  }
+
+  .phase-card.open .phase-card__toggle {
+    transform: rotate(180deg);
+  }
+
+  .phase-card__body {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.5s var(--ease-out);
+  }
+
+  .phase-card.open .phase-card__body {
+    max-height: 4000px;
+  }
+
+  .phase-card__content {
+    padding: 2rem;
+  }
+
+  /* Deliverables grid */
+  .deliverables-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+
+  .deliverable {
+    background: var(--bg-card-alt);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 1rem 1.25rem;
+    border-left: 3px solid var(--copper);
+  }
+
+  .deliverable__title {
+    font-family: var(--font-heading);
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.35rem;
+  }
+
+  .deliverable__spec {
+    font-family: var(--font-code);
+    font-size: 0.7rem;
+    color: var(--copper);
+    display: block;
+    margin-bottom: 0.4rem;
+  }
+
+  .deliverable__desc {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    line-height: 1.55;
+    margin: 0;
+  }
+
+  /* Milestones */
+  .milestones {
+    margin-top: 1.5rem;
+  }
+
+  .milestones h4 {
+    font-family: var(--font-heading);
+    font-size: 1rem;
+    color: var(--accent);
+    margin-bottom: 0.75rem;
+  }
+
+  .milestone-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .milestone-list li {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  .milestone-num {
+    font-family: var(--font-code);
+    font-size: 0.75rem;
+    color: var(--copper);
+    font-weight: 500;
+    min-width: 20px;
+  }
+
+  .milestone-label {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  /* ───────────────────────────── Bootstrap Sequence ───────────────────────────── */
+  .bootstrap-section {
+    background: var(--bg-card-alt);
+  }
+
+  .bootstrap-flow {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    position: relative;
+    max-width: 700px;
+    margin: 0 auto;
+  }
+
+  .bootstrap-flow::before {
+    content: '';
+    position: absolute;
+    left: 28px;
+    top: 28px;
+    bottom: 28px;
+    width: 2px;
+    background: linear-gradient(180deg, var(--accent), var(--copper));
+  }
+
+  .bootstrap-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 1.25rem;
+    padding: 0.75rem 0;
+    position: relative;
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+
+  .bootstrap-step.visible {
+    animation: fadeInRight 0.4s var(--ease-out) forwards;
+  }
+
+  .bootstrap-step__num {
+    width: 56px;
+    height: 56px;
+    min-width: 56px;
+    border-radius: 50%;
+    background: var(--bg-card);
+    border: 2px solid var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-heading);
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--accent);
+    position: relative;
+    z-index: 1;
+    transition: all 0.3s ease;
+  }
+
+  .bootstrap-step:hover .bootstrap-step__num {
+    background: var(--accent);
+    color: var(--text-inverse);
+    border-color: var(--accent);
+  }
+
+  .bootstrap-step__content {
+    padding-top: 0.5rem;
+    flex: 1;
+  }
+
+  .bootstrap-step__title {
+    font-family: var(--font-heading);
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.2rem;
+  }
+
+  .bootstrap-step__desc {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin: 0;
+  }
+
+  /* ───────────────────────────── Resolved Decisions ───────────────────────────── */
+  .decisions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 1.5rem;
+  }
+
+  .decision-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    padding: 1.75rem;
+    box-shadow: var(--shadow-sm);
+    position: relative;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  .decision-card.visible {
+    animation: fadeInUp 0.5s var(--ease-out) forwards;
+  }
+
+  .decision-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--copper));
+  }
+
+  .decision-card__num {
+    font-family: var(--font-code);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--copper);
+    display: block;
+    margin-bottom: 0.5rem;
+  }
+
+  .decision-card__question {
+    font-family: var(--font-heading);
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.75rem;
+    line-height: 1.4;
+  }
+
+  .decision-card__answer {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 0.75rem;
+    line-height: 1.4;
+  }
+
+  .decision-card__detail {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin: 0;
+  }
+
+  .decision-card__detail ul {
+    list-style: none;
+    padding: 0;
+    margin: 0.5rem 0 0;
+  }
+
+  .decision-card__detail li {
+    position: relative;
+    padding-left: 1rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .decision-card__detail li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.55em;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--copper);
+  }
+
+  /* ───────────────────────────── Open Questions ───────────────────────────── */
+  .questions-section {
+    background: var(--bg-card-alt);
+  }
+
+  .questions-category {
+    margin-bottom: 2rem;
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  .questions-category.visible {
+    animation: fadeInUp 0.5s var(--ease-out) forwards;
+  }
+
+  .questions-category__header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .questions-category__title {
+    font-family: var(--font-heading);
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--accent);
+    margin: 0;
+  }
+
+  .questions-category__count {
+    font-family: var(--font-code);
+    font-size: 0.7rem;
+    background: var(--accent);
+    color: var(--text-inverse);
+    padding: 0.15em 0.55em;
+    border-radius: 10px;
+    font-weight: 500;
+  }
+
+  .questions-category__toggle {
+    margin-left: auto;
+    color: var(--text-muted);
+    transition: transform 0.3s var(--ease-out);
+    width: 20px;
+    height: 20px;
+  }
+
+  .questions-category.open .questions-category__toggle {
+    transform: rotate(180deg);
+  }
+
+  .questions-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.4s var(--ease-out);
+  }
+
+  .questions-category.open .questions-list {
+    max-height: 2000px;
+  }
+
+  .questions-list li {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 0.85rem 1.15rem;
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+    line-height: 1.55;
+    border-left: 3px solid var(--copper);
+  }
+
+  .questions-list li strong {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  /* ───────────────────────────── Risk Areas ───────────────────────────── */
+  .risk-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1.25rem;
+  }
+
+  .risk-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 1.25rem 1.5rem;
+    box-shadow: var(--shadow-sm);
+    opacity: 0;
+    transform: translateY(16px);
+  }
+
+  .risk-card.visible {
+    animation: fadeInUp 0.4s var(--ease-out) forwards;
+  }
+
+  .risk-card__rank {
+    font-family: var(--font-code);
+    font-size: 0.7rem;
+    color: var(--copper);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 0.35rem;
+  }
+
+  .risk-card__title {
+    font-family: var(--font-heading);
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+  }
+
+  .risk-card__desc {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    line-height: 1.55;
+    margin: 0;
+  }
+
+  /* ───────────────────────────── Bootstrap Dataset ───────────────────────────── */
+  .dataset-columns {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1.5rem;
+  }
+
+  .dataset-group {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    box-shadow: var(--shadow-sm);
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  .dataset-group.visible {
+    animation: fadeInUp 0.5s var(--ease-out) forwards;
+  }
+
+  .dataset-group__title {
+    font-family: var(--font-heading);
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid var(--copper-bg);
+  }
+
+  .dataset-item {
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border-light);
+  }
+
+  .dataset-item:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+
+  .dataset-item__name {
+    font-family: var(--font-heading);
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.15rem;
+  }
+
+  .dataset-item__slug {
+    font-family: var(--font-code);
+    font-size: 0.72rem;
+    color: var(--copper);
+  }
+
+  .dataset-item__desc {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    margin: 0.2rem 0 0;
+    line-height: 1.5;
+  }
+
+  /* ───────────────────────────── Footer ───────────────────────────── */
+  .footer {
+    background: var(--bg-hero);
+    color: rgba(250, 246, 240, 0.5);
+    padding: 2.5rem 0;
+    text-align: center;
+    font-size: 0.8rem;
+    border-top: 3px solid var(--copper);
+  }
+
+  .footer strong {
+    color: rgba(250, 246, 240, 0.8);
+  }
+
+  .footer__nav {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    margin-top: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .footer__nav a {
+    color: var(--copper-light);
+    border-bottom: none;
+    font-size: 0.78rem;
+    font-family: var(--font-code);
+    letter-spacing: 0.05em;
+  }
+
+  .footer__nav a:hover {
+    color: var(--text-inverse);
+  }
+
+  /* ───────────────────────────── Animations ───────────────────────────── */
+  @keyframes fadeInUp {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes fadeInRight {
+    from {
+      opacity: 0;
+      transform: translateX(-20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  /* ───────────────────────────── Deep-Dive Order ───────────────────────────── */
+  .deepdive-list {
+    list-style: none;
+    max-width: 720px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .deepdive-item {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 0.75rem 1.25rem;
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  .deepdive-item.visible {
+    animation: fadeInUp 0.35s var(--ease-out) forwards;
+  }
+
+  .deepdive-item__rank {
+    font-family: var(--font-code);
+    font-size: 0.75rem;
+    color: var(--copper);
+    min-width: 24px;
+    font-weight: 500;
+  }
+
+  .deepdive-item__doc {
+    font-family: var(--font-heading);
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    min-width: 40px;
+  }
+
+  .deepdive-item__title {
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+    flex: 1;
+  }
+
+  .deepdive-item__status {
+    font-family: var(--font-code);
+    font-size: 0.7rem;
+    padding: 0.15em 0.5em;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+
+  .deepdive-item__status--drafted {
+    background: rgba(30, 58, 95, 0.1);
+    color: var(--accent);
+  }
+
+  .deepdive-item__status--stub {
+    background: var(--copper-bg);
+    color: var(--copper-dark);
+  }
+
+  /* ───────────────────────────── Responsive ───────────────────────────── */
+  @media (max-width: 768px) {
+    .hero h1 {
+      font-size: 2rem;
+    }
+
+    .hero__stats {
+      gap: 1.5rem;
+    }
+
+    .timeline-track {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .timeline-track::before {
+      top: 0;
+      bottom: 0;
+      left: 14px;
+      right: auto;
+      width: 3px;
+      height: auto;
+    }
+
+    .timeline-node {
+      text-align: left;
+      padding-left: 48px;
+      min-width: 0;
+      margin-bottom: 1.5rem;
+    }
+
+    .timeline-dot {
+      position: absolute;
+      left: 0;
+      top: 0;
+      margin: 0;
+    }
+
+    .deliverables-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .decisions-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .risk-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .dataset-columns {
+      grid-template-columns: 1fr;
+    }
+
+    .phase-card__header {
+      padding: 1.25rem 1.25rem;
+    }
+
+    .phase-card__content {
+      padding: 1.25rem;
+    }
+
+    h2 {
+      font-size: 1.5rem;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .hero {
+      padding: 3rem 0 2.5rem;
+    }
+
+    .hero h1 {
+      font-size: 1.65rem;
+    }
+
+    .hero__subtitle {
+      font-size: 1rem;
+    }
+
+    .container {
+      padding: 0 1.25rem;
+    }
+
+    section {
+      padding: 3rem 0;
+    }
+  }
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════ HERO ════════════════════════ -->
+<section class="hero">
+  <div class="container">
+    <span class="hero__label">OtterCamp V2 / Spec 14</span>
+    <h1>Open Questions &amp; Build Phasing</h1>
+    <p class="hero__subtitle">
+      The meta-planning document for OtterCamp V2. Five sequential build phases, from bare
+      infrastructure to production distribution. Self-host first, managed hosting later.
+    </p>
+    <div class="hero__stats">
+      <div class="hero__stat">
+        <span class="hero__stat-value">5</span>
+        <span class="hero__stat-label">Build Phases</span>
+      </div>
+      <div class="hero__stat">
+        <span class="hero__stat-value">3</span>
+        <span class="hero__stat-label">Resolved Decisions</span>
+      </div>
+      <div class="hero__stat">
+        <span class="hero__stat-value">~25</span>
+        <span class="hero__stat-label">Open Questions</span>
+      </div>
+      <div class="hero__stat">
+        <span class="hero__stat-value">10</span>
+        <span class="hero__stat-label">Bootstrap Steps</span>
+      </div>
+      <div class="hero__stat">
+        <span class="hero__stat-value">16</span>
+        <span class="hero__stat-label">Spec Documents</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════ PHASE TIMELINE OVERVIEW ════════════════════════ -->
+<section class="timeline-overview" id="timeline">
+  <div class="container--wide">
+    <div class="section-header">
+      <span class="section-header__label">Build Roadmap</span>
+      <h2>5 Phases, Foundation to Distribution</h2>
+      <p>Each phase produces a usable product that extends the prior. Dependencies are strict -- nothing in Phase N ships without Phase N-1.</p>
+    </div>
+
+    <div class="timeline-track" data-stagger="timeline">
+      <div class="timeline-node" data-stagger-child>
+        <div class="timeline-dot"></div>
+        <div class="timeline-phase-num">Phase 0</div>
+        <div class="timeline-phase-title">Foundation</div>
+        <div class="timeline-phase-desc">Infrastructure only. No user-facing product. Schema, auth, model gateway, event bus, prompt pipeline, control plane, tool framework, bootstrap CLI.</div>
+      </div>
+      <div class="timeline-node" data-stagger-child>
+        <div class="timeline-dot"></div>
+        <div class="timeline-phase-num">Phase 1</div>
+        <div class="timeline-phase-title">Sync Chat + TUI</div>
+        <div class="timeline-phase-desc">First usable product. Human talks to agents via terminal. Chat sessions, starter trio, basic memory, skills, streaming responses.</div>
+      </div>
+      <div class="timeline-node" data-stagger-child>
+        <div class="timeline-dot"></div>
+        <div class="timeline-phase-num">Phase 2</div>
+        <div class="timeline-phase-title">Projects + Tasks</div>
+        <div class="timeline-phase-desc">Autonomous work. Projects as git repos, task flows, subtasks, scheduling, async mode, merge queue, inbox, blocker escalation, shipping.</div>
+      </div>
+      <div class="timeline-node" data-stagger-child>
+        <div class="timeline-dot"></div>
+        <div class="timeline-phase-num">Phase 3</div>
+        <div class="timeline-phase-title">Self-Building</div>
+        <div class="timeline-phase-desc">OtterCamp builds itself. Web UI, MCP integration, system integration (CLI/browser), full control plane, observability, REST API.</div>
+      </div>
+      <div class="timeline-node" data-stagger-child>
+        <div class="timeline-dot"></div>
+        <div class="timeline-phase-num">Phase 4</div>
+        <div class="timeline-phase-title">Hardening + Distribution</div>
+        <div class="timeline-phase-desc">Production ready. Security audit, Docker Compose packaging, mobile UI, multi-tenant with RLS, additional model providers, migration tools.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════ PHASE DETAIL CARDS ════════════════════════ -->
+<section id="phases">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-header__label">Phase Details</span>
+      <h2>What Gets Built</h2>
+      <p>Expand each phase to see deliverables, spec dependencies, and key milestones.</p>
+    </div>
+
+    <div class="phase-cards">
+
+      <!-- Phase 0 -->
+      <div class="phase-card" data-animate>
+        <div class="phase-card__header" onclick="togglePhaseCard(this)">
+          <div class="phase-card__number">0</div>
+          <div class="phase-card__title-group">
+            <div class="phase-card__title">Foundation</div>
+            <div class="phase-card__tagline">Infrastructure only -- no user-facing product</div>
+          </div>
+          <div class="phase-card__toggle"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div>
+        </div>
+        <div class="phase-card__body">
+          <div class="phase-card__content">
+            <div class="deliverables-grid">
+              <div class="deliverable">
+                <span class="deliverable__spec">Docs 01, 04</span>
+                <div class="deliverable__title">Domain Model + Schema</div>
+                <p class="deliverable__desc">PostgreSQL with all foundational tables. Migration framework. Object storage abstraction (S3-compatible with local fallback).</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 04</span>
+                <div class="deliverable__title">Auth + Identity</div>
+                <p class="deliverable__desc">Email/password auth, server-side sessions, API keys, org isolation via <code>organization_id</code>, audit logging, rate limiting.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Docs 04, 05</span>
+                <div class="deliverable__title">Agent Identity</div>
+                <p class="deliverable__desc">Agent table with full profile shape. Lifecycle states (draft, active, paused, retired). Staff vs temp classification.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 07</span>
+                <div class="deliverable__title">Model Gateway</div>
+                <p class="deliverable__desc">Provider adapter interface, Anthropic implementation. Model profiles, versioning, concurrency management, cost tracking, retry with fallback.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 12</span>
+                <div class="deliverable__title">Event Bus</div>
+                <p class="deliverable__desc">Domain event emission, durable event log, realtime fanout (SSE/WebSocket), subscriber registration for downstream consumers.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 05</span>
+                <div class="deliverable__title">Prompt Assembly Pipeline</div>
+                <p class="deliverable__desc">7-layer pipeline: identity, policies, scope context, skills, memory, conversation history, tool descriptions. Budget management.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 16</span>
+                <div class="deliverable__title">Control Plane Foundation</div>
+                <p class="deliverable__desc">Capability model with namespaced permissions. Policy layers: instance safety, org, project, agent. Default-deny posture.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 20</span>
+                <div class="deliverable__title">Tool Framework</div>
+                <p class="deliverable__desc">Tool registry, two-tier execution routing (tier 1 chat-layer, tier 2 control-plane). Four-stage resolution pipeline.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 04</span>
+                <div class="deliverable__title">Bootstrap CLI</div>
+                <p class="deliverable__desc"><code>ottercamp bootstrap</code> -- creates org, first user, starter trio, General session. Idempotent.</p>
+              </div>
+            </div>
+            <div class="milestones">
+              <h4>Key Milestones</h4>
+              <ul class="milestone-list">
+                <li><span class="milestone-num">01</span> <span><span class="milestone-label">Database boots</span> -- migrations run, schema is up, bootstrap completes</span></li>
+                <li><span class="milestone-num">02</span> <span><span class="milestone-label">Auth works</span> -- human can log in, sessions valid, API keys created</span></li>
+                <li><span class="milestone-num">03</span> <span><span class="milestone-label">Model gateway routes</span> -- request reaches provider, response returns</span></li>
+                <li><span class="milestone-num">04</span> <span><span class="milestone-label">Event bus fires</span> -- domain events emit and can be consumed</span></li>
+                <li><span class="milestone-num">05</span> <span><span class="milestone-label">Prompt assembly runs</span> -- pipeline produces complete prompt within token budget</span></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Phase 1 -->
+      <div class="phase-card" data-animate>
+        <div class="phase-card__header" onclick="togglePhaseCard(this)">
+          <div class="phase-card__number">1</div>
+          <div class="phase-card__title-group">
+            <div class="phase-card__title">Synchronous Chat via TUI</div>
+            <div class="phase-card__tagline">First usable product -- human talks to agents in real-time</div>
+          </div>
+          <div class="phase-card__toggle"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div>
+        </div>
+        <div class="phase-card__body">
+          <div class="phase-card__content">
+            <div class="deliverables-grid">
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 17</span>
+                <div class="deliverable__title">TUI Application</div>
+                <p class="deliverable__desc">Terminal interface (Bubble Tea or equivalent). Streaming responses, session sidebar, keyboard-driven navigation. Connects via HTTP/SSE.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 02</span>
+                <div class="deliverable__title">Chat System</div>
+                <p class="deliverable__desc">Full chat schema. Org-scoped sessions. Sync mode with streaming. Turn cycle with listening eval. Progressive summarization. Cancel, steer, and message queue.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 05</span>
+                <div class="deliverable__title">Starter Trio Agents</div>
+                <p class="deliverable__desc">Frank (Chief of Staff), Lori (Agent Relations), Ellie (Memory). Full prompt packs, identity skills, default tool policies per agent.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 06</span>
+                <div class="deliverable__title">Basic Memory</div>
+                <p class="deliverable__desc">Ellie's passive injection (top-k retrieval into prompt layer 5). Implicit capture from chat events. Explicit capture via @mention. <code>memory.query</code> tool.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 10</span>
+                <div class="deliverable__title">Skills Foundation</div>
+                <p class="deliverable__desc">Org-level skills repo. Starter trio identity skills. Org defaults (safety, work standards). Skills injected into prompt layer 4.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 07</span>
+                <div class="deliverable__title">Model Provider</div>
+                <p class="deliverable__desc">Anthropic adapter fully functional. High-capability profile for agent turns, Haiku-tier for listening evals and summarization. Streaming for sync.</p>
+              </div>
+            </div>
+            <div class="milestones">
+              <h4>Key Milestones</h4>
+              <ul class="milestone-list">
+                <li><span class="milestone-num">01</span> <span><span class="milestone-label">"Hello, Frank"</span> -- human opens TUI, sees General session, talks to Frank with personality and context</span></li>
+                <li><span class="milestone-num">02</span> <span><span class="milestone-label">Multi-agent conversation</span> -- @mention Lori, listening eval runs, Frank may interject</span></li>
+                <li><span class="milestone-num">03</span> <span><span class="milestone-label">Memory works</span> -- tell Frank something, ask Ellie later, Ellie remembers</span></li>
+                <li><span class="milestone-num">04</span> <span><span class="milestone-label">Reactions work</span> -- thumbs-up a response, Ellie captures the signal</span></li>
+                <li><span class="milestone-num">05</span> <span><span class="milestone-label">Streaming works</span> -- agent responses stream token-by-token in the TUI</span></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Phase 2 -->
+      <div class="phase-card" data-animate>
+        <div class="phase-card__header" onclick="togglePhaseCard(this)">
+          <div class="phase-card__number">2</div>
+          <div class="phase-card__title-group">
+            <div class="phase-card__title">Projects + Tasks</div>
+            <div class="phase-card__tagline">Autonomous work -- agents manage projects and execute tasks</div>
+          </div>
+          <div class="phase-card__toggle"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div>
+        </div>
+        <div class="phase-card__body">
+          <div class="phase-card__content">
+            <div class="deliverables-grid">
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 03</span>
+                <div class="deliverable__title">Project System</div>
+                <p class="deliverable__desc">Full project schema. Creation through conversation with Frank. Project as git repo with <code>main</code> as source of truth. PM-maintained context block.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 03</span>
+                <div class="deliverable__title">Task Lifecycle</div>
+                <p class="deliverable__desc">Draft, queued, in_progress, blocked, review, done. Agent-created tasks. Task numbering (<code>OC-1</code>, <code>OC-5.3</code>). Flat hierarchy with dependency DAG.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 03</span>
+                <div class="deliverable__title">Flow Templates + Progression</div>
+                <p class="deliverable__desc">Flow templates designed conversationally. Node types: work, review. Explicit advancement via <code>flow.advance</code>. Rejection loops with visit counter.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 03</span>
+                <div class="deliverable__title">Subtasks + Scheduling</div>
+                <p class="deliverable__desc">Subtasks scoped to flow node executions. Task scheduling with cron expressions, three overlap policies (skip, queue, replace).</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Docs 02, 05</span>
+                <div class="deliverable__title">Async Mode + Staffing</div>
+                <p class="deliverable__desc">Async sessions for autonomous work. PM assignment, worker/reviewer staffing via Lori. Flow node actor resolution.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 03</span>
+                <div class="deliverable__title">Merge Queue + Inbox</div>
+                <p class="deliverable__desc">Serial merge processing with conflict detection. Inbox with five item types: task scoping, work review, draft action, escalation, capability approval.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 03a</span>
+                <div class="deliverable__title">Shipping + Delivery</div>
+                <p class="deliverable__desc">Two delivery patterns (during flow + after merge). Remote push, delivery modes (continuous, gated, scheduled), environment tracking.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 05</span>
+                <div class="deliverable__title">Temp Agents</div>
+                <p class="deliverable__desc">Create via <code>agent.create_temp</code>. Scoped lifetime (task, session, TTL). Auto-expiration and archival. Promotion to staff.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 06</span>
+                <div class="deliverable__title">Memory Hardening</div>
+                <p class="deliverable__desc">Dedup pipeline, entity synthesis, contradiction detection, task-completion consolidation, file-backed memories from project repos.</p>
+              </div>
+            </div>
+            <div class="milestones">
+              <h4>Key Milestones</h4>
+              <ul class="milestone-list">
+                <li><span class="milestone-num">01</span> <span><span class="milestone-label">"Create a project"</span> -- Frank routes to Lori for staffing, PM assigned, repo initialized</span></li>
+                <li><span class="milestone-num">02</span> <span><span class="milestone-label">Task flow works</span> -- PM scopes task, agent picks it up, creates branch, writes code, flow advances to review</span></li>
+                <li><span class="milestone-num">03</span> <span><span class="milestone-label">Autonomous execution</span> -- human goes away, agents work tasks, file blockers, escalate as needed</span></li>
+                <li><span class="milestone-num">04</span> <span><span class="milestone-label">Review loop</span> -- reviewer rejects, flow loops back, agent reworks, reviewer approves, task merges</span></li>
+                <li><span class="milestone-num">05</span> <span><span class="milestone-label">Scheduled tasks</span> -- PM sets up recurring check, tasks auto-create on cadence</span></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Phase 3 -->
+      <div class="phase-card" data-animate>
+        <div class="phase-card__header" onclick="togglePhaseCard(this)">
+          <div class="phase-card__number">3</div>
+          <div class="phase-card__title-group">
+            <div class="phase-card__title">Self-Building</div>
+            <div class="phase-card__tagline">OtterCamp builds itself -- development moves inside the system</div>
+          </div>
+          <div class="phase-card__toggle"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div>
+        </div>
+        <div class="phase-card__body">
+          <div class="phase-card__content">
+            <div class="deliverables-grid">
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 18</span>
+                <div class="deliverable__title">Web UI</div>
+                <p class="deliverable__desc">React SPA. Three-panel layout, scope pill, task boards (kanban), agent directory, inbox queue, merge queue, command bar. Dark mode default.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 09</span>
+                <div class="deliverable__title">MCP Integration</div>
+                <p class="deliverable__desc">MCP client (stdio + HTTP/SSE). Tool discovery, default-deny, secret management, circuit breaker, policy integration, execution audit log.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 11</span>
+                <div class="deliverable__title">System Integration</div>
+                <p class="deliverable__desc">Sandboxed CLI execution, browser automation with isolated contexts, artifact capture (screenshots, logs), domain allowlists/denylists.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 16</span>
+                <div class="deliverable__title">Full Control Plane</div>
+                <p class="deliverable__desc">Complete execution lifecycle. Approval workflows. Failure state repair: stuck tasks, queue drain, orphaned run recovery. Health heartbeats.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 07</span>
+                <div class="deliverable__title">Multi-Provider Routing</div>
+                <p class="deliverable__desc">OpenAI, Google, OpenAI-compatible adapters. Cross-provider fallback chains. Budget caps with soft/hard limits. Deterministic test mode.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 13</span>
+                <div class="deliverable__title">Observability Stack</div>
+                <p class="deliverable__desc">Structured logs with trace IDs. Metrics: latency, errors, queue depth, tokens. Cost dashboards per-org/project/agent. Alerting thresholds.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 06</span>
+                <div class="deliverable__title">Full Memory Pipeline</div>
+                <p class="deliverable__desc">Full 9-table schema. Sleep-time reflection, taxonomy management, cross-encoder reranking, injection cooldown, memory feedback loop, JSONL importer.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 12</span>
+                <div class="deliverable__title">REST API Surface</div>
+                <p class="deliverable__desc">REST endpoints for all domain entities. Realtime channel (SSE/WebSocket). Internal job API. Idempotency keys. Consistent error shape.</p>
+              </div>
+            </div>
+            <div class="milestones">
+              <h4>Key Milestones</h4>
+              <ul class="milestone-list">
+                <li><span class="milestone-num">01</span> <span><span class="milestone-label">Web UI is usable</span> -- navigate projects, review tasks, chat, manage inbox from a browser</span></li>
+                <li><span class="milestone-num">02</span> <span><span class="milestone-label">MCP connections work</span> -- agent calls external tool (GitHub, DB) through MCP with policy controls</span></li>
+                <li><span class="milestone-num">03</span> <span><span class="milestone-label">Agents write code</span> -- CLI commands, file I/O, and tests in sandboxed workspaces</span></li>
+                <li><span class="milestone-num">04</span> <span><span class="milestone-label">OtterCamp builds itself</span> -- its own features managed within itself, agents write, review, merge</span></li>
+                <li><span class="milestone-num">05</span> <span><span class="milestone-label">Full observability</span> -- cost breakdowns, error rates, queue health, agent performance dashboards</span></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Phase 4 -->
+      <div class="phase-card" data-animate>
+        <div class="phase-card__header" onclick="togglePhaseCard(this)">
+          <div class="phase-card__number">4</div>
+          <div class="phase-card__title-group">
+            <div class="phase-card__title">Hardening + Distribution</div>
+            <div class="phase-card__tagline">Production readiness for external users and operators</div>
+          </div>
+          <div class="phase-card__toggle"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div>
+        </div>
+        <div class="phase-card__body">
+          <div class="phase-card__content">
+            <div class="deliverables-grid">
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 13</span>
+                <div class="deliverable__title">Security Hardening</div>
+                <p class="deliverable__desc">Comprehensive audit. Defense-in-depth review. Retention controls. Redaction pipeline. Export/delete for compliance. RLS for multi-tenant.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 08</span>
+                <div class="deliverable__title">Self-Host Packaging</div>
+                <p class="deliverable__desc">Docker Compose: API, worker, PostgreSQL, object storage. <code>docker compose up</code> + <code>ottercamp bootstrap</code>. Versioned migrations, backup/restore.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 19</span>
+                <div class="deliverable__title">Mobile UI</div>
+                <p class="deliverable__desc">React Native (or equivalent). Dashboard at a glance. Push notifications for escalations and reviews. Quick actions. Lightweight chat with Frank.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Docs 04, 08</span>
+                <div class="deliverable__title">Multi-Tenant Operations</div>
+                <p class="deliverable__desc">Managed hosting infra. Org suspension/soft-delete. RLS enforcement. SSO/OIDC (Google, GitHub). Per-org provider credential isolation.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 07</span>
+                <div class="deliverable__title">Additional Providers</div>
+                <p class="deliverable__desc">Complete adapter suite. Local model support via OpenAI-compatible adapter (Ollama, vLLM, LM Studio). Regression suite for model upgrades.</p>
+              </div>
+              <div class="deliverable">
+                <span class="deliverable__spec">Doc 15</span>
+                <div class="deliverable__title">Migration Tools</div>
+                <p class="deliverable__desc">JSONL importer for historical data. Optional CSV/JSON import. Validation checklist: fresh install reproducible, permissions enforced, audit logs active.</p>
+              </div>
+            </div>
+            <div class="milestones">
+              <h4>Key Milestones</h4>
+              <ul class="milestone-list">
+                <li><span class="milestone-num">01</span> <span><span class="milestone-label">Security audit passes</span> -- all execution paths reviewed, no critical vulnerabilities</span></li>
+                <li><span class="milestone-num">02</span> <span><span class="milestone-label">Self-host end-to-end</span> -- docker compose up, bootstrap, chat with Frank, create project, agents work</span></li>
+                <li><span class="milestone-num">03</span> <span><span class="milestone-label">Mobile notifications</span> -- push notification for reviews, approve from phone</span></li>
+                <li><span class="milestone-num">04</span> <span><span class="milestone-label">Multi-tenant isolation</span> -- two orgs on same instance cannot see each other's data, RLS enforced</span></li>
+                <li><span class="milestone-num">05</span> <span><span class="milestone-label">Model flexibility</span> -- run with local models only, no cloud API keys required</span></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════ BOOTSTRAP SEQUENCE ════════════════════════ -->
+<section class="bootstrap-section" id="bootstrap">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-header__label">First Run</span>
+      <h2>10-Step Bootstrap Sequence</h2>
+      <p>Every step is idempotent. If bootstrap has already run (detected by existence of any organization row), the sequence is skipped entirely.</p>
+    </div>
+
+    <div class="bootstrap-flow" data-stagger="bootstrap">
+      <div class="bootstrap-step" data-stagger-child>
+        <div class="bootstrap-step__num">1</div>
+        <div class="bootstrap-step__content">
+          <div class="bootstrap-step__title">Run database migrations</div>
+          <p class="bootstrap-step__desc">Versioned, forward-only migrations. PostgreSQL schema up.</p>
+        </div>
+      </div>
+      <div class="bootstrap-step" data-stagger-child>
+        <div class="bootstrap-step__num">2</div>
+        <div class="bootstrap-step__content">
+          <div class="bootstrap-step__title">Create organization</div>
+          <p class="bootstrap-step__desc">Name from CLI args or environment variables.</p>
+        </div>
+      </div>
+      <div class="bootstrap-step" data-stagger-child>
+        <div class="bootstrap-step__num">3</div>
+        <div class="bootstrap-step__content">
+          <div class="bootstrap-step__title">Create first human user</div>
+          <p class="bootstrap-step__desc">Email/password from CLI args or environment. Assigned as org owner.</p>
+        </div>
+      </div>
+      <div class="bootstrap-step" data-stagger-child>
+        <div class="bootstrap-step__num">4</div>
+        <div class="bootstrap-step__content">
+          <div class="bootstrap-step__title">Create org-level skills repo</div>
+          <p class="bootstrap-step__desc">Populate with identity skills (Frank, Lori, Ellie, PM) and org defaults (safety, work standards).</p>
+        </div>
+      </div>
+      <div class="bootstrap-step" data-stagger-child>
+        <div class="bootstrap-step__num">5</div>
+        <div class="bootstrap-step__content">
+          <div class="bootstrap-step__title">Seed model profiles</div>
+          <p class="bootstrap-step__desc">High-capability (Opus), Standard (Sonnet), Haiku profiles. Requires at least one provider API key.</p>
+        </div>
+      </div>
+      <div class="bootstrap-step" data-stagger-child>
+        <div class="bootstrap-step__num">6</div>
+        <div class="bootstrap-step__content">
+          <div class="bootstrap-step__title">Seed default flow templates</div>
+          <p class="bootstrap-step__desc">Four system templates: Single Step, Work+Review, Work+Code Review+Human Review, Research.</p>
+        </div>
+      </div>
+      <div class="bootstrap-step" data-stagger-child>
+        <div class="bootstrap-step__num">7</div>
+        <div class="bootstrap-step__content">
+          <div class="bootstrap-step__title">Seed starter trio agents</div>
+          <p class="bootstrap-step__desc">Frank (Chief of Staff), Lori (Agent Relations), Ellie (Memory). Full profiles, skills, and tool policies.</p>
+        </div>
+      </div>
+      <div class="bootstrap-step" data-stagger-child>
+        <div class="bootstrap-step__num">8</div>
+        <div class="bootstrap-step__content">
+          <div class="bootstrap-step__title">Create General session</div>
+          <p class="bootstrap-step__desc">Org-scoped, sync mode. Participants: human (owner), Frank (default_responder), Lori (participant), Ellie (listener).</p>
+        </div>
+      </div>
+      <div class="bootstrap-step" data-stagger-child>
+        <div class="bootstrap-step__num">9</div>
+        <div class="bootstrap-step__content">
+          <div class="bootstrap-step__title">Seed default org policy</div>
+          <p class="bootstrap-step__desc">Communication tools default to draft_review. CLI/browser/MCP require capability grants. Turn limits set.</p>
+        </div>
+      </div>
+      <div class="bootstrap-step" data-stagger-child>
+        <div class="bootstrap-step__num">10</div>
+        <div class="bootstrap-step__content">
+          <div class="bootstrap-step__title">Record bootstrap audit event</div>
+          <p class="bootstrap-step__desc">Durable record that bootstrap completed successfully. Idempotency guard for future runs.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════ RESOLVED DECISIONS ════════════════════════ -->
+<section id="decisions">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-header__label">Product Decisions</span>
+      <h2>Key Resolved Decisions</h2>
+      <p>The three biggest open product decisions from the original stub have all been resolved.</p>
+    </div>
+
+    <div class="decisions-grid">
+      <div class="decision-card" data-animate>
+        <span class="decision-card__num">Decision 01</span>
+        <div class="decision-card__question">How strong is default human approval for risky actions?</div>
+        <div class="decision-card__answer">Default-deny for agent capabilities with three policy outcomes and no mid-turn blocking.</div>
+        <div class="decision-card__detail">
+          <ul>
+            <li><strong>allow</strong> -- execute immediately</li>
+            <li><strong>deny</strong> -- return "not permitted" as a tool result, agent adapts</li>
+            <li><strong>draft_review</strong> -- stage for human review in inbox, turn continues without blocking</li>
+          </ul>
+          <p style="margin-top: 0.75rem; margin-bottom: 0;">Policy layers are strictly tightening: instance safety > org > project > agent profile. Each layer can only restrict, never expand. No mid-turn approval gates exist -- the turn never blocks waiting for human input.</p>
+        </div>
+      </div>
+
+      <div class="decision-card" data-animate>
+        <span class="decision-card__num">Decision 02</span>
+        <div class="decision-card__question">What is the managed-hosting launch shape vs self-host?</div>
+        <div class="decision-card__answer">Self-host first (Phases 1-2), managed hosting deferred to Phase 4.</div>
+        <div class="decision-card__detail">
+          <p>Three deployment modes from one codebase: local single-node, VPS single-tenant (self-host), managed multi-tenant. Docker Compose is the packaging format.</p>
+          <p style="margin-bottom: 0;">Schema is multi-tenant from day one (every entity carries <code>organization_id</code>), so managed hosting does not require a schema migration. The delta is operational infrastructure, not architecture.</p>
+        </div>
+      </div>
+
+      <div class="decision-card" data-animate>
+        <span class="decision-card__num">Decision 03</span>
+        <div class="decision-card__question">What is the minimum bootstrap dataset?</div>
+        <div class="decision-card__answer">Starter trio profiles, org session, default skills, model profiles, flow templates, default policies.</div>
+        <div class="decision-card__detail">
+          <p>Every fresh install is immediately usable. The human opens OtterCamp, talks to Frank, and starts working. No configuration required beyond providing model provider API keys.</p>
+          <p style="margin-bottom: 0;">Ships with: Frank, Lori, Ellie agents; identity + org default skills; 3 model profiles; 4 flow templates; General session; instance safety + org policy.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════ BOOTSTRAP DATASET ════════════════════════ -->
+<section class="bootstrap-section" id="dataset">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-header__label">Ships in the Box</span>
+      <h2>Bootstrap Dataset</h2>
+      <p>Everything that ships with a fresh install. The human should be able to bootstrap, open the TUI, and start working within minutes.</p>
+    </div>
+
+    <div class="dataset-columns">
+      <div class="dataset-group" data-animate>
+        <div class="dataset-group__title">Starter Trio</div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">Frank <span class="dataset-item__slug">slug: frank, he/him</span></div>
+          <p class="dataset-item__desc">Chief of Staff. Org-scoped. Primary human touchpoint, cross-project coordinator, escalation handler. Warm but direct. High-capability model profile.</p>
+        </div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">Lori <span class="dataset-item__slug">slug: lori, she/her</span></div>
+          <p class="dataset-item__desc">Agent Relations Expert. Org-scoped. Staffing expert, agent creator, workforce manager. Thoughtful and precise. High-capability model profile.</p>
+        </div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">Ellie <span class="dataset-item__slug">slug: ellie, she/her</span></div>
+          <p class="dataset-item__desc">Memory and Knowledge. Org-scoped. Dual role: passive infrastructure (injection + capture) and active conversational agent. Standard + Haiku profiles.</p>
+        </div>
+      </div>
+
+      <div class="dataset-group" data-animate>
+        <div class="dataset-group__title">Model Profiles</div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">High-Capability</div>
+          <p class="dataset-item__desc">Anthropic Claude Opus. Temp 0.7, tool use enabled, streaming. 60s sync / 120s async timeout. Org default for Frank, Lori, PMs.</p>
+        </div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">Standard</div>
+          <p class="dataset-item__desc">Anthropic Claude Sonnet. Temp 0.7, tool use enabled, streaming. Falls back to high-capability profile. Default for workers and reviewers.</p>
+        </div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">Haiku</div>
+          <p class="dataset-item__desc">Anthropic Claude Haiku. Temp 0.3, tool use disabled, no streaming. 45s timeout. For listening evals, summarization, memory extraction, synthesis.</p>
+        </div>
+      </div>
+
+      <div class="dataset-group" data-animate>
+        <div class="dataset-group__title">Flow Templates</div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">Single Step</div>
+          <p class="dataset-item__desc">Work &rarr; Done. One work node (role: worker). No review. Simplest possible flow.</p>
+        </div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">Work + Review</div>
+          <p class="dataset-item__desc">Work &rarr; Review &rarr; Done (reject loops back). Standard for most implementation tasks.</p>
+        </div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">Work + Code Review + Human Review</div>
+          <p class="dataset-item__desc">Work &rarr; Code Review &rarr; Human Review &rarr; Done. For sensitive changes requiring human gate.</p>
+        </div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">Research</div>
+          <p class="dataset-item__desc">Research &rarr; Done. Single work node, no review. For exploration and analysis where the deliverable is knowledge.</p>
+        </div>
+      </div>
+
+      <div class="dataset-group" data-animate>
+        <div class="dataset-group__title">Skills</div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">Identity Skills</div>
+          <p class="dataset-item__desc">Per-agent: frank.md, lori.md, ellie.md, pm.md. Responsibilities, communication style, capabilities.</p>
+        </div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">Org Default Skills</div>
+          <p class="dataset-item__desc">safety-and-communication.md -- escalation behavior, external comms boundaries. general-work-standards.md -- conventions, ambiguity handling, signaling.</p>
+        </div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">Project Templates</div>
+          <p class="dataset-item__desc">Available but not pre-installed: code-review-checklist, go-coding-standards, typescript, api-design, content-writing, security-review.</p>
+        </div>
+      </div>
+
+      <div class="dataset-group" data-animate>
+        <div class="dataset-group__title">Policies</div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">Instance Safety</div>
+          <p class="dataset-item__desc">Baked in, not configurable. Cannot delete org, modify system tables, exfiltrate secrets, or bypass auth.</p>
+        </div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">Default Org Policy</div>
+          <p class="dataset-item__desc">Communication tools default to draft_review. CLI/browser/MCP require explicit capability grants. Max 50 tool calls/turn. Max 5min sync / 30min async turns.</p>
+        </div>
+      </div>
+
+      <div class="dataset-group" data-animate>
+        <div class="dataset-group__title">Session</div>
+        <div class="dataset-item">
+          <div class="dataset-item__name">General</div>
+          <p class="dataset-item__desc">Org-scoped, sync mode. Participants: human owner, Frank (default_responder), Lori (participant), Ellie (listener). Persistent org-level chat.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════ OPEN QUESTIONS ════════════════════════ -->
+<section class="questions-section" id="questions">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-header__label">Unresolved</span>
+      <h2>Open Questions (~25)</h2>
+      <p>Genuinely unresolved questions collected from across all specs. Organized by domain. Click a category to expand.</p>
+    </div>
+
+    <div class="questions-categories">
+
+      <div class="questions-category open" data-animate>
+        <div class="questions-category__header" onclick="toggleCategory(this)">
+          <div class="questions-category__title">Architecture and Infra</div>
+          <span class="questions-category__count">4</span>
+          <svg class="questions-category__toggle" width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <ul class="questions-list">
+          <li><strong>Realtime transport:</strong> WebSocket vs SSE for the default realtime channel. SSE is simpler and works through proxies. WebSocket is bidirectional. TUI and web UI may have different preferences.</li>
+          <li><strong>Kubernetes for managed hosting:</strong> Is Kubernetes required for managed launch, or can we start with simpler orchestration?</li>
+          <li><strong>Minimum self-host footprint:</strong> What are the minimum hardware requirements -- RAM, CPU, disk?</li>
+          <li><strong>API version compatibility:</strong> How strict should version compatibility be between self-host and managed cloud?</li>
+        </ul>
+      </div>
+
+      <div class="questions-category" data-animate>
+        <div class="questions-category__header" onclick="toggleCategory(this)">
+          <div class="questions-category__title">Auth and Identity</div>
+          <span class="questions-category__count">2</span>
+          <svg class="questions-category__toggle" width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <ul class="questions-list">
+          <li><strong>Password-less auth for self-hosted:</strong> Should local single-node deployments support a no-auth mode for developer convenience?</li>
+          <li><strong>Service account keys:</strong> Should there be a dedicated service account concept for CI/CD, or are user-scoped API keys sufficient?</li>
+        </ul>
+      </div>
+
+      <div class="questions-category" data-animate>
+        <div class="questions-category__header" onclick="toggleCategory(this)">
+          <div class="questions-category__title">Control Plane</div>
+          <span class="questions-category__count">3</span>
+          <svg class="questions-category__toggle" width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <ul class="questions-list">
+          <li><strong>Approval requirements:</strong> Should approval requirements be static policy or dynamically risk-scored?</li>
+          <li><strong>Session-wide approval grants:</strong> Allow "approve all CLI executions in this session" or only action-by-action?</li>
+          <li><strong>Default capability templates:</strong> What minimum set of capabilities ships as defaults for common agent roles?</li>
+        </ul>
+      </div>
+
+      <div class="questions-category" data-animate>
+        <div class="questions-category__header" onclick="toggleCategory(this)">
+          <div class="questions-category__title">System Integration</div>
+          <span class="questions-category__count">3</span>
+          <svg class="questions-category__toggle" width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <ul class="questions-list">
+          <li><strong>Browser session isolation:</strong> Should browser execution be isolated per task or reusable per session?</li>
+          <li><strong>Minimum sandbox model:</strong> Container, namespace, chroot, or process-level sandboxing for CLI execution?</li>
+          <li><strong>Default pre-approval actions:</strong> Which system actions require human pre-approval by default vs allow-by-default with capability grant?</li>
+        </ul>
+      </div>
+
+      <div class="questions-category" data-animate>
+        <div class="questions-category__header" onclick="toggleCategory(this)">
+          <div class="questions-category__title">MCP</div>
+          <span class="questions-category__count">3</span>
+          <svg class="questions-category__toggle" width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <ul class="questions-list">
+          <li><strong>MCP sampling:</strong> Should OtterCamp support the MCP sampling capability where the server requests OtterCamp to make an LLM call on its behalf? Significant trust, cost, and security implications.</li>
+          <li><strong>Connection templates:</strong> Ship pre-built templates for popular MCP servers (GitHub, Slack, Postgres) or is conversational setup sufficient?</li>
+          <li><strong>Multi-server tool disambiguation:</strong> Beyond connection prefix, should there be routing hints when multiple connections expose similar tools?</li>
+        </ul>
+      </div>
+
+      <div class="questions-category" data-animate>
+        <div class="questions-category__header" onclick="toggleCategory(this)">
+          <div class="questions-category__title">Tools</div>
+          <span class="questions-category__count">3</span>
+          <svg class="questions-category__toggle" width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <ul class="questions-list">
+          <li><strong>Tool usage analytics:</strong> Should per-agent, per-tool call frequency and success rate be a first-class metric?</li>
+          <li><strong>MCP schema change notification:</strong> When an MCP server updates a tool's schema between sessions, how do we communicate the change?</li>
+          <li><strong>Bulk operations:</strong> Should batch tools exist (e.g., <code>task.create_batch</code>) for agents that need to create many items?</li>
+        </ul>
+      </div>
+
+      <div class="questions-category" data-animate>
+        <div class="questions-category__header" onclick="toggleCategory(this)">
+          <div class="questions-category__title">Security and Observability</div>
+          <span class="questions-category__count">3</span>
+          <svg class="questions-category__toggle" width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <ul class="questions-list">
+          <li><strong>Compliance targets:</strong> Which compliance frameworks matter for the first commercial launch -- SOC 2, GDPR, or neither initially?</li>
+          <li><strong>Default retention policy:</strong> What default retention period balances usability and privacy?</li>
+          <li><strong>Cost limit behavior:</strong> Should cost hard limits fail closed (block all work) or degrade to cheaper models automatically?</li>
+        </ul>
+      </div>
+
+      <div class="questions-category" data-animate>
+        <div class="questions-category__header" onclick="toggleCategory(this)">
+          <div class="questions-category__title">Migration</div>
+          <span class="questions-category__count">2</span>
+          <svg class="questions-category__toggle" width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <ul class="questions-list">
+          <li><strong>V1 data imports:</strong> Do we offer optional import tools beyond the JSONL memory importer, or keep V2 strictly greenfield?</li>
+          <li><strong>V1 archive retention:</strong> How long do we keep V1 archives available internally?</li>
+        </ul>
+      </div>
+
+      <div class="questions-category" data-animate>
+        <div class="questions-category__header" onclick="toggleCategory(this)">
+          <div class="questions-category__title">UI</div>
+          <span class="questions-category__count">6</span>
+          <svg class="questions-category__toggle" width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <ul class="questions-list">
+          <li><strong>TUI framework:</strong> Bubble Tea confirmed as recommended, but final decision needed.</li>
+          <li><strong>TUI vs CLI relationship:</strong> Is the TUI a mode of the existing CLI binary, or a separate binary?</li>
+          <li><strong>Web UI framework:</strong> React is recommended but not locked in.</li>
+          <li><strong>Web UI rendering:</strong> SSR vs SPA vs hybrid?</li>
+          <li><strong>Mobile platform:</strong> iOS first, or iOS and Android simultaneously?</li>
+          <li><strong>Mobile framework:</strong> React Native vs native (Swift/Kotlin) vs Flutter?</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════ RISK AREAS ════════════════════════ -->
+<section id="risks">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-header__label">Risk Assessment</span>
+      <h2>Technically Hardest Challenges</h2>
+      <p>The five areas most likely to require significant iteration and tuning.</p>
+    </div>
+
+    <div class="risk-grid" style="margin-bottom: 3rem;">
+      <div class="risk-card" data-animate>
+        <span class="risk-card__rank">Challenge 1</span>
+        <div class="risk-card__title">Prompt Assembly Budget Management</div>
+        <p class="risk-card__desc">The 7-layer pipeline must produce good prompts within tight token budgets across diverse session types (sync org chat, async code task, long-running review). The framework is defined; the real challenge is parameter tuning.</p>
+      </div>
+      <div class="risk-card" data-animate>
+        <span class="risk-card__rank">Challenge 2</span>
+        <div class="risk-card__title">Memory Retrieval Quality at Scale</div>
+        <p class="risk-card__desc">V1 proved entity synthesis and taxonomy pre-filtering work at 13K memories. V2 will accumulate much faster across many projects. Retrieval quality at 100K+ memories with complex taxonomy trees is unproven.</p>
+      </div>
+      <div class="risk-card" data-animate>
+        <span class="risk-card__rank">Challenge 3</span>
+        <div class="risk-card__title">Async Agent Reliability</div>
+        <p class="risk-card__desc">Agents working autonomously through multi-step flows must handle context limits, tool failures, ambiguous requirements, and environmental surprises. Whether agents can reliably complete multi-hour tasks is the core product risk.</p>
+      </div>
+      <div class="risk-card" data-animate>
+        <span class="risk-card__rank">Challenge 4</span>
+        <div class="risk-card__title">Git Merge Conflict Resolution</div>
+        <p class="risk-card__desc">Parallel tasks on separate branches will occasionally conflict. Trivial conflicts are tractable. Non-trivial conflicts require an agent to understand both changes and rebase correctly -- hard for current models.</p>
+      </div>
+      <div class="risk-card" data-animate>
+        <span class="risk-card__rank">Challenge 5</span>
+        <div class="risk-card__title">MCP Reliability at the Edges</div>
+        <p class="risk-card__desc">MCP servers with incorrect schemas, flaky behavior, or slow responses produce agent errors hard to diagnose. The agent must be resilient to MCP failures without cascading into bad decisions.</p>
+      </div>
+    </div>
+
+    <div class="section-header">
+      <h2>Plan Adjustment Risks</h2>
+      <p>External factors that could force phase delays or architectural changes.</p>
+    </div>
+
+    <div class="risk-grid">
+      <div class="risk-card" data-animate>
+        <span class="risk-card__rank">Risk 1</span>
+        <div class="risk-card__title">Model Provider API Changes</div>
+        <p class="risk-card__desc">Provider API changes (rate limits, pricing, deprecations) could force adapter updates. The adapter pattern isolates this, but a major change to the primary provider could delay a phase.</p>
+      </div>
+      <div class="risk-card" data-animate>
+        <span class="risk-card__rank">Risk 2</span>
+        <div class="risk-card__title">Context Window Economics</div>
+        <p class="risk-card__desc">The prompt assembly pipeline assumes generous context windows. If model costs increase or context windows shrink, the budget allocation strategy may need rework.</p>
+      </div>
+      <div class="risk-card" data-animate>
+        <span class="risk-card__rank">Risk 3</span>
+        <div class="risk-card__title">Agent Capability Plateaus</div>
+        <p class="risk-card__desc">If foundation model capabilities plateau in code generation, long-horizon planning, or tool use accuracy, the product promise weakens. Human review gates are the mitigation.</p>
+      </div>
+      <div class="risk-card" data-animate>
+        <span class="risk-card__rank">Risk 4</span>
+        <div class="risk-card__title">Self-Host Complexity</div>
+        <p class="risk-card__desc">PostgreSQL + object storage + model credentials + git repos is meaningful operational overhead. May need a more opinionated deployment (single binary, embedded database).</p>
+      </div>
+      <div class="risk-card" data-animate>
+        <span class="risk-card__rank">Risk 5</span>
+        <div class="risk-card__title">Memory Cold-Start</div>
+        <p class="risk-card__desc">On a fresh install, Ellie has no memories, no taxonomy, no entity definitions. Early conversations will have poor memory retrieval until enough data accumulates.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════ DEEP-DIVE ORDER ════════════════════════ -->
+<section class="bootstrap-section" id="deepdive">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-header__label">Spec Priorities</span>
+      <h2>Deep-Dive Order</h2>
+      <p>Priority order for the 16 remaining spec documents. Finished specs (02, 03, 03a, 06) are not listed.</p>
+    </div>
+
+    <ul class="deepdive-list" data-stagger="deepdive">
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">1</span>
+        <span class="deepdive-item__doc">01</span>
+        <span class="deepdive-item__title">Architecture and Domain -- domain model, runtime boundaries, eventing contracts</span>
+        <span class="deepdive-item__status deepdive-item__status--drafted">drafted</span>
+      </li>
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">2</span>
+        <span class="deepdive-item__doc">04</span>
+        <span class="deepdive-item__title">Auth, Tenancy, and Identity -- foundation for everything</span>
+        <span class="deepdive-item__status deepdive-item__status--drafted">drafted</span>
+      </li>
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">3</span>
+        <span class="deepdive-item__doc">07</span>
+        <span class="deepdive-item__title">Models and Inference -- model gateway must work before chat works</span>
+        <span class="deepdive-item__status deepdive-item__status--drafted">drafted</span>
+      </li>
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">4</span>
+        <span class="deepdive-item__doc">05</span>
+        <span class="deepdive-item__title">Agents, Staff, and Temps -- prompt assembly and starter trio</span>
+        <span class="deepdive-item__status deepdive-item__status--drafted">drafted</span>
+      </li>
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">5</span>
+        <span class="deepdive-item__doc">16</span>
+        <span class="deepdive-item__title">Agent Control Plane -- capability model and execution broker</span>
+        <span class="deepdive-item__status deepdive-item__status--drafted">drafted</span>
+      </li>
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">6</span>
+        <span class="deepdive-item__doc">20</span>
+        <span class="deepdive-item__title">Tools and Tool Policy -- unifies tool references across all specs</span>
+        <span class="deepdive-item__status deepdive-item__status--drafted">drafted</span>
+      </li>
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">7</span>
+        <span class="deepdive-item__doc">10</span>
+        <span class="deepdive-item__title">Skills Integration -- markdown instructions, activation rules</span>
+        <span class="deepdive-item__status deepdive-item__status--drafted">drafted</span>
+      </li>
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">8</span>
+        <span class="deepdive-item__doc">12</span>
+        <span class="deepdive-item__title">API, Events, and Realtime -- REST contracts, event bus, SSE/WS</span>
+        <span class="deepdive-item__status deepdive-item__status--stub">stub</span>
+      </li>
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">9</span>
+        <span class="deepdive-item__doc">17</span>
+        <span class="deepdive-item__title">TUI -- first interface, Phase 1 deliverable</span>
+        <span class="deepdive-item__status deepdive-item__status--stub">stub</span>
+      </li>
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">10</span>
+        <span class="deepdive-item__doc">09</span>
+        <span class="deepdive-item__title">MCP Integration -- external tool connectivity</span>
+        <span class="deepdive-item__status deepdive-item__status--drafted">drafted</span>
+      </li>
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">11</span>
+        <span class="deepdive-item__doc">11</span>
+        <span class="deepdive-item__title">System Integration -- CLI and browser sandboxing</span>
+        <span class="deepdive-item__status deepdive-item__status--stub">stub</span>
+      </li>
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">12</span>
+        <span class="deepdive-item__doc">13</span>
+        <span class="deepdive-item__title">Security, Observability, Costs -- cross-cutting concerns</span>
+        <span class="deepdive-item__status deepdive-item__status--stub">stub</span>
+      </li>
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">13</span>
+        <span class="deepdive-item__doc">08</span>
+        <span class="deepdive-item__title">Deployment and Self-Hosting -- Docker Compose, upgrades</span>
+        <span class="deepdive-item__status deepdive-item__status--stub">stub</span>
+      </li>
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">14</span>
+        <span class="deepdive-item__doc">18</span>
+        <span class="deepdive-item__title">Web UI -- Phase 3 interface</span>
+        <span class="deepdive-item__status deepdive-item__status--stub">stub</span>
+      </li>
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">15</span>
+        <span class="deepdive-item__doc">15</span>
+        <span class="deepdive-item__title">Migration and Backward Compat -- clean-room, operational</span>
+        <span class="deepdive-item__status deepdive-item__status--stub">stub</span>
+      </li>
+      <li class="deepdive-item" data-stagger-child>
+        <span class="deepdive-item__rank">16</span>
+        <span class="deepdive-item__doc">19</span>
+        <span class="deepdive-item__title">Mobile UI -- Phase 4</span>
+        <span class="deepdive-item__status deepdive-item__status--stub">stub</span>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<!-- ════════════════════════ FOOTER ════════════════════════ -->
+<footer class="footer">
+  <div class="container">
+    <p><strong>OtterCamp V2</strong> -- Spec 14: Open Questions and Build Phasing</p>
+    <p>Self-host first (Phases 1-2). Managed hosting later (Phase 4). Schema is multi-tenant from day one.</p>
+    <nav class="footer__nav">
+      <a href="#timeline">Timeline</a>
+      <a href="#phases">Phases</a>
+      <a href="#bootstrap">Bootstrap</a>
+      <a href="#decisions">Decisions</a>
+      <a href="#dataset">Dataset</a>
+      <a href="#questions">Questions</a>
+      <a href="#risks">Risks</a>
+      <a href="#deepdive">Deep-Dive</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+// ═══════════════════════════ Phase Card Toggle ═══════════════════════════
+function togglePhaseCard(header) {
+  const card = header.closest('.phase-card');
+  card.classList.toggle('open');
+}
+
+// ═══════════════════════════ Question Category Toggle ═══════════════════════════
+function toggleCategory(header) {
+  const category = header.closest('.questions-category');
+  category.classList.toggle('open');
+}
+
+// ═══════════════════════════ Scroll Animations ═══════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  // Intersection Observer for individual animated elements
+  const animateObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry, index) => {
+      if (entry.isIntersecting) {
+        const el = entry.target;
+        const siblings = Array.from(el.parentElement.querySelectorAll('[data-animate]'));
+        const siblingIndex = siblings.indexOf(el);
+        const delay = siblingIndex >= 0 ? siblingIndex * 100 : 0;
+        setTimeout(() => {
+          el.classList.add('visible');
+        }, delay);
+        animateObserver.unobserve(el);
+      }
+    });
+  }, {
+    threshold: 0.1,
+    rootMargin: '0px 0px -40px 0px'
+  });
+
+  document.querySelectorAll('[data-animate]').forEach(el => {
+    animateObserver.observe(el);
+  });
+
+  // Staggered children observer
+  const staggerObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const container = entry.target;
+        const children = container.querySelectorAll('[data-stagger-child]');
+        children.forEach((child, i) => {
+          setTimeout(() => {
+            child.classList.add('visible');
+          }, i * 120);
+        });
+        staggerObserver.unobserve(container);
+      }
+    });
+  }, {
+    threshold: 0.15,
+    rootMargin: '0px 0px -30px 0px'
+  });
+
+  document.querySelectorAll('[data-stagger]').forEach(el => {
+    staggerObserver.observe(el);
+  });
+});
+</script>
+</body>
+</html>
