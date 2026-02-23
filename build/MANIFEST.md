@@ -82,3 +82,13 @@
 | 078 | 078-mcp-integration-tests.md | MCP Integration Tests | L5 | S | 020, 021, 022, 009 | written |
 | 079 | 079-event-bus-job-queue-integration-tests.md | Event Bus and Job Queue Integration Tests | L5 | S | 024 | written |
 | 080 | 080-security-observability-integration-tests.md | Security and Observability Integration Tests | L5 | S | 008, 009, 024, 063 | written |
+| 081 | 081-org-bootstrap-e2e.md | Org Bootstrap E2E | L5 | S | 001–080 | written |
+| 082 | 082-auth-flow-e2e.md | Auth Flow E2E | L5 | S | 001–080 | written |
+| 083 | 083-chat-lifecycle-e2e.md | Chat Lifecycle E2E | L5 | M | 001–080 | written |
+| 084 | 084-project-task-flow-e2e.md | Project and Task Flow E2E | L5 | M | 001–080 | written |
+| 085 | 085-agent-management-e2e.md | Agent Management E2E | L5 | M | 001–080 | written |
+| 086 | 086-memory-pipeline-e2e.md | Memory Pipeline E2E | L5 | M | 001–080 | written |
+| 087 | 087-control-plane-e2e.md | Control Plane E2E | L5 | M | 001–080 | written |
+| 088 | 088-full-workflow-e2e.md | Full Workflow E2E | L5 | M | 001–080 | written |
+| 089 | 089-ci-pipeline.md | CI Pipeline | L5 | S | 001–088 | written |
+| 090 | 090-deployment-packaging.md | Deployment Packaging and Docker Compose | L5 | S | 001–080 | written |
