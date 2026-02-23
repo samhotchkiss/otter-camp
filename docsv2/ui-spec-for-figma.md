@@ -571,13 +571,563 @@ The primary cost visibility tool. Designed for interactive exploration, not just
 - Agent utilization timeline (gantt-style: active, idle, blocked, waiting for approval)
 - Per-agent error rate
 
+## Resolved Layout Decisions (from docs 17, 18)
+
+- **Chat pane is resizable.** Operator drags the left edge to adjust width. Minimum width enforced. Width persisted in local storage.
+- **Session sidebar is collapsible.** Defaults to expanded. Collapses to icon-only (showing session icons without labels) via keyboard shortcut `Cmd-Shift-C` (web) or a toggle key (TUI). In collapsed state, unread indicators remain visible as dots on session icons.
+- **Notification center is a sidebar overlay.** Opened via bell icon at the top of the sidebar. Slides in as an overlay panel over the sidebar — NOT a separate page. Dismissed to return to the session list. Operator can view the current main content while the notification center is open.
+- **Command bar (Cmd-K).** Centered full-overlay. Fuzzy search across projects, tasks, agents, sessions, flow templates. Results grouped by entity type with icons. Recent searches and frequently accessed items shown when query is empty. Arrow-key navigation, Enter to select, Escape to dismiss. Results update as operator types (no submit). Quick actions: navigate ("Go to OC-42"), switch session ("Talk to Frank"), filter ("Show blocked tasks in OtterCamp V2"), system ("Toggle dark mode"). See Command Bar section below.
+- **Mobile-responsive.** Three-panel layout degrades to swappable panels on narrow screens (phone). On tablet widths, three-panel layout is preserved. Chat pane becomes a swappable view (not hidden) on narrow screens. See Mobile section below.
+- **Agent avatars.** Each agent has a consistent accent color and initial-based avatar (colored circle with initials). Uploaded photos are supported but not required. Visual distinction between agents in multi-agent conversations via avatar + name label. The starter trio (Frank, Lori, Ellie) should have recognizable visual identities in the design system.
+- **Work log visualization: collapsible tree.** Tool calls organized as a tree: each top-level item is a tool call with collapsible result detail. Large results (>100 lines) show a "Show more" expansion. Artifacts shown as downloadable items. Time/token summary at the top of each work log section.
+- **Transitions and animations.** Scope pill switching: subtle cross-fade of chat content (not a slide). Activity feed new items: slide-in from top with a brief highlight fade. Sidebar unread indicators: instant update (no animation). Goal: functional, not decorative.
+
+## Resolved Layout Questions (from doc 18)
+
+The following open questions from the original spec are now resolved:
+
+| Question | Resolution |
+|---|---|
+| Exact proportions of three panels | Sidebar ~220px, main content flexible, chat pane ~380px default. Both resizable. |
+| Chat pane resizable? | Yes. Operator drags left edge. Min width ~280px. Width persisted in local storage. |
+| Session sidebar collapsible? | Yes. Collapses to icon-only (~56px). `Cmd-Shift-C` toggle. Default: expanded. |
+| Notification center: overlay or page? | Sidebar overlay panel. Not a separate page. |
+| Command bar design? | Superhuman-style centered overlay. Cmd-K / Ctrl-K. See Command Bar section. |
+| Mobile-responsive? | Three panels → swappable views on mobile. Tablet gets three-panel layout. |
+
+## Command Bar
+
+Keyboard shortcut `Cmd-K` (Mac) / `Ctrl-K` (other). Superhuman-style command palette.
+
+### Visual Design
+
+- Centered on screen, overlaying current content with a backdrop.
+- Width: ~640px. Rounded corners. Shadow.
+- Input field at the top. Results below.
+- Grouped results: each group has a label ("Projects", "Tasks", "Agents", "Sessions"). Max ~3 items per group before "Show more."
+- Keyboard focus stays in the input field. Arrow keys navigate the results list.
+- Selected result highlighted. Enter to activate.
+
+### Empty State
+
+When opened with no query, shows:
+- Recently accessed items (last ~5 items across all types)
+- Quick action shortcuts: "Dashboard", "Inbox", "Talk to Frank"
+
+### Result Types
+
+- **Projects**: project name, icon (project color/avatar)
+- **Tasks**: "OC-42: Build Auth System" — task number + title, project name, status badge
+- **Agents**: agent name + role, status indicator
+- **Sessions**: session scope path ("OtterCamp V2 > OC-42")
+- **Flow templates**: template name
+
+### Quick Actions (typed commands)
+
+- Navigate: "dashboard", "inbox", "settings", "observability"
+- Switch session: "talk to [agent name]", "[project name] session", "[task number] session"
+- Filter tasks: "blocked tasks", "tasks in review", "show [project name]"
+- System: "dark mode", "light mode", "collapse sidebar", "focus chat"
+
+## Keyboard Shortcuts
+
+All shortcuts discoverable via command bar (type "?" or "keyboard shortcuts").
+
+| Shortcut (Mac) | Shortcut (Other) | Action |
+|---|---|---|
+| `Cmd-K` | `Ctrl-K` | Open command bar |
+| `Escape` | `Escape` | Close command bar / Cancel agent turn / Dismiss overlay |
+| `Cmd-Enter` | `Ctrl-Enter` | Send message in chat pane |
+| `Cmd-Shift-C` | `Ctrl-Shift-C` | Toggle sidebar collapsed/expanded |
+| `Cmd-1` through `Cmd-9` | `Ctrl-1` through `Ctrl-9` | Switch to session by position in sidebar |
+| `Cmd-[` | `Ctrl-[` | Scope pill: navigate left (zoom out) |
+| `Cmd-]` | `Ctrl-]` | Scope pill: navigate right (zoom in) |
+| `Cmd-I` | `Ctrl-I` | Focus inbox |
+| `Cmd-D` | `Ctrl-D` | Focus dashboard |
+| `/` | `/` | Focus chat input (when chat pane is not focused) |
+
+TUI equivalent shortcuts (from doc 17):
+- `[` / `]` — scope pill left/right
+- `e`, `s`, `d` — edit/steer/delete queued messages
+- Vim-style navigation: `j`/`k` for up/down, `g`/`G` for top/bottom
+
+## Sidebar Details
+
+### Collapse Behavior
+
+- **Expanded** (default): full session list with names, unread dots, project groupings.
+- **Collapsed** (icon-only): ~56px wide. Each session is represented by an icon (agent avatar or project color circle). Unread indicators visible as dots. Hovering an icon shows a tooltip with the session name. Notification bell icon still visible.
+- Transition: instant (no animation).
+
+### Notification Center Overlay
+
+- Triggered by bell icon at top of sidebar.
+- Slides in as an overlay panel over the sidebar. Main content and chat pane remain visible behind it.
+- Width: same as expanded sidebar (~220px).
+- Dismiss via X button or clicking outside the overlay.
+- Shows: urgency-tiered list (urgent/normal/low). Low-urgency notifications grouped ("3 tasks updated in OtterCamp V2"). Each item is clickable to navigate to context.
+- Unread badge on bell icon reflects count of unread urgent + normal notifications.
+
+## Task Board Cards (Detail)
+
+Each card on the kanban board (compact, dense design):
+
+```
+┌─────────────────────────────────┐
+│ OC-42: Build Auth System        │
+│ [■ ■ ● □ □]                     │  ← flow progress (5 nodes)
+│ 🔶 High  @Maven   [deploying]   │  ← priority, assignee, deploy badge
+│ Implement: 2/3 subtasks         │  ← subtask progress (active node only)
+└─────────────────────────────────┘
+```
+
+- **Flow progress bar**: filled dots for completed nodes, highlighted dot for active node, empty dots for pending nodes. Amber/orange dot for blocked node.
+- **Deploy badge**: shown on deploy tasks (from doc 03a). Green "deploying" or "deployed" pill.
+- **Remote push status**: shown when applicable — "push ok" (green) or "push failed" (red) micro-badge.
+- **Subtask progress**: only shown for the currently active node if it has subtasks.
+- Cards are not draggable (no drag-to-reorder). Task status changes through agents.
+- Clicking a card opens the task detail in main content.
+
+## Project View Sub-Views (New)
+
+### Schedules Tab
+
+Read-only. Editing schedules happens through conversation with the PM.
+
+```
+Schedules                                          [Active: 3  Paused: 1]
+
+Name                    Cadence              Last Run        Next Run       Status
+─────────────────────────────────────────────────────────────────────────────────
+Check inbox             Every 10 min         2 min ago ✓     8 min         Active
+Draft weekly roundup    Mon 9:00 AM          3 days ago ✓    4 days        Active
+Generate metrics        Daily 6:00 AM        18h ago ✓       6 hours       Active
+Competitor scan         Wed 2:00 PM          5 days ago      —             Paused
+```
+
+- Last Run shows: timestamp + status icon (✓ for success, ✗ for failure, — for never run).
+- Status column: "Active" (green) or "Paused" (amber/gray).
+- Clicking a row expands inline to show the last 5-10 task instances created by this schedule: task title, status badge, duration.
+
+### Environments Tab
+
+Shown only for projects with environments configured (doc 03a).
+
+```
+Environments
+
+Name          Deployed Commit    Deployed At         Deploy Task
+----------------------------------------------------------------
+staging       abc123d            2h ago              OC-247
+production    def456a            1d ago              OC-241
+```
+
+- Commit SHA abbreviated (7 chars). Clickable to view full SHA.
+- Deploy Task links to the task detail.
+- Hover over a row (or expand) shows previous deployed commit SHA for rollback reference.
+
+### Project Settings Sub-View
+
+Read-only. All editable through conversation (PM for project-level, Frank for org-level).
+
+Sections:
+- Project context block (the PM's context document)
+- Repo path and delivery mode (shipping | feedback | none)
+- Configured remotes (from doc 03a)
+- Agent assignments (staff agents assigned to this project)
+
+No edit forms. Provides transparency into current configuration.
+
+## Observability Sub-Views (New)
+
+### Run History
+
+```
+Recent Runs
+
+Status    Agent       Task                   Duration  Tokens    Cost      Time
+─────────────────────────────────────────────────────────────────────────────
+✓ ok      Maven       OC-42: Build Auth       12m       45k       $0.34     2m ago
+✓ ok      Maven       OC-42: Build Auth        3m       12k       $0.09     18m ago
+✗ failed  Kai         CP-8: Fix Login          0m        2k       $0.01     45m ago
+⟳ running Maven       OC-45: Update docs       --        --         --       now
+```
+
+Expandable row shows:
+- Tool call trace: each tool call with name, arguments (collapsed), result summary, duration.
+- Stop reason (for stopped/failed runs).
+- Model profile used.
+- Link to task and flow node this run was part of.
+
+Filtering: by status, agent, task, date range.
+
+### Cost Tracking
+
+- **By agent**: bar chart ranking agents by token consumption.
+- **By project**: bar chart ranking projects.
+- **By model**: distribution across model profiles.
+- **Trend**: daily/weekly cost trend line chart. Anomaly highlighting if costs spike (3x 7-day average triggers an alert indicator).
+- **Budget status**: per-org and per-project token_budget utilization. Soft limit = amber indicator; hard limit = red indicator; ok = green.
+
+### Queue Depth
+
+Real-time (SSE updates):
+- Tasks waiting in queue by priority tier (100/50/25/10).
+- Active concurrent runs vs global concurrency limit.
+- Per-provider rate limit utilization bars.
+- Average wait time in queue.
+
+## Viewing Context Hint
+
+A subtle banner at the top of the chat pane (below the scope pill) showing what the main content area is currently displaying:
+
+```
+Viewing: OC-42 · Implement Auth System
+```
+
+or
+
+```
+Viewing: OtterCamp V2 · Task Board
+```
+
+- Muted styling — not a primary element.
+- Helps the operator understand what context the agent is operating in (this hint is sent to the agent as part of the prompt, per doc 02).
+- Updates when main content changes.
+- On mobile: not present (no main content panel on mobile).
+
+## Task Detail: Additional Header Elements
+
+The task detail header (in addition to title/status/priority/assignee from the original spec):
+
+- **Branch name**: `task/build-auth-system` with a copy-to-clipboard button.
+- **Deploy badge**: if this is a deploy task (doc 03a), a deploy status pill: "deploying", "deployed", "deploy failed".
+- **Remote push status**: if applicable — `push ok` (green) or `push failed` (red). Shown when task's `push_succeeded` or `push_failed` event has fired.
+
+## Review Node View (Updated)
+
+When a task is at a review node, the task detail emphasizes the review surface:
+
+- **Diff view** (see Diff Viewer component below): primary review surface. Task branch vs the `commit_sha` from the previous flow node's execution (incremental review), or vs `main` if this is the first review node.
+- **Reviewer actions**: Approve / Reject with feedback. Inline buttons in the task detail header area. Reject opens a text input for feedback.
+- **Subtask summary**: what was completed in the preceding work node(s).
+- **Link to work log**: for the detailed async execution trace.
+
+For human-actor review nodes, the task also appears in the inbox. The operator can act from either the task detail or the inbox — both trigger the same downstream action. An inbox badge on the task detail header links to the inbox item.
+
+## Diff Viewer Component
+
+Used in task detail (review node view) and from any task's branch info section.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ [Unified] [Split]   src/auth/handler.go (+34 -12)               │
+├─────────────┬───────────────────────────────────────────────────┤
+│ File tree   │  @@ -45,7 +45,7 @@                                │
+│             │  - func handleToken(w, r) {                       │
+│ ▸ src/      │  + func handleToken(ctx context.Context, ...) {   │
+│   ▸ auth/   │    if token == "" {                                │
+│     handler │  -   return errors.New("empty token")             │
+│     middlew │  +   return ErrEmptyToken                         │
+│   ▸ tests/  │  }                                                │
+└─────────────┴───────────────────────────────────────────────────┘
+```
+
+- **File tree** (left panel): file paths with change indicators (+/-/~). Clicking a file scrolls to its diff.
+- **Diff content** (right panel): syntax-highlighted. Line numbers. Addition lines (green), deletion lines (red).
+- **Unified/Split toggle**: unified diff by default. Split (side-by-side) available via toggle button.
+- **Large diffs**: file-level summary first (filename + additions/deletions count). Click to expand individual file diff.
+- **Binary files**: shown as "Binary file changed (old: 24KB → new: 31KB)".
+- **Hunk headers**: `@@ -45,7 +45,7 @@` standard unified diff format.
+
+## TUI-Specific Components
+
+The TUI (doc 17) has terminal-specific representations of components that exist in both the web and terminal clients. These are NOT standard web UI components but should be documented for design consistency.
+
+### TUI Scope Indicator
+
+```
+[Task: OC-42] [Project: OtterCamp V2] [Org: General]
+                   ↑ active (highlighted)
+```
+
+- `[` and `]` keys navigate left/right.
+- Active scope is highlighted in the terminal (e.g., reverse video or bold).
+- Shows the actual name, not just the level label.
+
+### TUI Message Queue Section
+
+When messages are queued while an agent turn is in progress:
+
+```
+─── active turn ──────────────────────────────────────
+Agent: "Looking at the auth module..."
+  > read_file(src/auth/handler.go) ✓
+  > read_file(src/auth/middleware.go) ✓
+  > search_code("validateToken") ...
+
+─── queued ───────────────────────────────────────────
+[1] "What about the error handling?"      [e]dit [s]teer [d]elete
+[2] "Also check the logging setup"        [e]dit [s]teer [d]elete
+```
+
+- Queued messages below a "queued" divider.
+- Numbered for reference.
+- Keyboard shortcuts `e`, `s`, `d` for edit/steer/delete of the selected queued message.
+
+### TUI Active Turn Indicator
+
+```
+● Maven  [12s]  > search_code("validateToken") ...    [Esc: cancel]
+```
+
+- Shows: agent name, elapsed time in seconds, current tool call in progress, cancel hint.
+- Updates every second (elapsed time) and on each tool call.
+- Located at the bottom of the chat view or above the input area.
+
+### TUI Flow Stepper
+
+Text-form flow visualization:
+
+```
+[✓ Design] → [* Implement] → [  Code Review] → [  Final Review]
+                 ↑ current
+             3 subtasks: 2 done, 1 in progress
+```
+
+- `✓` = completed. `*` = active (current). ` ` = pending. `!` = blocked.
+- Arrow separators between nodes.
+- Active node summary shown below.
+- Compact enough to fit in an 80-column terminal.
+
+### TUI Reaction Indicators
+
+Compact inline reaction indicators below messages:
+
+```
+[+1]                    ← thumbs up
+[-1 "needs revision"]   ← thumbs down with note (truncated)
+```
+
+- No count badges for space efficiency.
+- Note text truncated to fit available width.
+
+## Mobile App UI (Phase 4)
+
+The mobile app is a monitoring and triage interface (React Native, iOS + Android). It ships in Phase 4. The three-panel layout does not apply to mobile. See doc 19 for full spec.
+
+### Mobile Layout Principles
+
+- **Single-panel**: one screen at a time. No persistent chat pane. Navigation via the bottom tab bar or back button.
+- **30-second interaction target**: notification → tap → act → done.
+- **No creation, no configuration**: read-only or approve/reject/defer/chat only.
+
+### Bottom Navigation (Tab Bar)
+
+Five tabs:
+1. **Notifications** (home) — primary entry point
+2. **Dashboard** — project health at a glance
+3. **Inbox** — action-required queue (badge count)
+4. **Chat** — lightweight session access
+5. **More** — settings, preferences, account
+
+### Mobile Notifications Screen
+
+Home screen. Reverse chronological notification list.
+
+```
+TODAY
+────────────────────────────────────
+🔴 [CRITICAL] Escalation: Auth conflict      OtterCamp V2
+   Frank escalated — token format decision needed
+   2m ago                                [Open Chat]
+
+🟠 [HIGH] Review needed: OC-42              OtterCamp V2
+   PM finished scoping landing page
+   15m ago                         [Approve] [Open]
+
+YESTERDAY
+────────────────────────────────────
+🔵 OC-40: Update README completed           OtterCamp V2
+   Task completed by Maven                  2h ago
+```
+
+- Grouped by time (Today / Yesterday / Earlier this week / Older).
+- Critical items pinned at top regardless of scroll position if any exist.
+- Swipe-right to open, swipe-left to dismiss.
+- Tapping navigates to the relevant screen (inbox item, task detail, chat session) via deep link.
+
+### Mobile Dashboard Screen
+
+```
+INBOX  ┌─────────────────┐
+  (3)  │ OtterCamp V2    │  ← inbox badge + project card
+       │ 2 in progress   │
+  ↓    │ 1 blocked ⚠     │
+Tap    │ 12m ago         │
+to     └─────────────────┘
+inbox  ┌─────────────────┐
+       │ Client Portal   │
+       │ 3 in progress   │
+       │ 0 blocked       │
+       │ 45m ago         │
+       └─────────────────┘
+
+QUICK STATS
+5 active tasks · 3 completed today · 3 inbox items
+```
+
+- Inbox badge: prominent, taps to inbox. The most important number.
+- Project cards: compact (name, task status summary bar, blocked count highlighted if > 0, last activity).
+- Pull-to-refresh.
+
+### Mobile Inbox Screen
+
+```
+ACTIVE (3)
+────────────────────────────────────────
+⚡ Escalation: Auth conflict
+   OtterCamp V2 · Frank escalated
+   [Open Chat]              [Defer]
+
+📋 Task Review: OC-42 Build Auth
+   OtterCamp V2 · Ready for your review
+   No diff on mobile — [View on Web]
+   [Approve]  [Reject]  [Defer]
+
+✉️ Draft: Welcome email
+   Client Portal · Approval needed
+   [Approve]  [Edit]  [Reject]  [Defer]
+
+DEFERRED (2)
+────────────────────────────────────────
+[Restore]  Task Scoping: Blog post...
+[Restore]  Task Scoping: API docs...
+```
+
+- Ordered by urgency then arrival time.
+- Action buttons are large tap targets (minimum 44px).
+- Swipe-left-to-defer gesture.
+- No diff view on mobile — work review items show "View on Web" link.
+
+### Mobile Chat Screen
+
+Session list → Chat view (two sub-screens):
+
+**Session list:**
+```
+General                     ●        ← org session (unread)
+OtterCamp V2                         ← project session
+  OC-42: Build Auth System  ●        ← task session (unread)
+Client Portal
+```
+
+**Chat view:**
+```
+┌──────────────────────────────────────┐
+│ Maven  ●  OC-42: Build Auth          │  ← header
+│                                      │
+│  You: What's the status of OC-42?    │
+│                                      │
+│  Maven:                              │
+│  ┌────────────────────────────────┐  │
+│  │ Agent is working...            │  │  ← collapsed tool activity
+│  └────────────────────────────────┘  │
+│  The auth system is progressing...   │
+│                                      │
+│  [Stop]                              │  ← visible during agent turn
+└──────────────────────────────────────┘
+│ Type a message...            [Send]  │
+└──────────────────────────────────────┘
+```
+
+- Tool calls collapsed to "Agent is working..." indicator.
+- Stop button visible during agent turns.
+- @mention: typing `@` shows agent list autocomplete.
+- No file attachments, no steer, no reactions.
+
+### Mobile Task Detail Screen
+
+Read-only. Compact layout.
+
+```
+← Back to Inbox
+
+OC-42: Build Auth System
+● in_progress  🔶 High  @Maven
+
+Flow: [✓ Design] → [* Implement] → [  Review] → [  Final]
+              ↑ 2/3 subtasks done
+
+⚠ This task needs your review
+[Open in Inbox]
+
+Description: Build the authentication system...
+
+Dependencies: depends on OC-38 (✓ done)
+
+History (recent):
+2h ago  Maven started implementation
+5h ago  Design node approved
+```
+
+- Flow stepper: horizontal, scrollable if many nodes.
+- Review banner: shown when task is at a review node and operator is the reviewer.
+- No diff view — review banner links to inbox item.
+
+### Push Notification Designs
+
+**Standard notification:**
+```
+OtterCamp
+Review needed: OC-42 Build Auth
+PM finished scoping landing page
+```
+
+**Rich notification (iOS/Android — with action buttons):**
+```
+OtterCamp                           [Approve] [Open]
+Review needed: OC-42 Build Auth
+PM finished scoping landing page
+```
+
+- Critical notifications: red indicator, vibration, sound.
+- High notifications: standard sound.
+- Medium/Low: no push (by default).
+- Action buttons map directly to inbox item actions (no app open required).
+
+### Biometric Auth Prompt
+
+- Face ID / Touch ID / fingerprint prompt appears on app open (after initial password login).
+- "Use Face ID to unlock OtterCamp" — standard platform biometric prompt UI.
+- Fallback: "Use Password" link after 3 biometric failures.
+- Biometric re-prompt for sensitive actions: capability approvals. Standard prompt text: "Confirm with Face ID to approve this capability."
+
+### Deep Link Navigation
+
+Every push notification and in-app notification item navigates directly to the relevant screen:
+- `ottercamp://inbox/{id}` → Mobile Inbox Screen, scrolled to item
+- `ottercamp://task/{project_slug}/{task_number}` → Mobile Task Detail Screen
+- `ottercamp://project/{project_slug}` → Mobile Project Status Screen
+- `ottercamp://chat/{session_id}` → Mobile Chat Screen, showing session
+- `ottercamp://notifications` → Mobile Notifications Screen
+- `ottercamp://dashboard` → Mobile Dashboard Screen
+
+Universal links (`https://app.ottercamp.dev/...`) open the app if installed, fall through to mobile-responsive web UI if not.
+
+### Offline State
+
+When offline:
+- Dashboard shows cached state with "Last updated X minutes ago" banner (amber).
+- Action buttons disabled with "No connection" tooltip.
+- Notification history readable (cached).
+- Mutations require connectivity — no optimistic updates on mobile.
+
 ## Open Questions for Design
 
-- Exact proportions of the three panels. Should the chat pane be resizable?
-- Session sidebar: always visible or collapsible?
-- Notification center: panel overlay or separate page?
-- Command bar design and available commands.
-- Mobile-responsive behavior: how do three panels collapse on smaller screens?
-- Agent avatars/identity: how visually distinct should different agents be?
-- Work log visualization: timeline vs flat list vs collapsible tree?
-- Transitions/animations when switching scope via pill.
+- **Agent avatar images**: generated avatars, uploaded photos, or colored initials? Should the starter trio have illustrated/illustrated avatars for personality?
+- **Panel proportions**: exact default widths for sidebar, main content, and chat pane. Presets ("wide chat", "wide main")?
+- **Work log detail**: timeline vs flat collapsible tree for the agent execution trace within each flow step?
+- **Inline diff comments**: future enhancement — annotation layer vs feeding comments back into chat session?
+- **Browser notifications**: should the web UI request browser notification permission for urgent items when the tab is not focused?
+- **Tablet mobile layout**: should the mobile app show a split-view (closer to web three-panel) on tablet widths?

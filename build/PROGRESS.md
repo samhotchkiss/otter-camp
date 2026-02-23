@@ -92,10 +92,28 @@ Docs read: 01, 02, 03, 03a, 04, 05, 14
 - `run_event` — append-only timeline; event_type includes heartbeat; unique(run_id, sequence) (doc 16)
 - `capability_policy` — declarative policy rules (allow|deny) at instance|org|project|agent_profile layers (doc 16)
 
-### Not yet read (docs 11, 12, 13, 15, 20, 21)
-- domain_event table — doc 12
-- Security/observability tables — doc 13
-- Tool registry tables — doc 20
+### CLI and Browser (doc 11)
+- `cli_execution` — CLI command lifecycle with risk classification and output capture (doc 11)
+- `browser_session` — task-scoped browser context, persists across runs within a task (doc 11)
+- `browser_action` — fine-grained record of every browser interaction (doc 11)
+- `browser_handoff` — human handoff lifecycle bridging browser domain and inbox (doc 11)
+
+### Events and Jobs (doc 12)
+- `domain_event` — durable event log with seq-based total ordering; actor_type includes 'supervisor' extension (doc 12)
+- `consumer_cursor` — per-consumer event position tracking (doc 12)
+- `job_queue` — PostgreSQL-backed async job queue with priority, retry, dead-letter (doc 12)
+- `idempotency_key` — mutation replay safety; 24-hour TTL; org-scoped via db-per-org (doc 12)
+
+### Security, Observability, Cost (doc 13)
+- `token_budget` — org or project-level token budget with soft/hard limits and period type (doc 13)
+- `trace_span` — distributed trace spans, partitioned by day, 7-day retention (doc 13, schema implied not DDL-defined)
+
+### Tools (doc 20)
+- `tool_definition` — native tool registry populated at startup; tier (1 or 2), category, domain, required_capability (doc 20)
+- `session_tool_set` — per-agent, per-session cached tool resolution; tool_names text[], mcp_tools jsonb (doc 20)
+
+### No new tables from docs 17, 18, 19, 21
+All tables now covered in running catalog above.
 
 ---
 
@@ -990,4 +1008,572 @@ Key cross-doc FK relationships found:
 
 Docs read: 06, 07, 08, 09, 10, 16
 
-## Iteration 3 Status: PENDING
+## Iteration 3 Status: COMPLETE
+
+Docs read: 11, 12, 13, 15, 20, 21, 17, 18, 19
+
+---
+
+## Doc 11: System Integration — CLI and Browser
+
+**Tables:**
+- `cli_execution` — run_id, run_step_id, task_id, project_id (denorm), agent_id, command, working_dir, risk_level (safe|normal|sensitive|dangerous), policy_decision (allow|deny), exit_code (nullable), stdout_preview, stderr_preview, stdout_artifact_id (→run_artifact.id), stderr_artifact_id (→run_artifact.id), duration_ms, status (pending|running|completed|failed|cancelled|denied), env_vars jsonb (keys only, no values), network_policy (allow_all|deny_all|allowlist), timeout_ms, started_at, completed_at, metadata jsonb
+- `browser_session` — task_id, project_id (denorm), agent_id, status (active|suspended|closed), domain_policy (allow_all|denylist|allowlist), domain_rules jsonb, credential_refs jsonb (secret name refs, NOT values), current_url, current_title, last_action_at, suspended_at, closed_at, close_reason (task_completed|task_cancelled|idle_timeout|revoked|manual), metadata jsonb
+- `browser_action` — browser_session_id, run_id, run_step_id, action_type (navigate|click|type|select|hover|scroll|press_key|screenshot|extract_text|extract_structured|get_page_info|wait_for|wait_for_navigation|back|forward|refresh), action_params jsonb, description, page_url_before, page_url_after, success boolean, error_message, screenshot_artifact_id (→run_artifact.id), extracted_data jsonb, policy_decision (allow|deny), duration_ms, completed_at, metadata jsonb
+- `browser_handoff` — browser_session_id, inbox_item_id (→inbox_item.id), run_id, reason (captcha|two_factor|payment|agent_request), agent_description, page_url, screenshot_artifact_id (→run_artifact.id), status (pending|in_progress|completed|expired), human_completed_at, post_handoff_screenshot_id (→run_artifact.id), expires_at, metadata jsonb
+
+**FKs:**
+- `cli_execution.run_id` → `run.id` (doc 16)
+- `cli_execution.run_step_id` → `run_step.id` (doc 16)
+- `cli_execution.task_id` → `project_task.id` (doc 03)
+- `cli_execution.project_id` → `project.id` (doc 03)
+- `cli_execution.agent_id` → `agent.id` (doc 05)
+- `cli_execution.stdout_artifact_id` → `run_artifact.id` (doc 16, nullable)
+- `cli_execution.stderr_artifact_id` → `run_artifact.id` (doc 16, nullable)
+- `browser_session.task_id` → `project_task.id` (doc 03)
+- `browser_session.project_id` → `project.id` (doc 03)
+- `browser_session.agent_id` → `agent.id` (doc 05)
+- `browser_action.browser_session_id` → `browser_session.id`
+- `browser_action.run_id` → `run.id` (doc 16)
+- `browser_action.run_step_id` → `run_step.id` (doc 16)
+- `browser_action.screenshot_artifact_id` → `run_artifact.id` (doc 16, nullable)
+- `browser_handoff.browser_session_id` → `browser_session.id`
+- `browser_handoff.inbox_item_id` → `inbox_item.id` (doc 03)
+- `browser_handoff.run_id` → `run.id` (doc 16)
+- `browser_handoff.screenshot_artifact_id` → `run_artifact.id` (doc 16, nullable)
+- `browser_handoff.post_handoff_screenshot_id` → `run_artifact.id` (doc 16, nullable)
+
+**Polymorphic patterns:** none new
+
+**Key behavioral rules:**
+- CLI and browser are tier 2 tools — all invocations route through control plane policy evaluation before execution
+- CLI risk levels: safe (always allowed if capability granted), normal (allowed by default), sensitive (denied by default, configurable), dangerous (denied)
+- Default CLI denylist: system destruction (rm -rf /), system control (shutdown/reboot/halt), privilege escalation (sudo/su), system modification (systemctl/service/etc), process interference (kill -9 1/killall), network reconfiguration (iptables/ifconfig)
+- Compound CLI commands decomposed; overall risk = maximum of all components
+- Working directory scoped to project git repo at task branch HEAD. Path traversal (../) that escapes repo is rejected.
+- Constructed environment (not inherited): always-set vars, project-config injected vars, org-secret injected credentials. Blocked: OPENAI_API_KEY, ANTHROPIC_API_KEY, OtterCamp internal service credentials.
+- CLI output inline limit: 50KB per stream (stdout/stderr). Total capture limit: 10MB per command. Excess stored as RunArtifact.
+- CLI streaming events: cli.stdout, cli.stderr, cli.exit — map to doc 16 run_event type 'output_chunk'
+- cli_execution status 'denied' — record created even when command is denied for audit purposes
+- env_vars on cli_execution stores only KEYS, never values
+- Browser sessions: task-scoped (NOT run-scoped). One active browser session per task. Persist across multiple runs.
+- Browser session lifecycle: active → suspended (task on_hold) → closed (task done/cancelled/idle/revoked/manual)
+- Browser session idle timeout: 1 hour default. Cleanup on task completion/cancellation.
+- Automatic screenshots after every navigation, every interaction, every error — stored as RunArtifacts, NOT returned to agent inline
+- Agent calls browser.screenshot() explicitly when it needs to see page state (included in tool result for vision)
+- Domain policy: allow_all (default), denylist, allowlist. Sensitive domains (financial/auth/admin/email) denied by default.
+- Credentials never in agent prompts — injected into browser context at session creation time by worker runtime
+- Human handoff: agent-initiated (not policy-triggered). Creates inbox_item (item_type='browser_handoff'). Run pauses. Handoff expires after 24 hours default.
+- Handoffs are one-way: human completes action → signals completion → agent resumes. No back-and-forth.
+- Git operations are regular CLI tool calls. No push to main (merge queue only). No force-push to shared branches. No branch deletion. Force-push to own task branch allowed when push enabled. Git push classified as 'sensitive'.
+- Browser per-action timeout: 30s for interactions, 60s for navigation (configurable). Browser sessions: 1-hour idle timeout.
+- Revocation immediate: in-flight ops finish, next tool call returns "not permitted"
+- Container-level isolation deferred (future); current model is process-level isolation
+
+**API endpoints:** none new beyond doc 16 control plane endpoints
+
+**Cross-spec references:**
+- cli_execution.run_id, run_step_id → run/run_step (doc 16)
+- cli_execution.stdout/stderr_artifact_id → run_artifact (doc 16)
+- browser_handoff.inbox_item_id → inbox_item (doc 03) — RESOLVES ISSUE #3: browser_handoff fully defined here
+- browser_session scoped to project_task (doc 03)
+- Capabilities: system.cli.execute, system.browser.navigate/.interact/.screenshot/.extract (doc 16 capability policy)
+- Secret injection via org secret store (doc 08)
+- Project network policy stored in project config (doc 03/08)
+- CLI/browser RunEvents reference doc 16 run_event table
+- Tools registered in tool registry (doc 20, not yet read)
+- Artifact retention follows org-level retention policy (doc 13, not yet read)
+
+**Gaps/conflicts:**
+- ISSUE #3 RESOLVED: browser_handoff table defines inbox_item_id → inbox_item.id. item_type='browser_handoff' on inbox_item is the link. The handoff reason values are: captcha, two_factor, payment, agent_request.
+- ISSUE #19 (new, see ISSUES.md): cli_execution references run_step_id as NOT NULL, but doc 16's run_step table has tool_execution records that can have nullable run_step_id. Clarify whether run_step_id is always required for cli_execution or can be null for direct-run executions.
+
+---
+
+---
+
+## Doc 17: TUI (Backend API Contracts and Figma Gaps Only)
+
+**Backend API contracts required by TUI:**
+- SSE event stream: `GET /v1/events/stream?scopes=org:{id},project:{id},session:{id},task:{id}` — used for real-time chat streaming, task status updates, inbox updates, merge queue updates, activity feed, agent status, unread indicators. Last-Event-ID header for reconnect/catch-up.
+- Session list: `GET /v1/chat-sessions?scope=...` — sidebar session list, grouped by scope
+- Dashboard data: org projects summary, inbox count, recent activity — requires: `GET /v1/projects`, `GET /v1/inbox`, `GET /v1/events?scope=org:{id}&limit=50` (or similar)
+- Task board: `GET /v1/projects/{id}/tasks?status=...` — kanban columns by work status
+- Task detail: `GET /v1/tasks/{id}` — full task details including flow state, subtasks, dependencies
+- Inbox list: `GET /v1/inbox` — inbox items with status, type, action_payload
+- Agent status: `GET /v1/agents` — list agents with status, current work (requires run association)
+- Merge queue: `GET /v1/projects/{id}/merge-queue` — merge queue entries
+- Schedules: `GET /v1/projects/{id}/schedules` — task schedules
+- Message send: `POST /v1/chat-sessions/{id}/messages` — from chat input area
+- Turn cancel: `POST /v1/chat-sessions/{id}/cancel-turn` — Escape key during streaming
+- Message queue actions: steer (`POST /v1/chat-sessions/{id}/messages/{mid}/steer`), edit (`PATCH /v1/chat-sessions/{id}/messages/{mid}`), delete (`DELETE /v1/chat-sessions/{id}/messages/{mid}`)
+- Reactions: `POST /v1/chat-sessions/{id}/messages/{mid}/reactions` (+/-), `DELETE /v1/chat-sessions/{id}/messages/{mid}/reactions/{rid}`
+- Inbox actions: `POST /v1/inbox/{id}/act` (approve/reject/defer)
+- @mention autocomplete: requires `GET /v1/agents?scope=...` for name lookup
+
+**Agent status view requires join-like data:** agent status + current_run must provide agent_id with their active run task. Backend needs to either: (a) include current task info on agent response, or (b) TUI queries runs separately. No current endpoint returns "which task is this agent currently working on?"
+
+**SSE events consumed by TUI (from doc 12):**
+- chat.message.created, chat.message.delta, chat.message.finalized, chat.turn.started, chat.turn.completed, chat.listening_eval.completed
+- task.status_changed, task.flow.advanced, task.subtask.completed
+- inbox.item.created, inbox.item.acted
+- agent.activated, agent.paused (for agent status view)
+- project.merge.queued, project.merge.completed, project.merge.conflict
+- system.schedule.fired, system.schedule.skipped
+
+**Figma gaps from doc 17:**
+- Scope indicator component (chat pane top): scope pills (Task / Project / Org) with active highlight. `[`/`]` navigation.
+- Message queue section: queued messages below active turn, with inline action hints `[e]dit [s]teer [d]elete`
+- Tool call inline rendering: compact status lines within agent message (`> read_file() ... done`)
+- Active turn indicator: agent name + elapsed time + tool activity + `[Esc to cancel]`
+- Flow stepper text representation: `[x Done] -> [* Active] -> [ Pending]` — terminal text form of flow visualization
+- Reaction indicators below messages: `[+1]` / `[-1 "note"]` compact form
+- Unread bubble-up in sidebar: `*` on task session bubbles to project grouping
+
+---
+
+## Doc 21: Testing
+
+**Tables:** none (no test-specific tables — test infrastructure is application-level, not schema-level)
+
+**OTTERCAMP_MODE=test flag behavior:**
+- Set via environment variable. Read once at startup, immutable at runtime. Default = production mode.
+- Test mode enables: deterministic model responses (doc 07 deterministic mode), state reset API, synthetic time control, test-only seeding endpoints, relaxed timeouts (configurable multiplier, default 3x via OTTERCAMP_TEST_TIMEOUT_MULTIPLIER).
+- Test mode does NOT disable: auth, policy evaluation, sandboxing, control plane enforcement, audit logging.
+- OTTERCAMP_MODE value is NOT stored in database.
+
+**State reset API endpoints (test mode only):**
+- `POST /test/reset` — truncates all tables, re-runs bootstrap. Returns org_id, user credentials, API key. Does NOT exist in production mode.
+- `POST /test/time/advance` — advances system clock by specified duration. Requires injectable clock abstraction in all time-dependent code.
+- `POST /test/seed/memories` — bulk load memories with specific content, confidence, source types
+- `POST /test/seed/invocations` — create model invocation records for cost/budget testing
+- `POST /test/seed/events` — inject domain events for testing event subscribers
+
+**3-layer test architecture:**
+- **Unit tests (Layer 1)**: all packages in isolation, mocking model providers/DB/filesystem/external services. 90%+ line coverage minimum. 95%+ for critical paths (policy, tools, prompt assembly, flow, memory). Must complete < 2 minutes. Test files alongside source: policy.go → policy_test.go. Table-driven tests for combinatorial cases.
+- **Integration tests (Layer 2)**: real PostgreSQL, real schema migrations, recorded provider responses. Each suite gets own DB (created/dropped by harness, cloned from migrated template). Recorded responses in testdata/responses/ committed to version control. In-process API server. Covers: DB queries/constraints, event bus LISTEN/NOTIFY delivery, model gateway routing, auth, memory pipeline, tool execution.
+- **E2E tests (Layer 3)**: full OtterCamp instance in test mode. Real auth, real policy, real control plane. CLI binary + HTTP client as test clients. Before each test: POST /test/reset. Must complete < 10 minutes.
+
+**Coverage gates:**
+- Overall minimum: 90% line coverage
+- Critical packages (policy, tools, prompt, flow, memory): 95% minimum
+- Coverage delta: no merge if coverage decreases > 1% from base branch
+- New .go files without _test.go files are flagged by CI
+
+**CI pipeline stages (total budget: 15 minutes):**
+1. Lint (< 30s)
+2. Unit tests (< 2min) — coverage report
+3. Build (< 1min)
+4. Integration tests (< 5min) — requires step 3
+5. E2E tests (< 10min) — requires step 3
+6. Coverage gate — requires steps 2, 4, 5
+
+**Key behavioral rules:**
+- Model response fixtures: stored in testdata/responses/ organized by scenario (chat/, flow/, memory/). Version-controlled test fixtures. Can optionally call live providers behind OTTERCAMP_TEST_LIVE_MODELS=true env var.
+- No internet access during tests (except gated live-model tests).
+- Browser tests: headless Chrome in Docker.
+- Injectable clock abstraction: ALL time-dependent code reads from this abstraction. In test mode, time is controllable via /test/time/advance. In production, returns real system time.
+- Recorded model responses: include prompt hash, provider response, token counts, latency. Replayed deterministically in tests.
+- E2E test uses POST /api/sessions/{id}/turns (note: different path than /v1/ — confirm consistency with doc 12 endpoint catalog).
+
+**Critical unit test cases explicitly required:**
+- Policy evaluation: layers in order, deny overrides allow, instance safety unoverridable
+- Tool resolution: all 4 stages, glob matching, tier 1 bypasses capability gate
+- Prompt assembly: 7 layers in order, budget truncation, skill activation rules
+- Flow progression: transitions, rejection loops, visit counter, dependency enforcement
+- Memory retrieval: 4-stage pipeline, trust tiers, dedup, passive injection dedup
+
+**Cross-spec references:**
+- doc 07 deterministic mode → used for test model responses
+- doc 08 OTTERCAMP_MODE env var → deployment configuration
+- doc 15 JSONL import → testdata/import/ fixtures
+- doc 12 API endpoints → used for E2E verification; NOTE: doc 21 uses /api/ prefix, doc 12 uses /v1/ prefix — possible inconsistency
+
+**Gaps/conflicts:**
+- ISSUE #27 (new): doc 21 E2E test examples use paths like `POST /api/sessions/{id}/turns` and `GET /api/projects`, while doc 12 defines all routes under `/v1/` prefix (e.g., `POST /v1/chat-sessions/:id/messages`). Either doc 21's examples use a shorthand, or the test mode uses a different API prefix. Additionally, doc 21 refers to `POST /api/sessions/{id}/turns` as a way to send a message, but doc 12 defines message sending as `POST /v1/chat-sessions/:id/messages`. Both the path prefix (/api vs /v1) and the resource name (sessions vs chat-sessions) differ. Clarify whether the doc 21 examples are accurate test code or illustrative pseudocode, and confirm the authoritative API paths are from doc 12.
+
+---
+
+## Doc 20: Tools and Tool Policy
+
+**Tables:**
+- `tool_definition` — name (unique text), domain (project|chat|memory|agent|system|browser|communication), category (native|system|browser|external), tier (int: 1 or 2), description, parameter_schema jsonb, return_schema jsonb (optional), required_capability text (null for tier 1), is_active boolean (default true), version int; populated at application startup from code, not user-editable
+- `session_tool_set` — session_id, agent_id, tool_names text[] (ordered), tool_versions jsonb, mcp_tools jsonb (array of {connection_id, tool_name, schema_hash}), resolved_at; unique(session_id, agent_id)
+
+**FKs:**
+- `session_tool_set.session_id` → `chat_session.id`
+- `session_tool_set.agent_id` → `agent.id`
+- `tool_definition` has no FKs (standalone registry)
+
+**Polymorphic patterns:** none new
+
+**Key behavioral rules:**
+- Four tool categories: native (shipped with OtterCamp), system (CLI/file/git), browser (web interaction), external (MCP and remote APIs)
+- Two-tier execution model: tier 1 (read-only, chat-layer, scope check only) vs tier 2 (mutations + external, full control plane path)
+- Default is tier 2. Tier 1 is a strict whitelist. Tools never move from tier 2 to tier 1.
+- All external tools are ALWAYS tier 2 (no exceptions). All browser tools are ALWAYS tier 2.
+- Tier 1 complete whitelist: project.list/get, task.list/get, subtask.list/get, flow.get_template/get_execution, inbox.list, merge_queue.status, schedule.list, session.list/get/history, memory.query, agent.list/get, file.read/list/search, git.status/diff/log
+- Tier 1 permission check is scope-based (is data within agent's current scope?), NOT policy-based.
+- Four-stage tool resolution pipeline (runs once at session start, cached for session lifetime): (1) Universe = all native + enabled external in scope; (2) Agent profile filter (allow/deny globs); (3) Flow node filter (soft deprioritize, NOT hard exclude); (4) Capability gate (exclude tier 2 tools without matching capability)
+- Flow node may declare optional `tool_domains` jsonb field for stage 3 soft filtering (new field on flow_node table — adds to ISSUE #16).
+- Tool descriptions are layer 7 of 7-layer prompt assembly (lowest priority, dropped first under budget pressure). Full catalog ~55 tools ≈ 4,000-5,000 tokens.
+- Session tool set is cached and stable. Configuration changes take effect on NEXT session, not current. Mid-session capability revocation enforced at EXECUTION TIME (not prompt removal).
+- Communication tools (email.compose, slack.post) create draft_action_review inbox items as DESIGNED BEHAVIOR, not policy interception. Tool succeeds; agent's turn continues immediately; agent not notified of inbox decision within same turn.
+- Agent profile allow/deny uses glob patterns. `project.*`, `github.*` (MCP connection slug), `browser.*`, `*`. Deny always wins over allow.
+- Starter trio tool policies: Frank = project/task/subtask/flow/session/memory/agent/inbox/schedule (no system/browser/external); Lori = agent.* + read tools; Ellie = memory.* + session.history + file.read/search.
+- Tool names use connection SLUGS for prompt clarity (github.create_issue). Capability names use connection UUIDs for stable policy references (mcp.tool.invoke:<uuid>:<tool_name>).
+- External tools default to is_enabled=false until admin explicitly enables via conversation.
+- Parallel execution: tier 1 in parallel, tier 2 sequential. Mixed tier: tier 1 first (parallel), then tier 2 (sequential).
+- Tool timeouts: tier 1 = 5s, tier 2 native = 10s, CLI = 60s, browser = 30s, external = 30s per-connection configurable.
+- No batch tools. No dynamic tool generation (agents cannot create tools at runtime).
+- flow_node.tool_domains: new optional jsonb field on flow_node — NOT mentioned in doc 03, 09, 10. This adds to the flow_node schema gaps (ISSUE #16 already tracks this).
+- git.commit requires `system.file.write` capability — same as file.write/delete.
+
+**Native tool catalog (55 tools, 7 domains):**
+- Project/Task: project.list/get/create/update, task.list/get/create/update/add_dependency/remove_dependency, subtask.list/get/create/update, flow.get_template/get_execution/advance/review_decision/create_template, inbox.list, merge_queue.status, schedule.list/create/update/delete (25 tools)
+- Chat/Session: session.list/get/history/create/invite_agent, message.send (6 tools)
+- Memory: memory.query (T1), memory.record (T2) (2 tools)
+- Agent: agent.list/get/create_temp/update (4 tools)
+- System: file.read/list/search/write/delete, cli.execute, git.status/diff/log/commit (10 tools)
+- Browser: browser.navigate/click/type/screenshot/extract/evaluate (6 tools)
+- Communication: email.compose, slack.post (2 tools)
+
+**Cross-spec references:**
+- mcp_tool_catalog (doc 09) + tool_definition = full tool universe
+- tool_execution (doc 16) = control plane record for tier 2 calls
+- chat_message (doc 02) = tier 1 calls recorded as tool_call/tool_result messages
+- flow_node.tool_domains: new optional field on flow_node table (doc 03) — not yet specified in doc 03 DDL
+- agent profile allow/deny lists (doc 05)
+- capability policy (doc 16) = stage 4 of resolution pipeline
+- layer 7 of 7-layer prompt assembly (doc 05)
+- communication tools create draft_action_review inbox items (doc 03 inbox_item.item_type)
+
+**Gaps/conflicts:**
+- ISSUE #25 (new): doc 20 introduces `flow_node.tool_domains` as a new optional jsonb field on the `flow_node` table (used in stage 3 of tool resolution as a soft deprioritization signal). This field is NOT mentioned in doc 03 (flow_node DDL), doc 09 (which only adds `mcp_tools`), or doc 10. This adds a THIRD new field to flow_node beyond what any single doc defines: (a) drop `skills` jsonb (doc 10), (b) add `mcp_tools` jsonb (doc 09), (c) add `tool_domains` jsonb (doc 20). Doc 03 must be updated to reflect all three changes. ISSUE #16 should be updated accordingly.
+- ISSUE #26 (new): doc 20 defines `browser.evaluate` as a browser tool ("Execute JavaScript in the page context"). Doc 11 (System Integration) defines the browser action API and does NOT include an `evaluate`/JS execution tool. Doc 11's API is: navigate, click, type, select, hover, scroll, press_key, screenshot, extract_text, extract_structured, get_page_info, wait_for, wait_for_navigation, back, forward, refresh. No JavaScript evaluation. This is a direct contradiction — doc 20 says browser.evaluate exists; doc 11 does not define it and does not mention JavaScript execution. Clarify: (a) does browser.evaluate exist? (b) is it intentionally excluded from doc 11 for security reasons? (c) if it should exist, what are its sandbox constraints?
+
+---
+
+## Doc 15: Migration and Backward Compatibility
+
+**Tables:** none new
+
+**Key behavioral rules:**
+- V2 is a clean-room rebuild. No V1 code, schema, or data reused. No migration shims.
+- Only data bridge: JSONL memory import (CLI-only, permanent capability). Uses doc 06's standard extraction pipeline. No stages skipped.
+- Imported memories: source_type='import', trust_tier=0.6 (medium-low, per doc 06 source trust tiers).
+- Bootstrap is idempotent — detected by checking for any organization row. Skips if org exists.
+- Bootstrap minimum dataset (authoritative from doc 14 + confirmed here): Frank, Lori, Ellie (starter trio), 4 default flow templates ("Single Step", "Work + Review", "Work + Code Review + Human Review", "Research"), 2 org-default skills (Safety and Communication Policies, General Work Standards), 3 model profiles (high-capability/Opus, standard/Sonnet, haiku/Haiku), default org policy, "General" org session, one bootstrap audit event.
+- V1 archives retained indefinitely in cold storage. Never queried at runtime.
+- Rollback strategy is forward-only (fix in V2). V1 restoration is last resort (OpenClaw dependency risk + data loss of V2-era work).
+- Starter trio profile updates on upgrade: OPEN QUESTION (flagged from doc 04). Bootstrap is idempotent and skips, so a separate upgrade mechanism is needed. Options deferred.
+
+**Cross-spec references:**
+- Bootstrap sequence: doc 14 is authoritative (10-step sequence). Doc 15 confirms and expands details.
+- JSONL import: doc 06 memory importer is the only data bridge.
+- Default flow templates: doc 03 system-provided templates (project_id=null).
+- Default skills: doc 10 org-scope skills with is_default=true.
+- Default model profiles: doc 07 system-provided profiles with organization_id=null.
+- Bootstrap org policy: doc 16 capability_policy defaults.
+
+**Gaps/conflicts:**
+- ISSUE #24 (new): doc 15 open question: "Starter trio profile updates on upgrade: when a new OtterCamp version ships with updated prompt packs, policies, or tool configurations for the starter trio (Frank, Lori, Ellie), how are those applied to existing installs?" Doc 14 resolved this partially (system_prompt updated; operator_instructions field never overwritten) but doc 15 still lists it as an open question. Gap: is the doc 14 partial resolution sufficient for implementation, or does a specific upgrade mechanism (migration script, CLI command, version check) need to be designed?
+
+---
+
+## Doc 13: Security, Observability, and Cost Controls
+
+**Tables:**
+- `token_budget` — organization_id, project_id (nullable — null = org-level budget), period_type (daily|weekly|monthly), soft_limit bigint (tokens, nullable), hard_limit bigint (tokens, nullable), created_by_type (human|system), created_by_id uuid; unique(organization_id, coalesce(project_id, sentinel_uuid), period_type); index on organization_id
+- `trace_span` — implied (not DDL-defined in this doc); append-only, partitioned by day, 7-day retention default; OTLP-compatible; stores distributed trace spans with start/end timestamps, status, attributes, parent span ID
+
+**Cross-reference tables confirmed by doc 13 (not new DDL, but authoritative statements about existing tables):**
+- `secret` (doc 08) — categories: model_provider|ssh_key|mcp_credential|external_service; encrypted via AES-256-GCM; master key from OTTERCAMP_MASTER_KEY env var or KMS; key_version tracks master key rotation
+- `model_usage_rollup` (doc 07) — retained indefinitely (rollups survive 30-day raw invocation purge)
+- `model_invocation` (doc 07) — 30-day retention (shorter than doc 14's stated 90 days)
+
+**FKs:**
+- `token_budget.organization_id` → `organization.id`
+- `token_budget.project_id` → `project.id` (nullable)
+- `token_budget.created_by_id` → `human_user.id` (when created_by_type='human') | sentinel UUID (when 'system'); application-layer only
+
+**Polymorphic patterns:**
+- `token_budget`: created_by_type in ('human', 'system') — no 'agent' type here (only humans and system create budgets)
+
+**Key behavioral rules:**
+- Defense-in-depth: 6 layers: (1) org isolation/db-per-org, (2) auth, (3) RBAC+capability authorization, (4) control plane gating, (5) agent sandboxing, (6) audit trail
+- Authorization posture is PERMISSIVE via capability templates (not default-deny). Instance safety policy is the only default-deny floor.
+- Budget enforcement is at TWO levels: org and project. (Agent-level budget via agent.budget_cap_tokens in doc 05 is an OPEN QUESTION per doc 13 Q1 — units conflict: doc 05 uses cents, doc 13 uses tokens)
+- Hard budget limit: fail CLOSED — block non-essential capabilities. Do NOT silently degrade to cheaper model. Essential capabilities (blocker filing, status updates) remain allowed.
+- Soft budget limit: warn once per period. Warning appears in activity feed + usage dashboard. Run proceeds.
+- Anomaly detection: background job every 15 minutes. If trailing-60-min token usage > 3x 7-day hourly average → alert. Max one spike alert per hour per org.
+- 5 codebase-wide secret safety invariants: never in prompts, never in logs, never in API responses, never in audit events, never in memory. Scrubbing layer enforces.
+- Log scrubbing replaces known secret patterns with [REDACTED]. Patterns: API key prefixes (sk-, key-), SSH private key headers, bearer token values, base64 blobs >32 chars in secret-adjacent fields.
+- Trace retention: 7 days default, configurable. Error traces always recorded regardless of sampling rate.
+- Retention enforcement: daily background job. Chat transcripts: 90 days. Run records + events: 90 days. Model invocation logs: 30 days. Domain events: 90 days. Audit events: 1 year (self-hosted), 3 years (managed). Memories (active): indefinite. Memories (archived): 1 year. Object storage artifacts: 90 days. Trace spans: 7 days.
+- NOTE: doc 13 retention for model invocations = 30 days. Doc 14 resolution says 90 days. INCONSISTENCY logged as ISSUE #21.
+- Retention enforcement order: for chat/invocation logs, archive to object storage before deletion if org has archival enabled. Audit events: archive before deletion, never hard-delete without archival.
+- Data deletion: delete project → memories archived (not deleted) with reason 'project_deleted'. Delete agent → soft-delete only; audit trail integrity preserved.
+- Org wipe: deletes all org data except audit events. CLI-only. Requires typing org slug. Not exposed in web UI.
+- GDPR-aware design: right to access (export API), erasure (deletion workflow), portability (JSON archive), minimization (retention policies). Not certified at GA.
+- Circuit breakers on external deps: model providers, MCP servers, git remotes. Open after 5 failures or >50% error rate over 1 min. Half-open after 30s.
+- Usage dashboard data source: model_usage_rollup for 30d/90d views (pre-aggregated). Raw model_invocation for 7d and real-time drill-downs.
+- Inference context replay: stored in model_invocation.metadata — per-layer token counts, memory injection manifest, compression events, truncation events. Enables "why did agent do X?" reconstruction.
+- Metrics endpoint: /metrics (Prometheus-compatible, pull model). Optional OTLP push for managed.
+- Health endpoints (per doc 08): /health/live (liveness) and /health/ready (readiness + deps). Doc 13 references /health/live and /health/ready — slight naming difference from doc 08 which uses /health and /ready. ISSUE #22.
+
+**Retention table (authoritative from doc 13):**
+| Data Type | Default Retention |
+|---|---|
+| Chat session transcripts | 90 days |
+| Memory items (active) | Indefinite |
+| Memory items (archived) | 1 year |
+| Audit events | 1 year (self-hosted), 3 years (managed) |
+| Run records and events | 90 days |
+| Model invocation logs | 30 days |
+| Domain events | 90 days |
+| Trace spans | 7 days |
+| Object storage artifacts | 90 days |
+| idempotency_key | 24h TTL |
+| job_queue completed jobs | Daily purge |
+
+**API endpoints implied:** None new. /metrics (Prometheus), /health/live, /health/ready already defined in other docs.
+
+**Cross-spec references:**
+- secret table (doc 08) — AES-256-GCM encrypted
+- model_usage_rollup (doc 07) — usage dashboard data source, retained indefinitely
+- model_invocation (doc 07) — per-request token tracking, 30-day retention
+- audit_event (doc 04) — never hard-deleted without archival
+- token_budget.project_id → project (doc 03)
+- budget enforcement in control plane broker (doc 16)
+- trace_span partitioned table — not DDL-defined here; implied infrastructure
+- Operational dashboards in web UI (doc 18, not yet read)
+
+**Gaps/conflicts:**
+- ISSUE #21 (new): doc 13 says model invocation log retention = 30 days. Doc 14 resolution Q says 90 days for model invocations. These are contradictory. Need definitive answer.
+- ISSUE #22 (new): doc 13 says health endpoints are /health/live and /health/ready. Doc 08 defines /health (liveness, "no dep checks") and /ready (readiness). Different paths. Need canonical path names.
+- ISSUE #23 (new): doc 13 has an open question explicitly stating the per-agent budget system conflicts with the org/project token_budget system: "Doc 05 uses cents (budget_cap_cents) while doc 13's token_budget system is entirely token-based — these units are incompatible. Either the agent-level budget should be converted to tokens (and the column renamed), or a conversion layer is needed." This confirms ISSUE #1 (budget_cap_cents vs tokens) and extends it: the budget enforcement path in doc 16 cannot compare across org/project/agent levels until this is resolved. Marking as BLOCKER.
+
+---
+
+## Doc 12: API, Events, and Realtime Contracts
+
+**Tables:**
+- `domain_event` — id (uuid), seq (bigint GENERATED ALWAYS AS IDENTITY — strict total ordering), type (text), occurred_at, actor_type (human|agent|system|supervisor), actor_id (uuid nullable), organization_id, project_id (nullable), task_id (nullable), session_id (nullable), payload jsonb, metadata jsonb; unique index on seq; scope indexes on (org_id, seq), (project_id, seq), (task_id, seq), (session_id, seq), (type, seq); retention index on occurred_at
+- `consumer_cursor` — consumer_name (PK text), last_seq (bigint default 0), last_event_at, updated_at; four named consumers: realtime_push, memory_pipeline, notification_evaluator, internal_reactions
+- `job_queue` — id, job_type, priority (int), payload jsonb, status (pending|claimed|running|completed|failed|dead_letter), attempts, max_attempts (default 3), claimed_by, claimed_at, started_at, completed_at, failed_at, error_message, error_details jsonb, result jsonb, run_after (timestamptz, for delayed/retry), created_at, updated_at
+- `idempotency_key` — key (text PK), method, path, request_hash (SHA-256), response_status, response_body jsonb (null for 204), created_at, expires_at; index on expires_at for cleanup
+
+**FKs:**
+- `domain_event.organization_id` → `organization.id` (structural consistency; tenant isolation via db-per-org)
+- `domain_event.actor_id` → `human_user.id` | `agent.id` (via actor_type; application-layer; may be null for system/supervisor events)
+- No explicit FK constraints on project_id, task_id, session_id on domain_event (denormalized for query; not enforced at DB level)
+- `consumer_cursor` has no FKs (standalone)
+- `job_queue` has no FKs (standalone; payload contains entity IDs)
+- `idempotency_key` has no FKs (org-scoped implicitly via db-per-org)
+
+**Polymorphic patterns:**
+- `domain_event`: actor_type in ('human','agent','system','supervisor') — note: 'supervisor' is an extension beyond the canonical 3-type principal convention of docs 04/05/16. All code switching on actor_type must handle 4 values.
+- `domain_event`: (scope fields) are NOT a polymorphic FK pair — they are independent nullable columns; an event may have project_id AND task_id AND session_id simultaneously
+
+**Key behavioral rules:**
+- API-first principle: every feature accessible via REST API. No UI-only features. Web UI is an API client.
+- All routes under /v1/. Version in URL path, not headers.
+- REST for CRUD; explicit command endpoints (POST verb-noun) for actions with side effects (e.g., POST /tasks/:id/advance-flow). PATCH to status fields is wrong for state transitions.
+- Consistent envelope: {data, meta} for success; {error, meta} for failures. data never null (empty list = []). meta always present with request_id + timestamp.
+- Cursor-based pagination only. Default page_size=50, max=200. Cursors are opaque.
+- Idempotency: all mutations accept Idempotency-Key header. Stored for 24-hour TTL. Same key + same request = replay stored response. Same key + different request = 409.
+- No API-layer rate limiting. Rate limiting only at model layer (doc 07).
+- All requests scoped to organization (from auth context). Cross-org access impossible.
+- domain_event.seq is BIGSERIAL identity — strict total ordering, unique even within same transaction.
+- Events written transactionally with domain operations (same DB transaction). LISTEN/NOTIFY wake-up after commit.
+- At-least-once delivery to consumers. Consumers must be idempotent.
+- Each consumer tracks own position via consumer_cursor.last_seq. A slow consumer does not block others.
+- Retention: default 90 days for events. Before purging, system checks all consumer cursors advanced past boundary. Consumer stalled >24h → operator alert.
+- SSE as default realtime transport: /v1/events/stream?scopes=org:id,project:id,task:id,session:id
+- SSE id field = event.seq (monotonic integer). Last-Event-ID for reconnect = simple seq > $last_seq comparison.
+- If SSE buffer overflows (default 1000 events), server drops connection. Client reconnects with Last-Event-ID.
+- If seq referenced by Last-Event-ID was purged, server responds with oldest available + X-Events-Gap: true header.
+- WebSocket: /v1/ws — bidirectional, for typing indicators and live-pairing. Not required for normal chat.
+- API key scope enforcement on SSE: oc_chat_ → only session:{id} scopes + chat.* events; oc_read_ → any scope; oc_full_ → unrestricted
+- Scope hierarchy: org:{id} ⊃ project:{id} ⊃ task:{id} ⊃ session:{id}
+- Job priority tiers: 100 (sync/human-waiting), 50 (standard async), 25 (background), 10 (maintenance)
+- Job pickup: SELECT ... FOR UPDATE SKIP LOCKED for concurrent worker claiming without contention
+- Job retry: exponential backoff base 5s, max 5min. When attempts >= max_attempts → dead_letter status.
+- Stale claim recovery: background process detects claimed/running jobs past timeout (default 30min for agent turns, 5min lightweight). Resets to pending or dead_letter.
+- Webhooks: deferred to V2.1. Event log designed to support them (stable types, consistent structure).
+- CLI client: `ottercamp` binary with noun-verb commands. Maps to REST API. Three output modes: table (default), json, quiet (IDs only).
+- CLI auth: --api-key flag, OTTERCAMP_API_KEY env var, or ~/.ottercamp/credentials file.
+- CLI default server URL: http://localhost:4110 (doc 08 default port).
+
+**Event type catalog — 140+ events across 13 domains:**
+- Chat: chat.session.{created|closed|mode_changed}, chat.message.{created|delta|finalized|failed|redacted}, chat.turn.{started|completed|failed|stopped}, chat.summary.created, chat.read_cursor.updated, chat.listening_eval.completed, chat.participant.{joined|left}, chat.reaction.{created|updated|deleted}
+- Task: task.{created|updated|status_changed|queued|started|blocked|unblocked|held|resumed|review_started|completed|cancelled}, task.subtask.{created|status_changed|completed}, task.participant.{added|removed}
+- Flow: task.flow.{advanced|rejected|node_started|node_completed|node_blocked}
+- Dependency: task.dependency.{added|removed|resolved|cancelled}
+- Agent: agent.{created|activated|paused|retired|cancelled|expired|promoted|profile_updated}, agent.project.{assigned|unassigned}
+- Memory: memory.item.{created|updated|archived|superseded|promoted}, memory.entity.{created|synthesized}, memory.contradiction.detected, memory.consolidation.{started|completed}, memory.import.{started|completed|failed}
+- Model: model.request.{started|completed|failed|fallback}, model.budget.{warning|exceeded}
+- Control: control.run.{created|started|completed|failed|cancelled|timed_out|paused|resumed|dead_lettered|stuck_detected|escalated}, control.policy.{created|updated|deleted|evaluated|denied}
+- Project: project.{created|updated|archived}
+- Merge/Delivery: project.merge.{queued|started|completed|conflict}, project.push.{succeeded|failed}, project.deploy.{started|completed|failed|rollback}, project.remote.{created|updated|removed}, project.environment.deployed
+- System: system.health.{degraded|recovered}, system.schedule.{created|updated|paused|resumed|fired|skipped}, system.job.{started|completed|failed|dead_lettered}
+- System Integration: system.cli.{executed|denied}, system.browser.{session_created|session_closed|handoff_created|handoff_completed|handoff_expired|domain_blocked}
+- MCP: mcp.connection.{created|updated|deleted|status_changed|health_changed}, mcp.catalog.changed, mcp.tool.{executed|denied|preload_failed}
+- Inbox: inbox.item.{created|acted|deferred}
+
+**Job types catalog:**
+- agent_turn, flow_node_start, memory_extraction, memory_consolidation, notification_delivery, merge_execute, push_execute, deploy_task_create, schedule_tick, summary_generate, cleanup_ephemeral, idempotency_cleanup, event_log_retention, session_cleanup, api_key_cleanup
+
+**API endpoint catalog (comprehensive — from Section 4):**
+- Auth/org, chat sessions/messages/participants/turns/artifacts/reactions/read-cursor, projects, tasks/flow/subtasks/dependencies/events/participants, flow templates/nodes/skills, inbox, merge queue, scheduling, agents/skills/project-assignments/templates, memory/query/items/entities/taxonomy/import/consolidate, models/providers, MCP connections/catalog/executions, skills, tools/tool-policies, control plane runs/steps/artifacts/events/cancel/retry/policies/evaluate/cost/health, system integration CLI/browser/handoffs, delivery remotes/environments, events/stream/ws, health/version
+
+**Cross-spec references:**
+- ISSUE #13 RESOLVED: domain_event table fully defined in doc 12 with seq-based ordering. See DDL above.
+- consumer_cursor bootstrapped with last_seq=0 for each consumer on first startup
+- Job types reference all domain operations defined in docs 02, 03, 03a, 06, 07, 16
+- supervisor actor_type extends canonical 3-type convention from docs 04/05/16 — handled in domain_events only, same as run_event from doc 16
+
+**Gaps/conflicts:**
+- ISSUE #20 (new): doc 12 defines `actor_type` on `domain_event` as ('human','agent','system','supervisor'). Doc 16 defines `run_event.actor_type` also including 'supervisor'. But the canonical principal convention from doc 04 defines only 3 types: 'human','agent','system'. Doc 12 explicitly notes this extension and says "code that switches on actor_type must handle all four values." However, the audit_event table (doc 04) only allows ('human','agent','system') — it does not include 'supervisor'. This means supervisor-initiated actions (stuck run recovery, timeout cancellation) cannot be attributed in audit_event. Clarify: should audit_event also be updated to allow actor_type='supervisor', or is supervisor attribution tracked only through domain_event and run_event (not audit_event)?
+
+---
+
+## Running Table Catalog additions from Doc 11
+
+### CLI and Browser (doc 11)
+- `cli_execution` — CLI command lifecycle with risk classification and output capture (doc 11)
+- `browser_session` — task-scoped browser context, persists across runs within a task (doc 11)
+- `browser_action` — fine-grained record of every browser interaction (doc 11)
+- `browser_handoff` — human handoff lifecycle bridging browser domain and inbox (doc 11)
+
+---
+
+## Doc 18: Web UI (Backend API Contracts and Figma Gaps Only)
+
+**Tables:** none new
+
+**Backend API contracts required by Web UI:**
+- Same REST API as TUI (doc 12 full endpoint catalog). No mobile-specific or web-specific endpoints.
+- Static SPA served by API service (no separate frontend server). React+TypeScript bundle.
+- SSE realtime: `GET /v1/events/stream?scopes=...` — same as TUI. Chat streaming, task status, inbox updates, merge queue, activity feed, agent status, unread indicators.
+- WebSocket: `GET /v1/ws` — optional, used for typing indicators and live-pairing (bidirectional). Not required for normal chat.
+- Auth: session-based auth (Bearer token), same as API. SSE authenticates with same session token.
+- Delta sync on reconnect: `GET /v1/events/stream?scopes=...&last-event-id={seq}` — reconnect catch-up.
+- Diff view: `GET /v1/tasks/{id}/diff?from_sha={sha}&to_sha={sha}` — task branch vs commit SHA (or vs main). Required for review node view. Branch vs previous `flow_node_execution.commit_sha` for incremental review.
+- Work log endpoint: `GET /v1/tasks/{id}/flow-nodes/{node_id}/work-log` or equivalent. Returns agent's async session execution trace: tool calls, arguments, results, artifacts, time, tokens.
+- Agent detail: `GET /v1/agents/{id}` — must include current assignments, model profile, budget info, skills, lifecycle status with transition history, activity summary (recent runs, active tasks, last active).
+- Agent activity: `GET /v1/agents/{id}/runs?limit=N` — recent runs for agent detail view.
+- Cost tracking data: `GET /v1/usage?group_by=agent|project|model&period=7d|30d|90d` — feeds Cost Tracking sub-view. Reads from model_usage_rollup (30d/90d) or raw model_invocation (7d).
+- Queue depth: `GET /v1/control/health` or polling endpoint for active runs count, wait queue depth, per-provider rate limit utilization, avg wait time.
+- Run history: `GET /v1/control/runs?status=...&agent=...&period=...` — feeds Run History observability sub-view.
+- Run detail: `GET /v1/control/runs/{id}` — full tool call trace, stop reason, model used, task/flow node link.
+- View state persistence: local storage only (no server-side view state). Active session, main content view, sidebar collapse, chat pane width, dark/light mode preference.
+- Optimistic inbox actions: client-side state update before API confirmation. Rollback on failure.
+- Cmd-K search: `GET /v1/search?q=...&types=project,task,agent,session,flow_template` — fuzzy search for command bar.
+- Keyboard shortcuts: `Cmd-[`/`Cmd-]` for scope pill navigation (same semantic as TUI `[`/`]` keys).
+
+**SSE events consumed by Web UI (same as TUI doc 17, plus):**
+- All events consumed by TUI (doc 17 notes).
+- Additional: project.deploy.{started|completed|failed|rollback}, project.environment.deployed — for Environments sub-view.
+- model.budget.{warning|exceeded} — for Budget Status widget in Cost Tracking.
+- system.health.{degraded|recovered} — for Queue Depth view.
+- system.job.{started|completed|failed} — for monitoring views.
+
+**Data shapes required by Web UI views:**
+- Agent directory row: agent_id, name, role title, status, project_names[], agent_class (staff|temp).
+- Run history row: run_id, status, agent_name, task_title, task_number, duration_ms, input_tokens+output_tokens, estimated_cost (display-layer calc), created_at.
+- Task detail history (from project_task_event): actor_name, actor_type, event_type, comment, created_at — rendered as human-readable prose.
+- Diff view: file-tree (path, change type, additions, deletions) + per-file unified diff content. Syntax highlighting by file extension.
+- Flow stepper node data: node_id, node_title, status (completed|active|blocked|pending), subtask_count, subtask_done, is_review_node, commit_sha (if completed), work_log_link.
+- Inbox item content: item_type, item_title, source_project, source_task, created_by, created_at, urgency, action_payload (diff preview for reviews, staged content for drafts, agent reasoning for escalations).
+
+**Figma gaps from doc 18 (not yet in ui-spec-for-figma.md):**
+- Sidebar collapse to icon-only: collapsible behavior for the session sidebar. Keyboard shortcut `Cmd-Shift-C`. Defaults to expanded.
+- Chat pane resizable: operator drags left edge of chat pane to adjust width. Minimum width enforced. Width persisted in local storage.
+- Viewing context hint at top of chat pane: "Viewing: OC-42 (Implement Auth)" — subtle contextual banner showing what main content is displayed, sent to agent as context.
+- Scope pill in web UI: segmented control with available scope levels. Cmd-[ / Cmd-] for keyboard navigation. Web-equivalent of TUI `[`/`]` scope navigation.
+- Notification center: bell icon sidebar overlay (NOT a separate page). Shows urgency-tiered notifications with grouped low-urgency items ("3 tasks updated in OtterCamp V2"). Dismiss individual or mark all read.
+- Task board card: flow progress bar (miniature step indicator) + priority + assignee + subtask progress. Dense kanban layout.
+- Schedules tab in Project View: table with schedule name, cadence, last run (with success/failed status indicator), next run, active/paused status. Row expansion shows last 5-10 task instances created by the schedule.
+- Environments tab in Project View: deployed commit SHA (abbreviated, clickable), deploy timestamp, deploy task link, previous commit on hover/expand for rollback reference.
+- Project Settings sub-view: read-only display of project context block, repo path, delivery mode, remotes, agent assignments. No edit forms.
+- Run History observability sub-view: table with status/agent/task/duration/tokens/cost/timestamp. Expandable row: full tool call trace, stop reason, model, task/flow node link.
+- Cost Tracking sub-view: per-agent, per-project, per-model breakdown. Trend chart. Budget status visual with approaching-limit indicator.
+- Queue Depth sub-view: tasks by priority level, active vs concurrency limit, per-provider rate limit utilization, avg wait time. Real-time SSE updates.
+- Command bar (Cmd-K): Superhuman-style centered overlay. Fuzzy search across projects/tasks/agents/sessions/flow templates. Results grouped by entity type. Recent searches shown when empty. Arrow-key navigation, Enter to select, Escape to dismiss. Quick actions: navigate, switch session, filter, system.
+- Keyboard shortcut cheatsheet: `Cmd-1` through `Cmd-9` (session by position), `Cmd-I` (inbox), `Cmd-D` (dashboard), `/` (focus chat input).
+- Dark mode toggle (persistent user preference via local storage).
+- Deployment badge on task header: shown when task is a deploy task (from doc 03a).
+- Remote push status indicator on task header: `push_succeeded` or `push_failed` badge (from task events).
+- Review node view: diff viewer as primary review surface. Approve/Reject buttons inline in task detail. Reject opens text input for feedback. Subtask summary from preceding work node. Work log link.
+- Diff viewer component: file tree left + diff content right. Syntax highlighting by file type. Unified/split toggle. File-level summary for large diffs (expandable per-file). Binary file indicator.
+- Mobile-responsive degradation: three-panel degrades to swappable panels on narrow screens. Tablets work in the three-panel layout.
+
+**Cross-spec references:**
+- Same API as TUI (doc 12 endpoint catalog; doc 17 for SSE event set).
+- Diff view requires `flow_node_execution.commit_sha` (doc 16) for incremental review (branch vs prev node commit SHA, not just vs main).
+- Run History data from `run`/`run_step`/`run_attempt`/`tool_execution` tables (doc 16).
+- Cost Tracking from `model_usage_rollup`/`model_invocation` (doc 07). Budget status from `token_budget` (doc 13).
+- Observability dashboards: same 4 dashboards as ui-spec-for-figma.md Settings/Observability section (Usage Explorer, Overview, Performance, Agents).
+- Activity feed from domain_event (doc 12) filtered by scope.
+- Inbox from inbox_item (doc 03) with full action_payload.
+- Environments from project_environment (doc 03a).
+- Delivery deploy badge from project_task `is_deploy_task` flag (doc 03a — task.deploy_flow_template_id context).
+
+**Gaps/conflicts:** none new beyond previously logged issues.
+
+---
+
+## Doc 19: Mobile UI (Backend API Contracts and Figma Gaps Only)
+
+**Tables:** none new
+
+**Backend API contracts required by Mobile:**
+- Shares same REST API and realtime endpoints as web UI (doc 12). No mobile-specific backend.
+- Push notification delivery: server-side notification event bus consumer (existing from doc 02) adds push channel. Evaluates operator's push preferences, sends via APNs (iOS) or FCM (Android). No new API endpoint — push is a server-side delivery mechanism.
+- Deep link URL scheme: `ottercamp://{resource}/{id}` (custom scheme) + universal links (`https://app.ottercamp.dev/{resource}/{id}`) as web fallback. These are client-side constructs mapping to existing API resources. No new server-side routes required.
+- Mobile dashboard aggregation endpoint (optional optimization): `GET /v1/mobile/dashboard` — returns inbox_count + project summaries + recent notifications in one request. Reduces API calls on app open. NOT a requirement — app can compose from existing endpoints. If added, backend concern only (no Figma impact).
+- WebSocket preferred over SSE for mobile foreground realtime (bidirectional, easier mobile reconnection behavior). Same `/v1/ws` endpoint as web UI. Fallback to SSE if WebSocket unavailable.
+- Delta sync on foreground: `GET /v1/events/stream?last-event-id={seq}` — catch up on missed events after backgrounding. API supports delta queries ("what changed since timestamp X").
+- Auth session: same session lifecycle as web (30-day sliding window, per doc 04). Mobile creates standard auth session. Multiple sessions (mobile + web + TUI) coexist — creating mobile session does not invalidate others.
+- Biometric auth: purely client-side (keychain/keystore + platform biometric APIs). Session token stored in platform keychain. No new server-side auth flow — server only sees Bearer token header.
+- Push notification payload includes: title, body, category (for rich notification action buttons), deep link URL, item_id (for inbox items).
+- Rich notification quick actions (iOS/Android): Approve, Open Chat — these map directly to existing inbox item action endpoints (`POST /v1/inbox/{id}/act`). Backend is unchanged; platform handles the button-to-request wiring.
+- Conflict detection for concurrent multi-device actions: server's standard last-write-wins + 409/conflict responses. Mobile app receives SSE/WebSocket update when another client acts on the same inbox item.
+
+**Push notification operator preferences stored server-side:**
+- Push preferences (per urgency tier, per project, quiet hours, per event type) must be stored somewhere. Doc 19 says "configuration accessible from mobile app settings screen and from the web UI. Changes sync across both." This implies a new table or extension to an existing table for push notification preferences. No DDL defined in doc 19. Possible homes: `organization.settings` jsonb (per-org, not per-operator), `human_user` table extension, or a new `push_notification_preference` table. This is an OPEN DATA MODEL QUESTION.
+
+**Data shapes required by Mobile:**
+- Inbox item (mobile): item_type, title, description (brief), source_project, source_task, timestamp, urgency, inline actions available. On mobile, no diff inline for work reviews — "View on Web" link instead.
+- Notification list item: urgency indicator, title, brief description, timestamp, source project/task, deep link.
+- Project card (dashboard): project_name, task counts by status (in_progress, blocked, review, queued), blocked_count, last_activity_at.
+- Task detail (mobile, read-only): header (title, status, priority, assignee, project_name), flow stepper (compact horizontal, scrollable), subtask summary, description, acceptance criteria, dependencies, history, branch name. No diff view.
+- Chat view (mobile): streaming text, tool calls collapsed to "Agent is working..." indicator. No file upload, no steer, no reactions.
+
+**Figma gaps from doc 19 (not yet in ui-spec-for-figma.md — mobile-specific components):**
+- Push notification UI (lock screen/notification shade): title + body + category-specific inline action buttons (Approve, Open Chat). Rich notification format.
+- Mobile Notifications screen (home screen): reverse chronological list grouped by time (Today/Yesterday/Earlier). Urgency color indicators. Swipe-to-dismiss, swipe-to-open. Unread/read state. Critical items always pinned at top.
+- Mobile Dashboard screen: inbox badge (prominent count, taps to inbox), project card grid (name + compact task status bar + blocked count + last activity), quick stats bar.
+- Mobile Inbox screen: two sections (Active / Deferred). Item type icon + title + description + urgency. Inline action buttons (type-specific: Approve/Request Changes/Defer, or Approve/Reject/Defer, or Open Chat/Defer, etc.). Swipe-to-defer gesture. Deferred section toggle.
+- Mobile Chat screen: session list grouped by scope + unread indicators. Chat view: mobile thread layout, streaming responses, typing indicator ("Agent is working..." collapsed), @mention basic autocomplete, text input + send button, Stop button during agent turns.
+- Mobile Task Detail screen: read-only. Compact flow stepper (horizontal scroll). Subtask compact list. History compact list. "View on Web" link for diff at review nodes. Review node banner: "This task needs your review" → link to inbox item.
+- Mobile Project Status screen: project name + description, task summary compact bar chart, flat task list (blocked/review first), merge queue section, schedules compact list.
+- Biometric auth prompt: Face ID / Touch ID / fingerprint prompt on app open. Fallback to password after 3 failures. Biometric re-confirmation for capability approvals.
+- Deep link navigation: tap-to-open with skeleton loading state. No intermediate navigation screens.
+- Offline indicator: "Last updated X minutes ago" banner on dashboard. "No connection" banner with disabled action buttons.
+- Conflict warning: "This item was already acted on from another device" when mid-action state update arrives.
+
+**Cross-spec references:**
+- Same API as web UI and TUI (doc 12 endpoint catalog).
+- Push notification channel extends existing notification delivery consumer (doc 02 notification system).
+- Inbox item actions map to `POST /v1/inbox/{id}/act` (doc 03 / doc 12).
+- Auth session follows doc 04 session lifecycle (30-day sliding, Bearer token).
+- Push preferences storage: open question (new table vs human_user extension vs organization.settings jsonb).
+- Mobile WebSocket: same `/v1/ws` endpoint (doc 12).
+
+**Gaps/conflicts:**
+- ISSUE #28 (new): doc 19 states push notification preferences are synced between mobile and web UI, implying server-side storage. No doc defines a push preference table or column. The existing notification preference system (doc 02) covers in-app notification filtering by urgency/project/event-type, but doc 19 requires per-urgency push enable/disable, per-project override, and quiet hours — which extend beyond what doc 02's notification_preference structure defines. Need: either extend doc 02's notification preferences to include push-specific fields, or define a new `push_notification_preference` table.
+
+---
