@@ -99,9 +99,9 @@ ALTER TABLE flow_template ADD CONSTRAINT fk_flow_template_start_node
 
 ## Implementer Notes
 
-> ⚠️ ISSUE #16 (BLOCKER): The authoritative `flow_node` schema requires THREE cross-doc changes to doc 03's DDL: (a) DROP `skills jsonb`, (b) ADD `mcp_tools jsonb`, (c) ADD `tool_domains jsonb` (also tracked as ISSUE #25). This task implements all three changes as the definitive schema. Do not implement `skills jsonb`. Do not wait for doc 03 to be updated before implementing — the resolution is clear from docs 09, 10, and 20. However, flag in the PR that doc 03 DDL has not been updated and request Sam's confirmation before merge.
+> ✅ ISSUES #16 + #25 (RESOLVED): Doc 03 DDL updated. Final `flow_node` schema: no `skills jsonb`; has `mcp_tools jsonb` and `tool_domains jsonb`. Implement exactly as specified in this task — no flags or confirmation needed.
 
-- ISSUE #25 (GAP): `tool_domains jsonb` is introduced in doc 20 but absent from doc 03, 09, and 10. It is included in this task as part of the ISSUE #16 resolution. The field stores tool domain strings (e.g. `["file", "cli", "mcp"]`) used by the tool resolution pipeline (task 049) for stage 3 soft deprioritization. It does not restrict tools — it only soft-deprioritizes them.
+- `tool_domains jsonb` stores tool domain strings (e.g. `["file", "cli", "mcp"]`) used by the tool resolution pipeline (task 049) for stage 3 soft deprioritization. It does not restrict tools — it only soft-deprioritizes them.
 - The `actor_id` column references `agent.id` but is stored as a plain `uuid` without a SQL FK. This is because `flow_node` and `agent` are peers at L2; adding a SQL FK here would create a circular migration dependency. Enforce referential integrity at the application layer in the flow node service (task 018).
 - `mcp_tools` jsonb array element shape: `{"connection_id": "<uuid>", "tool_name": "<string>"}`. The `connection_id` is validated against `mcp_connection.id` at session start (task 049), not at storage time.
 - `max_visits` defaults to 10 as a guard against infinite rejection loops. The rejection loop logic (incrementing visit counter, comparing against max_visits) is implemented in the flow execution service (task 030).

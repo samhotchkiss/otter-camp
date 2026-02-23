@@ -86,7 +86,7 @@ migrations and repository interfaces only — project service logic is in task 0
 - Implement `Bootstrapper.RegisterStep("seed-flow-templates", fn)` that creates the two system templates (`default-single-agent`, `default-review`) using `FlowTemplateRepo.BulkUpsertBySlug`; idempotent via upsert
 
 ### Must NOT build
-- `flow_node` table (task 017 — blocked by ISSUE #16)
+- `flow_node` table (task 017)
 - Project service CRUD logic (task 018)
 - Project API endpoints (task 019)
 - `project_task`, `inbox_item`, `merge_queue_entry` (task 027)

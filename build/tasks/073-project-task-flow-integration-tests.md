@@ -165,10 +165,8 @@ CHECK constraint (`source_type = depends_on_type`).
 is set on deploy completion, not on merge completion. The test simulates deploy completion
 by calling the delivery service's deploy-complete path rather than the merge service.
 
-**ISSUE #16 (flow_node schema):**
-Tests that create flow_node rows must use the final schema from task 017 (no `skills jsonb`,
-with `mcp_tools jsonb` and `tool_domains jsonb`). The helpers must set these columns to
-valid empty JSON (`{}`) rather than null if the DB schema requires non-null.
+**ISSUE #16 (RESOLVED):**
+`flow_node` schema is final (task 017): no `skills jsonb`, has `mcp_tools jsonb` and `tool_domains jsonb`. Test helpers set these to `[]` (empty JSON array) for rows that don't need them.
 
 **flow.advance is a tool call, not an API endpoint:**
 In production, flow node advancement happens via the `flow.advance` native tool call from

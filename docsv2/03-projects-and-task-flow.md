@@ -634,6 +634,7 @@ create table flow_node (
   reject_node_id   uuid references flow_node(id),  -- review nodes only
   -- Skills are linked via flow_node_skill join table (see doc 10)
   mcp_tools        jsonb,             -- MCP tool declarations: ["connection.tool_name", ...] (see 09-mcp-integration.md)
+  tool_domains     jsonb,             -- optional: ["cli", "browser", ...] soft-deprioritizes other domains in tool resolution stage 3 (see 20-tools-and-tool-policy.md)
   metadata         jsonb not null default '{}',
   check (node_type = 'review' or reject_node_id is null),  -- only review nodes can have reject edges
   check (actor_type != 'role' or actor_role is not null)   -- role-typed nodes must specify which role

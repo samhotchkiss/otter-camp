@@ -125,7 +125,7 @@ Does not include the service logic that drives flow advancement (task 030).
 
 ## Implementer Notes
 
-> ⚠️ ISSUE #16 (BLOCKER): `flow_node_execution` references `flow_node(id)` which is affected by the unresolved flow_node schema conflict (ISSUE #16). The FK reference itself is safe regardless of which columns are on `flow_node`, but do not implement any logic that reads `flow_node.skills jsonb` — that column must not exist per the ISSUE #16 resolution already applied in task 017.
+> ✅ ISSUE #16 (RESOLVED): `flow_node` schema is finalised in task 017. No `skills jsonb` column exists. `mcp_tools jsonb` and `tool_domains jsonb` are present. Do not read `skills jsonb`.
 
 - `flow_node_execution.session_id` is stored as a plain `uuid` with no SQL FK. This is because `chat_session` is at L4 (task 043) and a SQL FK here would create a forward-reference migration problem. The session linkage is established in task 060 at the application layer.
 - `project_subtask.work_status` intentionally excludes `'review'` and `'on_hold'` states. Doc 03 explicitly states these states do not apply to subtasks — subtasks either complete or are cancelled. If a review is needed at the subtask level, it should be a separate flow node with `requires_human_review=true`.

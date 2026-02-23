@@ -113,7 +113,7 @@ endpoints (task 032).
 
 ## Implementer Notes
 
-> ⚠️ ISSUE #16 (BLOCKER): This service reads `flow_node` rows to check `next_node_id`, `reject_node_id`, `requires_human_review`, and `max_visits`. The `flow_node` schema is affected by ISSUE #16. The schema in task 017 is the authoritative implementation; do not read or use any `skills jsonb` column. The `mcp_tools` and `tool_domains` columns on `flow_node` are NOT read by this service (they are used by the tool resolution pipeline in task 049).
+> ✅ ISSUE #16 (RESOLVED): `flow_node` schema finalised in task 017. This service reads only `next_node_id`, `reject_node_id`, `requires_human_review`, and `max_visits`. `mcp_tools` and `tool_domains` are read by task 049, not this service.
 
 - Flow advancement is explicitly agent-signalled: the agent must call the `flow.advance` tool. The control plane completing a run does NOT automatically advance the flow. This is a critical behavioral rule — implementers must resist the temptation to auto-advance on run success.
 - `RejectFlowNode` creates a new `flow_node_execution` row for the rejection target. It does NOT modify the `visit_number` on any existing row. The visit count for a node is computed as `COUNT(*) of flow_node_execution WHERE task_id = $1 AND flow_node_id = $2`, which equals the `MAX(visit_number)` since visit numbers are sequential.
