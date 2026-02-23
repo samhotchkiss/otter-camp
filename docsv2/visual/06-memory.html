@@ -1470,13 +1470,13 @@ flowchart LR
   subgraph S0["Stage 0: Garbage Rejection"]
     direction TB
     GR["Deterministic Filter"]
-    GR_D["Rejects:\n- Tool call sequences\n- Raw metrics/stats\n- Code blocks &gt;40% syntax\n- Tautologies\n- Formatting artifacts"]
+    GR_D["Rejects:\n- Tool call sequences\n- Raw metrics/stats\n- Code blocks &gt;40% syntax\n- Tautologies\n- Formatting artifacts\n- Behavioral overrides\n  (instruction poisoning defense)"]
   end
 
   subgraph S1["Stage 1: LLM Extraction"]
     direction TB
     LLM["Haiku-class LLM"]
-    LLM_D["Outputs per candidate:\n- Content (claim/fact)\n- Kind classification\n- Confidence 0.0-1.0\n- Entities mentioned\n- Temporal bounds\n- Source reference"]
+    LLM_D["Outputs per candidate:\n- Content (claim/fact)\n- Kind classification\n- Confidence 0.0-1.0\n- Entities mentioned\n- Temporal bounds\n- Source reference\n- Behavioral flag (instruction\n  poisoning classification)"]
   end
 
   subgraph S2["Stage 2: Scoring"]
@@ -1565,8 +1565,9 @@ flowchart LR
           </div>
           <div class="retrieval-stage__title">Scope Filter</div>
           <div class="retrieval-stage__desc">
-            Hard WHERE clause filtering to memories visible at the current scope level.
-            Scope inheritance cascades upward: task sees project and org.
+            Reads agent's memory_read_scopes array (org, assigned_projects, current_task).
+            Translates to SQL: org-scoped, project-assigned, task-matched.
+            Agent-private memories of other agents always excluded.
           </div>
           <div class="retrieval-stage__detail">Hard isolation</div>
         </div>
@@ -1809,9 +1810,9 @@ flowchart LR
           </div>
         </div>
         <ol class="lifecycle-steps">
-          <li><strong>Scope promotion</strong> -- evaluate task-scoped memories, promote valuable ones to project scope (set task_id = null, provenance preserved)</li>
+          <li><strong>Scope promotion</strong> -- LLM-based assessment: promote reusable knowledge (decisions, patterns) to project scope; keep task-specific working context for natural decay</li>
           <li><strong>Episodic distillation</strong> -- distill task episodic memories into semantic memories while context is freshest</li>
-          <li><strong>Execution summary</strong> -- generate procedural memory: what was done, how, tools used, decisions made</li>
+          <li><strong>Execution summary</strong> -- generate procedural memory with tool choreography: tools used, invocation order, which sequences led to success/failure</li>
           <li><strong>Targeted entity synthesis</strong> -- run entity synthesis for entities heavily mentioned during the task</li>
         </ol>
       </div>
@@ -1844,7 +1845,7 @@ flowchart LR
       <div class="state-flow reveal">
         <div class="state-node state-node--candidate">candidate</div>
         <div class="state-arrow">&rarr;</div>
-        <div class="state-node state-node--active">active</div>
+        <div class="state-node state-node--active">active (provisional &rarr; hardened)</div>
         <div class="state-arrow">&rarr;</div>
         <div class="state-node state-node--consolidated">consolidated</div>
         <div class="state-arrow">&rarr;</div>
@@ -1852,7 +1853,7 @@ flowchart LR
       </div>
       <div style="display: flex; justify-content: center; gap: 2rem; margin-top: 1rem; flex-wrap: wrap;" class="reveal">
         <span style="font-size: 0.78rem; color: var(--text-muted);">Quality gates for promotion</span>
-        <span style="font-size: 0.78rem; color: var(--text-muted);">Contradiction detection: 2-path (extraction + reflection)</span>
+        <span style="font-size: 0.78rem; color: var(--text-muted);">Provisional: entity/taxonomy lookup only. Hardened: fully vector-searchable</span>
         <span style="font-size: 0.78rem; color: var(--text-muted);">Supersession chain via FK</span>
       </div>
     </div>
@@ -1925,7 +1926,7 @@ flowchart LR
 
       <div class="schema-table reveal stagger-1">
         <div class="schema-table__name">memory</div>
-        <div class="schema-table__desc">Core memory record with scope, kind, layer, status, confidence, temporal bounds, supersession chain, sensitivity, content hash, and 1536d embedding.</div>
+        <div class="schema-table__desc">Core memory record with scope, kind, layer, status, is_hardened (provisional vs fully retrievable), confidence, temporal bounds, supersession chain, sensitivity, content hash, and 1536d embedding. CHECK constraints on kind, layer, status, archived_reason, and sensitivity.</div>
         <div class="schema-table__cols">
           <span class="schema-col schema-col--pk">id</span>
           <span class="schema-col schema-col--fk">organization_id</span>
