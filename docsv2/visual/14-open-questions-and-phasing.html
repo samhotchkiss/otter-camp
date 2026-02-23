@@ -1429,7 +1429,7 @@
               <div class="deliverable">
                 <span class="deliverable__spec">Doc 16</span>
                 <div class="deliverable__title">Full Control Plane</div>
-                <p class="deliverable__desc">Complete execution lifecycle. Approval workflows. Failure state repair: stuck tasks, queue drain, orphaned run recovery. Health heartbeats.</p>
+                <p class="deliverable__desc">Complete execution lifecycle. Binary policy enforcement. Failure state repair: stuck tasks, queue drain, orphaned run recovery. Health heartbeats.</p>
               </div>
               <div class="deliverable">
                 <span class="deliverable__spec">Doc 07</span>
@@ -1803,8 +1803,6 @@
           <svg class="questions-category__toggle" width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </div>
         <ul class="questions-list">
-          <li><strong>Approval requirements:</strong> Should approval requirements be static policy or dynamically risk-scored?</li>
-          <li><strong>Session-wide approval grants:</strong> Allow "approve all CLI executions in this session" or only action-by-action?</li>
           <li><strong>Default capability templates:</strong> What minimum set of capabilities ships as defaults for common agent roles?</li>
         </ul>
       </div>
@@ -1818,7 +1816,7 @@
         <ul class="questions-list">
           <li><strong>Browser session isolation:</strong> Should browser execution be isolated per task or reusable per session?</li>
           <li><strong>Minimum sandbox model:</strong> Container, namespace, chroot, or process-level sandboxing for CLI execution?</li>
-          <li><strong>Default pre-approval actions:</strong> Which system actions require human pre-approval by default vs allow-by-default with capability grant?</li>
+          <li><strong>Default sensitive action policy:</strong> Which system actions are denied by default vs allowed with capability grant?</li>
         </ul>
       </div>
 
