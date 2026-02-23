@@ -62,3 +62,13 @@
 | 058 | 058-cli-execution.md | CLI Sandbox and Execution | L4 | M | 052, 053, 055, 056, 004, 027 | written |
 | 059 | 059-browser-execution.md | Browser Tool Execution | L4 | M | 052, 053, 055, 004, 027, 043 | written |
 | 060 | 060-tool-execution-audit-retry.md | Tool Execution Audit, Retry Logic, and Run Event Fan-Out | L4 | S | 052, 053, 055, 024, 047 | written |
+| 061 | 061-flow-session-integration.md | Flow-Session Integration and Task Participant Cross-Domain Wiring | L4 | S | 029, 030, 043, 044, 052, 053 | written |
+| 062 | 062-model-attribution.md | Model Attribution — Run FK Linkage, Usage Rollup, and Cost Pipeline | L4 | S | 035, 036, 052, 053, 043, 044 | written |
+| 063 | 063-observability-security.md | Observability, Security Hardening, and Retention Enforcement | L4 | M | 001, 002, 003, 007, 024, 052, 036, 062 | written |
+| 064 | 064-delivery-execution.md | Delivery Execution — Background Workers and Deploy State Machine | L4 | M | 031, 028, 030, 052, 053, 024, 061 | written |
+| 065 | 065-scheduling-engine.md | Scheduling Engine — Cron Execution, Overlap Policy, and Schedule API | L4 | S | 016, 018, 028, 024, 019 | written |
+| 066 | 066-push-notification-preferences.md | Push Notification Preferences — Schema, Delivery Consumer, and API | L4 | S | 005, 027, 043, 044, 007 | written |
+| 067 | 067-api-middleware.md | API Middleware, Envelope Standardization, and Pagination | L4 | S | 001, 007, 024 | written |
+| 068 | 068-cli-binary.md | CLI Binary — Build, Packaging, and Command Suite | L4 | M | 001, 002, 005, 009, 006, 007, 063 | written |
+| 069 | 069-mobile-api.md | Mobile API — Dashboard Aggregation, Push Token Registration, and WebSocket Preference | L4 | S | 007, 043, 044, 047, 027, 028, 066, 067 | written |
+| 070 | 070-web-static-serving.md | Web UI Static File Serving and SPA Infrastructure | L4 | S | 001, 063, 067 | written |
