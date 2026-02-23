@@ -226,7 +226,7 @@ No new tables. This layer covers:
 | L3 | 22 (`audit_event`, `agent_project_assignment`, `agent_skill_attachment`, `flow_node`, `project_task`, `inbox_item`, `merge_queue_entry`, `project_task_event`, `project_remote`, `project_environment`, `flow_node_skill`, `model_usage_rollup`, `mcp_tool_catalog`, `mcp_secret_binding`, `memory`, `memory_taxonomy_tag`, `memory_entity_mention`, `memory_import`, `memory_compaction_run`, `capability_policy`, `trace_span`) |
 | L4 | 30 (`chat_session`, `chat_participant`, `chat_turn`, `chat_message`, `chat_artifact`, `chat_summary`, `chat_read_cursor`, `chat_message_reaction`, `run`, `run_step`, `run_attempt`, `tool_execution`, `run_artifact`, `run_event`, `model_invocation`, `flow_node_execution`, `project_subtask`, `project_task_dependency`, `project_task_participant`, `cli_execution`, `browser_session`, `browser_action`, `browser_handoff`, `mcp_execution_log`, `memory_source`, `memory_dedup_reviewed`, `session_tool_set`) |
 | L5 | 0 new tables |
-| **Total** | **76 tables** |
+| **Total** | **72 tables** |
 
 ---
 
