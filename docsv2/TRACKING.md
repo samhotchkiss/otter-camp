@@ -16,7 +16,7 @@
 
 | Doc | Name | Lines | Status | Notes |
 |-----|------|-------|--------|-------|
-| 01 | Architecture and Domain | 95 | 3 - In Process with Sam | Has product principles section |
+| 01 | Architecture and Domain | ~220 | 7 - Finished | 8 product principles, 8 domain boundaries, ~65 tables, entity map, cross-doc references, first-principles reviewed |
 | 02 | Chat | 1107 | 7 - Finished | Full schema, all open questions resolved |
 | 03 | Projects and Task Flow | 914 | 7 - Finished | 12-table schema, first-principles reviewed |
 | 03a | Shipping and Delivery | 344 | 7 - Finished | 2 new tables, 18 resolved decisions, first-principles reviewed |
@@ -68,9 +68,8 @@ Items discovered during review that belong to a spec not yet under active review
 
 ## Summary
 
-- **Finished:** 18 specs (02, 03, 03a, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 14, 15, 16, 20, 21)
-- **In Process:** 1 spec (01)
+- **Finished:** 19 specs (01, 02, 03, 03a, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 14, 15, 16, 20, 21)
 - **Initial Draft:** 3 specs (17, 18, 19)
 - **Stubs:** 1 (UI Spec for Figma)
 - **Total:** 22 specs (+ README)
-- **Total lines:** ~16,600
+- **Total lines:** ~16,700
