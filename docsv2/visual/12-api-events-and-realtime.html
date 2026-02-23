@@ -1208,15 +1208,13 @@ flowchart LR
       <div class="event-domain anim-in">
         <div class="event-domain-header">
           <span class="event-domain-name">Control Plane</span>
-          <span class="event-domain-count">8 events</span>
+          <span class="event-domain-count">5 events</span>
         </div>
         <ul class="event-type-list">
           <li>control.run.<span class="action">created</span></li>
           <li>control.run.<span class="action">started</span></li>
           <li>control.run.<span class="action">completed / failed / cancelled</span></li>
-          <li>control.approval.<span class="action">requested</span></li>
-          <li>control.approval.<span class="action">approved / rejected</span></li>
-          <li>control.policy.<span class="action">evaluated</span></li>
+          <li>control.policy.<span class="action">evaluated</span> (allow/deny)</li>
         </ul>
       </div>
 
@@ -1245,6 +1243,20 @@ flowchart LR
           <li>system.schedule.<span class="action">fired / skipped</span></li>
           <li>system.job.<span class="action">started / completed</span></li>
           <li>system.job.<span class="action">failed / dead_lettered</span></li>
+        </ul>
+      </div>
+
+      <div class="event-domain anim-in">
+        <div class="event-domain-header">
+          <span class="event-domain-name">MCP</span>
+          <span class="event-domain-count">7 events</span>
+        </div>
+        <ul class="event-type-list">
+          <li>mcp.connection.<span class="action">created / status_changed</span></li>
+          <li>mcp.connection.<span class="action">health_changed</span></li>
+          <li>mcp.catalog.<span class="action">changed</span></li>
+          <li>mcp.tool.<span class="action">executed / denied</span></li>
+          <li>mcp.tool.<span class="action">preload_failed</span></li>
         </ul>
       </div>
 
@@ -1502,7 +1514,7 @@ flowchart LR
           <tr><td class="col-name">id <span class="pk-badge">PK</span></td><td class="col-type">uuid</td><td class="col-note">gen_random_uuid()</td></tr>
           <tr><td class="col-name">type</td><td class="col-type">text</td><td class="col-note">Dot-namespaced event type (e.g. task.flow.advanced)</td></tr>
           <tr><td class="col-name">timestamp</td><td class="col-type">timestamptz</td><td class="col-note">When the event was created (UTC)</td></tr>
-          <tr><td class="col-name">actor_type</td><td class="col-type">text</td><td class="col-note">human | agent | system</td></tr>
+          <tr><td class="col-name">actor_type</td><td class="col-type">text</td><td class="col-note">human | agent | system | supervisor (automated control-plane actions)</td></tr>
           <tr><td class="col-name">actor_id</td><td class="col-type">uuid</td><td class="col-note">Nullable for system events</td></tr>
           <tr><td class="col-name">organization_id</td><td class="col-type">uuid</td><td class="col-note">Always present. Indexed for scope filtering.</td></tr>
           <tr><td class="col-name">project_id</td><td class="col-type">uuid</td><td class="col-note">Nullable. Partial index where not null.</td></tr>
