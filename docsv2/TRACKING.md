@@ -21,7 +21,7 @@
 | 03 | Projects and Task Flow | 914 | 7 - Finished | 12-table schema, first-principles reviewed |
 | 03a | Shipping and Delivery | 344 | 7 - Finished | 2 new tables, 18 resolved decisions, first-principles reviewed |
 | 04 | Auth, Tenancy, and Identity | ~640 | 7 - Finished | DB-per-org isolation, no org_membership, RBAC on human_user, 22 resolved decisions, first-principles reviewed |
-| 05 | Agents, Staff, and Temps | 892 | 6 - First Principles Review Completed | Project-scoped temps, 4 scope types, temps get project access, NDI, 230+ profile catalog, 43 resolved decisions, all review items resolved |
+| 05 | Agents, Staff, and Temps | 892 | 7 - Finished | Project-scoped temps, 4 scope types, temps get project access, NDI, 230+ profile catalog, 43 resolved decisions, first-principles reviewed |
 | 06 | Memory | 1072 | 7 - Finished | 9-table schema, 52 resolved decisions, first-principles reviewed |
 | 07 | Models and Inference | 714 | 2 - Initial Draft | Provider abstraction, model profiles, cost tracking, schema |
 | 08 | Deployment and Self-Hosting | 800 | 2 - Initial Draft | Three modes, Docker Compose, binary distribution, upgrades |
@@ -50,12 +50,13 @@ Items discovered during review that belong to a spec not yet under active review
 | D2 | 05 review | 16 | Verify doc 05 cross-references to control plane match doc 16 schema (policy evaluation, capability templates, audit trail) | Doc 16 reviewed |
 | D3 | 05 review | all | Standardize system principal convention — some specs use `created_by_type = 'system'`, others don't define system as a valid principal | Each spec's review |
 | D4 | 05 review | 04 | Confirm `system` is a recognized principal type in doc 04's auth model | Doc 04 next reviewed |
+| D5 | 05 review | 02 | Add explicit Ellie auto-join rule (currently implied by enumeration across scope types but never stated as a rule) | Doc 02 next reviewed |
+| D6 | 05 review | 02 | Clarify temp agent participation pattern in chat — doc 05 says temps don't chat with the human, enforcement is behavioral (PM controls assignment) not schema-level. Worth a note in doc 02's participant model | Doc 02 next reviewed |
 
 ## Summary
 
-- **Finished:** 5 specs (02, 03, 03a, 04, 06)
+- **Finished:** 6 specs (02, 03, 03a, 04, 05, 06)
 - **In Process:** 1 spec (01)
-- **First Principles Review Completed:** 1 spec (05)
 - **Initial Draft:** 14 specs (07, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
 - **Stubs:** 1 (UI Spec for Figma)
 - **Total:** 22 specs (+ README)
