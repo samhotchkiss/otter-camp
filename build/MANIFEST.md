@@ -72,3 +72,13 @@
 | 068 | 068-cli-binary.md | CLI Binary — Build, Packaging, and Command Suite | L4 | M | 001, 002, 005, 009, 006, 007, 063 | written |
 | 069 | 069-mobile-api.md | Mobile API — Dashboard Aggregation, Push Token Registration, and WebSocket Preference | L4 | S | 007, 043, 044, 047, 027, 028, 066, 067 | written |
 | 070 | 070-web-static-serving.md | Web UI Static File Serving and SPA Infrastructure | L4 | S | 001, 063, 067 | written |
+| 071 | 071-auth-integration-tests.md | Auth and Tenancy Integration Tests | L5 | S | 005, 006, 007, 008, 009, 012 | written |
+| 072 | 072-agent-integration-tests.md | Agent Integration Tests | L5 | S | 013, 014, 015, 025, 026 | written |
+| 073 | 073-project-task-flow-integration-tests.md | Project and Task Flow Integration Tests | L5 | M | 016, 017, 018, 019, 027, 028, 029, 030, 031, 032 | written |
+| 074 | 074-memory-integration-tests.md | Memory Integration Tests | L5 | M | 038, 039, 040, 041, 042 | written |
+| 075 | 075-model-gateway-integration-tests.md | Model Gateway Integration Tests | L5 | M | 010, 035, 036, 037, 062 | written |
+| 076 | 076-control-plane-integration-tests.md | Control Plane Integration Tests | L5 | M | 033, 034, 052, 053, 054, 055 | written |
+| 077 | 077-chat-integration-tests.md | Chat Integration Tests | L5 | M | 043, 044, 045, 046, 047, 048 | written |
+| 078 | 078-mcp-integration-tests.md | MCP Integration Tests | L5 | S | 020, 021, 022, 009 | written |
+| 079 | 079-event-bus-job-queue-integration-tests.md | Event Bus and Job Queue Integration Tests | L5 | S | 024 | written |
+| 080 | 080-security-observability-integration-tests.md | Security and Observability Integration Tests | L5 | S | 008, 009, 024, 063 | written |
