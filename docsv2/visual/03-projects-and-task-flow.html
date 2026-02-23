@@ -1055,7 +1055,7 @@ stateDiagram-v2
 
     <div class="callout sage fade-up" style="transition-delay: 0.22s; margin-top: 2rem;">
       <span class="callout-label">Scheduling note</span>
-      <p>A queued task with unresolved dependencies remains queued but is ineligible for scheduler pickup. Only tasks already in_progress transition to blocked when a new dependency is added mid-execution. The dependency is visible via the dependency table, not via work status.</p>
+      <p>The scheduler monitors concurrency slots managed by the model gateway. A queued task with unresolved dependencies remains queued but is ineligible for pickup. Only tasks already in_progress transition to blocked when a new dependency is added mid-execution.</p>
     </div>
   </section>
 
@@ -1135,6 +1135,11 @@ stateDiagram-v2
     <div class="callout fade-up" style="transition-delay: 0.28s; margin-top: 2rem;">
       <span class="callout-label">Immutability rule</span>
       <p>Flow templates are immutable once a task is using them. If the flow needs to change, the PM creates a new version. In-progress tasks keep their original flow. New tasks pick up the updated template. This avoids the problem of a flow changing under a task mid-execution.</p>
+    </div>
+
+    <div class="callout sage fade-up" style="transition-delay: 0.34s; margin-top: 1.5rem;">
+      <span class="callout-label">Nondeterministic idempotence</span>
+      <p>Flow node state, acceptance criteria, and artifacts live outside agent context. Workflows complete regardless of how many agent sessions it takes. If a session crashes or fills its context window, a new session picks up the same flow node using persisted state and Ellie's memories of prior attempts.</p>
     </div>
   </section>
 
@@ -1303,7 +1308,7 @@ stateDiagram-v2
       </div>
       <div class="git-card">
         <h3>Task branches</h3>
-        <p>When a task starts execution, a branch is created: <span class="mono">task/&lt;slug&gt;</span>. All work happens here. Subtasks share the same branch -- no sub-branches.</p>
+        <p>When a task starts execution, the control plane creates a branch: <span class="mono">task/&lt;slug&gt;</span>. All work happens here. Subtasks share the same branch -- no sub-branches.</p>
       </div>
       <div class="git-card">
         <h3>Review as diff</h3>
@@ -1319,7 +1324,7 @@ stateDiagram-v2
     <span class="section-number fade-up">08 / Database Schema</span>
     <h2 class="fade-up" style="transition-delay: 0.06s">12 tables for the project domain</h2>
     <p class="muted fade-up" style="transition-delay: 0.1s">
-      Tasks are flat -- no parent-child between tasks. Subtasks are contained within tasks, scoped to flow nodes. The dependency table is polymorphic. Merge state lives on its own table, not duplicated on the task.
+      Tasks are flat -- no parent-child between tasks. Subtasks are contained within tasks, scoped to flow nodes. The dependency table is polymorphic but enforces same-level dependencies (no cross-level). Merge state lives on its own table, not duplicated on the task.
     </p>
 
     <div class="schema-table-wrapper fade-up" style="transition-delay: 0.16s">
@@ -1347,8 +1352,8 @@ stateDiagram-v2
           </tr>
           <tr>
             <td class="table-name">project_subtask</td>
-            <td class="table-desc">Smallest unit of work, scoped to a task and flow node execution. Sequential on the task branch. Reduced status set.</td>
-            <td class="table-cols">flow_node_execution_id, subtask_number, work_status, assignee_id</td>
+            <td class="table-desc">Smallest unit of work, scoped to a task and flow node execution. Sequential on the task branch. Reduced status set. Unique slug within parent task.</td>
+            <td class="table-cols">flow_node_execution_id, subtask_number, slug, work_status, assignee_id</td>
             <td><span class="table-group core">Core</span></td>
           </tr>
           <tr>
@@ -1359,7 +1364,7 @@ stateDiagram-v2
           </tr>
           <tr>
             <td class="table-name">project_task_dependency</td>
-            <td class="table-desc">Polymorphic dependency links forming a DAG. Handles task-to-task, subtask-to-subtask, and cross-level dependencies.</td>
+            <td class="table-desc">Polymorphic dependency links forming a DAG. Same-level only: task-to-task or subtask-to-subtask within the same parent. Cross-level dependencies rejected by check constraint.</td>
             <td class="table-cols">source_type, source_id, depends_on_type, depends_on_id</td>
             <td><span class="table-group core">Core</span></td>
           </tr>
@@ -1377,8 +1382,8 @@ stateDiagram-v2
           </tr>
           <tr>
             <td class="table-name">flow_node</td>
-            <td class="table-desc">Work or review node within a flow template. Defines actor type, skill references, and edges (next_node, reject_node).</td>
-            <td class="table-cols">node_type, actor_type, next_node_id, reject_node_id, skills</td>
+            <td class="table-desc">Work or review node within a flow template. Defines actor type and role, skill/MCP tool references, and edges (next_node, reject_node).</td>
+            <td class="table-cols">node_type, actor_type, actor_role, next_node_id, reject_node_id, skills, mcp_tools</td>
             <td><span class="table-group flow">Flow</span></td>
           </tr>
           <tr>
@@ -1401,8 +1406,8 @@ stateDiagram-v2
           </tr>
           <tr>
             <td class="table-name">merge_queue_entry</td>
-            <td class="table-desc">Serializes completed task branches merging to main. Priority-then-FIFO ordering. Tracks conflict state separately from task status.</td>
-            <td class="table-cols">status, branch_name, priority, conflict_details</td>
+            <td class="table-desc">Serializes completed task branches merging to main. Priority-then-FIFO ordering. Tracks conflict state separately from task status. Archived after successful deploy.</td>
+            <td class="table-cols">status, branch_name, priority, conflict_details, archived_at</td>
             <td><span class="table-group ops">Ops</span></td>
           </tr>
         </tbody>
