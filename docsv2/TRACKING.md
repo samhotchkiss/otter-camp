@@ -24,7 +24,7 @@
 | 05 | Agents, Staff, and Temps | 892 | 7 - Finished | Project-scoped temps, 4 scope types, temps get project access, NDI, 230+ profile catalog, 43 resolved decisions, first-principles reviewed |
 | 06 | Memory | 1072 | 7 - Finished | 9-table schema, 52 resolved decisions, first-principles reviewed |
 | 07 | Models and Inference | 714 | 2 - Initial Draft | Provider abstraction, model profiles, cost tracking, schema |
-| 08 | Deployment and Self-Hosting | 906 | 3 - In Process with Sam | Three modes, Docker Compose, binary distribution, db-per-org managed mode, pgvector, catalog DB, per-org migration orchestration, all open questions resolved |
+| 08 | Deployment and Self-Hosting | ~945 | 7 - Finished | Three modes, Docker Compose, binary distribution, db-per-org managed mode, pgvector, catalog DB, per-org migration orchestration, OpenAI-compat bootstrap, provider connection model aligned with doc 07, 8 deferred items, first-principles reviewed |
 | 09 | MCP Integration | 659 | 2 - Initial Draft | Connection management, tool discovery, security, schema |
 | 10 | Skills Integration | 545 | 2 - Initial Draft | Skill format, storage, activation, catalog, schema |
 | 11 | System Integration (CLI and Browser) | 740 | 2 - Initial Draft | CLI sandboxing, browser actions, human handoff, artifacts |
@@ -57,9 +57,9 @@ Items discovered during review that belong to a spec not yet under active review
 
 ## Summary
 
-- **Finished:** 6 specs (02, 03, 03a, 04, 05, 06)
+- **Finished:** 7 specs (02, 03, 03a, 04, 05, 06, 08)
 - **In Process:** 1 spec (01)
-- **Initial Draft:** 14 specs (07, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
+- **Initial Draft:** 13 specs (07, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
 - **Stubs:** 1 (UI Spec for Figma)
 - **Total:** 22 specs (+ README)
 - **Total lines:** ~16,600
