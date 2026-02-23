@@ -14,3 +14,15 @@
 | 010 | 010-model-provider-registry.md | Model Provider Registry | L1 | M | 003 | written |
 | 011 | 011-skill-registry.md | Skill Registry Schema and Service | L1 | S | 003 | written |
 | 012 | 012-bootstrap.md | Bootstrap Sequence | L1 | M | 003, 005, 008, 009, 010, 011 | written |
+| 013 | 013-agent-schema.md | Agent Schema | L2 | M | 003, 012 | written |
+| 014 | 014-agent-service.md | Agent Service | L2 | M | 013, 006, 024 | written |
+| 015 | 015-agent-api.md | Agent API Endpoints | L2 | S | 014, 007 | written |
+| 016 | 016-project-schema.md | Project Schema | L2 | S | 003, 005, 012 | written |
+| 017 | 017-flow-node-schema.md | Flow Node Schema | L2 | S | 016, 011 | written |
+| 018 | 018-project-service.md | Project Service | L2 | S | 016, 017, 013 | written |
+| 019 | 019-project-api.md | Project API Endpoints | L2 | S | 018, 007 | written |
+| 020 | 020-mcp-schema-service.md | MCP Connection Schema and Service | L2 | M | 003, 009, 016, 013 | written |
+| 021 | 021-mcp-circuit-breaker.md | MCP Circuit Breaker and Health | L2 | M | 020, 024 | written |
+| 022 | 022-mcp-api.md | MCP API Endpoints | L2 | S | 021, 007 | written |
+| 023 | 023-token-budget.md | Token Budget Schema and Service | L2 | S | 003, 016, 024 | written |
+| 024 | 024-event-bus-job-queue.md | Event Bus and Job Queue | L2 | M | 002, 003 | written |
