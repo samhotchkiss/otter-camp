@@ -513,7 +513,7 @@
     <h1 class="fade-up delay-1">Architecture <span class="accent">&amp;</span> Domain Model</h1>
     <p class="summary fade-up delay-2">
       A modular monolith replacing OpenClaw with direct in-app orchestration.
-      Two runtime processes, five domain boundaries, one Postgres database.
+      Two runtime processes, six domain boundaries, one Postgres database.
     </p>
     <div class="badge-row fade-up delay-3">
       <span class="badge"><span class="dot"></span> Modular Monolith</span>
@@ -641,14 +641,13 @@ graph TB
   <div class="container">
     <div class="section-header fade-up" style="text-align:center; margin-bottom:0.5rem;">
       <span class="label">Core Domains</span>
-      <h2>Five Domain Boundaries</h2>
+      <h2>Six Domain Boundaries</h2>
       <p style="color: var(--text-secondary); font-size: 0.85rem; max-width: 600px; margin: 0.5rem auto 0;">
-        Each domain owns its data, rules, and events. Cross-domain communication happens through well-defined interfaces.
+        Four product domains and two infrastructure domains. Each owns its data, rules, and events. Cross-domain communication happens through well-defined interfaces.
       </p>
     </div>
+    <p style="color: var(--accent); font-size: 0.7rem; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; margin-top: 2rem; margin-bottom: 0.5rem; text-align: center;">Product Domains</p>
     <div class="domains-grid">
-
-      <!-- Chat Domain -->
       <div class="domain-card fade-up delay-1">
         <div class="domain-icon">
           <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -724,6 +723,11 @@ graph TB
         </div>
       </div>
 
+    </div>
+
+    <p style="color: var(--accent); font-size: 0.7rem; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; margin-top: 2rem; margin-bottom: 0.5rem; text-align: center;">Infrastructure Domains</p>
+    <div class="domains-grid">
+
       <!-- Model Domain -->
       <div class="domain-card fade-up delay-5">
         <div class="domain-icon">
@@ -739,6 +743,24 @@ graph TB
           <span class="entity-tag">Provider Adapter</span>
           <span class="entity-tag">Routing Policy</span>
           <span class="entity-tag">Cost Policy</span>
+        </div>
+      </div>
+
+      <!-- Control Plane Domain -->
+      <div class="domain-card fade-up delay-6">
+        <div class="domain-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </div>
+        <h3>Control Plane</h3>
+        <p class="domain-desc">
+          Owns runs, tool executions, capability policies, and worker dispatch.
+          Operational infrastructure that supports the product domains.
+        </p>
+        <div class="entity-list">
+          <span class="entity-tag">Run</span>
+          <span class="entity-tag">ToolExecution</span>
+          <span class="entity-tag">CapabilityPolicy</span>
+          <span class="entity-tag">Worker Dispatch</span>
         </div>
       </div>
 
@@ -787,6 +809,7 @@ graph LR
   AGENT["Agent<br/><i>Identity + Policy</i>"]
   MEMORY["Memory<br/><i>Extract + Retrieve</i>"]
   MODEL["Model<br/><i>Routing + Inference</i>"]
+  CP["Control Plane<br/><i>Runs + Dispatch</i>"]
 
   CHAT -->|"blocked progress<br/>creates tasks"| PROJECT
   CHAT -->|"@mention resolves<br/>agent identity"| AGENT
@@ -795,14 +818,20 @@ graph LR
 
   AGENT -->|"agents assigned<br/>to project tasks"| PROJECT
   AGENT -->|"agent context<br/>enriched by memory"| MEMORY
+  AGENT -->|"capability policies<br/>enforced by"| CP
 
   PROJECT -->|"flow execution<br/>triggers inference"| MODEL
   PROJECT -->|"task completion<br/>consolidates memory"| MEMORY
 
   MEMORY -->|"retrieval augments<br/>model prompts"| MODEL
 
+  CP -->|"dispatches runs<br/>to workers"| MODEL
+  CP -->|"tracks tool<br/>executions"| AGENT
+
   classDef domainNode fill:#111f38,stroke:#4fc3f7,stroke-width:2px,color:#e1f5fe,font-weight:600
-  class CHAT,PROJECT,AGENT,MEMORY,MODEL domainNode
+  classDef infraNode fill:#111f38,stroke:#29b6f6,stroke-width:2px,color:#e1f5fe,font-weight:600,stroke-dasharray:5
+  class CHAT,PROJECT,AGENT,MEMORY domainNode
+  class MODEL,CP infraNode
         </pre>
       </div>
     </div>
