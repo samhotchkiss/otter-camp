@@ -40,6 +40,17 @@
 | — | UI Spec for Figma | 494 | 1 - Stub | Updated alongside finished specs but not independently reviewed |
 | — | README | 61 | — | Index document, not a spec |
 
+## Deferred Cross-Spec Items
+
+Items discovered during review that belong to a spec not yet under active review. Each item is resolved when the target spec reaches its own review phase.
+
+| # | Source | Target | Item | Resolve When |
+|---|--------|--------|------|--------------|
+| D1 | 05 review | 04 | Add `max_concurrent_temps` to org settings shape example | Doc 04 next reviewed |
+| D2 | 05 review | 16 | Verify doc 05 cross-references to control plane match doc 16 schema (policy evaluation, capability templates, audit trail) | Doc 16 reviewed |
+| D3 | 05 review | all | Standardize system principal convention — some specs use `created_by_type = 'system'`, others don't define system as a valid principal | Each spec's review |
+| D4 | 05 review | 04 | Confirm `system` is a recognized principal type in doc 04's auth model | Doc 04 next reviewed |
+
 ## Summary
 
 - **Finished:** 5 specs (02, 03, 03a, 04, 06)
