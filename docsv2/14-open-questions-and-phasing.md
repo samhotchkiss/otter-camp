@@ -5,7 +5,7 @@ This is the meta-planning document for the OtterCamp V2 ground-up rewrite. It se
 
 The build phases are strictly sequential. Phase 0 (Foundation) delivers infrastructure with no user-facing product: PostgreSQL schema, auth/identity, model gateway with Anthropic adapter, event bus, 7-layer prompt assembly pipeline, control plane with default-deny capability model, two-tier tool framework, and the CLI bootstrap command. Phase 1 (Sync Chat + TUI) produces the first usable product where a human chats with agents via a terminal UI, including the full chat session system, starter trio agents with prompt packs, basic memory (Ellie's passive injection and implicit capture), skills foundation, and streaming model responses. Phase 2 (Projects + Tasks) adds autonomous work: projects as git repos, task lifecycle with flow templates and node progression, subtasks, scheduling with cron, async mode, merge queue, inbox, blocker escalation, temp agents, shipping/delivery, and memory hardening (dedup, entity synthesis, contradiction detection). Phase 3 (Self-Building) is where OtterCamp builds itself, delivering the web UI (React SPA), MCP integration for external tools, system integration (sandboxed CLI/browser), full control plane with binary policy enforcement, multi-provider model routing, observability stack, complete memory pipeline (sleep-time reflection, taxonomy management, importer), and the REST API surface. Phase 4 (Hardening + Distribution) covers security audit, Docker Compose self-host packaging, mobile UI with push notifications, multi-tenant operations with RLS, additional model providers including local models, and migration tooling.
 
-The document also catalogs approximately 25 genuinely open questions organized by domain (architecture, auth, control plane, system integration, MCP, tools, security, migration, UI), identifies five technically hardest challenges (prompt budget tuning, memory retrieval at scale, async agent reliability, git merge conflicts, MCP edge-case reliability), five plan-adjustment risks (provider API changes, context window economics, agent capability plateaus, self-host complexity, memory cold-start), and four "what could go wrong" scenarios. The bootstrap dataset section fully specifies the starter trio profiles (Frank as Chief of Staff, Lori as Agent Relations, Ellie as Memory), default skills (identity skills per agent, org-wide safety/work-standards skills, project template skills), three model profiles (high-capability/standard/haiku), four flow templates (single-step, work+review, work+code-review+human-review, research), default policies (instance safety baked in, org policy with binary allow/deny — communication tools create drafts as tool behavior), the General chat session, and the 10-step idempotent bootstrap sequence. Finally, it provides a prioritized deep-dive order for the remaining 16 spec documents.
+All 48 open questions collected from across the spec suite have been resolved — the document preserves each decision with its rationale. Key resolutions include: tokens as the universal budget unit across org/project/agent levels, automatic starter trio profile upgrades on startup with an `operator_instructions` field that is never overwritten, tiered data retention (memories forever, chat 1 year, invocations 90 days, all configurable per org), auto-login for local mode, no MCP sampling support, 3-5 starter MCP connection templates, and process-level CLI sandboxing. UI detail questions (panel proportions, animations, tablet layout, etc.) are deferred to Figma/design phase. The document also identifies five technically hardest challenges (prompt budget tuning, memory retrieval at scale, async agent reliability, git merge conflicts, MCP edge-case reliability), five plan-adjustment risks, and four "what could go wrong" scenarios. The bootstrap dataset section fully specifies the starter trio profiles (Frank as Chief of Staff, Lori as Agent Relations, Ellie as Memory), default skills, three model profiles, four flow templates, default policies, the General chat session, and the 10-step idempotent bootstrap sequence.
 
 ---
 
@@ -77,7 +77,7 @@ Everything else depends on this. Phase 0 produces no user-facing product — it 
 ### Deliverables
 
 **Domain Model and Schema (doc 01)**
-- PostgreSQL database with all foundational tables: `organization`, `human_user`, `org_membership`, `agent`, `auth_session`, `api_key`, `audit_event`.
+- PostgreSQL database with all foundational tables: `organization`, `human_user`, `agent`, `auth_session`, `api_key`, `audit_event`. No `org_membership` table — with db-per-org isolation, role lives directly on `human_user` (doc 04).
 - Migration framework (versioned, forward-only migrations).
 - Object storage abstraction (S3-compatible, with local filesystem fallback for development).
 
@@ -101,7 +101,7 @@ Everything else depends on this. Phase 0 produces no user-facing product — it 
 - Model profile abstraction: provider + model + settings + cost controls.
 - Profile versioning and assignment hierarchy (flow node > agent > project > org).
 - Global and per-provider concurrency management with priority queuing.
-- Cost tracking: `model_invocation` record per call, `model_cost_rollup` daily aggregation.
+- Cost tracking: `model_invocation` record per call, `model_usage_rollup` daily aggregation.
 - Retry with exponential backoff and fallback chain (up to 3 profiles deep).
 - System profiles: summarization, listening eval, memory extraction.
 - Error classification into canonical taxonomy.
@@ -109,7 +109,7 @@ Everything else depends on this. Phase 0 produces no user-facing product — it 
 **Event Bus (doc 12)**
 - Domain event emission on create/update transitions.
 - Durable event log table for replay and debugging.
-- Realtime fanout to subscribed clients (SSE or WebSocket — transport decision needed).
+- Realtime fanout to subscribed clients via SSE (default transport, doc 12). WebSocket available as secondary for bidirectional needs.
 - Event subscriber registration for downstream consumers (notifications, memory pipeline, control plane).
 
 **Prompt Assembly Pipeline (doc 05)**
@@ -170,7 +170,7 @@ The first usable product. A human can open the TUI and talk to agents in real-ti
 ### Deliverables
 
 **TUI Application (doc 17)**
-- Terminal-based interface built with Bubble Tea (or equivalent Go TUI framework).
+- Terminal-based interface built with Bubble Tea (Go) and the Charm ecosystem (doc 17).
 - Real-time streaming of agent responses.
 - Session sidebar: General session, future project/task sessions.
 - Keyboard-driven navigation and input.
@@ -371,7 +371,7 @@ Development moves inside OtterCamp. The system is building its own features.
 ### Deliverables
 
 **Web UI (doc 18)**
-- React SPA (or equivalent) with full dashboard.
+- React + TypeScript SPA (doc 18) with full dashboard.
 - Three-panel layout: session sidebar, main content, chat pane.
 - Scope pill for zoom in/out (doc 02).
 - Chat: org/project/task-scoped sessions, streaming, reactions, cancel/steer.
@@ -393,11 +393,12 @@ Development moves inside OtterCamp. The system is building its own features.
 - Policy integration: per-connection and per-tool capability grants.
 - Circuit breaker and health checks.
 - Resource and prompt support.
+- Starter connection templates for popular servers (GitHub, Slack, Postgres, filesystem, web search).
 - `mcp_execution_log` for MCP-specific audit.
 
 **System Integration (doc 11)**
 - CLI execution: sandboxed shell commands in project workspaces.
-- Browser automation: isolated browser contexts per run.
+- Browser automation: task-scoped browser sessions with reuse across runs within the same task (doc 11).
 - Sandboxing: constrained filesystem, network, and resource access.
 - Artifact capture: screenshots, logs, command output.
 - Domain allowlists/denylists for browser.
@@ -423,6 +424,7 @@ Development moves inside OtterCamp. The system is building its own features.
 - Operator dashboards (accessible conversationally through Frank and via web UI).
 - Cost tracking dashboards: per-org, per-project, per-agent, per-model.
 - Alerting thresholds for budget, error rate, queue depth.
+- Tool usage analytics: per-agent, per-tool success rates and failure patterns (built on existing ToolExecution data).
 
 **Memory Pipeline Hardening (doc 06)**
 - Full 9-table schema operational.
@@ -434,11 +436,11 @@ Development moves inside OtterCamp. The system is building its own features.
 - Injection cooldown to prevent repetitive context.
 - Attention-aware injection ordering.
 - Memory feedback loop: reactions adjust confidence.
-- Importer: JSONL zip upload for historical data.
+- Importer: CLI-only JSONL import (`ottercamp memory import`) for historical data.
 
 **API Surface (doc 12)**
 - REST endpoints for all domain entities.
-- Realtime channel (SSE or WebSocket) for session and task updates.
+- Realtime channel: SSE for server-to-client push, WebSocket for bidirectional (doc 12).
 - Internal job API for async orchestration.
 - Idempotency keys for mutation endpoints.
 - Consistent error shape and codes.
@@ -481,7 +483,7 @@ Production readiness for external users and operators.
 - Minimum footprint documentation.
 
 **Mobile UI (doc 19)**
-- React Native (or equivalent cross-platform framework).
+- React Native for iOS and Android simultaneously (doc 19).
 - Dashboard: project status at a glance, blocked items, progress summary.
 - Push notifications: escalations, review requests, task completions.
 - Quick actions: approve/reject inbox items, respond to escalations.
@@ -504,8 +506,8 @@ Production readiness for external users and operators.
 - Regression suite UX for evaluating model upgrades.
 
 **Migration Tools (doc 15)**
-- JSONL importer operational for historical data (via memory importer, doc 06).
-- Optional CSV/JSON import tools for structured data.
+- CLI-only JSONL importer (`ottercamp memory import`) operational for historical data (via memory importer, doc 06).
+- No CSV/JSON import for other data types — JSONL memory import is the only data bridge (doc 15, RD 2).
 - Validation checklist: fresh install reproducible, permissions enforced, core workflows functional, audit logs active.
 
 ### Key Milestones
@@ -522,63 +524,131 @@ The full product must exist before hardening it. Security audit requires all exe
 
 ---
 
-## Remaining Open Questions
+## Resolved Open Questions
 
-These are genuinely unresolved questions collected from across all specs. Questions that were resolved during drafting are recorded in each spec's Resolved Decisions section.
+All open questions from across the spec suite have been reviewed and resolved. This section preserves the decisions for reference. Questions are grouped by domain with the resolution noted.
 
 ### Architecture and Infra
 
-- **Realtime transport**: WebSocket vs SSE for the default realtime channel (doc 12). SSE is simpler and works through proxies. WebSocket is bidirectional. The TUI and web UI may have different preferences.
-- **Kubernetes for managed hosting**: is Kubernetes required for managed launch, or can we start with simpler orchestration (doc 08)?
-- **Minimum self-host footprint**: what are the minimum hardware requirements for a self-hosted deployment — RAM, CPU, disk (doc 08)?
-- **API version compatibility**: how strict should version compatibility be between self-host and managed cloud (doc 12)?
+1. ~~**Realtime transport**~~ **Resolved in doc 12**: SSE is the default for server-to-client push. WebSocket available as secondary transport for bidirectional needs (typing indicators, interactive tool sessions). Normal chat uses POST + SSE.
+
+2. ~~**Kubernetes for managed hosting**~~ **Resolved**: deferred to Phase 4. The managed hosting orchestration choice depends on scale requirements that won't be clear until self-host is running with real demand. The architecture supports any orchestration layer.
+
+3. ~~**Minimum self-host footprint**~~ **Resolved**: 4GB RAM / 2 vCPU / 40GB disk (~$20/mo VPS). Sufficient for single operator with a few concurrent projects. Document that heavier workloads (many async agents, large pgvector indexes) need 8GB+.
+
+4. ~~**API version compatibility**~~ **Resolved**: clients bundled with server. The TUI ships as part of the server binary. The web UI is served as static assets from the server. Mobile app targets a minimum server version. No version skew problem for TUI/web — they always match the server.
 
 ### Auth and Identity
 
-- **Password-less auth for self-hosted**: should local single-node deployments support a no-auth mode for developer convenience, similar to how dev tools work (doc 04)?
-- **Service account keys**: should there be a dedicated service account concept (not tied to a human user) for CI/CD and infrastructure automation, or are user-scoped API keys sufficient (doc 04)?
+5. ~~**Password-less auth for self-hosted**~~ **Resolved**: auto-login for local mode. When `OTTERCAMP_MODE=local` (or equivalent), the system auto-authenticates as the bootstrap user. Auth infrastructure still exists (sessions, API keys, audit logging all work) — it just skips the credential prompt. VPS and managed modes always require auth.
+
+6. ~~**Service account keys**~~ **Resolved**: deferred. For a single-operator product, the operator's API key works for CI/CD. Service accounts add schema complexity for a problem that doesn't exist yet. Add when multi-user orgs ship.
+
+7. ~~**Doc 04 bootstrap sequence is stale**~~ **Resolved**: doc 14's Bootstrap Dataset section (10-step sequence) is the authoritative specification. Doc 04 defers to doc 14 for the complete sequence. Tracked as deferred item for doc 04's next review.
+
+### Agents
+
+8. ~~**Lori private_memory inconsistency**~~ **Resolved**: doc 05 is authoritative — all staff agents (including Lori) have private memory enabled. Doc 14's bootstrap dataset updated to match.
+
+9. ~~**Starter trio profile updates on upgrade**~~ **Resolved**: automatic on startup with customization guard. On startup, the system checks a system profile version against the shipped version. If newer, it auto-applies updates to system agents (system_prompt, default tool policy, skills). Agent profiles have two instruction layers: `system_prompt` (shipped by OtterCamp, updated on upgrade) and `operator_instructions` (custom additions, never overwritten). The effective prompt is both combined. Operator customizations are always preserved.
 
 ### Control Plane
 
-- **Default capability templates**: what minimum set of capabilities ships as default templates for common agent roles — PM, worker, reviewer (doc 16)?
+10. ~~**Default capability templates**~~ **Resolved in doc 16**: four templates — `reader` (read-only), `worker` (project mutations + file I/O + CLI + browser + memory), `deployer` (worker + external comms), `admin` (all capabilities). Starter trio gets `admin`. Most task-working agents get `worker`.
 
 ### System Integration
 
-- **Browser session isolation**: should browser execution be isolated per task or reusable per session (doc 11)?
-- **Minimum sandbox model**: what is the minimum required sandboxing for CLI execution — container, namespace, chroot, or process-level (doc 11)?
-- **Default sensitive action policy**: which system actions are denied by default vs allowed with capability grant (doc 11)?
+11. ~~**`system.browser.control` capability doesn't exist**~~ **Resolved**: doc 14's default org policy updated to reference the actual granular capabilities from doc 16.
 
-### MCP
+12. ~~**Browser session isolation**~~ **Resolved in doc 11**: browser sessions are task-scoped with reuse across runs within the same task. Cleaned up when the task completes.
 
-- **MCP sampling**: should OtterCamp support the MCP sampling capability where the server requests OtterCamp to make an LLM call on its behalf? Significant trust, cost, and security implications (doc 09).
-- **Connection templates**: should we ship pre-built templates for popular MCP servers (GitHub, Slack, Postgres) or is conversational setup sufficient (doc 09)?
-- **Multi-server tool disambiguation**: beyond connection prefix, should there be routing hints when multiple connections expose similar tools (doc 09)?
+13. ~~**Minimum sandbox model**~~ **Resolved in doc 11**: process-level isolation with restricted working directory and environment. Container-level isolation is a future enhancement for managed/multi-tenant.
+
+14. ~~**Default sensitive action policy**~~ **Resolved in docs 11 and 16**: CLI commands are risk-classified (`safe`, `normal`, `sensitive`, `dangerous`). Default posture is permissive. `sensitive` and `dangerous` denied by default, configurable via policy.
+
+### MCP and External Tools
+
+15. ~~**MCP sampling**~~ **Resolved**: not supported. External servers cannot trigger model calls through OtterCamp. If a server needs LLM capabilities, it brings its own model access. Eliminates trust, cost, and security risks entirely. Can be revisited later with strict guardrails if a compelling use case emerges.
+
+16. ~~**Connection templates**~~ **Resolved**: ship 3-5 starter templates for popular servers (GitHub, Slack, Postgres, filesystem, web search). Templates are pre-filled connection configs — transport, URL pattern, required credentials, default tool enable list. Frank uses them to streamline setup. Community contributes more over time.
+
+17. ~~**Multi-server tool disambiguation**~~ **Resolved**: connection prefix is sufficient. The slug prefix (`staging_db.run_query` vs `prod_db.run_query`) plus each connection's description in the tool catalog gives agents enough context. No additional routing machinery needed. If an agent picks wrong, the operator adds a note to project skills.
 
 ### Tools
 
-- **Tool usage analytics**: should per-agent, per-tool call frequency and success rate be a first-class metric (doc 20)?
-- **MCP schema change notification**: when an MCP server updates a tool's schema between sessions, how do we communicate the change — is a validation error sufficient or do we need proactive notification (doc 20)?
-- **Bulk operations**: should batch tools exist (e.g., `task.create_batch`) for agents that need to create many items, or is individual tool calls acceptable overhead (doc 20)?
+18. ~~**Tool usage analytics**~~ **Resolved**: yes, built on existing data. Every tool call is logged in `ToolExecution` (doc 16) and `domain_event` (doc 12). Build aggregation views that surface tool success rates, call frequency, and failure patterns per agent. No new tables — queries and dashboard widgets in the observability stack (doc 13). Ship in Phase 3.
+
+19. ~~**External tool schema change notification**~~ **Resolved**: validation error is sufficient. When a tool call fails due to schema mismatch, the agent gets the error and adapts. The next session discovers the new schema. No proactive notification machinery needed.
+
+20. ~~**Bulk operations**~~ **Resolved**: no batch tools. Individual tool calls are fast enough (~200ms each). Batch operations complicate error handling and add API surface. If it becomes a bottleneck with real usage data, add batch variants then.
 
 ### Security and Observability
 
-- **Compliance targets**: which compliance frameworks matter for the first commercial launch — SOC 2, GDPR, or neither initially (doc 13)?
-- **Default retention policy**: what default retention period balances usability and privacy (doc 13)?
-- **Cost limit behavior**: should cost hard limits fail closed (block all work) or degrade to cheaper models automatically (doc 13)?
+21. ~~**Compliance targets**~~ **Resolved**: none for launch, but design for it. Build with SOC 2 and GDPR principles in mind (audit logging, access controls, data retention/deletion, encryption). Self-host-first means the operator controls their own data, sidestepping many compliance questions. Pursue formal certification when enterprise demand materializes.
 
-### Migration
+22. ~~**Default retention policy**~~ **Resolved**: tiered retention by data type. Memories: forever. Chat messages: 1 year. Chat summaries: forever. Model invocations: 90 days (rollups kept forever). Domain events: 90 days. Audit events: 1 year. Tool executions: 90 days. All configurable per org. Expired data archived to object storage, not deleted.
 
-- **V1 data imports**: do we offer optional import tools beyond the JSONL memory importer, or keep V2 strictly greenfield (doc 15)?
-- **V1 archive retention**: how long do we keep V1 archives available internally (doc 15)?
+23. ~~**Cost limit behavior**~~ **Resolved in doc 13**: fail closed. Hard limits deny non-essential runs (`failure_reason = 'budget_exceeded'`).
 
-### UI
+24. ~~**Per-agent token budgets**~~ **Resolved**: tokens everywhere. Rename `budget_cap_cents` to `budget_cap_tokens` on the agent table. All three levels (org, project, agent) use tokens as the unit. Enforcement order: agent budget check → project budget check → org budget check (most restrictive wins, all independent). The UI shows dollar estimates calculated from model pricing data (display-only).
 
-- **TUI framework**: Bubble Tea confirmed as the recommended library, but final decision needed (doc 17).
-- **TUI vs CLI relationship**: is the TUI a mode of the existing CLI binary, or a separate binary (doc 17)?
-- **Web UI framework**: React is recommended but not locked in (doc 18).
-- **Web UI rendering**: SSR vs SPA vs hybrid (doc 18)?
-- **Mobile platform**: iOS first, or iOS and Android simultaneously (doc 19)?
-- **Mobile framework**: React Native vs native (Swift/Kotlin) vs Flutter (doc 19)?
+25. ~~**Alerting channels**~~ **Resolved**: post-launch via external tools. For launch, alerts go to the inbox and activity feed (plus mobile push in Phase 4). External alerting handled by the operator connecting a webhook via the external tool system. The event bus (doc 12) already emits the right events.
+
+### Migration and Upgrades
+
+26. ~~**V1 data imports**~~ **Resolved in doc 15**: JSONL memory import only, CLI-only, permanently available.
+
+27. ~~**V1 archive retention**~~ **Resolved in doc 15**: indefinitely. Cold storage, not active infrastructure.
+
+### UI — TUI (doc 17)
+
+28. ~~**TUI framework**~~ **Resolved in doc 17**: Bubble Tea (Go) with Charm ecosystem.
+
+29. ~~**TUI vs CLI relationship**~~ **Resolved in doc 17**: TUI is a mode of the `otter` binary.
+
+30. ~~**Keybinding customization**~~ **Resolved**: `~/.config/ottercamp/keybindings.toml` with override support. Ship with vim-style and emacs-style presets plus a default preset.
+
+31. ~~**Mouse support**~~ **Resolved**: optional mouse support enabled by default. Click sidebar items, scroll viewports, click messages. All mouse actions have keyboard equivalents. Mouse can be disabled via config.
+
+32. ~~**TUI notification delivery**~~ **Resolved**: badge + subtle inline indicator. Notification count badge on inbox panel. Urgent events show a brief one-line indicator at the top of the current view ("Budget limit reached — press I for inbox"). Auto-dismisses after 5 seconds. Not a modal popup.
+
+33. ~~**Copy/paste handling**~~ **Resolved**: standard system copy via terminal's native selection, plus a `y` key to programmatically copy the currently focused message or code block to the clipboard.
+
+34. ~~**Terminal multiplexer compatibility**~~ **Resolved**: explicit test requirement. Test in tmux, screen, and common terminal emulators (iTerm2, Alacritty, Windows Terminal, kitty). Document known key conflicts and workarounds. Common setups must work at launch.
+
+### UI — Web (doc 18)
+
+35. ~~**Web UI framework**~~ **Resolved in doc 18**: React + TypeScript SPA.
+
+36. ~~**Web UI rendering**~~ **Resolved in doc 18**: SPA, no SSR.
+
+37. ~~**Agent avatars**~~ **Resolved**: pre-made avatars ship with each agent. Custom avatars stored alongside agent profiles. Operator can upload replacements.
+
+38. ~~**Work log visualization**~~ **Resolved**: collapsible tree. Run > RunSteps > ToolExecutions. Collapsed by default, expand for detail.
+
+39. ~~**Offline/degraded mode**~~ **Resolved**: banner + auto-reconnect with mutations disabled. Persistent "Connection lost" banner. Auto-reconnect with exponential backoff. Buttons grayed out while disconnected. On reconnect, fetch missed events via Last-Event-ID.
+
+40. ~~**Browser notifications**~~ **Resolved**: no browser notifications. Rely on in-app notification system. Mobile push (Phase 4) handles the away-from-computer case.
+
+41. **Panel proportions, transitions/animations, inline diff comments**: deferred to Figma/design phase. These are visual design decisions to be resolved during UI implementation with the Figma agent, not in the spec.
+
+### UI — Mobile (doc 19)
+
+42. ~~**Mobile platform**~~ **Resolved in doc 19**: iOS and Android simultaneously via React Native.
+
+43. ~~**Mobile framework**~~ **Resolved in doc 19**: React Native.
+
+44. **Tablet optimization, voice input, widget support, watch companion**: deferred to Figma/design phase. These are UX decisions to be resolved during mobile implementation, not in the spec.
+
+### Testing (doc 21)
+
+45. ~~**Live model tests in CI**~~ **Resolved**: yes, small subset on every merge. Run 2-3 smoke tests against a real provider on every merge (~30s, ~$0.01). Catches major API breakage immediately. Provider outage handling: if the live tests fail but all fixture tests pass, warn but don't block merge.
+
+46. ~~**Browser test infrastructure**~~ **Resolved**: required only for browser-touching PRs. Browser E2E runs when code in browser integration, system integration, or tool execution paths is modified. Skipped for unrelated changes.
+
+47. ~~**Test data freshness**~~ **Resolved**: manual re-recording with CI detection. When prompts change, the developer re-records affected fixtures locally with `OTTERCAMP_TEST_LIVE_MODELS=true`. CI detects stale fixtures (prompt hash mismatch) and fails with a clear message.
+
+48. ~~**Performance regression testing**~~ **Resolved**: simple threshold alerts. Track total duration of each CI stage. Warn if a stage exceeds its time budget, fail if it exceeds 2x. Time budgets already defined in doc 21.
 
 ---
 
@@ -628,7 +698,7 @@ Created during bootstrap (doc 04), immediately active (no draft review). Full sp
 **Frank (Chief of Staff)**
 - Slug: `frank`, pronouns: he/him, scope: org
 - System prompt: organizational strategist, primary human touchpoint, cross-project coordinator, escalation handler, warm but direct
-- Tool policy: project, task, subtask, flow, session, memory, agent, inbox, schedule tools. No system/browser/MCP tools.
+- Tool policy: project, task, subtask, flow, session, memory, agent, inbox, schedule tools. No system/browser/external tools.
 - Model: org's high-capability profile
 - Private memory: enabled
 - Identity skill: `skills/identities/frank.md`
@@ -638,7 +708,7 @@ Created during bootstrap (doc 04), immediately active (no draft review). Full sp
 - System prompt: staffing expert, agent creator, workforce manager, thoughtful and precise
 - Tool policy: agent management, project/task read, memory.query
 - Model: org's high-capability profile
-- Private memory: disabled
+- Private memory: enabled (default for all staff — doc 05)
 - Identity skill: `skills/identities/lori.md`
 
 **Ellie (Memory & Knowledge)**
@@ -734,8 +804,8 @@ System-provided templates (null `project_id` on `flow_template`, doc 03). Availa
 **Default Org Policy** (configurable by human)
 - Communication tools (`email.compose`, `slack.post`) are allowed — they create drafts as their designed tool behavior (doc 20).
 - CLI execution requires `system.cli.execute` capability grant.
-- Browser control requires `system.browser.control` capability grant.
-- MCP tools require per-connection capability grants.
+- Browser control requires granular capability grants: `system.browser.navigate`, `system.browser.interact`, `system.browser.screenshot`, `system.browser.extract` (doc 16).
+- External tools (MCP and remote APIs) require per-connection capability grants (doc 20).
 - Max tool calls per turn: 50.
 - Max turn duration: 5 minutes (sync), 30 minutes (async).
 
@@ -767,25 +837,14 @@ All steps are idempotent. If bootstrap has already run (detected by existence of
 
 ---
 
-## Immediate Deep-Dive Order
+## Spec Status for Build Planning
 
-Priority order for spec work remaining. Finished specs (02, 03, 03a, 06) do not appear.
+17 of 22 specs are finished (first-principles reviewed, all open questions resolved within each spec). The remaining specs:
 
-1. **01 — Architecture and Domain**: finalize the domain model, runtime component boundaries, and eventing contracts. Everything references this.
-2. **04 — Auth, Tenancy, and Identity**: foundation for everything. Heavily drafted but needs review pass.
-3. **07 — Models and Inference**: the model gateway must work before chat works. Heavily drafted, needs review.
-4. **05 — Agents, Staff, and Temps**: prompt assembly pipeline and starter trio definitions. Heavily drafted, needs review.
-5. **16 — Agent Control Plane**: capability model and execution broker. Foundation for all tier 2 tool execution. Has depth but needs review.
-6. **20 — Tools and Tool Policy**: unifies tool references across all specs. Heavily drafted, needs review.
-7. **10 — Skills Integration**: markdown instruction documents, activation rules, token budget. Heavily drafted, needs review.
-8. **12 — API, Events, and Realtime**: REST contracts, event bus, realtime transport. Stub — needs full draft.
-9. **17 — TUI**: first interface, Phase 1 deliverable. Stub — needs full draft.
-10. **09 — MCP Integration**: external tool connectivity, Phase 3 but schema design should stabilize early. Heavily drafted.
-11. **11 — System Integration**: CLI and browser sandboxing, Phase 3. Stub — needs full draft.
-12. **13 — Security, Observability, Costs**: cross-cutting concerns. Stub — needs full draft.
-13. **08 — Deployment and Self-Hosting**: packaging, Docker Compose, upgrades. Stub — needs full draft.
-14. **18 — Web UI**: Phase 3 interface. Stub.
-15. **15 — Migration and Backward Compat**: clean-room rebuild confirmed, mainly operational. Stub.
-16. **19 — Mobile UI**: Phase 4. Stub.
+- **01 — Architecture and Domain**: in process. Finalize domain model, runtime component boundaries, eventing contracts.
+- **14 — Open Questions and Phasing**: this document. Will be finalized last after all open questions above are resolved.
+- **17 — TUI**: initial draft. Bubble Tea framework confirmed. UX details to resolve during implementation.
+- **18 — Web UI**: initial draft. React + TypeScript SPA confirmed. UX details to resolve during implementation.
+- **19 — Mobile UI**: initial draft. React Native confirmed. UX details to resolve during implementation.
 
-Specs 04, 05, 07, 09, 10, 16, and 20 are substantially drafted (full schema, resolved decisions) despite the tracking file showing them as "stubs." They need systematic review passes, not full rewrites.
+The UI specs (17, 18, 19) are intentionally less detailed than the backend specs. Their open questions are largely UX/implementation decisions that should be resolved during their respective build phases, not upfront.

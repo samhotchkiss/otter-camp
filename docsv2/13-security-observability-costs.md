@@ -1,13 +1,13 @@
 ---
 ## Summary
 
-This spec defines the three cross-cutting concerns that apply to every other OtterCamp V2 spec: security, observability, and cost controls. OtterCamp is a single-human-operator platform where AI agents act on the operator's behalf, so the security model is primarily concerned with protecting the operator from rogue agent behavior, data leakage, and cost overruns rather than traditional external attackers. Security is implemented as six defense-in-depth layers: org isolation (hermetic `organization_id` scoping on every query), authentication (email/password or scoped API keys; agents have no credentials of their own), authorization (RBAC for humans, capability-based for agents with a default-deny posture), control plane gating (all agent mutations pass through the execution broker), agent sandboxing (constrained CLI, isolated browser contexts, per-connection MCP capability checks), and an immutable audit trail. The threat model explicitly centers on rogue agent behavior, secret exposure, prompt injection, external tool abuse, cost explosions, and denial of service.
+This spec defines the three cross-cutting concerns that apply to every other OtterCamp V2 spec: security, observability, and cost controls. OtterCamp is a single-human-operator platform where AI agents act on the operator's behalf, so the security model is primarily concerned with protecting the operator from rogue agent behavior, data leakage, and cost overruns rather than traditional external attackers. Security is implemented as six defense-in-depth layers: org isolation (database-per-org — every organization gets its own PostgreSQL database, eliminating cross-tenant data leaks architecturally), authentication (email/password or scoped API keys; agents have no credentials of their own), authorization (RBAC for humans, capability-based for agents — permissive via templates with an instance-safety default-deny floor), control plane gating (all agent mutations pass through the execution broker), agent sandboxing (constrained CLI, isolated browser contexts, per-connection MCP capability checks), and an immutable audit trail. The threat model explicitly centers on rogue agent behavior, secret exposure, prompt injection, memory instruction poisoning, external tool abuse, MCP supply-chain risk, cost explosions, and denial of service.
 
-Secret management uses AES-256-GCM encryption at rest in PostgreSQL with a master key provided by the operator (env var or KMS). Five codebase-wide invariants ensure secrets never appear in prompts, logs, API responses, audit events, or memory. The `secret` table stores encrypted blobs with per-secret nonces and key version tracking to support zero-downtime master key rotation. Privacy and retention are handled through configurable per-org policies enforced by a daily background job: 90-day default for chat transcripts and run records, 30 days for model invocation logs, 1 year for audit events (3 years managed), and indefinite for active memories. The spec includes GDPR-aware design (access, erasure, portability, minimization) without formal certification at GA.
+Secret management uses AES-256-GCM encryption at rest in PostgreSQL with a master key provided by the operator (`OTTERCAMP_MASTER_KEY` env var or KMS). Five codebase-wide invariants ensure secrets never appear in prompts, logs, API responses, audit events, or memory. The `secret` table (defined in 08-deployment-and-self-hosting.md) stores encrypted blobs with per-secret nonces, slugs for stable cross-system references, and key version tracking to support zero-downtime master key rotation. Privacy and retention are handled through configurable per-org policies enforced by a daily background job: 90-day default for chat transcripts and run records, 30 days for model invocation logs, 7 days for trace spans, 1 year for audit events (3 years managed), and indefinite for active memories. The spec includes GDPR-aware design (access, erasure, portability, minimization) without formal certification at GA.
 
-Observability is built into the platform, not bolted on. It consists of structured JSON logging (with mandatory trace_id, component, and secret scrubbing), OpenTelemetry-compatible distributed tracing (stored in a `trace_span` table with configurable sampling, default 100%), and Prometheus-compatible metrics exposed at `/metrics` across four categories: API, model, queue/execution, and memory. Four built-in web UI dashboards (overview, cost, performance, agents) surface key operational indicators, with OTLP export available for operators who prefer external tools like Grafana or Datadog. Reliability features include per-dependency circuit breakers (model providers, MCP servers, git remotes), graceful degradation strategies, SLOs for managed deployments (99.9% API availability), and incident severity classification.
+Observability is built into the platform, not bolted on. It consists of structured JSON logging (with mandatory trace_id, component, and secret scrubbing), OpenTelemetry-compatible distributed tracing (stored in a `trace_span` table with configurable sampling, default 100%), and Prometheus-compatible metrics exposed at `/metrics` across four categories: API, model, queue/execution, and memory. Four built-in web UI dashboards (overview, usage, performance, agents) surface key operational indicators, with OTLP export available for operators who prefer external tools like Grafana or Datadog. Reliability features include per-dependency circuit breakers (model providers, MCP servers, git remotes), graceful degradation strategies, SLOs for managed deployments (99.9% API availability), and incident severity classification.
 
-Cost controls are integrated into the control plane execution broker. Every `ModelInvocation` records per-request cost using a provider pricing table. Costs are aggregated into hourly, daily, and monthly summaries in a `cost_summary` table. Budgets are configurable at org and project levels with soft limits (warn once per period) and hard limits (block execution entirely). A critical design decision: hard limits fail closed -- they block execution and notify the human rather than silently degrading to cheaper models. Anomaly detection runs every 15 minutes and alerts when hourly spend exceeds 3x the 7-day average. Key schemas include `secret`, `cost_summary`, and `cost_budget`.
+Cost controls are token-based, integrated into the control plane execution broker. Every `model_invocation` record (see 07-models-and-inference.md) captures per-request token counts by type (input/output). Tokens are aggregated into daily summaries in doc 07's `model_usage_rollup` table. Budgets are configurable at org and project levels in tokens, with soft limits (warn once per period) and hard limits (deny non-essential capabilities). A critical design decision: hard limits fail closed — they block non-essential execution and notify the human rather than silently degrading to cheaper models. Essential capabilities (filing blockers, notifying the operator) remain allowed so agents can gracefully report the budget breach. Anomaly detection runs every 15 minutes and alerts when hourly token usage exceeds 3x the 7-day average. Key schemas include `secret` (doc 08), `model_usage_rollup` (doc 07), and `token_budget`.
 
 ---
 
@@ -27,11 +27,11 @@ Security is layered. No single mechanism is the sole defense — every layer ass
 
 **Layer 1: Org Isolation (Perimeter)**
 
-All data is scoped to an organization. Every API endpoint and database query includes `organization_id` in its filter. There is no code path that queries data without org scope (see 04-auth-tenancy-and-identity.md Row-Level Enforcement).
+Every organization gets its own PostgreSQL database (see 04-auth-tenancy-and-identity.md Database-Level Isolation). Cross-org data leakage is eliminated architecturally — there is no shared database to leak across.
 
-- API middleware extracts `organization_id` from the authenticated session or token and injects it into every request context.
-- Database queries always include `organization_id` in WHERE clauses.
-- Row-level security (RLS) in PostgreSQL is available as defense-in-depth for managed multi-tenant deployments.
+- API middleware resolves the authenticated session to an org-specific database connection. Application code cannot accidentally query another org's data.
+- Tables carry `organization_id` for structural consistency and the principal convention, but the security boundary is the database, not a WHERE clause.
+- No RLS needed — the isolation boundary is the database itself.
 - Cross-org data sharing does not exist. Orgs are hermetically sealed.
 
 **Layer 2: Authentication**
@@ -52,7 +52,7 @@ Two-tier authorization model:
 - RBAC roles (owner, admin, member, viewer) for coarse human access control.
 - Capabilities for fine-grained agent action permissions (see 16-agent-control-plane.md).
 
-Default posture is **deny**. Agents can only perform actions for which they have been explicitly granted capabilities. Policy evaluation is binary: `allow` or `deny`. Permissions are configured in advance — no runtime approval gating.
+Default posture is **permissive via capability templates** — agents receive generous capability grants from templates (reader, worker, deployer, admin) and can do real work out of the box. The instance safety layer (layer 1 of the policy stack) is the only default-deny layer, blocking self-modification, credential exfiltration, and other invariant violations. Admins add `deny` rules at the org or project layer when they want restrictions. Policy evaluation is binary: `allow` or `deny`. Permissions are configured in advance — no runtime approval gating.
 
 Policy layers, highest priority first:
 1. Instance safety policy
@@ -63,7 +63,7 @@ Policy layers, highest priority first:
 
 **Layer 4: Control Plane Gating**
 
-All agent mutations pass through the control plane execution broker (see 16-agent-control-plane.md). There is no privileged execution path outside the broker/worker pipeline. The broker evaluates policy, dispatches to the worker, and records the outcome. High-risk actions are denied by default — the org or project must explicitly allow them.
+All agent mutations pass through the control plane execution broker (see 16-agent-control-plane.md). There is no privileged execution path outside the broker/worker pipeline. The broker evaluates policy, dispatches to the worker, and records the outcome. Actions blocked by the instance safety layer cannot be overridden — all other restrictions are configurable by the operator.
 
 **Layer 5: Agent Sandboxing**
 
@@ -88,7 +88,7 @@ OtterCamp is designed for two deployment modes with different network postures:
 
 **Managed (multi-tenant)**:
 - TLS everywhere. No unencrypted connections.
-- API gateway with rate limiting and DDoS protection.
+- API gateway with DDoS protection.
 - Internal service communication over private networks.
 - Outbound connections to model providers over HTTPS.
 - Database connections encrypted in transit.
@@ -109,10 +109,10 @@ OtterCamp's threat model is shaped by its architecture: a single human operator 
 An agent attempts actions outside its permitted scope — modifying files it shouldn't touch, calling tools it shouldn't access, escalating its own privileges.
 
 **Mitigations**:
-- Default-deny capability posture. Agents can only do what is explicitly permitted.
-- All actions pass through the control plane broker. No direct execution path.
+- Instance safety layer blocks invariant violations (self-modification, credential exfiltration) regardless of template grants.
+- All mutations pass through the control plane broker. No direct execution path.
 - Policy evaluation on every action request with full audit trail.
-- High-risk actions require human approval.
+- Operators can add deny rules at the org or project layer to restrict specific agents or capabilities. Human review of agent work is modeled as review flow nodes in the task graph (see 03-projects-and-task-flow.md), not as policy-level gating.
 - Agent identity is asserted by the platform, not claimed by the agent — an agent cannot impersonate another agent.
 
 ### Threat: Data Leakage Between Orgs
@@ -120,10 +120,10 @@ An agent attempts actions outside its permitted scope — modifying files it sho
 In managed multi-tenant deployments, one org's data is exposed to another org through a query that fails to scope correctly.
 
 **Mitigations**:
-- `organization_id` is injected by middleware from the authenticated session, not from user input. Application code cannot omit it.
-- Every table that carries `organization_id` has it in primary query indexes.
-- Database-level RLS as defense-in-depth for managed deployments.
-- Integration tests validate org isolation on all query paths.
+- Database-per-org isolation: every org gets its own PostgreSQL database. There is no shared database to leak across (see 04-auth-tenancy-and-identity.md).
+- API middleware resolves the authenticated session to an org-specific database connection. Application code cannot accidentally query another org's data.
+- `organization_id` on tables provides structural consistency, not a security filter — the database boundary is the security boundary.
+- Integration tests validate org isolation on all connection paths.
 
 ### Threat: Secret Exposure
 
@@ -141,7 +141,7 @@ Model provider API keys, SSH keys, MCP credentials, or other secrets are exposed
 An external input (MCP tool response, file content, user-uploaded document) contains instructions that attempt to override the agent's behavior or exfiltrate data.
 
 **Mitigations**:
-- Agent identity layer (the system prompt containing who the agent is and its policies) is the highest-priority prompt layer and is never cut from context (see 05-agents-staff-and-temps.md Prompt Layers). External content cannot override identity.
+- Agent identity (layer 1) and policies/constraints (layer 2) are the two highest-priority prompt layers and are never cut from context (see 05-agents-staff-and-temps.md Prompt Layers). External content cannot override identity or policy.
 - MCP tool responses are treated as untrusted data — they are injected as tool results, not as system instructions.
 - Memory sensitivity classification prevents restricted memories (credentials, access controls) from appearing in passive injection.
 - The control plane evaluates every action the agent attempts regardless of why the agent decided to attempt it — even a successfully injected prompt still hits policy evaluation.
@@ -172,14 +172,25 @@ An agent uses MCP connections or CLI access to perform harmful operations on ext
 - Browser automation uses domain allowlists/denylists.
 - All external actions are logged in the audit trail with full input/output capture.
 
+### Threat: Compromised MCP Server
+
+A registered MCP server is malicious or compromised — it could exfiltrate data from tool inputs, inject malicious responses to influence agent behavior, or abuse credentials provided via secret bindings.
+
+**Mitigations**:
+- Per-connection and per-tool capability grants limit what each MCP server can access (see 09-mcp-integration.md).
+- Secret bindings limit credential exposure to specific connections — a compromised server only sees secrets explicitly bound to it.
+- Circuit breakers limit blast radius — a misbehaving server is quickly isolated.
+- All MCP tool calls are logged in the audit trail with full input/output capture, enabling post-incident analysis.
+- MCP tool responses are treated as untrusted data — injected as tool results, not as system instructions (see Prompt Injection mitigations).
+
 ### Threat: Cost Explosion
 
 A runaway agent enters a loop, makes excessive model calls, or triggers cascading work that burns through the model provider budget.
 
 **Mitigations**:
-- Per-request cost tracking on every ModelInvocation.
-- Per-org and per-project budget limits (soft and hard).
-- Hard limits fail closed — execution is blocked, not degraded.
+- Per-request token tracking on every `model_invocation` (see 07-models-and-inference.md).
+- Per-org and per-project token budget limits (soft and hard).
+- Hard limits fail closed — non-essential execution is blocked, not degraded.
 - Per-turn and per-run timeout budgets prevent infinite loops.
 - Anomaly detection flags sudden usage spikes.
 - Queue depth limits prevent unbounded work accumulation.
@@ -189,62 +200,48 @@ A runaway agent enters a loop, makes excessive model calls, or triggers cascadin
 External attackers attempt to overwhelm the managed service with requests.
 
 **Mitigations**:
-- Rate limiting per API key and per org (see 04-auth-tenancy-and-identity.md).
-- Login rate limiting with exponential backoff (per-IP and per-account).
-- API gateway DDoS protection (infrastructure-level, not application-level).
+- Login rate limiting with exponential backoff (per-IP and per-account, see 04-auth-tenancy-and-identity.md).
+- API gateway DDoS protection for managed deployments (infrastructure-level, not application-level).
 - Concurrency limits on model provider calls prevent a single org from monopolizing provider quotas.
+- Per-org API rate limiting may be added for managed hosting in the future; not in V2 scope.
 
 ## Secret Management
 
 ### What Secrets OtterCamp Stores
 
-OtterCamp manages several categories of secrets on behalf of the operator:
+OtterCamp manages four categories of secrets on behalf of the operator (see 08-deployment-and-self-hosting.md):
 
-- **Model provider API keys**: OpenAI, Anthropic, Google API keys for inference.
-- **SSH keys**: for git remote access (pushing/pulling code repositories).
-- **MCP credentials**: API keys, OAuth tokens, or other credentials for MCP server connections.
-- **Webhook secrets**: signing keys for outbound webhook payloads (future).
+- **Model provider API keys** (`model_provider`): OpenAI, Anthropic, Google API keys for inference.
+- **SSH keys** (`ssh_key`): for git remote access (pushing/pulling code repositories).
+- **MCP credentials** (`mcp_credential`): API keys, OAuth tokens, or other credentials for MCP server connections.
+- **External service credentials** (`external_service`): deploy platform tokens, GitHub tokens, Slack tokens, and other integration credentials.
 
 ### Storage
 
 Secrets are stored in PostgreSQL, encrypted at rest using AES-256-GCM. The encryption key is derived from a master key that is:
 
-- **Self-hosted**: provided by the operator via environment variable (`OTTERCAMP_SECRET_KEY`) or injected by a secret manager (Vault, AWS Secrets Manager, etc.). The operator is responsible for protecting this key.
+- **Self-hosted**: provided by the operator via environment variable (`OTTERCAMP_MASTER_KEY`) or key file (`OTTERCAMP_MASTER_KEY_FILE`). The operator is responsible for protecting this key.
 - **Managed**: managed by the hosting infrastructure's KMS. The application never sees the raw master key.
 
 Each secret is encrypted with a unique nonce. The encrypted blob and nonce are stored together. The plaintext is never written to disk, logs, or any persistent store other than the encrypted column.
 
 ### Schema
 
-```sql
-create table secret (
-  id              uuid primary key default gen_random_uuid(),
-  organization_id uuid not null references organization(id),
-  name            text not null,                        -- human-readable label ("OpenAI Production", "GitHub SSH")
-  secret_type     text not null,                        -- model_provider, ssh_key, mcp_credential, webhook_signing
-  encrypted_value bytea not null,                       -- AES-256-GCM encrypted
-  nonce           bytea not null,                       -- unique per encryption
-  key_version     int not null default 1,               -- for key rotation tracking
-  metadata        jsonb not null default '{}',          -- type-specific metadata (provider name, connection_id, etc.)
-  created_by_type text not null check (created_by_type in ('human', 'system')),
-  created_by_id   uuid,
-  last_rotated_at timestamptz,
-  expires_at      timestamptz,                          -- optional expiry
-  created_at      timestamptz not null default now(),
-  updated_at      timestamptz not null default now(),
+The authoritative `secret` table schema is defined in 08-deployment-and-self-hosting.md. Key columns for this spec's security concerns:
 
-  unique (organization_id, name)
-);
-
-create index on secret (organization_id);
-create index on secret (secret_type, organization_id);
-```
+- `slug text not null` — machine-readable identifier, used as the reference target across the system. All secret references use the slug (e.g., `provider_connection.api_key_secret_ref`, `mcp_secret_binding.secret_ref`).
+- `category text not null check (category in ('model_provider', 'ssh_key', 'mcp_credential', 'external_service'))` — the four secret types.
+- `encrypted_value bytea not null` — AES-256-GCM encrypted. Plaintext never stored.
+- `nonce bytea not null` — unique per encryption operation.
+- `key_version int not null default 1` — tracks which master key version encrypted this row; incremented on master key rotation.
+- `expires_at timestamptz` — optional; informational, does not auto-delete.
+- Unique on `(organization_id, slug)`. Indexed on `(organization_id, category)`.
 
 ### Lifecycle
 
 - **Creation**: the operator provides a secret value through the settings UI, CLI, or API. The value is encrypted immediately and stored. The plaintext is never echoed back after creation.
 - **Usage**: when the control plane worker needs a secret (to call a model provider, connect to an MCP server, or authenticate with a git remote), it reads the encrypted value, decrypts it in memory, injects it into the sandboxed execution environment, and discards the plaintext after the operation completes.
-- **Rotation**: the operator provides a new value. The old encrypted blob is overwritten. `key_version` is incremented. `last_rotated_at` is updated. An audit event is recorded. Active sessions using the old value will fail on next use and retry with the new value.
+- **Rotation**: the operator provides a new value. The old encrypted blob is overwritten with the new value encrypted under the current master key. `last_rotated_at` is updated. An audit event is recorded. Active sessions using the old value will fail on next use and retry with the new value. (`key_version` is not affected — it tracks the master key version, not the secret value. See Master Key Rotation below.)
 - **Deletion**: the encrypted blob is zeroed and the row is deleted. An audit event is recorded.
 - **Expiry**: secrets with an `expires_at` in the past are flagged in the settings UI and in the operator's inbox. Expired secrets are not automatically deleted — they continue to work until manually rotated or deleted. The warning is informational.
 
@@ -282,9 +279,12 @@ Retention policies are configurable per organization via `organization.settings`
 | Memory items (active) | Indefinite | Memories are the distilled knowledge of the organization. They have their own lifecycle (decay, consolidation, archival) but are not deleted by retention policy. |
 | Memory items (archived) | 1 year | Archived memories are preserved for provenance and temporal queries. After 1 year, they can be purged. |
 | Audit events | 1 year (self-hosted), 3 years (managed) | Audit events are the security compliance record. Longer retention for managed deployments where compliance requirements are stricter. |
-| Run records and events | 90 days | Execution history is useful for debugging and cost analysis. After 90 days, aggregate metrics are sufficient. |
-| Model invocation logs | 30 days | Detailed prompt/completion logs are large and sensitive. Token/cost aggregates are retained indefinitely. |
+| Run records and events | 90 days | Execution history is useful for debugging and usage analysis. After 90 days, aggregate metrics are sufficient. |
+| Model invocation logs | 30 days | Detailed prompt/completion logs are large and sensitive. Token aggregates in `model_usage_rollup` are retained indefinitely. |
+| Domain events | 90 days | Event bus records (see 12-api-events-and-realtime.md). Auto-purge after consumer cursors have advanced past. |
+| Trace spans | 7 days | Distributed tracing data. Partitioned by day for efficient cleanup. Configurable. |
 | Object storage artifacts | 90 days | Screenshots, generated files, log outputs. Artifacts linked to active tasks are exempt from retention until the task completes. |
+| Infrastructure tables | Per-table TTL | `idempotency_key` (24h TTL), `consumer_cursor` (indefinite), `job_queue` (completed jobs purged daily). See 12-api-events-and-realtime.md. |
 
 ### Retention Enforcement
 
@@ -293,7 +293,7 @@ A daily background job enforces retention policies:
 1. Query for records older than the retention threshold.
 2. For chat transcripts and model invocation logs: archive to object storage (compressed) before deletion if the org has archival enabled. Otherwise, hard delete.
 3. For audit events: archive to object storage before deletion. Never hard delete without archival.
-4. For run records: delete. Aggregate metrics (cost, token usage, latency) are retained in summary tables indefinitely.
+4. For run records: delete. Aggregate metrics (token usage, latency) are retained in rollup tables indefinitely.
 5. Record the retention run as an audit event.
 
 ### Data Deletion
@@ -458,7 +458,6 @@ Metrics are organized into four categories:
 - `ottercamp_model_invocation_total` (counter): total model calls by provider, model, and status.
 - `ottercamp_model_tokens_input_total` (counter): total input tokens by provider and model.
 - `ottercamp_model_tokens_output_total` (counter): total output tokens by provider and model.
-- `ottercamp_model_cost_dollars_total` (counter): total cost in dollars by provider and model.
 - `ottercamp_model_invocation_in_flight` (gauge): currently active model calls.
 
 **Queue and Execution Metrics**:
@@ -489,8 +488,7 @@ The following metrics are the essential operational indicators. These should be 
 | Model error rate | Failed model calls / total | > 5% over 5-minute window |
 | Queue depth | Pending runs waiting for execution | > 50 for > 10 minutes |
 | Queue wait time p95 | How long runs wait before starting | > 5 minutes |
-| Token usage rate | Tokens consumed per hour | Configurable per org |
-| Cost per hour | Dollar spend rate | Configurable per org |
+| Token usage rate | Tokens consumed per hour (input + output) | Configurable per org |
 | Active runs | Currently executing runs | > configured concurrency limit |
 | Agent utilization | % of time agents are actively executing vs idle | Informational, no alert |
 | Memory retrieval p95 latency | Memory query latency (passive path) | > 500ms (sync sessions are latency-sensitive) |
@@ -503,17 +501,34 @@ Dashboards are built into the web UI (see 18-web-ui.md) as part of the Settings/
 
 **Dashboard: Overview**
 - Current active runs and their status.
-- Today's spend vs budget (bar chart).
+- Today's token usage vs budget (bar chart).
 - Error rate trend (24 hours).
 - Approval queue depth and oldest pending item.
 - Agent activity feed (last 50 events).
 
-**Dashboard: Cost**
-- Spend by provider and model (stacked area chart, 30-day view).
-- Spend by project (bar chart).
-- Spend by agent (bar chart).
-- Budget utilization gauges (per org, per project).
-- Cost trend and projection (extrapolate current rate to end of billing period).
+**Dashboard: Usage**
+
+Summary bar at the top:
+- Current period usage: real-time gauge showing token consumption against budget for org and each project.
+- Budget status: utilization percentage per configured budget, soft/hard limit status.
+- Anomaly indicator: highlighted when current token rate significantly exceeds the 7-day average.
+
+Primary chart: **total tokens over time** (stacked area, 30-day default view with 7d/30d/90d toggles). The chart is the entry point — everything else drills down from it.
+
+Five drill-down dimensions, selectable as the chart's stacking/grouping axis:
+- **By purpose**: groups by `model_invocation.invocation_purpose` — agent turns, summarization, memory extraction, memory synthesis, memory reflection, listening evaluation, replay, etc. This answers "where are my tokens going?" at the system level. Agent turns typically dominate; memory and summarization are the hidden costs.
+- **By project**: tokens per project. Null project grouped as "Org-level" (system calls not tied to a project).
+- **By model**: tokens per model ID. Shows relative cost of different models.
+- **By agent**: tokens per agent. Surfaces which agents are the heaviest consumers.
+- **By provider**: tokens per provider connection. Useful when running multiple connections to the same or different providers.
+
+Selecting a segment in the chart (e.g., clicking a project's band in the stacked area) filters all other views on the page to that segment. Filters are composable — select a project, then switch to "by purpose" to see what that project's tokens are spent on.
+
+Below the chart:
+- **Top consumers table**: ranked list of agents by token consumption in the current period, with sparkline trends.
+- **Usage trend and projection**: extrapolate current rate to end of period with a projected total.
+
+Data source: the chart reads from `model_usage_rollup` for the 30d/90d views (fast, pre-aggregated) and from raw `model_invocation` records for 7d and real-time drill-downs (more granular, supports the purpose dimension).
 
 **Dashboard: Performance**
 - API latency percentiles (line chart, 24-hour view).
@@ -523,7 +538,7 @@ Dashboards are built into the web UI (see 18-web-ui.md) as part of the Settings/
 - Error rate by component (stacked area chart).
 
 **Dashboard: Agents**
-- Per-agent activity: runs completed, runs failed, tokens consumed, cost.
+- Per-agent activity: runs completed, runs failed, tokens consumed.
 - Agent utilization timeline (gantt-style: active, idle, blocked, waiting for approval).
 - Per-agent error rate.
 
@@ -630,160 +645,98 @@ Incident playbooks are operational documentation, not product spec content. They
 
 ## Cost Controls
 
-### Cost Tracking Architecture
+### Token Tracking Architecture
 
-Cost tracking is built into the execution pipeline at the point where costs are incurred: model invocations.
+Cost controls are token-based. OtterCamp tracks tokens consumed per model per connection — not USD. This keeps the system simple and avoids maintaining a provider pricing table that must be updated every time a provider changes rates. USD estimation can be layered on later if needed.
 
-Every `ModelInvocation` record (see 16-agent-control-plane.md) captures:
+Every `model_invocation` record (see 07-models-and-inference.md) captures:
 
 ```sql
--- These fields exist on the model_invocation table (defined in doc 16)
--- Repeated here for cost-tracking context:
---   provider          text not null
---   model             text not null
---   input_tokens      int not null
---   output_tokens     int not null
---   cost_estimate     numeric(10,6) not null   -- in USD
+-- These fields exist on the model_invocation table (defined in doc 07):
+--   provider_id       uuid not null references model_provider(id)
+--   connection_id     uuid references provider_connection(id)
+--   model_id          text not null
+--   input_tokens      int                      -- nullable (null on error/timeout)
+--   output_tokens     int                      -- nullable (null on error/timeout)
 --   organization_id   uuid not null
 --   project_id        uuid                     -- nullable, for org-level calls
---   agent_id          uuid not null
---   run_id            uuid not null
+--   agent_id          uuid                     -- nullable (system invocations)
+--   run_id            uuid                     -- nullable (not all invocations are runs)
 --   created_at        timestamptz not null
 ```
 
-Cost is calculated at invocation time using a provider pricing table maintained in the application configuration. Pricing is per-model, per-token-type (input vs output), and updated when providers change their pricing. The cost estimate is stored on each invocation record for historical accuracy — even if pricing changes later, the recorded cost reflects what was charged at the time.
+Token counts are the unit of measurement for budgets, dashboards, anomaly detection, and usage reporting.
 
-### Cost Aggregation
+### Token Usage Aggregation
 
-Raw per-invocation costs are aggregated into summary tables for efficient querying:
+Raw per-invocation token counts are aggregated into doc 07's `model_usage_rollup` table for efficient querying. The rollup provides daily aggregations by connection, model, agent, and project with input/output token counts and invocation counts. See 07-models-and-inference.md for the authoritative schema.
 
-```sql
-create table cost_summary (
-  id              uuid primary key default gen_random_uuid(),
-  organization_id uuid not null references organization(id),
-  project_id      uuid references project(id),         -- null = org-level aggregate
-  agent_id        uuid references agent(id),            -- null = project or org-level aggregate
-  provider        text not null,
-  model           text not null,
-  period_start    timestamptz not null,                  -- start of the aggregation period
-  period_type     text not null,                         -- hourly, daily, monthly
-  input_tokens    bigint not null default 0,
-  output_tokens   bigint not null default 0,
-  invocation_count int not null default 0,
-  total_cost      numeric(12,6) not null default 0,
-  created_at      timestamptz not null default now(),
-  updated_at      timestamptz not null default now(),
-
-  unique (organization_id, project_id, agent_id, provider, model, period_start, period_type)
-);
-
-create index on cost_summary (organization_id, period_start, period_type);
-create index on cost_summary (organization_id, project_id, period_start) where project_id is not null;
-```
-
-Aggregation runs as a periodic background job:
-- **Hourly summaries**: computed every hour from raw `ModelInvocation` records.
-- **Daily summaries**: computed from hourly summaries at end of day.
-- **Monthly summaries**: computed from daily summaries at end of month.
-
-Raw `ModelInvocation` records are retained for 30 days (see Retention). After that, only the aggregated summaries remain.
+Raw `model_invocation` records are retained for 30 days (see Retention). After that, only the rollup summaries remain.
 
 ### Budget System
 
-Budgets are configurable at two levels:
+Budgets are configurable at two levels, expressed in tokens:
 
-**Org-level budget**: total spend cap for the entire organization across all projects and agents.
+**Org-level budget**: total token cap for the entire organization across all projects and agents.
 
-**Project-level budget**: spend cap for a specific project across all agents working on it.
+**Project-level budget**: token cap for a specific project across all agents working on it.
 
 ```sql
-create table cost_budget (
+create table token_budget (
   id              uuid primary key default gen_random_uuid(),
   organization_id uuid not null references organization(id),
   project_id      uuid references project(id),         -- null = org-level budget
-  period_type     text not null,                        -- daily, monthly
-  soft_limit      numeric(10,2),                        -- warning threshold in USD (nullable = no soft limit)
-  hard_limit      numeric(10,2),                        -- block threshold in USD (nullable = no hard limit)
+  period_type     text not null check (period_type in ('daily', 'weekly', 'monthly')),
+  soft_limit      bigint,                               -- warning threshold in tokens (nullable = no soft limit)
+  hard_limit      bigint,                               -- block threshold in tokens (nullable = no hard limit)
   created_by_type text not null check (created_by_type in ('human', 'system')),
   created_by_id   uuid,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
 
-  unique (organization_id, project_id, period_type)
+  unique (organization_id, coalesce(project_id, '00000000-0000-0000-0000-000000000000'), period_type)
 );
 
-create index on cost_budget (organization_id);
+create index on token_budget (organization_id);
 ```
 
 ### Budget Enforcement
 
-Budget checks happen in the control plane execution broker, before a model invocation is dispatched:
+Budget checks happen in the control plane execution broker, before a model invocation is dispatched (see 16-agent-control-plane.md):
 
-1. **Pre-check**: before dispatching a run that will involve model calls, the broker checks current period spend against the applicable budgets (org + project).
-2. **Soft limit**: if current spend exceeds the soft limit, the run proceeds but a warning is emitted. The warning appears in the operator's activity feed and on the cost dashboard. A warning is emitted at most once per budget per period (not on every invocation after the limit).
-3. **Hard limit**: if current spend exceeds the hard limit, the run is **blocked**. The policy evaluation returns `deny` with reason `budget_exceeded`. The agent receives a clear error. An inbox item is created for the operator with the details.
+1. **Pre-check**: before dispatching a run that will involve model calls, the broker checks current period token usage against the applicable budgets (org + project).
+2. **Soft limit**: if current usage exceeds the soft limit, the run proceeds but a warning is emitted. The warning appears in the operator's activity feed and on the usage dashboard. A warning is emitted at most once per budget per period (not on every invocation after the limit).
+3. **Hard limit**: if current usage exceeds the hard limit, **non-essential capabilities are denied**. Essential capabilities (filing blockers, updating task status, notifying the operator) remain allowed so agents can gracefully report the budget breach. The policy evaluation returns `deny` with reason `budget_exceeded` for non-essential actions. An inbox item is created for the operator with the details.
 
-### Cost Limit Behavior: Fail Closed
+### Budget Limit Behavior: Fail Closed
 
-**This is a critical design decision.** When a hard cost limit is reached, the system blocks execution entirely. It does NOT silently degrade to a cheaper model.
+**This is a critical design decision.** When a hard token limit is reached, the system blocks non-essential execution. It does NOT silently degrade to a cheaper model.
 
 Rationale:
 - The human chose the model for a reason. Silently switching to a cheaper model changes the quality of work without the human's knowledge or consent.
-- Cost spikes are usually a sign of something unexpected happening (a loop, an overly broad task, a poorly scoped agent). The right response is to stop and surface the issue, not to keep going at lower quality.
-- The human can explicitly switch to a cheaper model profile if they want to continue at lower cost. That is a conscious decision.
+- Token spikes are usually a sign of something unexpected happening (a loop, an overly broad task, a poorly scoped agent). The right response is to stop and surface the issue, not to keep going at lower quality.
+- The human can explicitly switch to a cheaper model profile if they want to continue with less token usage. That is a conscious decision.
+- Essential capabilities remain allowed so agents can file blockers, update status, and notify — preventing tasks from getting stuck with no way to signal the problem.
 
-When execution is blocked by a cost limit:
-1. The run fails with status `budget_exceeded`.
-2. An inbox item is created for the operator: "Project X has exceeded its daily budget of $Y. Current spend: $Z. [Review spend] [Increase limit] [Switch model]."
-3. The operator can: increase the budget, switch the project to a cheaper model profile, or investigate the spend pattern.
+When execution is blocked by a token limit:
+1. Non-essential runs are denied by policy evaluation. The run is created and immediately set to status `failed` with `failure_reason = 'budget_exceeded'` (see 16-agent-control-plane.md run status enum).
+2. An inbox item is created for the operator: "Project X has exceeded its daily token budget of Y tokens. Current usage: Z tokens. [Review usage] [Increase limit] [Switch model]."
+3. The operator can: increase the budget, switch the project to a cheaper model profile, or investigate the usage pattern.
 4. Queued runs for the affected scope remain queued until the budget is reset (next period) or increased.
-
-### Cost Dashboard (Web UI)
-
-The cost dashboard is part of the operational dashboards in the web UI:
-
-- **Current period spend**: real-time gauge showing spend against budget for org and each project.
-- **Spend breakdown**: by provider, model, project, and agent. Interactive drill-down.
-- **Trend chart**: daily spend over the last 30 days. Trendline projection to end of current period.
-- **Top consumers**: ranked list of agents by spend in the current period.
-- **Anomaly indicator**: highlighted when current spend rate significantly exceeds the 7-day average.
-- **Budget status**: for each configured budget, show utilization percentage and whether soft/hard limits have been hit.
 
 ### Anomaly Detection
 
-The system detects unusual cost patterns and alerts the operator:
+The system detects unusual token usage patterns and alerts the operator:
 
-**Spike detection**: if the hourly spend rate exceeds 3x the 7-day hourly average, an alert is emitted. This catches runaway agents, infinite loops, or unexpectedly expensive operations.
+**Spike detection**: if the hourly token consumption rate exceeds 3x the 7-day hourly average, an alert is emitted. This catches runaway agents, infinite loops, or unexpectedly expensive operations.
 
 **Implementation**: a background job runs every 15 minutes:
-1. Calculate current hour's spend from raw invocation records.
-2. Compare against the average hourly spend over the last 7 days (from hourly summaries).
-3. If current > 3x average, emit an alert to the operator's activity feed and create an inbox item.
+1. Calculate token usage in the trailing 60-minute window from raw invocation records.
+2. Compare against the average hourly usage over the last 7 days (from rollup summaries).
+3. If trailing-60-min usage > 3x the 7-day hourly average, emit an alert to the operator's activity feed and create an inbox item.
 4. The alert is per-org and deduplicated — at most one spike alert per hour per org.
 
-**Zero-to-something detection**: if an org had zero spend in the previous 24 hours and suddenly incurs cost, flag it as informational (not necessarily anomalous, but worth noting in the activity feed).
-
-### Provider Pricing Configuration
-
-Model provider pricing is stored in application configuration, not in the database:
-
-```yaml
-model_pricing:
-  anthropic:
-    claude-sonnet-4-20250514:
-      input_per_million: 3.00
-      output_per_million: 15.00
-    claude-haiku-3-5:
-      input_per_million: 0.80
-      output_per_million: 4.00
-  openai:
-    gpt-4o:
-      input_per_million: 2.50
-      output_per_million: 10.00
-  # ... etc
-```
-
-Pricing is maintained by the OtterCamp team for managed deployments. Self-hosted operators can override pricing in their configuration. When a model is not found in the pricing table, cost is recorded as $0.00 with a warning log — the invocation still succeeds, but cost tracking is incomplete.
+**Zero-to-something detection**: if an org had zero token usage in the previous 24 hours and suddenly incurs usage, flag it as informational (not necessarily anomalous, but worth noting in the activity feed).
 
 ## Resolved Decisions
 
@@ -791,7 +744,7 @@ Pricing is maintained by the OtterCamp team for managed deployments. Self-hosted
 
 2. **Default retention: 90 days for transcripts, indefinite for memories, 1 year for audit events.** Configurable per org. Retention is enforced by a daily background job. Audit events are archived before deletion, never hard-deleted without archival.
 
-3. **Cost limits fail closed.** Block execution, notify human, create inbox item. Do NOT silently degrade to cheaper models. The human makes model selection decisions consciously. This is the answer to the open question from the stub.
+3. **Token limits fail closed.** Deny non-essential capabilities, notify human, create inbox item. Essential capabilities (filing blockers, status updates) remain allowed so agents can gracefully report the breach. Do NOT silently degrade to cheaper models. The human makes model selection decisions consciously.
 
 4. **Structured logging with JSON format.** Every log entry includes timestamp, level, message, trace_id, and component. Organization and principal context are included when available. Secret scrubbing before write.
 
@@ -799,13 +752,13 @@ Pricing is maintained by the OtterCamp team for managed deployments. Self-hosted
 
 6. **Prometheus-compatible metrics.** Exposed via `/metrics` endpoint (pull model). Optionally pushed via OTLP for managed deployments. Four categories: API, model, queue/execution, memory.
 
-7. **Operational dashboards built into the web UI.** Not a separate tool. Overview, cost, performance, and agent dashboards. Self-hosted operators can also export to Grafana/Datadog via Prometheus scrape or OTLP export.
+7. **Operational dashboards built into the web UI.** Not a separate tool. Overview, usage, performance, and agent dashboards. Self-hosted operators can also export to Grafana/Datadog via Prometheus scrape or OTLP export.
 
-8. **Secrets encrypted at rest with AES-256-GCM.** Master key provided by operator (env var or secret manager) for self-hosted. KMS-managed for managed deployments. Secrets never in prompts, logs, API responses, or memory.
+8. **Secrets encrypted at rest with AES-256-GCM.** Master key provided by operator (`OTTERCAMP_MASTER_KEY` env var or key file) for self-hosted. KMS-managed for managed deployments. Secrets never in prompts, logs, API responses, or memory. Schema defined in doc 08.
 
 9. **Secret safety rules are codebase-wide invariants.** Never in prompts, never in logs, never in API responses, never in audit events, never in memory. These are not guidelines — they are enforced by the scrubbing layer and extraction pipeline.
 
-10. **Defense in depth: six security layers.** Org isolation, authentication, authorization, control plane gating, agent sandboxing, audit trail. No single layer is the sole defense.
+10. **Defense in depth: six security layers.** Org isolation (database-per-org), authentication, authorization (permissive via templates with instance-safety floor), control plane gating, agent sandboxing, audit trail. No single layer is the sole defense.
 
 11. **Threat model centered on rogue agent behavior, not external attackers.** The primary threats are agents acting beyond their boundaries, cost explosions, and secret exposure. External attack surface (DDoS, brute force) matters for managed deployments and is handled at the infrastructure layer.
 
@@ -813,28 +766,22 @@ Pricing is maintained by the OtterCamp team for managed deployments. Self-hosted
 
 13. **Circuit breakers on all external dependencies.** Model providers, MCP servers, git remotes. Open after consecutive failures or high error rate. Half-open after configurable interval. Fail fast, not fail slow.
 
-14. **Cost aggregation: hourly, daily, monthly summaries.** Raw invocation records retained for 30 days. Summaries retained indefinitely. Aggregation runs as a periodic background job.
+14. **Token-based cost tracking, not USD.** The system tracks tokens per model per connection (see 07-models-and-inference.md). No provider pricing table at V2 launch — USD estimation can be added later as a UI layer on top of token counts using an optional provider pricing config. Raw invocation records retained for 30 days; `model_usage_rollup` summaries retained indefinitely.
 
-15. **Anomaly detection via hourly spend rate comparison.** 3x the 7-day average triggers an alert. Deduplicated to at most one alert per hour per org.
+15. **Anomaly detection via hourly token rate comparison.** 3x the 7-day average triggers an alert. Deduplicated to at most one alert per hour per org.
 
-16. **Budget enforcement in the control plane broker.** Pre-check before dispatching model invocations. Soft limits warn (once per period). Hard limits block (deny with reason `budget_exceeded`).
+16. **Budget enforcement in the control plane broker.** Pre-check before dispatching model invocations. Budgets expressed in tokens. Soft limits warn (once per period). Hard limits deny non-essential capabilities (essential capabilities like filing blockers remain allowed).
 
 17. **Redaction is human-only.** Agents cannot redact chat messages. This prevents agents from covering their tracks.
 
 18. **Trace sampling defaults to 100%.** Error traces always recorded regardless of sampling rate. Configurable for high-volume deployments.
 
-19. **Provider pricing in application configuration, not database.** Maintained by OtterCamp team for managed. Overridable by self-hosted operators. Unknown models tracked at $0.00 with warning.
+19. **Master key rotation is supported without downtime.** Application supports reading secrets encrypted with any known key version. Background job re-encrypts all secrets with the new key.
 
-20. **Master key rotation is supported without downtime.** Application supports reading secrets encrypted with any known key version. Background job re-encrypts all secrets with the new key.
-
-21. **Inference context replay via structured metadata on model_invocation.** Per-layer token counts, memory injection manifest, compression/truncation events stored in `model_invocation.metadata`. Combined with prompt/response capture in object storage, enables full reconstruction of what the agent saw when it made a decision. Follows same 30-day retention as invocation logs. Inspired by context engineering trace envelope patterns.
+20. **Inference context replay via structured metadata on model_invocation.** Per-layer token counts, memory injection manifest, compression/truncation events stored in `model_invocation.metadata`. Combined with prompt/response capture in object storage, enables full reconstruction of what the agent saw when it made a decision. Follows same 30-day retention as invocation logs. Inspired by context engineering trace envelope patterns.
 
 ## Open Questions
 
-1. **Per-agent budget limits**: should budgets be configurable per agent in addition to per-org and per-project? This would let the operator cap a specific agent's spend. Current design requires the operator to limit the agent's model profile or project assignment instead.
+1. **Per-agent token budgets**: should budgets be configurable per agent in addition to per-org and per-project? Doc 05's agent table includes `budget_cap_cents` and `budget_period` columns, and doc 16 describes per-agent budget enforcement. Two sub-questions: (a) How does per-agent budget interact with org-level and project-level `token_budget`? Priority order? Additive or independent? (b) Doc 05 uses cents (`budget_cap_cents`) while doc 13's token_budget system is entirely token-based — these units are incompatible. Either the agent-level budget should be converted to tokens (and the column renamed), or a conversion layer is needed. This must be reconciled before the budget enforcement path in doc 16 can compare across levels.
 
-2. **Cost allocation for shared operations**: when an org-level agent (Frank, Ellie) performs work that benefits a specific project, should the cost be allocated to the project or to the org? Currently, cost follows the `project_id` on the `ModelInvocation` — org-level agents without a project context are org-level costs.
-
-3. **Alerting channels**: the built-in alerting surfaces to the web UI activity feed and inbox. Should OtterCamp also support external alerting (email, Slack webhook, PagerDuty) for cost and reliability alerts? Or is that a post-GA integration?
-
-4. **Log retention for self-hosted**: should OtterCamp offer built-in log rotation and retention, or is stdout-to-infrastructure sufficient? Current design outputs to stdout and lets the deployment environment handle retention.
+2. **Alerting channels**: the built-in alerting surfaces to the web UI activity feed and inbox. Should OtterCamp also support external alerting (email, Slack webhook, PagerDuty) for usage and reliability alerts? Or is that a post-GA integration?

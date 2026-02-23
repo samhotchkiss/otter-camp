@@ -1,9 +1,9 @@
 ---
 ## Summary
 
-This spec defines the migration and backward compatibility policy for OtterCamp V2: a clean-room rebuild that shares no code, schema, or data with V1. V1 was architecturally bound to OpenClaw for agent orchestration, and since V2 replaces OpenClaw with direct in-app orchestration, there is no incremental migration path. V2 starts from an empty database, runs its own DDL, and populates itself through a bootstrap flow that seeds a minimum dataset: the starter trio of agents (Frank, Lori, Ellie), two default flow templates ("Single Work Node" and "Work + Review"), a safety policy skill, a default Anthropic Claude model profile, and the "General" org-level chat session. Bootstrap is idempotent -- it runs only when no organization row exists.
+This spec defines the migration and backward compatibility policy for OtterCamp V2: a clean-room rebuild that shares no code, schema, or data with V1. V1 was architecturally bound to OpenClaw for agent orchestration, and since V2 replaces OpenClaw with direct in-app orchestration, there is no incremental migration path. V2 starts from an empty database, runs its own DDL, and populates itself through a bootstrap flow that seeds a minimum dataset: the starter trio of agents (Frank, Lori, Ellie), four default flow templates, two org-default skills (Safety and Communication Policies, General Work Standards), three Anthropic model profiles (high-capability, standard, Haiku), a default org policy, and the "General" org-level chat session. Bootstrap is idempotent -- it runs only when no organization row exists.
 
-The only data bridge between V1 and V2 is an optional JSONL memory import path. V1 conversation transcripts can be exported as JSONL, uploaded as a zip, and processed through V2's full extraction pipeline (garbage rejection, LLM extraction, scoring, normalization, embedding, and dedup). Imported memories receive `source_type = 'import'` and a trust tier of 0.6 (medium-low), meaning they start at lower confidence than V2-native memories and require corroboration to be promoted. No extraction stage is skipped -- V1 data must meet V2's quality standards. No other V1 data (projects, tasks, chat history, agent profiles) is importable; only memory is considered worth bridging, since structural data can be quickly recreated through conversation.
+The only data bridge between V1 and V2 is an optional JSONL memory import path. V1 conversation transcripts can be exported as JSONL, imported via the CLI (`ottercamp memory import`), and processed through V2's full extraction pipeline (garbage rejection, LLM extraction, scoring, normalization, embedding, and dedup). Imported memories receive `source_type = 'import'` and a trust tier of 0.6 (medium-low), meaning they start at lower confidence than V2-native memories and require corroboration to be promoted. No extraction stage is skipped -- V1 data must meet V2's quality standards. No other V1 data (projects, tasks, chat history, agent profiles) is importable; only memory is considered worth bridging, since structural data can be quickly recreated through conversation.
 
 V2's API is entirely new with no backward compatibility layer, no migration shims, and no V1 endpoint emulation. External integrations must be rewritten. V1 archives (database backups, JSONL exports, source code, documentation) are retained indefinitely in cold storage but are never queried at runtime. The rollback strategy is forward-only: if V2 has issues, fix them in V2. V1 restoration is a documented last resort but depends on OpenClaw availability and loses all V2-era data. Cutover is human-initiated -- the user installs V2, bootstraps it, optionally imports V1 memories, and starts working. There is no automated migration phase, no parallel-run reconciliation, and no cutover script. The document includes a comprehensive pre-launch validation checklist covering fresh install, core workflows, auth, observability, memory import, and deployment.
 
@@ -109,7 +109,7 @@ This distinction matters: the importer is a general-purpose feature designed for
 ### How It Works
 
 1. A human exports V1 memory data as JSONL files (using V1's export tooling, which runs against the V1 archive).
-2. The human uploads a zip of those JSONL files to V2 through the chat interface or API.
+2. The human uploads JSONL files to V2 via the CLI (`ottercamp memory import <path>`).
 3. V2's importer processes every JSONL file through the full extraction pipeline — the same pipeline that processes ongoing conversations:
    - Stage 0: Garbage pattern rejection (deterministic pre-filter)
    - Stage 1: LLM extraction (Haiku-class model)
@@ -140,9 +140,11 @@ The quality of imported memories is limited by the quality of V1's JSONL exports
 - The import trust tier (0.6) means imported memories start with a lower confidence cap than memories from direct V2 conversations (0.8) or human statements (1.0). This is deliberate — imported data has not been verified in the V2 context.
 - Imported memories can be promoted to higher confidence through corroboration: if a V2 conversation confirms information from an import, the memory's confidence cap rises based on the new, higher-trust source.
 
-### Import Is Optional
+### Import Is Optional and Ongoing
 
 The JSONL import is entirely optional. V2 is fully functional without any V1 data. Organizations that are new to OtterCamp will never use this feature. Organizations migrating from V1 can choose to import historical memory data or start completely fresh — either path is supported.
+
+The importer is a permanent CLI capability, not a one-time migration tool. The operator can run `ottercamp memory import` at any point — during initial setup, weeks later when they realize they want historical context, or whenever they have new JSONL data from any source. There is no UI for this; it is CLI-only.
 
 ### No Other Data Bridges
 
@@ -156,7 +158,7 @@ The JSONL memory importer is the only data bridge between V1 and V2. There is no
 
 ### What Happens on First V2 Install
 
-When V2 starts for the first time with an empty database, the bootstrap sequence runs (as defined in doc 04, Bootstrap Flow section):
+When V2 starts for the first time with an empty database, the bootstrap sequence runs (fully specified in doc 14, Bootstrap Dataset section; doc 04 covers the auth-relevant subset):
 
 1. **Run schema migrations.** Create all database tables from the V2 DDL defined across specs. The migration system (doc 08) runs automatically on startup.
 
@@ -164,48 +166,48 @@ When V2 starts for the first time with an empty database, the bootstrap sequence
 
 3. **Create first user.** The operator provides an email and password. This user is created as the `owner` of the default org.
 
-4. **Seed starter trio.** The three foundational agents are created:
+4. **Create org-level skills repo and populate with default skills.** The org skills repo is created and seeded with identity skills for the starter trio and PM, plus two org-default skills: Safety and Communication Policies (sensitive info handling, escalation, communication boundaries) and General Work Standards (commit conventions, handling ambiguity, blocker vs workaround). See doc 10.
+
+5. **Seed model profiles.** Three system-provided model profiles (doc 07):
+   - **High-capability**: Anthropic Claude Opus (or current best). Default for Frank, Lori, PMs. Assigned as the org default.
+   - **Standard**: Anthropic Claude Sonnet (or current mid-tier). Default for workers and reviewers. Falls back to high-capability.
+   - **Haiku**: Anthropic Claude Haiku (or current fast/cheap tier). Used for listening evals, summarization, memory extraction, and memory synthesis.
+
+6. **Seed default flow templates.** System-provided flow templates (null `project_id`, doc 03):
+   - **"Single Step"**: one work node, no review. For simple, self-contained tasks.
+   - **"Work + Review"**: work node → review node (reject loops back). The standard pattern for most tasks.
+   - **"Work + Code Review + Human Review"**: work → agent code review → human review gate. For sensitive changes.
+   - **"Research"**: single work node, no review. For exploration tasks where the deliverable is knowledge, not code.
+
+   PMs design additional templates through conversation as projects require them.
+
+7. **Seed starter trio.** The three foundational agents are created:
    - **Frank** (Chief of Staff): org-level, the human's primary touchpoint, default responder in the org session.
    - **Lori** (Agent Relations Expert): handles staffing and hiring agents for projects.
    - **Ellie** (Memory): dual role — background memory infrastructure AND conversational agent for memory queries.
 
-   Each agent is created with its full profile: identity metadata, prompt pack, default tool policy, and default model policy (doc 05).
+   Each agent is created with its full profile: identity metadata, prompt pack (including identity skill from step 4), default tool policy, and model policy assignment (doc 05).
 
-5. **Create default flow templates.** The minimum set of flow templates that ship with V2:
-   - **"Single Work Node"**: a one-step flow — an agent does the work. Suitable for simple, self-contained tasks where no review is needed.
-   - **"Work + Review"**: a two-step flow — one agent does the work, another reviews it. The standard pattern for most tasks.
+8. **Create org session.** The persistent org-level chat session ("General") is created with Frank as the default responder. Participants: the human (owner), Frank (default responder), Lori (participant), Ellie (listener).
 
-   These templates are org-scoped and serve as starting points. The PM designs additional templates through conversation as projects require them.
+9. **Seed default org policy.** The default organization policy: communication tools create drafts, CLI and browser require capability grants, MCP tools require per-connection grants, max tool calls per turn (50), max turn duration limits (doc 16).
 
-6. **Create default org skills.** The minimum set of skills that ship with V2:
-   - **Safety policy**: baseline safety constraints that apply to all agents. Defines what agents must never do (e.g., never execute destructive operations without approval, never expose credentials in output).
-
-   This skill is always-active at the org level — it is loaded into every agent's prompt at layer 2 (policies and constraints, doc 05).
-
-7. **Create default model profile.** The default inference configuration:
-   - **Provider**: Anthropic.
-   - **Model**: Claude (the current recommended model at time of release).
-   - **Configuration**: standard defaults for temperature, max tokens, etc.
-
-   This profile is the org-level default. Agents use it unless overridden by a project-level or agent-level model policy.
-
-8. **Create org session.** The persistent org-level chat session ("General") is created with Frank as the default responder. The human, Frank, Lori, and Ellie are added as participants.
-
-9. **Record bootstrap event.** An audit event records that bootstrap completed, including the org ID, user ID, and agent IDs created.
+10. **Record bootstrap event.** An audit event records that bootstrap completed, including the org ID, user ID, and agent IDs created.
 
 ### Minimum Bootstrap Dataset
 
-The minimum bootstrap dataset is the set of data that ships with every V2 installation. It is not configurable — every V2 instance starts with exactly this data:
+The minimum bootstrap dataset is the set of data that ships with every V2 installation. It is not configurable — every V2 instance starts with exactly this data. See doc 14 (Bootstrap Dataset section) for the complete specification including profiles, tool policies, and configuration details.
 
 | Entity | Contents | Source Doc |
 |--------|----------|------------|
 | Organization | One org (self-hosted) or org-per-tenant (managed) | Doc 04 |
 | Human User | One owner user | Doc 04 |
-| Agents | Frank, Lori, Ellie (starter trio) | Docs 04, 05 |
-| Flow Templates | "Single Work Node", "Work + Review" | Doc 03 |
-| Skills | Safety policy | Doc 10 |
-| Model Profile | Anthropic Claude default | Doc 07 |
-| Chat Session | "General" org session | Doc 02 |
+| Skills Repo | Org-level skills repo with identity skills (Frank, Lori, Ellie, PM) and two org defaults | Doc 10 |
+| Model Profiles | High-capability, standard, and Haiku (all Anthropic) | Doc 07 |
+| Flow Templates | "Single Step", "Work + Review", "Work + Code Review + Human Review", "Research" | Doc 03 |
+| Agents | Frank, Lori, Ellie (starter trio) with profiles, skills, and tool policies | Docs 04, 05 |
+| Chat Session | "General" org session (Frank as default responder, Ellie as listener) | Doc 02 |
+| Org Policy | Default org policy (communication drafts, capability grants, turn limits) | Doc 16 |
 | Audit Event | Bootstrap completed event | Doc 04 |
 
 This dataset is sufficient for a human to start using V2 immediately — open the TUI, talk to Frank, and begin working. Everything else (additional agents, projects, tasks, flow templates, skills, memory) is created through normal product usage.
@@ -296,8 +298,8 @@ Before V2 is considered launch-ready, the following must be confirmed:
 - [ ] All schema migrations run without error.
 - [ ] Starter trio (Frank, Lori, Ellie) is created and operational.
 - [ ] Default flow templates are created and usable.
-- [ ] Default safety policy skill is created and loaded into agent prompts.
-- [ ] Default model profile is created and functional (inference succeeds).
+- [ ] Default org skills (Safety and Communication Policies, General Work Standards) are created and loaded into agent prompts.
+- [ ] Default model profiles (high-capability, standard, Haiku) are created and functional (inference succeeds).
 - [ ] Org session ("General") is created with correct participants.
 - [ ] Bootstrap is idempotent — restarting the application does not re-seed.
 
@@ -306,7 +308,7 @@ Before V2 is considered launch-ready, the following must be confirmed:
 - [ ] Human can @mention Lori and Ellie in conversation.
 - [ ] Human can create a project through conversation with Frank.
 - [ ] Human can create and manage tasks through conversation.
-- [ ] Tasks can execute through flow templates (single work node, work + review).
+- [ ] Tasks can execute through flow templates (Single Step, Work + Review).
 - [ ] Ellie extracts memories from conversations (implicit capture).
 - [ ] Ellie responds to direct memory queries (@mention).
 - [ ] Memory retrieval returns relevant results in new conversations (passive injection).
@@ -325,7 +327,7 @@ Before V2 is considered launch-ready, the following must be confirmed:
 - [ ] Error logging captures actionable information.
 
 **Memory Import (Optional Path)**
-- [ ] JSONL import via zip upload works end-to-end.
+- [ ] JSONL import via CLI (`ottercamp memory import`) works end-to-end.
 - [ ] Imported data goes through the full extraction pipeline (no stage is skipped).
 - [ ] Import job tracks progress and reports results.
 - [ ] Imported memories have `source_type = 'import'` and trust tier 0.6.
@@ -356,7 +358,7 @@ After V2 launches, monitor for:
 
 3. **V1 archives retained indefinitely.** No expiry on V1 database backups, memory exports, source code, or documentation. Cold storage, not active infrastructure.
 
-4. **Minimum bootstrap dataset defined.** Every V2 installation ships with: starter trio agent profiles (Frank, Lori, Ellie), default flow templates ("Single Work Node", "Work + Review"), default org skill (safety policy), default model profile (Anthropic Claude), org session ("General"). This is not configurable — it is the product's starting state.
+4. **Minimum bootstrap dataset defined.** Every V2 installation ships with: starter trio agent profiles (Frank, Lori, Ellie), four default flow templates, two org-default skills (Safety and Communication Policies, General Work Standards), three model profiles (high-capability, standard, Haiku), default org policy, and the "General" org session. Full specification in doc 14's Bootstrap Dataset section. This is not configurable — it is the product's starting state.
 
 5. **No V1 API backward compatibility.** V2's API is entirely new. No migration shims, no compatibility adapters, no V1 endpoint emulation. External integrations must be rewritten.
 
@@ -368,6 +370,8 @@ After V2 launches, monitor for:
 
 9. **Import trust tier is 0.6 (medium-low).** Imported memories cannot exceed 0.6 initial confidence without subsequent corroboration from a higher-trust source. This reflects the inherent uncertainty of historical data processed out of its original context.
 
+10. **JSONL import is CLI-only and permanently available.** `ottercamp memory import` is a permanent CLI capability, not exposed in the web UI. The operator can import at any time — during initial setup, weeks later, or whenever they have new JSONL data from any source.
+
 ## Open Questions
 
 - **Starter trio profile updates on upgrade**: when a new OtterCamp version ships with updated prompt packs, policies, or tool configurations for the starter trio (Frank, Lori, Ellie), how are those applied to existing installs? Bootstrap is idempotent and skips if an org exists, so upgrades need a different mechanism. Options: forward-only migration that patches agent rows, a "system profile version" check on startup, or a manual `ottercamp upgrade-agents` CLI command. Flagged from doc 04.
@@ -378,4 +382,4 @@ All other questions from the original skeletal spec have been resolved:
 
 - **"How long do we keep V1 archives available internally?"** — Resolved: indefinitely. No expiry on V1 archives. They move to cold storage but are never deleted.
 
-- **"What minimum bootstrap dataset (if any) should ship with V2?"** — Resolved: starter trio agent profiles, default flow templates ("Single Work Node", "Work + Review"), default org skill (safety policy), default model profile (Anthropic Claude), org session ("General"). This dataset ships with every V2 installation.
+- **"What minimum bootstrap dataset (if any) should ship with V2?"** — Resolved: starter trio agent profiles, four default flow templates, two org-default skills, three model profiles, default org policy, org session ("General"). Full specification in doc 14's Bootstrap Dataset section. This dataset ships with every V2 installation.

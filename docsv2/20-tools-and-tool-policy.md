@@ -1,11 +1,11 @@
 ---
 ## Summary
 
-This spec defines the complete tool system for OtterCamp V2 -- how agents discover, access, and execute tools. Tools are what transform agents from conversation partners into operators that can act on the world. The system answers four questions for every tool call: what tools exist, which does this agent have, what is allowed right now, and how does it execute. All tools fall into exactly one of four categories: Native (shipped with OtterCamp, operating on domain entities like tasks/projects/memory), System (filesystem and CLI access within sandboxed workspaces), Browser (web interaction in isolated contexts), and MCP (dynamically discovered from external MCP servers).
+This spec defines the complete tool system for OtterCamp V2 -- how agents discover, access, and execute tools. Tools are what transform agents from conversation partners into operators that can act on the world. The system answers four questions for every tool call: what tools exist, which does this agent have, what is allowed right now, and how does it execute. All tools fall into exactly one of four categories: Native (shipped with OtterCamp, operating on domain entities like tasks/projects/memory), System (filesystem and CLI access within sandboxed workspaces), Browser (web interaction in isolated contexts), and External (remote APIs and MCP servers — any service outside OtterCamp's control).
 
-The core architectural pattern is a two-tier execution model. Tier 1 tools are read-only operations (listing tasks, querying memory, reading files) that execute directly in the chat layer with a simple scope check -- fast and lightweight since reads vastly outnumber writes in a typical agent turn. Tier 2 tools are mutations and external calls that route through the full control plane pipeline: policy evaluation (allow/deny), broker execution, sandboxing, and RunStep audit trail. Tier assignment is static and defaults to tier 2; tier 1 is a strict whitelist. All MCP and browser tools are always tier 2 with no exceptions.
+The core architectural pattern is a two-tier execution model. Tier 1 tools are read-only operations (listing tasks, querying memory, reading files) that execute directly in the chat layer with a simple scope check -- fast and lightweight since reads vastly outnumber writes in a typical agent turn. Tier 2 tools are mutations and external calls that route through the full control plane pipeline: policy evaluation (allow/deny), broker execution, sandboxing, and RunStep audit trail. Tier assignment is static and defaults to tier 2; tier 1 is a strict whitelist. All external and browser tools are always tier 2 with no exceptions.
 
-Tool availability is determined by a four-stage resolution pipeline that runs once per turn: (1) Universe -- all native plus active MCP tools, (2) Agent Profile Filter -- allow/deny lists with glob patterns from the agent's profile (e.g., Frank gets project/task/session tools but no system or browser tools), (3) Flow Node Filter -- a soft deprioritization for prompt budget, not a hard access gate, (4) Capability Gate -- tier 2 tools require matching control plane capabilities. The resolved tool set is cached per session for stability. The native catalog ships approximately 40 tools across 7 domains (project, chat, memory, agent, system, browser, communication). Key schema tables are `tool_definition` (native tool metadata, populated at startup) and `session_tool_set` (per-agent, per-session cache of resolved tools for debugging). Communication tools (email, Slack) create drafts as their designed behavior -- the tool succeeds and stages the action in the human's inbox for review. This is tool behavior, not a policy interception.
+Tool availability is determined by a four-stage resolution pipeline that runs once per session: (1) Universe -- all native plus enabled external tools, (2) Agent Profile Filter -- allow/deny lists with glob patterns from the agent's profile (e.g., Frank gets project/task/session tools but no system or browser tools), (3) Flow Node Filter -- a soft deprioritization for prompt budget, not a hard access gate, (4) Capability Gate -- tier 2 tools require matching control plane capabilities. The resolved tool set is cached per session for stability. The native catalog ships approximately 55 tools across 7 domains (project, chat, memory, agent, system, browser, communication). Key schema tables are `tool_definition` (native tool metadata, populated at startup) and `session_tool_set` (per-agent, per-session cache of resolved tools for debugging). Communication tools (email, Slack) create drafts as their designed behavior -- the tool succeeds and stages the action in the human's inbox for review. This is tool behavior, not a policy interception.
 
 ---
 
@@ -31,7 +31,7 @@ Native tools are defined in code, versioned with the application, and always ava
 
 Tools that give agents controlled access to the local execution environment — the filesystem, CLI, and codebase. These operate within sandboxed workspaces scoped to the project's git repo.
 
-System tools are always available but heavily policy-gated. The capabilities `system.cli.execute`, `system.file.write`, `system.browser.navigate`, and `system.browser.interact` (doc 16) gate access.
+System tools are always available but heavily policy-gated. The capabilities `system.cli.execute` and `system.file.write` (doc 16) gate access to CLI and file write operations.
 
 ### Category 3: Browser Tools
 
@@ -39,15 +39,15 @@ Tools for web interaction — navigating pages, clicking elements, extracting co
 
 Separated from system tools because browser execution has distinct isolation requirements (domain allowlists/denylists, per-run contexts, artifact capture) and a different risk profile.
 
-### Category 4: MCP Tools
+### Category 4: External Tools (MCP and Remote APIs)
 
-Tools dynamically discovered from connected MCP servers (doc 09). These are external — they call services outside OtterCamp's control. An MCP tool's schema, description, and capabilities come from the MCP server at connection time, not from OtterCamp's codebase.
+Tools that interact with services outside OtterCamp's control. The primary integration protocol is MCP (Model Context Protocol, doc 09), but this category covers any remote API interaction — MCP servers, REST APIs, GraphQL endpoints, or any external service an agent needs to call. The common thread is that the tool's implementation lives outside OtterCamp and its behavior is outside OtterCamp's control.
 
-MCP tools are the only category that is not statically known. They appear and disappear as MCP connections are added, removed, or updated. Once discovered, they participate in the same policy pipeline as native tools.
+External tools are the only category that is not statically known. They appear and disappear as connections are added, removed, or updated. Once discovered, they participate in the same policy pipeline as native tools. All external tools are tier 2 with no exceptions — external calls cannot be verified as side-effect-free.
 
 ## Native Tool Catalog
 
-The complete set of tools that ship with OtterCamp before any MCP connections are configured. Grouped by domain. Each tool is tagged with its execution tier (see Two-Tier Execution below).
+The complete set of tools that ship with OtterCamp before any external connections are configured. Grouped by domain. Each tool is tagged with its execution tier (see Two-Tier Execution below).
 
 ### Project and Task Domain
 
@@ -55,6 +55,8 @@ The complete set of tools that ship with OtterCamp before any MCP connections ar
 |---|---|---|
 | `project.list` | List projects the agent has access to | 1 (read) |
 | `project.get` | Get project details, context block, repo info | 1 (read) |
+| `project.create` | Create a new project with name, description, and initial configuration | 2 (mutation) |
+| `project.update` | Update project metadata: description, context block, settings | 2 (mutation) |
 | `task.list` | List tasks in a project, filterable by status/priority/assignee | 1 (read) |
 | `task.get` | Get task details: description, acceptance criteria, constraints, flow state, dependencies | 1 (read) |
 | `task.create` | Create a new task in a project with title, description, flow template, priority | 2 (mutation) |
@@ -72,11 +74,16 @@ The complete set of tools that ship with OtterCamp before any MCP connections ar
 | `inbox.list` | List pending inbox items for the human | 1 (read) |
 | `merge_queue.status` | Get merge queue status for a project | 1 (read) |
 | `schedule.list` | List task schedules for a project | 1 (read) |
+| `schedule.create` | Create a recurring task schedule with cron expression and overlap policy | 2 (mutation) |
+| `schedule.update` | Update schedule: cron expression, overlap policy, enabled/disabled | 2 (mutation) |
+| `schedule.delete` | Delete a task schedule | 2 (mutation) |
+| `flow.create_template` | Create a new flow template with nodes, edges, and skill declarations | 2 (mutation) |
 
 ### Chat and Session Domain
 
 | Tool | Description | Tier |
 |---|---|---|
+| `session.list` | List sessions the agent has access to, filterable by scope | 1 (read) |
 | `session.get` | Get session metadata: scope, mode, participants | 1 (read) |
 | `session.history` | Read conversation history from a session (within permitted scope) | 1 (read) |
 | `session.create` | Create a new session at a scope | 2 (mutation) |
@@ -99,6 +106,7 @@ The complete set of tools that ship with OtterCamp before any MCP connections ar
 | `agent.list` | List agents available in the current scope (org, project) | 1 (read) |
 | `agent.get` | Get agent profile details: role, skills, tool policy | 1 (read) |
 | `agent.create_temp` | Create a temporary agent for specialized work | 2 (mutation) |
+| `agent.update` | Update agent profile: tool policy, model policy, memory policy, skills | 2 (mutation) |
 
 ### System Domain
 
@@ -139,11 +147,11 @@ Communication tools create drafts as their designed behavior — the tool succee
 
 ### Catalog Size and Scope
 
-The native catalog above contains approximately 40 tools across 7 domains. This is the full set that ships with OtterCamp. It is intentionally bounded:
+The native catalog above contains approximately 55 tools across 7 domains. This is the full set that ships with OtterCamp. It is intentionally bounded:
 
 - Every tool maps to a real operation agents need to perform.
 - There are no "convenience" tools that bundle multiple operations.
-- There is no tool for creating new tools at runtime — all tools are either native (shipped with OtterCamp) or from MCP servers. Agents cannot create new tools.
+- There is no tool for creating new tools at runtime — all tools are either native (shipped with OtterCamp) or from external connections. Agents cannot create new tools.
 
 ## Two-Tier Execution
 
@@ -164,7 +172,7 @@ How the agent understands its environment. No side effects. Executed directly in
 - `subtask.list`, `subtask.get`
 - `flow.get_template`, `flow.get_execution`
 - `inbox.list`, `merge_queue.status`, `schedule.list`
-- `session.get`, `session.history`
+- `session.list`, `session.get`, `session.history`
 - `memory.query`
 - `agent.list`, `agent.get`
 - `file.read`, `file.list`, `file.search`
@@ -197,7 +205,7 @@ These change state or reach outside OtterCamp. Full control plane path (doc 16):
 - All mutation tools from the native catalog
 - All browser tools
 - All communication tools
-- All MCP tools (every MCP call is tier 2, no exceptions)
+- All external tools (every remote API call is tier 2, no exceptions)
 
 **Execution path:**
 ```
@@ -220,17 +228,17 @@ In a typical async turn, an agent might do 30 reads and 3 writes. Running 30 rea
 1. **Default is tier 2.** When in doubt, it is tier 2. The cost of running a read through the control plane is latency overhead. The cost of running a mutation through the chat layer is missing audit trail and policy checks.
 2. **Tier 1 is a whitelist.** Only tools explicitly listed as tier 1 bypass the control plane. The list above is exhaustive.
 3. **Tools may migrate from tier 1 to tier 2** if requirements change (e.g., adding rate limiting or compliance logging to file reads). Migration never goes the other direction — a tool does not move from tier 2 to tier 1.
-4. **MCP tools are always tier 2.** External calls are never side-effect-free from OtterCamp's perspective, even if the MCP server claims the operation is read-only. We cannot verify that claim.
+4. **External tools are always tier 2.** Remote API calls are never side-effect-free from OtterCamp's perspective, even if the server claims the operation is read-only. We cannot verify that claim.
 
 ## Tool Resolution Pipeline
 
-When an agent takes a turn, it needs a concrete set of tools. The tool set is determined by a four-stage resolution pipeline that runs once at the start of each turn, as part of prompt assembly (doc 05, layer 7).
+When an agent joins a session, it needs a concrete set of tools. The tool set is determined by a four-stage resolution pipeline that runs once at session start (or the agent's first turn) and is cached for the session's lifetime. The resolved tools are used during prompt assembly (doc 05, layer 7).
 
 ### Stage 1: Universe
 
-Start with all registered tools — the full native catalog plus all tools from active MCP connections in the agent's scope.
+Start with all registered tools — the full native catalog plus all enabled tools from active external connections in the agent's scope.
 
-For MCP tools, "active MCP connections in the agent's scope" means: connections registered at the org level, plus connections registered at the project level for the agent's current project. Connection health is checked — tools from unhealthy connections (circuit breaker open, connection down) are excluded.
+For external tools, "active connections in the agent's scope" means: connections registered at the org level, plus connections registered at the project level for the agent's current project. Connection health is checked — tools from unhealthy connections (circuit breaker open, connection down) are excluded.
 
 ### Stage 2: Agent Profile Filter
 
@@ -242,17 +250,17 @@ Apply the agent's tool policy from its profile (doc 05). The agent profile carri
 The allow/deny model works on tool names with glob support:
 - `project.*` — all tools in the project domain
 - `file.write` — a specific tool
-- `mcp.*` — all MCP tools
-- `mcp.tool:<connection_id>:*` — all tools from a specific MCP connection
+- `github.*` — all tools from the "github" external connection (matches by slug)
+- `<slug>.*` — all tools from any specific external connection
 - `browser.*` — all browser tools
 - `*` — everything (the default allow list for unrestricted agents)
 
 **Starter trio defaults:**
-- **Frank** (Chief of Staff): `project.*`, `task.*`, `subtask.*`, `flow.*`, `session.*`, `memory.*`, `agent.*`, `inbox.*`, `schedule.*`. No system tools, no browser, no MCP. Frank operates at the organizational level — he creates tasks and coordinates, he does not execute.
-- **Lori** (Agent Relations): `agent.*`, `project.list`, `project.get`, `task.list`, `task.get`, `memory.query`. Lori manages staffing, not execution.
+- **Frank** (Chief of Staff): `project.*`, `task.*`, `subtask.*`, `flow.*`, `session.*`, `memory.*`, `agent.*`, `inbox.*`, `schedule.*`. No system tools, no browser, no external tools. Frank operates at the organizational level — he creates projects and tasks and coordinates, he does not execute.
+- **Lori** (Agent Relations): `agent.*`, `project.list`, `project.get`, `task.list`, `task.get`, `memory.query`. Lori manages agents (create, update, staff) but does not execute tasks.
 - **Ellie** (Memory): `memory.*`, `session.history`, `file.read`, `file.search`. Ellie reads broadly for memory extraction but does not mutate project state.
 
-Worker agents typically get the full catalog — they need system tools, file access, CLI, and potentially browser and MCP tools to do their jobs. Reviewer agents get read tools plus `flow.review_decision`.
+Worker agents typically get the full catalog — they need system tools, file access, CLI, and potentially browser and external tools to do their jobs. Reviewer agents get read tools plus `flow.review_decision`.
 
 ### Stage 3: Flow Node Filter (Contextual)
 
@@ -270,21 +278,29 @@ Cross-reference the remaining tools against the agent's control plane capabiliti
 
 | Tool Domain | Required Capability |
 |---|---|
+| `project.create` | `project.create` |
+| `project.update` | `project.update` |
 | `task.create` | `project.task.create` |
-| `task.update` | `project.task.update` |
+| `task.update`, `task.add_dependency`, `task.remove_dependency` | `project.task.update` |
+| `subtask.create`, `subtask.update` | `project.task.update` |
 | `flow.advance`, `flow.review_decision` | `project.flow.advance` |
+| `flow.create_template` | `project.flow.create_template` |
+| `schedule.create`, `schedule.update`, `schedule.delete` | `project.schedule.manage` |
 | `file.write`, `file.delete` | `system.file.write` |
 | `cli.execute` | `system.cli.execute` |
 | `browser.navigate` | `system.browser.navigate` |
-| `browser.click`, `browser.type`, `browser.screenshot`, `browser.extract`, `browser.evaluate` | `system.browser.interact` |
+| `browser.click`, `browser.type`, `browser.evaluate` | `system.browser.interact` |
+| `browser.screenshot` | `system.browser.screenshot` |
+| `browser.extract` | `system.browser.extract` |
 | `git.commit` | `system.file.write` |
 | `session.create` | `chat.session.create` |
 | `session.invite_agent` | `chat.participant.add` |
 | `message.send` | `chat.message.write` |
 | `memory.record` | `memory.write` |
+| `agent.update` | `agent.update` |
 | `agent.create_temp` | `agent.temp.create` |
-| MCP tools | `mcp.tool.invoke:<connection_id>:<tool_name>` |
-| `email.compose` | `comms.email.send` |
+| External tools (MCP, etc.) | `mcp.tool.invoke:<connection_id>:<tool_name>` |
+| `email.compose` | `comms.email.draft` |
 | `slack.post` | `comms.slack.post` |
 
 Tools that require a capability the agent does not hold are excluded from the tool set. They do not appear in the prompt and cannot be called.
@@ -294,7 +310,7 @@ Tier 1 tools bypass the capability gate — they are governed by scope checks at
 ### Pipeline Summary
 
 ```
-All registered tools (native + MCP)
+All registered tools (native + external)
   |
   v
 Agent profile allow/deny filter
@@ -335,7 +351,7 @@ When the token budget is tight, tool descriptions are the first thing reduced:
 3. **Compact descriptions**: if still over budget, tool descriptions are shortened to name + one-line summary, dropping parameter schemas. The agent can still call the tool — the model has general knowledge of common tool patterns — but loses the specific parameter documentation.
 4. **Essential tools only**: in extreme budget pressure, only tools directly relevant to the current task scope are included. For a task-scoped session, this means the task/flow/file/cli tools. For an org-scoped session, this means project/agent/memory tools.
 
-In practice, tool descriptions are small relative to other layers. The full native catalog of ~40 tools with complete descriptions consumes roughly 3,000-4,000 tokens — a fraction of most context windows. Budget pressure on tools typically only occurs when MCP connections contribute dozens of additional tools.
+In practice, tool descriptions are small relative to other layers. The full native catalog of ~55 tools with complete descriptions consumes roughly 4,000-5,000 tokens — a fraction of most context windows. Budget pressure on tools typically only occurs when external connections contribute dozens of additional tools.
 
 ### Caching and Versioning
 
@@ -343,7 +359,7 @@ Tool descriptions are cached and versioned. They do not change mid-session:
 
 - The resolved tool set is computed at session start (or on the first turn) and cached.
 - Within a session, the tool set is stable — tools do not appear or disappear between turns.
-- If MCP connections change or agent capabilities are updated, the new tool set takes effect on the next session, not the current one.
+- If external connections change or agent capabilities are updated, the new tool set takes effect on the next session, not the current one.
 - The tool set version is stored on the session metadata for debugging.
 
 This avoids a class of confusing agent behavior where a tool is available on turn 3 but gone on turn 4. Stability within a session matters more than instant reactivity to configuration changes.
@@ -374,7 +390,7 @@ The profile tool policy answers: "what tools does this agent have access to?" It
 
 ### Control Plane Capability Policy (Permission)
 
-Defined in the control plane (doc 16). Determines whether a specific tool call is allowed, denied, or requires approval at runtime. Evaluated on every tier 2 tool call.
+Defined in the control plane (doc 16). Determines whether a specific tool call is allowed or denied at runtime. Evaluated on every tier 2 tool call.
 
 The capability model answers: "is this agent allowed to perform this specific action right now?" It is the fine filter.
 
@@ -400,7 +416,7 @@ Is task.create tier 1 or tier 2?
   -> Tier 2: route to control plane
   |
   v
-Does agent hold project.task.update capability?
+Does agent hold project.task.create capability?
   -> No: deny (this should not happen if stage 4 resolution is correct)
   -> Yes: continue
   |
@@ -424,51 +440,55 @@ Communication tools (`email.compose`, `slack.post`) create drafts as their **des
 
 This is tool behavior, not policy. The distinction matters: the policy engine said "allow" — the agent has the communication capability. The tool then chose to stage a draft rather than send immediately, because creating drafts for human review is what communication tools do by design. The agent does the work of composing the action; the human does the work of approving it.
 
-## MCP Tool Integration
+## External Tool Integration
 
-MCP tools (doc 09) participate in the same pipeline as native tools, with additional considerations for their dynamic nature.
+External tools (currently via MCP, doc 09) participate in the same pipeline as native tools, with additional considerations for their dynamic nature.
 
 ### Discovery and Registration
 
-When an MCP connection is registered (org-level or project-level), OtterCamp's MCP client queries the server for its tool catalog. Each discovered tool is stored in `mcp_tool_catalog` (doc 09) with:
+When an external connection is registered (org-level or project-level), OtterCamp's client queries the server for its tool catalog. Each discovered tool is stored in `mcp_tool_catalog` (doc 09) with:
 
-- Connection ID
-- Tool name (namespaced as `mcp:<connection_id>:<tool_name>`)
+- Connection ID and slug
+- Tool name (namespaced as `<connection_slug>.<tool_name>`, e.g., `github.create_issue` — see doc 09)
 - Description (from the MCP server)
 - Input schema (JSON Schema, from the MCP server)
 - Output schema (if provided)
+
+Note: tool names use the connection slug (human-readable), while capability names use the connection UUID (e.g., `mcp.tool.invoke:<connection_id>:<tool_name>`). The slug provides readable prompt names; the UUID provides stable policy references.
+
+Discovered external tools default to disabled (`is_enabled = false` in `mcp_tool_catalog`, doc 09). The admin enables tools through conversation — Frank (org-level) or a PM (project-scoped) reports what was discovered and the admin decides which to enable. This is a critical security gate — a newly connected server's tools are visible but inert until explicitly enabled through conversation.
 
 The MCP tool catalog is refreshed on connection health checks. New tools appear, removed tools disappear. But per the caching rule above, changes take effect on the next session, not the current one.
 
 ### Policy Integration
 
-MCP tools are subject to the same four-stage resolution pipeline:
+External tools are subject to the same four-stage resolution pipeline:
 
 1. **Universe**: included if the connection is in the agent's scope.
-2. **Agent profile**: matched against allow/deny patterns. `mcp.*` matches all MCP tools. `mcp.tool:<connection_id>:*` matches all tools from a specific connection. `mcp.tool:<connection_id>:search` matches one specific tool.
-3. **Flow node**: deprioritized if the node does not declare MCP-relevant domains.
+2. **Agent profile**: matched against allow/deny patterns. `github.*` matches all tools from the "github" connection. `github.create_issue` matches one specific tool. Patterns use connection slugs, not UUIDs.
+3. **Flow node**: deprioritized if the node does not declare relevant tool domains.
 4. **Capability gate**: requires `mcp.tool.invoke:<connection_id>:<tool_name>` or the broader `mcp.connection.use:<connection_id>`.
 
 ### Execution
 
-All MCP tool calls are tier 2, no exceptions. The execution path:
+All external tool calls are tier 2, no exceptions. The execution path:
 
 1. Policy evaluation (allow/deny)
 2. Input validation against the stored JSON Schema
-3. Call to the MCP server via the connection
+3. Call to the external server via the connection
 4. Response capture and validation
 5. Timeout handling (per-connection and per-tool timeouts)
 6. Result returned to agent, logged as RunStep
 
-### MCP Tool Descriptions in Prompt
+### External Tool Descriptions in Prompt
 
-MCP tool descriptions are generated from the stored catalog, not from the MCP server at prompt assembly time. This ensures consistency within a session and avoids latency from MCP server calls during prompt assembly.
+External tool descriptions are generated from the stored catalog, not fetched from the server at prompt assembly time. This ensures consistency within a session and avoids latency from server calls during prompt assembly.
 
-The description format is the same as native tools. If the MCP server provides a rich description and parameter schema, those are used. If the description is sparse, the tool still appears with its name and parameter schema — the agent can reason about it from the name and schema alone.
+The description format is the same as native tools. If the server provides a rich description and parameter schema, those are used. If the description is sparse, the tool still appears with its name and parameter schema — the agent can reason about it from the name and schema alone.
 
-### MCP Tool Limits
+### External Tool Limits
 
-When an MCP connection provides many tools (10+), prompt budget becomes a concern. The resolution is the same as for native tools — deprioritized MCP tools are dropped first when budget is tight. The agent profile can also use deny patterns to exclude specific MCP tools that are not relevant to the agent's work.
+When a connection provides many tools (10+), prompt budget becomes a concern. The resolution is the same as for native tools — deprioritized external tools are dropped first when budget is tight. The agent profile can also use deny patterns to exclude specific external tools that are not relevant to the agent's work.
 
 ## Schema
 
@@ -480,9 +500,9 @@ Stores metadata for native tools. This table is populated at application startup
 create table tool_definition (
   id              uuid primary key default gen_random_uuid(),
   name            text not null unique,                     -- e.g., "task.create", "file.read"
-  domain          text not null,                            -- project, chat, memory, agent, system, browser, communication
-  category        text not null,                            -- native, system, browser, communication
-  tier            int not null,                             -- 1 = chat-layer (read), 2 = control-plane (mutation)
+  domain          text not null check (domain in ('project', 'chat', 'memory', 'agent', 'system', 'browser', 'communication')),
+  category        text not null check (category in ('native', 'system', 'browser', 'external')), -- matches the four-category taxonomy
+  tier            int not null check (tier in (1, 2)),       -- 1 = chat-layer (read), 2 = control-plane (mutation)
   description     text not null,                            -- human-readable description for prompt
   parameter_schema jsonb not null default '{}',             -- JSON Schema for tool parameters
   return_schema   jsonb,                                    -- JSON Schema for return value (optional)
@@ -512,7 +532,7 @@ Caches the resolved tool set for a session. Computed on the first turn, stable f
 create table session_tool_set (
   id              uuid primary key default gen_random_uuid(),
   session_id      uuid not null references chat_session(id),
-  agent_id        uuid not null,
+  agent_id        uuid not null references agent(id),
   tool_names      text[] not null,                          -- ordered list of tool names in the resolved set
   tool_versions   jsonb not null default '{}',              -- {tool_name: version} for debugging
   mcp_tools       jsonb not null default '[]',              -- [{connection_id, tool_name, schema_hash}]
@@ -527,12 +547,12 @@ create index on session_tool_set (session_id);
 Design notes:
 - One row per agent per session. Different agents in the same session may have different tool sets.
 - `tool_names` is the complete list of tools available to this agent in this session, in prompt inclusion order (highest priority first).
-- `mcp_tools` includes schema hashes so that MCP tool schema changes between sessions are detectable.
+- `mcp_tools` (name reflects MCP as the primary external protocol) includes schema hashes so that external tool schema changes between sessions are detectable.
 - This table is for debugging and observability. It is not on the critical path — the resolved tool set is held in memory during the session and persisted here for after-the-fact analysis.
 
 ### Cross-References
 
-- `mcp_tool_catalog` (doc 09): stores the discovered tools from each MCP connection. `tool_definition` covers native tools; `mcp_tool_catalog` covers MCP tools. Together they form the tool universe.
+- `mcp_tool_catalog` (doc 09): stores the discovered tools from each external connection. `tool_definition` covers native tools; `mcp_tool_catalog` covers external tools. Together they form the tool universe.
 - `tool_execution` (doc 16): the control plane's record of tier 2 tool executions. Links back to the tool name and captures input/output/timing.
 - `chat_message` (doc 02): tier 1 tool calls are recorded as `tool_call`/`tool_result` messages. Tier 2 tool calls are recorded in both `chat_message` and `tool_execution`.
 - `flow_node.tool_domains` (new field, optional): jsonb array of tool domain names that are relevant to this flow node. Used by stage 3 of the resolution pipeline.
@@ -580,34 +600,37 @@ Each tool has a per-call timeout:
 - **Tier 2 native tools**: 10-second default. Mutations are slightly more expensive but still fast.
 - **CLI execution**: configurable, default 60 seconds. Some commands are legitimately slow (builds, tests).
 - **Browser tools**: configurable, default 30 seconds. Page loads and interactions vary.
-- **MCP tools**: per-connection configurable, default 30 seconds. External services have variable latency.
+- **External tools**: per-connection configurable, default 30 seconds. Remote services have variable latency.
 
 Timeouts are enforced by the execution layer. A timed-out tool call returns a timeout error to the agent. The turn duration envelope (doc 02) provides the outer bound — individual tool timeouts are within that.
 
 ## Resolved Decisions
 
-- **Four tool categories**: native, system, browser, MCP. Every tool falls into exactly one. Browser is separated from system due to distinct isolation requirements and risk profile.
+- **Four tool categories**: native, system, browser, external. Every tool falls into exactly one. Browser is separated from system due to distinct isolation requirements and risk profile. External covers MCP servers and any remote API — the common trait is that the service is outside OtterCamp's control.
 - **Two-tier execution**: tier 1 (read-only, chat-layer) and tier 2 (mutations, control-plane). Tier is static, set at registration. Default is tier 2. Tier 1 is a whitelist.
-- **All MCP tools are tier 2**: external calls cannot be verified as side-effect-free. No exceptions.
+- **All external tools are tier 2**: remote API calls (MCP or otherwise) cannot be verified as side-effect-free. No exceptions.
 - **All browser tools are tier 2**: even screenshots have external side effects (network requests, cookies).
-- **No dynamic tool generation**: agents cannot create new tools at runtime. All tools are native (shipped) or MCP (discovered from servers).
+- **No dynamic tool generation**: agents cannot create new tools at runtime. All tools are native (shipped) or external (discovered from MCP servers or registered via API).
 - **Tool descriptions cached per session**: the resolved tool set is computed once and does not change mid-session. Configuration changes take effect on the next session.
 - **Four-stage resolution pipeline**: universe -> profile filter -> flow node filter -> capability gate. Each stage narrows the set.
 - **Flow node filter is a soft filter**: deprioritizes for prompt budget, does not exclude from callable set. Access control is handled by stages 2 and 4.
-- **Profile tool policy uses allow/deny with globs**: `project.*`, `mcp.tool:<connection_id>:*`, etc. Deny always wins over allow.
+- **Profile tool policy uses allow/deny with globs**: `project.*`, `github.*` (MCP connection slug), etc. Deny always wins over allow.
 - **Tool descriptions are lowest-priority prompt layer**: dropped first when budget is tight. Deprioritized tools (from flow node filter) are dropped before others.
 - **Compact description fallback**: when budget forces tool description reduction, names + one-line summaries replace full schemas. Agent can still call tools.
 - **Communication tool drafts are a normal result, not an error**: the tool succeeds and stages a draft. The agent's turn continues. Inbox item is created by the tool. Agent is not notified of the decision within the same turn.
 - **Parallel tier 1, sequential tier 2**: multiple tool calls in one model response follow this execution order.
 - **Error results, not exceptions**: all tool failures are returned as structured tool results the agent can interpret and adapt to.
-- **Native tool catalog is approximately 40 tools across 7 domains**: project, chat, memory, agent, system, browser, communication. This is the complete set.
+- **Native tool catalog is approximately 55 tools across 7 domains**: project, chat, memory, agent, system, browser, communication. This is the complete set.
 - **Capability revocation mid-session is enforced at execution time**: the tool description may still be in the prompt, but the call returns "not permitted." This is the guardrail, not the primary mechanism.
 - **Communication tools create drafts as their designed behavior**: emails, Slack posts, and similar external communications are staged for human review. This is tool behavior, not policy interception — the policy engine evaluates allow/deny for the capability, and the tool itself stages the draft.
 - **`memory.query` is tier 1**: it is a read operation on the memory system. All agents have access to it.
 - **`memory.record` is tier 2**: it creates durable state (a memory item). Goes through the control plane.
+- **External tools default to disabled**: discovered tools in `mcp_tool_catalog` have `is_enabled = false` until an admin explicitly enables them through conversation. This is defense-in-depth independent of the capability posture.
+- **Tool names use connection slugs, capability names use connection UUIDs**: external tool names (e.g., `github.create_issue`) use human-readable slugs for prompt clarity. Capability names (e.g., `mcp.tool.invoke:<uuid>:<tool_name>`) use stable UUIDs for policy evaluation.
+- **Tool resolution is per-session, not per-turn**: the four-stage pipeline runs once when an agent joins a session. The resolved set is cached and stable for the session's lifetime. Configuration changes take effect on the next session.
 
 ## Open Questions
 
 - **Tool usage analytics**: should we track per-agent, per-tool call frequency and success rate as a first-class metric? Useful for identifying agents that struggle with specific tools, or tools that fail frequently. Deferred to observability spec (doc 13).
-- **Tool versioning across MCP schema changes**: when an MCP server updates a tool's schema between sessions, how do we communicate the change to the agent? The cached-per-session model means the agent sees the old schema until next session. If schema changes are breaking, the tool call may fail with a validation error — is that sufficient, or do we need proactive notification?
+- **Tool versioning across external schema changes**: when an external server updates a tool's schema between sessions, how do we communicate the change to the agent? The cached-per-session model means the agent sees the old schema until next session. If schema changes are breaking, the tool call may fail with a validation error — is that sufficient, or do we need proactive notification?
 - **Bulk operations**: should there be a `task.create_batch` or similar tools for agents that need to create many items at once? Currently, an agent creating 10 subtasks makes 10 individual `subtask.create` calls. The overhead may be acceptable, or it may warrant batch tools.

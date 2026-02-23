@@ -7,7 +7,7 @@ The session sidebar organizes conversations hierarchically by scope: org-level (
 
 The main content area features several key views: a Dashboard with action items, project status, and a real-time activity feed; a Project View with a kanban-style task board (columns by work status), flow visualization, merge queue, and scheduled tasks; and a Task Detail view with progressive disclosure across three levels (board card, detail with flow stepper and subtask list, and per-node work logs). The Inbox is a separate action-required queue distinct from notifications -- every inbox item blocks progress somewhere until the human acts, with item types including task scoping reviews, work reviews, draft action reviews, escalations, and capability approvals. The activity feed provides real-time "proof of life" showing agent work, task transitions, merges, blockers, and memory system events via a live event bus.
 
-The chat pane supports rich content rendering (markdown, syntax-highlighted code, inline images, file references, artifacts), file upload via drag-and-drop or attachment button, a message queue with Edit/Steer/Delete controls for messages sent while an agent turn is in progress, lightweight reactions (double-click for thumbs-up, right-click for thumbs-down with optional feedback), and memory attribution indicators showing when agent responses drew on injected memories. Design principles emphasize: chat-primary interaction, real-time streaming by default, dark mode, keyboard-driven navigation (Superhuman-style command bar), operator-focused single-user design, and progressive disclosure to avoid overwhelming the user while keeping everything accessible.
+The chat pane supports rich content rendering (markdown, syntax-highlighted code, inline images, file references, artifacts), file upload via drag-and-drop or attachment button, a message queue with Edit/Steer/Delete controls for messages sent while an agent turn is in progress, lightweight reactions (double-click for thumbs-up, right-click for thumbs-down with optional feedback), and memory attribution indicators showing when agent responses drew on injected memories. Settings includes four observability dashboards (overview, usage, performance, agents); the Usage Explorer is the primary cost visibility tool, showing total tokens over time as a stacked area chart with five interactive drill-down dimensions (purpose, project, model, agent, provider) — clicking any chart segment filters the page, and filters compose across dimensions. Design principles emphasize: chat-primary interaction, real-time streaming by default, dark mode, keyboard-driven navigation (Superhuman-style command bar), operator-focused single-user design, and progressive disclosure to avoid overwhelming the user while keeping everything accessible.
 
 ---
 
@@ -494,6 +494,82 @@ Task: Implement Auth
 ```
 
 The work log is read-only — it shows what the agent did in its per-node async session. The human discusses the work in the task's sync session (chat pane), not in the work log.
+
+## Settings: Observability Dashboards
+
+Accessed from the main navigation (sidebar or top nav). Four dashboards live in the Settings/Observability section of the main content area (see 13-security-observability-costs.md for the full specification). The chat pane remains visible — the operator can ask agents questions about usage while viewing the data.
+
+### Usage Explorer
+
+The primary cost visibility tool. Designed for interactive exploration, not just summary display.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  USAGE                                                    [7d] [30d] [90d] │
+│                                                                       │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐               │
+│  │ 2.4M     │  │ 68%      │  │ ⚠ Spike detected     │               │
+│  │ tokens   │  │ of budget │  │ 3.2x avg (2h ago)    │               │
+│  │ today    │  │ (monthly) │  │                      │               │
+│  └──────────┘  └──────────┘  └──────────────────────┘               │
+│                                                                       │
+│  Group by: [Purpose] [Project] [Model] [Agent] [Provider]           │
+│  ┌───────────────────────────────────────────────────────────┐      │
+│  │                                                           │      │
+│  │  ████████████████████████████████  ← agent turns          │      │
+│  │  ████████████████                  ← summarization        │      │
+│  │  ██████████                        ← memory extraction    │      │
+│  │  ████                              ← memory synthesis     │      │
+│  │  ██                                ← listening eval       │      │
+│  │  ·····                             ← other                │      │
+│  │  |---------|---------|---------|                           │      │
+│  │  Feb 1     Feb 8     Feb 15    Feb 22                     │      │
+│  │                                                           │      │
+│  └───────────────────────────────────────────────────────────┘      │
+│  ↑ Click any segment to filter. Filters compose across dimensions.  │
+│                                                                       │
+│  TOP CONSUMERS (this period)                                         │
+│  ┌──────────────────────────────────────────────────────────┐       │
+│  │  Agent            Tokens       Trend        % of total   │       │
+│  │  ─────────────────────────────────────────────────────── │       │
+│  │  Frank            842K         ▁▂▃▅▇        35%          │       │
+│  │  Lori             614K         ▂▂▃▃▄        26%          │       │
+│  │  build-worker-3   412K         ▁▁▁▇▇        17%          │       │
+│  │  Ellie            289K         ▂▂▂▂▂        12%          │       │
+│  └──────────────────────────────────────────────────────────┘       │
+│                                                                       │
+│  PROJECTION: at current rate, ~7.1M tokens by end of month (budget: 10M) │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Key interactions:**
+- **Dimension toggle** (Purpose / Project / Model / Agent / Provider): changes the stacking axis of the time series chart. Default: Purpose.
+- **Click a chart segment**: filters the entire page to that segment. E.g., click "agent turns" then switch to "by Project" to see which projects drive agent turn costs. Active filters shown as removable chips above the chart.
+- **Time range**: 7d / 30d / 90d toggles. 7d reads from raw `model_invocation` records (more granular). 30d/90d read from pre-aggregated `model_usage_rollup`.
+- **Top consumers table**: ranked by tokens in the current budget period. Sparkline shows the 7-day trend at a glance.
+- **Budget gauges**: summary bar at top shows current period usage against budget, with soft/hard limit indicators.
+
+### Overview Dashboard
+
+- Current active runs and their status
+- Today's token usage vs budget (bar chart)
+- Error rate trend (24 hours)
+- Approval queue depth and oldest pending item
+- Agent activity feed (last 50 events)
+
+### Performance Dashboard
+
+- API latency percentiles (line chart, 24-hour view)
+- Model latency by provider (line chart)
+- Queue depth over time (area chart)
+- Memory retrieval latency (line chart)
+- Error rate by component (stacked area chart)
+
+### Agents Dashboard
+
+- Per-agent activity: runs completed, runs failed, tokens consumed
+- Agent utilization timeline (gantt-style: active, idle, blocked, waiting for approval)
+- Per-agent error rate
 
 ## Open Questions for Design
 
