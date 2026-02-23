@@ -1029,7 +1029,7 @@
     <div class="section-header fade-up">
       <span class="label">CLI Command Policy</span>
       <h2>Risk Classification Matrix</h2>
-      <p>Every CLI command is classified by risk level before execution. Risk determines whether the command is allowed, requires approval, or is denied outright. Compound commands are decomposed and classified by their riskiest component.</p>
+      <p>Every CLI command is classified by risk level before execution. Policy decisions are binary: allow or deny. Permissions are configured in advance, not resolved at runtime. Compound commands are decomposed and classified by their riskiest component.</p>
     </div>
 
     <div class="risk-grid">
@@ -1068,7 +1068,7 @@
           <span class="risk-indicator"></span>
           <span class="risk-level">Sensitive</span>
         </div>
-        <span class="risk-policy">Default: Requires approval</span>
+        <span class="risk-policy">Default: Denied (configurable via org/project policy)</span>
         <p class="risk-desc">Commands that could have significant impact. Network calls, containers, publishing.</p>
         <ul class="risk-examples">
           <li><code>curl</code>, <code>wget</code></li>
@@ -1183,8 +1183,6 @@ flowchart TD
     F["DENY\nnot permitted"]
     G["Classify risk level\nsafe / normal / sensitive / dangerous"]
     H{"Policy\ndecision?"}
-    I["Create inbox item\nwith command details"]
-    J["PENDING\nawaiting approval"]
     K["Create sandboxed process"]
     L["Working dir: project repo\nat task branch HEAD"]
     M["Env: constructed\nnot inherited"]
@@ -1206,8 +1204,6 @@ flowchart TD
     E -->|"clear"| G
     G --> H
     H -->|"deny"| F
-    H -->|"require_approval"| I
-    I --> J
     H -->|"allow"| K
     K --> L
     K --> M
@@ -1414,7 +1410,7 @@ flowchart TD
           <li><code>allow_all</code> -- any domain (default)</li>
           <li><code>denylist</code> -- block specific domains</li>
           <li><code>allowlist</code> -- only specified domains</li>
-          <li>Sensitive domains (financial, auth, admin, email) require approval by default</li>
+          <li>Sensitive domains (financial, auth, admin, email) denied by default; allowlisted per org/project</li>
         </ul>
       </div>
 
