@@ -252,15 +252,6 @@ API keys are prefixed for easy identification and secret scanning:
 - **Expiry**: optional. Keys can have an expiry date. Expired keys are automatically revoked by a daily cleanup job.
 - **Rotation**: not automatic. The human creates a new key and revokes the old one. A grace period (both keys valid simultaneously) is supported by simply creating the new key before revoking the old one.
 
-### Rate Limiting
-
-API key requests are rate-limited per key and per org. Default limits:
-
-- Per key: 60 requests/minute for mutations, 300 requests/minute for reads.
-- Per org: 600 requests/minute aggregate across all keys.
-
-Limits are configurable per org. Rate limit headers (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`) are included on every response.
-
 ## Bootstrap Flow
 
 ### What Happens on First Install
@@ -380,8 +371,7 @@ create table organization (
     },
     "auth": {
       "session_lifetime_days": 30,
-      "api_rate_limit_per_key": 60,
-      "api_rate_limit_per_org": 600
+      "session_expiry_hours": 720
     }
   }
   ```
@@ -594,10 +584,6 @@ Unauthenticated endpoints (login, health check, public info) are explicitly allo
 - **Exponential backoff**: after each failed attempt, the response is artificially delayed (100ms, 200ms, 400ms, ...) to slow down automated attacks.
 
 These limits are stored in-memory in the application process. They do not require database writes or external dependencies. If the process restarts, counters reset — this is acceptable since a restart already disrupts an active brute force attempt.
-
-### API Rate Limiting
-
-See the API Keys section above. Implemented via a token bucket algorithm, tracked per key and per org.
 
 ## Resolved Decisions
 

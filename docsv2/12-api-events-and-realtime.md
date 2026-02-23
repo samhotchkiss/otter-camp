@@ -1,18 +1,18 @@
 ---
 ## Summary
 
-This spec defines OtterCamp's entire API surface, event system, and realtime communication contracts. The API is a versioned REST API (all routes under `/v1/`) that uses standard REST for CRUD operations and explicit command endpoints (verb-noun POST routes like `/tasks/:id/advance-flow`) for actions with side effects. All responses use a consistent JSON envelope with `data`/`error` and `meta` fields. List endpoints use cursor-based pagination exclusively. Authentication is via Bearer token (API keys) for programmatic access and session cookies for the web UI; all requests are scoped to a single organization with row-level enforcement. Section 4 contains a comprehensive endpoint catalog covering every domain: auth, chat sessions/messages, projects, tasks/flow, flow templates, inbox, merge queue, scheduling, agents, memory, models, MCP connections, skills, tools/policies, control plane, system integration, delivery/environments, and events.
+This spec defines OtterCamp's entire API surface, event system, realtime communication contracts, and CLI client. The API is the single access layer — every piece of OtterCamp functionality is accessible through it, with no UI-only features. It is a versioned REST API (all routes under `/v1/`) that uses standard REST for CRUD operations and explicit command endpoints (verb-noun POST routes like `/tasks/:id/advance-flow`) for actions with side effects. All responses use a consistent JSON envelope with `data`/`error` and `meta` fields. List endpoints use cursor-based pagination exclusively. Authentication is via Bearer token (API keys) for programmatic access and session cookies for the web UI; all requests are scoped to a single organization with row-level enforcement. Section 4 contains a comprehensive endpoint catalog covering every domain: auth, chat sessions/messages, projects, tasks/flow, flow templates, inbox, merge queue, scheduling, agents, memory, models, MCP connections, skills, tools/policies, control plane, system integration, delivery/environments, and events.
 
-The event system is the central nervous system of the platform. Every significant state change emits a domain event into a durable `domain_event` PostgreSQL table. Events follow a uniform structure with dot-namespaced types (`{domain}.{entity}.{action}`), an actor (human/agent/system), hierarchical scope fields (org, project, task, session) denormalized as columns for efficient filtering, and a type-specific JSON payload. The dispatch uses an outbox pattern: events are written transactionally with domain operations, then an async dispatcher polls for unpublished events and fans them out to four consumer categories -- realtime push (SSE/WebSocket), memory capture (Ellie), notification delivery, and internal reaction handlers. Consumers receive at-least-once delivery and must be idempotent. The spec defines roughly 70 event types across 11 domains (chat, task, flow, dependency, agent, memory, model, control plane, project, merge/delivery, system/inbox).
+The event system is the central nervous system of the platform. Every significant state change emits a domain event into a durable `domain_event` PostgreSQL table. Events follow a uniform structure with dot-namespaced types (`{domain}.{entity}.{action}`), a monotonic sequence number (`seq`) for strict ordering, an actor (human/agent/system), hierarchical scope fields (org, project, task, session) denormalized as columns for efficient filtering, and a type-specific JSON payload. Each consumer (realtime push, memory pipeline, notification evaluator, internal reactions) independently tracks its position in the event log via a `consumer_cursor` table. Events are written transactionally with domain operations; LISTEN/NOTIFY provides near-instant consumer wake-up, with polling as fallback. Consumers receive at-least-once delivery and must be idempotent. A slow or crashed consumer catches up from its own cursor without affecting others. The spec defines roughly 140 event types across 13 domains (chat, task, flow, dependency, agent, memory, model, control plane, project, merge/delivery, system/inbox).
 
-For realtime transport, SSE is the default (simpler, works through proxies, built-in reconnection via `Last-Event-ID`), with WebSocket available as an opt-in secondary channel for bidirectional needs like typing indicators. Clients subscribe to hierarchical scopes (`org:id`, `project:id`, `task:id`, `session:id`) and receive filtered events. Asynchronous work is processed through a PostgreSQL-backed job queue (no Redis) using `SELECT ... FOR UPDATE SKIP LOCKED` for concurrent worker claiming, with exponential backoff retries, dead letter handling, priority tiers (100 for sync/human-waiting, 50 for standard async, 25 for background, 10 for maintenance), and stale claim recovery. The spec also covers idempotency keys (org-scoped, 24-hour TTL, stored in an `idempotency_key` table), per-API-key rate limiting with configurable defaults for self-host vs managed, and notes that webhooks are deferred to V2.1 but the event log is designed to support them. Three database tables are introduced: `domain_event`, `job_queue`, and `idempotency_key`.
+For realtime transport, SSE is the default (simpler, works through proxies, built-in reconnection via `Last-Event-ID`), with WebSocket available as an opt-in secondary channel for bidirectional needs like typing indicators. Clients subscribe to hierarchical scopes (`org:id`, `project:id`, `task:id`, `session:id`) and receive filtered events. Asynchronous work is processed through a PostgreSQL-backed job queue (no Redis) using `SELECT ... FOR UPDATE SKIP LOCKED` for concurrent worker claiming, with exponential backoff retries, dead letter handling, priority tiers (100 for sync/human-waiting, 50 for standard async, 25 for background, 10 for maintenance), and stale claim recovery. The spec also covers idempotency keys (org-scoped, 24-hour TTL, stored in an `idempotency_key` table) and notes that webhooks are deferred to V2.1 but the event log is designed to support them. There is no API-layer rate limiting — the only rate-limiting concern is upstream LLM providers, handled at the model layer (doc 07). Four database tables are introduced: `domain_event`, `consumer_cursor`, `job_queue`, and `idempotency_key`.
 
 ---
 
 # 12. API, Events, and Realtime Contracts
 
 > Status: Draft
-> Depends on: 01-architecture-and-domain.md (architecture, eventing model), 02-chat.md (realtime event payloads, streaming), 03-projects-and-task-flow.md (task lifecycle, merge queue, inbox), 03a-shipping-and-delivery.md (deploy events, push hooks), 04-auth-tenancy-and-identity.md (auth model, tenancy), 16-agent-control-plane.md (control plane API surface)
+> Depends on: 01-architecture-and-domain.md (architecture, eventing model), 02-chat.md (realtime event payloads, streaming), 03-projects-and-task-flow.md (task lifecycle, merge queue, inbox), 03a-shipping-and-delivery.md (deploy events, push hooks), 04-auth-tenancy-and-identity.md (auth model, tenancy), 07-models-and-inference.md (rate limiting at model layer), 16-agent-control-plane.md (control plane API surface)
 
 ## Purpose
 
@@ -21,6 +21,17 @@ Define the API surface, event system, and realtime contracts that bind together 
 ---
 
 ## 1. API Design Principles
+
+### API-First: The Single Access Layer
+
+Every piece of OtterCamp functionality is available through the API. There is no functionality that exists only in the web UI, only in the TUI, or only accessible to agents. If a human can do it in the browser, they can do it via the API and the CLI. If an agent can do it internally, a human can inspect and replicate it through the same API surface.
+
+This is a hard constraint, not an aspiration. It means:
+
+- **No UI-only features.** Every button, form, and action in the web UI maps to an API call. The web UI is a client of the API, not a separate application.
+- **No hidden internal APIs.** Agent-internal operations (tool execution, memory extraction, flow advancement) have corresponding human-accessible API endpoints for inspection, debugging, and manual override.
+- **The CLI wraps the API.** The `ottercamp` CLI (Section 14) provides complete access to every API endpoint with self-documentation and shell completion. Anything you can do in the UI, you can script.
+- **Scriptability is a design requirement.** Every operation that a human might want to automate (create a project, assign agents, trigger a deploy, query memories) has a clean, scriptable API path.
 
 ### REST for CRUD, Commands for Actions
 
@@ -80,14 +91,16 @@ Clients should ignore unknown fields in responses (forward-compatible parsing).
 API keys are created and managed per the auth model in doc 04. Each key is scoped to an organization and carries the permissions of the human or agent it was created for.
 
 ```
-Authorization: Bearer ottercamp_sk_live_abc123...
+Authorization: Bearer oc_full_a1b2c3d4e5f6...
 ```
+
+API keys use three scope prefixes: `oc_full_` (full access), `oc_read_` (read-only), `oc_chat_` (chat-only). See doc 04 for the authoritative API key format.
 
 API keys are the primary auth mechanism for programmatic access — the TUI, CI integrations, and any external tooling.
 
 ### Session Cookie
 
-The web UI uses session cookies for authentication. Cookie-based auth follows standard secure practices: `HttpOnly`, `Secure`, `SameSite=Strict`, short-lived with refresh.
+The web UI uses session cookies for authentication. Cookie-based auth follows standard secure practices: `HttpOnly`, `Secure`, `SameSite=Lax`, short-lived with refresh.
 
 ### Agent Authentication
 
@@ -185,7 +198,10 @@ POST   /v1/tasks/:id/dependencies        Add dependency
 DELETE /v1/tasks/:id/dependencies/:did   Remove dependency
 
 GET    /v1/tasks/:id/events              Task event log (audit trail)
+
 GET    /v1/tasks/:id/participants        Task participants
+POST   /v1/tasks/:id/participants        Add participant (command)
+DELETE /v1/tasks/:id/participants/:pid   Remove participant
 ```
 
 ### Flow Templates (doc 03)
@@ -194,6 +210,15 @@ GET    /v1/tasks/:id/participants        Task participants
 POST   /v1/projects/:pid/flow-templates  Create flow template
 GET    /v1/projects/:pid/flow-templates  List flow templates
 GET    /v1/flow-templates/:id            Template detail (includes nodes and edges)
+PATCH  /v1/flow-templates/:id            Update template metadata (name, description, is_current)
+POST   /v1/flow-templates/:id/new-version  Create versioned copy (command)
+
+POST   /v1/flow-templates/:id/nodes      Add a node
+PATCH  /v1/flow-templates/:id/nodes/:nid  Update node (actor, edges, description)
+DELETE /v1/flow-templates/:id/nodes/:nid  Remove node
+
+POST   /v1/flow-templates/:id/nodes/:nid/skills  Attach skill to flow node
+DELETE /v1/flow-templates/:id/nodes/:nid/skills/:sid  Detach skill from flow node
 ```
 
 ### Inbox (doc 03)
@@ -225,13 +250,37 @@ POST   /v1/schedules/:id/resume          Resume schedule (command)
 ### Agents (doc 05)
 
 ```
-POST   /v1/agents                        Create agent
+POST   /v1/agents                        Create agent (optionally from template_id)
 GET    /v1/agents                        List agents (filterable by class, status)
 GET    /v1/agents/:id                    Agent detail (profile, capabilities, assignments)
 PATCH  /v1/agents/:id                    Update agent profile
 POST   /v1/agents/:id/activate           Activate agent (command)
 POST   /v1/agents/:id/pause              Pause agent (command)
 POST   /v1/agents/:id/retire             Retire agent (command)
+
+GET    /v1/agents/:id/skills             List skills attached to agent
+POST   /v1/agents/:id/skills             Attach skill to agent
+DELETE /v1/agents/:id/skills/:sid        Detach skill from agent
+```
+
+### Agent Project Assignments (doc 05)
+
+```
+GET    /v1/projects/:pid/agents          List agents assigned to project
+POST   /v1/projects/:pid/agents          Assign agent to project (role, is_primary)
+PATCH  /v1/projects/:pid/agents/:aid     Update assignment (role)
+DELETE /v1/projects/:pid/agents/:aid     Unassign agent from project
+```
+
+### Agent Profile Templates (doc 05)
+
+```
+GET    /v1/agent-templates               Browse templates (filterable by domain_tags, class)
+GET    /v1/agent-templates/:id           Template detail
+POST   /v1/agent-templates               Create org-customized template
+PATCH  /v1/agent-templates/:id           Update org template
+DELETE /v1/agent-templates/:id           Deactivate template
+POST   /v1/agent-templates/:id/fork      Fork a shipped template into org-customized (command)
 ```
 
 ### Memory (doc 06)
@@ -240,10 +289,24 @@ POST   /v1/agents/:id/retire             Retire agent (command)
 POST   /v1/memory/query                  Query memory (Ellie's retrieval pipeline)
 GET    /v1/memory/items                  List memory items (filterable by scope, type, entity)
 GET    /v1/memory/items/:id              Memory item detail
+PATCH  /v1/memory/items/:id              Edit memory item (content, tags, scope)
+POST   /v1/memory/items/:id/archive     Archive a memory item (command)
 POST   /v1/memory/items/:id/feedback     Submit feedback on a memory item
 GET    /v1/memory/entities               List known entities
 GET    /v1/memory/entities/:id           Entity detail with related memories
+
 GET    /v1/memory/taxonomy               Browse taxonomy tree
+POST   /v1/memory/taxonomy               Create taxonomy node
+PATCH  /v1/memory/taxonomy/:id           Rename or reparent node
+DELETE /v1/memory/taxonomy/:id           Prune taxonomy node
+
+POST   /v1/memory/import                 Upload JSONL zip for import
+GET    /v1/memory/imports                List import jobs
+GET    /v1/memory/imports/:id            Import job detail (progress, errors)
+
+POST   /v1/memory/consolidate            Trigger consolidation run (dedup, synthesis, decay)
+GET    /v1/memory/consolidation-runs     List consolidation runs
+GET    /v1/memory/consolidation-runs/:id  Run detail (type, status, counts)
 ```
 
 ### Models and Inference (doc 07)
@@ -253,28 +316,39 @@ GET    /v1/model-profiles                List model profiles
 POST   /v1/model-profiles                Create model profile
 GET    /v1/model-profiles/:id            Model profile detail
 PATCH  /v1/model-profiles/:id            Update model profile
-GET    /v1/model-providers               List configured providers
+
+GET    /v1/model-providers               List provider connections
+POST   /v1/model-providers               Create provider connection
+GET    /v1/model-providers/:id           Provider connection detail (health, usage)
+PATCH  /v1/model-providers/:id           Update provider connection
+DELETE /v1/model-providers/:id           Remove provider connection
+POST   /v1/model-providers/:id/test      Test provider connection (command)
 ```
 
 ### MCP Connections (doc 09)
 
 ```
-POST   /v1/mcp-connections               Create MCP connection
-GET    /v1/mcp-connections               List connections
-GET    /v1/mcp-connections/:id           Connection detail (includes available tools)
-PATCH  /v1/mcp-connections/:id           Update connection config
-DELETE /v1/mcp-connections/:id           Remove connection
-POST   /v1/mcp-connections/:id/test      Test connection (command)
+POST   /v1/mcp/connections               Create MCP connection
+GET    /v1/mcp/connections               List connections
+GET    /v1/mcp/connections/:id           Connection detail (includes available tools)
+PATCH  /v1/mcp/connections/:id           Update connection config
+DELETE /v1/mcp/connections/:id           Remove connection
+POST   /v1/mcp/connections/:id/test      Test connection (command)
+POST   /v1/mcp/connections/:id/refresh   Refresh tool catalog
+GET    /v1/mcp/connections/:id/catalog   List cataloged tools
+PATCH  /v1/mcp/connections/:id/catalog/:entry_id  Toggle tool enabled/disabled
+GET    /v1/mcp/connections/:id/executions  Execution log
 ```
 
 ### Skills (doc 10)
 
 ```
 POST   /v1/skills                        Create skill
-GET    /v1/skills                        List skills
+GET    /v1/skills                        List skills (filterable by scope, is_default, source)
 GET    /v1/skills/:id                    Skill detail
-PATCH  /v1/skills/:id                    Update skill
+PATCH  /v1/skills/:id                    Update skill (content, metadata, is_default)
 DELETE /v1/skills/:id                    Delete skill
+GET    /v1/skills/catalog                Browse shipped skill templates (system-provided)
 ```
 
 ### Tools and Tool Policy (doc 20)
@@ -290,20 +364,37 @@ POST   /v1/tool-policies                 Create/update tool policy
 
 ```
 POST   /v1/control/runs                  Request an action run
+GET    /v1/control/runs                  List runs (filterable by status, agent, project)
 GET    /v1/control/runs/:id              Run detail
 GET    /v1/control/runs/:id/events       Run event stream
+GET    /v1/control/runs/:id/steps        List run steps
+GET    /v1/control/runs/:rid/steps/:sid  Run step detail (attempts, output, timing)
+GET    /v1/control/runs/:id/artifacts    List run artifacts
 POST   /v1/control/runs/:id/cancel       Cancel run (command)
-POST   /v1/control/approvals/:id/approve Approve blocked action (command)
-POST   /v1/control/approvals/:id/reject  Reject blocked action (command)
+POST   /v1/control/runs/:id/retry        Retry a failed run (command)
+GET    /v1/control/policies              List policies
+POST   /v1/control/policies              Create policy
+PUT    /v1/control/policies/:id          Replace policy
+DELETE /v1/control/policies/:id          Delete policy
 GET    /v1/control/policies/evaluate     Dry-run policy simulation
+GET    /v1/control/cost/summary          Cost summary (filterable by time range, project, agent)
+GET    /v1/control/health                Control plane health check
 ```
+
+> **Note:** Capability approval is conversational (via inbox items), not a synchronous run-blocking mechanism. See doc 16.
 
 ### System Integration (doc 11)
 
 ```
 POST   /v1/system/cli/execute            Execute CLI command (sandboxed)
+POST   /v1/system/browser/sessions       Create/resume browser session
+DELETE /v1/system/browser/sessions/:id   Close browser session
 POST   /v1/system/browser/navigate       Browser navigation action
+POST   /v1/system/browser/interact       Click, type, scroll, press key
 GET    /v1/system/browser/screenshot     Capture browser screenshot
+POST   /v1/system/browser/extract        Extract structured data from page
+POST   /v1/system/browser/handoff        Create human handoff (transfer browser control)
+POST   /v1/system/browser/handoff/:id/return  Return control from human
 ```
 
 ### Delivery and Environments (doc 03a)
@@ -321,9 +412,13 @@ GET    /v1/projects/:pid/environments/:eid  Environment detail (current deploy s
 
 ### Events and System
 
+> **Scope enforcement:** `oc_chat_` keys can only query `chat.*` events and subscribe to `session:{id}` scopes. `oc_read_` keys can query/subscribe to any scope. See Section 9 for details.
+
 ```
 GET    /v1/events                        Query event log (filterable by type, scope, time range)
 GET    /v1/events/:id                    Event detail
+GET    /v1/events/stream                 SSE endpoint for realtime events
+GET    /v1/ws                            WebSocket endpoint for bidirectional realtime
 
 GET    /v1/health                        Health check (unauthenticated)
 GET    /v1/version                       API version info (unauthenticated)
@@ -417,7 +512,6 @@ task_node_has_open_subtasks 422  Cannot advance flow — open subtasks remain
 session_closed              422  Cannot post to a closed session
 session_turn_in_progress    409  A turn is already in progress (for steer/cancel timing)
 
-rate_limit_exceeded         429  Rate limit reached for this API key
 idempotency_conflict        409  Idempotency key reused with different parameters
 
 internal_error              500  Unexpected server error
@@ -440,7 +534,7 @@ Idempotency-Key: idem_a1b2c3d4e5
 - The server stores the key, request fingerprint (method + path + body hash), and response for a retention period (default: 24 hours).
 - If the same key is sent again with the same request fingerprint, the server returns the stored response without re-executing the operation.
 - If the same key is sent with a different request fingerprint, the server returns a `409 idempotency_conflict` error.
-- Idempotency keys are scoped to the authenticated org — different orgs can use the same key string without conflict.
+- Idempotency keys live in the org's database (db-per-org), so different orgs can use the same key string without conflict.
 
 ### Replay Safety
 
@@ -452,17 +546,14 @@ Command endpoints (advance-flow, cancel-turn, etc.) are inherently non-idempoten
 
 ```sql
 create table idempotency_key (
-  key               text not null,
-  organization_id   uuid not null,
+  key               text primary key,    -- org isolation is implicit (db-per-org)
   method            text not null,
   path              text not null,
   request_hash      text not null,       -- SHA-256 of canonical request body
   response_status   int not null,
-  response_body     jsonb not null,
+  response_body     jsonb,             -- null for 204 responses
   created_at        timestamptz not null default now(),
-  expires_at        timestamptz not null,
-
-  primary key (organization_id, key)
+  expires_at        timestamptz not null
 );
 
 create index on idempotency_key (expires_at);  -- cleanup query
@@ -478,10 +569,10 @@ A periodic job purges expired rows.
 
 The event system is the backbone of OtterCamp's asynchronous communication. Domain events are emitted on every significant state change and written to a durable event log table. The log serves four primary consumers:
 
-1. **Realtime fanout** — events are pushed to connected clients via SSE/WebSocket.
-2. **Memory capture** — Ellie subscribes to the event bus and extracts memories from relevant events (doc 06).
-3. **Notification delivery** — the notification layer subscribes to events, applies human preferences, and delivers notifications (doc 02).
-4. **Internal reactions** — inbox item creation, merge queue hooks, deploy task creation, dependency resolution, and any other system behavior triggered by state changes.
+1. **Realtime push** (`realtime_push`) — events are pushed to connected clients via SSE/WebSocket.
+2. **Memory pipeline** (`memory_pipeline`) — evaluates events for memory extraction, enqueues extraction jobs (doc 06).
+3. **Notification evaluator** (`notification_evaluator`) — evaluates events against human preferences, enqueues delivery jobs (doc 02).
+4. **Internal reactions** (`internal_reactions`) — inbox item creation, merge queue hooks, deploy task creation, dependency resolution, and any other system behavior triggered by state changes.
 
 The event log is the single source of truth for "what happened." Other systems subscribe to it rather than directly coupling to each other.
 
@@ -491,23 +582,24 @@ Every event has the same top-level structure:
 
 ```json
 {
-  "id": "evt_01H2X3Y4Z5...",
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "seq": 42,
   "type": "task.flow.advanced",
-  "timestamp": "2026-02-22T14:30:00.123Z",
+  "occurred_at": "2026-02-22T14:30:00.123Z",
   "actor": {
     "type": "agent",
-    "id": "uuid-of-agent"
+    "id": "660f9500-f3ac-52e5-b827-557766550000"
   },
   "scope": {
-    "organization_id": "uuid-of-org",
-    "project_id": "uuid-of-project",
-    "task_id": "uuid-of-task",
+    "organization_id": "770a0600-04bd-63f6-c938-668877660000",
+    "project_id": "880b1700-15ce-74g7-d049-779988770000",
+    "task_id": "990c2800-26df-85h8-e150-880099880000",
     "session_id": null
   },
   "payload": {
-    "task_id": "uuid-of-task",
-    "from_node_id": "uuid-of-node-a",
-    "to_node_id": "uuid-of-node-b",
+    "task_id": "990c2800-26df-85h8-e150-880099880000",
+    "from_node_id": "aa0d3900-37e0-96i9-f261-991100990000",
+    "to_node_id": "bb0e4a00-48f1-a7j0-0372-002211000000",
     "visit": 1
   },
   "metadata": {
@@ -519,73 +611,103 @@ Every event has the same top-level structure:
 
 **Field definitions:**
 
-- `id` — globally unique event ID. Prefixed with `evt_` for human readability.
+- `id` — globally unique event UUID.
+- `seq` — monotonically increasing sequence number. Used for ordering, consumer cursors, and SSE reconnection. Guaranteed unique and strictly ordered even for events written in the same transaction.
 - `type` — dot-namespaced event type (see Section 8).
-- `timestamp` — UTC timestamp with millisecond precision. When the event was created, not when the underlying action started.
-- `actor` — who caused the event. Type is `human`, `agent`, or `system`. ID is the actor's entity ID. System events (e.g., scheduled task creation) have actor type `system` and null ID.
+- `occurred_at` — UTC timestamp with millisecond precision. When the event was created.
+- `actor` — who caused the event. Type is `human`, `agent`, `system`, or `supervisor` (automated control-plane actions such as stuck task recovery). ID is the actor's entity UUID. System events (e.g., scheduled task creation) have actor type `system` and null ID. See A10 note below on `supervisor`.
 - `scope` — hierarchical scope for event routing and filtering. All fields nullable except `organization_id`. A chat event has `session_id` set; a task event has `project_id` and `task_id` set; an org-level event has only `organization_id`.
 - `payload` — event-type-specific data. Structure varies by type. Always a JSON object.
 - `metadata` — operational metadata. Idempotency key, request ID, trace ID. Not part of the business event.
+
+> **Note on `supervisor` actor type:** Doc 04's canonical principal convention defines three types: `human`, `agent`, `system`. The `supervisor` type extends this convention for domain events only — it distinguishes automated control-plane actions (stuck run recovery, timeout cancellation) from general system actions (scheduled task creation, retention purges). Code that switches on actor type must handle all four values. See doc 16 for supervisor behavior.
 
 ### DDL: domain_event
 
 ```sql
 create table domain_event (
   id                uuid primary key default gen_random_uuid(),
+  seq               bigint generated always as identity,  -- strict total ordering for consumer cursors
   type              text not null,
-  timestamp         timestamptz not null default now(),
+  occurred_at       timestamptz not null default now(),    -- when the event happened (business time)
   actor_type        text not null check (actor_type in ('human', 'agent', 'system', 'supervisor')),  -- supervisor: automated control-plane actions (e.g., run cancellation, stuck task recovery)
   actor_id          uuid,
-  organization_id   uuid not null,
+  organization_id   uuid not null,                         -- structural consistency (db-per-org makes this implicit, but kept for query uniformity — see doc 04)
   project_id        uuid,
   task_id           uuid,
   session_id        uuid,
   payload           jsonb not null,
-  metadata          jsonb not null default '{}',
-  published         boolean not null default false,  -- has this event been dispatched to consumers?
-  created_at        timestamptz not null default now()
+  metadata          jsonb not null default '{}'
 );
 
--- Primary query: consume unpublished events in order
-create index on domain_event (published, created_at) where published = false;
+-- Consumer pickup: strict ordering by sequence
+create unique index on domain_event (seq);
 
 -- Scope-based queries for client subscription filtering
-create index on domain_event (organization_id, created_at);
-create index on domain_event (project_id, created_at) where project_id is not null;
-create index on domain_event (task_id, created_at) where task_id is not null;
-create index on domain_event (session_id, created_at) where session_id is not null;
+create index on domain_event (organization_id, seq);
+create index on domain_event (project_id, seq) where project_id is not null;
+create index on domain_event (task_id, seq) where task_id is not null;
+create index on domain_event (session_id, seq) where session_id is not null;
 
 -- Type-based queries for consumers that care about specific event types
-create index on domain_event (type, created_at);
+create index on domain_event (type, seq);
 
 -- Retention management
-create index on domain_event (created_at);
+create index on domain_event (occurred_at);
 ```
 
 **Design notes:**
 
-- `published` is a dispatch flag. The event dispatcher reads unpublished events, fans them out to consumers (realtime, memory, notifications, internal handlers), and marks them published. This is an outbox pattern — events are written transactionally with the domain operation and dispatched asynchronously.
-- The `scope` fields are denormalized from the event payload for efficient subscription filtering. The dispatcher does not need to parse the payload to route events.
-- Events are append-only. Never updated or deleted during normal operation. A retention policy purges old events (configurable per org, default 90 days for the event log; the effects of events — memories, notifications, audit records — persist independently).
-- The `id` column uses UUIDs for global uniqueness. The `evt_` prefix mentioned in the JSON representation is a display convention, not stored in the database.
+- The `seq` column is a `BIGSERIAL` identity that provides strict total ordering for consumer cursors. Unlike UUIDs or timestamps, sequence values are guaranteed unique and monotonically increasing even for events written in the same transaction. All consumer queries and indexes use `seq` for ordering.
+- Events are truly append-only — no updates. Each consumer tracks its own position via the `consumer_cursor` table. This eliminates write contention on the event table from dispatch.
+- The `scope` fields are denormalized from the event payload for efficient subscription filtering. Consumers do not need to parse the payload to route events.
+- `organization_id` is present for structural consistency and query uniformity, not for tenant isolation (db-per-org provides that). See doc 04 for the rationale.
+- A retention policy purges old events (configurable per org, default 90 days). Before purging, the system verifies all consumer cursors have advanced past the retention boundary. If a consumer is stalled for more than 24 hours, an alert fires and the operator can manually advance or disable that consumer to unblock retention purges. The effects of events — memories, notifications, audit records — persist independently of event log retention.
+- The `id` column uses UUIDs for global uniqueness. The `evt_` prefix in the JSON representation is a display convention applied at the API layer, not stored in the database.
 
-### Event Dispatch (Outbox Pattern)
+### Event Dispatch (Per-Consumer Cursors)
 
-Events are dispatched using a poll-based outbox pattern:
+Each consumer independently tracks its position in the event log using a `consumer_cursor` table. This means consumers are decoupled — if the memory pipeline goes down for 5 minutes, it catches up from where it left off without affecting realtime push or notifications.
+
+**How it works:**
 
 1. A domain operation writes its primary data and the event row in the same database transaction.
-2. A dispatcher process polls `domain_event` for unpublished events ordered by `created_at`.
-3. For each event, the dispatcher fans it out to all registered consumers: realtime push, memory pipeline, notification evaluator, internal reaction handlers.
-4. After all consumers have acknowledged (or the event has been queued for each), the dispatcher marks the event as `published`.
-5. If the dispatcher crashes, it resumes from the last unpublished event. Events are delivered at-least-once to consumers; consumers must be idempotent.
+2. After commit, the transaction issues `NOTIFY domain_events` to wake up any listening consumers immediately.
+3. Each consumer process maintains its own cursor (the `seq` value of the last event it successfully processed). On startup or wake-up, it queries `domain_event WHERE seq > $cursor ORDER BY seq` to get unprocessed events.
+4. After processing an event, the consumer advances its cursor in the `consumer_cursor` table.
+5. If a consumer crashes, it resumes from its last committed cursor. Events are delivered at-least-once; consumers must be idempotent.
 
-The poll interval is short (100-500ms) to keep latency low for realtime consumers. Under load, the dispatcher processes events in batches.
+**Consumers:**
+
+- **`realtime_push`** — fans out events to all connected SSE/WebSocket clients. This is one consumer that handles all connected clients (web UI, TUI, mobile app). The push infrastructure broadcasts to every connected socket; individual browser tabs and app instances are not separate consumers. Processes events in-line (no job queue hop — latency matters).
+- **`memory_pipeline`** — evaluates each event for memory relevance. When an event warrants extraction, enqueues a `memory_extraction` job (Section 11) for the worker to process. The consumer is lightweight (a filter); the LLM call happens in the worker.
+- **`notification_evaluator`** — evaluates each event against human notification preferences. When a notification should be sent, enqueues a `notification_delivery` job for the worker. The consumer is a filter; actual delivery (push notification, email) happens in the worker.
+- **`internal_reactions`** — inbox item creation, dependency resolution, merge queue hooks, deploy task creation, and other system behaviors triggered by state changes. Most reactions are lightweight writes; complex reactions enqueue jobs.
+
+**LISTEN/NOTIFY optimization:** PostgreSQL `LISTEN/NOTIFY` provides near-instant wake-up when new events are written. Consumers also poll on a fallback interval (every 5 seconds) to recover from missed notifications (which can happen if the connection drops momentarily). LISTEN/NOTIFY is a latency optimization, not a durability mechanism — the `consumer_cursor` table is the source of truth for each consumer's position.
+
+### DDL: consumer_cursor
+
+```sql
+create table consumer_cursor (
+  consumer_name   text primary key,          -- e.g., 'realtime_push', 'memory_pipeline'
+  last_seq        bigint not null default 0,  -- seq of last successfully processed event (0 = start from beginning)
+  last_event_at   timestamptz,               -- occurred_at of that event (for monitoring lag)
+  updated_at      timestamptz not null default now()
+);
+```
+
+**Bootstrap:** On first startup, the system inserts a row for each consumer with `last_seq = 0`. A consumer with `last_seq = 0` starts processing from the oldest available event. In practice, on a fresh install there are no events yet, so this is a no-op.
+
+The lag between `last_event_at` and `now()` is a key health metric — if any consumer falls more than a few seconds behind, something is wrong.
 
 ---
 
 ## 8. Event Types
 
 Events are organized by domain. Each event type is a dot-separated string: `{domain}.{entity}.{action}`.
+
+> **Note:** Event payload structures are defined in their respective domain specs. This catalog lists event types with brief descriptions. See the domain spec (noted in the "Emitted by" column) for authoritative payload schemas.
 
 ### Chat Events
 
@@ -601,7 +723,12 @@ chat.message.failed            A message failed
 chat.message.redacted          A message was redacted
 
 chat.turn.started              An agent turn began
-chat.turn.completed            An agent turn finished (any terminal status)
+chat.turn.completed            An agent turn finished successfully
+chat.turn.failed               An agent turn failed (model error, session closed)
+chat.turn.stopped              An agent turn was interrupted (user_cancelled, user_steered, max_tool_calls, max_duration)
+
+chat.summary.created           A progressive summary was generated for a message range
+chat.read_cursor.updated       A human's read cursor advanced (payload: user_id, last_read_seq)
 
 chat.listening_eval.completed  Listening eval finished, interjection decisions made
 
@@ -614,6 +741,8 @@ chat.reaction.deleted          A reaction was removed
 ```
 
 ### Task Events
+
+> **Naming note:** Task events use the two-part form `task.{action}` rather than `task.task.{action}`. When the entity matches the domain, the entity segment is omitted for readability. Sub-entities (subtask, flow, dependency, participant) use the full three-part form.
 
 ```
 task.created                   A new task was created
@@ -632,6 +761,9 @@ task.cancelled                 Task was cancelled
 task.subtask.created           A subtask was created
 task.subtask.status_changed    Subtask work status changed
 task.subtask.completed         A subtask reached done
+
+task.participant.added         A participant was added to a task
+task.participant.removed       A participant was removed from a task
 ```
 
 ### Flow Events
@@ -660,8 +792,12 @@ agent.created                  A new agent was created
 agent.activated                Agent moved to active
 agent.paused                   Agent was paused
 agent.retired                  Agent was retired
+agent.cancelled                Agent draft was rejected (never activated)
+agent.expired                  Temp agent auto-expired (TTL or scope ended)
+agent.promoted                 Temp agent promoted to staff
 agent.profile_updated          Agent profile was updated (prompt, policies)
-agent.assigned                 Agent was assigned to a project or task role
+agent.project.assigned         Agent assigned to a project (payload: project_id, role)
+agent.project.unassigned       Agent removed from a project
 ```
 
 ### Memory Events
@@ -669,10 +805,21 @@ agent.assigned                 Agent was assigned to a project or task role
 ```
 memory.item.created            A new memory item was extracted
 memory.item.updated            A memory item was updated (confidence, content)
-memory.item.archived           A memory item was archived
+memory.item.archived           A memory item was archived (manual or decay)
 memory.item.superseded         A memory item was superseded by a newer one
+memory.item.promoted           A task-scoped memory was promoted to project scope (on task completion)
+
+memory.entity.created          A new entity was discovered during extraction
 memory.entity.synthesized      An entity synthesis was completed
-memory.dedup.completed         A deduplication pass completed
+
+memory.contradiction.detected  A contradiction was found between memories (payload: new_id, superseded_id)
+
+memory.consolidation.started   A consolidation run began (dedup, synthesis, decay, etc.)
+memory.consolidation.completed A consolidation run finished (payload: run_type, counts)
+
+memory.import.started          A memory import job began
+memory.import.completed        A memory import job finished successfully
+memory.import.failed           A memory import job failed
 ```
 
 ### Model Events
@@ -694,8 +841,18 @@ control.run.started            A run began execution
 control.run.completed          A run completed successfully
 control.run.failed             A run failed
 control.run.cancelled          A run was cancelled
+control.run.timed_out          Run exceeded time limit
+control.run.paused             Run paused (e.g., browser handoff)
+control.run.resumed            Run resumed after pause (e.g., handoff completed)
+control.run.dead_lettered      Run exhausted retries and was dead-lettered
+control.run.stuck_detected     Supervisor detected stuck run
+control.run.escalated          Run escalated for human attention
 
+control.policy.created         A capability policy was created
+control.policy.updated         A capability policy was updated
+control.policy.deleted         A capability policy was deleted
 control.policy.evaluated       A policy evaluation occurred (allow/deny)
+control.policy.denied          Policy evaluation denied the action
 ```
 
 ### Project Events
@@ -721,6 +878,12 @@ project.deploy.started         A deploy task began execution
 project.deploy.completed       A deploy task succeeded
 project.deploy.failed          A deploy task failed
 project.deploy.rollback        A rollback deploy was triggered
+
+project.remote.created         A remote was added to a project
+project.remote.updated         A remote configuration was changed
+project.remote.removed         A remote was removed from a project
+
+project.environment.deployed   An environment was updated to a new commit
 ```
 
 ### System Events
@@ -729,6 +892,10 @@ project.deploy.rollback        A rollback deploy was triggered
 system.health.degraded         System health degraded (provider down, queue backlog)
 system.health.recovered        System health recovered
 
+system.schedule.created        A task schedule was created
+system.schedule.updated        A task schedule was modified
+system.schedule.paused         A task schedule was paused
+system.schedule.resumed        A task schedule was resumed
 system.schedule.fired          A task schedule tick created a new task
 system.schedule.skipped        A schedule tick was skipped (overlap policy)
 
@@ -738,11 +905,27 @@ system.job.failed              A background job failed
 system.job.dead_lettered       A job exhausted retries and was dead-lettered
 ```
 
-### MCP
+### System Integration Events
+
+```
+system.cli.executed            A CLI command completed (payload: command, exit_code, risk_level)
+system.cli.denied              A CLI command was denied by policy
+
+system.browser.session_created A browser session was created (payload: task_id)
+system.browser.session_closed  A browser session was closed (payload: close_reason)
+system.browser.handoff_created Human handoff created (transfer browser control to human)
+system.browser.handoff_completed  Human handoff completed (control returned)
+system.browser.handoff_expired Human handoff expired (no human action within timeout)
+system.browser.domain_blocked  Navigation to a blocked domain was denied
+```
+
+### MCP Events
 
 | Event | Payload highlights | Emitted by |
 |---|---|---|
 | `mcp.connection.created` | connection_id, name, transport | MCP layer |
+| `mcp.connection.updated` | connection_id, changed_fields | MCP layer |
+| `mcp.connection.deleted` | connection_id, name | MCP layer |
 | `mcp.connection.status_changed` | connection_id, old_status, new_status | MCP layer |
 | `mcp.connection.health_changed` | connection_id, old_health, new_health | MCP layer |
 | `mcp.catalog.changed` | connection_id, added_count, removed_count | MCP layer |
@@ -788,20 +971,23 @@ GET /v1/events/stream?scopes=org:uuid,project:uuid,session:uuid
 
 - Authenticated via Bearer token or session cookie.
 - `scopes` parameter defines what events the client wants. Multiple scopes can be subscribed simultaneously.
+- **API key scope enforcement:** `oc_chat_` keys can only subscribe to `session:{id}` scopes and only receive `chat.*` event types. `oc_read_` keys can subscribe to any scope (read-only). `oc_full_` keys have unrestricted access. The server rejects scope subscriptions that exceed the key's permissions with `403 auth_insufficient_scope`.
 - The server filters events from the durable event log and sends relevant ones to the client.
 - Each SSE message includes:
 
 ```
-id: evt_01H2X3Y4Z5
+id: 42
 event: chat.message.delta
-data: {"message_id":"uuid","delta":{"text":"Here's what"}}
+data: {"message_id":"550e8400-e29b-41d4-a716-446655440000","delta":{"text":"Here's what"}}
 
-id: evt_01H2X3Y4Z6
+id: 43
 event: task.status_changed
-data: {"task_id":"uuid","from_status":"in_progress","to_status":"review"}
+data: {"task_id":"660f9500-f3ac-52e5-b827-557766550000","from_status":"in_progress","to_status":"review"}
 ```
 
-- The `id` field enables reconnection — on reconnect, the client sends `Last-Event-ID` and the server replays missed events.
+- The `id` field is the event's `seq` value (the monotonic sequence number from the `domain_event` table). This provides strict ordering and makes reconnection trivial.
+- On reconnect, the client sends `Last-Event-ID` (a numeric seq value) and the server replays all events with `seq > Last-Event-ID`.
+- If `Last-Event-ID` references a seq that has been purged (older than the retention window), the server responds with the oldest available event and includes an `X-Events-Gap: true` header to signal that events were missed.
 - The server sends periodic `:keepalive` comments (every 15 seconds) to prevent connection timeout.
 
 ### WebSocket Endpoint
@@ -854,13 +1040,15 @@ The server performs coarse scope filtering. Clients may receive events they do n
 
 If a client falls behind (slow consumer), the server buffers up to a configurable limit (default: 1000 events). If the buffer overflows, the server drops the connection. The client reconnects and uses `Last-Event-ID` to catch up. Events that were dropped from the buffer are still in the durable event log and are replayed on reconnect.
 
+WebSocket connections use the same buffer overflow policy. On disconnect, WebSocket clients must re-subscribe and fetch missed events from the `GET /v1/events` REST endpoint, as WebSocket has no built-in `Last-Event-ID` equivalent.
+
 ---
 
 ## 11. Internal Job/Worker API
 
 ### Architecture
 
-The API service and Worker service are separate processes from the same codebase (doc 01). They communicate via a PostgreSQL-backed job queue — no Redis, no external message broker. Fewer moving parts, fewer things to break.
+The API service and Worker service are built from the same Go codebase. In local mode they run as goroutines within a single process; in server mode they can be split into separate processes for resource isolation (see doc 08 for deployment modes). They communicate via a PostgreSQL-backed job queue — no Redis, no external message broker. Fewer moving parts, fewer things to break.
 
 ### How It Works
 
@@ -878,7 +1066,7 @@ agent_turn              Execute an agent turn (the tool-call loop)
 flow_node_start         Start a flow node execution (resolve actor, create session, kick off)
 memory_extraction       Extract memories from an event
 memory_consolidation    Run memory consolidation (dedup, synthesis, decay)
-notification_dispatch   Evaluate and deliver notifications for an event
+notification_delivery   Deliver a notification (push, email) for a matched event
 merge_execute           Execute a merge queue entry
 push_execute            Push main to a remote
 deploy_task_create      Create a deploy task from a merge event
@@ -887,6 +1075,8 @@ summary_generate        Generate a chat summary for a message range
 cleanup_ephemeral       Purge ephemeral messages (daily)
 idempotency_cleanup     Purge expired idempotency keys
 event_log_retention     Purge old events past retention period
+session_cleanup         Purge expired and revoked auth sessions (referenced by doc 04)
+api_key_cleanup         Revoke expired API keys (referenced by doc 04)
 ```
 
 ### DDL: job_queue
@@ -953,6 +1143,8 @@ returning *;
 
 `FOR UPDATE SKIP LOCKED` ensures multiple workers can poll concurrently without contention or double-claiming. Each worker gets a different job.
 
+The job queue also uses PostgreSQL `LISTEN/NOTIFY` for immediate wake-up when new jobs are inserted (matching doc 08's `WORKER_POLL_INTERVAL` description). Workers fall back to polling on a configurable interval (default 1 second) if a notification is missed.
+
 ### Retry Policy
 
 - On failure, the job's status returns to `pending` with `run_after` set to the backoff time.
@@ -994,37 +1186,9 @@ Priority can be adjusted per job at creation time based on context (e.g., an age
 
 ## 12. Rate Limiting
 
-### Per-API-Key Limits
+OtterCamp does not impose API-layer rate limits (requests per minute, per endpoint, etc.). The only rate-limiting concern is avoiding overwhelming upstream LLM providers, and that is handled entirely at the model layer (doc 07) via provider connection health status, failover priority, and concurrency management.
 
-Rate limiting is enforced per API key. Each key has configurable limits:
-
-- **Requests per minute** — overall request rate.
-- **Requests per minute per endpoint family** — prevent one endpoint from monopolizing the budget.
-- **Concurrent SSE connections** — limit simultaneous realtime subscriptions per key.
-
-### Defaults
-
-| Deployment | Requests/min | Per-endpoint/min | SSE connections |
-|------------|-------------|-------------------|-----------------|
-| Self-host  | 10,000      | 2,000             | 50              |
-| Managed    | 1,000       | 200               | 10              |
-
-Self-host defaults are generous — the operator owns the infrastructure. Managed defaults are stricter to protect shared infrastructure.
-
-### Response
-
-When rate limited, the server returns `429 Too Many Requests` with:
-
-```
-Retry-After: 5
-X-RateLimit-Limit: 1000
-X-RateLimit-Remaining: 0
-X-RateLimit-Reset: 1708617000
-```
-
-### Implementation
-
-Rate limiting uses a sliding window counter in the API service's memory. No external dependency. State is per-process — in a multi-process deployment, the effective limit is the configured limit per process. This is intentionally simple; if precise cross-process limiting becomes necessary, it can move to a shared store later.
+If API-layer rate limiting becomes necessary in the future (e.g., for managed multi-tenant hosting), it will be added as a non-breaking addition.
 
 ---
 
@@ -1036,7 +1200,7 @@ The event system is explicitly designed to support webhooks when they are added:
 
 - Every event in the durable log has a stable type, consistent structure, and scope information.
 - Webhook subscriptions will filter by event type and scope, same as realtime subscriptions.
-- Delivery will use the standard outbox pattern with retry and dead-letter semantics.
+- Delivery will use the same per-consumer cursor pattern with retry and dead-letter semantics.
 - Webhook payloads will be the same event JSON structure clients already see via SSE/WebSocket.
 
 When implemented, webhooks will add:
@@ -1051,13 +1215,175 @@ No new event types or structures will be needed — webhooks consume the same ev
 
 ---
 
+## 14. CLI Client
+
+The `ottercamp` binary includes both server management commands (doc 08: `serve`, `migrate`, `bootstrap`, `backup`) and a full API client CLI. The API client provides complete access to every endpoint in Section 4 from the command line.
+
+### Command Structure
+
+Commands follow a `noun verb` pattern that maps directly to the API:
+
+```
+ottercamp <resource> <action> [flags]
+```
+
+The resource names match the API path segments. The action maps to the HTTP method or command endpoint:
+
+```
+ottercamp projects list                           # GET  /v1/projects
+ottercamp projects create --name "Auth Rewrite"   # POST /v1/projects
+ottercamp projects get <id>                       # GET  /v1/projects/:id
+ottercamp projects update <id> --name "New Name"  # PATCH /v1/projects/:id
+ottercamp projects archive <id>                   # POST /v1/projects/:id/archive
+
+ottercamp tasks list --project <pid>              # GET  /v1/projects/:pid/tasks
+ottercamp tasks create --project <pid> --title "Fix login"  # POST /v1/projects/:pid/tasks
+ottercamp tasks advance-flow <id>                 # POST /v1/tasks/:id/advance-flow
+ottercamp tasks hold <id>                         # POST /v1/tasks/:id/hold
+
+ottercamp chat sessions list --scope project:<pid>  # GET  /v1/chat-sessions?scope=...
+ottercamp chat send <session-id> "Can you look at this?"  # POST /v1/chat-sessions/:id/messages
+ottercamp chat watch <session-id>                 # SSE  /v1/events/stream?scopes=session:<id>
+
+ottercamp agents list                             # GET  /v1/agents
+ottercamp agents create --template <tid>          # POST /v1/agents
+ottercamp agents assign <aid> --project <pid>     # POST /v1/projects/:pid/agents
+
+ottercamp memory query "what do we know about auth?"  # POST /v1/memory/query
+ottercamp memory items list --scope project       # GET  /v1/memory/items?scope=...
+ottercamp memory import upload ./memories.zip     # POST /v1/memory/import
+
+ottercamp events stream --scope org               # SSE  /v1/events/stream?scopes=org:<id>
+ottercamp events list --type task.completed        # GET  /v1/events?type=...
+
+ottercamp control runs list --status running      # GET  /v1/control/runs?status=running
+ottercamp control policies list                   # GET  /v1/control/policies
+```
+
+Sub-resources use dotted or nested syntax:
+
+```
+ottercamp tasks subtasks list <task-id>
+ottercamp tasks participants add <task-id> --agent <aid>
+ottercamp flow-templates nodes add <template-id> --type work --actor agent
+ottercamp agents skills attach <agent-id> --skill <sid>
+```
+
+### Authentication
+
+The CLI authenticates via API key, stored in one of:
+
+1. `--api-key` flag (per-command, for scripts)
+2. `OTTERCAMP_API_KEY` environment variable
+3. `~/.ottercamp/credentials` file (written by `ottercamp auth login`)
+
+The `ottercamp auth login` command opens the browser for session-based login, exchanges the session for an API key, and stores it locally. This is the recommended flow for interactive use.
+
+```
+ottercamp auth login                    # Browser login → stores API key
+ottercamp auth login --url https://my-ottercamp.example.com
+ottercamp auth status                   # Show current auth context (org, user, key scope)
+ottercamp auth logout                   # Revoke stored key and remove credentials
+```
+
+### Output Formats
+
+All commands support three output modes:
+
+- `--output table` (default for interactive) — human-readable tables, truncated to terminal width.
+- `--output json` — full JSON response (the API envelope `data` field). Pipe to `jq` for processing.
+- `--output quiet` — IDs only, one per line. For scripting composition.
+
+```
+# Get task IDs for all in-progress tasks
+ottercamp tasks list --project <pid> --status in_progress -o quiet | \
+  xargs -I {} ottercamp tasks hold {}
+
+# Full JSON for scripting
+ottercamp agents get <id> -o json | jq '.model_profile_id'
+```
+
+### Streaming
+
+Commands that map to SSE endpoints stream events to stdout in real time:
+
+```
+# Watch a chat session (streams message deltas)
+ottercamp chat watch <session-id>
+
+# Stream all events for a project
+ottercamp events stream --scope project:<pid>
+
+# Follow a control plane run
+ottercamp control runs watch <run-id>
+```
+
+Streaming commands run until interrupted (`Ctrl+C`) or until the stream ends (e.g., run completes). With `--output json`, each event is printed as a newline-delimited JSON object for piping to other tools.
+
+### Self-Documentation and Completion
+
+The CLI is extensively self-documenting:
+
+- **`ottercamp help`** — top-level help with all resource groups.
+- **`ottercamp <resource> help`** — all actions for a resource, with descriptions.
+- **`ottercamp <resource> <action> --help`** — full flag documentation, examples, and the corresponding API endpoint.
+- **`ottercamp api-docs`** — opens the API documentation in the browser.
+- **`ottercamp api-docs <resource>`** — opens the specific section.
+
+Every help page shows the underlying API call:
+
+```
+$ ottercamp tasks advance-flow --help
+Advance a task's flow to the next node.
+
+Usage:
+  ottercamp tasks advance-flow <task-id> [flags]
+
+API: POST /v1/tasks/:id/advance-flow
+
+Flags:
+  --output, -o   Output format: table, json, quiet (default: table)
+  --api-key      API key (overrides stored credentials)
+
+Examples:
+  ottercamp tasks advance-flow 550e8400-e29b-41d4-a716-446655440000
+```
+
+Shell completion is built in for bash, zsh, fish, and PowerShell:
+
+```
+ottercamp completion bash > /etc/bash_completion.d/ottercamp
+ottercamp completion zsh > "${fpath[1]}/_ottercamp"
+ottercamp completion fish > ~/.config/fish/completions/ottercamp.fish
+```
+
+Completion covers:
+- All resource names and actions
+- Flag names and their valid values (e.g., `--status` completes to `draft`, `queued`, `in_progress`, etc.)
+- Resource IDs where feasible (e.g., project names, agent names) via live API lookup with caching
+
+### Server URL
+
+The CLI needs to know where the OtterCamp server is:
+
+1. `--server` flag
+2. `OTTERCAMP_URL` environment variable
+3. Stored in `~/.ottercamp/credentials` (set during `ottercamp auth login`)
+4. Default: `http://localhost:4110` (the default serve port from doc 08)
+
+---
+
 ## Database Schema Summary
 
-This spec introduces two new tables:
+This spec introduces four new tables:
 
 ### domain_event
 
 The durable event log. DDL in Section 7.
+
+### consumer_cursor
+
+Per-consumer position tracking for event dispatch. DDL in Section 7.
 
 ### job_queue
 
@@ -1081,9 +1407,9 @@ These are infrastructure tables that support the rest of the system. They do not
 
 4. **PostgreSQL-backed job queue.** No Redis dependency. `SELECT ... FOR UPDATE SKIP LOCKED` provides efficient concurrent claiming. Fewer moving parts, fewer failure modes. The system already depends on PostgreSQL; adding another data store for the job queue adds operational complexity without proportional benefit.
 
-5. **Rate limiting: per-API-key with configurable limits.** Default generous for self-host (operator owns the infra), stricter for managed. Sliding window counter in process memory — no external dependency. Cross-process precision deferred until needed.
+5. **No API-layer rate limiting.** The only rate-limiting concern is upstream LLM providers, handled at the model layer (doc 07). API-layer rate limits add complexity with no proportional benefit — self-host operators own their infrastructure, and the model layer already prevents provider overload. Can be added later if managed multi-tenant hosting requires it.
 
-6. **Event dispatch uses the outbox pattern.** Events are written transactionally with domain operations and dispatched asynchronously. At-least-once delivery to consumers; consumers must be idempotent. This decouples event producers from consumers and ensures no events are lost on crash.
+6. **Event dispatch uses per-consumer cursor tracking on a monotonic sequence.** Each consumer (realtime push, memory pipeline, notification evaluator, internal reactions) independently tracks its position via a `seq`-based cursor in the `consumer_cursor` table. The `seq` column (`BIGSERIAL`) provides strict total ordering that eliminates the timestamp-collision problem. Events are written transactionally with domain operations. LISTEN/NOTIFY provides near-instant wake-up; polling is the fallback. At-least-once delivery; consumers must be idempotent. This decouples consumers from each other — one slow consumer does not block others.
 
 7. **Cursor-based pagination only.** No offset-based pagination. Cursors are opaque and client-generated construction is not supported. Reliable under concurrent writes.
 
@@ -1101,11 +1427,15 @@ These are infrastructure tables that support the rest of the system. They do not
 
 14. **Stale claim recovery via background process.** Handles worker crashes without manual intervention. Configurable timeout per job type — longer for agent turns (which may involve long model calls), shorter for lightweight jobs.
 
-15. **Idempotency keys scoped to org with 24-hour TTL.** Client-generated, server-stored. Same key with same request returns stored response. Same key with different request returns 409. Prevents accidental duplicate mutations.
+15. **Idempotency keys in org database with 24-hour TTL.** Client-generated, server-stored. Same key with same request returns stored response. Same key with different request returns 409. Prevents accidental duplicate mutations. Org scoping is implicit from db-per-org — no `organization_id` column needed.
 
-16. **SSE reconnection via Last-Event-ID.** Built into the SSE protocol. Client reconnects and replays missed events from the durable log. No client-side tracking needed beyond the standard `EventSource` API.
+16. **SSE reconnection via Last-Event-ID using monotonic seq.** The SSE `id` field is the event's `seq` value — a monotonic integer that provides strict ordering. On reconnect, `Last-Event-ID` is a simple numeric comparison (`WHERE seq > $last_seq`). No UUID parsing, no timestamp ambiguity.
 
 17. **Backpressure via buffer overflow and reconnect.** If a client falls behind, the server drops the connection after the buffer fills. The client reconnects and catches up from the event log. Simple, no flow control negotiation needed.
+
+18. **API-first: no UI-only features.** Every piece of functionality is accessible through the REST API. The web UI, TUI, mobile app, and CLI are all API clients. There is no hidden internal API — agent operations have corresponding human-accessible endpoints for inspection and override.
+
+19. **CLI wraps the API with `noun verb` commands.** The `ottercamp` binary includes a full API client alongside server management commands. Resource names map to API paths, actions map to HTTP methods/commands. Three output modes (table, json, quiet) support both interactive use and scripting. Shell completion and self-documentation are built in — every command shows its underlying API call.
 
 ## Open Questions
 
