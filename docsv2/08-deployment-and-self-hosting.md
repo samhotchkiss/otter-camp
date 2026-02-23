@@ -5,7 +5,7 @@ This spec defines how OtterCamp is packaged, deployed, configured, and operated 
 
 In single-node mode, one process runs both the API server (HTTP/WebSocket) and the background Worker (agent turns, memory pipeline, scheduled tasks) using goroutines, sharing a single database connection pool. For VPS deployments, a `--mode` flag allows splitting API and Worker into separate processes for resource isolation, coordinating through the PostgreSQL-backed job queue. The managed multi-tenant mode uses **database-per-org isolation** (consistent with 04-auth-tenancy-and-identity.md) — every organization gets its own PostgreSQL database, with a catalog database mapping org slugs to database connections. No shared databases, no RLS. Managed mode adds per-org resource limits, S3 with path-prefixed object isolation, per-org migration orchestration, connection routing, and horizontal scaling of stateless API/Worker processes behind a load balancer. Docker Compose is the primary self-host distribution (as few as two containers: OtterCamp + PostgreSQL with pgvector), while a standalone binary with zero runtime dependencies is also available via Homebrew, apt, or direct download.
 
-Configuration is entirely through environment variables with sensible defaults -- the only truly required user input is a model provider API key (e.g., `ANTHROPIC_API_KEY`). An optional YAML config file supports complex structures like MCP server definitions. Schema migrations are embedded in the binary and run automatically on startup (forward-only, transactional, backward-compatible for minor versions). Secrets (provider API keys, SSH keys, MCP credentials) are stored AES-256-GCM encrypted in a `secret` table, with a master key sourced from an environment variable, key file, or cloud KMS. The spec also covers backup/restore (single-command `ottercamp backup`/`restore` packaging both database and object storage), health check endpoints (`/health` for liveness, `/ready` for readiness), TLS options (reverse proxy, built-in ACME, or manual certs), the upgrade path (semantic versioning with automatic migration for minor releases), and the CLI command surface for server management.
+Configuration is entirely through environment variables with sensible defaults -- the only truly required user input is at least one model provider API key, which bootstrap uses to create a provider connection in the database (see 07-models-and-inference.md). After bootstrap, provider connections are managed through the subscription dashboard, not environment variables. An optional YAML config file supports complex structures like MCP server definitions. Schema migrations are embedded in the binary and run automatically on startup (forward-only, transactional, backward-compatible for minor versions). Secrets (provider API keys, SSH keys, MCP credentials) are stored AES-256-GCM encrypted in a `secret` table, with a master key sourced from an environment variable, key file, or cloud KMS. The spec also covers backup/restore (single-command `ottercamp backup`/`restore` packaging both database and object storage), health check endpoints (`/health` for liveness, `/ready` for readiness), TLS options (reverse proxy, built-in ACME, or manual certs), the upgrade path (semantic versioning with automatic migration for minor releases), and the CLI command surface for server management.
 
 ---
 
@@ -136,7 +136,8 @@ services:
       - OBJECT_STORAGE_BUCKET=ottercamp
       - OBJECT_STORAGE_ACCESS_KEY=ottercamp
       - OBJECT_STORAGE_SECRET_KEY=ottercamp
-      # Model provider keys — the only required user configuration
+      # Model provider keys — used during bootstrap to create provider connections
+      # (see 07-models-and-inference.md). After first run, manage connections via the UI.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GOOGLE_AI_API_KEY=${GOOGLE_AI_API_KEY:-}
@@ -193,7 +194,7 @@ volumes:
 1. PostgreSQL starts and becomes healthy.
 2. MinIO starts (object storage).
 3. OtterCamp starts, connects to PostgreSQL, runs schema migrations automatically.
-4. If this is the first start (empty database), bootstrap runs: creates the org, prompts for or reads admin credentials from environment variables, seeds the starter trio (Frank, Lori, Ellie), creates the General session. See doc 04 for full bootstrap flow.
+4. If this is the first start (empty database), bootstrap runs: creates the org, prompts for or reads admin credentials from environment variables, seeds the starter trio (Frank, Lori, Ellie), creates the General session, and creates provider connections from any model provider API keys in environment variables (see Provider Connection Bootstrap). See doc 04 for full bootstrap flow.
 5. API server begins accepting connections on port 8080.
 6. Worker begins processing background jobs.
 7. The operator opens `http://localhost:8080` and logs in.
@@ -283,7 +284,7 @@ On first run, the binary:
 
 1. Connects to PostgreSQL.
 2. Runs schema migrations.
-3. Runs the bootstrap flow (creates org, prompts for admin credentials if not set via env vars).
+3. Runs the bootstrap flow (creates org, prompts for admin credentials if not set via env vars, creates provider connections from any API key env vars).
 4. Starts serving on `http://localhost:8080`.
 
 Object storage defaults to local filesystem (`~/.ottercamp/objects/` or configurable via `OBJECT_STORAGE_PATH`). No S3 setup required.
@@ -334,11 +335,7 @@ All configuration is via environment variables. No configuration file is require
 
 #### Required
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `ANTHROPIC_API_KEY` | Anthropic API key. At least one model provider key is required. | `sk-ant-...` |
-
-That is the only required configuration when using the binary with a local PostgreSQL. If PostgreSQL is not on `localhost:5432`, `DATABASE_URL` is also needed.
+At least one model provider API key must be available during bootstrap so the system can create a provider connection (see Provider Connection Bootstrap below). If PostgreSQL is not on `localhost:5432`, `DATABASE_URL` is also needed. There is no other required configuration.
 
 #### Database
 
@@ -371,15 +368,22 @@ That is the only required configuration when using the binary with a local Postg
 | `TLS_ACME_DOMAIN` | — | Domain for automatic ACME (Let's Encrypt) certificate. Requires port 443. |
 | `BASE_URL` | `http://localhost:8080` | Public-facing URL. Used for links in notifications, API responses, and OAuth callbacks. |
 
-#### Model Providers
+#### Model Provider Bootstrap
+
+These environment variables are **bootstrap convenience** shortcuts. On first run, each provided key creates a `provider_connection` record with the key stored encrypted in the `secret` table (see 07-models-and-inference.md Provider Connections and Provider Connection Bootstrap below). After bootstrap, provider connections — including failover chains, per-connection concurrency limits, and health tracking — are managed through the subscription dashboard. The env vars are not read after bootstrap completes.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | — | Anthropic API key. |
-| `OPENAI_API_KEY` | — | OpenAI API key. |
-| `GOOGLE_AI_API_KEY` | — | Google AI API key. |
-| `MODEL_CONCURRENCY_GLOBAL` | `10` | Maximum concurrent LLM sessions across all providers. |
-| `MODEL_CONCURRENCY_PER_PROVIDER` | `5` | Maximum concurrent sessions per provider. |
+| `ANTHROPIC_API_KEY` | — | Creates an Anthropic provider connection on bootstrap. |
+| `OPENAI_API_KEY` | — | Creates an OpenAI provider connection on bootstrap. |
+| `GOOGLE_AI_API_KEY` | — | Creates a Google AI provider connection on bootstrap. |
+
+#### Model Gateway
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MODEL_CONCURRENCY_GLOBAL` | `10` | Maximum concurrent model sessions across all providers (see 07-models-and-inference.md Concurrency and Queuing). |
+| `MODEL_CONCURRENCY_PER_PROVIDER` | `5` | Maximum concurrent sessions per provider. Per-provider limits can be further constrained at the org level. |
 
 #### Worker
 
@@ -435,19 +439,10 @@ That is the only required configuration when using the binary with a local Postg
 
 ### Configuration File (Optional)
 
-For complex structures that do not map well to flat environment variables (such as per-provider model routing overrides or complex MCP server configurations), an optional YAML configuration file is supported:
+For complex structures that do not map well to flat environment variables (such as MCP server configurations), an optional YAML configuration file is supported:
 
 ```yaml
 # ~/.ottercamp/config.yaml (or OTTERCAMP_CONFIG_FILE env var)
-
-# Model routing overrides (per-provider settings beyond API key)
-models:
-  anthropic:
-    default_model: claude-sonnet-4-20250514
-    max_tokens: 8192
-  openai:
-    default_model: gpt-4o
-    max_tokens: 4096
 
 # MCP server connections (complex, multi-field config)
 mcp_servers:
@@ -464,6 +459,8 @@ mcp_servers:
 ```
 
 Environment variables always override the config file. The config file is optional — everything can be done with env vars alone, though some configurations (like MCP servers with multiple fields) are more readable in YAML.
+
+Note: model profiles, provider connections, and model routing are NOT configured via this file. They are managed through the subscription dashboard and stored in the database (see 07-models-and-inference.md). The YAML config file is for infrastructure-level settings only.
 
 ## Database Management
 
@@ -703,9 +700,21 @@ Secrets are decrypted at runtime when needed:
 
 ### Self-Host vs Managed
 
-In **self-host mode**, model provider API keys can be configured via environment variables (`ANTHROPIC_API_KEY`, etc.) for convenience. These are read at startup and stored in the `secret` table (encrypted). After bootstrap, the env vars are no longer needed — the encrypted database copy is the source of truth. The operator can remove the env vars from their compose file after first run if they prefer.
+In **self-host mode**, model provider API keys can be provided via environment variables (`ANTHROPIC_API_KEY`, etc.) as a bootstrap convenience. On first run, the bootstrap flow reads these env vars and creates the full provider connection infrastructure (see Provider Connection Bootstrap below). After bootstrap, the env vars are no longer read — provider connections and their encrypted secrets in the database are the source of truth. The operator can remove the API key env vars from their compose file after first run.
 
 In **managed mode**, secrets are NEVER in environment variables. All secrets are managed through the application UI or API, stored encrypted in PostgreSQL, and decrypted at runtime via KMS. Environment variables are used only for infrastructure configuration (database URL, S3 endpoint), never for tenant-scoped secrets.
+
+### Provider Connection Bootstrap
+
+When model provider API key environment variables are present during bootstrap (first run), the system creates the full provider connection infrastructure defined in 07-models-and-inference.md:
+
+1. **Register providers**: ensure `model_provider` records exist for each provider with an API key (Anthropic, OpenAI, Google). These are instance-level records — if they already exist (e.g., seeded in migrations), this step is a no-op.
+2. **Store secrets**: for each API key, create a `secret` table entry with the key encrypted (AES-256-GCM). The secret is categorized as `model_provider`.
+3. **Create provider connections**: for each API key, create a `provider_connection` record linking the org to the provider, with `api_key_secret_ref` pointing to the encrypted secret. The connection starts with `health_status = 'healthy'` and `failover_priority = 0`.
+4. **Create default model profiles**: create the default agent and system profiles for the org (see 07-models-and-inference.md Model Profiles). If Anthropic is present, it is the primary provider for all default profiles. System profiles (summarization, listening eval, memory extraction, memory synthesis) are created with appropriate model selections.
+5. **Create org-level assignment**: create a `model_profile_assignment` with `scope_type = 'org'` pointing to the primary default profile, so all agents have a working model configuration immediately.
+
+After bootstrap, the operator manages provider connections through the subscription dashboard (see 07-models-and-inference.md Subscription Dashboard): adding connections, configuring failover chains, adjusting concurrency limits, and monitoring health. The environment variables are a one-time convenience — the database-stored provider connections are the runtime source of truth.
 
 ### Secret Lifecycle
 
@@ -881,7 +890,7 @@ These limits are stored in `organization.settings` (jsonb) within each org's dat
 - **Secrets stored encrypted in PostgreSQL, not in environment variables (managed mode).** Self-host can bootstrap from env vars for convenience, but the encrypted database copy becomes the source of truth. Managed mode never uses env vars for tenant secrets.
 - **Forward-only migrations.** No rollback migrations. Fixes go forward. This eliminates the class of bugs where rollback scripts are untested or out of sync.
 - **Health checks follow the liveness/readiness pattern.** `/health` for process liveness (no dependency checks), `/ready` for traffic readiness (checks database, storage, migrations). Non-critical dependencies do not affect readiness.
-- **Model provider API keys are the only truly required user configuration.** Everything else has defaults. A developer can run OtterCamp with just an Anthropic key and a local PostgreSQL.
+- **A model provider API key is the only truly required user input.** Everything else has defaults. A developer can run OtterCamp with just an Anthropic key and a local PostgreSQL. The API key is a bootstrap convenience — on first run, the system creates the full provider connection infrastructure (provider_connection, encrypted secret, default model profiles, org-level assignment) described in doc 07. After bootstrap, provider connections are managed through the subscription dashboard, not environment variables.
 - **Split mode is optional, not required.** Single process runs everything by default. Split API and Worker processes are available for VPS operators who want resource isolation but are not required.
 - **Docker Compose is the primary self-host packaging.** It is not the only option — the binary runs independently — but Docker Compose is what we optimize for, document first, and test most thoroughly.
 - **Master key for secrets encryption is the one external secret.** It is provided via environment variable or key file, never stored in the database. In managed mode, it is a KMS key reference.

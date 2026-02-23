@@ -1186,9 +1186,9 @@
         <div class="config-level-title">Environment Variables</div>
         <div class="config-level-desc">
           All configuration can be set via env vars. Always override the config file.
-          The only truly required input is a model provider API key.
+          Model provider keys are bootstrap-only -- they create provider connections on first run.
         </div>
-        <div class="config-level-example">ANTHROPIC_API_KEY=sk-ant-...
+        <div class="config-level-example">ANTHROPIC_API_KEY=sk-ant-...  # bootstrap only
 DATABASE_URL=postgres://...
 PORT=8080</div>
       </div>
@@ -1198,16 +1198,15 @@ PORT=8080</div>
         <div class="config-priority">02</div>
         <div class="config-level-title">YAML Config File</div>
         <div class="config-level-desc">
-          Optional. For complex structures that do not map well to flat env vars:
-          model routing overrides, MCP server definitions.
+          Optional. For complex structures that do not map well to flat env vars.
+          MCP server definitions only -- model config lives in the database.
         </div>
         <div class="config-level-example"># ~/.ottercamp/config.yaml
-models:
-  anthropic:
-    default_model: claude-sonnet-4
 mcp_servers:
   - name: github
-    transport: stdio</div>
+    transport: stdio
+    command: npx
+    args: ["-y", "@mcp/server-github"]</div>
       </div>
       <div class="config-arrow">--></div>
       <div class="config-level">
@@ -1229,11 +1228,15 @@ DATABASE_MAX_CONNECTIONS=25</div>
 
     <div class="config-categories animate-in">
       <div class="config-cat">
-        <h4>Required</h4>
+        <h4>Provider Bootstrap</h4>
         <div class="config-vars">
           <div class="config-var">
             <div class="config-var-name">ANTHROPIC_API_KEY</div>
-            <div class="config-var-desc">At least one model provider key. The only required user config.</div>
+            <div class="config-var-desc">Bootstrap: creates provider connection + encrypted secret + default profiles (see doc 07)</div>
+          </div>
+          <div class="config-var">
+            <div class="config-var-name">OPENAI_API_KEY</div>
+            <div class="config-var-desc">Bootstrap: creates OpenAI provider connection. Optional.</div>
           </div>
         </div>
       </div>
