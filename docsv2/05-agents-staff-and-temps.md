@@ -569,7 +569,7 @@ create table agent (
   -- Model Policy
   default_model_profile_id uuid,                           -- references model_profile.logical_profile_id (stable identity) — see doc 07
   allowed_model_profiles  uuid[],                          -- nullable = any org-available profile allowed
-  budget_cap_cents        int,                             -- per-agent cost cap in cents per budget period
+  budget_cap_tokens       int,                             -- per-agent token cap per budget period
   budget_period           text default 'monthly'
     check (budget_period in ('daily', 'weekly', 'monthly')),
 
@@ -618,7 +618,7 @@ create index on agent (temp_expires_at) where agent_class = 'temp' and lifecycle
 - `lifecycle_status` combines staff and temp states into one column. Staff agents use `draft`, `active`, `paused`, `retired`, `cancelled`. Temp agents use `active`, `expired`, `promoted`.
 - `memory_read_scopes` is a text array. Possible values: `org`, `assigned_projects`, `current_task`. Default is `{org, assigned_projects, current_task}` — both staff and temps see their assigned project's memory. The difference is that staff agents are assigned to multiple projects (cross-project knowledge) while temps are assigned to exactly one. Agent-private memory access is controlled separately by the `private_memory_enabled` boolean, not by this array. Retrieval cascades upward within each scope (see 06-memory.md Scope Inheritance).
 - The check constraint on `tool_allow_list`/`tool_deny_list` prevents setting both simultaneously. If both are null, the agent inherits the org/project tool policy.
-- `budget_cap_cents` and `budget_period` are the per-agent budget. The org and project also have budgets (see 13-security-observability-costs.md). The most restrictive cap across all three levels applies.
+- `budget_cap_tokens` and `budget_period` are the per-agent token budget. The org and project also have budgets (see 13-security-observability-costs.md). The most restrictive cap across all three levels applies. Budget caps are always in tokens — never in cents or dollars. Dollar estimates are display-only in the UI.
 - `temp_expires_at` is pre-computed for TTL-scoped temps. For task-scoped and session-scoped temps, it is set when the task completes or session closes.
 
 ### agent_project_assignment
