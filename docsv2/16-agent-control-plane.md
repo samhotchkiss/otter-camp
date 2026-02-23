@@ -557,6 +557,10 @@ Cancellation is graceful:
 6. All pending steps are marked `cancelled`.
 7. A RunEvent records the cancellation with the actor and reason.
 
+### Paused Runs
+
+A run enters `paused` when it requires external input (e.g., browser handoff to a human — see doc 11 Human Handoff). Paused runs are exempt from stuck detection — the supervisor does not treat them as stuck. Paused runs have a configurable timeout (default: 24 hours) after which they transition to `timed_out`.
+
 ## Inbox Integration
 
 The inbox is the human's review surface for items that require human attention. Inbox items come from two sources: the flow engine (when a `review` flow node with `human` actor type activates) and conversational capability requests from agents. Policy does not push items to the inbox — policy is strictly binary (allow/deny).
@@ -573,41 +577,25 @@ This is agent-initiated, not policy-triggered. The agent noticed it lacked a cap
 
 ### CLI Sandboxing
 
-CLI execution uses container-based isolation. Each CLI worker runs in a lightweight container with:
+CLI execution uses process-level isolation. Each CLI command runs as a restricted OS process with:
 
-**Filesystem isolation:**
-- The container's filesystem is an overlay mount with the project's git repo (task branch) as the read-write layer.
-- The working directory is the project workspace. The agent can read and write files within the workspace.
-- Directories outside the workspace are not accessible. No access to `/etc`, `/var`, host system configs, or other projects.
-- Temporary files go to an ephemeral tmpfs mount, cleared when the container exits.
-
-**Process isolation:**
-- The container runs as a non-root user with no privilege escalation.
-- Process count is limited (default: 256).
-- CPU and memory are capped per container (configurable per org/project).
-
-**Network policy:**
-- By default, outbound network access is allowed (agents need to install packages, call APIs, etc.).
-- Org and project policies can restrict network access: allowlist specific domains, denylist specific domains, or deny all outbound.
-- Inbound connections are never allowed.
-
-**Environment:**
-- Environment variables are set by the control plane at container creation.
-- Secrets referenced in the action are resolved at execution time (see Security section) and injected as environment variables.
-- The agent does not see other agents' secrets or other projects' environment.
-
-**Time and resource limits:**
+- Working directory scoped to the project repo (task branch).
+- Filtered environment variables (no host secrets leak). Secrets referenced in the action are resolved at execution time (see Security section) and injected as environment variables. The agent does not see other agents' secrets or other projects' environment.
+- Resource limits via ulimit (CPU time, memory, file descriptors).
+- Command denylist enforced before execution.
+- Network policy enforced at the process level. By default, outbound network access is allowed (agents need to install packages, call APIs, etc.). Org and project policies can restrict network access: allowlist specific domains, denylist specific domains, or deny all outbound. Inbound connections are never allowed.
 - Wall clock timeout per command (configurable, default: 5 minutes).
-- CPU time limit to prevent infinite loops.
-- Output size limit (stdout + stderr combined, default: 1 MB). Output beyond the limit is truncated and a warning is emitted.
+- stdout and stderr are captured independently. Inline limit: 50KB per stream (content included in the tool result). Total capture limit: 10MB per command (excess stored as a RunArtifact). See doc 11 for details.
 - Disk write limit (default: 500 MB) to prevent the agent from filling the workspace.
+
+Container-based isolation is a future enhancement for managed/multi-tenant deployments. See doc 11 for the full CLI sandbox model.
 
 ### Browser Isolation
 
 Browser execution uses isolated browser contexts:
 
-- Each run gets its own browser context (isolated cookies, localStorage, session state).
-- Browser contexts are not shared between runs or between agents.
+- Browser sessions are task-scoped — the first run in a task creates the browser session, and subsequent runs within the same task can resume it. Sessions are cleaned up when the task completes. See doc 11 for the full browser session lifecycle.
+- Browser contexts are not shared between tasks or between agents.
 - Domain restrictions are enforced at the browser level: the navigation policy (allowlist/denylist) is configured per org/project and enforced before any page load.
 - All browser actions (navigations, clicks, typed text) are recorded as RunEvents for replay.
 - Screenshots are captured at configurable points (every navigation, every interaction, on error, on completion) and stored as RunArtifacts.
@@ -835,7 +823,7 @@ create table run (
 
   -- Status
   status              text not null default 'created'
-    check (status in ('created', 'in_progress', 'completed', 'failed', 'timed_out', 'cancelled', 'cancelling', 'dead_letter')),
+    check (status in ('created', 'in_progress', 'paused', 'completed', 'failed', 'timed_out', 'cancelled', 'cancelling', 'dead_letter')),
   failure_reason      text,                      -- null unless failed
   failure_class       text check (failure_class in ('transient', 'permanent', 'timeout', 'policy', 'cancelled', 'orphaned')),
 
@@ -999,7 +987,7 @@ create table run_artifact (
 
   -- Artifact
   name            text not null,                 -- human-readable name
-  artifact_type   text not null check (artifact_type in ('log', 'screenshot', 'file', 'trace', 'diff')),
+  artifact_type   text not null check (artifact_type in ('log', 'screenshot', 'file', 'trace', 'diff', 'cli_output', 'download', 'extracted_data', 'page_snapshot', 'build_output', 'test_report')),
   content_type    text not null,                 -- MIME type
   size_bytes      bigint not null,
   storage_path    text not null,                 -- object storage path
@@ -1178,9 +1166,9 @@ The capability model in this doc defines what permissions are needed. The tool r
 
 - **Most-restrictive-wins policy composition.** Higher-priority layers always override lower ones. `deny` at any layer is absolute. `allow` only when all applicable layers allow (or are silent). This is simple, predictable, and safe.
 
-- **Container-based CLI sandboxing.** CLI commands run in lightweight containers with filesystem isolation (overlay mount of project workspace), process limits, network policy, and resource caps. This provides strong isolation without the complexity of full VMs.
+- **Process-level CLI sandboxing.** CLI commands run as restricted OS processes with working directory scoped to the project repo, filtered environment variables, resource limits via ulimit, command denylist, and network policy enforcement. Container-based isolation is a future enhancement for managed/multi-tenant deployments. See doc 11 for the full CLI sandbox model.
 
-- **Browser contexts are isolated per run.** Each run gets a fresh browser context with no shared state. This prevents data leakage between runs and between agents. Browser sessions have a maximum duration to prevent resource leaks.
+- **Browser sessions are task-scoped.** The first run in a task creates the browser session, and subsequent runs within the same task can resume it. Sessions are cleaned up when the task completes. This prevents data leakage between tasks and between agents. See doc 11 for the full browser session lifecycle.
 
 - **Dead letter handling for repeated failures.** Runs that exceed max retries go to `dead_letter` status rather than being silently dropped. This ensures nothing is lost and the operator can investigate.
 

@@ -14,7 +14,7 @@ The schema introduces four tables: `cli_execution` (full command lifecycle with 
 # 11. System Integration (CLI and Browser Control)
 
 > Status: Draft
-> Depends on: 01-architecture-and-domain.md (control runtime), 02-chat.md (tool execution tiers, turn loop), 03-projects-and-task-flow.md (task branches, project repos), 03a-shipping-and-delivery.md (deploy tasks using CLI/browser), 16-agent-control-plane.md (policy, execution broker, sandboxing, RunArtifact)
+> Depends on: 01-architecture-and-domain.md (control runtime), 02-chat.md (tool execution tiers, turn loop), 03-projects-and-task-flow.md (task branches, project repos), 03a-shipping-and-delivery.md (deploy tasks using CLI/browser), 13-security-and-observability.md (artifact retention, secret store, observability), 16-agent-control-plane.md (policy, execution broker, sandboxing, RunArtifact)
 
 ## Purpose
 
@@ -51,7 +51,7 @@ Define how agents execute real-world actions through the terminal and web browse
 CLI and browser execution are capabilities gated by the control plane (doc 16):
 
 - `system.cli.execute` — permission to run terminal commands.
-- `system.browser.control` — permission to control a browser.
+- Browser capabilities (`system.browser.navigate`, `.interact`, `.screenshot`, `.extract` — typically granted together) — permission to control a browser.
 
 These capabilities follow the standard policy evaluation path (doc 16 Policy Evaluation). The control plane's execution broker admits the request, the worker runtime executes in a sandbox, and results flow back through RunEvents and RunArtifacts.
 
@@ -87,6 +87,9 @@ Agent requests: cli.execute({command: "go test ./...", working_dir: "."})
 │   └─ Store output as RunArtifact (if above size threshold)
 │
 └─ If deny:
+    ├─ A `cli_execution` record is created with `status = 'denied'` for audit purposes,
+    │   even though the command does not execute. This aligns with doc 16's pattern
+    │   where denied runs still create a run record.
     └─ Return "not permitted: {reason}" as tool result
 ```
 
@@ -117,6 +120,8 @@ For long-running commands, stdout and stderr are streamed back to the agent and 
 - `cli.stdout` events carry incremental output chunks.
 - `cli.stderr` events carry error output chunks.
 - `cli.exit` event carries the final exit code and summary.
+
+These map to doc 16's `output_chunk` event type, with `event_data` containing `{stream: 'stdout'|'stderr', chunk: '...'}` or `{stream: 'exit', exit_code: N}`.
 
 The agent receives the complete output when the command finishes. The human (if watching the run in the UI) sees output in real time.
 
@@ -177,6 +182,7 @@ Within the project repo, the agent has full read/write access. Outside the repo:
 
 - **Read access**: system package directories (for compilation/linking), temp directories.
 - **Write access**: the project repo and designated temp directories only.
+- **Disk write limit**: 500MB per command execution (configurable). Prevents runaway processes from filling the disk.
 - **No access**: other projects' repos, OtterCamp data directories, system configuration.
 
 ## CLI Command Policy
@@ -213,6 +219,7 @@ Following doc 16's policy hierarchy (highest priority first):
 2. **Organization policy**: org-wide additions to denylist or adjustments to risk classification. Example: an org might elevate `docker` commands to `dangerous` if containers aren't needed.
 3. **Project policy**: project-specific overrides. Example: a deployment project might allow `docker build` and `docker push` at `normal` risk.
 4. **Agent profile policy**: per-agent restrictions. Example: a content-writing agent has no business running `docker` commands, even if the project allows them.
+5. **Request-specific overrides** — runtime context (e.g., budget exhaustion) can deny operations that would otherwise be allowed.
 
 Lower layers can only restrict, not loosen, what higher layers have denied. A project policy cannot allow a command that the instance safety policy denies.
 
@@ -359,7 +366,7 @@ A browser session is created when an agent first requests a browser action withi
 1. Creates an isolated browser context.
 2. Applies domain policy (allowlist/denylist).
 3. Injects any pre-configured credentials.
-4. Associates the session with the current run and task.
+4. Associates the session with the task. The session persists across multiple runs within that task.
 
 ### Task-Scoped Reuse
 
@@ -379,6 +386,7 @@ Browser sessions are cleaned up when:
 - The task is put `on_hold`. Browser sessions are suspended (state preserved but browser process released). If the task resumes, a new session is created — the state is not guaranteed to be resumable after an extended hold.
 - The human explicitly revokes browser access for the agent.
 - The session has been idle for longer than a configurable timeout (default: 1 hour). Prevents zombie browser processes.
+- The human manually closes the browser session through the UI or by requesting it in chat (close_reason: `manual`).
 
 On cleanup, the final page screenshot is captured as a RunArtifact, and any downloaded files are preserved.
 
@@ -439,8 +447,8 @@ Per doc 03, agents work on task branches (`task/<task-slug>`). The following rul
 
 - **Allowed on task branch**: `git add`, `git commit`, `git status`, `git diff`, `git log`, `git stash`, `git checkout` (files, not branches), `git rebase` (onto updated main, for conflict resolution), `git merge` (for pulling in main updates).
 - **Allowed read-only on any branch**: `git log`, `git diff`, `git show`, `git blame` — agents can read history from `main` or other branches for context.
-- **Denied**: `git push` to `main` (all pushes to main go through the merge queue), `git checkout main` (agents don't switch to main for work), `git branch -D` (agents don't delete branches), `git push --force` to any branch (force push is destructive).
-- **Sensitive**: `git push` to task branch remote (allowed by default, but classified as `sensitive` for policy tracking). This is how task branches are synced with configured remotes (doc 03a).
+- **Denied**: `git push` to `main` (all pushes to main go through the merge queue), `git checkout main` (agents don't switch to main for work), `git branch -D` (agents don't delete branches), `git push --force` to shared branches (main, develop, release/*). Force-pushing to the agent's own task branch is allowed when push is enabled, to support rebase workflows.
+- **Sensitive**: `git push` to task branch remote (allowed by default, but classified as `sensitive` for policy tracking). This is how task branches are synced with configured remotes (doc 03a). This means `git push` is denied by default and must be explicitly enabled at the org or project level. Projects that use remote sync (doc 03a) must enable push as part of project setup. Note: `git rebase` is allowed (see above) but force-pushing the rebased branch requires push to be enabled.
 
 ### Commit Practices
 
@@ -525,7 +533,7 @@ Both CLI and browser operations support cancellation:
 
 - **CLI**: SIGTERM to the running process, SIGKILL after 10 seconds. Tool result includes partial output captured before cancellation.
 - **Browser**: the current action is aborted. The browser session state remains valid — cancellation doesn't corrupt the session.
-- **Turn-level cancellation** (doc 02): when the human cancels a turn, in-flight CLI processes finish (to avoid leaving partial side effects), and browser actions complete their current step before stopping.
+- **Turn-level cancellation** (doc 02): when the human cancels a turn, in-flight CLI processes receive SIGTERM and are given a grace period (default: 5 seconds) to exit cleanly. If the process does not exit within the grace period, it receives SIGKILL. This prevents indefinite waits on long-running commands. Browser actions complete their current step before stopping.
 
 ### Retry Policy
 
@@ -570,7 +578,7 @@ The UI provides:
 The human can revoke an agent's system access at any time:
 
 - **Revoke CLI**: the agent's `system.cli.execute` capability is removed. In-progress commands finish, but subsequent tool calls return "not permitted."
-- **Revoke browser**: the agent's `system.browser.control` capability is removed. The browser session is suspended (screenshot captured). The agent can no longer issue browser actions.
+- **Revoke browser**: revoke all `system.browser.*` capabilities. The browser session is suspended (screenshot captured). The agent can no longer issue browser actions.
 - Revocation is immediate. The agent sees "not permitted" on the next tool call attempt and can adapt (escalate, switch approach, signal step done with the work it completed so far).
 
 ---
@@ -716,7 +724,7 @@ These tables extend, not duplicate, the control plane's execution tracking:
 - **Chat (doc 02)**: CLI and browser tools are tier 2 tools in the turn loop. They route through the control plane for policy evaluation and execution. Tool call/result messages in chat reference the underlying cli_execution or browser_action records.
 - **Projects/tasks (doc 03)**: CLI commands run in the project's git repo, on the agent's task branch. Browser sessions are scoped to tasks.
 - **Shipping (doc 03a)**: deploy tasks use CLI (run deploy scripts, build commands) and browser (submit to Kindle Store, interact with hosting platforms) for delivery actions. Same execution model.
-- **Agents (doc 05)**: agent profiles include tool policy that determines which system tools an agent can access. A content writer might have `system.browser.control` but not `system.cli.execute`.
+- **Agents (doc 05)**: agent profiles include tool policy that determines which system tools an agent can access. A content writer might have browser capabilities (`system.browser.navigate`, `.interact`, `.screenshot`, `.extract`) but not `system.cli.execute`.
 - **Control plane (doc 16)**: the authoritative policy and execution layer. All CLI and browser actions pass through the broker. Run/RunStep/RunArtifact/RunEvent entities provide the generic execution framework that this spec's domain tables extend.
 - **Tools (doc 20)**: CLI tools (`cli.execute`) and browser tools (`browser.navigate`, `browser.click`, etc.) are registered in the tool registry as tier 2 system tools. Tool descriptions are included in prompt assembly (layer 7).
 - **Security/observability (doc 13)**: CLI and browser execution data feeds into observability dashboards (action counts, failure rates, execution times). Secret references in credential injection follow doc 13's security baseline.
@@ -736,12 +744,12 @@ These tables extend, not duplicate, the control plane's execution tracking:
 9. **CLI output is truncated in tool results with full output in RunArtifacts.** Inline limit defaults to 50KB per stream. Total capture limit defaults to 10MB per command. The agent is told when output is truncated and given an artifact reference.
 10. **One active browser session per task.** Multi-tab support is deferred. The agent navigates between sites within a single session. Simplifies state management and prevents resource exhaustion.
 11. **Human handoff creates an inbox item.** The human completes the sensitive action manually and signals completion. Handoffs expire after a configurable timeout (default 24 hours). No back-and-forth during a handoff — discussion happens in the task's sync session.
-12. **Git operations are regular CLI tool calls with policy rules.** No push to `main` (merge queue only), no force push, no branch deletion. Read-only access to any branch. Commits linked to runs via RunEvent metadata.
+12. **Git operations are regular CLI tool calls with policy rules.** No push to `main` (merge queue only), no force push to shared branches (main, develop, release/*) — force-pushing to the agent's own task branch is allowed when push is enabled. No branch deletion. Read-only access to any branch. Commits linked to runs via RunEvent metadata.
 13. **CLI retries are not automatic.** Commands may have side effects, so the agent must explicitly choose to re-run. Projects can mark specific commands as idempotent for single automatic retry on transient failure.
 14. **Risk classification has four levels**: `safe`, `normal`, `sensitive`, `dangerous`. Each level maps to a default policy action. Classification follows the policy layer hierarchy (instance > org > project > agent), where lower layers can only restrict, not loosen.
 15. **CLI and browser domain tables extend the control plane schema.** They reference Run/RunStep/RunArtifact by ID and add domain-specific detail (command strings, exit codes, page URLs, screenshots). They do not duplicate generic execution tracking.
 16. **Browser session idle timeout defaults to 1 hour.** Active sessions with no browser actions for this duration are cleaned up. Prevents zombie browser processes.
-17. **Revocation is immediate.** The human can revoke `system.cli.execute` or `system.browser.control` at any time. In-flight operations finish, subsequent attempts return "not permitted."
+17. **Revocation is immediate.** The human can revoke `system.cli.execute` or all `system.browser.*` capabilities at any time. In-flight operations finish, subsequent attempts return "not permitted."
 
 ## Open Questions
 

@@ -785,7 +785,7 @@ create table inbox_item (
   id                uuid primary key default gen_random_uuid(),
   organization_id   uuid not null references organization(id),
   target_user_id    uuid not null references human_user(id),  -- which human this item is for
-  item_type         text not null check (item_type in ('task_scoping_review', 'task_work_review', 'draft_action_review', 'escalation', 'capability_approval')),
+  item_type         text not null check (item_type in ('task_scoping_review', 'task_work_review', 'draft_action_review', 'escalation', 'capability_approval', 'browser_handoff')),
   status            text not null default 'pending' check (status in ('pending', 'deferred', 'acted')),
   source_project_id uuid references project(id),
   source_task_id    uuid references project_task(id),
