@@ -185,11 +185,11 @@ table does NOT support 'supervisor' (ISSUE #20 unresolved). Supervisor tests ver
 `run_event` rows are written but do NOT assert `audit_event` rows for supervisor actions.
 Add a comment: `// TODO(issue-20): supervisor actions cannot be logged to audit_event.`
 
-**ISSUE #23 (budget enforcement):**
-`TestPolicy_Eval_BudgetGate` tests the hard-limit blocking behavior (non-essential
-capabilities denied when budget exhausted). This tests the soft limit (block, not
-the per-agent cap hierarchy). Add a `// TODO(issue-23):` comment noting that per-agent
-budget enforcement in the gate is deferred.
+**ISSUE #23 (RESOLVED — hierarchical/additive budget enforcement):**
+`TestPolicy_Eval_BudgetGate` tests the full three-level check:
+- Seed `token_budget` org row with hard limit exhausted → non-essential capabilities denied; essential capabilities (filing blockers, notifying operator) still allowed.
+- Also verify that per-agent cap (`agent.budget_cap_tokens`) causes deny when the agent's period usage is at/above the cap, even if org/project have remaining headroom.
+- Verify `BudgetService.RecordUsage` charges the invocation token count to all three applicable levels simultaneously: assert org usage, project usage, and agent period usage each increment by the correct amount after a completed invocation.
 
 **Run state machine optimistic concurrency:**
 `TestRun_OptimisticConcurrency` requires both goroutines to attempt the state transition

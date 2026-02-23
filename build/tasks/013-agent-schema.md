@@ -115,7 +115,7 @@ only — lifecycle business logic lives in task 014.
 
 > ✅ ISSUE #1 (RESOLVED): Column is `budget_cap_tokens bigint` (tokens). Doc 05 updated. Dollar/cent units are never used in the data layer.
 
-> ⚠️ ISSUE #23 (BLOCKER): The interaction between per-agent `budget_cap_tokens`/`budget_period` (this table) and the org/project `token_budget` table (task 023) is unspecified. Budget enforcement logic in the control plane cannot be implemented until Sam resolves the hierarchy rules (additive? most-restrictive? hierarchical?). This task delivers schema only; enforcement is blocked.
+> ✅ ISSUE #23 (RESOLVED): Budget enforcement is hierarchical/additive. The per-agent `budget_cap_tokens`/`budget_period` columns work within the three-level hierarchy: a single invocation is charged to agent, project, and org levels simultaneously. All three levels are checked before dispatch in task 053. `BudgetService.CheckBudget` (task 023) accepts an `agentID *uuid.UUID` parameter and checks the agent cap alongside org/project limits. This task delivers the schema; enforcement is wired in task 053.
 
 - ISSUE #5 (AMBIGUOUS): No DB check constraint prevents a staff agent from reaching `expired` or a temp agent from reaching `draft`. This is application-layer enforcement only (implemented in task 014). Do not add a compound check on `(agent_class, lifecycle_status)` — document this as intentional in a code comment.
 - ISSUE #8 (GAP): When `temp_scope_type='ttl'`, `temp_scope_id` semantics are unclear — the spec does not state whether it points to the associated project or is null. Until Sam resolves this, make `temp_scope_id` nullable and add a code comment referencing ISSUE #8.

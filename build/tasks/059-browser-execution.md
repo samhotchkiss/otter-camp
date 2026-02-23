@@ -47,7 +47,7 @@ policy enforcement; credential injection; and idle timeout handling.
 - `browser_session_id uuid not null references browser_session(id) on delete cascade`
 - `run_id uuid not null references run(id) on delete cascade`
 - `run_step_id uuid not null references run_step(id) on delete cascade`
-- `action_type text not null check (action_type in ('navigate','click','type','select','hover','scroll','press_key','screenshot','extract_text','extract_structured','get_page_info','wait_for','wait_for_navigation','back','forward','refresh'))` — 15 action types from doc 11; see ISSUE #26 note below
+- `action_type text not null check (action_type in ('navigate','click','type','select','hover','scroll','press_key','screenshot','extract_text','extract_structured','get_page_info','wait_for','wait_for_navigation','back','forward','refresh','evaluate'))` — 16 action types from doc 11 (✅ ISSUE #26 resolved: `evaluate` added)
 - `input jsonb not null default '{}'` — action-specific parameters
 - `output jsonb` — action result (page info, extracted text, etc.)
 - `screenshot_artifact_id uuid references run_artifact(id) on delete set null` — automatic screenshot taken after every nav/interaction/error
@@ -129,7 +129,7 @@ policy enforcement; credential injection; and idle timeout handling.
   - No credential sites, no payment pages (doc 11 rule).
   - Returns `false` (denied) if domain matches any denylist entry.
 
-> ⚠️ ISSUE #26 (BLOCKER): Doc 20 defines `browser.evaluate` (JavaScript execution in page context). Doc 11 does NOT include it in the browser action model. The `action_type` CHECK constraint above reflects doc 11's 15 actions only and omits `browser.evaluate`. Do not add `evaluate` to the action_type enum until Sam resolves this contradiction. The `BrowserExecutor` will return `ErrUnknownActionType` for any `evaluate` action dispatched via the broker.
+> ✅ ISSUE #26 (RESOLVED): `browser.evaluate` is confirmed. Doc 11 §Scripted Execution defines the action: input `{script string, timeout_ms int}`, runs JS in the page context, requires `system.browser.interact` capability, subject to domain policy, automatic screenshot after. The `action_type` CHECK constraint above includes `'evaluate'` as the 16th action type.
 
 **Human handoff flow:**
 - `BrowserExecutor.RequestHandoff(ctx, sessionID, runID, agentID, targetUserID, reason) (BrowserHandoff, error)`:
@@ -214,4 +214,4 @@ Credentials for browser sessions are loaded from the agent's MCP secret bindings
 **Screenshot storage:**
 Screenshots are `image/png` and are ALWAYS stored in object storage (never inline). `run_artifact.inline_content` is always null for screenshots. The `download_url` (presigned link from task 054) is the access mechanism.
 
-> ⚠️ ISSUE #26 (BLOCKER): `browser.evaluate` (JavaScript execution) is defined in doc 20 but absent from doc 11's browser action model. The `action_type` CHECK constraint does NOT include `evaluate`. Do not implement or enable `browser.evaluate` until Sam resolves the contradiction between doc 20 and doc 11.
+> ✅ ISSUE #26 (RESOLVED): Implement `evaluate` by dispatching the `script` string to the Playwright/Puppeteer worker via `page.evaluate(script)`; serialize return value as JSON; capture automatic post-action screenshot; enforce `system.browser.interact` capability (same check as `click` and `type`); deny if current page domain is blocked by policy.

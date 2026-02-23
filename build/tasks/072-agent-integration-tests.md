@@ -77,15 +77,16 @@ DELETE /v1/agents/:id/skills/:sid detaches; priority ordering preserved for mult
 `lifecycle_status='promoted'`; `agent_profile_template` row with `source='promoted'`
 created; promoted agent requires human approval before becoming draft staff.
 
-`TestAgent_BudgetCap_Stub` — create agent with `budget_cap_tokens` set (stub column name
-per ISSUE #1 resolution pending); verify the column value is persisted and returned
-correctly; budget enforcement behavior is NOT tested here (blocked by ISSUE #23).
+`TestAgent_BudgetCap_Stub` — create agent with `budget_cap_tokens` and `budget_period` set;
+verify the column values are persisted and returned correctly via `AgentRepo.GetByID`;
+budget *enforcement* tests (checking the cap during a run) are in the control plane
+integration tests (task 076).
 
 ### Must NOT build
 
 - E2E tests for agent management (those are in task 085)
 - Tests for prompt assembly or turn execution (tasks 072/083)
-- Budget enforcement integration tests — blocked by ISSUES #1 and #23; deferred
+- Budget enforcement integration tests — covered by control plane tests (task 076)
 
 ## Acceptance Criteria
 
@@ -128,11 +129,11 @@ correctly; budget enforcement behavior is NOT tested here (blocked by ISSUE #23)
 **ISSUE #1 (RESOLVED):**
 `TestAgent_BudgetCap_Stub` uses `budget_cap_tokens` (the resolved column name). No TODO needed.
 
-**ISSUE #23 (BLOCKER — budget enforcement path):**
-Budget cap enforcement (checking the cap before/during a run) is explicitly NOT tested
-in this suite. Add a skipped test `TestAgent_BudgetEnforcement_BLOCKED` with a
-`t.Skip("blocked by ISSUE #23 — budget enforcement hierarchy unresolved")` to make the
-gap visible in CI output.
+**ISSUE #23 (RESOLVED — budget enforcement path):**
+Budget cap enforcement is tested in the control plane integration suite (task 076), not here.
+`TestAgent_BudgetCap_Stub` tests persistence only. `TestPolicy_Eval_BudgetGate` in task 076
+tests the full three-level hierarchical/additive check (org → project → agent). No
+`t.Skip` or blocked test needed in this suite.
 
 **ISSUE #5 (lifecycle cross-class constraint):**
 `TestAgent_StaffLifecycle_IllegalTransition` verifies application-layer enforcement only.

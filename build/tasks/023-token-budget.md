@@ -11,11 +11,11 @@
 
 ## Scope
 
-Build the `token_budget` table, repository, and budget enforcement service for org- and
-project-level token limits. Soft limits (warn once per period) and hard limits (block
-non-essential capabilities) are both implemented. Anomaly detection background job is
-included. Per-agent budget enforcement is schema-only (blocked by ISSUE #23 until the
-hierarchy is resolved).
+Build the `token_budget` table, repository, and budget enforcement service for all three
+budget levels: org, project, and per-agent. Soft limits (warn once per period) and hard
+limits (block non-essential capabilities) are both implemented. Anomaly detection background
+job is included. Budget enforcement is hierarchical/additive: a single invocation is charged
+to all three applicable levels simultaneously (ISSUE #23 resolved).
 
 ### Must build
 
@@ -47,11 +47,14 @@ hierarchy is resolved).
 
 ```go
 type BudgetService interface {
-    // Called before model invocation (in control plane broker, task 052)
-    CheckBudget(ctx context.Context, orgID uuid.UUID, projectID *uuid.UUID, estimatedTokens int64) (*BudgetCheckResult, error)
+    // Called before model invocation (in control plane broker, task 052).
+    // Checks all three levels: org, project (if projectID != nil), agent (if agentID != nil).
+    // Hierarchical/additive: any level exceeding its hard limit causes Allowed=false.
+    CheckBudget(ctx context.Context, orgID uuid.UUID, projectID *uuid.UUID, agentID *uuid.UUID, estimatedTokens int64) (*BudgetCheckResult, error)
 
-    // Called after model invocation completes (token count known)
-    RecordUsage(ctx context.Context, orgID uuid.UUID, projectID *uuid.UUID, tokensUsed int64) error
+    // Called after model invocation completes (token count known).
+    // Records actual usage at all three applicable levels simultaneously.
+    RecordUsage(ctx context.Context, orgID uuid.UUID, projectID *uuid.UUID, agentID *uuid.UUID, tokensUsed int64) error
 
     // Called by anomaly detection job
     ScanForAnomalies(ctx context.Context) error
@@ -96,7 +99,6 @@ type BudgetCheckResult struct {
 - Job is registered with the job queue in `BudgetService.RegisterJobs()` called at startup
 
 ### Must NOT build
-- Per-agent budget enforcement (blocked by ISSUE #23)
 - Model invocation table (task 035/036)
 - Model usage rollup (task 036)
 - Control plane broker enforcement wiring (task 052 uses `BudgetService.CheckBudget`)
@@ -130,7 +132,7 @@ type BudgetCheckResult struct {
 
 ## Implementer Notes
 
-> ⚠️ ISSUE #23 (BLOCKER): The interaction between per-agent `budget_cap_tokens`/`budget_period` (agent table, task 013) and this org/project `token_budget` table is unspecified. Specifically: when both a project budget and an agent budget are configured, which takes precedence? Are they additive? Is it most-restrictive-wins? The control plane broker (task 052) cannot implement multi-level budget enforcement until Sam resolves this. This task delivers schema and org/project-level enforcement only. Per-agent enforcement is a stub in `CheckBudget` that logs a warning: "per-agent budget enforcement not yet implemented — ISSUE #23 unresolved."
+> ✅ ISSUE #23 (RESOLVED): Budget enforcement is hierarchical/additive. `CheckBudget` accepts an `agentID *uuid.UUID` parameter and checks all three levels (org → project → agent) in sequence. Per-agent usage is computed as `SUM(input_tokens + output_tokens) FROM model_invocation WHERE agent_id = $agentID AND created_at >= agent_period_start` (via the injected `UsageQuerier` interface). A single invocation's actual token count is recorded at all three levels simultaneously via `RecordUsage`.
 
 - The `model_invocation` table (task 035/036) is a forward reference. In this task, `RecordUsage` and `CheckBudget` aggregate from `model_invocation` via a dependency-injected `UsageQuerier` interface:
   ```go

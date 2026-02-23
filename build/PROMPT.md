@@ -1,6 +1,20 @@
 # Ralph Loop: V2 Build Breakdown — Sprint 1 (Backend + API + CLI + Tests)
 
-You are breaking down the OtterCamp V2 spec suite into 1-2 day implementation task files that a Claude Code session can pick up and build. You will read all 22 specs, derive a dependency-driven build order from the actual schemas and FK relationships, and produce 60-120 task files in `build/tasks/`.
+You are breaking down the OtterCamp V2 spec suite into sequential implementation phases that Codex will pick up and build consecutively. You will read all 22 specs, derive a dependency-driven build order from the actual schemas and FK relationships, and produce 60-120 phase files in `build/tasks/`.
+
+**The pipeline after you finish:**
+1. You (Ralph) produce phase files + ISSUES.md
+2. Sam reviews ISSUES.md and resolves any spec conflicts before building starts
+3. Codex picks up phase files in sequence and builds the system
+4. An Opus agent does final review and approval of each completed phase
+
+This means your phase files must be precise enough for Codex to execute without ambiguity, and your ISSUES.md must surface every spec conflict or gap before a single line of code is written.
+
+## Execution Model
+
+**Each iteration runs as a separate agent invocation.** You are never asked to complete all iterations in one session. When you receive a prompt, it will tell you exactly which iteration you are on, which docs to read, and what to produce. At the end of your iteration, commit your work and stop — do not proceed to the next iteration. The orchestrator (Sam) will launch the next iteration after reviewing your output.
+
+**State files are your memory across iterations.** You do not have access to previous sessions' context. Always read `build/PROGRESS.md`, `build/ISSUES.md`, `build/DEPENDENCY-GRAPH.md`, and `build/MANIFEST.md` at the start of each iteration (if they exist) to recover context.
 
 ## Sprint 1 Scope — CRITICAL
 
@@ -28,9 +42,11 @@ Every domain task should think in terms of: schema → service → API endpoints
 2. **Derive build order from FK analysis, not doc 14's phases.** Doc 14 is useful for intuition but its phase boundaries are product-facing, not implementation-facing. Your layers come from "what tables reference what other tables."
 3. **No Large tasks.** Every task must be completable in 1-2 days. If a task feels bigger, split it immediately. Sizing: S = half day to one day, M = one to two days. If you catch yourself writing "L" — stop and split.
 4. **Commit after every batch.** Each iteration that produces files must end with a git commit so the next iteration sees the latest state.
-5. **Three state files are your working memory.** You persist context across iterations via `build/PROGRESS.md`, `build/MANIFEST.md`, and `build/DEPENDENCY-GRAPH.md`. Read them at the start of every iteration after Phase 1.
-6. **Every domain gets tests.** Schema tasks get migration tests. Service tasks get unit tests. API tasks get integration tests. And there are dedicated E2E test tasks that exercise full workflows (create org → create agent → start chat → send message → get response → create project → create task → run flow → verify memory extraction).
+5. **Four state files are your working memory.** You persist context across iterations via `build/PROGRESS.md`, `build/MANIFEST.md`, `build/DEPENDENCY-GRAPH.md`, and `build/ISSUES.md`. Read them at the start of every iteration after Phase 1.
+6. **Every domain gets tests.** Schema tasks get migration tests. Service tasks get unit tests. API tasks get integration tests. And there are dedicated E2E test tasks that exercise full workflows (create org → create agent → start chat → send message → get response → create project → create task → run flow → verify memory extraction). Every task file must specify which unit tests, integration tests, and E2E tests it requires — following the architecture in doc 21.
 7. **Every API endpoint gets a CLI command.** The CLI is not an afterthought — it's the primary interface for Sprint 1. If you can't do it from the CLI, it's not done.
+8. **Log every spec inconsistency immediately.** While reading, if two specs contradict each other, a spec references something undefined, or a behavioral rule is ambiguous, write it to `build/ISSUES.md` right away. Do not guess or paper over it. These issues must be resolved by Sam before Codex starts building.
+9. **Update the Figma UI doc for UI components discovered in specs.** When reading docs 17, 18, and 19, check `docsv2/ui-spec-for-figma.md`. If a component, view, or interaction pattern described in the spec is missing from the Figma doc, add it. The Figma doc must be complete before Sprint 2 (UI) begins.
 
 ---
 
@@ -47,24 +63,25 @@ All specs live in `docsv2/`. Here is the current status:
 | 04 | Auth, Tenancy, and Identity | 631 | **Finished** | Full build |
 | 05 | Agents, Staff, and Temps | 892 | **Finished** | Full build |
 | 06 | Memory | 1135 | **Finished** | Full build |
-| 07 | Models and Inference | 818 | Draft | Full build |
+| 07 | Models and Inference | 818 | **Finished** | Full build |
 | 08 | Deployment and Self-Hosting | 960 | **Finished** | Full build |
-| 09 | MCP Integration | 821 | Draft | Full build |
-| 10 | Skills Integration | 556 | Draft | Full build |
-| 11 | System Integration (CLI/Browser) | 748 | Draft | CLI yes, browser deferred |
-| 12 | API, Events, and Realtime | 1112 | Draft | Full build |
-| 13 | Security, Observability, Costs | 840 | Draft | Full build |
-| 14 | Open Questions and Phasing | 791 | Draft | Reference only |
-| 15 | Migration and Backward Compat | 381 | Draft | Full build |
+| 09 | MCP Integration | 821 | **Finished** | Full build |
+| 10 | Skills Integration | 556 | **Finished** | Full build |
+| 11 | System Integration (CLI/Browser) | 748 | **Finished** | CLI yes, browser deferred |
+| 12 | API, Events, and Realtime | 1112 | **Finished** | Full build |
+| 13 | Security, Observability, Costs | 840 | **Finished** | Full build |
+| 14 | Open Questions and Phasing | 791 | **Finished** | Reference only |
+| 15 | Migration and Backward Compat | 381 | **Finished** | Full build |
 | 16 | Agent Control Plane | 1201 | **Finished** | Full build |
 | 17 | TUI | 824 | Draft | **Read only — no tasks** |
 | 18 | Web UI | 895 | Draft | **Read only — no tasks** |
 | 19 | Mobile UI | 470 | Draft | **Read only — no tasks** |
-| 20 | Tools and Tool Policy | 613 | Draft | Full build |
+| 20 | Tools and Tool Policy | 613 | **Finished** | Full build |
+| 21 | Testing | 495 | **Finished** | Full build |
 
-**Finished specs** (02, 03, 03a, 04, 05, 06, 08, 16) have complete schemas with CREATE TABLE statements, resolved open questions, and full behavioral rules. These get thorough task coverage: 5-10 tasks each (schema + service + API + CLI + tests).
+**Finished specs** (02, 03, 03a, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 14, 15, 16, 20, 21) have complete schemas with CREATE TABLE statements, resolved open questions, and full behavioral rules. These get thorough task coverage: 5-10 tasks each (schema + service + API + CLI + tests).
 
-**Draft specs with full build** (07, 09, 10, 11, 12, 13, 15, 20) have schema sketches and behavioral descriptions but may have open questions. These get moderate coverage: 3-6 tasks each. Mark draft-sourced tasks with `spec-status: draft` so the implementer knows the spec may evolve.
+**Doc 21 (Testing):** This spec defines the full testing strategy — 3-layer architecture, `OTTERCAMP_MODE=test` flag, deterministic model responses, state reset API, coverage gates, and E2E via CLI+API. Read this spec before writing any test tasks. Every L5 test task should align with the architecture and conventions it defines.
 
 **Doc 11 (System Integration):** Build CLI sandboxing and command execution. Defer browser automation to Sprint 2 (it's a UI-adjacent concern).
 
@@ -83,13 +100,28 @@ Read docs 01, 02, 03, 03a, 04, 05, 14. These are the core domain + architecture 
 - Cross-references spotted (e.g., "chat_session.scope_id references project or project_task")
 - API endpoints mentioned or implied
 
+Also create `build/ISSUES.md` with this header structure:
+```markdown
+# Spec Issues
+
+Issues found during spec review that must be resolved before building starts.
+Each issue must be resolved by Sam before Codex picks up the affected task.
+
+| # | Severity | Affected Docs | Issue | Status |
+|---|----------|--------------|-------|--------|
+```
+
+Severity levels: **BLOCKER** (contradicting specs — cannot implement without resolution), **GAP** (spec references something undefined), **AMBIGUOUS** (behavioral rule unclear — two valid interpretations exist). Add a row for every issue found during reading. Do not wait until the end of Phase 1 — log as you go.
+
 ### Iteration 2
 Read docs 06, 07, 08, 09, 10, 16. These are memory, models, deployment, MCP, skills, and control plane. Update `build/PROGRESS.md` with the same structure.
 
 ### Iteration 3
-Read docs 11, 12, 13, 15, 17, 18, 19, 20. These are system integration, API, security, migration, and the three UI specs. Update `build/PROGRESS.md` to completion. **For docs 17-19, note only the API contracts and data shapes they require from the backend** — do not plan any UI tasks. At the end of this iteration, PROGRESS.md should list every table from every spec and every FK relationship.
+Read docs 11, 12, 13, 15, 17, 18, 19, 20, 21. These are system integration, API, security, migration, the three UI specs, and the testing spec. Update `build/PROGRESS.md` to completion. **For doc 21, capture the testing architecture, `OTTERCAMP_MODE=test` flag behavior, state reset API, and coverage requirements** — these inform every L5 test task. At the end of this iteration, PROGRESS.md should list every table from every spec and every FK relationship.
 
-**Phase 1 exit gate:** PROGRESS.md contains a complete table catalog with FK relationships from all 22 specs. Do not proceed to Phase 2 until this is true.
+**Figma UI doc audit (docs 17-19):** For each of the three UI specs, read `docsv2/ui-spec-for-figma.md` and identify any component, view, interaction pattern, or data shape described in the UI spec that is not already documented in the Figma doc. Add missing items directly to `docsv2/ui-spec-for-figma.md` under the appropriate section. Do not create tasks for UI components — but do ensure the Figma doc is complete so Sprint 2 can begin from a solid foundation. Note the API contracts and data shapes the UI specs require from the backend in PROGRESS.md so those requirements flow into the relevant backend tasks.
+
+**Phase 1 exit gate:** PROGRESS.md contains a complete table catalog with FK relationships from all 22 specs. ISSUES.md exists and contains every spec inconsistency, gap, and ambiguity found during reading. `docsv2/ui-spec-for-figma.md` has been updated with any UI components missing from the UI specs. Do not proceed to Phase 2 until all three are true.
 
 ---
 
@@ -173,6 +205,21 @@ create after reading this section.
 - [ ] (for API tasks: specific endpoints with methods, paths, request/response shapes)
 - [ ] (for CLI tasks: specific commands with flags and expected output)
 - [ ] (for test tasks: specific scenarios that must pass)
+
+## Tests Required
+
+Following the architecture in doc 21:
+
+**Unit tests** (list the specific functions/modules to test and what cases to cover):
+- (e.g., `policy_eval`: allow/deny/escalate outcomes for each capability category)
+
+**Integration tests** (run against real PostgreSQL, test service interactions):
+- (e.g., `POST /api/v1/orgs` creates org + default agents + seeds policies, returns 201)
+
+**E2E tests** (full CLI+API flow — only for tasks that complete a user-facing workflow):
+- (e.g., `otter org create → otter agent list` returns Frank and the default staff)
+
+If this task has no E2E tests, write `None — covered by dedicated E2E task NNN`.
 
 ## Implementer Notes
 
@@ -262,6 +309,8 @@ Create `build/SUMMARY.md` with:
 10. **UI exclusion check:** Verify zero tasks reference TUI components, React components, or mobile views. Any task that says "UI" should be about CLI output formatting, not graphical UI.
 11. **Draft spec coverage:** For each draft spec, list the tasks derived from it and flag where spec gaps may cause implementation ambiguity.
 12. **Stats:** Total tasks, tasks per layer, tasks per domain, finished-spec tasks vs draft-spec tasks.
+13. **Issues check:** Count open issues in ISSUES.md by severity. List all BLOCKERs. If any BLOCKER is unresolved, flag it prominently — Sam must resolve these before Codex starts. The build should not begin with open BLOCKERs.
+14. **Figma doc check:** Confirm `docsv2/ui-spec-for-figma.md` was updated during Phase 1 and lists the components discovered in docs 17-19.
 
 After validation, signal completion:
 
@@ -274,11 +323,13 @@ After validation, signal completion:
 | File | Created | Purpose |
 |------|---------|---------|
 | `build/PROGRESS.md` | Phase 1, iter 1 | Reading notes — tables, FKs, behavioral rules per spec |
+| `build/ISSUES.md` | Phase 1, iter 1 | Spec inconsistencies, gaps, and ambiguities — Sam resolves before Codex builds |
 | `build/DEPENDENCY-GRAPH.md` | Phase 2, iter 4 | Complete table catalog with layer assignments |
 | `build/CHUNKING-PLAN.md` | Phase 2, iter 4 | Proposed task groups with counts |
 | `build/MANIFEST.md` | Phase 3, first batch | Running index of all task files |
 | `build/SUMMARY.md` | Phase 4 | Final validation report |
-| `build/tasks/*.md` | Phase 3 | The actual task files (60-120 of them) |
+| `build/tasks/*.md` | Phase 3 | The actual phase files (60-120 of them) — Codex runs these consecutively |
+| `docsv2/ui-spec-for-figma.md` | Ongoing (Phase 1 iter 3) | Figma design brief — updated with any missing UI components from docs 17-19 |
 
 ---
 
@@ -294,6 +345,8 @@ After validation, signal completion:
 8. **Creating UI tasks.** This is Sprint 1. No TUI, no Web UI, no Mobile UI. If you catch yourself writing a task that mentions Bubble Tea, React, React Native, or any visual component — stop. That's Sprint 2.
 9. **Schema without tests.** Every schema task should note that the corresponding test task will verify migrations run cleanly. Every service task should note test expectations. Every API task should define expected request/response shapes that integration tests will verify.
 10. **API without CLI.** If there's an API endpoint, there must be a CLI command that calls it. The CLI is how we verify the system works before any UI exists.
+11. **Guessing through spec contradictions.** If two specs say different things, do not pick one and move on. Log it in ISSUES.md and leave the affected task's behavior unspecified until Sam resolves it. Codex should not be making spec decisions.
+12. **Skipping the test specification.** Every task file must list its required unit tests, integration tests, and E2E tests. A task file with no Tests Required section is incomplete. Codex needs to know exactly what to test, not just what to build.
 
 ---
 
@@ -303,7 +356,7 @@ After validation, signal completion:
 |-----------|-------|-------------|
 | 1 | 1 | Read docs 01-05, 14. Create PROGRESS.md |
 | 2 | 1 | Read docs 06-10, 16. Update PROGRESS.md |
-| 3 | 1 | Read docs 11-13, 15, 17-20. Complete PROGRESS.md |
+| 3 | 1 | Read docs 11-13, 15, 17-21. Complete PROGRESS.md |
 | 4 | 2 | Build DEPENDENCY-GRAPH.md + CHUNKING-PLAN.md |
 | 5-6 | 3 | Write L0 + L1 tasks (foundation + core identity) |
 | 7-9 | 3 | Write L2 + L3 tasks (domain core + features) |

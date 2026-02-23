@@ -184,8 +184,12 @@ The Supervisor subscribes to `run.failed` domain events to trigger dead-letter h
 **Paused runs and the 24-hour timeout:**
 Paused runs are exempt from the heartbeat silence check. However, a separate `detectStalePaused` check runs: if a run has been `paused` for >24 hours, the supervisor considers it stale and fails it with `failure_reason="paused timeout exceeded"`. This handles abandoned browser handoffs (task 059).
 
-**Budget gate interaction:**
-Budget enforcement calls `BudgetService.CheckBudget` which checks `token_budget` table limits. Until ISSUE #23 is resolved, implement the per-org and per-project checks only. Skip per-agent budget enforcement and log a warning:
-> ⚠️ ISSUE #23 (BLOCKER): Per-agent budget enforcement is blocked until Sam resolves the budget unit conflict (cents vs tokens) between doc 05 and doc 13. Implement org/project budget checks; skip agent-level check.
+**Budget gate interaction (ISSUE #23 RESOLVED — hierarchical/additive):**
+`BudgetService.CheckBudget(ctx, orgID, projectID, agentID, estimatedTokens)` checks all three levels in order:
+1. **Org level**: check `token_budget` where `project_id IS NULL`; if hard limit exceeded → `Allowed=false, Level="org"`.
+2. **Project level**: check `token_budget` where `project_id = run.ProjectID`; if hard limit exceeded → `Allowed=false, Level="project"`.
+3. **Agent level**: check `agent.budget_cap_tokens` using `agent.budget_period` as the window; compute current-period usage via `model_invocation` sum for the agent; if exceeded → `Allowed=false, Level="agent"`.
+
+After the invocation completes, call `BudgetService.RecordUsage(ctx, orgID, projectID, agentID, actualTokens)` to charge the token count against all three applicable levels simultaneously. The broker calls `RecordUsage` regardless of whether the pre-check used an estimate.
 
 > ⚠️ ISSUE #17 (AMBIGUOUS): Policy evaluation for run creation must reject writes to `policy_layer='instance'` rows. Enforce at the API level in task 054, not in this service layer.

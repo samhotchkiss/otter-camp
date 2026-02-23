@@ -704,7 +704,13 @@ create index on token_budget (organization_id);
 
 Budget checks happen in the control plane execution broker, before a model invocation is dispatched (see 16-agent-control-plane.md):
 
-1. **Pre-check**: before dispatching a run that will involve model calls, the broker checks current period token usage against the applicable budgets (org + project).
+1. **Pre-check**: before dispatching a run that will involve model calls, the broker performs a hierarchical budget check across all three applicable levels in order:
+   - **Org level**: check `token_budget` where `project_id IS NULL` for the org; if hard limit exceeded → deny.
+   - **Project level**: if run is project-scoped, check `token_budget` where `project_id = run.project_id`; if hard limit exceeded → deny.
+   - **Agent level**: check `agent.budget_cap_tokens` and `agent.budget_period` for the run's agent (if configured); compute current-period usage via `model_invocation` sum for that agent; if exceeded → deny.
+
+   **Hierarchical/additive model**: a single invocation's token count is charged to **all** applicable levels simultaneously — agent usage feeds up to the project total, and project usage feeds up to the org total. The same tokens deplete the budget at every configured level at once. The most restrictive limit governs the allow/deny decision; all non-null hard limits are checked before each dispatch.
+
 2. **Soft limit**: if current usage exceeds the soft limit, the run proceeds but a warning is emitted. The warning appears in the operator's activity feed and on the usage dashboard. A warning is emitted at most once per budget per period (not on every invocation after the limit).
 3. **Hard limit**: if current usage exceeds the hard limit, **non-essential capabilities are denied**. Essential capabilities (filing blockers, updating task status, notifying the operator) remain allowed so agents can gracefully report the budget breach. The policy evaluation returns `deny` with reason `budget_exceeded` for non-essential actions. An inbox item is created for the operator with the details.
 

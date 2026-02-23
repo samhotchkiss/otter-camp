@@ -251,6 +251,8 @@ The browser action API is deliberately high-level. Agents do not write Playwrigh
 - **Actions auditable**: every action is a structured record with clear semantics.
 - **Sandboxing enforceable**: the system controls what the browser does, not the agent.
 
+The one exception is `browser.evaluate`, which provides direct JavaScript execution in the page context. It is a controlled escape hatch for cases where the structured action API is insufficient — see **Scripted Execution** below.
+
 ### Browser Action API
 
 The agent has access to these browser tools:
@@ -279,6 +281,19 @@ The agent has access to these browser tools:
 - `browser.wait_for({selector, state, timeout_ms})` — wait for an element to appear, disappear, or become interactive. `state` is `visible`, `hidden`, or `interactive`. Prevents the agent from acting on a page that hasn't finished loading.
 - `browser.wait_for_navigation({timeout_ms})` — wait for a page navigation to complete after a click or form submission.
 
+**Scripted Execution:**
+- `browser.evaluate({script, timeout_ms})` — execute a JavaScript expression in the current page context. `script` is a string containing a JavaScript expression or statement block; if it returns a value, that value is serialized as JSON and returned in `result`. `timeout_ms` defaults to 5000.
+
+  Use `browser.evaluate` when structured actions are insufficient: accessing page state not exposed by `get_page_info`, triggering custom UI behaviours, or extracting data that `extract_structured` cannot reach.
+
+  Security constraints:
+  - The script runs in the page's existing context with the same access the page itself has — no additional host permissions are granted.
+  - Scripts cannot access the browser worker's process, credentials store, or host filesystem.
+  - Requires `system.browser.interact` capability (same as `browser.click` and `browser.type`).
+  - Subject to domain policy: if the current page domain is blocked, the action is denied.
+  - An automatic screenshot is captured after execution (same as other interaction actions).
+  - `browser.evaluate` is an escape hatch, not a general scripting layer. Prefer structured actions whenever they suffice.
+
 ### Action Results
 
 Every browser action returns a structured result:
@@ -296,7 +311,7 @@ Every browser action returns a structured result:
 To maintain auditability without requiring the agent to explicitly screenshot after every action, the system captures screenshots automatically:
 
 - **After every navigation** (`browser.navigate`, redirects, form submissions that trigger navigation).
-- **After every interaction** (`browser.click`, `browser.type`, `browser.select`) — captured after the action completes and any resulting animations/transitions settle.
+- **After every interaction** (`browser.click`, `browser.type`, `browser.select`, `browser.evaluate`) — captured after the action completes and any resulting animations/transitions settle.
 - **On error** — captures the page state when an action fails.
 
 Automatic screenshots are stored as RunArtifacts linked to the browser action's RunStep. They are NOT returned to the agent inline (that would waste tokens) — they are available for human review in the run's artifact timeline. The agent can explicitly call `browser.screenshot()` when it needs to see the page state (the screenshot is then included in the tool result for the model).
@@ -656,7 +671,7 @@ create table browser_action (
   browser_session_id  uuid not null references browser_session(id),
   run_id              uuid not null,      -- references the control plane run
   run_step_id         uuid not null,      -- references the specific run step
-  action_type         text not null,      -- navigate, click, type, select, hover, scroll, press_key, screenshot, extract_text, extract_structured, get_page_info, wait_for, wait_for_navigation, back, forward, refresh
+  action_type         text not null,      -- navigate, click, type, select, hover, scroll, press_key, screenshot, extract_text, extract_structured, get_page_info, wait_for, wait_for_navigation, back, forward, refresh, evaluate
   action_params       jsonb not null,     -- structured parameters for the action
   description         text,               -- human-readable description from the agent
   page_url_before     text,               -- URL before the action
@@ -736,7 +751,7 @@ These tables extend, not duplicate, the control plane's execution tracking:
 1. **Browser sessions are reusable per task, not per run.** Multiple runs within a task share the browser context (cookies, login state, history). This enables multi-step workflows that span multiple agent runs. Sessions are cleaned up when the task completes.
 2. **CLI sandbox model is process-level isolation with restricted working directory and environment.** Container-level isolation (each command in a lightweight container) is a future enhancement for managed multi-tenant deployments. Process isolation is sufficient for single-operator self-hosted deployments.
 3. **Sensitive actions are denied by default.** Commands matching the denylist are denied. Browser actions on sensitive domains (financial, auth, admin) are denied by default — the org or project can allowlist specific domains. Policy is binary: allow or deny, configured in advance. Human handoff for browser actions (CAPTCHA, 2FA) is agent-initiated, not policy-triggered.
-4. **Browser action API is high-level.** Agents use structured actions (`navigate`, `click`, `type`, `screenshot`, `extract_text`, `extract_structured`, `wait_for`), not raw browser automation code. This keeps prompts clean, actions auditable, and sandboxing enforceable.
+4. **Browser action API is high-level.** Agents use structured actions (`navigate`, `click`, `type`, `screenshot`, `extract_text`, `extract_structured`, `wait_for`), not raw browser automation code. This keeps prompts clean, actions auditable, and sandboxing enforceable. `browser.evaluate` is the one exception — a controlled JavaScript execution escape hatch for cases where structured actions are insufficient; it requires `system.browser.interact` and runs in the page context only.
 5. **Compound CLI commands are decomposed for classification.** Pipes, chains, and subshells are broken down, and the overall risk is the maximum of all components. This prevents policy bypass via command chaining.
 6. **Automatic screenshots after every browser action.** Stored as RunArtifacts for human review, NOT returned inline to the agent (to avoid wasting tokens). The agent explicitly calls `browser.screenshot()` when it needs to see the page.
 7. **Agents never see credentials in prompts.** Credentials are injected into browser contexts and CLI environments at execution time by the worker, resolved from the org's secret store. The agent's tool call history and audit trail never contain raw secrets.

@@ -415,21 +415,20 @@ these as blocked until the spec issue is resolved by Sam.
 - `agent` — ISSUE #1 (BLOCKER): `budget_cap_cents` vs `budget_cap_tokens` column name and type
   unresolved between doc 05 and doc 14. DDL cannot be finalized.
 
-- `agent`, `token_budget`, `run` (budget enforcement path) — ISSUE #23 (BLOCKER): per-agent
-  budget (doc 05, `budget_cap_cents`/`budget_period`) conflicts with org/project token_budget
-  table (doc 13, token units). Interaction rules (additive? most-restrictive? hierarchical?)
-  are unspecified. Budget enforcement in the control plane broker cannot be implemented until
-  this is resolved.
+- `agent`, `token_budget`, `run` (budget enforcement path) — ✅ ISSUE #23 (RESOLVED): per-agent
+  budget (`budget_cap_tokens`/`budget_period`) integrates with the org/project `token_budget`
+  table via hierarchical/additive enforcement: a single invocation depletes all three applicable
+  levels simultaneously; any exceeded hard limit blocks the invocation.
 
 - `flow_node` — ISSUE #16 (BLOCKER): authoritative `flow_node` schema is scattered across
   three contradictory docs. Required changes: (a) DROP `skills jsonb` (doc 10), (b) ADD
   `mcp_tools jsonb` (doc 09), (c) ADD `tool_domains jsonb` (doc 20 — tracked also as
   ISSUE #25). Doc 03 DDL must be updated with all three changes before implementation.
 
-- `tool_definition`, `browser_action`, `browser_session` (browser tool catalog) — ISSUE #26
-  (BLOCKER): doc 20 defines `browser.evaluate` (JS execution); doc 11 does not include it in
-  the browser action model. These two docs directly contradict each other. Browser tool catalog
-  and `browser_action.action_type` enum cannot be finalized.
+- `tool_definition`, `browser_action`, `browser_session` (browser tool catalog) — ✅ ISSUE #26
+  (RESOLVED): `browser.evaluate` (JS execution in page context) confirmed and specified in
+  doc 11 §Scripted Execution. `browser_action.action_type` enum includes 16 actions including
+  `evaluate`.
 
 - `model_invocation` (retention policy) — ISSUE #21 (BLOCKER): doc 13 says 30-day retention;
   doc 14 says 90-day retention. Retention enforcement job and archival policy cannot be

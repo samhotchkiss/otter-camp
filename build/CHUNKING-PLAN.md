@@ -128,7 +128,7 @@ Running total after L2: **24**
 - [ ] 023: Token budget schema + service — `token_budget` DDL + repository; soft limit (warn once
   per period, activity feed entry) + hard limit (block non-essential capabilities, fail closed);
   anomaly detection background job (15-min interval, 3x 7-day average threshold);
-  **FLAG: ISSUE #23 BLOCKER — per-agent budget enforcement path blocked until units/hierarchy resolved** — S
+  per-agent cap (`budget_cap_tokens`) enforced via hierarchical/additive model (✅ ISSUE #23 resolved) — S
 
 - [ ] 024: Event bus + job queue — `domain_event` DDL (seq-based ordering, LISTEN/NOTIFY wake-up);
   `consumer_cursor` DDL + per-consumer position tracking; `job_queue` DDL (priority tiers,
@@ -343,16 +343,16 @@ Running total after L4: **70**
   command decomposition (risk = max of parts); 50KB inline limit, 10MB total cap (excess → RunArtifact);
   cli.stdout/stderr/exit events mapped to run_event.output_chunk; working directory enforcement
   (path traversal rejection); process-level isolation; git operation rules (no push to main,
-  no force-push to shared branches); **FLAG: ISSUE #26 — browser.evaluate existence unresolved;
-  ISSUE #19 — run_step_id NOT NULL constraint** — M
+  no force-push to shared branches); ✅ ISSUE #26 resolved: `browser.evaluate` confirmed (doc 11 §Scripted Execution);
+  ISSUE #19 (run_step_id NOT NULL constraint) remains open — M
 
 - [ ] 059: Browser tool execution — `browser_session` DDL + repository (task-scoped, one active
-  per task, persists across runs); `browser_action` DDL + repository (14 action types; automatic
-  screenshot after every nav/interaction/error → RunArtifact, NOT inline); `browser_handoff` DDL +
-  repository (agent-initiated, inbox_item created, run paused, 24-hour expiry); domain policy
-  enforcement (sensitive domains denied by default); credential injection at session creation time;
-  idle timeout (1 hour); revocation (in-flight ops finish, next call denied);
-  **FLAG: ISSUE #26 — browser.evaluate existence unresolved** — M
+  per task, persists across runs); `browser_action` DDL + repository (16 action types including
+  `evaluate`; automatic screenshot after every nav/interaction/error → RunArtifact, NOT inline);
+  `browser_handoff` DDL + repository (agent-initiated, inbox_item created, run paused, 24-hour
+  expiry); domain policy enforcement (sensitive domains denied by default); credential injection at
+  session creation time; idle timeout (1 hour); revocation (in-flight ops finish, next call denied);
+  ✅ ISSUE #26 resolved: `browser.evaluate` included (JS execution, `system.browser.interact` required) — M
 
 - [ ] 060: Flow node execution + session linking — `flow_node_execution` DDL integration with
   chat_session creation (per-node async session auto-created on node start); commit_sha recording
