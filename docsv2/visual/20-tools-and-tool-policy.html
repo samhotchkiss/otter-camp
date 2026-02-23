@@ -1419,16 +1419,20 @@ flowchart LR
           </tr>
         </thead>
         <tbody>
-          <tr><td class="tool-col">task.create, task.update</td><td class="cap-col">project.task.update</td></tr>
+          <tr><td class="tool-col">task.create</td><td class="cap-col">project.task.create</td></tr>
+          <tr><td class="tool-col">task.update</td><td class="cap-col">project.task.update</td></tr>
           <tr><td class="tool-col">flow.advance, flow.review_decision</td><td class="cap-col">project.flow.advance</td></tr>
           <tr><td class="tool-col">file.write, file.delete, git.commit</td><td class="cap-col">system.file.write</td></tr>
           <tr><td class="tool-col">cli.execute</td><td class="cap-col">system.cli.execute</td></tr>
-          <tr><td class="tool-col">browser.*</td><td class="cap-col">system.browser.control</td></tr>
-          <tr><td class="tool-col">session.create, session.invite_agent</td><td class="cap-col">chat.participant.manage</td></tr>
+          <tr><td class="tool-col">browser.navigate</td><td class="cap-col">system.browser.navigate</td></tr>
+          <tr><td class="tool-col">browser.click, .type, .screenshot, .extract, .evaluate</td><td class="cap-col">system.browser.interact</td></tr>
+          <tr><td class="tool-col">session.create</td><td class="cap-col">chat.session.create</td></tr>
+          <tr><td class="tool-col">session.invite_agent</td><td class="cap-col">chat.participant.add</td></tr>
           <tr><td class="tool-col">message.send</td><td class="cap-col">chat.message.write</td></tr>
           <tr><td class="tool-col">memory.record</td><td class="cap-col">memory.write</td></tr>
-          <tr><td class="tool-col">agent.create_temp</td><td class="cap-col">agent.manage</td></tr>
-          <tr><td class="tool-col">email.compose, slack.post</td><td class="cap-col">communication.send</td></tr>
+          <tr><td class="tool-col">agent.create_temp</td><td class="cap-col">agent.temp.create</td></tr>
+          <tr><td class="tool-col">email.compose</td><td class="cap-col">comms.email.send</td></tr>
+          <tr><td class="tool-col">slack.post</td><td class="cap-col">comms.slack.post</td></tr>
           <tr><td class="tool-col">MCP tools</td><td class="cap-col">mcp.tool.invoke:&lt;conn_id&gt;:&lt;tool&gt;</td></tr>
         </tbody>
       </table>
@@ -1580,15 +1584,14 @@ flowchart LR
         <div class="domain-header" onclick="toggleDomain(this)">
           <div class="domain-header-left">
             <span class="domain-name" style="color: var(--tier2);">Communication</span>
-            <span class="domain-count">3 tools</span>
+            <span class="domain-count">2 tools</span>
           </div>
           <span class="domain-toggle">v</span>
         </div>
         <div class="domain-body">
           <div class="tool-row-header"><span>Tool</span><span>Description</span><span>Tier</span></div>
-          <div class="tool-row"><span class="tool-name t2">email.draft</span><span class="tool-desc">Draft an email for human review</span><span class="tool-tier t2">Tier 2</span></div>
-          <div class="tool-row"><span class="tool-name t2">email.send</span><span class="tool-desc">Send an email (requires deployer template)</span><span class="tool-tier t2">Tier 2</span></div>
-          <div class="tool-row"><span class="tool-name t2">slack.post</span><span class="tool-desc">Post a message to a Slack channel</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">email.compose</span><span class="tool-desc">Compose and stage an email draft for review</span><span class="tool-tier t2">Tier 2</span></div>
+          <div class="tool-row"><span class="tool-name t2">slack.post</span><span class="tool-desc">Compose and stage a Slack message draft for review</span><span class="tool-tier t2">Tier 2</span></div>
         </div>
       </div>
     </div>
@@ -1599,45 +1602,45 @@ flowchart LR
 <section id="human-review">
   <div class="container">
     <span class="section-number">05 // Sensitive Action Handling</span>
-    <h2 class="fade-up">Human Review as a Flow Node</h2>
+    <h2 class="fade-up">Communication Tool Drafts</h2>
     <p class="section-desc fade-up">
-      Human review is a <strong>flow concern</strong>, not a policy concern. Policy is strictly binary: allow or deny. When a human needs to review an agent's work (e.g., an email draft before sending), the task flow includes explicit <code>review</code> nodes with <code>human</code> actor type. The tool always does what it says -- <code>draft</code> drafts, <code>send</code> sends. Nothing is secretly intercepted by policy.
+      Communication tools (<code>email.compose</code>, <code>slack.post</code>) create drafts as their <strong>designed behavior</strong>, not as a policy interception. The policy engine evaluates allow/deny for the communication capability. If allowed, the tool executes -- and its normal successful output is a staged draft. The tool succeeds, a <code>draft_action_review</code> inbox item is created, and the agent's turn continues immediately.
     </p>
 
     <div class="draft-review-flow fade-up">
       <div class="dr-step">
         <span class="dr-step-num">Step 1</span>
-        <span class="dr-step-label">Agent drafts</span>
-        <span class="dr-step-detail">e.g., email.draft<br>creates the draft</span>
+        <span class="dr-step-label">Agent composes</span>
+        <span class="dr-step-detail">e.g., email.compose<br>tool succeeds</span>
       </div>
       <span class="dr-arrow">--></span>
       <div class="dr-step highlight">
         <span class="dr-step-num">Step 2</span>
-        <span class="dr-step-label">Flow advances</span>
-        <span class="dr-step-detail">Review node activates<br>(human actor type)</span>
+        <span class="dr-step-label">Draft staged</span>
+        <span class="dr-step-detail">Tool creates<br>draft_action_review<br>inbox item</span>
       </div>
       <span class="dr-arrow">--></span>
       <div class="dr-step inbox-step">
         <span class="dr-step-num">Step 3</span>
-        <span class="dr-step-label">Inbox item created</span>
-        <span class="dr-step-detail">Human reviews draft<br>+ context in inbox</span>
+        <span class="dr-step-label">Human reviews</span>
+        <span class="dr-step-detail">Reviews draft<br>+ context in inbox</span>
       </div>
       <span class="dr-arrow">--></span>
       <div class="dr-step">
         <span class="dr-step-num">Step 4</span>
         <span class="dr-step-label">Human decides</span>
-        <span class="dr-step-detail">Approve: flow advances<br>Reject: flow loops back</span>
+        <span class="dr-step-detail">Approve: inbox handler<br>sends the email</span>
       </div>
       <span class="dr-arrow">--></span>
       <div class="dr-step">
         <span class="dr-step-num">Step 5</span>
-        <span class="dr-step-label">Agent sends</span>
-        <span class="dr-step-detail">email.send executes<br>at the next flow node</span>
+        <span class="dr-step-label">Agent continues</span>
+        <span class="dr-step-detail">Not notified within<br>same turn</span>
       </div>
     </div>
 
     <div class="insight fade-up">
-      <p><strong>Flow-driven, not policy-driven.</strong> The flow graph models the review step explicitly: <code>[email.draft]</code> → <code>[review node, human actor]</code> → <code>[email.send]</code>. The inbox receives items from the flow engine when a review node activates, not from policy interception.</p>
+      <p><strong>Tool behavior, not policy.</strong> The distinction matters: the policy engine said "allow" -- the agent has the communication capability. The tool then chose to stage a draft rather than send immediately, because creating drafts for human review is what communication tools do by design. The agent composes; the human approves.</p>
     </div>
 
     <!-- Mermaid: human review flow -->
@@ -1647,30 +1650,30 @@ flowchart LR
         <button onclick="zoomMermaid('mermaid-dr', -1)" title="Zoom Out">-</button>
         <button onclick="zoomMermaid('mermaid-dr', 0)" title="Reset">R</button>
       </div>
-      <span class="mermaid-label">Human review: explicit flow node, not policy interception</span>
+      <span class="mermaid-label">Communication tool draft: tool behavior, not policy interception</span>
       <div class="mermaid-inner" id="mermaid-dr">
         <pre class="mermaid">
 %%{init: {'theme': 'dark', 'themeVariables': { 'primaryColor': '#162033', 'primaryTextColor': '#e2e8f0', 'primaryBorderColor': '#334155', 'lineColor': '#94a3b8', 'secondaryColor': '#1e293b', 'tertiaryColor': '#0f172a', 'edgeLabelBackground': '#0f172a', 'fontSize': '13px', 'fontFamily': 'Inter, sans-serif' }}}%%
 sequenceDiagram
     participant A as Agent
-    participant FE as Flow Engine
+    participant CP as Control Plane
     participant I as Inbox
     participant H as Human
 
-    A->>FE: email.draft(to, subject, body)
-    FE->>FE: Work node completes
-    FE->>FE: Advance to review node (human actor)
-    FE->>I: Create inbox item for human
+    A->>CP: email.compose(to, subject, body)
+    CP->>CP: Policy: allow/deny
+    CP->>CP: Tool executes successfully
+    CP->>I: Create draft_action_review inbox item
+    CP-->>A: {status: draft_staged, inbox_item_id: uuid}
+    Note over A: Agent continues turn
     Note over I,H: Async -- human reviews when ready
     H->>I: Review draft email
     alt Approve
-        H->>FE: Approve
-        FE->>FE: Advance to next node
-        A->>FE: email.send()
+        H->>I: Approve
+        I->>I: Inbox handler sends email
     else Reject
-        H->>FE: Reject with feedback
-        FE->>FE: Loop back to work node
-        A->>A: Revise based on feedback
+        H->>I: Reject
+        I->>I: Draft discarded
     end
         </pre>
       </div>
