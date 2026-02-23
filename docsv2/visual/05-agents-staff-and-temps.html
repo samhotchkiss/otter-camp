@@ -610,6 +610,97 @@
     font-style: italic;
     font-family: var(--font-heading);
   }
+
+  /* ---- Access Model Table ---- */
+  .access-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+  }
+  .access-table th {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--ink-faint);
+    text-align: left;
+    padding: 10px 16px;
+    border-bottom: 2px solid rgba(44, 36, 22, 0.08);
+  }
+  .access-table td {
+    padding: 8px 16px;
+    border-bottom: 1px solid rgba(44, 36, 22, 0.04);
+    vertical-align: middle;
+  }
+  .access-table tr:last-child td { border-bottom: none; }
+  .access-table td:first-child {
+    color: var(--ink);
+    font-weight: 500;
+    font-size: 0.85rem;
+  }
+  .access-table td:nth-child(2) {
+    text-align: center;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+  .access-yes { color: var(--teal); }
+  .access-no { color: var(--sienna); }
+
+  /* ---- Scope Type Cards ---- */
+  .scope-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-top: 28px;
+  }
+  @media (max-width: 800px) {
+    .scope-grid { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 500px) {
+    .scope-grid { grid-template-columns: 1fr; }
+  }
+  .scope-card {
+    background: white;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    border: 1px solid rgba(44, 36, 22, 0.06);
+    overflow: hidden;
+    border-top: 3px solid var(--sienna);
+  }
+  .scope-card-header {
+    padding: 14px 16px 10px;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--sienna);
+    border-bottom: 1px solid rgba(44, 36, 22, 0.06);
+    background: var(--sienna-faded);
+  }
+  .scope-card-body {
+    padding: 12px 16px 16px;
+  }
+  .scope-card-body p {
+    font-size: 0.84rem;
+    color: var(--ink-light);
+    line-height: 1.5;
+    margin-bottom: 6px;
+  }
+  .scope-card-body p:last-child { margin-bottom: 0; }
+  .scope-tag {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 2px 8px;
+    border-radius: 10px;
+    color: var(--sienna);
+    background: var(--sienna-faded);
+    border: 1px solid var(--sienna-border);
+    margin-top: 6px;
+  }
+
   .restrict-list {
     list-style: none;
     padding: 0;
@@ -858,7 +949,7 @@
     <h2>Two Agent Classes</h2>
     <p>The distinction is about <strong>durability and identity</strong>, not capability.
        Staff agents persist, accumulate cross-project memory, and develop working relationships.
-       Temp agents are scoped to a task, session, or TTL &mdash; created for a job, cleaned up when done.</p>
+       Temp agents are the project workforce &mdash; always project-assigned, they do the work and do not chat with the human.</p>
 
     <div class="comparison-grid">
       <!-- Staff Card -->
@@ -875,11 +966,11 @@
             <li><span class="li-marker"></span><span><strong>Memory-building</strong> &mdash; Ellie captures memories about and from staff agents. They develop institutional knowledge over time.</span></li>
             <li><span class="li-marker"></span><span><strong>Org or project scoped</strong> &mdash; org-level agents available everywhere; project-level agents primarily associated with specific projects</span></li>
             <li><span class="li-marker"></span><span><strong>Lifecycle</strong> &mdash; draft &rarr; active &rarr; paused &rarr; retired (human approval at draft)</span></li>
-            <li><span class="li-marker"></span><span><strong>Private memory</strong> &mdash; available for complex roles (PMs, Frank, Ellie). Working notes carry forward across every session and project.</span></li>
+            <li><span class="li-marker"></span><span><strong>Private memory</strong> &mdash; available for complex roles (PMs, Frank, Lori, Ellie). Working notes carry forward across every session and project.</span></li>
           </ul>
           <div class="use-cases">
             <h4>Best for</h4>
-            <p>PMs (always staff), org-level coordinators, policy/content/architecture reviewers whose value comes from accumulated judgment, specialists with cross-project knowledge (DevOps, database architects).</p>
+            <p>PMs (always staff), org-level coordinators (Frank, Lori, Ellie), policy/content reviewers whose value comes from accumulated judgment, cross-project specialists (DevOps, database architects).</p>
           </div>
         </div>
       </div>
@@ -888,20 +979,20 @@
       <div class="compare-card temp">
         <div class="compare-card-header temp">
           <h3>Temp Agents</h3>
-          <div class="subtitle">Default for implementation work</div>
+          <div class="subtitle">The project workforce &mdash; always project-assigned, do the work, don't chat with the human</div>
         </div>
         <div class="compare-card-body">
           <ul>
-            <li><span class="li-marker"></span><span><strong>Scoped lifetime</strong> &mdash; tied to a task, session, or explicit TTL; auto-retired when scope ends</span></li>
+            <li><span class="li-marker"></span><span><strong>Always project-assigned</strong> &mdash; every temp belongs to a project via assignment. Temps never exist outside a project context.</span></li>
+            <li><span class="li-marker"></span><span><strong>Four scope types</strong> &mdash; project (standing workforce), task, session, or TTL. Duration varies by scope.</span></li>
             <li><span class="li-marker"></span><span><strong>Lightweight identity</strong> &mdash; has name and role but no deep personality or long-term relationship</span></li>
-            <li><span class="li-marker"></span><span><strong>Restricted by default</strong> &mdash; no secrets, no connectors, no private memory, org-level memory only</span></li>
-            <li><span class="li-marker"></span><span><strong>Memory-light</strong> &mdash; inherits org context via passive injection; contributions attributed to task/project scope, not the temp's identity</span></li>
-            <li><span class="li-marker"></span><span><strong>Lifecycle</strong> &mdash; created &rarr; active &rarr; expired or promoted (no draft review)</span></li>
+            <li><span class="li-marker"></span><span><strong>Project-level access</strong> &mdash; full access to project secrets, connectors, and memory. Auto-revoked on expiration.</span></li>
+            <li><span class="li-marker"></span><span><strong>Single-project memory</strong> &mdash; receives org + assigned project memory. No cross-project knowledge. Contributions attributed to task/project scope, not the temp's identity.</span></li>
             <li><span class="li-marker"></span><span><strong>Concurrent limit</strong> &mdash; max 10 active per org (configurable)</span></li>
           </ul>
           <div class="use-cases">
             <h4>Best for</h4>
-            <p>Implementation workers (writing code, running tests, applying fixes), code reviewers (applying a rubric captured in skills/prompts), one-off experiments, burst parallelism, specialized skill combos. Promotable to staff via Lori.</p>
+            <p>Project-scoped workers (standing workforce), task-scoped workers (specialized one-off work), code reviewers (applying a rubric), burst parallelism. Promotable to staff via Lori.</p>
           </div>
         </div>
       </div>
@@ -914,12 +1005,56 @@
       <div class="dividing-line-grid">
         <div class="dividing-line-side staff-side">
           <strong>Accumulated Judgment</strong>
-          PMs &mdash; always staff. Policy reviewers, architecture reviewers, content reviewers &mdash; staff when cross-project judgment matters.
+          PMs &mdash; always staff. Org coordinators, policy reviewers, architecture reviewers, content reviewers &mdash; staff when cross-project judgment matters.
         </div>
         <div class="dividing-line-vs">vs.</div>
         <div class="dividing-line-side temp-side">
           <strong>Fixed Rubric</strong>
-          Workers &mdash; default to temp. Code reviewers &mdash; typically temp (rubric captured in skills). One-off tasks, burst parallelism.
+          Project workers &mdash; the standing workforce. Task workers, code reviewers (rubric in skills), burst parallelism.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======== TEMP SCOPE TYPES ======== -->
+  <hr class="section-divider">
+  <section class="section" id="temp-scopes">
+    <h2>Four Temp Scope Types</h2>
+    <p>Temps come in four scope types, each with different lifetimes and lifecycle characteristics.
+       Project-scoped temps are the standing workforce; the other three are short-lived and auto-expire.</p>
+
+    <div class="scope-grid">
+      <div class="scope-card">
+        <div class="scope-card-header">project</div>
+        <div class="scope-card-body">
+          <p><strong>Standing workforce.</strong> Persists across tasks within the project. The PM can pause or retire them explicitly.</p>
+          <p>Retired when the PM lets them go or the project is archived.</p>
+          <span class="scope-tag">pausable</span>
+          <span class="scope-tag">retirable</span>
+        </div>
+      </div>
+      <div class="scope-card">
+        <div class="scope-card-header">task</div>
+        <div class="scope-card-body">
+          <p><strong>Task worker.</strong> Scoped to a single task. Auto-expires when the task completes.</p>
+          <p>Useful when the task requires a specialized skill set the standing workers lack.</p>
+          <span class="scope-tag">auto-expire</span>
+        </div>
+      </div>
+      <div class="scope-card">
+        <div class="scope-card-header">session</div>
+        <div class="scope-card-body">
+          <p><strong>Session-bound.</strong> Scoped to a single session. Auto-expires when the session closes.</p>
+          <p>Shortest-lived temp type. Good for one-off explorations.</p>
+          <span class="scope-tag">auto-expire</span>
+        </div>
+      </div>
+      <div class="scope-card">
+        <div class="scope-card-header">ttl</div>
+        <div class="scope-card-body">
+          <p><strong>Time-limited.</strong> Expires when the TTL elapses. Duration set at creation.</p>
+          <p>Good for burst parallelism and time-boxed research.</p>
+          <span class="scope-tag">auto-expire</span>
         </div>
       </div>
     </div>
@@ -975,7 +1110,7 @@ flowchart TB
       </div>
       <div class="mermaid-label">
         <span>Staff memory persists indefinitely</span>
-        <span>Temps do not accumulate cross-project memory</span>
+        <span>Temps get single-project memory only</span>
       </div>
     </div>
 
@@ -985,7 +1120,7 @@ flowchart TB
         <div class="cap-card-body">
           <div class="policy-layer"><span class="policy-number">R</span><span class="policy-name">read_scopes</span><span class="policy-note">org + all assigned projects + task</span></div>
           <div class="policy-layer"><span class="policy-number">W</span><span class="policy-name">write_scope</span><span class="policy-note">context (current scope)</span></div>
-          <div class="policy-layer"><span class="policy-number">P</span><span class="policy-name">private_memory</span><span class="policy-note">enabled for PMs, Frank, Ellie</span></div>
+          <div class="policy-layer"><span class="policy-number">P</span><span class="policy-name">private_memory</span><span class="policy-note">enabled for PMs, Frank, Lori, Ellie</span></div>
           <p style="font-size: 0.82rem; color: var(--ink-faint); margin-top: 8px; margin-bottom: 0;">
             Ellie injects memories from all assigned projects on every turn. Agent-private memories carry forward across sessions and projects.
           </p>
@@ -994,11 +1129,11 @@ flowchart TB
       <div class="cap-card">
         <div class="cap-card-header" style="color: var(--sienna);">Temp Agent Memory</div>
         <div class="cap-card-body">
-          <div class="policy-layer"><span class="policy-number">R</span><span class="policy-name">read_scopes</span><span class="policy-note">org only (unless project-assigned)</span></div>
+          <div class="policy-layer"><span class="policy-number">R</span><span class="policy-name">read_scopes</span><span class="policy-note">org + assigned project + task</span></div>
           <div class="policy-layer"><span class="policy-number">W</span><span class="policy-name">write_scope</span><span class="policy-note">task or project scope</span></div>
           <div class="policy-layer"><span class="policy-number">P</span><span class="policy-name">private_memory</span><span class="policy-note">not available</span></div>
           <p style="font-size: 0.82rem; color: var(--ink-faint); margin-top: 8px; margin-bottom: 0;">
-            Contributions captured by Ellie at task/project scope, not attributed to the temp's identity. When a temp expires, knowledge lives on in the project.
+            Temps receive org-level and their single assigned project's memory. No cross-project knowledge. Contributions captured at task/project scope, not attributed to the temp's identity.
           </p>
         </div>
       </div>
@@ -1054,7 +1189,7 @@ flowchart TB
             </div>
             <div class="config-row">
               <span class="config-label">read scopes</span>
-              <span class="config-value">org, assigned projects</span>
+              <span class="config-value">org, projects, task</span>
             </div>
           </div>
         </div>
@@ -1096,11 +1231,11 @@ flowchart TB
             </div>
             <div class="config-row">
               <span class="config-label">private memory</span>
-              <span class="config-value no">disabled</span>
+              <span class="config-value yes">enabled</span>
             </div>
             <div class="config-row">
               <span class="config-label">read scopes</span>
-              <span class="config-value">org, assigned projects</span>
+              <span class="config-value">org, projects, task</span>
             </div>
           </div>
         </div>
@@ -1202,7 +1337,7 @@ flowchart TB
         <div class="cap-card-body">
           <div class="policy-layer"><span class="policy-number">R</span><span class="policy-name">read_scopes</span><span class="policy-note">org, projects, task, private</span></div>
           <div class="policy-layer"><span class="policy-number">W</span><span class="policy-name">write_scope</span><span class="policy-note">"context" = current scope</span></div>
-          <div class="policy-layer"><span class="policy-number">P</span><span class="policy-name">private_memory</span><span class="policy-note">working notes (PMs, Frank)</span></div>
+          <div class="policy-layer"><span class="policy-number">P</span><span class="policy-name">private_memory</span><span class="policy-note">working notes (PMs, Frank, Lori, Ellie)</span></div>
         </div>
       </div>
       <div class="cap-card">
@@ -1210,7 +1345,7 @@ flowchart TB
         <div class="cap-card-body">
           <div class="policy-layer"><span class="policy-number">1</span><span class="policy-name">agent_class</span><span class="policy-note">staff or temp</span></div>
           <div class="policy-layer"><span class="policy-number">2</span><span class="policy-name">scope_level</span><span class="policy-note">org or project</span></div>
-          <div class="policy-layer"><span class="policy-number">3</span><span class="policy-name">temp_scope_type</span><span class="policy-note">task / session / ttl</span></div>
+          <div class="policy-layer"><span class="policy-number">3</span><span class="policy-name">temp_scope_type</span><span class="policy-note">project / task / session / ttl</span></div>
           <div class="policy-layer"><span class="policy-number">4</span><span class="policy-name">skill_ids</span><span class="policy-note">baseline competencies</span></div>
         </div>
       </div>
@@ -1243,7 +1378,7 @@ flowchart TB
     CAT -->|"Match template to<br/>flow node requirements"| SYS
 
     STAFF["Staff Agent<br/>Draft then Active<br/>Human approves"]
-    TEMP["Temp Worker<br/>Immediately active<br/>Scoped to task"]
+    TEMP["Temp Worker<br/>Immediately active<br/>Scoped to project or task"]
 
     LORI -->|"Proposes staff profile"| STAFF
     SYS -->|"Instantiates temp<br/>for flow node"| TEMP
@@ -1279,7 +1414,7 @@ flowchart TB
         <div class="cap-card-header" style="color: var(--sienna);">For Temp Instantiation</div>
         <div class="cap-card-body">
           <p style="font-size: 0.88rem; color: var(--ink-light); margin-bottom: 8px; line-height: 1.5;">
-            The PM or system selects a template matching the flow node's requirements. The temp is instantiated with the template's prompt and skills, scoped to the task.
+            The PM or system selects a template matching the flow node's requirements. The temp is instantiated with the template's prompt and skills, scoped to the project or task.
           </p>
           <p style="font-size: 0.82rem; color: var(--ink-faint); margin-bottom: 0;">Templates tagged by domain (frontend, backend, DevOps, QA, etc.) and by recommended class (staff or temp).</p>
         </div>
@@ -1377,7 +1512,7 @@ flowchart TB
   <!-- ======== CAPABILITY MODEL ======== -->
   <hr class="section-divider">
   <section class="section" id="capability">
-    <h2>Default-Deny Capability Model</h2>
+    <h2>Guardrails &amp; Access Model</h2>
     <div class="cap-intro">
       <p>Every agent operates within the <strong>org policy envelope</strong> &mdash; the outermost boundary of what any agent can do.
          Policy layers stack from most restrictive (highest priority) to least. Each layer can only <strong>tighten</strong>, never loosen.</p>
@@ -1410,16 +1545,23 @@ flowchart TB
         </div>
       </div>
       <div class="cap-card">
-        <div class="cap-card-header" style="color: var(--sienna);">Temp Agent Restrictions</div>
+        <div class="cap-card-header" style="color: var(--sienna);">Temp Agent Access Model</div>
         <div class="cap-card-body">
-          <ul class="restrict-list">
-            <li>No secret/credential access by default</li>
-            <li>No external connector access by default</li>
-            <li>No private memory scope</li>
-            <li>Org-level memory only (unless project-assigned)</li>
-            <li>All grants auto-revoke on expiration</li>
-            <li>Concurrent limit: 10 active per org (configurable)</li>
-          </ul>
+          <table class="access-table">
+            <thead>
+              <tr><th>Capability</th><th>Access</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Project secrets &amp; connectors</td><td class="access-yes">YES</td></tr>
+              <tr><td>Single-project memory</td><td class="access-yes">YES</td></tr>
+              <tr><td>Cross-project memory</td><td class="access-no">NO</td></tr>
+              <tr><td>Private memory</td><td class="access-no">NO</td></tr>
+              <tr><td>Human-facing communication</td><td class="access-no">NO</td></tr>
+            </tbody>
+          </table>
+          <p style="font-size: 0.82rem; color: var(--ink-faint); margin-top: 10px; margin-bottom: 0;">
+            All project access auto-revoked on expiration or retirement. Concurrent limit: 10 active per org (configurable).
+          </p>
         </div>
       </div>
       <div class="cap-card">
@@ -1451,7 +1593,8 @@ flowchart TB
   <section class="section" id="lifecycle">
     <h2>Agent Lifecycle</h2>
     <p>Staff agents go through human-approved stages. Temp agents skip review and are created immediately active.
-       Both converge at retirement &mdash; or a temp can be promoted to staff through Lori.</p>
+       Project-scoped temps have a richer lifecycle (paused, retired). Task/session/TTL temps have a simpler one.
+       Any temp can be promoted to staff through Lori.</p>
 
     <h3 style="margin-top: 24px;">Staff Agent Lifecycle</h3>
     <div class="mermaid-container" id="mermaid-staff-container">
@@ -1495,15 +1638,62 @@ stateDiagram-v2
       </div>
     </div>
 
-    <h3 style="margin-top: 36px;">Temp Agent Lifecycle</h3>
-    <div class="mermaid-container" id="mermaid-temp-container">
+    <h3 style="margin-top: 36px;">Project-Scoped Temp Lifecycle</h3>
+    <p style="font-size: 0.92rem; color: var(--ink-light); max-width: 700px;">
+      Project-scoped temps have a richer lifecycle, closer to staff minus the draft step. The PM can pause and explicitly retire them.
+    </p>
+    <div class="mermaid-container" id="mermaid-temp-project-container">
       <div class="mermaid-controls">
-        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-temp', 1.2)" title="Zoom in">+</button>
-        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-temp', 0.8)" title="Zoom out">&minus;</button>
-        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-temp', 0, true)" title="Reset">R</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-temp-project', 1.2)" title="Zoom in">+</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-temp-project', 0.8)" title="Zoom out">&minus;</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-temp-project', 0, true)" title="Reset">R</button>
       </div>
-      <div class="mermaid-inner" id="mermaid-temp-inner">
-        <pre class="mermaid" id="mermaid-temp">
+      <div class="mermaid-inner" id="mermaid-temp-project-inner">
+        <pre class="mermaid" id="mermaid-temp-project">
+stateDiagram-v2
+    direction LR
+    [*] --> Active : Created by PM or Lori
+    Active --> Paused : PM pauses
+    Active --> Retired : PM retires
+    Active --> Promoted : Lori promotes to staff
+    Paused --> Active : Reactivated
+    Paused --> Retired : Retired while paused
+
+    note right of Active
+        Standing workforce.
+        Persists across tasks.
+        No draft review needed.
+    end note
+    note right of Paused
+        PM has benched this worker.
+        Still assigned to project.
+        Not picking up flow nodes.
+    end note
+    note right of Retired
+        Explicitly let go by PM.
+        Profile preserved for audit.
+        Project access revoked.
+    end note
+        </pre>
+      </div>
+      <div class="mermaid-label">
+        <span>No draft review -- created immediately active</span>
+        <span>PM can pause and retire project-scoped temps</span>
+      </div>
+    </div>
+
+    <h3 style="margin-top: 36px;">Task / Session / TTL Temp Lifecycle</h3>
+    <p style="font-size: 0.92rem; color: var(--ink-light); max-width: 700px;">
+      Short-lived temps auto-expire when their scope ends. No pause or retire -- they simply expire.
+    </p>
+    <div class="mermaid-container" id="mermaid-temp-short-container">
+      <div class="mermaid-controls">
+        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-temp-short', 1.2)" title="Zoom in">+</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-temp-short', 0.8)" title="Zoom out">&minus;</button>
+        <button class="mermaid-btn" onclick="zoomMermaid('mermaid-temp-short', 0, true)" title="Reset">R</button>
+      </div>
+      <div class="mermaid-inner" id="mermaid-temp-short-inner">
+        <pre class="mermaid" id="mermaid-temp-short">
 stateDiagram-v2
     direction LR
     [*] --> Active : Created (no draft review)
@@ -1518,7 +1708,7 @@ stateDiagram-v2
     note right of Expired
         Archival summary by Ellie.
         Contributions remain in
-        task/session. Slot freed.
+        project memory. Slot freed.
     end note
     note right of Promoted
         Config copied to new
@@ -1528,8 +1718,9 @@ stateDiagram-v2
         </pre>
       </div>
       <div class="mermaid-label">
-        <span>No draft review for temps</span>
-        <span>Promotion goes through normal staff lifecycle</span>
+        <span>Task: expires on task completion</span>
+        <span>Session: expires on session close</span>
+        <span>TTL: expires when time elapses</span>
       </div>
     </div>
 
@@ -1734,11 +1925,11 @@ flowchart LR
           <tr><td>default_model_profile_id</td><td>uuid fk</td><td>Default model for this agent's turns</td></tr>
           <tr><td>allowed_model_profiles</td><td>uuid[]</td><td>Permitted model profiles (null = any)</td></tr>
           <tr><td>budget_cap_cents</td><td>int</td><td>Per-agent cost cap per budget period</td></tr>
-          <tr><td>memory_read_scopes</td><td>text[]</td><td>org, assigned_projects, current_task, private</td></tr>
+          <tr><td>memory_read_scopes</td><td>text[]</td><td>Default: {org, assigned_projects, current_task}. Staff and temps share the same default -- the difference is staff are assigned to multiple projects.</td></tr>
           <tr><td>memory_write_scope</td><td>text</td><td>"context" = write to current scope</td></tr>
-          <tr><td>private_memory_enabled</td><td>boolean</td><td>Working notes for complex roles</td></tr>
-          <tr><td>temp_scope_type</td><td>text</td><td>task, session, or ttl (temps only)</td></tr>
-          <tr><td>temp_scope_id</td><td>uuid</td><td>Task or session reference (temps only)</td></tr>
+          <tr><td>private_memory_enabled</td><td>boolean</td><td>Working notes for complex roles (PMs, Frank, Lori, Ellie)</td></tr>
+          <tr><td>temp_scope_type</td><td>text</td><td>project, task, session, or ttl (temps only)</td></tr>
+          <tr><td>temp_scope_id</td><td>uuid</td><td>Project, task, or session reference (temps only)</td></tr>
           <tr><td>temp_ttl_seconds</td><td>int</td><td>TTL duration (ttl-scoped temps only)</td></tr>
           <tr><td>temp_expires_at</td><td>timestamptz</td><td>Pre-computed expiration</td></tr>
           <tr><td>promoted_to_agent_id</td><td>uuid fk</td><td>Set when temp is promoted to staff</td></tr>
@@ -1747,6 +1938,7 @@ flowchart LR
       <div class="schema-note">
         Check constraints enforce: staff agents have no temp fields; temp agents have temp_scope_type set.
         Tool allow/deny lists are mutually exclusive. Unique on (organization_id, slug).
+        memory_read_scopes default is {org, assigned_projects, current_task} for both staff and temp.
       </div>
     </div>
 
@@ -1871,12 +2063,13 @@ flowchart LR
     <p>Spec 05 of the OtterCamp V2 product specification. Agents are the workforce &mdash; the human directs and decides.</p>
     <div class="footer-links">
       <a href="#comparison">Staff vs Temps</a>
+      <a href="#temp-scopes">Temp Scopes</a>
       <a href="#cross-project-memory">Cross-Project Memory</a>
       <a href="#trio">Starter Trio</a>
       <a href="#profile">Agent Profile</a>
       <a href="#catalog">Profile Catalog</a>
       <a href="#prompt-assembly">Prompt Assembly</a>
-      <a href="#capability">Capability Model</a>
+      <a href="#capability">Guardrails</a>
       <a href="#lifecycle">Lifecycle</a>
       <a href="#session-continuity">Session Continuity</a>
       <a href="#staffing">Staffing &amp; Roles</a>
@@ -1957,7 +2150,7 @@ flowchart LR
   // Stagger child elements within sections (exclude mermaid-container to avoid tiny render)
   function staggerChildren() {
     const sections = document.querySelectorAll('.section');
-    const staggerSelector = '.compare-card, .trio-card, .pipeline-layer, .cap-card, .asm-step, .schema-table-wrap, .dividing-line-callout, .ndi-card';
+    const staggerSelector = '.compare-card, .trio-card, .pipeline-layer, .cap-card, .asm-step, .schema-table-wrap, .dividing-line-callout, .ndi-card, .scope-card';
     sections.forEach(section => {
       const cards = section.querySelectorAll(staggerSelector);
       cards.forEach((card, i) => {

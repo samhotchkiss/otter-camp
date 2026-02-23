@@ -260,6 +260,8 @@ This applies to both `work` and `review` nodes — a reviewer could discover a b
 
 Every run that happens during a flow node's execution is linked back to the task and the flow node (see 16-agent-control-plane.md Task and Flow Binding). This provides full traceability: what the agent did, what it produced, how much it cost, and how long it took — all scoped to the specific step in the workflow.
 
+This design follows the **nondeterministic idempotence** principle: flow node state, acceptance criteria, and artifacts live outside agent context, so workflows complete regardless of how many agent sessions it takes. If a session crashes or fills its context window, a new session picks up the same flow node using the persisted state and Ellie's memories of prior attempts. See 05-agents-staff-and-temps.md Session Continuity and Crash Recovery for the full model.
+
 ## Staff Roles in Flow
 
 - Planner, worker, reviewer role assignments remain project-scoped.
@@ -620,13 +622,15 @@ create table flow_node (
   description      text,
   node_type        text not null,     -- work, review
   actor_type       text not null,     -- role, project_manager, human, agent
+  actor_role       text,              -- set when actor_type = role: worker, reviewer, planner
   actor_id         uuid,              -- set when actor_type = agent
   position         int not null,
   next_node_id     uuid references flow_node(id),
   reject_node_id   uuid references flow_node(id),  -- review nodes only
   skills           jsonb,             -- skill references for this node
   metadata         jsonb,
-  check (node_type = 'review' or reject_node_id is null)  -- only review nodes can have reject edges
+  check (node_type = 'review' or reject_node_id is null),  -- only review nodes can have reject edges
+  check (actor_type != 'role' or actor_role is not null)   -- role-typed nodes must specify which role
 );
 ```
 

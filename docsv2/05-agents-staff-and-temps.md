@@ -1,15 +1,15 @@
 ---
 ## Summary
 
-This spec defines the agent model for OtterCamp V2 -- how agents are created, classified, assigned to projects, and what they see at runtime. Agents are the workforce: every meaningful action (planning, coding, reviewing, triaging) is performed by an agent, while the human directs and decides. There are two agent classes: **staff** (durable, named, cross-project memory-building members of the org) and **temp** (ephemeral agents scoped to a task, session, or TTL that are auto-retired when done). The dividing line is **accumulated judgment vs. fixed rubric**: PMs are always staff, workers default to temp, reviewers default to temp (staff when accumulated judgment across projects matters, e.g. content policy or architecture review). Staff agent memory extends across all assigned projects and persists indefinitely -- knowledge gained in Project A informs decisions in Project B. Temps can be promoted to staff through Lori.
+This spec defines the agent model for OtterCamp V2 -- how agents are created, classified, assigned to projects, and what they see at runtime. Agents are the workforce: every meaningful action (planning, coding, reviewing, triaging) is performed by an agent, while the human directs and decides. There are two agent classes: **staff** (durable, named, cross-project memory-building members of the org) and **temp** (the project workforce -- always project-assigned, do the work, don't chat with the human). The dividing line is **accumulated judgment vs. fixed rubric**: PMs are always staff, workers default to temp, reviewers default to temp (staff when accumulated judgment across projects matters, e.g. content policy or architecture review). Temps come in four scope types: project-scoped (standing workforce, persist across tasks, pausable/retirable), task-scoped, session-scoped, and TTL-scoped. Staff agent memory extends across all assigned projects and persists indefinitely -- knowledge gained in Project A informs decisions in Project B. Temps get full project-level access (secrets, connectors, memory) for their assigned project, auto-revoked on expiration. Temps can be promoted to staff through Lori.
 
 Every org is bootstrapped with a "starter trio" of org-level staff agents: **Frank** (Chief of Staff, primary human touchpoint, cross-project coordinator, escalation endpoint -- explicitly NOT a project manager), **Lori** (Agent Relations Expert, creates and manages agents through conversation, recommends staffing), and **Ellie** (Memory system, dual role as background infrastructure and conversational agent, specified fully in doc 06).
 
-Agent profiles carry a rich shape: identity fields (name, slug, pronouns, role_title), a prompt pack (system_prompt + policy_addendum), tool policy (allow/deny lists), model policy (default model profile, allowed profiles, budget caps), memory policy (read scopes, write scope, private memory toggle), and skill attachments. Staff agents follow a lifecycle of draft -> active -> paused/retired, with human approval required at the draft stage. Temp agents skip draft review and are created immediately active, but are restricted by default (no secrets, no connectors, no private memory, no project-specific memory unless assigned, concurrent limit of 10 per org). Projects are staffed conversationally through Lori, with four roles: project_manager (exactly one per project, enforced by schema), worker, reviewer, and planner.
+Agent profiles carry a rich shape: identity fields (name, slug, pronouns, role_title), a prompt pack (system_prompt + policy_addendum), tool policy (allow/deny lists), model policy (default model profile, allowed profiles, budget caps), memory policy (read scopes, write scope, private memory toggle), and skill attachments. Staff agents follow a lifecycle of draft -> active -> paused/retired, with human approval required at the draft stage. Temp agents skip draft review and are created immediately active. They get project-level access (secrets, connectors, memory) for their assigned project, with no cross-project memory and no private memory. Concurrent limit of 10 per org. Projects are staffed conversationally through Lori, with four roles: project_manager (exactly one per project, enforced by schema), worker, reviewer, and planner.
 
 The runtime model is a 7-layer prompt assembly pipeline that runs once per turn: (1) agent identity, (2) policies/constraints, (3) scope context, (4) skills instructions, (5) memory injection from Ellie, (6) conversation history, (7) tool descriptions. Layers 1-2 are never cut; layers 3-7 are budget-dependent and compressed as needed. Agent identity is separate from session identity -- sessions are ephemeral (they fill context, crash, or time out), but the agent persists. Work state lives in flow nodes and Ellie's memory, enabling nondeterministic idempotence: workflows complete because acceptance criteria define "done," regardless of how many sessions it takes. The PM runs proactive supervision -- event-triggered and periodic checks on active flow nodes, detecting stuck agents and escalating or reassigning.
 
-The database schema centers on three tables: `agent` (full profile with classification, prompt pack, tool/model/memory policies, and temp-specific fields -- this is the authoritative definition, referenced but not defined in doc 04), `agent_project_assignment` (maps agents to projects with roles, enforces one-PM-per-project via partial unique index), and `agent_skill_attachment` (links agents to baseline skills). Policy enforcement follows a strictly-tightening hierarchy: instance safety > org > project > agent profile. 37 resolved decisions, no open questions.
+The database schema centers on four tables: `agent` (full profile with classification, prompt pack, tool/model/memory policies, and temp-specific fields -- this is the authoritative definition, referenced but not defined in doc 04), `agent_project_assignment` (maps agents to projects with roles, enforces one-PM-per-project via partial unique index), and `agent_skill_attachment` (links agents to baseline skills). Policy enforcement follows a strictly-tightening hierarchy: instance safety > org > project > agent profile. 43 resolved decisions, no open questions.
 
 ---
 
@@ -40,15 +40,20 @@ Characteristics:
 
 ### Temp Agents
 
-Temp agents are ephemeral, scoped to a specific task, session, or short-lived purpose. They are created for a job and cleaned up when the job is done.
+Temp agents are the project workforce. They are always assigned to a project, do the implementation work, and do not communicate directly with the human. Temps are the default for workers and code reviewers — the roles where the work product matters, not the worker's identity.
 
-Temps are the default for implementation work. Most task execution — writing code, running tests, applying fixes, doing code reviews — is done by temps. The work product is what matters, not the identity of who produced it. Temps keep the agent roster lean and prevent identity bloat.
+Temps keep the agent roster lean and prevent identity bloat. They have lightweight identities (name, role, skills) but no deep personality, no cross-project memory, and no durable private memory.
 
 Characteristics:
-- **Scoped lifetime**: tied to a task, session, or explicit TTL. When the scope ends, the temp is automatically retired.
+- **Always project-assigned**: every temp belongs to a project via `agent_project_assignment`. Temps never exist outside a project context.
+- **Scoped lifetime**: temps live for different durations depending on their scope type:
+  - `project` — persists across tasks within the project. The project's standing workforce. Retired when the PM lets them go or the project is archived.
+  - `task` — scoped to a single task. Expires when the task completes.
+  - `session` — scoped to a single session. Expires when the session closes.
+  - `ttl` — scoped to a time duration. Expires when the TTL elapses.
 - **Lightweight identity**: has a name and role description but no deep personality or long-term relationship.
-- **Restricted by default**: inherits the org policy envelope but cannot exceed it. Limited connector access, no secrets access by default.
-- **Memory-light**: inherits org-level memory context through passive injection but does NOT receive project-specific memories unless explicitly assigned to a project. Temp agents do not build durable private memory — their contributions are captured by Ellie through the normal implicit extraction pipeline, but the memories are attributed to the task or project scope, not the temp agent's private scope.
+- **Project-level access**: temps get full access to their assigned project's secrets, connectors, and memory. They are project members — they need to do real work. Access is auto-revoked on expiration.
+- **Single-project memory**: temps receive org-level and their assigned project's memory through passive injection. They do NOT receive memory from other projects (no cross-project knowledge). They do not build durable private memory — their contributions are captured by Ellie at the task or project scope, not attributed to the temp's identity.
 
 ### When to Use Each
 
@@ -61,9 +66,9 @@ The dividing line is **accumulated judgment vs. fixed rubric**. If the role's va
 - **Specialists with cross-project knowledge**: a DevOps agent who knows all your deployment patterns, a database architect who remembers every schema decision.
 
 **Use temps for:**
-- **Implementation workers**: the default. Writing code, running tests, applying fixes — the work product matters, not the worker's identity. Temps execute flow nodes and are retired when the task completes.
+- **Project workers (project-scoped)**: the standing workforce. Hired for the project, persist across tasks, pick up flow nodes, execute, move on to the next one. They don't chat with the human — they just do the work.
+- **Task workers (task-scoped)**: spun up for a single task and expired when it completes. Useful when the task requires a specialized skill set that the standing workers don't have.
 - **Code reviewers**: applying a style guide, checking test coverage, verifying correctness. The rubric is captured in skills and prompts, not in the reviewer's memory.
-- **One-off experiments**: "try writing this blog post with a more formal tone."
 - **Burst parallelism**: "spin up 3 temps to research these 3 topics simultaneously."
 - **Specialized combinations**: "a temp that knows both Go and PostgreSQL internals for this migration task."
 
@@ -120,6 +125,7 @@ Lori is responsible for the agent workforce. She creates staff agents, recommend
 
 ### Ellie — Memory System
 
+**Pronouns**: she/her
 **Scope**: org-level
 **Role**: memory infrastructure AND conversational agent
 
@@ -175,13 +181,13 @@ Controls how the agent interacts with Ellie's memory system. Memory behavior is 
 
 **Staff agent memory** extends across all assigned projects and persists indefinitely. When a staff PM manages three projects, Ellie injects memories from all three into every turn — patterns learned in Project A inform decisions in Project B. This cross-project knowledge accumulation is why certain roles must be staff. Staff agents also build agent-private memories (working notes, preferences, learned heuristics) that carry forward across every session and every project.
 
-**Temp agent memory** is scoped and ephemeral. Temps receive org-level memory through passive injection but do not accumulate their own durable memories. Their contributions are captured by Ellie at the task or project scope, not attributed to the temp's identity. When a temp expires, its knowledge lives on in the project's memory — but no "temp agent" persists to carry it forward.
+**Temp agent memory** is scoped to their single assigned project. Temps receive org-level and project-level memory through passive injection — they are project members and need project context to do their work. But temps do not receive memory from other projects (no cross-project knowledge), and they do not build durable private memory. Their contributions are captured by Ellie at the task or project scope, not attributed to the temp's identity. When a temp expires, its knowledge lives on in the project's memory — but no "temp agent" persists to carry it forward.
 
 Fields:
 
-- **memory_read_scopes**: which memory scopes the agent can read from via passive injection and `memory.query`. Staff default: `{org, assigned_projects, current_task}` — staff agents see memories from every project they're assigned to. Temp default: `{org}` — temps see org-level memory only unless explicitly assigned to a project. Agent-private memories of other agents are never readable.
+- **memory_read_scopes**: which memory scopes the agent can read from via passive injection and `memory.query`. Staff default: `{org, assigned_projects, current_task}` — staff agents see memories from every project they're assigned to, enabling cross-project knowledge. Temp default: `{org, assigned_projects, current_task}` — temps see org-level memory plus their single assigned project and current task. The difference from staff is that staff agents are assigned to multiple projects (cross-project memory), while temps are assigned to exactly one. Agent-private memories of other agents are never readable.
 - **memory_write_scope**: where the agent's captured memories are stored. Default: scoped to the current context (task-scoped during task work, project-scoped during project sessions, org-scoped during org sessions).
-- **private_memory_enabled**: whether the agent maintains private working notes (agent-private scope in 06-memory.md). Default for staff PMs, Frank, and Ellie: true. Default for all other staff and all temps: false. Private memory is where staff agents accumulate cross-project judgment — "this codebase has fragile tests," "this human prefers detailed commit messages."
+- **private_memory_enabled**: whether the agent maintains private working notes (agent-private scope in 06-memory.md). Default for staff PMs, Frank, Lori, and Ellie: true. Default for all other staff and all temps: false. Private memory is where staff agents accumulate cross-project judgment — "this codebase has fragile tests," "this human prefers detailed commit messages," "Agent Maven performs best on backend tasks."
 
 ### Skill Attachments
 
@@ -195,8 +201,12 @@ Activation rules: org/project default skills are always active. Agent-level skil
 
 - **agent_class**: `staff` or `temp`.
 - **scope_level**: `org` or `project`. Org-level agents are available everywhere. Project-level agents are primarily associated with specific projects but can be assigned to others.
-- **temp_scope_type**: for temp agents only. `task`, `session`, or `ttl`.
-- **temp_scope_id**: for temp agents only. The task or session this temp is scoped to.
+- **temp_scope_type**: for temp agents only. `project`, `task`, `session`, or `ttl`.
+  - `project` — persists across tasks, the standing project workforce. Retired when the PM lets them go or the project is archived.
+  - `task` — expires when the task completes.
+  - `session` — expires when the session closes.
+  - `ttl` — expires when the TTL elapses.
+- **temp_scope_id**: for temp agents only. The project, task, or session this temp is scoped to.
 - **temp_ttl**: for temp agents only when `temp_scope_type` is `ttl`. Duration after which the temp is auto-retired.
 
 ## Agent Lifecycle
@@ -238,8 +248,30 @@ Activation rules: org/project default skills are always active. Agent-level skil
 
 ### Temp Agent Lifecycle
 
+Temp lifecycle depends on scope type. Project-scoped temps have a richer lifecycle (closer to staff minus the draft step). Task/session/TTL temps have a simpler lifecycle.
+
+**Project-scoped temps:**
+
 ```
-         created (by PM, agent, or human)
+         created (by PM or Lori)
+              │
+              ▼
+           active ◄──── reactivated
+              │              ▲
+         ┌────┼────┐         │
+         │    │    │         │
+         ▼    ▼    ▼         │
+     paused  retired  promoted
+         │             (to staff)
+         │
+         ├── reactivated ──►
+         └── retired
+```
+
+**Task / session / TTL temps:**
+
+```
+         created (by PM, agent, or system)
               │
               ▼
            active
@@ -253,13 +285,17 @@ Activation rules: org/project default skills are always active. Agent-level skil
 
 **States:**
 
-- **active**: the temp is live and working. Created and immediately active — no draft review step for temps. Temps are disposable by design; the overhead of review is not warranted.
-- **expired**: the temp's scope has ended (task completed, session closed, TTL elapsed). The system auto-transitions to expired. An archival summary is generated — Ellie captures a brief record of what the temp did, its configuration, and its outcomes. The temp's contributions (code, messages, artifacts) remain in the task/session they were part of.
+- **active**: the temp is live and working. Created and immediately active — no draft review step for temps. For project-scoped temps, "active" means available to pick up flow nodes. Between tasks, the temp is still active but idle (no flow node assigned).
+- **paused** (project-scoped only): the PM has temporarily benched this worker. Still assigned to the project, but not picking up new flow nodes. Useful when the project is in a planning phase or the worker is causing issues.
+- **expired** (task/session/TTL only): the temp's scope has ended (task completed, session closed, TTL elapsed). The system auto-transitions to expired. An archival summary is generated — Ellie captures a brief record of what the temp did, its configuration, and its outcomes.
+- **retired** (project-scoped only): the PM or Lori has explicitly let this worker go, or the project has been archived. The temp's profile is preserved for audit. Project access (secrets, connectors, memory) is revoked.
 - **promoted**: the temp was promoted to a staff agent by Lori. The temp record is preserved with a reference to the new staff agent. Promotion copies the temp's configuration into a new staff agent profile, which then goes through the normal staff draft -> active lifecycle.
 
-**Temp agents skip the draft step.** They are created and immediately active. The org policy envelope (see Guardrails) constrains what they can do, so the risk of an unreviewed temp is bounded.
+**Temp agents skip the draft step.** They are created and immediately active. The org policy envelope (see Guardrails) constrains what they can do, and the PM supervises their work.
 
-**Archival summary on expiration:** When a temp expires, Ellie generates a brief summary: what the temp was created for, what it did, and whether the work succeeded. This is stored as an episodic memory at the task or project scope. It serves two purposes: (1) the org remembers that a temp was used and what happened, and (2) if the same kind of temp is needed again, Ellie can surface the prior experience.
+**Archival summary on expiration/retirement:** When a temp expires or is retired, Ellie generates a brief summary: what the temp was created for, what it did, and whether the work succeeded. This is stored as an episodic memory at the project scope. It serves two purposes: (1) the org remembers that a temp was used and what happened, and (2) if the same kind of temp is needed again, Ellie can surface the prior experience.
+
+**Auto-retirement mechanism:** Temp expiration is handled by event bus subscribers: task completion events trigger expiration of task-scoped temps, session close events trigger expiration of session-scoped temps, and a periodic scheduler job expires TTL-based temps whose `temp_expires_at` has passed. When a temp expires or is retired, its `agent_project_assignment.is_active` is set to `false` and project access is revoked.
 
 ### Promotion: Temp to Staff
 
@@ -474,16 +510,16 @@ Policy layers, from most restrictive (highest priority) to least:
 
 Each layer can only tighten, never loosen. A project policy cannot grant permissions the org policy denies. An agent's tool allow-list cannot include tools the project policy blocks.
 
-### Temp Agent Restrictions
+### Temp Agent Access Model
 
-Temp agents have additional restrictions beyond the org envelope:
+Temps are project members — they need access to do real work. Their access is scoped to their assigned project and auto-revoked when they expire or are retired.
 
-- **No secret access by default**: temps cannot read secrets or credentials unless explicitly granted by the human for the specific task.
-- **No connector access by default**: temps cannot use external MCP connections unless explicitly granted.
-- **Auto-revoke on expiration**: any credentials or grants given to a temp are automatically revoked when the temp expires. No stale access.
-- **Org-level memory only**: temps receive org-level memory through passive injection but do NOT receive project-specific memories unless they are assigned to a project via `agent_project_assignment`.
+- **Project secrets and connectors**: temps inherit their assigned project's secrets and MCP connector access. A temp worker building against a database needs the database credentials. A temp running a deploy flow needs the deployment connector. The project's access grants apply; the org policy envelope still constrains.
+- **Single-project memory**: temps receive org-level and their assigned project's memory. They do NOT receive cross-project memory — knowledge from other projects is not available.
 - **No private memory**: temps do not maintain agent-private memory scope. Their contributions are captured at the task or project level.
-- **Concurrent limit**: max active temps per org is configurable (default 10).
+- **Auto-revoke on expiration/retirement**: all project access (secrets, connectors, memory) is automatically revoked when the temp expires or is retired. No stale access.
+- **No human-facing communication**: temps do the work but do not chat with the human. They communicate through flow node artifacts, blocker escalations to the PM, and task status updates.
+- **Concurrent limit**: max active temps per org is configurable (default 10). Stored in `organization.settings` (e.g., `{"agents": {"max_concurrent_temps": 10}}`).
 
 ### Staff Agent Safeguards
 
@@ -536,13 +572,13 @@ create table agent (
     check (budget_period in ('daily', 'weekly', 'monthly')),
 
   -- Memory Policy
-  memory_read_scopes      text[] not null default '{org}', -- which scopes the agent can read from
+  memory_read_scopes      text[] not null default '{org,assigned_projects,current_task}', -- org + project + task
   memory_write_scope      text not null default 'context', -- where captured memories go (context = current scope)
   private_memory_enabled  boolean not null default false,
 
   -- Temp-specific fields
-  temp_scope_type         text check (temp_scope_type in ('task', 'session', 'ttl')),
-  temp_scope_id           uuid,                            -- task or session this temp is scoped to
+  temp_scope_type         text check (temp_scope_type in ('project', 'task', 'session', 'ttl')),
+  temp_scope_id           uuid,                            -- project, task, or session this temp is scoped to
   temp_ttl_seconds        int,                             -- TTL in seconds (for ttl-scoped temps)
   temp_expires_at         timestamptz,                     -- computed: created_at + temp_ttl, or set by scope end
   promoted_to_agent_id    uuid references agent(id),       -- set when temp is promoted to staff
@@ -579,7 +615,7 @@ create index on agent (temp_expires_at) where agent_class = 'temp' and lifecycle
 - All agent tables live in the org's isolated database (database-per-org model, see 04-auth-tenancy-and-identity.md). The `organization_id` column is retained as an internal consistency check and for queries, but tenant isolation is enforced at the database level.
 - `scope_level` is about the agent's home scope, not about access. An org-level agent is available everywhere. A project-level agent is primarily associated with projects but can still participate in org sessions if invited.
 - `lifecycle_status` combines staff and temp states into one column. Staff agents use `draft`, `active`, `paused`, `retired`, `cancelled`. Temp agents use `active`, `expired`, `promoted`.
-- `memory_read_scopes` is a text array. Possible values: `org`, `assigned_projects`, `current_task`, `private`. Default is `{org}` (temp-appropriate). Lori sets `{org, assigned_projects, current_task}` for staff agents during creation, enabling cross-project memory. Retrieval cascades upward within each scope (see 06-memory.md Scope Inheritance).
+- `memory_read_scopes` is a text array. Possible values: `org`, `assigned_projects`, `current_task`, `private`. Default is `{org, assigned_projects, current_task}` — both staff and temps see their assigned project's memory. The difference is that staff agents are assigned to multiple projects (cross-project knowledge) while temps are assigned to exactly one. Retrieval cascades upward within each scope (see 06-memory.md Scope Inheritance).
 - `memory_write_scope = 'context'` means "write to whatever scope the current session is in" — task scope during task work, project scope during project sessions, org scope during org sessions.
 - The check constraint on `tool_allow_list`/`tool_deny_list` prevents setting both simultaneously. If both are null, the agent inherits the org/project tool policy.
 - `budget_cap_cents` and `budget_period` are the per-agent budget. The org and project also have budgets (see 13-security-observability-costs.md). The most restrictive cap across all three levels applies.
@@ -691,7 +727,7 @@ system_prompt:      [Frank's identity prompt — organizational strategist,
                      escalation handler, warm but direct communication style]
 private_memory:     true
 default_model:      [org's high-capability profile]
-memory_read_scopes: [org, assigned_projects]
+memory_read_scopes: [org, assigned_projects, current_task]
 ```
 
 ### Lori
@@ -706,9 +742,9 @@ scope_level:        org
 system_prompt:      [Lori's identity prompt — staffing expert, agent creator,
                      workforce manager, understands agent capabilities and
                      project needs, thoughtful and precise]
-private_memory:     false
+private_memory:     true
 default_model:      [org's high-capability profile]
-memory_read_scopes: [org, assigned_projects]
+memory_read_scopes: [org, assigned_projects, current_task]
 ```
 
 ### Ellie
@@ -807,7 +843,7 @@ create index on agent_profile_template (is_active) where organization_id is null
 
 1. **Two agent classes: staff and temp.** Staff agents are durable, named, memory-building members of the org. Temp agents are ephemeral, scoped, and disposable. The distinction is about durability and identity, not capability.
 2. **Temp agents CAN be promoted to staff.** Lori handles the promotion. The temp's configuration is copied into a new staff agent profile, which goes through normal draft -> active review. The temp is marked `promoted` with a reference to the new staff agent.
-3. **Temps inherit org-level memory but NOT project-specific memory** unless explicitly assigned to a project. This prevents temps from accessing project context they have no business seeing.
+3. **Temps are always project-assigned and get project memory.** Every temp belongs to a project via `agent_project_assignment`. Temps receive org + project + task memory. The distinction from staff is single-project vs cross-project memory, not presence vs absence of project memory.
 4. **Concurrent temp agents: configurable per-org limit, default 10.** Prevents runaway temp creation and uncontrolled cost. Applies to simultaneously active temps, not lifetime total.
 5. **Staff agents are created by Lori through conversation.** No UI creation path. The human describes what they need, Lori builds the agent profile, the human approves.
 6. **No UI creation path for any agent.** Consistent with the product principle that everything happens through chat. The UI shows agent profiles read-only.
@@ -819,17 +855,17 @@ create index on agent_profile_template (is_active) where organization_id is null
 12. **Archival summary on temp expiration.** Ellie captures what the temp was created for, what it did, and the outcome. Stored as episodic memory at task or project scope.
 13. **Staff agent lifecycle: draft -> active -> paused -> retired.** No deletion. Retired agents preserved for audit. Paused agents retain assignments but stop responding.
 14. **Policy layers: instance safety > org > project > agent profile.** Each layer can only tighten, never loosen. Most restrictive wins.
-15. **Temp agent restrictions: no secrets, no connectors, no private memory, no project memory (unless assigned).** All grants auto-revoke on expiration.
+15. **Temps get project-level access (secrets, connectors, memory) for their assigned project.** They need to do real work. Access is auto-revoked on expiration/retirement. No cross-project access, no private memory.
 16. **The starter trio (Frank, Lori, Ellie) are seeded on bootstrap.** System-created, immediately active, org-level. They are not optional.
 17. **Frank is NOT a project manager.** He operates at the org level — cross-project coordination, strategic conversations, escalation endpoint. Individual project management is the PM's job.
 18. **Lori recommends, the human decides.** Lori proposes agents and staffing plans, but never makes unilateral staffing decisions.
 19. **Exactly one PM per project, enforced by schema.** If the PM is retired, a new PM must be assigned before the project continues.
 20. **Project roles: project_manager, worker, reviewer, planner.** An agent can hold multiple roles in the same project (separate rows) and different roles in different projects.
 21. **Agent identity is stateless at the prompt level.** Everything is assembled fresh from profile, context, memory, and history on every turn. No "agent runtime" holding state between turns.
-22. **Private memory for complex roles.** PMs, Frank, and Ellie have `private_memory_enabled = true` by default. Other staff and all temps default to false.
+22. **Private memory for complex roles.** PMs, Frank, Lori, and Ellie have `private_memory_enabled = true` by default. Lori needs private memory to track agent performance, staffing patterns, and workforce knowledge across the org. Other staff and all temps default to false.
 23. **Skill attachments on agent profile are baseline competencies.** Activation depends on flow node context — agent skills are the fallback when no flow node skills are declared.
 24. **PMs are always staff agents.** PMs need deep project context, cross-project awareness, and persistent working relationships. They accumulate institutional knowledge that makes them more effective over time.
-25. **Workers default to temp.** Implementation work — writing code, running tests, applying fixes — is done by ephemeral agents scoped to the task. The work product matters, not the worker's identity. Temps keep the agent roster lean.
+25. **Workers default to temp.** Implementation work — writing code, running tests, applying fixes — is done by temps. Project-scoped temps are the standing workforce; task-scoped temps handle specialized one-off work. Temps keep the agent roster lean.
 26. **Reviewers default to temp, staff when judgment-dependent.** Code reviewers apply a fixed rubric (captured in skills/prompts) and can be temp. Policy, content, architecture, and compliance reviewers need accumulated judgment across projects and should be staff.
 27. **Staff agent memory extends across all assigned projects.** A staff agent assigned to three projects has memory from all three available on every turn. Cross-project knowledge accumulation is the key reason to make a role staff. This is the primary differentiator from temps.
 28. **Staff agent memory persists indefinitely.** Knowledge, preferences, heuristics, and working notes carry forward across every session and project. Staff agents get more effective over time.
@@ -842,6 +878,12 @@ create index on agent_profile_template (is_active) where organization_id is null
 35. **Catalog templates are not live agents.** Templates are instantiated into real agents (staff or temp) when needed. The catalog is a library of proven configurations, not a roster of active agents.
 36. **Lori draws from the catalog when creating agents.** She searches by domain tags, selects a template, customizes for the org's needs, and proposes the result. Templates can also be selected automatically for temp workers based on flow node requirements.
 37. **Successful agents can be saved back to the catalog.** When an agent works well, its profile can be promoted to a template for reuse. This is how the catalog grows organically.
+38. **Four temp scope types: project, task, session, ttl.** Project-scoped temps are the standing workforce (persist across tasks, pausable, explicitly retirable). Task/session/TTL temps are short-lived and auto-expire.
+39. **Project-scoped temps have a richer lifecycle than other temps.** They support paused and retired states (like staff minus draft). Task/session/TTL temps only have active, expired, and promoted.
+40. **Temps do not communicate directly with the human.** They do the work through flow node execution. Communication happens via artifacts, blocker escalations to the PM, and task status updates.
+41. **Temp auto-retirement is event-driven.** Task completion events expire task-scoped temps, session close events expire session-scoped temps, a periodic scheduler expires TTL temps. On expiration/retirement, `agent_project_assignment.is_active` is set to false.
+42. **When a staff agent is removed from a project, it loses access to that project's memory.** `memory_read_scopes = {assigned_projects}` automatically excludes the removed project. Memories the agent captured while working on that project remain at the project scope, accessible to other agents still assigned. The agent's private memories remain intact.
+43. **Project roles map to but are distinct from task participant roles.** Project roles (`agent_project_assignment`) define the agent's capacity within the project. Task participant roles (`project_task_participant`) define who is working on a specific task. The PM assigns task participants from the project's assigned agents.
 
 ## Open Questions
 

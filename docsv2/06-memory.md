@@ -398,7 +398,7 @@ Return top-k results within the context budget allocation.
 ### Three Retrieval Modes
 
 **Passive injection (sync sessions, human present):**
-- Runs automatically at turn start as part of context assembly (layer 5 of 7 in the prompt assembly pipeline — see 05-agent-runtime.md).
+- Runs automatically at turn start as part of context assembly (layer 5 of 7 in the prompt assembly pipeline — see 05-agents-staff-and-temps.md).
 - Must be fast — the four-stage pipeline is designed for low latency.
 - Top-k results injected into the agent's context without agent action.
 - Budget-aware: Ellie fills the allocated memory budget, no more.
