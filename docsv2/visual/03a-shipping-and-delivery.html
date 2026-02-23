@@ -909,7 +909,7 @@ flowchart LR
           <h3>Continuous</h3>
           <span class="mode-badge">auto</span>
         </div>
-        <p>Every merge to main triggers a deploy task. If a deploy is already running, the merge is implicitly batched -- when it completes, a follow-up fires if new merges landed.</p>
+        <p>Every merge to main triggers a deploy task. If a deploy is already running, the merge is implicitly batched -- when it completes, a follow-up fires if new merges landed. Deploy task creation is protected by a PostgreSQL advisory lock per project to prevent race conditions.</p>
         <div class="mode-trigger">
           <strong>Trigger:</strong> merge event on event bus
         </div>
@@ -1127,7 +1127,7 @@ flowchart LR
       <div class="schema-row">
         <span class="schema-col-name">delivery_mode</span>
         <span class="schema-col-type">text</span>
-        <span class="schema-col-note">null | continuous | gated | scheduled</span>
+        <span class="schema-col-note">continuous | gated | scheduled (null = inherits from project_remote)</span>
       </div>
       <div class="schema-row">
         <span class="schema-col-name">deploy_flow_template_id</span>
@@ -1152,6 +1152,11 @@ flowchart LR
         <span class="event-desc">Recorded on deploy task after successful deployment. Metadata: environment name, commit SHA.</span>
       </div>
     </div>
+
+    <h3 class="fade-up" style="margin-top: 2rem;">Merge Queue Entry Retention</h3>
+    <p class="section-desc fade-up">
+      <code>merge_queue_entry</code> rows are never hard-deleted. When a deploy completes successfully, the entry's <code>archived_at</code> timestamp is set. Active/pending queries filter to <code>archived_at is null</code>, preserving the full merge audit trail.
+    </p>
   </div>
 </section>
 
