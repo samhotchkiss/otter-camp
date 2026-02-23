@@ -3,9 +3,9 @@
 
 This spec defines the complete tool system for OtterCamp V2 -- how agents discover, access, and execute tools. Tools are what transform agents from conversation partners into operators that can act on the world. The system answers four questions for every tool call: what tools exist, which does this agent have, what is allowed right now, and how does it execute. All tools fall into exactly one of four categories: Native (shipped with OtterCamp, operating on domain entities like tasks/projects/memory), System (filesystem and CLI access within sandboxed workspaces), Browser (web interaction in isolated contexts), and MCP (dynamically discovered from external MCP servers).
 
-The core architectural pattern is a two-tier execution model. Tier 1 tools are read-only operations (listing tasks, querying memory, reading files) that execute directly in the chat layer with a simple scope check -- fast and lightweight since reads vastly outnumber writes in a typical agent turn. Tier 2 tools are mutations and external calls that route through the full control plane pipeline: policy evaluation (allow/deny/draft_review), broker execution, sandboxing, and RunStep audit trail. Tier assignment is static and defaults to tier 2; tier 1 is a strict whitelist. All MCP and browser tools are always tier 2 with no exceptions.
+The core architectural pattern is a two-tier execution model. Tier 1 tools are read-only operations (listing tasks, querying memory, reading files) that execute directly in the chat layer with a simple scope check -- fast and lightweight since reads vastly outnumber writes in a typical agent turn. Tier 2 tools are mutations and external calls that route through the full control plane pipeline: policy evaluation (allow/deny), broker execution, sandboxing, and RunStep audit trail. Tier assignment is static and defaults to tier 2; tier 1 is a strict whitelist. All MCP and browser tools are always tier 2 with no exceptions.
 
-Tool availability is determined by a four-stage resolution pipeline that runs once per turn: (1) Universe -- all native plus active MCP tools, (2) Agent Profile Filter -- allow/deny lists with glob patterns from the agent's profile (e.g., Frank gets project/task/session tools but no system or browser tools), (3) Flow Node Filter -- a soft deprioritization for prompt budget, not a hard access gate, (4) Capability Gate -- tier 2 tools require matching control plane capabilities. The resolved tool set is cached per session for stability. The native catalog ships approximately 40 tools across 7 domains (project, chat, memory, agent, system, browser, communication). Key schema tables are `tool_definition` (native tool metadata, populated at startup) and `session_tool_set` (per-agent, per-session cache of resolved tools for debugging). The `draft_review` policy outcome is central to sensitive operations like email and Slack -- the action is staged in the human's inbox rather than executed immediately, and the agent's turn continues without blocking.
+Tool availability is determined by a four-stage resolution pipeline that runs once per turn: (1) Universe -- all native plus active MCP tools, (2) Agent Profile Filter -- allow/deny lists with glob patterns from the agent's profile (e.g., Frank gets project/task/session tools but no system or browser tools), (3) Flow Node Filter -- a soft deprioritization for prompt budget, not a hard access gate, (4) Capability Gate -- tier 2 tools require matching control plane capabilities. The resolved tool set is cached per session for stability. The native catalog ships approximately 40 tools across 7 domains (project, chat, memory, agent, system, browser, communication). Key schema tables are `tool_definition` (native tool metadata, populated at startup) and `session_tool_set` (per-agent, per-session cache of resolved tools for debugging). Communication tools (email, Slack) create drafts as their designed behavior -- the tool succeeds and stages the action in the human's inbox for review. This is tool behavior, not a policy interception.
 
 ---
 
@@ -31,7 +31,7 @@ Native tools are defined in code, versioned with the application, and always ava
 
 Tools that give agents controlled access to the local execution environment — the filesystem, CLI, and codebase. These operate within sandboxed workspaces scoped to the project's git repo.
 
-System tools are always available but heavily policy-gated. The capabilities `system.cli.execute`, `system.file.write`, and `system.browser.control` (doc 16) gate access.
+System tools are always available but heavily policy-gated. The capabilities `system.cli.execute`, `system.file.write`, `system.browser.navigate`, and `system.browser.interact` (doc 16) gate access.
 
 ### Category 3: Browser Tools
 
@@ -132,10 +132,10 @@ All browser tools are tier 2. Even `browser.screenshot` — which might seem rea
 
 | Tool | Description | Tier |
 |---|---|---|
-| `email.compose` | Compose and stage an email for review | 2 (mutation, typically `draft_review`) |
-| `slack.post` | Post a message to a Slack channel | 2 (mutation, typically `draft_review`) |
+| `email.compose` | Compose and stage an email draft for review | 2 (mutation) |
+| `slack.post` | Compose and stage a Slack message draft for review | 2 (mutation) |
 
-Communication tools default to `draft_review` policy — the action is staged in the human's inbox rather than executed immediately. The human reviews, edits if needed, and approves. See doc 02 for the `draft_review` outcome and doc 03 for the inbox model.
+Communication tools create drafts as their designed behavior — the tool succeeds and stages the action in the human's inbox as a `draft_action_review` item. The human reviews, edits if needed, and approves. This is tool behavior, not policy interception — the policy engine evaluates allow/deny for the communication capability; the tool itself decides to stage a draft rather than send immediately.
 
 ### Catalog Size and Scope
 
@@ -184,7 +184,7 @@ Agent requests tool call
 
 ### Tier 2: Control-Plane Tools (Mutations, External, Side Effects)
 
-These change state or reach outside OtterCamp. Full control plane path (doc 16): policy evaluation (allow/deny/draft_review), execution via broker, RunStep audit trail, artifact capture.
+These change state or reach outside OtterCamp. Full control plane path (doc 16): policy evaluation (allow/deny), execution via broker, RunStep audit trail, artifact capture.
 
 **What qualifies for tier 2:**
 - Writes to OtterCamp state (create/update/delete)
@@ -207,7 +207,6 @@ Agent requests tool call
   -> Policy evaluation:
      - allow: dispatch to broker -> sandbox -> execute -> return result
      - deny: return "not permitted" as tool result
-     - draft_review: stage action, return "queued for review" as tool result
   -> Log as chat_message (tool_call + tool_result)
   -> Log as RunStep in control plane audit trail
 ```
@@ -271,18 +270,22 @@ Cross-reference the remaining tools against the agent's control plane capabiliti
 
 | Tool Domain | Required Capability |
 |---|---|
-| `task.create`, `task.update` | `project.task.update` |
+| `task.create` | `project.task.create` |
+| `task.update` | `project.task.update` |
 | `flow.advance`, `flow.review_decision` | `project.flow.advance` |
 | `file.write`, `file.delete` | `system.file.write` |
 | `cli.execute` | `system.cli.execute` |
-| `browser.*` | `system.browser.control` |
+| `browser.navigate` | `system.browser.navigate` |
+| `browser.click`, `browser.type`, `browser.screenshot`, `browser.extract`, `browser.evaluate` | `system.browser.interact` |
 | `git.commit` | `system.file.write` |
-| `session.create`, `session.invite_agent` | `chat.participant.manage` |
+| `session.create` | `chat.session.create` |
+| `session.invite_agent` | `chat.participant.add` |
 | `message.send` | `chat.message.write` |
 | `memory.record` | `memory.write` |
-| `agent.create_temp` | `agent.manage` |
+| `agent.create_temp` | `agent.temp.create` |
 | MCP tools | `mcp.tool.invoke:<connection_id>:<tool_name>` |
-| `email.compose`, `slack.post` | `communication.send` |
+| `email.compose` | `comms.email.send` |
+| `slack.post` | `comms.slack.post` |
 
 Tools that require a capability the agent does not hold are excluded from the tool set. They do not appear in the prompt and cannot be called.
 
@@ -321,7 +324,7 @@ Each tool description includes:
 - **Description**: one to two sentences explaining what the tool does and when to use it
 - **Parameters**: typed parameter schema (JSON Schema format)
 - **Returns**: description of the return value structure
-- **Policy hint**: if the tool is under `draft_review` policy, the description says so — the agent knows upfront that calling this tool will stage the action for review, not execute it immediately
+- **Behavior hint**: if the tool creates drafts for review (e.g., communication tools), the description says so — the agent knows upfront that calling this tool will stage the action for review, not execute it immediately
 
 ### Budget Management
 
@@ -402,25 +405,24 @@ Does agent hold project.task.update capability?
   -> Yes: continue
   |
   v
-Evaluate policy layers: allow / deny / draft_review
+Evaluate policy layers: allow / deny
   -> allow: execute
   -> deny: return "not permitted"
-  -> draft_review: stage for inbox review
 ```
 
-The profile filter ensures agents never see tools they should not have. The capability gate ensures the resolution pipeline was correct. The policy evaluation adds runtime context — the same capability might be `allow` in one project and `draft_review` in another.
+The profile filter ensures agents never see tools they should not have. The capability gate ensures the resolution pipeline was correct. The policy evaluation adds runtime context — the same capability might be `allow` in one project and `deny` in another.
 
-### The `draft_review` Outcome
+### Communication Tool Drafts
 
-When a tool call results in `draft_review`:
+Communication tools (`email.compose`, `slack.post`) create drafts as their **designed behavior**, not as a policy interception. The policy engine evaluates allow/deny for the communication capability. If allowed, the tool executes — and its normal successful output is a staged draft:
 
-1. The action is staged — not executed. The tool result returned to the agent says "queued for review."
-2. An inbox item is created for the human (doc 03, Inbox section) with the action payload, context, and preview.
+1. The tool succeeds. The tool result returned to the agent says "draft staged for review."
+2. The tool itself creates a `draft_action_review` inbox item for the human (doc 03, Inbox section) with the composed content, context, and preview.
 3. The agent's turn continues immediately. No blocking.
-4. When the human acts on the inbox item (approve, edit+approve, reject), the action executes or is discarded.
+4. When the human acts on the inbox item (approve, edit+approve, reject), the inbox handler executes the final action (e.g., sends the email). This may trigger a new run for audit purposes.
 5. The agent is not notified of the inbox decision within the same turn. If the agent needs to know the outcome, it can check `inbox.list` on a subsequent turn.
 
-`draft_review` is the primary mechanism for sensitive operations — sending emails, posting to external channels, deploying to production. The agent does the work of composing the action; the human does the work of approving it.
+This is tool behavior, not policy. The distinction matters: the policy engine said "allow" — the agent has the communication capability. The tool then chose to stage a draft rather than send immediately, because creating drafts for human review is what communication tools do by design. The agent does the work of composing the action; the human does the work of approving it.
 
 ## MCP Tool Integration
 
@@ -451,7 +453,7 @@ MCP tools are subject to the same four-stage resolution pipeline:
 
 All MCP tool calls are tier 2, no exceptions. The execution path:
 
-1. Policy evaluation (allow/deny/draft_review)
+1. Policy evaluation (allow/deny)
 2. Input validation against the stored JSON Schema
 3. Call to the MCP server via the connection
 4. Response capture and validation
@@ -556,9 +558,9 @@ Tool call errors are returned as tool results, not as exceptions. The agent sees
 - **Permission denied**: `{"error": "permission_denied", "message": "You do not have permission to execute CLI commands in this project."}`
 - **Execution failure**: `{"error": "execution_failed", "message": "Command exited with code 1.", "output": "..."}`
 - **Timeout**: `{"error": "timeout", "message": "Tool execution exceeded the 30-second timeout."}`
-- **Draft review**: `{"status": "queued_for_review", "inbox_item_id": "uuid", "message": "Email staged for human review."}`
+- **Draft staged**: `{"status": "draft_staged", "inbox_item_id": "uuid", "message": "Email staged for human review."}`
 
-The `draft_review` outcome is not an error — it is a normal result. The agent should acknowledge it and continue its turn.
+The draft staged outcome is not an error — it is a normal result from communication tools. The tool succeeded; the action was staged for review as the tool's designed behavior. The agent should acknowledge it and continue its turn.
 
 ### Parallel Tool Execution
 
@@ -595,12 +597,12 @@ Timeouts are enforced by the execution layer. A timed-out tool call returns a ti
 - **Profile tool policy uses allow/deny with globs**: `project.*`, `mcp.tool:<connection_id>:*`, etc. Deny always wins over allow.
 - **Tool descriptions are lowest-priority prompt layer**: dropped first when budget is tight. Deprioritized tools (from flow node filter) are dropped before others.
 - **Compact description fallback**: when budget forces tool description reduction, names + one-line summaries replace full schemas. Agent can still call tools.
-- **`draft_review` is a normal result, not an error**: the agent's turn continues. Inbox item is created. Agent is not notified of the decision within the same turn.
+- **Communication tool drafts are a normal result, not an error**: the tool succeeds and stages a draft. The agent's turn continues. Inbox item is created by the tool. Agent is not notified of the decision within the same turn.
 - **Parallel tier 1, sequential tier 2**: multiple tool calls in one model response follow this execution order.
 - **Error results, not exceptions**: all tool failures are returned as structured tool results the agent can interpret and adapt to.
 - **Native tool catalog is approximately 40 tools across 7 domains**: project, chat, memory, agent, system, browser, communication. This is the complete set.
 - **Capability revocation mid-session is enforced at execution time**: the tool description may still be in the prompt, but the call returns "not permitted." This is the guardrail, not the primary mechanism.
-- **Communication tools default to `draft_review`**: emails, Slack posts, and similar external communications are staged for human review.
+- **Communication tools create drafts as their designed behavior**: emails, Slack posts, and similar external communications are staged for human review. This is tool behavior, not policy interception — the policy engine evaluates allow/deny for the capability, and the tool itself stages the draft.
 - **`memory.query` is tier 1**: it is a read operation on the memory system. All agents have access to it.
 - **`memory.record` is tier 2**: it creates durable state (a memory item). Goes through the control plane.
 

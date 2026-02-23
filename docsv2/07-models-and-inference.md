@@ -96,25 +96,27 @@ An org can have:
 
 Each connection tracks its operational health:
 
-- **Status:** `healthy`, `degraded` (experiencing intermittent errors), `rate_limited` (actively throttled, with estimated reset time), `unavailable` (auth failed or quota exhausted), `disabled` (manually turned off by the operator).
+- **Status:** `healthy`, `degraded` (experiencing intermittent errors), `rate_limited` (actively throttled, with estimated reset time), `unavailable` (auth failed or quota exhausted). Operator disable is handled by the `is_enabled` boolean, not by health status — health status only tracks operational states.
 - **Last successful call:** timestamp of the most recent successful invocation through this connection.
 - **Last error:** timestamp and error class of the most recent failure.
 - **Rate limit state:** remaining requests/tokens and reset time, as reported by the provider's response headers (via the adapter).
 - **Cumulative stats:** total invocations, total input/output tokens, error count -- tracked per connection for the subscription dashboard.
 
-Health status is updated on every invocation result. The gateway does not actively poll providers for health -- it learns from actual traffic.
+Health status is updated on every invocation result for connections that are receiving traffic.
+
+**Active health probing.** Connections in `degraded`, `rate_limited`, or `unavailable` status receive periodic lightweight health checks (a minimal API call, e.g., a model list request) to detect recovery. Default interval: 60 seconds for `degraded`/`rate_limited`, 5 minutes for `unavailable`. When a probe succeeds, the connection transitions back to `healthy`.
 
 ### Connection Selection
 
 When the gateway dispatches a request to a provider, it needs to select which connection to use. The selection logic:
 
 1. **Resolve profile.** The profile specifies a provider and model.
-2. **Find eligible connections.** All connections for this org + provider that are not `disabled` or `unavailable`.
-3. **Prefer healthy connections.** Sort by health status: `healthy` > `degraded` > `rate_limited`.
-4. **Within the same health tier, prefer the connection with the most remaining rate limit headroom.** If rate limit state is unknown (no recent calls), treat as fully available.
+2. **Find eligible connections.** All connections for this org + provider where `is_enabled = true` and `health_status` is not `unavailable`. Connections with `is_enabled = false` or `health_status = 'unavailable'` are excluded.
+3. **Sort by health tier.** `healthy` > `degraded`. Connections with `health_status = 'rate_limited'` are skipped (they are not eligible for selection until the rate limit resets or active health probing detects recovery).
+4. **Within the same health tier, sort by `failover_priority`** (lower number = tried first).
 5. **If no eligible connections exist for the profile's provider, trigger cross-provider failover** (see Failover).
 
-This is not round-robin or load-balancing. It is health-aware selection with a preference for the healthiest connection. In the common case (one healthy connection per provider), selection is trivial.
+This is not round-robin or load-balancing. It is health-aware selection with a preference for the healthiest connection, with deterministic ordering via `failover_priority`. In the common case (one healthy connection per provider), selection is trivial.
 
 ### Subscription Dashboard
 
@@ -174,7 +176,7 @@ OtterCamp uses model calls internally for operations that are not agent turns. T
 
 - **Summarization profile** -- used for progressive conversation summarization (see 02-chat.md Session Continuity). Optimized for speed, not depth. Haiku-tier model.
 - **Listening eval profile** -- used for the multi-party listening evaluation pass (see 02-chat.md Turn Cycle Phase 2). Must be fast -- the human is waiting. Haiku-tier model.
-- **Memory extraction profile** -- used by the memory pipeline to extract memories from conversations (see 06-memory.md). Runs async, no latency pressure. Mid-tier model.
+- **Memory extraction profile** -- used by the memory pipeline to extract memories from conversations (see 06-memory.md). Runs async, no latency pressure. Haiku-tier model.
 - **Memory synthesis profile** -- used for entity synthesis and deduplication in the memory system. Mid-tier model, async.
 
 System profiles are configured at the org level. They have a `system_purpose` field (`summarization`, `listening_eval`, `memory_extraction`, `memory_synthesis`) for programmatic lookup. Sensible defaults ship with the system. The operator can tune them but most should never need to touch them.
@@ -227,6 +229,8 @@ The system enforces limits on concurrent model sessions to manage resource usage
 A configurable maximum number of concurrent model sessions across all providers. This is primarily for resource conservation -- especially important in self-hosted/single-node deployments where RAM is constrained by model context windows held in memory during streaming.
 
 When the limit is reached, new requests queue and execute in order as slots free up.
+
+**Reserved sync slot.** The model gateway always reserves at least one concurrency slot for synchronous (interactive) requests. Background/async agent work cannot consume all available slots — a live user's chat must never wait because async tasks have saturated the connection pool.
 
 The global limit is set at the instance level by the operator. It is not configurable per-org -- it is an infrastructure constraint, not a tenant policy.
 
@@ -500,12 +504,12 @@ create table provider_connection (
   provider_id           uuid not null references model_provider(id),
   label                 text not null,               -- human-assigned name: 'Personal Anthropic', 'Team OpenAI'
   is_enabled            boolean not null default true,
-  api_key_secret_ref    text,                        -- named reference to secret store (see doc 08 secret table, doc 13 security model)
+  api_key_secret_ref    text,                        -- secret.slug reference; null for keyless endpoints (e.g., local Ollama). See doc 08 secret reference convention.
   base_url_override     text,                        -- connection-specific endpoint override
   max_concurrent        int,                         -- per-connection concurrency cap (null = use provider default)
 
   -- health tracking
-  health_status         text not null default 'healthy' check (health_status in ('healthy', 'degraded', 'rate_limited', 'unavailable', 'disabled')),
+  health_status         text not null default 'healthy' check (health_status in ('healthy', 'degraded', 'rate_limited', 'unavailable')),
   last_success_at       timestamptz,
   last_error_at         timestamptz,
   last_error_class      text,                        -- from error taxonomy
@@ -535,7 +539,7 @@ create index on provider_connection (organization_id, provider_id, failover_prio
 - `label` is the human-readable name shown in the subscription dashboard.
 - `api_key_secret_ref` is a reference into the encrypted secret store (see 13-security-observability-costs.md). API keys are never stored in plaintext.
 - `base_url_override` lets a connection point to a different endpoint (e.g., a regional endpoint, a proxy, a different local model server).
-- `health_status` is updated by the gateway after each invocation. The gateway transitions: `healthy` -> `degraded` (on intermittent errors) -> `rate_limited` (on 429) -> `unavailable` (on persistent auth/quota failures). Recovery: when a previously failing connection succeeds, it transitions back to `healthy`.
+- `health_status` is updated by the gateway after each invocation. The gateway transitions: `healthy` -> `degraded` (on intermittent errors) -> `rate_limited` (on 429) -> `unavailable` (on persistent auth/quota failures). Recovery: when a previously failing connection succeeds (via traffic or active health probing), it transitions back to `healthy`. Operator disable is handled by `is_enabled`, not `health_status` — the two are independent.
 - `failover_priority` determines the order connections are tried within a provider. The operator sets this. Lower numbers are tried first.
 - Cumulative stats are denormalized counters updated atomically on each invocation. They power the subscription dashboard without requiring joins to the invocation table.
 
@@ -564,6 +568,8 @@ create table model_profile (
   temperature           numeric(4,2) not null default 0.7,
   top_p                 numeric(4,2),
   top_k                 int,
+  presence_penalty      real,                            -- provider-dependent; null = provider default
+  frequency_penalty     real,                            -- provider-dependent; null = provider default
 
   -- tool call policy
   tool_use_enabled      boolean not null default true,
@@ -592,7 +598,8 @@ create table model_profile (
   metadata              jsonb not null default '{}'
 );
 
-create unique index on model_profile (organization_id, slug, version);
+create unique index on model_profile (organization_id, slug, version) where (organization_id is not null);
+create unique index on model_profile (slug, version) where (organization_id is null);
 create index on model_profile (logical_profile_id, is_current);
 create index on model_profile (organization_id, profile_type, is_current);
 create index on model_profile (organization_id, system_purpose) where system_purpose is not null;
@@ -644,7 +651,7 @@ create table model_invocation (
   profile_version     int not null,
   provider_id         uuid not null references model_provider(id),
   model_id            text not null,                    -- actual model used (resolved from profile)
-  connection_id       uuid not null references provider_connection(id),
+  connection_id       uuid references provider_connection(id), -- null when no eligible connection was found
 
   -- attribution
   session_id          uuid references chat_session(id), -- chat session, if applicable
@@ -657,7 +664,7 @@ create table model_invocation (
   run_id              uuid references run(id),          -- control plane Run, if this call happened during a Run
   run_step_id         uuid references run_step(id),     -- specific RunStep within the Run
   run_attempt_id      uuid references run_attempt(id),  -- specific RunAttempt within the RunStep
-  invocation_purpose  text not null check (invocation_purpose in ('agent_turn', 'listening_eval', 'summarization', 'memory_extraction', 'memory_synthesis', 'memory_dedup', 'memory_reflection', 'replay')),
+  invocation_purpose  text not null check (invocation_purpose in ('agent_turn', 'listening_eval', 'summarization', 'memory_extraction', 'memory_synthesis', 'memory_dedup', 'memory_reflection', 'memory_classification', 'memory_reranking', 'replay')),
 
   -- request
   request_priority    text not null check (request_priority in ('sync_interactive', 'sync_system', 'async_agent', 'async_system')),
@@ -717,7 +724,7 @@ create index on model_invocation (fallback_of_invocation_id) where fallback_of_i
 
 - One row per model call. This is the most granular tracking record in the system.
 - `connection_id` records which specific connection served this request. Essential for the subscription dashboard and failover analysis.
-- `invocation_purpose` includes expanded values for memory pipeline operations (`memory_dedup`, `memory_reflection`) beyond the basic extraction/synthesis. These use the `memory_synthesis` system profile. `agent_turn` and `replay` use agent profiles, not system profiles.
+- `invocation_purpose` includes expanded values for memory pipeline operations (`memory_dedup`, `memory_reflection`, `memory_classification`, `memory_reranking`) beyond the basic extraction/synthesis. `memory_classification` and `memory_reranking` use the `memory_synthesis` system profile, same as `memory_dedup` and `memory_reflection`. `agent_turn` and `replay` use agent profiles, not system profiles.
 - `retry_of_invocation_id` and `fallback_of_invocation_id` are separate FK columns for unambiguous chain reconstruction. A retry points to the invocation it retried. A fallback points to the invocation that failed and triggered the fallback. No ambiguity about the chain structure.
 - `prompt_storage_ref` and `response_storage_ref` point to object storage (S3-compatible). Full prompts and responses are stored off-table to keep the invocation table lean and queryable.
 - `agent_id` is set for system profile invocations that are causally linked to an agent (e.g., summarization triggered by an agent's conversation), not just for direct agent turns. This enables accurate per-agent token attribution.

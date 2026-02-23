@@ -86,7 +86,7 @@ Executes approved actions in controlled sandboxes. Workers are stateless — the
 
 Immutable record of decisions and outcomes. Every policy evaluation, every broker decision, and every execution result is logged. This is append-only and tamper-evident.
 
-The audit log is separate from `run_event` (which tracks execution timeline). The audit log captures policy decisions and access control events that may not map 1:1 to runs.
+Policy decisions and access control events are recorded as `run_event` entries. Events that occur outside a run context (e.g., policy changes, capability updates) are recorded in doc 04's `audit_event` table.
 
 ## Canonical Execution Entities
 
@@ -253,7 +253,6 @@ Capabilities follow a hierarchical dot-separated namespace: `{domain}.{resource}
 
 | Capability | Description |
 |---|---|
-| `memory.read` | Query memory (via Ellie or directly) |
 | `memory.write` | Create or update memory items |
 | `memory.entity.create` | Create a new entity in the knowledge graph |
 | `memory.entity.update` | Update entity attributes or relationships |
@@ -263,7 +262,6 @@ Capabilities follow a hierarchical dot-separated namespace: `{domain}.{resource}
 
 | Capability | Description |
 |---|---|
-| `system.file.read` | Read files in the project workspace |
 | `system.file.write` | Write/create/delete files in the project workspace |
 | `system.cli.execute` | Execute shell commands |
 | `system.browser.navigate` | Navigate to a URL in a browser session |
@@ -298,19 +296,21 @@ Capabilities follow a hierarchical dot-separated namespace: `{domain}.{resource}
 | `agent.temp.create` | Create a temporary agent |
 | `agent.temp.retire` | Retire a temporary agent |
 
+Tier 1 tools (`memory.read`, `system.file.read`, and other read-only chat-layer tools) are not listed here — they use basic scope checks in the chat layer, not capability grants. See doc 02.
+
 ### Capability Templates
+
+**Post-Genesis.** At Genesis, all humans are org admins and capability templates are not enforced. The template definitions below are the target design for role-based capability assignment.
 
 Predefined sets of capabilities for common agent roles. Templates simplify policy configuration — instead of granting individual capabilities, assign a template. Templates can be customized per agent after assignment.
 
-**`reader`** — read-only access. Safe for any agent that only needs to observe.
+**`reader`** — read-only access. Safe for any agent that only needs to observe. (Tier 1 reads like `memory.read` and `system.file.read` are not listed — they use scope checks, not capability grants.)
 
 ```
 project.read
 project.task.read
 chat.session.read
-memory.read
 agent.profile.read
-system.file.read
 ```
 
 **`worker`** — the standard template for agents doing real work. Includes project mutations, file I/O, CLI, browser, and memory. Workers can build, test, and interact with systems. No external communications.
@@ -331,7 +331,6 @@ chat.message.write
 chat.artifact.create
 memory.write
 memory.entity.create
-system.file.read
 system.file.write
 system.cli.execute
 system.browser.navigate
@@ -673,7 +672,7 @@ The system actively prevents tasks from getting stuck. A background **supervisor
 
 **Stuck task detection:**
 - Periodically scan for tasks in `in_progress` or `blocked` whose associated runs have failed, timed out, or gone silent.
-- "Silent" means: the agent's last heartbeat is older than the configured threshold (default: 2 minutes for sync, 5 minutes for async).
+- "Silent" means: the agent's last heartbeat is older than the configured threshold (default: 90 seconds (3 missed heartbeats at 30-second intervals) for sync, 5 minutes for async).
 - For stuck tasks: emit a supervisor event, attempt to diagnose (check run status, check model provider health, check worker health), and take recovery action.
 - Recovery actions, in order: (1) start a new run at the same flow node if the failure was transient, (2) file a blocker task if the failure was permanent, (3) escalate to the PM if diagnosis is inconclusive.
 - Maximum auto-recovery attempts per task per flow node: 3. After that, escalate.
@@ -723,7 +722,7 @@ Token counts roll up through the entity hierarchy:
 
 - **Per model invocation**: the raw token count of one model call (doc 07).
 - **Per RunAttempt**: sum of all model invocations in the attempt.
-- **Per RunStep**: sum of all attempts (only the latest attempt counts — retries replace, not accumulate).
+- **Per RunStep**: sum of all attempts (retries accumulate -- every attempt consumed real tokens and was billed by providers).
 - **Per Run**: sum of all steps.
 - **Per flow node execution**: sum of all runs at that node (across the task).
 - **Per task**: sum of all runs across all flow nodes.

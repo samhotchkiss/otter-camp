@@ -104,6 +104,8 @@ For projects that use Pattern 2, the PM configures a delivery mode:
 **Continuous:**
 Every merge to `main` emits a merge event on the event bus. An event handler checks whether the project has a deploy flow template configured and whether a deploy task is currently pending or in progress. If no deploy is active, it creates a deploy task from the template. If a deploy is already running, the merge is implicitly batched — when the current deploy completes, the system checks for new merges since the deploy started and triggers a follow-up deploy if needed. This prevents redundant concurrent deploys while ensuring every change eventually ships. Appropriate for internal tools and fast-iteration projects.
 
+**Concurrency guard.** Deploy task creation is protected by a PostgreSQL advisory lock per project. Both the merge-event handler and the post-deploy follow-up check acquire the lock before creating a deploy task, preventing duplicate deploy tasks from race conditions.
+
 **Gated:**
 Merges accumulate. The human triggers a release through chat with the PM ("let's deploy," "push to production"). The PM creates a deploy task including all changes since the last successful deployment. The PM may also proactively suggest deployment ("5 tasks have merged since the last deploy — want me to trigger a deployment?"). Appropriate for production services, client-facing work.
 
@@ -243,7 +245,7 @@ The original deploy task is not modified. The original source tasks stay `done`.
 
 ```sql
 -- Add to project table:
-delivery_mode            text,              -- null (not configured), continuous, gated, scheduled
+delivery_mode            text check (delivery_mode in ('continuous', 'gated', 'scheduled')), -- null = inherits from project_remote
 deploy_flow_template_id  uuid references flow_template(id),  -- flow template for Pattern 2 deploy tasks
 ```
 
@@ -257,14 +259,14 @@ create table project_remote (
   id              uuid primary key default gen_random_uuid(),
   project_id      uuid not null references project(id),
   name            text not null,           -- human-readable label, e.g., "GitHub", "Production Server"
-  remote_type     text not null,           -- git_host, ssh, deploy_platform
+  remote_type     text not null check (remote_type in ('git_host', 'ssh', 'deploy_platform')),
   url             text not null,           -- git remote URL, SSH target, platform endpoint
-  push_behavior   text not null default 'auto',  -- auto, manual
+  push_behavior   text not null default 'auto' check (push_behavior in ('auto', 'manual')),
   auth_config     jsonb,                   -- encrypted credential reference (key ID, token ID — not raw secrets)
   position        int not null default 0,  -- ordering for display and push sequence
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
-  metadata        jsonb,
+  metadata        jsonb not null default '{}',
   unique (project_id, name)
 );
 
@@ -288,7 +290,7 @@ create table project_environment (
   deploy_task_id      uuid references project_task(id),  -- which deploy task deployed it
   created_at          timestamptz not null default now(),
   updated_at          timestamptz not null default now(),
-  metadata            jsonb,
+  metadata            jsonb not null default '{}',
   unique (project_id, name)
 );
 
@@ -322,6 +324,10 @@ Deploy tasks use the standard `project_task.metadata` jsonb field (no additional
 ```
 
 Set by the event handler (continuous mode) or PM (gated/scheduled mode) at deploy task creation time. `included_task_ids` is computed by querying `merge_queue_entry` for all entries merged between the last successful deploy's commit and the deploy's target commit.
+
+### Merge Queue Entry Retention
+
+**Retention.** `merge_queue_entry` rows are never hard-deleted. When a deploy that includes the entry completes successfully, the entry's `archived_at` timestamp is set. Queries for active/pending entries filter to `archived_at is null`. This preserves the full merge audit trail.
 
 ### Design Notes
 

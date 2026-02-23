@@ -186,7 +186,6 @@ Controls how the agent interacts with Ellie's memory system. Memory behavior is 
 Fields:
 
 - **memory_read_scopes**: which memory scopes the agent can read from via passive injection and `memory.query`. Staff default: `{org, assigned_projects, current_task}` — staff agents see memories from every project they're assigned to, enabling cross-project knowledge. Temp default: `{org, assigned_projects, current_task}` — temps see org-level memory plus their single assigned project and current task. The difference from staff is that staff agents are assigned to multiple projects (cross-project memory), while temps are assigned to exactly one. Agent-private memories of other agents are never readable.
-- **memory_write_scope**: where the agent's captured memories are stored. Default: scoped to the current context (task-scoped during task work, project-scoped during project sessions, org-scoped during org sessions).
 - **private_memory_enabled**: whether the agent maintains private working notes (agent-private scope in 06-memory.md). Default for staff PMs, Frank, Lori, and Ellie: true. Default for all other staff and all temps: false. Private memory is where staff agents accumulate cross-project judgment — "this codebase has fragile tests," "this human prefers detailed commit messages," "Agent Maven performs best on backend tasks."
 
 ### Skill Attachments
@@ -575,7 +574,6 @@ create table agent (
 
   -- Memory Policy
   memory_read_scopes      text[] not null default '{org,assigned_projects,current_task}', -- org + project + task
-  memory_write_scope      text not null default 'context', -- where captured memories go (context = current scope)
   private_memory_enabled  boolean not null default false,
 
   -- Temp-specific fields
@@ -618,7 +616,6 @@ create index on agent (temp_expires_at) where agent_class = 'temp' and lifecycle
 - `scope_level` is about the agent's home scope, not about access. An org-level agent is available everywhere. A project-level agent is primarily associated with projects but can still participate in org sessions if invited.
 - `lifecycle_status` combines staff and temp states into one column. Staff agents use `draft`, `active`, `paused`, `retired`, `cancelled`. Temp agents use `active`, `expired`, `promoted`.
 - `memory_read_scopes` is a text array. Possible values: `org`, `assigned_projects`, `current_task`. Default is `{org, assigned_projects, current_task}` — both staff and temps see their assigned project's memory. The difference is that staff agents are assigned to multiple projects (cross-project knowledge) while temps are assigned to exactly one. Agent-private memory access is controlled separately by the `private_memory_enabled` boolean, not by this array. Retrieval cascades upward within each scope (see 06-memory.md Scope Inheritance).
-- `memory_write_scope = 'context'` means "write to whatever scope the current session is in" — task scope during task work, project scope during project sessions, org scope during org sessions.
 - The check constraint on `tool_allow_list`/`tool_deny_list` prevents setting both simultaneously. If both are null, the agent inherits the org/project tool policy.
 - `budget_cap_cents` and `budget_period` are the per-agent budget. The org and project also have budgets (see 13-security-observability-costs.md). The most restrictive cap across all three levels applies.
 - `temp_expires_at` is pre-computed for TTL-scoped temps. For task-scoped and session-scoped temps, it is set when the task completes or session closes.
@@ -638,10 +635,11 @@ create table agent_project_assignment (
   assigned_by_id  uuid not null,
   assigned_at     timestamptz not null default now(),
   removed_at      timestamptz,
-  metadata        jsonb not null default '{}',
-
-  unique (agent_id, project_id, role)
+  metadata        jsonb not null default '{}'
 );
+
+-- Unique active assignment per agent-project-role (allows re-assignment after soft-delete)
+create unique index on agent_project_assignment (agent_id, project_id, role) where (is_active = true);
 
 -- Lookup: which agents are assigned to a project?
 create index on agent_project_assignment (project_id, is_active);
@@ -656,7 +654,7 @@ create unique index on agent_project_assignment (project_id)
 
 **Design notes:**
 
-- The unique constraint on `(agent_id, project_id, role)` allows an agent to hold multiple roles in the same project (separate rows).
+- The partial unique index on `(agent_id, project_id, role) where (is_active = true)` allows an agent to hold multiple roles in the same project (separate rows) and supports re-assignment after soft-delete.
 - The partial unique index on `project_id` where `role = 'project_manager' and is_active = true` enforces the one-PM-per-project rule at the database level.
 - `is_active` + `removed_at` pattern: assignments are soft-deleted. The record is preserved for history. When an agent is removed from a project, `is_active = false` and `removed_at` is set.
 - `assigned_by_type` + `assigned_by_id`: who made the assignment. Usually Lori (agent) or the human.
@@ -805,10 +803,11 @@ create table agent_profile_template (
   source_agent_id         uuid references agent(id),          -- if promoted from a successful agent
   is_active               boolean not null default true,
   created_at              timestamptz not null default now(),
-  updated_at              timestamptz not null default now(),
-
-  unique (organization_id, slug)
+  updated_at              timestamptz not null default now()
 );
+
+create unique index on agent_profile_template (organization_id, slug) where (organization_id is not null);
+create unique index on agent_profile_template (slug) where (organization_id is null);
 
 -- Browse by domain
 create index on agent_profile_template using gin (domain_tags);

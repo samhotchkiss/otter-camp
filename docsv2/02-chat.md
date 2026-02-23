@@ -485,7 +485,7 @@ A turn with 3 tool calls might produce 4 agent messages (text segments between a
 ### Edge Cases
 
 - **Model emits only tool calls, no text**: no agent text message for that iteration. Just tool_call and tool_result messages. Common when the agent is silently gathering information.
-- **Model emits multiple tool calls in one response**: each becomes its own tool_call message. Tier 1 tools can execute in parallel; tier 2 tools execute sequentially. Each gets its own tool_result.
+- **Model emits multiple tool calls in one response**: each becomes its own tool_call message. Tier 1 tools can execute in parallel; tier 2 tools execute sequentially. When a model response contains a mix of tier 1 and tier 2 tool calls, all tier 1 calls execute first (in parallel), then tier 2 calls execute sequentially. Each gets its own tool_result.
 - **Model starts streaming text, then emits a tool call**: the partial text is finalized as-is. The human sees "Let me check..." and then the tool call — natural and expected.
 
 ### Message State Transitions by Role
@@ -909,9 +909,10 @@ create table chat_session (
   title           text,
   mode            text not null check (mode in ('sync', 'async')) default 'sync',
   status          text not null check (status in ('active', 'closed')) default 'active',
-  created_by_type text not null check (created_by_type in ('human', 'agent', 'system')),
+  created_by_type text not null check (created_by_type in ('human', 'agent', 'system')), -- agent: when a PM or agent creates a per-node async session during flow execution
   created_by_id   uuid not null,           -- sentinel UUID for system-created sessions
   message_seq     int not null default 0,
+  turn_seq        int not null default 0, -- atomic counter for chat_turn.sequence
   created_at      timestamptz not null default now(),
   closed_at       timestamptz,
   metadata        jsonb not null default '{}'
@@ -962,7 +963,7 @@ create table chat_turn (
   cycle_id            uuid,            -- groups all turns triggered by the same human message
   sequence            int not null,
   trigger             text not null check (trigger in ('human_message', 'system_kick', 'agent_mention', 'interjection', 'continuation')),
-  responding_type     text not null check (responding_type in ('human', 'agent')),
+  responding_type     text not null check (responding_type in ('agent')), -- humans trigger turns but do not "respond" in the turn-loop sense
   responding_id       uuid not null,
   status              text not null check (status in ('in_progress', 'completed', 'failed', 'stopped')) default 'in_progress',
   stop_reason         text check (stop_reason in ('max_tool_calls', 'max_duration', 'user_cancelled', 'user_steered', 'model_error', 'session_closed')),
@@ -1099,7 +1100,7 @@ create index on chat_summary (session_id, from_sequence);
 - **Agentic flow nodes get sessions**: when a flow node with an agent actor begins execution, a task-scoped session is automatically created for that node. This is the agent's workspace for that step.
 - **Agents don't escalate sessions**: if an agent discovers a concern beyond its task scope, it files a new task (assigned to the project manager) with a dependency link back to its own task. The PM triages in a project-scoped session, escalating to Frank or the human if needed. Agents stay within their session scope.
 - **Sync/async session modes**: synchronous sessions (human present) pre-assemble context for low latency. Asynchronous sessions (autonomous agent work) allow tool-based discovery over multiple turns. Latency is acceptable in async; quality and thoroughness are the priority.
-- **Multi-agent coordination**: each scope has a default responder (Frank for org, PM for project, assigned agent for task). Other present agents listen and can interject via a lightweight eval pass when they have something urgent to contribute. No round-robin, no free-for-all.
+- **Multi-agent coordination**: each scope has a default responder (Frank for org, PM for project, PM (or task lead) for task). Other present agents listen and can interject via a lightweight eval pass when they have something urgent to contribute. No round-robin, no free-for-all.
 - **One loop, two entry points**: the tool-call loop is the agentic loop. Same mechanics sync and async, different triggers. Sync: human message. Async: system kick.
 - **No mid-turn approval**: permissions are pre-configured. Policy check at runtime returns allow or deny — always immediate and binary. The turn never blocks waiting for human input. Communication tools that create drafts do so as their designed behavior (tool-level, not policy-level).
 - **Stop conditions**: max tool calls (counter) and max turn duration (soft enforcement at loop boundaries). Tokens tracked but not a gate.

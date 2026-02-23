@@ -199,7 +199,7 @@ The transport type is set per connection and does not change after creation. To 
 
 ### Configuration Through Conversation
 
-MCP connections are configured conversationally — through Frank (org-level) or the project PM (project-level). There is no MCP configuration UI. The admin describes what they want to connect, and the agent handles the setup.
+MCP connections are configured conversationally — through Frank (org-level) or the project PM (project-level). There is no MCP configuration UI. The admin describes what they want to connect, and the agent handles the setup. Self-hosters can also seed initial MCP connections via the YAML config file at deploy time (see doc 08). After bootstrap, conversational configuration is the ongoing management path.
 
 Example flow:
 > **Human**: "Frank, I want to connect our GitHub MCP server so agents can manage issues and PRs."
@@ -221,11 +221,14 @@ Transitions:
 configuring → active → degraded → active (recovered)
                      → disabled (manual)
                      → failed (unrecoverable)
+configuring → failed (initial connection attempt failed)
 degraded → active (recovered)
          → failed (exceeded threshold)
 disabled → active (re-enabled)
 failed → configuring (reconfigured)
 ```
+
+If the initial connection attempt fails during setup, the connection moves to `failed`. The operator can retry configuration or delete the connection.
 
 ### Connection Configuration Shape
 
@@ -487,7 +490,7 @@ MCP resources are read-only data provided by the server. Examples: a database sc
 1. When a connection is established, the connector runtime discovers available resources via `resources/list`.
 2. Resources are cataloged alongside tools (recorded in `mcp_tool_catalog` with `entry_type = 'resource'`).
 3. Agents can read resources via a synthetic read-only tool: `<connection>.read_resource(uri: string)`.
-4. Resource reads are **tier 1** (chat-layer) since they are read-only — no control plane overhead. However, they still require the `mcp.connection.use:<connection_id>` capability.
+4. Resource reads are **tier 1** (chat-layer) since they are read-only — no control plane overhead. Access is governed by a basic scope check (does the agent have access to this connection's project?), not a capability grant. This aligns with the tier 1 model from doc 02.
 5. Resource contents can be injected into the agent's context during prompt assembly if the connection and specific resources are configured as context sources for a project or flow node.
 
 ### Resource Caching
@@ -582,7 +585,7 @@ create index on mcp_connection (project_id) where project_id is not null;
 - `transport_config` structure varies by transport type:
   - stdio: `{"command": "node", "args": ["server.js"], "env": {"KEY": "ref:secret_name"}, "cwd": "/path"}`
   - http_sse: `{"endpoint": "https://mcp.example.com/github", "headers": {"Authorization": "ref:secret_name"}}`
-- Secret references in `transport_config` use the `ref:` prefix and are resolved at runtime from the secret store.
+- Secret references in `transport_config` use the `ref:<slug>` prefix (e.g., `"ref:github_token"`) and are resolved at runtime by looking up `secret.slug`. See doc 08 for the full secret reference convention.
 - `slug` is unique within the org and used as the tool name prefix (e.g., `github.create_issue`).
 
 ### mcp_tool_catalog
@@ -623,12 +626,13 @@ create index on mcp_tool_catalog (connection_id, is_enabled) where is_enabled = 
 ```sql
 create table mcp_execution_log (
   id                uuid primary key default gen_random_uuid(),
+  organization_id   uuid not null references organization(id),
   connection_id     uuid not null references mcp_connection(id),
   catalog_entry_id  uuid not null references mcp_tool_catalog(id),
   tool_execution_id uuid references tool_execution(id),   -- link to control plane ToolExecution (tier 2 only)
   run_id            uuid references run(id),                -- link to control plane Run (doc 16)
   agent_id          uuid not null references agent(id),
-  entry_type        text not null check (entry_type in ('tool', 'resource', 'prompt')),
+  entry_type        text not null check (entry_type in ('tool', 'resource', 'prompt')),  -- intentional denormalization from mcp_tool_catalog for query convenience
   tool_name         text not null,
   input_params      jsonb,                                 -- secrets redacted
   output            jsonb,                                 -- secrets redacted
@@ -643,6 +647,7 @@ create table mcp_execution_log (
   metadata          jsonb not null default '{}'
 );
 
+create index on mcp_execution_log (organization_id, created_at);
 create index on mcp_execution_log (connection_id, created_at);
 create index on mcp_execution_log (agent_id, created_at);
 create index on mcp_execution_log (tool_execution_id) where tool_execution_id is not null;
@@ -664,7 +669,7 @@ create table mcp_secret_binding (
   id              uuid primary key default gen_random_uuid(),
   connection_id   uuid not null references mcp_connection(id) on delete cascade,
   binding_key     text not null,                   -- logical name: auth_token, api_key, etc.
-  secret_ref      text not null,                   -- reference to the secret store entry
+  secret_ref      text not null,                   -- secret.slug value; see doc 08 secret reference convention
   inject_as       text not null check (inject_as in ('header', 'query_param', 'env_var', 'body_field')),
   inject_target   text not null,                   -- header name, query param name, env var name, etc.
   created_at      timestamptz not null default now(),
@@ -789,7 +794,7 @@ All endpoints require appropriate org/project authorization. Connection creation
 - **Each MCP tool call creates a ToolExecution record.** Full traceability through the control plane. MCP-specific metadata (connection, catalog entry, transport details) is captured in the `mcp_execution_log` for MCP-specific queries.
 - **Default-deny for discovered tools.** All tools are cataloged but disabled until the admin explicitly enables them. Consistent with the control plane's default-deny capability posture.
 - **Secrets are injected at runtime, never in agent prompts.** The connector runtime resolves secret references from the encrypted store at execution time. Agents never see credentials. Secrets are redacted from all logged inputs and outputs.
-- **Resource reads are tier 1 (chat-layer).** They are read-only and don't need full control plane overhead. They still require the `mcp.connection.use` capability for access control. `policy_decision` is nullable in the execution log for these reads.
+- **Resource reads are tier 1 (chat-layer).** They are read-only and don't need full control plane overhead. Access is governed by a basic scope check (does the agent have access to this connection's project?), not a capability grant. `policy_decision` is nullable in the execution log for these reads.
 - **Connection health is the connector runtime's responsibility.** Health checks, circuit breakers, and status transitions are managed by the runtime. The admin is informed through conversation and events, not through a polling dashboard.
 - **Circuit breaker prevents cascading failures.** When a connection is unhealthy, calls are rejected at the circuit breaker before reaching the server. Agents receive a clear error and can adapt.
 - **Catalog refresh discovers changes, doesn't auto-enable.** When a server adds new tools, they appear in the catalog as disabled. The admin is notified and decides what to enable. Removed tools are marked `removed`, not deleted, for audit trail integrity.

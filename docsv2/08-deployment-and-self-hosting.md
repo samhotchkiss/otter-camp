@@ -471,6 +471,8 @@ mcp_servers:
     args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/projects"]
 ```
 
+**Bootstrap-only.** MCP server definitions in the config file are seeded as `mcp_connection` records on first run. After bootstrap, MCP connections are managed conversationally through Frank (org-level) or the project PM (project-level). Changes to this YAML section after first run are not re-synced.
+
 Environment variables always override the config file. The config file is optional — everything can be done with env vars alone, though some configurations (like MCP servers with multiple fields) are more readable in YAML.
 
 Note: model profiles, provider connections, and model routing are NOT configured via this file. They are managed through the subscription dashboard and stored in the database (see 07-models-and-inference.md). The YAML config file is for infrastructure-level settings only.
@@ -686,13 +688,16 @@ create table secret (
   id              uuid primary key default gen_random_uuid(),
   organization_id uuid not null references organization(id),
   name            text not null,               -- human-readable label ("Anthropic API Key", "GitHub SSH Key")
-  slug            text not null,               -- machine-readable identifier ("anthropic_api_key")
+  slug            text not null,               -- machine-readable identifier ("anthropic_api_key"); used as the reference target
   category        text not null check (category in ('model_provider', 'ssh_key', 'mcp_credential', 'external_service')),
   encrypted_value bytea not null,              -- AES-256-GCM encrypted
+  nonce           bytea not null,              -- unique per encryption operation
+  key_version     int not null default 1,      -- tracks which master key version encrypted this row; incremented on master key rotation
   created_by_type text not null check (created_by_type in ('human', 'agent', 'system')),
-  created_by_id   uuid not null,             -- sentinel UUID for system-created secrets
+  created_by_id   uuid not null,               -- sentinel UUID for system-created secrets
   last_rotated_at timestamptz,
-  expires_at      timestamptz,                 -- optional expiry
+  expires_at      timestamptz,                 -- optional expiry; informational, does not auto-delete
+  metadata        jsonb not null default '{}', -- type-specific metadata (provider name, connection_id, etc.)
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
 
@@ -702,6 +707,19 @@ create table secret (
 create index on secret (organization_id, category);
 ```
 
+#### Secret reference convention
+
+All secret references across the system use the secret's `slug` as the identifier:
+
+- **Column-level references** (e.g., `provider_connection.api_key_secret_ref`, `mcp_secret_binding.secret_ref`): store the plain `slug` value.
+- **Inline JSON references** (e.g., MCP `transport_config`): use `ref:<slug>` prefix to distinguish secret references from literal string values. Resolved at runtime by stripping the `ref:` prefix and looking up `secret.slug`.
+
+This is two formats but one underlying identifier — the slug.
+
+#### Deletion safety
+
+Secrets cannot be deleted while active references exist. Before deletion, the system queries known reference columns (`provider_connection.api_key_secret_ref`, `mcp_secret_binding.secret_ref`) for the slug. If references exist, the deletion is blocked and the dependents are listed in the error response. This is application-layer enforcement — no FK constraints exist on slug references.
+
 ### Encryption
 
 - **Encryption algorithm**: AES-256-GCM. Each secret is encrypted with a unique nonce.
@@ -710,6 +728,7 @@ create index on secret (organization_id, category);
   1. `OTTERCAMP_MASTER_KEY` environment variable — a 32-byte hex-encoded key.
   2. A key file at a configurable path (`OTTERCAMP_MASTER_KEY_FILE`).
   3. In managed mode: a cloud KMS (AWS KMS, GCP KMS). The master key is a KMS key reference, and encryption/decryption calls go through the KMS API.
+- **First-run behavior**: if no master key is provided via any of the above sources, the system auto-generates a 32-byte random key, writes it to `~/.ottercamp/master.key` with `0600` permissions, and logs a prominent warning: `"SECURITY: Master key auto-generated at ~/.ottercamp/master.key. Back up this file immediately — losing it means losing access to all encrypted secrets."` Bootstrap then proceeds normally.
 - **Key rotation**: when the master key is rotated, a background job re-encrypts all secrets with the new key. The old key is retained (in a key history) until re-encryption is complete.
 
 ### Runtime Decryption

@@ -534,7 +534,7 @@ create table domain_event (
   id                uuid primary key default gen_random_uuid(),
   type              text not null,
   timestamp         timestamptz not null default now(),
-  actor_type        text not null check (actor_type in ('human', 'agent', 'system')),
+  actor_type        text not null check (actor_type in ('human', 'agent', 'system', 'supervisor')),  -- supervisor: automated control-plane actions (e.g., run cancellation, stuck task recovery)
   actor_id          uuid,
   organization_id   uuid not null,
   project_id        uuid,
@@ -695,11 +695,7 @@ control.run.completed          A run completed successfully
 control.run.failed             A run failed
 control.run.cancelled          A run was cancelled
 
-control.approval.requested     An action requires human approval
-control.approval.approved      An action was approved
-control.approval.rejected      An action was rejected
-
-control.policy.evaluated       A policy evaluation occurred (allow/deny/require_approval)
+control.policy.evaluated       A policy evaluation occurred (allow/deny)
 ```
 
 ### Project Events
@@ -741,6 +737,18 @@ system.job.completed           A background job completed
 system.job.failed              A background job failed
 system.job.dead_lettered       A job exhausted retries and was dead-lettered
 ```
+
+### MCP
+
+| Event | Payload highlights | Emitted by |
+|---|---|---|
+| `mcp.connection.created` | connection_id, name, transport | MCP layer |
+| `mcp.connection.status_changed` | connection_id, old_status, new_status | MCP layer |
+| `mcp.connection.health_changed` | connection_id, old_health, new_health | MCP layer |
+| `mcp.catalog.changed` | connection_id, added_count, removed_count | MCP layer |
+| `mcp.tool.executed` | connection_id, tool_name, duration_ms, status | MCP layer |
+| `mcp.tool.denied` | connection_id, tool_name, agent_id, reason | MCP layer |
+| `mcp.tool.preload_failed` | connection_id, tool_name, error | MCP layer |
 
 ### Inbox Events
 

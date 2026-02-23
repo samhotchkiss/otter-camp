@@ -126,18 +126,23 @@ There is no separate approval state machine. Review and approval are handled by 
 
 ```
 draft ──→ queued ──→ in_progress ──→ review ──→ done
-                      ↑    │  ↑        │
-                      │    │  │        │ (rejected — back to work)
-                      │    ▼  │        ▼
-                      │  blocked    in_progress
-                      │    │
-                      │    │ (dependency resolved)
-                      │    ▼
-                      │  in_progress
-                      │
-                      ├── on_hold ◄── in_progress
-                      │     │
-                      └─────┘ (resumed → back to queued)
+            │         ↑    │  ↑        │
+            │         │    │  │        │ (rejected — back to work)
+            │         │    ▼  │        ▼
+            │         │  blocked    in_progress
+            │         │    │  │
+            │         │    │  └──→ cancelled
+            │         │    │ (dependency resolved)
+            │         │    ▼
+            │         │  in_progress
+            │         │
+            ├─────────┼── on_hold ◄── in_progress
+            │         │     │
+            │         └─────┘ (resumed → back to queued)
+            │
+            └──→ on_hold (queued → on_hold)
+
+Any non-terminal state ──→ cancelled
 ```
 
 Explicit transition table:
@@ -157,7 +162,7 @@ Explicit transition table:
 
 When a task transitions to `queued`, it enters the scheduling queue. The scheduler manages pickup:
 
-- The scheduler monitors for available concurrency slots (global max concurrent LLM sessions, per-provider limits — see 16-agent-control-plane.md).
+- The scheduler monitors concurrency slots managed by the model gateway (`07-models-and-inference.md`).
 - When a slot opens, the scheduler picks the highest-priority eligible task and kicks off its first flow node — resolving the actor, creating an async session, and starting a run.
 - **Dependency-aware scheduling**: a task is only eligible for pickup if all its dependencies are `done`. A task can be `queued` with unresolved dependencies — it sits in the queue but is skipped until dependencies clear. This ensures order of operations without requiring the PM to manually sequence queuing.
 - Subtasks within a node also go through the scheduler. They are queued as work units and picked up when slots are available, respecting inter-subtask dependencies.
@@ -347,7 +352,7 @@ Every project is backed by a git repository. Git is the canonical store for all 
 
 ### Branch Strategy
 
-- When a task starts execution (first flow node kicks off), a task branch is created: `task/<task-slug>`.
+- When a task starts execution (first flow node kicks off), the control plane creates a task branch: `task/<task-slug>`.
 - All work for that task happens on the task branch.
 - Subtasks work on the same task branch — they're contributing to the same flow node's work. No sub-branches.
 - Tasks that produce no file changes (e.g., sending an email, changing external settings) still create a task branch and enter the merge queue on completion. The merge is a no-op fast-forward processed instantly. The simplicity of "every task has a branch" outweighs the negligible overhead of empty merges.
@@ -521,7 +526,7 @@ Dependencies govern execution order. They are separate from the task/subtask con
 - If a dependency is added to a task that is already `in_progress` (e.g., the agent files a blocker), the task transitions to `blocked`.
 - When all dependencies are resolved: a blocked task returns to `in_progress`; a queued task becomes eligible for the scheduler.
 - Dependencies are the mechanism behind blockers (see Blockers and Escalation).
-- Dependencies form a DAG — cycles are rejected at creation time.
+- Dependencies form a DAG -- cycles are rejected at creation time. Cross-level dependencies (task depending on a subtask of another task, or vice versa) are not allowed. Dependencies can only be task->task or subtask->subtask within the same parent task.
 - **Removing dependencies**: the PM can remove a dependency at any time. When a dependency is removed from a `blocked` task and no other unresolved dependencies remain, the task transitions to its previous active state (`in_progress` or `queued`). Dependency removal is logged in `project_task_event`.
 
 **Cancelled dependencies:**
@@ -541,9 +546,9 @@ Dependencies govern execution order. They are separate from the task/subtask con
 
 **Subtask-level dependencies:**
 
-- Subtasks within a node can depend on each other or on external tasks.
+- Subtasks within a node can depend on other subtasks within the same parent task.
 - A subtask with unresolved dependencies is `blocked`.
-- Cross-task and cross-project dependencies are valid at both levels.
+- Cross-level dependencies (subtask depending on a task, or vice versa) are not allowed. Dependencies can only be task->task or subtask->subtask within the same parent task.
 
 ### Example
 
@@ -624,7 +629,7 @@ create table flow_node (
   actor_type       text not null check (actor_type in ('role', 'project_manager', 'human', 'agent')),
   actor_role       text,              -- set when actor_type = role: worker, reviewer, planner
   actor_id         uuid,              -- set when actor_type = agent
-  position         int not null,
+  position         int not null,      -- UI display ordering; execution order is determined by the graph edges (next_node_id, reject_node_id)
   next_node_id     uuid references flow_node(id),
   reject_node_id   uuid references flow_node(id),  -- review nodes only
   skills           jsonb,             -- skill references for this node
@@ -651,7 +656,7 @@ create table project_task (
   priority              text not null default 'normal'
     check (priority in ('urgent', 'high', 'normal', 'low')),
   requires_human_review boolean not null default false,
-  flow_template_id      uuid not null references flow_template(id),
+  flow_template_id      uuid references flow_template(id), -- nullable in draft; set during scoping
   current_flow_node_id  uuid references flow_node(id),
   schedule_id           uuid references task_schedule(id),  -- set when created by a schedule
   branch_name           text,          -- task/<slug>, set when execution starts
@@ -662,6 +667,8 @@ create table project_task (
   updated_at            timestamptz not null default now(),
   completed_at          timestamptz,       -- set when task reaches done or cancelled
   metadata              jsonb not null default '{}',
+  check (schedule_id is null or requires_human_review = false),
+  -- Design note: task assignment is tracked via project_task_participant with role = 'worker', not a dedicated assignee column.
   unique (project_id, slug),
   unique (project_id, task_number)
 );
@@ -707,6 +714,7 @@ create table project_subtask (
   task_id                uuid not null references project_task(id),
   flow_node_execution_id uuid not null references flow_node_execution(id),
   subtask_number         int not null,  -- sequential per task, auto-incremented
+  slug                   text not null, -- e.g., "implement-auth-middleware"; unique within task
   title                  text not null,
   description            text,
   acceptance_criteria    text,
@@ -719,7 +727,8 @@ create table project_subtask (
   assignee_id            uuid,
   created_at             timestamptz not null default now(),
   updated_at             timestamptz not null default now(),
-  metadata               jsonb not null default '{}'
+  metadata               jsonb not null default '{}',
+  unique (task_id, slug)
 );
 
 create index on project_subtask (task_id);
@@ -741,6 +750,7 @@ create table project_task_dependency (
   depends_on_type text not null check (depends_on_type in ('task', 'subtask')),
   depends_on_id   uuid not null,
   created_at      timestamptz not null default now(),
+  check (source_type = depends_on_type), -- no cross-level dependencies
   unique (source_type, source_id, depends_on_type, depends_on_id)
 );
 
@@ -748,7 +758,7 @@ create index on project_task_dependency (source_type, source_id);
 create index on project_task_dependency (depends_on_type, depends_on_id);
 ```
 
-- Polymorphic: handles task→task, subtask→subtask, and subtask→task dependencies.
+- Polymorphic: handles task->task and subtask->subtask dependencies. Cross-level dependencies (subtask->task or task->subtask) are rejected by the `check (source_type = depends_on_type)` constraint.
 - DAG enforcement: application layer rejects cycles at creation time.
 
 ### project_task_participant
@@ -787,6 +797,7 @@ create table inbox_item (
   created_by_id     uuid not null,
   acted_at          timestamptz,
   action_taken      text check (action_taken in ('approved', 'rejected', 'dismissed', 'responded')),
+  -- Mapping: "Edit then approve" → approved (with action_notes). "Approve with constraints" → approved (with action_notes). "Request changes" → rejected. "Defer" → changes inbox_item.status to deferred, no action_taken recorded.
   action_notes      text,             -- feedback on rejection, constraints on approval
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
@@ -812,11 +823,13 @@ create table merge_queue_entry (
   started_at       timestamptz,
   completed_at     timestamptz,
   conflict_details text,
+  archived_at      timestamptz,              -- set when the deploy including this entry completes successfully
   metadata         jsonb not null default '{}',
   unique (task_id)  -- one entry per task at a time
 );
 
 create index on merge_queue_entry (project_id, status);
+create index on merge_queue_entry (project_id) where (archived_at is null);
 ```
 
 ### task_schedule
@@ -882,7 +895,7 @@ create index on project_task_event (task_id, created_at);
 - **12 tables** for the project/task domain.
 - Tasks are flat — no parent-child between tasks. Dependencies handle ordering.
 - Subtasks are contained within tasks, scoped to flow nodes. They're the atomic work units.
-- The dependency table is polymorphic to handle cross-level dependencies (subtask depends on task, etc.) in one place.
+- The dependency table is polymorphic (task->task and subtask->subtask within the same parent) but enforces same-level dependencies via a check constraint — no cross-level dependencies (subtask depending on a task, or vice versa).
 - `inbox_item` carries enough context (`context` jsonb) to make decisions inline without navigating away.
 - `merge_queue_entry` is separate from task status — a task can be `done` but still waiting in the merge queue. Merge state is not duplicated on the task; the UI queries both tables to show the full picture ("Done, merge pending" or "Done, merge conflict"). If a merge conflicts, the PM creates a new task or assigns an agent to resolve it on the branch.
 - `project_task_event` provides a complete audit trail of every task's journey through its lifecycle.

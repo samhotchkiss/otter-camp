@@ -280,9 +280,11 @@ When OtterCamp starts for the first time with an empty database, the bootstrap s
 
    Each agent is created with its identity metadata, prompt pack, default tool policy, and default model policy as defined in 05-agents-staff-and-temps.md.
 
-5. **Create org session**: the persistent org-level chat session ("General") is created with Frank as the default responder. The human, Frank, Lori, and Ellie are added as participants.
+5. **Seed provider connections** — if `OTTERCAMP_MODEL_PROVIDER` and `OTTERCAMP_MODEL_API_KEY` are set, create the provider connection, encrypt the API key, and create default model profiles (agent and system). See `08-deployment-and-self-hosting.md` for the full provider connection bootstrap sub-steps. The starter trio's `default_model_profile_id` is back-filled to point to the newly created profiles.
 
-6. **Record bootstrap event**: an audit event records that bootstrap completed, including the org ID, user ID, and agent IDs created.
+6. **Create org session**: the persistent org-level chat session ("General") is created with Frank as the default responder. The human, Frank, Lori, and Ellie are added as participants.
+
+7. **Record bootstrap event**: an audit event records that bootstrap completed, including the org ID, user ID, and agent IDs created.
 
 ### Bootstrap is Idempotent
 
@@ -494,7 +496,7 @@ create table audit_event (
   principal_type  text not null check (principal_type in ('human', 'agent', 'system')),
   principal_id    uuid not null,          -- sentinel UUID 00000000-0000-0000-0000-000000000000 for system actions
   delegated_by    uuid references human_user(id),  -- set when an agent acts on behalf of a human
-  scope_type      text check (scope_type in ('project', 'task', 'session')),
+  scope_type      text check (scope_type in ('org', 'project', 'task', 'session')),
   scope_id        uuid,                   -- optional: the ID of the scoped entity
   context         jsonb not null default '{}', -- action-specific payload
   created_at      timestamptz not null default now()

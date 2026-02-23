@@ -171,6 +171,8 @@ An LLM (Haiku-class for cost efficiency) processes event content within a contex
 
 Each candidate is scored on a composite scale. V1 used a 0–100 scale with threshold 40 for inclusion.
 
+**Note:** Stage 2 produces a composite _utility score_ on a 0–100 scale (threshold: 40) used for candidate filtering. This is distinct from the `confidence` field (0.0–1.0) stored on the memory table, which reflects the extraction LLM's self-assessed confidence from Stage 1. Both values are preserved: `confidence` on the memory row, and the utility score in `memory.metadata`.
+
 **V1 scoring findings:**
 - Score distribution is bimodal with peaks at 55–59 and 65–69.
 - Threshold 40 is appropriate — captures the lower peak without admitting noise.
@@ -391,6 +393,13 @@ Every retrieval query passes through four stages:
 **Stage 1: Scope Filter (hard)**
 Filter to memories visible at the current scope level, applying scope inheritance. This is a simple WHERE clause, not a ranking step.
 
+The scope filter reads the calling agent's `memory_read_scopes` array (defined in `05-agents-staff-and-temps.md`) and translates each value to a SQL filter:
+- `org` → include memories where `project_id` is null (org-scoped)
+- `assigned_projects` → include memories where `project_id` is in the agent's active `agent_project_assignment` set
+- `current_task` → include memories where `task_id` matches the session's associated task (if any)
+
+Agent-private memories of other agents are always excluded (`agent_id` is set AND `agent_id != calling_agent_id`).
+
 **Stage 2: Taxonomy Classification**
 Classify the query into one or more taxonomy nodes. This can be rule-based (keyword matching against taxonomy node names) or LLM-powered (cheap Haiku call to classify the query into the taxonomy tree). The taxonomy classification also serves as the query router — different taxonomy branches naturally route to different memory populations (current-state queries route to taxonomy nodes where file-backed memories cluster, preference queries route to the preference subtree, etc.).
 
@@ -541,11 +550,27 @@ When significant new information about an entity has been ingested since the las
 
 Periodic job evaluates active memories against their decay curves. Memories that have dropped below the utility threshold are moved to `archived` status.
 
+### Memory scope on extraction
+
+Memories are scoped to match the session they were extracted from:
+- Org session → org-scoped memory
+- Project session → project-scoped memory
+- Task session → task-scoped memory
+
+### Promote-on-task-completion
+
+When a task completes, Ellie evaluates all task-scoped memories via a Haiku-class LLM pass. Each memory is assessed for lasting value beyond the task context:
+
+- **Promote**: memories with reusable knowledge (architectural decisions, learned patterns, important context) are promoted to project scope (`task_id` set to null).
+- **Keep**: memories that are purely task-specific working context (intermediate debugging steps, ephemeral status updates) remain task-scoped and naturally age out through the decay pipeline.
+
+This ensures valuable knowledge from task work persists at the project level for future tasks, while ephemeral working context doesn't clutter the project memory space.
+
 ### Task-Completion Consolidation
 
 Task completion is the natural consolidation trigger. Ellie subscribes to task completion events on the event bus. When a task reaches `done` status, an immediate consolidation pass runs on that task's memories:
 
-1. **Scope promotion**: Evaluate task-scoped memories — promote valuable ones (high confidence, broad applicability) to project scope. Mechanically, promotion sets `task_id = null` on the memory, widening its scope from task to project. Provenance is preserved — the `memory_source` records still point to the original task session. No duplicate is created.
+1. **Scope promotion**: Evaluate task-scoped memories — promote valuable ones (high confidence, broad applicability) to project scope. Mechanically, promotion sets `task_id = null` on the memory, widening its scope from task to project. Provenance is preserved — the `memory_source` records still point to the original task session. No duplicate is created. (See Promote-on-task-completion above for the LLM-based assessment process.)
 2. **Episodic distillation**: Distill task episodic memories into semantic memories while the full context of what was done and why is freshest.
 3. **Execution summary**: Generate a procedural memory summarizing what was done, how, what tools were used, and what decisions were made. This gives future agents a playbook when similar tasks arrive — "here's how we did this last time."
 4. **Targeted entity synthesis**: Run entity synthesis for entities heavily mentioned during the task.
@@ -611,6 +636,7 @@ The importer allows bulk loading of historical memory data from external sources
 2. System creates a `memory_import` record tracking the job.
 3. The zip is extracted and each JSONL file is identified.
 4. Each JSONL file is processed through the same extraction pipeline as ongoing ingest:
+   - Stage 0: Garbage pattern rejection — imported records pass through the same garbage pattern filter (section 2.1) as live-captured events. Malformed, trivial, or obviously low-value records are discarded before LLM extraction.
    - Stage 1: LLM extraction from conversation windows
    - Stage 2: Scoring and filtering (threshold 40)
    - Stage 3: Normalization (entity names, taxonomy classification)
