@@ -26,3 +26,13 @@
 | 022 | 022-mcp-api.md | MCP API Endpoints | L2 | S | 021, 007 | written |
 | 023 | 023-token-budget.md | Token Budget Schema and Service | L2 | S | 003, 016, 024 | written |
 | 024 | 024-event-bus-job-queue.md | Event Bus and Job Queue | L2 | M | 002, 003 | written |
+| 025 | 025-agent-project-assignment.md | Agent Project Assignment and Skill Attachment | L3 | S | 013, 011, 016 | written |
+| 026 | 026-agent-assignment-api.md | Agent API Endpoints — Assignments and Skills | L3 | S | 025, 015, 007 | written |
+| 027 | 027-project-task-schema.md | Project Task Schema | L3 | M | 016, 017, 005, 025 | written |
+| 028 | 028-project-task-service.md | Project Task Service | L3 | M | 027, 018, 024, 025 | written |
+| 029 | 029-flow-execution-schema.md | Flow Execution Schema | L3 | S | 027, 017 | written |
+| 030 | 030-flow-execution-service.md | Flow Execution Service | L3 | M | 029, 028, 024 | written |
+| 031 | 031-delivery-schema-service.md | Delivery Schema and Service | L3 | M | 027, 016, 024 | written |
+| 032 | 032-task-project-api.md | Task and Project API Endpoints | L3 | M | 028, 030, 031, 019, 007 | written |
+| 033 | 033-capability-policy.md | Capability Policy Schema and Service | L3 | M | 003, 016, 013, 023 | written |
+| 034 | 034-capability-policy-api.md | Capability Policy API Endpoints | L3 | S | 033, 007 | written |
