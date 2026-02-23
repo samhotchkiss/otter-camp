@@ -36,3 +36,11 @@
 | 032 | 032-task-project-api.md | Task and Project API Endpoints | L3 | M | 028, 030, 031, 019, 007 | written |
 | 033 | 033-capability-policy.md | Capability Policy Schema and Service | L3 | M | 003, 016, 013, 023 | written |
 | 034 | 034-capability-policy-api.md | Capability Policy API Endpoints | L3 | S | 033, 007 | written |
+| 035 | 035-model-gateway-routing.md | Model Gateway — Routing, Fallback, and Concurrency | L3 | M | 010, 024, 033 | written |
+| 036 | 036-model-gateway-streaming-tracking.md | Model Gateway — Streaming, Token Tracking, and Rollups | L3 | M | 035, 004, 003 | written |
+| 037 | 037-model-api.md | Model API Endpoints | L3 | S | 036, 007 | written |
+| 038 | 038-memory-schema.md | Memory Schema | L3 | M | 003, 005, 016, 013 | written |
+| 039 | 039-memory-extraction.md | Memory Extraction Pipeline | L3 | M | 038, 035, 024 | written |
+| 040 | 040-memory-retrieval.md | Memory Retrieval Pipeline | L3 | M | 038, 035, 013 | written |
+| 041 | 041-memory-compaction-import.md | Memory Compaction and Import | L3 | M | 038, 039, 040, 004, 024 | written |
+| 042 | 042-memory-api.md | Memory API Endpoints | L3 | S | 041, 040, 007 | written |
