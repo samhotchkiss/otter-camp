@@ -33,10 +33,10 @@ var (
 )
 
 const (
-	defaultListLimit         = 50
-	maxListLimit             = 200
-	purgeEphemeralSessionJob = "chat.session.purge"
-	purgeJobPriority         = 50
+	defaultListLimit  = 50
+	maxListLimit      = 200
+	chatJobPriority   = 50
+	summarizePriority = 60
 )
 
 var messageStatusTransitions = map[string]map[string]struct{}{
@@ -517,11 +517,23 @@ func (s *service) CloseSession(ctx context.Context, sessionID uuid.UUID) error {
 		return err
 	}
 
-	if session.Mode == "async" {
-		runAfter := s.clock.Now().UTC().Add(24 * time.Hour)
-		if _, err := s.enqueuer.Enqueue(ctx, nil, purgeEphemeralSessionJob, purgeJobPriority, map[string]any{
-			"organization_id": session.OrganizationID,
-			"session_id":      session.ID,
+	if _, err := s.enqueuer.Enqueue(ctx, nil, ChatSummarizeJobType, summarizePriority, ChatSummarizePayload{
+		SessionID:         session.ID,
+		LayerBudgetTokens: 0,
+	}, nil); err != nil {
+		return err
+	}
+
+	runAfter := nextCleanupRunAfter(s.clock.Now().UTC())
+	cleanupTypes := []string{
+		CleanupTypeEphemeralPurge,
+		CleanupTypeToolCompaction,
+		CleanupTypeSummaryConsolidate,
+	}
+	for _, cleanupType := range cleanupTypes {
+		if _, err := s.enqueuer.Enqueue(ctx, nil, ChatSessionCleanupJobType, chatJobPriority, ChatSessionCleanupPayload{
+			SessionID:   session.ID,
+			CleanupType: cleanupType,
 		}, &runAfter); err != nil {
 			return err
 		}
