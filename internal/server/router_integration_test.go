@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
+	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"golang.org/x/crypto/bcrypt"
@@ -203,6 +204,81 @@ func TestVersionAndPrefixEnforcement(t *testing.T) {
 	}
 	if got := jsonPathString(t, prefixResp.Body, "error", "message"); got != "This API uses the /v1/ prefix. See docs." {
 		t.Fatalf("prefix message = %q, want %q", got, "This API uses the /v1/ prefix. See docs.")
+	}
+}
+
+func TestTestResetRouteInTestMode(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	bootstrapper := bootstrap.New(bootstrap.Options{
+		Pool:    pool,
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Version: "test-version",
+		Config: bootstrap.Config{
+			OrgSlug:       "server-test-reset",
+			OrgName:       "Server Test Reset",
+			AdminEmail:    "admin@test.local",
+			AdminPassword: "admin-password",
+			SkillsDir:     t.TempDir(),
+		},
+	})
+	if err := bootstrapper.Run(ctx); err != nil {
+		t.Fatalf("bootstrap run: %v", err)
+	}
+
+	orgRepo := repo.NewOrgRepo(pool)
+	if _, err := orgRepo.Create(ctx, repo.Organization{
+		Slug:        "extra-org-before-reset",
+		DisplayName: "Extra Org Before Reset",
+	}); err != nil {
+		t.Fatalf("create extra org: %v", err)
+	}
+
+	handler := NewHandlerWithOptions(HandlerOptions{
+		Version:      "test-version",
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		TestMode:     true,
+		TestResetter: bootstrapper,
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resp := mustJSON(t, http.MethodPost, server.URL+"/test/reset", nil, nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("POST /test/reset status = %d, want %d body=%s", resp.StatusCode, http.StatusNoContent, string(resp.Body))
+	}
+
+	var orgCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM organization`).Scan(&orgCount); err != nil {
+		t.Fatalf("count organizations: %v", err)
+	}
+	if orgCount != 1 {
+		t.Fatalf("organization count after reset = %d, want 1", orgCount)
+	}
+
+	var orgSlug string
+	if err := pool.QueryRow(ctx, `SELECT slug FROM organization LIMIT 1`).Scan(&orgSlug); err != nil {
+		t.Fatalf("select organization slug: %v", err)
+	}
+	if orgSlug != "server-test-reset" {
+		t.Fatalf("organization slug after reset = %q, want %q", orgSlug, "server-test-reset")
+	}
+}
+
+func TestTestResetRouteNotRegisteredInProductionMode(t *testing.T) {
+	handler := NewHandlerWithOptions(HandlerOptions{
+		Version:      "test-version",
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		TestMode:     false,
+		TestResetter: nil,
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resp := mustJSON(t, http.MethodPost, server.URL+"/test/reset", nil, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("POST /test/reset status = %d, want %d", resp.StatusCode, http.StatusNotFound)
 	}
 }
 
