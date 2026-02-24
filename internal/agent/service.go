@@ -47,6 +47,7 @@ var (
 	ErrInvalidTransition          = errors.New("invalid lifecycle transition")
 	ErrInvalidForTempAgent        = errors.New("operation is invalid for temp agent")
 	ErrConcurrentTempLimitReached = errors.New("max concurrent temp agent limit reached")
+	ErrStarterTrioProtected       = errors.New("starter trio agent is protected")
 )
 
 type Agent = repo.Agent
