@@ -145,6 +145,7 @@ type UpdateScheduleRequest struct {
 	CronExpression *string
 	OverlapPolicy  *string
 	MaxDurationMS  *int64
+	IsEnabled      *bool
 }
 
 type ProjectService interface {
@@ -876,6 +877,9 @@ func (s *service) UpdateSchedule(ctx context.Context, scheduleID uuid.UUID, req 
 	}
 	if req.MaxDurationMS != nil {
 		next.MaxDurationMS = req.MaxDurationMS
+	}
+	if req.IsEnabled != nil {
+		next.IsEnabled = *req.IsEnabled
 	}
 
 	updated, err := s.schedules.Update(ctx, next)

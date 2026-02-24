@@ -716,7 +716,8 @@ func (r *TaskScheduleRepo) Update(ctx context.Context, schedule TaskSchedule) (T
 			cron_expression = $4,
 			overlap_policy = $5,
 			max_duration_ms = $6,
-			next_fire_at = $7
+			next_fire_at = $7,
+			is_enabled = $8
 		WHERE id = $1
 		RETURNING id, organization_id, project_id, flow_template_id, display_name, cron_expression, overlap_policy, max_duration_ms, is_enabled, last_fired_at, next_fire_at, created_by_type, created_by_id, created_at, updated_at
 	`,
@@ -727,6 +728,7 @@ func (r *TaskScheduleRepo) Update(ctx context.Context, schedule TaskSchedule) (T
 		defaultOverlapPolicy(schedule.OverlapPolicy),
 		schedule.MaxDurationMS,
 		schedule.NextFireAt,
+		schedule.IsEnabled,
 	)
 
 	updated, err := scanTaskSchedule(row)
