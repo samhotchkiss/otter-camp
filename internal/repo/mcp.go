@@ -164,6 +164,32 @@ func (r *MCPConnectionRepo) List(ctx context.Context, organizationID uuid.UUID) 
 	return connections, nil
 }
 
+func (r *MCPConnectionRepo) ListEnabled(ctx context.Context) ([]MCPConnection, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, organization_id, project_id, display_name, slug, transport, transport_config, status, is_enabled, last_healthy_at, created_by_type, created_by_id, created_at, updated_at
+		FROM mcp_connection
+		WHERE is_enabled = true
+		ORDER BY created_at ASC, id ASC
+	`)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	connections := make([]MCPConnection, 0)
+	for rows.Next() {
+		connection, scanErr := scanMCPConnection(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		connections = append(connections, connection)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return connections, nil
+}
+
 func (r *MCPConnectionRepo) SetStatus(ctx context.Context, id uuid.UUID, status string) (MCPConnection, error) {
 	row := r.pool.QueryRow(ctx, `
 		UPDATE mcp_connection

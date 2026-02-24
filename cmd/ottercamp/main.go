@@ -24,6 +24,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/db"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	oclog "github.com/samhotchkiss/otter-camp/internal/log"
+	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/migrate"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	secretsvc "github.com/samhotchkiss/otter-camp/internal/secret"
@@ -113,6 +114,26 @@ func runServe() int {
 	}
 
 	bus := eventbus.New(pool.Raw(), logger, eventbus.Config{})
+	secretService := secretsvc.NewService(repo.NewSecretRepo(pool.Raw()))
+
+	mcpService, err := mcp.NewService(mcp.ServiceOptions{
+		Connections:      repo.NewMCPConnectionRepo(pool.Raw()),
+		Catalog:          repo.NewMCPToolCatalogRepo(pool.Raw()),
+		Bindings:         repo.NewMCPSecretBindingRepo(pool.Raw()),
+		Resolver:         secretService,
+		EventBus:         bus,
+		TransportFactory: mcp.NewDefaultTransportFactory(nil),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mcp service setup error: %v\n", err)
+		return 1
+	}
+
+	if err := mcp.RegisterNativeToolDefinitions(context.Background(), repo.NewToolDefinitionRepo(pool.Raw())); err != nil {
+		fmt.Fprintf(os.Stderr, "mcp tool registration error: %v\n", err)
+		return 1
+	}
+
 	agentService, err := agentsvc.NewService(agentsvc.Options{
 		Pool:   pool.Raw(),
 		Agents: repo.NewAgentRepo(pool.Raw()),
@@ -156,7 +177,11 @@ func runServe() int {
 	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signalCh)
 
-	err = server.Run(context.Background(), server.Options{
+	serveCtx, cancelServe := context.WithCancel(context.Background())
+	defer cancelServe()
+	mcpService.StartHealthScheduler(serveCtx)
+
+	err = server.Run(serveCtx, server.Options{
 		Addr:            cfg.Addr,
 		Logger:          logger,
 		Version:         version,
