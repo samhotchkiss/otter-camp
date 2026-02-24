@@ -16,7 +16,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/audit"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
+	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/db"
@@ -53,6 +56,8 @@ func run(args []string) int {
 		return runWorker()
 	case "migrate":
 		return runMigrate()
+	case "bootstrap":
+		return runBootstrap(args[1:])
 	case "backup":
 		return runBackup(args[1:])
 	case "secret":
@@ -106,14 +111,18 @@ func runServe() int {
 		fmt.Fprintf(os.Stderr, "auth service setup error: %v\n", err)
 		return 1
 	}
+	bootstrapper := newBootstrapper(pool.Raw(), logger, version)
+	resetter := bootstrap.NewResetter(pool.Raw(), bootstrapper, logger)
 
 	handler := server.NewHandlerWithOptions(server.HandlerOptions{
-		Version:     version,
-		Commit:      commit,
-		BuiltAt:     builtAt,
-		Logger:      logger,
-		AuthService: authService,
-		Pool:        pool.Raw(),
+		Version:      version,
+		Commit:       commit,
+		BuiltAt:      builtAt,
+		Mode:         cfg.Mode,
+		Logger:       logger,
+		AuthService:  authService,
+		Pool:         pool.Raw(),
+		TestResetter: resetter,
 	})
 
 	signalCh := make(chan os.Signal, 1)
@@ -176,6 +185,33 @@ func runMigrate() int {
 		return 1
 	}
 
+	return 0
+}
+
+func runBootstrap(args []string) int {
+	flags := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "bootstrap argument error: %v\n", err)
+		return 1
+	}
+	if flags.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "bootstrap does not accept positional arguments: %s\n", strings.Join(flags.Args(), " "))
+		return 1
+	}
+
+	pool, err := db.NewFromEnv(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "database config error: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	bootstrapper := newBootstrapper(pool.Raw(), logger, version)
+	if err := bootstrapper.Run(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "bootstrap failed: %v\n", err)
+		return 1
+	}
 	return 0
 }
 
@@ -889,6 +925,26 @@ func newSecretServiceFromEnv() (secretsvc.Service, func(), error) {
 	return service, cleanup, nil
 }
 
+func newBootstrapper(pool *pgxpool.Pool, logger *slog.Logger, appVersion string) *bootstrap.Bootstrapper {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	return bootstrap.New(bootstrap.Options{
+		Logger:                     logger,
+		Pool:                       pool,
+		Migrator:                   migrate.NewRunner(pool, logger),
+		OrgRepo:                    repo.NewOrgRepo(pool),
+		UserRepo:                   repo.NewHumanUserRepo(pool),
+		SkillRepo:                  repo.NewSkillRepo(pool),
+		ModelProviderRepo:          repo.NewModelProviderRepo(pool),
+		ModelProfileRepo:           repo.NewModelProfileRepo(pool),
+		ModelProfileAssignmentRepo: repo.NewModelProfileAssignmentRepo(pool),
+		AuditRecorder:              audit.NewService(repo.NewAuditEventRepo(pool), logger),
+		AppVersion:                 appVersion,
+	})
+}
+
 func parseOrgID(flagValue string) (uuid.UUID, error) {
 	raw := strings.TrimSpace(flagValue)
 	if raw == "" {
@@ -921,5 +977,5 @@ func printSecretUsage(w *os.File) {
 }
 
 func printUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp <serve|worker|migrate|backup|secret|skill|magic-link|reset-password|unlock-account|version>")
+	fmt.Fprintln(w, "usage: ottercamp <serve|worker|migrate|bootstrap|backup|secret|skill|magic-link|reset-password|unlock-account|version>")
 }

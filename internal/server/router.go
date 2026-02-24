@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/api"
 	"github.com/samhotchkiss/otter-camp/internal/auth"
+	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
@@ -16,14 +18,20 @@ type RouteRegistrar interface {
 	RegisterRoutes(r chi.Router)
 }
 
+type TestResetter interface {
+	Reset(ctx context.Context) error
+}
+
 type HandlerOptions struct {
 	Version         string
 	Commit          string
 	BuiltAt         string
+	Mode            config.Mode
 	Logger          *slog.Logger
 	AuthService     auth.Service
 	Pool            *pgxpool.Pool
 	GitService      api.GitService
+	TestResetter    TestResetter
 	RouteRegistrars []RouteRegistrar
 }
 
@@ -49,6 +57,15 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	r.Get("/health/ready", healthOK)
 	r.Get("/health", healthOK)
 	r.Get("/ready", healthOK)
+	if opts.Mode == config.ModeTest && opts.TestResetter != nil {
+		r.Post("/test/reset", func(w http.ResponseWriter, r *http.Request) {
+			if err := opts.TestResetter.Reset(r.Context()); err != nil {
+				api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to reset test state")
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
+	}
 
 	r.Route("/v1", func(v1 chi.Router) {
 		if opts.Pool != nil {
