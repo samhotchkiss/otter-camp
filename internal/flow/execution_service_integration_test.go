@@ -1,0 +1,447 @@
+//go:build integration
+
+package flow
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/testdb"
+)
+
+func TestFlowExecutionServiceAdvanceThroughTerminalNode(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, nodes := seedLinearTemplate(t, ctx, fixture, false, 5)
+	taskRecord := seedFlowTask(t, ctx, fixture, "Flow task", "in_progress", &template.ID)
+
+	started, err := fixture.service.StartFlow(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if started.VisitNumber != 1 {
+		t.Fatalf("start visit_number = %d, want 1", started.VisitNumber)
+	}
+
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow step 1: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow step 2: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow terminal step: %v", err)
+	}
+
+	updatedTask, err := fixture.taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "done" {
+		t.Fatalf("task work_status = %q, want done", updatedTask.WorkStatus)
+	}
+
+	executions, err := fixture.executionRepo.ListByTask(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("ListByTask executions: %v", err)
+	}
+	if len(executions) != 3 {
+		t.Fatalf("execution row count = %d, want 3", len(executions))
+	}
+	for i, execution := range executions {
+		if execution.Status != "completed" {
+			t.Fatalf("execution[%d] status = %q, want completed", i, execution.Status)
+		}
+	}
+
+	if nodes[0].ID != executions[0].FlowNodeID || nodes[1].ID != executions[1].FlowNodeID || nodes[2].ID != executions[2].FlowNodeID {
+		t.Fatalf("unexpected flow node execution order")
+	}
+}
+
+func TestFlowExecutionServiceRejectionLoopVisitIncrements(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, nodes := seedLinearTemplate(t, ctx, fixture, true, 5)
+	taskRecord := seedFlowTask(t, ctx, fixture, "Rejection loop task", "in_progress", &template.ID)
+
+	if _, err := fixture.service.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow to review node: %v", err)
+	}
+
+	firstReject, err := fixture.service.RejectFlowNode(ctx, taskRecord.ID, Actor{Type: "human_user", ID: fixture.pmUser.ID})
+	if err != nil {
+		t.Fatalf("RejectFlowNode first: %v", err)
+	}
+	if firstReject.VisitNumber != 2 {
+		t.Fatalf("first rejection visit_number = %d, want 2", firstReject.VisitNumber)
+	}
+
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow back to review: %v", err)
+	}
+	secondReject, err := fixture.service.RejectFlowNode(ctx, taskRecord.ID, Actor{Type: "human_user", ID: fixture.pmUser.ID})
+	if err != nil {
+		t.Fatalf("RejectFlowNode second: %v", err)
+	}
+	if secondReject.VisitNumber != 3 {
+		t.Fatalf("second rejection visit_number = %d, want 3", secondReject.VisitNumber)
+	}
+
+	executions, err := fixture.executionRepo.ListByTask(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("ListByTask executions: %v", err)
+	}
+	visitCount := 0
+	for _, execution := range executions {
+		if execution.FlowNodeID == nodes[0].ID {
+			visitCount++
+		}
+	}
+	if visitCount != 3 {
+		t.Fatalf("reject target visit count = %d, want 3", visitCount)
+	}
+}
+
+func TestFlowExecutionServiceRejectFlowNodeMaxVisits(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, _ := seedLinearTemplate(t, ctx, fixture, true, 2)
+	taskRecord := seedFlowTask(t, ctx, fixture, "Max visits task", "in_progress", &template.ID)
+
+	if _, err := fixture.service.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow to review: %v", err)
+	}
+	if _, err := fixture.service.RejectFlowNode(ctx, taskRecord.ID, Actor{Type: "human_user", ID: fixture.pmUser.ID}); err != nil {
+		t.Fatalf("RejectFlowNode first: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow to review again: %v", err)
+	}
+
+	if _, err := fixture.service.RejectFlowNode(ctx, taskRecord.ID, Actor{Type: "human_user", ID: fixture.pmUser.ID}); err == nil || err != ErrMaxVisitsExceeded {
+		t.Fatalf("RejectFlowNode max visits err = %v, want ErrMaxVisitsExceeded", err)
+	}
+
+	updatedTask, err := fixture.taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+
+	executions, err := fixture.executionRepo.ListByTask(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("ListByTask executions: %v", err)
+	}
+	visitsToRejectTarget := 0
+	for _, execution := range executions {
+		if execution.VisitNumber >= 3 {
+			visitsToRejectTarget++
+		}
+	}
+	if visitsToRejectTarget != 0 {
+		t.Fatalf("unexpected execution created beyond max visits")
+	}
+}
+
+func TestFlowExecutionServiceDependencyCycleDetection(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	taskA := seedFlowTask(t, ctx, fixture, "Task A", "in_progress", nil)
+	taskB := seedFlowTask(t, ctx, fixture, "Task B", "in_progress", nil)
+
+	if _, err := fixture.service.AddDependency(ctx, AddDependencyRequest{
+		SourceType:    "project_task",
+		SourceID:      taskA.ID,
+		DependsOnType: "project_task",
+		DependsOnID:   taskB.ID,
+		CreatedByType: "system",
+	}); err != nil {
+		t.Fatalf("AddDependency A->B: %v", err)
+	}
+
+	if _, err := fixture.service.AddDependency(ctx, AddDependencyRequest{
+		SourceType:    "project_task",
+		SourceID:      taskB.ID,
+		DependsOnType: "project_task",
+		DependsOnID:   taskA.ID,
+		CreatedByType: "system",
+	}); err == nil || err != ErrCyclicDependency {
+		t.Fatalf("AddDependency B->A err = %v, want ErrCyclicDependency", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM project_task_dependency`).Scan(&count); err != nil {
+		t.Fatalf("count dependencies: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("dependency row count = %d, want 1", count)
+	}
+}
+
+func TestFlowExecutionServiceOnTaskCancelledMarksDependentsBlocked(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	taskA := seedFlowTask(t, ctx, fixture, "Task A", "in_progress", nil)
+	taskB := seedFlowTask(t, ctx, fixture, "Task B", "in_progress", nil)
+
+	if _, err := fixture.service.AddDependency(ctx, AddDependencyRequest{
+		SourceType:    "project_task",
+		SourceID:      taskA.ID,
+		DependsOnType: "project_task",
+		DependsOnID:   taskB.ID,
+		CreatedByType: "system",
+	}); err != nil {
+		t.Fatalf("AddDependency A->B: %v", err)
+	}
+
+	if _, err := fixture.taskRepo.UpdateStatus(ctx, taskB.ID, "cancelled"); err != nil {
+		t.Fatalf("UpdateStatus task B cancelled: %v", err)
+	}
+	if err := fixture.service.OnTaskCancelled(ctx, taskB.ID); err != nil {
+		t.Fatalf("OnTaskCancelled: %v", err)
+	}
+
+	updatedA, err := fixture.taskRepo.GetByID(ctx, taskA.ID)
+	if err != nil {
+		t.Fatalf("GetByID task A: %v", err)
+	}
+	if updatedA.WorkStatus != "blocked" {
+		t.Fatalf("task A work_status = %q, want blocked", updatedA.WorkStatus)
+	}
+
+	tasks, err := fixture.taskRepo.ListByProject(ctx, fixture.project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject: %v", err)
+	}
+	foundResolution := false
+	for _, taskRecord := range tasks {
+		if taskRecord.ID == taskA.ID || taskRecord.ID == taskB.ID {
+			continue
+		}
+		if taskRecord.WorkStatus == "queued" && strings.HasPrefix(taskRecord.Title, "Resolve blocker for task "+fixture.project.Slug+"-") {
+			foundResolution = true
+			break
+		}
+	}
+	if !foundResolution {
+		t.Fatal("expected resolution task for cancelled dependency")
+	}
+}
+
+type integrationFixture struct {
+	service       FlowExecutionService
+	organization  repo.Organization
+	project       repo.Project
+	pmUser        repo.HumanUser
+	pmAgent       repo.Agent
+	taskRepo      *repo.ProjectTaskRepo
+	templateRepo  *repo.FlowTemplateRepo
+	nodeRepo      *repo.FlowNodeRepo
+	executionRepo *repo.FlowNodeExecutionRepo
+}
+
+func seedFlowIntegrationFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) integrationFixture {
+	t.Helper()
+
+	orgRepo := repo.NewOrgRepo(pool)
+	projectRepo := repo.NewProjectRepo(pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	userRepo := repo.NewHumanUserRepo(pool)
+	agentRepo := repo.NewAgentRepo(pool)
+	assignmentRepo := repo.NewAgentProjectAssignmentRepo(pool)
+
+	org, err := orgRepo.Create(ctx, repo.Organization{
+		Slug:        "flow-org-" + uuid.NewString()[:8],
+		DisplayName: "Flow Org",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "flow-project-" + uuid.NewString()[:8],
+		DisplayName:    "Flow Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	pmUser, err := userRepo.Create(ctx, repo.HumanUser{
+		OrganizationID: org.ID,
+		Email:          "pm+" + uuid.NewString()[:8] + "@example.com",
+		DisplayName:    "PM User",
+		Role:           "admin",
+		IsActive:       true,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create pm user: %v", err)
+	}
+	pmAgent, err := agentRepo.Create(ctx, repo.Agent{
+		OrganizationID:       org.ID,
+		DisplayName:          "PM Agent",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		AgentType:            "pm",
+		CreatedByType:        "human_user",
+		CreatedByID:          pmUser.ID,
+		MemoryReadScopes:     []string{},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		OperatorInstructions: "",
+		SystemPrompt:         "",
+	})
+	if err != nil {
+		t.Fatalf("create pm agent: %v", err)
+	}
+	if _, err := assignmentRepo.Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        pmAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "pm",
+		AssignedByType: "system",
+	}); err != nil {
+		t.Fatalf("assign pm: %v", err)
+	}
+
+	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})
+	svc, err := NewService(Options{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	return integrationFixture{
+		service:       svc,
+		organization:  org,
+		project:       project,
+		pmUser:        pmUser,
+		pmAgent:       pmAgent,
+		taskRepo:      taskRepo,
+		templateRepo:  templateRepo,
+		nodeRepo:      nodeRepo,
+		executionRepo: executionRepo,
+	}
+}
+
+func seedLinearTemplate(t *testing.T, ctx context.Context, fixture integrationFixture, withReject bool, maxVisits int) (repo.FlowTemplate, []repo.FlowNode) {
+	t.Helper()
+
+	template, err := fixture.templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &fixture.organization.ID,
+		ProjectID:      &fixture.project.ID,
+		Slug:           "flow-template-" + uuid.NewString()[:8],
+		DisplayName:    "Flow Template",
+		Description:    "integration template",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+
+	node1, err := fixture.nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Node 1",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      maxVisits,
+	})
+	if err != nil {
+		t.Fatalf("create node1: %v", err)
+	}
+	node2, err := fixture.nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Node 2",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      maxVisits,
+	})
+	if err != nil {
+		t.Fatalf("create node2: %v", err)
+	}
+	node3, err := fixture.nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Node 3",
+		NodeType:       "work",
+		Position:       3,
+		MaxVisits:      maxVisits,
+	})
+	if err != nil {
+		t.Fatalf("create node3: %v", err)
+	}
+
+	node1.NextNodeID = &node2.ID
+	if withReject {
+		node2.RejectNodeID = &node1.ID
+	}
+	node2.NextNodeID = &node3.ID
+
+	if _, err := fixture.nodeRepo.Update(ctx, node1); err != nil {
+		t.Fatalf("update node1: %v", err)
+	}
+	if _, err := fixture.nodeRepo.Update(ctx, node2); err != nil {
+		t.Fatalf("update node2: %v", err)
+	}
+
+	template.StartNodeID = &node1.ID
+	if _, err := fixture.templateRepo.Update(ctx, template); err != nil {
+		t.Fatalf("update template start node: %v", err)
+	}
+
+	return template, []repo.FlowNode{node1, node2, node3}
+}
+
+func seedFlowTask(t *testing.T, ctx context.Context, fixture integrationFixture, title string, status string, templateID *uuid.UUID) repo.ProjectTask {
+	t.Helper()
+	taskRecord, err := fixture.taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.organization.ID,
+		ProjectID:      fixture.project.ID,
+		Title:          title,
+		WorkStatus:     status,
+		FlowTemplateID: templateID,
+		CreatedByType:  "system",
+		CreatedByID:    nil,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	return taskRecord
+}
