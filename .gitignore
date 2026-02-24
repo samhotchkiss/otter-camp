@@ -61,6 +61,7 @@ bridge/.env
 /seed
 /server
 /otter
+/queue-dance.py
 
 # Avatar PNGs (keep webp, ignore large PNGs)
 data/agents/*/avatar.png
