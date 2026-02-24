@@ -593,6 +593,9 @@ func mergeFlowTemplateForDeprecate(current FlowTemplate, next FlowTemplate) Flow
 	merged.IsCurrent = true
 	merged.Version = current.Version + 1
 
+	if strings.TrimSpace(next.Slug) != "" {
+		merged.Slug = strings.TrimSpace(next.Slug)
+	}
 	if strings.TrimSpace(next.DisplayName) != "" {
 		merged.DisplayName = strings.TrimSpace(next.DisplayName)
 	}

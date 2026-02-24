@@ -120,8 +120,10 @@ func TestProjectServiceUpdateFlowTemplateInUseCreatesNewVersion(t *testing.T) {
 	}
 
 	newName := "Deploy Flow v2"
+	newSlug := "deploy-flow-v2"
 	updated, err := svc.UpdateFlowTemplate(ctx, orgID, template.ID, UpdateFlowTemplateRequest{
 		DisplayName:   &newName,
+		Slug:          &newSlug,
 		UpdatedByType: "system",
 	})
 	if err != nil {
@@ -132,6 +134,9 @@ func TestProjectServiceUpdateFlowTemplateInUseCreatesNewVersion(t *testing.T) {
 	}
 	if updated.Version != template.Version+1 {
 		t.Fatalf("updated version = %d, want %d", updated.Version, template.Version+1)
+	}
+	if updated.Slug != newSlug {
+		t.Fatalf("updated slug = %q, want %q", updated.Slug, newSlug)
 	}
 
 	oldRow, err := templateRepo.GetByID(ctx, template.ID)
