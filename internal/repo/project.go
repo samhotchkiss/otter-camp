@@ -354,6 +354,34 @@ func (r *FlowTemplateRepo) ListAll(ctx context.Context, organizationID, projectI
 	return templates, nil
 }
 
+func (r *FlowTemplateRepo) Update(ctx context.Context, template FlowTemplate) (FlowTemplate, error) {
+	row := r.pool.QueryRow(ctx, `
+		UPDATE flow_template
+		SET
+			slug = $2,
+			display_name = $3,
+			description = $4,
+			start_node_id = $5
+		WHERE id = $1
+		RETURNING id, organization_id, project_id, slug, display_name, description, is_current, version, start_node_id, is_system, created_by_type, created_by_id, created_at, updated_at
+	`,
+		template.ID,
+		strings.TrimSpace(template.Slug),
+		strings.TrimSpace(template.DisplayName),
+		template.Description,
+		template.StartNodeID,
+	)
+
+	updated, err := scanFlowTemplate(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return FlowTemplate{}, ErrNotFound
+	}
+	if err != nil {
+		return FlowTemplate{}, mapDBError(err)
+	}
+	return updated, nil
+}
+
 func (r *FlowTemplateRepo) Deprecate(ctx context.Context, currentID uuid.UUID, next FlowTemplate) (FlowTemplate, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -565,6 +593,9 @@ func mergeFlowTemplateForDeprecate(current FlowTemplate, next FlowTemplate) Flow
 	merged.IsCurrent = true
 	merged.Version = current.Version + 1
 
+	if strings.TrimSpace(next.Slug) != "" {
+		merged.Slug = strings.TrimSpace(next.Slug)
+	}
 	if strings.TrimSpace(next.DisplayName) != "" {
 		merged.DisplayName = strings.TrimSpace(next.DisplayName)
 	}
@@ -706,6 +737,20 @@ func (r *TaskScheduleRepo) Update(ctx context.Context, schedule TaskSchedule) (T
 		return TaskSchedule{}, mapDBError(err)
 	}
 	return updated, nil
+}
+
+func (r *TaskScheduleRepo) Delete(ctx context.Context, id uuid.UUID) error {
+	ct, err := r.pool.Exec(ctx, `
+		DELETE FROM task_schedule
+		WHERE id = $1
+	`, id)
+	if err != nil {
+		return mapDBError(err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *TaskScheduleRepo) Enable(ctx context.Context, id uuid.UUID) (TaskSchedule, error) {
