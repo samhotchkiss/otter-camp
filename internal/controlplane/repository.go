@@ -289,6 +289,115 @@ func (r *RunRepository) ListByTask(ctx context.Context, organizationID, taskID u
 	return r.List(ctx, filter)
 }
 
+func (r *RunRepository) ListInProgressUpdatedBefore(ctx context.Context, before time.Time) ([]Run, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id, organization_id, project_id, task_id, flow_node_id, session_id, turn_id,
+		       principal_type, principal_id, status, idempotency_key, trigger_type, version,
+		       failure_reason, failure_class, metadata, created_at, updated_at, started_at, completed_at
+		FROM run
+		WHERE status = 'in_progress'
+		  AND updated_at < $1
+		ORDER BY updated_at ASC, id ASC
+	`, before.UTC())
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	items := make([]Run, 0)
+	for rows.Next() {
+		item, scanErr := scanRun(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		items = append(items, item)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return items, nil
+}
+
+func (r *RunRepository) ListPausedUpdatedBefore(ctx context.Context, before time.Time) ([]Run, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id, organization_id, project_id, task_id, flow_node_id, session_id, turn_id,
+		       principal_type, principal_id, status, idempotency_key, trigger_type, version,
+		       failure_reason, failure_class, metadata, created_at, updated_at, started_at, completed_at
+		FROM run
+		WHERE status = 'paused'
+		  AND updated_at < $1
+		ORDER BY updated_at ASC, id ASC
+	`, before.UTC())
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	items := make([]Run, 0)
+	for rows.Next() {
+		item, scanErr := scanRun(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		items = append(items, item)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return items, nil
+}
+
+func (r *RunRepository) ListOrphanedInProgress(ctx context.Context, since time.Time) ([]Run, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT r.id, r.organization_id, r.project_id, r.task_id, r.flow_node_id, r.session_id, r.turn_id,
+		       r.principal_type, r.principal_id, r.status, r.idempotency_key, r.trigger_type, r.version,
+		       r.failure_reason, r.failure_class, r.metadata, r.created_at, r.updated_at, r.started_at, r.completed_at
+		FROM run r
+		WHERE r.status = 'in_progress'
+		  AND NOT EXISTS (
+			  SELECT 1
+			  FROM run_event re
+			  WHERE re.run_id = r.id
+			    AND re.created_at > $1
+		  )
+		ORDER BY r.updated_at ASC, r.id ASC
+	`, since.UTC())
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	items := make([]Run, 0)
+	for rows.Next() {
+		item, scanErr := scanRun(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		items = append(items, item)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return items, nil
+}
+
+func (r *RunRepository) CountDeadLetterByTaskFlowNode(ctx context.Context, taskID, flowNodeID uuid.UUID) (int, error) {
+	if taskID == uuid.Nil || flowNodeID == uuid.Nil {
+		return 0, nil
+	}
+	var count int
+	if err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM run
+		WHERE task_id = $1
+		  AND flow_node_id = $2
+		  AND status = 'dead_letter'
+	`, taskID, flowNodeID).Scan(&count); err != nil {
+		return 0, mapDBError(err)
+	}
+	return count, nil
+}
+
 func (r *RunRepository) Cancel(ctx context.Context, id uuid.UUID, expectedVersion int) (Run, error) {
 	return r.UpdateStatus(ctx, id, expectedVersion, "cancelling", nil, nil)
 }

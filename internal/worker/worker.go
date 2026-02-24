@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/samhotchkiss/otter-camp/internal/budget"
+	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/db"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
@@ -47,11 +49,41 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	tickWorker := scheduling.NewScheduleTickWorker(pool.Raw(), scheduleEngine, logger)
 	jqWorker.Register(scheduling.ScheduleTickJobType, tickWorker.Execute)
 
+	budgetService, err := budget.NewService(budget.Options{
+		Pool:   pool.Raw(),
+		Events: bus,
+		Logger: logger,
+	})
+	if err != nil {
+		return fmt.Errorf("worker budget service setup: %w", err)
+	}
+
+	runService, err := controlplane.NewRunService(controlplane.RunServiceOptions{
+		Pool:     pool.Raw(),
+		EventBus: bus,
+		Budget:   budgetService,
+		Logger:   logger,
+	})
+	if err != nil {
+		return fmt.Errorf("worker run service setup: %w", err)
+	}
+	supervisor, err := controlplane.NewSupervisor(controlplane.SupervisorOptions{
+		Pool:       pool.Raw(),
+		RunService: runService,
+		EventBus:   bus,
+		Logger:     logger,
+	})
+	if err != nil {
+		return fmt.Errorf("worker supervisor setup: %w", err)
+	}
+
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	heartbeat := scheduling.NewSchedulerHeartbeat(pool.Raw(), jqWorker, logger, nil)
 	heartbeat.Start(runCtx)
+	supervisor.Start(runCtx)
+	defer supervisor.Stop()
 
 	errCh := make(chan error, 1)
 	go func() {
