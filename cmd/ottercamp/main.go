@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
+	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/db"
@@ -51,6 +52,8 @@ func run(args []string) int {
 		return runServe()
 	case "worker":
 		return runWorker()
+	case "bootstrap":
+		return runBootstrap()
 	case "migrate":
 		return runMigrate()
 	case "backup":
@@ -107,13 +110,29 @@ func runServe() int {
 		return 1
 	}
 
+	store, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "storage config error: %v\n", err)
+		return 1
+	}
+
+	bootstrapper := bootstrap.NewBootstrapper(bootstrap.Options{
+		Pool:    pool.Raw(),
+		Logger:  logger,
+		Store:   store,
+		Version: version,
+	})
+	resetter := bootstrap.NewResetter(pool.Raw(), bootstrapper)
+
 	handler := server.NewHandlerWithOptions(server.HandlerOptions{
-		Version:     version,
-		Commit:      commit,
-		BuiltAt:     builtAt,
-		Logger:      logger,
-		AuthService: authService,
-		Pool:        pool.Raw(),
+		Version:      version,
+		Commit:       commit,
+		BuiltAt:      builtAt,
+		Logger:       logger,
+		AuthService:  authService,
+		Pool:         pool.Raw(),
+		TestMode:     cfg.Mode == config.ModeTest,
+		TestResetter: resetter,
 	})
 
 	signalCh := make(chan os.Signal, 1)
@@ -176,6 +195,43 @@ func runMigrate() int {
 		return 1
 	}
 
+	return 0
+}
+
+func runBootstrap() int {
+	pool, err := db.NewFromEnv(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "database config error: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+
+	store, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "storage config error: %v\n", err)
+		return 1
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	bootstrapper := bootstrap.NewBootstrapper(bootstrap.Options{
+		Pool:    pool.Raw(),
+		Logger:  logger,
+		Store:   store,
+		Version: version,
+		ProgressFn: func(progress bootstrap.Progress) {
+			details := strings.TrimSpace(progress.Details)
+			if details == "" {
+				fmt.Fprintf(os.Stdout, "step %d (%s): %s\n", progress.Step, progress.Name, progress.Status)
+				return
+			}
+			fmt.Fprintf(os.Stdout, "step %d (%s): %s - %s\n", progress.Step, progress.Name, progress.Status, details)
+		},
+	})
+
+	if err := bootstrapper.Run(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "bootstrap error: %v\n", err)
+		return 1
+	}
 	return 0
 }
 
@@ -921,5 +977,5 @@ func printSecretUsage(w *os.File) {
 }
 
 func printUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp <serve|worker|migrate|backup|secret|skill|magic-link|reset-password|unlock-account|version>")
+	fmt.Fprintln(w, "usage: ottercamp <serve|worker|bootstrap|migrate|backup|secret|skill|magic-link|reset-password|unlock-account|version>")
 }
