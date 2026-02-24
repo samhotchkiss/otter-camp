@@ -252,7 +252,7 @@ func buildScopeFilterSQL(req RetrievalRequest, readScopes []string) (string, []a
 			if req.AgentID == nil || *req.AgentID == uuid.Nil {
 				continue
 			}
-			scopeClauses = append(scopeClauses, fmt.Sprintf("(agent_id = $%d)", nextArg))
+			scopeClauses = append(scopeClauses, fmt.Sprintf("(scope = 'agent_private' AND agent_id = $%d)", nextArg))
 			args = append(args, *req.AgentID)
 			nextArg++
 		}

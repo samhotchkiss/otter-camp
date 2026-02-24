@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -49,49 +50,70 @@ func (d *Deduper) ReviewCluster(ctx context.Context, pairs []DedupPair) error {
 		return nil
 	}
 
-	for start := 0; start < len(pairs); start += dedupBatchSize {
-		end := start + dedupBatchSize
-		if end > len(pairs) {
-			end = len(pairs)
-		}
-		batch := append([]DedupPair(nil), pairs[start:end]...)
-		orgID := batch[0].MemoryA.OrganizationID
-
-		reviews, err := d.reviewer.ReviewDedup(ctx, orgID, batch)
+	for _, inputPair := range pairs {
+		tx, err := d.pool.BeginTx(ctx, pgx.TxOptions{})
 		if err != nil {
 			return err
 		}
-		if len(reviews) != len(batch) {
-			return fmt.Errorf("dedup review count mismatch: got %d, want %d", len(reviews), len(batch))
-		}
+		committed := false
+		func() {
+			defer func() {
+				if !committed {
+					_ = tx.Rollback(ctx)
+				}
+			}()
 
-		for index := range batch {
-			pair := batch[index]
-			review := reviews[index]
+			shouldProcess, processErr := shouldProcessDedupPair(ctx, tx, inputPair)
+			if processErr != nil {
+				err = processErr
+				return
+			}
+			if !shouldProcess {
+				if commitErr := tx.Commit(ctx); commitErr != nil {
+					err = commitErr
+					return
+				}
+				committed = true
+				return
+			}
+
+			reviews, reviewErr := d.reviewer.ReviewDedup(ctx, inputPair.MemoryA.OrganizationID, []DedupPair{inputPair})
+			if reviewErr != nil {
+				err = reviewErr
+				return
+			}
+			if len(reviews) != 1 {
+				err = fmt.Errorf("dedup review count mismatch: got %d, want %d", len(reviews), 1)
+				return
+			}
+
+			pair := inputPair
+			review := reviews[0]
 			if review.Pair.MemoryA.ID != uuid.Nil && review.Pair.MemoryB.ID != uuid.Nil {
 				pair = review.Pair
 			}
-			if err := d.applyReview(ctx, pair, review.Decision); err != nil {
-				return err
+			if applyErr := d.applyReviewTx(ctx, tx, pair, review.Decision, d.clock.Now()); applyErr != nil {
+				err = applyErr
+				return
 			}
+
+			if commitErr := tx.Commit(ctx); commitErr != nil {
+				err = commitErr
+				return
+			}
+			committed = true
+		}()
+		if err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func (d *Deduper) applyReview(ctx context.Context, pair DedupPair, decision DedupDecision) error {
+func (d *Deduper) applyReviewTx(ctx context.Context, tx pgx.Tx, pair DedupPair, decision DedupDecision, now time.Time) error {
 	if pair.MemoryA.ID == uuid.Nil || pair.MemoryB.ID == uuid.Nil {
 		return fmt.Errorf("dedup pair memory ids are required")
 	}
-
-	now := d.clock.Now()
-	tx, err := d.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = tx.Rollback(ctx)
-	}()
 
 	if err := upsertDedupDecision(ctx, tx, pair, decision, now); err != nil {
 		return err
@@ -112,7 +134,7 @@ func (d *Deduper) applyReview(ctx context.Context, pair DedupPair, decision Dedu
 		if d.merger == nil {
 			return fmt.Errorf("merge decision received but merger is not configured")
 		}
-		merged, mergeErr := d.merger.Merge(ctx, pair.MemoryA.OrganizationID, pair.MemoryA, pair.MemoryB)
+		merged, mergeErr := d.merger.Merge(ctx, tx, pair.MemoryA.OrganizationID, pair.MemoryA, pair.MemoryB)
 		if mergeErr != nil {
 			return mergeErr
 		}
@@ -129,7 +151,45 @@ func (d *Deduper) applyReview(ctx context.Context, pair DedupPair, decision Dedu
 		return fmt.Errorf("unsupported dedup decision %q", decision)
 	}
 
-	return tx.Commit(ctx)
+	return nil
+}
+
+func shouldProcessDedupPair(ctx context.Context, tx pgx.Tx, pair DedupPair) (bool, error) {
+	var existingDecision string
+	decisionErr := tx.QueryRow(ctx, `
+		SELECT decision
+		FROM memory_dedup_reviewed
+		WHERE LEAST(memory_id_a::text, memory_id_b::text) = LEAST($1::text, $2::text)
+		  AND GREATEST(memory_id_a::text, memory_id_b::text) = GREATEST($1::text, $2::text)
+	`, pair.MemoryA.ID, pair.MemoryB.ID).Scan(&existingDecision)
+	switch {
+	case errors.Is(decisionErr, pgx.ErrNoRows):
+		return true, nil
+	case decisionErr != nil:
+		return false, decisionErr
+	}
+	if existingDecision != "deferred" {
+		return false, nil
+	}
+
+	var lockedID uuid.UUID
+	lockErr := tx.QueryRow(ctx, `
+		SELECT id
+		FROM memory_dedup_reviewed
+		WHERE decision = 'deferred'
+		  AND LEAST(memory_id_a::text, memory_id_b::text) = LEAST($1::text, $2::text)
+		  AND GREATEST(memory_id_a::text, memory_id_b::text) = GREATEST($1::text, $2::text)
+		ORDER BY id
+		FOR UPDATE SKIP LOCKED
+		LIMIT 1
+	`, pair.MemoryA.ID, pair.MemoryB.ID).Scan(&lockedID)
+	if errors.Is(lockErr, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if lockErr != nil {
+		return false, lockErr
+	}
+	return true, nil
 }
 
 func upsertDedupDecision(ctx context.Context, tx pgx.Tx, pair DedupPair, decision DedupDecision, reviewedAt time.Time) error {
@@ -154,12 +214,18 @@ func upsertDedupDecision(ctx context.Context, tx pgx.Tx, pair DedupPair, decisio
 }
 
 func supersedeMemory(ctx context.Context, tx pgx.Tx, loserID, winnerID uuid.UUID, at time.Time) error {
-	_, err := tx.Exec(ctx, `
+	result, err := tx.Exec(ctx, `
 		UPDATE memory
 		SET status = 'superseded',
 		    superseded_by = $2,
 		    superseded_at = $3
 		WHERE id = $1
 	`, loserID, winnerID, at.UTC())
-	return err
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("memory %s not found for supersession", loserID)
+	}
+	return nil
 }

@@ -5,9 +5,13 @@ package memory
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
@@ -422,6 +426,10 @@ func TestEntitySynthesizerTriggerFromMentions(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
+		status := "active"
+		if i == 4 {
+			status = "superseded"
+		}
 		memory, createErr := memoryRepo.Create(ctx, repo.Memory{
 			OrganizationID: org.ID,
 			MemoryType:     "semantic",
@@ -429,7 +437,7 @@ func TestEntitySynthesizerTriggerFromMentions(t *testing.T) {
 			Content:        fmt.Sprintf("entity memory %d", i),
 			ContentHash:    fmt.Sprintf("entity-hash-%d", i),
 			Embedding:      embeddingWithSignal(float32(i + 1)),
-			Status:         "active",
+			Status:         status,
 			Sensitivity:    "normal",
 			Confidence:     0.9,
 		})
@@ -623,6 +631,188 @@ func TestDeduperReviewClusterSupersedeA(t *testing.T) {
 	}
 }
 
+func TestDeduperSkipLockedConcurrency(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org, _ := seedOrgAndAgent(t, ctx, pool, []string{"org"})
+	memoryRepo := repo.NewMemoryRepo(pool)
+	dedupRepo := repo.NewMemoryDedupReviewedRepo(pool)
+
+	memoryA, err := memoryRepo.Create(ctx, repo.Memory{
+		OrganizationID: org.ID,
+		MemoryType:     "semantic",
+		Scope:          "org",
+		Content:        "policy starts at 09:00",
+		ContentHash:    "skip-locked-a",
+		Embedding:      embeddingWithSignal(30),
+		Status:         "active",
+		Sensitivity:    "normal",
+		Confidence:     0.9,
+	})
+	if err != nil {
+		t.Fatalf("create memory A: %v", err)
+	}
+	memoryB, err := memoryRepo.Create(ctx, repo.Memory{
+		OrganizationID: org.ID,
+		MemoryType:     "semantic",
+		Scope:          "org",
+		Content:        "policy starts at 9am",
+		ContentHash:    "skip-locked-b",
+		Embedding:      embeddingWithSignal(31),
+		Status:         "active",
+		Sensitivity:    "normal",
+		Confidence:     0.9,
+	})
+	if err != nil {
+		t.Fatalf("create memory B: %v", err)
+	}
+
+	if _, err := dedupRepo.Create(ctx, repo.MemoryDedupReviewed{
+		MemoryIDA:        memoryA.ID,
+		MemoryIDB:        memoryB.ID,
+		CosineSimilarity: 0.92,
+		Decision:         "deferred",
+		ReviewedBy:       "llm",
+	}); err != nil {
+		t.Fatalf("seed deferred review: %v", err)
+	}
+
+	reviewer := &countingDedupReviewer{
+		decision: DedupDecisionSupersedeA,
+		sleep:    150 * time.Millisecond,
+	}
+	deduper, err := NewDeduper(DeduperOptions{
+		Pool:     pool,
+		Reviewer: reviewer,
+	})
+	if err != nil {
+		t.Fatalf("NewDeduper: %v", err)
+	}
+
+	pair := DedupPair{
+		MemoryA:          memoryA,
+		MemoryB:          memoryB,
+		CosineSimilarity: 0.92,
+	}
+
+	start := make(chan struct{})
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errCh <- deduper.ReviewCluster(ctx, []DedupPair{pair})
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for callErr := range errCh {
+		if callErr != nil {
+			t.Fatalf("ReviewCluster concurrent error: %v", callErr)
+		}
+	}
+
+	if got := reviewer.calls.Load(); got != 1 {
+		t.Fatalf("reviewer calls = %d, want 1", got)
+	}
+
+	storedA, err := memoryRepo.GetByID(ctx, memoryA.ID)
+	if err != nil {
+		t.Fatalf("GetByID memory A: %v", err)
+	}
+	if storedA.Status != "superseded" {
+		t.Fatalf("memory A status = %q, want superseded", storedA.Status)
+	}
+}
+
+func TestDeduperMergeRollbackOnSupersessionFailure(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org, _ := seedOrgAndAgent(t, ctx, pool, []string{"org"})
+	memoryRepo := repo.NewMemoryRepo(pool)
+
+	memoryA, err := memoryRepo.Create(ctx, repo.Memory{
+		OrganizationID: org.ID,
+		MemoryType:     "semantic",
+		Scope:          "org",
+		Content:        "A",
+		ContentHash:    "merge-rollback-a",
+		Embedding:      embeddingWithSignal(40),
+		Status:         "active",
+		Sensitivity:    "normal",
+		Confidence:     0.9,
+	})
+	if err != nil {
+		t.Fatalf("create memory A: %v", err)
+	}
+	memoryB, err := memoryRepo.Create(ctx, repo.Memory{
+		OrganizationID: org.ID,
+		MemoryType:     "semantic",
+		Scope:          "org",
+		Content:        "B",
+		ContentHash:    "merge-rollback-b",
+		Embedding:      embeddingWithSignal(41),
+		Status:         "active",
+		Sensitivity:    "normal",
+		Confidence:     0.9,
+	})
+	if err != nil {
+		t.Fatalf("create memory B: %v", err)
+	}
+
+	var mergedID atomic.Value
+	merger := txMergingMemoryCreator{
+		deleteMemoryID: &memoryB.ID,
+		mergedID:       &mergedID,
+	}
+	deduper, err := NewDeduper(DeduperOptions{
+		Pool: pool,
+		Reviewer: staticDedupReviewer{
+			decision: DedupDecisionMerge,
+		},
+		Merger: merger,
+	})
+	if err != nil {
+		t.Fatalf("NewDeduper: %v", err)
+	}
+
+	err = deduper.ReviewCluster(ctx, []DedupPair{{
+		MemoryA:          memoryA,
+		MemoryB:          memoryB,
+		CosineSimilarity: 0.95,
+	}})
+	if err == nil {
+		t.Fatal("expected ReviewCluster merge to fail when supersession update cannot find loser row")
+	}
+
+	storedA, err := memoryRepo.GetByID(ctx, memoryA.ID)
+	if err != nil {
+		t.Fatalf("GetByID memory A: %v", err)
+	}
+	if storedA.Status != "active" {
+		t.Fatalf("memory A status after rollback = %q, want active", storedA.Status)
+	}
+	storedB, err := memoryRepo.GetByID(ctx, memoryB.ID)
+	if err != nil {
+		t.Fatalf("GetByID memory B: %v", err)
+	}
+	if storedB.Status != "active" {
+		t.Fatalf("memory B status after rollback = %q, want active", storedB.Status)
+	}
+
+	if loaded := merger.mergedID.Load(); loaded != nil {
+		id := loaded.(uuid.UUID)
+		if _, err := memoryRepo.GetByID(ctx, id); err == nil {
+			t.Fatalf("merged memory %s exists after rollback, want no persisted row", id)
+		}
+	}
+}
+
 func TestContradictionDetectorArchivesWhenConfidenceFallsToZero(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -804,6 +994,90 @@ func TestContradictionDetectorReturnsConflictWhenNewConfidenceDropsBelowPromotio
 	}
 }
 
+func TestContradictionDetectorDemotesActiveMemoryToCandidateWhenConfidenceDropsLow(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org, _ := seedOrgAndAgent(t, ctx, pool, []string{"org"})
+	entityRepo := repo.NewMemoryEntityRepo(pool)
+	memoryRepo := repo.NewMemoryRepo(pool)
+	mentionRepo := repo.NewMemoryEntityMentionRepo(pool)
+
+	entity, err := entityRepo.Create(ctx, repo.MemoryEntity{
+		OrganizationID: org.ID,
+		CanonicalName:  "Rate Limit Policy",
+		EntityType:     "concept",
+	})
+	if err != nil {
+		t.Fatalf("create entity: %v", err)
+	}
+
+	existing, err := memoryRepo.Create(ctx, repo.Memory{
+		OrganizationID: org.ID,
+		MemoryType:     "semantic",
+		Scope:          "org",
+		Content:        "Rate limit is 100 rps",
+		ContentHash:    "rl-existing",
+		Embedding:      embeddingWithSignal(0),
+		Status:         "active",
+		Sensitivity:    "normal",
+		Confidence:     0.8,
+	})
+	if err != nil {
+		t.Fatalf("create existing memory: %v", err)
+	}
+	newMemory, err := memoryRepo.Create(ctx, repo.Memory{
+		OrganizationID: org.ID,
+		MemoryType:     "semantic",
+		Scope:          "org",
+		Content:        "Rate limit is 200 rps",
+		ContentHash:    "rl-new",
+		Embedding:      embeddingWithSignal(1),
+		Status:         "active",
+		Sensitivity:    "normal",
+		Confidence:     0.25,
+	})
+	if err != nil {
+		t.Fatalf("create new memory: %v", err)
+	}
+
+	for _, memoryID := range []uuid.UUID{existing.ID, newMemory.ID} {
+		if _, err := mentionRepo.Create(ctx, repo.MemoryEntityMention{
+			MemoryID:    memoryID,
+			EntityID:    entity.ID,
+			MentionText: "Rate Limit Policy",
+			Confidence:  1,
+		}); err != nil {
+			t.Fatalf("create mention for %s: %v", memoryID, err)
+		}
+	}
+
+	detector, err := NewContradictionDetector(ContradictionDetectorOptions{
+		Pool: pool,
+		Classifier: staticContradictionClassifier{
+			label: ContradictionLabelContradictory,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewContradictionDetector: %v", err)
+	}
+
+	if _, err := detector.Check(ctx, newMemory); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+
+	storedNew, err := memoryRepo.GetByID(ctx, newMemory.ID)
+	if err != nil {
+		t.Fatalf("GetByID new: %v", err)
+	}
+	if storedNew.Confidence >= 0.2 {
+		t.Fatalf("new confidence = %f, want < 0.2", storedNew.Confidence)
+	}
+	if storedNew.Status != "candidate" {
+		t.Fatalf("new status = %q, want candidate", storedNew.Status)
+	}
+}
+
 func seedOrgAndAgent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, scopes []string) (repo.Organization, repo.Agent) {
 	t.Helper()
 
@@ -893,6 +1167,72 @@ func (s staticDedupReviewer) ReviewDedup(_ context.Context, _ uuid.UUID, pairs [
 		}
 	}
 	return out, nil
+}
+
+type countingDedupReviewer struct {
+	decision DedupDecision
+	sleep    time.Duration
+	calls    atomic.Int32
+}
+
+func (r *countingDedupReviewer) ReviewDedup(_ context.Context, _ uuid.UUID, pairs []DedupPair) ([]DedupReview, error) {
+	r.calls.Add(1)
+	if r.sleep > 0 {
+		time.Sleep(r.sleep)
+	}
+	out := make([]DedupReview, len(pairs))
+	for i, pair := range pairs {
+		out[i] = DedupReview{
+			Pair:     pair,
+			Decision: r.decision,
+		}
+	}
+	return out, nil
+}
+
+type txMergingMemoryCreator struct {
+	deleteMemoryID *uuid.UUID
+	mergedID       *atomic.Value
+}
+
+func (m txMergingMemoryCreator) Merge(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, memoryA, memoryB repo.Memory) (repo.Memory, error) {
+	content := memoryA.Content + "\n" + memoryB.Content
+	row := tx.QueryRow(ctx, `
+		INSERT INTO memory (
+			organization_id,
+			project_id,
+			project_task_id,
+			agent_id,
+			memory_type,
+			scope,
+			content,
+			content_hash,
+			confidence,
+			utility_score,
+			status,
+			sensitivity,
+			trust_tier,
+			file_backed
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0.85, 0.85, 'active', 'normal', 0.85, false)
+		RETURNING id, organization_id, project_id, project_task_id, agent_id, memory_type, scope, content, content_hash,
+		          embedding::text, confidence, utility_score, extraction_score, status, is_hardened, sensitivity, trust_tier,
+		          file_backed, file_path, file_last_scanned_at, superseded_by, superseded_at, archived_at, created_at, updated_at
+	`, orgID, memoryA.ProjectID, memoryA.ProjectTaskID, memoryA.AgentID, memoryA.MemoryType, memoryA.Scope, content, hashContent(content))
+
+	created, err := scanMemory(row)
+	if err != nil {
+		return repo.Memory{}, err
+	}
+	if m.deleteMemoryID != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM memory WHERE id = $1`, *m.deleteMemoryID); err != nil {
+			return repo.Memory{}, err
+		}
+	}
+	if m.mergedID != nil {
+		m.mergedID.Store(created.ID)
+	}
+	return created, nil
 }
 
 type staticContradictionClassifier struct {

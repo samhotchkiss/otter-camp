@@ -93,15 +93,23 @@ func (d *ContradictionDetector) Check(ctx context.Context, newMemory repo.Memory
 	}()
 
 	newConfidence := clampFloat(newMemory.Confidence-0.1, 0, 1)
-	// Promotion from candidate->active is owned by the extraction pipeline (task 039).
-	// Callers must re-check the stored confidence after Check() and keep the memory as
-	// candidate when confidence drops below 0.2.
-	if _, err := tx.Exec(ctx, `
-		UPDATE memory
-		SET confidence = $2
-		WHERE id = $1
-	`, newMemory.ID, newConfidence); err != nil {
-		return nil, err
+	if keepAsCandidateAfterContradiction(newConfidence) {
+		if _, err := tx.Exec(ctx, `
+			UPDATE memory
+			SET confidence = $2,
+			    status = 'candidate'
+			WHERE id = $1
+		`, newMemory.ID, newConfidence); err != nil {
+			return nil, err
+		}
+	} else {
+		if _, err := tx.Exec(ctx, `
+			UPDATE memory
+			SET confidence = $2
+			WHERE id = $1
+		`, newMemory.ID, newConfidence); err != nil {
+			return nil, err
+		}
 	}
 
 	for _, candidate := range contradictions {
@@ -191,4 +199,8 @@ func (d *ContradictionDetector) prescreenCandidates(ctx context.Context, newMemo
 	}
 	defer rows.Close()
 	return scanMemoryRows(rows)
+}
+
+func keepAsCandidateAfterContradiction(newConfidence float64) bool {
+	return newConfidence < 0.2
 }

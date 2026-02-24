@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
@@ -96,7 +97,7 @@ type DedupReviewer interface {
 }
 
 type DedupMerger interface {
-	Merge(ctx context.Context, orgID uuid.UUID, memoryA, memoryB repo.Memory) (repo.Memory, error)
+	Merge(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, memoryA, memoryB repo.Memory) (repo.Memory, error)
 }
 
 type ContradictionClassifier interface {

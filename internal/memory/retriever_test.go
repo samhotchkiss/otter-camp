@@ -45,6 +45,32 @@ func TestBuildScopeFilterSQLIncludesProjectAndSensitivity(t *testing.T) {
 	}
 }
 
+func TestBuildScopeFilterSQLAgentPrivateRequiresScopeAndAgentID(t *testing.T) {
+	orgID := uuid.New()
+	agentID := uuid.New()
+	req := RetrievalRequest{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+	}
+
+	where, args, err := buildScopeFilterSQL(req, []string{"agent_private"})
+	if err != nil {
+		t.Fatalf("buildScopeFilterSQL: %v", err)
+	}
+	if !strings.Contains(where, "scope = 'agent_private'") {
+		t.Fatalf("where clause missing agent_private scope guard: %s", where)
+	}
+	if !strings.Contains(where, "agent_id = $2") {
+		t.Fatalf("where clause missing agent_id binding: %s", where)
+	}
+	if len(args) != 2 {
+		t.Fatalf("args len = %d, want 2", len(args))
+	}
+	if got := args[1].(uuid.UUID); got != agentID {
+		t.Fatalf("agent arg = %s, want %s", got, agentID)
+	}
+}
+
 func TestRelevanceScoreFormula(t *testing.T) {
 	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
 	createdAt := now.AddDate(0, 0, -30) // episodic half-life boundary => recency score 0.5
