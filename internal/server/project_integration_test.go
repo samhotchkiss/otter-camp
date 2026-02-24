@@ -228,8 +228,32 @@ func TestProjectHTTPFlowTemplateScheduleAndNodes(t *testing.T) {
 	if validSchedule.StatusCode != http.StatusCreated {
 		t.Fatalf("create schedule status = %d, want %d body=%s", validSchedule.StatusCode, http.StatusCreated, string(validSchedule.Body))
 	}
+	scheduleID := jsonPathString(t, validSchedule.Body, "data", "id")
+	if scheduleID == "" {
+		t.Fatalf("missing schedule id body=%s", string(validSchedule.Body))
+	}
 	if !hasJSONPath(validSchedule.Body, "data", "next_fire_at") {
 		t.Fatalf("missing next_fire_at body=%s", string(validSchedule.Body))
+	}
+
+	disabledSchedule := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+projectID+"/schedules/"+scheduleID+"/disable", map[string]any{}, map[string]string{
+		"Authorization": "Bearer " + memberToken,
+	})
+	if disabledSchedule.StatusCode != http.StatusOK {
+		t.Fatalf("disable schedule status = %d, want %d body=%s", disabledSchedule.StatusCode, http.StatusOK, string(disabledSchedule.Body))
+	}
+	if enabled := jsonPathValue(t, disabledSchedule.Body, "data", "enabled"); enabled.(bool) {
+		t.Fatalf("disable response enabled = %v, want false body=%s", enabled, string(disabledSchedule.Body))
+	}
+
+	enabledSchedule := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+projectID+"/schedules/"+scheduleID+"/enable", map[string]any{}, map[string]string{
+		"Authorization": "Bearer " + memberToken,
+	})
+	if enabledSchedule.StatusCode != http.StatusOK {
+		t.Fatalf("enable schedule status = %d, want %d body=%s", enabledSchedule.StatusCode, http.StatusOK, string(enabledSchedule.Body))
+	}
+	if !hasJSONPath(enabledSchedule.Body, "data", "next_run_at") {
+		t.Fatalf("enable response missing next_run_at body=%s", string(enabledSchedule.Body))
 	}
 
 	nodeA := mustJSON(t, http.MethodPost, testServer.URL+"/v1/flow-templates/"+newTemplateID+"/nodes", map[string]any{

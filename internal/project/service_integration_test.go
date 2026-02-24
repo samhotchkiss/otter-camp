@@ -80,9 +80,17 @@ func TestProjectServiceDeleteActiveTasksBlocked(t *testing.T) {
 	ensureProjectTaskTable(t, ctx, pool)
 
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO project_task (project_id, work_status)
-		VALUES ($1, 'in_progress')
-	`, projectID); err != nil {
+		INSERT INTO project_task (
+			organization_id,
+			project_id,
+			task_number,
+			title,
+			work_status,
+			created_by_type,
+			metadata
+		)
+		VALUES ($1, $2, 1, 'active task', 'in_progress', 'system', '{}'::jsonb)
+	`, orgID, projectID); err != nil {
 		t.Fatalf("insert active project_task row: %v", err)
 	}
 
@@ -113,9 +121,18 @@ func TestProjectServiceUpdateFlowTemplateInUseCreatesNewVersion(t *testing.T) {
 	}
 
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO project_task (project_id, flow_template_id, work_status)
-		VALUES ($1, $2, 'in_progress')
-	`, projectID, template.ID); err != nil {
+		INSERT INTO project_task (
+			organization_id,
+			project_id,
+			task_number,
+			title,
+			flow_template_id,
+			work_status,
+			created_by_type,
+			metadata
+		)
+		VALUES ($1, $2, 1, 'active task', $3, 'in_progress', 'system', '{}'::jsonb)
+	`, orgID, projectID, template.ID); err != nil {
 		t.Fatalf("insert in-use project_task row: %v", err)
 	}
 
@@ -247,6 +264,61 @@ func TestProjectServiceCreateListAndDeleteSchedule(t *testing.T) {
 	}
 	if _, err := svc.GetSchedule(ctx, schedule.ID); !errors.Is(err, repo.ErrNotFound) {
 		t.Fatalf("GetSchedule after delete err = %v, want repo.ErrNotFound", err)
+	}
+}
+
+func TestProjectServiceEnableDisableSchedule(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	svc := newIntegrationService(t, pool)
+	orgID, projectID := seedProject(t, ctx, pool)
+
+	template, err := svc.CreateFlowTemplate(ctx, CreateFlowTemplateRequest{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           "schedule-toggle-flow",
+		DisplayName:    "Schedule Toggle Flow",
+		Description:    "toggle",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateFlowTemplate: %v", err)
+	}
+
+	schedule, err := svc.CreateSchedule(ctx, CreateScheduleRequest{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		FlowTemplateID: template.ID,
+		DisplayName:    "Toggle Trigger",
+		CronExpression: "*/5 * * * *",
+		OverlapPolicy:  "skip",
+		IsEnabled:      false,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateSchedule: %v", err)
+	}
+
+	enabled, err := svc.EnableSchedule(ctx, schedule.ID)
+	if err != nil {
+		t.Fatalf("EnableSchedule: %v", err)
+	}
+	if !enabled.IsEnabled {
+		t.Fatalf("enabled flag = false, want true")
+	}
+	if enabled.NextFireAt == nil {
+		t.Fatal("next_fire_at = nil, want value")
+	}
+
+	disabled, err := svc.DisableSchedule(ctx, schedule.ID)
+	if err != nil {
+		t.Fatalf("DisableSchedule: %v", err)
+	}
+	if disabled.IsEnabled {
+		t.Fatalf("enabled flag = true, want false")
+	}
+	if disabled.NextFireAt != nil {
+		t.Fatalf("next_fire_at = %v, want nil", *disabled.NextFireAt)
 	}
 }
 
