@@ -37,6 +37,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/migrate"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
+	"github.com/samhotchkiss/otter-camp/internal/push"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	secretsvc "github.com/samhotchkiss/otter-camp/internal/secret"
 	"github.com/samhotchkiss/otter-camp/internal/server"
@@ -237,6 +238,14 @@ func runServe() int {
 		fmt.Fprintf(os.Stderr, "chat service setup error: %v\n", err)
 		return 1
 	}
+	pushPreferenceRepo := push.NewPreferenceRepository(pool.Raw())
+	pushPreferenceService, err := push.NewPreferenceService(push.PreferenceServiceOptions{
+		Repository: pushPreferenceRepo,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "push preference service setup error: %v\n", err)
+		return 1
+	}
 
 	store, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
 	if err != nil {
@@ -275,6 +284,7 @@ func runServe() int {
 			server.NewProjectRouteRegistrar(projectService),
 			server.NewTaskRouteRegistrar(taskService, flowService, deliveryService, pool.Raw()),
 			server.NewChatRouteRegistrar(chatService, pool.Raw()),
+			server.NewPushRouteRegistrar(pushPreferenceService, pushPreferenceRepo),
 			server.NewCapabilityPolicyRouteRegistrar(server.CapabilityPolicyRouteOptions{
 				Policies:      policyRepo,
 				Projects:      repo.NewProjectRepo(pool.Raw()),

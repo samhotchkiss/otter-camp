@@ -11,6 +11,8 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/db"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
+	"github.com/samhotchkiss/otter-camp/internal/push"
+	"github.com/samhotchkiss/otter-camp/internal/push/adapters"
 	"github.com/samhotchkiss/otter-camp/internal/scheduling"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 )
@@ -76,6 +78,31 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	if err != nil {
 		return fmt.Errorf("worker supervisor setup: %w", err)
 	}
+
+	pushRepo := push.NewPreferenceRepository(pool.Raw())
+	pushService, err := push.NewPreferenceService(push.PreferenceServiceOptions{
+		Repository: pushRepo,
+	})
+	if err != nil {
+		return fmt.Errorf("worker push preference service setup: %w", err)
+	}
+	pushAdapter := adapters.NewMultiAdapter(
+		adapters.NewAPNSAdapter(logger),
+		adapters.NewFCMAdapter(logger),
+	)
+	pushConsumer, err := push.NewDeliveryConsumer(push.DeliveryConsumerOptions{
+		Pool:        pool.Raw(),
+		Logger:      logger,
+		Preferences: pushService,
+		Tokens:      pushRepo,
+		Adapter:     pushAdapter,
+	})
+	if err != nil {
+		return fmt.Errorf("worker push delivery consumer setup: %w", err)
+	}
+	bus.Subscribe("push.delivery.consumer", nil, func(ctx context.Context, event eventbus.DomainEvent) error {
+		return pushConsumer.Consume(ctx, event)
+	})
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
