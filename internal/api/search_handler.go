@@ -16,19 +16,17 @@ import (
 )
 
 const (
-	searchTypeProject      = "project"
-	searchTypeTask         = "task"
-	searchTypeAgent        = "agent"
-	searchTypeSession      = "session"
-	searchTypeFlowTemplate = "flow_template"
+	searchTypeProject = "project"
+	searchTypeTask    = "task"
+	searchTypeAgent   = "agent"
+	searchTypeSession = "session"
 )
 
 var validSearchTypes = map[string]struct{}{
-	searchTypeProject:      {},
-	searchTypeTask:         {},
-	searchTypeAgent:        {},
-	searchTypeSession:      {},
-	searchTypeFlowTemplate: {},
+	searchTypeProject: {},
+	searchTypeTask:    {},
+	searchTypeAgent:   {},
+	searchTypeSession: {},
 }
 
 type SearchHandler struct {
@@ -148,8 +146,6 @@ func (h SearchHandler) searchType(ctx context.Context, organizationID, pattern s
 		return h.searchAgents(ctx, organizationID, pattern, limit)
 	case searchTypeSession:
 		return h.searchSessions(ctx, organizationID, pattern, limit)
-	case searchTypeFlowTemplate:
-		return h.searchFlowTemplates(ctx, organizationID, pattern, limit)
 	default:
 		return nil, fmt.Errorf("unsupported search type %q", typeName)
 	}
@@ -224,24 +220,6 @@ func (h SearchHandler) searchSessions(ctx context.Context, organizationID, patte
 	return scanSearchRows(rows, searchTypeSession, "/v1/chat-sessions/")
 }
 
-func (h SearchHandler) searchFlowTemplates(ctx context.Context, organizationID, pattern string, limit int) ([]SearchResult, error) {
-	rows, err := h.pool.Query(ctx, `
-		SELECT ft.id::text, ft.name
-		FROM flow_template ft
-		LEFT JOIN project p ON p.id = ft.project_id
-		WHERE (ft.organization_id = $1 OR p.organization_id = $1)
-		  AND ft.name ILIKE $2
-		ORDER BY ft.created_at DESC, ft.id DESC
-		LIMIT $3
-	`, organizationID, pattern, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	return scanSearchRows(rows, searchTypeFlowTemplate, "/v1/flow-templates/")
-}
-
 func scanSearchRows(rows pgx.Rows, typeName, urlPrefix string) ([]SearchResult, error) {
 	results := make([]SearchResult, 0)
 	for rows.Next() {
@@ -290,7 +268,6 @@ func parseSearchTypes(rawValues []string) ([]string, error) {
 			searchTypeTask,
 			searchTypeAgent,
 			searchTypeSession,
-			searchTypeFlowTemplate,
 		}, nil
 	}
 
@@ -320,7 +297,6 @@ func parseSearchTypes(rawValues []string) ([]string, error) {
 			searchTypeTask,
 			searchTypeAgent,
 			searchTypeSession,
-			searchTypeFlowTemplate,
 		}, nil
 	}
 

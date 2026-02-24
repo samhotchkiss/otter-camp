@@ -5,7 +5,6 @@ CREATE TABLE project (
     display_name text NOT NULL,
     description text NOT NULL DEFAULT '',
     delivery_mode text NOT NULL DEFAULT 'gated' CHECK (delivery_mode IN ('continuous', 'gated', 'scheduled')),
-    default_branch text NOT NULL DEFAULT 'main',
     deploy_flow_template_id uuid,
     settings jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_by_type text NOT NULL CHECK (created_by_type IN ('human_user', 'agent', 'system')),
