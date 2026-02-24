@@ -44,6 +44,9 @@ func Auth(opts AuthOptions) func(http.Handler) http.Handler {
 					}
 
 					ctx := withSessionPrincipal(r.Context(), login.Session, AuthMethodLocal)
+					if login.Session != nil {
+						ctx = api.WithOrganizationID(ctx, login.Session.OrganizationID)
+					}
 					ctx = WithSessionToken(ctx, login.SessionToken)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					refreshSessionAsync(opts.Service, logger, login.SessionToken, requestIDFromContext(r.Context()))
@@ -63,6 +66,9 @@ func Auth(opts AuthOptions) func(http.Handler) http.Handler {
 				}
 
 				ctx := withSessionPrincipal(r.Context(), sessionInfo, AuthMethodSession)
+				if sessionInfo != nil {
+					ctx = api.WithOrganizationID(ctx, sessionInfo.OrganizationID)
+				}
 				ctx = WithSessionToken(ctx, bearerToken)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				refreshSessionAsync(opts.Service, logger, bearerToken, requestIDFromContext(r.Context()))
@@ -85,6 +91,7 @@ func Auth(opts AuthOptions) func(http.Handler) http.Handler {
 				AuthMethod:     AuthMethodAPIKey,
 				APIKey:         keyInfo,
 			})
+			ctx = api.WithOrganizationID(ctx, keyInfo.OrganizationID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

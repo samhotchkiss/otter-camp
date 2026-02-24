@@ -30,7 +30,11 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/worker"
 )
 
-var version = "dev"
+var (
+	version = "dev"
+	commit  = "unknown"
+	builtAt = "unknown"
+)
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -105,8 +109,11 @@ func runServe() int {
 
 	handler := server.NewHandlerWithOptions(server.HandlerOptions{
 		Version:     version,
+		Commit:      commit,
+		BuiltAt:     builtAt,
 		Logger:      logger,
 		AuthService: authService,
+		Pool:        pool.Raw(),
 	})
 
 	signalCh := make(chan os.Signal, 1)
