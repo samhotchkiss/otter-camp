@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -9,31 +10,50 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
-func TestRegisterStepReplacesCreateStarterTrioStub(t *testing.T) {
-	b := NewBootstrapper()
+func TestRegisterStepReplacesStep7AliasAndPreservesOrder(t *testing.T) {
+	b := NewBootstrapper(Options{DisableDefaultStep: true})
 
-	called := 0
+	order := []string{}
+	b.RegisterStep("one", func(context.Context, *State) error {
+		order = append(order, "one")
+		return nil
+	})
 	b.RegisterStep("create-starter-trio", func(context.Context, *State) error {
-		called++
+		order = append(order, "stub")
+		return nil
+	})
+	b.RegisterStep("three", func(context.Context, *State) error {
+		order = append(order, "three")
+		return nil
+	})
+	b.RegisterStep("create-agents", func(context.Context, *State) error {
+		order = append(order, "replacement")
 		return nil
 	})
 
-	err := b.Run(context.Background(), &State{OrganizationID: uuid.New()})
-	if err != nil {
+	if err := b.Run(context.Background()); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if called != 1 {
-		t.Fatalf("replacement step called %d times, want 1", called)
+
+	got := strings.Join(order, ",")
+	want := "one,replacement,three"
+	if got != want {
+		t.Fatalf("step execution order = %q, want %q", got, want)
+	}
+
+	names := strings.Join(b.StepNames(), ",")
+	if names != "one,create-starter-trio,three" {
+		t.Fatalf("step names = %q, want %q", names, "one,create-starter-trio,three")
 	}
 }
 
 func TestRunRecoversStepPanic(t *testing.T) {
-	b := NewBootstrapper()
-	b.RegisterStep("create-starter-trio", func(context.Context, *State) error {
+	b := NewBootstrapper(Options{DisableDefaultStep: true})
+	b.RegisterStep("panic-step", func(context.Context, *State) error {
 		panic("boom")
 	})
 
-	err := b.Run(context.Background(), &State{OrganizationID: uuid.New()})
+	err := b.Run(context.Background())
 	if err == nil {
 		t.Fatal("expected error from panic recovery")
 	}
@@ -42,18 +62,41 @@ func TestRunRecoversStepPanic(t *testing.T) {
 	}
 }
 
-func TestMissingStarterTrioIdempotencySelection(t *testing.T) {
-	existing := []repo.Agent{
-		{DisplayName: "Frank", IsStarterTrio: true},
-		{DisplayName: "Lori", IsStarterTrio: true},
-		{DisplayName: "Worker Temp", IsStarterTrio: false},
+func TestProfileNeedsRotation(t *testing.T) {
+	base := repo.ModelProfile{
+		ProviderID:          uuid.New(),
+		ModelName:           "model-a",
+		ContextWindowTokens: 1000,
+		MaxOutputTokens:     100,
+		SupportsStreaming:   true,
+		SupportsVision:      false,
+		InvocationPurpose:   "agent_turn",
 	}
 
-	missing := missingStarterTrio(existing)
-	if len(missing) != 1 {
-		t.Fatalf("missing starter trio count = %d, want 1", len(missing))
+	if profileNeedsRotation(base, base) {
+		t.Fatal("expected no rotation when profile matches")
 	}
-	if missing[0].displayName != "Ellie" {
-		t.Fatalf("missing starter trio display name = %q, want %q", missing[0].displayName, "Ellie")
+
+	next := base
+	next.ModelName = "model-b"
+	if !profileNeedsRotation(base, next) {
+		t.Fatal("expected rotation when model name changes")
+	}
+}
+
+func TestNormalizeStepNameAlias(t *testing.T) {
+	if got := normalizeStepName("create-agents"); got != "create-starter-trio" {
+		t.Fatalf("normalized step name = %q, want %q", got, "create-starter-trio")
+	}
+}
+
+func TestSkippedError(t *testing.T) {
+	err := skipped("already bootstrapped")
+	var skipErr skipStep
+	if !errors.As(err, &skipErr) {
+		t.Fatalf("expected skipStep error, got %T", err)
+	}
+	if skipErr.Reason() != "already bootstrapped" {
+		t.Fatalf("skip reason = %q, want %q", skipErr.Reason(), "already bootstrapped")
 	}
 }
