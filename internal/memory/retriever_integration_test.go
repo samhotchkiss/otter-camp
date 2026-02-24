@@ -305,6 +305,104 @@ func TestRetrieverTaxonomySubtreeFilter(t *testing.T) {
 	}
 }
 
+func TestRetrieverTaxonomySubtreeFilterFallbackWhenFewResults(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org, agent := seedOrgAndAgent(t, ctx, pool, []string{"org"})
+	memoryRepo := repo.NewMemoryRepo(pool)
+	taxonomyRepo := repo.NewMemoryTaxonomyNodeRepo(pool)
+	tagRepo := repo.NewMemoryTaxonomyTagRepo(pool)
+
+	workflow, err := taxonomyRepo.Create(ctx, repo.MemoryTaxonomyNode{
+		OrganizationID: org.ID,
+		Slug:           "workflow",
+		DisplayName:    "workflow",
+	})
+	if err != nil {
+		t.Fatalf("create workflow root: %v", err)
+	}
+	workflowGit, err := taxonomyRepo.Create(ctx, repo.MemoryTaxonomyNode{
+		OrganizationID: org.ID,
+		ParentID:       &workflow.ID,
+		Slug:           "workflow.git",
+		DisplayName:    "workflow git",
+	})
+	if err != nil {
+		t.Fatalf("create workflow child: %v", err)
+	}
+
+	makeMemory := func(content string, signal float32) repo.Memory {
+		memory, createErr := memoryRepo.Create(ctx, repo.Memory{
+			OrganizationID: org.ID,
+			MemoryType:     "semantic",
+			Scope:          "org",
+			Content:        content,
+			ContentHash:    hashContent(content),
+			Embedding:      embeddingWithSignal(signal),
+			Status:         "active",
+			Sensitivity:    "normal",
+			Confidence:     0.8,
+		})
+		if createErr != nil {
+			t.Fatalf("create memory %s: %v", content, createErr)
+		}
+		return memory
+	}
+
+	workflowA := makeMemory("workflow git conventions", 8)
+	workflowB := makeMemory("workflow release checklist", 9)
+	untaggedA := makeMemory("customer preference notes", 10)
+	untaggedB := makeMemory("agent reminder notes", 11)
+
+	for _, item := range []repo.Memory{workflowA, workflowB} {
+		if _, err := tagRepo.Create(ctx, repo.MemoryTaxonomyTag{
+			MemoryID:       item.ID,
+			TaxonomyNodeID: workflowGit.ID,
+			AssignedBy:     "manual",
+			Confidence:     1,
+		}); err != nil {
+			t.Fatalf("tag workflow memory: %v", err)
+		}
+	}
+
+	retriever, err := NewRetriever(RetrieverOptions{
+		Pool:     pool,
+		Embedder: staticEmbedder{vector: embeddingWithSignal(12)},
+	})
+	if err != nil {
+		t.Fatalf("NewRetriever: %v", err)
+	}
+
+	result, err := retriever.Query(ctx, RetrievalRequest{
+		OrganizationID: org.ID,
+		AgentID:        &agent.ID,
+		Query:          "workflow",
+		Mode:           RetrievalModePassive,
+		MaxResults:     10,
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if !result.FallbackUsed {
+		t.Fatal("expected fallback to full stage-1 corpus when taxonomy filter returned fewer than 3 memories")
+	}
+	if len(result.Memories) < 3 {
+		t.Fatalf("result len = %d, want >= 3 after fallback", len(result.Memories))
+	}
+
+	foundUntagged := false
+	for _, item := range result.Memories {
+		if item.Memory.ID == untaggedA.ID || item.Memory.ID == untaggedB.ID {
+			foundUntagged = true
+			break
+		}
+	}
+	if !foundUntagged {
+		t.Fatal("expected at least one untagged memory in fallback result set")
+	}
+}
+
 func TestEntitySynthesizerTriggerFromMentions(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
