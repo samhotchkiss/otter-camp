@@ -185,6 +185,7 @@ func runServe() int {
 				repo.NewAgentProjectAssignmentRepo(pool.Raw()),
 				repo.NewAgentSkillAttachmentRepo(pool.Raw()),
 			),
+			server.NewMCPRouteRegistrar(mcpService, repo.NewMCPToolCatalogRepo(pool.Raw())),
 		},
 		TestMode:     cfg.Mode == config.ModeTest,
 		TestResetter: resetter,

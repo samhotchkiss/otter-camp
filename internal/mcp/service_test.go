@@ -540,6 +540,18 @@ type fakeBindingRepo struct {
 	rows map[uuid.UUID][]repo.MCPSecretBinding
 }
 
+func (f *fakeBindingRepo) Create(_ context.Context, binding repo.MCPSecretBinding) (repo.MCPSecretBinding, error) {
+	if f.rows == nil {
+		f.rows = make(map[uuid.UUID][]repo.MCPSecretBinding)
+	}
+	created := binding
+	if created.ID == uuid.Nil {
+		created.ID = uuid.New()
+	}
+	f.rows[created.ConnectionID] = append(f.rows[created.ConnectionID], created)
+	return created, nil
+}
+
 func (f *fakeBindingRepo) GetByConnection(_ context.Context, connectionID uuid.UUID) ([]repo.MCPSecretBinding, error) {
 	if f.rows == nil {
 		return nil, nil
