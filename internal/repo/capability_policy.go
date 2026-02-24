@@ -28,6 +28,13 @@ type CapabilityPolicy struct {
 	UpdatedAt      time.Time
 }
 
+type CapabilityPolicyFilters struct {
+	PolicyLayer *string
+	Capability  *string
+	ProjectID   *uuid.UUID
+	AgentID     *uuid.UUID
+}
+
 type CapabilityPolicyRepo struct {
 	pool *pgxpool.Pool
 }
@@ -243,6 +250,65 @@ func (r *CapabilityPolicyRepo) ListForEvaluation(ctx context.Context, orgID uuid
 	return policies, nil
 }
 
+func (r *CapabilityPolicyRepo) ListByOrganization(ctx context.Context, organizationID uuid.UUID, filters CapabilityPolicyFilters) ([]CapabilityPolicy, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT
+			cp.id,
+			cp.policy_layer,
+			cp.organization_id,
+			cp.project_id,
+			cp.agent_id,
+			cp.capability,
+			cp.effect,
+			cp.conditions,
+			cp.priority,
+			cp.created_by_type,
+			cp.created_by_id,
+			cp.created_at,
+			cp.updated_at
+		FROM capability_policy cp
+		LEFT JOIN project p ON cp.project_id = p.id
+		LEFT JOIN agent a ON cp.agent_id = a.id
+		WHERE (
+			cp.policy_layer = 'instance'
+			OR (cp.policy_layer = 'org' AND cp.organization_id = $1)
+			OR (cp.policy_layer = 'project' AND p.organization_id = $1)
+			OR (cp.policy_layer = 'agent_profile' AND a.organization_id = $1)
+			OR (cp.policy_layer = 'request' AND cp.organization_id = $1)
+		)
+		  AND ($2::text = '' OR cp.policy_layer = $2)
+		  AND ($2::text <> '' OR cp.policy_layer <> 'request')
+		  AND ($3::text = '' OR cp.capability = $3)
+		  AND ($4::uuid IS NULL OR cp.project_id = $4)
+		  AND ($5::uuid IS NULL OR cp.agent_id = $5)
+		ORDER BY cp.created_at DESC, cp.id DESC
+	`,
+		organizationID,
+		normalizeFilterText(filters.PolicyLayer),
+		normalizeFilterText(filters.Capability),
+		filters.ProjectID,
+		filters.AgentID,
+	)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	policies := make([]CapabilityPolicy, 0)
+	for rows.Next() {
+		item, scanErr := scanCapabilityPolicy(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		policies = append(policies, item)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+
+	return policies, nil
+}
+
 func (r *CapabilityPolicyRepo) Update(ctx context.Context, policy CapabilityPolicy) (CapabilityPolicy, error) {
 	row := r.pool.QueryRow(ctx, `
 		UPDATE capability_policy
@@ -341,4 +407,11 @@ func defaultPolicyPriority(priority int) int {
 		return 100
 	}
 	return priority
+}
+
+func normalizeFilterText(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }

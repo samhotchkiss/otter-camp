@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
+	"github.com/samhotchkiss/otter-camp/internal/audit"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
@@ -26,6 +27,7 @@ import (
 	oclog "github.com/samhotchkiss/otter-camp/internal/log"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/migrate"
+	"github.com/samhotchkiss/otter-camp/internal/policy"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	secretsvc "github.com/samhotchkiss/otter-camp/internal/secret"
@@ -95,8 +97,6 @@ func runServe() int {
 		return 1
 	}
 
-	_ = clock.New(cfg.Mode)
-
 	pool, err := db.NewFromEnv(context.Background())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "database config error: %v\n", err)
@@ -132,6 +132,21 @@ func runServe() int {
 
 	if err := mcp.RegisterNativeToolDefinitions(context.Background(), repo.NewToolDefinitionRepo(pool.Raw())); err != nil {
 		fmt.Fprintf(os.Stderr, "mcp tool registration error: %v\n", err)
+		return 1
+	}
+
+	auditRecorder := audit.NewService(repo.NewAuditEventRepo(pool.Raw()), logger)
+	policyRepo := repo.NewCapabilityPolicyRepo(pool.Raw())
+	policyEvaluator, err := policy.NewPolicyEvaluator(policy.EvaluatorOptions{
+		Policies: policyRepo,
+		Clock:    clock.New(cfg.Mode),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "policy evaluator setup error: %v\n", err)
+		return 1
+	}
+	if err := policyEvaluator.LoadInstancePolicies(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "policy evaluator load instance policies error: %v\n", err)
 		return 1
 	}
 
@@ -196,6 +211,14 @@ func runServe() int {
 			),
 			server.NewMCPRouteRegistrar(mcpService, repo.NewMCPToolCatalogRepo(pool.Raw())),
 			server.NewProjectRouteRegistrar(projectService),
+			server.NewCapabilityPolicyRouteRegistrar(server.CapabilityPolicyRouteOptions{
+				Policies:      policyRepo,
+				Projects:      repo.NewProjectRepo(pool.Raw()),
+				Agents:        repo.NewAgentRepo(pool.Raw()),
+				Evaluator:     policyEvaluator,
+				AuditRecorder: auditRecorder,
+				BootstrapMode: strings.EqualFold(strings.TrimSpace(os.Getenv("OTTERCAMP_BOOTSTRAP_MODE")), "true"),
+			}),
 		},
 		TestMode:     cfg.Mode == config.ModeTest,
 		TestResetter: resetter,

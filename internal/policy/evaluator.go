@@ -31,6 +31,20 @@ type PolicyDecision struct {
 	Conditions map[string]any
 }
 
+type PolicyTraceEntry struct {
+	Layer         string
+	Effect        string
+	MatchedRuleID *uuid.UUID
+	Reason        string
+}
+
+type layerEvaluation struct {
+	decision      PolicyDecision
+	matched       bool
+	matchedRuleID *uuid.UUID
+	reason        string
+}
+
 type CapabilityPolicyRepository interface {
 	ListByLayer(ctx context.Context, layer string, capability string, organizationID, projectID, agentID *uuid.UUID) ([]repo.CapabilityPolicy, error)
 }
@@ -102,77 +116,120 @@ func (e *PolicyEvaluator) LoadInstancePolicies(ctx context.Context) error {
 }
 
 func (e *PolicyEvaluator) Evaluate(ctx context.Context, req EvaluationRequest) PolicyDecision {
+	decision, _ := e.evaluateInternal(ctx, req, false)
+	return decision
+}
+
+func (e *PolicyEvaluator) EvaluateWithTrace(ctx context.Context, req EvaluationRequest) (PolicyDecision, []PolicyTraceEntry) {
+	return e.evaluateInternal(ctx, req, true)
+}
+
+func (e *PolicyEvaluator) evaluateInternal(ctx context.Context, req EvaluationRequest, collectTrace bool) (PolicyDecision, []PolicyTraceEntry) {
 	capability := strings.TrimSpace(req.Capability)
 	if capability == "" {
 		return PolicyDecision{
 			Effect: "allow",
 			Layer:  "none",
 			Reason: "silence passes",
-		}
+		}, buildEmptyTrace(collectTrace)
 	}
 
+	trace := make([]PolicyTraceEntry, 0, 5)
+	var denyDecision *PolicyDecision
 	var allowDecision *PolicyDecision
-	consider := func(decision PolicyDecision, ok bool) *PolicyDecision {
-		if !ok {
-			return nil
+	recordLayer := func(layer string, evaluation layerEvaluation) {
+		if !collectTrace {
+			return
 		}
-		if decision.Effect == "deny" {
-			return &decision
+		effect := "none"
+		reason := evaluation.reason
+		if reason == "" {
+			reason = "no matching policy"
 		}
+		if evaluation.matched {
+			effect = evaluation.decision.Effect
+			reason = evaluation.decision.Reason
+		}
+		trace = append(trace, PolicyTraceEntry{
+			Layer:         layer,
+			Effect:        effect,
+			MatchedRuleID: evaluation.matchedRuleID,
+			Reason:        reason,
+		})
+	}
+	consider := func(evaluation layerEvaluation) {
+		if !evaluation.matched {
+			return
+		}
+		if evaluation.decision.Effect == "deny" {
+			if denyDecision == nil {
+				decision := evaluation.decision
+				denyDecision = &decision
+			}
+			return
+		}
+		decision := evaluation.decision
 		allowDecision = &decision
-		return nil
 	}
 
 	instance := e.instancePolicies(capability)
-	if matched := consider(evaluateLayer("instance", instance, req.Context)); matched != nil {
-		return *matched
-	}
+	instanceEval := evaluateLayer("instance", instance, req.Context)
+	recordLayer("instance", instanceEval)
+	consider(instanceEval)
 
 	orgPolicies, err := e.cachedOrgPolicies(ctx, req.OrganizationID, capability)
 	if err != nil {
-		return errorDecision(err)
+		return errorDecision(err), traceWithError(collectTrace, trace, "org", err)
 	}
-	if matched := consider(evaluateLayer("org", orgPolicies, req.Context)); matched != nil {
-		return *matched
-	}
+	orgEval := evaluateLayer("org", orgPolicies, req.Context)
+	recordLayer("org", orgEval)
+	consider(orgEval)
 
 	if req.ProjectID != nil {
 		projectPolicies, cacheErr := e.cachedProjectPolicies(ctx, *req.ProjectID, req.OrganizationID, capability)
 		if cacheErr != nil {
-			return errorDecision(cacheErr)
+			return errorDecision(cacheErr), traceWithError(collectTrace, trace, "project", cacheErr)
 		}
-		if matched := consider(evaluateLayer("project", projectPolicies, req.Context)); matched != nil {
-			return *matched
-		}
+		projectEval := evaluateLayer("project", projectPolicies, req.Context)
+		recordLayer("project", projectEval)
+		consider(projectEval)
+	} else {
+		recordLayer("project", layerEvaluation{reason: "layer not applicable"})
 	}
 
 	if req.AgentID != nil {
 		agentPolicies, cacheErr := e.cachedAgentPolicies(ctx, *req.AgentID, req.OrganizationID, capability)
 		if cacheErr != nil {
-			return errorDecision(cacheErr)
+			return errorDecision(cacheErr), traceWithError(collectTrace, trace, "agent_profile", cacheErr)
 		}
-		if matched := consider(evaluateLayer("agent_profile", agentPolicies, req.Context)); matched != nil {
-			return *matched
-		}
+		agentEval := evaluateLayer("agent_profile", agentPolicies, req.Context)
+		recordLayer("agent_profile", agentEval)
+		consider(agentEval)
+	} else {
+		recordLayer("agent_profile", layerEvaluation{reason: "layer not applicable"})
 	}
 
 	requestPolicies, err := e.policies.ListByLayer(ctx, "request", capability, &req.OrganizationID, req.ProjectID, req.AgentID)
 	if err != nil {
-		return errorDecision(err)
+		return errorDecision(err), traceWithError(collectTrace, trace, "request", err)
 	}
-	if matched := consider(evaluateLayer("request", requestPolicies, req.Context)); matched != nil {
-		return *matched
+	requestEval := evaluateLayer("request", requestPolicies, req.Context)
+	recordLayer("request", requestEval)
+	consider(requestEval)
+
+	if denyDecision != nil {
+		return *denyDecision, trace
 	}
 
 	if allowDecision != nil {
-		return *allowDecision
+		return *allowDecision, trace
 	}
 
 	return PolicyDecision{
 		Effect: "allow",
 		Layer:  "none",
 		Reason: "silence passes",
-	}
+	}, trace
 }
 
 func (e *PolicyEvaluator) CheckBudgetGate(ctx context.Context, orgID uuid.UUID, projectID *uuid.UUID, agentID *uuid.UUID) (allowed bool, reason string) {
@@ -206,6 +263,17 @@ func (e *PolicyEvaluator) InvalidateProjectCache(projectID uuid.UUID) {
 func (e *PolicyEvaluator) InvalidateAgentCache(agentID uuid.UUID) {
 	prefix := agentID.String() + "|"
 	deleteByPrefix(&e.agentProfileCache, prefix)
+}
+
+func (e *PolicyEvaluator) InvalidateCache(orgID uuid.UUID, capability string) {
+	capability = strings.TrimSpace(capability)
+	if capability == "" {
+		e.InvalidateOrgCache(orgID)
+		return
+	}
+	e.orgCache.Delete(orgID.String() + "|" + capability)
+	deleteBySuffix(&e.projectCache, "|"+capability)
+	deleteBySuffix(&e.agentProfileCache, "|"+capability)
 }
 
 func (e *PolicyEvaluator) instancePolicies(capability string) []repo.CapabilityPolicy {
@@ -261,37 +329,50 @@ func (e *PolicyEvaluator) cachedAgentPolicies(ctx context.Context, agentID uuid.
 	return clonePolicies(fresh), nil
 }
 
-func evaluateLayer(layer string, policies []repo.CapabilityPolicy, evalContext map[string]any) (PolicyDecision, bool) {
+func evaluateLayer(layer string, policies []repo.CapabilityPolicy, evalContext map[string]any) layerEvaluation {
 	if len(policies) == 0 {
-		return PolicyDecision{}, false
+		return layerEvaluation{reason: "no matching policy"}
 	}
 
 	for _, policyRow := range policies {
 		if strings.EqualFold(policyRow.Effect, "deny") {
-			return PolicyDecision{
-				Effect: "deny",
-				Layer:  layer,
-				Reason: "denied by policy",
-			}, true
+			return layerEvaluation{
+				decision: PolicyDecision{
+					Effect: "deny",
+					Layer:  layer,
+					Reason: "denied by policy",
+				},
+				matched:       true,
+				matchedRuleID: pointerToUUID(policyRow.ID),
+			}
 		}
 	}
 
+	conditionsFailed := false
 	for _, policyRow := range policies {
 		if !strings.EqualFold(policyRow.Effect, "allow") {
 			continue
 		}
 		conditions := decodeConditions(policyRow.Conditions)
 		if conditionsSatisfied(conditions, evalContext) {
-			return PolicyDecision{
-				Effect:     "allow",
-				Layer:      layer,
-				Reason:     "allowed by policy",
-				Conditions: conditions,
-			}, true
+			return layerEvaluation{
+				decision: PolicyDecision{
+					Effect:     "allow",
+					Layer:      layer,
+					Reason:     "allowed by policy",
+					Conditions: conditions,
+				},
+				matched:       true,
+				matchedRuleID: pointerToUUID(policyRow.ID),
+			}
 		}
+		conditionsFailed = true
 	}
 
-	return PolicyDecision{}, false
+	if conditionsFailed {
+		return layerEvaluation{reason: "allow conditions not satisfied"}
+	}
+	return layerEvaluation{reason: "no matching policy"}
 }
 
 func errorDecision(err error) PolicyDecision {
@@ -407,6 +488,68 @@ func deleteByPrefix(store *sync.Map, prefix string) {
 		}
 		return true
 	})
+}
+
+func deleteBySuffix(store *sync.Map, suffix string) {
+	store.Range(func(key, _ any) bool {
+		keyText, ok := key.(string)
+		if ok && strings.HasSuffix(keyText, suffix) {
+			store.Delete(key)
+		}
+		return true
+	})
+}
+
+func pointerToUUID(value uuid.UUID) *uuid.UUID {
+	if value == uuid.Nil {
+		return nil
+	}
+	copied := value
+	return &copied
+}
+
+func buildEmptyTrace(enabled bool) []PolicyTraceEntry {
+	if !enabled {
+		return nil
+	}
+	return []PolicyTraceEntry{
+		{Layer: "instance", Effect: "none", Reason: "capability is required"},
+		{Layer: "org", Effect: "none", Reason: "capability is required"},
+		{Layer: "project", Effect: "none", Reason: "capability is required"},
+		{Layer: "agent_profile", Effect: "none", Reason: "capability is required"},
+		{Layer: "request", Effect: "none", Reason: "capability is required"},
+	}
+}
+
+func traceWithError(enabled bool, trace []PolicyTraceEntry, layer string, err error) []PolicyTraceEntry {
+	if !enabled {
+		return nil
+	}
+	trace = append(trace, PolicyTraceEntry{
+		Layer:  layer,
+		Effect: "error",
+		Reason: fmt.Sprintf("policy evaluation failed: %v", err),
+	})
+	for _, name := range []string{"instance", "org", "project", "agent_profile", "request"} {
+		if hasTraceLayer(trace, name) {
+			continue
+		}
+		trace = append(trace, PolicyTraceEntry{
+			Layer:  name,
+			Effect: "none",
+			Reason: "evaluation skipped due earlier error",
+		})
+	}
+	return trace
+}
+
+func hasTraceLayer(trace []PolicyTraceEntry, layer string) bool {
+	for _, item := range trace {
+		if item.Layer == layer {
+			return true
+		}
+	}
+	return false
 }
 
 func clonePolicies(in []repo.CapabilityPolicy) []repo.CapabilityPolicy {
