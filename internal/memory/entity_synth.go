@@ -49,11 +49,20 @@ func (s *EntitySynthesizer) SynthesizeProfile(ctx context.Context, entityID uuid
 	if err != nil {
 		return nil, err
 	}
+
+	mentionCount, err := s.countMentions(ctx, entityID)
+	if err != nil {
+		return nil, err
+	}
+	if mentionCount < 5 {
+		return nil, nil
+	}
+
 	memories, err := s.listActiveMemoriesForEntity(ctx, entityID)
 	if err != nil {
 		return nil, err
 	}
-	if len(memories) < 5 {
+	if len(memories) == 0 {
 		return nil, nil
 	}
 
@@ -187,6 +196,18 @@ func (s *EntitySynthesizer) getEntity(ctx context.Context, entityID uuid.UUID) (
 		return repo.MemoryEntity{}, err
 	}
 	return entity, nil
+}
+
+func (s *EntitySynthesizer) countMentions(ctx context.Context, entityID uuid.UUID) (int, error) {
+	var count int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM memory_entity_mention
+		WHERE entity_id = $1
+	`, entityID).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (s *EntitySynthesizer) listActiveMemoriesForEntity(ctx context.Context, entityID uuid.UUID) ([]repo.Memory, error) {

@@ -93,6 +93,9 @@ func (d *ContradictionDetector) Check(ctx context.Context, newMemory repo.Memory
 	}()
 
 	newConfidence := clampFloat(newMemory.Confidence-0.1, 0, 1)
+	// Promotion from candidate->active is owned by the extraction pipeline (task 039).
+	// Callers must re-check the stored confidence after Check() and keep the memory as
+	// candidate when confidence drops below 0.2.
 	if _, err := tx.Exec(ctx, `
 		UPDATE memory
 		SET confidence = $2

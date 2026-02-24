@@ -16,7 +16,7 @@ func relevanceScore(cosineSimilarity float64, createdAt time.Time, memoryType st
 	recency := recencyScore(createdAt, memoryType, now)
 	return (relevanceWeightCosine * cosineSimilarity) +
 		(relevanceWeightRecency * recency) +
-		(relevanceWeightConfidence * clampFloat(confidence, 0, 1))
+		(relevanceWeightConfidence * clampRelevanceFloat(confidence, 0, 1))
 }
 
 func recencyScore(createdAt time.Time, memoryType string, now time.Time) float64 {
@@ -71,7 +71,7 @@ func cosineSimilarity(queryEmbedding, memoryEmbedding []float32) float64 {
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
-func clampFloat(value, min, max float64) float64 {
+func clampRelevanceFloat(value, min, max float64) float64 {
 	if value < min {
 		return min
 	}

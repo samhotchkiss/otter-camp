@@ -379,6 +379,77 @@ func TestEntitySynthesizerTriggerFromMentions(t *testing.T) {
 	}
 }
 
+func TestEntitySynthesizerTriggerFromMentionCountWithInactiveSources(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org, _ := seedOrgAndAgent(t, ctx, pool, []string{"org"})
+	entityRepo := repo.NewMemoryEntityRepo(pool)
+	memoryRepo := repo.NewMemoryRepo(pool)
+	mentionRepo := repo.NewMemoryEntityMentionRepo(pool)
+
+	entity, err := entityRepo.Create(ctx, repo.MemoryEntity{
+		OrganizationID: org.ID,
+		CanonicalName:  "Acme Ltd",
+		EntityType:     "organization",
+	})
+	if err != nil {
+		t.Fatalf("create entity: %v", err)
+	}
+
+	for i := 0; i < 5; i++ {
+		status := "active"
+		if i >= 2 {
+			status = "superseded"
+		}
+		memory, createErr := memoryRepo.Create(ctx, repo.Memory{
+			OrganizationID: org.ID,
+			MemoryType:     "semantic",
+			Scope:          "org",
+			Content:        fmt.Sprintf("entity mention memory %d", i),
+			ContentHash:    fmt.Sprintf("entity-mention-hash-%d", i),
+			Embedding:      embeddingWithSignal(float32(i + 11)),
+			Status:         status,
+			Sensitivity:    "normal",
+			Confidence:     0.9,
+		})
+		if createErr != nil {
+			t.Fatalf("create mention memory %d: %v", i, createErr)
+		}
+		if _, mentionErr := mentionRepo.Create(ctx, repo.MemoryEntityMention{
+			MemoryID:    memory.ID,
+			EntityID:    entity.ID,
+			MentionText: "Acme Ltd",
+			Confidence:  1,
+		}); mentionErr != nil {
+			t.Fatalf("create mention %d: %v", i, mentionErr)
+		}
+	}
+
+	seenActiveCount := 0
+	synthesizer, err := NewEntitySynthesizer(EntitySynthesizerOptions{
+		Pool: pool,
+		Model: countingSynthesisModel{
+			summary: "Acme profile synthesized from active memories.",
+			seen:    &seenActiveCount,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewEntitySynthesizer: %v", err)
+	}
+
+	profile, err := synthesizer.SynthesizeProfile(ctx, entity.ID)
+	if err != nil {
+		t.Fatalf("SynthesizeProfile: %v", err)
+	}
+	if profile == nil {
+		t.Fatal("profile is nil, want synthesized profile")
+	}
+	if seenActiveCount != 2 {
+		t.Fatalf("active memories passed to synthesis = %d, want 2", seenActiveCount)
+	}
+}
+
 func TestDeduperReviewClusterSupersedeA(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -547,6 +618,94 @@ func TestContradictionDetectorArchivesWhenConfidenceFallsToZero(t *testing.T) {
 	}
 }
 
+func TestContradictionDetectorReturnsConflictWhenNewConfidenceDropsBelowPromotionThreshold(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org, _ := seedOrgAndAgent(t, ctx, pool, []string{"org"})
+	entityRepo := repo.NewMemoryEntityRepo(pool)
+	memoryRepo := repo.NewMemoryRepo(pool)
+	mentionRepo := repo.NewMemoryEntityMentionRepo(pool)
+
+	entity, err := entityRepo.Create(ctx, repo.MemoryEntity{
+		OrganizationID: org.ID,
+		CanonicalName:  "API Contract",
+		EntityType:     "concept",
+	})
+	if err != nil {
+		t.Fatalf("create entity: %v", err)
+	}
+
+	existing, err := memoryRepo.Create(ctx, repo.Memory{
+		OrganizationID: org.ID,
+		MemoryType:     "semantic",
+		Scope:          "org",
+		Content:        "API requires field X",
+		ContentHash:    "api-existing",
+		Embedding:      embeddingWithSignal(0),
+		Status:         "active",
+		Sensitivity:    "normal",
+		Confidence:     0.8,
+	})
+	if err != nil {
+		t.Fatalf("create existing memory: %v", err)
+	}
+	newMemory, err := memoryRepo.Create(ctx, repo.Memory{
+		OrganizationID: org.ID,
+		MemoryType:     "semantic",
+		Scope:          "org",
+		Content:        "API removed field X",
+		ContentHash:    "api-new",
+		Embedding:      embeddingWithSignal(1),
+		Status:         "candidate",
+		Sensitivity:    "normal",
+		Confidence:     0.15,
+	})
+	if err != nil {
+		t.Fatalf("create new memory: %v", err)
+	}
+
+	for _, memoryID := range []uuid.UUID{existing.ID, newMemory.ID} {
+		if _, err := mentionRepo.Create(ctx, repo.MemoryEntityMention{
+			MemoryID:    memoryID,
+			EntityID:    entity.ID,
+			MentionText: "API Contract",
+			Confidence:  1,
+		}); err != nil {
+			t.Fatalf("create mention for %s: %v", memoryID, err)
+		}
+	}
+
+	detector, err := NewContradictionDetector(ContradictionDetectorOptions{
+		Pool: pool,
+		Classifier: staticContradictionClassifier{
+			label: ContradictionLabelContradictory,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewContradictionDetector: %v", err)
+	}
+
+	conflicts, err := detector.Check(ctx, newMemory)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(conflicts) != 1 || conflicts[0].ID != existing.ID {
+		t.Fatalf("conflicts = %v, want existing memory only", conflicts)
+	}
+
+	storedNew, err := memoryRepo.GetByID(ctx, newMemory.ID)
+	if err != nil {
+		t.Fatalf("GetByID new: %v", err)
+	}
+	if storedNew.Confidence >= 0.2 {
+		t.Fatalf("new confidence = %f, want < 0.2", storedNew.Confidence)
+	}
+	if storedNew.Status != "candidate" {
+		t.Fatalf("new status = %q, want candidate", storedNew.Status)
+	}
+}
+
 func seedOrgAndAgent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, scopes []string) (repo.Organization, repo.Agent) {
 	t.Helper()
 
@@ -608,6 +767,18 @@ type staticSynthesisModel struct {
 }
 
 func (s staticSynthesisModel) SynthesizeEntityProfile(context.Context, uuid.UUID, repo.MemoryEntity, []repo.Memory) (string, error) {
+	return s.summary, nil
+}
+
+type countingSynthesisModel struct {
+	summary string
+	seen    *int
+}
+
+func (s countingSynthesisModel) SynthesizeEntityProfile(_ context.Context, _ uuid.UUID, _ repo.MemoryEntity, memories []repo.Memory) (string, error) {
+	if s.seen != nil {
+		*s.seen = len(memories)
+	}
 	return s.summary, nil
 }
 
