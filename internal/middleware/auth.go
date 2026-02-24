@@ -59,19 +59,36 @@ func Auth(opts AuthOptions) func(http.Handler) http.Handler {
 
 			if bearerToken != "" {
 				sessionInfo, err := opts.Service.ValidateSession(r.Context(), bearerToken)
-				if err != nil {
-					status, code, msg := mapAuthError(err)
-					api.Error(w, status, code, msg)
+				if err == nil {
+					ctx := withSessionPrincipal(r.Context(), sessionInfo, AuthMethodSession)
+					if sessionInfo != nil {
+						ctx = api.WithOrganizationID(ctx, sessionInfo.OrganizationID)
+					}
+					ctx = WithSessionToken(ctx, bearerToken)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					refreshSessionAsync(opts.Service, logger, bearerToken, requestIDFromContext(r.Context()))
 					return
 				}
 
-				ctx := withSessionPrincipal(r.Context(), sessionInfo, AuthMethodSession)
-				if sessionInfo != nil {
-					ctx = api.WithOrganizationID(ctx, sessionInfo.OrganizationID)
+				// Support API keys supplied as Bearer credentials for CLI compatibility.
+				keyInfo, keyErr := opts.Service.ValidateAPIKey(r.Context(), bearerToken)
+				if keyErr == nil {
+					ctx := WithPrincipal(r.Context(), Principal{
+						UserID:         keyInfo.UserID,
+						OrganizationID: keyInfo.OrganizationID,
+						Email:          keyInfo.Email,
+						DisplayName:    keyInfo.DisplayName,
+						Role:           keyInfo.Role,
+						AuthMethod:     AuthMethodAPIKey,
+						APIKey:         keyInfo,
+					})
+					ctx = api.WithOrganizationID(ctx, keyInfo.OrganizationID)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
 				}
-				ctx = WithSessionToken(ctx, bearerToken)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				refreshSessionAsync(opts.Service, logger, bearerToken, requestIDFromContext(r.Context()))
+
+				status, code, msg := mapAuthError(err)
+				api.Error(w, status, code, msg)
 				return
 			}
 

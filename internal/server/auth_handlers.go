@@ -69,6 +69,10 @@ func (h authHandlers) login(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.service.Login(r.Context(), strings.TrimSpace(req.Email), req.Password, requestClientIP(r), r.UserAgent())
 	if err != nil {
+		if errors.Is(err, auth.ErrRateLimited) {
+			// Default auth limiter window is 15 minutes.
+			w.Header().Set("Retry-After", "900")
+		}
 		status, code, message := mapLoginError(err)
 		api.Error(w, status, code, message)
 		return
@@ -79,8 +83,9 @@ func (h authHandlers) login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.JSON(w, http.StatusOK, map[string]any{
-		"token":      result.SessionToken,
-		"expires_at": result.Session.ExpiresAt,
+		"token":         result.SessionToken,
+		"session_token": result.SessionToken,
+		"expires_at":    result.Session.ExpiresAt,
 		"user": userResponse{
 			ID:             result.Session.UserID,
 			OrganizationID: result.Session.OrganizationID,
@@ -298,7 +303,7 @@ func mapLoginError(err error) (status int, code, message string) {
 	case errors.Is(err, auth.ErrRateLimited):
 		return http.StatusTooManyRequests, api.ErrCodeRateLimited, "too many authentication attempts"
 	case errors.Is(err, auth.ErrAccountLocked):
-		return http.StatusUnauthorized, api.ErrCodeUnauthorized, "account is locked"
+		return http.StatusLocked, api.ErrCodeUnauthorized, "account is locked"
 	default:
 		return http.StatusInternalServerError, api.ErrCodeInternal, "login failed"
 	}
