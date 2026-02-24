@@ -139,7 +139,6 @@ func (r *MemoryTaxonomyNodeRepo) ListByOrganization(ctx context.Context, organiz
 		}
 		nodes = append(nodes, node)
 	}
-
 	if rows.Err() != nil {
 		return nil, mapDBError(rows.Err())
 	}
