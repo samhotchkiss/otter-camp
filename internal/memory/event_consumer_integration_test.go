@@ -117,6 +117,29 @@ func TestTaskConsolidationTriggeredByTaskCompletedEvent(t *testing.T) {
 	if runCount == 0 {
 		t.Fatal("no completed task consolidation run found")
 	}
+
+	var memoriesExamined, memoriesUpdated, memoriesArchived int
+	if err := pool.QueryRow(ctx, `
+		SELECT memories_examined, memories_updated, memories_archived
+		FROM memory_compaction_run
+		WHERE organization_id = $1
+		  AND run_type = 'task_consolidation'
+		  AND status = 'completed'
+		  AND scope_context->>'task_id' = $2
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, org.ID, task.ID.String()).Scan(&memoriesExamined, &memoriesUpdated, &memoriesArchived); err != nil {
+		t.Fatalf("fetch completed task consolidation run counters: %v", err)
+	}
+	if memoriesExamined != 5 {
+		t.Fatalf("memories_examined = %d, want 5", memoriesExamined)
+	}
+	if memoriesArchived < 2 {
+		t.Fatalf("memories_archived = %d, want >= 2", memoriesArchived)
+	}
+	if memoriesUpdated < 3 {
+		t.Fatalf("memories_updated = %d, want >= 3", memoriesUpdated)
+	}
 }
 
 type staticTaskSummaryModel struct {
