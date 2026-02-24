@@ -138,23 +138,6 @@ Every task specifies tests at three layers:
 
 ---
 
-## Open BLOCKERs (Must Not Be Finalized Until Resolved)
-
-These issues in `build/ISSUES.md` affect implementation decisions. Tasks call them out
-inline. Do not finalize the flagged design decision until Sam resolves the issue.
-
-| Issue | Severity | Affects | Summary |
-|-------|----------|---------|---------|
-All BLOCKERs resolved. See `build/ISSUES.md` for full resolution notes on each:
-- #1 ✅ `budget_cap_tokens` (tokens only, never cents)
-- #16 ✅ `flow_node` final schema: no `skills`, has `mcp_tools` + `tool_domains`
-- #21 ✅ `model_invocation` retention = 90 days
-- #23 ✅ Budget enforcement is hierarchical/additive (agent → project → org)
-- #26 ✅ `browser.evaluate` confirmed; doc 11 §Scripted Execution defines it
-- #27 ✅ All API routes use `/v1/` prefix; doc 12 is authoritative; no `/api/` variant
-
----
-
 ## Where Things Live
 
 ```

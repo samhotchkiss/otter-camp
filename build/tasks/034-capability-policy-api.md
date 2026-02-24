@@ -94,7 +94,7 @@ Response: `{data: {id, policy_layer, capability, effect, conditions, priority, c
 
 ## Implementer Notes
 
-> ⚠️ ISSUE #17 (AMBIGUOUS): Instance-layer write protection is enforced at this API layer. The handler must check `policy_layer='instance'` on any mutating request and return 403 before calling the service layer. Additionally, write attempts should be recorded as audit events with `event_type='policy.instance_write_attempt'` even though the request is rejected — this provides a security trail for unauthorized modification attempts.
+> ✅ ISSUE #17 (RESOLVED): Instance-layer write protection is enforced at this API layer. The handler must check `policy_layer='instance'` on any mutating request (POST/PATCH/PUT/DELETE) and return 403 before calling the service layer, unless the server is in bootstrap mode. Record rejected attempts as audit events with `event_type='policy.instance_write_attempt'` even though the request is rejected — this provides a security trail for unauthorized modification attempts.
 
 - The `POST /v1/control/policies/evaluate` dry-run endpoint always calls `PolicyEvaluator.Evaluate` with the provided context. It must return the full trace even if the first layer produces a deny. This requires the evaluator to support a "collect-all" mode where it continues evaluation after reaching a deny decision, for tracing purposes only.
 - The `PUT /v1/control/policies/:id` endpoint is a full replacement. It must validate all required fields for the `policy_layer` type, not just the fields provided in the body. This distinguishes it from PATCH semantics.

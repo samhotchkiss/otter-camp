@@ -774,7 +774,7 @@ After bootstrap, the operator manages provider connections through the subscript
 
 Two health check endpoints, following Kubernetes conventions (but useful for any orchestrator or monitoring system):
 
-#### GET /health (Liveness)
+#### GET /health/live (Liveness) — also aliased as `GET /health`
 
 Returns 200 if the process is running and responsive. Does NOT check downstream dependencies. Used by process managers and load balancers to detect a hung or crashed process.
 
@@ -788,7 +788,7 @@ Returns 200 if the process is running and responsive. Does NOT check downstream 
 
 Returns 503 if the process is shutting down or in a fatal error state.
 
-#### GET /ready (Readiness)
+#### GET /health/ready (Readiness) — also aliased as `GET /ready`
 
 Returns 200 if the process is ready to serve traffic. Checks all critical dependencies:
 
@@ -829,11 +829,11 @@ Non-critical dependencies (model providers, browser service, MCP connections) ar
 
 ### Usage
 
-- **Docker Compose**: `healthcheck` directive in the compose file uses `/health`.
-- **Kubernetes** (when supported): liveness probe uses `/health`, readiness probe uses `/ready`.
-- **Process managers** (systemd, Supervisor): check `/health` for restart decisions.
-- **Load balancers**: use `/ready` to determine whether to route traffic to an instance.
-- **Monitoring**: scrape both endpoints for alerting. Alert on `/ready` returning 503.
+- **Docker Compose**: `healthcheck` directive in the compose file uses `/health/live` (or the `/health` alias).
+- **Kubernetes** (when supported): liveness probe uses `/health/live`, readiness probe uses `/health/ready`.
+- **Process managers** (systemd, Supervisor): check `/health/live` (or `/health` alias) for restart decisions.
+- **Load balancers**: use `/health/ready` (or `/ready` alias) to determine whether to route traffic to an instance.
+- **Monitoring**: scrape both endpoints for alerting. Alert on `/health/ready` returning 503.
 
 ## TLS and Network Security
 

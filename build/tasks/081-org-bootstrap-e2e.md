@@ -212,10 +212,11 @@ the test suite runs. The `StartServer(t)` helper must wait for `GET /v1/health` 
 **ISSUE #27 (RESOLVED — path prefix):**
 All API calls use `/v1/` paths (doc 12). Doc 21 examples have been corrected.
 
-**ISSUE #22 (health endpoint path):**
-Use `GET /v1/health` as the health check path. If the server exposes `/health` (doc 08)
-and `/health/live` (doc 13) as separate paths, test both; the E2E test may use either
-for liveness polling. Use `/v1/health` for the API assertion.
+**ISSUE #22 (RESOLVED — health endpoint path):**
+Canonical paths: `GET /health/live` (liveness) aliased as `GET /health`; `GET /health/ready`
+(readiness) aliased as `GET /ready`. Health endpoints are NOT under `/v1/`. The `StartServer`
+helper should poll `GET /health/live` (or `/health`) for readiness. The E2E test health
+assertion should use `GET /health/live` returning 200.
 
 **OTTERCAMP_MODE=test:**
 The server subprocess must be started with `OTTERCAMP_MODE=test` in its environment.

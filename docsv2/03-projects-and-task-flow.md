@@ -381,6 +381,7 @@ When multiple tasks complete around the same time, they all want to merge to `ma
 - For each merge: attempt fast-forward or clean merge. If it succeeds, `main` is updated and the next merge proceeds.
 - If a merge conflicts: the system attempts auto-resolution (trivial conflicts). If auto-resolution fails, the PM is notified and can either resolve it, assign an agent to rebase the task branch, or escalate.
 - The merge queue is visible in the project view — the human can see what's queued, what's merging, and what's blocked on conflicts.
+- `merge_queue_entry` rows are never hard-deleted. `archived_at` is set when the **deploy** that includes the entry completes successfully — not at merge time.
 
 ### Merge Conflicts
 

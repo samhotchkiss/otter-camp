@@ -192,4 +192,4 @@ Paused runs are exempt from the heartbeat silence check. However, a separate `de
 
 After the invocation completes, call `BudgetService.RecordUsage(ctx, orgID, projectID, agentID, actualTokens)` to charge the token count against all three applicable levels simultaneously. The broker calls `RecordUsage` regardless of whether the pre-check used an estimate.
 
-> ⚠️ ISSUE #17 (AMBIGUOUS): Policy evaluation for run creation must reject writes to `policy_layer='instance'` rows. Enforce at the API level in task 054, not in this service layer.
+> ✅ ISSUE #17 (RESOLVED): Policy write protection for `policy_layer='instance'` is enforced at the API handler layer in task 054, not here. This service layer does not need to add additional guards.

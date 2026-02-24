@@ -452,10 +452,11 @@ image built from the same `Dockerfile`. The difference is the container command:
 - API service: `command: ["serve"]` (starts HTTP server + embedded worker for test/dev mode)
 - Worker service: `command: ["worker"]` (starts background job worker only, no HTTP listener)
 
-**ISSUE #22 (health endpoint path):**
-The `README.md` Quick Start uses `GET /v1/health` to verify the deployment. The Docker
-Compose healthcheck for the `ottercamp` service (not shown above but can be added) should
-use the same path. If both `/health` and `/v1/health` are exposed, document both.
+**ISSUE #22 (RESOLVED — health endpoint path):**
+Canonical paths: `GET /health/live` (liveness, also aliased as `GET /health`) and
+`GET /health/ready` (readiness, also aliased as `GET /ready`). Health endpoints are NOT
+under `/v1/`. The `README.md` Quick Start and Docker Compose healthcheck should use
+`GET /health/live`. Document both the canonical and alias paths.
 
 **Object storage shared volume:**
 Both `ottercamp` and `ottercamp-worker` mount the same `object-storage` volume at

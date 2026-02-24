@@ -293,10 +293,11 @@ recognizes these prefixes and triggers the named tool call or delay deterministi
 This requires coordination with the turn execution engine implementation (task 048) and
 the control plane service (task 053).
 
-**ISSUE #17 (instance policy write protection):**
+**ISSUE #17 (RESOLVED — instance policy write protection):**
 The `TestControlPlane_PolicyDeny_RunContinues` scenario creates a project-level deny
-policy (not instance-level) to avoid ISSUE #17 ambiguity. Instance-level policies are not
-written or modified in this E2E test.
+policy (not instance-level). Instance-level policies are write-protected at the API layer
+(task 034/054 handlers return 403 for policy_layer='instance' from non-bootstrap callers).
+This E2E test does not attempt to create instance-level policies.
 
 **tool_execution query endpoint:**
 The `WaitForToolExecution` helper may need to use `GET /v1/control/runs/<id>/steps` and

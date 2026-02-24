@@ -264,18 +264,26 @@ When OtterCamp starts for the first time with an empty database, the bootstrap s
 
 3. **Create first user**: the operator provides an email and password (via CLI prompt or environment variables). This user is created as the `owner` of the default org.
 
-4. **Seed starter trio**: the three foundational agents are created in the org:
+4. **Seed org-level skills**: the org-level skill repository is created and default built-in skills are registered (file I/O, web search, code execution, etc.).
+
+5. **Seed model profiles**: three default model profiles are created — high-capability, standard, and haiku — with org-level `model_profile_assignment` rows so every agent resolves a profile without explicit configuration.
+
+6. **Seed default flow templates**: the built-in flow templates (simple task, research, code review, etc.) are inserted as system-owned templates available to all projects in the org.
+
+7. **Seed starter trio**: the three foundational agents are created in the org:
    - **Frank** (Chief of Staff): org-level, the human's primary touchpoint. Default responder in the org session.
    - **Lori** (Agent Relations Expert): handles staffing, hiring agents for projects.
    - **Ellie** (Memory): dual role — background memory infrastructure AND conversational agent for memory queries.
 
    Each agent is created with its identity metadata, prompt pack, default tool policy, and default model policy as defined in 05-agents-staff-and-temps.md.
 
-5. **Seed provider connections** — if `OTTERCAMP_MODEL_PROVIDER` and `OTTERCAMP_MODEL_API_KEY` are set, create the provider connection, encrypt the API key, and create default model profiles (agent and system). See `08-deployment-and-self-hosting.md` for the full provider connection bootstrap sub-steps. The starter trio's `default_model_profile_id` is back-filled to point to the newly created profiles.
+8. **Seed provider connections** — if `OTTERCAMP_MODEL_PROVIDER` and `OTTERCAMP_MODEL_API_KEY` are set, create the provider connection, encrypt the API key, and back-fill the starter trio's `default_model_profile_id` to point to the seeded profiles. See `08-deployment-and-self-hosting.md` for the full provider connection bootstrap sub-steps.
 
-6. **Create org session**: the persistent org-level chat session ("General") is created with Frank as the default responder. The human, Frank, Lori, and Ellie are added as participants.
+9. **Create org session**: the persistent org-level chat session ("General") is created with Frank as the default responder. The human, Frank, Lori, and Ellie are added as participants.
 
-7. **Record bootstrap event**: an audit event records that bootstrap completed, including the org ID, user ID, and agent IDs created.
+10. **Record bootstrap event**: an audit event records that bootstrap completed, including the org ID, user ID, and agent IDs created.
+
+> Authoritative reference: doc 14 §Bootstrap Dataset defines the complete 10-step sequence and the exact seed data for each step.
 
 ### Bootstrap is Idempotent
 

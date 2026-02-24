@@ -148,7 +148,7 @@ Implement BOTH path variants to resolve ISSUE #22:
 - Returns 200 if all pass; 503 with `{"status":"degraded","checks":{...}}` if any fail.
 - Timeouts: each check has a 2-second deadline.
 
-> ⚠️ ISSUE #22 (AMBIGUOUS): Doc 08 uses `/health` and `/ready`; doc 13 uses `/health/live` and `/health/ready`. Both path sets are implemented here with `/health/live` as the canonical liveness path and `/health` aliased to it for backward compatibility.
+> ✅ ISSUE #22 (RESOLVED): Canonical paths: `GET /health/live` (liveness) aliased as `GET /health`; `GET /health/ready` (readiness) aliased as `GET /ready`. Health endpoints are NOT under `/v1/`. Doc 08 §Health Checks updated. Implement all four paths: canonical `/health/live` and `/health/ready` plus their aliases.
 
 **6-layer security model implementation** (`internal/security/`):
 

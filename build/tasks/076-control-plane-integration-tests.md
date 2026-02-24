@@ -173,11 +173,12 @@ runs have 24h default timeout before supervisor intervenes).
 - Domain event bus: real (in-process dispatch)
 - Model gateway: not involved in control plane dispatch tests
 
-**ISSUE #17 (instance policy write-protection):**
+**ISSUE #17 (RESOLVED — instance policy write-protection):**
 `TestPolicy_Eval_InstanceLayer_Unoverridable` tests the API-layer guard: a request by
 an org-admin to POST a policy with policy_layer='instance' returns 403. This is
 application-layer enforcement only (no DB constraint). Test verifies the handler-level
-check via HTTP response code.
+check via HTTP response code. The rejected write attempt is also recorded as an audit
+event with event_type='policy.instance_write_attempt'.
 
 **ISSUE #20 (supervisor actor_type in audit_event):**
 Supervisor-generated `run_event` rows use actor_type='supervisor'. The `audit_event`
