@@ -49,3 +49,22 @@ func TestPrefixEnforcementRedirectsRoot(t *testing.T) {
 		t.Fatalf("Location = %q, want %q", got, "/v1/")
 	}
 }
+
+func TestPrefixEnforcementAllowsTestResetPath(t *testing.T) {
+	called := false
+	handler := PrefixEnforcement()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/test/reset", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if !called {
+		t.Fatal("expected handler to run for /test/reset")
+	}
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusNoContent)
+	}
+}

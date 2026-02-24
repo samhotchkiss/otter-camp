@@ -4,9 +4,12 @@ package bootstrap
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/storage"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
 
@@ -22,14 +25,35 @@ func TestRegisterStarterTrioStepCreatesAgentsIdempotently(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 
-	bootstrapper := NewBootstrapper()
-	RegisterStarterTrioStep(bootstrapper, agentRepo)
-	state := &State{OrganizationID: org.ID}
+	t.Setenv("OTTERCAMP_ORG_SLUG", "bootstrap-agents")
+	t.Setenv("OTTERCAMP_ORG_NAME", "Bootstrap Agents")
+	t.Setenv("OTTERCAMP_ADMIN_EMAIL", "")
+	t.Setenv("OTTERCAMP_ADMIN_PASSWORD", "")
 
-	if err := bootstrapper.Run(ctx, state); err != nil {
+	store, err := storage.New(storage.Config{
+		Backend: storage.BackendFS,
+		FSRoot:  t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("new storage: %v", err)
+	}
+
+	bootstrapper, err := New(Options{
+		Pool:    pool,
+		Store:   store,
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Version: "test-version",
+	})
+	if err != nil {
+		t.Fatalf("new bootstrapper: %v", err)
+	}
+
+	RegisterStarterTrioStep(bootstrapper, agentRepo)
+
+	if err := bootstrapper.Run(ctx); err != nil {
 		t.Fatalf("first bootstrap run: %v", err)
 	}
-	if err := bootstrapper.Run(ctx, state); err != nil {
+	if err := bootstrapper.Run(ctx); err != nil {
 		t.Fatalf("second bootstrap run: %v", err)
 	}
 

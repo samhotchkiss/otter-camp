@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
+	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/db"
@@ -49,6 +50,8 @@ func run(args []string) int {
 	switch args[0] {
 	case "serve":
 		return runServe()
+	case "bootstrap":
+		return runBootstrap(args[1:])
 	case "worker":
 		return runWorker()
 	case "migrate":
@@ -107,13 +110,29 @@ func runServe() int {
 		return 1
 	}
 
+	var testResetter server.TestResetter
+	if cfg.Mode == config.ModeTest {
+		bootstrapper, bootstrapErr := bootstrap.New(bootstrap.Options{
+			Pool:    pool.Raw(),
+			Logger:  logger,
+			Version: version,
+		})
+		if bootstrapErr != nil {
+			fmt.Fprintf(os.Stderr, "bootstrap setup error: %v\n", bootstrapErr)
+			return 1
+		}
+		testResetter = bootstrapper
+	}
+
 	handler := server.NewHandlerWithOptions(server.HandlerOptions{
-		Version:     version,
-		Commit:      commit,
-		BuiltAt:     builtAt,
-		Logger:      logger,
-		AuthService: authService,
-		Pool:        pool.Raw(),
+		Version:      version,
+		Commit:       commit,
+		BuiltAt:      builtAt,
+		Logger:       logger,
+		AuthService:  authService,
+		Pool:         pool.Raw(),
+		Mode:         string(cfg.Mode),
+		TestResetter: testResetter,
 	})
 
 	signalCh := make(chan os.Signal, 1)
@@ -176,6 +195,57 @@ func runMigrate() int {
 		return 1
 	}
 
+	return 0
+}
+
+func runBootstrap(args []string) int {
+	flags := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
+	orgSlug := flags.String("org-slug", "", "organization slug override")
+	orgName := flags.String("org-name", "", "organization display name override")
+	adminEmail := flags.String("admin-email", "", "admin email override")
+	adminPassword := flags.String("admin-password", "", "admin password override")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "bootstrap argument error: %v\n", err)
+		return 1
+	}
+
+	if strings.TrimSpace(*orgSlug) != "" {
+		_ = os.Setenv("OTTERCAMP_ORG_SLUG", strings.TrimSpace(*orgSlug))
+	}
+	if strings.TrimSpace(*orgName) != "" {
+		_ = os.Setenv("OTTERCAMP_ORG_NAME", strings.TrimSpace(*orgName))
+	}
+	if strings.TrimSpace(*adminEmail) != "" {
+		_ = os.Setenv("OTTERCAMP_ADMIN_EMAIL", strings.TrimSpace(*adminEmail))
+	}
+	if strings.TrimSpace(*adminPassword) != "" {
+		_ = os.Setenv("OTTERCAMP_ADMIN_PASSWORD", strings.TrimSpace(*adminPassword))
+	}
+
+	pool, err := db.NewFromEnv(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bootstrap database config error: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	bootstrapper, err := bootstrap.New(bootstrap.Options{
+		Pool:    pool.Raw(),
+		Logger:  logger,
+		Version: version,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bootstrap setup error: %v\n", err)
+		return 1
+	}
+
+	if err := bootstrapper.Run(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "bootstrap failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(os.Stdout, "bootstrap complete")
 	return 0
 }
 
@@ -921,5 +991,5 @@ func printSecretUsage(w *os.File) {
 }
 
 func printUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp <serve|worker|migrate|backup|secret|skill|magic-link|reset-password|unlock-account|version>")
+	fmt.Fprintln(w, "usage: ottercamp <serve|bootstrap|worker|migrate|backup|secret|skill|magic-link|reset-password|unlock-account|version>")
 }

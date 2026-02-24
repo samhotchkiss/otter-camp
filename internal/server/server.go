@@ -69,7 +69,10 @@ func Run(ctx context.Context, opts Options) error {
 }
 
 func NewHandler(version string) http.Handler {
-	return NewHandlerWithOptions(HandlerOptions{Version: version})
+	return NewHandlerWithOptions(HandlerOptions{
+		Version: version,
+		Mode:    os.Getenv("OTTERCAMP_MODE"),
+	})
 }
 
 func shutdown(parent context.Context, srv *http.Server, timeout time.Duration) error {

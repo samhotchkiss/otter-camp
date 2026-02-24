@@ -37,19 +37,19 @@ func RegisterStarterTrioStep(bootstrapper *Bootstrapper, agentRepo *repo.AgentRe
 		return
 	}
 
-	bootstrapper.RegisterStep("create-starter-trio", func(ctx context.Context, state *State) error {
-		if state == nil || state.OrganizationID == uuid.Nil {
+	bootstrapper.RegisterStep("create-agents", func(ctx context.Context, state *BootstrapState) error {
+		if state == nil || state.Organization.ID == uuid.Nil {
 			return fmt.Errorf("organization id is required")
 		}
 
-		existing, err := agentRepo.GetStarterTrio(ctx, state.OrganizationID)
+		existing, err := agentRepo.GetStarterTrio(ctx, state.Organization.ID)
 		if err != nil {
 			return err
 		}
 
 		for _, seed := range missingStarterTrio(existing) {
 			if _, err := agentRepo.Create(ctx, repo.Agent{
-				OrganizationID:       state.OrganizationID,
+				OrganizationID:       state.Organization.ID,
 				DisplayName:          seed.displayName,
 				AgentClass:           "staff",
 				LifecycleStatus:      "active",
