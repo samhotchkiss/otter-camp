@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,14 +18,20 @@ type RouteRegistrar interface {
 	RegisterRoutes(r chi.Router)
 }
 
+type TestResetter interface {
+	Reset(ctx context.Context) error
+}
+
 type HandlerOptions struct {
 	Version         string
 	Commit          string
 	BuiltAt         string
+	Mode            string
 	Logger          *slog.Logger
 	AuthService     auth.Service
 	Pool            *pgxpool.Pool
 	GitService      api.GitService
+	TestResetter    TestResetter
 	RouteRegistrars []RouteRegistrar
 }
 
@@ -49,6 +57,9 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	r.Get("/health/ready", healthOK)
 	r.Get("/health", healthOK)
 	r.Get("/ready", healthOK)
+	if strings.EqualFold(strings.TrimSpace(opts.Mode), "test") && opts.TestResetter != nil {
+		r.Post("/test/reset", newTestResetHandler(logger, opts.TestResetter))
+	}
 
 	r.Route("/v1", func(v1 chi.Router) {
 		if opts.Pool != nil {

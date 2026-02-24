@@ -22,14 +22,22 @@ func TestRegisterStarterTrioStepCreatesAgentsIdempotently(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 
-	bootstrapper := NewBootstrapper()
+	bootstrapper := NewBootstrapper(Options{Pool: pool, OrgSlug: org.Slug})
 	RegisterStarterTrioStep(bootstrapper, agentRepo)
-	state := &State{OrganizationID: org.ID}
 
-	if err := bootstrapper.Run(ctx, state); err != nil {
+	bootstrapper.RegisterStep("run-migrations", func(context.Context, *State) error { return nil })
+	bootstrapper.RegisterStep("create-first-human-user", func(context.Context, *State) error { return nil })
+	bootstrapper.RegisterStep("seed-default-skills", func(context.Context, *State) error { return nil })
+	bootstrapper.RegisterStep("seed-model-registry", func(context.Context, *State) error { return nil })
+	bootstrapper.RegisterStep("seed-default-flow-templates", func(context.Context, *State) error { return nil })
+	bootstrapper.RegisterStep("create-general-session", func(context.Context, *State) error { return nil })
+	bootstrapper.RegisterStep("seed-capability-policy", func(context.Context, *State) error { return nil })
+	bootstrapper.RegisterStep("record-bootstrap-audit-event", func(context.Context, *State) error { return nil })
+
+	if err := bootstrapper.Run(ctx); err != nil {
 		t.Fatalf("first bootstrap run: %v", err)
 	}
-	if err := bootstrapper.Run(ctx, state); err != nil {
+	if err := bootstrapper.Run(ctx); err != nil {
 		t.Fatalf("second bootstrap run: %v", err)
 	}
 

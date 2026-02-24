@@ -2,24 +2,24 @@ package bootstrap
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
+	"testing/fstest"
 
-	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
-func TestRegisterStepReplacesCreateStarterTrioStub(t *testing.T) {
-	b := NewBootstrapper()
+func TestRegisterStepReplacesCreateAgentsStub(t *testing.T) {
+	b := newNoopBootstrapper()
 
 	called := 0
-	b.RegisterStep("create-starter-trio", func(context.Context, *State) error {
+	b.RegisterStep("create-agents", func(context.Context, *State) error {
 		called++
 		return nil
 	})
 
-	err := b.Run(context.Background(), &State{OrganizationID: uuid.New()})
-	if err != nil {
+	if err := b.Run(context.Background()); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
 	if called != 1 {
@@ -27,18 +27,39 @@ func TestRegisterStepReplacesCreateStarterTrioStub(t *testing.T) {
 	}
 }
 
+func TestRegisterStepPreservesOrder(t *testing.T) {
+	b := NewBootstrapper(Options{})
+
+	before := b.StepNames()
+	b.RegisterStep("create-agents", func(context.Context, *State) error { return nil })
+	after := b.StepNames()
+
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("step order changed: before=%v after=%v", before, after)
+	}
+}
+
 func TestRunRecoversStepPanic(t *testing.T) {
-	b := NewBootstrapper()
-	b.RegisterStep("create-starter-trio", func(context.Context, *State) error {
+	b := newNoopBootstrapper()
+	b.RegisterStep("create-agents", func(context.Context, *State) error {
 		panic("boom")
 	})
 
-	err := b.Run(context.Background(), &State{OrganizationID: uuid.New()})
+	err := b.Run(context.Background())
 	if err == nil {
 		t.Fatal("expected error from panic recovery")
 	}
 	if !strings.Contains(err.Error(), "panic") {
 		t.Fatalf("error %q does not mention panic", err)
+	}
+}
+
+func TestLoadDefaultSkillSeedsRequiresCoreSet(t *testing.T) {
+	_, err := loadDefaultSkillSeeds(fstest.MapFS{
+		"defaults/skills/summarize.md": {Data: []byte("# Summarize")},
+	})
+	if err == nil {
+		t.Fatal("expected missing embedded skills error")
 	}
 }
 
@@ -56,4 +77,13 @@ func TestMissingStarterTrioIdempotencySelection(t *testing.T) {
 	if missing[0].displayName != "Ellie" {
 		t.Fatalf("missing starter trio display name = %q, want %q", missing[0].displayName, "Ellie")
 	}
+}
+
+func newNoopBootstrapper() *Bootstrapper {
+	b := NewBootstrapper(Options{})
+	for _, name := range b.StepNames() {
+		stepName := name
+		b.RegisterStep(stepName, func(context.Context, *State) error { return nil })
+	}
+	return b
 }

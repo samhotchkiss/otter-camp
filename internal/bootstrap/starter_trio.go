@@ -37,7 +37,7 @@ func RegisterStarterTrioStep(bootstrapper *Bootstrapper, agentRepo *repo.AgentRe
 		return
 	}
 
-	bootstrapper.RegisterStep("create-starter-trio", func(ctx context.Context, state *State) error {
+	bootstrapper.RegisterStep("create-agents", func(ctx context.Context, state *State) error {
 		if state == nil || state.OrganizationID == uuid.Nil {
 			return fmt.Errorf("organization id is required")
 		}

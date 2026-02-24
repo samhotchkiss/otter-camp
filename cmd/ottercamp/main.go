@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
+	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/db"
@@ -53,6 +54,8 @@ func run(args []string) int {
 		return runWorker()
 	case "migrate":
 		return runMigrate()
+	case "bootstrap":
+		return runBootstrap()
 	case "backup":
 		return runBackup(args[1:])
 	case "secret":
@@ -114,6 +117,12 @@ func runServe() int {
 		Logger:      logger,
 		AuthService: authService,
 		Pool:        pool.Raw(),
+		Mode:        string(cfg.Mode),
+		TestResetter: bootstrap.NewBootstrapper(bootstrap.Options{
+			Pool:       pool.Raw(),
+			Logger:     logger,
+			AppVersion: version,
+		}),
 	})
 
 	signalCh := make(chan os.Signal, 1)
@@ -176,6 +185,29 @@ func runMigrate() int {
 		return 1
 	}
 
+	return 0
+}
+
+func runBootstrap() int {
+	pool, err := db.NewFromEnv(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "database config error: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	bootstrapper := bootstrap.NewBootstrapper(bootstrap.Options{
+		Pool:           pool.Raw(),
+		Logger:         logger,
+		AppVersion:     version,
+		ProgressWriter: os.Stdout,
+	})
+
+	if err := bootstrapper.Run(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "bootstrap error: %v\n", err)
+		return 1
+	}
 	return 0
 }
 
@@ -921,5 +953,5 @@ func printSecretUsage(w *os.File) {
 }
 
 func printUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp <serve|worker|migrate|backup|secret|skill|magic-link|reset-password|unlock-account|version>")
+	fmt.Fprintln(w, "usage: ottercamp <serve|worker|migrate|bootstrap|backup|secret|skill|magic-link|reset-password|unlock-account|version>")
 }
