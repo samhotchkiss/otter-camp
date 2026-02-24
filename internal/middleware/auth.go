@@ -161,6 +161,9 @@ func extractCredentials(r *http.Request) (bearerToken string, apiKey string) {
 	if candidate := strings.TrimSpace(r.Header.Get("X-API-Key")); candidate != "" {
 		return "", candidate
 	}
+	if candidate := strings.TrimSpace(r.URL.Query().Get("token")); candidate != "" {
+		return candidate, ""
+	}
 	if candidate := strings.TrimSpace(r.URL.Query().Get("api_key")); candidate != "" {
 		return "", candidate
 	}

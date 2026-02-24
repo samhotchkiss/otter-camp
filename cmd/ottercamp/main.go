@@ -260,6 +260,11 @@ func runServe() int {
 		AuthService: authService,
 		Pool:        pool.Raw(),
 		RouteRegistrars: []server.RouteRegistrar{
+			server.NewRealtimeRouteRegistrar(server.RealtimeRouteOptions{
+				Pool:   pool.Raw(),
+				Events: bus,
+				Logger: logger,
+			}),
 			server.NewAgentRouteRegistrar(
 				agentService,
 				repo.NewAgentProfileTemplateRepo(pool.Raw()),
