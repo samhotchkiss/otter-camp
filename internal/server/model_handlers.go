@@ -638,10 +638,6 @@ func (h modelHandlers) createProfile(w http.ResponseWriter, r *http.Request) {
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
 		return
 	}
-	if strings.TrimSpace(req.DisplayName) == "" {
-		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "display_name is required")
-		return
-	}
 	if strings.TrimSpace(req.ProviderID) == "" {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "provider_id is required")
 		return
@@ -668,6 +664,10 @@ func (h modelHandlers) createProfile(w http.ResponseWriter, r *http.Request) {
 		}
 		maxTokens = *req.MaxTokens
 	}
+	displayName := strings.TrimSpace(req.DisplayName)
+	if displayName == "" {
+		displayName = strings.TrimSpace(req.ModelName)
+	}
 
 	created, err := h.profiles.Create(r.Context(), repo.ModelProfile{
 		LogicalProfileID:    uuid.NewString(),
@@ -676,6 +676,7 @@ func (h modelHandlers) createProfile(w http.ResponseWriter, r *http.Request) {
 		IsCurrent:           true,
 		ProviderID:          providerID,
 		ModelName:           strings.TrimSpace(req.ModelName),
+		DisplayName:         displayName,
 		ContextWindowTokens: defaultModelProfileContextWindow,
 		MaxOutputTokens:     maxTokens,
 		SupportsStreaming:   true,
@@ -714,6 +715,15 @@ func (h modelHandlers) patchProfile(w http.ResponseWriter, r *http.Request) {
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
 		return
 	}
+	if req.DisplayName == nil &&
+		req.ProviderID == nil &&
+		req.ModelName == nil &&
+		req.Temperature == nil &&
+		req.MaxTokens == nil &&
+		req.FallbackProfileID == nil {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "at least one patch field is required")
+		return
+	}
 
 	current, err := h.profiles.GetCurrentByLogicalID(r.Context(), principal.OrganizationID, logicalProfileID)
 	if err != nil {
@@ -724,6 +734,7 @@ func (h modelHandlers) patchProfile(w http.ResponseWriter, r *http.Request) {
 	next := repo.ModelProfile{
 		ProviderID:          current.ProviderID,
 		ModelName:           current.ModelName,
+		DisplayName:         current.DisplayName,
 		ContextWindowTokens: current.ContextWindowTokens,
 		MaxOutputTokens:     current.MaxOutputTokens,
 		SupportsStreaming:   current.SupportsStreaming,
@@ -752,6 +763,14 @@ func (h modelHandlers) patchProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		next.ModelName = trimmed
+	}
+	if req.DisplayName != nil {
+		trimmed := strings.TrimSpace(*req.DisplayName)
+		if trimmed == "" {
+			responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "display_name is required")
+			return
+		}
+		next.DisplayName = trimmed
 	}
 	if req.MaxTokens != nil {
 		if *req.MaxTokens <= 0 {
@@ -1330,7 +1349,7 @@ func toProfileResponse(profile repo.ModelProfile) profileResponse {
 		ID:                profile.ID,
 		LogicalProfileID:  profile.LogicalProfileID,
 		Version:           profile.Version,
-		DisplayName:       profile.ModelName,
+		DisplayName:       profile.DisplayName,
 		ProviderID:        profile.ProviderID,
 		ModelName:         profile.ModelName,
 		Temperature:       profile.Temperature,

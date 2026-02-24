@@ -47,7 +47,7 @@ func TestModelAPIProfileCRUDAndHistory(t *testing.T) {
 	}
 
 	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/model/profiles", map[string]any{
-		"display_name": "Standard",
+		"display_name": "Standard (GPT-4o)",
 		"provider_id":  provider.ID.String(),
 		"model_name":   "gpt-4o-mini",
 		"temperature":  0.2,
@@ -59,6 +59,9 @@ func TestModelAPIProfileCRUDAndHistory(t *testing.T) {
 	logicalID := jsonPathString(t, created.Body, "data", "logical_profile_id")
 	if logicalID == "" {
 		t.Fatalf("missing logical_profile_id body=%s", string(created.Body))
+	}
+	if gotDisplay := jsonPathString(t, created.Body, "data", "display_name"); gotDisplay != "Standard (GPT-4o)" {
+		t.Fatalf("create display_name=%q want=%q body=%s", gotDisplay, "Standard (GPT-4o)", string(created.Body))
 	}
 	if version := int(jsonPathFloatValue(t, created.Body, "data", "version")); version != 1 {
 		t.Fatalf("created version=%d want=1 body=%s", version, string(created.Body))
@@ -78,13 +81,17 @@ func TestModelAPIProfileCRUDAndHistory(t *testing.T) {
 	}
 
 	updated := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/model/profiles/"+logicalID, map[string]any{
-		"model_name": "gpt-4o-mini-v2",
+		"display_name": "Updated Name",
+		"model_name":   "gpt-4o-mini-v2",
 	}, map[string]string{"Authorization": "Bearer " + adminToken})
 	if updated.StatusCode != http.StatusOK {
 		t.Fatalf("patch profile status=%d want=%d body=%s", updated.StatusCode, http.StatusOK, string(updated.Body))
 	}
 	if version := int(jsonPathFloatValue(t, updated.Body, "data", "version")); version != 2 {
 		t.Fatalf("updated version=%d want=2 body=%s", version, string(updated.Body))
+	}
+	if gotDisplay := jsonPathString(t, updated.Body, "data", "display_name"); gotDisplay != "Updated Name" {
+		t.Fatalf("patch display_name=%q want=%q body=%s", gotDisplay, "Updated Name", string(updated.Body))
 	}
 
 	history := mustJSON(t, http.MethodGet, testServer.URL+"/v1/model/profiles/"+logicalID+"/history", nil, map[string]string{

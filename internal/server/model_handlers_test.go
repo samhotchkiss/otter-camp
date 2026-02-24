@@ -138,6 +138,62 @@ func TestPatchProfileVersioningCreatesSequentialCurrentVersion(t *testing.T) {
 	}
 }
 
+func TestPatchProfileEmptyBodyReturns422(t *testing.T) {
+	orgID := uuid.New()
+	providerID := uuid.New()
+	providers := &fakeModelProviderRepo{
+		providers: map[uuid.UUID]repo.ModelProvider{
+			providerID: {
+				ID:          providerID,
+				Slug:        "test-provider",
+				DisplayName: "Test Provider",
+				APIBaseURL:  "https://provider.test",
+				IsEnabled:   true,
+				CreatedAt:   time.Now().UTC(),
+				UpdatedAt:   time.Now().UTC(),
+			},
+		},
+	}
+	profiles := newFakeModelProfileRepo()
+	created, err := profiles.Create(context.Background(), repo.ModelProfile{
+		LogicalProfileID:    uuid.NewString(),
+		OrganizationID:      &orgID,
+		Version:             1,
+		IsCurrent:           true,
+		ProviderID:          providerID,
+		ModelName:           "gpt-4o-mini",
+		DisplayName:         "Initial Name",
+		ContextWindowTokens: 10000,
+		MaxOutputTokens:     512,
+		SupportsStreaming:   true,
+		InvocationPurpose:   defaultInvocationPurpose,
+	})
+	if err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	h := modelHandlers{
+		providers: providers,
+		profiles:  profiles,
+	}
+
+	patchReq := newModelRequest(t, http.MethodPatch, "/v1/model/profiles/"+created.LogicalProfileID, map[string]any{}, orgID, "admin")
+	patchReq = withRouteParams(patchReq, map[string]string{"logical_profile_id": created.LogicalProfileID})
+	patchResp := httptest.NewRecorder()
+	h.patchProfile(patchResp, patchReq)
+	if patchResp.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("patch status=%d want=%d body=%s", patchResp.Code, http.StatusUnprocessableEntity, patchResp.Body.String())
+	}
+
+	history, err := profiles.ListHistoryByLogicalID(context.Background(), orgID, created.LogicalProfileID)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("history len=%d want=1", len(history))
+	}
+}
+
 func TestAssignmentHierarchyPutListDeleteGuard(t *testing.T) {
 	orgID := uuid.New()
 	assignments := newFakeModelAssignmentRepo()
@@ -273,6 +329,9 @@ func (f *fakeModelProfileRepo) Create(_ context.Context, profile repo.ModelProfi
 	}
 	if profile.InvocationPurpose == "" {
 		profile.InvocationPurpose = defaultInvocationPurpose
+	}
+	if strings.TrimSpace(profile.DisplayName) == "" {
+		profile.DisplayName = profile.ModelName
 	}
 	items := f.byLogical[profile.LogicalProfileID]
 	for i := range items {
