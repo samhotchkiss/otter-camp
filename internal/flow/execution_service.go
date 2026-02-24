@@ -259,6 +259,7 @@ func (s *service) StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNo
 		FlowNodeID:  *template.StartNodeID,
 		VisitNumber: 1,
 		Status:      "active",
+		SessionID:   newExecutionSessionID(),
 	})
 	if err != nil {
 		return nil, err
@@ -331,6 +332,7 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 			FlowNodeID:  *currentNode.NextNodeID,
 			VisitNumber: 1,
 			Status:      "active",
+			SessionID:   newExecutionSessionID(),
 		})
 		if createErr != nil {
 			return nil, createErr
@@ -398,6 +400,7 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 		FlowNodeID:  rejectNode.ID,
 		VisitNumber: nextVisit,
 		Status:      "active",
+		SessionID:   newExecutionSessionID(),
 	})
 	if err != nil {
 		return nil, err
@@ -776,6 +779,11 @@ func actorIDPtr(actor Actor) *uuid.UUID {
 		return nil
 	}
 	id := actor.ID
+	return &id
+}
+
+func newExecutionSessionID() *uuid.UUID {
+	id := uuid.New()
 	return &id
 }
 

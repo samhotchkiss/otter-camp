@@ -46,6 +46,7 @@ type Project = repo.Project
 type FlowTemplate = repo.FlowTemplate
 type FlowNode = repo.FlowNode
 type TaskSchedule = repo.TaskSchedule
+type Task = repo.ProjectTask
 
 type ProjectFilter struct {
 	DeliveryMode string
