@@ -115,6 +115,34 @@ func (r *ModelProfileRepo) ListCurrent(ctx context.Context, organizationID uuid.
 	return items, nil
 }
 
+func (r *ModelProfileRepo) ListCurrentByProvider(ctx context.Context, organizationID, providerID uuid.UUID) ([]ModelProfile, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
+		FROM model_profile
+		WHERE is_current = true
+		  AND provider_id = $2
+		  AND (organization_id = $1 OR organization_id IS NULL)
+		ORDER BY logical_profile_id, CASE WHEN organization_id = $1 THEN 0 ELSE 1 END
+	`, organizationID, providerID)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	items := make([]ModelProfile, 0)
+	for rows.Next() {
+		profile, scanErr := scanModelProfile(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		items = append(items, profile)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return items, nil
+}
+
 func (r *ModelProfileRepo) ListAll(ctx context.Context, organizationID uuid.UUID) ([]ModelProfile, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
@@ -122,6 +150,33 @@ func (r *ModelProfileRepo) ListAll(ctx context.Context, organizationID uuid.UUID
 		WHERE organization_id = $1 OR organization_id IS NULL
 		ORDER BY logical_profile_id, version
 	`, organizationID)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	items := make([]ModelProfile, 0)
+	for rows.Next() {
+		profile, scanErr := scanModelProfile(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		items = append(items, profile)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return items, nil
+}
+
+func (r *ModelProfileRepo) ListHistoryByLogicalID(ctx context.Context, organizationID uuid.UUID, logicalProfileID string) ([]ModelProfile, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
+		FROM model_profile
+		WHERE logical_profile_id = $2
+		  AND (organization_id = $1 OR organization_id IS NULL)
+		ORDER BY version DESC, CASE WHEN organization_id = $1 THEN 0 ELSE 1 END
+	`, organizationID, strings.TrimSpace(logicalProfileID))
 	if err != nil {
 		return nil, mapDBError(err)
 	}
