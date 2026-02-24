@@ -148,7 +148,7 @@ func TestIssueValidateRevokeAPIKeyAndRateLimit(t *testing.T) {
 		t.Fatalf("ValidateAPIKey garbage err = %v, want ErrInvalidAPIKey", err)
 	}
 
-	if err := service.RevokeAPIKey(ctx, first.KeyID, user.ID); err != nil {
+	if err := service.RevokeAPIKey(ctx, first.KeyID, user.ID, user.Role, org.ID); err != nil {
 		t.Fatalf("RevokeAPIKey: %v", err)
 	}
 	if _, err := service.ValidateAPIKey(ctx, first.RawKey); !errors.Is(err, ErrInvalidAPIKey) {

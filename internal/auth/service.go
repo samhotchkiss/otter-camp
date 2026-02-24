@@ -48,6 +48,7 @@ var (
 	ErrSessionRevoked           = errors.New("session revoked")
 	ErrInvalidSession           = errors.New("invalid session")
 	ErrInvalidAPIKey            = errors.New("invalid api key")
+	ErrForbidden                = errors.New("forbidden")
 	ErrTokenExpired             = errors.New("token expired")
 	ErrNoDefaultOrganization    = errors.New("default organization is not configured")
 	ErrNoAdminForLocalAutoLogin = errors.New("no admin user available for local auto-login")
@@ -60,7 +61,7 @@ type Service interface {
 	ValidateSession(ctx context.Context, sessionToken string) (*SessionInfo, error)
 	ValidateAPIKey(ctx context.Context, rawKey string) (*APIKeyInfo, error)
 	IssueAPIKey(ctx context.Context, userID uuid.UUID, displayName string, scopes []string, expiresAt *time.Time) (*IssueResult, error)
-	RevokeAPIKey(ctx context.Context, keyID, requestingUserID uuid.UUID) error
+	RevokeAPIKey(ctx context.Context, keyID, requestingUserID uuid.UUID, requestingRole string, requestingOrgID uuid.UUID) error
 	ListAPIKeys(ctx context.Context, userID uuid.UUID) ([]*APIKeyInfo, error)
 	MagicLink(ctx context.Context, email string) (*MagicLinkResult, error)
 	ResetPassword(ctx context.Context, token, newPassword string) error
@@ -92,15 +93,18 @@ type SessionInfo struct {
 }
 
 type APIKeyInfo struct {
-	ID          uuid.UUID
-	UserID      uuid.UUID
-	KeyPrefix   string
-	DisplayName string
-	Scopes      []string
-	CreatedAt   time.Time
-	LastUsedAt  *time.Time
-	ExpiresAt   *time.Time
-	RevokedAt   *time.Time
+	ID             uuid.UUID
+	UserID         uuid.UUID
+	OrganizationID uuid.UUID
+	Email          string
+	DisplayName    string
+	Role           string
+	KeyPrefix      string
+	Scopes         []string
+	CreatedAt      time.Time
+	LastUsedAt     *time.Time
+	ExpiresAt      *time.Time
+	RevokedAt      *time.Time
 }
 
 type IssueResult struct {
@@ -412,7 +416,24 @@ func (s *service) ValidateAPIKey(ctx context.Context, rawKey string) (*APIKeyInf
 	if err != nil {
 		return nil, err
 	}
-	return apiKeyToInfo(touched), nil
+
+	owner, err := s.users.GetByID(ctx, touched.UserID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil, ErrInvalidAPIKey
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !owner.IsActive {
+		return nil, ErrInvalidAPIKey
+	}
+
+	info := apiKeyToInfo(touched)
+	info.OrganizationID = owner.OrganizationID
+	info.Email = owner.Email
+	info.DisplayName = owner.DisplayName
+	info.Role = owner.Role
+	return info, nil
 }
 
 func (s *service) IssueAPIKey(ctx context.Context, userID uuid.UUID, displayName string, scopes []string, expiresAt *time.Time) (*IssueResult, error) {
@@ -448,7 +469,7 @@ func (s *service) IssueAPIKey(ctx context.Context, userID uuid.UUID, displayName
 	}, nil
 }
 
-func (s *service) RevokeAPIKey(ctx context.Context, keyID, requestingUserID uuid.UUID) error {
+func (s *service) RevokeAPIKey(ctx context.Context, keyID, requestingUserID uuid.UUID, requestingRole string, requestingOrgID uuid.UUID) error {
 	key, err := s.apiKeys.GetByID(ctx, keyID)
 	if errors.Is(err, repo.ErrNotFound) {
 		return ErrInvalidAPIKey
@@ -456,8 +477,22 @@ func (s *service) RevokeAPIKey(ctx context.Context, keyID, requestingUserID uuid
 	if err != nil {
 		return err
 	}
+
 	if key.UserID != requestingUserID {
-		return ErrInvalidAPIKey
+		if !strings.EqualFold(strings.TrimSpace(requestingRole), "admin") {
+			return ErrForbidden
+		}
+
+		owner, ownerErr := s.users.GetByID(ctx, key.UserID)
+		if errors.Is(ownerErr, repo.ErrNotFound) {
+			return ErrInvalidAPIKey
+		}
+		if ownerErr != nil {
+			return ownerErr
+		}
+		if owner.OrganizationID != requestingOrgID {
+			return ErrForbidden
+		}
 	}
 	_, err = s.apiKeys.Revoke(ctx, keyID)
 	return err

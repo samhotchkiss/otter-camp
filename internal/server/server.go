@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"os"
 	"time"
-
-	"github.com/go-chi/chi/v5"
 )
 
 type Options struct {
@@ -71,12 +69,7 @@ func Run(ctx context.Context, opts Options) error {
 }
 
 func NewHandler(version string) http.Handler {
-	r := chi.NewRouter()
-	r.Get("/version", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte(version))
-	})
-	return r
+	return NewHandlerWithOptions(HandlerOptions{Version: version})
 }
 
 func shutdown(parent context.Context, srv *http.Server, timeout time.Duration) error {

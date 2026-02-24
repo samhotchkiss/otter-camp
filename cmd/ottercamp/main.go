@@ -86,6 +86,29 @@ func runServe() int {
 
 	_ = clock.New(cfg.Mode)
 
+	pool, err := db.NewFromEnv(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "database config error: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+
+	authService, err := authsvc.NewService(authsvc.Options{
+		Users:    repo.NewHumanUserRepo(pool.Raw()),
+		Sessions: repo.NewAuthSessionRepo(pool.Raw()),
+		APIKeys:  repo.NewAPIKeyRepo(pool.Raw()),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "auth service setup error: %v\n", err)
+		return 1
+	}
+
+	handler := server.NewHandlerWithOptions(server.HandlerOptions{
+		Version:     version,
+		Logger:      logger,
+		AuthService: authService,
+	})
+
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signalCh)
@@ -94,6 +117,7 @@ func runServe() int {
 		Addr:            cfg.Addr,
 		Logger:          logger,
 		Version:         version,
+		Handler:         handler,
 		SignalCh:        signalCh,
 		ShutdownTimeout: 30 * time.Second,
 	})
