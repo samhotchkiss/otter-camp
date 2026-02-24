@@ -56,6 +56,7 @@ var ErrorCodes = []string{
 type PaginationMeta struct {
 	NextCursor *string `json:"next_cursor"`
 	PrevCursor *string `json:"prev_cursor"`
+	HasMore    bool    `json:"has_more"`
 	Limit      int     `json:"limit"`
 	Total      *int    `json:"total"`
 }

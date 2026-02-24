@@ -329,6 +329,7 @@ func (h chatHandlers) listSessions(w http.ResponseWriter, r *http.Request) {
 
 	responder.JSONList(w, http.StatusOK, payload, api.PaginationMeta{
 		NextCursor: nextCursor,
+		HasMore:    hasMore,
 		Limit:      limit,
 	})
 }
@@ -528,6 +529,7 @@ func (h chatHandlers) listMessages(w http.ResponseWriter, r *http.Request) {
 
 	responder.JSONList(w, http.StatusOK, payload, api.PaginationMeta{
 		NextCursor: nextCursor,
+		HasMore:    hasMore,
 		Limit:      limit,
 		Total:      &total,
 	})
@@ -654,13 +656,18 @@ func (h chatHandlers) cancelTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var cancelReason *string
 	if r.ContentLength > 0 {
 		var req cancelTurnRequest
 		if err := decodeJSON(r, &req); err != nil {
 			responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
 			return
 		}
+		cancelReason = trimOptionalString(req.Reason)
 	}
+	// The endpoint accepts reason for API compatibility, but CancelCurrentTurn currently
+	// does not persist reason text; this remains a best-effort advisory input for now.
+	_ = cancelReason
 
 	turnID := h.currentInProgressTurnID(r.Context(), sessionID)
 	if err := h.service.CancelCurrentTurn(r.Context(), sessionID); err != nil {
@@ -811,7 +818,7 @@ func (h chatHandlers) addReaction(w http.ResponseWriter, r *http.Request) {
 
 func (h chatHandlers) removeReaction(w http.ResponseWriter, r *http.Request) {
 	responder := api.NewResponder(r.Context())
-	_, ok := h.requirePrincipal(w, r)
+	principal, ok := h.requirePrincipal(w, r)
 	if !ok {
 		return
 	}
@@ -843,14 +850,20 @@ func (h chatHandlers) removeReaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	found := false
+	var reaction *chat.ChatMessageReaction
 	for _, item := range reactions {
 		if item.ID == reactionID {
 			found = true
+			reaction = item
 			break
 		}
 	}
 	if !found {
 		responder.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+		return
+	}
+	if reaction != nil && reaction.ReactorID != principal.UserID && !isAdminRole(principal.Role) {
+		responder.Error(w, http.StatusForbidden, api.ErrCodeForbidden, "forbidden")
 		return
 	}
 
@@ -1134,6 +1147,7 @@ func (h chatHandlers) listArtifacts(w http.ResponseWriter, r *http.Request) {
 
 	responder.JSONList(w, http.StatusOK, payload, api.PaginationMeta{
 		NextCursor: nextCursor,
+		HasMore:    hasMore,
 		Limit:      limit,
 	})
 }

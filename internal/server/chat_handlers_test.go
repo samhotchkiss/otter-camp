@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/samhotchkiss/otter-camp/internal/api"
 	"github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
@@ -134,6 +135,125 @@ func TestGetSessionCrossOrgNotFound(t *testing.T) {
 
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusNotFound, rr.Body.String())
+	}
+}
+
+func TestRemoveReactionForbiddenForNonReactor(t *testing.T) {
+	sessionID := uuid.New()
+	messageID := uuid.New()
+	reactionID := uuid.New()
+	reactorID := uuid.New()
+	callerID := uuid.New()
+
+	var removeCalls int
+	svc := &fakeChatService{
+		getMessageFn: func(context.Context, uuid.UUID) (*chat.ChatMessage, error) {
+			return &chat.ChatMessage{ID: messageID, SessionID: sessionID}, nil
+		},
+		listReactionsFn: func(context.Context, uuid.UUID) ([]*chat.ChatMessageReaction, error) {
+			return []*chat.ChatMessageReaction{
+				{
+					ID:        reactionID,
+					MessageID: messageID,
+					SessionID: sessionID,
+					ReactorID: reactorID,
+				},
+			}, nil
+		},
+		removeReactionFn: func(context.Context, uuid.UUID) error {
+			removeCalls++
+			return nil
+		},
+	}
+	h := chatHandlers{service: svc}
+
+	req := newChatRequest(
+		t,
+		http.MethodDelete,
+		"/v1/chat-sessions/"+sessionID.String()+"/messages/"+messageID.String()+"/reactions/"+reactionID.String(),
+		nil,
+		middleware.Principal{
+			UserID:         callerID,
+			OrganizationID: uuid.New(),
+			Role:           "member",
+		},
+	)
+	req = withRouteParams(req, map[string]string{
+		"id":  sessionID.String(),
+		"mid": messageID.String(),
+		"rid": reactionID.String(),
+	})
+	rr := httptest.NewRecorder()
+
+	h.removeReaction(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusForbidden, rr.Body.String())
+	}
+	if got := errorCode(t, rr.Body.Bytes()); got != api.ErrCodeForbidden {
+		t.Fatalf("error.code = %q, want %q body=%s", got, api.ErrCodeForbidden, rr.Body.String())
+	}
+	if removeCalls != 0 {
+		t.Fatalf("RemoveReaction calls = %d, want 0", removeCalls)
+	}
+}
+
+func TestPutReadCursorRejectsAgentAPIKey(t *testing.T) {
+	svc := &fakeChatService{}
+	h := chatHandlers{service: svc}
+
+	sessionID := uuid.New()
+	req := newChatRequest(t, http.MethodPut, "/v1/chat-sessions/"+sessionID.String()+"/read-cursor", map[string]any{
+		"last_read_sequence": 3,
+	}, middleware.Principal{
+		UserID:         uuid.New(),
+		OrganizationID: uuid.New(),
+		Role:           "agent",
+		AuthMethod:     middleware.AuthMethodAPIKey,
+		APIKey:         &auth.APIKeyInfo{Scopes: []string{"agent:chat"}},
+	})
+	req = withRouteParams(req, map[string]string{"id": sessionID.String()})
+	rr := httptest.NewRecorder()
+
+	h.putReadCursor(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusForbidden, rr.Body.String())
+	}
+	if got := errorCode(t, rr.Body.Bytes()); got != api.ErrCodeForbidden {
+		t.Fatalf("error.code = %q, want %q body=%s", got, api.ErrCodeForbidden, rr.Body.String())
+	}
+}
+
+func TestCancelTurnAcceptsReasonBody(t *testing.T) {
+	sessionID := uuid.New()
+	var cancelCalls int
+
+	svc := &fakeChatService{
+		cancelCurrentTurnFn: func(context.Context, uuid.UUID) error {
+			cancelCalls++
+			return nil
+		},
+	}
+	h := chatHandlers{service: svc}
+
+	req := newChatRequest(t, http.MethodPost, "/v1/chat-sessions/"+sessionID.String()+"/cancel-turn", map[string]any{
+		"reason": "user requested",
+	}, middleware.Principal{
+		UserID:         uuid.New(),
+		OrganizationID: uuid.New(),
+		Role:           "member",
+	})
+	req = withRouteParams(req, map[string]string{"id": sessionID.String()})
+	rr := httptest.NewRecorder()
+
+	h.cancelTurn(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if cancelCalls != 1 {
+		t.Fatalf("CancelCurrentTurn calls = %d, want 1", cancelCalls)
 	}
 }
 

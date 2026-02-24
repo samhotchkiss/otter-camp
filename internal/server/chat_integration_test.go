@@ -34,6 +34,20 @@ func TestChatHTTPSessionCreateListGetRoundTrip(t *testing.T) {
 	if got := jsonPathString(t, listed.Body, "data", "0", "id"); got != sessionID {
 		t.Fatalf("listed session id = %q, want %q body=%s", got, sessionID, string(listed.Body))
 	}
+	if got := jsonPathValue(t, listed.Body, "meta", "pagination", "has_more"); got != false {
+		t.Fatalf("meta.pagination.has_more = %v, want false body=%s", got, string(listed.Body))
+	}
+
+	for i := 0; i < 3; i++ {
+		_ = createChatSessionForTest(t, testServer.URL, adminToken)
+	}
+	paged := mustJSON(t, http.MethodGet, testServer.URL+"/v1/chat-sessions?limit=2", nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if paged.StatusCode != http.StatusOK {
+		t.Fatalf("paged list sessions status = %d, want %d body=%s", paged.StatusCode, http.StatusOK, string(paged.Body))
+	}
+	if got := jsonPathValue(t, paged.Body, "meta", "pagination", "has_more"); got != true {
+		t.Fatalf("paged meta.pagination.has_more = %v, want true body=%s", got, string(paged.Body))
+	}
 
 	got := mustJSON(t, http.MethodGet, testServer.URL+"/v1/chat-sessions/"+sessionID, nil, map[string]string{"Authorization": "Bearer " + adminToken})
 	if got.StatusCode != http.StatusOK {
@@ -78,15 +92,28 @@ func TestChatHTTPMessageSendAndList(t *testing.T) {
 	if got := jsonPathString(t, listed.Body, "data", "0", "id"); got != messageID {
 		t.Fatalf("listed message id = %q, want %q body=%s", got, messageID, string(listed.Body))
 	}
+	if got := jsonPathValue(t, listed.Body, "meta", "pagination", "has_more"); got != false {
+		t.Fatalf("meta.pagination.has_more = %v, want false body=%s", got, string(listed.Body))
+	}
+
+	_ = appendChatMessageForTest(t, testServer.URL, adminToken, sessionID, "second message")
+	paged := mustJSON(t, http.MethodGet, testServer.URL+"/v1/chat-sessions/"+sessionID+"/messages?limit=1", nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if paged.StatusCode != http.StatusOK {
+		t.Fatalf("paged list messages status = %d, want %d body=%s", paged.StatusCode, http.StatusOK, string(paged.Body))
+	}
+	if got := jsonPathValue(t, paged.Body, "meta", "pagination", "has_more"); got != true {
+		t.Fatalf("paged meta.pagination.has_more = %v, want true body=%s", got, string(paged.Body))
+	}
 }
 
 func TestChatHTTPReactionLifecycle(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 
-	testServer, adminUser, _ := newChatTestServer(t)
+	testServer, adminUser, memberUser := newChatTestServer(t)
 	defer testServer.Close()
 
 	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	memberToken := loginToken(t, testServer.URL, memberUser.Email, "member-password")
 	sessionID := createChatSessionForTest(t, testServer.URL, adminToken)
 	messageID := appendChatMessageForTest(t, testServer.URL, adminToken, sessionID, "react to this")
 
@@ -108,6 +135,23 @@ func TestChatHTTPReactionLifecycle(t *testing.T) {
 	}
 	if len(reactionItems) != 1 {
 		t.Fatalf("reaction list count = %d, want 1 body=%s", len(reactionItems), string(listed.Body))
+	}
+
+	forbidden := mustJSON(t, http.MethodDelete, testServer.URL+"/v1/chat-sessions/"+sessionID+"/messages/"+messageID+"/reactions/"+reactionID, nil, map[string]string{"Authorization": "Bearer " + memberToken})
+	if forbidden.StatusCode != http.StatusForbidden {
+		t.Fatalf("delete reaction as non-reactor status = %d, want %d body=%s", forbidden.StatusCode, http.StatusForbidden, string(forbidden.Body))
+	}
+
+	stillListed := mustJSON(t, http.MethodGet, testServer.URL+"/v1/chat-sessions/"+sessionID+"/messages/"+messageID+"/reactions", nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if stillListed.StatusCode != http.StatusOK {
+		t.Fatalf("list reactions after forbidden delete status = %d, want %d body=%s", stillListed.StatusCode, http.StatusOK, string(stillListed.Body))
+	}
+	stillItems, ok := jsonPathValue(t, stillListed.Body, "data").([]any)
+	if !ok {
+		t.Fatalf("reaction list after forbidden delete shape = %T, want []any body=%s", jsonPathValue(t, stillListed.Body, "data"), string(stillListed.Body))
+	}
+	if len(stillItems) != 1 {
+		t.Fatalf("reaction list count after forbidden delete = %d, want 1 body=%s", len(stillItems), string(stillListed.Body))
 	}
 
 	deleted := mustJSON(t, http.MethodDelete, testServer.URL+"/v1/chat-sessions/"+sessionID+"/messages/"+messageID+"/reactions/"+reactionID, nil, map[string]string{"Authorization": "Bearer " + adminToken})
