@@ -55,7 +55,7 @@ type GatewayResponse struct {
 }
 
 type ConnectionSelector interface {
-	SelectConnection(ctx context.Context, orgID uuid.UUID, profileID string, priority PriorityTier) (*repo.ProviderConnection, error)
+	SelectConnection(ctx context.Context, orgID uuid.UUID, profileID, invocationPurpose string, priority PriorityTier) (*repo.ProviderConnection, error)
 }
 
 type GatewayExecutor interface {

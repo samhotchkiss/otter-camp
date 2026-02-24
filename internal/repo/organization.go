@@ -13,8 +13,9 @@ import (
 )
 
 type OrganizationSettings struct {
-	Agents    OrganizationAgentsSettings    `json:"agents,omitempty"`
-	Redaction OrganizationRedactionSettings `json:"redaction,omitempty"`
+	Agents       OrganizationAgentsSettings       `json:"agents,omitempty"`
+	Redaction    OrganizationRedactionSettings    `json:"redaction,omitempty"`
+	ModelCapture OrganizationModelCaptureSettings `json:"model_capture,omitempty"`
 }
 
 type OrganizationAgentsSettings struct {
@@ -24,6 +25,11 @@ type OrganizationAgentsSettings struct {
 type OrganizationRedactionSettings struct {
 	Enabled bool   `json:"enabled,omitempty"`
 	Policy  string `json:"policy,omitempty"`
+}
+
+type OrganizationModelCaptureSettings struct {
+	CapturePrompts   bool `json:"capture_prompts,omitempty"`
+	CaptureResponses bool `json:"capture_responses,omitempty"`
 }
 
 type Organization struct {

@@ -11,6 +11,7 @@ import (
 )
 
 const maxFallbackHops = 3
+const systemHaikuProfileID = "haiku"
 
 type modelProfileLookup interface {
 	GetCurrentByLogicalID(ctx context.Context, organizationID uuid.UUID, logicalProfileID string) (repo.ModelProfile, error)
@@ -37,7 +38,7 @@ func NewRouter(profiles modelProfileLookup, connections providerConnectionLookup
 	}
 }
 
-func (r *Router) SelectConnection(ctx context.Context, orgID uuid.UUID, profileID string, priority PriorityTier) (*repo.ProviderConnection, error) {
+func (r *Router) SelectConnection(ctx context.Context, orgID uuid.UUID, profileID, invocationPurpose string, priority PriorityTier) (*repo.ProviderConnection, error) {
 	if r == nil || r.profiles == nil || r.connections == nil {
 		return nil, fmt.Errorf("gateway router is not configured")
 	}
@@ -45,7 +46,7 @@ func (r *Router) SelectConnection(ctx context.Context, orgID uuid.UUID, profileI
 		return nil, fmt.Errorf("organization id is required")
 	}
 
-	currentProfileID := strings.TrimSpace(profileID)
+	currentProfileID := routedProfileID(strings.TrimSpace(profileID), invocationPurpose)
 	if currentProfileID == "" {
 		return nil, fmt.Errorf("profile id is required")
 	}
@@ -81,6 +82,15 @@ func (r *Router) SelectConnection(ctx context.Context, orgID uuid.UUID, profileI
 	}
 
 	return nil, ErrNoHealthyConnection
+}
+
+func routedProfileID(profileID, invocationPurpose string) string {
+	switch strings.TrimSpace(invocationPurpose) {
+	case "listening_eval", "summarization", "memory_extraction", "memory_retrieval", "memory_dedup":
+		return systemHaikuProfileID
+	default:
+		return profileID
+	}
 }
 
 func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID uuid.UUID) (*repo.ProviderConnection, error) {

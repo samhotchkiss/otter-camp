@@ -1,0 +1,13 @@
+{
+  "response": {
+    "message": "Deterministic fixture payload for streaming mode validation.",
+    "metadata": {
+      "source": "fixture"
+    }
+  },
+  "metadata": {
+    "input_tokens": 37,
+    "output_tokens": 21,
+    "cache_read_tokens": 3
+  }
+}
