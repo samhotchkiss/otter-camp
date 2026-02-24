@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/db"
 	oclog "github.com/samhotchkiss/otter-camp/internal/log"
 	"github.com/samhotchkiss/otter-camp/internal/migrate"
+	"github.com/samhotchkiss/otter-camp/internal/ratelimit"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/server"
 	skillsvc "github.com/samhotchkiss/otter-camp/internal/skill"
@@ -46,6 +48,12 @@ func run(args []string) int {
 		return runMigrate()
 	case "backup":
 		return runBackup(args[1:])
+	case "magic-link":
+		return runMagicLink(args[1:])
+	case "reset-password":
+		return runResetPassword(args[1:])
+	case "unlock-account":
+		return runUnlockAccount(args[1:])
 	case "skill":
 		return runSkill(args[1:])
 	case "version":
@@ -150,6 +158,121 @@ func runBackup(args []string) int {
 	}
 
 	fmt.Fprintln(os.Stdout, "backup not yet implemented")
+	return 0
+}
+
+func runMagicLink(args []string) int {
+	flags := flag.NewFlagSet("magic-link", flag.ContinueOnError)
+	email := flags.String("email", "", "account email")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "magic-link argument error: %v\n", err)
+		return 1
+	}
+	if strings.TrimSpace(*email) == "" {
+		fmt.Fprintln(os.Stderr, "magic-link requires --email")
+		return 1
+	}
+
+	deps, cleanup, err := newAuthCommandDepsFromEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "magic-link setup error: %v\n", err)
+		return 1
+	}
+	defer cleanup()
+
+	result, err := deps.service.MagicLink(context.Background(), strings.TrimSpace(*email))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "magic-link failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(os.Stdout, result.Token)
+	return 0
+}
+
+func runResetPassword(args []string) int {
+	flags := flag.NewFlagSet("reset-password", flag.ContinueOnError)
+	userIDRaw := flags.String("user-id", "", "user id")
+	newPassword := flags.String("new-password", "", "new password")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "reset-password argument error: %v\n", err)
+		return 1
+	}
+	if strings.TrimSpace(*userIDRaw) == "" {
+		fmt.Fprintln(os.Stderr, "reset-password requires --user-id")
+		return 1
+	}
+	if strings.TrimSpace(*newPassword) == "" {
+		fmt.Fprintln(os.Stderr, "reset-password requires --new-password")
+		return 1
+	}
+
+	userID, err := uuid.Parse(strings.TrimSpace(*userIDRaw))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reset-password user-id error: %v\n", err)
+		return 1
+	}
+
+	deps, cleanup, err := newAuthCommandDepsFromEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reset-password setup error: %v\n", err)
+		return 1
+	}
+	defer cleanup()
+
+	user, err := deps.userRepo.GetByID(context.Background(), userID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reset-password user lookup failed: %v\n", err)
+		return 1
+	}
+
+	ctx := authsvc.WithOrgID(context.Background(), user.OrganizationID)
+	link, err := deps.service.MagicLink(ctx, user.Email)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reset-password magic-link failed: %v\n", err)
+		return 1
+	}
+
+	if err := deps.service.ResetPassword(context.Background(), link.Token, *newPassword); err != nil {
+		fmt.Fprintf(os.Stderr, "reset-password failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stdout, "password reset for user %s\n", userID)
+	return 0
+}
+
+func runUnlockAccount(args []string) int {
+	flags := flag.NewFlagSet("unlock-account", flag.ContinueOnError)
+	userIDRaw := flags.String("user-id", "", "user id")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "unlock-account argument error: %v\n", err)
+		return 1
+	}
+	if strings.TrimSpace(*userIDRaw) == "" {
+		fmt.Fprintln(os.Stderr, "unlock-account requires --user-id")
+		return 1
+	}
+
+	userID, err := uuid.Parse(strings.TrimSpace(*userIDRaw))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "unlock-account user-id error: %v\n", err)
+		return 1
+	}
+
+	deps, cleanup, err := newAuthCommandDepsFromEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "unlock-account setup error: %v\n", err)
+		return 1
+	}
+	defer cleanup()
+
+	if err := deps.service.UnlockAccount(context.Background(), userID); err != nil {
+		fmt.Fprintf(os.Stderr, "unlock-account failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stdout, "unlocked user %s\n", userID)
 	return 0
 }
 
@@ -464,6 +587,53 @@ func newSkillServiceFromEnv() (skillsvc.Service, func(), error) {
 	return service, cleanup, nil
 }
 
+type authCommandDeps struct {
+	service  authsvc.Service
+	userRepo *repo.HumanUserRepo
+}
+
+func newAuthCommandDepsFromEnv() (*authCommandDeps, func(), error) {
+	pool, err := db.NewFromEnv(context.Background())
+	if err != nil {
+		return nil, nil, err
+	}
+
+	defaultOrgID := uuid.Nil
+	defaultOrgIDRaw := strings.TrimSpace(os.Getenv("OTTERCAMP_DEFAULT_ORG_ID"))
+	if defaultOrgIDRaw != "" {
+		parsed, err := uuid.Parse(defaultOrgIDRaw)
+		if err != nil {
+			pool.Close()
+			return nil, nil, fmt.Errorf("parse OTTERCAMP_DEFAULT_ORG_ID: %w", err)
+		}
+		defaultOrgID = parsed
+	}
+
+	userRepo := repo.NewHumanUserRepo(pool.Raw())
+	sessionRepo := repo.NewAuthSessionRepo(pool.Raw())
+	apiKeyRepo := repo.NewAPIKeyRepo(pool.Raw())
+	clk := clock.Real{}
+	limiter := ratelimit.NewWithClock(20, 15*time.Minute, clk)
+	service, err := authsvc.NewService(userRepo, sessionRepo, apiKeyRepo, clk, authsvc.Config{
+		DefaultOrgID:  defaultOrgID,
+		AuthMode:      strings.TrimSpace(os.Getenv("OTTERCAMP_AUTH_MODE")),
+		IPRateLimiter: limiter,
+	}, nil)
+	if err != nil {
+		pool.Close()
+		return nil, nil, err
+	}
+
+	cleanup := func() {
+		pool.Close()
+	}
+
+	return &authCommandDeps{
+		service:  service,
+		userRepo: userRepo,
+	}, cleanup, nil
+}
+
 func parseOrgID(flagValue string) (uuid.UUID, error) {
 	raw := strings.TrimSpace(flagValue)
 	if raw == "" {
@@ -480,5 +650,5 @@ func printSkillUsage(w *os.File) {
 }
 
 func printUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp <serve|worker|migrate|backup|skill|version>")
+	fmt.Fprintln(w, "usage: ottercamp <serve|worker|migrate|backup|magic-link|reset-password|unlock-account|skill|version>")
 }
