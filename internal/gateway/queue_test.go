@@ -16,7 +16,7 @@ type stubRouter struct {
 	err        error
 }
 
-func (s stubRouter) SelectConnection(_ context.Context, _ uuid.UUID, _ string, _ PriorityTier) (*repo.ProviderConnection, error) {
+func (s stubRouter) SelectConnection(_ context.Context, _ uuid.UUID, _ string, _ string, _ PriorityTier) (*repo.ProviderConnection, error) {
 	if s.err != nil {
 		return nil, s.err
 	}

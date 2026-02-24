@@ -60,7 +60,7 @@ func TestRouterSelectConnectionSkipsUnavailable(t *testing.T) {
 		health,
 	)
 
-	selected, err := router.SelectConnection(context.Background(), orgID, "standard", PrioritySyncInteractive)
+	selected, err := router.SelectConnection(context.Background(), orgID, "standard", "agent_turn", PrioritySyncInteractive)
 	if err != nil {
 		t.Fatalf("SelectConnection: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestRouterSelectConnectionUsesFallbackProfileChain(t *testing.T) {
 		health,
 	)
 
-	selected, err := router.SelectConnection(context.Background(), orgID, "standard", PrioritySyncInteractive)
+	selected, err := router.SelectConnection(context.Background(), orgID, "standard", "agent_turn", PrioritySyncInteractive)
 	if err != nil {
 		t.Fatalf("SelectConnection: %v", err)
 	}
@@ -131,8 +131,40 @@ func TestRouterSelectConnectionFallbackMaxHops(t *testing.T) {
 		NewHealthChecker(),
 	)
 
-	_, err := router.SelectConnection(context.Background(), orgID, "a", PrioritySyncInteractive)
+	_, err := router.SelectConnection(context.Background(), orgID, "a", "agent_turn", PrioritySyncInteractive)
 	if !errors.Is(err, ErrNoHealthyConnection) {
 		t.Fatalf("SelectConnection error = %v, want ErrNoHealthyConnection", err)
+	}
+}
+
+func TestRouterSelectConnectionRoutesListeningEvalToHaiku(t *testing.T) {
+	orgID := uuid.New()
+	haikuProvider := uuid.New()
+	haikuConnection := uuid.New()
+	otherProvider := uuid.New()
+	otherConnection := uuid.New()
+
+	router := NewRouter(
+		&stubProfileLookup{
+			profiles: map[string]repo.ModelProfile{
+				"high-capability": {LogicalProfileID: "high-capability", ProviderID: otherProvider},
+				"haiku":           {LogicalProfileID: "haiku", ProviderID: haikuProvider},
+			},
+		},
+		&stubConnectionLookup{
+			items: map[uuid.UUID][]repo.ProviderConnection{
+				otherProvider: {{ID: otherConnection, ProviderID: otherProvider, IsEnabled: true, FailoverPriority: 1}},
+				haikuProvider: {{ID: haikuConnection, ProviderID: haikuProvider, IsEnabled: true, FailoverPriority: 1}},
+			},
+		},
+		NewHealthChecker(),
+	)
+
+	selected, err := router.SelectConnection(context.Background(), orgID, "high-capability", "listening_eval", PrioritySyncInteractive)
+	if err != nil {
+		t.Fatalf("SelectConnection: %v", err)
+	}
+	if selected.ID != haikuConnection {
+		t.Fatalf("selected connection = %s, want %s", selected.ID, haikuConnection)
 	}
 }

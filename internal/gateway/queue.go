@@ -144,7 +144,7 @@ func (q *PriorityQueue) Enqueue(ctx context.Context, req GatewayRequest) (Gatewa
 		return GatewayResponse{}, fmt.Errorf("priority tier %q is invalid", req.Priority)
 	}
 
-	connection, err := q.router.SelectConnection(ctx, req.OrganizationID, req.ProfileID, req.Priority)
+	connection, err := q.router.SelectConnection(ctx, req.OrganizationID, req.ProfileID, req.InvocationPurpose, req.Priority)
 	if err != nil {
 		return GatewayResponse{}, err
 	}
