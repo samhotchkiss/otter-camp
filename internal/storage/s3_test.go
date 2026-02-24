@@ -10,6 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 func TestS3StorePutCallsPutObjectWithCorrectKey(t *testing.T) {
@@ -74,6 +75,74 @@ func TestS3StoreListPropagatesErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
+}
+
+func TestS3StoreExistsUsesHeadObjectOutcomes(t *testing.T) {
+	t.Run("head succeeds", func(t *testing.T) {
+		mock := &mockS3Client{}
+		store := newS3WithClient("bucket-1", mock)
+
+		exists, err := store.Exists(context.Background(), "orgs/a/chat/1/file.txt")
+		if err != nil {
+			t.Fatalf("Exists: %v", err)
+		}
+		if !exists {
+			t.Fatal("Exists = false, want true")
+		}
+	})
+
+	t.Run("no such key", func(t *testing.T) {
+		mock := &mockS3Client{
+			headErr: &s3types.NoSuchKey{},
+		}
+		store := newS3WithClient("bucket-1", mock)
+
+		exists, err := store.Exists(context.Background(), "orgs/a/chat/1/missing.txt")
+		if err != nil {
+			t.Fatalf("Exists: %v", err)
+		}
+		if exists {
+			t.Fatal("Exists = true, want false")
+		}
+	})
+
+	t.Run("head error propagates", func(t *testing.T) {
+		mock := &mockS3Client{
+			headErr: errors.New("boom"),
+		}
+		store := newS3WithClient("bucket-1", mock)
+
+		_, err := store.Exists(context.Background(), "orgs/a/chat/1/file.txt")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+}
+
+func TestS3StoreRejectsPathTraversalAcrossMethods(t *testing.T) {
+	store := newS3WithClient("bucket-1", &mockS3Client{})
+	key := "../../etc/passwd"
+	checkInvalidKey := func(err error, method string) {
+		if err == nil {
+			t.Fatalf("%s expected invalid key error", method)
+		}
+		var keyErr *InvalidKeyError
+		if !errors.As(err, &keyErr) {
+			t.Fatalf("%s error = %T, want *InvalidKeyError", method, err)
+		}
+	}
+
+	err := store.Put(context.Background(), key, bytes.NewReader([]byte("x")), PutOptions{})
+	checkInvalidKey(err, "Put")
+
+	_, err = store.Get(context.Background(), key)
+	checkInvalidKey(err, "Get")
+
+	err = store.Delete(context.Background(), key)
+	checkInvalidKey(err, "Delete")
+
+	_, err = store.Exists(context.Background(), key)
+	checkInvalidKey(err, "Exists")
 }
 
 func TestS3StoreLargePutUsesMultipart(t *testing.T) {
