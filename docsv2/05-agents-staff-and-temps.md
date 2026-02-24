@@ -187,7 +187,7 @@ Controls how the agent interacts with Ellie's memory system. Memory behavior is 
 Fields:
 
 - **memory_read_scopes**: which memory scopes the agent can read from via passive injection and `memory.query`. Staff default: `{org, assigned_projects, current_task}` — staff agents see memories from every project they're assigned to, enabling cross-project knowledge. Temp default: `{org, assigned_projects, current_task}` — temps see org-level memory plus their single assigned project and current task. The difference from staff is that staff agents are assigned to multiple projects (cross-project memory), while temps are assigned to exactly one. Agent-private memories of other agents are never readable.
-- **private_memory_enabled**: whether the agent maintains private working notes (agent-private scope in 06-memory.md). Default for staff PMs, Frank, Lori, and Ellie: true. Default for all other staff and all temps: false. Private memory is where staff agents accumulate cross-project judgment — "this codebase has fragile tests," "this human prefers detailed commit messages," "Agent Maven performs best on backend tasks."
+- **private_memory_enabled**: whether the agent maintains private working notes (agent-private scope in 06-memory.md). Default: `false` for all agents — staff and temps alike. Enable explicitly only for agents handling sensitive personal data (medical records, financial information, personal communications, etc.). Frank surfaces this recommendation when the human creates an agent for a sensitive role. Private memory is never on by default; it is an intentional opt-in.
 
 ### Skill Attachments
 
@@ -349,7 +349,7 @@ The project manager is not just another role — the PM has unique responsibilit
 - **Triages blockers**: when an agent files a blocker, it goes to the PM first. The PM decides whether to resolve it, escalate to Frank, or escalate to the human.
 - **Proactive supervision**: the PM monitors active flow nodes for stuck agents, failed sessions, and stalled progress. This is a periodic check, not continuous polling — the PM reviews flow node state when triggered by events (session ended, timeout elapsed, blocker filed) or on a periodic sweep. When the PM detects a stuck node, it can: reassign the work to a different temp, provide additional context to the current agent, escalate to Frank, or escalate to the human. See 03-projects-and-task-flow.md Proactive Supervision for the full supervision protocol.
 - **Default responder**: the PM is the default responder in the project-scoped session and in task sync sessions.
-- **Private memory**: PMs have `private_memory_enabled = true` by default. They maintain working notes about project state, agent performance, and strategic context.
+- **Private memory**: PMs have `private_memory_enabled = false` by default, the same as all other agents. Enable it explicitly if a PM is assigned to a project involving sensitive personal data.
 
 Every project has exactly one PM. If a PM agent is retired, a new PM must be assigned before the project can continue. Lori handles this transition.
 
@@ -732,7 +732,7 @@ scope_level:        org
 system_prompt:      [Frank's identity prompt — organizational strategist,
                      primary human touchpoint, cross-project coordinator,
                      escalation handler, warm but direct communication style]
-private_memory:     true
+private_memory:     false
 default_model:      [org's high-capability profile]
 memory_read_scopes: [org, assigned_projects, current_task]
 ```
@@ -749,7 +749,7 @@ scope_level:        org
 system_prompt:      [Lori's identity prompt — staffing expert, agent creator,
                      workforce manager, understands agent capabilities and
                      project needs, thoughtful and precise]
-private_memory:     true
+private_memory:     false
 default_model:      [org's high-capability profile]
 memory_read_scopes: [org, assigned_projects, current_task]
 ```
@@ -766,7 +766,7 @@ scope_level:        org
 system_prompt:      [Ellie's identity prompt — memory system, knowledge keeper,
                      passive infrastructure + active conversational agent,
                      precise, source-aware, transparent about confidence]
-private_memory:     true
+private_memory:     false
 default_model:      [org's standard-capability profile for conversational turns;
                      Haiku-class for background pipeline work]
 memory_read_scopes: [org, assigned_projects, current_task]
@@ -871,7 +871,7 @@ create index on agent_profile_template (is_active) where organization_id is null
 19. **Exactly one PM per project, enforced by schema.** If the PM is retired, a new PM must be assigned before the project continues.
 20. **Project roles: project_manager, worker, reviewer, planner.** An agent can hold multiple roles in the same project (separate rows) and different roles in different projects.
 21. **Agent identity is stateless at the prompt level.** Everything is assembled fresh from profile, context, memory, and history on every turn. No "agent runtime" holding state between turns.
-22. **Private memory for complex roles.** PMs, Frank, Lori, and Ellie have `private_memory_enabled = true` by default. Lori needs private memory to track agent performance, staffing patterns, and workforce knowledge across the org. Other staff and all temps default to false.
+22. **Private memory is opt-in for all agents.** `private_memory_enabled = false` for all agents by default — staff, PMs, Frank, Lori, Ellie, and temps alike. Enable it explicitly only for agents handling sensitive personal data (medical, financial, personal communications). Frank recommends enabling it when the human creates an agent for a sensitive role.
 23. **Skill attachments on agent profile are baseline competencies.** Activation depends on flow node context — agent skills are the fallback when no flow node skills are declared.
 24. **PMs are always staff agents.** PMs need deep project context, cross-project awareness, and persistent working relationships. They accumulate institutional knowledge that makes them more effective over time.
 25. **Workers default to temp.** Implementation work — writing code, running tests, applying fixes — is done by temps. Project-scoped temps are the standing workforce; task-scoped temps handle specialized one-off work. Temps keep the agent roster lean.
