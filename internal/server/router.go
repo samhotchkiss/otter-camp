@@ -1,0 +1,72 @@
+package server
+
+import (
+	"log/slog"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/samhotchkiss/otter-camp/internal/api"
+	"github.com/samhotchkiss/otter-camp/internal/auth"
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
+)
+
+type RouteRegistrar interface {
+	RegisterRoutes(r chi.Router)
+}
+
+type HandlerOptions struct {
+	Version         string
+	Logger          *slog.Logger
+	AuthService     auth.Service
+	RouteRegistrars []RouteRegistrar
+}
+
+func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	authHandlers := newAuthHandlers(opts.AuthService)
+
+	r := chi.NewRouter()
+	r.Use(middleware.RequestID(logger))
+
+	r.Get("/version", func(w http.ResponseWriter, r *http.Request) {
+		api.JSON(w, http.StatusOK, map[string]string{"version": opts.Version})
+	})
+	r.Get("/health/live", healthOK)
+	r.Get("/health/ready", healthOK)
+	r.Get("/health", healthOK)
+	r.Get("/ready", healthOK)
+
+	r.Route("/v1", func(v1 chi.Router) {
+		v1.Get("/version", func(w http.ResponseWriter, r *http.Request) {
+			api.JSON(w, http.StatusOK, map[string]string{"version": opts.Version})
+		})
+		v1.Post("/auth/login", authHandlers.login)
+
+		v1.Group(func(protected chi.Router) {
+			protected.Use(middleware.Auth(middleware.AuthOptions{Service: opts.AuthService, Logger: logger}))
+			protected.Post("/auth/logout", authHandlers.logout)
+			protected.Post("/auth/refresh", authHandlers.refresh)
+			protected.Get("/auth/me", authHandlers.me)
+			protected.Post("/api-keys", authHandlers.issueAPIKey)
+			protected.Delete("/api-keys/{id}", authHandlers.revokeAPIKey)
+			protected.Get("/api-keys", authHandlers.listAPIKeys)
+
+			for _, registrar := range opts.RouteRegistrars {
+				if registrar == nil {
+					continue
+				}
+				registrar.RegisterRoutes(protected)
+			}
+		})
+	})
+
+	return r
+}
+
+func healthOK(w http.ResponseWriter, _ *http.Request) {
+	api.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
