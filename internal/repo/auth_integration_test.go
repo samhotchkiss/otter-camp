@@ -313,6 +313,14 @@ func TestAPIKeyRepoLifecycleAndCascadeDelete(t *testing.T) {
 		t.Fatalf("ListByUser count = %d, want 1", len(listed))
 	}
 
+	touched, err := keyRepo.TouchLastUsed(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("TouchLastUsed: %v", err)
+	}
+	if touched.LastUsedAt == nil {
+		t.Fatal("expected last_used_at to be set")
+	}
+
 	revoked, err := keyRepo.Revoke(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("Revoke: %v", err)

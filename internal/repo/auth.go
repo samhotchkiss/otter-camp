@@ -651,6 +651,25 @@ func (r *APIKeyRepo) Revoke(ctx context.Context, id uuid.UUID) (APIKey, error) {
 	return updated, nil
 }
 
+func (r *APIKeyRepo) TouchLastUsed(ctx context.Context, id uuid.UUID) (APIKey, error) {
+	row := r.pool.QueryRow(ctx, `
+		UPDATE api_key
+		SET last_used_at = now()
+		WHERE id = $1
+		RETURNING id, user_id, key_hash, key_prefix, display_name, scopes, created_at, last_used_at, expires_at, revoked_at
+	`, id)
+
+	updated, err := scanAPIKey(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return APIKey{}, ErrNotFound
+	}
+	if err != nil {
+		return APIKey{}, mapDBError(err)
+	}
+
+	return updated, nil
+}
+
 func scanAPIKey(row pgx.Row) (APIKey, error) {
 	var apiKey APIKey
 	if err := row.Scan(
