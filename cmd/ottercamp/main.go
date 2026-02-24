@@ -23,6 +23,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/audit"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
+	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/db"
@@ -208,6 +209,14 @@ func runServe() int {
 		fmt.Fprintf(os.Stderr, "delivery service setup error: %v\n", err)
 		return 1
 	}
+	chatService, err := chat.NewService(chat.Options{
+		Pool:   pool.Raw(),
+		Events: bus,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "chat service setup error: %v\n", err)
+		return 1
+	}
 
 	store, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
 	if err != nil {
@@ -245,6 +254,7 @@ func runServe() int {
 			server.NewModelRouteRegistrar(pool.Raw()),
 			server.NewProjectRouteRegistrar(projectService),
 			server.NewTaskRouteRegistrar(taskService, flowService, deliveryService, pool.Raw()),
+			server.NewChatRouteRegistrar(chatService, pool.Raw()),
 			server.NewCapabilityPolicyRouteRegistrar(server.CapabilityPolicyRouteOptions{
 				Policies:      policyRepo,
 				Projects:      repo.NewProjectRepo(pool.Raw()),
