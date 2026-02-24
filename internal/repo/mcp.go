@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -680,13 +679,4 @@ func planCatalogDiff(existingByName map[string]MCPToolCatalogEntry, manifest []M
 	}
 
 	return added, updated, removed, nil
-}
-
-func sortMCPToolNames(entries []MCPToolCatalogEntry) []string {
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		names = append(names, entry.ToolName)
-	}
-	sort.Strings(names)
-	return names
 }

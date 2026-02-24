@@ -294,6 +294,62 @@ func TestCircuitBreakerStatusRecoveryViaHealthProbe(t *testing.T) {
 	t.Fatalf("status = %q, want active", status)
 }
 
+func TestCircuitBreakerStatusTransitionsToFailedAfterMaxConsecutiveOpens(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	orgID := seedMCPOrgAndProject(t, ctx, pool)
+	connRepo := repo.NewMCPConnectionRepo(pool)
+
+	connection, err := connRepo.Create(ctx, repo.MCPConnection{
+		OrganizationID:  orgID,
+		DisplayName:     "Breaker Permanent Open",
+		Slug:            "breaker-permanent-open",
+		Transport:       "http",
+		TransportConfig: []byte(`{"failure_threshold":1,"max_consecutive_opens":3,"recovery_timeout_ms":5,"health_active_interval_ms":1,"health_degraded_interval_ms":1}`),
+		IsEnabled:       true,
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+	if _, err := connRepo.SetStatus(ctx, connection.ID, "active"); err != nil {
+		t.Fatalf("set active status: %v", err)
+	}
+
+	service, err := NewService(ServiceOptions{
+		Connections:      connRepo,
+		Catalog:          repo.NewMCPToolCatalogRepo(pool),
+		Bindings:         repo.NewMCPSecretBindingRepo(pool),
+		Resolver:         &integrationResolver{},
+		TransportFactory: &switchingFactory{transport: &MockTransport{HealthCheckErr: errors.New("network failure")}},
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := service.RunHealthChecks(ctx); err != nil {
+			t.Fatalf("RunHealthChecks: %v", err)
+		}
+		var status string
+		if err := pool.QueryRow(ctx, `SELECT status FROM mcp_connection WHERE id = $1`, connection.ID).Scan(&status); err != nil {
+			t.Fatalf("load connection status: %v", err)
+		}
+		if status == "failed" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM mcp_connection WHERE id = $1`, connection.ID).Scan(&status); err != nil {
+		t.Fatalf("load connection status: %v", err)
+	}
+	t.Fatalf("status = %q, want failed", status)
+}
+
 func TestStdioTransportCallAndHealthCheck(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping stdio transport integration in short mode")
