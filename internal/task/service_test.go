@@ -152,6 +152,28 @@ func TestTransitionStatusCompletedAtBehavior(t *testing.T) {
 	}
 }
 
+func TestTransitionStatusRequiresHumanApprovalGate(t *testing.T) {
+	taskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                  taskID,
+				OrganizationID:      uuid.New(),
+				ProjectID:           uuid.New(),
+				WorkStatus:          "draft",
+				Title:               "Task",
+				CreatedByType:       "system",
+				RequiresHumanReview: true,
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	if _, err := svc.TransitionStatus(context.Background(), taskID, "queued", Actor{Type: "system"}); !errors.Is(err, ErrRequiresHumanApproval) {
+		t.Fatalf("TransitionStatus queued err = %v, want ErrRequiresHumanApproval", err)
+	}
+}
+
 func TestTransitionStatusCancelledArchivesActiveMergeQueueEntries(t *testing.T) {
 	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
 	taskID := uuid.New()

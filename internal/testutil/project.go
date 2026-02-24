@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
@@ -155,4 +156,12 @@ func MakeTask(t testing.TB, db *pgxpool.Pool, projectID uuid.UUID, opts MakeTask
 
 	out := project.Task(taskRecord)
 	return &out
+}
+
+func MakeAgent(t testing.TB, db *pgxpool.Pool, orgID uuid.UUID) *agentsvc.Agent {
+	t.Helper()
+	return MakeAgentWithOptions(t, db, orgID, AgentOptions{
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+	})
 }

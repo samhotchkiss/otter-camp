@@ -33,7 +33,7 @@ type AgentOptions struct {
 	ToolDenyList     []string
 }
 
-func MakeAgent(t testing.TB, db *pgxpool.Pool, orgID uuid.UUID, opts AgentOptions) *agentsvc.Agent {
+func MakeAgentWithOptions(t testing.TB, db *pgxpool.Pool, orgID uuid.UUID, opts AgentOptions) *agentsvc.Agent {
 	t.Helper()
 
 	displayName := strings.TrimSpace(opts.DisplayName)

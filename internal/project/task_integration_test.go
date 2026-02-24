@@ -213,6 +213,10 @@ func TestTask_RequiresHumanReview_Gate(t *testing.T) {
 		t.Fatal("requires_human_review = false, want true")
 	}
 
+	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "queued", tasksvc.Actor{Type: "system"}); !errors.Is(err, tasksvc.ErrRequiresHumanApproval) {
+		t.Fatalf("TransitionStatus queued err = %v, want ErrRequiresHumanApproval", err)
+	}
+
 	if _, err := fx.taskService.ApproveTask(ctx, taskRecord.ID, fx.pmUser.ID); !errors.Is(err, tasksvc.ErrInboxItemNotFound) {
 		t.Fatalf("ApproveTask before review request err = %v, want ErrInboxItemNotFound", err)
 	}
