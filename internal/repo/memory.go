@@ -58,10 +58,6 @@ type RetrievalFilter struct {
 	Limit          int
 }
 
-type MemorySource struct {
-	ID uuid.UUID
-}
-
 type MemoryRepo struct {
 	pool *pgxpool.Pool
 }
@@ -430,8 +426,8 @@ func (r *MemoryRepo) Supersede(ctx context.Context, id, supersededBy uuid.UUID) 
 	return updated, nil
 }
 
-func (r *MemoryRepo) GetSources(context.Context, uuid.UUID) ([]MemorySource, error) {
-	return nil, fmt.Errorf("not yet implemented - see task 075")
+func (r *MemoryRepo) GetSources(ctx context.Context, memoryID uuid.UUID) ([]MemorySource, error) {
+	return NewMemorySourceRepo(r.pool).ListByMemory(ctx, memoryID)
 }
 
 func (r *MemoryRepo) list(ctx context.Context, query string, args ...any) ([]Memory, error) {
