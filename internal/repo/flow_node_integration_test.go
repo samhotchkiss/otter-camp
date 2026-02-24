@@ -81,6 +81,26 @@ func TestFlowNodeRepoCRUDAndGetByTemplateOrdered(t *testing.T) {
 		t.Fatalf("nodeA.tool_domains = %+v, want [cli]", gotA.ToolDomains)
 	}
 
+	listed, err := flowNodeRepo.ListByTemplate(ctx, flowTemplateID)
+	if err != nil {
+		t.Fatalf("ListByTemplate: %v", err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("ListByTemplate len = %d, want 2", len(listed))
+	}
+	seen := map[uuid.UUID]bool{
+		nodeA.ID: false,
+		nodeB.ID: false,
+	}
+	for _, node := range listed {
+		if _, ok := seen[node.ID]; ok {
+			seen[node.ID] = true
+		}
+	}
+	if !seen[nodeA.ID] || !seen[nodeB.ID] {
+		t.Fatalf("ListByTemplate IDs missing: seen nodeA=%v nodeB=%v", seen[nodeA.ID], seen[nodeB.ID])
+	}
+
 	gotA.DisplayName = "Work Node Updated"
 	gotA.Position = 30
 	updatedA, err := flowNodeRepo.Update(ctx, gotA)

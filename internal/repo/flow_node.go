@@ -472,11 +472,3 @@ func defaultFlowNodeMaxVisits(maxVisits int) int {
 	}
 	return maxVisits
 }
-
-func trimStringPointer(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	trimmed := strings.TrimSpace(*value)
-	return &trimmed
-}
