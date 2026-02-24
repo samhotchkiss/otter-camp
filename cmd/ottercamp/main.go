@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -21,6 +24,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/migrate"
 	"github.com/samhotchkiss/otter-camp/internal/ratelimit"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	secretsvc "github.com/samhotchkiss/otter-camp/internal/secret"
 	"github.com/samhotchkiss/otter-camp/internal/server"
 	skillsvc "github.com/samhotchkiss/otter-camp/internal/skill"
 	"github.com/samhotchkiss/otter-camp/internal/storage"
@@ -54,6 +58,8 @@ func run(args []string) int {
 		return runResetPassword(args[1:])
 	case "unlock-account":
 		return runUnlockAccount(args[1:])
+	case "secret":
+		return runSecret(args[1:])
 	case "skill":
 		return runSkill(args[1:])
 	case "version":
@@ -274,6 +280,227 @@ func runUnlockAccount(args []string) int {
 
 	fmt.Fprintf(os.Stdout, "unlocked user %s\n", userID)
 	return 0
+}
+
+func runSecret(args []string) int {
+	if len(args) == 0 {
+		printSecretUsage(os.Stderr)
+		return 1
+	}
+
+	switch args[0] {
+	case "set":
+		return runSecretSet(args[1:])
+	case "list":
+		return runSecretList(args[1:])
+	case "delete":
+		return runSecretDelete(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown secret command: %s\n", args[0])
+		printSecretUsage(os.Stderr)
+		return 1
+	}
+}
+
+func runSecretSet(args []string) int {
+	flags := flag.NewFlagSet("secret set", flag.ContinueOnError)
+	orgIDRaw := flags.String("org-id", "", "organization id (or OTTERCAMP_ORG_ID)")
+	slug := flags.String("slug", "", "secret slug")
+	displayName := flags.String("display-name", "", "secret display name")
+	description := flags.String("description", "", "secret description")
+	valueFlag := flags.String("value", "", "secret value (prefer stdin)")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "secret set argument error: %v\n", err)
+		return 1
+	}
+
+	orgID, err := parseOrgID(*orgIDRaw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "secret set org error: %v\n", err)
+		return 1
+	}
+	if strings.TrimSpace(*slug) == "" {
+		fmt.Fprintln(os.Stderr, "secret set requires --slug")
+		return 1
+	}
+	if strings.TrimSpace(*displayName) == "" {
+		fmt.Fprintln(os.Stderr, "secret set requires --display-name")
+		return 1
+	}
+
+	value, err := readSecretValue(*valueFlag, os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "secret set value error: %v\n", err)
+		return 1
+	}
+
+	service, cleanup, err := newSecretServiceFromEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "secret set setup error: %v\n", err)
+		return 1
+	}
+	defer cleanup()
+
+	if err := service.Set(context.Background(), orgID, strings.TrimSpace(*slug), *displayName, *description, value, secretsvc.Principal{
+		Type: "human",
+		ID:   uuid.Nil,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "secret set failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stdout, "saved secret %s\n", strings.TrimSpace(*slug))
+	return 0
+}
+
+func runSecretList(args []string) int {
+	flags := flag.NewFlagSet("secret list", flag.ContinueOnError)
+	orgIDRaw := flags.String("org-id", "", "organization id (or OTTERCAMP_ORG_ID)")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "secret list argument error: %v\n", err)
+		return 1
+	}
+
+	orgID, err := parseOrgID(*orgIDRaw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "secret list org error: %v\n", err)
+		return 1
+	}
+
+	service, cleanup, err := newSecretServiceFromEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "secret list setup error: %v\n", err)
+		return 1
+	}
+	defer cleanup()
+
+	secrets, err := service.List(context.Background(), orgID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "secret list failed: %v\n", err)
+		return 1
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "slug\tdisplay_name\tkey_version\tupdated_at")
+	for _, secret := range secrets {
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\n", secret.Slug, secret.DisplayName, secret.KeyVersion, secret.UpdatedAt.UTC().Format(time.RFC3339))
+	}
+	_ = tw.Flush()
+	return 0
+}
+
+func runSecretDelete(args []string) int {
+	flags := flag.NewFlagSet("secret delete", flag.ContinueOnError)
+	orgIDRaw := flags.String("org-id", "", "organization id (or OTTERCAMP_ORG_ID)")
+	slug := flags.String("slug", "", "secret slug")
+	force := flags.Bool("force", false, "delete even when references are detected")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "secret delete argument error: %v\n", err)
+		return 1
+	}
+
+	orgID, err := parseOrgID(*orgIDRaw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "secret delete org error: %v\n", err)
+		return 1
+	}
+	if strings.TrimSpace(*slug) == "" {
+		fmt.Fprintln(os.Stderr, "secret delete requires --slug")
+		return 1
+	}
+
+	pool, err := db.NewFromEnv(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "secret delete setup error: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+
+	repository := repo.NewSecretRepo(pool.Raw())
+	service := secretsvc.NewService(repository)
+
+	blockers, err := service.CheckDeleteSafety(context.Background(), orgID, strings.TrimSpace(*slug))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "secret delete safety check failed: %v\n", err)
+		return 1
+	}
+
+	if len(blockers) > 0 {
+		fmt.Fprintln(os.Stdout, "blocking references:")
+		for _, blocker := range blockers {
+			fmt.Fprintf(os.Stdout, "  - %s\n", blocker)
+		}
+		if !*force {
+			confirmed, err := promptDeleteConfirmation(os.Stdin)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "secret delete confirmation error: %v\n", err)
+				return 1
+			}
+			if !confirmed {
+				fmt.Fprintln(os.Stdout, "secret delete cancelled")
+				return 1
+			}
+		}
+	}
+
+	if *force && len(blockers) > 0 {
+		if err := repository.Delete(context.Background(), orgID, strings.TrimSpace(*slug)); err != nil {
+			fmt.Fprintf(os.Stderr, "secret delete failed: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stdout, "deleted secret %s\n", strings.TrimSpace(*slug))
+		return 0
+	}
+
+	if err := service.Delete(context.Background(), orgID, strings.TrimSpace(*slug), secretsvc.Principal{
+		Type: "human",
+		ID:   uuid.Nil,
+	}); err != nil {
+		if errors.Is(err, secretsvc.ErrSecretInUse) {
+			fmt.Fprintf(os.Stderr, "secret delete failed: %v (use --force to bypass)\n", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "secret delete failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stdout, "deleted secret %s\n", strings.TrimSpace(*slug))
+	return 0
+}
+
+func readSecretValue(valueFlag string, stdin *os.File) (string, error) {
+	if stdin != nil {
+		info, err := stdin.Stat()
+		if err != nil {
+			return "", fmt.Errorf("stat stdin: %w", err)
+		}
+		if info.Mode()&os.ModeCharDevice == 0 {
+			data, err := io.ReadAll(stdin)
+			if err != nil {
+				return "", fmt.Errorf("read stdin: %w", err)
+			}
+			if len(data) == 0 {
+				return "", fmt.Errorf("stdin is empty")
+			}
+			return strings.TrimRight(string(data), "\r\n"), nil
+		}
+	}
+
+	if strings.TrimSpace(valueFlag) == "" {
+		return "", fmt.Errorf("provide secret value via stdin or --value")
+	}
+	return valueFlag, nil
+}
+
+func promptDeleteConfirmation(stdin *os.File) (bool, error) {
+	fmt.Fprint(os.Stdout, "continue delete? [y/N]: ")
+	reader := bufio.NewReader(stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	answer := strings.ToLower(strings.TrimSpace(line))
+	return answer == "y" || answer == "yes", nil
 }
 
 func runSkill(args []string) int {
@@ -634,6 +861,20 @@ func newAuthCommandDepsFromEnv() (*authCommandDeps, func(), error) {
 	}, cleanup, nil
 }
 
+func newSecretServiceFromEnv() (secretsvc.Service, func(), error) {
+	pool, err := db.NewFromEnv(context.Background())
+	if err != nil {
+		return nil, nil, err
+	}
+
+	repository := repo.NewSecretRepo(pool.Raw())
+	service := secretsvc.NewService(repository)
+	cleanup := func() {
+		pool.Close()
+	}
+	return service, cleanup, nil
+}
+
 func parseOrgID(flagValue string) (uuid.UUID, error) {
 	raw := strings.TrimSpace(flagValue)
 	if raw == "" {
@@ -649,6 +890,10 @@ func printSkillUsage(w *os.File) {
 	fmt.Fprintln(w, "usage: ottercamp skill <create|update|delete|list|check> [flags]")
 }
 
+func printSecretUsage(w *os.File) {
+	fmt.Fprintln(w, "usage: ottercamp secret <set|list|delete> [flags]")
+}
+
 func printUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp <serve|worker|migrate|backup|magic-link|reset-password|unlock-account|skill|version>")
+	fmt.Fprintln(w, "usage: ottercamp <serve|worker|migrate|backup|magic-link|reset-password|unlock-account|secret|skill|version>")
 }
