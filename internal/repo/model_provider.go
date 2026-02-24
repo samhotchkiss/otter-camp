@@ -141,6 +141,31 @@ func (r *ModelProviderRepo) SetEnabled(ctx context.Context, id uuid.UUID, enable
 	return provider, nil
 }
 
+func (r *ModelProviderRepo) Update(ctx context.Context, provider ModelProvider) (ModelProvider, error) {
+	metadata := provider.Metadata
+	if len(metadata) == 0 {
+		metadata = json.RawMessage(`{}`)
+	}
+
+	row := r.pool.QueryRow(ctx, `
+		UPDATE model_provider
+		SET display_name = $2,
+			is_enabled = $3,
+			metadata = $4::jsonb
+		WHERE id = $1
+		RETURNING id, slug, display_name, api_base_url, supported_features, is_enabled, metadata, created_at, updated_at
+	`, provider.ID, provider.DisplayName, provider.IsEnabled, metadata)
+
+	updated, err := scanModelProvider(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ModelProvider{}, ErrNotFound
+	}
+	if err != nil {
+		return ModelProvider{}, mapDBError(err)
+	}
+	return updated, nil
+}
+
 func scanModelProvider(row pgx.Row) (ModelProvider, error) {
 	var provider ModelProvider
 	if err := row.Scan(

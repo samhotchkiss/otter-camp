@@ -20,6 +20,7 @@ type ModelProfile struct {
 	IsCurrent           bool
 	ProviderID          uuid.UUID
 	ModelName           string
+	DisplayName         string
 	ContextWindowTokens int
 	MaxOutputTokens     int
 	SupportsStreaming   bool
@@ -48,6 +49,7 @@ func (r *ModelProfileRepo) Create(ctx context.Context, profile ModelProfile) (Mo
 			is_current,
 			provider_id,
 			model_name,
+			display_name,
 			context_window_tokens,
 			max_output_tokens,
 			supports_streaming,
@@ -56,9 +58,9 @@ func (r *ModelProfileRepo) Create(ctx context.Context, profile ModelProfile) (Mo
 			invocation_purpose,
 			fallback_profile_id
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		RETURNING id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
-	`, profile.LogicalProfileID, profile.OrganizationID, defaultProfileVersion(profile.Version), profile.IsCurrent, profile.ProviderID, profile.ModelName, profile.ContextWindowTokens, profile.MaxOutputTokens, profile.SupportsStreaming, profile.SupportsVision, profile.Temperature, profile.InvocationPurpose, profile.FallbackProfileID)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		RETURNING id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, display_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
+	`, profile.LogicalProfileID, profile.OrganizationID, defaultProfileVersion(profile.Version), profile.IsCurrent, profile.ProviderID, profile.ModelName, profile.DisplayName, profile.ContextWindowTokens, profile.MaxOutputTokens, profile.SupportsStreaming, profile.SupportsVision, profile.Temperature, profile.InvocationPurpose, profile.FallbackProfileID)
 
 	created, err := scanModelProfile(row)
 	if err != nil {
@@ -69,7 +71,7 @@ func (r *ModelProfileRepo) Create(ctx context.Context, profile ModelProfile) (Mo
 
 func (r *ModelProfileRepo) GetCurrentByLogicalID(ctx context.Context, organizationID uuid.UUID, logicalProfileID string) (ModelProfile, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
+		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, display_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
 		FROM model_profile
 		WHERE logical_profile_id = $2
 		  AND is_current = true
@@ -90,7 +92,7 @@ func (r *ModelProfileRepo) GetCurrentByLogicalID(ctx context.Context, organizati
 
 func (r *ModelProfileRepo) ListCurrent(ctx context.Context, organizationID uuid.UUID) ([]ModelProfile, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
+		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, display_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
 		FROM model_profile
 		WHERE is_current = true
 		  AND (organization_id = $1 OR organization_id IS NULL)
@@ -115,13 +117,68 @@ func (r *ModelProfileRepo) ListCurrent(ctx context.Context, organizationID uuid.
 	return items, nil
 }
 
+func (r *ModelProfileRepo) ListCurrentByProvider(ctx context.Context, organizationID, providerID uuid.UUID) ([]ModelProfile, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, display_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
+		FROM model_profile
+		WHERE is_current = true
+		  AND provider_id = $2
+		  AND (organization_id = $1 OR organization_id IS NULL)
+		ORDER BY logical_profile_id, CASE WHEN organization_id = $1 THEN 0 ELSE 1 END
+	`, organizationID, providerID)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	items := make([]ModelProfile, 0)
+	for rows.Next() {
+		profile, scanErr := scanModelProfile(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		items = append(items, profile)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return items, nil
+}
+
 func (r *ModelProfileRepo) ListAll(ctx context.Context, organizationID uuid.UUID) ([]ModelProfile, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
+		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, display_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
 		FROM model_profile
 		WHERE organization_id = $1 OR organization_id IS NULL
 		ORDER BY logical_profile_id, version
 	`, organizationID)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	items := make([]ModelProfile, 0)
+	for rows.Next() {
+		profile, scanErr := scanModelProfile(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		items = append(items, profile)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return items, nil
+}
+
+func (r *ModelProfileRepo) ListHistoryByLogicalID(ctx context.Context, organizationID uuid.UUID, logicalProfileID string) ([]ModelProfile, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, display_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
+		FROM model_profile
+		WHERE logical_profile_id = $2
+		  AND (organization_id = $1 OR organization_id IS NULL)
+		ORDER BY version DESC, CASE WHEN organization_id = $1 THEN 0 ELSE 1 END
+	`, organizationID, strings.TrimSpace(logicalProfileID))
 	if err != nil {
 		return nil, mapDBError(err)
 	}
@@ -151,7 +208,7 @@ func (r *ModelProfileRepo) Deprecate(ctx context.Context, currentID uuid.UUID, n
 	}()
 
 	row := tx.QueryRow(ctx, `
-		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
+		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, display_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
 		FROM model_profile
 		WHERE id = $1
 		FOR UPDATE
@@ -184,6 +241,7 @@ func (r *ModelProfileRepo) Deprecate(ctx context.Context, currentID uuid.UUID, n
 			is_current,
 			provider_id,
 			model_name,
+			display_name,
 			context_window_tokens,
 			max_output_tokens,
 			supports_streaming,
@@ -192,14 +250,15 @@ func (r *ModelProfileRepo) Deprecate(ctx context.Context, currentID uuid.UUID, n
 			invocation_purpose,
 			fallback_profile_id
 		)
-		VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		RETURNING id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
+		VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		RETURNING id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, display_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
 	`,
 		current.LogicalProfileID,
 		current.OrganizationID,
 		current.Version+1,
 		next.ProviderID,
 		next.ModelName,
+		next.DisplayName,
 		next.ContextWindowTokens,
 		next.MaxOutputTokens,
 		next.SupportsStreaming,
@@ -231,6 +290,7 @@ func scanModelProfile(row pgx.Row) (ModelProfile, error) {
 		&profile.IsCurrent,
 		&profile.ProviderID,
 		&profile.ModelName,
+		&profile.DisplayName,
 		&profile.ContextWindowTokens,
 		&profile.MaxOutputTokens,
 		&profile.SupportsStreaming,
