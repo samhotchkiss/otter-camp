@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -14,10 +15,16 @@ type RouteRegistrar interface {
 	RegisterRoutes(r chi.Router)
 }
 
+type TestResetter interface {
+	Reset(ctx context.Context) error
+}
+
 type HandlerOptions struct {
 	Version         string
 	Logger          *slog.Logger
 	AuthService     auth.Service
+	TestMode        bool
+	TestResetter    TestResetter
 	RouteRegistrars []RouteRegistrar
 }
 
@@ -39,6 +46,16 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	r.Get("/health/ready", healthOK)
 	r.Get("/health", healthOK)
 	r.Get("/ready", healthOK)
+
+	if opts.TestMode && opts.TestResetter != nil {
+		r.Post("/test/reset", func(w http.ResponseWriter, r *http.Request) {
+			if err := opts.TestResetter.Reset(r.Context()); err != nil {
+				api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "test reset failed")
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
+	}
 
 	r.Route("/v1", func(v1 chi.Router) {
 		v1.Get("/version", func(w http.ResponseWriter, r *http.Request) {

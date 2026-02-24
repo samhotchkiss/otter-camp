@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
+	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/db"
@@ -49,6 +50,8 @@ func run(args []string) int {
 		return runWorker()
 	case "migrate":
 		return runMigrate()
+	case "bootstrap":
+		return runBootstrap()
 	case "backup":
 		return runBackup(args[1:])
 	case "secret":
@@ -103,10 +106,14 @@ func runServe() int {
 		return 1
 	}
 
+	bootstrapper := bootstrap.NewFromEnv(pool.Raw(), logger, version)
+
 	handler := server.NewHandlerWithOptions(server.HandlerOptions{
-		Version:     version,
-		Logger:      logger,
-		AuthService: authService,
+		Version:      version,
+		Logger:       logger,
+		AuthService:  authService,
+		TestMode:     cfg.Mode == config.ModeTest,
+		TestResetter: bootstrapper,
 	})
 
 	signalCh := make(chan os.Signal, 1)
@@ -169,6 +176,38 @@ func runMigrate() int {
 		return 1
 	}
 
+	return 0
+}
+
+func runBootstrap() int {
+	pool, err := db.NewFromEnv(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "database config error: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	bootstrapper := bootstrap.New(bootstrap.Options{
+		Pool:    pool.Raw(),
+		Logger:  logger,
+		Version: version,
+		Config:  bootstrap.ConfigFromEnv(),
+		Progress: func(event bootstrap.ProgressEvent) {
+			if event.Message != "" {
+				fmt.Fprintf(os.Stdout, "step %d (%s): %s (%s)\n", event.Number, event.Name, event.Status, event.Message)
+				return
+			}
+			fmt.Fprintf(os.Stdout, "step %d (%s): %s\n", event.Number, event.Name, event.Status)
+		},
+	})
+
+	if err := bootstrapper.Run(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "bootstrap error: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(os.Stdout, "bootstrap complete")
 	return 0
 }
 
@@ -914,5 +953,5 @@ func printSecretUsage(w *os.File) {
 }
 
 func printUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp <serve|worker|migrate|backup|secret|skill|magic-link|reset-password|unlock-account|version>")
+	fmt.Fprintln(w, "usage: ottercamp <serve|worker|migrate|bootstrap|backup|secret|skill|magic-link|reset-password|unlock-account|version>")
 }
