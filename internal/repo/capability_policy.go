@@ -146,6 +146,14 @@ func (r *CapabilityPolicyRepo) ListByLayer(ctx context.Context, layer string, ca
 		  	$1 <> 'agent_profile'
 		  	OR agent_id = $5
 		  )
+		  AND (
+		  	$1 <> 'request'
+		  	OR (
+		  		organization_id = $3
+		  		AND (project_id IS NULL OR project_id = $4)
+		  		AND (agent_id IS NULL OR agent_id = $5)
+		  	)
+		  )
 		ORDER BY priority ASC, created_at ASC, id ASC
 	`,
 		strings.TrimSpace(layer),

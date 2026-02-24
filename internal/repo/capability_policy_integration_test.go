@@ -128,3 +128,71 @@ func TestCapabilityPolicyListForEvaluationLayerOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestCapabilityPolicyListByLayerRequestScopeIsolation(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	orgRepo := NewOrgRepo(pool)
+	projectRepo := NewProjectRepo(pool)
+	policyRepo := NewCapabilityPolicyRepo(pool)
+
+	org, err := orgRepo.Create(ctx, Organization{
+		Slug:        "cap-request-scope-org-" + uuid.NewString()[:8],
+		DisplayName: "Capability Request Scope Org",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+
+	projectA, err := projectRepo.Create(ctx, Project{
+		OrganizationID: org.ID,
+		Slug:           "cap-request-project-a-" + uuid.NewString()[:8],
+		DisplayName:    "Capability Request Project A",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create project A: %v", err)
+	}
+	projectB, err := projectRepo.Create(ctx, Project{
+		OrganizationID: org.ID,
+		Slug:           "cap-request-project-b-" + uuid.NewString()[:8],
+		DisplayName:    "Capability Request Project B",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create project B: %v", err)
+	}
+
+	capability := "mcp.connection.use"
+	if _, err := policyRepo.Create(ctx, CapabilityPolicy{
+		PolicyLayer:    "request",
+		OrganizationID: &org.ID,
+		ProjectID:      &projectA.ID,
+		Capability:     capability,
+		Effect:         "allow",
+		CreatedByType:  "system",
+	}); err != nil {
+		t.Fatalf("create request policy: %v", err)
+	}
+
+	matching, err := policyRepo.ListByLayer(ctx, "request", capability, &org.ID, &projectA.ID, nil)
+	if err != nil {
+		t.Fatalf("ListByLayer matching project: %v", err)
+	}
+	if len(matching) != 1 {
+		t.Fatalf("matching request policies len = %d, want 1", len(matching))
+	}
+
+	nonMatching, err := policyRepo.ListByLayer(ctx, "request", capability, &org.ID, &projectB.ID, nil)
+	if err != nil {
+		t.Fatalf("ListByLayer non-matching project: %v", err)
+	}
+	if len(nonMatching) != 0 {
+		t.Fatalf("non-matching request policies len = %d, want 0", len(nonMatching))
+	}
+}
