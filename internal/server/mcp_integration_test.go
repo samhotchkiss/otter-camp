@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/uuid"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
@@ -109,6 +110,13 @@ func TestMCPHTTPRoundTripCreateRefreshEnableTestDelete(t *testing.T) {
 	if executions.Headers.Get("X-Stub") != "true" {
 		t.Fatalf("X-Stub header = %q, want %q", executions.Headers.Get("X-Stub"), "true")
 	}
+	executionsData, ok := jsonPathValue(t, executions.Body, "data").([]any)
+	if !ok {
+		t.Fatalf("executions data shape = %T, want []any body=%s", jsonPathValue(t, executions.Body, "data"), string(executions.Body))
+	}
+	if len(executionsData) != 0 {
+		t.Fatalf("executions data len = %d, want 0 body=%s", len(executionsData), string(executions.Body))
+	}
 
 	deleted := mustJSON(t, http.MethodDelete, testServer.URL+"/v1/mcp/connections/"+connectionID, nil, map[string]string{
 		"Authorization": "Bearer " + adminToken,
@@ -130,6 +138,64 @@ func TestMCPHTTPRoundTripCreateRefreshEnableTestDelete(t *testing.T) {
 	}
 	if catalogRows != 0 {
 		t.Fatalf("catalog row count after delete = %d, want 0", catalogRows)
+	}
+}
+
+func TestMCPHTTPCreateConnectionHonorsIsEnabledAndSecretBindings(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, _ := newMCPTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/mcp/connections", map[string]any{
+		"display_name": "Disabled MCP",
+		"slug":         "disabled-mcp",
+		"transport":    "http",
+		"transport_config": map[string]any{
+			"base_url": "https://mcp.example.test",
+		},
+		"is_enabled": false,
+		"secret_bindings": []map[string]any{
+			{
+				"secret_ref":   "ref:mcp-api-key",
+				"env_var_name": "MCP_API_KEY",
+			},
+		},
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if created.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d body=%s", created.StatusCode, http.StatusCreated, string(created.Body))
+	}
+	connectionID := jsonPathString(t, created.Body, "data", "id")
+	if connectionID == "" {
+		t.Fatalf("expected connection id in response body=%s", string(created.Body))
+	}
+	connectionUUID, err := uuid.Parse(connectionID)
+	if err != nil {
+		t.Fatalf("parse connection id: %v", err)
+	}
+
+	got := mustJSON(t, http.MethodGet, testServer.URL+"/v1/mcp/connections/"+connectionID, nil, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if got.StatusCode != http.StatusOK {
+		t.Fatalf("get status = %d, want %d body=%s", got.StatusCode, http.StatusOK, string(got.Body))
+	}
+	if enabled := jsonPathBoolValue(t, got.Body, "data", "is_enabled"); enabled {
+		t.Fatalf("is_enabled = true, want false body=%s", string(got.Body))
+	}
+
+	var bindingCount int
+	if err := testServer.Pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM mcp_secret_binding
+		WHERE connection_id = $1
+	`, connectionUUID).Scan(&bindingCount); err != nil {
+		t.Fatalf("count bindings: %v", err)
+	}
+	if bindingCount != 1 {
+		t.Fatalf("binding count = %d, want 1", bindingCount)
 	}
 }
 

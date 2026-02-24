@@ -46,12 +46,18 @@ func (r *MCPRouteRegistrar) RegisterRoutes(router chi.Router) {
 }
 
 type createMCPConnectionRequest struct {
-	DisplayName     string          `json:"display_name"`
-	Slug            string          `json:"slug"`
-	ProjectID       *uuid.UUID      `json:"project_id"`
-	Transport       string          `json:"transport"`
-	TransportConfig json.RawMessage `json:"transport_config"`
-	IsEnabled       *bool           `json:"is_enabled"`
+	DisplayName     string                             `json:"display_name"`
+	Slug            string                             `json:"slug"`
+	ProjectID       *uuid.UUID                         `json:"project_id"`
+	Transport       string                             `json:"transport"`
+	TransportConfig json.RawMessage                    `json:"transport_config"`
+	IsEnabled       *bool                              `json:"is_enabled"`
+	SecretBindings  []createMCPConnectionSecretBinding `json:"secret_bindings,omitempty"`
+}
+
+type createMCPConnectionSecretBinding struct {
+	SecretRef  string `json:"secret_ref"`
+	EnvVarName string `json:"env_var_name"`
 }
 
 type updateMCPConnectionRequest struct {
@@ -164,6 +170,8 @@ func (h mcpHandlers) createConnection(w http.ResponseWriter, r *http.Request) {
 		Slug:            req.Slug,
 		Transport:       req.Transport,
 		TransportConfig: req.TransportConfig,
+		IsEnabled:       req.IsEnabled,
+		SecretBindings:  toMCPSecretBindingInputs(req.SecretBindings),
 		CreatedByType:   "human_user",
 		CreatedByID:     principal.UserID,
 	})
@@ -171,17 +179,6 @@ func (h mcpHandlers) createConnection(w http.ResponseWriter, r *http.Request) {
 		status, code, message := mapMCPError(err)
 		responder.Error(w, status, code, message)
 		return
-	}
-
-	if req.IsEnabled != nil && !*req.IsEnabled {
-		disabled := false
-		updated, updateErr := h.service.UpdateConnection(r.Context(), principal.OrganizationID, created.ID, mcp.UpdateConnectionRequest{IsEnabled: &disabled})
-		if updateErr != nil {
-			status, code, message := mapMCPError(updateErr)
-			responder.Error(w, status, code, message)
-			return
-		}
-		created = updated
 	}
 
 	responder.JSON(w, http.StatusCreated, toMCPConnectionResponse(created))
@@ -443,10 +440,8 @@ func (h mcpHandlers) listExecutionsStub(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("X-Stub", "true")
-	responder.JSON(w, http.StatusOK, map[string]any{
-		"data": []any{},
-		"meta": map[string]any{"total": 0},
-	})
+	// Task 055 replaces this stub with persisted execution-log reads.
+	responder.JSONList(w, http.StatusOK, []any{}, api.PaginationMeta{})
 }
 
 func parsePathUUID(responder api.Responder, w http.ResponseWriter, r *http.Request, key string) (uuid.UUID, bool) {
@@ -467,6 +462,8 @@ func mapMCPError(err error) (status int, code, message string) {
 		return http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "connection is failed"
 	case errors.Is(err, mcp.ErrInvalidSlug):
 		return http.StatusUnprocessableEntity, api.ErrCodeValidation, "invalid slug"
+	case errors.Is(err, mcp.ErrInvalidSecretBinding):
+		return http.StatusUnprocessableEntity, api.ErrCodeValidation, "invalid secret binding"
 	case errors.Is(err, repo.ErrConflict):
 		return http.StatusConflict, api.ErrCodeConflict, "conflict"
 	case errors.Is(err, mcp.ErrConnectionOrg), errors.Is(err, repo.ErrNotFound):
@@ -507,4 +504,18 @@ func toMCPCatalogEntryResponse(item repo.MCPToolCatalogEntry) mcpCatalogEntryRes
 		DiscoveredAt: item.DiscoveredAt,
 		UpdatedAt:    item.UpdatedAt,
 	}
+}
+
+func toMCPSecretBindingInputs(items []createMCPConnectionSecretBinding) []mcp.SecretBindingInput {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]mcp.SecretBindingInput, 0, len(items))
+	for _, item := range items {
+		out = append(out, mcp.SecretBindingInput{
+			SecretRef:  item.SecretRef,
+			EnvVarName: item.EnvVarName,
+		})
+	}
+	return out
 }

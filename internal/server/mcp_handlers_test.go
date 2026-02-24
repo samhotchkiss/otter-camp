@@ -70,6 +70,35 @@ func TestMapMCPErrorMappings(t *testing.T) {
 	}
 }
 
+func TestMCPExecutionsStubReturnsTopLevelArrayData(t *testing.T) {
+	connID := uuid.New()
+	h := mcpHandlers{}
+
+	req := newMCPRequest(t, http.MethodGet, "/v1/mcp/connections/"+connID.String()+"/executions", nil, uuid.New(), "member", map[string]string{"id": connID.String()})
+	rr := httptest.NewRecorder()
+
+	h.listExecutionsStub(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := rr.Header().Get("X-Stub"); got != "true" {
+		t.Fatalf("X-Stub header = %q, want %q", got, "true")
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, rr.Body.String())
+	}
+	data, ok := payload["data"].([]any)
+	if !ok {
+		t.Fatalf("data shape = %T, want []any body=%s", payload["data"], rr.Body.String())
+	}
+	if len(data) != 0 {
+		t.Fatalf("data length = %d, want 0 body=%s", len(data), rr.Body.String())
+	}
+}
+
 func newMCPRequest(t *testing.T, method, path string, payload any, orgID uuid.UUID, role string, urlParams map[string]string) *http.Request {
 	t.Helper()
 

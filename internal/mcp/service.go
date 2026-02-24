@@ -19,12 +19,13 @@ import (
 )
 
 var (
-	slugPattern         = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
-	ErrInvalidSlug      = errors.New("invalid slug")
-	ErrConnectionFailed = errors.New("mcp connection is failed")
-	ErrConnectionOrg    = errors.New("mcp connection does not belong to organization")
-	ErrResolverRequired = errors.New("secret resolver is required")
-	ErrTransportFactory = errors.New("mcp transport factory is required")
+	slugPattern             = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	ErrInvalidSlug          = errors.New("invalid slug")
+	ErrInvalidSecretBinding = errors.New("invalid secret binding")
+	ErrConnectionFailed     = errors.New("mcp connection is failed")
+	ErrConnectionOrg        = errors.New("mcp connection does not belong to organization")
+	ErrResolverRequired     = errors.New("secret resolver is required")
+	ErrTransportFactory     = errors.New("mcp transport factory is required")
 )
 
 const (
@@ -42,6 +43,11 @@ type MCPConnection = repo.MCPConnection
 type MCPToolCatalogEntry = repo.MCPToolCatalogEntry
 type MCPSecretBinding = repo.MCPSecretBinding
 
+type SecretBindingInput struct {
+	SecretRef  string
+	EnvVarName string
+}
+
 type CreateConnectionRequest struct {
 	OrganizationID  uuid.UUID
 	ProjectID       *uuid.UUID
@@ -49,6 +55,8 @@ type CreateConnectionRequest struct {
 	Slug            string
 	Transport       string
 	TransportConfig json.RawMessage
+	IsEnabled       *bool
+	SecretBindings  []SecretBindingInput
 	CreatedByType   string
 	CreatedByID     uuid.UUID
 }
@@ -143,6 +151,7 @@ type ToolCatalogRepository interface {
 }
 
 type SecretBindingRepository interface {
+	Create(ctx context.Context, binding repo.MCPSecretBinding) (repo.MCPSecretBinding, error)
 	GetByConnection(ctx context.Context, connectionID uuid.UUID) ([]repo.MCPSecretBinding, error)
 }
 
@@ -284,6 +293,10 @@ func (s *service) CreateConnection(ctx context.Context, req CreateConnectionRequ
 	if err != nil {
 		return nil, err
 	}
+	enabled := true
+	if req.IsEnabled != nil {
+		enabled = *req.IsEnabled
+	}
 
 	created, err := s.connections.Create(ctx, repo.MCPConnection{
 		OrganizationID:  req.OrganizationID,
@@ -293,13 +306,31 @@ func (s *service) CreateConnection(ctx context.Context, req CreateConnectionRequ
 		Transport:       strings.TrimSpace(req.Transport),
 		TransportConfig: req.TransportConfig,
 		Status:          "configuring",
-		IsEnabled:       true,
+		IsEnabled:       enabled,
 		CreatedByType:   strings.TrimSpace(req.CreatedByType),
 		CreatedByID:     req.CreatedByID,
 	})
 	if err != nil {
 		return nil, err
 	}
+
+	for _, binding := range req.SecretBindings {
+		secretRef := strings.TrimSpace(binding.SecretRef)
+		envVarName := strings.TrimSpace(binding.EnvVarName)
+		if secretRef == "" || envVarName == "" {
+			_ = s.connections.Delete(ctx, created.ID)
+			return nil, ErrInvalidSecretBinding
+		}
+		if _, err := s.bindings.Create(ctx, repo.MCPSecretBinding{
+			ConnectionID: created.ID,
+			SecretRef:    secretRef,
+			EnvVarName:   envVarName,
+		}); err != nil {
+			_ = s.connections.Delete(ctx, created.ID)
+			return nil, err
+		}
+	}
+
 	return &created, nil
 }
 
