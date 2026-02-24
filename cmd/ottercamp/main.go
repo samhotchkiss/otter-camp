@@ -16,11 +16,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/db"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	oclog "github.com/samhotchkiss/otter-camp/internal/log"
 	"github.com/samhotchkiss/otter-camp/internal/migrate"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -110,6 +112,18 @@ func runServe() int {
 		return 1
 	}
 
+	bus := eventbus.New(pool.Raw(), logger, eventbus.Config{})
+	agentService, err := agentsvc.NewService(agentsvc.Options{
+		Pool:   pool.Raw(),
+		Agents: repo.NewAgentRepo(pool.Raw()),
+		Events: bus,
+		Logger: logger,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent service setup error: %v\n", err)
+		return 1
+	}
+
 	store, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "storage config error: %v\n", err)
@@ -125,12 +139,15 @@ func runServe() int {
 	resetter := bootstrap.NewResetter(pool.Raw(), bootstrapper)
 
 	handler := server.NewHandlerWithOptions(server.HandlerOptions{
-		Version:      version,
-		Commit:       commit,
-		BuiltAt:      builtAt,
-		Logger:       logger,
-		AuthService:  authService,
-		Pool:         pool.Raw(),
+		Version:     version,
+		Commit:      commit,
+		BuiltAt:     builtAt,
+		Logger:      logger,
+		AuthService: authService,
+		Pool:        pool.Raw(),
+		RouteRegistrars: []server.RouteRegistrar{
+			server.NewAgentRouteRegistrar(agentService, repo.NewAgentProfileTemplateRepo(pool.Raw())),
+		},
 		TestMode:     cfg.Mode == config.ModeTest,
 		TestResetter: resetter,
 	})
