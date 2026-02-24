@@ -21,3 +21,21 @@ CREATE TRIGGER project_set_updated_at
 BEFORE UPDATE ON project
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
+
+DO $$
+BEGIN
+    IF to_regclass('mcp_connection') IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint
+            WHERE conname = 'mcp_connection_project_fk'
+              AND conrelid = 'mcp_connection'::regclass
+       ) THEN
+        ALTER TABLE mcp_connection
+            ADD CONSTRAINT mcp_connection_project_fk
+            FOREIGN KEY (project_id)
+            REFERENCES project(id)
+            ON DELETE CASCADE;
+    END IF;
+END
+$$;
