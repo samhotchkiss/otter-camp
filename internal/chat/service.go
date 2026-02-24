@@ -156,7 +156,7 @@ type chatParticipantRepository interface {
 type chatMessageRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ChatMessage, error)
 	ListBySession(ctx context.Context, sessionID uuid.UUID) ([]repo.ChatMessage, error)
-	UpdateStatus(ctx context.Context, id uuid.UUID, status string) (repo.ChatMessage, error)
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string, errorMessage string) (repo.ChatMessage, error)
 	UpdateContent(ctx context.Context, id uuid.UUID, content string) (repo.ChatMessage, error)
 	Redact(ctx context.Context, id uuid.UUID) (repo.ChatMessage, error)
 }
@@ -167,7 +167,7 @@ type chatTurnRepository interface {
 	ListBySession(ctx context.Context, sessionID uuid.UUID) ([]repo.ChatTurn, error)
 	SetStarted(ctx context.Context, id uuid.UUID, startedAt time.Time) (repo.ChatTurn, error)
 	SetCompleted(ctx context.Context, id uuid.UUID, completedAt time.Time, durationMS int) (repo.ChatTurn, error)
-	SetCancelled(ctx context.Context, id uuid.UUID, cancelRequestedAt time.Time) (repo.ChatTurn, error)
+	SetCancelled(ctx context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time) (repo.ChatTurn, error)
 	SetFailed(ctx context.Context, id uuid.UUID, errorMessage string, completedAt time.Time) (repo.ChatTurn, error)
 }
 
@@ -626,6 +626,16 @@ func (s *service) GetOrCreateNodeSession(ctx context.Context, flowNodeExecutionI
 	if err != nil {
 		return nil, err
 	}
+
+	if err := s.publishEvent(ctx, agentRecord.OrganizationID, "chat.session.created", "agent", &agentID, map[string]any{
+		"session_id": created.ID,
+		"scope_type": created.ScopeType,
+		"scope_id":   created.ScopeID,
+		"mode":       created.Mode,
+	}); err != nil {
+		return nil, err
+	}
+
 	return &created, nil
 }
 
@@ -776,7 +786,7 @@ func (s *service) AppendMessage(ctx context.Context, input AppendMessageInput) (
 	return message, nil
 }
 
-func (s *service) UpdateMessageStatus(ctx context.Context, messageID uuid.UUID, newStatus, _ string) error {
+func (s *service) UpdateMessageStatus(ctx context.Context, messageID uuid.UUID, newStatus, errorMsg string) error {
 	message, err := s.GetMessage(ctx, messageID)
 	if err != nil {
 		return err
@@ -791,7 +801,7 @@ func (s *service) UpdateMessageStatus(ctx context.Context, messageID uuid.UUID, 
 		return ErrInvalidStatusTransition
 	}
 
-	_, err = s.messages.UpdateStatus(ctx, message.ID, target)
+	_, err = s.messages.UpdateStatus(ctx, message.ID, target, strings.TrimSpace(errorMsg))
 	return err
 }
 
@@ -1008,11 +1018,8 @@ func (s *service) CancelTurn(ctx context.Context, turnID uuid.UUID, reason strin
 	}
 
 	now := s.clock.Now().UTC()
-	if _, err := s.turns.SetCancelled(ctx, turn.ID, now); err != nil {
+	if _, err := s.turns.SetCancelled(ctx, turn.ID, now, now); err != nil {
 		return err
-	}
-	if _, err := s.pool.Exec(ctx, `UPDATE chat_turn SET completed_at = $2 WHERE id = $1`, turn.ID, now); err != nil {
-		return mapDBError(err)
 	}
 	_, _ = s.sessions.UpdateCurrentTurn(ctx, turn.SessionID, nil)
 
@@ -1672,8 +1679,12 @@ func mapDBError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
-		case "23505", "23503", "23514":
+		case "23505":
 			return fmt.Errorf("%w: %s", repo.ErrConflict, pgErr.Message)
+		case "23503":
+			return fmt.Errorf("%w: %s", repo.ErrNotFound, pgErr.Message)
+		case "23514":
+			return fmt.Errorf("validation failed: %s", pgErr.Message)
 		}
 	}
 	return err

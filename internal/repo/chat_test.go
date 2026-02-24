@@ -130,9 +130,10 @@ func TestChatMessageRepoRedactSetsRedactionFields(t *testing.T) {
 			*dest[10].(*bool) = true
 			*dest[11].(**time.Time) = &now
 			*dest[12].(**string) = nil
-			*dest[13].(*json.RawMessage) = json.RawMessage(`{"reason":"policy"}`)
-			*dest[14].(*time.Time) = now
+			*dest[13].(**string) = nil
+			*dest[14].(*json.RawMessage) = json.RawMessage(`{"reason":"policy"}`)
 			*dest[15].(*time.Time) = now
+			*dest[16].(*time.Time) = now
 			return nil
 		}}
 	}
@@ -188,9 +189,10 @@ func TestChatMessageRepoGetBySequenceReturnsRequestedMessage(t *testing.T) {
 					*dest[10].(*bool) = false
 					*dest[11].(**time.Time) = nil
 					*dest[12].(**string) = nil
-					*dest[13].(*json.RawMessage) = json.RawMessage(`{}`)
-					*dest[14].(*time.Time) = now
+					*dest[13].(**string) = nil
+					*dest[14].(*json.RawMessage) = json.RawMessage(`{}`)
 					*dest[15].(*time.Time) = now
+					*dest[16].(*time.Time) = now
 					return nil
 				}}
 			}
