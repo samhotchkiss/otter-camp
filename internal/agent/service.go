@@ -47,6 +47,7 @@ var (
 	ErrInvalidTransition          = errors.New("invalid lifecycle transition")
 	ErrInvalidForTempAgent        = errors.New("operation is invalid for temp agent")
 	ErrConcurrentTempLimitReached = errors.New("max concurrent temp agent limit reached")
+	ErrStarterTrioProtected       = errors.New("starter trio agents cannot be retired or cancelled")
 )
 
 type Agent = repo.Agent
@@ -560,6 +561,9 @@ func (s *service) transitionStaffLifecycle(ctx context.Context, orgID, agentID u
 
 	if err := ensureStaffClass(agent.AgentClass); err != nil {
 		return nil, err
+	}
+	if agent.IsStarterTrio && (targetStatus == statusRetired || targetStatus == statusCancelled) {
+		return nil, ErrStarterTrioProtected
 	}
 
 	eventType, err := validateStaffTransition(agent.LifecycleStatus, targetStatus)

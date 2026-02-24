@@ -16,10 +16,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	agentdomain "github.com/samhotchkiss/otter-camp/internal/agent"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/db"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	oclog "github.com/samhotchkiss/otter-camp/internal/log"
 	"github.com/samhotchkiss/otter-camp/internal/migrate"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -88,7 +90,7 @@ func runServe() int {
 		return 1
 	}
 
-	_ = clock.New(cfg.Mode)
+	runtimeClock := clock.New(cfg.Mode)
 
 	pool, err := db.NewFromEnv(context.Background())
 	if err != nil {
@@ -107,6 +109,18 @@ func runServe() int {
 		return 1
 	}
 
+	agentService, err := agentdomain.NewService(agentdomain.Options{
+		Pool:   pool.Raw(),
+		Agents: repo.NewAgentRepo(pool.Raw()),
+		Events: eventbus.New(pool.Raw(), logger, eventbus.Config{}),
+		Clock:  runtimeClock,
+		Logger: logger,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent service setup error: %v\n", err)
+		return 1
+	}
+
 	handler := server.NewHandlerWithOptions(server.HandlerOptions{
 		Version:     version,
 		Commit:      commit,
@@ -114,6 +128,9 @@ func runServe() int {
 		Logger:      logger,
 		AuthService: authService,
 		Pool:        pool.Raw(),
+		RouteRegistrars: []server.RouteRegistrar{
+			server.NewAgentRouteRegistrar(agentService, repo.NewAgentProfileTemplateRepo(pool.Raw())),
+		},
 	})
 
 	signalCh := make(chan os.Signal, 1)
