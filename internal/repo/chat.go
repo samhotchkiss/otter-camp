@@ -167,6 +167,10 @@ func (r *ChatSessionRepo) UpdateMode(ctx context.Context, id uuid.UUID, mode str
 	return r.updateSessionColumn(ctx, id, `mode = $2`, strings.TrimSpace(mode))
 }
 
+func (r *ChatSessionRepo) UpdateTitle(ctx context.Context, id uuid.UUID, title *string) (ChatSession, error) {
+	return r.updateSessionColumn(ctx, id, `title = $2`, trimStringPointer(title))
+}
+
 func (r *ChatSessionRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) (ChatSession, error) {
 	return r.updateSessionColumn(ctx, id, `status = $2`, strings.TrimSpace(status))
 }
