@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/db"
@@ -54,6 +55,12 @@ func run(args []string) int {
 		return runSecret(args[1:])
 	case "skill":
 		return runSkill(args[1:])
+	case "magic-link":
+		return runMagicLink(args[1:])
+	case "reset-password":
+		return runResetPassword(args[1:])
+	case "unlock-account":
+		return runUnlockAccount(args[1:])
 	case "version":
 		fmt.Fprintln(os.Stdout, version)
 		return 0
@@ -677,6 +684,152 @@ func printSkillCheckReport(report *skillsvc.ConsistencyReport) {
 	printList("Mismatches", report.Mismatches)
 }
 
+func runMagicLink(args []string) int {
+	flags := flag.NewFlagSet("magic-link", flag.ContinueOnError)
+	email := flags.String("email", "", "email for magic link")
+	orgIDRaw := flags.String("org-id", "", "organization id (optional)")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "magic-link argument error: %v\n", err)
+		return 1
+	}
+
+	if strings.TrimSpace(*email) == "" {
+		fmt.Fprintln(os.Stderr, "magic-link requires --email")
+		return 1
+	}
+
+	service, users, cleanup, err := newAuthServiceFromEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "magic-link setup error: %v\n", err)
+		return 1
+	}
+	defer cleanup()
+	_ = users
+
+	ctx := context.Background()
+	if strings.TrimSpace(*orgIDRaw) != "" {
+		orgID, err := uuid.Parse(strings.TrimSpace(*orgIDRaw))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "magic-link org-id error: %v\n", err)
+			return 1
+		}
+		ctx = authsvc.WithOrganizationID(ctx, orgID)
+	}
+
+	result, err := service.MagicLink(ctx, strings.TrimSpace(*email))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "magic-link failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(os.Stdout, result.Token)
+	return 0
+}
+
+func runResetPassword(args []string) int {
+	flags := flag.NewFlagSet("reset-password", flag.ContinueOnError)
+	userIDRaw := flags.String("user-id", "", "user id")
+	newPassword := flags.String("new-password", "", "new password")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "reset-password argument error: %v\n", err)
+		return 1
+	}
+
+	userID, err := parseUUIDFlag(*userIDRaw, "user-id")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reset-password user-id error: %v\n", err)
+		return 1
+	}
+	if strings.TrimSpace(*newPassword) == "" {
+		fmt.Fprintln(os.Stderr, "reset-password requires --new-password")
+		return 1
+	}
+
+	service, users, cleanup, err := newAuthServiceFromEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reset-password setup error: %v\n", err)
+		return 1
+	}
+	defer cleanup()
+
+	user, err := users.GetByID(context.Background(), userID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reset-password user lookup failed: %v\n", err)
+		return 1
+	}
+
+	ctx := authsvc.WithOrganizationID(context.Background(), user.OrganizationID)
+	magic, err := service.MagicLink(ctx, user.Email)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reset-password token generation failed: %v\n", err)
+		return 1
+	}
+	if err := service.ResetPassword(ctx, magic.Token, *newPassword); err != nil {
+		fmt.Fprintf(os.Stderr, "reset-password failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stdout, "reset password for user %s\n", userID)
+	return 0
+}
+
+func runUnlockAccount(args []string) int {
+	flags := flag.NewFlagSet("unlock-account", flag.ContinueOnError)
+	userIDRaw := flags.String("user-id", "", "user id")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "unlock-account argument error: %v\n", err)
+		return 1
+	}
+
+	userID, err := parseUUIDFlag(*userIDRaw, "user-id")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "unlock-account user-id error: %v\n", err)
+		return 1
+	}
+
+	service, _, cleanup, err := newAuthServiceFromEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "unlock-account setup error: %v\n", err)
+		return 1
+	}
+	defer cleanup()
+
+	if err := service.UnlockAccount(context.Background(), userID); err != nil {
+		fmt.Fprintf(os.Stderr, "unlock-account failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stdout, "unlocked user %s\n", userID)
+	return 0
+}
+
+func newAuthServiceFromEnv() (authsvc.Service, *repo.HumanUserRepo, func(), error) {
+	pool, err := db.NewFromEnv(context.Background())
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	userRepo := repo.NewHumanUserRepo(pool.Raw())
+	sessionRepo := repo.NewAuthSessionRepo(pool.Raw())
+	apiKeyRepo := repo.NewAPIKeyRepo(pool.Raw())
+
+	service, err := authsvc.NewService(authsvc.Options{
+		Users:    userRepo,
+		Sessions: sessionRepo,
+		APIKeys:  apiKeyRepo,
+		Clock:    clock.Real{},
+	})
+	if err != nil {
+		pool.Close()
+		return nil, nil, nil, err
+	}
+
+	cleanup := func() {
+		pool.Close()
+	}
+	return service, userRepo, cleanup, nil
+}
+
 func newSkillServiceFromEnv() (skillsvc.Service, func(), error) {
 	pool, err := db.NewFromEnv(context.Background())
 	if err != nil {
@@ -716,6 +869,18 @@ func parseOrgID(flagValue string) (uuid.UUID, error) {
 	return uuid.Parse(raw)
 }
 
+func parseUUIDFlag(rawValue, name string) (uuid.UUID, error) {
+	raw := strings.TrimSpace(rawValue)
+	if raw == "" {
+		return uuid.Nil, fmt.Errorf("%s is required", name)
+	}
+	parsed, err := uuid.Parse(raw)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return parsed, nil
+}
+
 func printSkillUsage(w *os.File) {
 	fmt.Fprintln(w, "usage: ottercamp skill <create|update|delete|list|check> [flags]")
 }
@@ -725,5 +890,5 @@ func printSecretUsage(w *os.File) {
 }
 
 func printUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp <serve|worker|migrate|backup|secret|skill|version>")
+	fmt.Fprintln(w, "usage: ottercamp <serve|worker|migrate|backup|secret|skill|magic-link|reset-password|unlock-account|version>")
 }
