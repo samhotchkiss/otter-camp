@@ -134,6 +134,19 @@ func TestModelInvocationRepoListByOrgIsScoped(t *testing.T) {
 	}
 
 	runID := uuid.New()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO run (
+			id,
+			organization_id,
+			principal_type,
+			principal_id,
+			status,
+			trigger_type
+		)
+		VALUES ($1, $2, 'system', $3, 'created', 'api')
+	`, runID, orgA.ID, uuid.Nil); err != nil {
+		t.Fatalf("create run for org A: %v", err)
+	}
 	profileID := "standard"
 	if _, err := invocationRepo.Create(ctx, ModelInvocation{
 		OrganizationID:       orgA.ID,
