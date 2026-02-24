@@ -35,6 +35,7 @@ var (
 	ErrInboxItemTypeInvalid      = errors.New("invalid inbox item type")
 	ErrSourceTaskRequired        = errors.New("source_task_id is required for this inbox item type")
 	ErrSourceProjectIDRequired   = errors.New("source_project_id is required for this inbox item type")
+	ErrRequiresHumanApproval     = errors.New("task requires human approval before queueing")
 	ErrTransitionTargetRequired  = errors.New("target status is required")
 	ErrActorTypeInvalidForAction = errors.New("actor_type is invalid for action")
 )
@@ -354,10 +355,10 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 }
 
 func (s *service) TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor Actor) (*ProjectTask, error) {
-	return s.transitionStatus(ctx, taskID, toStatus, actor, nil)
+	return s.transitionStatus(ctx, taskID, toStatus, actor, nil, false)
 }
 
-func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor Actor, extraPayload map[string]any) (*ProjectTask, error) {
+func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor Actor, extraPayload map[string]any, approvalOverride bool) (*ProjectTask, error) {
 	if taskID == uuid.Nil {
 		return nil, ErrTaskIDRequired
 	}
@@ -375,6 +376,9 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	if !isTransitionAllowed(from, target) {
 		return nil, ErrInvalidStatusTransition{From: from, To: target}
 	}
+	if target == "queued" && taskRecord.RequiresHumanReview && !approvalOverride {
+		return nil, ErrRequiresHumanApproval
+	}
 
 	taskRecord.WorkStatus = target
 	if target == "done" || target == "cancelled" {
@@ -387,6 +391,11 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	updated, err := s.tasks.Update(ctx, taskRecord)
 	if err != nil {
 		return nil, err
+	}
+	if target == "cancelled" {
+		if err := s.archiveActiveMergeEntriesForTask(ctx, updated); err != nil {
+			return nil, err
+		}
 	}
 
 	actorType, actorID, err := normalizeActionActor(actor.Type, actor.ID)
@@ -457,7 +466,7 @@ func (s *service) ApproveTask(ctx context.Context, taskID, actedByUserID uuid.UU
 		return nil, err
 	}
 
-	return s.transitionStatus(ctx, taskID, "queued", Actor{Type: "human_user", ID: actedByUserID}, nil)
+	return s.transitionStatus(ctx, taskID, "queued", Actor{Type: "human_user", ID: actedByUserID}, nil, true)
 }
 
 func (s *service) RejectTask(ctx context.Context, taskID, actedByUserID uuid.UUID, reason string) (*ProjectTask, error) {
@@ -493,7 +502,7 @@ func (s *service) RejectTask(ctx context.Context, taskID, actedByUserID uuid.UUI
 func (s *service) MarkBlocked(ctx context.Context, taskID uuid.UUID, reason string, actor Actor) (*ProjectTask, error) {
 	blocked, err := s.transitionStatus(ctx, taskID, "blocked", actor, map[string]any{
 		"blocker_reason": strings.TrimSpace(reason),
-	})
+	}, false)
 	if err != nil {
 		return nil, err
 	}
@@ -702,6 +711,27 @@ func (s *service) DequeueFromMerge(ctx context.Context, entryID uuid.UUID, reaso
 		return nil, err
 	}
 	return &archived, nil
+}
+
+func (s *service) archiveActiveMergeEntriesForTask(ctx context.Context, taskRecord repo.ProjectTask) error {
+	active, err := s.queue.ListActive(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range active {
+		if entry.TaskID != taskRecord.ID {
+			continue
+		}
+		if entry.ArchivedAt != nil {
+			continue
+		}
+		if _, err := s.queue.Archive(ctx, entry.ID, s.clock.Now().UTC()); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s *service) GetMergeQueueStatus(ctx context.Context, projectID uuid.UUID) ([]*MergeQueueEntry, error) {
