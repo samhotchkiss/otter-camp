@@ -237,6 +237,7 @@ func runServe() int {
 				repo.NewAgentSkillAttachmentRepo(pool.Raw()),
 			),
 			server.NewMCPRouteRegistrar(mcpService, repo.NewMCPToolCatalogRepo(pool.Raw())),
+			server.NewModelRouteRegistrar(pool.Raw()),
 			server.NewProjectRouteRegistrar(projectService),
 			server.NewTaskRouteRegistrar(taskService, flowService, deliveryService, pool.Raw()),
 			server.NewCapabilityPolicyRouteRegistrar(server.CapabilityPolicyRouteOptions{
