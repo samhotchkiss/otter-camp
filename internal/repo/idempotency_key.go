@@ -117,6 +117,25 @@ func (r *IdempotencyKeyRepo) CheckConflict(ctx context.Context, organizationID u
 	return nil
 }
 
+func (r *IdempotencyKeyRepo) Delete(ctx context.Context, organizationID uuid.UUID, keyHash string) error {
+	if organizationID == uuid.Nil {
+		return fmt.Errorf("organization_id is required")
+	}
+	if strings.TrimSpace(keyHash) == "" {
+		return fmt.Errorf("key_hash is required")
+	}
+
+	_, err := r.pool.Exec(ctx, `
+		DELETE FROM idempotency_key
+		WHERE organization_id = $1
+		  AND key_hash = $2
+	`, organizationID, keyHash)
+	if err != nil {
+		return mapDBError(err)
+	}
+	return nil
+}
+
 func scanIdempotencyKey(row pgx.Row) (IdempotencyKey, error) {
 	var (
 		key      IdempotencyKey

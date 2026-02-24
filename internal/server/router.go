@@ -5,9 +5,11 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/api"
 	"github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
 type RouteRegistrar interface {
@@ -16,8 +18,12 @@ type RouteRegistrar interface {
 
 type HandlerOptions struct {
 	Version         string
+	Commit          string
+	BuiltAt         string
 	Logger          *slog.Logger
 	AuthService     auth.Service
+	Pool            *pgxpool.Pool
+	GitService      api.GitService
 	RouteRegistrars []RouteRegistrar
 }
 
@@ -28,22 +34,30 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	}
 
 	authHandlers := newAuthHandlers(opts.AuthService)
+	versionHandler := api.NewVersionHandler(api.BuildInfo{
+		Version: opts.Version,
+		Commit:  opts.Commit,
+		BuiltAt: opts.BuiltAt,
+	})
+	searchHandler := api.NewSearchHandler(opts.Pool)
+	diffHandler := api.NewDiffHandler(opts.Pool, opts.GitService)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID(logger))
-
-	r.Get("/version", func(w http.ResponseWriter, r *http.Request) {
-		api.JSON(w, http.StatusOK, map[string]string{"version": opts.Version})
-	})
+	r.Use(middleware.PrefixEnforcement())
 	r.Get("/health/live", healthOK)
 	r.Get("/health/ready", healthOK)
 	r.Get("/health", healthOK)
 	r.Get("/ready", healthOK)
 
 	r.Route("/v1", func(v1 chi.Router) {
-		v1.Get("/version", func(w http.ResponseWriter, r *http.Request) {
-			api.JSON(w, http.StatusOK, map[string]string{"version": opts.Version})
-		})
+		if opts.Pool != nil {
+			v1.Use(middleware.Idempotency(middleware.IdempotencyOptions{
+				Repository: repo.NewIdempotencyKeyRepo(opts.Pool),
+			}))
+		}
+
+		v1.Get("/version", versionHandler.Get)
 		v1.Post("/auth/login", authHandlers.login)
 
 		v1.Group(func(protected chi.Router) {
@@ -54,6 +68,8 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 			protected.Post("/api-keys", authHandlers.issueAPIKey)
 			protected.Delete("/api-keys/{id}", authHandlers.revokeAPIKey)
 			protected.Get("/api-keys", authHandlers.listAPIKeys)
+			protected.Get("/search", searchHandler.Search)
+			protected.Get("/tasks/{id}/diff", diffHandler.GetTaskDiff)
 
 			for _, registrar := range opts.RouteRegistrars {
 				if registrar == nil {

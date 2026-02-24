@@ -183,6 +183,29 @@ func TestAuthHTTPLocalModeAutoLogin(t *testing.T) {
 	}
 }
 
+func TestVersionAndPrefixEnforcement(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, _, _ := newAuthTestServer(t, "standard")
+	defer testServer.Close()
+
+	versionResp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/version", nil, nil)
+	if versionResp.StatusCode != http.StatusOK {
+		t.Fatalf("version status = %d, want %d body=%s", versionResp.StatusCode, http.StatusOK, string(versionResp.Body))
+	}
+	if got := jsonPathString(t, versionResp.Body, "data", "version"); got != "test-version" {
+		t.Fatalf("version = %q, want %q", got, "test-version")
+	}
+
+	prefixResp := mustJSON(t, http.MethodGet, testServer.URL+"/api/projects", nil, nil)
+	if prefixResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("prefix status = %d, want %d body=%s", prefixResp.StatusCode, http.StatusNotFound, string(prefixResp.Body))
+	}
+	if got := jsonPathString(t, prefixResp.Body, "error", "message"); got != "This API uses the /v1/ prefix. See docs." {
+		t.Fatalf("prefix message = %q, want %q", got, "This API uses the /v1/ prefix. See docs.")
+	}
+}
+
 type authIntegrationServer struct {
 	URL  string
 	Pool *pgxpool.Pool
@@ -219,6 +242,7 @@ func newAuthTestServer(t *testing.T, authMode string) (*authIntegrationServer, r
 		Version:     "test-version",
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		AuthService: service,
+		Pool:        pool,
 	})
 
 	ts := httptest.NewServer(handler)
