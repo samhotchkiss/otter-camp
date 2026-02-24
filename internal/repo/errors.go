@@ -8,8 +8,9 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("repo: not found")
-	ErrConflict = errors.New("repo: conflict")
+	ErrNotFound        = errors.New("repo: not found")
+	ErrConflict        = errors.New("repo: conflict")
+	ErrAlreadyAttached = errors.New("repo: already attached")
 )
 
 func mapDBError(err error) error {

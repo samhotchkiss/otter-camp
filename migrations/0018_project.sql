@@ -1,4 +1,4 @@
-CREATE TABLE project (
+CREATE TABLE IF NOT EXISTS project (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id uuid NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
     slug text NOT NULL CHECK (slug ~ '^[a-z0-9-]+$'),
@@ -14,10 +14,35 @@ CREATE TABLE project (
     CONSTRAINT project_org_slug_unique UNIQUE (organization_id, slug)
 );
 
-CREATE INDEX project_org_created_at_idx
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'project_org_slug_unique'
+          AND conrelid = 'project'::regclass
+    ) THEN
+        ALTER TABLE project
+            ADD CONSTRAINT project_org_slug_unique UNIQUE (organization_id, slug);
+    END IF;
+END
+$$;
+
+CREATE INDEX IF NOT EXISTS project_org_created_at_idx
     ON project (organization_id, created_at DESC);
 
-CREATE TRIGGER project_set_updated_at
-BEFORE UPDATE ON project
-FOR EACH ROW
-EXECUTE FUNCTION set_updated_at();
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'project_set_updated_at'
+          AND tgrelid = 'project'::regclass
+    ) THEN
+        CREATE TRIGGER project_set_updated_at
+        BEFORE UPDATE ON project
+        FOR EACH ROW
+        EXECUTE FUNCTION set_updated_at();
+    END IF;
+END
+$$;
