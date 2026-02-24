@@ -27,9 +27,9 @@ type inboxNotificationService struct {
 
 func (s inboxNotificationService) CreateSystemAlert(ctx context.Context, orgID uuid.UUID, _ *string, description string) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO inbox_item (organization_id, item_type, description)
-		VALUES ($1, 'system_alert', $2)
-	`, orgID, description)
+		INSERT INTO inbox_item (organization_id, item_type, created_by_type, created_by_id, title, body)
+		VALUES ($1, 'system_alert', 'system', $2, $3, $4)
+	`, orgID, uuid.Nil, "Budget alert", description)
 	return err
 }
 
@@ -37,23 +37,10 @@ func TestCheckBudgetSumsModelInvocationTokens(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
 
-	if _, err := pool.Exec(ctx, `
-		CREATE TABLE model_invocation (
-			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-			organization_id uuid NOT NULL,
-			project_id uuid,
-			agent_id uuid,
-			input_tokens bigint NOT NULL DEFAULT 0,
-			output_tokens bigint NOT NULL DEFAULT 0,
-			created_at timestamptz NOT NULL DEFAULT now()
-		)
-	`); err != nil {
-		t.Fatalf("create model_invocation table: %v", err)
-	}
-
 	orgRepo := repo.NewOrgRepo(pool)
 	projectRepo := repo.NewProjectRepo(pool)
 	budgetRepo := repo.NewTokenBudgetRepo(pool)
+	providerRepo := repo.NewModelProviderRepo(pool)
 
 	org, err := orgRepo.Create(ctx, repo.Organization{
 		Slug:        "budget-check-org",
@@ -61,6 +48,15 @@ func TestCheckBudgetSumsModelInvocationTokens(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("create org: %v", err)
+	}
+	provider, err := providerRepo.Create(ctx, repo.ModelProvider{
+		Slug:        "budget-provider",
+		DisplayName: "Budget Provider",
+		APIBaseURL:  "https://provider.example",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
 	}
 
 	projectA, err := projectRepo.Create(ctx, repo.Project{
@@ -105,9 +101,9 @@ func TestCheckBudgetSumsModelInvocationTokens(t *testing.T) {
 	insertRow := func(projectID uuid.UUID, input, output int64) {
 		t.Helper()
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO model_invocation (organization_id, project_id, input_tokens, output_tokens, created_at)
-			VALUES ($1, $2, $3, $4, $5)
-		`, org.ID, projectID, input, output, createdAt); err != nil {
+			INSERT INTO model_invocation (organization_id, model_provider_id, project_id, invocation_purpose, status, model_name, input_tokens, output_tokens, created_at)
+			VALUES ($1, $2, $3, 'agent_turn', 'completed', $4, $5, $6, $7)
+		`, org.ID, provider.ID, projectID, "budget-model", input, output, createdAt); err != nil {
 			t.Fatalf("insert model_invocation row: %v", err)
 		}
 	}
@@ -151,34 +147,9 @@ func TestCheckBudgetWarnsOncePerPeriodWithInboxInsert(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
 
-	if _, err := pool.Exec(ctx, `
-		CREATE TABLE model_invocation (
-			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-			organization_id uuid NOT NULL,
-			project_id uuid,
-			agent_id uuid,
-			input_tokens bigint NOT NULL DEFAULT 0,
-			output_tokens bigint NOT NULL DEFAULT 0,
-			created_at timestamptz NOT NULL DEFAULT now()
-		)
-	`); err != nil {
-		t.Fatalf("create model_invocation table: %v", err)
-	}
-
-	if _, err := pool.Exec(ctx, `
-		CREATE TABLE inbox_item (
-			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-			organization_id uuid NOT NULL,
-			item_type text NOT NULL,
-			description text NOT NULL,
-			created_at timestamptz NOT NULL DEFAULT now()
-		)
-	`); err != nil {
-		t.Fatalf("create inbox_item table: %v", err)
-	}
-
 	orgRepo := repo.NewOrgRepo(pool)
 	budgetRepo := repo.NewTokenBudgetRepo(pool)
+	providerRepo := repo.NewModelProviderRepo(pool)
 
 	org, err := orgRepo.Create(ctx, repo.Organization{
 		Slug:        "budget-soft-alert-org",
@@ -186,6 +157,15 @@ func TestCheckBudgetWarnsOncePerPeriodWithInboxInsert(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("create org: %v", err)
+	}
+	provider, err := providerRepo.Create(ctx, repo.ModelProvider{
+		Slug:        "budget-soft-provider",
+		DisplayName: "Budget Soft Provider",
+		APIBaseURL:  "https://provider.example",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
 	}
 
 	soft := int64(100)
@@ -205,9 +185,9 @@ func TestCheckBudgetWarnsOncePerPeriodWithInboxInsert(t *testing.T) {
 
 	now := time.Date(2026, time.February, 24, 10, 0, 0, 0, time.UTC)
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO model_invocation (organization_id, input_tokens, output_tokens, created_at)
-		VALUES ($1, $2, $3, $4)
-	`, org.ID, int64(70), int64(50), now.Add(2*time.Hour)); err != nil {
+		INSERT INTO model_invocation (organization_id, model_provider_id, invocation_purpose, status, model_name, input_tokens, output_tokens, created_at)
+		VALUES ($1, $2, 'agent_turn', 'completed', $3, $4, $5, $6)
+	`, org.ID, provider.ID, "budget-model", int64(70), int64(50), now.Add(2*time.Hour)); err != nil {
 		t.Fatalf("insert model_invocation: %v", err)
 	}
 

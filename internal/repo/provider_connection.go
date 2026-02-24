@@ -20,6 +20,7 @@ type ProviderConnection struct {
 	APIKeyRef          string
 	APIBaseURLOverride *string
 	FailoverPriority   int
+	MaxConcurrent      int
 	HealthStatus       string
 	IsEnabled          bool
 	Metadata           json.RawMessage
@@ -59,13 +60,14 @@ func (r *ProviderConnectionRepo) Create(ctx context.Context, connection Provider
 			api_key_ref,
 			api_base_url_override,
 			failover_priority,
+			max_concurrent,
 			health_status,
 			is_enabled,
 			metadata
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
-		RETURNING id, organization_id, provider_id, display_name, api_key_ref, api_base_url_override, failover_priority, health_status, is_enabled, metadata, created_at, updated_at
-	`, connection.OrganizationID, connection.ProviderID, connection.DisplayName, connection.APIKeyRef, connection.APIBaseURLOverride, failoverPriority, healthStatus, connection.IsEnabled, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+		RETURNING id, organization_id, provider_id, display_name, api_key_ref, api_base_url_override, failover_priority, max_concurrent, health_status, is_enabled, metadata, created_at, updated_at
+	`, connection.OrganizationID, connection.ProviderID, connection.DisplayName, connection.APIKeyRef, connection.APIBaseURLOverride, failoverPriority, defaultMaxConcurrent(connection.MaxConcurrent), healthStatus, connection.IsEnabled, metadata)
 
 	created, err := scanProviderConnection(row)
 	if err != nil {
@@ -76,7 +78,7 @@ func (r *ProviderConnectionRepo) Create(ctx context.Context, connection Provider
 
 func (r *ProviderConnectionRepo) GetByID(ctx context.Context, id uuid.UUID) (ProviderConnection, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, organization_id, provider_id, display_name, api_key_ref, api_base_url_override, failover_priority, health_status, is_enabled, metadata, created_at, updated_at
+		SELECT id, organization_id, provider_id, display_name, api_key_ref, api_base_url_override, failover_priority, max_concurrent, health_status, is_enabled, metadata, created_at, updated_at
 		FROM provider_connection
 		WHERE id = $1
 	`, id)
@@ -93,7 +95,7 @@ func (r *ProviderConnectionRepo) GetByID(ctx context.Context, id uuid.UUID) (Pro
 
 func (r *ProviderConnectionRepo) List(ctx context.Context, organizationID uuid.UUID) ([]ProviderConnection, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, organization_id, provider_id, display_name, api_key_ref, api_base_url_override, failover_priority, health_status, is_enabled, metadata, created_at, updated_at
+		SELECT id, organization_id, provider_id, display_name, api_key_ref, api_base_url_override, failover_priority, max_concurrent, health_status, is_enabled, metadata, created_at, updated_at
 		FROM provider_connection
 		WHERE organization_id = $1
 		ORDER BY failover_priority ASC, created_at ASC
@@ -129,10 +131,11 @@ func (r *ProviderConnectionRepo) Update(ctx context.Context, connection Provider
 			api_key_ref = $3,
 			api_base_url_override = $4,
 			failover_priority = $5,
-			metadata = $6::jsonb
+			max_concurrent = $6,
+			metadata = $7::jsonb
 		WHERE id = $1
-		RETURNING id, organization_id, provider_id, display_name, api_key_ref, api_base_url_override, failover_priority, health_status, is_enabled, metadata, created_at, updated_at
-	`, connection.ID, connection.DisplayName, connection.APIKeyRef, connection.APIBaseURLOverride, connection.FailoverPriority, metadata)
+		RETURNING id, organization_id, provider_id, display_name, api_key_ref, api_base_url_override, failover_priority, max_concurrent, health_status, is_enabled, metadata, created_at, updated_at
+	`, connection.ID, connection.DisplayName, connection.APIKeyRef, connection.APIBaseURLOverride, connection.FailoverPriority, defaultMaxConcurrent(connection.MaxConcurrent), metadata)
 
 	updated, err := scanProviderConnection(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -149,7 +152,7 @@ func (r *ProviderConnectionRepo) SetHealthStatus(ctx context.Context, id uuid.UU
 		UPDATE provider_connection
 		SET health_status = $2
 		WHERE id = $1
-		RETURNING id, organization_id, provider_id, display_name, api_key_ref, api_base_url_override, failover_priority, health_status, is_enabled, metadata, created_at, updated_at
+		RETURNING id, organization_id, provider_id, display_name, api_key_ref, api_base_url_override, failover_priority, max_concurrent, health_status, is_enabled, metadata, created_at, updated_at
 	`, id, healthStatus)
 
 	updated, err := scanProviderConnection(row)
@@ -167,7 +170,7 @@ func (r *ProviderConnectionRepo) SetEnabled(ctx context.Context, id uuid.UUID, e
 		UPDATE provider_connection
 		SET is_enabled = $2
 		WHERE id = $1
-		RETURNING id, organization_id, provider_id, display_name, api_key_ref, api_base_url_override, failover_priority, health_status, is_enabled, metadata, created_at, updated_at
+		RETURNING id, organization_id, provider_id, display_name, api_key_ref, api_base_url_override, failover_priority, max_concurrent, health_status, is_enabled, metadata, created_at, updated_at
 	`, id, enabled)
 
 	updated, err := scanProviderConnection(row)
@@ -182,7 +185,7 @@ func (r *ProviderConnectionRepo) SetEnabled(ctx context.Context, id uuid.UUID, e
 
 func (r *ProviderConnectionRepo) ListByProvider(ctx context.Context, organizationID, providerID uuid.UUID) ([]ProviderConnection, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, organization_id, provider_id, display_name, api_key_ref, api_base_url_override, failover_priority, health_status, is_enabled, metadata, created_at, updated_at
+		SELECT id, organization_id, provider_id, display_name, api_key_ref, api_base_url_override, failover_priority, max_concurrent, health_status, is_enabled, metadata, created_at, updated_at
 		FROM provider_connection
 		WHERE organization_id = $1
 		  AND provider_id = $2
@@ -218,6 +221,7 @@ func scanProviderConnection(row pgx.Row) (ProviderConnection, error) {
 		&connection.APIKeyRef,
 		&connection.APIBaseURLOverride,
 		&connection.FailoverPriority,
+		&connection.MaxConcurrent,
 		&connection.HealthStatus,
 		&connection.IsEnabled,
 		&connection.Metadata,
@@ -235,4 +239,11 @@ func scanProviderConnection(row pgx.Row) (ProviderConnection, error) {
 	}
 
 	return connection, nil
+}
+
+func defaultMaxConcurrent(value int) int {
+	if value <= 0 {
+		return 10
+	}
+	return value
 }
