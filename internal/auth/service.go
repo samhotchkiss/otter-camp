@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/samhotchkiss/otter-camp/internal/audit"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/ratelimit"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -31,6 +32,7 @@ const (
 	sessionTTLDefault   = 30 * 24 * time.Hour
 	accountLockDuration = 30 * time.Minute
 	magicLinkTTLDefault = 15 * time.Minute
+	maxFailedAttempts   = 10
 )
 
 const (
@@ -68,10 +70,7 @@ type Service interface {
 	UnlockAccount(ctx context.Context, userID uuid.UUID) error
 }
 
-type AuditRecorder interface {
-	Record(ctx context.Context, event any) error
-	RecordAsync(ctx context.Context, event any)
-}
+type AuditRecorder = audit.AuditRecorder
 
 type LoginResult struct {
 	SessionToken string
@@ -136,7 +135,8 @@ type Options struct {
 	SessionTTL   time.Duration
 	MagicLinkTTL time.Duration
 
-	AuditRecorder AuditRecorder
+	MaxFailedLoginAttempts int
+	AuditRecorder          AuditRecorder
 }
 
 type UserRepository interface {
@@ -181,6 +181,7 @@ type service struct {
 
 	sessionTTL   time.Duration
 	magicLinkTTL time.Duration
+	maxFailed    int
 
 	audit AuditRecorder
 
@@ -256,6 +257,16 @@ func NewService(opts Options) (Service, error) {
 		limiter = ratelimit.New(20, 15*time.Minute, clk)
 	}
 
+	maxFailed := opts.MaxFailedLoginAttempts
+	if maxFailed <= 0 {
+		maxFailed = maxFailedAttempts
+	}
+
+	recorder := opts.AuditRecorder
+	if recorder == nil {
+		recorder = audit.NewNoopRecorder()
+	}
+
 	return &service{
 		users:        opts.Users,
 		sessions:     opts.Sessions,
@@ -268,7 +279,8 @@ func NewService(opts Options) (Service, error) {
 		defaultOrg:   defaultOrg,
 		sessionTTL:   sessionTTL,
 		magicLinkTTL: magicLinkTTL,
-		audit:        opts.AuditRecorder,
+		maxFailed:    maxFailed,
+		audit:        recorder,
 		magicLinks:   make(map[string]magicLinkToken),
 	}, nil
 }
@@ -299,15 +311,18 @@ func (s *service) Login(ctx context.Context, email, password, ipAddr, userAgent 
 	}
 
 	now := s.clock.Now()
-	if user.LockedUntil != nil && user.FailedLoginAttempts >= 10 && user.LockedUntil.After(now) {
+	if user.LockedUntil != nil && user.FailedLoginAttempts >= s.maxFailed && user.LockedUntil.After(now) {
 		return nil, ErrAccountLocked
 	}
 
 	if user.PasswordHash == nil || bcrypt.CompareHashAndPassword([]byte(*user.PasswordHash), []byte(password)) != nil {
 		updated, incrErr := s.users.IncrFailedAttempts(ctx, user.ID)
-		if incrErr == nil && updated.FailedLoginAttempts >= 10 {
+		if incrErr == nil && updated.FailedLoginAttempts >= s.maxFailed {
 			lockUntil := now.Add(accountLockDuration)
 			_, _ = s.users.SetLockedUntil(ctx, user.ID, &lockUntil)
+			if updated.FailedLoginAttempts == s.maxFailed {
+				s.recordLockoutAudit(ctx, user, ipAddr, lockUntil)
+			}
 		}
 		return nil, ErrInvalidCredentials
 	}
@@ -610,6 +625,29 @@ func (s *service) localAutoLogin(ctx context.Context, orgID uuid.UUID, ipAddr, u
 		}
 	}
 	return nil, ErrNoAdminForLocalAutoLogin
+}
+
+func (s *service) recordLockoutAudit(ctx context.Context, user repo.HumanUser, ipAddr string, lockedUntil time.Time) {
+	if s.audit == nil {
+		return
+	}
+
+	targetType := "human_user"
+	targetID := user.ID
+	event := audit.Event{
+		OrgID:         user.OrganizationID,
+		EventType:     "login_failed_lockout",
+		PrincipalType: "human",
+		PrincipalID:   user.ID,
+		TargetType:    &targetType,
+		TargetID:      &targetID,
+		Metadata: map[string]any{
+			"email":        user.Email,
+			"ip_address":   strings.TrimSpace(ipAddr),
+			"locked_until": lockedUntil.UTC().Format(time.RFC3339),
+		},
+	}
+	s.audit.RecordAsync(ctx, event)
 }
 
 func (s *service) createSession(ctx context.Context, user repo.HumanUser, ipAddr, userAgent string) (*LoginResult, error) {
