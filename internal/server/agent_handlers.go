@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -55,13 +57,43 @@ type agentTemplateRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.AgentProfileTemplate, error)
 }
 
+type agentAssignmentLookupRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.Agent, error)
+}
+
+type projectAssignmentLookupRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.Project, error)
+}
+
+type skillAssignmentLookupRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.Skill, error)
+}
+
+type agentProjectAssignmentListRepository interface {
+	ListByAgent(ctx context.Context, agentID uuid.UUID) ([]repo.AgentProjectAssignment, error)
+}
+
+type agentSkillAttachmentListRepository interface {
+	GetByAgentAndSkill(ctx context.Context, agentID, skillID uuid.UUID) (repo.AgentSkillAttachment, error)
+	ListByAgent(ctx context.Context, agentID uuid.UUID) ([]repo.AgentSkillAttachment, error)
+}
+
 type AgentRouteRegistrar struct {
 	handlers agentHandlers
 }
 
-func NewAgentRouteRegistrar(service agent.AgentService, templates agentTemplateRepository) *AgentRouteRegistrar {
+func NewAgentRouteRegistrar(
+	service agent.AgentService,
+	templates agentTemplateRepository,
+	assignments agent.AssignmentService,
+	agents agentAssignmentLookupRepository,
+	projects projectAssignmentLookupRepository,
+	skills skillAssignmentLookupRepository,
+	projectAssignments agentProjectAssignmentListRepository,
+	skillAttachments agentSkillAttachmentListRepository,
+) *AgentRouteRegistrar {
 	return &AgentRouteRegistrar{
-		handlers: newAgentHandlers(service, templates),
+		handlers: newAgentHandlersWithAssignments(service, templates, assignments, agents, projects, skills, projectAssignments, skillAttachments),
 	}
 }
 
@@ -79,12 +111,27 @@ func (r *AgentRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.Get("/agent-templates", r.handlers.listAgentTemplates)
 	router.With(middleware.RequireRole("admin")).Post("/agent-templates", r.handlers.createAgentTemplate)
 	router.Get("/agent-templates/{id}", r.handlers.getAgentTemplate)
+
+	router.Get("/agents/{id}/project-assignments", r.handlers.listAgentProjectAssignments)
+	router.With(middleware.RequireRole("admin")).Post("/agents/{id}/project-assignments", r.handlers.createAgentProjectAssignment)
+	router.With(middleware.RequireRole("admin")).Delete("/agents/{id}/project-assignments/{pid}", r.handlers.deleteAgentProjectAssignment)
+
+	router.Get("/agents/{id}/skills", r.handlers.listAgentSkills)
+	router.With(middleware.RequireRole("admin")).Post("/agents/{id}/skills", r.handlers.attachAgentSkill)
+	router.With(middleware.RequireRole("admin")).Patch("/agents/{id}/skills/{sid}", r.handlers.updateAgentSkillPriority)
+	router.With(middleware.RequireRole("admin")).Delete("/agents/{id}/skills/{sid}", r.handlers.detachAgentSkill)
 }
 
 type agentHandlers struct {
-	service   agent.AgentService
-	templates agentTemplateRepository
-	totals    *agentTotalCache
+	service            agent.AgentService
+	templates          agentTemplateRepository
+	assignments        agent.AssignmentService
+	agents             agentAssignmentLookupRepository
+	projects           projectAssignmentLookupRepository
+	skills             skillAssignmentLookupRepository
+	projectAssignments agentProjectAssignmentListRepository
+	skillAttachments   agentSkillAttachmentListRepository
+	totals             *agentTotalCache
 }
 
 func newAgentHandlers(service agent.AgentService, templates agentTemplateRepository) agentHandlers {
@@ -92,6 +139,29 @@ func newAgentHandlers(service agent.AgentService, templates agentTemplateReposit
 		service:   service,
 		templates: templates,
 		totals:    newAgentTotalCache(60 * time.Second),
+	}
+}
+
+func newAgentHandlersWithAssignments(
+	service agent.AgentService,
+	templates agentTemplateRepository,
+	assignments agent.AssignmentService,
+	agents agentAssignmentLookupRepository,
+	projects projectAssignmentLookupRepository,
+	skills skillAssignmentLookupRepository,
+	projectAssignments agentProjectAssignmentListRepository,
+	skillAttachments agentSkillAttachmentListRepository,
+) agentHandlers {
+	return agentHandlers{
+		service:            service,
+		templates:          templates,
+		assignments:        assignments,
+		agents:             agents,
+		projects:           projects,
+		skills:             skills,
+		projectAssignments: projectAssignments,
+		skillAttachments:   skillAttachments,
+		totals:             newAgentTotalCache(60 * time.Second),
 	}
 }
 
@@ -141,6 +211,20 @@ type createAgentTemplateRequest struct {
 	Metadata              json.RawMessage `json:"metadata"`
 }
 
+type createProjectAssignmentRequest struct {
+	ProjectID uuid.UUID `json:"project_id"`
+	Role      string    `json:"role"`
+}
+
+type createAgentSkillRequest struct {
+	SkillID  uuid.UUID `json:"skill_id"`
+	Priority *int      `json:"priority"`
+}
+
+type updateAgentSkillPriorityRequest struct {
+	Priority int `json:"priority"`
+}
+
 type agentResponse struct {
 	ID                    uuid.UUID  `json:"id"`
 	OrganizationID        uuid.UUID  `json:"organization_id"`
@@ -185,6 +269,45 @@ type agentTemplateResponse struct {
 	Metadata              json.RawMessage `json:"metadata"`
 	CreatedAt             time.Time       `json:"created_at"`
 	UpdatedAt             time.Time       `json:"updated_at"`
+}
+
+type projectAssignmentResponse struct {
+	ID         uuid.UUID `json:"id"`
+	AgentID    uuid.UUID `json:"agent_id"`
+	ProjectID  uuid.UUID `json:"project_id"`
+	Role       string    `json:"role"`
+	IsActive   bool      `json:"is_active"`
+	AssignedAt time.Time `json:"assigned_at"`
+}
+
+type projectAssignmentListItemResponse struct {
+	ID          uuid.UUID `json:"id"`
+	ProjectID   uuid.UUID `json:"project_id"`
+	ProjectSlug string    `json:"project_slug"`
+	Role        string    `json:"role"`
+	AssignedAt  time.Time `json:"assigned_at"`
+}
+
+type agentSkillAttachmentResponse struct {
+	ID         uuid.UUID `json:"id"`
+	AgentID    uuid.UUID `json:"agent_id"`
+	SkillID    uuid.UUID `json:"skill_id"`
+	Priority   int       `json:"priority"`
+	IsActive   bool      `json:"is_active"`
+	AttachedAt time.Time `json:"attached_at"`
+}
+
+type agentSkillAttachmentListItemResponse struct {
+	ID         uuid.UUID `json:"id"`
+	SkillID    uuid.UUID `json:"skill_id"`
+	SkillName  string    `json:"skill_name"`
+	Priority   int       `json:"priority"`
+	AttachedAt time.Time `json:"attached_at"`
+}
+
+type priorityCursor struct {
+	P  int    `json:"p"`
+	ID string `json:"id"`
 }
 
 func (h agentHandlers) listAgents(w http.ResponseWriter, r *http.Request) {
@@ -696,6 +819,525 @@ func (h agentHandlers) getAgentTemplate(w http.ResponseWriter, r *http.Request) 
 	responder.JSON(w, http.StatusOK, toAgentTemplateResponse(template))
 }
 
+func (h agentHandlers) createAgentProjectAssignment(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.assignments == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "assignment service unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	agentID, err := parseAgentIDParam(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid agent id")
+		return
+	}
+
+	var req createProjectAssignmentRequest
+	if err := decodeJSON(r, &req); err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+
+	if req.ProjectID == uuid.Nil {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "project_id is required")
+		return
+	}
+
+	role := strings.ToLower(strings.TrimSpace(req.Role))
+	if role != "pm" && role != "worker" && role != "reviewer" && role != "observer" {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "role must be one of pm, worker, reviewer, observer")
+		return
+	}
+
+	agentRecord, err := h.getScopedAgent(r.Context(), principal.OrganizationID, agentID)
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(agentRecord.LifecycleStatus), "active") {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "agent lifecycle_status must be active")
+		return
+	}
+
+	if _, err := h.getScopedProject(r.Context(), principal.OrganizationID, req.ProjectID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	var assigned *repo.AgentProjectAssignment
+	for attempt := 0; attempt < 3; attempt++ {
+		assigned, err = h.assignments.AssignToProject(r.Context(), agentID, req.ProjectID, role, agent.AssignmentActor{
+			Type: "human_user",
+			ID:   principal.UserID,
+		})
+		if !errors.Is(err, agent.ErrPMConflict) {
+			break
+		}
+	}
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	responder.JSON(w, http.StatusOK, toProjectAssignmentResponse(assigned))
+}
+
+func (h agentHandlers) deleteAgentProjectAssignment(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.assignments == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "assignment service unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	agentID, err := parseAgentIDParam(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid agent id")
+		return
+	}
+	projectID, err := parseProjectIDParam(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+
+	if _, err := h.getScopedAgent(r.Context(), principal.OrganizationID, agentID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+	if _, err := h.getScopedProject(r.Context(), principal.OrganizationID, projectID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	removed, err := h.assignments.RemoveFromProject(r.Context(), agentID, projectID)
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+	responder.JSON(w, http.StatusOK, toProjectAssignmentResponse(removed))
+}
+
+func (h agentHandlers) listAgentProjectAssignments(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.projectAssignments == nil || h.projects == nil || h.agents == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "assignment repositories unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	agentID, err := parseAgentIDParam(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid agent id")
+		return
+	}
+	if _, err := h.getScopedAgent(r.Context(), principal.OrganizationID, agentID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	items, err := h.projectAssignments.ListByAgent(r.Context(), agentID)
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	params := api.ParsePaginationParams(r.URL.Query())
+	var cursorAt time.Time
+	var cursorID uuid.UUID
+	if params.Cursor != "" {
+		decodedAt, decodedID, decodeErr := (api.PaginationDecoder{}).Decode(params.Cursor)
+		if decodeErr != nil {
+			responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "invalid cursor")
+			return
+		}
+		cursorAt = decodedAt
+		cursorID = decodedID
+	}
+
+	startIdx := 0
+	if params.Cursor != "" {
+		startIdx = len(items)
+		for i, item := range items {
+			if item.AssignedAt.Before(cursorAt) || (item.AssignedAt.Equal(cursorAt) && item.ID.String() < cursorID.String()) {
+				startIdx = i
+				break
+			}
+		}
+	}
+
+	remaining := items[startIdx:]
+	page := remaining
+	var nextCursor *string
+	if len(page) > params.Limit {
+		page = page[:params.Limit]
+		encoded := (api.PaginationEncoder{}).Encode(page[len(page)-1].AssignedAt, page[len(page)-1].ID)
+		nextCursor = &encoded
+	}
+
+	payload := make([]projectAssignmentListItemResponse, 0, len(page))
+	for _, item := range page {
+		project, getErr := h.getScopedProject(r.Context(), principal.OrganizationID, item.ProjectID)
+		if getErr != nil {
+			status, code, message := mapAssignmentError(getErr)
+			responder.Error(w, status, code, message)
+			return
+		}
+		payload = append(payload, toProjectAssignmentListItemResponse(item, project.Slug))
+	}
+
+	total := len(items)
+	responder.JSONList(w, http.StatusOK, payload, api.PaginationMeta{
+		NextCursor: nextCursor,
+		Limit:      params.Limit,
+		Total:      &total,
+	})
+}
+
+func (h agentHandlers) listAgentSkills(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.skillAttachments == nil || h.skills == nil || h.agents == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "assignment repositories unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	agentID, err := parseAgentIDParam(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid agent id")
+		return
+	}
+	if _, err := h.getScopedAgent(r.Context(), principal.OrganizationID, agentID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	items, err := h.skillAttachments.ListByAgent(r.Context(), agentID)
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	params := api.ParsePaginationParams(r.URL.Query())
+	cursorPriority := -1
+	cursorID := ""
+	if params.Cursor != "" {
+		decodedPriority, decodedID, decodeErr := decodePriorityCursor(params.Cursor)
+		if decodeErr != nil {
+			responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "invalid cursor")
+			return
+		}
+		cursorPriority = decodedPriority
+		cursorID = decodedID
+	}
+
+	startIdx := 0
+	if params.Cursor != "" {
+		startIdx = len(items)
+		for i, item := range items {
+			if item.Priority > cursorPriority || (item.Priority == cursorPriority && item.ID.String() > cursorID) {
+				startIdx = i
+				break
+			}
+		}
+	}
+
+	remaining := items[startIdx:]
+	page := remaining
+	var nextCursor *string
+	if len(page) > params.Limit {
+		page = page[:params.Limit]
+		encoded, encodeErr := encodePriorityCursor(page[len(page)-1].Priority, page[len(page)-1].ID)
+		if encodeErr != nil {
+			responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "request failed")
+			return
+		}
+		nextCursor = &encoded
+	}
+
+	payload := make([]agentSkillAttachmentListItemResponse, 0, len(page))
+	for _, item := range page {
+		skill, getErr := h.getScopedSkill(r.Context(), principal.OrganizationID, item.SkillID)
+		if getErr != nil {
+			status, code, message := mapAssignmentError(getErr)
+			responder.Error(w, status, code, message)
+			return
+		}
+		payload = append(payload, toAgentSkillAttachmentListItemResponse(item, skill.DisplayName))
+	}
+
+	total := len(items)
+	responder.JSONList(w, http.StatusOK, payload, api.PaginationMeta{
+		NextCursor: nextCursor,
+		Limit:      params.Limit,
+		Total:      &total,
+	})
+}
+
+func (h agentHandlers) attachAgentSkill(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.assignments == nil || h.skillAttachments == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "assignment service unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	agentID, err := parseAgentIDParam(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid agent id")
+		return
+	}
+	if _, err := h.getScopedAgent(r.Context(), principal.OrganizationID, agentID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	var req createAgentSkillRequest
+	if err := decodeJSON(r, &req); err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+	if req.SkillID == uuid.Nil {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "skill_id is required")
+		return
+	}
+	priority := 100
+	if req.Priority != nil {
+		priority = *req.Priority
+	}
+	if priority < 1 || priority > 1000 {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "priority must be between 1 and 1000")
+		return
+	}
+
+	if _, err := h.getScopedSkill(r.Context(), principal.OrganizationID, req.SkillID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	preexisting, preexistingErr := h.skillAttachments.GetByAgentAndSkill(r.Context(), agentID, req.SkillID)
+	hadPreexisting := preexistingErr == nil
+	wasReactivated := hadPreexisting && !preexisting.IsActive
+	if preexistingErr != nil && !errors.Is(preexistingErr, repo.ErrNotFound) {
+		status, code, message := mapAssignmentError(preexistingErr)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	attached, err := h.assignments.AttachSkill(r.Context(), agentID, req.SkillID, priority, agent.AssignmentActor{
+		Type: "human_user",
+		ID:   principal.UserID,
+	})
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	if hadPreexisting {
+		writeJSONWithMeta(w, r.Context(), http.StatusOK, toAgentSkillAttachmentResponse(attached), map[string]any{
+			"reactivated": wasReactivated,
+		})
+		return
+	}
+	responder.JSON(w, http.StatusCreated, toAgentSkillAttachmentResponse(attached))
+}
+
+func (h agentHandlers) detachAgentSkill(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.assignments == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "assignment service unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	agentID, err := parseAgentIDParam(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid agent id")
+		return
+	}
+	skillID, err := parseSkillIDParam(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid skill id")
+		return
+	}
+	if _, err := h.getScopedAgent(r.Context(), principal.OrganizationID, agentID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	detached, err := h.assignments.DetachSkill(r.Context(), agentID, skillID)
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+	responder.JSON(w, http.StatusOK, toAgentSkillAttachmentResponse(detached))
+}
+
+func (h agentHandlers) updateAgentSkillPriority(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.assignments == nil || h.skillAttachments == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "assignment service unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	agentID, err := parseAgentIDParam(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid agent id")
+		return
+	}
+	skillID, err := parseSkillIDParam(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid skill id")
+		return
+	}
+	if _, err := h.getScopedAgent(r.Context(), principal.OrganizationID, agentID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	var req updateAgentSkillPriorityRequest
+	if err := decodeJSON(r, &req); err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+	if req.Priority < 1 || req.Priority > 1000 {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "priority must be between 1 and 1000")
+		return
+	}
+
+	existing, err := h.skillAttachments.GetByAgentAndSkill(r.Context(), agentID, skillID)
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+	if !existing.IsActive {
+		responder.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+		return
+	}
+
+	if err := h.assignments.ReorderSkills(r.Context(), agentID, map[uuid.UUID]int{skillID: req.Priority}); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	updated, err := h.skillAttachments.GetByAgentAndSkill(r.Context(), agentID, skillID)
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+	responder.JSON(w, http.StatusOK, toAgentSkillAttachmentResponse(&updated))
+}
+
+func (h agentHandlers) getScopedAgent(ctx context.Context, organizationID, agentID uuid.UUID) (repo.Agent, error) {
+	if h.agents == nil {
+		return repo.Agent{}, fmt.Errorf("agent repository unavailable")
+	}
+	agentRecord, err := h.agents.GetByID(ctx, agentID)
+	if err != nil {
+		return repo.Agent{}, err
+	}
+	if agentRecord.OrganizationID != organizationID {
+		return repo.Agent{}, repo.ErrNotFound
+	}
+	return agentRecord, nil
+}
+
+func (h agentHandlers) getScopedProject(ctx context.Context, organizationID, projectID uuid.UUID) (repo.Project, error) {
+	if h.projects == nil {
+		return repo.Project{}, fmt.Errorf("project repository unavailable")
+	}
+	projectRecord, err := h.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return repo.Project{}, err
+	}
+	if projectRecord.OrganizationID != organizationID {
+		return repo.Project{}, repo.ErrNotFound
+	}
+	return projectRecord, nil
+}
+
+func (h agentHandlers) getScopedSkill(ctx context.Context, organizationID, skillID uuid.UUID) (repo.Skill, error) {
+	if h.skills == nil {
+		return repo.Skill{}, fmt.Errorf("skill repository unavailable")
+	}
+	skillRecord, err := h.skills.GetByID(ctx, skillID)
+	if err != nil {
+		return repo.Skill{}, err
+	}
+	if skillRecord.OrganizationID != organizationID && skillRecord.OrganizationID != uuid.Nil {
+		return repo.Skill{}, repo.ErrNotFound
+	}
+	return skillRecord, nil
+}
+
+func parseAgentIDParam(r *http.Request) (uuid.UUID, error) {
+	return uuid.Parse(strings.TrimSpace(chi.URLParam(r, "id")))
+}
+
+func parseProjectIDParam(r *http.Request) (uuid.UUID, error) {
+	return uuid.Parse(strings.TrimSpace(chi.URLParam(r, "pid")))
+}
+
+func parseSkillIDParam(r *http.Request) (uuid.UUID, error) {
+	return uuid.Parse(strings.TrimSpace(chi.URLParam(r, "sid")))
+}
+
 func mapAgentError(err error) (status int, code, message string) {
 	switch {
 	case errors.Is(err, agent.ErrInvalidTransition):
@@ -730,6 +1372,125 @@ func mapTemplateError(err error) (status int, code, message string) {
 	default:
 		return http.StatusInternalServerError, api.ErrCodeInternal, "request failed"
 	}
+}
+
+func mapAssignmentError(err error) (status int, code, message string) {
+	switch {
+	case err == nil:
+		return http.StatusOK, "", ""
+	case errors.Is(err, repo.ErrNotFound):
+		return http.StatusNotFound, api.ErrCodeNotFound, "resource not found"
+	case errors.Is(err, repo.ErrConflict), errors.Is(err, agent.ErrPMConflict):
+		return http.StatusConflict, api.ErrCodeConflict, "conflict"
+	case errors.Is(err, agent.ErrAssignmentAgentIDRequired),
+		errors.Is(err, agent.ErrAssignmentProjectIDRequired),
+		errors.Is(err, agent.ErrAssignmentSkillIDRequired),
+		errors.Is(err, agent.ErrAssignmentInvalidRole),
+		errors.Is(err, agent.ErrInvalidCreatedByType),
+		errors.Is(err, agent.ErrCreatedByIDRequired):
+		return http.StatusUnprocessableEntity, api.ErrCodeValidation, err.Error()
+	default:
+		return http.StatusInternalServerError, api.ErrCodeInternal, "request failed"
+	}
+}
+
+func toProjectAssignmentResponse(item *repo.AgentProjectAssignment) projectAssignmentResponse {
+	if item == nil {
+		return projectAssignmentResponse{}
+	}
+	return projectAssignmentResponse{
+		ID:         item.ID,
+		AgentID:    item.AgentID,
+		ProjectID:  item.ProjectID,
+		Role:       item.Role,
+		IsActive:   item.IsActive,
+		AssignedAt: item.AssignedAt,
+	}
+}
+
+func toProjectAssignmentListItemResponse(item repo.AgentProjectAssignment, projectSlug string) projectAssignmentListItemResponse {
+	return projectAssignmentListItemResponse{
+		ID:          item.ID,
+		ProjectID:   item.ProjectID,
+		ProjectSlug: projectSlug,
+		Role:        item.Role,
+		AssignedAt:  item.AssignedAt,
+	}
+}
+
+func toAgentSkillAttachmentResponse(item *repo.AgentSkillAttachment) agentSkillAttachmentResponse {
+	if item == nil {
+		return agentSkillAttachmentResponse{}
+	}
+	return agentSkillAttachmentResponse{
+		ID:         item.ID,
+		AgentID:    item.AgentID,
+		SkillID:    item.SkillID,
+		Priority:   item.Priority,
+		IsActive:   item.IsActive,
+		AttachedAt: item.AttachedAt,
+	}
+}
+
+func toAgentSkillAttachmentListItemResponse(item repo.AgentSkillAttachment, skillName string) agentSkillAttachmentListItemResponse {
+	return agentSkillAttachmentListItemResponse{
+		ID:         item.ID,
+		SkillID:    item.SkillID,
+		SkillName:  skillName,
+		Priority:   item.Priority,
+		AttachedAt: item.AttachedAt,
+	}
+}
+
+func encodePriorityCursor(priority int, id uuid.UUID) (string, error) {
+	payload, err := json.Marshal(priorityCursor{
+		P:  priority,
+		ID: id.String(),
+	})
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(payload), nil
+}
+
+func decodePriorityCursor(raw string) (int, string, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil {
+		return 0, "", err
+	}
+	var cursor priorityCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil {
+		return 0, "", err
+	}
+	if strings.TrimSpace(cursor.ID) == "" {
+		return 0, "", errors.New("cursor id is required")
+	}
+	if _, err := uuid.Parse(cursor.ID); err != nil {
+		return 0, "", err
+	}
+	return cursor.P, cursor.ID, nil
+}
+
+func writeJSONWithMeta(w http.ResponseWriter, ctx context.Context, status int, data any, extraMeta map[string]any) {
+	requestID, ok := api.RequestIDFromContext(ctx)
+	if !ok || strings.TrimSpace(requestID) == "" {
+		requestID = uuid.NewString()
+	}
+
+	meta := map[string]any{
+		"request_id": requestID,
+	}
+	for key, value := range extraMeta {
+		meta[key] = value
+	}
+
+	w.Header().Set(api.HeaderRequestID, requestID)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"data": data,
+		"meta": meta,
+	})
 }
 
 func isAllowedAgentType(agentType string) bool {

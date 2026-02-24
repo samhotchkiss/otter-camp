@@ -144,6 +144,14 @@ func runServe() int {
 		fmt.Fprintf(os.Stderr, "agent service setup error: %v\n", err)
 		return 1
 	}
+	assignmentService, err := agentsvc.NewAssignmentService(agentsvc.AssignmentServiceOptions{
+		Pool:   pool.Raw(),
+		Events: bus,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent assignment service setup error: %v\n", err)
+		return 1
+	}
 
 	store, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
 	if err != nil {
@@ -167,7 +175,16 @@ func runServe() int {
 		AuthService: authService,
 		Pool:        pool.Raw(),
 		RouteRegistrars: []server.RouteRegistrar{
-			server.NewAgentRouteRegistrar(agentService, repo.NewAgentProfileTemplateRepo(pool.Raw())),
+			server.NewAgentRouteRegistrar(
+				agentService,
+				repo.NewAgentProfileTemplateRepo(pool.Raw()),
+				assignmentService,
+				repo.NewAgentRepo(pool.Raw()),
+				repo.NewProjectRepo(pool.Raw()),
+				repo.NewSkillRepo(pool.Raw()),
+				repo.NewAgentProjectAssignmentRepo(pool.Raw()),
+				repo.NewAgentSkillAttachmentRepo(pool.Raw()),
+			),
 		},
 		TestMode:     cfg.Mode == config.ModeTest,
 		TestResetter: resetter,

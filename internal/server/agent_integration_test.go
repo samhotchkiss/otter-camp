@@ -214,6 +214,13 @@ func newAgentTestServer(t *testing.T) (*authIntegrationServer, repo.Organization
 	if err != nil {
 		t.Fatalf("new agent service: %v", err)
 	}
+	assignmentService, err := agent.NewAssignmentService(agent.AssignmentServiceOptions{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("new assignment service: %v", err)
+	}
 
 	handler := NewHandlerWithOptions(HandlerOptions{
 		Version:     "test-version",
@@ -221,7 +228,16 @@ func newAgentTestServer(t *testing.T) (*authIntegrationServer, repo.Organization
 		AuthService: authService,
 		Pool:        pool,
 		RouteRegistrars: []RouteRegistrar{
-			NewAgentRouteRegistrar(agentService, repo.NewAgentProfileTemplateRepo(pool)),
+			NewAgentRouteRegistrar(
+				agentService,
+				repo.NewAgentProfileTemplateRepo(pool),
+				assignmentService,
+				repo.NewAgentRepo(pool),
+				repo.NewProjectRepo(pool),
+				repo.NewSkillRepo(pool),
+				repo.NewAgentProjectAssignmentRepo(pool),
+				repo.NewAgentSkillAttachmentRepo(pool),
+			),
 		},
 	})
 
