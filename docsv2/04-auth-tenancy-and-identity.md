@@ -289,7 +289,7 @@ When OtterCamp starts for the first time with an empty database, the bootstrap s
 
 If OtterCamp starts and the database already has an org and user, the bootstrap sequence is skipped. This is detected by checking for the existence of any `organization` row.
 
-**Note on upgrades**: bootstrap only runs on first install. When a new OtterCamp version ships with updated prompt packs or policies for the starter trio, those updates are applied through the migration system, not bootstrap. See 15-migration-and-backward-compat.md for the upgrade path for system-managed agent profiles.
+**Note on upgrades**: bootstrap only runs on first install. When a new OtterCamp version ships, the application compares the running binary version against the version recorded in the step 10 audit event. If the versions differ, `system_prompt` for Frank, Lori, and Ellie is updated from the shipped defaults on startup. `operator_instructions`, tool policy, model assignments, and skill attachments are never overwritten — those belong to the operator. To manually apply new shipped defaults for other fields, run `ottercamp agent sync-defaults`. See 15-migration-and-backward-compat.md §Resolved Decisions for the full upgrade path specification.
 
 ### CLI Bootstrap Command
 

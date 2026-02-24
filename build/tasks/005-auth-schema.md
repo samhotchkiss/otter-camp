@@ -35,6 +35,7 @@ business logic (login, session creation, rate limiting) is in task 006.
 - `last_login_at timestamptz`
 - `created_at timestamptz not null default now()`
 - `updated_at timestamptz not null default now()`
+- `settings jsonb not null default '{}'` — general-purpose user settings store (push preferences, UI preferences, etc.)
 - Unique constraint: `(organization_id, email)`
 
 **`auth_session` table** (doc 04):

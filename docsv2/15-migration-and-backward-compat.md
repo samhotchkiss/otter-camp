@@ -352,6 +352,8 @@ After V2 launches, monitor for:
 
 ## Resolved Decisions
 
+11. **Starter trio profile updates on upgrade — system_prompt only, on startup.** When a new OtterCamp version ships, the application compares the running binary version against the version recorded in the bootstrap audit event (`system.bootstrap`) metadata. If the versions differ, `system_prompt` for Frank, Lori, and Ellie is updated from the shipped defaults automatically on startup. `operator_instructions`, tool policy, model assignments, and skill attachments are **never** overwritten — those belong to the operator and may have been customized. The CLI command `ottercamp agent sync-defaults` lets operators manually apply new shipped defaults for all other fields when they want them.
+
 1. **V2 is a clean-room rebuild.** No V1 code, schema, or data is reused. V1 informs requirements, not implementation. This is the foundational decision that shapes everything else in this document.
 
 2. **Optional JSONL import for V1 memories is the ONLY data bridge.** No CSV/JSON import for other V1 data (projects, tasks, chat history, agent profiles). Memory is the only V1 artifact worth importing, and it goes through the standard extraction pipeline — not a special migration path.
@@ -374,12 +376,4 @@ After V2 launches, monitor for:
 
 ## Open Questions
 
-- **Starter trio profile updates on upgrade**: when a new OtterCamp version ships with updated prompt packs, policies, or tool configurations for the starter trio (Frank, Lori, Ellie), how are those applied to existing installs? Bootstrap is idempotent and skips if an org exists, so upgrades need a different mechanism. Options: forward-only migration that patches agent rows, a "system profile version" check on startup, or a manual `ottercamp upgrade-agents` CLI command. Flagged from doc 04.
-
-All other questions from the original skeletal spec have been resolved:
-
-- **"Do we offer optional CSV/JSON import tools later, or keep V2 strictly greenfield?"** — Resolved: JSONL memory import only. No CSV/JSON import for other data types. The JSONL importer is the standard bulk import facility (doc 06), not a V1-specific migration tool.
-
-- **"How long do we keep V1 archives available internally?"** — Resolved: indefinitely. No expiry on V1 archives. They move to cold storage but are never deleted.
-
-- **"What minimum bootstrap dataset (if any) should ship with V2?"** — Resolved: starter trio agent profiles, four default flow templates, two org-default skills, three model profiles, default org policy, org session ("General"). Full specification in doc 14's Bootstrap Dataset section. This dataset ships with every V2 installation.
+All open questions have been resolved — see Resolved Decisions above.

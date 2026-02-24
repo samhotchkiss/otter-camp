@@ -1,4 +1,4 @@
-# 066: Push Notification Preferences — Schema, Delivery Consumer, and API
+# 066: Push Notification Preferences — Delivery Consumer and API
 
 | Field | Value |
 |-------|-------|
@@ -11,83 +11,82 @@
 
 ## Scope
 
-Define the `push_notification_preference` table (ISSUE #28 — new table not defined in any
-spec); implement preference storage for per-urgency-tier enable/disable, per-project
-overrides, quiet hours, and per-event-type filtering; build the push delivery consumer
-(APNs/FCM adapter stubs); and expose the preference API.
+Implement push notification preference storage (inside `human_user.settings` jsonb — no new
+table), build the push delivery consumer (APNs/FCM adapter stubs), and expose the preference API.
 
-> ⚠️ ISSUE #28 (GAP): Doc 19 requires server-side push notification preferences but no table
-> or column is defined anywhere in the spec. This task defines the schema using best judgment
-> per doc 19 requirements. The design decision: use a dedicated `push_notification_preference`
-> table (one row per user) rather than extending `human_user` with a jsonb column, to allow
-> indexing on `user_id` and to keep `human_user` from accumulating preferences. Sam must
-> review and confirm the schema before the DDL is considered authoritative.
+> ✅ ISSUE #28 (RESOLVED): Push notification preferences are stored in `human_user.settings` jsonb
+> under two keys: `push_preferences` (tier settings, quiet hours, per-project overrides,
+> per-event-type overrides) and `push_tokens` (registered device tokens). No separate
+> `push_notification_preference` table is created. This keeps `human_user` as the single source of
+> truth for user configuration and avoids a one-row-per-user table pattern.
 
 ### Must build
 
-**Migration** (`0077_push_notification_preference.sql`):
+**No new migration** — preferences live in `human_user.settings` (added in task 005).
 
-```sql
-CREATE TABLE push_notification_preference (
-    id              uuid        primary key default gen_random_uuid(),
-    user_id         uuid        not null references human_user(id) on delete cascade,
-    organization_id uuid        not null references organization(id) on delete cascade,
+**`push_preferences` jsonb shape** (stored under `human_user.settings->'push_preferences'`):
 
-    -- Per-urgency-tier enable/disable:
-    -- Keys: 'urgent', 'high', 'normal', 'low'
-    -- Values: true = push enabled for this tier, false = disabled
-    tier_enabled    jsonb       not null default '{"urgent":true,"high":true,"normal":true,"low":false}',
-
-    -- Per-project push overrides:
-    -- Array of {project_id: uuid, enabled: bool, tiers: {...}}
-    -- Absence of a project entry = use tier_enabled defaults
-    project_overrides jsonb     not null default '[]',
-
-    -- Quiet hours (user's local timezone; enforced server-side using utc_offset):
-    quiet_hours_enabled boolean not null default false,
-    quiet_hours_start   text,   -- "HH:MM" 24-hour, e.g. "22:00"
-    quiet_hours_end     text,   -- "HH:MM" 24-hour, e.g. "08:00"
-    quiet_hours_timezone text,  -- IANA timezone string, e.g. "America/New_York"
-
-    -- Per-event-type filtering:
-    -- Keys: event_type strings (e.g. 'task.blocked', 'task.review_requested')
-    -- Values: true = send push for this event type; false = suppress
-    -- Absence of key = use tier_enabled default
-    event_type_overrides jsonb  not null default '{}',
-
-    -- Push token registration (may have multiple devices):
-    -- Array of {token: string, platform: 'apns'|'fcm', device_id: string, registered_at: timestamptz}
-    -- Tokens are NOT encrypted here — they are not secrets (per APNs/FCM design)
-    push_tokens     jsonb       not null default '[]',
-
-    created_at      timestamptz not null default now(),
-    updated_at      timestamptz not null default now(),
-
-    UNIQUE (user_id, organization_id)
-);
-CREATE INDEX idx_push_pref_user ON push_notification_preference (user_id);
+```json
+{
+  "tier_enabled": {
+    "urgent": true,
+    "high": true,
+    "normal": true,
+    "low": false
+  },
+  "project_overrides": [],
+  "quiet_hours_enabled": false,
+  "quiet_hours_start": null,
+  "quiet_hours_end": null,
+  "quiet_hours_timezone": null,
+  "event_type_overrides": {}
+}
 ```
+
+**`push_tokens` jsonb shape** (stored under `human_user.settings->'push_tokens'`):
+
+```json
+[
+  {
+    "token": "...",
+    "platform": "apns",
+    "device_id": "...",
+    "registered_at": "2025-01-01T00:00:00Z"
+  }
+]
+```
+
+**`push_preferences` field semantics:**
+- `tier_enabled`: keys `'urgent'`, `'high'`, `'normal'`, `'low'`; value true = push enabled for that tier
+- `project_overrides`: array of `{project_id, enabled, tiers: {...}}`; absence of a project entry = use tier_enabled defaults
+- `quiet_hours_enabled`: if false, quiet hours fields are ignored
+- `quiet_hours_start` / `quiet_hours_end`: `"HH:MM"` 24-hour format (e.g. `"22:00"`)
+- `quiet_hours_timezone`: IANA timezone string (e.g. `"America/New_York"`)
+- `event_type_overrides`: keys = event_type strings; values true/false; absence = use tier_enabled default
 
 **Repository** (`internal/push/preference_repository.go`):
 
-`PushPreferenceRepository`:
-- `GetByUser(ctx, userID, orgID) (*PushNotificationPreference, error)` — returns nil if not found
-- `Upsert(ctx, pref PushNotificationPreference) error` — ON CONFLICT (user_id, org_id) DO UPDATE
-- `RegisterToken(ctx, userID, orgID, token PushToken) error` — appends to `push_tokens` jsonb array; deduplicates by `device_id`
-- `RevokeToken(ctx, userID, orgID, deviceID string) error` — removes matching entry from `push_tokens` array
+`PushPreferenceRepository` reads and writes to `human_user.settings` using `HumanUserRepo`:
+- `GetPreferences(ctx, userID) (*PushPreferences, error)` — reads `settings->'push_preferences'`; returns default struct if key absent
+- `SavePreferences(ctx, userID, prefs PushPreferences) error` — writes to `settings->'push_preferences'` using `UPDATE human_user SET settings = jsonb_set(settings, '{push_preferences}', $1) WHERE id = $2`
+- `GetTokens(ctx, userID) ([]PushToken, error)` — reads `settings->'push_tokens'`; returns empty slice if absent
+- `RegisterToken(ctx, userID, token PushToken) error` — upserts into `push_tokens` array by `device_id`; uses `jsonb_set` to write updated array; deduplicates by device_id (update token value if same device_id)
+- `RevokeToken(ctx, userID, deviceID string) error` — removes matching entry from `push_tokens` array
+
+All writes use atomic `UPDATE ... SET settings = jsonb_set(...)` — no read-modify-write race.
 
 **Push preference service** (`internal/push/preference_service.go`):
 
-`PushPreferenceService.GetPreferences(ctx, userID, orgID) (PushNotificationPreference, error)`:
-- Calls repository; if no row exists, returns a default preference object (all tiers at default).
+`PushPreferenceService.GetPreferences(ctx, userID) (PushPreferences, error)`:
+- Calls repository; if no `push_preferences` key exists in settings, returns a default preference struct (all tiers at defaults).
 
-`PushPreferenceService.UpdatePreferences(ctx, userID, orgID, update PushPreferenceUpdate) error`:
+`PushPreferenceService.UpdatePreferences(ctx, userID, update PushPreferenceUpdate) error`:
 - Validates `quiet_hours_start` / `quiet_hours_end` format if provided (`HH:MM`).
 - Validates `quiet_hours_timezone` against IANA timezone list.
 - Validates tier keys are in `{'urgent','high','normal','low'}`.
-- Upserts via repository.
+- Saves via repository.
 
-`PushPreferenceService.ShouldDeliver(ctx, userID, orgID, projectID *uuid.UUID, urgencyTier, eventType string) (bool, error)`:
+`PushPreferenceService.ShouldDeliver(ctx, userID, projectID *uuid.UUID, urgencyTier, eventType string) (bool, error)`:
 - The delivery gate used before sending a push notification.
 - Returns false if any of:
   1. `tier_enabled[urgencyTier]` is false (and no project override enables it).
@@ -112,9 +111,10 @@ Consumes `domain_event` rows with event types:
 - Parse event; determine target user ID(s) from payload (e.g., task participants for
   `task.blocked`, PM for `run.dead_lettered`).
 - For each target user:
-  1. Load `PushNotificationPreference` via `PushPreferenceService.GetPreferences`.
+  1. Load preferences via `PushPreferenceService.GetPreferences`.
   2. Call `ShouldDeliver`; if false: skip with reason logged.
-  3. If should deliver: build notification payload; dispatch via `PushAdapter.Send`.
+  3. If should deliver: load tokens via `PushPreferenceRepository.GetTokens`; build
+     notification payload; dispatch via `PushAdapter.Send`.
 
 `PushDeliveryConsumer.BuildPayload(event DomainEvent, urgencyTier string) PushPayload`:
 - `PushPayload`:
@@ -155,9 +155,9 @@ type PushAdapter interface {
 **Push preference API:**
 
 `GET /v1/me/push-preferences`:
-- Returns the authenticated user's push preferences for their current org.
+- Returns the authenticated user's push preferences.
 - Calls `PushPreferenceService.GetPreferences`.
-- Returns default preference object (not 404) if no row exists.
+- Returns default preference object (not 404) if no preferences are stored.
 
 `PATCH /v1/me/push-preferences`:
 - Body: partial update — any subset of fields.
@@ -174,11 +174,11 @@ type PushAdapter interface {
 
 ## Acceptance Criteria
 
-- [ ] `push_notification_preference` table has a unique constraint on `(user_id, organization_id)`; second row for same pair is rejected
+- [ ] `human_user.settings` stores push preferences under key `push_preferences`; a second upsert for the same user updates the key (no duplicate rows, no new table)
 - [ ] `PushPreferenceService.ShouldDeliver` returns false for `tier_enabled.normal=false` when event urgency is `normal`
 - [ ] `PushPreferenceService.ShouldDeliver` returns true for `urgency='urgent'` even during quiet hours
 - [ ] `PushPreferenceService.ShouldDeliver` returns false for quiet hours with urgency `high` when current time is within quiet window
-- [ ] `PushPreferenceRepository.RegisterToken` updates the existing entry when the same `device_id` is registered again (no duplicate)
+- [ ] `PushPreferenceRepository.RegisterToken` updates the existing entry when the same `device_id` is registered again (no duplicate in `push_tokens` array)
 - [ ] `PushDeliveryConsumer.Consume` skips delivery and logs reason when `ShouldDeliver` returns false
 - [ ] `GET /v1/me/push-preferences` returns default preference object (not 404) for a user with no stored preferences
 - [ ] `PATCH /v1/me/push-preferences` with invalid quiet hours format returns 422
@@ -192,17 +192,59 @@ type PushAdapter interface {
 - `MultiAdapter.Send`: `platform='apns'` → routes to `APNSAdapter`; `platform='fcm'` → routes to `FCMAdapter`
 
 **Integration tests:**
-- `PushPreferenceRepository.Upsert` round-trip: create then update; verify updated fields reflect changes; unique constraint prevents second row for same user+org
-- Token registration: register token for device A; re-register same device A with new token → only one entry for device A; register device B → two entries
-- `GET /v1/me/push-preferences` for user with no row → 200 with default values; `PATCH` → 200 with updated values; `GET` again → updated values persisted
+- `PushPreferenceRepository` round-trip: save preferences → read back; verify updated fields reflect changes; second save overwrites first (no duplicate storage)
+- Token registration (via `human_user.settings`): register token for device A; re-register same device A with new token → only one entry for device A in `push_tokens` array; register device B → two entries
+- `GET /v1/me/push-preferences` for user with no `push_preferences` key → 200 with default values; `PATCH` → 200 with updated values; `GET` again → updated values persisted
 
 **E2E tests:**
 - None — covered by dedicated E2E task 083
 
 ## Implementer Notes
 
-> ⚠️ ISSUE #28 (GAP): This table is entirely the result of spec gap-filling. The schema defined here is based on doc 19's functional requirements (per-urgency push enable/disable, per-project overrides, quiet hours, per-event-type filtering). Sam must review the `push_notification_preference` schema before this task is implemented and confirm whether the `push_tokens` jsonb array or a separate `push_device_token` table is preferred. If a separate table is chosen, this task's scope expands by ~0.5 days.
+**Storage mechanics:**
+
+Preferences are stored as two keys in `human_user.settings`:
+- `settings->'push_preferences'` — the preference object (tier settings, quiet hours, etc.)
+- `settings->'push_tokens'` — the array of registered device tokens
+
+Use `jsonb_set(settings, '{push_preferences}', $1::jsonb)` for atomic updates. Do NOT
+read-modify-write at the application layer — use PostgreSQL jsonb_set to prevent
+races between concurrent preference updates.
+
+For `push_tokens` array, use a PostgreSQL expression to upsert by device_id:
+```sql
+UPDATE human_user
+SET settings = jsonb_set(
+    settings,
+    '{push_tokens}',
+    (
+        SELECT jsonb_agg(
+            CASE WHEN elem->>'device_id' = $device_id THEN $new_token::jsonb ELSE elem END
+        )
+        FROM jsonb_array_elements(COALESCE(settings->'push_tokens', '[]')) AS elem
+        -- If device not found in array, append it:
+        -- If no existing entry, the result is null → handle in application via COALESCE
+    )
+)
+WHERE id = $user_id
+```
+Or compute the updated array in Go and write back atomically.
 
 **Quiet hours midnight wrap:** when `quiet_hours_start > quiet_hours_end` (e.g., 22:00–06:00),
 the quiet period wraps midnight. Check: `current_hour >= start OR current_hour < end`.
 When `start <= end` (e.g., 13:00–14:00), check: `current_hour >= start AND current_hour < end`.
+
+**Default preferences struct:**
+```go
+var DefaultPushPreferences = PushPreferences{
+    TierEnabled: map[string]bool{
+        "urgent": true,
+        "high":   true,
+        "normal": true,
+        "low":    false,
+    },
+    ProjectOverrides:    []ProjectPushOverride{},
+    QuietHoursEnabled:   false,
+    EventTypeOverrides:  map[string]bool{},
+}
+```
