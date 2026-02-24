@@ -167,9 +167,9 @@ each worker goroutine opens its own DB connection and runs
 ensure both workers start polling before any jobs are available, then releases all 10
 jobs at once. Assert final counts after all workers drain the queue.
 
-**ISSUE #13 (domain_event table forward reference):**
-ISSUE #13 was marked Open (table definition in doc 12). The `domain_event` table is
-defined in task 024. These tests depend on task 024 being implemented.
+**ISSUE #13 (RESOLVED — domain_event table):**
+`domain_event` is fully defined in doc 12 and implemented in task 024. These tests
+depend on task 024 being complete.
 
 **at-least-once delivery test:**
 `TestJobQueue_at_least_once_delivery` is the most complex test. The pattern:

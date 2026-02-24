@@ -187,12 +187,11 @@ Agent-provided overrides (`env_overrides` input parameter):
 
 ## Implementer Notes
 
-**ISSUE #19 clarification:**
-The `run_step_id uuid not null` constraint on `cli_execution` implies the broker always creates
-a `run_step` before dispatching CLI. The `CLIExecutor` receives `run_step_id` as a required
-input. Verify with Sam if this is the intended design.
-
-> ⚠️ ISSUE #19 (AMBIGUOUS): `cli_execution.run_step_id` is NOT NULL, implying the control plane broker always creates a `run_step` before CLI dispatch. This task implements accordingly. If the constraint should be nullable, update the migration in task 052 (FK fixup) and this DDL.
+**ISSUE #19 (RESOLVED):**
+`run_step_id NOT NULL` is intentional. The broker always creates a `run_step` before
+dispatching any CLI command. `CLIExecutor` receives `run_step_id` as a required input.
+This is the correct design — all domain-specific execution records (cli_execution,
+browser_action) are always tied to a RunStep.
 
 **Project env_vars thin spec:**
 Doc 11 references "project-config injected vars" but does not define the source. This task

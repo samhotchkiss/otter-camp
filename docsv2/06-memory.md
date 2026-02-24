@@ -841,6 +841,17 @@ create table memory_source (
 -- This means corroboration from a higher-trust source elevates the confidence cap.
 -- Values: human direct (1.0), human reaction (0.9), agent from conversation (0.8),
 --   agent from task (0.7), file (0.7), import (0.6), external (0.4).
+--
+-- session_id: soft reference to chat_session.id — NO SQL FK. Memories are designed
+-- to outlive sessions. Application code must use LEFT JOIN when joining to chat_session.
+-- The absence of a FK is intentional; do not add one.
+--
+-- source_id semantics by source_type:
+--   'chat_message' → chat_message.id (application-layer enforcement, no DB FK)
+--   'event'        → domain_event.id (application-layer enforcement, no DB FK)
+--   'file'         → NULL (files live in git/object storage; no DB record)
+--   'import'       → memory_import.id (also reflected in the import_id FK column)
+--   'explicit'     → NULL (human-asserted fact; no originating source record)
 
 create index idx_memory_source_memory on memory_source(memory_id);
 create index idx_memory_source_session on memory_source(session_id) where session_id is not null;

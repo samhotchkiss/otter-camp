@@ -170,11 +170,12 @@ has the secret value replaced with `[REDACTED]`; raw secret is never stored.
 - Secret store: real (AES-256-GCM decryption via task 009); secret rows in testdb
 - Clock: injected `clock.Fake` for health check interval and circuit recovery window tests
 
-**ISSUE #15 (resource read scope check):**
-`TestConnection_ProjectScope_vs_OrgScope` tests access visibility but does not test
-the MCP resource read scope check (ISSUE #15 unresolved — exact enforcement mechanism
-not specified). Add a skipped test `TestMCPResource_ScopeCheck_AMBIGUOUS` with:
-`t.Skip("blocked by ISSUE #15 — resource read scope check enforcement mechanism unresolved")`
+**ISSUE #15 (RESOLVED — resource read scope check):**
+`TestConnection_ProjectScope_vs_OrgScope` tests access visibility. The scope check
+is: project-scoped connection → verify `agent_project_assignment` exists for agent+project;
+org-scoped connection → allow all org agents. Remove the `t.Skip` stub and implement
+`TestMCPResource_ScopeCheck` with both project-scoped (access denied / granted) and
+org-scoped (always granted) cases.
 
 **MockMCPServer transport:**
 The mock server should speak the MCP protocol (JSON-RPC or HTTP-based, depending on the

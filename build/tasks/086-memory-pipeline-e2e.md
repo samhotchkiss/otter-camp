@@ -260,11 +260,10 @@ implementation-defined. The test checks both `layer_token_counts.memory_injectio
 warning and skips the assertion with a comment: `TODO: verify metadata field name with
 task 036 implementer`.
 
-**ISSUE #9 (memory_source.session_id soft reference):**
-The `memory_source` table stores session_id as a soft reference (no SQL FK). The test
-does not directly verify `memory_source` rows — it verifies the existence and content of
-`memory` rows via the API. The `memory_source` linkage is an implementation detail tested
-in task 074 integration tests.
+**ISSUE #9 (RESOLVED — memory_source.session_id soft reference):**
+`memory_source.session_id` is a permanent soft reference (no SQL FK, by design). This
+test does not directly verify `memory_source` rows — it verifies `memory` rows via the
+API. The `memory_source` linkage is tested in task 074 integration tests.
 
 **Compaction synchronous trigger:**
 In `OTTERCAMP_MODE=test`, the `POST /v1/memory/consolidate` endpoint with

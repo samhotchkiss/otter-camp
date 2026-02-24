@@ -146,7 +146,7 @@ aggregation are covered separately in task 036.
 
 ## Implementer Notes
 
-> ⚠️ ISSUE #18 (AMBIGUOUS): `run_attempt_id` on `model_invocation` is unclear for agent turn-loop calls. When a model call happens during a conversational agent turn (not inside a worker-dispatched run), `run_attempt_id` will be null. The column exists and is populated for worker-domain calls. Do not error on null `run_attempt_id`; the aggregation query in task 062 uses `WHERE run_attempt_id = $1` and will only count invocations with the FK set. Add a comment: `-- null for non-worker model calls (e.g. chat turns); see ISSUE #18`.
+> ✅ ISSUE #18 (RESOLVED): `run_attempt_id` is null for standalone chat turn-loop calls (no associated run). It is set only when the model call occurs within a control plane run attempt. Token aggregation queries use `WHERE run_id = $1` (captures all invocations in the run); `WHERE run_attempt_id = $1` is used for per-attempt breakdowns only. Add DDL comment: `-- null for standalone chat turns; set for model calls within a run_attempt`.
 
 > ✅ ISSUE #21 (RESOLVED): `model_invocation` retention is **90 days**. Doc 13 updated. No TODO needed — retention is enforced in task 063 with `RetentionModelInvocationDays = 90`.
 

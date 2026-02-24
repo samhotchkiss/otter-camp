@@ -177,10 +177,10 @@ type MockProviderServer struct {
 ```
 This allows `TestRouting_FallbackChain_OnFailure` to script exactly which calls fail.
 
-**ISSUE #18 (run_attempt_id for agent turn-loop calls):**
-`TestTokenRollup_InvocationRecord` should test both cases: invocation with `run_attempt_id`
-set (worker-domain call) and without (chat turn-loop call). Add a `// TODO(issue-18):`
-comment on the nullable case noting the ambiguity.
+**ISSUE #18 (RESOLVED — run_attempt_id for turn-loop calls):**
+`TestTokenRollup_InvocationRecord` tests both cases: invocation with `run_attempt_id` set
+(worker-domain call within a run_attempt) and without (standalone chat turn-loop, null).
+Both are valid — no TODO needed.
 
 **ISSUE #21 (RESOLVED):** `model_invocation` retention is 90 days (task 080).
 Rollup integration tests here verify accuracy of rollup computation only.

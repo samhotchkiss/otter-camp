@@ -167,7 +167,7 @@ in task 054) and the model usage API (`GET /v1/usage` in task 037).
 
 ## Implementer Notes
 
-> ⚠️ ISSUE #18 (AMBIGUOUS): Whether model calls that occur during the agent's turn loop (outside a worker run, i.e., just chatting in a sync session) receive a `run_attempt_id` is unresolved. The safe default is: set `RunAttemptID=nil` for all chat-layer model calls. Only worker-dispatched runs (those with a `run_attempt` row) set `RunAttemptID`. The token aggregation queries in `CostQuery.SumForRun` use `WHERE run_id = $1` which correctly captures all invocations in a run regardless of whether `run_attempt_id` is set.
+> ✅ ISSUE #18 (RESOLVED): `run_attempt_id` is null for standalone chat turn-loop calls; set only for model calls within a control plane run attempt. `CostQuery.SumForRun` uses `WHERE run_id = $1` to capture all invocations in a run. Per-attempt breakdowns use `WHERE run_attempt_id = $1`. No change needed to existing aggregation logic.
 
 The `run`, `run_step`, and `run_attempt` token columns may need to be added via
 `0075_run_token_columns.sql` if task 052 did not include them. Check task 052 schema

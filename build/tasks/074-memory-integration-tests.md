@@ -201,10 +201,11 @@ returns `status='completed'`.
 - `testdata/embeddings/sample_vectors.json` — 20 pre-computed 1536-dim unit vectors for
   retrieval ranking tests; commit this file
 
-**ISSUES #9, #10 (memory_source soft references):**
-`TestExtraction_Stage4_EmbedAndStore` verifies `memory_source` row creation. The
-`session_id` column is a soft reference (no SQL FK per ISSUE #9). Test must NOT assert
-a FK constraint; instead assert the UUID value is set correctly.
+**ISSUES #9, #10 (RESOLVED — memory_source soft references):**
+`TestExtraction_Stage4_EmbedAndStore` verifies `memory_source` row creation. `session_id`
+is a permanent soft reference (no SQL FK, by design). Test asserts the UUID value is
+correct; does NOT assert FK enforcement. `source_id` semantics: chat_message→id,
+event→domain_event.id, file→null, import→memory_import.id, explicit→null.
 
 **pgvector index:**
 Tests that use vector similarity require the pgvector index to exist. The `testdb.New(t)`

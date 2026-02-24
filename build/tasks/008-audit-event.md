@@ -113,9 +113,7 @@ Following the architecture in doc 21 (`OTTERCAMP_MODE=test`):
 
 ## Implementer Notes
 
-- ISSUE #20 (AMBIGUOUS): `audit_event.principal_type` currently does not include `'supervisor'`. Supervisor-initiated actions (stuck run recovery, timeout cancellation from task 053) cannot be logged to `audit_event` as-is. Until Sam resolves this, do not add `'supervisor'` to the CHECK constraint. Supervisor actions should be recorded in `domain_event` and `run_event` instead.
-
-> ISSUE #20 (AMBIGUOUS): `audit_event.principal_type` check constraint excludes `'supervisor'`. Supervisor-initiated actions (e.g. stuck run recovery from task 053) can be recorded in `domain_event` and `run_event` but not in `audit_event`. Do not add `'supervisor'` to the audit_event principal_type check until Sam resolves whether supervisor-initiated actions belong in the audit trail.
+- ✅ ISSUE #20 (RESOLVED): `audit_event.principal_type` retains its 3-type check: `('human', 'agent', 'system')`. Supervisor is an internal system component, not a principal. Supervisor-initiated actions (stuck run recovery, timeout cancellation) are tracked via `run_event` (actor_type='supervisor') and `domain_event` — NOT in `audit_event`. Do not add 'supervisor' to the check constraint.
 
 - The system sentinel UUID (`00000000-0000-0000-0000-000000000000`) is used when `principal_type='system'` to represent actions performed by the system itself (bootstrap, scheduled jobs). This is consistent across doc 04 and doc 12.
 - `RecordAsync` is the primary call pattern used throughout the codebase. Most callers do not need to know if audit recording succeeded. `Record` is for contexts where the audit trail is security-critical (e.g. failed login events) and failure should surface.

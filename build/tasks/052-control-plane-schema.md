@@ -200,4 +200,4 @@ Use `SELECT COALESCE(MAX(sequence),0)+1 FROM run_event WHERE run_id=$1 FOR UPDAT
 **FK stub fix timing:**
 Migration `0061_run_fk_fixup.sql` must run AFTER `0055_run.sql`. The model_invocation table (from task 036) was created with nullable `uuid` columns for `run_id/run_step_id/run_attempt_id` and no FK constraint. This migration adds the FK constraints using `ALTER TABLE ... ADD CONSTRAINT`.
 
-> ⚠️ ISSUE #19 (AMBIGUOUS): `cli_execution.run_step_id` is NOT NULL in the DDL (task 058). This implies the broker always creates a `run_step` before dispatching CLI commands. Verify with Sam if this is intended. If so, ensure `run_step` creation is documented as a required pre-condition in task 053.
+> ✅ ISSUE #19 (RESOLVED): `cli_execution.run_step_id NOT NULL` is intentional. The broker always creates a `run_step` before dispatching any CLI (or browser) command. `run_step` creation is a required pre-condition in task 053's dispatch flow. This applies to all domain-specific execution records (cli_execution, browser_action).

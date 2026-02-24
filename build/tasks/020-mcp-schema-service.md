@@ -151,7 +151,7 @@ type MCPService interface {
 
 ## Implementer Notes
 
-- ISSUE #15 (AMBIGUOUS): MCP resource reads are tier 1 and governed by "a basic scope check — does the agent have access to this connection's project?" The exact check is unspecified. Implement as: if `connection.project_id IS NULL` (org-scoped), all org agents have access; if `connection.project_id IS NOT NULL`, check `agent_project_assignment` (task 025) for the agent + project. Document this decision in a code comment referencing ISSUE #15.
+- ✅ ISSUE #15 (RESOLVED): MCP resource read scope check: if `connection.project_id IS NULL` (org-scoped), all org agents have access; if `connection.project_id IS NOT NULL`, verify active `agent_project_assignment` for the agent + project (task 025). No capability grant needed for tier-1 reads.
 - The transport stub in this task should implement the `MCPTransport` interface with a `MockTransport` that returns a hardcoded tool list. The real transport implementations (stdio, http, sse) are wired in task 021.
 - `mcp_connection.transport_config` is a jsonb blob; the structure varies by transport type. Do not add DDL constraints on its shape — validate at the service layer based on `transport`.
 - The `slug` field on `mcp_connection` follows the same `^[a-z0-9-]+$` pattern as project slugs. Add a `CHECK` constraint in the migration.

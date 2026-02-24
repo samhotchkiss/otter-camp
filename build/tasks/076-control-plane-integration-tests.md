@@ -180,11 +180,11 @@ application-layer enforcement only (no DB constraint). Test verifies the handler
 check via HTTP response code. The rejected write attempt is also recorded as an audit
 event with event_type='policy.instance_write_attempt'.
 
-**ISSUE #20 (supervisor actor_type in audit_event):**
-Supervisor-generated `run_event` rows use actor_type='supervisor'. The `audit_event`
-table does NOT support 'supervisor' (ISSUE #20 unresolved). Supervisor tests verify
-`run_event` rows are written but do NOT assert `audit_event` rows for supervisor actions.
-Add a comment: `// TODO(issue-20): supervisor actions cannot be logged to audit_event.`
+**ISSUE #20 (RESOLVED — supervisor actor_type):**
+Supervisor-generated `run_event` rows use actor_type='supervisor'. `audit_event` does NOT
+support 'supervisor' — by design. Supervisor tests verify `run_event` rows are written
+and do NOT assert `audit_event` rows for supervisor actions. Remove any TODO(issue-20)
+comments; this is the final, intended behavior.
 
 **ISSUE #23 (RESOLVED — hierarchical/additive budget enforcement):**
 `TestPolicy_Eval_BudgetGate` tests the full three-level check:

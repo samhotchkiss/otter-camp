@@ -159,4 +159,4 @@ For tier 1 calls that occur outside a control plane run (e.g., a memory.query ca
 - Recovery timeout: separate
 Use the per-call timeout for `MCPExecutor.Execute`. If the context deadline is exceeded, return `ErrTimeout` and update `tool_execution.status='timed_out'`.
 
-> ⚠️ ISSUE #15 (AMBIGUOUS): MCP resource read scope check implementation is not specified. Implement as: if `mcp_connection.project_id IS NOT NULL`, check `agent_project_assignment` for the agent+project pair. If `mcp_connection.project_id IS NULL` (org-scoped), allow any org agent. Document this decision for Sam's review.
+> ✅ ISSUE #15 (RESOLVED): MCP resource read scope check: if `mcp_connection.project_id IS NOT NULL`, verify the agent has an active `agent_project_assignment` row for that project; if `mcp_connection.project_id IS NULL` (org-scoped), allow any org agent. No capability grant needed for tier-1 resource reads.

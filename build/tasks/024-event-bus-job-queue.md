@@ -179,7 +179,7 @@ func (w *JobWorker) Enqueue(ctx context.Context, tx *sql.Tx, jobType string, pri
 
 ## Implementer Notes
 
-- ISSUE #20 (AMBIGUOUS): `domain_event.actor_type` includes `'supervisor'` as a 4th value beyond the canonical 3. This is an intentional extension per doc 12 ("code that switches on actor_type must handle all four values"). The `audit_event` table (task 008) does NOT include 'supervisor' — supervisor-initiated actions are tracked in domain_event only. Do not add 'supervisor' to `audit_event.principal_type` without Sam's resolution of ISSUE #20.
+- ✅ ISSUE #20 (RESOLVED): `domain_event.actor_type` includes `'supervisor'` as a 4th value — intentional per doc 12. Supervisor-initiated actions are tracked in `domain_event` and `run_event` only; `audit_event.principal_type` retains its 3-type check and does NOT include 'supervisor'. Code switching on actor_type must handle all four values.
 - The event bus must support transactional publishing: the `Publish` call takes an optional `*sql.Tx`. When a transaction is provided, the INSERT and NOTIFY happen within that transaction. This ensures that if the transaction rolls back, the event is not published. Use `pg_notify` within the transaction (note: PostgreSQL delivers NOTIFY only on transaction commit, so this is safe).
 - Consumer goroutines should have a dedicated panic recovery wrapper — a panicking consumer must not crash the entire server. Log the panic with stack trace, skip the event, advance the cursor to prevent stuck processing.
 - The `idempotency_key` table serves the API middleware (task 067). This task builds the table and the `IdempotencyKeyRepo` with methods `Store`, `Get`, `CheckConflict`. The middleware wiring is in task 067.
