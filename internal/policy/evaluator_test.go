@@ -276,6 +276,51 @@ func TestEvaluateDenyWinsWithinLayer(t *testing.T) {
 	}
 }
 
+func TestEvaluateRequestLayerScopeIsolation(t *testing.T) {
+	orgID := uuid.New()
+	projectA := uuid.New()
+	projectB := uuid.New()
+	capability := "mcp.connection.use"
+
+	policies := &fakePolicyRepo{
+		policies: []repo.CapabilityPolicy{
+			{
+				PolicyLayer:    "request",
+				OrganizationID: &orgID,
+				ProjectID:      &projectA,
+				Capability:     capability,
+				Effect:         "deny",
+			},
+		},
+	}
+
+	evaluator, err := NewPolicyEvaluator(EvaluatorOptions{
+		Policies: policies,
+		Clock:    clock.NewFake(time.Date(2026, time.February, 24, 10, 0, 0, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("NewPolicyEvaluator: %v", err)
+	}
+
+	match := evaluator.Evaluate(context.Background(), EvaluationRequest{
+		OrganizationID: orgID,
+		ProjectID:      &projectA,
+		Capability:     capability,
+	})
+	if match.Effect != "deny" || match.Layer != "request" {
+		t.Fatalf("request-layer match = %+v, want deny/request", match)
+	}
+
+	isolated := evaluator.Evaluate(context.Background(), EvaluationRequest{
+		OrganizationID: orgID,
+		ProjectID:      &projectB,
+		Capability:     capability,
+	})
+	if isolated.Effect != "allow" || isolated.Layer != "none" {
+		t.Fatalf("request-layer isolation decision = %+v, want allow/none", isolated)
+	}
+}
+
 func TestLoadInstancePoliciesUsesCachedInstanceRules(t *testing.T) {
 	capability := "system.file.write"
 	policies := &fakePolicyRepo{

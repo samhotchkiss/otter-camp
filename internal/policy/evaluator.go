@@ -302,6 +302,9 @@ func errorDecision(err error) PolicyDecision {
 	}
 }
 
+// conditionsSatisfied intentionally supports only max_file_size_kb, max_token_count,
+// and allowed_domains. Unknown keys are treated as satisfied (ignored), which is a
+// known gap until we add a more complete condition expression engine.
 func conditionsSatisfied(conditions map[string]any, evalContext map[string]any) bool {
 	if len(conditions) == 0 {
 		return true
