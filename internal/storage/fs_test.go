@@ -53,6 +53,33 @@ func TestFSStorePutRejectsPathTraversal(t *testing.T) {
 	}
 }
 
+func TestFSStoreRejectsPathTraversalForGetDeleteAndExists(t *testing.T) {
+	store, err := NewFS(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFS: %v", err)
+	}
+
+	key := "../../etc/passwd"
+	checkInvalidKey := func(err error, method string) {
+		if err == nil {
+			t.Fatalf("%s expected invalid key error", method)
+		}
+		var keyErr *InvalidKeyError
+		if !errors.As(err, &keyErr) {
+			t.Fatalf("%s error = %T, want *InvalidKeyError", method, err)
+		}
+	}
+
+	_, err = store.Get(context.Background(), key)
+	checkInvalidKey(err, "Get")
+
+	err = store.Delete(context.Background(), key)
+	checkInvalidKey(err, "Delete")
+
+	_, err = store.Exists(context.Background(), key)
+	checkInvalidKey(err, "Exists")
+}
+
 func TestFSStoreExistsAndDeleteLifecycle(t *testing.T) {
 	store, err := NewFS(t.TempDir())
 	if err != nil {
