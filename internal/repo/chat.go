@@ -585,15 +585,16 @@ func (r *ChatTurnRepo) SetCompleted(ctx context.Context, id uuid.UUID, completed
 	return scanChatTurnWithNotFound(row)
 }
 
-func (r *ChatTurnRepo) SetCancelled(ctx context.Context, id uuid.UUID, cancelRequestedAt time.Time) (ChatTurn, error) {
+func (r *ChatTurnRepo) SetCancelled(ctx context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time) (ChatTurn, error) {
 	row := r.db.QueryRow(ctx, `
 		UPDATE chat_turn
 		SET status = 'cancelled',
-		    cancel_requested_at = $2
+		    cancel_requested_at = $2,
+		    completed_at = $3
 		WHERE id = $1
 		RETURNING id, session_id, turn_number, cycle_id, responding_type, responding_id, status, cancel_requested_at,
 		          started_at, completed_at, duration_ms, error_message, created_at
-	`, id, cancelRequestedAt.UTC())
+	`, id, cancelRequestedAt.UTC(), completedAt.UTC())
 	return scanChatTurnWithNotFound(row)
 }
 
@@ -657,6 +658,7 @@ type ChatMessage struct {
 	IsRedacted     bool
 	RedactedAt     *time.Time
 	ToolCallID     *string
+	ErrorMessage   *string
 	Metadata       json.RawMessage
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
@@ -713,11 +715,12 @@ func (r *ChatMessageRepo) Create(ctx context.Context, message ChatMessage) (Chat
 			is_redacted,
 			redacted_at,
 			tool_call_id,
+			error_message,
 			metadata
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE(NULLIF($8, ''), 'text'), COALESCE(NULLIF($9, ''), 'pending'), $10, $11, $12, $13::jsonb)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE(NULLIF($8, ''), 'text'), COALESCE(NULLIF($9, ''), 'pending'), $10, $11, $12, $13, $14::jsonb)
 		RETURNING id, session_id, turn_id, sequence_number, author_type, author_id, role, content, content_format, status,
-		          is_redacted, redacted_at, tool_call_id, metadata, created_at, updated_at
+		          is_redacted, redacted_at, tool_call_id, error_message, metadata, created_at, updated_at
 	`,
 		message.SessionID,
 		message.TurnID,
@@ -731,6 +734,7 @@ func (r *ChatMessageRepo) Create(ctx context.Context, message ChatMessage) (Chat
 		message.IsRedacted,
 		message.RedactedAt,
 		trimStringPointer(message.ToolCallID),
+		trimStringPointer(message.ErrorMessage),
 		normalizeChatJSON(message.Metadata, json.RawMessage(`{}`)),
 	)
 
@@ -747,7 +751,7 @@ func (r *ChatMessageRepo) Create(ctx context.Context, message ChatMessage) (Chat
 func (r *ChatMessageRepo) GetByID(ctx context.Context, id uuid.UUID) (ChatMessage, error) {
 	row := r.db.QueryRow(ctx, `
 		SELECT id, session_id, turn_id, sequence_number, author_type, author_id, role, content, content_format, status,
-		       is_redacted, redacted_at, tool_call_id, metadata, created_at, updated_at
+		       is_redacted, redacted_at, tool_call_id, error_message, metadata, created_at, updated_at
 		FROM chat_message
 		WHERE id = $1
 	`, id)
@@ -757,7 +761,7 @@ func (r *ChatMessageRepo) GetByID(ctx context.Context, id uuid.UUID) (ChatMessag
 func (r *ChatMessageRepo) GetBySequence(ctx context.Context, sessionID uuid.UUID, sequenceNumber int64) (ChatMessage, error) {
 	row := r.db.QueryRow(ctx, `
 		SELECT id, session_id, turn_id, sequence_number, author_type, author_id, role, content, content_format, status,
-		       is_redacted, redacted_at, tool_call_id, metadata, created_at, updated_at
+		       is_redacted, redacted_at, tool_call_id, error_message, metadata, created_at, updated_at
 		FROM chat_message
 		WHERE session_id = $1
 		  AND sequence_number = $2
@@ -768,7 +772,7 @@ func (r *ChatMessageRepo) GetBySequence(ctx context.Context, sessionID uuid.UUID
 func (r *ChatMessageRepo) ListBySession(ctx context.Context, sessionID uuid.UUID) ([]ChatMessage, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, session_id, turn_id, sequence_number, author_type, author_id, role, content, content_format, status,
-		       is_redacted, redacted_at, tool_call_id, metadata, created_at, updated_at
+		       is_redacted, redacted_at, tool_call_id, error_message, metadata, created_at, updated_at
 		FROM chat_message
 		WHERE session_id = $1
 		ORDER BY sequence_number ASC
@@ -795,7 +799,7 @@ func (r *ChatMessageRepo) ListBySession(ctx context.Context, sessionID uuid.UUID
 func (r *ChatMessageRepo) ListByTurn(ctx context.Context, sessionID, turnID uuid.UUID) ([]ChatMessage, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, session_id, turn_id, sequence_number, author_type, author_id, role, content, content_format, status,
-		       is_redacted, redacted_at, tool_call_id, metadata, created_at, updated_at
+		       is_redacted, redacted_at, tool_call_id, error_message, metadata, created_at, updated_at
 		FROM chat_message
 		WHERE session_id = $1
 		  AND turn_id = $2
@@ -820,14 +824,19 @@ func (r *ChatMessageRepo) ListByTurn(ctx context.Context, sessionID, turnID uuid
 	return items, nil
 }
 
-func (r *ChatMessageRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) (ChatMessage, error) {
+func (r *ChatMessageRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string, errorMessage string) (ChatMessage, error) {
+	normalizedStatus := strings.TrimSpace(status)
 	row := r.db.QueryRow(ctx, `
 		UPDATE chat_message
-		SET status = $2
+		SET status = $2,
+		    error_message = CASE
+		        WHEN $2 = 'failed' THEN NULLIF($3, '')
+		        ELSE NULL
+		    END
 		WHERE id = $1
 		RETURNING id, session_id, turn_id, sequence_number, author_type, author_id, role, content, content_format, status,
-		          is_redacted, redacted_at, tool_call_id, metadata, created_at, updated_at
-	`, id, strings.TrimSpace(status))
+		          is_redacted, redacted_at, tool_call_id, error_message, metadata, created_at, updated_at
+	`, id, normalizedStatus, strings.TrimSpace(errorMessage))
 	return scanChatMessageWithNotFound(row)
 }
 
@@ -848,7 +857,7 @@ func (r *ChatMessageRepo) UpdateContent(ctx context.Context, id uuid.UUID, conte
 		SET content = $2
 		WHERE id = $1
 		RETURNING id, session_id, turn_id, sequence_number, author_type, author_id, role, content, content_format, status,
-		          is_redacted, redacted_at, tool_call_id, metadata, created_at, updated_at
+		          is_redacted, redacted_at, tool_call_id, error_message, metadata, created_at, updated_at
 	`, id, content)
 	return scanChatMessageWithNotFound(row)
 }
@@ -862,7 +871,7 @@ func (r *ChatMessageRepo) Redact(ctx context.Context, id uuid.UUID) (ChatMessage
 		    redacted_at = now()
 		WHERE id = $1
 		RETURNING id, session_id, turn_id, sequence_number, author_type, author_id, role, content, content_format, status,
-		          is_redacted, redacted_at, tool_call_id, metadata, created_at, updated_at
+		          is_redacted, redacted_at, tool_call_id, error_message, metadata, created_at, updated_at
 	`, id)
 	return scanChatMessageWithNotFound(row)
 }
@@ -870,7 +879,7 @@ func (r *ChatMessageRepo) Redact(ctx context.Context, id uuid.UUID) (ChatMessage
 func (r *ChatMessageRepo) GetPending(ctx context.Context, sessionID uuid.UUID) ([]ChatMessage, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, session_id, turn_id, sequence_number, author_type, author_id, role, content, content_format, status,
-		       is_redacted, redacted_at, tool_call_id, metadata, created_at, updated_at
+		       is_redacted, redacted_at, tool_call_id, error_message, metadata, created_at, updated_at
 		FROM chat_message
 		WHERE session_id = $1
 		  AND status IN ('pending', 'streaming')
@@ -898,7 +907,7 @@ func (r *ChatMessageRepo) GetPending(ctx context.Context, sessionID uuid.UUID) (
 func (r *ChatMessageRepo) GetByToolCallID(ctx context.Context, sessionID uuid.UUID, toolCallID string) ([]ChatMessage, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, session_id, turn_id, sequence_number, author_type, author_id, role, content, content_format, status,
-		       is_redacted, redacted_at, tool_call_id, metadata, created_at, updated_at
+		       is_redacted, redacted_at, tool_call_id, error_message, metadata, created_at, updated_at
 		FROM chat_message
 		WHERE session_id = $1
 		  AND tool_call_id = $2
@@ -950,6 +959,7 @@ func scanChatMessage(row pgx.Row) (ChatMessage, error) {
 		&item.IsRedacted,
 		&item.RedactedAt,
 		&item.ToolCallID,
+		&item.ErrorMessage,
 		&item.Metadata,
 		&item.CreatedAt,
 		&item.UpdatedAt,
