@@ -201,13 +201,8 @@ Activation rules: org/project default skills are always active. Agent-level skil
 
 - **agent_class**: `staff` or `temp`.
 - **scope_level**: `org` or `project`. Org-level agents are available everywhere. Project-level agents are primarily associated with specific projects but can be assigned to others.
-- **temp_scope_type**: for temp agents only. `project`, `task`, `session`, or `ttl`.
-  - `project` — persists across tasks, the standing project workforce. Retired when the PM lets them go or the project is archived.
-  - `task` — expires when the task completes.
-  - `session` — expires when the session closes.
-  - `ttl` — expires when the TTL elapses.
-- **temp_scope_id**: for temp agents only. The project, task, or session this temp is scoped to.
-- **temp_ttl_seconds**: for temp agents only when `temp_scope_type` is `ttl`. Duration in seconds after which the temp is auto-retired.
+- **temp_project_id**: for temp agents only. The project this temp belongs to. All temps are project-scoped — they persist across multiple tasks until explicitly retired by the PM or Lori, or until their optional TTL expires.
+- **temp_ttl_seconds**: optional. If set, the temp is auto-retired when `temp_expires_at` is reached. If null, the temp only expires through explicit retirement or project archival.
 
 ## Agent Lifecycle
 
@@ -287,15 +282,15 @@ Temp lifecycle depends on scope type. Project-scoped temps have a richer lifecyc
 
 - **active**: the temp is live and working. Created and immediately active — no draft review step for temps. For project-scoped temps, "active" means available to pick up flow nodes. Between tasks, the temp is still active but idle (no flow node assigned).
 - **paused** (project-scoped only): the PM has temporarily benched this worker. Still assigned to the project, but not picking up new flow nodes. Useful when the project is in a planning phase or the worker is causing issues.
-- **expired** (task/session/TTL only): the temp's scope has ended (task completed, session closed, TTL elapsed). The system auto-transitions to expired. An archival summary is generated — Ellie captures a brief record of what the temp did, its configuration, and its outcomes.
-- **retired** (project-scoped only): the PM or Lori has explicitly let this worker go, or the project has been archived. The temp's profile is preserved for audit. Project access (secrets, connectors, memory) is revoked.
+- **expired**: the temp's TTL has elapsed (`temp_expires_at < now()`). The system auto-transitions to expired. An archival summary is generated — Ellie captures a brief record of what the temp did, its configuration, and its outcomes. Only applies if `temp_ttl_seconds` was set at creation.
+- **retired**: the PM or Lori has explicitly retired this temp, or the project has been archived. The temp's profile is preserved for audit. Project access (secrets, connectors, memory) is revoked.
 - **promoted**: the temp was promoted to a staff agent by Lori. The temp record is preserved with a reference to the new staff agent. Promotion copies the temp's configuration into a new staff agent profile, which then goes through the normal staff draft -> active lifecycle.
 
 **Temp agents skip the draft step.** They are created and immediately active. The org policy envelope (see Guardrails) constrains what they can do, and the PM supervises their work.
 
 **Archival summary on expiration/retirement:** When a temp expires or is retired, Ellie generates a brief summary: what the temp was created for, what it did, and whether the work succeeded. This is stored as an episodic memory at the project scope. It serves two purposes: (1) the org remembers that a temp was used and what happened, and (2) if the same kind of temp is needed again, Ellie can surface the prior experience.
 
-**Auto-retirement mechanism:** Temp expiration is handled by event bus subscribers: task completion events trigger expiration of task-scoped temps, session close events trigger expiration of session-scoped temps, and a periodic scheduler job expires TTL-based temps whose `temp_expires_at` has passed. When a temp expires or is retired, its `agent_project_assignment.is_active` is set to `false` and project access is revoked.
+**Auto-retirement mechanism:** If `temp_ttl_seconds` is set, a periodic scheduler job expires temps whose `temp_expires_at` has passed. Task completion and session close events do NOT retire temps — temps persist across multiple tasks within their project. Explicit retirement by the PM or Lori (or project archival) is the primary retirement path. When a temp expires or is retired, its `agent_project_assignment.is_active` is set to `false` and project access is revoked.
 
 ### Promotion: Temp to Staff
 
@@ -578,10 +573,9 @@ create table agent (
   private_memory_enabled  boolean not null default false,
 
   -- Temp-specific fields
-  temp_scope_type         text check (temp_scope_type in ('project', 'task', 'session', 'ttl')),
-  temp_scope_id           uuid,                            -- project, task, or session this temp is scoped to
-  temp_ttl_seconds        int,                             -- TTL in seconds (for ttl-scoped temps)
-  temp_expires_at         timestamptz,                     -- computed: created_at + temp_ttl_seconds, or set by scope end
+  temp_project_id         uuid references project(id),     -- all temps are project-scoped; required for agent_class='temp'
+  temp_ttl_seconds        int,                             -- optional: auto-retire when temp_expires_at passes
+  temp_expires_at         timestamptz,                     -- computed: created_at + temp_ttl_seconds; null = no TTL
   promoted_to_agent_id    uuid references agent(id),       -- set when temp is promoted to staff
 
   -- Metadata
@@ -594,9 +588,9 @@ create table agent (
 
   unique (organization_id, slug),
   check (
-    (agent_class = 'staff' and temp_scope_type is null and temp_scope_id is null and temp_ttl_seconds is null)
+    (agent_class = 'staff' and temp_project_id is null and temp_ttl_seconds is null)
     or
-    (agent_class = 'temp' and temp_scope_type is not null)
+    (agent_class = 'temp' and temp_project_id is not null)
   ),
   check (
     (tool_allow_list is null or tool_deny_list is null)    -- only one of allow/deny can be set
@@ -607,7 +601,7 @@ create table agent (
 create index on agent (organization_id, lifecycle_status);
 create index on agent (organization_id, agent_class) where lifecycle_status = 'active';
 create index on agent (organization_id, slug);
-create index on agent (temp_scope_type, temp_scope_id) where agent_class = 'temp';
+create index on agent (temp_project_id) where agent_class = 'temp';
 create index on agent (temp_expires_at) where agent_class = 'temp' and lifecycle_status = 'active';
 ```
 
@@ -619,7 +613,7 @@ create index on agent (temp_expires_at) where agent_class = 'temp' and lifecycle
 - `memory_read_scopes` is a text array. Possible values: `org`, `assigned_projects`, `current_task`. Default is `{org, assigned_projects, current_task}` — both staff and temps see their assigned project's memory. The difference is that staff agents are assigned to multiple projects (cross-project knowledge) while temps are assigned to exactly one. Agent-private memory access is controlled separately by the `private_memory_enabled` boolean, not by this array. Retrieval cascades upward within each scope (see 06-memory.md Scope Inheritance).
 - The check constraint on `tool_allow_list`/`tool_deny_list` prevents setting both simultaneously. If both are null, the agent inherits the org/project tool policy.
 - `budget_cap_tokens` and `budget_period` are the per-agent token budget. The org and project also have budgets (see 13-security-observability-costs.md). Budget enforcement is **hierarchical/additive**: a single invocation is charged against all three applicable levels simultaneously (agent, project, org). All configured hard limits are checked before dispatch; any level that would be exceeded causes the invocation to be denied. Budget caps are always in tokens — never in cents or dollars. Dollar estimates are display-only in the UI.
-- `temp_expires_at` is pre-computed for TTL-scoped temps. For task-scoped and session-scoped temps, it is set when the task completes or session closes.
+- `temp_expires_at` is computed as `created_at + temp_ttl_seconds` when the temp is created with a TTL. It is null for temps with no TTL. Temps without a TTL only retire through explicit PM/Lori action or project archival. Task completion and session close do NOT retire temps.
 
 ### agent_project_assignment
 
@@ -874,7 +868,7 @@ create index on agent_profile_template (is_active) where organization_id is null
 22. **Private memory is opt-in for all agents.** `private_memory_enabled = false` for all agents by default — staff, PMs, Frank, Lori, Ellie, and temps alike. Enable it explicitly only for agents handling sensitive personal data (medical, financial, personal communications). Frank recommends enabling it when the human creates an agent for a sensitive role.
 23. **Skill attachments on agent profile are baseline competencies.** Activation depends on flow node context — agent skills are the fallback when no flow node skills are declared.
 24. **PMs are always staff agents.** PMs need deep project context, cross-project awareness, and persistent working relationships. They accumulate institutional knowledge that makes them more effective over time.
-25. **Workers default to temp.** Implementation work — writing code, running tests, applying fixes — is done by temps. Project-scoped temps are the standing workforce; task-scoped temps handle specialized one-off work. Temps keep the agent roster lean.
+25. **Workers default to temp.** Implementation work — writing code, running tests, applying fixes — is done by temps. All temps are project-scoped and persist across multiple tasks. Temps keep the agent roster lean and can be promoted to staff if they prove valuable.
 26. **Reviewers default to temp, staff when judgment-dependent.** Code reviewers apply a fixed rubric (captured in skills/prompts) and can be temp. Policy, content, architecture, and compliance reviewers need accumulated judgment across projects and should be staff.
 27. **Staff agent memory extends across all assigned projects.** A staff agent assigned to three projects has memory from all three available on every turn. Cross-project knowledge accumulation is the key reason to make a role staff. This is the primary differentiator from temps.
 28. **Staff agent memory persists indefinitely.** Knowledge, preferences, heuristics, and working notes carry forward across every session and project. Staff agents get more effective over time.
@@ -887,10 +881,10 @@ create index on agent_profile_template (is_active) where organization_id is null
 35. **Catalog templates are not live agents.** Templates are instantiated into real agents (staff or temp) when needed. The catalog is a library of proven configurations, not a roster of active agents.
 36. **Lori draws from the catalog when creating agents.** She searches by domain tags, selects a template, customizes for the org's needs, and proposes the result. Templates can also be selected automatically for temp workers based on flow node requirements.
 37. **Successful agents can be saved back to the catalog.** When an agent works well, its profile can be promoted to a template for reuse. This is how the catalog grows organically.
-38. **Four temp scope types: project, task, session, ttl.** Project-scoped temps are the standing workforce (persist across tasks, pausable, explicitly retirable). Task/session/TTL temps are short-lived and auto-expire.
-39. **Project-scoped temps have a richer lifecycle than other temps.** They support paused and retired states (like staff minus draft). Task/session/TTL temps only have active, expired, and promoted.
+38. **All temps are project-scoped.** There is exactly one scope type for temps: project. A temp belongs to a project and persists across multiple tasks. Task completion and session close do NOT retire temps.
+39. **Temps support the full project-scoped lifecycle: active, paused, retired, expired, promoted.** Paused = benched by PM but still assigned. Retired = explicitly let go by PM/Lori or project archived. Expired = optional TTL elapsed. Promoted = converted to staff.
 40. **Temps do not communicate directly with the human.** They do the work through flow node execution. Communication happens via artifacts, blocker escalations to the PM, and task status updates.
-41. **Temp auto-retirement is event-driven.** Task completion events expire task-scoped temps, session close events expire session-scoped temps, a periodic scheduler expires TTL temps. On expiration/retirement, `agent_project_assignment.is_active` is set to false.
+41. **Temp retirement is explicit or TTL-based.** The PM or Lori explicitly retires a temp when the project no longer needs that role. An optional TTL (`temp_ttl_seconds`) auto-retires the temp after a set duration. On expiration/retirement, `agent_project_assignment.is_active` is set to false.
 42. **When a staff agent is removed from a project, it loses access to that project's memory.** `memory_read_scopes = {assigned_projects}` automatically excludes the removed project. Memories the agent captured while working on that project remain at the project scope, accessible to other agents still assigned. The agent's private memories remain intact.
 43. **Project roles map to but are distinct from task participant roles.** Project roles (`agent_project_assignment`) define the agent's capacity within the project. Task participant roles (`project_task_participant`) define who is working on a specific task. The PM assigns task participants from the project's assigned agents.
 

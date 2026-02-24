@@ -48,17 +48,17 @@ filter excludes retired); explicit `?include_retired=true` parameter surfaces it
 `TestAgent_StaffLifecycle_IllegalTransition` — attempt to set a staff agent to 'expired'
 (temp-only state); service returns error; `lifecycle_status` unchanged in DB.
 
-`TestAgent_TempAgent_Scoping` — create temp agent with `temp_scope_type='project'` and
-`temp_scope_id` set to a real project ID; GET /v1/agents/:id shows correct scope fields;
-temp agent appears in project-scoped agent list.
+`TestAgent_TempAgent_ProjectScoping` — create temp agent with `temp_project_id` set to a
+real project ID; GET /v1/agents/:id shows correct scope fields; temp agent appears in
+project-scoped agent list; temp remains active after task completion (task completion does
+NOT retire the temp).
 
-`TestAgent_TempAgent_TTLExpiry` — create temp agent with `temp_scope_type='ttl'` and
-`temp_expires_at` in the past (use `clock.Fake`); trigger auto-retirement check; agent
+`TestAgent_TempAgent_TTLExpiry` — create temp agent with `temp_ttl_seconds` set and
+`temp_expires_at` in the past (use `clock.Fake`); trigger `RetireExpiredTemps`; agent
 `lifecycle_status` becomes 'expired'; `archival_summary` field is populated.
 
-`TestAgent_TempAgent_TaskCompletion_AutoRetire` — create temp agent scoped to a task;
-emit `task.completed` domain event for that task; assert auto-retirement runs and agent
-`lifecycle_status='expired'`.
+`TestAgent_TempAgent_ExplicitRetirement` — create temp agent; call explicit retire endpoint;
+assert agent `lifecycle_status='retired'`; assert project assignment is_active becomes false.
 
 `TestAgent_TempAgent_ConcurrentLimit` — org settings has `max_concurrent_temps=2`; create
 2 temp agents (both active); attempt to create a 3rd; service returns error with code

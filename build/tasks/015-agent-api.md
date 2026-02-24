@@ -50,8 +50,7 @@ GET    /v1/agent-templates/:id           → AgentProfileTemplateRepo.GetByID
   "private_memory": false,
   "budget_cap_tokens": 0,
   "budget_period": "daily|weekly|monthly|null",
-  "temp_scope_type": "project|project_task|chat_session|ttl|null",
-  "temp_scope_id": "uuid|null",
+  "temp_project_id": "uuid|null",
   "temp_ttl_seconds": 0
 }
 ```

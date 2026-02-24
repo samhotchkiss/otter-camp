@@ -55,7 +55,7 @@ type AgentService interface {
 
 **Temp lifecycle state machine** (doc 05):
 - Temp agents are created directly as `lifecycle_status='active'` (no draft state)
-- `active → expired`: triggered by: (a) TTL expiry scheduler, (b) `task_completed` domain event for task-scoped temps, (c) `session_closed` domain event for session-scoped temps; emit `agent.expired`; write archival summary (see below)
+- `active → expired`: triggered by TTL expiry scheduler only (when `temp_expires_at < now()`); emit `agent.expired`; write archival summary (see below). Task completion and session close do NOT retire temps.
 - `active → promoted`: triggered by promotion workflow; emit `agent.promoted`
 - Staff lifecycle transitions (pause/retire/cancel) are rejected for temp agents with `ErrInvalidForTempAgent`
 
@@ -64,11 +64,10 @@ type AgentService interface {
 - If at or over limit: return `ErrConcurrentTempLimitReached` with current count and limit in the error message
 - Enforcement is a synchronous check-before-insert; no DB-level constraint (acknowledged race condition for high-concurrency deployments — document in code comment)
 
-**Temp auto-retirement** (event-driven, via task 024 event bus):
-- Subscribe to `domain_event` for event types: `task.completed`, `session.closed`
-- On `task.completed`: find all `temp_scope_type='project_task'` temps with matching `temp_scope_id`; expire each
-- On `session.closed`: find all `temp_scope_type='chat_session'` temps with matching `temp_scope_id`; expire each
-- TTL expiry: `RetireExpiredTemps()` queries `temp_expires_at < now()` and `lifecycle_status='active'`; batches up to 100 per call; called by the scheduler job (task 024)
+**Temp auto-retirement** (TTL scheduler only, via task 024 scheduler):
+- TTL expiry: `RetireExpiredTemps()` queries `temp_expires_at < now()` and `lifecycle_status='active'`; batches up to 100 per call; called by the periodic scheduler job (task 024)
+- Task completion and session close events do NOT trigger temp retirement — temps persist across multiple tasks within their project
+- Explicit retirement: PM or Lori calls `AgentService.RetireTemp(ctx, orgID, agentID)`; sets lifecycle_status='retired'
 
 **Archival summary on expiration:**
 - On `ExpireTemp`: generate a brief archival summary (stub for now — call `ArchivalSummaryService.Generate(agent)` which returns a static string in this task; real implementation in task 052/057)
@@ -95,7 +94,7 @@ type AgentService interface {
 
 - [ ] `AgentService.Create` with `agent_class='staff'` creates agent in `lifecycle_status='draft'`
 - [ ] `AgentService.CreateTemp` rejects when org is at max concurrent temps; returns `ErrConcurrentTempLimitReached`
-- [ ] `AgentService.CreateTemp` with `temp_scope_type='ttl'` sets `temp_expires_at = created_at + temp_ttl_seconds`
+- [ ] `AgentService.CreateTemp` with `temp_ttl_seconds` set computes `temp_expires_at = created_at + temp_ttl_seconds`
 - [ ] `AgentService.Pause` on an already-paused agent returns `ErrInvalidTransition`
 - [ ] `AgentService.Retire` on a temp agent returns `ErrInvalidForTempAgent`
 - [ ] `AgentService.ExpireTemp` sets `lifecycle_status='expired'` and emits `agent.expired` domain event
@@ -112,7 +111,7 @@ type AgentService interface {
 
 **Integration tests:**
 - `CreateTemp` + concurrent limit: seed org with max_concurrent_temps=2; create 2 temps → success; create 3rd → `ErrConcurrentTempLimitReached`
-- Temp auto-retirement via event: publish `task.completed` event; verify all matching task-scoped temps expire
+- Temp TTL expiry: create temp with `temp_ttl_seconds=1` and `temp_expires_at` in the past (use `clock.Fake`); call `RetireExpiredTemps` → temp expires
 - `RetireExpiredTemps`: seed 5 expired temps (temp_expires_at in the past) + 2 future temps; call → 5 expired, 2 unchanged
 - Promotion workflow: temp → `PromoteTemp` → new draft staff agent in DB; temp has `promoted_to_agent_id` set; `agent.promoted` event in `domain_event` table
 

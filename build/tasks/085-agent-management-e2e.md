@@ -13,8 +13,8 @@
 
 E2E test scenario for agent lifecycle management. Uses only the `ottercamp` CLI binary
 and REST API. Verifies: staff agent creation in draft state and activation, project
-assignment, project-scoped temp agent creation (active immediately, no review), task
-completion triggering temp auto-retirement, and org-scoped temp persistence.
+assignment, temp agent creation (active immediately, no review, project-scoped),
+temp persistence across task completion, explicit temp retirement, and starter trio presence.
 
 ### Must build
 
@@ -107,22 +107,21 @@ GET /v1/agents/<staff_agent_id>/project-assignments
 
 Step 1 — Reset, bootstrap, create project (reuse or create fresh).
 
-Step 2 — Create a project-scoped temp agent:
+Step 2 — Create a temp agent (project-scoped):
 ```
 POST /v1/agents
 Authorization: Bearer <token>
 {
   "name": "temp-worker-1",
   "agent_class": "temp",
-  "temp_scope_type": "project",
-  "temp_scope_id": "<project_id>",
+  "temp_project_id": "<project_id>",
   "role": "worker"
 }
 → 201
 → body.data.id (temp_agent_id)
 → body.data.lifecycle_status == "active"  (temp agents are immediately active — no review)
 → body.data.agent_class == "temp"
-→ body.data.temp_scope_type == "project"
+→ body.data.temp_project_id == project_id
 ```
 
 Step 3 — Verify temp agent is active immediately (no approval required):
@@ -131,72 +130,70 @@ GET /v1/agents/<temp_agent_id>
 → body.data.lifecycle_status == "active"
 ```
 
-Step 4 — Create a task and assign the temp agent:
+Step 4 — Create a task and complete it:
 ```
 POST /v1/projects/<project_id>/tasks
 { "title": "Temp agent test task" }
 → 201 → task_id
 
-POST /v1/tasks/<task_id>/participants
-{ "participant_type": "agent", "participant_id": "<temp_agent_id>", "role": "worker" }
-→ 201
-```
-
-Step 5 — Complete the task (test mode shortcut):
-```
 CompleteTask(taskID: task_id)
 → GET /v1/tasks/<task_id> → work_status == "done"
 ```
 
-Step 6 — Verify project-scoped temp auto-retires after task completion:
+Step 5 — Verify temp agent is STILL ACTIVE after task completion (temps persist across tasks):
 ```
-WaitForAgentStatus(agentID: temp_agent_id, status: "expired", timeout: 30s)
-→ body.data.lifecycle_status == "expired"
+GET /v1/agents/<temp_agent_id>
+→ body.data.lifecycle_status == "active"
 ```
 
-Step 7 — Verify expired temp agent is no longer usable:
+Step 6 — Explicitly retire the temp agent:
+```
+POST /v1/agents/<temp_agent_id>/retire
+Authorization: Bearer <token>
+→ 200
+→ body.data.lifecycle_status == "retired"
+```
+
+Step 7 — Verify retired temp agent is no longer usable:
 ```
 POST /v1/agents/<temp_agent_id>/project-assignments
 { "project_id": "<project_id>", "role": "worker" }
-→ 422 or 409  (expired agent cannot be assigned)
+→ 422 or 409  (retired agent cannot be assigned)
 ```
 
-**Scenario: `TestAgent_TempLifecycle_OrgScoped_Persists`**
+**Scenario: `TestAgent_TempLifecycle_TTL_Expires`**
+
+Verifies that a temp with `temp_ttl_seconds` set auto-retires when the TTL elapses,
+but NOT before.
 
 Step 1 — Reset, bootstrap, create project.
 
-Step 2 — Create an org-scoped temp agent (TTL-based):
+Step 2 — Create a temp agent with a TTL:
 ```
 POST /v1/agents
 Authorization: Bearer <token>
 {
-  "name": "org-temp-worker",
+  "name": "ttl-temp-worker",
   "agent_class": "temp",
-  "temp_scope_type": "ttl",
+  "temp_project_id": "<project_id>",
   "temp_ttl_seconds": 3600,
   "role": "worker"
 }
 → 201
 → body.data.lifecycle_status == "active"
-→ body.data.temp_scope_type == "ttl"
 → body.data.temp_expires_at is a non-null future timestamp
 ```
 
-Step 3 — Create a task and complete it:
+Step 3 — Complete a task and verify temp is still active (TTL not elapsed):
 ```
 CompleteTask(taskID: new task)
-→ task work_status == "done"
+GET /v1/agents/<ttl_temp_id>
+→ body.data.lifecycle_status == "active"
 ```
 
-Step 4 — Verify org-scoped (TTL) temp does NOT auto-retire after task completion:
+Step 4 — Verify TTL expiry time is in the future:
 ```
-GET /v1/agents/<org_temp_id>
-→ body.data.lifecycle_status == "active"  (still active, TTL not expired)
-```
-
-Step 5 — Verify the agent's TTL expiry time is in the future:
-```
-GET /v1/agents/<org_temp_id>
+GET /v1/agents/<ttl_temp_id>
 → body.data.temp_expires_at > now
 ```
 
@@ -227,8 +224,8 @@ Authorization: Bearer <token>
 ## Acceptance Criteria
 
 - [ ] `TestAgent_StaffLifecycle` passes: draft → active on activation; project assignment created
-- [ ] `TestAgent_TempLifecycle_ProjectScoped` passes: temp is immediately active; auto-retires to `expired` after task completes; expired agent cannot be assigned
-- [ ] `TestAgent_TempLifecycle_OrgScoped_Persists` passes: TTL-scoped temp remains `active` after task completion; `temp_expires_at` is in the future
+- [ ] `TestAgent_TempLifecycle_ProjectScoped` passes: temp is immediately active; remains active after task completes; explicitly retired temp cannot be assigned
+- [ ] `TestAgent_TempLifecycle_TTL_Expires` passes: TTL-temp remains `active` after task completion; `temp_expires_at` is in the future
 - [ ] `TestAgent_StarterTrio_AlwaysPresent` passes: Frank, Lori, Ellie are all present and active after bootstrap
 - [ ] Full scenario completes in under 3 minutes
 
@@ -240,8 +237,8 @@ Authorization: Bearer <token>
 
 **E2E tests:**
 - `TestAgent_StaffLifecycle` — draft → active, project assignment
-- `TestAgent_TempLifecycle_ProjectScoped` — temp active immediately; auto-retires on task complete
-- `TestAgent_TempLifecycle_OrgScoped_Persists` — TTL temp persists after task complete
+- `TestAgent_TempLifecycle_ProjectScoped` — temp active immediately; persists after task complete; explicit retirement works
+- `TestAgent_TempLifecycle_TTL_Expires` — TTL temp persists after task complete; temp_expires_at in future
 - `TestAgent_StarterTrio_AlwaysPresent` — starter trio exists and is active
 
 ## Implementer Notes
@@ -254,21 +251,19 @@ The lifecycle_status machine enforcement is application-layer only. The test for
 "expired agent cannot be assigned" verifies the application layer rejects the assignment,
 not a DB constraint. The expected status code is 422 (Unprocessable Entity) or 409.
 
-**ISSUE #8 (temp_scope_id for TTL-scoped temps):**
-When creating a TTL-scoped temp (`temp_scope_type == "ttl"`), the `temp_scope_id` field
-behavior is unspecified (ISSUE #8). The test does not include `temp_scope_id` in the
-create payload for TTL-scoped agents. If the server requires it, the test should set it
-to the project_id. Document whichever behavior the implementation chooses.
+**ISSUE #8 (RESOLVED — temp scope):**
+All temps are project-scoped. `temp_scope_type` and `temp_scope_id` are replaced by
+`temp_project_id` (required for all temps). Task completion does NOT retire temps —
+the `TestAgent_TempLifecycle_ProjectScoped` scenario explicitly verifies this.
 
-**ISSUE #4 (private memory defaults):**
-The test does not assert `private_memory` values on agents — that distinction is tested
-in the memory E2E (task 086). This test focuses on lifecycle and assignment.
+**ISSUE #4 (RESOLVED — private memory defaults):**
+`private_memory_enabled = false` for all agents. The test does not assert private_memory
+values — that is tested in the memory E2E (task 086).
 
-**Auto-retirement event-driven behavior:**
-The project-scoped temp auto-retirement is triggered by the `task_completed` event on
-the job queue. In `OTTERCAMP_MODE=test`, event processing happens inline or within a
-very short delay. The `WaitForAgentStatus` poll uses a 30-second timeout to account for
-any async processing delay.
+**Temp retirement:**
+Temps are explicitly retired by PM or Lori via `POST /v1/agents/:id/retire`. TTL-based
+temps auto-expire via the scheduler when `temp_expires_at` passes. Neither task completion
+nor session close retires a temp.
 
 **CompleteTask helper:**
 `CompleteTask(t, baseURL, token, taskID)` is a test utility that advances the task

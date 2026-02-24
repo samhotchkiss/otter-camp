@@ -285,10 +285,11 @@ Used when attaching skills to agents.
 - Concrete types: `human_user` | `agent` | system sentinel UUID
 - On tables: `agent_skill_attachment` [docs 05, 10]
 
-### temp_scope_type + temp_scope_id
-Used on temp agents to declare their scope.
-- Concrete types: `project` | `project_task` | `chat_session` | (ttl: temp_scope_id semantics unclear — ISSUE #8)
+### temp_project_id (temp agent project reference)
+Used on temp agents to declare their project. All temps are project-scoped.
+- Always references `project.id`; required (NOT NULL) for agent_class='temp'; null for staff
 - On tables: `agent` [doc 05]
+- ✅ ISSUE #8 RESOLVED: replaced `temp_scope_type + temp_scope_id` polymorphic pair
 
 ### source_type + source_id (memory provenance)
 Used to link memories to their originating event or artifact.

@@ -38,10 +38,9 @@ only — lifecycle business logic lives in task 014.
 - `default_model_profile_id text` — references `model_profile.logical_profile_id` (application-layer, no SQL FK)
 - `budget_cap_tokens bigint` — per-agent token cap; see ISSUE #1
 - `budget_period text check (budget_period in ('daily','weekly','monthly'))` — null = no rolling period
-- `temp_scope_type text check (temp_scope_type in ('project','project_task','chat_session','ttl'))` — null for staff
-- `temp_scope_id uuid` — see ISSUE #8 for ttl-type semantics
-- `temp_ttl_seconds integer` — null unless temp_scope_type='ttl'
-- `temp_expires_at timestamptz` — computed from created_at + temp_ttl_seconds; null for staff
+- `temp_project_id uuid references project(id)` — required for agent_class='temp'; null for staff
+- `temp_ttl_seconds integer` — optional; if set, temp auto-retires when temp_expires_at passes
+- `temp_expires_at timestamptz` — computed: created_at + temp_ttl_seconds; null if no TTL
 - `promoted_to_agent_id uuid references agent(id)` — set when a temp is promoted; null otherwise
 - `created_by_type text not null check (created_by_type in ('human_user','agent','system'))`
 - `created_by_id uuid not null`
@@ -88,7 +87,7 @@ only — lifecycle business logic lives in task 014.
 - [ ] Migration `0015_agent.sql` applies cleanly; all columns and indexes created
 - [ ] Migration `0016_agent_profile_template.sql` applies cleanly
 - [ ] `agent.lifecycle_status` check constraint rejects any value not in the 7-value set
-- [ ] `agent.agent_class` + `temp_scope_type` consistency: a staff agent row with `temp_scope_type` set is accepted at the DB level (constraint is application-layer per ISSUE #5 — do not add a compound check constraint)
+- [ ] `agent.agent_class` + `temp_project_id` consistency: DB check constraint enforces `temp_project_id IS NOT NULL` for temps and `IS NULL` for staff
 - [ ] `AgentRepo.Create` inserts a row and returns the full struct including generated ID and timestamps
 - [ ] `AgentRepo.CountActiveTemps` returns the count of `agent_class='temp'` AND `lifecycle_status='active'` rows for a given org
 - [ ] `AgentRepo.GetStarterTrio` returns exactly 3 rows where `is_starter_trio=true`
@@ -98,7 +97,7 @@ only — lifecycle business logic lives in task 014.
 ## Tests Required
 
 **Unit tests:**
-- `AgentRepo` field mapping: verify that all nullable columns (temp_scope_type, temp_expires_at, promoted_to_agent_id, budget_cap_tokens, budget_period) marshal to/from Go structs correctly (nil pointer vs zero value)
+- `AgentRepo` field mapping: verify that all nullable columns (temp_project_id, temp_expires_at, promoted_to_agent_id, budget_cap_tokens, budget_period) marshal to/from Go structs correctly (nil pointer vs zero value)
 - Bootstrap step 7 idempotency check function in isolation
 
 **Integration tests:**
@@ -118,8 +117,8 @@ only — lifecycle business logic lives in task 014.
 > ✅ ISSUE #23 (RESOLVED): Budget enforcement is hierarchical/additive. The per-agent `budget_cap_tokens`/`budget_period` columns work within the three-level hierarchy: a single invocation is charged to agent, project, and org levels simultaneously. All three levels are checked before dispatch in task 053. `BudgetService.CheckBudget` (task 023) accepts an `agentID *uuid.UUID` parameter and checks the agent cap alongside org/project limits. This task delivers the schema; enforcement is wired in task 053.
 
 - ISSUE #5 (AMBIGUOUS): No DB check constraint prevents a staff agent from reaching `expired` or a temp agent from reaching `draft`. This is application-layer enforcement only (implemented in task 014). Do not add a compound check on `(agent_class, lifecycle_status)` — document this as intentional in a code comment.
-- ISSUE #8 (GAP): When `temp_scope_type='ttl'`, `temp_scope_id` semantics are unclear — the spec does not state whether it points to the associated project or is null. Until Sam resolves this, make `temp_scope_id` nullable and add a code comment referencing ISSUE #8.
+- ✅ ISSUE #8 (RESOLVED): All temps are project-scoped. `temp_scope_type` and `temp_scope_id` are replaced by a single `temp_project_id uuid references project(id) NOT NULL` (for temps). TTL expiry is an optional mechanism independent of scope.
 - The `created_by_type + created_by_id` polymorphic pair follows the canonical 3-type convention (`human_user | agent | system`). The system sentinel UUID is `00000000-0000-0000-0000-000000000000`.
 - `promoted_to_agent_id` self-reference: when a temp is promoted to a staff agent, this column is set to the new staff agent's ID. The FK uses `ON DELETE SET NULL` to avoid cascading deletes if the promoted agent is ever retired and deleted.
 - The starter trio agents must have `is_starter_trio=true` and must not be deletable via the normal agent delete path. The `AgentRepo.Delete` method (if implemented) must check `is_starter_trio=true` and return `ErrStarterTrioProtected`.
-- ISSUE #4 (AMBIGUOUS): `private_memory=true` applies to staff PMs, Frank, Lori, and Ellie only — not all staff. Implement per doc 05 body text until Sam resolves the contradiction with doc 14's bootstrap dataset wording.
+- ✅ ISSUE #4 (RESOLVED): `private_memory_enabled = false` for all agents by default. It is an explicit opt-in only for agents handling sensitive personal data. No agent seeds with true.
