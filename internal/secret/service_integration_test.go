@@ -125,6 +125,9 @@ func TestServiceDeleteBlockedByMCPTransportReference(t *testing.T) {
 		t.Fatalf("Set failed: %v", err)
 	}
 
+	if _, err := pool.Exec(context.Background(), `DROP TABLE IF EXISTS mcp_connection CASCADE`); err != nil {
+		t.Fatalf("drop mcp_connection table failed: %v", err)
+	}
 	if _, err := pool.Exec(context.Background(), `
 		CREATE TABLE mcp_connection (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
