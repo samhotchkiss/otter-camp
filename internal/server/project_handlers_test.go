@@ -49,6 +49,8 @@ func TestProjectRoutesRegistered(t *testing.T) {
 		"POST /projects/{id}/schedules",
 		"PATCH /projects/{id}/schedules/{schedule_id}",
 		"DELETE /projects/{id}/schedules/{schedule_id}",
+		"POST /projects/{id}/schedules/{schedule_id}/enable",
+		"POST /projects/{id}/schedules/{schedule_id}/disable",
 	}
 
 	for _, key := range required {
@@ -227,6 +229,14 @@ func (f *fakeProjectService) ListSchedules(context.Context, uuid.UUID) ([]*proje
 }
 
 func (f *fakeProjectService) UpdateSchedule(context.Context, uuid.UUID, projectsvc.UpdateScheduleRequest) (*projectsvc.TaskSchedule, error) {
+	return nil, repo.ErrNotFound
+}
+
+func (f *fakeProjectService) EnableSchedule(context.Context, uuid.UUID) (*projectsvc.TaskSchedule, error) {
+	return nil, repo.ErrNotFound
+}
+
+func (f *fakeProjectService) DisableSchedule(context.Context, uuid.UUID) (*projectsvc.TaskSchedule, error) {
 	return nil, repo.ErrNotFound
 }
 

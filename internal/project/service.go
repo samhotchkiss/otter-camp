@@ -12,10 +12,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/robfig/cron/v3"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/scheduling"
 )
 
 var (
@@ -170,6 +170,8 @@ type ProjectService interface {
 	GetSchedule(ctx context.Context, scheduleID uuid.UUID) (*TaskSchedule, error)
 	ListSchedules(ctx context.Context, projectID uuid.UUID) ([]*TaskSchedule, error)
 	UpdateSchedule(ctx context.Context, scheduleID uuid.UUID, req UpdateScheduleRequest) (*TaskSchedule, error)
+	EnableSchedule(ctx context.Context, scheduleID uuid.UUID) (*TaskSchedule, error)
+	DisableSchedule(ctx context.Context, scheduleID uuid.UUID) (*TaskSchedule, error)
 	DeleteSchedule(ctx context.Context, scheduleID uuid.UUID) error
 }
 
@@ -235,7 +237,8 @@ type service struct {
 	events eventbus.EventBus
 	clock  clock.Clock
 
-	cronParser cron.Parser
+	cronParser      *scheduling.CronParser
+	scheduleService *scheduling.TaskScheduleService
 }
 
 func NewService(opts Options) (ProjectService, error) {
@@ -247,12 +250,10 @@ func NewService(opts Options) (ProjectService, error) {
 	}
 
 	svc := &service{
-		pool:   opts.Pool,
-		events: opts.Events,
-		clock:  opts.Clock,
-		cronParser: cron.NewParser(
-			cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow,
-		),
+		pool:       opts.Pool,
+		events:     opts.Events,
+		clock:      opts.Clock,
+		cronParser: scheduling.NewCronParser(),
 	}
 	if svc.clock == nil {
 		svc.clock = clock.Real{}
@@ -282,6 +283,16 @@ func NewService(opts Options) (ProjectService, error) {
 	} else {
 		svc.agents = repo.NewAgentRepo(opts.Pool)
 	}
+	scheduleService, err := scheduling.NewTaskScheduleService(scheduling.TaskScheduleServiceOptions{
+		Schedules:  svc.schedules,
+		Events:     svc.events,
+		Clock:      svc.clock,
+		CronParser: svc.cronParser,
+	})
+	if err != nil {
+		return nil, err
+	}
+	svc.scheduleService = scheduleService
 
 	return svc, nil
 }
@@ -896,6 +907,33 @@ func (s *service) DeleteSchedule(ctx context.Context, scheduleID uuid.UUID) erro
 	return s.schedules.Delete(ctx, scheduleID)
 }
 
+func (s *service) EnableSchedule(ctx context.Context, scheduleID uuid.UUID) (*TaskSchedule, error) {
+	if scheduleID == uuid.Nil {
+		return nil, ErrScheduleIDRequired
+	}
+
+	updated, err := s.scheduleService.Enable(ctx, scheduleID)
+	if err != nil {
+		if errors.Is(err, scheduling.ErrInvalidCronExpression) {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidCronExpression, err)
+		}
+		return nil, err
+	}
+	return &updated, nil
+}
+
+func (s *service) DisableSchedule(ctx context.Context, scheduleID uuid.UUID) (*TaskSchedule, error) {
+	if scheduleID == uuid.Nil {
+		return nil, ErrScheduleIDRequired
+	}
+
+	updated, err := s.scheduleService.Disable(ctx, scheduleID)
+	if err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
 func validateSlug(value string) (string, error) {
 	slug := strings.TrimSpace(value)
 	if slug == "" || len(slug) > 64 {
@@ -929,7 +967,7 @@ func normalizeActor(actorType string, actorID uuid.UUID) (string, uuid.UUID, err
 }
 
 func (s *service) computeNextFireAt(expression string) (time.Time, error) {
-	schedule, err := s.cronParser.Parse(expression)
+	schedule, err := s.cronParser.ParseExpression(expression)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("%w: %v", ErrInvalidCronExpression, err)
 	}

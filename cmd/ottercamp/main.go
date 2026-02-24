@@ -3,11 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -71,6 +74,8 @@ func run(args []string) int {
 		return runSecret(args[1:])
 	case "skill":
 		return runSkill(args[1:])
+	case "schedule":
+		return runSchedule(args[1:])
 	case "magic-link":
 		return runMagicLink(args[1:])
 	case "reset-password":
@@ -893,6 +898,322 @@ func printSkillCheckReport(report *skillsvc.ConsistencyReport) {
 	printList("Mismatches", report.Mismatches)
 }
 
+func runSchedule(args []string) int {
+	if len(args) == 0 {
+		printScheduleUsage(os.Stderr)
+		return 1
+	}
+
+	switch args[0] {
+	case "list":
+		return runScheduleList(args[1:])
+	case "enable":
+		return runScheduleToggle(args[1:], true)
+	case "disable":
+		return runScheduleToggle(args[1:], false)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown schedule command: %s\n", args[0])
+		printScheduleUsage(os.Stderr)
+		return 1
+	}
+}
+
+func runScheduleList(args []string) int {
+	flags := flag.NewFlagSet("schedule list", flag.ContinueOnError)
+	projectSlug := flags.String("project", "", "project slug")
+	jsonOutput := flags.Bool("json", false, "emit JSON output")
+	apiURLFlag := flags.String("api-url", "", "ottercamp API base URL (or OTTERCAMP_API_URL)")
+	apiKeyFlag := flags.String("api-key", "", "ottercamp API key (or OTTERCAMP_API_KEY)")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "schedule list argument error: %v\n", err)
+		return 1
+	}
+	if strings.TrimSpace(*projectSlug) == "" {
+		fmt.Fprintln(os.Stderr, "schedule list requires --project")
+		return 1
+	}
+
+	client, err := newCLIAPIClient(*apiURLFlag, *apiKeyFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "schedule list setup error: %v\n", err)
+		return 1
+	}
+
+	ctx := context.Background()
+	projectID, err := client.lookupProjectID(ctx, strings.TrimSpace(*projectSlug))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "schedule list project lookup failed: %v\n", err)
+		return 1
+	}
+
+	schedules, err := client.listSchedules(ctx, projectID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "schedule list failed: %v\n", err)
+		return 1
+	}
+
+	if *jsonOutput {
+		encoded, err := json.MarshalIndent(schedules, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "schedule list json encode failed: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(os.Stdout, string(encoded))
+		return 0
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "NAME\tCRON\tENABLED\tLAST_FIRED\tNEXT_RUN")
+	for _, item := range schedules {
+		fmt.Fprintf(
+			tw,
+			"%s\t%s\t%t\t%s\t%s\n",
+			item.DisplayName,
+			item.CronExpression,
+			item.IsEnabled,
+			formatOptionalTime(item.LastFiredAt),
+			formatOptionalTime(item.NextFireAt),
+		)
+	}
+	_ = tw.Flush()
+	return 0
+}
+
+func runScheduleToggle(args []string, enable bool) int {
+	commandName := "schedule disable"
+	if enable {
+		commandName = "schedule enable"
+	}
+
+	flags := flag.NewFlagSet(commandName, flag.ContinueOnError)
+	projectSlug := flags.String("project", "", "project slug")
+	jsonOutput := flags.Bool("json", false, "emit JSON output")
+	apiURLFlag := flags.String("api-url", "", "ottercamp API base URL (or OTTERCAMP_API_URL)")
+	apiKeyFlag := flags.String("api-key", "", "ottercamp API key (or OTTERCAMP_API_KEY)")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "%s argument error: %v\n", commandName, err)
+		return 1
+	}
+	if strings.TrimSpace(*projectSlug) == "" {
+		fmt.Fprintf(os.Stderr, "%s requires --project\n", commandName)
+		return 1
+	}
+	if flags.NArg() != 1 {
+		fmt.Fprintf(os.Stderr, "%s requires schedule name argument\n", commandName)
+		return 1
+	}
+	scheduleName := strings.TrimSpace(flags.Arg(0))
+	if scheduleName == "" {
+		fmt.Fprintf(os.Stderr, "%s requires non-empty schedule name\n", commandName)
+		return 1
+	}
+
+	client, err := newCLIAPIClient(*apiURLFlag, *apiKeyFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s setup error: %v\n", commandName, err)
+		return 1
+	}
+
+	ctx := context.Background()
+	projectID, err := client.lookupProjectID(ctx, strings.TrimSpace(*projectSlug))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s project lookup failed: %v\n", commandName, err)
+		return 1
+	}
+
+	schedules, err := client.listSchedules(ctx, projectID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s list failed: %v\n", commandName, err)
+		return 1
+	}
+
+	selected, found := pickScheduleByName(schedules, scheduleName)
+	if !found {
+		fmt.Fprintf(os.Stderr, "%s failed: schedule %q not found\n", commandName, scheduleName)
+		return 1
+	}
+
+	result, err := client.toggleSchedule(ctx, projectID, selected.ID, enable)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s failed: %v\n", commandName, err)
+		return 1
+	}
+
+	if *jsonOutput {
+		encoded, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s json encode failed: %v\n", commandName, err)
+			return 1
+		}
+		fmt.Fprintln(os.Stdout, string(encoded))
+		return 0
+	}
+
+	if enable {
+		fmt.Fprintf(os.Stdout, "enabled schedule %s (next run: %s)\n", selected.DisplayName, result.NextRunAt)
+		return 0
+	}
+	fmt.Fprintf(os.Stdout, "disabled schedule %s\n", selected.DisplayName)
+	return 0
+}
+
+type cliAPIClient struct {
+	baseURL string
+	apiKey  string
+	client  *http.Client
+}
+
+func newCLIAPIClient(apiURL, apiKey string) (*cliAPIClient, error) {
+	baseURL := strings.TrimSpace(apiURL)
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(os.Getenv("OTTERCAMP_API_URL"))
+	}
+	if baseURL == "" {
+		baseURL = "http://127.0.0.1:8080"
+	}
+
+	key := strings.TrimSpace(apiKey)
+	if key == "" {
+		key = strings.TrimSpace(os.Getenv("OTTERCAMP_API_KEY"))
+	}
+	if key == "" {
+		return nil, fmt.Errorf("api key required via --api-key or OTTERCAMP_API_KEY")
+	}
+
+	return &cliAPIClient{
+		baseURL: strings.TrimRight(baseURL, "/"),
+		apiKey:  key,
+		client:  &http.Client{Timeout: 15 * time.Second},
+	}, nil
+}
+
+func (c *cliAPIClient) lookupProjectID(ctx context.Context, slug string) (string, error) {
+	query := url.Values{}
+	query.Set("slug_prefix", slug)
+	query.Set("limit", "200")
+
+	var resp struct {
+		Data []struct {
+			ID   string `json:"id"`
+			Slug string `json:"slug"`
+		} `json:"data"`
+	}
+	if err := c.request(ctx, http.MethodGet, "/v1/projects?"+query.Encode(), nil, &resp); err != nil {
+		return "", err
+	}
+
+	for _, item := range resp.Data {
+		if item.Slug == slug {
+			return item.ID, nil
+		}
+	}
+	return "", fmt.Errorf("project %q not found", slug)
+}
+
+type cliSchedule struct {
+	ID             string     `json:"id"`
+	DisplayName    string     `json:"display_name"`
+	CronExpression string     `json:"cron_expression"`
+	IsEnabled      bool       `json:"is_enabled"`
+	LastFiredAt    *time.Time `json:"last_fired_at"`
+	NextFireAt     *time.Time `json:"next_fire_at"`
+}
+
+func (c *cliAPIClient) listSchedules(ctx context.Context, projectID string) ([]cliSchedule, error) {
+	var resp struct {
+		Data []cliSchedule `json:"data"`
+	}
+	path := fmt.Sprintf("/v1/projects/%s/schedules", url.PathEscape(projectID))
+	if err := c.request(ctx, http.MethodGet, path, nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
+type cliScheduleToggleResult struct {
+	ScheduleID string `json:"schedule_id"`
+	Enabled    *bool  `json:"enabled,omitempty"`
+	NextRunAt  string `json:"next_run_at,omitempty"`
+}
+
+func (c *cliAPIClient) toggleSchedule(ctx context.Context, projectID, scheduleID string, enable bool) (*cliScheduleToggleResult, error) {
+	action := "disable"
+	if enable {
+		action = "enable"
+	}
+	path := fmt.Sprintf("/v1/projects/%s/schedules/%s/%s", url.PathEscape(projectID), url.PathEscape(scheduleID), action)
+	var resp struct {
+		Data cliScheduleToggleResult `json:"data"`
+	}
+	if err := c.request(ctx, http.MethodPost, path, map[string]any{}, &resp); err != nil {
+		return nil, err
+	}
+	return &resp.Data, nil
+}
+
+func (c *cliAPIClient) request(ctx context.Context, method, path string, payload any, out any) error {
+	fullURL := c.baseURL + path
+	var body io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		body = strings.NewReader(string(encoded))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, fullURL, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-API-Key", c.apiKey)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	res, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("api %s %s returned %d: %s", method, path, res.StatusCode, strings.TrimSpace(string(data)))
+	}
+	if out == nil {
+		return nil
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	return json.Unmarshal(data, out)
+}
+
+func pickScheduleByName(schedules []cliSchedule, name string) (cliSchedule, bool) {
+	for _, item := range schedules {
+		if item.DisplayName == name {
+			return item, true
+		}
+	}
+	for _, item := range schedules {
+		if strings.EqualFold(item.DisplayName, name) {
+			return item, true
+		}
+	}
+	return cliSchedule{}, false
+}
+
+func formatOptionalTime(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
 func runMagicLink(args []string) int {
 	flags := flag.NewFlagSet("magic-link", flag.ContinueOnError)
 	email := flags.String("email", "", "email for magic link")
@@ -1094,10 +1415,14 @@ func printSkillUsage(w *os.File) {
 	fmt.Fprintln(w, "usage: ottercamp skill <create|update|delete|list|check> [flags]")
 }
 
+func printScheduleUsage(w *os.File) {
+	fmt.Fprintln(w, "usage: ottercamp schedule <list|enable|disable> [flags]")
+}
+
 func printSecretUsage(w *os.File) {
 	fmt.Fprintln(w, "usage: ottercamp secret <set|list|delete> [flags]")
 }
 
 func printUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp <serve|worker|bootstrap|migrate|backup|secret|skill|magic-link|reset-password|unlock-account|version>")
+	fmt.Fprintln(w, "usage: ottercamp <serve|worker|bootstrap|migrate|backup|secret|skill|schedule|magic-link|reset-password|unlock-account|version>")
 }

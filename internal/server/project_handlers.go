@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/scheduling"
 )
 
 type ProjectRouteRegistrar struct {
@@ -46,11 +48,15 @@ func (r *ProjectRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.With(middleware.RequireRole("member")).Post("/projects/{id}/schedules", r.handlers.createSchedule)
 	router.With(middleware.RequireRole("member")).Patch("/projects/{id}/schedules/{schedule_id}", r.handlers.updateSchedule)
 	router.With(middleware.RequireRole("member")).Delete("/projects/{id}/schedules/{schedule_id}", r.handlers.deleteSchedule)
+	router.With(middleware.RequireRole("member")).Post("/projects/{id}/schedules/{schedule_id}/enable", r.handlers.enableSchedule)
+	router.With(middleware.RequireRole("member")).Post("/projects/{id}/schedules/{schedule_id}/disable", r.handlers.disableSchedule)
 }
 
 type projectHandlers struct {
 	service projectsvc.ProjectService
 }
+
+var scheduleCronParser = scheduling.NewCronParser()
 
 type createProjectRequest struct {
 	Slug                 string          `json:"slug"`
@@ -822,6 +828,10 @@ func (h projectHandlers) createSchedule(w http.ResponseWriter, r *http.Request) 
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "cron_expression is required")
 		return
 	}
+	if err := scheduleCronParser.ValidateExpression(req.CronExpression); err != nil {
+		h.respondProjectError(responder, w, fmt.Errorf("%w: %v", projectsvc.ErrInvalidCronExpression, err))
+		return
+	}
 
 	created, createErr := h.service.CreateSchedule(r.Context(), projectsvc.CreateScheduleRequest{
 		OrganizationID: principal.OrganizationID,
@@ -875,6 +885,12 @@ func (h projectHandlers) updateSchedule(w http.ResponseWriter, r *http.Request) 
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
 		return
 	}
+	if req.CronExpression != nil {
+		if err := scheduleCronParser.ValidateExpression(*req.CronExpression); err != nil {
+			h.respondProjectError(responder, w, fmt.Errorf("%w: %v", projectsvc.ErrInvalidCronExpression, err))
+			return
+		}
+	}
 
 	updated, updateErr := h.service.UpdateSchedule(r.Context(), scheduleID, projectsvc.UpdateScheduleRequest{
 		FlowTemplateID: req.FlowTemplateID,
@@ -922,6 +938,82 @@ func (h projectHandlers) deleteSchedule(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h projectHandlers) enableSchedule(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+
+	projectID, err := parseUUIDParam(r, "id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+	scheduleID, err := parseUUIDParam(r, "schedule_id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid schedule id")
+		return
+	}
+	current, err := h.service.GetSchedule(r.Context(), scheduleID)
+	if err != nil {
+		h.respondProjectError(responder, w, err)
+		return
+	}
+	if current.OrganizationID != principal.OrganizationID || current.ProjectID != projectID {
+		responder.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+		return
+	}
+
+	updated, err := h.service.EnableSchedule(r.Context(), scheduleID)
+	if err != nil {
+		h.respondProjectError(responder, w, err)
+		return
+	}
+	responder.JSON(w, http.StatusOK, map[string]any{
+		"schedule_id": updated.ID,
+		"next_run_at": updated.NextFireAt,
+	})
+}
+
+func (h projectHandlers) disableSchedule(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+
+	projectID, err := parseUUIDParam(r, "id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+	scheduleID, err := parseUUIDParam(r, "schedule_id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid schedule id")
+		return
+	}
+	current, err := h.service.GetSchedule(r.Context(), scheduleID)
+	if err != nil {
+		h.respondProjectError(responder, w, err)
+		return
+	}
+	if current.OrganizationID != principal.OrganizationID || current.ProjectID != projectID {
+		responder.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+		return
+	}
+
+	updated, err := h.service.DisableSchedule(r.Context(), scheduleID)
+	if err != nil {
+		h.respondProjectError(responder, w, err)
+		return
+	}
+	responder.JSON(w, http.StatusOK, map[string]any{
+		"schedule_id": updated.ID,
+		"enabled":     updated.IsEnabled,
+	})
 }
 
 func (h projectHandlers) requirePrincipal(w http.ResponseWriter, r *http.Request) (middleware.Principal, bool) {
