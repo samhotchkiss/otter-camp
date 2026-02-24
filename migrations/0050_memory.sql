@@ -68,8 +68,8 @@ CREATE INDEX memory_status_file_backed_idx
     ON memory (status, file_backed)
     WHERE file_backed = true;
 
--- HNSW index for vector retrieval.
-CREATE INDEX memory_embedding_hnsw_idx
+-- HNSW_INDEX: must run outside transaction; migration runner handles this automatically
+CREATE INDEX CONCURRENTLY memory_embedding_hnsw_idx
     ON memory USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 
@@ -77,4 +77,3 @@ CREATE TRIGGER memory_set_updated_at
 BEFORE UPDATE ON memory
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
-
