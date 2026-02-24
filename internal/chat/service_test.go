@@ -481,6 +481,72 @@ func TestMapDBErrorForeignKeyIsNotDuplicateReaction(t *testing.T) {
 	}
 }
 
+func TestCloseSessionEnqueuesSummarizationAndCleanupJobs(t *testing.T) {
+	sessionID := uuid.New()
+	orgID := uuid.New()
+	now := time.Date(2026, time.January, 15, 22, 30, 0, 0, time.UTC)
+	enqueuer := &fakeEnqueuer{}
+
+	svc := newUnitService(t, unitDeps{
+		enqueuer: enqueuer,
+		sessions: &fakeSessionRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+				if id != sessionID {
+					t.Fatalf("unexpected session id %s", id)
+				}
+				return repo.ChatSession{
+					ID:             sessionID,
+					OrganizationID: orgID,
+					ScopeType:      "organization",
+					ScopeID:        orgID,
+					Mode:           "async",
+					Status:         "active",
+				}, nil
+			},
+			closeFn: func(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+				return repo.ChatSession{ID: id, OrganizationID: orgID, Status: "closed"}, nil
+			},
+		},
+		turns: &fakeTurnRepo{listBySessionFn: func(context.Context, uuid.UUID) ([]repo.ChatTurn, error) {
+			return []repo.ChatTurn{}, nil
+		}},
+	})
+	svc.clock = staticClock{now: now}
+
+	if err := svc.CloseSession(context.Background(), sessionID); err != nil {
+		t.Fatalf("CloseSession: %v", err)
+	}
+
+	if len(enqueuer.calls) != 4 {
+		t.Fatalf("enqueued jobs = %d, want 4", len(enqueuer.calls))
+	}
+	if enqueuer.calls[0].jobType != ChatSummarizeJobType {
+		t.Fatalf("first job type = %s, want %s", enqueuer.calls[0].jobType, ChatSummarizeJobType)
+	}
+
+	cleanupRunAfter := nextCleanupRunAfter(now)
+	seen := map[string]bool{}
+	for _, call := range enqueuer.calls[1:] {
+		if call.jobType != ChatSessionCleanupJobType {
+			t.Fatalf("cleanup job type = %s, want %s", call.jobType, ChatSessionCleanupJobType)
+		}
+		payload, ok := call.payload.(ChatSessionCleanupPayload)
+		if !ok {
+			t.Fatalf("cleanup payload type = %T, want ChatSessionCleanupPayload", call.payload)
+		}
+		seen[payload.CleanupType] = true
+		if call.runAfter == nil || !call.runAfter.Equal(cleanupRunAfter) {
+			t.Fatalf("cleanup run_after = %v, want %s", call.runAfter, cleanupRunAfter)
+		}
+	}
+
+	for _, cleanupType := range []string{CleanupTypeEphemeralPurge, CleanupTypeToolCompaction, CleanupTypeSummaryConsolidate} {
+		if !seen[cleanupType] {
+			t.Fatalf("missing cleanup job for %s", cleanupType)
+		}
+	}
+}
+
 type unitDeps struct {
 	sessions     *fakeSessionRepo
 	participants *fakeParticipantRepo
@@ -835,10 +901,35 @@ func (f *fakeEventBus) Publish(_ context.Context, _ pgx.Tx, event eventbus.Domai
 	return nil
 }
 
-type fakeEnqueuer struct{}
+type fakeEnqueuer struct {
+	calls []enqueuedJob
+}
 
-func (f *fakeEnqueuer) Enqueue(_ context.Context, _ pgx.Tx, _ string, _ int, _ any, _ *time.Time) (uuid.UUID, error) {
+type enqueuedJob struct {
+	jobType  string
+	priority int
+	payload  any
+	runAfter *time.Time
+}
+
+func (f *fakeEnqueuer) Enqueue(_ context.Context, _ pgx.Tx, jobType string, priority int, payload any, runAfter *time.Time) (uuid.UUID, error) {
+	call := enqueuedJob{
+		jobType:  jobType,
+		priority: priority,
+		payload:  payload,
+	}
+	if runAfter != nil {
+		value := runAfter.UTC()
+		call.runAfter = &value
+	}
+	f.calls = append(f.calls, call)
 	return uuid.New(), nil
 }
+
+type staticClock struct {
+	now time.Time
+}
+
+func (c staticClock) Now() time.Time { return c.now }
 
 var _ json.Marshaler
