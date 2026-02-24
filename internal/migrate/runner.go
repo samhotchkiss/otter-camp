@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -13,6 +14,7 @@ import (
 )
 
 const advisoryLockID int64 = 9_226_014_607
+const hnswIndexSignalComment = "-- HNSW_INDEX: must run outside transaction; migration runner handles this automatically"
 
 type Runner struct {
 	pool   *pgxpool.Pool
@@ -110,6 +112,10 @@ func (r *Runner) ensureSchemaMigrations(ctx context.Context) error {
 }
 
 func (r *Runner) applyMigration(ctx context.Context, migration Migration) error {
+	if requiresNonTransactionalExecution(migration.SQL) {
+		return r.applyMigrationOutsideTransaction(ctx, migration)
+	}
+
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin migration %04d: %w", migration.Version, err)
@@ -134,4 +140,43 @@ func (r *Runner) applyMigration(ctx context.Context, migration Migration) error 
 	}
 
 	return nil
+}
+
+func (r *Runner) applyMigrationOutsideTransaction(ctx context.Context, migration Migration) error {
+	statements := splitSQLStatements(migration.SQL)
+	for _, stmt := range statements {
+		if strings.TrimSpace(stmt) == "" {
+			continue
+		}
+		if _, err := r.pool.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("execute migration %04d (%s): %w", migration.Version, migration.File, err)
+		}
+	}
+
+	if _, err := r.pool.Exec(ctx, `
+		INSERT INTO schema_migrations (version, applied_at)
+		VALUES ($1, now())
+	`, migration.Version); err != nil {
+		return fmt.Errorf("record migration %04d: %w", migration.Version, err)
+	}
+
+	return nil
+}
+
+func requiresNonTransactionalExecution(sql string) bool {
+	return strings.Contains(sql, hnswIndexSignalComment)
+}
+
+func splitSQLStatements(sql string) []string {
+	normalized := strings.ReplaceAll(sql, "\r\n", "\n")
+	parts := strings.Split(normalized, ";\n")
+	statements := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		statements = append(statements, trimmed)
+	}
+	return statements
 }
