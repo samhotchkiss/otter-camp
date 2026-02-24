@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"net/http"
@@ -33,6 +34,7 @@ import (
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	oclog "github.com/samhotchkiss/otter-camp/internal/log"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
+	"github.com/samhotchkiss/otter-camp/internal/memory"
 	memoryimporter "github.com/samhotchkiss/otter-camp/internal/memory/importer"
 	"github.com/samhotchkiss/otter-camp/internal/migrate"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
@@ -66,6 +68,23 @@ type memoryImportStartFunc func(ctx context.Context, orgID uuid.UUID, fileKey st
 
 type memoryImportStatusClient interface {
 	GetMemoryImport(ctx context.Context, importID string) (cliMemoryImportStatus, error)
+}
+
+type deterministicMemoryQueryEmbedder struct{}
+
+func (deterministicMemoryQueryEmbedder) Embed(_ context.Context, _ uuid.UUID, _ string, inputs []string) ([][]float32, error) {
+	out := make([][]float32, 0, len(inputs))
+	for _, input := range inputs {
+		hasher := fnv.New64a()
+		_, _ = hasher.Write([]byte(strings.ToLower(strings.TrimSpace(input))))
+		seed := hasher.Sum64()
+
+		vector := make([]float32, 1536)
+		vector[0] = float32(seed%1000)/1000 + 0.001
+		vector[1] = 1
+		out = append(out, vector)
+	}
+	return out, nil
 }
 
 func main() {
@@ -238,9 +257,26 @@ func runServe() int {
 		return 1
 	}
 
+	memoryRetriever, err := memory.NewRetriever(memory.RetrieverOptions{
+		Pool:     pool.Raw(),
+		Embedder: deterministicMemoryQueryEmbedder{},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory retriever setup error: %v\n", err)
+		return 1
+	}
+
 	store, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "storage config error: %v\n", err)
+		return 1
+	}
+	memoryImporterService, err := memoryimporter.NewImporter(memoryimporter.ImporterOptions{
+		Pool:  pool.Raw(),
+		Store: store,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory importer setup error: %v\n", err)
 		return 1
 	}
 
@@ -280,6 +316,12 @@ func runServe() int {
 			server.NewProjectRouteRegistrar(projectService),
 			server.NewTaskRouteRegistrar(taskService, flowService, deliveryService, pool.Raw()),
 			server.NewChatRouteRegistrar(chatService, pool.Raw()),
+			server.NewMemoryRouteRegistrar(server.MemoryRouteOptions{
+				Pool:      pool.Raw(),
+				Retriever: memoryRetriever,
+				Importer:  memoryImporterService,
+				Store:     store,
+			}),
 			server.NewCapabilityPolicyRouteRegistrar(server.CapabilityPolicyRouteOptions{
 				Policies:      policyRepo,
 				Projects:      repo.NewProjectRepo(pool.Raw()),
