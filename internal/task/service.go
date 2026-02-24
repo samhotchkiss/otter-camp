@@ -115,6 +115,7 @@ type CreateTaskRequest struct {
 	Title           string
 	Description     *string
 	FlowTemplateID  *uuid.UUID
+	ScheduleID      *uuid.UUID
 	AssignedAgentID *uuid.UUID
 	CreatedByType   string
 	CreatedByID     uuid.UUID
@@ -322,6 +323,7 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 		Description:         req.Description,
 		WorkStatus:          "draft",
 		FlowTemplateID:      req.FlowTemplateID,
+		ScheduleID:          req.ScheduleID,
 		RequiresHumanReview: requiresHumanReview,
 		CreatedByType:       createdByType,
 		CreatedByID:         createdByID,
