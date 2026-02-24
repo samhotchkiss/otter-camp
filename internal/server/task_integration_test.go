@@ -1,0 +1,522 @@
+//go:build integration
+
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
+	deliverysvc "github.com/samhotchkiss/otter-camp/internal/delivery"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
+	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/testdb"
+	"golang.org/x/crypto/bcrypt"
+)
+
+func TestTaskHTTPCreateQueueReviewDecisionLifecycle(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "task-lifecycle", true)
+	seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+project.ID.String()+"/tasks", map[string]any{
+		"title":       "Lifecycle Task",
+		"description": "verify queue + review decision",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if created.StatusCode != http.StatusCreated {
+		t.Fatalf("create task status = %d, want %d body=%s", created.StatusCode, http.StatusCreated, string(created.Body))
+	}
+	taskID := jsonPathString(t, created.Body, "data", "id")
+
+	queued := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskID+"/queue", map[string]any{}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if queued.StatusCode != http.StatusOK {
+		t.Fatalf("queue task status = %d, want %d body=%s", queued.StatusCode, http.StatusOK, string(queued.Body))
+	}
+	if got := jsonPathString(t, queued.Body, "data", "work_status"); got != "draft" {
+		t.Fatalf("queue work_status = %q, want %q body=%s", got, "draft", string(queued.Body))
+	}
+
+	var inboxCount int
+	if err := testServer.Pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM inbox_item
+		WHERE source_task_id = $1
+		  AND item_type = 'human_approval_required'
+	`, taskID).Scan(&inboxCount); err != nil {
+		t.Fatalf("count queue inbox items: %v", err)
+	}
+	if inboxCount != 1 {
+		t.Fatalf("human_approval_required inbox count = %d, want 1", inboxCount)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	taskUUID := uuid.MustParse(taskID)
+	taskRecord, err := taskRepo.GetByID(context.Background(), taskUUID)
+	if err != nil {
+		t.Fatalf("get task after queue: %v", err)
+	}
+	taskRecord.WorkStatus = "review"
+	if _, err := taskRepo.Update(context.Background(), taskRecord); err != nil {
+		t.Fatalf("set task to review: %v", err)
+	}
+
+	body := "Review this task"
+	_, err = repo.NewInboxItemRepo(testServer.Pool).Create(context.Background(), repo.InboxItem{
+		OrganizationID:  org.ID,
+		TargetUserID:    &adminUser.ID,
+		ItemType:        "task_review",
+		SourceProjectID: &project.ID,
+		SourceTaskID:    &taskUUID,
+		CreatedByType:   "system",
+		Title:           "Task review required",
+		Body:            &body,
+		ActionPayload:   json.RawMessage(`{"action":"review"}`),
+	})
+	if err != nil {
+		t.Fatalf("create task_review inbox: %v", err)
+	}
+
+	approved := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskID+"/review-decision", map[string]any{
+		"decision": "approve",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if approved.StatusCode != http.StatusOK {
+		t.Fatalf("review decision status = %d, want %d body=%s", approved.StatusCode, http.StatusOK, string(approved.Body))
+	}
+
+	got := mustJSON(t, http.MethodGet, testServer.URL+"/v1/tasks/"+taskID, nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if got.StatusCode != http.StatusOK {
+		t.Fatalf("get task status = %d, want %d body=%s", got.StatusCode, http.StatusOK, string(got.Body))
+	}
+	if status := jsonPathString(t, got.Body, "data", "work_status"); status != "done" {
+		t.Fatalf("work_status = %q, want %q body=%s", status, "done", string(got.Body))
+	}
+}
+
+func TestTaskHTTPAdvanceFlowAndMissingActiveExecution(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "flow-advance", false)
+	taskRecord, templateID, nodeA, nodeB := seedFlowTask(t, testServer.Pool, org.ID, project.ID)
+	_ = templateID
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	missing := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskRecord.ID.String()+"/advance-flow", map[string]any{}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if missing.StatusCode != http.StatusNotFound {
+		t.Fatalf("advance without execution status = %d, want %d body=%s", missing.StatusCode, http.StatusNotFound, string(missing.Body))
+	}
+
+	execRepo := repo.NewFlowNodeExecutionRepo(testServer.Pool)
+	if _, err := execRepo.Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  nodeA.ID,
+		VisitNumber: 1,
+		Status:      "active",
+	}); err != nil {
+		t.Fatalf("create active execution: %v", err)
+	}
+
+	advanced := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskRecord.ID.String()+"/advance-flow", map[string]any{}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if advanced.StatusCode != http.StatusOK {
+		t.Fatalf("advance status = %d, want %d body=%s", advanced.StatusCode, http.StatusOK, string(advanced.Body))
+	}
+
+	taskAfter, err := repo.NewProjectTaskRepo(testServer.Pool).GetByID(context.Background(), taskRecord.ID)
+	if err != nil {
+		t.Fatalf("get task after advance: %v", err)
+	}
+	if taskAfter.CurrentFlowNodeID == nil || *taskAfter.CurrentFlowNodeID != nodeB.ID {
+		t.Fatalf("current_flow_node_id = %v, want %v", taskAfter.CurrentFlowNodeID, nodeB.ID)
+	}
+
+	executions, err := execRepo.ListByTask(context.Background(), taskRecord.ID)
+	if err != nil {
+		t.Fatalf("list executions: %v", err)
+	}
+	if len(executions) != 2 {
+		t.Fatalf("execution count = %d, want 2", len(executions))
+	}
+	if executions[0].Status != "completed" {
+		t.Fatalf("first execution status = %q, want %q", executions[0].Status, "completed")
+	}
+	if executions[1].FlowNodeID != nodeB.ID || executions[1].Status != "active" {
+		t.Fatalf("second execution = %+v, want node=%s status=active", executions[1], nodeB.ID)
+	}
+}
+
+func TestTaskHTTPInboxListIncludesBroadcastAndFiltersActed(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	inboxRepo := repo.NewInboxItemRepo(testServer.Pool)
+
+	for i := 0; i < 3; i++ {
+		title := "direct-" + strconv.Itoa(i)
+		if _, err := inboxRepo.Create(context.Background(), repo.InboxItem{
+			OrganizationID: org.ID,
+			TargetUserID:   &adminUser.ID,
+			ItemType:       "system_alert",
+			CreatedByType:  "system",
+			Title:          title,
+			ActionPayload:  json.RawMessage(`{}`),
+		}); err != nil {
+			t.Fatalf("create direct inbox item %d: %v", i, err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		title := "broadcast-" + strconv.Itoa(i)
+		if _, err := inboxRepo.Create(context.Background(), repo.InboxItem{
+			OrganizationID: org.ID,
+			ItemType:       "system_alert",
+			CreatedByType:  "system",
+			Title:          title,
+			ActionPayload:  json.RawMessage(`{}`),
+		}); err != nil {
+			t.Fatalf("create broadcast inbox item %d: %v", i, err)
+		}
+	}
+	actedTitle := "acted-item"
+	actedItem, err := inboxRepo.Create(context.Background(), repo.InboxItem{
+		OrganizationID: org.ID,
+		TargetUserID:   &adminUser.ID,
+		ItemType:       "system_alert",
+		CreatedByType:  "system",
+		Title:          actedTitle,
+		ActionPayload:  json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create acted inbox item: %v", err)
+	}
+	if _, err := inboxRepo.MarkActed(context.Background(), actedItem.ID, adminUser.ID); err != nil {
+		t.Fatalf("mark acted inbox item: %v", err)
+	}
+
+	listed := mustJSON(t, http.MethodGet, testServer.URL+"/v1/inbox", nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if listed.StatusCode != http.StatusOK {
+		t.Fatalf("list inbox status = %d, want %d body=%s", listed.StatusCode, http.StatusOK, string(listed.Body))
+	}
+	items, ok := jsonPathValue(t, listed.Body, "data").([]any)
+	if !ok {
+		t.Fatalf("inbox list data type = %T, want []any body=%s", jsonPathValue(t, listed.Body, "data"), string(listed.Body))
+	}
+	if len(items) != 5 {
+		t.Fatalf("inbox item count = %d, want 5 body=%s", len(items), string(listed.Body))
+	}
+
+	unacted := mustJSON(t, http.MethodGet, testServer.URL+"/v1/inbox?is_acted=false", nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if unacted.StatusCode != http.StatusOK {
+		t.Fatalf("inbox unacted status = %d, want %d body=%s", unacted.StatusCode, http.StatusOK, string(unacted.Body))
+	}
+	unactedItems, ok := jsonPathValue(t, unacted.Body, "data").([]any)
+	if !ok {
+		t.Fatalf("unacted data type = %T, want []any body=%s", jsonPathValue(t, unacted.Body, "data"), string(unacted.Body))
+	}
+	if len(unactedItems) != 5 {
+		t.Fatalf("unacted item count = %d, want 5 body=%s", len(unactedItems), string(unacted.Body))
+	}
+}
+
+func TestTaskHTTPMergeQueuePositionOrder(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "merge-queue", false)
+	queueRepo := repo.NewMergeQueueEntryRepo(testServer.Pool)
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	taskA := seedTaskRecord(t, testServer.Pool, org.ID, project.ID, "queue-a", "done", "feature/a")
+	taskB := seedTaskRecord(t, testServer.Pool, org.ID, project.ID, "queue-b", "done", "feature/b")
+	taskC := seedTaskRecord(t, testServer.Pool, org.ID, project.ID, "queue-c", "done", "feature/c")
+
+	if _, err := queueRepo.Enqueue(context.Background(), repo.MergeQueueEntry{ProjectID: project.ID, TaskID: taskA.ID, BranchName: "feature/a"}); err != nil {
+		t.Fatalf("enqueue A: %v", err)
+	}
+	if _, err := queueRepo.Enqueue(context.Background(), repo.MergeQueueEntry{ProjectID: project.ID, TaskID: taskB.ID, BranchName: "feature/b"}); err != nil {
+		t.Fatalf("enqueue B: %v", err)
+	}
+	if _, err := queueRepo.Enqueue(context.Background(), repo.MergeQueueEntry{ProjectID: project.ID, TaskID: taskC.ID, BranchName: "feature/c"}); err != nil {
+		t.Fatalf("enqueue C: %v", err)
+	}
+
+	listed := mustJSON(t, http.MethodGet, testServer.URL+"/v1/projects/"+project.ID.String()+"/merge-queue", nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if listed.StatusCode != http.StatusOK {
+		t.Fatalf("merge queue list status = %d, want %d body=%s", listed.StatusCode, http.StatusOK, string(listed.Body))
+	}
+	items, ok := jsonPathValue(t, listed.Body, "data").([]any)
+	if !ok {
+		t.Fatalf("merge queue data type = %T, want []any body=%s", jsonPathValue(t, listed.Body, "data"), string(listed.Body))
+	}
+	if len(items) != 3 {
+		t.Fatalf("merge queue item count = %d, want 3 body=%s", len(items), string(listed.Body))
+	}
+	queueTaskID := func(index int) string {
+		t.Helper()
+		item, ok := items[index].(map[string]any)
+		if !ok {
+			t.Fatalf("merge queue item[%d] type = %T, want map[string]any body=%s", index, items[index], string(listed.Body))
+		}
+		value, _ := item["task_id"].(string)
+		return value
+	}
+	if got := queueTaskID(0); got != taskA.ID.String() {
+		t.Fatalf("queue[0].task_id = %q, want %q body=%s", got, taskA.ID.String(), string(listed.Body))
+	}
+	if got := queueTaskID(1); got != taskB.ID.String() {
+		t.Fatalf("queue[1].task_id = %q, want %q body=%s", got, taskB.ID.String(), string(listed.Body))
+	}
+	if got := queueTaskID(2); got != taskC.ID.String() {
+		t.Fatalf("queue[2].task_id = %q, want %q body=%s", got, taskC.ID.String(), string(listed.Body))
+	}
+}
+
+func TestTaskHTTPRemoteDeleteProtectionWithActiveEnvironment(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "delivery-remotes", false)
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	createdRemote := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+project.ID.String()+"/remotes", map[string]any{
+		"name":      "origin",
+		"url":       "https://example.com/repo.git",
+		"transport": "https",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if createdRemote.StatusCode != http.StatusCreated {
+		t.Fatalf("create remote status = %d, want %d body=%s", createdRemote.StatusCode, http.StatusCreated, string(createdRemote.Body))
+	}
+	remoteID := jsonPathString(t, createdRemote.Body, "data", "id")
+
+	createdEnv := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+project.ID.String()+"/environments", map[string]any{
+		"name":          "production",
+		"delivery_mode": "gated",
+		"remote_id":     remoteID,
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if createdEnv.StatusCode != http.StatusCreated {
+		t.Fatalf("create environment status = %d, want %d body=%s", createdEnv.StatusCode, http.StatusCreated, string(createdEnv.Body))
+	}
+	environmentID := jsonPathString(t, createdEnv.Body, "data", "id")
+
+	blockedDelete := mustJSON(t, http.MethodDelete, testServer.URL+"/v1/projects/"+project.ID.String()+"/remotes/"+remoteID, nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if blockedDelete.StatusCode != http.StatusConflict {
+		t.Fatalf("delete remote while active status = %d, want %d body=%s", blockedDelete.StatusCode, http.StatusConflict, string(blockedDelete.Body))
+	}
+
+	deactivateEnv := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/projects/"+project.ID.String()+"/environments/"+environmentID, map[string]any{
+		"is_active": false,
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if deactivateEnv.StatusCode != http.StatusOK {
+		t.Fatalf("deactivate environment status = %d, want %d body=%s", deactivateEnv.StatusCode, http.StatusOK, string(deactivateEnv.Body))
+	}
+
+	deleted := mustJSON(t, http.MethodDelete, testServer.URL+"/v1/projects/"+project.ID.String()+"/remotes/"+remoteID, nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if deleted.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete remote status = %d, want %d body=%s", deleted.StatusCode, http.StatusNoContent, string(deleted.Body))
+	}
+}
+
+func newTaskTestServer(t *testing.T) (*authIntegrationServer, repo.Organization, repo.HumanUser, repo.HumanUser) {
+	t.Helper()
+
+	pool := testdb.New(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	slug := "task-http-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	adminEmail := "admin+" + slug + "@example.com"
+	memberEmail := "member+" + slug + "@example.com"
+	org, adminUser := createOrgAndUser(t, pool, slug, adminEmail, "Admin", "admin", "admin-password")
+	_, memberUser := createOrgAndUser(t, pool, slug, memberEmail, "Member", "member", "member-password")
+
+	authService, err := authsvc.NewService(authsvc.Options{
+		Users:        repo.NewHumanUserRepo(pool),
+		Sessions:     repo.NewAuthSessionRepo(pool),
+		APIKeys:      repo.NewAPIKeyRepo(pool),
+		DefaultOrgID: org.ID,
+		AuthMode:     "standard",
+		BcryptCost:   bcrypt.MinCost,
+	})
+	if err != nil {
+		t.Fatalf("new auth service: %v", err)
+	}
+
+	bus := eventbus.New(pool, logger, eventbus.Config{})
+	taskService, err := tasksvc.NewService(tasksvc.Options{Pool: pool, EventBus: bus})
+	if err != nil {
+		t.Fatalf("new task service: %v", err)
+	}
+	flowService, err := flowsvc.NewService(flowsvc.Options{Pool: pool, TasksService: taskService, Events: bus})
+	if err != nil {
+		t.Fatalf("new flow service: %v", err)
+	}
+	deliveryService, err := deliverysvc.NewService(deliverysvc.Options{Pool: pool})
+	if err != nil {
+		t.Fatalf("new delivery service: %v", err)
+	}
+
+	handler := NewHandlerWithOptions(HandlerOptions{
+		Version:     "test-version",
+		Logger:      logger,
+		AuthService: authService,
+		Pool:        pool,
+		RouteRegistrars: []RouteRegistrar{
+			NewTaskRouteRegistrar(taskService, flowService, deliveryService, pool),
+		},
+	})
+
+	ts := httptest.NewServer(handler)
+	return &authIntegrationServer{URL: ts.URL, Pool: pool, ts: ts}, org, adminUser, memberUser
+}
+
+func seedTaskProject(t *testing.T, pool *pgxpool.Pool, orgID, createdByID uuid.UUID, slug string, requiresHumanReview bool) repo.Project {
+	t.Helper()
+
+	settings := json.RawMessage(`{}`)
+	if requiresHumanReview {
+		settings = json.RawMessage(`{"requires_human_review":true}`)
+	}
+
+	project, err := repo.NewProjectRepo(pool).Create(context.Background(), repo.Project{
+		OrganizationID: orgID,
+		Slug:           slug + "-" + uuid.NewString()[:8],
+		DisplayName:    slug,
+		Description:    "",
+		DeliveryMode:   "gated",
+		Settings:       settings,
+		CreatedByType:  "human_user",
+		CreatedByID:    createdByID,
+	})
+	if err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	return project
+}
+
+func seedPMAssignment(t *testing.T, pool *pgxpool.Pool, orgID, projectID, userID uuid.UUID) repo.Agent {
+	t.Helper()
+
+	agent, err := repo.NewAgentRepo(pool).Create(context.Background(), repo.Agent{
+		OrganizationID:       orgID,
+		DisplayName:          "pm-" + uuid.NewString()[:8],
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "",
+		OperatorInstructions: "",
+		AgentType:            "pm",
+		CreatedByType:        "human_user",
+		CreatedByID:          userID,
+	})
+	if err != nil {
+		t.Fatalf("seed PM agent: %v", err)
+	}
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(context.Background(), repo.AgentProjectAssignment{
+		AgentID:        agent.ID,
+		ProjectID:      projectID,
+		Role:           "pm",
+		AssignedByType: "human_user",
+		AssignedByID:   &userID,
+		IsActive:       true,
+	}); err != nil {
+		t.Fatalf("seed PM assignment: %v", err)
+	}
+	return agent
+}
+
+func seedTaskRecord(t *testing.T, pool *pgxpool.Pool, orgID, projectID uuid.UUID, title, status, branch string) repo.ProjectTask {
+	t.Helper()
+
+	branchPtr := branch
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(context.Background(), repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		Title:          title,
+		WorkStatus:     status,
+		BranchName:     &branchPtr,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	return taskRecord
+}
+
+func seedFlowTask(t *testing.T, pool *pgxpool.Pool, orgID, projectID uuid.UUID) (repo.ProjectTask, uuid.UUID, repo.FlowNode, repo.FlowNode) {
+	t.Helper()
+
+	template, err := repo.NewFlowTemplateRepo(pool).Create(context.Background(), repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           "flow-" + uuid.NewString()[:8],
+		DisplayName:    "Flow",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	nodeA, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Node A",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create node A: %v", err)
+	}
+	nodeB, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Node B",
+		NodeType:       "work",
+		Position:       2,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create node B: %v", err)
+	}
+	nodeA.NextNodeID = &nodeB.ID
+	if _, err := nodeRepo.Update(context.Background(), nodeA); err != nil {
+		t.Fatalf("update node A next_node_id: %v", err)
+	}
+	template.StartNodeID = &nodeA.ID
+	if _, err := repo.NewFlowTemplateRepo(pool).Update(context.Background(), template); err != nil {
+		t.Fatalf("update template start node: %v", err)
+	}
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(context.Background(), repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		Title:          "flow-task",
+		WorkStatus:     "in_progress",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow task: %v", err)
+	}
+	if _, err := repo.NewProjectTaskRepo(pool).SetFlowNode(context.Background(), taskRecord.ID, &nodeA.ID); err != nil {
+		t.Fatalf("set task current node: %v", err)
+	}
+	taskRecord.CurrentFlowNodeID = &nodeA.ID
+
+	return taskRecord, template.ID, nodeA, nodeB
+}

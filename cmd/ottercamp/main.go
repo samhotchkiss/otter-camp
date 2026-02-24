@@ -23,7 +23,9 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/db"
+	deliverysvc "github.com/samhotchkiss/otter-camp/internal/delivery"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	oclog "github.com/samhotchkiss/otter-camp/internal/log"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/migrate"
@@ -34,6 +36,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/server"
 	skillsvc "github.com/samhotchkiss/otter-camp/internal/skill"
 	"github.com/samhotchkiss/otter-camp/internal/storage"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/worker"
 )
 
@@ -176,6 +179,30 @@ func runServe() int {
 		fmt.Fprintf(os.Stderr, "project service setup error: %v\n", err)
 		return 1
 	}
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     pool.Raw(),
+		EventBus: bus,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "task service setup error: %v\n", err)
+		return 1
+	}
+	flowService, err := flowsvc.NewService(flowsvc.Options{
+		Pool:         pool.Raw(),
+		TasksService: taskService,
+		Events:       bus,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "flow service setup error: %v\n", err)
+		return 1
+	}
+	deliveryService, err := deliverysvc.NewService(deliverysvc.Options{
+		Pool: pool.Raw(),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "delivery service setup error: %v\n", err)
+		return 1
+	}
 
 	store, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
 	if err != nil {
@@ -211,6 +238,7 @@ func runServe() int {
 			),
 			server.NewMCPRouteRegistrar(mcpService, repo.NewMCPToolCatalogRepo(pool.Raw())),
 			server.NewProjectRouteRegistrar(projectService),
+			server.NewTaskRouteRegistrar(taskService, flowService, deliveryService, pool.Raw()),
 			server.NewCapabilityPolicyRouteRegistrar(server.CapabilityPolicyRouteOptions{
 				Policies:      policyRepo,
 				Projects:      repo.NewProjectRepo(pool.Raw()),
