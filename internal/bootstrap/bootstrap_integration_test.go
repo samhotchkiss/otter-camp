@@ -143,6 +143,42 @@ func TestBootstrapRunSkipsAdminUserWhenCredentialsMissing(t *testing.T) {
 	}
 }
 
+func TestBootstrapSeedsSystemFlowTemplatesIdempotently(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	bootstrapper := NewBootstrapper(Options{
+		Pool:      pool,
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		SkillsDir: filepath.Join(t.TempDir(), "skills"),
+		OrgSlug:   "default",
+		OrgName:   "OtterCamp",
+		Version:   "test-version",
+	})
+
+	if err := bootstrapper.Run(ctx); err != nil {
+		t.Fatalf("bootstrap run 1: %v", err)
+	}
+	if err := bootstrapper.Run(ctx); err != nil {
+		t.Fatalf("bootstrap run 2: %v", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM flow_template
+		WHERE organization_id IS NULL
+		  AND project_id IS NULL
+		  AND is_system = true
+		  AND slug IN ('default-single-agent', 'default-review')
+	`).Scan(&count); err != nil {
+		t.Fatalf("count flow templates: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("system flow template count = %d, want 2", count)
+	}
+}
+
 func TestTestResetRouteResetsAndRebootstrapsInTestMode(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

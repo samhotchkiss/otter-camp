@@ -130,7 +130,7 @@ func (h DiffHandler) loadTaskDiffRow(ctx context.Context, taskID uuid.UUID) (tas
 			t.project_id,
 			p.organization_id,
 			COALESCE(NULLIF(t.branch_name, ''), 'main') AS branch_name,
-			COALESCE(NULLIF(p.default_branch, ''), 'main') AS base_branch
+			'main' AS base_branch
 		FROM project_task t
 		JOIN project p ON p.id = t.project_id
 		WHERE t.id = $1
