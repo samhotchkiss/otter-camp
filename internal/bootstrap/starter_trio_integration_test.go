@@ -22,14 +22,14 @@ func TestRegisterStarterTrioStepCreatesAgentsIdempotently(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 
-	bootstrapper := NewBootstrapper()
+	bootstrapper := NewBootstrapper(Options{DisableDefaultStep: true})
 	RegisterStarterTrioStep(bootstrapper, agentRepo)
 	state := &State{OrganizationID: org.ID}
 
-	if err := bootstrapper.Run(ctx, state); err != nil {
+	if err := bootstrapper.RunWithState(ctx, state); err != nil {
 		t.Fatalf("first bootstrap run: %v", err)
 	}
-	if err := bootstrapper.Run(ctx, state); err != nil {
+	if err := bootstrapper.RunWithState(ctx, state); err != nil {
 		t.Fatalf("second bootstrap run: %v", err)
 	}
 
