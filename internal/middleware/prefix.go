@@ -37,7 +37,7 @@ func PrefixEnforcement() func(http.Handler) http.Handler {
 
 func allowedPrefixBypass(path string) bool {
 	switch path {
-	case "/health", "/health/live", "/health/ready", "/ready", "/metrics":
+	case "/health", "/health/live", "/health/ready", "/ready", "/metrics", "/test/reset":
 		return true
 	default:
 		return false
