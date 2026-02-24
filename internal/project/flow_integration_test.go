@@ -233,6 +233,9 @@ func TestDependencyDAG_BlockedAutoResolutionTask(t *testing.T) {
 			continue
 		}
 		if strings.HasPrefix(item.Title, "Resolve blocker for task "+fx.project.Slug+"-") && item.WorkStatus == "queued" {
+			if item.AssignedAgentID == nil || *item.AssignedAgentID != fx.pmAgent.ID {
+				t.Fatalf("resolution task assigned_agent_id = %v, want %s", item.AssignedAgentID, fx.pmAgent.ID)
+			}
 			foundResolution = true
 			break
 		}

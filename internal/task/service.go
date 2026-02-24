@@ -388,6 +388,11 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	if err != nil {
 		return nil, err
 	}
+	if target == "cancelled" {
+		if err := s.archiveActiveMergeEntriesForTask(ctx, updated); err != nil {
+			return nil, err
+		}
+	}
 
 	actorType, actorID, err := normalizeActionActor(actor.Type, actor.ID)
 	if err != nil {
@@ -702,6 +707,27 @@ func (s *service) DequeueFromMerge(ctx context.Context, entryID uuid.UUID, reaso
 		return nil, err
 	}
 	return &archived, nil
+}
+
+func (s *service) archiveActiveMergeEntriesForTask(ctx context.Context, taskRecord repo.ProjectTask) error {
+	active, err := s.queue.ListActive(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range active {
+		if entry.TaskID != taskRecord.ID {
+			continue
+		}
+		if entry.ArchivedAt != nil {
+			continue
+		}
+		if _, err := s.queue.Archive(ctx, entry.ID, s.clock.Now().UTC()); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s *service) GetMergeQueueStatus(ctx context.Context, projectID uuid.UUID) ([]*MergeQueueEntry, error) {

@@ -245,6 +245,21 @@ func TestTask_StateMachine_Cancelled(t *testing.T) {
 	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "in_progress", tasksvc.Actor{Type: "system"}); err != nil {
 		t.Fatalf("TransitionStatus in_progress: %v", err)
 	}
+	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "review", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus review: %v", err)
+	}
+
+	branch := "feature/" + uuid.NewString()[:8]
+	if _, err := fx.taskRepo.SetBranch(ctx, taskRecord.ID, &branch); err != nil {
+		t.Fatalf("SetBranch: %v", err)
+	}
+	enqueued, err := fx.taskService.EnqueueForMerge(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("EnqueueForMerge: %v", err)
+	}
+	if enqueued.ArchivedAt != nil {
+		t.Fatalf("archived_at before cancel = %v, want nil", enqueued.ArchivedAt)
+	}
 
 	cancelled, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "cancelled", tasksvc.Actor{Type: "system"})
 	if err != nil {
@@ -255,6 +270,14 @@ func TestTask_StateMachine_Cancelled(t *testing.T) {
 	}
 	if cancelled.CompletedAt == nil {
 		t.Fatal("cancelled completed_at = nil, want non-nil")
+	}
+
+	stored, err := fx.queueRepo.GetByTask(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByTask: %v", err)
+	}
+	if stored.ArchivedAt == nil {
+		t.Fatal("merge queue archived_at = nil after cancellation, want non-nil")
 	}
 }
 

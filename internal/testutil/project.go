@@ -156,26 +156,3 @@ func MakeTask(t testing.TB, db *pgxpool.Pool, projectID uuid.UUID, opts MakeTask
 	out := project.Task(taskRecord)
 	return &out
 }
-
-func MakeAgent(t testing.TB, db *pgxpool.Pool, orgID uuid.UUID) repo.Agent {
-	t.Helper()
-
-	created, err := repo.NewAgentRepo(db).Create(context.Background(), repo.Agent{
-		OrganizationID:       orgID,
-		DisplayName:          "Agent " + uuid.NewString()[:8],
-		AgentClass:           "staff",
-		LifecycleStatus:      "active",
-		AgentType:            "general",
-		SystemPrompt:         "",
-		OperatorInstructions: "",
-		CreatedByType:        "system",
-		CreatedByID:          uuid.Nil,
-		MemoryReadScopes:     []string{},
-		ToolAllowList:        []string{},
-		ToolDenyList:         []string{},
-	})
-	if err != nil {
-		t.Fatalf("create agent: %v", err)
-	}
-	return created
-}

@@ -152,6 +152,47 @@ func TestTransitionStatusCompletedAtBehavior(t *testing.T) {
 	}
 }
 
+func TestTransitionStatusCancelledArchivesActiveMergeQueueEntries(t *testing.T) {
+	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
+	taskID := uuid.New()
+	otherTaskID := uuid.New()
+	projectID := uuid.New()
+
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				WorkStatus:     "review",
+				Title:          "Task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+	queueRepo := &fakeQueueRepo{
+		entries: []repo.MergeQueueEntry{
+			{ID: uuid.New(), ProjectID: projectID, TaskID: taskID, Status: "queued"},
+			{ID: uuid.New(), ProjectID: projectID, TaskID: otherTaskID, Status: "queued"},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	svc.queue = queueRepo
+	svc.clock = clock.NewFake(now)
+
+	if _, err := svc.TransitionStatus(context.Background(), taskID, "cancelled", Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus cancelled: %v", err)
+	}
+
+	if queueRepo.entries[0].ArchivedAt == nil {
+		t.Fatal("task merge queue entry archived_at = nil, want non-nil")
+	}
+	if queueRepo.entries[1].ArchivedAt != nil {
+		t.Fatalf("other task merge queue entry archived_at = %v, want nil", queueRepo.entries[1].ArchivedAt)
+	}
+}
+
 func TestMarkBlockedCreatesResolutionTaskTitle(t *testing.T) {
 	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
 	taskID := uuid.New()
