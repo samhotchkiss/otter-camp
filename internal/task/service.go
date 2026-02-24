@@ -395,6 +395,8 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	payload := map[string]any{
 		"from_status": from,
 		"to_status":   target,
+		"task_id":     updated.ID,
+		"project_id":  updated.ProjectID,
 	}
 	for key, value := range extraPayload {
 		payload[key] = value
