@@ -4,6 +4,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,12 +14,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/audit"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/server"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
 
-func TestBootstrapRunSeedsDataAndIsIdempotent(t *testing.T) {
+func TestBootstrapRunSeedsAndIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -46,6 +48,34 @@ func TestBootstrapRunSeedsDataAndIsIdempotent(t *testing.T) {
 
 	if before != after {
 		t.Fatalf("bootstrap counts changed after rerun: before=%+v after=%+v", before, after)
+	}
+
+	var (
+		principalType string
+		principalID   uuid.UUID
+		metadataJSON  []byte
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT principal_type, principal_id, metadata
+		FROM audit_event
+		WHERE event_type = 'system.bootstrap'
+		  AND organization_id = $1
+	`, before.organizationID).Scan(&principalType, &principalID, &metadataJSON); err != nil {
+		t.Fatalf("load bootstrap audit event: %v", err)
+	}
+	if principalType != "system" {
+		t.Fatalf("bootstrap audit principal_type = %q, want %q", principalType, "system")
+	}
+	if principalID != audit.SystemPrincipalID {
+		t.Fatalf("bootstrap audit principal_id = %s, want %s", principalID, audit.SystemPrincipalID)
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
+		t.Fatalf("decode bootstrap metadata: %v", err)
+	}
+	if gotVersion, ok := metadata["version"].(string); !ok || gotVersion != "test-version" {
+		t.Fatalf("bootstrap metadata version = %#v, want %q", metadata["version"], "test-version")
 	}
 
 	orgRepo := repo.NewOrgRepo(pool)
@@ -113,7 +143,7 @@ func TestBootstrapRunSkipsAdminUserWhenCredentialsMissing(t *testing.T) {
 	}
 }
 
-func TestTestResetRouteResetsAndRebootsInTestMode(t *testing.T) {
+func TestTestResetRouteResetsAndRebootstrapsInTestMode(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -166,6 +196,11 @@ func TestTestResetRouteResetsAndRebootsInTestMode(t *testing.T) {
 	if orgCount != 1 {
 		t.Fatalf("organization count after reset = %d, want 1", orgCount)
 	}
+
+	assertIntCount(t, ctx, pool, `SELECT COUNT(*) FROM human_user WHERE role = 'admin'`, 1)
+	assertIntCount(t, ctx, pool, `SELECT COUNT(*) FROM skill WHERE created_by_type = 'system'`, 3)
+	assertIntCount(t, ctx, pool, `SELECT COUNT(*) FROM model_profile WHERE is_current = true`, 3)
+	assertIntCount(t, ctx, pool, `SELECT COUNT(*) FROM model_profile_assignment WHERE scope_type = 'organization'`, 8)
 }
 
 func TestTestResetRouteNotRegisteredOutsideTestMode(t *testing.T) {
@@ -184,12 +219,13 @@ func TestTestResetRouteNotRegisteredOutsideTestMode(t *testing.T) {
 }
 
 type snapshot struct {
-	organizations int
-	adminUsers    int
-	skills        int
-	modelProfiles int
-	assignments   int
-	bootstrapLogs int
+	organizationID uuid.UUID
+	organizations  int
+	adminUsers     int
+	skills         int
+	modelProfiles  int
+	assignments    int
+	bootstrapLogs  int
 }
 
 func countSnapshot(t *testing.T, ctx context.Context, pool *pgxpool.Pool) snapshot {
@@ -207,10 +243,25 @@ func countSnapshot(t *testing.T, ctx context.Context, pool *pgxpool.Pool) snapsh
 	}
 
 	s.organizations = mustCount(`SELECT COUNT(*) FROM organization`)
+	if err := pool.QueryRow(ctx, `SELECT id FROM organization WHERE slug = 'default'`).Scan(&s.organizationID); err != nil {
+		t.Fatalf("load default organization id: %v", err)
+	}
 	s.adminUsers = mustCount(`SELECT COUNT(*) FROM human_user WHERE role = 'admin'`)
 	s.skills = mustCount(`SELECT COUNT(*) FROM skill`)
 	s.modelProfiles = mustCount(`SELECT COUNT(*) FROM model_profile WHERE is_current = true`)
 	s.assignments = mustCount(`SELECT COUNT(*) FROM model_profile_assignment`)
 	s.bootstrapLogs = mustCount(`SELECT COUNT(*) FROM audit_event WHERE event_type = 'system.bootstrap'`)
 	return s
+}
+
+func assertIntCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, query string, want int, args ...any) {
+	t.Helper()
+
+	var got int
+	if err := pool.QueryRow(ctx, query, args...).Scan(&got); err != nil {
+		t.Fatalf("count query failed: %v (query=%q)", err, query)
+	}
+	if got != want {
+		t.Fatalf("count query returned %d, want %d (query=%q)", got, want, query)
+	}
 }

@@ -55,6 +55,10 @@ type MigrateRunner interface {
 	Run(ctx context.Context) error
 }
 
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 type Progress struct {
 	Step    int
 	Name    string
@@ -125,6 +129,7 @@ type Bootstrapper struct {
 	runner MigrateRunner
 
 	pool                *pgxpool.Pool
+	rowQuerier          rowQuerier
 	orgRepo             *repo.OrgRepo
 	userRepo            *repo.HumanUserRepo
 	skillRepo           *repo.SkillRepo
@@ -200,6 +205,7 @@ func NewBootstrapper(opts ...Options) *Bootstrapper {
 		adminPassword:     merged.AdminPassword,
 		runner:            merged.MigrateRunner,
 		pool:              merged.Pool,
+		rowQuerier:        merged.Pool,
 		defaultSkillSeeds: loadDefaultSkillSeeds(),
 		modelAssignmentPlan: []modelAssignment{
 			{LogicalProfileID: "high-capability", InvocationPurpose: "agent_turn"},
@@ -616,21 +622,55 @@ func (b *Bootstrapper) stepRecordBootstrapAuditEvent(ctx context.Context, state 
 }
 
 func (b *Bootstrapper) adminUserExists(ctx context.Context, organizationID uuid.UUID) (bool, error) {
-	users, err := b.userRepo.List(ctx, organizationID)
+	if b.rowQuerier == nil {
+		return false, fmt.Errorf("row querier is not configured")
+	}
+
+	var exists bool
+	err := b.rowQuerier.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM human_user
+			WHERE organization_id = $1
+			  AND role = $2
+			LIMIT 1
+		)
+	`, organizationID, adminRole).Scan(&exists)
 	if err != nil {
 		return false, err
 	}
-	for _, user := range users {
-		if user.Role == adminRole {
-			return true, nil
-		}
+	return exists, nil
+}
+
+func (b *Bootstrapper) currentOrgProfileExists(ctx context.Context, organizationID uuid.UUID, logicalID string) (bool, error) {
+	if b.rowQuerier == nil {
+		return false, fmt.Errorf("row querier is not configured")
 	}
-	return false, nil
+
+	var exists bool
+	err := b.rowQuerier.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM model_profile
+			WHERE organization_id = $1
+			  AND logical_profile_id = $2
+			  AND is_current = true
+			LIMIT 1
+		)
+	`, organizationID, logicalID).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 func (b *Bootstrapper) bootstrapAuditEventExists(ctx context.Context, organizationID uuid.UUID) (bool, error) {
+	if b.rowQuerier == nil {
+		return false, fmt.Errorf("row querier is not configured")
+	}
+
 	var exists bool
-	err := b.pool.QueryRow(ctx, `
+	err := b.rowQuerier.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1
 			FROM audit_event
@@ -717,6 +757,28 @@ func (b *Bootstrapper) upsertProvider(ctx context.Context, desired repo.ModelPro
 }
 
 func (b *Bootstrapper) upsertOrgProfile(ctx context.Context, organizationID uuid.UUID, providerID uuid.UUID, seed modelProfileSeed) (repo.ModelProfile, error) {
+	exists, err := b.currentOrgProfileExists(ctx, organizationID, seed.LogicalProfileID)
+	if err != nil {
+		return repo.ModelProfile{}, err
+	}
+
+	if !exists {
+		orgID := organizationID
+		return b.profileRepo.Create(ctx, repo.ModelProfile{
+			LogicalProfileID:    seed.LogicalProfileID,
+			OrganizationID:      &orgID,
+			Version:             1,
+			IsCurrent:           true,
+			ProviderID:          providerID,
+			ModelName:           seed.ModelName,
+			ContextWindowTokens: seed.ContextWindowTokens,
+			MaxOutputTokens:     seed.MaxOutputTokens,
+			SupportsStreaming:   seed.SupportsStreaming,
+			SupportsVision:      seed.SupportsVision,
+			InvocationPurpose:   seed.InvocationPurpose,
+		})
+	}
+
 	current, err := b.getCurrentOrgProfile(ctx, organizationID, seed.LogicalProfileID)
 	switch {
 	case err == nil:
@@ -764,7 +826,11 @@ func profileNeedsRotation(current repo.ModelProfile, desired repo.ModelProfile) 
 }
 
 func (b *Bootstrapper) getCurrentOrgProfile(ctx context.Context, organizationID uuid.UUID, logicalID string) (repo.ModelProfile, error) {
-	row := b.pool.QueryRow(ctx, `
+	if b.rowQuerier == nil {
+		return repo.ModelProfile{}, fmt.Errorf("row querier is not configured")
+	}
+
+	row := b.rowQuerier.QueryRow(ctx, `
 		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
 		FROM model_profile
 		WHERE organization_id = $1

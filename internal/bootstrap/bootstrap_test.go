@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
@@ -98,5 +99,186 @@ func TestSkippedError(t *testing.T) {
 	}
 	if skipErr.Reason() != "already bootstrapped" {
 		t.Fatalf("skip reason = %q, want %q", skipErr.Reason(), "already bootstrapped")
+	}
+}
+
+func TestAdminUserExists(t *testing.T) {
+	t.Run("found", func(t *testing.T) {
+		b := &Bootstrapper{
+			rowQuerier: fakeRowQuerier{
+				row: boolRow(true),
+			},
+		}
+
+		exists, err := b.adminUserExists(context.Background(), uuid.New())
+		if err != nil {
+			t.Fatalf("adminUserExists returned error: %v", err)
+		}
+		if !exists {
+			t.Fatal("adminUserExists = false, want true")
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		b := &Bootstrapper{
+			rowQuerier: fakeRowQuerier{
+				row: boolRow(false),
+			},
+		}
+
+		exists, err := b.adminUserExists(context.Background(), uuid.New())
+		if err != nil {
+			t.Fatalf("adminUserExists returned error: %v", err)
+		}
+		if exists {
+			t.Fatal("adminUserExists = true, want false")
+		}
+	})
+
+	t.Run("scan error", func(t *testing.T) {
+		expected := errors.New("db failure")
+		b := &Bootstrapper{
+			rowQuerier: fakeRowQuerier{
+				row: errRow(expected),
+			},
+		}
+
+		_, err := b.adminUserExists(context.Background(), uuid.New())
+		if !errors.Is(err, expected) {
+			t.Fatalf("adminUserExists error = %v, want %v", err, expected)
+		}
+	})
+}
+
+func TestCurrentOrgProfileExists(t *testing.T) {
+	t.Run("found", func(t *testing.T) {
+		b := &Bootstrapper{
+			rowQuerier: fakeRowQuerier{
+				row: boolRow(true),
+			},
+		}
+
+		exists, err := b.currentOrgProfileExists(context.Background(), uuid.New(), "standard")
+		if err != nil {
+			t.Fatalf("currentOrgProfileExists returned error: %v", err)
+		}
+		if !exists {
+			t.Fatal("currentOrgProfileExists = false, want true")
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		b := &Bootstrapper{
+			rowQuerier: fakeRowQuerier{
+				row: boolRow(false),
+			},
+		}
+
+		exists, err := b.currentOrgProfileExists(context.Background(), uuid.New(), "standard")
+		if err != nil {
+			t.Fatalf("currentOrgProfileExists returned error: %v", err)
+		}
+		if exists {
+			t.Fatal("currentOrgProfileExists = true, want false")
+		}
+	})
+
+	t.Run("scan error", func(t *testing.T) {
+		expected := errors.New("db failure")
+		b := &Bootstrapper{
+			rowQuerier: fakeRowQuerier{
+				row: errRow(expected),
+			},
+		}
+
+		_, err := b.currentOrgProfileExists(context.Background(), uuid.New(), "standard")
+		if !errors.Is(err, expected) {
+			t.Fatalf("currentOrgProfileExists error = %v, want %v", err, expected)
+		}
+	})
+}
+
+func TestBootstrapAuditEventExists(t *testing.T) {
+	t.Run("found", func(t *testing.T) {
+		b := &Bootstrapper{
+			rowQuerier: fakeRowQuerier{
+				row: boolRow(true),
+			},
+		}
+
+		exists, err := b.bootstrapAuditEventExists(context.Background(), uuid.New())
+		if err != nil {
+			t.Fatalf("bootstrapAuditEventExists returned error: %v", err)
+		}
+		if !exists {
+			t.Fatal("bootstrapAuditEventExists = false, want true")
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		b := &Bootstrapper{
+			rowQuerier: fakeRowQuerier{
+				row: boolRow(false),
+			},
+		}
+
+		exists, err := b.bootstrapAuditEventExists(context.Background(), uuid.New())
+		if err != nil {
+			t.Fatalf("bootstrapAuditEventExists returned error: %v", err)
+		}
+		if exists {
+			t.Fatal("bootstrapAuditEventExists = true, want false")
+		}
+	})
+
+	t.Run("scan error", func(t *testing.T) {
+		expected := errors.New("db failure")
+		b := &Bootstrapper{
+			rowQuerier: fakeRowQuerier{
+				row: errRow(expected),
+			},
+		}
+
+		_, err := b.bootstrapAuditEventExists(context.Background(), uuid.New())
+		if !errors.Is(err, expected) {
+			t.Fatalf("bootstrapAuditEventExists error = %v, want %v", err, expected)
+		}
+	})
+}
+
+type fakeRowQuerier struct {
+	row pgx.Row
+}
+
+func (f fakeRowQuerier) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row {
+	return f.row
+}
+
+type fakeRow struct {
+	scanFn func(dest ...any) error
+}
+
+func (f fakeRow) Scan(dest ...any) error {
+	return f.scanFn(dest...)
+}
+
+func boolRow(value bool) pgx.Row {
+	return fakeRow{
+		scanFn: func(dest ...any) error {
+			target, ok := dest[0].(*bool)
+			if !ok {
+				return errors.New("expected *bool scan target")
+			}
+			*target = value
+			return nil
+		},
+	}
+}
+
+func errRow(err error) pgx.Row {
+	return fakeRow{
+		scanFn: func(_ ...any) error {
+			return err
+		},
 	}
 }
