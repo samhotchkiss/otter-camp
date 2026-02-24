@@ -30,7 +30,7 @@ func TestImporterIntegrationProcessImportRoundTrip(t *testing.T) {
 		t.Fatalf("NewFS: %v", err)
 	}
 
-	archive := buildImportArchive(t, 5)
+	archive := buildImportArchive(t, 50)
 	fileKey := fmt.Sprintf("imports/%s/%s/import.zip", org.ID, uuid.New())
 	if err := store.Put(ctx, fileKey, bytes.NewReader(archive), storage.PutOptions{ContentType: "application/zip", ContentLength: int64(len(archive))}); err != nil {
 		t.Fatalf("store.Put: %v", err)
@@ -71,8 +71,8 @@ func TestImporterIntegrationProcessImportRoundTrip(t *testing.T) {
 	if final.Status != "completed" {
 		t.Fatalf("final status = %s, want completed", final.Status)
 	}
-	if final.TotalRecords == nil || *final.TotalRecords != 5 {
-		t.Fatalf("total_records = %v, want 5", final.TotalRecords)
+	if final.TotalRecords == nil || *final.TotalRecords != 50 {
+		t.Fatalf("total_records = %v, want 50", final.TotalRecords)
 	}
 	if final.ImportedRecords < 1 {
 		t.Fatalf("imported_records = %d, want >= 1", final.ImportedRecords)
@@ -87,6 +87,58 @@ func TestImporterIntegrationProcessImportRoundTrip(t *testing.T) {
 	}
 	if memoryCount < 1 {
 		t.Fatal("expected at least one memory row to be created")
+	}
+}
+
+func TestImporterProcessImportRejectsOversizedArchive(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org := mustCreateOrg(t, ctx, pool)
+	store, err := storage.NewFS(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFS: %v", err)
+	}
+
+	archive := buildOversizedImportArchive(t, 51*1024*1024)
+	fileKey := fmt.Sprintf("imports/%s/%s/oversized.zip", org.ID, uuid.New())
+	if err := store.Put(ctx, fileKey, bytes.NewReader(archive), storage.PutOptions{ContentType: "application/zip", ContentLength: int64(len(archive))}); err != nil {
+		t.Fatalf("store.Put: %v", err)
+	}
+
+	extractor := &recordingExtractor{memoryRepo: repo.NewMemoryRepo(pool)}
+	enqueuer := &stubEnqueuer{}
+	imp, err := NewImporter(ImporterOptions{
+		Pool:      pool,
+		Store:     store,
+		Extractor: extractor,
+		Enqueuer:  enqueuer,
+	})
+	if err != nil {
+		t.Fatalf("NewImporter: %v", err)
+	}
+
+	importID, err := imp.StartImport(ctx, org.ID, uuid.Nil, fileKey)
+	if err != nil {
+		t.Fatalf("StartImport: %v", err)
+	}
+
+	if err := imp.ProcessImport(ctx, importID); err == nil {
+		t.Fatal("ProcessImport error = nil, want oversized archive error")
+	}
+
+	final, err := repo.NewMemoryImportRepo(pool).GetByID(ctx, importID)
+	if err != nil {
+		t.Fatalf("GetByID after ProcessImport: %v", err)
+	}
+	if final.Status != "failed" {
+		t.Fatalf("final status = %s, want failed", final.Status)
+	}
+	if final.ErrorMessage == nil || strings.TrimSpace(*final.ErrorMessage) == "" {
+		t.Fatal("error_message = nil/empty, want non-empty")
+	}
+	if !strings.Contains(strings.ToLower(*final.ErrorMessage), "50mb") {
+		t.Fatalf("error_message = %q, want to mention 50MB limit", *final.ErrorMessage)
 	}
 }
 
@@ -143,6 +195,35 @@ func buildImportArchive(t *testing.T, count int) []byte {
 		}
 		_, _ = w.Write([]byte(line))
 	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("zip close: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func buildOversizedImportArchive(t *testing.T, bytesTarget int) []byte {
+	t.Helper()
+
+	buf := bytes.NewBuffer(nil)
+	zw := zip.NewWriter(buf)
+	w, err := zw.Create("oversized.jsonl")
+	if err != nil {
+		t.Fatalf("zip create: %v", err)
+	}
+
+	chunk := bytes.Repeat([]byte("a"), 1024*1024)
+	written := 0
+	for written < bytesTarget {
+		remaining := bytesTarget - written
+		if remaining < len(chunk) {
+			chunk = chunk[:remaining]
+		}
+		if _, err := w.Write(chunk); err != nil {
+			t.Fatalf("zip write oversized chunk: %v", err)
+		}
+		written += len(chunk)
+	}
+
 	if err := zw.Close(); err != nil {
 		t.Fatalf("zip close: %v", err)
 	}

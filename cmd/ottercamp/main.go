@@ -50,7 +50,23 @@ var (
 	version = "dev"
 	commit  = "unknown"
 	builtAt = "unknown"
+
+	newMemoryImportStore = func() (storage.Store, error) {
+		return storage.New(storage.ConfigFromEnv(os.LookupEnv))
+	}
+	startMemoryImport           = startMemoryImportViaImporter
+	newMemoryImportStatusClient = func() (memoryImportStatusClient, error) {
+		return newCLIAPIClient("", "")
+	}
+	memoryImportPollInterval = 5 * time.Second
+	memoryImportSleep        = time.Sleep
 )
+
+type memoryImportStartFunc func(ctx context.Context, orgID uuid.UUID, fileKey string, store storage.Store) (uuid.UUID, error)
+
+type memoryImportStatusClient interface {
+	GetMemoryImport(ctx context.Context, importID string) (cliMemoryImportStatus, error)
+}
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -981,7 +997,7 @@ func runMemoryImport(args []string) int {
 		return 1
 	}
 
-	store, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
+	store, err := newMemoryImportStore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "memory import storage error: %v\n", err)
 		return 1
@@ -993,23 +1009,7 @@ func runMemoryImport(args []string) int {
 		return 1
 	}
 
-	pool, err := db.NewFromEnv(context.Background())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "memory import database error: %v\n", err)
-		return 1
-	}
-	defer pool.Close()
-
-	imp, err := memoryimporter.NewImporter(memoryimporter.ImporterOptions{
-		Pool:  pool.Raw(),
-		Store: store,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "memory import setup error: %v\n", err)
-		return 1
-	}
-
-	importID, err := imp.StartImport(context.Background(), orgID, uuid.Nil, key)
+	importID, err := startMemoryImport(context.Background(), orgID, key, store)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "memory import start failed: %v\n", err)
 		return 1
@@ -1020,30 +1020,22 @@ func runMemoryImport(args []string) int {
 		return 0
 	}
 
-	if err := imp.ProcessImport(context.Background(), importID); err != nil {
-		fmt.Fprintf(os.Stderr, "memory import processing failed: %v\n", err)
+	client, err := newMemoryImportStatusClient()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import wait setup error: %v\n", err)
 		return 1
 	}
 
-	importRepo := repo.NewMemoryImportRepo(pool.Raw())
-	var final repo.MemoryImport
-	for {
-		item, err := importRepo.GetByID(context.Background(), importID)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "memory import status check failed: %v\n", err)
-			return 1
-		}
-		final = item
-		if final.Status == "completed" || final.Status == "failed" {
-			break
-		}
-		time.Sleep(5 * time.Second)
+	final, err := waitForMemoryImportCompletion(context.Background(), client, importID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import status check failed: %v\n", err)
+		return 1
 	}
 
 	fmt.Fprintf(
 		os.Stdout,
 		"import %s: status=%s total=%d processed=%d imported=%d rejected=%d\n",
-		importID.String(),
+		final.ID,
 		final.Status,
 		valueOrZero(final.TotalRecords),
 		final.ProcessedRecords,
@@ -1057,6 +1049,43 @@ func runMemoryImport(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+func startMemoryImportViaImporter(ctx context.Context, orgID uuid.UUID, fileKey string, store storage.Store) (uuid.UUID, error) {
+	pool, err := db.NewFromEnv(ctx)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	defer pool.Close()
+
+	imp, err := memoryimporter.NewImporter(memoryimporter.ImporterOptions{
+		Pool:  pool.Raw(),
+		Store: store,
+	})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return imp.StartImport(ctx, orgID, uuid.Nil, fileKey)
+}
+
+func waitForMemoryImportCompletion(ctx context.Context, client memoryImportStatusClient, importID uuid.UUID) (cliMemoryImportStatus, error) {
+	if client == nil {
+		return cliMemoryImportStatus{}, fmt.Errorf("memory import status client is required")
+	}
+
+	for {
+		item, err := client.GetMemoryImport(ctx, importID.String())
+		if err != nil {
+			return cliMemoryImportStatus{}, err
+		}
+		if strings.TrimSpace(item.ID) == "" {
+			item.ID = importID.String()
+		}
+		if item.Status == "completed" || item.Status == "failed" {
+			return item, nil
+		}
+		memoryImportSleep(memoryImportPollInterval)
+	}
 }
 
 func runScheduleList(args []string) int {
@@ -1205,9 +1234,17 @@ type cliAPIClient struct {
 }
 
 func newCLIAPIClient(apiURL, apiKey string) (*cliAPIClient, error) {
+	creds, err := loadCLIStoredCredentials()
+	if err != nil {
+		return nil, err
+	}
+
 	baseURL := strings.TrimSpace(apiURL)
 	if baseURL == "" {
 		baseURL = strings.TrimSpace(os.Getenv("OTTERCAMP_API_URL"))
+	}
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(creds.APIURL)
 	}
 	if baseURL == "" {
 		baseURL = "http://127.0.0.1:8080"
@@ -1218,7 +1255,10 @@ func newCLIAPIClient(apiURL, apiKey string) (*cliAPIClient, error) {
 		key = strings.TrimSpace(os.Getenv("OTTERCAMP_API_KEY"))
 	}
 	if key == "" {
-		return nil, fmt.Errorf("api key required via --api-key or OTTERCAMP_API_KEY")
+		key = strings.TrimSpace(creds.APIKey)
+	}
+	if key == "" {
+		return nil, fmt.Errorf("api key required via --api-key, OTTERCAMP_API_KEY, or ~/.ottercamp/credentials")
 	}
 
 	return &cliAPIClient{
@@ -1226,6 +1266,89 @@ func newCLIAPIClient(apiURL, apiKey string) (*cliAPIClient, error) {
 		apiKey:  key,
 		client:  &http.Client{Timeout: 15 * time.Second},
 	}, nil
+}
+
+type cliStoredCredentials struct {
+	APIURL string
+	APIKey string
+}
+
+func loadCLIStoredCredentials() (cliStoredCredentials, error) {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return cliStoredCredentials{}, nil
+	}
+
+	path := filepath.Join(home, ".ottercamp", "credentials")
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return cliStoredCredentials{}, nil
+	}
+	if err != nil {
+		return cliStoredCredentials{}, err
+	}
+
+	return parseCLIStoredCredentials(content), nil
+}
+
+func parseCLIStoredCredentials(raw []byte) cliStoredCredentials {
+	text := strings.TrimSpace(string(raw))
+	if text == "" {
+		return cliStoredCredentials{}
+	}
+
+	var jsonObject map[string]any
+	if err := json.Unmarshal(raw, &jsonObject); err == nil {
+		return cliStoredCredentials{
+			APIURL: pickString(jsonObject, "api_url", "apiURL", "url"),
+			APIKey: pickString(jsonObject, "api_key", "apiKey", "key"),
+		}
+	}
+
+	creds := cliStoredCredentials{}
+	scanner := bufio.NewScanner(strings.NewReader(text))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(parts[0]))
+		value := strings.TrimSpace(parts[1])
+		switch key {
+		case "api_url":
+			if creds.APIURL == "" {
+				creds.APIURL = value
+			}
+		case "api_key":
+			if creds.APIKey == "" {
+				creds.APIKey = value
+			}
+		}
+	}
+	if creds.APIKey == "" && !strings.ContainsAny(text, "\n\r=") {
+		creds.APIKey = text
+	}
+	return creds
+}
+
+func pickString(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		if s, ok := value.(string); ok {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
 }
 
 func (c *cliAPIClient) lookupProjectID(ctx context.Context, slug string) (string, error) {
@@ -1260,6 +1383,16 @@ type cliSchedule struct {
 	NextFireAt     *time.Time `json:"next_fire_at"`
 }
 
+type cliMemoryImportStatus struct {
+	ID               string  `json:"id"`
+	Status           string  `json:"status"`
+	TotalRecords     *int    `json:"total_records"`
+	ProcessedRecords int     `json:"processed_records"`
+	ImportedRecords  int     `json:"imported_records"`
+	RejectedRecords  int     `json:"rejected_records"`
+	ErrorMessage     *string `json:"error_message,omitempty"`
+}
+
 func (c *cliAPIClient) listSchedules(ctx context.Context, projectID string) ([]cliSchedule, error) {
 	var resp struct {
 		Data []cliSchedule `json:"data"`
@@ -1267,6 +1400,17 @@ func (c *cliAPIClient) listSchedules(ctx context.Context, projectID string) ([]c
 	path := fmt.Sprintf("/v1/projects/%s/schedules", url.PathEscape(projectID))
 	if err := c.request(ctx, http.MethodGet, path, nil, &resp); err != nil {
 		return nil, err
+	}
+	return resp.Data, nil
+}
+
+func (c *cliAPIClient) GetMemoryImport(ctx context.Context, importID string) (cliMemoryImportStatus, error) {
+	path := fmt.Sprintf("/v1/memory/imports/%s", url.PathEscape(strings.TrimSpace(importID)))
+	var resp struct {
+		Data cliMemoryImportStatus `json:"data"`
+	}
+	if err := c.request(ctx, http.MethodGet, path, nil, &resp); err != nil {
+		return cliMemoryImportStatus{}, err
 	}
 	return resp.Data, nil
 }

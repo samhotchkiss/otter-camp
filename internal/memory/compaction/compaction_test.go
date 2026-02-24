@@ -1,9 +1,12 @@
 package compaction
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestCalculateDecayHalfLife(t *testing.T) {
@@ -51,4 +54,77 @@ func TestScopePromotionAction(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProcessCandidateBatchesCallsDeduplicatorAndArchivesDuplicate(t *testing.T) {
+	orgID := uuid.New()
+	strong := uuid.New()
+	weak := uuid.New()
+	unique := uuid.New()
+
+	candidates := []CandidateMemory{
+		{ID: strong, Content: "deploy pipeline retries fixed"},
+		{ID: weak, Content: "deploy retries fixed in pipeline"},
+		{ID: unique, Content: "billing alert threshold raised"},
+	}
+
+	dedup := &mockCandidateDeduplicator{
+		reviews: []CandidateReview{
+			{MemoryID: weak, Action: CandidateReviewArchive},
+			{MemoryID: unique, Action: CandidateReviewKeep},
+		},
+	}
+
+	statusByID := map[uuid.UUID]string{
+		strong: "candidate",
+		weak:   "candidate",
+		unique: "candidate",
+	}
+	applier := func(context.Context, uuid.UUID, []CandidateMemory, []CandidateReview) (int, int, error) {
+		updated := 0
+		archived := 0
+		for _, review := range dedup.reviews {
+			if review.Action == CandidateReviewArchive || review.Action == CandidateReviewMerge {
+				statusByID[review.MemoryID] = "archived"
+				archived++
+			}
+		}
+		return updated, archived, nil
+	}
+
+	examined, updated, archived, err := processCandidateBatches(context.Background(), orgID, candidates, dedup, applier)
+	if err != nil {
+		t.Fatalf("processCandidateBatches: %v", err)
+	}
+	if dedup.calls != 1 {
+		t.Fatalf("deduplicator calls = %d, want 1", dedup.calls)
+	}
+	if len(dedup.batches) != 1 || len(dedup.batches[0]) != 3 {
+		t.Fatalf("deduplicator batch size = %d, want 3", len(dedup.batches[0]))
+	}
+	if examined != 3 {
+		t.Fatalf("examined = %d, want 3", examined)
+	}
+	if updated != 0 {
+		t.Fatalf("updated = %d, want 0", updated)
+	}
+	if archived != 1 {
+		t.Fatalf("archived = %d, want 1", archived)
+	}
+	if got := statusByID[weak]; got != "archived" {
+		t.Fatalf("weaker duplicate status = %q, want archived", got)
+	}
+}
+
+type mockCandidateDeduplicator struct {
+	reviews []CandidateReview
+	calls   int
+	batches [][]CandidateMemory
+}
+
+func (m *mockCandidateDeduplicator) ReviewCandidateBatch(_ context.Context, _ uuid.UUID, batch []CandidateMemory) ([]CandidateReview, error) {
+	m.calls++
+	copied := append([]CandidateMemory(nil), batch...)
+	m.batches = append(m.batches, copied)
+	return append([]CandidateReview(nil), m.reviews...), nil
 }
