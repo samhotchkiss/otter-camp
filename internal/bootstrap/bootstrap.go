@@ -136,6 +136,7 @@ type Bootstrapper struct {
 	providerRepo        *repo.ModelProviderRepo
 	profileRepo         *repo.ModelProfileRepo
 	profileAssignRepo   *repo.ModelProfileAssignmentRepo
+	flowTemplateRepo    *repo.FlowTemplateRepo
 	auditRepo           *repo.AuditEventRepo
 	auditService        *audit.Service
 	defaultSkillSeeds   []defaultSkillSeed
@@ -226,6 +227,7 @@ func NewBootstrapper(opts ...Options) *Bootstrapper {
 		b.providerRepo = repo.NewModelProviderRepo(merged.Pool)
 		b.profileRepo = repo.NewModelProfileRepo(merged.Pool)
 		b.profileAssignRepo = repo.NewModelProfileAssignmentRepo(merged.Pool)
+		b.flowTemplateRepo = repo.NewFlowTemplateRepo(merged.Pool)
 		b.auditRepo = repo.NewAuditEventRepo(merged.Pool)
 		b.auditService = audit.NewService(b.auditRepo, merged.Logger)
 	}
@@ -410,7 +412,7 @@ func (b *Bootstrapper) defaultSteps() []step {
 		{number: 3, name: "create-admin-user", fn: b.stepCreateAdminUser},
 		{number: 4, name: "seed-default-skills", fn: b.stepSeedDefaultSkills},
 		{number: 5, name: "seed-model-profiles", fn: b.stepSeedModelProfiles},
-		{number: 6, name: "seed-flow-templates", fn: b.stubForTable(6, "seed-flow-templates", "flow_template")},
+		{number: 6, name: "seed-flow-templates", fn: b.stepSeedFlowTemplates},
 		{number: 7, name: "create-starter-trio", fn: b.stubForTable(7, "create-starter-trio", "agent")},
 		{number: 8, name: "create-general-session", fn: b.stubForTable(8, "create-general-session", "chat_session")},
 		{number: 9, name: "seed-capability-policy", fn: b.stubForTable(9, "seed-capability-policy", "capability_policy")},
@@ -591,6 +593,15 @@ func (b *Bootstrapper) stepSeedModelProfiles(ctx context.Context, state *State) 
 	return nil
 }
 
+func (b *Bootstrapper) stepSeedFlowTemplates(ctx context.Context, _ *State) error {
+	if b.flowTemplateRepo == nil {
+		return fmt.Errorf("flow_template repository is not configured")
+	}
+
+	_, err := b.flowTemplateRepo.BulkUpsertBySlug(ctx, defaultFlowTemplateSeeds())
+	return err
+}
+
 func (b *Bootstrapper) stepRecordBootstrapAuditEvent(ctx context.Context, state *State) error {
 	if b.pool == nil || b.auditService == nil {
 		return fmt.Errorf("audit dependencies are not configured")
@@ -737,6 +748,35 @@ func defaultProfileSeeds() []modelProfileSeed {
 			SupportsStreaming:   true,
 			SupportsVision:      false,
 			InvocationPurpose:   "agent_turn",
+		},
+	}
+}
+
+func defaultFlowTemplateSeeds() []repo.FlowTemplate {
+	return []repo.FlowTemplate{
+		{
+			OrganizationID: nil,
+			ProjectID:      nil,
+			Slug:           "default-single-agent",
+			DisplayName:    "Default Single Agent",
+			Description:    "Single-agent default task flow template.",
+			IsCurrent:      true,
+			Version:        1,
+			IsSystem:       true,
+			CreatedByType:  systemActorType,
+			CreatedByID:    systemActorID,
+		},
+		{
+			OrganizationID: nil,
+			ProjectID:      nil,
+			Slug:           "default-review",
+			DisplayName:    "Default Review",
+			Description:    "Review-oriented default task flow template.",
+			IsCurrent:      true,
+			Version:        1,
+			IsSystem:       true,
+			CreatedByType:  systemActorType,
+			CreatedByID:    systemActorID,
 		},
 	}
 }

@@ -157,10 +157,10 @@ func (h SearchHandler) searchType(ctx context.Context, organizationID, pattern s
 
 func (h SearchHandler) searchProjects(ctx context.Context, organizationID, pattern string, limit int) ([]SearchResult, error) {
 	rows, err := h.pool.Query(ctx, `
-		SELECT id::text, COALESCE(NULLIF(name, ''), slug) AS title
+		SELECT id::text, COALESCE(NULLIF(display_name, ''), slug) AS title
 		FROM project
 		WHERE organization_id = $1
-		  AND (slug ILIKE $2 OR name ILIKE $2)
+		  AND (slug ILIKE $2 OR display_name ILIKE $2)
 		ORDER BY created_at DESC, id DESC
 		LIMIT $3
 	`, organizationID, pattern, limit)

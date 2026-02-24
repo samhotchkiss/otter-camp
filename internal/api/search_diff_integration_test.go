@@ -35,9 +35,11 @@ func TestSearchHandlerProjectTypeFiltersByOrg(t *testing.T) {
 	projectB := uuid.New()
 	now := time.Now().UTC()
 	if _, err := pool.Exec(context.Background(), `
-		INSERT INTO project (id, organization_id, slug, name, created_at)
-		VALUES ($1, $2, $3, $4, $5), ($6, $7, $8, $9, $10)
-	`, projectA, orgA.ID, "proj-alpha", "Proj Alpha", now, projectB, orgB.ID, "proj-beta", "Proj Beta", now); err != nil {
+		INSERT INTO project (id, organization_id, slug, display_name, delivery_mode, created_by_type, created_by_id, created_at)
+		VALUES
+			($1, $2, $3, $4, 'gated', 'system', $5, $6),
+			($7, $8, $9, $10, 'gated', 'system', $11, $12)
+	`, projectA, orgA.ID, "proj-alpha", "Proj Alpha", uuid.Nil, now, projectB, orgB.ID, "proj-beta", "Proj Beta", uuid.Nil, now); err != nil {
 		t.Fatalf("seed projects: %v", err)
 	}
 
@@ -97,9 +99,9 @@ func TestDiffHandlerNoRemoteAndSuccess(t *testing.T) {
 	projectID := uuid.New()
 	taskID := uuid.New()
 	if _, err := pool.Exec(context.Background(), `
-		INSERT INTO project (id, organization_id, slug, name, default_branch, created_at)
-		VALUES ($1, $2, $3, $4, $5, now())
-	`, projectID, org.ID, "proj-diff", "Project Diff", "main"); err != nil {
+		INSERT INTO project (id, organization_id, slug, display_name, delivery_mode, default_branch, created_by_type, created_by_id, created_at)
+		VALUES ($1, $2, $3, $4, 'gated', $5, 'system', $6, now())
+	`, projectID, org.ID, "proj-diff", "Project Diff", "main", uuid.Nil); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
 	if _, err := pool.Exec(context.Background(), `
@@ -160,8 +162,11 @@ func ensureProjectTable(t *testing.T, pool *pgxpool.Pool) {
 			id uuid PRIMARY KEY,
 			organization_id uuid NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
 			slug text NOT NULL,
-			name text NOT NULL,
+			display_name text NOT NULL,
+			delivery_mode text NOT NULL DEFAULT 'gated',
 			default_branch text NOT NULL DEFAULT 'main',
+			created_by_type text NOT NULL DEFAULT 'system',
+			created_by_id uuid NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
 			created_at timestamptz NOT NULL DEFAULT now()
 		)
 	`)
