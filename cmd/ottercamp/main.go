@@ -26,6 +26,7 @@ import (
 	oclog "github.com/samhotchkiss/otter-camp/internal/log"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/migrate"
+	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	secretsvc "github.com/samhotchkiss/otter-camp/internal/secret"
 	"github.com/samhotchkiss/otter-camp/internal/server"
@@ -152,6 +153,14 @@ func runServe() int {
 		fmt.Fprintf(os.Stderr, "agent assignment service setup error: %v\n", err)
 		return 1
 	}
+	projectService, err := projectsvc.NewService(projectsvc.Options{
+		Pool:   pool.Raw(),
+		Events: bus,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "project service setup error: %v\n", err)
+		return 1
+	}
 
 	store, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
 	if err != nil {
@@ -186,6 +195,7 @@ func runServe() int {
 				repo.NewAgentSkillAttachmentRepo(pool.Raw()),
 			),
 			server.NewMCPRouteRegistrar(mcpService, repo.NewMCPToolCatalogRepo(pool.Raw())),
+			server.NewProjectRouteRegistrar(projectService),
 		},
 		TestMode:     cfg.Mode == config.ModeTest,
 		TestResetter: resetter,
