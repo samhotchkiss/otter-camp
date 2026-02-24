@@ -61,7 +61,14 @@ type ExtractionSourceContext struct {
 }
 
 type ImportRecord struct {
-	Content string
+	Content      string
+	MemoryType   string
+	Confidence   *float64
+	UtilityScore *float64
+	Entities     []ExtractedEntity
+	TaxonomyTags []string
+	TrustTier    *float64
+	Embedding    []float32
 }
 
 type ExtractedEntity struct {

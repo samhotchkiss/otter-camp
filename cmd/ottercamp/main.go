@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -32,6 +33,7 @@ import (
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	oclog "github.com/samhotchkiss/otter-camp/internal/log"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
+	memoryimporter "github.com/samhotchkiss/otter-camp/internal/memory/importer"
 	"github.com/samhotchkiss/otter-camp/internal/migrate"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
@@ -48,7 +50,23 @@ var (
 	version = "dev"
 	commit  = "unknown"
 	builtAt = "unknown"
+
+	newMemoryImportStore = func() (storage.Store, error) {
+		return storage.New(storage.ConfigFromEnv(os.LookupEnv))
+	}
+	startMemoryImport           = startMemoryImportViaImporter
+	newMemoryImportStatusClient = func() (memoryImportStatusClient, error) {
+		return newCLIAPIClient("", "")
+	}
+	memoryImportPollInterval = 5 * time.Second
+	memoryImportSleep        = time.Sleep
 )
+
+type memoryImportStartFunc func(ctx context.Context, orgID uuid.UUID, fileKey string, store storage.Store) (uuid.UUID, error)
+
+type memoryImportStatusClient interface {
+	GetMemoryImport(ctx context.Context, importID string) (cliMemoryImportStatus, error)
+}
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -77,6 +95,8 @@ func run(args []string) int {
 		return runSkill(args[1:])
 	case "schedule":
 		return runSchedule(args[1:])
+	case "memory":
+		return runMemory(args[1:])
 	case "magic-link":
 		return runMagicLink(args[1:])
 	case "reset-password":
@@ -928,6 +948,146 @@ func runSchedule(args []string) int {
 	}
 }
 
+func runMemory(args []string) int {
+	if len(args) == 0 {
+		printMemoryUsage(os.Stderr)
+		return 1
+	}
+
+	switch args[0] {
+	case "import":
+		return runMemoryImport(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown memory command: %s\n", args[0])
+		printMemoryUsage(os.Stderr)
+		return 1
+	}
+}
+
+func runMemoryImport(args []string) int {
+	flags := flag.NewFlagSet("memory import", flag.ContinueOnError)
+	filePath := flags.String("file", "", "path to JSONL zip archive")
+	orgIDRaw := flags.String("org-id", "", "organization id (or OTTERCAMP_ORG_ID)")
+	wait := flags.Bool("wait", false, "wait for import completion")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "memory import argument error: %v\n", err)
+		return 1
+	}
+
+	if strings.TrimSpace(*filePath) == "" {
+		fmt.Fprintln(os.Stderr, "memory import requires --file")
+		return 1
+	}
+	orgID, err := parseOrgID(*orgIDRaw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import org error: %v\n", err)
+		return 1
+	}
+
+	file, err := os.Open(strings.TrimSpace(*filePath))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import open file error: %v\n", err)
+		return 1
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import stat file error: %v\n", err)
+		return 1
+	}
+
+	store, err := newMemoryImportStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import storage error: %v\n", err)
+		return 1
+	}
+
+	key := fmt.Sprintf("imports/%s/%s/%s", orgID, uuid.New(), filepath.Base(strings.TrimSpace(*filePath)))
+	if err := store.Put(context.Background(), key, file, storage.PutOptions{ContentType: "application/zip", ContentLength: info.Size()}); err != nil {
+		fmt.Fprintf(os.Stderr, "memory import upload error: %v\n", err)
+		return 1
+	}
+
+	importID, err := startMemoryImport(context.Background(), orgID, key, store)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import start failed: %v\n", err)
+		return 1
+	}
+
+	if !*wait {
+		fmt.Fprintln(os.Stdout, importID.String())
+		return 0
+	}
+
+	client, err := newMemoryImportStatusClient()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import wait setup error: %v\n", err)
+		return 1
+	}
+
+	final, err := waitForMemoryImportCompletion(context.Background(), client, importID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import status check failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(
+		os.Stdout,
+		"import %s: status=%s total=%d processed=%d imported=%d rejected=%d\n",
+		final.ID,
+		final.Status,
+		valueOrZero(final.TotalRecords),
+		final.ProcessedRecords,
+		final.ImportedRecords,
+		final.RejectedRecords,
+	)
+	if final.Status == "failed" {
+		if final.ErrorMessage != nil {
+			fmt.Fprintln(os.Stderr, strings.TrimSpace(*final.ErrorMessage))
+		}
+		return 1
+	}
+	return 0
+}
+
+func startMemoryImportViaImporter(ctx context.Context, orgID uuid.UUID, fileKey string, store storage.Store) (uuid.UUID, error) {
+	pool, err := db.NewFromEnv(ctx)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	defer pool.Close()
+
+	imp, err := memoryimporter.NewImporter(memoryimporter.ImporterOptions{
+		Pool:  pool.Raw(),
+		Store: store,
+	})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return imp.StartImport(ctx, orgID, uuid.Nil, fileKey)
+}
+
+func waitForMemoryImportCompletion(ctx context.Context, client memoryImportStatusClient, importID uuid.UUID) (cliMemoryImportStatus, error) {
+	if client == nil {
+		return cliMemoryImportStatus{}, fmt.Errorf("memory import status client is required")
+	}
+
+	for {
+		item, err := client.GetMemoryImport(ctx, importID.String())
+		if err != nil {
+			return cliMemoryImportStatus{}, err
+		}
+		if strings.TrimSpace(item.ID) == "" {
+			item.ID = importID.String()
+		}
+		if item.Status == "completed" || item.Status == "failed" {
+			return item, nil
+		}
+		memoryImportSleep(memoryImportPollInterval)
+	}
+}
+
 func runScheduleList(args []string) int {
 	flags := flag.NewFlagSet("schedule list", flag.ContinueOnError)
 	projectSlug := flags.String("project", "", "project slug")
@@ -1074,9 +1234,17 @@ type cliAPIClient struct {
 }
 
 func newCLIAPIClient(apiURL, apiKey string) (*cliAPIClient, error) {
+	creds, err := loadCLIStoredCredentials()
+	if err != nil {
+		return nil, err
+	}
+
 	baseURL := strings.TrimSpace(apiURL)
 	if baseURL == "" {
 		baseURL = strings.TrimSpace(os.Getenv("OTTERCAMP_API_URL"))
+	}
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(creds.APIURL)
 	}
 	if baseURL == "" {
 		baseURL = "http://127.0.0.1:8080"
@@ -1087,7 +1255,10 @@ func newCLIAPIClient(apiURL, apiKey string) (*cliAPIClient, error) {
 		key = strings.TrimSpace(os.Getenv("OTTERCAMP_API_KEY"))
 	}
 	if key == "" {
-		return nil, fmt.Errorf("api key required via --api-key or OTTERCAMP_API_KEY")
+		key = strings.TrimSpace(creds.APIKey)
+	}
+	if key == "" {
+		return nil, fmt.Errorf("api key required via --api-key, OTTERCAMP_API_KEY, or ~/.ottercamp/credentials")
 	}
 
 	return &cliAPIClient{
@@ -1095,6 +1266,89 @@ func newCLIAPIClient(apiURL, apiKey string) (*cliAPIClient, error) {
 		apiKey:  key,
 		client:  &http.Client{Timeout: 15 * time.Second},
 	}, nil
+}
+
+type cliStoredCredentials struct {
+	APIURL string
+	APIKey string
+}
+
+func loadCLIStoredCredentials() (cliStoredCredentials, error) {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return cliStoredCredentials{}, nil
+	}
+
+	path := filepath.Join(home, ".ottercamp", "credentials")
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return cliStoredCredentials{}, nil
+	}
+	if err != nil {
+		return cliStoredCredentials{}, err
+	}
+
+	return parseCLIStoredCredentials(content), nil
+}
+
+func parseCLIStoredCredentials(raw []byte) cliStoredCredentials {
+	text := strings.TrimSpace(string(raw))
+	if text == "" {
+		return cliStoredCredentials{}
+	}
+
+	var jsonObject map[string]any
+	if err := json.Unmarshal(raw, &jsonObject); err == nil {
+		return cliStoredCredentials{
+			APIURL: pickString(jsonObject, "api_url", "apiURL", "url"),
+			APIKey: pickString(jsonObject, "api_key", "apiKey", "key"),
+		}
+	}
+
+	creds := cliStoredCredentials{}
+	scanner := bufio.NewScanner(strings.NewReader(text))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(parts[0]))
+		value := strings.TrimSpace(parts[1])
+		switch key {
+		case "api_url":
+			if creds.APIURL == "" {
+				creds.APIURL = value
+			}
+		case "api_key":
+			if creds.APIKey == "" {
+				creds.APIKey = value
+			}
+		}
+	}
+	if creds.APIKey == "" && !strings.ContainsAny(text, "\n\r=") {
+		creds.APIKey = text
+	}
+	return creds
+}
+
+func pickString(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		if s, ok := value.(string); ok {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
 }
 
 func (c *cliAPIClient) lookupProjectID(ctx context.Context, slug string) (string, error) {
@@ -1129,6 +1383,16 @@ type cliSchedule struct {
 	NextFireAt     *time.Time `json:"next_fire_at"`
 }
 
+type cliMemoryImportStatus struct {
+	ID               string  `json:"id"`
+	Status           string  `json:"status"`
+	TotalRecords     *int    `json:"total_records"`
+	ProcessedRecords int     `json:"processed_records"`
+	ImportedRecords  int     `json:"imported_records"`
+	RejectedRecords  int     `json:"rejected_records"`
+	ErrorMessage     *string `json:"error_message,omitempty"`
+}
+
 func (c *cliAPIClient) listSchedules(ctx context.Context, projectID string) ([]cliSchedule, error) {
 	var resp struct {
 		Data []cliSchedule `json:"data"`
@@ -1136,6 +1400,17 @@ func (c *cliAPIClient) listSchedules(ctx context.Context, projectID string) ([]c
 	path := fmt.Sprintf("/v1/projects/%s/schedules", url.PathEscape(projectID))
 	if err := c.request(ctx, http.MethodGet, path, nil, &resp); err != nil {
 		return nil, err
+	}
+	return resp.Data, nil
+}
+
+func (c *cliAPIClient) GetMemoryImport(ctx context.Context, importID string) (cliMemoryImportStatus, error) {
+	path := fmt.Sprintf("/v1/memory/imports/%s", url.PathEscape(strings.TrimSpace(importID)))
+	var resp struct {
+		Data cliMemoryImportStatus `json:"data"`
+	}
+	if err := c.request(ctx, http.MethodGet, path, nil, &resp); err != nil {
+		return cliMemoryImportStatus{}, err
 	}
 	return resp.Data, nil
 }
@@ -1429,10 +1704,21 @@ func printScheduleUsage(w *os.File) {
 	fmt.Fprintln(w, "usage: ottercamp schedule <list|enable|disable> [flags]")
 }
 
+func printMemoryUsage(w *os.File) {
+	fmt.Fprintln(w, "usage: ottercamp memory import --file <path> [--org-id <uuid>] [--wait]")
+}
+
 func printSecretUsage(w *os.File) {
 	fmt.Fprintln(w, "usage: ottercamp secret <set|list|delete> [flags]")
 }
 
 func printUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp <serve|worker|bootstrap|migrate|backup|secret|skill|schedule|magic-link|reset-password|unlock-account|version>")
+	fmt.Fprintln(w, "usage: ottercamp <serve|worker|bootstrap|migrate|backup|secret|skill|schedule|memory|magic-link|reset-password|unlock-account|version>")
+}
+
+func valueOrZero(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
