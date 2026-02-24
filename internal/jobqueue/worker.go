@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/clock"
 )
 
 const (
@@ -59,6 +60,7 @@ type Config struct {
 	StaleClaimThreshold  time.Duration
 	CleanupEnqueuePeriod time.Duration
 	ListenReconnectDelay time.Duration
+	Clock                clock.Clock
 }
 
 type Worker struct {
@@ -72,6 +74,7 @@ type Worker struct {
 	staleClaimThreshold  time.Duration
 	cleanupEnqueuePeriod time.Duration
 	listenReconnectDelay time.Duration
+	clock                clock.Clock
 
 	handlersMu sync.RWMutex
 	handlers   map[string]JobHandler
@@ -112,6 +115,9 @@ func New(pool *pgxpool.Pool, logger *slog.Logger, cfg Config) *Worker {
 	if cfg.ListenReconnectDelay <= 0 {
 		cfg.ListenReconnectDelay = time.Second
 	}
+	if cfg.Clock == nil {
+		cfg.Clock = clock.Real{}
+	}
 
 	w := &Worker{
 		pool:                 pool,
@@ -123,6 +129,7 @@ func New(pool *pgxpool.Pool, logger *slog.Logger, cfg Config) *Worker {
 		staleClaimThreshold:  cfg.StaleClaimThreshold,
 		cleanupEnqueuePeriod: cfg.CleanupEnqueuePeriod,
 		listenReconnectDelay: cfg.ListenReconnectDelay,
+		clock:                cfg.Clock,
 		handlers:             make(map[string]JobHandler),
 	}
 
@@ -235,7 +242,7 @@ func (w *Worker) Enqueue(ctx context.Context, tx pgx.Tx, jobType string, priorit
 		return uuid.Nil, err
 	}
 
-	when := time.Now().UTC()
+	when := w.clock.Now().UTC()
 	if runAfter != nil {
 		when = runAfter.UTC()
 	}
@@ -265,7 +272,7 @@ func (w *Worker) Enqueue(ctx context.Context, tx pgx.Tx, jobType string, priorit
 }
 
 func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
-	staleBefore := time.Now().UTC().Add(-w.staleClaimThreshold)
+	staleBefore := w.clock.Now().UTC().Add(-w.staleClaimThreshold)
 	ct, err := w.pool.Exec(ctx, `
 		UPDATE job_queue
 		SET status = CASE WHEN attempts < max_attempts THEN 'pending' ELSE 'dead_letter' END,
@@ -311,7 +318,7 @@ func (w *Worker) claimPending(ctx context.Context) ([]Job, error) {
 			FROM job_queue
 			WHERE status = 'pending'
 			  AND run_after <= now()
-			ORDER BY priority ASC, run_after ASC
+			ORDER BY priority DESC, run_after ASC, created_at ASC
 			LIMIT $1
 			FOR UPDATE SKIP LOCKED
 		)
@@ -381,7 +388,7 @@ func (w *Worker) markFailure(ctx context.Context, job Job, jobErr error) error {
 	}
 
 	if job.Attempts < job.MaxAttempts {
-		runAfter := time.Now().UTC().Add(backoffDelay(job.Attempts))
+		runAfter := w.clock.Now().UTC().Add(backoffDelay(job.Attempts))
 		_, err := w.pool.Exec(ctx, `
 			UPDATE job_queue
 			SET status = 'pending',
@@ -517,11 +524,11 @@ func (w *Worker) idempotencyCleanupHandler(ctx context.Context, _ Job) error {
 			WHERE id IN (
 				SELECT id
 				FROM idempotency_key
-				WHERE expires_at < now()
+				WHERE expires_at < $1
 				ORDER BY expires_at ASC
 				LIMIT 1000
 			)
-		`)
+		`, w.clock.Now().UTC())
 		if err != nil {
 			return fmt.Errorf("delete expired idempotency keys: %w", err)
 		}
