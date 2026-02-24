@@ -168,6 +168,7 @@ func runServe() int {
 		Pool:        pool.Raw(),
 		RouteRegistrars: []server.RouteRegistrar{
 			server.NewAgentRouteRegistrar(agentService, repo.NewAgentProfileTemplateRepo(pool.Raw())),
+			server.NewMCPRouteRegistrar(mcpService, repo.NewMCPToolCatalogRepo(pool.Raw())),
 		},
 		TestMode:     cfg.Mode == config.ModeTest,
 		TestResetter: resetter,
