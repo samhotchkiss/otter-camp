@@ -42,6 +42,11 @@ type Memory struct {
 	UpdatedAt         time.Time
 }
 
+type NearDuplicateMatch struct {
+	MemoryID         uuid.UUID
+	CosineSimilarity float64
+}
+
 type RetrievalFilter struct {
 	OrganizationID uuid.UUID
 	Scopes         []string
@@ -279,6 +284,62 @@ func (r *MemoryRepo) GetByContentHash(ctx context.Context, orgID uuid.UUID, cont
 	return memory, nil
 }
 
+func (r *MemoryRepo) HasActiveByContentHash(ctx context.Context, orgID uuid.UUID, contentHash string) (bool, error) {
+	var exists bool
+	if err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM memory
+			WHERE organization_id = $1
+			  AND content_hash = $2
+			  AND status = 'active'
+		)
+	`, orgID, strings.TrimSpace(contentHash)).Scan(&exists); err != nil {
+		return false, mapDBError(err)
+	}
+	return exists, nil
+}
+
+func (r *MemoryRepo) FindNearDuplicates(ctx context.Context, orgID uuid.UUID, embedding []float32, minCosine float64, limit int) ([]NearDuplicateMatch, error) {
+	if orgID == uuid.Nil {
+		return nil, fmt.Errorf("organization id is required")
+	}
+	if len(embedding) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, (1 - (embedding <=> $2::vector))::float8 AS cosine_similarity
+		FROM memory
+		WHERE organization_id = $1
+		  AND embedding IS NOT NULL
+		  AND status IN ('candidate', 'active')
+		  AND (1 - (embedding <=> $2::vector)) >= $3
+		ORDER BY embedding <=> $2::vector ASC
+		LIMIT $4
+	`, orgID, embeddingToLiteral(embedding), minCosine, limit)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	items := make([]NearDuplicateMatch, 0)
+	for rows.Next() {
+		var item NearDuplicateMatch
+		if scanErr := rows.Scan(&item.MemoryID, &item.CosineSimilarity); scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		items = append(items, item)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return items, nil
+}
+
 func (r *MemoryRepo) ListFileBacked(ctx context.Context, orgID uuid.UUID) ([]Memory, error) {
 	return r.list(ctx, `
 		SELECT id, organization_id, project_id, project_task_id, agent_id, memory_type, scope, content, content_hash,
@@ -290,6 +351,40 @@ func (r *MemoryRepo) ListFileBacked(ctx context.Context, orgID uuid.UUID) ([]Mem
 		  AND status IN ('candidate','active')
 		ORDER BY COALESCE(file_last_scanned_at, to_timestamp(0)) ASC, created_at ASC
 	`, orgID)
+}
+
+func (r *MemoryRepo) ListActiveUnhardened(ctx context.Context, orgID uuid.UUID, olderThan time.Time) ([]Memory, error) {
+	return r.list(ctx, `
+		SELECT id, organization_id, project_id, project_task_id, agent_id, memory_type, scope, content, content_hash,
+		       embedding::text, confidence, utility_score, extraction_score, status, is_hardened, sensitivity, trust_tier,
+		       file_backed, file_path, file_last_scanned_at, superseded_by, superseded_at, archived_at, created_at, updated_at
+		FROM memory
+		WHERE organization_id = $1
+		  AND status = 'active'
+		  AND is_hardened = false
+		  AND created_at < $2
+		ORDER BY created_at ASC
+	`, orgID, olderThan.UTC())
+}
+
+func (r *MemoryRepo) UpdateHardened(ctx context.Context, id uuid.UUID, hardened bool) (Memory, error) {
+	row := r.pool.QueryRow(ctx, `
+		UPDATE memory
+		SET is_hardened = $2
+		WHERE id = $1
+		RETURNING id, organization_id, project_id, project_task_id, agent_id, memory_type, scope, content, content_hash,
+		          embedding::text, confidence, utility_score, extraction_score, status, is_hardened, sensitivity, trust_tier,
+		          file_backed, file_path, file_last_scanned_at, superseded_by, superseded_at, archived_at, created_at, updated_at
+	`, id, hardened)
+
+	updated, err := scanMemory(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Memory{}, ErrNotFound
+	}
+	if err != nil {
+		return Memory{}, mapDBError(err)
+	}
+	return updated, nil
 }
 
 func (r *MemoryRepo) Archive(ctx context.Context, id uuid.UUID) (Memory, error) {

@@ -1,0 +1,13 @@
+# Stage-0 behavioral override blocklist.
+# One regex per line.
+
+ignore\s+previous\s+instructions
+disregard\s+your\s+system\s+prompt
+act\s+as\s+if\s+you\s+have\s+no\s+restrictions
+you\s+are\s+now\s+in\s+developer\s+mode
+jailbreak
+bypass\s+safety
+forget\s+all\s+prior\s+rules
+override\s+the\s+policy
+do\s+not\s+follow\s+the\s+system
+new\s+personality\s*:

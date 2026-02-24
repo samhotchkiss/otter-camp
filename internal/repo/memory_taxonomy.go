@@ -119,6 +119,33 @@ func (r *MemoryTaxonomyNodeRepo) ListChildren(ctx context.Context, organizationI
 	return nodes, nil
 }
 
+func (r *MemoryTaxonomyNodeRepo) ListByOrganization(ctx context.Context, organizationID uuid.UUID) ([]MemoryTaxonomyNode, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, organization_id, parent_id, slug, display_name, description, created_at
+		FROM memory_taxonomy_node
+		WHERE organization_id = $1
+		ORDER BY created_at ASC
+	`, organizationID)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	nodes := make([]MemoryTaxonomyNode, 0)
+	for rows.Next() {
+		node, scanErr := scanMemoryTaxonomyNode(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		nodes = append(nodes, node)
+	}
+
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return nodes, nil
+}
+
 const listSubtreeQuery = `
 WITH RECURSIVE subtree AS (
 	SELECT id, organization_id, parent_id, slug, display_name, description, created_at, 0 AS depth
