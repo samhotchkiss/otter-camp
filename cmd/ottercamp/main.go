@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -32,6 +33,7 @@ import (
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	oclog "github.com/samhotchkiss/otter-camp/internal/log"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
+	memoryimporter "github.com/samhotchkiss/otter-camp/internal/memory/importer"
 	"github.com/samhotchkiss/otter-camp/internal/migrate"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
@@ -77,6 +79,8 @@ func run(args []string) int {
 		return runSkill(args[1:])
 	case "schedule":
 		return runSchedule(args[1:])
+	case "memory":
+		return runMemory(args[1:])
 	case "magic-link":
 		return runMagicLink(args[1:])
 	case "reset-password":
@@ -928,6 +932,133 @@ func runSchedule(args []string) int {
 	}
 }
 
+func runMemory(args []string) int {
+	if len(args) == 0 {
+		printMemoryUsage(os.Stderr)
+		return 1
+	}
+
+	switch args[0] {
+	case "import":
+		return runMemoryImport(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown memory command: %s\n", args[0])
+		printMemoryUsage(os.Stderr)
+		return 1
+	}
+}
+
+func runMemoryImport(args []string) int {
+	flags := flag.NewFlagSet("memory import", flag.ContinueOnError)
+	filePath := flags.String("file", "", "path to JSONL zip archive")
+	orgIDRaw := flags.String("org-id", "", "organization id (or OTTERCAMP_ORG_ID)")
+	wait := flags.Bool("wait", false, "wait for import completion")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "memory import argument error: %v\n", err)
+		return 1
+	}
+
+	if strings.TrimSpace(*filePath) == "" {
+		fmt.Fprintln(os.Stderr, "memory import requires --file")
+		return 1
+	}
+	orgID, err := parseOrgID(*orgIDRaw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import org error: %v\n", err)
+		return 1
+	}
+
+	file, err := os.Open(strings.TrimSpace(*filePath))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import open file error: %v\n", err)
+		return 1
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import stat file error: %v\n", err)
+		return 1
+	}
+
+	store, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import storage error: %v\n", err)
+		return 1
+	}
+
+	key := fmt.Sprintf("imports/%s/%s/%s", orgID, uuid.New(), filepath.Base(strings.TrimSpace(*filePath)))
+	if err := store.Put(context.Background(), key, file, storage.PutOptions{ContentType: "application/zip", ContentLength: info.Size()}); err != nil {
+		fmt.Fprintf(os.Stderr, "memory import upload error: %v\n", err)
+		return 1
+	}
+
+	pool, err := db.NewFromEnv(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import database error: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+
+	imp, err := memoryimporter.NewImporter(memoryimporter.ImporterOptions{
+		Pool:  pool.Raw(),
+		Store: store,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import setup error: %v\n", err)
+		return 1
+	}
+
+	importID, err := imp.StartImport(context.Background(), orgID, uuid.Nil, key)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory import start failed: %v\n", err)
+		return 1
+	}
+
+	if !*wait {
+		fmt.Fprintln(os.Stdout, importID.String())
+		return 0
+	}
+
+	if err := imp.ProcessImport(context.Background(), importID); err != nil {
+		fmt.Fprintf(os.Stderr, "memory import processing failed: %v\n", err)
+		return 1
+	}
+
+	importRepo := repo.NewMemoryImportRepo(pool.Raw())
+	var final repo.MemoryImport
+	for {
+		item, err := importRepo.GetByID(context.Background(), importID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "memory import status check failed: %v\n", err)
+			return 1
+		}
+		final = item
+		if final.Status == "completed" || final.Status == "failed" {
+			break
+		}
+		time.Sleep(5 * time.Second)
+	}
+
+	fmt.Fprintf(
+		os.Stdout,
+		"import %s: status=%s total=%d processed=%d imported=%d rejected=%d\n",
+		importID.String(),
+		final.Status,
+		valueOrZero(final.TotalRecords),
+		final.ProcessedRecords,
+		final.ImportedRecords,
+		final.RejectedRecords,
+	)
+	if final.Status == "failed" {
+		if final.ErrorMessage != nil {
+			fmt.Fprintln(os.Stderr, strings.TrimSpace(*final.ErrorMessage))
+		}
+		return 1
+	}
+	return 0
+}
+
 func runScheduleList(args []string) int {
 	flags := flag.NewFlagSet("schedule list", flag.ContinueOnError)
 	projectSlug := flags.String("project", "", "project slug")
@@ -1429,10 +1560,21 @@ func printScheduleUsage(w *os.File) {
 	fmt.Fprintln(w, "usage: ottercamp schedule <list|enable|disable> [flags]")
 }
 
+func printMemoryUsage(w *os.File) {
+	fmt.Fprintln(w, "usage: ottercamp memory import --file <path> [--org-id <uuid>] [--wait]")
+}
+
 func printSecretUsage(w *os.File) {
 	fmt.Fprintln(w, "usage: ottercamp secret <set|list|delete> [flags]")
 }
 
 func printUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp <serve|worker|bootstrap|migrate|backup|secret|skill|schedule|magic-link|reset-password|unlock-account|version>")
+	fmt.Fprintln(w, "usage: ottercamp <serve|worker|bootstrap|migrate|backup|secret|skill|schedule|memory|magic-link|reset-password|unlock-account|version>")
+}
+
+func valueOrZero(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
