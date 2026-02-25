@@ -168,3 +168,10 @@ func TestRouterSelectConnectionRoutesListeningEvalToHaiku(t *testing.T) {
 		t.Fatalf("selected connection = %s, want %s", selected.ID, haikuConnection)
 	}
 }
+
+func TestRoutedProfileIDRoutesMemoryRetrievalClassificationToHaiku(t *testing.T) {
+	got := routedProfileID("high-capability", "memory_retrieval_classification")
+	if got != systemHaikuProfileID {
+		t.Fatalf("routed profile id = %q, want %q", got, systemHaikuProfileID)
+	}
+}

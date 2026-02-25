@@ -86,7 +86,14 @@ func (r *Router) SelectConnection(ctx context.Context, orgID uuid.UUID, profileI
 
 func routedProfileID(profileID, invocationPurpose string) string {
 	switch strings.TrimSpace(invocationPurpose) {
-	case "listening_eval", "summarization", "memory_extraction", "memory_retrieval", "memory_dedup":
+	case "listening_eval",
+		"summarization",
+		"skill_summarization",
+		"memory_extraction",
+		"memory_retrieval",
+		"memory_retrieval_classification",
+		"memory_dedup",
+		"memory_contradiction":
 		return systemHaikuProfileID
 	default:
 		return profileID
