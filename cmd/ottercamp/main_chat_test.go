@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"strings"
 	"testing"
@@ -137,6 +138,72 @@ func TestChatListShowsRelativeLastActivity(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "2 minutes ago") {
 		t.Fatalf("stdout = %q, want relative time", stdout)
+	}
+}
+
+func TestChatSendWaitJSONOutputShape(t *testing.T) {
+	sessionID := uuid.New()
+	sentMessageID := uuid.New()
+	assistantMessageID := uuid.New()
+
+	streamPayload := `event: chat.turn.completed
+data: {"payload":{"session_id":"` + sessionID.String() + `","turn_id":"` + uuid.NewString() + `"}}
+
+`
+	client := &fakeChatCommandClient{
+		sendResult: chatMessageEnvelope{
+			Data: cliChatMessage{
+				ID:             sentMessageID,
+				SessionID:      sessionID,
+				SequenceNumber: 1,
+				Role:           "user",
+				Content:        "hello",
+				Status:         "pending",
+			},
+		},
+		listMessagesResult: chatMessageListEnvelope{
+			Data: []cliChatMessage{
+				{
+					ID:             assistantMessageID,
+					SessionID:      sessionID,
+					SequenceNumber: 2,
+					Role:           "assistant",
+					Content:        "hi there",
+					Status:         "final",
+				},
+			},
+		},
+		streamReader: io.NopCloser(strings.NewReader(streamPayload)),
+	}
+
+	restore := overrideChatTestGlobals(t, client)
+	defer restore()
+	defaultOutputMode = clitools.OutputModeJSON
+
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		return runChatSend([]string{sessionID.String(), "hello", "--wait", "--timeout=2s"})
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 stderr=%q", code, stderr)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("json unmarshal stdout: %v stdout=%q", err, stdout)
+	}
+
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload data type = %T, want map[string]any", payload["data"])
+	}
+	if gotID, _ := data["id"].(string); gotID != sentMessageID.String() {
+		t.Fatalf("data.id = %q, want %q", gotID, sentMessageID)
+	}
+	if _, exists := data["sent_message"]; exists {
+		t.Fatalf("data.sent_message exists, expected flat data shape")
+	}
+	if _, exists := data["response_message"]; !exists {
+		t.Fatal("data.response_message missing")
 	}
 }
 

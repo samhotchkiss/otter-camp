@@ -380,11 +380,14 @@ func runChatSend(args []string) int {
 		if responseMessage != nil {
 			responsePayload = responseMessage
 		}
+		sentData, err := jsonObject(sent.Data)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "chat send output error: %v\n", err)
+			return 1
+		}
+		sentData["response_message"] = responsePayload
 		payload := map[string]any{
-			"data": map[string]any{
-				"sent_message":     sent.Data,
-				"response_message": responsePayload,
-			},
+			"data": sentData,
 			"meta": sent.Meta,
 		}
 		if err := formatter.WriteJSON(payload); err != nil {
@@ -856,6 +859,19 @@ func normalizeInterspersedChatArgs(args []string, flagsWithValues map[string]str
 	}
 	normalized = append(normalized, positionals...)
 	return normalized, nil
+}
+
+func jsonObject(value any) (map[string]any, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return nil, err
+	}
+	return decoded, nil
 }
 
 func latestAssistantMessage(ctx context.Context, client chatCommandClient, sessionID uuid.UUID) (cliChatMessage, error) {
