@@ -580,10 +580,11 @@ func runSecret(args []string) int {
 func runSecretSet(args []string) int {
 	flags := flag.NewFlagSet("secret set", flag.ContinueOnError)
 	orgIDRaw := flags.String("org-id", "", "organization id (or OTTERCAMP_ORG_ID)")
-	slug := flags.String("slug", "", "secret slug")
+	slugFlag := flags.String("slug", "", "secret slug (legacy alias; prefer positional <slug>)")
 	displayName := flags.String("display-name", "", "secret display name")
 	description := flags.String("description", "", "secret description")
 	valueFlag := flags.String("value", "", "secret value (prefer stdin)")
+	fromFile := flags.String("from-file", "", "read secret value from file path")
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "secret set argument error: %v\n", err)
 		return 1
@@ -594,8 +595,9 @@ func runSecretSet(args []string) int {
 		fmt.Fprintf(os.Stderr, "secret set org error: %v\n", err)
 		return 1
 	}
-	if strings.TrimSpace(*slug) == "" {
-		fmt.Fprintln(os.Stderr, "secret set requires --slug")
+	slug := resolveSecretSlug(flags.Args(), *slugFlag)
+	if strings.TrimSpace(slug) == "" {
+		fmt.Fprintln(os.Stderr, "secret set requires <slug> (or --slug)")
 		return 1
 	}
 	if strings.TrimSpace(*displayName) == "" {
@@ -603,7 +605,7 @@ func runSecretSet(args []string) int {
 		return 1
 	}
 
-	value, err := readSecretValue(*valueFlag, os.Stdin)
+	value, err := readSecretValue(*valueFlag, *fromFile, os.Stdin, os.Stderr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "secret set value error: %v\n", err)
 		return 1
@@ -616,7 +618,7 @@ func runSecretSet(args []string) int {
 	}
 	defer cleanup()
 
-	if err := service.Set(context.Background(), orgID, strings.TrimSpace(*slug), *displayName, *description, value, secretsvc.Principal{
+	if err := service.Set(context.Background(), orgID, strings.TrimSpace(slug), *displayName, *description, value, secretsvc.Principal{
 		Type: "human",
 		ID:   uuid.Nil,
 	}); err != nil {
@@ -624,7 +626,7 @@ func runSecretSet(args []string) int {
 		return 1
 	}
 
-	fmt.Fprintf(os.Stdout, "saved secret %s\n", strings.TrimSpace(*slug))
+	fmt.Fprintf(os.Stdout, "saved secret %s\n", strings.TrimSpace(slug))
 	return 0
 }
 
@@ -768,13 +770,43 @@ func runSecretDelete(args []string) int {
 	return 0
 }
 
-func readSecretValue(valueFlag string, stdin *os.File) (string, error) {
-	if stdin != nil {
-		info, err := stdin.Stat()
+func resolveSecretSlug(positional []string, slugFlag string) string {
+	if len(positional) > 0 && strings.TrimSpace(positional[0]) != "" {
+		return strings.TrimSpace(positional[0])
+	}
+	return strings.TrimSpace(slugFlag)
+}
+
+func readSecretValue(valueFlag, fromFile string, stdin *os.File, stderr io.Writer) (string, error) {
+	return readSecretValueWithTerminal(valueFlag, fromFile, stdin, stderr, isTerminalFile)
+}
+
+func readSecretValueWithTerminal(valueFlag, fromFile string, stdin *os.File, stderr io.Writer, terminalFn func(*os.File) (bool, error)) (string, error) {
+	fromFile = strings.TrimSpace(fromFile)
+	if fromFile != "" {
+		data, err := os.ReadFile(fromFile)
 		if err != nil {
-			return "", fmt.Errorf("stat stdin: %w", err)
+			return "", fmt.Errorf("read --from-file: %w", err)
 		}
-		if info.Mode()&os.ModeCharDevice == 0 {
+		value := strings.TrimRight(string(data), "\r\n")
+		if strings.TrimSpace(value) == "" {
+			return "", fmt.Errorf("--from-file is empty")
+		}
+		return value, nil
+	}
+
+	valueFlag = strings.TrimSpace(valueFlag)
+	if valueFlag != "" {
+		return valueFlag, nil
+	}
+
+	if stdin != nil {
+		isTTY, err := terminalFn(stdin)
+		if err != nil {
+			return "", err
+		}
+
+		if !isTTY {
 			data, err := io.ReadAll(stdin)
 			if err != nil {
 				return "", fmt.Errorf("read stdin: %w", err)
@@ -784,12 +816,34 @@ func readSecretValue(valueFlag string, stdin *os.File) (string, error) {
 			}
 			return strings.TrimRight(string(data), "\r\n"), nil
 		}
+
+		if stderr != nil {
+			fmt.Fprint(stderr, "Secret value: ")
+		}
+		reader := bufio.NewReader(stdin)
+		line, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", fmt.Errorf("read stdin: %w", err)
+		}
+		value := strings.TrimRight(line, "\r\n")
+		if strings.TrimSpace(value) == "" {
+			return "", fmt.Errorf("secret value is empty")
+		}
+		return value, nil
 	}
 
-	if strings.TrimSpace(valueFlag) == "" {
-		return "", fmt.Errorf("provide secret value via stdin or --value")
+	return "", fmt.Errorf("provide secret value via --from-file, --value, or stdin")
+}
+
+func isTerminalFile(stdin *os.File) (bool, error) {
+	if stdin == nil {
+		return false, nil
 	}
-	return valueFlag, nil
+	info, err := stdin.Stat()
+	if err != nil {
+		return false, fmt.Errorf("stat stdin: %w", err)
+	}
+	return info.Mode()&os.ModeCharDevice != 0, nil
 }
 
 func promptDeleteConfirmation(stdin *os.File) (bool, error) {
