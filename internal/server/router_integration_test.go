@@ -61,8 +61,8 @@ func TestAuthHTTPLoginMeLogoutAndExpiredSession(t *testing.T) {
 	logoutResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/auth/logout", map[string]any{}, map[string]string{
 		"Authorization": "Bearer " + token,
 	})
-	if logoutResp.StatusCode != http.StatusOK {
-		t.Fatalf("logout status = %d, want %d body=%s", logoutResp.StatusCode, http.StatusOK, string(logoutResp.Body))
+	if logoutResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("logout status = %d, want %d body=%s", logoutResp.StatusCode, http.StatusNoContent, string(logoutResp.Body))
 	}
 
 	meAfterLogout := mustJSON(t, http.MethodGet, testServer.URL+"/v1/auth/me", nil, map[string]string{
@@ -136,8 +136,8 @@ func TestAuthHTTPAPIKeyLifecycleAndAdminRevoke(t *testing.T) {
 	revoked := mustJSON(t, http.MethodDelete, testServer.URL+"/v1/api-keys/"+apiKeyID, nil, map[string]string{
 		"Authorization": "Bearer " + adminToken,
 	})
-	if revoked.StatusCode != http.StatusOK {
-		t.Fatalf("revoke status = %d, want %d body=%s", revoked.StatusCode, http.StatusOK, string(revoked.Body))
+	if revoked.StatusCode != http.StatusNoContent {
+		t.Fatalf("revoke status = %d, want %d body=%s", revoked.StatusCode, http.StatusNoContent, string(revoked.Body))
 	}
 
 	afterRevoke := mustJSON(t, http.MethodGet, testServer.URL+"/v1/auth/me", nil, map[string]string{

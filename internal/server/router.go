@@ -56,7 +56,11 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	if opts.Pool != nil {
 		userRepo = repo.NewHumanUserRepo(opts.Pool)
 	}
-	authHandlers := newAuthHandlers(opts.AuthService, userRepo, authSessionRepo)
+	var orgRepo *repo.OrgRepo
+	if opts.Pool != nil {
+		orgRepo = repo.NewOrgRepo(opts.Pool)
+	}
+	authHandlers := newAuthHandlers(opts.AuthService, userRepo, authSessionRepo, orgRepo)
 	mobileHandlers := newMobileHandlers(opts.Pool)
 	versionHandler := api.NewVersionHandler(api.BuildInfo{
 		Version: opts.Version,
@@ -127,6 +131,8 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 			protected.Post("/api-keys", authHandlers.issueAPIKey)
 			protected.Delete("/api-keys/{id}", authHandlers.revokeAPIKey)
 			protected.Get("/api-keys", authHandlers.listAPIKeys)
+			protected.With(middleware.RequireRole("admin")).Post("/users", authHandlers.createUser)
+			protected.With(middleware.RequireRole("admin")).Post("/orgs", authHandlers.createOrganization)
 			protected.Get("/mobile/dashboard", mobileHandlers.dashboard)
 			protected.With(middleware.RequireRole("admin")).Get("/admin/users", authHandlers.listAdminUsers)
 			protected.With(middleware.RequireRole("admin")).Post("/admin/users/{id}/reset-password", authHandlers.adminResetPassword)

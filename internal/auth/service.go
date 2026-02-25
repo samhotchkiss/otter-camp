@@ -372,6 +372,28 @@ func (s *service) RefreshSession(ctx context.Context, sessionToken string) (*Ses
 	return validated, nil
 }
 
+// RefreshSessionToken extends the existing session and issues a new session token.
+// The original session remains valid until its own expiry/revocation window.
+func (s *service) RefreshSessionToken(ctx context.Context, sessionToken, ipAddr, userAgent string) (*LoginResult, error) {
+	session, err := s.RefreshSession(ctx, sessionToken)
+	if err != nil {
+		return nil, err
+	}
+
+	user, err := s.users.GetByID(ctx, session.UserID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil, ErrInvalidSession
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !user.IsActive {
+		return nil, ErrInvalidSession
+	}
+
+	return s.createSession(ctx, user, ipAddr, userAgent)
+}
+
 func (s *service) ValidateSession(ctx context.Context, sessionToken string) (*SessionInfo, error) {
 	return s.validateSession(ctx, sessionToken)
 }

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -17,12 +19,14 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type authHandlers struct {
 	service  auth.Service
 	users    authUserRepository
 	sessions authSessionRepository
+	orgs     authOrganizationRepository
 }
 
 type authUserRepository interface {
@@ -30,17 +34,29 @@ type authUserRepository interface {
 	GetByEmail(ctx context.Context, organizationID uuid.UUID, email string) (repo.HumanUser, error)
 }
 
+type authUserCreator interface {
+	Create(ctx context.Context, user repo.HumanUser) (repo.HumanUser, error)
+}
+
 type authSessionRepository interface {
 	ListActive(ctx context.Context, userID uuid.UUID) ([]repo.AuthSession, error)
 	Revoke(ctx context.Context, id uuid.UUID) error
+}
+
+type authOrganizationRepository interface {
+	Create(ctx context.Context, org repo.Organization) (repo.Organization, error)
 }
 
 type orgLookupByEmailRepository interface {
 	GetByEmailAnyOrg(ctx context.Context, email string) (repo.HumanUser, error)
 }
 
-func newAuthHandlers(service auth.Service, users authUserRepository, sessions authSessionRepository) authHandlers {
-	return authHandlers{service: service, users: users, sessions: sessions}
+type rotatingSessionService interface {
+	RefreshSessionToken(ctx context.Context, sessionToken, ipAddr, userAgent string) (*auth.LoginResult, error)
+}
+
+func newAuthHandlers(service auth.Service, users authUserRepository, sessions authSessionRepository, orgs authOrganizationRepository) authHandlers {
+	return authHandlers{service: service, users: users, sessions: sessions, orgs: orgs}
 }
 
 type loginRequest struct {
@@ -49,9 +65,25 @@ type loginRequest struct {
 }
 
 type issueAPIKeyRequest struct {
+	Name        string     `json:"name,omitempty"`
 	DisplayName string     `json:"display_name"`
 	Scopes      []string   `json:"scopes"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+}
+
+type createUserRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Name     string `json:"name"`
+	Role     string `json:"role,omitempty"`
+}
+
+type createOrganizationRequest struct {
+	Name          string `json:"name"`
+	Slug          string `json:"slug"`
+	AdminEmail    string `json:"admin_email,omitempty"`
+	AdminPassword string `json:"admin_password,omitempty"`
+	AdminName     string `json:"admin_name,omitempty"`
 }
 
 type adminResetPasswordRequest struct {
@@ -70,6 +102,7 @@ type apiKeyResponse struct {
 	ID          uuid.UUID  `json:"id"`
 	Key         string     `json:"key,omitempty"`
 	KeyPrefix   string     `json:"key_prefix"`
+	Name        string     `json:"name,omitempty"`
 	DisplayName string     `json:"display_name"`
 	Scopes      []string   `json:"scopes"`
 	CreatedAt   *time.Time `json:"created_at,omitempty"`
@@ -86,12 +119,18 @@ type authSessionResponse struct {
 	IPAddress  string    `json:"ip_address"`
 }
 
+type organizationResponse struct {
+	ID         uuid.UUID `json:"id"`
+	Name       string    `json:"name"`
+	Slug       string    `json:"slug"`
+	AdminEmail string    `json:"admin_email,omitempty"`
+}
+
 func (h authHandlers) login(w http.ResponseWriter, r *http.Request) {
 	if h.service == nil {
 		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "auth service unavailable")
 		return
 	}
-	// Biometric auth is intentionally client-side only. The server receives normal credentials/API keys.
 
 	var req loginRequest
 	if err := decodeJSON(r, &req); err != nil {
@@ -117,7 +156,6 @@ func (h authHandlers) login(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if errors.Is(err, auth.ErrRateLimited) {
-			// Default auth limiter window is 15 minutes.
 			w.Header().Set("Retry-After", "900")
 		}
 		status, code, message := mapLoginError(err)
@@ -161,7 +199,7 @@ func (h authHandlers) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	api.JSON(w, http.StatusOK, map[string]bool{"revoked": true})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h authHandlers) refresh(w http.ResponseWriter, r *http.Request) {
@@ -176,6 +214,25 @@ func (h authHandlers) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if rotator, ok := h.service.(rotatingSessionService); ok {
+		login, err := rotator.RefreshSessionToken(r.Context(), sessionToken, requestClientIP(r), r.UserAgent())
+		if err != nil {
+			status, code, message := mapAuthError(err)
+			api.Error(w, status, code, message)
+			return
+		}
+		if login == nil || login.Session == nil {
+			api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "refresh failed")
+			return
+		}
+		api.JSON(w, http.StatusOK, map[string]any{
+			"token":         login.SessionToken,
+			"session_token": login.SessionToken,
+			"expires_at":    login.Session.ExpiresAt,
+		})
+		return
+	}
+
 	session, err := h.service.RefreshSession(r.Context(), sessionToken)
 	if err != nil {
 		status, code, message := mapAuthError(err)
@@ -183,7 +240,11 @@ func (h authHandlers) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	api.JSON(w, http.StatusOK, map[string]time.Time{"expires_at": session.ExpiresAt})
+	api.JSON(w, http.StatusOK, map[string]any{
+		"token":         sessionToken,
+		"session_token": sessionToken,
+		"expires_at":    session.ExpiresAt,
+	})
 }
 
 func (h authHandlers) me(w http.ResponseWriter, r *http.Request) {
@@ -353,13 +414,18 @@ func (h authHandlers) issueAPIKey(w http.ResponseWriter, r *http.Request) {
 		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
 		return
 	}
-	if strings.TrimSpace(req.DisplayName) == "" {
+
+	displayName := strings.TrimSpace(req.DisplayName)
+	if displayName == "" {
+		displayName = strings.TrimSpace(req.Name)
+	}
+	if displayName == "" {
 		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "display_name is required")
 		return
 	}
 
 	scopes := normalizeScopes(req.Scopes)
-	issued, err := h.service.IssueAPIKey(r.Context(), principal.UserID, strings.TrimSpace(req.DisplayName), scopes, req.ExpiresAt)
+	issued, err := h.service.IssueAPIKey(r.Context(), principal.UserID, displayName, scopes, req.ExpiresAt)
 	if err != nil {
 		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to issue api key")
 		return
@@ -369,6 +435,7 @@ func (h authHandlers) issueAPIKey(w http.ResponseWriter, r *http.Request) {
 		ID:          issued.KeyID,
 		Key:         issued.RawKey,
 		KeyPrefix:   issued.KeyPrefix,
+		Name:        issued.DisplayName,
 		DisplayName: issued.DisplayName,
 		Scopes:      scopes,
 		ExpiresAt:   req.ExpiresAt,
@@ -406,7 +473,7 @@ func (h authHandlers) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	api.JSON(w, http.StatusOK, map[string]bool{"revoked": true})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h authHandlers) listAPIKeys(w http.ResponseWriter, r *http.Request) {
@@ -436,6 +503,7 @@ func (h authHandlers) listAPIKeys(w http.ResponseWriter, r *http.Request) {
 		response = append(response, apiKeyResponse{
 			ID:          item.ID,
 			KeyPrefix:   item.KeyPrefix,
+			Name:        item.DisplayName,
 			DisplayName: item.DisplayName,
 			Scopes:      append([]string{}, item.Scopes...),
 			CreatedAt:   &createdAt,
@@ -446,6 +514,132 @@ func (h authHandlers) listAPIKeys(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.JSON(w, http.StatusOK, response)
+}
+
+func (h authHandlers) createUser(w http.ResponseWriter, r *http.Request) {
+	creator, ok := h.users.(authUserCreator)
+	if !ok || creator == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "user repository unavailable")
+		return
+	}
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		api.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	var req createUserRequest
+	if err := decodeJSON(r, &req); err != nil {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+
+	email := strings.TrimSpace(req.Email)
+	password := strings.TrimSpace(req.Password)
+	displayName := strings.TrimSpace(req.Name)
+	if email == "" || password == "" || displayName == "" {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "email, password, and name are required")
+		return
+	}
+
+	role, err := normalizeUserRole(req.Role, "member")
+	if err != nil {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, err.Error())
+		return
+	}
+
+	created, err := createUserInOrganization(r.Context(), creator, principal.OrganizationID, email, password, displayName, role)
+	if errors.Is(err, repo.ErrConflict) {
+		api.Error(w, http.StatusConflict, api.ErrCodeConflict, "user already exists")
+		return
+	}
+	if err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to create user")
+		return
+	}
+
+	api.JSON(w, http.StatusCreated, userResponse{
+		ID:             created.ID,
+		OrganizationID: created.OrganizationID,
+		Email:          created.Email,
+		DisplayName:    created.DisplayName,
+		Role:           created.Role,
+	})
+}
+
+func (h authHandlers) createOrganization(w http.ResponseWriter, r *http.Request) {
+	if h.orgs == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "organization repository unavailable")
+		return
+	}
+	creator, ok := h.users.(authUserCreator)
+	if !ok || creator == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "user repository unavailable")
+		return
+	}
+	if _, ok := middleware.PrincipalFromContext(r.Context()); !ok {
+		api.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	var req createOrganizationRequest
+	if err := decodeJSON(r, &req); err != nil {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+
+	slug := strings.TrimSpace(req.Slug)
+	name := strings.TrimSpace(req.Name)
+	if slug == "" || name == "" {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "slug and name are required")
+		return
+	}
+
+	adminEmail := strings.TrimSpace(req.AdminEmail)
+	if adminEmail == "" {
+		adminEmail = fmt.Sprintf("%s-admin@localhost", slug)
+	}
+	adminPassword := strings.TrimSpace(req.AdminPassword)
+	if adminPassword == "" {
+		adminPassword = strings.TrimSpace(os.Getenv("OTTERCAMP_ADMIN_PASSWORD"))
+	}
+	if adminPassword == "" {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "admin_password is required")
+		return
+	}
+	adminName := strings.TrimSpace(req.AdminName)
+	if adminName == "" {
+		adminName = "Admin"
+	}
+
+	org, err := h.orgs.Create(r.Context(), repo.Organization{
+		Slug:        slug,
+		DisplayName: name,
+	})
+	if errors.Is(err, repo.ErrConflict) {
+		api.Error(w, http.StatusConflict, api.ErrCodeConflict, "organization already exists")
+		return
+	}
+	if err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to create organization")
+		return
+	}
+
+	if _, err := createUserInOrganization(r.Context(), creator, org.ID, adminEmail, adminPassword, adminName, "admin"); err != nil {
+		if errors.Is(err, repo.ErrConflict) {
+			api.Error(w, http.StatusConflict, api.ErrCodeConflict, "admin user already exists")
+			return
+		}
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to create organization admin")
+		return
+	}
+
+	api.JSON(w, http.StatusCreated, organizationResponse{
+		ID:         org.ID,
+		Name:       org.DisplayName,
+		Slug:       org.Slug,
+		AdminEmail: adminEmail,
+	})
 }
 
 func (h authHandlers) listAdminUsers(w http.ResponseWriter, r *http.Request) {
@@ -474,15 +668,13 @@ func (h authHandlers) listAdminUsers(w http.ResponseWriter, r *http.Request) {
 		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to fetch user")
 		return
 	}
-	api.JSON(w, http.StatusOK, []userResponse{
-		{
-			ID:             user.ID,
-			OrganizationID: user.OrganizationID,
-			Email:          user.Email,
-			DisplayName:    user.DisplayName,
-			Role:           user.Role,
-		},
-	})
+	api.JSON(w, http.StatusOK, []userResponse{{
+		ID:             user.ID,
+		OrganizationID: user.OrganizationID,
+		Email:          user.Email,
+		DisplayName:    user.DisplayName,
+		Role:           user.Role,
+	}})
 }
 
 func (h authHandlers) adminResetPassword(w http.ResponseWriter, r *http.Request) {
@@ -645,6 +837,47 @@ func normalizeScopes(scopes []string) []string {
 	return result
 }
 
+func normalizeUserRole(rawRole, defaultRole string) (string, error) {
+	role := strings.ToLower(strings.TrimSpace(rawRole))
+	if role == "" {
+		role = strings.ToLower(strings.TrimSpace(defaultRole))
+	}
+	switch role {
+	case "owner", "admin", "member", "viewer":
+		return role, nil
+	default:
+		return "", fmt.Errorf("invalid role")
+	}
+}
+
+func createUserInOrganization(ctx context.Context, creator authUserCreator, orgID uuid.UUID, email, password, displayName, role string) (repo.HumanUser, error) {
+	passwordHash, err := hashPasswordForMode(password)
+	if err != nil {
+		return repo.HumanUser{}, err
+	}
+	return creator.Create(ctx, repo.HumanUser{
+		OrganizationID: orgID,
+		Email:          strings.TrimSpace(email),
+		DisplayName:    strings.TrimSpace(displayName),
+		PasswordHash:   &passwordHash,
+		Role:           role,
+		IsActive:       true,
+		Settings:       json.RawMessage(`{}`),
+	})
+}
+
+func hashPasswordForMode(password string) (string, error) {
+	cost := 12
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("OTTERCAMP_MODE")), "test") {
+		cost = bcrypt.MinCost
+	}
+	hashBytes, err := bcrypt.GenerateFromPassword([]byte(password), cost)
+	if err != nil {
+		return "", err
+	}
+	return string(hashBytes), nil
+}
+
 func mapLoginError(err error) (status int, code, message string) {
 	switch {
 	case errors.Is(err, auth.ErrInvalidCredentials):
@@ -663,7 +896,7 @@ func mapAuthError(err error) (status int, code, message string) {
 	case errors.Is(err, auth.ErrSessionExpired):
 		return http.StatusUnauthorized, api.ErrCodeSessionExpired, "session expired"
 	case errors.Is(err, auth.ErrSessionRevoked):
-		return http.StatusUnauthorized, api.ErrCodeSessionRevoked, "session revoked"
+		return http.StatusUnauthorized, api.ErrCodeUnauthorized, "session invalid"
 	case errors.Is(err, auth.ErrInvalidSession):
 		return http.StatusUnauthorized, api.ErrCodeUnauthorized, "invalid session"
 	case errors.Is(err, auth.ErrInvalidAPIKey):
