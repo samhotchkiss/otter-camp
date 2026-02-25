@@ -166,7 +166,7 @@ func TestRealtimeConnectionStateReflectedInModelStatus(t *testing.T) {
 		Backoff:   []time.Duration{10 * time.Millisecond},
 		OnStateChange: func(state ConnectionState, degraded bool) {
 			mu.Lock()
-			model = pressMsg(model, ConnectionStateMsg{State: state, Degraded: degraded})
+			model = pressRealtimeMsg(model, ConnectionStateMsg{State: state, Degraded: degraded})
 			views = append(views, model.View())
 			mu.Unlock()
 		},
@@ -301,7 +301,7 @@ func containsDegradedState(states []ConnectionStateMsg, degraded bool) bool {
 	return false
 }
 
-func pressMsg(model Model, msg tea.Msg) Model {
+func pressRealtimeMsg(model Model, msg tea.Msg) Model {
 	updated, _ := model.Update(msg)
 	next, ok := updated.(Model)
 	if !ok {
