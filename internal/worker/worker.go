@@ -13,11 +13,15 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/model"
+	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/push"
 	"github.com/samhotchkiss/otter-camp/internal/push/adapters"
+	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/scheduling"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/tools"
+	"github.com/samhotchkiss/otter-camp/internal/turn"
 )
 
 func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) error {
@@ -96,6 +100,63 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	if err != nil {
 		return fmt.Errorf("worker run service setup: %w", err)
 	}
+	toolResolver, err := tools.NewToolResolver(tools.ToolResolverOptions{
+		Pool:   pool.Raw(),
+		Events: bus,
+		Logger: logger,
+	})
+	if err != nil {
+		return fmt.Errorf("worker tool resolver setup: %w", err)
+	}
+	promptAssembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{
+		Pool:   pool.Raw(),
+		Logger: logger,
+	})
+	if err != nil {
+		return fmt.Errorf("worker prompt assembler setup: %w", err)
+	}
+	summarizationChecker, err := chat.NewSummarizationChecker(chat.SummarizationCheckerOptions{
+		Pool: pool.Raw(),
+	})
+	if err != nil {
+		return fmt.Errorf("worker summarization checker setup: %w", err)
+	}
+	profileResolver := model.NewProfileResolver(
+		repo.NewModelProfileAssignmentRepo(pool.Raw()),
+		repo.NewModelProfileRepo(pool.Raw()),
+	)
+	turnEngine, err := turn.NewEngine(turn.Options{
+		Pool:          pool.Raw(),
+		Chat:          chatService,
+		ToolResolver:  toolResolver,
+		Assembler:     promptAssembler,
+		Summarization: summarizationChecker,
+		ModelGateway:  turn.UnavailableModelGateway{},
+		Dispatcher:    turn.UnavailableToolDispatcher{},
+		RunCanceler:   runService,
+		Events:        bus,
+		Enqueuer:      jqWorker,
+		Invocations:   repo.NewModelInvocationRepo(pool.Raw()),
+		ModelProfiles: repo.NewModelProfileRepo(pool.Raw()),
+		Profiles:      profileResolver,
+		Messages:      repo.NewChatMessageRepo(pool.Raw()),
+		Turns:         repo.NewChatTurnRepo(pool.Raw()),
+		Sessions:      repo.NewChatSessionRepo(pool.Raw()),
+		Agents:        repo.NewAgentRepo(pool.Raw()),
+		Tasks:         repo.NewProjectTaskRepo(pool.Raw()),
+		MemorySources: repo.NewMemorySourceRepo(pool.Raw()),
+		Memories:      repo.NewMemoryRepo(pool.Raw()),
+		Logger:        logger,
+	})
+	if err != nil {
+		return fmt.Errorf("worker turn engine setup: %w", err)
+	}
+	turnEngine.RegisterJobHandler(jqWorker)
+	turnUserSub := turnEngine.SubscribeUserMessageEnqueue(nil)
+	defer bus.Unsubscribe(turnUserSub)
+	turnReactionSub := turnEngine.SubscribeReactionFeedback(nil)
+	defer bus.Unsubscribe(turnReactionSub)
+
 	supervisor, err := controlplane.NewSupervisor(controlplane.SupervisorOptions{
 		Pool:       pool.Raw(),
 		RunService: runService,

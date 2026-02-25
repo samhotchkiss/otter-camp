@@ -119,6 +119,132 @@ func TestChatServiceIntegrationAppendMessageConcurrentSequenceContiguous(t *test
 	}
 }
 
+func TestChatServiceIntegrationAppendMessagePublishesUserSentForUserMessage(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	user := seedChatServiceUser(t, ctx, pool, org.ID, "append-message-user-sent", "member")
+
+	bus := newIntegrationEventBus(pool)
+	svc := newIntegrationService(t, pool, bus)
+	session := mustCreateSession(t, ctx, svc, org.ID)
+
+	events := make(chan eventbus.DomainEvent, 8)
+	sub := bus.Subscribe("chat-append-message-user-sent-"+uuid.NewString(), &org.ID, func(_ context.Context, event eventbus.DomainEvent) error {
+		if event.EventType == "chat.message.created" || event.EventType == "chat.message.user_sent" {
+			events <- event
+		}
+		return nil
+	})
+	defer bus.Unsubscribe(sub)
+
+	authorType := "human_user"
+	message, err := svc.AppendMessage(ctx, AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: &authorType,
+		AuthorID:   &user.ID,
+		Role:       "user",
+		Content:    "hello from integration test",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	received := map[string]eventbus.DomainEvent{}
+	deadline := time.After(5 * time.Second)
+	for len(received) < 2 {
+		select {
+		case event := <-events:
+			received[event.EventType] = event
+		case <-deadline:
+			t.Fatalf("timed out waiting for message events; got %d", len(received))
+		}
+	}
+
+	created := received["chat.message.created"]
+	if created.EventType == "" {
+		t.Fatal("missing chat.message.created event")
+	}
+	userSent := received["chat.message.user_sent"]
+	if userSent.EventType == "" {
+		t.Fatal("missing chat.message.user_sent event")
+	}
+
+	for _, event := range []eventbus.DomainEvent{created, userSent} {
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal %s payload: %v", event.EventType, err)
+		}
+		if payload["session_id"] != session.ID.String() {
+			t.Fatalf("%s payload session_id = %v, want %s", event.EventType, payload["session_id"], session.ID)
+		}
+		if payload["message_id"] != message.ID.String() {
+			t.Fatalf("%s payload message_id = %v, want %s", event.EventType, payload["message_id"], message.ID)
+		}
+	}
+}
+
+func TestChatServiceIntegrationAppendMessageSteerMetadataSkipsUserSentEvent(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	user := seedChatServiceUser(t, ctx, pool, org.ID, "append-message-steer", "member")
+
+	bus := newIntegrationEventBus(pool)
+	svc := newIntegrationService(t, pool, bus)
+	session := mustCreateSession(t, ctx, svc, org.ID)
+
+	events := make(chan eventbus.DomainEvent, 8)
+	sub := bus.Subscribe("chat-append-message-steer-"+uuid.NewString(), &org.ID, func(_ context.Context, event eventbus.DomainEvent) error {
+		if event.EventType == "chat.message.created" || event.EventType == "chat.message.user_sent" {
+			events <- event
+		}
+		return nil
+	})
+	defer bus.Unsubscribe(sub)
+
+	metadata := json.RawMessage(`{"steer_turn_id":"` + uuid.NewString() + `"}`)
+	authorType := "human_user"
+	message, err := svc.AppendMessage(ctx, AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: &authorType,
+		AuthorID:   &user.ID,
+		Role:       "user",
+		Content:    "steer payload",
+		Metadata:   metadata,
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	var created eventbus.DomainEvent
+	select {
+	case created = <-events:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for chat.message.created event")
+	}
+	if created.EventType != "chat.message.created" {
+		t.Fatalf("first event = %s, want chat.message.created", created.EventType)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(created.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal created payload: %v", err)
+	}
+	if payload["message_id"] != message.ID.String() {
+		t.Fatalf("created payload message_id = %v, want %s", payload["message_id"], message.ID)
+	}
+
+	select {
+	case event := <-events:
+		if event.EventType == "chat.message.user_sent" {
+			t.Fatal("unexpected chat.message.user_sent event for steer metadata")
+		}
+	case <-time.After(600 * time.Millisecond):
+		// expected: no additional user_sent event
+	}
+}
+
 func TestChatServiceIntegrationMultiHumanQueueFIFO(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
