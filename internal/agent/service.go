@@ -351,7 +351,7 @@ func (s *service) Unpause(ctx context.Context, orgID, agentID uuid.UUID) error {
 }
 
 func (s *service) Retire(ctx context.Context, orgID, agentID uuid.UUID) error {
-	_, err := s.transitionStaffLifecycle(ctx, orgID, agentID, statusRetired)
+	_, err := s.transitionRetireLifecycle(ctx, orgID, agentID)
 	return err
 }
 
@@ -587,6 +587,50 @@ func (s *service) transitionStaffLifecycle(ctx context.Context, orgID, agentID u
 	return &updated, nil
 }
 
+func (s *service) transitionRetireLifecycle(ctx context.Context, orgID, agentID uuid.UUID) (*Agent, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin retire transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	agent, err := getAgentForUpdateTx(ctx, tx, orgID, agentID)
+	if err != nil {
+		return nil, err
+	}
+
+	eventType := "agent.retired"
+	if agent.AgentClass == agentClassTemp {
+		if err := validateTempRetireTransition(agent.LifecycleStatus); err != nil {
+			return nil, err
+		}
+	} else {
+		eventType, err = validateStaffTransition(agent.LifecycleStatus, statusRetired)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err := setLifecycleStatusTx(ctx, tx, agent.ID, agent.OrganizationID, statusRetired); err != nil {
+		return nil, err
+	}
+	if err := s.publishDomainEventTx(ctx, tx, agent.OrganizationID, eventType, map[string]any{
+		"agent_id": agent.ID,
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit retire transaction: %w", err)
+	}
+
+	updated := agent
+	updated.LifecycleStatus = statusRetired
+	return &updated, nil
+}
+
 func (s *service) expireTempLockedTx(ctx context.Context, tx pgx.Tx, agent Agent, reason string) error {
 	if agent.AgentClass != agentClassTemp {
 		return ErrInvalidForTempAgent
@@ -706,6 +750,13 @@ func validateTempTransition(currentStatus, targetStatus string) error {
 		return nil
 	}
 	return fmt.Errorf("%w: current=%s target=%s", ErrInvalidTransition, currentStatus, targetStatus)
+}
+
+func validateTempRetireTransition(currentStatus string) error {
+	if currentStatus == statusActive {
+		return nil
+	}
+	return fmt.Errorf("%w: current=%s target=%s", ErrInvalidTransition, currentStatus, statusRetired)
 }
 
 func ensureStaffClass(agentClass string) error {
