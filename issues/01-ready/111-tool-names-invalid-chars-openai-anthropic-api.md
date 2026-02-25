@@ -2,6 +2,7 @@
 
 Layer: L2
 Effort: S
+Priority: CRITICAL — blocks ALL agent turns (every session has 67 tools, all names invalid)
 Depends on: 098 (tools sent to provider)
 
 ## Context
