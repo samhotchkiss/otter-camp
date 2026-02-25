@@ -1,0 +1,117 @@
+package tui
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestResolveSizeClassBoundaries(t *testing.T) {
+	tests := []struct {
+		name     string
+		width    int
+		height   int
+		wantSize SizeClass
+	}{
+		{name: "xs width upper boundary", width: 69, height: 30, wantSize: SizeXS},
+		{name: "xs height override", width: 120, height: 22, wantSize: SizeXS},
+		{name: "s lower boundary", width: 70, height: 30, wantSize: SizeS},
+		{name: "s upper boundary", width: 99, height: 30, wantSize: SizeS},
+		{name: "m lower boundary", width: 100, height: 30, wantSize: SizeM},
+		{name: "m upper boundary", width: 139, height: 30, wantSize: SizeM},
+		{name: "l lower boundary", width: 140, height: 30, wantSize: SizeL},
+		{name: "l upper boundary", width: 199, height: 30, wantSize: SizeL},
+		{name: "xl boundary", width: 200, height: 30, wantSize: SizeXL},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveSizeClass(tc.width, tc.height)
+			if got != tc.wantSize {
+				t.Fatalf("resolveSizeClass(%d,%d) = %s, want %s", tc.width, tc.height, got, tc.wantSize)
+			}
+		})
+	}
+}
+
+func TestLayoutVisibilityAndHintsBySizeClass(t *testing.T) {
+	cases := []struct {
+		name              string
+		width             int
+		height            int
+		focus             Panel
+		sidebarVisible    bool
+		wantClass         SizeClass
+		wantVisible       [3]bool
+		hiddenHintContain string
+	}{
+		{
+			name:              "xs single panel",
+			width:             69,
+			height:            30,
+			focus:             ChatPanel,
+			sidebarVisible:    false,
+			wantClass:         SizeXS,
+			wantVisible:       [3]bool{false, false, true},
+			hiddenHintContain: "sidebar hidden",
+		},
+		{
+			name:              "s main+chat with drawer hidden",
+			width:             90,
+			height:            30,
+			focus:             MainPanel,
+			sidebarVisible:    false,
+			wantClass:         SizeS,
+			wantVisible:       [3]bool{false, true, true},
+			hiddenHintContain: "sidebar hidden",
+		},
+		{
+			name:              "m collapsed sidebar default",
+			width:             120,
+			height:            30,
+			focus:             MainPanel,
+			sidebarVisible:    false,
+			wantClass:         SizeM,
+			wantVisible:       [3]bool{false, true, true},
+			hiddenHintContain: "sidebar hidden",
+		},
+		{
+			name:              "l all panes visible",
+			width:             160,
+			height:            34,
+			focus:             MainPanel,
+			sidebarVisible:    false,
+			wantClass:         SizeL,
+			wantVisible:       [3]bool{true, true, true},
+			hiddenHintContain: "",
+		},
+		{
+			name:              "xl all panes visible",
+			width:             220,
+			height:            40,
+			focus:             MainPanel,
+			sidebarVisible:    false,
+			wantClass:         SizeXL,
+			wantVisible:       [3]bool{true, true, true},
+			hiddenHintContain: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			layout := computeLayout(tc.width, tc.height, tc.focus, tc.sidebarVisible, DefaultState().PanelProportions)
+			if layout.sizeClass != tc.wantClass {
+				t.Fatalf("size class = %s, want %s", layout.sizeClass, tc.wantClass)
+			}
+			if layout.visible != tc.wantVisible {
+				t.Fatalf("visible panes = %v, want %v", layout.visible, tc.wantVisible)
+			}
+			if tc.hiddenHintContain == "" {
+				if layout.hiddenHints != "" {
+					t.Fatalf("hidden hints = %q, want empty", layout.hiddenHints)
+				}
+			} else if !strings.Contains(layout.hiddenHints, tc.hiddenHintContain) {
+				t.Fatalf("hidden hints = %q, want substring %q", layout.hiddenHints, tc.hiddenHintContain)
+			}
+		})
+	}
+}
