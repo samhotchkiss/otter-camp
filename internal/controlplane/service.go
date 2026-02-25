@@ -24,6 +24,7 @@ var (
 	ErrRunIDRequired          = errors.New("run_id is required")
 	ErrRunStepIDRequired      = errors.New("run_step_id is required")
 	ErrInvalidTransition      = errors.New("invalid state transition")
+	ErrTerminalState          = errors.New("run is already in terminal state")
 	ErrMaxAttemptsExceeded    = errors.New("max attempts exceeded")
 	ErrPolicyDenied           = errors.New("run creation denied by policy")
 	ErrBudgetExceeded         = errors.New("run creation blocked by budget gate")
@@ -496,6 +497,10 @@ func (s *runService) RequestCancel(ctx context.Context, runID uuid.UUID, request
 			"actor_type": requestActorType,
 			"actor_id":   uuidPointerToString(requestActorID),
 		},
+	}
+
+	if _, terminal := runTerminalStatuses[current.Status]; terminal {
+		return ErrTerminalState
 	}
 
 	if current.Status == "created" {
@@ -1149,7 +1154,7 @@ func normalizeDomainActor(actorType string, actorID *uuid.UUID) (string, *uuid.U
 			return "", nil, ErrInvalidRequestedByType
 		}
 		id := *actorID
-		return "human_user", &id, nil
+		return "human", &id, nil
 	case "agent":
 		if actorID == nil || *actorID == uuid.Nil {
 			return "", nil, ErrInvalidRequestedByType
