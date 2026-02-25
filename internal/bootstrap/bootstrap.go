@@ -137,6 +137,7 @@ type Bootstrapper struct {
 	profileRepo         *repo.ModelProfileRepo
 	profileAssignRepo   *repo.ModelProfileAssignmentRepo
 	flowTemplateRepo    *repo.FlowTemplateRepo
+	flowNodeRepo        *repo.FlowNodeRepo
 	auditRepo           *repo.AuditEventRepo
 	auditService        *audit.Service
 	defaultSkillSeeds   []defaultSkillSeed
@@ -228,6 +229,7 @@ func NewBootstrapper(opts ...Options) *Bootstrapper {
 		b.profileRepo = repo.NewModelProfileRepo(merged.Pool)
 		b.profileAssignRepo = repo.NewModelProfileAssignmentRepo(merged.Pool)
 		b.flowTemplateRepo = repo.NewFlowTemplateRepo(merged.Pool)
+		b.flowNodeRepo = repo.NewFlowNodeRepo(merged.Pool)
 		b.auditRepo = repo.NewAuditEventRepo(merged.Pool)
 		b.auditService = audit.NewService(b.auditRepo, merged.Logger)
 	}
@@ -594,11 +596,148 @@ func (b *Bootstrapper) stepSeedModelProfiles(ctx context.Context, state *State) 
 }
 
 func (b *Bootstrapper) stepSeedFlowTemplates(ctx context.Context, _ *State) error {
-	if b.flowTemplateRepo == nil {
-		return fmt.Errorf("flow_template repository is not configured")
+	if b.flowTemplateRepo == nil || b.flowNodeRepo == nil {
+		return fmt.Errorf("flow template repositories are not configured")
 	}
 
-	_, err := b.flowTemplateRepo.BulkUpsertBySlug(ctx, defaultFlowTemplateSeeds())
+	templates, err := b.flowTemplateRepo.BulkUpsertBySlug(ctx, defaultFlowTemplateSeeds())
+	if err != nil {
+		return err
+	}
+	return b.seedSystemTemplateNodes(ctx, templates)
+}
+
+type flowNodeSeedSpec struct {
+	DisplayName         string
+	NodeType            string
+	Position            int
+	ActorType           *string
+	RequiresHumanReview bool
+	NextSeedIndex       *int
+}
+
+type systemTemplateNodeSeedPlan struct {
+	StartNodeID *uuid.UUID
+	Seeds       []flowNodeSeedSpec
+}
+
+func buildSystemTemplateNodeSeedPlan(template repo.FlowTemplate, existing []repo.FlowNode) (systemTemplateNodeSeedPlan, error) {
+	if len(existing) > 0 {
+		if template.StartNodeID != nil {
+			return systemTemplateNodeSeedPlan{}, nil
+		}
+		start := existing[0].ID
+		return systemTemplateNodeSeedPlan{StartNodeID: &start}, nil
+	}
+
+	roleActor := "role"
+	switch template.Slug {
+	case "default-single-agent":
+		return systemTemplateNodeSeedPlan{
+			Seeds: []flowNodeSeedSpec{
+				{
+					DisplayName: "Work",
+					NodeType:    "work",
+					Position:    0,
+					ActorType:   &roleActor,
+				},
+			},
+		}, nil
+	case "default-review":
+		nextIndex := 1
+		return systemTemplateNodeSeedPlan{
+			Seeds: []flowNodeSeedSpec{
+				{
+					DisplayName:   "Work",
+					NodeType:      "work",
+					Position:      0,
+					ActorType:     &roleActor,
+					NextSeedIndex: &nextIndex,
+				},
+				{
+					DisplayName:         "Review",
+					NodeType:            "review",
+					Position:            1,
+					RequiresHumanReview: true,
+				},
+			},
+		}, nil
+	default:
+		return systemTemplateNodeSeedPlan{}, fmt.Errorf("unsupported system flow template slug %q", template.Slug)
+	}
+}
+
+func (b *Bootstrapper) seedSystemTemplateNodes(ctx context.Context, templates []repo.FlowTemplate) error {
+	for _, template := range templates {
+		plan, err := b.planSystemTemplateNodes(ctx, template)
+		if err != nil {
+			return err
+		}
+		if err := b.applySystemTemplateNodeSeedPlan(ctx, template, plan); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *Bootstrapper) planSystemTemplateNodes(ctx context.Context, template repo.FlowTemplate) (systemTemplateNodeSeedPlan, error) {
+	if !template.IsSystem {
+		return systemTemplateNodeSeedPlan{}, nil
+	}
+
+	existing, err := b.flowNodeRepo.GetByTemplateOrdered(ctx, template.ID)
+	if err != nil {
+		return systemTemplateNodeSeedPlan{}, err
+	}
+	return buildSystemTemplateNodeSeedPlan(template, existing)
+}
+
+func (b *Bootstrapper) applySystemTemplateNodeSeedPlan(ctx context.Context, template repo.FlowTemplate, plan systemTemplateNodeSeedPlan) error {
+	if len(plan.Seeds) == 0 {
+		if plan.StartNodeID != nil {
+			return b.updateTemplateStartNode(ctx, template, *plan.StartNodeID)
+		}
+		return nil
+	}
+
+	created := make([]repo.FlowNode, 0, len(plan.Seeds))
+	for _, seed := range plan.Seeds {
+		node, err := b.flowNodeRepo.Create(ctx, repo.FlowNode{
+			FlowTemplateID:      template.ID,
+			DisplayName:         seed.DisplayName,
+			NodeType:            seed.NodeType,
+			Position:            seed.Position,
+			ActorType:           seed.ActorType,
+			RequiresHumanReview: seed.RequiresHumanReview,
+		})
+		if err != nil {
+			return err
+		}
+		created = append(created, node)
+	}
+
+	for i := range created {
+		nextIndex := plan.Seeds[i].NextSeedIndex
+		if nextIndex == nil {
+			continue
+		}
+		if *nextIndex < 0 || *nextIndex >= len(created) {
+			return fmt.Errorf("seed plan next node index %d out of range for template %s", *nextIndex, template.Slug)
+		}
+		node := created[i]
+		node.NextNodeID = &created[*nextIndex].ID
+		if _, err := b.flowNodeRepo.Update(ctx, node); err != nil {
+			return err
+		}
+	}
+
+	return b.updateTemplateStartNode(ctx, template, created[0].ID)
+}
+
+func (b *Bootstrapper) updateTemplateStartNode(ctx context.Context, template repo.FlowTemplate, nodeID uuid.UUID) error {
+	next := template
+	next.StartNodeID = &nodeID
+	_, err := b.flowTemplateRepo.Update(ctx, next)
 	return err
 }
 

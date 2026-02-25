@@ -177,6 +177,60 @@ func TestBootstrapSeedsSystemFlowTemplatesIdempotently(t *testing.T) {
 	if count != 2 {
 		t.Fatalf("system flow template count = %d, want 2", count)
 	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT slug, start_node_id
+		FROM flow_template
+		WHERE organization_id IS NULL
+		  AND project_id IS NULL
+		  AND is_system = true
+		  AND slug IN ('default-single-agent', 'default-review')
+		ORDER BY slug ASC
+	`)
+	if err != nil {
+		t.Fatalf("list system templates: %v", err)
+	}
+	defer rows.Close()
+
+	startNodeBySlug := map[string]uuid.UUID{}
+	for rows.Next() {
+		var (
+			slug        string
+			startNodeID *uuid.UUID
+		)
+		if err := rows.Scan(&slug, &startNodeID); err != nil {
+			t.Fatalf("scan system template row: %v", err)
+		}
+		if startNodeID == nil || *startNodeID == uuid.Nil {
+			t.Fatalf("template %q start_node_id = %v, want non-nil", slug, startNodeID)
+		}
+		startNodeBySlug[slug] = *startNodeID
+	}
+	if rows.Err() != nil {
+		t.Fatalf("iterate system templates: %v", rows.Err())
+	}
+
+	for _, slug := range []string{"default-review", "default-single-agent"} {
+		if _, ok := startNodeBySlug[slug]; !ok {
+			t.Fatalf("missing seeded system template %q", slug)
+		}
+	}
+
+	var totalNodes int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM flow_node n
+		JOIN flow_template t ON t.id = n.flow_template_id
+		WHERE t.organization_id IS NULL
+		  AND t.project_id IS NULL
+		  AND t.is_system = true
+		  AND t.slug IN ('default-single-agent', 'default-review')
+	`).Scan(&totalNodes); err != nil {
+		t.Fatalf("count system flow nodes: %v", err)
+	}
+	if totalNodes != 3 {
+		t.Fatalf("system flow node count = %d, want 3", totalNodes)
+	}
 }
 
 func TestTestResetRouteResetsAndRebootstrapsInTestMode(t *testing.T) {

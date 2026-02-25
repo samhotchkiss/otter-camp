@@ -553,6 +553,15 @@ func (h projectHandlers) updateFlowTemplate(w http.ResponseWriter, r *http.Reque
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid flow template id")
 		return
 	}
+	template, getErr := h.service.GetFlowTemplate(r.Context(), principal.OrganizationID, templateID)
+	if getErr != nil {
+		h.respondProjectError(responder, w, getErr)
+		return
+	}
+	if h.isSystemTemplateReadOnlyForPrincipal(principal, template) {
+		responder.Error(w, http.StatusForbidden, api.ErrCodeForbidden, "forbidden")
+		return
+	}
 
 	var req updateFlowTemplateRequest
 	if err := decodeJSON(r, &req); err != nil {
@@ -633,8 +642,13 @@ func (h projectHandlers) addFlowNode(w http.ResponseWriter, r *http.Request) {
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid flow template id")
 		return
 	}
-	if _, err := h.service.GetFlowTemplate(r.Context(), principal.OrganizationID, templateID); err != nil {
+	template, err := h.service.GetFlowTemplate(r.Context(), principal.OrganizationID, templateID)
+	if err != nil {
 		h.respondProjectError(responder, w, err)
+		return
+	}
+	if h.isSystemTemplateReadOnlyForPrincipal(principal, template) {
+		responder.Error(w, http.StatusForbidden, api.ErrCodeForbidden, "forbidden")
 		return
 	}
 
@@ -701,8 +715,13 @@ func (h projectHandlers) updateFlowNode(w http.ResponseWriter, r *http.Request) 
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid flow node id")
 		return
 	}
-	if _, err := h.service.GetFlowTemplate(r.Context(), principal.OrganizationID, templateID); err != nil {
+	template, err := h.service.GetFlowTemplate(r.Context(), principal.OrganizationID, templateID)
+	if err != nil {
 		h.respondProjectError(responder, w, err)
+		return
+	}
+	if h.isSystemTemplateReadOnlyForPrincipal(principal, template) {
+		responder.Error(w, http.StatusForbidden, api.ErrCodeForbidden, "forbidden")
 		return
 	}
 	if !h.nodeBelongsToTemplate(r, templateID, nodeID) {
@@ -754,8 +773,13 @@ func (h projectHandlers) deleteFlowNode(w http.ResponseWriter, r *http.Request) 
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid flow node id")
 		return
 	}
-	if _, err := h.service.GetFlowTemplate(r.Context(), principal.OrganizationID, templateID); err != nil {
+	template, err := h.service.GetFlowTemplate(r.Context(), principal.OrganizationID, templateID)
+	if err != nil {
 		h.respondProjectError(responder, w, err)
+		return
+	}
+	if h.isSystemTemplateReadOnlyForPrincipal(principal, template) {
+		responder.Error(w, http.StatusForbidden, api.ErrCodeForbidden, "forbidden")
 		return
 	}
 	if !h.nodeBelongsToTemplate(r, templateID, nodeID) {
@@ -1050,6 +1074,17 @@ func (h projectHandlers) requirePrincipal(w http.ResponseWriter, r *http.Request
 		return middleware.Principal{}, false
 	}
 	return principal, true
+}
+
+func (h projectHandlers) isSystemTemplateReadOnlyForPrincipal(principal middleware.Principal, template *projectsvc.FlowTemplate) bool {
+	if template == nil || template.OrganizationID != nil {
+		return false
+	}
+	return !isProjectAdminRole(principal.Role)
+}
+
+func isProjectAdminRole(role string) bool {
+	return strings.EqualFold(strings.TrimSpace(role), "admin")
 }
 
 func (h projectHandlers) nodeBelongsToTemplate(r *http.Request, templateID, nodeID uuid.UUID) bool {

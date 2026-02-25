@@ -580,9 +580,6 @@ func (s *service) UpdateFlowTemplate(ctx context.Context, orgID, templateID uuid
 	if err != nil {
 		return nil, err
 	}
-	if template.IsSystem {
-		return nil, ErrSystemTemplateProtected
-	}
 
 	updatedByType, updatedByID, err := normalizeActor(req.UpdatedByType, req.UpdatedByID)
 	if err != nil {
