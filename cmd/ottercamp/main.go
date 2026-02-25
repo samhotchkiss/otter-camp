@@ -1659,7 +1659,7 @@ func (c *cliAPIClient) request(ctx context.Context, method, path string, payload
 		return err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("api %s %s returned %d: %s", method, path, res.StatusCode, strings.TrimSpace(string(data)))
+		return parseCLIAPIError(method, path, res.StatusCode, data)
 	}
 	if out == nil {
 		return nil
@@ -1981,12 +1981,7 @@ func runVersionCommand(args []string) int {
 }
 
 func runChatCommand(args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: ottercamp chat <start|send|list|history> [flags]")
-		return 1
-	}
-	fmt.Fprintln(os.Stderr, "chat command group is wired in task 051")
-	return 1
+	return runChatCommandImpl(args)
 }
 
 func runServerCommand(args []string) int {
