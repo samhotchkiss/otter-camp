@@ -485,6 +485,40 @@ func TestTurn_Steer(t *testing.T) {
 		t.Fatalf("SteerTurn: %v", err)
 	}
 
+	cancelledTurn, err := svc.GetTurn(baseCtx, turn.ID)
+	if err != nil {
+		t.Fatalf("GetTurn cancelled: %v", err)
+	}
+	if cancelledTurn.Status != "cancelled" {
+		t.Fatalf("original turn status = %q, want cancelled", cancelledTurn.Status)
+	}
+
+	turns, err := svc.ListTurns(baseCtx, session.ID)
+	if err != nil {
+		t.Fatalf("ListTurns: %v", err)
+	}
+	var pendingTurn *ChatTurn
+	for _, item := range turns {
+		if item.ID == turn.ID {
+			continue
+		}
+		if item.Status == "pending" {
+			pendingTurn = item
+			break
+		}
+	}
+	if pendingTurn == nil {
+		t.Fatal("expected a new pending turn after steer")
+	}
+
+	redactedOriginal, err := svc.GetMessage(baseCtx, original.ID)
+	if err != nil {
+		t.Fatalf("GetMessage original: %v", err)
+	}
+	if redactedOriginal.Status != "redacted" {
+		t.Fatalf("original message status = %q, want redacted", redactedOriginal.Status)
+	}
+
 	messages, err := svc.ListMessages(baseCtx, session.ID, MessageFilter{Limit: 10})
 	if err != nil {
 		t.Fatalf("ListMessages: %v", err)
@@ -506,6 +540,9 @@ func TestTurn_Steer(t *testing.T) {
 	}
 	if metadata["steer_turn_id"] != turn.ID.String() {
 		t.Fatalf("metadata.steer_turn_id = %v, want %s", metadata["steer_turn_id"], turn.ID)
+	}
+	if steer.TurnID == nil || *steer.TurnID != pendingTurn.ID {
+		t.Fatalf("steer turn_id = %v, want %s", steer.TurnID, pendingTurn.ID)
 	}
 }
 
