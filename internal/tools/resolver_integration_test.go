@@ -24,29 +24,8 @@ func TestToolResolverIntegrationFullPipelineAndCacheHit(t *testing.T) {
 	org, projectA, _, agent := seedToolResolverBase(t, ctx, pool, []string{"git.*"})
 	session := seedProjectScopedSession(t, ctx, pool, org.ID, projectA.ID)
 
-	toolRepo := repo.NewToolDefinitionRepo(pool)
-	if _, err := toolRepo.Create(ctx, repo.ToolDefinition{
-		Name:        "memory.query",
-		DisplayName: "Memory Query",
-		Description: "Query memory",
-		ToolTier:    "tier1",
-		ToolDomain:  "memory",
-		IsEnabled:   true,
-		InputSchema: json.RawMessage(`{"type":"object"}`),
-	}); err != nil {
-		t.Fatalf("create memory tool: %v", err)
-	}
-	if _, err := toolRepo.Create(ctx, repo.ToolDefinition{
-		Name:        "git.push",
-		DisplayName: "Git Push",
-		Description: "Push branch",
-		ToolTier:    "tier2",
-		ToolDomain:  "git",
-		IsEnabled:   true,
-		InputSchema: json.RawMessage(`{"type":"object"}`),
-	}); err != nil {
-		t.Fatalf("create git tool: %v", err)
-	}
+	seedNativeTool(t, ctx, pool, "memory.lookup", "tier1", "memory")
+	seedNativeTool(t, ctx, pool, "git.test_push", "tier2", "git")
 
 	conn := seedMCPConnection(t, ctx, pool, org.ID, nil)
 	seedMCPToolCatalogEntry(t, ctx, pool, conn.ID, "mcp.github.create_issue")
@@ -60,14 +39,14 @@ func TestToolResolverIntegrationFullPipelineAndCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSessionToolSet first: %v", err)
 	}
-	if !containsTool(first, "memory.query") {
-		t.Fatalf("resolved set missing memory.query: %+v", first)
+	if !containsTool(first, "memory.lookup") {
+		t.Fatalf("resolved set missing memory.lookup: %+v", first)
 	}
 	if !containsTool(first, "mcp.github.create_issue") {
 		t.Fatalf("resolved set missing org-scoped mcp tool: %+v", first)
 	}
-	if containsTool(first, "git.push") {
-		t.Fatalf("resolved set unexpectedly contains git.push despite deny list")
+	if containsTool(first, "git.test_push") {
+		t.Fatalf("resolved set unexpectedly contains git.test_push despite deny list")
 	}
 
 	second, err := resolver.GetSessionToolSet(ctx, session.ID, agent.ID)
@@ -104,7 +83,7 @@ func TestToolResolverIntegrationPolicyUpdateInvalidatesAndRebuildsCache(t *testi
 
 	org, projectA, _, agent := seedToolResolverBase(t, ctx, pool, nil)
 	session := seedProjectScopedSession(t, ctx, pool, org.ID, projectA.ID)
-	seedNativeTool(t, ctx, pool, "memory.query", "tier1", "memory")
+	seedNativeTool(t, ctx, pool, "memory.lookup", "tier1", "memory")
 
 	resolver, err := NewToolResolver(ToolResolverOptions{
 		Pool:   pool,
