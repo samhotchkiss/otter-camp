@@ -52,6 +52,7 @@ type AgentTurnPayload struct {
 }
 
 type ModelRequest struct {
+	OrganizationID  uuid.UUID
 	SessionID       uuid.UUID
 	TurnID          uuid.UUID
 	AgentID         uuid.UUID
@@ -803,6 +804,7 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	messages, _ := e.messages.ListBySession(ctx, rt.session.ID)
 	recent := lastNUserMessages(messages, 3)
 	resp, err := e.models.Complete(ctx, ModelRequest{
+		OrganizationID:  rt.session.OrganizationID,
 		SessionID:       rt.session.ID,
 		TurnID:          rt.turn.ID,
 		AgentID:         rt.agent.ID,
@@ -839,6 +841,7 @@ func (e *TurnEngine) runListeningEval(ctx context.Context, rt *turnRuntime, asse
 	messages, _ := e.messages.ListBySession(ctx, rt.session.ID)
 	last3 := lastNUserMessages(messages, 3)
 	resp, err := e.models.Complete(ctx, ModelRequest{
+		OrganizationID:  rt.session.OrganizationID,
 		SessionID:       rt.session.ID,
 		TurnID:          rt.turn.ID,
 		AgentID:         rt.agent.ID,
@@ -1069,12 +1072,13 @@ func (e *TurnEngine) callMainModel(
 		lastSteerPollChunks := 0
 
 		response, callErr := e.models.StreamComplete(ctx, ModelRequest{
-			SessionID: rt.session.ID,
-			TurnID:    rt.turn.ID,
-			AgentID:   rt.agent.ID,
-			Purpose:   "agent_turn",
-			Profile:   profile,
-			Prompt:    assembled,
+			OrganizationID: rt.session.OrganizationID,
+			SessionID:      rt.session.ID,
+			TurnID:         rt.turn.ID,
+			AgentID:        rt.agent.ID,
+			Purpose:        "agent_turn",
+			Profile:        profile,
+			Prompt:         assembled,
 		}, func(token string) error {
 			if !streamingMarked {
 				if err := e.chat.UpdateMessageStatus(ctx, assistant.ID, "streaming", ""); err != nil {
@@ -1466,6 +1470,9 @@ func isTransientModelError(err error) bool {
 		return false
 	}
 	if errors.Is(err, ErrModelTransient) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if errors.Is(err, ErrRateLimited) {
 		return true
 	}
 	var netErr net.Error

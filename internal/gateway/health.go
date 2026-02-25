@@ -147,6 +147,45 @@ func (h *HealthChecker) RecordFailure(connectionID uuid.UUID, err error) {
 	}
 }
 
+func (h *HealthChecker) MarkDegraded(connectionID uuid.UUID) {
+	now := h.now().UTC()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	record := h.recordLocked(connectionID)
+	record.state = HealthStateDegraded
+	record.lastFailureAt = now
+	record.consecutiveFailures = max(record.consecutiveFailures, 2)
+	bumpRecoveryProbe(record, now)
+}
+
+func (h *HealthChecker) MarkRateLimited(connectionID uuid.UUID) {
+	now := h.now().UTC()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	record := h.recordLocked(connectionID)
+	record.state = HealthStateRateLimited
+	record.lastFailureAt = now
+	record.consecutiveFailures = max(record.consecutiveFailures, 2)
+	bumpRecoveryProbe(record, now)
+}
+
+func (h *HealthChecker) MarkUnavailable(connectionID uuid.UUID) {
+	now := h.now().UTC()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	record := h.recordLocked(connectionID)
+	record.state = HealthStateUnavailable
+	record.lastFailureAt = now
+	record.consecutiveFailures = max(record.consecutiveFailures, 5)
+	bumpRecoveryProbe(record, now)
+}
+
 func becomesUnavailable(record *healthRecord, now time.Time) bool {
 	if record.consecutiveFailures >= 5 {
 		return true
@@ -173,4 +212,11 @@ func (h *HealthChecker) recordLocked(connectionID uuid.UUID) *healthRecord {
 		h.records[connectionID] = record
 	}
 	return record
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
