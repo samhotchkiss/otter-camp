@@ -60,8 +60,10 @@ type Run struct {
 type RunListFilter struct {
 	OrganizationID  uuid.UUID
 	TaskID          *uuid.UUID
+	FlowNodeID      *uuid.UUID
 	Status          string
 	PrincipalID     *uuid.UUID
+	TriggerType     string
 	Limit           int
 	CursorCreatedAt *time.Time
 	CursorID        *uuid.UUID
@@ -245,6 +247,11 @@ func (r *RunRepository) List(ctx context.Context, filter RunListFilter) ([]Run, 
 		args = append(args, *filter.TaskID)
 		argPos++
 	}
+	if filter.FlowNodeID != nil {
+		query += fmt.Sprintf(" AND flow_node_id = $%d", argPos)
+		args = append(args, *filter.FlowNodeID)
+		argPos++
+	}
 	if status := normalizeRunStatus(filter.Status); status != "" {
 		query += fmt.Sprintf(" AND status = $%d", argPos)
 		args = append(args, status)
@@ -253,6 +260,11 @@ func (r *RunRepository) List(ctx context.Context, filter RunListFilter) ([]Run, 
 	if filter.PrincipalID != nil {
 		query += fmt.Sprintf(" AND principal_id = $%d", argPos)
 		args = append(args, *filter.PrincipalID)
+		argPos++
+	}
+	if triggerType := normalizeTriggerType(filter.TriggerType); triggerType != "" {
+		query += fmt.Sprintf(" AND trigger_type = $%d", argPos)
+		args = append(args, triggerType)
 		argPos++
 	}
 	if filter.CursorCreatedAt != nil && filter.CursorID != nil {
@@ -779,6 +791,18 @@ type ToolExecution struct {
 	CreatedAt      time.Time
 }
 
+type ToolExecutionListFilter struct {
+	OrganizationID  uuid.UUID
+	RunID           *uuid.UUID
+	ToolName        string
+	ToolDomain      string
+	PolicyDecision  string
+	Status          string
+	Limit           int
+	CursorCreatedAt *time.Time
+	CursorID        *uuid.UUID
+}
+
 type ToolExecutionRepository struct {
 	db queryExecutor
 }
@@ -865,6 +889,30 @@ func (r *ToolExecutionRepository) Get(ctx context.Context, id uuid.UUID) (ToolEx
 	return item, nil
 }
 
+func (r *ToolExecutionRepository) GetByOrganization(ctx context.Context, organizationID, id uuid.UUID) (ToolExecution, error) {
+	if organizationID == uuid.Nil {
+		return ToolExecution{}, fmt.Errorf("organization_id is required")
+	}
+
+	row := r.db.QueryRow(ctx, `
+		SELECT te.id, te.run_id, te.run_step_id, te.run_attempt_id, te.tool_name, te.tool_tier, te.tool_domain, te.capability,
+		       te.policy_decision, te.input, te.output, te.status, te.error_message, te.started_at, te.completed_at, te.duration_ms,
+		       te.metadata, te.created_at
+		FROM tool_execution te
+		JOIN run r ON r.id = te.run_id
+		WHERE te.id = $1
+		  AND r.organization_id = $2
+	`, id, organizationID)
+	item, err := scanToolExecution(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ToolExecution{}, ErrNotFound
+	}
+	if err != nil {
+		return ToolExecution{}, mapDBError(err)
+	}
+	return item, nil
+}
+
 func (r *ToolExecutionRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status string, output json.RawMessage, errorMessage *string) (ToolExecution, error) {
 	status = normalizeToolExecutionStatus(status)
 	if status == "" {
@@ -896,6 +944,76 @@ func (r *ToolExecutionRepository) UpdateStatus(ctx context.Context, id uuid.UUID
 		return ToolExecution{}, mapDBError(err)
 	}
 	return item, nil
+}
+
+func (r *ToolExecutionRepository) ListByOrganization(ctx context.Context, filter ToolExecutionListFilter) ([]ToolExecution, error) {
+	if filter.OrganizationID == uuid.Nil {
+		return nil, fmt.Errorf("organization_id is required")
+	}
+	limit := normalizeLimit(filter.Limit)
+
+	query := `
+		SELECT te.id, te.run_id, te.run_step_id, te.run_attempt_id, te.tool_name, te.tool_tier, te.tool_domain, te.capability,
+		       te.policy_decision, te.input, te.output, te.status, te.error_message, te.started_at, te.completed_at, te.duration_ms,
+		       te.metadata, te.created_at
+		FROM tool_execution te
+		JOIN run r ON r.id = te.run_id
+		WHERE r.organization_id = $1`
+	args := []any{filter.OrganizationID}
+	argPos := 2
+
+	if filter.RunID != nil {
+		query += fmt.Sprintf(" AND te.run_id = $%d", argPos)
+		args = append(args, *filter.RunID)
+		argPos++
+	}
+	if toolName := strings.TrimSpace(filter.ToolName); toolName != "" {
+		query += fmt.Sprintf(" AND te.tool_name = $%d", argPos)
+		args = append(args, toolName)
+		argPos++
+	}
+	if toolDomain := normalizeToolDomain(filter.ToolDomain); toolDomain != "" {
+		query += fmt.Sprintf(" AND te.tool_domain = $%d", argPos)
+		args = append(args, toolDomain)
+		argPos++
+	}
+	if policyDecision := normalizePolicyDecision(filter.PolicyDecision); policyDecision != "" {
+		query += fmt.Sprintf(" AND te.policy_decision = $%d", argPos)
+		args = append(args, policyDecision)
+		argPos++
+	}
+	if status := normalizeToolExecutionStatus(filter.Status); status != "" {
+		query += fmt.Sprintf(" AND te.status = $%d", argPos)
+		args = append(args, status)
+		argPos++
+	}
+	if filter.CursorCreatedAt != nil && filter.CursorID != nil {
+		query += fmt.Sprintf(" AND (te.created_at, te.id) < ($%d, $%d)", argPos, argPos+1)
+		args = append(args, filter.CursorCreatedAt.UTC(), *filter.CursorID)
+		argPos += 2
+	}
+
+	query += fmt.Sprintf(" ORDER BY te.created_at DESC, te.id DESC LIMIT $%d", argPos)
+	args = append(args, limit)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	items := make([]ToolExecution, 0)
+	for rows.Next() {
+		item, scanErr := scanToolExecution(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		items = append(items, item)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return items, nil
 }
 
 func (r *ToolExecutionRepository) ListByRun(ctx context.Context, runID uuid.UUID) ([]ToolExecution, error) {
@@ -1434,6 +1552,24 @@ func normalizeRunAttemptTrigger(value string) string {
 func normalizeToolExecutionStatus(value string) string {
 	switch strings.TrimSpace(strings.ToLower(value)) {
 	case "pending", "in_progress", "completed", "failed", "policy_denied", "timed_out":
+		return strings.TrimSpace(strings.ToLower(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeToolDomain(value string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "native", "mcp", "cli", "browser":
+		return strings.TrimSpace(strings.ToLower(value))
+	default:
+		return ""
+	}
+}
+
+func normalizePolicyDecision(value string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "allowed", "denied", "not_checked":
 		return strings.TrimSpace(strings.ToLower(value))
 	default:
 		return ""

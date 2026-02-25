@@ -25,9 +25,11 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/audit"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
+	"github.com/samhotchkiss/otter-camp/internal/budget"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/config"
+	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/db"
 	deliverysvc "github.com/samhotchkiss/otter-camp/internal/delivery"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
@@ -266,6 +268,28 @@ func runServe() int {
 		fmt.Fprintf(os.Stderr, "flow service setup error: %v\n", err)
 		return 1
 	}
+
+	budgetService, err := budget.NewService(budget.Options{
+		Pool:   pool.Raw(),
+		Events: bus,
+		Logger: logger,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "budget service setup error: %v\n", err)
+		return 1
+	}
+	runService, err := controlplane.NewRunService(controlplane.RunServiceOptions{
+		Pool:          pool.Raw(),
+		EventBus:      bus,
+		Budget:        budgetService,
+		SessionBridge: flowSessionBridge,
+		Logger:        logger,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "run service setup error: %v\n", err)
+		return 1
+	}
+
 	pushPreferenceRepo := push.NewPreferenceRepository(pool.Raw())
 	pushPreferenceService, err := push.NewPreferenceService(push.PreferenceServiceOptions{
 		Repository: pushPreferenceRepo,
@@ -348,6 +372,10 @@ func runServe() int {
 				Evaluator:     policyEvaluator,
 				AuditRecorder: auditRecorder,
 				BootstrapMode: strings.EqualFold(strings.TrimSpace(os.Getenv("OTTERCAMP_BOOTSTRAP_MODE")), "true"),
+			}),
+			server.NewControlPlaneRouteRegistrar(server.ControlPlaneRouteOptions{
+				Pool:       pool.Raw(),
+				RunService: runService,
 			}),
 		},
 		TestMode:     cfg.Mode == config.ModeTest,
