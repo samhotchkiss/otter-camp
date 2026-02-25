@@ -102,6 +102,26 @@ func (r *HumanUserRepo) GetByEmail(ctx context.Context, organizationID uuid.UUID
 	return user, nil
 }
 
+func (r *HumanUserRepo) GetByEmailAnyOrg(ctx context.Context, email string) (HumanUser, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, organization_id, email, display_name, password_hash, role, is_active, failed_login_attempts, locked_until, last_login_at, created_at, updated_at, settings
+		FROM human_user
+		WHERE email = $1
+		ORDER BY created_at ASC
+		LIMIT 1
+	`, email)
+
+	user, err := scanHumanUser(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return HumanUser{}, ErrNotFound
+	}
+	if err != nil {
+		return HumanUser{}, mapDBError(err)
+	}
+
+	return user, nil
+}
+
 func (r *HumanUserRepo) List(ctx context.Context, organizationID uuid.UUID) ([]HumanUser, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, organization_id, email, display_name, password_hash, role, is_active, failed_login_attempts, locked_until, last_login_at, created_at, updated_at, settings

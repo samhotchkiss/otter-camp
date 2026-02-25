@@ -35,6 +35,10 @@ type authSessionRepository interface {
 	Revoke(ctx context.Context, id uuid.UUID) error
 }
 
+type orgLookupByEmailRepository interface {
+	GetByEmailAnyOrg(ctx context.Context, email string) (repo.HumanUser, error)
+}
+
 func newAuthHandlers(service auth.Service, users authUserRepository, sessions authSessionRepository) authHandlers {
 	return authHandlers{service: service, users: users, sessions: sessions}
 }
@@ -95,7 +99,22 @@ func (h authHandlers) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.service.Login(r.Context(), strings.TrimSpace(req.Email), req.Password, requestClientIP(r), r.UserAgent())
+	email := strings.TrimSpace(req.Email)
+	result, err := h.service.Login(r.Context(), email, req.Password, requestClientIP(r), r.UserAgent())
+	if errors.Is(err, auth.ErrNoDefaultOrganization) {
+		if lookup, ok := h.users.(orgLookupByEmailRepository); ok {
+			found, lookupErr := lookup.GetByEmailAnyOrg(r.Context(), email)
+			switch {
+			case lookupErr == nil:
+				ctx := auth.WithOrganizationID(r.Context(), found.OrganizationID)
+				result, err = h.service.Login(ctx, email, req.Password, requestClientIP(r), r.UserAgent())
+			case errors.Is(lookupErr, repo.ErrNotFound):
+				err = auth.ErrInvalidCredentials
+			default:
+				err = lookupErr
+			}
+		}
+	}
 	if err != nil {
 		if errors.Is(err, auth.ErrRateLimited) {
 			// Default auth limiter window is 15 minutes.

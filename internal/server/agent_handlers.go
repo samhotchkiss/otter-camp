@@ -339,9 +339,16 @@ func (h agentHandlers) listAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agentType := strings.ToLower(strings.TrimSpace(query.Get("agent_type")))
+	if agentType == "" {
+		agentType = strings.ToLower(strings.TrimSpace(query.Get("role")))
+	}
 	if agentType != "" && !isAllowedAgentType(agentType) {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "agent_type must be one of pm, worker, reviewer, general")
 		return
+	}
+	nameFilter := strings.ToLower(strings.TrimSpace(query.Get("name")))
+	if nameFilter == "" {
+		nameFilter = strings.ToLower(strings.TrimSpace(query.Get("display_name")))
 	}
 
 	params := api.ParsePaginationParams(query)
@@ -385,6 +392,9 @@ func (h agentHandlers) listAgents(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if agentType != "" && strings.ToLower(strings.TrimSpace(item.AgentType)) != agentType {
+			continue
+		}
+		if nameFilter != "" && !strings.Contains(strings.ToLower(strings.TrimSpace(item.DisplayName)), nameFilter) {
 			continue
 		}
 		filtered = append(filtered, item)
