@@ -26,18 +26,18 @@ import (
 )
 
 const (
-	AgentTurnJobType             = "agent_turn"
-	defaultAgentTurnJobPriority  = 70
-	defaultMaxToolCalls          = 25
-	defaultSyncMaxDuration       = 5 * time.Minute
-	defaultAsyncMaxDuration      = 30 * time.Minute
-	defaultListeningEvalDelay    = 500 * time.Millisecond
-	defaultModelRetryBudget      = 3
-	defaultSummarizeLayerBudget  = 0
-	chunkPollSteerEveryNChunks   = 10
-	maxContinuationTurnDepth     = 3
-	defaultTurnConsumerName      = "turn-engine.user-message"
-	defaultReactionConsumerName  = "turn-engine.reactions"
+	AgentTurnJobType            = "agent_turn"
+	defaultAgentTurnJobPriority = 70
+	defaultMaxToolCalls         = 25
+	defaultSyncMaxDuration      = 5 * time.Minute
+	defaultAsyncMaxDuration     = 30 * time.Minute
+	defaultListeningEvalDelay   = 500 * time.Millisecond
+	defaultModelRetryBudget     = 3
+	defaultSummarizeLayerBudget = 0
+	chunkPollSteerEveryNChunks  = 10
+	maxContinuationTurnDepth    = 3
+	defaultTurnConsumerName     = "turn-engine.user-message"
+	defaultReactionConsumerName = "turn-engine.reactions"
 )
 
 var (
@@ -430,7 +430,9 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 	}, nil
 }
 
-func (e *TurnEngine) RegisterJobHandler(worker interface{ Register(jobType string, handler jobqueue.JobHandler) }) {
+func (e *TurnEngine) RegisterJobHandler(worker interface {
+	Register(jobType string, handler jobqueue.JobHandler)
+}) {
 	if e == nil || worker == nil {
 		return
 	}
@@ -1034,6 +1036,7 @@ func (e *TurnEngine) callMainModel(
 			return ModelResponse{}, fmt.Errorf("model retry budget exhausted")
 		}
 		rt.invocationAttempt++
+		invocationMetadata := buildInvocationMetadata(assembled)
 		invocation, err := e.invocations.Create(ctx, repo.ModelInvocation{
 			OrganizationID:           rt.session.OrganizationID,
 			ModelProviderID:          profile.ProviderID,
@@ -1052,7 +1055,7 @@ func (e *TurnEngine) callMainModel(
 			RunID:                    nil,
 			RunStepID:                nil,
 			RunAttemptID:             nil,
-			Metadata:                 json.RawMessage(`{}`),
+			Metadata:                 invocationMetadata,
 		})
 		if err != nil {
 			return ModelResponse{}, err
@@ -1502,6 +1505,32 @@ func estimateTokensFromPrompt(assembled *prompt.AssembledPrompt) int {
 		total = estimateTokens(assembled.SystemPrompt)
 	}
 	return total
+}
+
+func buildInvocationMetadata(assembled *prompt.AssembledPrompt) json.RawMessage {
+	if assembled == nil {
+		return json.RawMessage(`{}`)
+	}
+
+	layerTokens := make(map[string]any, len(assembled.LayerTokens)+1)
+	for key, value := range assembled.LayerTokens {
+		layerTokens[key] = value
+	}
+	memoryTokens := 0
+	if value, ok := assembled.LayerTokens["layer5"]; ok && value > 0 {
+		memoryTokens = value
+	}
+	layerTokens["memory_injection"] = memoryTokens
+
+	payload := map[string]any{
+		"layer_token_counts":  layerTokens,
+		"memory_layer_tokens": memoryTokens,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return raw
 }
 
 func estimateTokens(content string) int {

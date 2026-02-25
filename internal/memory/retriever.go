@@ -183,7 +183,14 @@ func (r *Retriever) stage1ScopeFilter(ctx context.Context, req RetrievalRequest)
 
 func (r *Retriever) resolveReadScopes(ctx context.Context, req RetrievalRequest) ([]string, error) {
 	if req.AgentID == nil || *req.AgentID == uuid.Nil {
-		return []string{"org"}, nil
+		scopes := []string{"org"}
+		if req.ProjectID != nil && *req.ProjectID != uuid.Nil {
+			scopes = append(scopes, "project")
+		}
+		if req.TaskID != nil && *req.TaskID != uuid.Nil {
+			scopes = append(scopes, "task")
+		}
+		return scopes, nil
 	}
 
 	agent, err := r.agents.GetByID(ctx, *req.AgentID)

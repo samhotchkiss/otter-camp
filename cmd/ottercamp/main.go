@@ -423,6 +423,7 @@ func runServe() int {
 				Retriever: memoryRetriever,
 				Importer:  memoryImporterService,
 				Store:     store,
+				TestMode:  cfg.Mode == config.ModeTest,
 			}),
 			server.NewPushRouteRegistrar(pushPreferenceService, pushPreferenceRepo),
 			server.NewCapabilityPolicyRouteRegistrar(server.CapabilityPolicyRouteOptions{

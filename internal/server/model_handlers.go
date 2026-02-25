@@ -54,6 +54,12 @@ type modelProfileAssignmentRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
+type modelInvocationRepository interface {
+	ListByOrg(ctx context.Context, organizationID uuid.UUID) ([]repo.ModelInvocation, error)
+	ListByRun(ctx context.Context, organizationID, runID uuid.UUID) ([]repo.ModelInvocation, error)
+	ListBySession(ctx context.Context, organizationID, sessionID uuid.UUID) ([]repo.ModelInvocation, error)
+}
+
 type ModelRouteRegistrar struct {
 	handlers modelHandlers
 }
@@ -65,6 +71,7 @@ func NewModelRouteRegistrar(pool *pgxpool.Pool) *ModelRouteRegistrar {
 		handlers.connections = repo.NewProviderConnectionRepo(pool)
 		handlers.profiles = repo.NewModelProfileRepo(pool)
 		handlers.assignments = repo.NewModelProfileAssignmentRepo(pool)
+		handlers.invocations = repo.NewModelInvocationRepo(pool)
 	}
 	return &ModelRouteRegistrar{handlers: handlers}
 }
@@ -86,6 +93,7 @@ func (r *ModelRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.Get("/model/assignments", r.handlers.listAssignments)
 	router.With(middleware.RequireRole("admin")).Put("/model/assignments/{scope_type}/{scope_id}", r.handlers.putAssignment)
 	router.With(middleware.RequireRole("admin")).Delete("/model/assignments/{scope_type}/{scope_id}", r.handlers.deleteAssignment)
+	router.Get("/model/invocations", r.handlers.listInvocations)
 
 	router.Get("/usage", r.handlers.getUsage)
 	router.Get("/usage/summary", r.handlers.getUsageSummary)
@@ -97,6 +105,7 @@ type modelHandlers struct {
 	connections providerConnectionRepository
 	profiles    modelProfileRepository
 	assignments modelProfileAssignmentRepository
+	invocations modelInvocationRepository
 }
 
 type patchProviderRequest struct {
@@ -192,6 +201,24 @@ type assignmentResponse struct {
 	InvocationPurpose string    `json:"invocation_purpose"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+type invocationResponse struct {
+	ID                uuid.UUID       `json:"id"`
+	OrganizationID    uuid.UUID       `json:"organization_id"`
+	ModelProviderID   uuid.UUID       `json:"model_provider_id"`
+	ModelProfileID    *string         `json:"model_profile_id"`
+	InvocationPurpose string          `json:"invocation_purpose"`
+	Status            string          `json:"status"`
+	InputTokens       *int            `json:"input_tokens"`
+	OutputTokens      *int            `json:"output_tokens"`
+	ModelName         string          `json:"model_name"`
+	Metadata          json.RawMessage `json:"metadata"`
+	SessionID         *uuid.UUID      `json:"session_id"`
+	TurnID            *uuid.UUID      `json:"turn_id"`
+	RunID             *uuid.UUID      `json:"run_id"`
+	CreatedAt         time.Time       `json:"created_at"`
+	CompletedAt       *time.Time      `json:"completed_at"`
 }
 
 type usageResponse struct {
@@ -1027,6 +1054,63 @@ func (h modelHandlers) deleteAssignment(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h modelHandlers) listInvocations(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if h.invocations == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "model invocation repository unavailable")
+		return
+	}
+
+	query := r.URL.Query()
+	runIDText := strings.TrimSpace(query.Get("run_id"))
+	sessionIDText := strings.TrimSpace(query.Get("session_id"))
+
+	var (
+		items []repo.ModelInvocation
+		err   error
+	)
+	switch {
+	case runIDText != "":
+		runID, parseErr := uuid.Parse(runIDText)
+		if parseErr != nil {
+			responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid run_id")
+			return
+		}
+		items, err = h.invocations.ListByRun(r.Context(), principal.OrganizationID, runID)
+	case sessionIDText != "":
+		sessionID, parseErr := uuid.Parse(sessionIDText)
+		if parseErr != nil {
+			responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid session_id")
+			return
+		}
+		items, err = h.invocations.ListBySession(r.Context(), principal.OrganizationID, sessionID)
+	default:
+		items, err = h.invocations.ListByOrg(r.Context(), principal.OrganizationID)
+	}
+	if err != nil {
+		h.respondModelError(responder, w, err)
+		return
+	}
+
+	limit := clampListLimit(query.Get("limit"), 50, 200)
+	hasMore := len(items) > limit
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	response := make([]invocationResponse, 0, len(items))
+	for _, item := range items {
+		response = append(response, toInvocationResponse(item))
+	}
+	responder.JSONList(w, http.StatusOK, response, api.PaginationMeta{
+		HasMore: hasMore,
+		Limit:   limit,
+	})
+}
+
 func (h modelHandlers) getUsage(w http.ResponseWriter, r *http.Request) {
 	responder := api.NewResponder(r.Context())
 	principal, ok := h.requirePrincipal(w, r)
@@ -1358,6 +1442,30 @@ func toProfileResponse(profile repo.ModelProfile) profileResponse {
 		IsCurrent:         profile.IsCurrent,
 		OrganizationID:    profile.OrganizationID,
 		CreatedAt:         profile.CreatedAt,
+	}
+}
+
+func toInvocationResponse(item repo.ModelInvocation) invocationResponse {
+	metadata := item.Metadata
+	if len(metadata) == 0 {
+		metadata = json.RawMessage(`{}`)
+	}
+	return invocationResponse{
+		ID:                item.ID,
+		OrganizationID:    item.OrganizationID,
+		ModelProviderID:   item.ModelProviderID,
+		ModelProfileID:    item.ModelProfileID,
+		InvocationPurpose: item.InvocationPurpose,
+		Status:            item.Status,
+		InputTokens:       item.InputTokens,
+		OutputTokens:      item.OutputTokens,
+		ModelName:         item.ModelName,
+		Metadata:          metadata,
+		SessionID:         item.SessionID,
+		TurnID:            item.TurnID,
+		RunID:             item.RunID,
+		CreatedAt:         item.CreatedAt,
+		CompletedAt:       item.CompletedAt,
 	}
 }
 

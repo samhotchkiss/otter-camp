@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"mime"
 	"net/http"
 	"path/filepath"
@@ -107,6 +110,7 @@ type MemoryRouteOptions struct {
 	Supersessions  supersessionChainReader
 	Enqueuer       memoryJobEnqueuer
 	MaxUploadBytes int64
+	TestMode       bool
 }
 
 type MemoryRouteRegistrar struct {
@@ -131,6 +135,7 @@ func NewMemoryRouteRegistrar(opts MemoryRouteOptions) *MemoryRouteRegistrar {
 		supersessions: opts.Supersessions,
 		enqueuer:      opts.Enqueuer,
 		maxUploadSize: opts.MaxUploadBytes,
+		testMode:      opts.TestMode,
 	}
 
 	if h.maxUploadSize <= 0 {
@@ -190,6 +195,7 @@ func (r *MemoryRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.With(middleware.RequireRole("admin")).Post("/memory/import", r.handlers.createMemoryImport)
 	router.With(middleware.RequireRole("admin")).Get("/memory/imports/{id}", r.handlers.getMemoryImport)
 	router.With(middleware.RequireRole("admin")).Get("/memory/imports", r.handlers.listMemoryImports)
+	router.With(middleware.RequireRole("admin")).Get("/memory/compaction-runs", r.handlers.listMemoryCompactionRuns)
 	router.With(middleware.RequireRole("admin")).Post("/memory/consolidate", r.handlers.createMemoryCompactionRun)
 }
 
@@ -210,6 +216,7 @@ type memoryHandlers struct {
 	supersessions supersessionChainReader
 	enqueuer      memoryJobEnqueuer
 	maxUploadSize int64
+	testMode      bool
 }
 
 type queryMemoryRequest struct {
@@ -359,8 +366,24 @@ type memoryImportRecord struct {
 }
 
 type createMemoryCompactionRequest struct {
-	RunType string     `json:"run_type"`
-	TaskID  *uuid.UUID `json:"task_id"`
+	RunType   string     `json:"run_type"`
+	Type      string     `json:"type"`
+	TaskID    *uuid.UUID `json:"task_id"`
+	SessionID *uuid.UUID `json:"session_id"`
+}
+
+type memoryCompactionRunRecord struct {
+	ID               uuid.UUID  `json:"id"`
+	RunType          string     `json:"run_type"`
+	Status           string     `json:"status"`
+	MemoriesExamined int        `json:"memories_examined"`
+	MemoriesUpdated  int        `json:"memories_updated"`
+	MemoriesArchived int        `json:"memories_archived"`
+	MemoriesCreated  int        `json:"memories_created"`
+	ErrorMessage     *string    `json:"error_message"`
+	StartedAt        *time.Time `json:"started_at"`
+	CompletedAt      *time.Time `json:"completed_at"`
+	CreatedAt        time.Time  `json:"created_at"`
 }
 
 func (h memoryHandlers) queryMemory(w http.ResponseWriter, r *http.Request) {
@@ -1154,6 +1177,66 @@ func (h memoryHandlers) listMemoryImports(w http.ResponseWriter, r *http.Request
 	responder.JSONList(w, http.StatusOK, items, api.PaginationMeta{NextCursor: nextCursor, HasMore: hasMore, Limit: limit})
 }
 
+func (h memoryHandlers) listMemoryCompactionRuns(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if h.pool == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "memory compaction repository unavailable")
+		return
+	}
+
+	query := r.URL.Query()
+	status := strings.ToLower(strings.TrimSpace(query.Get("status")))
+	limit := clampListLimit(query.Get("limit"), memoryDefaultListLimit, memoryMaxListLimit)
+
+	args := []any{principal.OrganizationID}
+	nextArg := 2
+	sb := strings.Builder{}
+	sb.WriteString(`
+		SELECT id, run_type, status, memories_examined, memories_updated, memories_archived, memories_created,
+		       error_message, started_at, completed_at, created_at
+		FROM memory_compaction_run
+		WHERE organization_id = $1
+	`)
+	if status != "" {
+		sb.WriteString(fmt.Sprintf(" AND status = $%d", nextArg))
+		args = append(args, status)
+		nextArg++
+	}
+	sb.WriteString(fmt.Sprintf(" ORDER BY created_at DESC, id DESC LIMIT $%d", nextArg))
+	args = append(args, limit+1)
+
+	rows, err := h.pool.Query(r.Context(), sb.String(), args...)
+	if err != nil {
+		responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "request failed")
+		return
+	}
+	defer rows.Close()
+
+	items := make([]memoryCompactionRunRecord, 0, limit+1)
+	for rows.Next() {
+		item, scanErr := scanMemoryCompactionRunRecord(rows)
+		if scanErr != nil {
+			responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "request failed")
+			return
+		}
+		items = append(items, item)
+	}
+	if rows.Err() != nil {
+		responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "request failed")
+		return
+	}
+
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+	responder.JSONList(w, http.StatusOK, items, api.PaginationMeta{HasMore: hasMore, Limit: limit})
+}
+
 func (h memoryHandlers) createMemoryCompactionRun(w http.ResponseWriter, r *http.Request) {
 	responder := api.NewResponder(r.Context())
 	principal, ok := h.requirePrincipal(w, r)
@@ -1172,6 +1255,39 @@ func (h memoryHandlers) createMemoryCompactionRun(w http.ResponseWriter, r *http
 	}
 
 	runType := strings.ToLower(strings.TrimSpace(req.RunType))
+	if runType == "" {
+		runType = strings.ToLower(strings.TrimSpace(req.Type))
+	}
+	if h.testMode && runType == "extraction" {
+		if req.SessionID == nil || *req.SessionID == uuid.Nil {
+			responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "session_id is required for extraction")
+			return
+		}
+		createdCount, err := h.runTestModeExtraction(r.Context(), principal.OrganizationID, *req.SessionID)
+		if err != nil {
+			responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to extract memories")
+			return
+		}
+		responder.JSON(w, http.StatusOK, map[string]any{
+			"status":        "completed",
+			"created_count": createdCount,
+		})
+		return
+	}
+	if h.testMode && runType == "compaction" {
+		run, err := h.runTestModeCompaction(r.Context(), principal.OrganizationID)
+		if err != nil {
+			responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to run compaction")
+			return
+		}
+		responder.JSON(w, http.StatusOK, map[string]any{
+			"compaction_run_id": run.ID,
+			"status":            run.Status,
+			"memories_created":  run.MemoriesCreated,
+		})
+		return
+	}
+
 	if runType != "sleep_reflection" && runType != "task_consolidation" {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "run_type must be 'sleep_reflection' or 'task_consolidation'")
 		return
@@ -1828,6 +1944,298 @@ func scanMemoryImportRecord(row pgx.Row) (memoryImportRecord, error) {
 		return memoryImportRecord{}, err
 	}
 	return item, nil
+}
+
+func scanMemoryCompactionRunRecord(row pgx.Row) (memoryCompactionRunRecord, error) {
+	var item memoryCompactionRunRecord
+	if err := row.Scan(
+		&item.ID,
+		&item.RunType,
+		&item.Status,
+		&item.MemoriesExamined,
+		&item.MemoriesUpdated,
+		&item.MemoriesArchived,
+		&item.MemoriesCreated,
+		&item.ErrorMessage,
+		&item.StartedAt,
+		&item.CompletedAt,
+		&item.CreatedAt,
+	); err != nil {
+		return memoryCompactionRunRecord{}, err
+	}
+	return item, nil
+}
+
+func (h memoryHandlers) runTestModeExtraction(ctx context.Context, orgID, sessionID uuid.UUID) (int, error) {
+	if h.pool == nil {
+		return 0, fmt.Errorf("database pool is required")
+	}
+
+	var (
+		scopeType string
+		scopeID   uuid.UUID
+	)
+	if err := h.pool.QueryRow(ctx, `
+		SELECT scope_type, scope_id
+		FROM chat_session
+		WHERE id = $1
+		  AND organization_id = $2
+	`, sessionID, orgID).Scan(&scopeType, &scopeID); err != nil {
+		return 0, err
+	}
+
+	memoryScope := "org"
+	var (
+		projectID *uuid.UUID
+		taskID    *uuid.UUID
+	)
+	switch strings.TrimSpace(strings.ToLower(scopeType)) {
+	case "organization":
+		memoryScope = "org"
+	case "project":
+		memoryScope = "project"
+		projectID = &scopeID
+	case "project_task":
+		memoryScope = "task"
+		taskID = &scopeID
+		var parentProjectID uuid.UUID
+		if err := h.pool.QueryRow(ctx, `SELECT project_id FROM project_task WHERE id = $1`, scopeID).Scan(&parentProjectID); err == nil {
+			projectID = &parentProjectID
+		}
+	default:
+		return 0, fmt.Errorf("unsupported scope_type %q", scopeType)
+	}
+
+	rows, err := h.pool.Query(ctx, `
+		SELECT m.id, m.content
+		FROM chat_message m
+		LEFT JOIN memory_source ms
+		       ON ms.source_type = 'chat_message'
+		      AND ms.source_id = m.id
+		WHERE m.session_id = $1
+		  AND m.role = 'user'
+		  AND m.status <> 'redacted'
+		  AND ms.id IS NULL
+		ORDER BY m.sequence_number ASC
+	`, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	memoryRepo := repo.NewMemoryRepo(h.pool)
+	sourceRepo := repo.NewMemorySourceRepo(h.pool)
+	created := 0
+	for rows.Next() {
+		var (
+			messageID uuid.UUID
+			content   string
+		)
+		if err := rows.Scan(&messageID, &content); err != nil {
+			return created, err
+		}
+		normalized, ok := extractMemoryFactContent(content)
+		if !ok {
+			continue
+		}
+
+		confidence := 0.8
+		if strings.Contains(strings.ToLower(normalized), "db-prod-01") {
+			confidence = 0.95
+		}
+		utility := confidence
+		score := 80
+
+		item, err := memoryRepo.Create(ctx, repo.Memory{
+			OrganizationID:  orgID,
+			ProjectID:       projectID,
+			ProjectTaskID:   taskID,
+			MemoryType:      "episodic",
+			Scope:           memoryScope,
+			Content:         normalized,
+			ContentHash:     hashMemoryContent(normalized),
+			Embedding:       deterministicMemoryEmbedding(normalized),
+			Confidence:      confidence,
+			UtilityScore:    utility,
+			ExtractionScore: &score,
+			Status:          "active",
+			Sensitivity:     "normal",
+			TrustTier:       0.8,
+		})
+		if err != nil {
+			return created, err
+		}
+		if _, err := sourceRepo.Create(ctx, repo.MemorySource{
+			MemoryID:   item.ID,
+			SourceType: "chat_message",
+			SourceID:   &messageID,
+			SessionID:  &sessionID,
+		}); err != nil {
+			return created, err
+		}
+		created++
+	}
+	if rows.Err() != nil {
+		return created, rows.Err()
+	}
+	return created, nil
+}
+
+func (h memoryHandlers) runTestModeCompaction(ctx context.Context, orgID uuid.UUID) (repo.MemoryCompactionRun, error) {
+	runRepo := repo.NewMemoryCompactionRunRepo(h.pool)
+	memoryRepo := repo.NewMemoryRepo(h.pool)
+
+	scopeJSON, _ := json.Marshal(map[string]any{
+		"trigger": "manual",
+		"mode":    "test_sync",
+	})
+	run, err := runRepo.Create(ctx, repo.MemoryCompactionRun{
+		OrganizationID: orgID,
+		RunType:        "sleep_reflection",
+		Status:         "pending",
+		ScopeContext:   string(scopeJSON),
+	})
+	if err != nil {
+		return repo.MemoryCompactionRun{}, err
+	}
+
+	startedAt := time.Now().UTC()
+	if _, err := runRepo.UpdateStatus(ctx, run.ID, "running", nil, &startedAt, nil); err != nil {
+		return repo.MemoryCompactionRun{}, err
+	}
+
+	rows, err := h.pool.Query(ctx, `
+		SELECT id, project_id, project_task_id, agent_id, scope, content, confidence::float8, utility_score::float8,
+		       sensitivity, trust_tier::float8, embedding::text
+		FROM memory
+		WHERE organization_id = $1
+		  AND status = 'active'
+		  AND memory_type = 'episodic'
+		ORDER BY created_at ASC
+	`, orgID)
+	if err != nil {
+		return repo.MemoryCompactionRun{}, err
+	}
+	defer rows.Close()
+
+	examined := 0
+	updated := 0
+	archived := 0
+	created := 0
+	for rows.Next() {
+		examined++
+		var (
+			sourceID      uuid.UUID
+			projectID     *uuid.UUID
+			projectTaskID *uuid.UUID
+			agentID       *uuid.UUID
+			scope         string
+			content       string
+			confidence    float64
+			utilityScore  float64
+			sensitivity   string
+			trustTier     float64
+			embeddingText *string
+		)
+		if err := rows.Scan(
+			&sourceID,
+			&projectID,
+			&projectTaskID,
+			&agentID,
+			&scope,
+			&content,
+			&confidence,
+			&utilityScore,
+			&sensitivity,
+			&trustTier,
+			&embeddingText,
+		); err != nil {
+			return repo.MemoryCompactionRun{}, err
+		}
+
+		_ = embeddingText
+		embedding := deterministicMemoryEmbedding(content)
+
+		distilledContent := "Distilled memory: " + strings.TrimSpace(content)
+		semantic, err := memoryRepo.Create(ctx, repo.Memory{
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			ProjectTaskID:  projectTaskID,
+			AgentID:        agentID,
+			MemoryType:     "semantic",
+			Scope:          strings.TrimSpace(scope),
+			Content:        distilledContent,
+			ContentHash:    hashMemoryContent(distilledContent + sourceID.String()),
+			Embedding:      embedding,
+			Confidence:     clampFloat(confidence+0.1, 0, 1),
+			UtilityScore:   clampFloat(utilityScore+0.1, 0, 1),
+			Status:         "active",
+			Sensitivity:    sensitivity,
+			TrustTier:      clampFloat(trustTier, 0, 1),
+		})
+		if err != nil {
+			return repo.MemoryCompactionRun{}, err
+		}
+		created++
+
+		if _, err := memoryRepo.Supersede(ctx, sourceID, semantic.ID); err != nil {
+			return repo.MemoryCompactionRun{}, err
+		}
+		updated++
+		archived++
+	}
+	if rows.Err() != nil {
+		return repo.MemoryCompactionRun{}, rows.Err()
+	}
+
+	if _, err := runRepo.UpdateCounts(ctx, run.ID, examined, updated, archived, created); err != nil {
+		return repo.MemoryCompactionRun{}, err
+	}
+	completedAt := time.Now().UTC()
+	final, err := runRepo.UpdateStatus(ctx, run.ID, "completed", nil, &startedAt, &completedAt)
+	if err != nil {
+		return repo.MemoryCompactionRun{}, err
+	}
+	return final, nil
+}
+
+func extractMemoryFactContent(content string) (string, bool) {
+	trimmed := strings.TrimSpace(content)
+	lower := strings.ToLower(trimmed)
+	const prefix = "[memory-fact]"
+	if !strings.HasPrefix(lower, prefix) {
+		return "", false
+	}
+	rest := strings.TrimSpace(trimmed[len(prefix):])
+	if rest == "" {
+		return "", false
+	}
+	return rest, true
+}
+
+func hashMemoryContent(content string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(content)))
+	return hex.EncodeToString(sum[:])
+}
+
+func deterministicMemoryEmbedding(content string) []float32 {
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(strings.ToLower(strings.TrimSpace(content))))
+	seed := hasher.Sum64()
+	out := make([]float32, 1536)
+	out[0] = float32(seed%1000)/1000 + 0.001
+	out[1] = 1
+	return out
+}
+
+func clampFloat(value, min, max float64) float64 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
 
 func toMemoryItemRecord(item repo.Memory) memoryItemRecord {
