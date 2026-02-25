@@ -27,6 +27,7 @@ type ExecutionContext struct {
 	ToolExecutionID *uuid.UUID
 	RunID           *uuid.UUID
 	AgentID         *uuid.UUID
+	SessionID       *uuid.UUID
 }
 
 type executionContextKey struct{}
@@ -44,6 +45,10 @@ func executionContextFromContext(ctx context.Context) ExecutionContext {
 		return ExecutionContext{}
 	}
 	return stored
+}
+
+func ExecutionContextFromContext(ctx context.Context) ExecutionContext {
+	return executionContextFromContext(ctx)
 }
 
 type MCPExecutionLogWriter interface {

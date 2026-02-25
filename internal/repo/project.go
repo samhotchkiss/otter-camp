@@ -124,6 +124,10 @@ func (r *ProjectRepo) GetByID(ctx context.Context, id uuid.UUID) (Project, error
 	return project, nil
 }
 
+func (r *ProjectRepo) Get(ctx context.Context, id uuid.UUID) (Project, error) {
+	return r.GetByID(ctx, id)
+}
+
 func (r *ProjectRepo) GetBySlug(ctx context.Context, organizationID uuid.UUID, slug string) (Project, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT id, organization_id, slug, display_name, description, delivery_mode, deploy_flow_template_id, settings, created_by_type, created_by_id, created_at, updated_at
@@ -166,6 +170,43 @@ func (r *ProjectRepo) List(ctx context.Context, organizationID uuid.UUID) ([]Pro
 		return nil, mapDBError(rows.Err())
 	}
 	return projects, nil
+}
+
+func (r *ProjectRepo) ListByOrg(ctx context.Context, organizationID uuid.UUID, limit int, cursor string) ([]Project, string, error) {
+	projects, err := r.List(ctx, organizationID)
+	if err != nil {
+		return nil, "", err
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	start := 0
+	trimmedCursor := strings.TrimSpace(cursor)
+	if trimmedCursor != "" {
+		for i := range projects {
+			if projects[i].ID.String() == trimmedCursor {
+				start = i + 1
+				break
+			}
+		}
+	}
+	if start > len(projects) {
+		start = len(projects)
+	}
+	end := start + limit
+	if end > len(projects) {
+		end = len(projects)
+	}
+
+	nextCursor := ""
+	if end < len(projects) && end > start {
+		nextCursor = projects[end-1].ID.String()
+	}
+	return projects[start:end], nextCursor, nil
 }
 
 func (r *ProjectRepo) Update(ctx context.Context, project Project) (Project, error) {
