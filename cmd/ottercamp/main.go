@@ -384,6 +384,8 @@ func runServe() int {
 		Store:   store,
 		Version: version,
 	})
+	bootstrap.RegisterStarterTrioStep(bootstrapper, repo.NewAgentRepo(pool.Raw()))
+	bootstrap.RegisterCapabilityPolicyStep(bootstrapper, repo.NewCapabilityPolicyRepo(pool.Raw()))
 	resetter := bootstrap.NewResetter(pool.Raw(), bootstrapper)
 
 	handler := server.NewHandlerWithOptions(server.HandlerOptions{
@@ -412,6 +414,7 @@ func runServe() int {
 			),
 			server.NewMCPRouteRegistrar(mcpService, repo.NewMCPToolCatalogRepo(pool.Raw())),
 			server.NewModelRouteRegistrar(pool.Raw()),
+			server.NewOrgAuditRouteRegistrar(pool.Raw()),
 			server.NewProjectRouteRegistrar(projectService),
 			server.NewTaskRouteRegistrar(taskService, flowService, deliveryService, pool.Raw()),
 			server.NewChatRouteRegistrar(chatService, pool.Raw()),
@@ -545,11 +548,14 @@ func runBootstrap() int {
 			fmt.Fprintf(os.Stdout, "step %d (%s): %s - %s\n", progress.Step, progress.Name, progress.Status, details)
 		},
 	})
+	bootstrap.RegisterStarterTrioStep(bootstrapper, repo.NewAgentRepo(pool.Raw()))
+	bootstrap.RegisterCapabilityPolicyStep(bootstrapper, repo.NewCapabilityPolicyRepo(pool.Raw()))
 
 	if err := bootstrapper.Run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "bootstrap error: %v\n", err)
 		return 1
 	}
+	fmt.Fprintln(os.Stdout, "Bootstrap complete")
 	return 0
 }
 
@@ -2311,6 +2317,8 @@ func runDBReset(args []string) int {
 		Store:   store,
 		Version: versionpkg.Version,
 	})
+	bootstrap.RegisterStarterTrioStep(bootstrapper, repo.NewAgentRepo(pool.Raw()))
+	bootstrap.RegisterCapabilityPolicyStep(bootstrapper, repo.NewCapabilityPolicyRepo(pool.Raw()))
 	if err := bootstrapper.Run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "db reset bootstrap error: %v\n", err)
 		return 1

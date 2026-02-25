@@ -23,7 +23,7 @@ var defaultStarterTrio = []starterTrioSeed{
 	{
 		displayName:  "Lori",
 		systemPrompt: "You are Lori, Agent Relations Expert: staffing expert, agent creator, workforce manager, thoughtful and precise.",
-		agentType:    "general",
+		agentType:    "pm",
 	},
 	{
 		displayName:  "Ellie",
