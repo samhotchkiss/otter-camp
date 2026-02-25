@@ -57,6 +57,7 @@ type SSEEvent struct {
 	Event string
 	Data  string
 }
+
 func StartServer(t *testing.T) (*ServerProcess, string) {
 	t.Helper()
 
