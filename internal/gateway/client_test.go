@@ -127,6 +127,42 @@ func TestBuildProviderBodyOmitsToolsWhenNoDescriptors(t *testing.T) {
 	}
 }
 
+func TestNormalizeToolSchemaAddsPropertiesWhenMissing(t *testing.T) {
+	cases := []struct {
+		name   string
+		input  json.RawMessage
+		hasKey string
+	}{
+		{
+			name:   "empty schema gets properties",
+			input:  json.RawMessage(``),
+			hasKey: "properties",
+		},
+		{
+			name:   "object without properties gets properties injected",
+			input:  json.RawMessage(`{"type":"object"}`),
+			hasKey: "properties",
+		},
+		{
+			name:   "object with properties unchanged",
+			input:  json.RawMessage(`{"type":"object","properties":{"x":{"type":"string"}}}`),
+			hasKey: "properties",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := normalizeToolSchema(tc.input)
+			obj, ok := result.(map[string]any)
+			if !ok {
+				t.Fatalf("result type = %T, want map[string]any", result)
+			}
+			if _, exists := obj[tc.hasKey]; !exists {
+				t.Fatalf("result missing %q key: %v", tc.hasKey, obj)
+			}
+		})
+	}
+}
+
 func TestOpenAIToolsSanitizesNames(t *testing.T) {
 	cases := []struct {
 		name    string
