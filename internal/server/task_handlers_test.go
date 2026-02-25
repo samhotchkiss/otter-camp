@@ -59,6 +59,7 @@ func TestTaskRoutesRegistered(t *testing.T) {
 		"POST /projects/{id}/environments",
 		"PATCH /projects/{id}/environments/{eid}",
 		"POST /projects/{id}/environments/{eid}/deploy",
+		"POST /projects/{id}/rollback",
 	}
 
 	for _, key := range required {
