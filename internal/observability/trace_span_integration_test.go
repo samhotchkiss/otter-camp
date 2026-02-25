@@ -89,4 +89,18 @@ func TestTraceSpanInsertAppendOnlyAndRetention(t *testing.T) {
 	if oldCount != 0 {
 		t.Fatalf("old trace spans = %d, want 0", oldCount)
 	}
+
+	var partitionExists int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = current_schema()
+		  AND c.relname = 'trace_span_p_old'
+	`).Scan(&partitionExists); err != nil {
+		t.Fatalf("count old trace partition table: %v", err)
+	}
+	if partitionExists != 0 {
+		t.Fatalf("trace_span_p_old table count = %d, want 0", partitionExists)
+	}
 }

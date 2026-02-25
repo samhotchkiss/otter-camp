@@ -96,7 +96,7 @@ func (j *RetentionJob) Run(ctx context.Context) error {
 	if rowsDeleted["memory"], err = j.deleteArchivedMemory(ctx, now.AddDate(0, 0, -RetentionArchivedMemoryDays)); err != nil {
 		return err
 	}
-	if rowsDeleted["trace_span"], err = j.deleteOlderThan(ctx, "trace_span", now.AddDate(0, 0, -RetentionTraceSpanDays)); err != nil {
+	if rowsDeleted["trace_span"], err = j.dropOldTraceSpanPartitions(ctx, now.AddDate(0, 0, -RetentionTraceSpanDays)); err != nil {
 		return err
 	}
 
@@ -141,6 +141,64 @@ func (j *RetentionJob) deleteArchivedMemory(ctx context.Context, cutoff time.Tim
 		return 0, fmt.Errorf("commit retention delete for memory: %w", err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+func (j *RetentionJob) dropOldTraceSpanPartitions(ctx context.Context, cutoff time.Time) (int64, error) {
+	tx, err := j.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("begin trace_span partition retention: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx, `
+		SELECT child_ns.nspname, child.relname
+		FROM pg_inherits inh
+		JOIN pg_class parent ON parent.oid = inh.inhparent
+		JOIN pg_namespace parent_ns ON parent_ns.oid = parent.relnamespace
+		JOIN pg_class child ON child.oid = inh.inhrelid
+		JOIN pg_namespace child_ns ON child_ns.oid = child.relnamespace
+		WHERE parent_ns.nspname = current_schema()
+		  AND parent.relname = 'trace_span'
+		  AND pg_get_expr(child.relpartbound, child.oid) LIKE 'FOR VALUES FROM (%'
+		  AND ((regexp_match(pg_get_expr(child.relpartbound, child.oid), $$TO \('([^']+)'\)$$))[1])::timestamptz < $1
+	`, cutoff.UTC())
+	if err != nil {
+		return 0, fmt.Errorf("query trace_span partitions for retention: %w", err)
+	}
+	defer rows.Close()
+
+	type partitionRef struct {
+		schema string
+		name   string
+	}
+	partitions := make([]partitionRef, 0)
+	for rows.Next() {
+		var partition partitionRef
+		if scanErr := rows.Scan(&partition.schema, &partition.name); scanErr != nil {
+			return 0, fmt.Errorf("scan trace_span partition: %w", scanErr)
+		}
+		partitions = append(partitions, partition)
+	}
+	if rows.Err() != nil {
+		return 0, fmt.Errorf("iterate trace_span partitions: %w", rows.Err())
+	}
+
+	var dropped int64
+	for _, partition := range partitions {
+		qualified := pgx.Identifier{partition.schema, partition.name}.Sanitize()
+		if _, err := tx.Exec(ctx, fmt.Sprintf("ALTER TABLE trace_span DETACH PARTITION %s", qualified)); err != nil {
+			return 0, fmt.Errorf("detach trace_span partition %s: %w", partition.name, err)
+		}
+		if _, err := tx.Exec(ctx, fmt.Sprintf("DROP TABLE %s", qualified)); err != nil {
+			return 0, fmt.Errorf("drop trace_span partition %s: %w", partition.name, err)
+		}
+		dropped++
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit trace_span partition retention: %w", err)
+	}
+	return dropped, nil
 }
 
 func (j *RetentionJob) deleteRunArtifacts(ctx context.Context, cutoff time.Time) (int64, error) {
