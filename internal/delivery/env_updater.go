@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -25,8 +26,24 @@ type EnvUpdater struct {
 	events eventbus.EventBus
 	clock  clock.Clock
 
-	tasks      *repo.ProjectTaskRepo
-	executions *repo.FlowNodeExecutionRepo
+	tasks interface {
+		GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
+	}
+	executions interface {
+		ListByTask(ctx context.Context, taskID uuid.UUID) ([]repo.FlowNodeExecution, error)
+	}
+
+	applyCompletion func(ctx context.Context, update deployCompletionUpdate) error
+}
+
+type deployCompletionUpdate struct {
+	OrganizationID    uuid.UUID
+	ProjectID         uuid.UUID
+	DeployTaskID      uuid.UUID
+	CommitSHA         string
+	CompletedAt       time.Time
+	MergeEntryIDs     []uuid.UUID
+	TriggeredByTaskID uuid.UUID
 }
 
 func NewEnvUpdater(opts EnvUpdaterOptions) (*EnvUpdater, error) {
@@ -36,13 +53,15 @@ func NewEnvUpdater(opts EnvUpdaterOptions) (*EnvUpdater, error) {
 	if opts.Clock == nil {
 		opts.Clock = clock.Real{}
 	}
-	return &EnvUpdater{
+	updater := &EnvUpdater{
 		pool:       opts.Pool,
 		events:     opts.Events,
 		clock:      opts.Clock,
 		tasks:      repo.NewProjectTaskRepo(opts.Pool),
 		executions: repo.NewFlowNodeExecutionRepo(opts.Pool),
-	}, nil
+	}
+	updater.applyCompletion = updater.applyCompletionTx
+	return updater, nil
 }
 
 func (u *EnvUpdater) OnDeployCompleted(ctx context.Context, deployTaskID uuid.UUID) error {
@@ -67,6 +86,23 @@ func (u *EnvUpdater) OnDeployCompleted(ctx context.Context, deployTaskID uuid.UU
 	}
 
 	now := u.clock.Now().UTC()
+	update := deployCompletionUpdate{
+		OrganizationID:    taskRecord.OrganizationID,
+		ProjectID:         taskRecord.ProjectID,
+		DeployTaskID:      deployTaskID,
+		CommitSHA:         commitSHA,
+		CompletedAt:       now,
+		MergeEntryIDs:     extractMergeQueueEntryIDs(taskRecord.Metadata),
+		TriggeredByTaskID: extractTriggeredByTaskID(taskRecord.Metadata),
+	}
+	apply := u.applyCompletion
+	if apply == nil {
+		apply = u.applyCompletionTx
+	}
+	return apply(ctx, update)
+}
+
+func (u *EnvUpdater) applyCompletionTx(ctx context.Context, update deployCompletionUpdate) error {
 	tx, err := u.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err
@@ -83,28 +119,27 @@ func (u *EnvUpdater) OnDeployCompleted(ctx context.Context, deployTaskID uuid.UU
 			deploy_task_id = $4
 		WHERE project_id = $1
 		  AND is_active = true
-	`, taskRecord.ProjectID, commitSHA, now, deployTaskID); err != nil {
+	`, update.ProjectID, update.CommitSHA, update.CompletedAt, update.DeployTaskID); err != nil {
 		return err
 	}
 
-	mergeEntryIDs := extractMergeQueueEntryIDs(taskRecord.Metadata)
-	if len(mergeEntryIDs) > 0 {
+	if len(update.MergeEntryIDs) > 0 {
 		if _, err := tx.Exec(ctx, `
 			UPDATE merge_queue_entry
 			SET archived_at = $2
 			WHERE id = ANY($1)
 			  AND archived_at IS NULL
-		`, mergeEntryIDs, now); err != nil {
+		`, update.MergeEntryIDs, update.CompletedAt); err != nil {
 			return err
 		}
 	}
-	if triggeredBy := extractTriggeredByTaskID(taskRecord.Metadata); triggeredBy != uuid.Nil {
+	if update.TriggeredByTaskID != uuid.Nil {
 		if _, err := tx.Exec(ctx, `
 			UPDATE merge_queue_entry
 			SET archived_at = $2
 			WHERE task_id = $1
 			  AND archived_at IS NULL
-		`, triggeredBy, now); err != nil {
+		`, update.TriggeredByTaskID, update.CompletedAt); err != nil {
 			return err
 		}
 	}
@@ -113,21 +148,21 @@ func (u *EnvUpdater) OnDeployCompleted(ctx context.Context, deployTaskID uuid.UU
 		SET archived_at = $2
 		WHERE task_id = $1
 		  AND archived_at IS NULL
-	`, deployTaskID, now); err != nil {
+	`, update.DeployTaskID, update.CompletedAt); err != nil {
 		return err
 	}
 
 	if u.events != nil {
 		payload, err := json.Marshal(map[string]any{
-			"project_id":     taskRecord.ProjectID,
-			"commit_sha":     commitSHA,
-			"deploy_task_id": deployTaskID,
+			"project_id":     update.ProjectID,
+			"commit_sha":     update.CommitSHA,
+			"deploy_task_id": update.DeployTaskID,
 		})
 		if err != nil {
 			return err
 		}
 		if err := u.events.Publish(ctx, tx, eventbus.DomainEvent{
-			OrganizationID: taskRecord.OrganizationID,
+			OrganizationID: update.OrganizationID,
 			EventType:      "project.deployed",
 			ActorType:      deliverySystemActorType,
 			Payload:        payload,

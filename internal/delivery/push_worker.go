@@ -26,6 +26,15 @@ type PushWorkerOptions struct {
 	Logger   *slog.Logger
 }
 
+type pushEnvironmentRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectEnvironment, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.ProjectEnvironment, error)
+}
+
+type projectTaskEventRecorder interface {
+	Record(ctx context.Context, event repo.ProjectTaskEvent) (repo.ProjectTaskEvent, error)
+}
+
 type PushWorker struct {
 	pool     *pgxpool.Pool
 	git      GitService
@@ -34,12 +43,12 @@ type PushWorker struct {
 	clock    clock.Clock
 	logger   *slog.Logger
 
-	projects     *repo.ProjectRepo
-	remotes      *repo.ProjectRemoteRepo
-	environments *repo.ProjectEnvironmentRepo
-	taskEvents   *repo.ProjectTaskEventRepo
-	inbox        *repo.InboxItemRepo
-	users        *repo.HumanUserRepo
+	projects     projectRepository
+	remotes      projectRemoteRepository
+	environments pushEnvironmentRepository
+	taskEvents   projectTaskEventRecorder
+	inbox        inboxRepository
+	users        userRepository
 
 	jitter func(time.Duration) time.Duration
 }

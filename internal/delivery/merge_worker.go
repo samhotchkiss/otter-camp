@@ -38,8 +38,11 @@ type MergeWorker struct {
 	queue    *repo.MergeQueueEntryRepo
 	projects *repo.ProjectRepo
 	remotes  *repo.ProjectRemoteRepo
-	users    *repo.HumanUserRepo
+	users    userRepository
 	inbox    *repo.InboxItemRepo
+
+	lockProject   func(ctx context.Context, projectID uuid.UUID) (pgx.Tx, bool, error)
+	executeLocked func(ctx context.Context, tx pgx.Tx, payload mergeExecutePayload) error
 }
 
 func NewMergeWorker(opts MergeWorkerOptions) (*MergeWorker, error) {
@@ -59,7 +62,7 @@ func NewMergeWorker(opts MergeWorkerOptions) (*MergeWorker, error) {
 		opts.Enqueuer = jobqueue.New(opts.Pool, opts.Logger, jobqueue.Config{})
 	}
 
-	return &MergeWorker{
+	worker := &MergeWorker{
 		pool:     opts.Pool,
 		git:      opts.Git,
 		events:   opts.Events,
@@ -71,7 +74,10 @@ func NewMergeWorker(opts MergeWorkerOptions) (*MergeWorker, error) {
 		remotes:  repo.NewProjectRemoteRepo(opts.Pool),
 		users:    repo.NewHumanUserRepo(opts.Pool),
 		inbox:    repo.NewInboxItemRepo(opts.Pool),
-	}, nil
+	}
+	worker.lockProject = worker.lockProjectTx
+	worker.executeLocked = worker.executeWithProjectLock
+	return worker, nil
 }
 
 func (w *MergeWorker) Execute(ctx context.Context, job jobqueue.Job) error {
@@ -90,24 +96,51 @@ func (w *MergeWorker) Execute(ctx context.Context, job jobqueue.Job) error {
 		return fmt.Errorf("project_id is required")
 	}
 
-	tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin merge tx: %w", err)
+	locker := w.lockProject
+	if locker == nil {
+		locker = w.lockProjectTx
 	}
-	defer func() {
-		_ = tx.Rollback(ctx)
-	}()
-
-	var hasLock bool
-	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtext($1)::bigint)`, advisoryLockKey(payload.ProjectID)).Scan(&hasLock); err != nil {
-		return fmt.Errorf("acquire project advisory lock: %w", err)
+	tx, hasLock, err := locker(ctx, payload.ProjectID)
+	if err != nil {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
+		return err
 	}
 	if !hasLock {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
 		runAfter := w.clock.Now().UTC().Add(mergeRetryDelay)
 		_, enqueueErr := w.enqueuer.Enqueue(ctx, nil, MergeExecuteJobType, deliveryDefaultPriority, payload, &runAfter)
 		return enqueueErr
 	}
+	if tx != nil {
+		defer func() {
+			_ = tx.Rollback(ctx)
+		}()
+	}
 
+	executor := w.executeLocked
+	if executor == nil {
+		executor = w.executeWithProjectLock
+	}
+	return executor(ctx, tx, payload)
+}
+
+func (w *MergeWorker) lockProjectTx(ctx context.Context, projectID uuid.UUID) (pgx.Tx, bool, error) {
+	tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, false, fmt.Errorf("begin merge tx: %w", err)
+	}
+	var hasLock bool
+	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtext($1)::bigint)`, advisoryLockKey(projectID)).Scan(&hasLock); err != nil {
+		return tx, false, fmt.Errorf("acquire project advisory lock: %w", err)
+	}
+	return tx, hasLock, nil
+}
+
+func (w *MergeWorker) executeWithProjectLock(ctx context.Context, tx pgx.Tx, payload mergeExecutePayload) error {
 	entry, err := w.loadMergeQueueEntryForUpdate(ctx, tx, payload.MergeQueueEntryID)
 	if errors.Is(err, repo.ErrNotFound) {
 		return nil
@@ -194,10 +227,7 @@ func (w *MergeWorker) Execute(ctx context.Context, job jobqueue.Job) error {
 		}
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (w *MergeWorker) loadMergeQueueEntryForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (repo.MergeQueueEntry, error) {
@@ -311,7 +341,7 @@ func (w *MergeWorker) createMergeConflictInbox(ctx context.Context, projectRecor
 	return nil
 }
 
-func resolveAdminRecipient(ctx context.Context, users *repo.HumanUserRepo, organizationID uuid.UUID) (*uuid.UUID, error) {
+func resolveAdminRecipient(ctx context.Context, users userRepository, organizationID uuid.UUID) (*uuid.UUID, error) {
 	if users == nil {
 		return nil, nil
 	}

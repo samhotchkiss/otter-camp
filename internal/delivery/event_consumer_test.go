@@ -59,3 +59,24 @@ func TestEventConsumerIgnoresNonDeployCompletions(t *testing.T) {
 		t.Fatalf("calls = %d, want 0", len(h.calls))
 	}
 }
+
+func TestEventConsumerHandlesTaskCompletedDeploy(t *testing.T) {
+	taskID := uuid.New()
+	h := &fakeDeployCompletionHandler{}
+	consumer := NewEventConsumer(EventConsumerOptions{Updater: h})
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":   taskID.String(),
+		"task_type": deliveryTaskTypeDeploy,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	if err := consumer.handle(context.Background(), eventbus.DomainEvent{EventType: "task.completed", Payload: payload}); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if len(h.calls) != 1 || h.calls[0] != taskID {
+		t.Fatalf("calls = %v, want [%s]", h.calls, taskID)
+	}
+}

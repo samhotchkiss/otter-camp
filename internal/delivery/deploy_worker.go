@@ -25,17 +25,87 @@ type DeployWorkerOptions struct {
 	Logger *slog.Logger
 }
 
+type deployWorkerStore interface {
+	TryProjectLock(ctx context.Context, projectID uuid.UUID) (bool, error)
+	UnlockProjectLock(ctx context.Context, projectID uuid.UUID) error
+	HasInFlightDeployTask(ctx context.Context, projectID uuid.UUID) (bool, error)
+	SetActiveEnvironmentDeployTask(ctx context.Context, projectID, deployTaskID uuid.UUID) error
+	NextScheduledFireAt(ctx context.Context, projectID uuid.UUID) (*time.Time, error)
+}
+
+type sqlDeployWorkerStore struct {
+	pool *pgxpool.Pool
+}
+
+func (s *sqlDeployWorkerStore) TryProjectLock(ctx context.Context, projectID uuid.UUID) (bool, error) {
+	var locked bool
+	err := s.pool.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtext($1)::bigint)`, advisoryLockKey(projectID)).Scan(&locked)
+	return locked, err
+}
+
+func (s *sqlDeployWorkerStore) UnlockProjectLock(ctx context.Context, projectID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `SELECT pg_advisory_unlock(hashtext($1)::bigint)`, advisoryLockKey(projectID))
+	return err
+}
+
+func (s *sqlDeployWorkerStore) HasInFlightDeployTask(ctx context.Context, projectID uuid.UUID) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM project_task
+			WHERE project_id = $1
+			  AND work_status IN ('queued', 'in_progress')
+			  AND COALESCE(metadata->>'task_type', '') = 'deploy'
+			LIMIT 1
+		)
+	`, projectID).Scan(&exists)
+	return exists, err
+}
+
+func (s *sqlDeployWorkerStore) SetActiveEnvironmentDeployTask(ctx context.Context, projectID, deployTaskID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE project_environment
+		SET deploy_task_id = $2
+		WHERE project_id = $1
+		  AND is_active = true
+	`, projectID, deployTaskID)
+	return err
+}
+
+func (s *sqlDeployWorkerStore) NextScheduledFireAt(ctx context.Context, projectID uuid.UUID) (*time.Time, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT ts.next_fire_at
+		FROM task_schedule ts
+		JOIN project_environment pe ON pe.schedule_id = ts.id
+		WHERE pe.project_id = $1
+		  AND pe.is_active = true
+		  AND ts.is_enabled = true
+		ORDER BY ts.next_fire_at ASC NULLS LAST, ts.created_at ASC
+		LIMIT 1
+	`, projectID)
+	var nextFireAt *time.Time
+	if err := row.Scan(&nextFireAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return nextFireAt, nil
+}
+
 type DeployWorker struct {
 	pool   *pgxpool.Pool
 	events eventbus.EventBus
 	clock  clock.Clock
 	logger *slog.Logger
 
-	projects    *repo.ProjectRepo
-	tasks       *repo.ProjectTaskRepo
-	assignments *repo.AgentProjectAssignmentRepo
-	inbox       *repo.InboxItemRepo
-	users       *repo.HumanUserRepo
+	store       deployWorkerStore
+	projects    projectRepository
+	tasks       projectTaskRepository
+	assignments assignmentRepository
+	inbox       inboxRepository
+	users       userRepository
 }
 
 func NewDeployWorker(opts DeployWorkerOptions) (*DeployWorker, error) {
@@ -53,6 +123,7 @@ func NewDeployWorker(opts DeployWorkerOptions) (*DeployWorker, error) {
 		events:      opts.Events,
 		clock:       opts.Clock,
 		logger:      opts.Logger,
+		store:       &sqlDeployWorkerStore{pool: opts.Pool},
 		projects:    repo.NewProjectRepo(opts.Pool),
 		tasks:       repo.NewProjectTaskRepo(opts.Pool),
 		assignments: repo.NewAgentProjectAssignmentRepo(opts.Pool),
@@ -109,14 +180,8 @@ func (w *DeployWorker) createContinuousDeployTask(ctx context.Context, payload d
 		return uuid.Nil, err
 	}
 
-	conn, err := w.pool.Acquire(ctx)
+	locked, err := w.store.TryProjectLock(ctx, payload.ProjectID)
 	if err != nil {
-		return uuid.Nil, err
-	}
-	defer conn.Release()
-
-	var locked bool
-	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtext($1)::bigint)`, advisoryLockKey(payload.ProjectID)).Scan(&locked); err != nil {
 		return uuid.Nil, err
 	}
 	if !locked {
@@ -124,10 +189,10 @@ func (w *DeployWorker) createContinuousDeployTask(ctx context.Context, payload d
 		return uuid.Nil, nil
 	}
 	defer func() {
-		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtext($1)::bigint)`, advisoryLockKey(payload.ProjectID))
+		_ = w.store.UnlockProjectLock(context.Background(), payload.ProjectID)
 	}()
 
-	hasInFlight, err := w.hasInFlightDeployTask(ctx, conn, payload.ProjectID)
+	hasInFlight, err := w.store.HasInFlightDeployTask(ctx, payload.ProjectID)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -175,31 +240,11 @@ func (w *DeployWorker) createContinuousDeployTask(ctx context.Context, payload d
 		return uuid.Nil, err
 	}
 
-	if _, err := conn.Exec(ctx, `
-		UPDATE project_environment
-		SET deploy_task_id = $2
-		WHERE project_id = $1
-		  AND is_active = true
-	`, payload.ProjectID, taskRecord.ID); err != nil {
+	if err := w.store.SetActiveEnvironmentDeployTask(ctx, payload.ProjectID, taskRecord.ID); err != nil {
 		return uuid.Nil, err
 	}
 
 	return taskRecord.ID, nil
-}
-
-func (w *DeployWorker) hasInFlightDeployTask(ctx context.Context, conn *pgxpool.Conn, projectID uuid.UUID) (bool, error) {
-	var exists bool
-	err := conn.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM project_task
-			WHERE project_id = $1
-			  AND work_status IN ('queued', 'in_progress')
-			  AND COALESCE(metadata->>'task_type', '') = 'deploy'
-			LIMIT 1
-		)
-	`, projectID).Scan(&exists)
-	return exists, err
 }
 
 func (w *DeployWorker) handleGated(ctx context.Context, payload deployTaskCreatePayload) error {
@@ -265,21 +310,8 @@ func (w *DeployWorker) handleGated(ctx context.Context, payload deployTaskCreate
 }
 
 func (w *DeployWorker) inScheduledWindow(ctx context.Context, projectID uuid.UUID) (bool, error) {
-	row := w.pool.QueryRow(ctx, `
-		SELECT ts.next_fire_at
-		FROM task_schedule ts
-		JOIN project_environment pe ON pe.schedule_id = ts.id
-		WHERE pe.project_id = $1
-		  AND pe.is_active = true
-		  AND ts.is_enabled = true
-		ORDER BY ts.next_fire_at ASC NULLS LAST, ts.created_at ASC
-		LIMIT 1
-	`, projectID)
-	var nextFireAt *time.Time
-	if err := row.Scan(&nextFireAt); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
-		}
+	nextFireAt, err := w.store.NextScheduledFireAt(ctx, projectID)
+	if err != nil {
 		return false, err
 	}
 	return isWithinWindow(w.clock.Now().UTC(), nextFireAt, scheduledWindowTolerance), nil
