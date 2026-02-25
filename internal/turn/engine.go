@@ -305,6 +305,7 @@ type turnRuntime struct {
 	activeTier2RunMu  sync.RWMutex
 	modelRetryUsed    int
 	invocationAttempt int
+	toolSet           []tools.ToolDescriptor
 }
 
 func NewEngine(opts Options) (*TurnEngine, error) {
@@ -626,6 +627,7 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 		if err != nil {
 			return err
 		}
+		rt.toolSet = toolSet
 
 		assembled, assembleErr := e.assembler.Assemble(ctx, prompt.AssemblyInput{
 			SessionID:        rt.session.ID,
@@ -863,11 +865,35 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		return false, nil
 	}
 
+	// Build reverse map: sanitized API name → original tool name, and tier lookup.
+	apiNameToOriginal := make(map[string]string, len(rt.toolSet))
+	apiNameToTier := make(map[string]string, len(rt.toolSet))
+	for _, td := range rt.toolSet {
+		apiName := td.APIName
+		if apiName == "" {
+			apiName = tools.SanitizeToolNameForAPI(td.Name)
+		}
+		apiNameToOriginal[apiName] = td.Name
+		apiNameToTier[apiName] = td.Tier
+	}
+
 	toolCalls := make([]ToolCall, 0, len(calls))
 	for i, call := range calls {
 		id := strings.TrimSpace(call.ID)
 		if id == "" {
 			id = fmt.Sprintf("tool-%d", i+1)
+		}
+		// Resolve the model-returned name (may be sanitized) back to the original.
+		name := strings.TrimSpace(call.Name)
+		if orig, ok := apiNameToOriginal[name]; ok {
+			name = orig
+		}
+		// Resolve tier from tool set if not provided by model.
+		tier := strings.TrimSpace(strings.ToLower(call.Tier))
+		if tier == "" {
+			if t, ok := apiNameToTier[strings.TrimSpace(call.Name)]; ok {
+				tier = strings.ToLower(t)
+			}
 		}
 		arguments := cloneMap(call.Arguments)
 		arguments["organization_id"] = rt.session.OrganizationID.String()
@@ -886,8 +912,8 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		toolCalls = append(toolCalls, ToolCall{
 			ID:              id,
-			Name:            strings.TrimSpace(call.Name),
-			Tier:            strings.TrimSpace(strings.ToLower(call.Tier)),
+			Name:            name,
+			Tier:            tier,
 			Arguments:       arguments,
 			MCPConnectionID: call.MCPConnectionID,
 		})

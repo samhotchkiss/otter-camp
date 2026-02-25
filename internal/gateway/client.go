@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/tools"
 	"github.com/samhotchkiss/otter-camp/internal/turn"
 )
 
@@ -895,10 +896,14 @@ func openAITools(req turn.ModelRequest) []map[string]any {
 
 	result := make([]map[string]any, 0, len(req.Prompt.ToolDescriptors))
 	for _, descriptor := range req.Prompt.ToolDescriptors {
+		apiName := strings.TrimSpace(descriptor.APIName)
+		if apiName == "" {
+			apiName = tools.SanitizeToolNameForAPI(strings.TrimSpace(descriptor.Name))
+		}
 		result = append(result, map[string]any{
 			"type": "function",
 			"function": map[string]any{
-				"name":        strings.TrimSpace(descriptor.Name),
+				"name":        apiName,
 				"description": strings.TrimSpace(descriptor.Description),
 				"parameters":  normalizeToolSchema(descriptor.InputSchema),
 			},
@@ -914,8 +919,12 @@ func anthropicTools(req turn.ModelRequest) []map[string]any {
 
 	result := make([]map[string]any, 0, len(req.Prompt.ToolDescriptors))
 	for _, descriptor := range req.Prompt.ToolDescriptors {
+		apiName := strings.TrimSpace(descriptor.APIName)
+		if apiName == "" {
+			apiName = tools.SanitizeToolNameForAPI(strings.TrimSpace(descriptor.Name))
+		}
 		result = append(result, map[string]any{
-			"name":         strings.TrimSpace(descriptor.Name),
+			"name":         apiName,
 			"description":  strings.TrimSpace(descriptor.Description),
 			"input_schema": normalizeToolSchema(descriptor.InputSchema),
 		})

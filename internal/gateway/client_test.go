@@ -43,8 +43,8 @@ func TestBuildProviderBodyOpenAIIncludesTools(t *testing.T) {
 	}
 
 	function := expectMap(t, tool, "function")
-	if function["name"] != "browser.open" {
-		t.Fatalf("function.name = %v, want browser.open", function["name"])
+	if function["name"] != "browser_open" {
+		t.Fatalf("function.name = %v, want browser_open", function["name"])
 	}
 	if function["description"] != "Open a URL in the browser" {
 		t.Fatalf("function.description = %v, want expected description", function["description"])
@@ -80,8 +80,8 @@ func TestBuildProviderBodyAnthropicIncludesTools(t *testing.T) {
 		t.Fatalf("len(tools) = %d, want 1", len(toolsPayload))
 	}
 	tool := expectMapValue(t, toolsPayload[0], "tools[0]")
-	if tool["name"] != "web.search" {
-		t.Fatalf("tools[0].name = %v, want web.search", tool["name"])
+	if tool["name"] != "web_search" {
+		t.Fatalf("tools[0].name = %v, want web_search", tool["name"])
 	}
 	if tool["description"] != "Search the web" {
 		t.Fatalf("tools[0].description = %v, want expected description", tool["description"])
@@ -124,6 +124,70 @@ func TestBuildProviderBodyOmitsToolsWhenNoDescriptors(t *testing.T) {
 				t.Fatalf("payload.tool_choice exists; expected omitted")
 			}
 		})
+	}
+}
+
+func TestOpenAIToolsSanitizesNames(t *testing.T) {
+	cases := []struct {
+		name    string
+		apiName string
+		want    string
+	}{
+		{name: "file.read", want: "file_read"},
+		{name: "git.status", want: "git_status"},
+		{name: "memory.query", want: "memory_query"},
+		{name: "already_valid", want: "already_valid"},
+		{name: "with-dashes", want: "with-dashes"},
+		// APIName takes precedence over sanitizing Name
+		{name: "file.read", apiName: "file_read_override", want: "file_read_override"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := turn.ModelRequest{
+				Profile: repo.ModelProfile{ModelName: "gpt-4o-mini"},
+				Prompt: &prompt.AssembledPrompt{
+					Messages: []prompt.PromptMessage{{Role: "user", Content: "hi"}},
+					ToolDescriptors: []tools.ToolDescriptor{{
+						Name:    tc.name,
+						APIName: tc.apiName,
+					}},
+				},
+			}
+			body, err := buildProviderBody("openai", req, false)
+			if err != nil {
+				t.Fatalf("buildProviderBody() error = %v", err)
+			}
+			payload := decodeBody(t, body)
+			toolsPayload := expectArray(t, payload, "tools")
+			tool := expectMapValue(t, toolsPayload[0], "tools[0]")
+			function := expectMap(t, tool, "function")
+			if function["name"] != tc.want {
+				t.Fatalf("function.name = %v, want %v", function["name"], tc.want)
+			}
+		})
+	}
+}
+
+func TestAnthropicToolsSanitizesNames(t *testing.T) {
+	req := turn.ModelRequest{
+		Profile: repo.ModelProfile{ModelName: "claude-3-5-sonnet"},
+		Prompt: &prompt.AssembledPrompt{
+			Messages: []prompt.PromptMessage{{Role: "user", Content: "hi"}},
+			ToolDescriptors: []tools.ToolDescriptor{{
+				Name:        "task.create",
+				Description: "Create a task",
+			}},
+		},
+	}
+	body, err := buildProviderBody("anthropic", req, false)
+	if err != nil {
+		t.Fatalf("buildProviderBody() error = %v", err)
+	}
+	payload := decodeBody(t, body)
+	toolsPayload := expectArray(t, payload, "tools")
+	tool := expectMapValue(t, toolsPayload[0], "tools[0]")
+	if tool["name"] != "task_create" {
+		t.Fatalf("tools[0].name = %v, want task_create", tool["name"])
 	}
 }
 
