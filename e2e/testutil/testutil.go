@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,12 +34,21 @@ type ServerProcess struct {
 	baseURL string
 	rootDir string
 	binary  string
+	dbURL   string
 	env     []string
 	cleanup func()
 	cmd     *exec.Cmd
+	worker  *exec.Cmd
 	stdout  bytes.Buffer
 	stderr  bytes.Buffer
+	wstdout bytes.Buffer
+	wstderr bytes.Buffer
 }
+
+var (
+	baseURLDBMu sync.RWMutex
+	baseURLDB   = map[string]string{}
+)
 
 func StartServer(t *testing.T) (*ServerProcess, string) {
 	t.Helper()
@@ -61,6 +71,7 @@ func StartServer(t *testing.T) (*ServerProcess, string) {
 		baseURL: baseURL,
 		rootDir: rootDir,
 		binary:  binary,
+		dbURL:   strings.TrimSpace(envMap["OTTERCAMP_DATABASE_URL"]),
 		env:     mapToEnv(envMap),
 		cleanup: cleanup,
 	}
@@ -83,7 +94,46 @@ func StartServer(t *testing.T) (*ServerProcess, string) {
 		server.Stop(t)
 		t.Fatalf("%v\nstdout:\n%s\nstderr:\n%s", err, server.stdout.String(), server.stderr.String())
 	}
+	baseURLDBMu.Lock()
+	baseURLDB[baseURL] = server.dbURL
+	baseURLDBMu.Unlock()
 	return server, baseURL
+}
+
+func StartServerWithWorker(t *testing.T) (*ServerProcess, string) {
+	t.Helper()
+	server, baseURL := StartServer(t)
+	server.StartWorker(t)
+	return server, baseURL
+}
+
+func (s *ServerProcess) StartWorker(t *testing.T) {
+	t.Helper()
+	if s == nil {
+		t.Fatal("server process is nil")
+	}
+	if s.worker != nil {
+		return
+	}
+
+	cmd := exec.Command(s.binary, "worker")
+	cmd.Dir = s.rootDir
+	cmd.Env = s.env
+	cmd.Stdout = &s.wstdout
+	cmd.Stderr = &s.wstderr
+	s.worker = cmd
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start worker: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+			t.Fatalf("worker exited early\nstdout:\n%s\nstderr:\n%s", s.wstdout.String(), s.wstderr.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (s *ServerProcess) Stop(t *testing.T) {
@@ -91,28 +141,38 @@ func (s *ServerProcess) Stop(t *testing.T) {
 	if s == nil {
 		return
 	}
+	baseURLDBMu.Lock()
+	delete(baseURLDB, s.baseURL)
+	baseURLDBMu.Unlock()
+
 	defer func() {
 		if s.cleanup != nil {
 			s.cleanup()
 			s.cleanup = nil
 		}
 	}()
-	if s.cmd == nil || s.cmd.Process == nil {
+
+	stopCommand(s.worker)
+	stopCommand(s.cmd)
+}
+
+func stopCommand(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	if s.cmd.ProcessState != nil && s.cmd.ProcessState.Exited() {
+	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
 		return
 	}
 
-	_ = s.cmd.Process.Signal(os.Interrupt)
+	_ = cmd.Process.Signal(os.Interrupt)
 	done := make(chan error, 1)
 	go func() {
-		done <- s.cmd.Wait()
+		done <- cmd.Wait()
 	}()
 
 	select {
 	case <-time.After(10 * time.Second):
-		_ = s.cmd.Process.Kill()
+		_ = cmd.Process.Kill()
 		<-done
 	case <-done:
 	}
@@ -263,6 +323,177 @@ func stringPath(t *testing.T, body []byte, path ...string) string {
 	value := JSONPath(t, body, path...)
 	str, _ := value.(string)
 	return str
+}
+
+type MemoryFilter struct {
+	ScopeType    string
+	ContainsText string
+	MemoryType   string
+	ProjectID    string
+}
+
+func WaitForMemory(t *testing.T, baseURL, token string, filter MemoryFilter, timeout time.Duration) map[string]any {
+	t.Helper()
+
+	scope := strings.TrimSpace(strings.ToLower(filter.ScopeType))
+	switch scope {
+	case "organization":
+		scope = "org"
+	case "project":
+		scope = "project"
+	case "task":
+		scope = "task"
+	}
+
+	deadline := time.Now().Add(timeout)
+	lastStatus := 0
+	lastBody := []byte("{}")
+	for time.Now().Before(deadline) {
+		values := url.Values{}
+		values.Set("status", "active")
+		if scope != "" {
+			values.Set("scope", scope)
+		}
+		if strings.TrimSpace(filter.MemoryType) != "" {
+			values.Set("memory_type", strings.TrimSpace(filter.MemoryType))
+		}
+		if strings.TrimSpace(filter.ProjectID) != "" {
+			values.Set("project_id", strings.TrimSpace(filter.ProjectID))
+		}
+		if strings.TrimSpace(filter.ContainsText) != "" {
+			values.Set("search", strings.TrimSpace(filter.ContainsText))
+		}
+
+		path := "/v1/memory/items?" + values.Encode()
+		body, status := GET(t, baseURL, path, token)
+		lastStatus = status
+		lastBody = body
+		if status == http.StatusOK {
+			rawItems, ok := JSONPath(t, body, "data").([]any)
+			if ok {
+				for _, raw := range rawItems {
+					item, itemOK := raw.(map[string]any)
+					if !itemOK {
+						continue
+					}
+					if strings.TrimSpace(filter.ContainsText) != "" {
+						content, _ := item["content"].(string)
+						if !strings.Contains(strings.ToLower(content), strings.ToLower(strings.TrimSpace(filter.ContainsText))) {
+							continue
+						}
+					}
+					return item
+				}
+			}
+		}
+		time.Sleep(400 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for memory filter=%+v last_status=%d last_body=%s", filter, lastStatus, string(lastBody))
+	return nil
+}
+
+func TriggerExtractionJob(t *testing.T, baseURL, token, sessionID string) {
+	t.Helper()
+	body, status := POST(t, baseURL, "/v1/memory/consolidate", token, map[string]any{
+		"run_type":   "extraction",
+		"session_id": strings.TrimSpace(sessionID),
+	})
+	if status != http.StatusOK && status != http.StatusNoContent && status != http.StatusAccepted {
+		t.Fatalf("POST /v1/memory/consolidate extraction status=%d body=%s", status, string(body))
+	}
+}
+
+func TriggerCompactionRun(t *testing.T, baseURL, token, orgID string) {
+	t.Helper()
+	_ = orgID
+	body, status := POST(t, baseURL, "/v1/memory/consolidate", token, map[string]any{
+		"type":     "compaction",
+		"run_type": "compaction",
+	})
+	if status != http.StatusOK && status != http.StatusNoContent && status != http.StatusAccepted {
+		t.Fatalf("POST /v1/memory/consolidate compaction status=%d body=%s", status, string(body))
+	}
+	if status != http.StatusAccepted {
+		return
+	}
+
+	runID := stringPath(t, body, "data", "compaction_run_id")
+	if strings.TrimSpace(runID) == "" {
+		return
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		runsBody, runsStatus := GET(t, baseURL, "/v1/memory/compaction-runs?limit=50", token)
+		if runsStatus == http.StatusOK {
+			items, ok := JSONPath(t, runsBody, "data").([]any)
+			if ok {
+				for _, raw := range items {
+					item, itemOK := raw.(map[string]any)
+					if !itemOK {
+						continue
+					}
+					id, _ := item["id"].(string)
+					if id != runID {
+						continue
+					}
+					itemStatus, _ := item["status"].(string)
+					if strings.EqualFold(strings.TrimSpace(itemStatus), "completed") {
+						return
+					}
+				}
+			}
+		}
+		time.Sleep(800 * time.Millisecond)
+	}
+}
+
+func WaitForAssistantMessage(t *testing.T, baseURL, token, sessionID string, afterSequence int64, timeout time.Duration) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	lastStatus := 0
+	lastBody := []byte("{}")
+
+	path := "/v1/chat-sessions/" + strings.TrimSpace(sessionID) + "/messages?limit=200"
+	for time.Now().Before(deadline) {
+		body, status := GET(t, baseURL, path, token)
+		lastStatus = status
+		lastBody = body
+		if status == http.StatusTooManyRequests {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		if status == http.StatusOK {
+			items, ok := JSONPath(t, body, "data").([]any)
+			if ok {
+				for i := len(items) - 1; i >= 0; i-- {
+					item, itemOK := items[i].(map[string]any)
+					if !itemOK {
+						continue
+					}
+					role, _ := item["role"].(string)
+					statusText, _ := item["status"].(string)
+					if !strings.EqualFold(strings.TrimSpace(statusText), "final") &&
+						!strings.EqualFold(strings.TrimSpace(statusText), "failed") {
+						continue
+					}
+					sequenceRaw, hasSequence := item["sequence_number"].(float64)
+					if !hasSequence {
+						continue
+					}
+					if !strings.EqualFold(strings.TrimSpace(role), "assistant") &&
+						!strings.EqualFold(strings.TrimSpace(role), "system") {
+						continue
+					}
+					if int64(sequenceRaw) > afterSequence {
+						return item
+					}
+				}
+			}
+		}
+		time.Sleep(1 * time.Second)
+	}
+	t.Fatalf("timed out waiting for assistant response session=%s after_sequence=%d last_status=%d last_body=%s", sessionID, afterSequence, lastStatus, string(lastBody))
+	return nil
 }
 
 func waitForHealthLive(baseURL string, timeout, pollInterval time.Duration) error {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/samhotchkiss/otter-camp/internal/budget"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
@@ -15,8 +16,8 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/jobs"
 	"github.com/samhotchkiss/otter-camp/internal/model"
-	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
+	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/push"
 	"github.com/samhotchkiss/otter-camp/internal/push/adapters"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -186,13 +187,17 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		repo.NewModelProfileAssignmentRepo(pool.Raw()),
 		repo.NewModelProfileRepo(pool.Raw()),
 	)
+	modelGateway := turn.ModelGateway(turn.UnavailableModelGateway{})
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("OTTERCAMP_MODE")), "test") {
+		modelGateway = deterministicTurnModelGateway{}
+	}
 	turnEngine, err := turn.NewEngine(turn.Options{
 		Pool:          pool.Raw(),
 		Chat:          chatService,
 		ToolResolver:  toolResolver,
 		Assembler:     promptAssembler,
 		Summarization: summarizationChecker,
-		ModelGateway:  turn.UnavailableModelGateway{},
+		ModelGateway:  modelGateway,
 		Dispatcher:    turn.UnavailableToolDispatcher{},
 		RunCanceler:   runService,
 		Events:        bus,
