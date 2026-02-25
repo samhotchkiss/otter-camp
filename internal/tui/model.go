@@ -15,6 +15,10 @@ const (
 	ChatPanel
 )
 
+type WorkspaceEnvelopeMsg struct {
+	Envelope EventEnvelope
+}
+
 type Model struct {
 	state          UIState
 	focus          Panel
@@ -28,6 +32,7 @@ type Model struct {
 	quitting       bool
 	sidebarVisible bool
 	sizeClass      SizeClass
+	workspace      workspaceState
 }
 
 func NewModel(state UIState) Model {
@@ -42,6 +47,7 @@ func NewModel(state UIState) Model {
 		statusMessage:  "Tab/Shift-Tab cycle focus. 1/2/3 direct focus. :focus and :quit commands available.",
 		connection:     ConnectionDisconnected,
 		sidebarVisible: normalized.SidebarVisible,
+		workspace:      newWorkspaceState(),
 	}
 	model.applyResponsiveLayout()
 	return model
@@ -65,6 +71,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ConnectionStateMsg:
 		m.connection = typed.State
 		m.streamDegraded = typed.Degraded
+		return m, nil
+	case WorkspaceEnvelopeMsg:
+		m.workspace.applyRealtimeEnvelope(typed.Envelope)
 		return m, nil
 	case tea.KeyMsg:
 		return m.updateKey(typed)
@@ -96,6 +105,12 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.applyResponsiveLayout()
 		m.statusMessage = "Focus: " + panelLabel(m.focus)
 		return m, nil
+	case tea.KeyEnter:
+		m.handleEnterKey()
+		return m, nil
+	case tea.KeyEsc:
+		m.handleEscapeKey()
+		return m, nil
 	case tea.KeyRunes:
 		if len(key.Runes) == 1 {
 			r := key.Runes[0]
@@ -111,11 +126,112 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.statusMessage = "Focus: " + panelLabel(m.focus)
 				return m, nil
 			}
+
+			if handled := m.handleWorkspaceRune(r); handled {
+				return m, nil
+			}
 		}
 		return m, nil
 	default:
 		return m, nil
 	}
+}
+
+func (m *Model) handleEnterKey() {
+	switch m.focus {
+	case SidebarPanel:
+		m.workspace.selectSidebarNode()
+		m.state.LastActiveChatSession = m.workspace.activeSessionID
+		m.statusMessage = "Sidebar selection applied."
+	case MainPanel:
+		if m.workspace.mainView == ViewInbox {
+			if m.workspace.applyInboxAction("open") {
+				m.state.LastActiveChatSession = m.workspace.activeSessionID
+				m.statusMessage = "Opened inbox item in context."
+				return
+			}
+		}
+		if m.workspace.mainView == ViewProject || m.workspace.mainView == ViewDashboard {
+			m.workspace.setMainView(ViewTask)
+			m.statusMessage = "Opened task detail."
+			return
+		}
+	}
+}
+
+func (m *Model) handleEscapeKey() {
+	if m.focus == MainPanel {
+		m.workspace.setMainView(ViewDashboard)
+		m.statusMessage = "Returned to dashboard."
+	}
+}
+
+func (m *Model) handleWorkspaceRune(r rune) bool {
+	switch r {
+	case 'j':
+		if m.focus == SidebarPanel {
+			m.workspace.moveSidebar(1)
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
+			m.workspace.moveInbox(1)
+		}
+		return true
+	case 'k':
+		if m.focus == SidebarPanel {
+			m.workspace.moveSidebar(-1)
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
+			m.workspace.moveInbox(-1)
+		}
+		return true
+	case 'h':
+		if m.focus == SidebarPanel {
+			m.workspace.collapseSidebarNode()
+			return true
+		}
+	case 'l':
+		if m.focus == SidebarPanel {
+			m.workspace.expandSidebarNode()
+			return true
+		}
+	case 'g':
+		if m.focus == SidebarPanel {
+			m.workspace.sidebarHome()
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
+			m.workspace.inboxHome()
+		}
+		return true
+	case 'G':
+		if m.focus == SidebarPanel {
+			m.workspace.sidebarEnd()
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
+			m.workspace.inboxEnd()
+		}
+		return true
+	case 'r':
+		m.statusMessage = "Workspace refreshed."
+		return true
+	case 'a':
+		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("approve") {
+			m.statusMessage = "Inbox item approved."
+			return true
+		}
+	case 'x':
+		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("reject") {
+			m.statusMessage = "Inbox item rejected."
+			return true
+		}
+	case 'f':
+		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("defer") {
+			m.statusMessage = "Inbox item deferred."
+			return true
+		}
+	case 'o':
+		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("open") {
+			m.state.LastActiveChatSession = m.workspace.activeSessionID
+			m.statusMessage = "Opened inbox item in context."
+			return true
+		}
+	}
+	return false
 }
 
 func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -176,6 +292,14 @@ func (m *Model) executeCommand(raw string) {
 		}
 		m.setFocus(panel)
 		m.statusMessage = "Focus: " + panelLabel(m.focus)
+	case "dashboard", "project", "task", "inbox", "activity", "agents", "merges", "schedules":
+		view, ok := resolveMainViewCommand(fields[0])
+		if !ok {
+			m.statusMessage = "Unknown workspace command: " + fields[0]
+			return
+		}
+		m.workspace.setMainView(view)
+		m.statusMessage = "Main view: " + string(view)
 	default:
 		m.statusMessage = "Unknown command: " + fields[0]
 	}
@@ -243,6 +367,61 @@ func (m Model) StreamDegraded() bool {
 	return m.streamDegraded
 }
 
+func (m Model) MainView() MainView {
+	return m.workspace.mainView
+}
+
+func (m Model) WorkspaceSession() string {
+	return m.workspace.activeSessionID
+}
+
+func (m Model) WorkspaceRender(class SizeClass) string {
+	return m.workspace.render(m.workspace.mainView, class)
+}
+
+func (m Model) BoardCounts() boardCounts {
+	return m.workspace.boardCounts()
+}
+
+func (m Model) ActivityEntries() []string {
+	out := make([]string, len(m.workspace.activity))
+	copy(out, m.workspace.activity)
+	return out
+}
+
+func (m Model) SidebarVisibleEntries() []string {
+	visibleIDs := m.workspace.visibleSidebarIDs()
+	entries := make([]string, 0, len(visibleIDs))
+	for _, id := range visibleIDs {
+		node := m.workspace.nodes[id]
+		if node == nil {
+			continue
+		}
+		label := node.Label
+		if node.Unread > 0 {
+			label = fmt.Sprintf("%s (%d)", label, node.Unread)
+		}
+		entries = append(entries, label)
+	}
+	return entries
+}
+
+func (m Model) TaskStatus(taskID string) string {
+	task := m.workspace.tasks[taskID]
+	if task == nil {
+		return ""
+	}
+	return task.Status
+}
+
+func (m Model) TaskFlow(taskID string) int {
+	task := m.workspace.tasks[taskID]
+	if task == nil {
+		return 0
+	}
+	return task.Flow
+}
+
 func (m Model) SizeClass() SizeClass {
 	if m.sizeClass == "" {
 		return resolveSizeClass(m.width, m.height)
@@ -265,6 +444,9 @@ func (m Model) State() UIState {
 	next := m.state
 	next.LastActiveView = viewFromPanel(focus)
 	next.SidebarVisible = m.sidebarVisible
+	if strings.TrimSpace(m.workspace.activeSessionID) != "" {
+		next.LastActiveChatSession = m.workspace.activeSessionID
+	}
 	return normalizeState(next)
 }
 

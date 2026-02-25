@@ -1,0 +1,23 @@
+### L dashboard
+view=dashboard size=L tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
+
+### L project
+view=project size=L projects=1 selected_session=session-org-general
+
+### L task
+view=task size=L id=task-1 status=todo flow=1 history=1
+
+### L inbox
+view=inbox size=L current=task-1 total=2
+
+### L activity
+view=activity size=L entries=1 last=workspace booted
+
+### L agents
+view=agents size=L count=3
+
+### L merges
+view=merges size=L count=2
+
+### L schedules
+view=schedules size=L count=2
