@@ -1017,8 +1017,21 @@ func (s *service) StartTurn(ctx context.Context, turnID uuid.UUID) error {
 	if normalizeTurnStatus(turn.Status) != "pending" {
 		return ErrInvalidStatusTransition
 	}
-	_, err = s.turns.SetStarted(ctx, turn.ID, s.clock.Now().UTC())
-	return err
+	started, err := s.turns.SetStarted(ctx, turn.ID, s.clock.Now().UTC())
+	if err != nil {
+		return err
+	}
+
+	session, err := s.GetSession(ctx, turn.SessionID)
+	if err != nil {
+		return err
+	}
+	actorType, actorID := actorFromContext(ctx)
+	return s.publishEvent(ctx, session.OrganizationID, "chat.turn.started", actorType, actorID, map[string]any{
+		"session_id": session.ID,
+		"turn_id":    turn.ID,
+		"status":     started.Status,
+	})
 }
 
 func (s *service) CompleteTurn(ctx context.Context, turnID uuid.UUID) error {
@@ -1042,7 +1055,18 @@ func (s *service) CompleteTurn(ctx context.Context, turnID uuid.UUID) error {
 		return err
 	}
 	_, _ = s.sessions.UpdateCurrentTurn(ctx, turn.SessionID, nil)
-	return nil
+
+	session, err := s.GetSession(ctx, turn.SessionID)
+	if err != nil {
+		return err
+	}
+	actorType, actorID := actorFromContext(ctx)
+	return s.publishEvent(ctx, session.OrganizationID, "chat.turn.completed", actorType, actorID, map[string]any{
+		"session_id":  session.ID,
+		"turn_id":     turn.ID,
+		"status":      "completed",
+		"duration_ms": durationMS,
+	})
 }
 
 func (s *service) CancelTurn(ctx context.Context, turnID uuid.UUID, reason string) error {

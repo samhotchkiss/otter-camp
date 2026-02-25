@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,7 @@ type chatArtifactRepository interface {
 
 type chatMessageRepository interface {
 	ListBySession(ctx context.Context, sessionID uuid.UUID) ([]repo.ChatMessage, error)
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string, errorMessage string) (repo.ChatMessage, error)
 }
 
 type ChatRouteRegistrar struct {
@@ -47,7 +49,10 @@ type ChatRouteRegistrar struct {
 }
 
 func NewChatRouteRegistrar(service chat.ChatService, pool *pgxpool.Pool) *ChatRouteRegistrar {
-	h := chatHandlers{service: service}
+	h := chatHandlers{
+		service:  service,
+		testMode: strings.EqualFold(strings.TrimSpace(os.Getenv("OTTERCAMP_MODE")), "test"),
+	}
 	if pool != nil {
 		h.sessions = repo.NewChatSessionRepo(pool)
 		h.readCursors = repo.NewChatReadCursorRepo(pool)
@@ -65,8 +70,10 @@ func (r *ChatRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.Delete("/chat-sessions/{id}", r.handlers.deleteSession)
 
 	router.Get("/chat-sessions/{id}/messages", r.handlers.listMessages)
+	router.Get("/chat-sessions/{id}/messages/{mid}", r.handlers.getMessage)
 	router.Post("/chat-sessions/{id}/messages", r.handlers.appendMessage)
 	router.Patch("/chat-sessions/{id}/messages/{mid}", r.handlers.editQueuedMessage)
+	router.Get("/chat-sessions/{id}/turns", r.handlers.listTurns)
 
 	router.Post("/chat-sessions/{id}/cancel-turn", r.handlers.cancelTurn)
 	router.Post("/chat-sessions/{id}/messages/{mid}/steer", r.handlers.steerTurn)
@@ -92,6 +99,7 @@ type chatHandlers struct {
 	readCursors chatReadCursorRepository
 	artifacts   chatArtifactRepository
 	messages    chatMessageRepository
+	testMode    bool
 }
 
 type createChatSessionRequest struct {
@@ -109,6 +117,7 @@ type patchChatSessionRequest struct {
 type appendChatMessageRequest struct {
 	Content       string `json:"content"`
 	ContentFormat string `json:"content_format"`
+	Role          string `json:"role,omitempty"`
 }
 
 type editChatMessageRequest struct {
@@ -116,7 +125,8 @@ type editChatMessageRequest struct {
 }
 
 type cancelTurnRequest struct {
-	Reason *string `json:"reason"`
+	Reason *string    `json:"reason"`
+	TurnID *uuid.UUID `json:"turn_id"`
 }
 
 type steerTurnRequest struct {
@@ -124,7 +134,8 @@ type steerTurnRequest struct {
 }
 
 type addReactionRequest struct {
-	Emoji string `json:"emoji"`
+	Emoji    string `json:"emoji,omitempty"`
+	Reaction string `json:"reaction,omitempty"`
 }
 
 type addParticipantRequest struct {
@@ -192,8 +203,28 @@ type chatReactionRecord struct {
 	SessionID   uuid.UUID `json:"session_id"`
 	ReactorType string    `json:"reactor_type"`
 	ReactorID   uuid.UUID `json:"reactor_id"`
+	Reaction    string    `json:"reaction,omitempty"`
 	Emoji       string    `json:"emoji"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+type chatMessageDetailRecord struct {
+	chatMessageRecord
+	Reactions []chatReactionRecord `json:"reactions"`
+}
+
+type chatTurnRecord struct {
+	ID                uuid.UUID  `json:"id"`
+	SessionID         uuid.UUID  `json:"session_id"`
+	TurnNumber        int        `json:"turn_number"`
+	RespondingType    string     `json:"responding_type"`
+	RespondingID      uuid.UUID  `json:"responding_id"`
+	Status            string     `json:"status"`
+	CancelRequestedAt *time.Time `json:"cancel_requested_at,omitempty"`
+	StartedAt         *time.Time `json:"started_at,omitempty"`
+	CompletedAt       *time.Time `json:"completed_at,omitempty"`
+	DurationMS        *int       `json:"duration_ms,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
 }
 
 type chatReadCursorRecord struct {
@@ -232,15 +263,20 @@ func (h chatHandlers) createSession(w http.ResponseWriter, r *http.Request) {
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
 		return
 	}
-	if strings.TrimSpace(req.ScopeType) == "" || req.ScopeID == uuid.Nil || strings.TrimSpace(req.Mode) == "" {
+	scopeType := strings.TrimSpace(req.ScopeType)
+	scopeID := req.ScopeID
+	if strings.EqualFold(scopeType, "organization") && scopeID == uuid.Nil {
+		scopeID = principal.OrganizationID
+	}
+	if scopeType == "" || scopeID == uuid.Nil || strings.TrimSpace(req.Mode) == "" {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "scope_type, scope_id, and mode are required")
 		return
 	}
 
 	session, err := h.service.CreateSession(r.Context(), chat.CreateSessionInput{
 		OrganizationID: principal.OrganizationID,
-		ScopeType:      req.ScopeType,
-		ScopeID:        req.ScopeID,
+		ScopeType:      scopeType,
+		ScopeID:        scopeID,
 		Mode:           req.Mode,
 		Title:          trimOptionalString(req.Title),
 	})
@@ -535,6 +571,81 @@ func (h chatHandlers) listMessages(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h chatHandlers) getMessage(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	_, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if h.service == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "chat service unavailable")
+		return
+	}
+
+	sessionID, ok := parseChatPathUUID(responder, w, r, "id", "invalid session id")
+	if !ok {
+		return
+	}
+	messageID, ok := parseChatPathUUID(responder, w, r, "mid", "invalid message id")
+	if !ok {
+		return
+	}
+
+	message, err := h.service.GetMessage(r.Context(), messageID)
+	if err != nil {
+		h.respondChatError(responder, w, err)
+		return
+	}
+	if message.SessionID != sessionID {
+		responder.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+		return
+	}
+
+	reactions, err := h.service.ListReactions(r.Context(), messageID)
+	if err != nil {
+		h.respondChatError(responder, w, err)
+		return
+	}
+
+	responder.JSON(w, http.StatusOK, chatMessageDetailRecord{
+		chatMessageRecord: toChatMessageResponse(message),
+		Reactions:         toChatReactionResponses(reactions),
+	})
+}
+
+func (h chatHandlers) listTurns(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	_, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if h.service == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "chat service unavailable")
+		return
+	}
+
+	sessionID, ok := parseChatPathUUID(responder, w, r, "id", "invalid session id")
+	if !ok {
+		return
+	}
+	if _, err := h.service.GetSession(r.Context(), sessionID); err != nil {
+		h.respondChatError(responder, w, err)
+		return
+	}
+
+	turns, err := h.service.ListTurns(r.Context(), sessionID)
+	if err != nil {
+		h.respondChatError(responder, w, err)
+		return
+	}
+
+	payload := make([]chatTurnRecord, 0, len(turns))
+	for _, turn := range turns {
+		payload = append(payload, toChatTurnResponse(turn))
+	}
+	responder.JSON(w, http.StatusOK, payload)
+}
+
 func (h chatHandlers) appendMessage(w http.ResponseWriter, r *http.Request) {
 	responder := api.NewResponder(r.Context())
 	principal, ok := h.requirePrincipal(w, r)
@@ -566,17 +677,22 @@ func (h chatHandlers) appendMessage(w http.ResponseWriter, r *http.Request) {
 	if isAgentAPIKey(principal) {
 		authorType = "agent"
 	}
+	role := normalizeAppendRole(req.Role)
 	message, err := h.service.AppendMessage(r.Context(), chat.AppendMessageInput{
 		SessionID:     sessionID,
 		AuthorType:    &authorType,
 		AuthorID:      &principal.UserID,
-		Role:          "user",
+		Role:          role,
 		Content:       content,
 		ContentFormat: strings.TrimSpace(req.ContentFormat),
 	})
 	if err != nil {
 		h.respondChatError(responder, w, err)
 		return
+	}
+
+	if role == "user" {
+		h.kickoffDeterministicTurn(sessionID, content)
 	}
 
 	responder.JSON(w, http.StatusAccepted, toChatMessageResponse(message))
@@ -656,7 +772,10 @@ func (h chatHandlers) cancelTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var cancelReason *string
+	var (
+		cancelReason *string
+		requestTurn  *uuid.UUID
+	)
 	if r.ContentLength > 0 {
 		var req cancelTurnRequest
 		if err := decodeJSON(r, &req); err != nil {
@@ -664,18 +783,38 @@ func (h chatHandlers) cancelTurn(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		cancelReason = trimOptionalString(req.Reason)
+		requestTurn = req.TurnID
 	}
-	// The endpoint accepts reason for API compatibility, but CancelCurrentTurn currently
-	// does not persist reason text; this remains a best-effort advisory input for now.
-	_ = cancelReason
+	reason := ""
+	if cancelReason != nil {
+		reason = *cancelReason
+	}
 
-	turnID := h.currentInProgressTurnID(r.Context(), sessionID)
-	if err := h.service.CancelCurrentTurn(r.Context(), sessionID); err != nil {
-		h.respondChatError(responder, w, err)
-		return
-	}
-	if turnID == uuid.Nil {
-		turnID = h.latestTurnIDByStatus(r.Context(), sessionID, "cancelled")
+	turnID := uuid.Nil
+	if requestTurn != nil && *requestTurn != uuid.Nil {
+		turn, err := h.service.GetTurn(r.Context(), *requestTurn)
+		if err != nil {
+			h.respondChatError(responder, w, err)
+			return
+		}
+		if turn.SessionID != sessionID {
+			responder.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+			return
+		}
+		if err := h.service.CancelTurn(r.Context(), turn.ID, reason); err != nil {
+			h.respondChatError(responder, w, err)
+			return
+		}
+		turnID = turn.ID
+	} else {
+		turnID = h.currentInProgressTurnID(r.Context(), sessionID)
+		if err := h.service.CancelCurrentTurn(r.Context(), sessionID); err != nil {
+			h.respondChatError(responder, w, err)
+			return
+		}
+		if turnID == uuid.Nil {
+			turnID = h.latestTurnIDByStatus(r.Context(), sessionID, "cancelled")
+		}
 	}
 
 	responder.JSON(w, http.StatusOK, map[string]any{
@@ -799,8 +938,12 @@ func (h chatHandlers) addReaction(w http.ResponseWriter, r *http.Request) {
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
 		return
 	}
-	if strings.TrimSpace(req.Emoji) == "" {
-		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "emoji is required")
+	emoji := strings.TrimSpace(req.Emoji)
+	if emoji == "" {
+		emoji = strings.TrimSpace(req.Reaction)
+	}
+	if emoji == "" {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "emoji or reaction is required")
 		return
 	}
 
@@ -808,7 +951,7 @@ func (h chatHandlers) addReaction(w http.ResponseWriter, r *http.Request) {
 	if isAgentAPIKey(principal) {
 		reactorType = "agent"
 	}
-	reaction, err := h.service.AddReaction(r.Context(), messageID, reactorType, principal.UserID, strings.TrimSpace(req.Emoji))
+	reaction, err := h.service.AddReaction(r.Context(), messageID, reactorType, principal.UserID, emoji)
 	if err != nil {
 		h.respondChatError(responder, w, err)
 		return
@@ -1255,6 +1398,112 @@ func (h chatHandlers) latestTurnIDByStatus(ctx context.Context, sessionID uuid.U
 	return selected
 }
 
+func (h chatHandlers) kickoffDeterministicTurn(sessionID uuid.UUID, content string) {
+	if !h.testMode || h.service == nil {
+		return
+	}
+	if h.currentInProgressTurnID(context.Background(), sessionID) != uuid.Nil {
+		return
+	}
+	agentID, ok := h.firstActiveAgentParticipant(context.Background(), sessionID)
+	if !ok {
+		return
+	}
+
+	turn, err := h.service.CreateTurn(context.Background(), sessionID, agentID)
+	if err != nil || turn == nil {
+		return
+	}
+	if err := h.service.StartTurn(context.Background(), turn.ID); err != nil {
+		return
+	}
+
+	go h.finishDeterministicTurn(sessionID, turn.ID, agentID, content)
+}
+
+func (h chatHandlers) finishDeterministicTurn(sessionID, turnID, agentID uuid.UUID, userContent string) {
+	delay := deterministicTurnDelay(userContent)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	<-timer.C
+
+	ctx := context.Background()
+	turn, err := h.service.GetTurn(ctx, turnID)
+	if err != nil || turn == nil {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(turn.Status), "in_progress") {
+		return
+	}
+
+	authorType := "agent"
+	role := "assistant"
+	reply := deterministicTurnResponse(userContent)
+	message, err := h.service.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  sessionID,
+		TurnID:     &turnID,
+		AuthorType: &authorType,
+		AuthorID:   &agentID,
+		Role:       role,
+		Content:    reply,
+	})
+	if err != nil {
+		return
+	}
+
+	h.markMessageFinal(ctx, message.ID)
+	_ = h.service.CompleteTurn(ctx, turnID)
+}
+
+func (h chatHandlers) firstActiveAgentParticipant(ctx context.Context, sessionID uuid.UUID) (uuid.UUID, bool) {
+	participants, err := h.service.ListParticipants(ctx, sessionID)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	for _, participant := range participants {
+		if participant == nil {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(participant.ParticipantType), "agent") {
+			continue
+		}
+		if participant.ParticipantID == uuid.Nil || participant.RemovedAt != nil {
+			continue
+		}
+		return participant.ParticipantID, true
+	}
+	return uuid.Nil, false
+}
+
+func (h chatHandlers) markMessageFinal(ctx context.Context, messageID uuid.UUID) {
+	if err := h.service.UpdateMessageStatus(ctx, messageID, "final", ""); err == nil {
+		return
+	}
+	if h.messages == nil {
+		return
+	}
+	_, _ = h.messages.UpdateStatus(ctx, messageID, "final", "")
+}
+
+func deterministicTurnDelay(content string) time.Duration {
+	trimmed := strings.ToLower(strings.TrimSpace(content))
+	if strings.HasPrefix(trimmed, "[slow-response]") {
+		return 2 * time.Second
+	}
+	return 150 * time.Millisecond
+}
+
+func deterministicTurnResponse(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(strings.ToLower(trimmed), "[slow-response]") {
+		trimmed = strings.TrimSpace(trimmed[len("[slow-response]"):])
+	}
+	if trimmed == "" {
+		return "I am here and ready to help."
+	}
+	return "Deterministic reply: " + trimmed
+}
+
 func (h chatHandlers) requirePrincipal(w http.ResponseWriter, r *http.Request) (middleware.Principal, bool) {
 	responder := api.NewResponder(r.Context())
 	principal, ok := middleware.PrincipalFromContext(r.Context())
@@ -1463,6 +1712,7 @@ func toChatReactionResponse(model *chat.ChatMessageReaction) chatReactionRecord 
 		SessionID:   model.SessionID,
 		ReactorType: model.ReactorType,
 		ReactorID:   model.ReactorID,
+		Reaction:    model.Emoji,
 		Emoji:       model.Emoji,
 		CreatedAt:   model.CreatedAt,
 	}
@@ -1474,6 +1724,51 @@ func toChatReactionResponses(items []*chat.ChatMessageReaction) []chatReactionRe
 		result = append(result, toChatReactionResponse(item))
 	}
 	return result
+}
+
+func toChatTurnResponse(model *chat.ChatTurn) chatTurnRecord {
+	if model == nil {
+		return chatTurnRecord{}
+	}
+	return chatTurnRecord{
+		ID:                model.ID,
+		SessionID:         model.SessionID,
+		TurnNumber:        model.TurnNumber,
+		RespondingType:    model.RespondingType,
+		RespondingID:      model.RespondingID,
+		Status:            normalizeTurnResponseStatus(model.Status),
+		CancelRequestedAt: model.CancelRequestedAt,
+		StartedAt:         model.StartedAt,
+		CompletedAt:       model.CompletedAt,
+		DurationMS:        model.DurationMS,
+		CreatedAt:         model.CreatedAt,
+	}
+}
+
+func normalizeTurnResponseStatus(value string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "in_progress":
+		return "active"
+	default:
+		return strings.TrimSpace(strings.ToLower(value))
+	}
+}
+
+func normalizeAppendRole(value string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "", "user", "human":
+		return "user"
+	case "assistant":
+		return "assistant"
+	case "tool_call":
+		return "tool_call"
+	case "tool_result":
+		return "tool_result"
+	case "system":
+		return "system"
+	default:
+		return strings.TrimSpace(strings.ToLower(value))
+	}
 }
 
 func toChatReadCursorResponse(model repo.ChatReadCursor) chatReadCursorRecord {
