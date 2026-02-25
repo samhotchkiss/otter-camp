@@ -2,152 +2,121 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, v2]
   pull_request:
-    branches: [main]
+    branches: [main, v2]
 
 env:
-  GO_VERSION: '1.24'
-  NODE_VERSION: '20'
+  GO_VERSION: "1.21"
 
 jobs:
-  # Backend Tests
-  backend:
-    name: Backend Tests
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      
-      - name: Download dependencies
-        run: go mod download
-      
-      - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out ./...
-      
-      - name: Build server
-        run: go build -o bin/server ./cmd/server
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: latest
+          args: --timeout=3m
 
-  # Frontend Tests
-  frontend:
-    name: Frontend Tests
+  unit-tests:
+    name: Unit Tests
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
+    timeout-minutes: 5
+    needs: lint
+    strategy:
+      matrix:
+        go: ["1.21"]
+      fail-fast: true
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-go@v5
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: web/package-lock.json
-      
-      - name: Install dependencies
-        run: npm ci
-      
-      - name: Type check
-        run: npx tsc --noEmit
-      
+          go-version: ${{ matrix.go }}
+          cache: true
       - name: Run unit tests
-        run: npm test -- --run
-      
-      - name: Build
-        run: npm run build
+        run: make test-unit
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit-go${{ matrix.go }}
+          path: coverage-unit.out
+          retention-days: 7
+      - name: Coverage gate
+        run: |
+          go tool cover -func=coverage-unit.out | tail -1
+          COVERAGE=$(go tool cover -func=coverage-unit.out | tail -1 | awk '{print $3}' | sed 's/%//')
+          if [ $(echo "$COVERAGE < 90.0" | bc -l) -eq 1 ]; then
+            echo "Coverage ${COVERAGE}% is below the 90% minimum"
+            exit 1
+          fi
 
-  # E2E Tests
-  e2e:
-    name: E2E Tests
+  integration-tests:
+    name: Integration Tests
     runs-on: ubuntu-latest
-    needs: [backend, frontend]
+    timeout-minutes: 10
+    needs: unit-tests
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16
         env:
-          POSTGRES_USER: otter
-          POSTGRES_PASSWORD: camp
-          POSTGRES_DB: ottercamp
+          POSTGRES_USER: ottercamp
+          POSTGRES_PASSWORD: ottercamp
+          POSTGRES_DB: ottercamp_test
         ports:
           - 5432:5432
         options: >-
           --health-cmd pg_isready
-          --health-interval 10s
+          --health-interval 5s
           --health-timeout 5s
-          --health-retries 5
-
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: web/package-lock.json
-      
-      - name: Build Go server
-        run: go build -o bin/server ./cmd/server
-      
-      - name: Install frontend dependencies
-        working-directory: web
-        run: npm ci
-      
-      - name: Install Playwright browsers
-        working-directory: web
-        run: npx playwright install --with-deps chromium
-      
-      - name: Start backend server
-        run: ./bin/server &
+      - name: Run integration tests
         env:
-          PORT: '4200'
-          DATABASE_URL: postgres://otter:camp@localhost:5432/ottercamp?sslmode=disable
-      
-      - name: Start frontend dev server
-        working-directory: web
-        run: npm run dev &
-        env:
-          VITE_API_URL: http://localhost:4200
-      
-      - name: Wait for servers
-        run: |
-          echo "Waiting for backend..."
-          timeout 60 bash -c 'until curl -s http://localhost:4200/health > /dev/null 2>&1; do sleep 1; done' || echo "Backend health check unavailable, continuing..."
-          echo "Waiting for frontend..."
-          timeout 60 bash -c 'until curl -s http://localhost:5173 > /dev/null 2>&1; do sleep 1; done'
-          echo "Both servers ready!"
-      
-      - name: Run E2E tests
-        working-directory: web
-        run: npx playwright test --project=chromium
-        env:
-          CI: true
-          BASE_URL: http://localhost:5173
-      
-      - name: Upload test results
+          DATABASE_URL: postgres://ottercamp:ottercamp@localhost:5432/ottercamp_test?sslmode=disable
+        run: make test-integration
+      - name: Upload integration coverage
         uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: e2e-test-results
-          path: web/test-results/
+          name: coverage-integration
+          path: coverage-integration.out
           retention-days: 7
-      
-      - name: Upload Playwright report
-        uses: actions/upload-artifact@v4
-        if: always()
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    needs: unit-tests
+    strategy:
+      matrix:
+        go: ["1.21"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          name: playwright-report
-          path: web/playwright-report/
+          go-version: ${{ matrix.go }}
+          cache: true
+      - name: Build binary
+        run: make build
+      - name: Verify binary exists
+        run: |
+          test -f ./bin/ottercamp
+          ./bin/ottercamp version
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ottercamp-linux-amd64-go${{ matrix.go }}
+          path: ./bin/ottercamp
           retention-days: 7
