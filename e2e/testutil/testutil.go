@@ -231,6 +231,31 @@ func POST(t *testing.T, baseURL, path, token string, body any) ([]byte, int) {
 	return rawBody, resp.StatusCode
 }
 
+func DELETE(t *testing.T, baseURL, path, token string) ([]byte, int) {
+	t.Helper()
+	url := strings.TrimRight(baseURL, "/") + path
+
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		t.Fatalf("new DELETE request: %v", err)
+	}
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	}
+
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatalf("DELETE %s failed: %v", path, err)
+	}
+	defer resp.Body.Close()
+
+	rawBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read DELETE %s body: %v", path, err)
+	}
+	return rawBody, resp.StatusCode
+}
+
 func JSONPath(t *testing.T, body []byte, path ...string) any {
 	t.Helper()
 	var current any

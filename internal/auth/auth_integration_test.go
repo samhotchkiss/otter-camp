@@ -206,8 +206,8 @@ func TestSession_Revocation(t *testing.T) {
 	logout := doJSON(t, http.MethodPost, srv.URL+"/v1/auth/logout", map[string]any{}, map[string]string{
 		"Authorization": "Bearer " + token,
 	})
-	if logout.StatusCode != http.StatusOK {
-		t.Fatalf("logout status=%d want=%d body=%s", logout.StatusCode, http.StatusOK, string(logout.Body))
+	if logout.StatusCode != http.StatusNoContent {
+		t.Fatalf("logout status=%d want=%d body=%s", logout.StatusCode, http.StatusNoContent, string(logout.Body))
 	}
 
 	me := doJSON(t, http.MethodGet, srv.URL+"/v1/auth/me", nil, map[string]string{
@@ -363,8 +363,8 @@ func TestAPIKey_Revocation(t *testing.T) {
 	revoked := doJSON(t, http.MethodDelete, srv.URL+"/v1/api-keys/"+keyID, nil, map[string]string{
 		"Authorization": "Bearer " + token,
 	})
-	if revoked.StatusCode != http.StatusOK {
-		t.Fatalf("revoke key status=%d want=%d body=%s", revoked.StatusCode, http.StatusOK, string(revoked.Body))
+	if revoked.StatusCode != http.StatusNoContent {
+		t.Fatalf("revoke key status=%d want=%d body=%s", revoked.StatusCode, http.StatusNoContent, string(revoked.Body))
 	}
 
 	after := doJSON(t, http.MethodGet, srv.URL+"/v1/auth/me", nil, map[string]string{

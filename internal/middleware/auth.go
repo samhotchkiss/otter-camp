@@ -184,7 +184,7 @@ func mapAuthError(err error) (status int, code, message string) {
 	case errors.Is(err, auth.ErrSessionExpired):
 		return http.StatusUnauthorized, api.ErrCodeSessionExpired, "session expired"
 	case errors.Is(err, auth.ErrSessionRevoked):
-		return http.StatusUnauthorized, api.ErrCodeSessionRevoked, "session revoked"
+		return http.StatusUnauthorized, api.ErrCodeUnauthorized, "session invalid"
 	case errors.Is(err, auth.ErrInvalidAPIKey):
 		return http.StatusUnauthorized, api.ErrCodeUnauthorized, "invalid api key"
 	case errors.Is(err, auth.ErrInvalidSession):
