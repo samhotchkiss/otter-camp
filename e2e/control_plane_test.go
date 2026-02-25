@@ -17,7 +17,7 @@ func TestControlPlane_RunLifecycle(t *testing.T) {
 	defer server.Stop(t)
 
 	token, _, _ := resetBootstrapAndLogin(t, server, baseURL)
-	projectID := createProject(t, baseURL, token, "cp-lifecycle")
+	projectID := createControlPlaneProject(t, baseURL, token, "cp-lifecycle")
 	taskID := createProjectTask(t, baseURL, token, projectID, "Run lifecycle test task", "Control plane lifecycle task", "")
 	runID := createControlRun(t, baseURL, token, taskID)
 
@@ -44,7 +44,7 @@ func TestControlPlane_PolicyAllow(t *testing.T) {
 	defer server.Stop(t)
 
 	token, orgID, frankID := resetBootstrapAndLogin(t, server, baseURL)
-	projectID := createProject(t, baseURL, token, "cp-allow")
+	projectID := createControlPlaneProject(t, baseURL, token, "cp-allow")
 	taskID := createProjectTask(
 		t,
 		baseURL,
@@ -100,7 +100,7 @@ func TestControlPlane_PolicyDeny_RunContinues(t *testing.T) {
 	defer server.Stop(t)
 
 	token, _, _ := resetBootstrapAndLogin(t, server, baseURL)
-	projectID := createProject(t, baseURL, token, "cp-deny")
+	projectID := createControlPlaneProject(t, baseURL, token, "cp-deny")
 
 	policyBody, policyStatus := testutil.POST(t, baseURL, "/v1/control/policies", token, map[string]any{
 		"policy_layer": "project",
@@ -158,7 +158,7 @@ func TestControlPlane_RunCancellation(t *testing.T) {
 	defer server.Stop(t)
 
 	token, _, _ := resetBootstrapAndLogin(t, server, baseURL)
-	projectID := createProject(t, baseURL, token, "cp-cancel")
+	projectID := createControlPlaneProject(t, baseURL, token, "cp-cancel")
 	taskID := createProjectTask(t, baseURL, token, projectID, "[slow-run] Long running task", "Deterministic slow run for cancel test", "")
 	runID := createControlRun(t, baseURL, token, taskID)
 
@@ -217,7 +217,7 @@ func resetBootstrapAndLogin(t *testing.T, server *testutil.ServerProcess, baseUR
 	return token, orgID, frankID
 }
 
-func createProject(t *testing.T, baseURL, token, prefix string) string {
+func createControlPlaneProject(t *testing.T, baseURL, token, prefix string) string {
 	t.Helper()
 	suffix := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(prefix)), "_", "-")
 	slug := fmt.Sprintf("%s-%d", suffix, time.Now().UnixNano())
