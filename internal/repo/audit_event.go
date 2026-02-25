@@ -45,10 +45,10 @@ type AuditEventRepo struct {
 }
 
 var (
-	auditOpenAIKeyPattern      = regexp.MustCompile(`sk-[A-Za-z0-9]{20,}`)
-	auditBearerPattern         = regexp.MustCompile(`(?i)Bearer\\s+[A-Za-z0-9._-]{20,}`)
-	auditJWTPattern            = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+`)
-	auditKnownEnvSecretPattern = regexp.MustCompile(`(?m)(OPENAI_API_KEY|ANTHROPIC_API_KEY|OTTERCAMP_MASTER_KEY|OTTERCAMP_DB_URL)=([^\\s\"']+)`)
+	auditOpenAIKeyPattern      = regexp.MustCompile(`sk-[A-Za-z0-9][A-Za-z0-9-]{19,}`)
+	auditBearerPattern         = regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9._-]{20,}`)
+	auditJWTPattern            = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
+	auditKnownEnvSecretPattern = regexp.MustCompile(`(?m)(OPENAI_API_KEY|ANTHROPIC_API_KEY|OTTERCAMP_MASTER_KEY|OTTERCAMP_DB_URL)=([^\s"']+)`)
 )
 
 func NewAuditEventRepo(pool *pgxpool.Pool) *AuditEventRepo {

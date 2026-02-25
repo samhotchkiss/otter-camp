@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	openAIKeyPattern      = regexp.MustCompile(`sk-[A-Za-z0-9]{20,}`)
+	openAIKeyPattern      = regexp.MustCompile(`sk-[A-Za-z0-9][A-Za-z0-9-]{19,}`)
 	anthropicLinePattern  = regexp.MustCompile(`(?m)(ANTHROPIC_API_KEY=)([^\s"']+)`)
 	knownEnvSecretPattern = regexp.MustCompile(`(?m)(OPENAI_API_KEY|ANTHROPIC_API_KEY|OTTERCAMP_MASTER_KEY|OTTERCAMP_DB_URL)=([^\s"']+)`)
 	authorizationPattern  = regexp.MustCompile(`(?i)(Authorization:\s*Bearer\s+)[A-Za-z0-9._-]{20,}`)
