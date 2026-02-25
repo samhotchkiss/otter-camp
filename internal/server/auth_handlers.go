@@ -597,24 +597,6 @@ func (h authHandlers) loadAdminTargetUser(w http.ResponseWriter, r *http.Request
 	return target, true
 }
 
-func requestBaseURL(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
-		scheme = strings.ToLower(proto)
-	}
-	host := strings.TrimSpace(r.Host)
-	if forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); forwardedHost != "" {
-		host = forwardedHost
-	}
-	if host == "" {
-		host = "localhost:4110"
-	}
-	return scheme + "://" + host
-}
-
 func decodeJSON(r *http.Request, out any) error {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
