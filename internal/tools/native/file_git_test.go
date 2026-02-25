@@ -300,6 +300,15 @@ func TestHelperProcess(t *testing.T) {
 	case "git-status":
 		fmt.Fprint(os.Stdout, "## main...origin/main [ahead 2, behind 1]\n M app.go\n?? new.txt\n")
 		os.Exit(0)
+	case "git-branch-main":
+		fmt.Fprint(os.Stdout, "main\n")
+		os.Exit(0)
+	case "git-rev-list-2":
+		fmt.Fprint(os.Stdout, "2\n")
+		os.Exit(0)
+	case "git-push-ok":
+		fmt.Fprint(os.Stdout, "ok\n")
+		os.Exit(0)
 	case "not-git":
 		fmt.Fprint(os.Stdout, "fatal: not a git repository\n")
 		os.Exit(128)
