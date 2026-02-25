@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -113,6 +114,74 @@ func TestMainAndChatReachableInTwoActions(t *testing.T) {
 	}
 }
 
+func TestInitialStatusIncludesFrankHintOnFreshState(t *testing.T) {
+	model := NewModel(DefaultState())
+	if !strings.Contains(model.StatusMessage(), "Ctrl-G") {
+		t.Fatalf("status message missing Frank jump hint: %q", model.StatusMessage())
+	}
+}
+
+func TestFrankJumpCtrlGPreservesMainViewAndHighlightsGeneral(t *testing.T) {
+	model := moveToTaskSession(NewModel(DefaultState()))
+	if got := model.MainView(); got != ViewTask {
+		t.Fatalf("main view before Ctrl-G = %s, want %s", got, ViewTask)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyCtrlG})
+	if got := model.WorkspaceSession(); got != generalSessionID {
+		t.Fatalf("workspace session after Ctrl-G = %q, want %q", got, generalSessionID)
+	}
+	if got := model.MainView(); got != ViewTask {
+		t.Fatalf("main view changed on Ctrl-G = %s, want %s", got, ViewTask)
+	}
+	entries := model.SidebarVisibleEntries()
+	if len(entries) == 0 || !strings.HasPrefix(entries[0], "> General / Frank") {
+		t.Fatalf("first sidebar entry = %v, want active General / Frank", entries)
+	}
+}
+
+func TestFrankJumpZeroFallbackOutsideChatInput(t *testing.T) {
+	model := moveToTaskSession(NewModel(DefaultState()))
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'0'}})
+
+	if got := model.WorkspaceSession(); got != generalSessionID {
+		t.Fatalf("workspace session after 0 fallback = %q, want %q", got, generalSessionID)
+	}
+}
+
+func TestFrankJumpZeroGuardWhenChatInputActive(t *testing.T) {
+	model := moveToTaskSession(NewModel(DefaultState()))
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	sessionBefore := model.WorkspaceSession()
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'0'}})
+
+	if got := model.WorkspaceSession(); got != sessionBefore {
+		t.Fatalf("workspace session changed in chat input mode = %q, want %q", got, sessionBefore)
+	}
+	if got := model.ChatInput(); got != "0" {
+		t.Fatalf("chat input after typing 0 in chat panel = %q, want 0", got)
+	}
+}
+
+func TestFrankCommandAliasMatchesGeneral(t *testing.T) {
+	base := moveToTaskSession(NewModel(DefaultState()))
+
+	viaFrank := runCommand(base, "frank")
+	viaGeneral := runCommand(base, "general")
+
+	if got := viaFrank.WorkspaceSession(); got != generalSessionID {
+		t.Fatalf("workspace session after :frank = %q, want %q", got, generalSessionID)
+	}
+	if got := viaGeneral.WorkspaceSession(); got != generalSessionID {
+		t.Fatalf("workspace session after :general = %q, want %q", got, generalSessionID)
+	}
+	if viaFrank.MainView() != viaGeneral.MainView() {
+		t.Fatalf("main view mismatch :frank=%s :general=%s", viaFrank.MainView(), viaGeneral.MainView())
+	}
+}
+
 func pressKey(model Model, key tea.KeyMsg) Model {
 	updated, _ := model.Update(key)
 	next, ok := updated.(Model)
@@ -120,6 +189,23 @@ func pressKey(model Model, key tea.KeyMsg) Model {
 		panic("unexpected model type")
 	}
 	return next
+}
+
+func moveToTaskSession(model Model) Model {
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+	return model
+}
+
+func runCommand(model Model, command string) Model {
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	for _, r := range []rune(command) {
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+	return model
 }
 
 func pressMsg(model Model, msg tea.Msg) Model {

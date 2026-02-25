@@ -95,6 +95,54 @@ func TestScopeSwitchPreservesMainViewState(t *testing.T) {
 	}
 }
 
+func TestFrankJumpPreservesMainViewState(t *testing.T) {
+	t.Parallel()
+
+	model := moveToTaskSession(NewModel(DefaultState()))
+	model.workspace.setMainView(ViewInbox)
+	initialMainView := model.MainView()
+
+	model = pressChatIntegrationMsg(model, tea.KeyMsg{Type: tea.KeyCtrlG})
+	if got := model.WorkspaceSession(); got != generalSessionID {
+		t.Fatalf("workspace session after Ctrl-G = %q, want %q", got, generalSessionID)
+	}
+	if got := model.MainView(); got != initialMainView {
+		t.Fatalf("main view changed via Ctrl-G: got=%q want=%q", got, initialMainView)
+	}
+
+	model = moveToTaskSession(model)
+	model.workspace.setMainView(initialMainView)
+	model = runCommand(model, "frank")
+	if got := model.WorkspaceSession(); got != generalSessionID {
+		t.Fatalf("workspace session after :frank = %q, want %q", got, generalSessionID)
+	}
+	if got := model.MainView(); got != initialMainView {
+		t.Fatalf("main view changed via :frank: got=%q want=%q", got, initialMainView)
+	}
+}
+
+func TestFrankJumpFailureShowsRetryMessage(t *testing.T) {
+	t.Parallel()
+
+	model := moveToTaskSession(NewModel(DefaultState()))
+	delete(model.workspace.nodes, generalSidebarNodeID)
+	model.workspace.topLevel = []string{"project-alpha"}
+	beforeSession := model.WorkspaceSession()
+
+	model = pressChatIntegrationMsg(model, tea.KeyMsg{Type: tea.KeyCtrlG})
+
+	if got := model.WorkspaceSession(); got != beforeSession {
+		t.Fatalf("workspace session changed on failed Frank jump = %q, want %q", got, beforeSession)
+	}
+	status := model.StatusMessage()
+	if !strings.Contains(status, "Unable to load Frank session") {
+		t.Fatalf("status missing failure message: %q", status)
+	}
+	if !strings.Contains(status, "retry") {
+		t.Fatalf("status missing retry action: %q", status)
+	}
+}
+
 func pressChatIntegrationMsg(model Model, msg tea.Msg) Model {
 	updated, _ := model.Update(msg)
 	next, ok := updated.(Model)
