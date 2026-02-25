@@ -48,7 +48,7 @@ func TestAgent_StaffLifecycle(t *testing.T) {
 	activateAgent(t, baseURL, token, staffAgentID)
 	testutil.WaitForAgentStatus(t, baseURL, token, staffAgentID, "active", 10*time.Second)
 
-	projectID := createProject(t, baseURL, token, "Agent Test Project")
+	projectID := createAgentProject(t, baseURL, token, "Agent Test Project")
 
 	assignBody, assignStatus := testutil.POST(t, baseURL, "/v1/agents/"+staffAgentID+"/project-assignments", token, map[string]any{
 		"project_id": projectID,
@@ -90,7 +90,7 @@ func TestAgent_TempLifecycle_ProjectScoped(t *testing.T) {
 	server, baseURL, token := setupAgentScenario(t)
 	defer server.Stop(t)
 
-	projectID := createProject(t, baseURL, token, "Temp Lifecycle Project")
+	projectID := createAgentProject(t, baseURL, token, "Temp Lifecycle Project")
 
 	createTempBody, createTempStatus := testutil.POST(t, baseURL, "/v1/agents", token, map[string]any{
 		"display_name":    "temp-worker-1",
@@ -157,7 +157,7 @@ func TestAgent_TempLifecycle_TTL_Expires(t *testing.T) {
 	server, baseURL, token := setupAgentScenario(t)
 	defer server.Stop(t)
 
-	projectID := createProject(t, baseURL, token, "Temp TTL Project")
+	projectID := createAgentProject(t, baseURL, token, "Temp TTL Project")
 
 	createBody, createStatus := testutil.POST(t, baseURL, "/v1/agents", token, map[string]any{
 		"display_name":     "ttl-temp-worker",
@@ -284,7 +284,7 @@ func activateAgent(t *testing.T, baseURL, token, agentID string) {
 	}
 }
 
-func createProject(t *testing.T, baseURL, token, name string) string {
+func createAgentProject(t *testing.T, baseURL, token, name string) string {
 	t.Helper()
 
 	slug := strings.ToLower(strings.ReplaceAll(name, " ", "-")) + "-" + fmt.Sprintf("%d", time.Now().UnixNano())
