@@ -817,6 +817,62 @@ func TestToolDomainFromNameEdgeCases(t *testing.T) {
 	}
 }
 
+func TestSanitizeToolNameForAPI(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"file.read", "file_read"},
+		{"git.status", "git_status"},
+		{"memory.query", "memory_query"},
+		{"task.create", "task_create"},
+		{"already_valid", "already_valid"},
+		{"with-dashes", "with-dashes"},
+		{"MixedCase.Action", "MixedCase_Action"},
+		{"a.b.c", "a_b_c"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			got := SanitizeToolNameForAPI(tc.input)
+			if got != tc.want {
+				t.Fatalf("SanitizeToolNameForAPI(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildUniversePopulatesAPIName(t *testing.T) {
+	orgID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+
+	resolver := newResolverFixture()
+	resolver.sessions.items[sessionID] = repo.ChatSession{
+		ID:             sessionID,
+		OrganizationID: orgID,
+	}
+	resolver.agents.items[agentID] = repo.Agent{ID: agentID}
+	resolver.toolDefs.items = []repo.ToolDefinition{
+		{Name: "file.read", ToolTier: "tier1", IsEnabled: true},
+		{Name: "git.status", ToolTier: "tier1", IsEnabled: true},
+	}
+
+	got, err := resolver.resolver.GetSessionToolSet(context.Background(), sessionID, agentID)
+	if err != nil {
+		t.Fatalf("GetSessionToolSet: %v", err)
+	}
+	byName := make(map[string]ToolDescriptor, len(got))
+	for _, td := range got {
+		byName[td.Name] = td
+	}
+	if byName["file.read"].APIName != "file_read" {
+		t.Fatalf("file.read APIName = %q, want file_read", byName["file.read"].APIName)
+	}
+	if byName["git.status"].APIName != "git_status" {
+		t.Fatalf("git.status APIName = %q, want git_status", byName["git.status"].APIName)
+	}
+}
+
 func TestApplyCapabilityGateWithoutPolicyEvaluatorReturnsInput(t *testing.T) {
 	resolver := newResolverFixture()
 	resolver.resolver.policies = nil

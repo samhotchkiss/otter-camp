@@ -17,6 +17,7 @@ import (
 
 type ToolDescriptor struct {
 	Name            string          `json:"name"`
+	APIName         string          `json:"api_name,omitempty"`
 	Description     string          `json:"description"`
 	InputSchema     json.RawMessage `json:"input_schema"`
 	Tier            string          `json:"tier"`
@@ -26,6 +27,21 @@ type ToolDescriptor struct {
 	MCPConnectionID *uuid.UUID      `json:"mcp_connection_id"`
 	IsEnabled       bool            `json:"is_enabled"`
 	Priority        int             `json:"priority"`
+}
+
+// SanitizeToolNameForAPI replaces characters not matching [a-zA-Z0-9_-] with
+// underscores so that tool names meet OpenAI and Anthropic API naming constraints.
+func SanitizeToolNameForAPI(name string) string {
+	var sb strings.Builder
+	for _, c := range name {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '_' || c == '-' {
+			sb.WriteRune(c)
+		} else {
+			sb.WriteRune('_')
+		}
+	}
+	return sb.String()
 }
 
 type sessionToolSetRepository interface {
@@ -300,6 +316,7 @@ func (r *ToolResolver) buildUniverse(ctx context.Context, session repo.ChatSessi
 		}
 		resolved = append(resolved, ToolDescriptor{
 			Name:        tool.Name,
+			APIName:     SanitizeToolNameForAPI(tool.Name),
 			Description: tool.Description,
 			InputSchema: normalizedInputSchema(tool.InputSchema),
 			Tier:        strings.TrimSpace(tool.ToolTier),
@@ -329,6 +346,7 @@ func (r *ToolResolver) buildUniverse(ctx context.Context, session repo.ChatSessi
 			connectionID := connection.ID
 			resolved = append(resolved, ToolDescriptor{
 				Name:            entry.ToolName,
+				APIName:         SanitizeToolNameForAPI(entry.ToolName),
 				Description:     entry.Description,
 				InputSchema:     normalizedInputSchema(entry.InputSchema),
 				Tier:            "tier2",
