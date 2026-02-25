@@ -309,6 +309,7 @@ func (b *ToolBroker) dispatchToExecutor(ctx context.Context, domain, toolName st
 		if b.browser == nil {
 			return nil, ErrToolNotSupported
 		}
+		safeInput = injectBrowserExecutionContext(safeInput, toolName, dispatch, runRecord)
 		return b.browser.Execute(ctx, safeInput)
 	case "mcp":
 		if b.mcp == nil {
@@ -366,6 +367,60 @@ func injectCLIExecutionContext(ctx context.Context, input map[string]any, dispat
 		}
 	}
 	return input
+}
+
+func injectBrowserExecutionContext(input map[string]any, toolName string, dispatch DispatchInput, runRecord *Run) map[string]any {
+	if input == nil {
+		input = map[string]any{}
+	}
+	if _, ok := input["tool_name"]; !ok {
+		input["tool_name"] = strings.TrimSpace(toolName)
+	}
+	if _, ok := input["action_type"]; !ok {
+		actionType := browserActionTypeForToolName(toolName)
+		if actionType != "" {
+			input["action_type"] = actionType
+		}
+	}
+	if dispatch.RunID != nil {
+		if _, ok := input["run_id"]; !ok {
+			input["run_id"] = dispatch.RunID.String()
+		}
+	}
+	if dispatch.RunStepID != nil {
+		if _, ok := input["run_step_id"]; !ok {
+			input["run_step_id"] = dispatch.RunStepID.String()
+		}
+	}
+	if dispatch.RunAttemptID != nil {
+		if _, ok := input["run_attempt_id"]; !ok {
+			input["run_attempt_id"] = dispatch.RunAttemptID.String()
+		}
+	}
+	if dispatch.AgentID != uuid.Nil {
+		if _, ok := input["agent_id"]; !ok {
+			input["agent_id"] = dispatch.AgentID.String()
+		}
+	}
+	if runRecord != nil {
+		if runRecord.ProjectID != nil {
+			if _, ok := input["project_id"]; !ok {
+				input["project_id"] = runRecord.ProjectID.String()
+			}
+		}
+		if runRecord.TaskID != nil {
+			if _, ok := input["task_id"]; !ok {
+				input["task_id"] = runRecord.TaskID.String()
+			}
+		}
+	}
+	return input
+}
+
+func browserActionTypeForToolName(toolName string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(toolName))
+	trimmed = strings.TrimPrefix(trimmed, "browser.")
+	return strings.TrimSpace(trimmed)
 }
 
 func (b *ToolBroker) createDeniedExecution(ctx context.Context, input DispatchInput, toolName, toolTier, toolDomain string, capability *string, payload, metadata json.RawMessage, reason string) (ToolExecution, error) {

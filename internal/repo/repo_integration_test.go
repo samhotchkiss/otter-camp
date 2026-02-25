@@ -128,7 +128,7 @@ func TestToolDefinitionRepoCRUDListAndBulkUpsert(t *testing.T) {
 	}
 
 	created, err := repo.Create(context.Background(), ToolDefinition{
-		Name:        "file.read",
+		Name:        "tooltest.file.read",
 		DisplayName: "File Read",
 		Description: "Read a file",
 		ToolTier:    "tier1",
@@ -149,22 +149,22 @@ func TestToolDefinitionRepoCRUDListAndBulkUpsert(t *testing.T) {
 	}
 
 	insertSet := []ToolDefinition{
-		{Name: "cli.execute", DisplayName: "CLI Execute", Description: "Run command", ToolTier: "tier2", ToolDomain: "cli", IsEnabled: true},
-		{Name: "browser.navigate", DisplayName: "Browser Navigate", Description: "Navigate browser", ToolTier: "tier2", ToolDomain: "browser", IsEnabled: true},
-		{Name: "memory.search", DisplayName: "Memory Search", Description: "Search memory", ToolTier: "tier1", ToolDomain: "memory", IsEnabled: true},
-		{Name: "project.create", DisplayName: "Project Create", Description: "Create project", ToolTier: "tier1", ToolDomain: "project", IsEnabled: true},
-		{Name: "agent.list", DisplayName: "Agent List", Description: "List agents", ToolTier: "tier1", ToolDomain: "agent", IsEnabled: true},
+		{Name: "tooltest.cli.execute", DisplayName: "CLI Execute", Description: "Run command", ToolTier: "tier2", ToolDomain: "cli", IsEnabled: true},
+		{Name: "tooltest.browser.navigate", DisplayName: "Browser Navigate", Description: "Navigate browser", ToolTier: "tier2", ToolDomain: "browser", IsEnabled: true},
+		{Name: "tooltest.memory.search", DisplayName: "Memory Search", Description: "Search memory", ToolTier: "tier1", ToolDomain: "memory", IsEnabled: true},
+		{Name: "tooltest.project.create", DisplayName: "Project Create", Description: "Create project", ToolTier: "tier1", ToolDomain: "project", IsEnabled: true},
+		{Name: "tooltest.agent.list", DisplayName: "Agent List", Description: "List agents", ToolTier: "tier1", ToolDomain: "agent", IsEnabled: true},
 	}
 	if _, err := repo.BulkUpsert(context.Background(), insertSet); err != nil {
 		t.Fatalf("BulkUpsert insert set failed: %v", err)
 	}
 
 	updateSet := []ToolDefinition{
-		{Name: "cli.execute", DisplayName: "CLI Execute v2", Description: "Run shell command", ToolTier: "tier2", ToolDomain: "cli", IsEnabled: true},
-		{Name: "browser.navigate", DisplayName: "Browser Navigate v2", Description: "Navigate URL", ToolTier: "tier2", ToolDomain: "browser", IsEnabled: false},
-		{Name: "memory.search", DisplayName: "Memory Search v2", Description: "Lookup memory", ToolTier: "tier1", ToolDomain: "memory", IsEnabled: true},
-		{Name: "system.health", DisplayName: "System Health", Description: "Read health", ToolTier: "tier1", ToolDomain: "system", IsEnabled: true},
-		{Name: "chat.send", DisplayName: "Chat Send", Description: "Send chat", ToolTier: "tier1", ToolDomain: "chat", IsEnabled: true},
+		{Name: "tooltest.cli.execute", DisplayName: "CLI Execute v2", Description: "Run shell command", ToolTier: "tier2", ToolDomain: "cli", IsEnabled: true},
+		{Name: "tooltest.browser.navigate", DisplayName: "Browser Navigate v2", Description: "Navigate URL", ToolTier: "tier2", ToolDomain: "browser", IsEnabled: false},
+		{Name: "tooltest.memory.search", DisplayName: "Memory Search v2", Description: "Lookup memory", ToolTier: "tier1", ToolDomain: "memory", IsEnabled: true},
+		{Name: "tooltest.system.health", DisplayName: "System Health", Description: "Read health", ToolTier: "tier1", ToolDomain: "system", IsEnabled: true},
+		{Name: "tooltest.chat.send", DisplayName: "Chat Send", Description: "Send chat", ToolTier: "tier1", ToolDomain: "chat", IsEnabled: true},
 	}
 	if _, err := repo.BulkUpsert(context.Background(), updateSet); err != nil {
 		t.Fatalf("BulkUpsert update set failed: %v", err)
@@ -414,7 +414,7 @@ func TestAllReposListRoundTrip(t *testing.T) {
 		t.Fatalf("provider create failed: %v", err)
 	}
 
-	if _, err := toolRepo.Create(context.Background(), ToolDefinition{Name: "file.write", DisplayName: "File Write", Description: "Write file", ToolTier: "tier2", ToolDomain: "file", IsEnabled: true}); err != nil {
+	if _, err := toolRepo.Create(context.Background(), ToolDefinition{Name: "tooltest.file.write", DisplayName: "File Write", Description: "Write file", ToolTier: "tier2", ToolDomain: "file", IsEnabled: true}); err != nil {
 		t.Fatalf("tool create failed: %v", err)
 	}
 

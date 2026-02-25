@@ -203,6 +203,9 @@ func (s *Supervisor) tick(ctx context.Context) error {
 	if err := s.detectStalePaused(ctx); err != nil {
 		return err
 	}
+	if err := s.detectExpiredBrowserHandoffs(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -292,6 +295,90 @@ func (s *Supervisor) detectStalePaused(ctx context.Context) error {
 		}
 		if failErr := s.runService.FailRun(ctx, runRecord.ID, "paused timeout exceeded", "timeout"); failErr != nil && !errors.Is(failErr, ErrInvalidTransition) {
 			return failErr
+		}
+	}
+	return nil
+}
+
+func (s *Supervisor) detectExpiredBrowserHandoffs(ctx context.Context) error {
+	if s.pool == nil {
+		return nil
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, run_id, inbox_item_id, target_user_id
+		FROM browser_handoff
+		WHERE status = 'pending'
+		  AND expires_at < $1
+		ORDER BY expires_at ASC, id ASC
+	`, s.clock.Now().UTC())
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "browser_handoff") {
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+
+	type expiredHandoff struct {
+		id         uuid.UUID
+		runID      uuid.UUID
+		inboxItem  uuid.UUID
+		targetUser uuid.UUID
+	}
+	expired := make([]expiredHandoff, 0)
+	for rows.Next() {
+		var item expiredHandoff
+		if scanErr := rows.Scan(&item.id, &item.runID, &item.inboxItem, &item.targetUser); scanErr != nil {
+			return scanErr
+		}
+		expired = append(expired, item)
+	}
+	if rows.Err() != nil {
+		return rows.Err()
+	}
+
+	for _, item := range expired {
+		tag, updateErr := s.pool.Exec(ctx, `
+			UPDATE browser_handoff
+			SET status = 'expired',
+			    completed_at = COALESCE(completed_at, now())
+			WHERE id = $1
+			  AND status = 'pending'
+		`, item.id)
+		if updateErr != nil {
+			return updateErr
+		}
+		if tag.RowsAffected() == 0 {
+			continue
+		}
+
+		if _, markErr := s.pool.Exec(ctx, `
+			UPDATE inbox_item
+			SET is_acted = true,
+			    acted_at = COALESCE(acted_at, now()),
+			    acted_by_id = COALESCE(acted_by_id, $2)
+			WHERE id = $1
+			  AND is_acted = false
+		`, item.inboxItem, item.targetUser); markErr != nil {
+			return markErr
+		}
+
+		if failErr := s.runService.FailRun(ctx, item.runID, "browser handoff expired", "timeout"); failErr != nil && !errors.Is(failErr, ErrInvalidTransition) {
+			return failErr
+		}
+
+		if s.notifier != nil {
+			runRecord, getErr := s.runService.GetRun(ctx, item.runID)
+			if getErr != nil {
+				if errors.Is(getErr, ErrNotFound) {
+					continue
+				}
+				return getErr
+			}
+			if escalateErr := s.notifier.createEscalationInboxItem(ctx, runRecord, "supervisor", true); escalateErr != nil {
+				return escalateErr
+			}
 		}
 	}
 	return nil
