@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -19,6 +20,10 @@ type WorkspaceEnvelopeMsg struct {
 	Envelope EventEnvelope
 }
 
+type ChatEnvelopeMsg struct {
+	Envelope EventEnvelope
+}
+
 type Model struct {
 	state          UIState
 	focus          Panel
@@ -33,6 +38,18 @@ type Model struct {
 	sidebarVisible bool
 	sizeClass      SizeClass
 	workspace      workspaceState
+
+	chatInput        string
+	chatHistory      []string
+	chatHistoryIndex int
+	chatMessages     []ChatMessage
+	chatMessageIndex map[string]int
+	queuedMessages   []QueuedMessage
+	editingQueued    bool
+	activeTurn       bool
+	activeScope      ChatScope
+	activeSession    string
+	localMessageSeq  int
 }
 
 func NewModel(state UIState) Model {
@@ -41,13 +58,19 @@ func NewModel(state UIState) Model {
 	if !ok {
 		panel = MainPanel
 	}
+	scope := inferScopeFromSession(normalized.LastActiveChatSession)
+
 	model := Model{
-		state:          normalized,
-		focus:          panel,
-		statusMessage:  "Tab/Shift-Tab cycle focus. 1/2/3 direct focus. :focus and :quit commands available.",
-		connection:     ConnectionDisconnected,
-		sidebarVisible: normalized.SidebarVisible,
-		workspace:      newWorkspaceState(),
+		state:            normalized,
+		focus:            panel,
+		statusMessage:    "Tab/Shift-Tab cycle focus. 1/2/3 direct focus. :focus/:scope/:quit commands available.",
+		connection:       ConnectionDisconnected,
+		sidebarVisible:   normalized.SidebarVisible,
+		workspace:        newWorkspaceState(),
+		chatHistoryIndex: -1,
+		chatMessageIndex: map[string]int{},
+		activeScope:      scope,
+		activeSession:    strings.TrimSpace(normalized.LastActiveChatSession),
 	}
 	model.applyResponsiveLayout()
 	return model
@@ -74,6 +97,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case WorkspaceEnvelopeMsg:
 		m.workspace.applyRealtimeEnvelope(typed.Envelope)
+		return m, nil
+	case ChatEnvelopeMsg:
+		m.applyChatEnvelope(typed.Envelope)
 		return m, nil
 	case tea.KeyMsg:
 		return m.updateKey(typed)
@@ -105,11 +131,20 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.applyResponsiveLayout()
 		m.statusMessage = "Focus: " + panelLabel(m.focus)
 		return m, nil
-	case tea.KeyEnter:
-		m.handleEnterKey()
-		return m, nil
-	case tea.KeyEsc:
-		m.handleEscapeKey()
+	case tea.KeyEnter, tea.KeyEsc, tea.KeyBackspace, tea.KeyUp:
+		if m.focus == ChatPanel {
+			if handled := m.handleChatControlKey(key); handled {
+				return m, nil
+			}
+		}
+		if key.Type == tea.KeyEnter {
+			m.handleEnterKey()
+			return m, nil
+		}
+		if key.Type == tea.KeyEsc {
+			m.handleEscapeKey()
+			return m, nil
+		}
 		return m, nil
 	case tea.KeyRunes:
 		if len(key.Runes) == 1 {
@@ -124,6 +159,20 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if panel, ok := panelFromShortcut(key.Alt, r); ok {
 				m.setFocus(panel)
 				m.statusMessage = "Focus: " + panelLabel(m.focus)
+				return m, nil
+			}
+
+			if r == '[' {
+				m.switchScope(cycleScope(m.activeScope, false))
+				return m, nil
+			}
+			if r == ']' {
+				m.switchScope(cycleScope(m.activeScope, true))
+				return m, nil
+			}
+
+			if m.focus == ChatPanel {
+				m.handleChatRunes(key)
 				return m, nil
 			}
 
@@ -142,11 +191,13 @@ func (m *Model) handleEnterKey() {
 	case SidebarPanel:
 		m.workspace.selectSidebarNode()
 		m.state.LastActiveChatSession = m.workspace.activeSessionID
+		m.activeSession = m.workspace.activeSessionID
 		m.statusMessage = "Sidebar selection applied."
 	case MainPanel:
 		if m.workspace.mainView == ViewInbox {
 			if m.workspace.applyInboxAction("open") {
 				m.state.LastActiveChatSession = m.workspace.activeSessionID
+				m.activeSession = m.workspace.activeSessionID
 				m.statusMessage = "Opened inbox item in context."
 				return
 			}
@@ -227,11 +278,91 @@ func (m *Model) handleWorkspaceRune(r rune) bool {
 	case 'o':
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("open") {
 			m.state.LastActiveChatSession = m.workspace.activeSessionID
+			m.activeSession = m.workspace.activeSessionID
 			m.statusMessage = "Opened inbox item in context."
 			return true
 		}
 	}
 	return false
+}
+
+func (m *Model) handleChatControlKey(key tea.KeyMsg) bool {
+	switch key.Type {
+	case tea.KeyEnter:
+		if key.Alt {
+			m.chatInput += "\n"
+			m.statusMessage = "Inserted newline."
+			return true
+		}
+		m.sendOrQueueInput()
+		return true
+	case tea.KeyBackspace:
+		runes := []rune(m.chatInput)
+		if len(runes) > 0 {
+			m.chatInput = string(runes[:len(runes)-1])
+		}
+		return true
+	case tea.KeyUp:
+		if strings.TrimSpace(m.chatInput) == "" {
+			m.recallHistory()
+			return true
+		}
+	case tea.KeyEsc:
+		if m.activeTurn {
+			m.activeTurn = false
+			m.statusMessage = "Active turn cancelled."
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) handleChatRunes(key tea.KeyMsg) {
+	if len(key.Runes) == 1 {
+		r := key.Runes[0]
+		if r == '\n' {
+			m.chatInput += "\n"
+			m.statusMessage = "Inserted newline."
+			return
+		}
+		if m.activeTurn && len(m.queuedMessages) > 0 && strings.TrimSpace(m.chatInput) == "" {
+			switch strings.ToLower(string(r)) {
+			case "e":
+				m.applyQueueActionEdit()
+				return
+			case "s":
+				m.applyQueueActionSteer()
+				return
+			case "d":
+				m.applyQueueActionDelete()
+				return
+			}
+		}
+	}
+	m.chatInput += string(key.Runes)
+	m.tryAutocompleteMention()
+}
+
+func (m *Model) tryAutocompleteMention() {
+	trimmedRight := strings.TrimRight(m.chatInput, "\n")
+	start := strings.LastIndexAny(trimmedRight, " \t\n")
+	tokenStart := 0
+	if start >= 0 {
+		tokenStart = start + 1
+	}
+	if tokenStart >= len(trimmedRight) {
+		return
+	}
+	token := trimmedRight[tokenStart:]
+	if !strings.HasPrefix(token, "@") || len(token) < 2 {
+		return
+	}
+	completion := autocompleteMention(token)
+	if completion == "" || completion == token {
+		return
+	}
+	m.chatInput = trimmedRight[:tokenStart] + completion + " "
+	m.statusMessage = "Mention autocomplete applied."
 }
 
 func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -292,6 +423,12 @@ func (m *Model) executeCommand(raw string) {
 		}
 		m.setFocus(panel)
 		m.statusMessage = "Focus: " + panelLabel(m.focus)
+	case "scope":
+		if len(fields) != 2 {
+			m.statusMessage = "Usage: :scope org|project|task"
+			return
+		}
+		m.switchScope(normalizeScope(fields[1]))
 	case "dashboard", "project", "task", "inbox", "activity", "agents", "merges", "schedules":
 		view, ok := resolveMainViewCommand(fields[0])
 		if !ok {
@@ -330,7 +467,7 @@ func (m Model) viewForShell(shell string) string {
 		realtimeDegradedSuffix(m.streamDegraded),
 		layout.sizeClass,
 		panelLabel(focus),
-		valueOrPlaceholder(m.state.LastActiveChatSession),
+		valueOrPlaceholder(m.State().LastActiveChatSession),
 	)
 	if layout.hiddenHints != "" {
 		status += " | " + layout.hiddenHints
@@ -340,10 +477,14 @@ func (m Model) viewForShell(shell string) string {
 	if layout.gutters > 0 {
 		prefix = strings.Repeat(" ", layout.gutters)
 	}
-	lines := []string{
-		prefix + header,
-		prefix + shellLine,
-		prefix + status,
+	lines := []string{prefix + header, prefix + shellLine, prefix + status}
+	if m.shouldRenderChatDetails() {
+		for _, line := range m.renderChatPane(maxInt(24, layout.widths[2])) {
+			lines = append(lines, prefix+line)
+		}
+		if m.focus == ChatPanel && !m.commandMode {
+			lines = append(lines, prefix+"Input> "+m.chatInput)
+		}
 	}
 	if m.commandMode {
 		lines = append(lines, prefix+"Command> "+m.commandBuffer)
@@ -351,37 +492,87 @@ func (m Model) viewForShell(shell string) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m Model) FocusedPanel() Panel {
-	return m.focus
+func (m Model) shouldRenderChatDetails() bool {
+	return len(m.chatMessages) > 0 || len(m.queuedMessages) > 0 || strings.TrimSpace(m.chatInput) != "" || m.activeTurn
 }
 
-func (m Model) Quitting() bool {
-	return m.quitting
+func (m Model) renderChatPane(width int) []string {
+	if len(m.chatMessages) == 0 {
+		return []string{"Chat: (no messages yet)"}
+	}
+	lines := []string{"Chat:"}
+	start := 0
+	if len(m.chatMessages) > 8 {
+		start = len(m.chatMessages) - 8
+	}
+	for _, msg := range m.chatMessages[start:] {
+		content := markdownToPlain(msg.Content, width)
+		if strings.TrimSpace(content) == "" {
+			content = msg.Content
+		}
+		roleLabel := strings.ToUpper(msg.Role)
+		if roleLabel == "" {
+			roleLabel = "ASSISTANT"
+		}
+		lines = append(lines, fmt.Sprintf("  [%s] %s", roleLabel, strings.TrimSpace(content)))
+		for _, toolCall := range msg.ToolCalls {
+			lines = append(lines, fmt.Sprintf("    tool %s (%s)", toolCall.Name, toolCall.Status))
+		}
+	}
+	if len(m.queuedMessages) > 0 {
+		queue := m.queuedMessages[0]
+		queueLine := fmt.Sprintf("Queued next: %s", queue.Text)
+		if queue.Steer {
+			queueLine += " [steer]"
+		}
+		if queue.Edited {
+			queueLine += " [edited]"
+		}
+		lines = append(lines, queueLine)
+		if len(m.queuedMessages) > 1 {
+			lines = append(lines, fmt.Sprintf("Queued backlog: %d", len(m.queuedMessages)-1))
+		}
+	}
+	return lines
 }
 
-func (m Model) ConnectionState() ConnectionState {
-	return m.connection
-}
+func (m Model) FocusedPanel() Panel { return m.focus }
+func (m Model) Quitting() bool      { return m.quitting }
 
-func (m Model) StreamDegraded() bool {
-	return m.streamDegraded
-}
+func (m Model) ConnectionState() ConnectionState { return m.connection }
+func (m Model) StreamDegraded() bool             { return m.streamDegraded }
 
-func (m Model) MainView() MainView {
-	return m.workspace.mainView
-}
-
-func (m Model) WorkspaceSession() string {
+func (m Model) ActiveTurn() bool     { return m.activeTurn }
+func (m Model) ChatScope() ChatScope { return m.activeScope }
+func (m Model) ActiveChatSession() string {
+	if strings.TrimSpace(m.activeSession) != "" {
+		return m.activeSession
+	}
 	return m.workspace.activeSessionID
 }
 
+func (m Model) QueueDepth() int { return len(m.queuedMessages) }
+
+func (m Model) QueueSnapshot() []QueuedMessage {
+	cloned := make([]QueuedMessage, len(m.queuedMessages))
+	copy(cloned, m.queuedMessages)
+	return cloned
+}
+
+func (m Model) ChatInput() string { return m.chatInput }
+
+func (m Model) ChatMessages() []ChatMessage {
+	cloned := make([]ChatMessage, len(m.chatMessages))
+	copy(cloned, m.chatMessages)
+	return cloned
+}
+
+func (m Model) MainView() MainView       { return m.workspace.mainView }
+func (m Model) WorkspaceSession() string { return m.workspace.activeSessionID }
 func (m Model) WorkspaceRender(class SizeClass) string {
 	return m.workspace.render(m.workspace.mainView, class)
 }
-
-func (m Model) BoardCounts() boardCounts {
-	return m.workspace.boardCounts()
-}
+func (m Model) BoardCounts() boardCounts { return m.workspace.boardCounts() }
 
 func (m Model) ActivityEntries() []string {
 	out := make([]string, len(m.workspace.activity))
@@ -444,8 +635,8 @@ func (m Model) State() UIState {
 	next := m.state
 	next.LastActiveView = viewFromPanel(focus)
 	next.SidebarVisible = m.sidebarVisible
-	if strings.TrimSpace(m.workspace.activeSessionID) != "" {
-		next.LastActiveChatSession = m.workspace.activeSessionID
+	if strings.TrimSpace(m.activeSession) != "" {
+		next.LastActiveChatSession = m.activeSession
 	}
 	return normalizeState(next)
 }
@@ -453,6 +644,190 @@ func (m Model) State() UIState {
 func (m Model) focusOrder() []Panel {
 	layout := m.CurrentLayout()
 	return layout.focusOrder
+}
+
+func (m *Model) sendOrQueueInput() {
+	text := strings.TrimSpace(m.chatInput)
+	if text == "" {
+		m.statusMessage = "Cannot send empty message."
+		return
+	}
+
+	m.chatHistory = append(m.chatHistory, text)
+	m.chatHistoryIndex = len(m.chatHistory)
+	if m.activeTurn {
+		queued := QueuedMessage{Text: text}
+		if m.editingQueued {
+			queued.Edited = true
+			m.editingQueued = false
+		}
+		m.queuedMessages = append(m.queuedMessages, queued)
+		m.statusMessage = fmt.Sprintf("Queued message (%d pending).", len(m.queuedMessages))
+	} else {
+		m.appendMessage("local-user", "user", text, true)
+		m.activeTurn = true
+		m.statusMessage = "Message sent. Waiting for assistant response."
+	}
+	m.chatInput = ""
+}
+
+func (m *Model) recallHistory() {
+	if len(m.chatHistory) == 0 {
+		return
+	}
+	if m.chatHistoryIndex < 0 {
+		m.chatHistoryIndex = len(m.chatHistory)
+	}
+	if m.chatHistoryIndex > 0 {
+		m.chatHistoryIndex--
+	}
+	m.chatInput = m.chatHistory[m.chatHistoryIndex]
+	m.statusMessage = "Recalled previous message."
+}
+
+func (m *Model) applyQueueActionEdit() {
+	if len(m.queuedMessages) == 0 {
+		return
+	}
+	queued := m.queuedMessages[0]
+	m.queuedMessages = append([]QueuedMessage{}, m.queuedMessages[1:]...)
+	m.chatInput = queued.Text
+	m.editingQueued = true
+	m.statusMessage = "Editing queued message - send to re-queue."
+}
+
+func (m *Model) applyQueueActionSteer() {
+	if len(m.queuedMessages) == 0 {
+		return
+	}
+	m.queuedMessages[0].Steer = true
+	m.statusMessage = "Queued message marked for steer/promote."
+}
+
+func (m *Model) applyQueueActionDelete() {
+	if len(m.queuedMessages) == 0 {
+		return
+	}
+	m.queuedMessages = append([]QueuedMessage{}, m.queuedMessages[1:]...)
+	m.statusMessage = "Queued message deleted."
+}
+
+func (m *Model) applyChatEnvelope(event EventEnvelope) {
+	switch event.EventType {
+	case "chat.message.delta":
+		var payload struct {
+			MessageID string `json:"message_id"`
+			Role      string `json:"role"`
+			Delta     string `json:"delta"`
+		}
+		if !decodePayload(event.Payload, &payload) {
+			return
+		}
+		index := m.ensureMessage(payload.MessageID, payload.Role)
+		m.chatMessages[index].Content += payload.Delta
+		m.chatMessages[index].Finalized = false
+		m.activeTurn = true
+	case "chat.message.finalized":
+		var payload struct {
+			MessageID string `json:"message_id"`
+			Role      string `json:"role"`
+			Content   string `json:"content"`
+		}
+		if !decodePayload(event.Payload, &payload) {
+			return
+		}
+		index := m.ensureMessage(payload.MessageID, payload.Role)
+		if strings.TrimSpace(payload.Content) != "" {
+			m.chatMessages[index].Content = payload.Content
+		}
+		m.chatMessages[index].Finalized = true
+		m.activeTurn = false
+		if len(m.queuedMessages) > 0 {
+			next := m.queuedMessages[0]
+			m.queuedMessages = append([]QueuedMessage{}, m.queuedMessages[1:]...)
+			m.appendMessage("local-user", "user", next.Text, true)
+			m.activeTurn = true
+			m.statusMessage = "Promoted queued message after finalize."
+		}
+	case "chat.tool_call.status":
+		var payload struct {
+			MessageID string `json:"message_id"`
+			Name      string `json:"name"`
+			Status    string `json:"status"`
+		}
+		if !decodePayload(event.Payload, &payload) {
+			return
+		}
+		index := m.ensureMessage(payload.MessageID, "assistant")
+		m.upsertToolCall(index, strings.TrimSpace(payload.Name), strings.TrimSpace(payload.Status))
+	}
+}
+
+func (m *Model) appendMessage(prefix, role, content string, finalized bool) {
+	m.localMessageSeq++
+	id := fmt.Sprintf("%s-%d", strings.TrimSpace(prefix), m.localMessageSeq)
+	message := ChatMessage{ID: id, Role: normalizeRole(role), Content: content, Finalized: finalized}
+	m.chatMessageIndex[id] = len(m.chatMessages)
+	m.chatMessages = append(m.chatMessages, message)
+}
+
+func (m *Model) ensureMessage(messageID, role string) int {
+	id := strings.TrimSpace(messageID)
+	if id == "" {
+		m.localMessageSeq++
+		id = fmt.Sprintf("stream-%d", m.localMessageSeq)
+	}
+	if index, ok := m.chatMessageIndex[id]; ok {
+		if normalized := normalizeRole(role); normalized != "" {
+			m.chatMessages[index].Role = normalized
+		}
+		return index
+	}
+	message := ChatMessage{ID: id, Role: normalizeRole(role), Finalized: false}
+	m.chatMessageIndex[id] = len(m.chatMessages)
+	m.chatMessages = append(m.chatMessages, message)
+	return len(m.chatMessages) - 1
+}
+
+func (m *Model) upsertToolCall(index int, name, status string) {
+	if index < 0 || index >= len(m.chatMessages) || name == "" {
+		return
+	}
+	for i := range m.chatMessages[index].ToolCalls {
+		if m.chatMessages[index].ToolCalls[i].Name == name {
+			m.chatMessages[index].ToolCalls[i].Status = status
+			return
+		}
+	}
+	m.chatMessages[index].ToolCalls = append(m.chatMessages[index].ToolCalls, ToolCallStatus{Name: name, Status: status})
+}
+
+func decodePayload(raw json.RawMessage, out any) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return false
+	}
+	return true
+}
+
+func (m *Model) switchScope(next ChatScope) {
+	m.activeScope = next
+	m.activeSession = sessionForScope(next)
+	m.statusMessage = fmt.Sprintf("Scope switched to %s.", next)
+}
+
+func inferScopeFromSession(session string) ChatScope {
+	trimmed := strings.ToLower(strings.TrimSpace(session))
+	switch {
+	case strings.HasPrefix(trimmed, "org"):
+		return ScopeOrg
+	case strings.HasPrefix(trimmed, "task"):
+		return ScopeTask
+	default:
+		return ScopeProject
+	}
 }
 
 func (m *Model) setFocus(panel Panel) {
@@ -549,4 +924,11 @@ func realtimeDegradedSuffix(degraded bool) string {
 		return " (degraded)"
 	}
 	return ""
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
