@@ -22,7 +22,7 @@ func TestToolBrokerDispatchTier2PipelineIntegration(t *testing.T) {
 	org := seedControlPlaneOrg(t, ctx, pool)
 	agentRecord := seedBrokerAgent(t, ctx, pool, org.ID)
 	seedToolDefinition(t, ctx, pool, repo.ToolDefinition{
-		Name:               "file.write",
+		Name:               "tooltest.file.write",
 		DisplayName:        "File Write",
 		Description:        "Write a file",
 		ToolTier:           "tier2",
@@ -46,7 +46,7 @@ func TestToolBrokerDispatchTier2PipelineIntegration(t *testing.T) {
 		RunStepID:    &step.ID,
 		RunAttemptID: &attempt.ID,
 		AgentID:      agentRecord.ID,
-		ToolName:     "file.write",
+		ToolName:     "tooltest.file.write",
 		ToolTier:     "tier2",
 		Input:        map[string]any{"path": "README.md"},
 	})
@@ -142,7 +142,7 @@ func TestToolBrokerDispatchPolicyDeniedIntegration(t *testing.T) {
 	org := seedControlPlaneOrg(t, ctx, pool)
 	agentRecord := seedBrokerAgent(t, ctx, pool, org.ID)
 	seedToolDefinition(t, ctx, pool, repo.ToolDefinition{
-		Name:               "browser.navigate",
+		Name:               "tooltest.browser.navigate",
 		DisplayName:        "Browser Navigate",
 		Description:        "Navigate browser",
 		ToolTier:           "tier2",
@@ -166,7 +166,7 @@ func TestToolBrokerDispatchPolicyDeniedIntegration(t *testing.T) {
 		RunStepID:    &step.ID,
 		RunAttemptID: &attempt.ID,
 		AgentID:      agentRecord.ID,
-		ToolName:     "browser.navigate",
+		ToolName:     "tooltest.browser.navigate",
 		ToolTier:     "tier2",
 		Input:        map[string]any{"url": "https://example.com"},
 	})

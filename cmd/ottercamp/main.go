@@ -25,6 +25,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/audit"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
+	browsersvc "github.com/samhotchkiss/otter-camp/internal/browser"
 	"github.com/samhotchkiss/otter-camp/internal/budget"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
@@ -227,14 +228,6 @@ func runServe() int {
 		fmt.Fprintf(os.Stderr, "project service setup error: %v\n", err)
 		return 1
 	}
-	taskService, err := tasksvc.NewService(tasksvc.Options{
-		Pool:     pool.Raw(),
-		EventBus: bus,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "task service setup error: %v\n", err)
-		return 1
-	}
 	deliveryService, err := deliverysvc.NewService(deliverysvc.Options{
 		Pool: pool.Raw(),
 	})
@@ -256,16 +249,6 @@ func runServe() int {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "flow session bridge setup error: %v\n", err)
-		return 1
-	}
-	flowService, err := flowsvc.NewService(flowsvc.Options{
-		Pool:          pool.Raw(),
-		TasksService:  taskService,
-		Events:        bus,
-		SessionBridge: flowSessionBridge,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "flow service setup error: %v\n", err)
 		return 1
 	}
 
@@ -290,6 +273,42 @@ func runServe() int {
 		return 1
 	}
 
+	store, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "storage config error: %v\n", err)
+		return 1
+	}
+	browserExecutor, err := browsersvc.NewExecutor(browsersvc.ExecutorOptions{
+		Pool:      pool.Raw(),
+		Runs:      runService,
+		Artifacts: controlplane.NewRunArtifactRepository(pool.Raw()),
+		Store:     store,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "browser executor setup error: %v\n", err)
+		return 1
+	}
+
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:            pool.Raw(),
+		EventBus:        bus,
+		BrowserHandoffs: browserExecutor,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "task service setup error: %v\n", err)
+		return 1
+	}
+	flowService, err := flowsvc.NewService(flowsvc.Options{
+		Pool:          pool.Raw(),
+		TasksService:  taskService,
+		Events:        bus,
+		SessionBridge: flowSessionBridge,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "flow service setup error: %v\n", err)
+		return 1
+	}
+
 	pushPreferenceRepo := push.NewPreferenceRepository(pool.Raw())
 	pushPreferenceService, err := push.NewPreferenceService(push.PreferenceServiceOptions{
 		Repository: pushPreferenceRepo,
@@ -305,12 +324,6 @@ func runServe() int {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "memory retriever setup error: %v\n", err)
-		return 1
-	}
-
-	store, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "storage config error: %v\n", err)
 		return 1
 	}
 	memoryImporterService, err := memoryimporter.NewImporter(memoryimporter.ImporterOptions{

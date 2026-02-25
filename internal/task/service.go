@@ -38,6 +38,7 @@ var (
 	ErrRequiresHumanApproval     = errors.New("task requires human approval before queueing")
 	ErrTransitionTargetRequired  = errors.New("target status is required")
 	ErrActorTypeInvalidForAction = errors.New("actor_type is invalid for action")
+	ErrBrowserHandoffUnavailable = errors.New("browser handoff service unavailable")
 )
 
 var validStatusTransitions = map[string]map[string]struct{}{
@@ -197,6 +198,10 @@ type eventPublisher interface {
 	Publish(ctx context.Context, tx pgx.Tx, event eventbus.DomainEvent) error
 }
 
+type browserHandoffCompleter interface {
+	CompleteHandoffByInboxItem(ctx context.Context, inboxItemID, actedByUserID uuid.UUID, actionDecision string) error
+}
+
 type Options struct {
 	Pool *pgxpool.Pool
 
@@ -212,6 +217,8 @@ type Options struct {
 
 	EventBus eventPublisher
 	Clock    clock.Clock
+
+	BrowserHandoffs browserHandoffCompleter
 }
 
 type service struct {
@@ -229,6 +236,8 @@ type service struct {
 
 	eventBus eventPublisher
 	clock    clock.Clock
+
+	browserHandoffs browserHandoffCompleter
 }
 
 func NewService(opts Options) (TaskService, error) {
@@ -243,6 +252,8 @@ func NewService(opts Options) (TaskService, error) {
 		pool:     opts.Pool,
 		eventBus: opts.EventBus,
 		clock:    opts.Clock,
+
+		browserHandoffs: opts.BrowserHandoffs,
 	}
 	if svc.clock == nil {
 		svc.clock = clock.Real{}
@@ -661,7 +672,20 @@ func (s *service) ActOnInboxItem(ctx context.Context, itemID, userID uuid.UUID, 
 		default:
 			return ErrUnknownInboxAction
 		}
-	case "blocker_filed", "task_review", "comment_mention", "draft_action_review", "browser_handoff", "system_alert":
+	case "browser_handoff":
+		switch normalizedAction {
+		case "dismiss", "ack", "acknowledge":
+			_, err := s.inbox.MarkActed(ctx, item.ID, userID)
+			return err
+		case "completed", "cancelled":
+			if s.browserHandoffs == nil {
+				return ErrBrowserHandoffUnavailable
+			}
+			return s.browserHandoffs.CompleteHandoffByInboxItem(ctx, item.ID, userID, normalizedAction)
+		default:
+			return ErrUnknownInboxAction
+		}
+	case "blocker_filed", "task_review", "comment_mention", "draft_action_review", "system_alert":
 		switch normalizedAction {
 		case "dismiss", "ack", "acknowledge":
 			_, err := s.inbox.MarkActed(ctx, item.ID, userID)

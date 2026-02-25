@@ -2288,6 +2288,8 @@ func mapTaskError(err error) (int, string, string) {
 		return http.StatusConflict, api.ErrCodeConflict, "conflict"
 	case errors.Is(err, tasksvc.ErrInboxActionForbidden):
 		return http.StatusForbidden, api.ErrCodeForbidden, "forbidden"
+	case errors.Is(err, tasksvc.ErrBrowserHandoffUnavailable):
+		return http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "browser handoff service unavailable"
 	case errors.Is(err, tasksvc.ErrUnknownInboxAction),
 		errors.Is(err, tasksvc.ErrUnknownInboxItemType),
 		errors.Is(err, tasksvc.ErrInboxItemTypeInvalid),
