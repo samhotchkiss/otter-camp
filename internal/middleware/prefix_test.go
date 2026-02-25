@@ -7,12 +7,12 @@ import (
 	"testing"
 )
 
-func TestPrefixEnforcementRejectsNonV1Path(t *testing.T) {
+func TestPrefixEnforcementRejectsNonV1PathForNonReadMethods(t *testing.T) {
 	handler := PrefixEnforcement()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler should not run")
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/projects", nil)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
@@ -33,7 +33,7 @@ func TestPrefixEnforcementRejectsNonV1Path(t *testing.T) {
 	}
 }
 
-func TestPrefixEnforcementRedirectsRoot(t *testing.T) {
+func TestPrefixEnforcementAllowsRoot(t *testing.T) {
 	handler := PrefixEnforcement()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -42,11 +42,8 @@ func TestPrefixEnforcementRedirectsRoot(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusPermanentRedirect {
-		t.Fatalf("status = %d, want %d", rr.Code, http.StatusPermanentRedirect)
-	}
-	if got := rr.Header().Get("Location"); got != "/v1/" {
-		t.Fatalf("Location = %q, want %q", got, "/v1/")
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusNoContent)
 	}
 }
 

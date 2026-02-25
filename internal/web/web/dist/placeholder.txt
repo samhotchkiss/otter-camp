@@ -1,0 +1,1 @@
+This placeholder keeps the embedded dist tree non-empty in backend-only builds.
