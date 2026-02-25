@@ -19,6 +19,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/jobs"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
+	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/model"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
@@ -326,6 +327,18 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	defer bus.Unsubscribe(turnUserSub)
 	turnReactionSub := turnEngine.SubscribeReactionFeedback(nil)
 	defer bus.Unsubscribe(turnReactionSub)
+
+	memoryConsumer, err := memory.NewEventConsumer(memory.EventConsumerOptions{
+		Pool:     pool.Raw(),
+		Events:   bus,
+		Enqueuer: jqWorker,
+	})
+	if err != nil {
+		return fmt.Errorf("worker memory event consumer setup: %w", err)
+	}
+	memoryConsumer.RegisterJobs(jqWorker)
+	memoryTurnCompletedSub := memoryConsumer.SubscribeTurnCompleted(nil)
+	defer bus.Unsubscribe(memoryTurnCompletedSub)
 
 	supervisor, err := controlplane.NewSupervisor(controlplane.SupervisorOptions{
 		Pool:       pool.Raw(),
