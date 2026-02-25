@@ -97,6 +97,32 @@ func (r *ToolDefinitionRepo) ListByTier(ctx context.Context, tier string) ([]Too
 	`, tier)
 }
 
+func (r *ToolDefinitionRepo) ListEnabled(ctx context.Context) ([]ToolDefinition, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, name, display_name, description, tool_tier, tool_domain, required_capability, input_schema, is_enabled, created_at
+		FROM tool_definition
+		WHERE is_enabled = true
+		ORDER BY name
+	`)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	tools := make([]ToolDefinition, 0)
+	for rows.Next() {
+		tool, scanErr := scanToolDefinition(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		tools = append(tools, tool)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return tools, nil
+}
+
 func (r *ToolDefinitionRepo) SetEnabled(ctx context.Context, id uuid.UUID, enabled bool) (ToolDefinition, error) {
 	row := r.pool.QueryRow(ctx, `
 		UPDATE tool_definition
