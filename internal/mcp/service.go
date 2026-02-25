@@ -22,6 +22,7 @@ var (
 	slugPattern             = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 	ErrInvalidSlug          = errors.New("invalid slug")
 	ErrInvalidSecretBinding = errors.New("invalid secret binding")
+	ErrSecretNotFound       = errors.New("mcp.secret_not_found")
 	ErrConnectionFailed     = errors.New("mcp connection is failed")
 	ErrConnectionOrg        = errors.New("mcp connection does not belong to organization")
 	ErrResolverRequired     = errors.New("secret resolver is required")
@@ -355,7 +356,8 @@ func (s *service) ListConnections(ctx context.Context, orgID uuid.UUID, filter M
 	for i := range all {
 		item := all[i]
 		if filter.ProjectID != nil {
-			if item.ProjectID == nil || *item.ProjectID != *filter.ProjectID {
+			// Project-scoped views include both org-scoped (nil) and matching project connections.
+			if item.ProjectID != nil && *item.ProjectID != *filter.ProjectID {
 				continue
 			}
 		}
@@ -437,11 +439,11 @@ func (s *service) RefreshCatalog(ctx context.Context, connID uuid.UUID) error {
 	runtime := s.runtimeConfigForConnection(connection)
 	resolvedConfig, err := resolveTransportConfigRefs(ctx, connection.OrganizationID, connection.TransportConfig, s.resolver)
 	if err != nil {
-		return err
+		return s.markConnectionFailedOnMissingSecret(ctx, connID, err)
 	}
 	secretBindings, err := s.ResolveSecretBindings(ctx, connID)
 	if err != nil {
-		return err
+		return s.markConnectionFailedOnMissingSecret(ctx, connID, err)
 	}
 	transport, err := s.transportFactory.New(ctx, connection, resolvedConfig, secretBindings)
 	if err != nil {
@@ -609,7 +611,7 @@ func (s *service) CallTool(ctx context.Context, req CallToolRequest) (json.RawMe
 
 	runtime := s.runtimeConfigForConnection(connection)
 	breaker := s.breakerForConnection(connection.ID, runtime)
-	if err := breaker.BeforeCall(s.now()); err != nil {
+	if err := breaker.BeginProbe(s.now()); err != nil {
 		return nil, err
 	}
 
@@ -905,6 +907,14 @@ func jitteredBackoff(base time.Duration, power int, randValue float64) time.Dura
 	delay := base * time.Duration(1<<power)
 	factor := 0.8 + (randValue * 0.4)
 	return time.Duration(float64(delay) * factor)
+}
+
+func (s *service) markConnectionFailedOnMissingSecret(ctx context.Context, connID uuid.UUID, err error) error {
+	if !errors.Is(err, repo.ErrNotFound) {
+		return err
+	}
+	_, _ = s.connections.SetStatus(ctx, connID, "failed")
+	return fmt.Errorf("%w: %v", ErrSecretNotFound, err)
 }
 
 func isTransientError(err error) bool {
