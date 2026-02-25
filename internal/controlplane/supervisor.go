@@ -242,6 +242,9 @@ func (s *Supervisor) detectStuckRuns(ctx context.Context) error {
 		}); appendErr != nil {
 			return appendErr
 		}
+		if publishErr := s.publishRecoveryInitiated(ctx, runRecord, "heartbeat_silence"); publishErr != nil {
+			return publishErr
+		}
 
 		if recoverErr := s.recoverRun(ctx, runRecord, "heartbeat silence exceeded"); recoverErr != nil {
 			return recoverErr
@@ -503,16 +506,12 @@ func (s *Supervisor) maybeEscalateStaleBlocker(ctx context.Context, runRecord Ru
 }
 
 func (s *Supervisor) handleDeadLetterEvent(ctx context.Context, event eventbus.DomainEvent) error {
-	if strings.TrimSpace(event.EventType) != "run.failed" {
+	if strings.TrimSpace(event.EventType) != "run.dead_lettered" {
 		return nil
 	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
-		return nil
-	}
-	deadLettered, _ := payload["dead_lettered"].(bool)
-	if !deadLettered {
 		return nil
 	}
 	runIDRaw, _ := payload["run_id"].(string)
@@ -551,6 +550,25 @@ func (s *Supervisor) handleDeadLetterEvent(ctx context.Context, event eventbus.D
 		}
 	}
 	return nil
+}
+
+func (s *Supervisor) publishRecoveryInitiated(ctx context.Context, runRecord Run, reason string) error {
+	if s == nil || s.eventBus == nil {
+		return nil
+	}
+	payload, err := json.Marshal(map[string]any{
+		"run_id": runRecord.ID.String(),
+		"reason": strings.TrimSpace(reason),
+	})
+	if err != nil {
+		return err
+	}
+	return s.eventBus.Publish(ctx, nil, eventbus.DomainEvent{
+		OrganizationID: runRecord.OrganizationID,
+		EventType:      "run.supervisor.recovery_initiated",
+		ActorType:      "supervisor",
+		Payload:        payload,
+	})
 }
 
 func (s *Supervisor) loadOldestOpenBlocker(ctx context.Context, organizationID, taskID uuid.UUID) (*time.Time, string, error) {

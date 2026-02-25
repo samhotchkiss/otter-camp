@@ -4,11 +4,16 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -129,6 +134,59 @@ func TestRunEventRepositoryAppendConcurrentSequenceAssignment(t *testing.T) {
 		if _, ok := seen[i]; !ok {
 			t.Fatalf("missing sequence %d", i)
 		}
+	}
+}
+
+func TestRunEventRepositoryAppendPublishesNotify(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	runRecord := seedControlPlaneRun(t, ctx, NewRunRepository(pool), org.ID)
+
+	listener, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire listener: %v", err)
+	}
+	defer listener.Release()
+
+	channel := RunEventsChannel(runRecord.ID)
+	listenSQL := "LISTEN " + pgx.Identifier{channel}.Sanitize()
+	if _, err := listener.Exec(ctx, listenSQL); err != nil {
+		t.Fatalf("listen run event channel: %v", err)
+	}
+	defer func() {
+		_, _ = listener.Exec(context.Background(), "UNLISTEN "+pgx.Identifier{channel}.Sanitize())
+	}()
+
+	created, err := NewRunEventRepository(pool).Append(ctx, RunEvent{
+		RunID:     runRecord.ID,
+		EventType: "heartbeat",
+		ActorType: "system",
+		Payload:   []byte(`{"k":"v"}`),
+	})
+	if err != nil {
+		t.Fatalf("append run event: %v", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	notification, err := listener.Conn().WaitForNotification(waitCtx)
+	if err != nil {
+		t.Fatalf("wait for notification: %v", err)
+	}
+	if notification.Channel != channel {
+		t.Fatalf("notification channel = %q, want %q", notification.Channel, channel)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(notification.Payload), &payload); err != nil {
+		t.Fatalf("decode notification payload: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", payload["run_id"])); got != runRecord.ID.String() {
+		t.Fatalf("payload.run_id = %q, want %q", got, runRecord.ID)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", payload["sequence"])); got != fmt.Sprintf("%d", created.Sequence) {
+		t.Fatalf("payload.sequence = %q, want %d", got, created.Sequence)
 	}
 }
 

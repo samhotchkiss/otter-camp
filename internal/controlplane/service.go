@@ -416,7 +416,9 @@ func (s *runService) StartRun(ctx context.Context, runID uuid.UUID) error {
 	if _, err := s.appendRunEvent(ctx, updated.ID, nil, nil, "run_started", "system", nil, nil); err != nil {
 		return err
 	}
-	return nil
+	return s.publishDomainEvent(ctx, updated.OrganizationID, "run.started", "system", nil, map[string]any{
+		"run_id": createdID(updated.ID),
+	})
 }
 
 func (s *runService) CompleteRun(ctx context.Context, runID uuid.UUID, output json.RawMessage) error {
@@ -508,8 +510,13 @@ func (s *runService) RequestCancel(ctx context.Context, runID uuid.UUID, request
 		if transitionErr != nil {
 			return transitionErr
 		}
-		_, appendErr := s.appendRunEvent(ctx, updated.ID, nil, nil, "run_cancelled", requestActorType, requestActorID, payload)
-		return appendErr
+		if _, appendErr := s.appendRunEvent(ctx, updated.ID, nil, nil, "run_cancelled", requestActorType, requestActorID, payload); appendErr != nil {
+			return appendErr
+		}
+		return s.publishDomainEvent(ctx, updated.OrganizationID, "run.cancelled", requestActorType, requestActorID, map[string]any{
+			"run_id":       createdID(updated.ID),
+			"requested_by": payload["requested_by"],
+		})
 	}
 
 	updated, transitionErr := s.transitionRun(ctx, runID, map[string]struct{}{"in_progress": {}, "paused": {}}, "cancelling", nil, nil)
@@ -530,8 +537,12 @@ func (s *runService) ConfirmCancelled(ctx context.Context, runID uuid.UUID) erro
 	if err != nil {
 		return err
 	}
-	_, err = s.appendRunEvent(ctx, updated.ID, nil, nil, "run_cancelled", "system", nil, nil)
-	return err
+	if _, err := s.appendRunEvent(ctx, updated.ID, nil, nil, "run_cancelled", "system", nil, nil); err != nil {
+		return err
+	}
+	return s.publishDomainEvent(ctx, updated.OrganizationID, "run.cancelled", "system", nil, map[string]any{
+		"run_id": createdID(updated.ID),
+	})
 }
 
 func (s *runService) PauseRun(ctx context.Context, runID uuid.UUID) error {
@@ -539,8 +550,12 @@ func (s *runService) PauseRun(ctx context.Context, runID uuid.UUID) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.appendRunEvent(ctx, updated.ID, nil, nil, "run_paused", "system", nil, nil)
-	return err
+	if _, err := s.appendRunEvent(ctx, updated.ID, nil, nil, "run_paused", "system", nil, nil); err != nil {
+		return err
+	}
+	return s.publishDomainEvent(ctx, updated.OrganizationID, "run.paused", "system", nil, map[string]any{
+		"run_id": createdID(updated.ID),
+	})
 }
 
 func (s *runService) ResumeRun(ctx context.Context, runID uuid.UUID) error {
@@ -628,26 +643,8 @@ func (s *runService) DeadLetter(ctx context.Context, runID uuid.UUID) error {
 	if err != nil {
 		return err
 	}
-
-	payload := map[string]any{
-		"run_id":        updated.ID.String(),
-		"task_id":       uuidToString(updated.TaskID),
-		"flow_node_id":  uuidToString(updated.FlowNodeID),
-		"dead_lettered": true,
-		"failure_class": stringPointerValue(updated.FailureClass),
-		"reason":        stringPointerValue(updated.FailureReason),
-	}
-	if _, err := s.appendRunEvent(ctx, updated.ID, nil, nil, "run_failed", "system", nil, payload); err != nil {
-		return err
-	}
-
-	if err := s.publishDomainEvent(ctx, updated.OrganizationID, "run.failed", "system", nil, payload); err != nil {
-		return err
-	}
-	if err := s.recordRunDeadLetteredTaskEvent(ctx, updated, "system"); err != nil {
-		return err
-	}
-	return s.createEscalationInboxItem(ctx, updated, "system", false)
+	handler := NewDeadLetterHandler(s)
+	return handler.Handle(ctx, updated.ID, stringPointerValue(updated.FailureReason))
 }
 
 func (s *runService) EmitHeartbeat(ctx context.Context, runID uuid.UUID, runAttemptID *uuid.UUID) error {
@@ -1104,16 +1101,7 @@ func normalizeRetryTrigger(value string) string {
 }
 
 func maxAttemptsForWorker(workerType string) int {
-	switch strings.ToLower(strings.TrimSpace(workerType)) {
-	case "mcp", "native":
-		return 3
-	case "cli", "browser":
-		return 2
-	case "internal":
-		return 1
-	default:
-		return 1
-	}
+	return MaxAttemptsForDomain(workerType)
 }
 
 func actorToAgentID(principalType string, principalID uuid.UUID) *uuid.UUID {
