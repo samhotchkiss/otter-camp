@@ -141,6 +141,13 @@ func prepareTemplateDatabase(ctx context.Context, baseURL, templateName string) 
 	}
 	defer templatePool.Close()
 
+	// Ensure each process starts from a pristine template schema.
+	// The template DB is persistent across runs, so stale test data can leak
+	// into newly cloned databases unless we reset it before migrations.
+	if _, err := templatePool.Exec(ctx, `DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public`); err != nil {
+		return err
+	}
+
 	runner := migrate.NewRunner(templatePool, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	return runner.Run(ctx)
 }
