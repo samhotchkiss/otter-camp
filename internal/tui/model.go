@@ -21,6 +21,8 @@ type Model struct {
 	commandMode    bool
 	commandBuffer  string
 	statusMessage  string
+	connection     ConnectionState
+	streamDegraded bool
 	width          int
 	height         int
 	quitting       bool
@@ -37,6 +39,7 @@ func NewModel(state UIState) Model {
 		state:          normalized,
 		focus:          panel,
 		statusMessage:  "Tab/Shift-Tab cycle focus. Alt-1/2/3 direct focus. :focus or :quit commands available.",
+		connection:     ConnectionDisconnected,
 		sidebarVisible: normalized.SidebarVisible,
 	}
 }
@@ -50,6 +53,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = typed.Width
 		m.height = typed.Height
+		return m, nil
+	case ConnectionStateMsg:
+		m.connection = typed.State
+		m.streamDegraded = typed.Degraded
 		return m, nil
 	case tea.KeyMsg:
 		return m.updateKey(typed)
@@ -186,8 +193,10 @@ func (m Model) View() string {
 	}
 
 	status := fmt.Sprintf(
-		"Status: %s | View=%s | ChatSession=%s",
+		"Status: %s | Realtime=%s%s | View=%s | ChatSession=%s",
 		m.statusMessage,
+		m.connection,
+		realtimeDegradedSuffix(m.streamDegraded),
 		state.LastActiveView,
 		valueOrPlaceholder(state.LastActiveChatSession),
 	)
@@ -200,6 +209,14 @@ func (m Model) FocusedPanel() Panel {
 
 func (m Model) Quitting() bool {
 	return m.quitting
+}
+
+func (m Model) ConnectionState() ConnectionState {
+	return m.connection
+}
+
+func (m Model) StreamDegraded() bool {
+	return m.streamDegraded
 }
 
 func (m Model) State() UIState {
@@ -291,4 +308,11 @@ func valueOrPlaceholder(value string) string {
 		return "none"
 	}
 	return trimmed
+}
+
+func realtimeDegradedSuffix(degraded bool) string {
+	if degraded {
+		return " (degraded)"
+	}
+	return ""
 }
