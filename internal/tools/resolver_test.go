@@ -3,10 +3,13 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
@@ -53,6 +56,87 @@ func TestStage1UniverseAppliesMCPProjectScope(t *testing.T) {
 	}
 	if containsTool(got, "mcp.jira.create_ticket") {
 		t.Fatalf("unexpected project-B MCP tool in project-A session")
+	}
+}
+
+func TestNewToolResolverRequiresPoolWhenDependenciesMissing(t *testing.T) {
+	if _, err := NewToolResolver(ToolResolverOptions{}); err == nil {
+		t.Fatal("expected error when pool is missing and default repositories are requested")
+	}
+}
+
+func TestNewToolResolverAllowsPoolBackedDefaults(t *testing.T) {
+	resolver, err := NewToolResolver(ToolResolverOptions{Pool: &pgxpool.Pool{}})
+	if err != nil {
+		t.Fatalf("NewToolResolver with pool: %v", err)
+	}
+	if resolver == nil {
+		t.Fatal("resolver is nil")
+	}
+}
+
+func TestGetSessionToolSetCacheLookupError(t *testing.T) {
+	sessionID := uuid.New()
+	agentID := uuid.New()
+	resolver := newResolverFixture()
+	resolver.sessionSets.getErr = errors.New("cache lookup failed")
+
+	_, err := resolver.resolver.GetSessionToolSet(context.Background(), sessionID, agentID)
+	if err == nil || err.Error() != "cache lookup failed" {
+		t.Fatalf("GetSessionToolSet error = %v, want cache lookup failed", err)
+	}
+}
+
+func TestGetSessionToolSetRejectsInvalidCachedJSON(t *testing.T) {
+	sessionID := uuid.New()
+	agentID := uuid.New()
+	resolver := newResolverFixture()
+	resolver.sessionSets.active[sessionID.String()+"|"+agentID.String()] = &repo.SessionToolSet{
+		ID:        uuid.New(),
+		SessionID: sessionID,
+		AgentID:   agentID,
+		ToolSet:   json.RawMessage(`{"invalid":"shape"}`),
+	}
+
+	_, err := resolver.resolver.GetSessionToolSet(context.Background(), sessionID, agentID)
+	if err == nil {
+		t.Fatal("expected decode error for invalid cached tool_set json")
+	}
+}
+
+func TestGetSessionToolSetPropagatesCreateError(t *testing.T) {
+	orgID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+
+	resolver := newResolverFixture()
+	resolver.sessionSets.createErr = errors.New("create failed")
+	resolver.sessions.items[sessionID] = repo.ChatSession{
+		ID:             sessionID,
+		OrganizationID: orgID,
+		ScopeType:      "organization",
+		ScopeID:        orgID,
+	}
+	resolver.agents.items[agentID] = repo.Agent{ID: agentID}
+	resolver.toolDefs.items = []repo.ToolDefinition{
+		{Name: "memory.query", ToolTier: "tier1", ToolDomain: "memory", IsEnabled: true},
+	}
+
+	_, err := resolver.resolver.GetSessionToolSet(context.Background(), sessionID, agentID)
+	if err == nil || err.Error() != "create failed" {
+		t.Fatalf("GetSessionToolSet error = %v, want create failed", err)
+	}
+}
+
+func TestGetSessionToolSetPropagatesSessionLookupError(t *testing.T) {
+	sessionID := uuid.New()
+	agentID := uuid.New()
+	resolver := newResolverFixture()
+	resolver.sessions.err = errors.New("session load failed")
+
+	_, err := resolver.resolver.GetSessionToolSet(context.Background(), sessionID, agentID)
+	if err == nil || err.Error() != "session load failed" {
+		t.Fatalf("GetSessionToolSet error = %v, want session load failed", err)
 	}
 }
 
@@ -261,6 +345,492 @@ func TestGetSessionToolSetAfterInvalidateRebuildsCache(t *testing.T) {
 	}
 }
 
+func TestHandlePolicyUpdateInvalidatesAllActiveSets(t *testing.T) {
+	orgID := uuid.New()
+	sessionA := uuid.New()
+	sessionB := uuid.New()
+	agentA := uuid.New()
+	agentB := uuid.New()
+
+	resolver := newResolverFixture()
+	rowA, err := resolver.sessionSets.Create(context.Background(), sessionA, agentA, json.RawMessage(`[]`))
+	if err != nil {
+		t.Fatalf("Create rowA: %v", err)
+	}
+	rowB, err := resolver.sessionSets.Create(context.Background(), sessionB, agentB, json.RawMessage(`[]`))
+	if err != nil {
+		t.Fatalf("Create rowB: %v", err)
+	}
+	resolver.sessionSets.activeByOrg[orgID] = []repo.SessionToolSet{*rowA, *rowB}
+
+	if err := resolver.resolver.HandlePolicyUpdate(context.Background(), orgID); err != nil {
+		t.Fatalf("HandlePolicyUpdate: %v", err)
+	}
+
+	if _, err := resolver.sessionSets.GetActive(context.Background(), sessionA, agentA); !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("sessionA active row error = %v, want ErrNotFound", err)
+	}
+	if _, err := resolver.sessionSets.GetActive(context.Background(), sessionB, agentB); !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("sessionB active row error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestHandlePolicyUpdateValidatesOrgID(t *testing.T) {
+	resolver := newResolverFixture()
+	if err := resolver.resolver.HandlePolicyUpdate(context.Background(), uuid.Nil); err == nil {
+		t.Fatal("expected error for nil organization id")
+	}
+}
+
+func TestHandlePolicyUpdatePropagatesListError(t *testing.T) {
+	resolver := newResolverFixture()
+	resolver.sessionSets.listErr = errors.New("list failed")
+	err := resolver.resolver.HandlePolicyUpdate(context.Background(), uuid.New())
+	if err == nil || err.Error() != "list failed" {
+		t.Fatalf("HandlePolicyUpdate error = %v, want list failed", err)
+	}
+}
+
+func TestHandlePolicyUpdatePropagatesInvalidateError(t *testing.T) {
+	orgID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+	resolver := newResolverFixture()
+
+	row, err := resolver.sessionSets.Create(context.Background(), sessionID, agentID, json.RawMessage(`[]`))
+	if err != nil {
+		t.Fatalf("Create row: %v", err)
+	}
+	resolver.sessionSets.activeByOrg[orgID] = []repo.SessionToolSet{*row}
+	resolver.sessionSets.invalidateErr = errors.New("invalidate failed")
+
+	err = resolver.resolver.HandlePolicyUpdate(context.Background(), orgID)
+	if err == nil || err.Error() != "invalidate failed" {
+		t.Fatalf("HandlePolicyUpdate error = %v, want invalidate failed", err)
+	}
+}
+
+func TestSubscribePolicyUpdatesHandlesCapabilityEvents(t *testing.T) {
+	orgID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+
+	resolver := newResolverFixture()
+	row, err := resolver.sessionSets.Create(context.Background(), sessionID, agentID, json.RawMessage(`[]`))
+	if err != nil {
+		t.Fatalf("Create row: %v", err)
+	}
+	resolver.sessionSets.activeByOrg[orgID] = []repo.SessionToolSet{*row}
+
+	_ = resolver.resolver.SubscribePolicyUpdates(nil)
+	if resolver.events.handler == nil {
+		t.Fatal("expected policy update handler to be registered")
+	}
+
+	if err := resolver.events.handler(context.Background(), eventbus.DomainEvent{
+		OrganizationID: orgID,
+		EventType:      "capability.policy.updated",
+	}); err != nil {
+		t.Fatalf("handler(policy.updated): %v", err)
+	}
+	if _, err := resolver.sessionSets.GetActive(context.Background(), sessionID, agentID); !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("active row error = %v, want ErrNotFound after policy update", err)
+	}
+}
+
+func TestSubscribePolicyUpdatesFallsBackToSubscribedOrg(t *testing.T) {
+	orgID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+
+	resolver := newResolverFixture()
+	row, err := resolver.sessionSets.Create(context.Background(), sessionID, agentID, json.RawMessage(`[]`))
+	if err != nil {
+		t.Fatalf("Create row: %v", err)
+	}
+	resolver.sessionSets.activeByOrg[orgID] = []repo.SessionToolSet{*row}
+
+	_ = resolver.resolver.SubscribePolicyUpdates(&orgID)
+	if resolver.events.handler == nil {
+		t.Fatal("expected policy update handler to be registered")
+	}
+
+	if err := resolver.events.handler(context.Background(), eventbus.DomainEvent{
+		EventType: "capability.policy.updated",
+	}); err != nil {
+		t.Fatalf("handler(policy.updated fallback org): %v", err)
+	}
+	if _, err := resolver.sessionSets.GetActive(context.Background(), sessionID, agentID); !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("active row error = %v, want ErrNotFound after policy update fallback", err)
+	}
+}
+
+func TestSubscribePolicyUpdatesIgnoresNonPolicyEvents(t *testing.T) {
+	resolver := newResolverFixture()
+	_ = resolver.resolver.SubscribePolicyUpdates(nil)
+	if resolver.events.handler == nil {
+		t.Fatal("expected policy update handler to be registered")
+	}
+	if err := resolver.events.handler(context.Background(), eventbus.DomainEvent{
+		OrganizationID: uuid.New(),
+		EventType:      "something.else",
+	}); err != nil {
+		t.Fatalf("handler(non-policy): %v", err)
+	}
+}
+
+func TestSubscribePolicyUpdatesNoEventBus(t *testing.T) {
+	resolver := newResolverFixture()
+	resolver.resolver.events = nil
+	if sub := resolver.resolver.SubscribePolicyUpdates(nil); sub != (eventbus.Subscription{}) {
+		t.Fatalf("expected zero subscription when event bus is nil, got %#v", sub)
+	}
+}
+
+func TestResolveSessionProjectIDUsesProjectTaskScope(t *testing.T) {
+	orgID := uuid.New()
+	projectA := uuid.New()
+	projectB := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+
+	resolver := newResolverFixture()
+	resolver.sessions.items[sessionID] = repo.ChatSession{
+		ID:             sessionID,
+		OrganizationID: orgID,
+		ScopeType:      "project_task",
+		ScopeID:        taskID,
+	}
+	resolver.tasks.items[taskID] = repo.ProjectTask{
+		ID:        taskID,
+		ProjectID: projectA,
+	}
+	resolver.agents.items[agentID] = repo.Agent{ID: agentID}
+	resolver.toolDefs.items = []repo.ToolDefinition{
+		{Name: "memory.query", ToolTier: "tier1", ToolDomain: "memory", IsEnabled: true},
+	}
+
+	connA := repo.MCPConnection{ID: uuid.New(), OrganizationID: orgID, ProjectID: &projectA, IsEnabled: true}
+	connB := repo.MCPConnection{ID: uuid.New(), OrganizationID: orgID, ProjectID: &projectB, IsEnabled: true}
+	resolver.connections.items = []repo.MCPConnection{connA, connB}
+	resolver.catalog.entries[connA.ID] = []repo.MCPToolCatalogEntry{{ConnectionID: connA.ID, ToolName: "mcp.projectA.allowed", IsEnabled: true}}
+	resolver.catalog.entries[connB.ID] = []repo.MCPToolCatalogEntry{{ConnectionID: connB.ID, ToolName: "mcp.projectB.denied", IsEnabled: true}}
+
+	got, err := resolver.resolver.GetSessionToolSet(context.Background(), sessionID, agentID)
+	if err != nil {
+		t.Fatalf("GetSessionToolSet: %v", err)
+	}
+	if !containsTool(got, "mcp.projectA.allowed") {
+		t.Fatalf("missing project A MCP tool: %+v", got)
+	}
+	if containsTool(got, "mcp.projectB.denied") {
+		t.Fatalf("unexpected project B MCP tool in project-task scoped session: %+v", got)
+	}
+}
+
+func TestResolveToolSetPropagatesProjectTaskLookupError(t *testing.T) {
+	orgID := uuid.New()
+	taskID := uuid.New()
+	agentID := uuid.New()
+	resolver := newResolverFixture()
+	resolver.tasks.err = errors.New("task lookup failed")
+
+	_, err := resolver.resolver.resolveToolSet(context.Background(), repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project_task",
+		ScopeID:        taskID,
+	}, agentID)
+	if err == nil || err.Error() != "task lookup failed" {
+		t.Fatalf("resolveToolSet error = %v, want task lookup failed", err)
+	}
+}
+
+func TestBuildUniverseInfersDomainFromToolNamePrefix(t *testing.T) {
+	orgID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+
+	resolver := newResolverFixture()
+	resolver.sessions.items[sessionID] = repo.ChatSession{
+		ID:             sessionID,
+		OrganizationID: orgID,
+		ScopeType:      "organization",
+		ScopeID:        orgID,
+	}
+	resolver.agents.items[agentID] = repo.Agent{ID: agentID}
+	resolver.toolDefs.items = []repo.ToolDefinition{
+		{Name: "git.status", ToolTier: "tier1", ToolDomain: "", IsEnabled: true},
+	}
+
+	got, err := resolver.resolver.GetSessionToolSet(context.Background(), sessionID, agentID)
+	if err != nil {
+		t.Fatalf("GetSessionToolSet: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("tool count = %d, want 1", len(got))
+	}
+	if got[0].Domain != "git" {
+		t.Fatalf("tool domain = %q, want git", got[0].Domain)
+	}
+}
+
+func TestTrimCapabilityNilAndEmptyString(t *testing.T) {
+	if got := trimCapability(nil); got != nil {
+		t.Fatalf("trimCapability(nil) = %v, want nil", got)
+	}
+
+	blank := "  "
+	if got := trimCapability(&blank); got != nil {
+		t.Fatalf("trimCapability(blank) = %v, want nil", got)
+	}
+}
+
+func TestDecodeToolSetEmptyAndInvalidJSON(t *testing.T) {
+	got, err := decodeToolSet(nil)
+	if err != nil {
+		t.Fatalf("decodeToolSet(nil): %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("decodeToolSet(nil) length = %d, want 0", len(got))
+	}
+
+	if _, err := decodeToolSet(json.RawMessage(`{"not":"an array"}`)); err == nil {
+		t.Fatal("expected decodeToolSet to fail on non-array JSON")
+	}
+}
+
+func TestConnectionVisibleInSessionCombinations(t *testing.T) {
+	projectID := uuid.New()
+	otherProjectID := uuid.New()
+
+	if !connectionVisibleInSession(nil, nil) {
+		t.Fatal("org-scoped connection should be visible without session project")
+	}
+	if !connectionVisibleInSession(nil, &projectID) {
+		t.Fatal("org-scoped connection should be visible with session project")
+	}
+	if connectionVisibleInSession(&projectID, nil) {
+		t.Fatal("project-scoped connection should be hidden without session project")
+	}
+	if !connectionVisibleInSession(&projectID, &projectID) {
+		t.Fatal("project-scoped connection should be visible in matching project session")
+	}
+	if connectionVisibleInSession(&projectID, &otherProjectID) {
+		t.Fatal("project-scoped connection should be hidden in different project session")
+	}
+}
+
+func TestMatchToolGlobEdgeCases(t *testing.T) {
+	if matchToolGlob("", "file.read") {
+		t.Fatal("empty pattern must not match")
+	}
+	if matchToolGlob("file.*", "") {
+		t.Fatal("empty name must not match")
+	}
+	if !matchToolGlob("mcp.**.create_issue", "mcp.github.repo.create_issue") {
+		t.Fatal("expected ** mid-pattern to match nested name")
+	}
+	if !matchToolGlob("file.*.*", "file.alpha.beta") {
+		t.Fatal("expected two-segment wildcard to match")
+	}
+	if matchToolGlob("file.*.read", "file.alpha.beta.read") {
+		t.Fatal("single segment wildcard should not match extra segments")
+	}
+}
+
+func TestStage3PrioritizesMCPTools(t *testing.T) {
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	connectionID := uuid.New()
+	session := repo.ChatSession{ScopeType: "project_task", ScopeID: taskID}
+
+	resolver := newResolverFixture()
+	resolver.tasks.items[taskID] = repo.ProjectTask{
+		ID:                taskID,
+		CurrentFlowNodeID: &nodeID,
+	}
+	resolver.flowExecutions.active[taskID.String()+"|"+nodeID.String()] = repo.FlowNodeExecution{TaskID: taskID, FlowNodeID: nodeID}
+	resolver.flowNodes.items[nodeID] = repo.FlowNode{
+		ID: nodeID,
+		MCPTools: []repo.FlowNodeMCPTool{
+			{ConnectionID: connectionID, ToolName: "mcp.github.create_issue"},
+		},
+	}
+
+	input := []ToolDescriptor{
+		{Name: "memory.query", Domain: "memory", Source: "native"},
+		{Name: "mcp.github.create_issue", Domain: "mcp", Source: "mcp", MCPConnectionID: &connectionID},
+		{Name: "file.read", Domain: "file", Source: "native"},
+	}
+	got, err := resolver.resolver.applyFlowNodeOrdering(context.Background(), session, input)
+	if err != nil {
+		t.Fatalf("applyFlowNodeOrdering: %v", err)
+	}
+	if len(got) != len(input) {
+		t.Fatalf("tool count = %d, want %d", len(got), len(input))
+	}
+	if got[0].Name != "mcp.github.create_issue" {
+		t.Fatalf("first tool = %q, want mcp.github.create_issue", got[0].Name)
+	}
+	if !containsTool(got, "memory.query") || !containsTool(got, "file.read") {
+		t.Fatalf("stage3 removed non-prioritized tools: %+v", got)
+	}
+}
+
+func TestBuildUniversePropagatesMCPConnectionListError(t *testing.T) {
+	orgID := uuid.New()
+	resolver := newResolverFixture()
+	resolver.toolDefs.items = []repo.ToolDefinition{{Name: "memory.query", ToolTier: "tier1", ToolDomain: "memory"}}
+	resolver.connections.err = errors.New("mcp connection list failed")
+
+	_, err := resolver.resolver.buildUniverse(context.Background(), repo.ChatSession{OrganizationID: orgID}, nil)
+	if err == nil || err.Error() != "mcp connection list failed" {
+		t.Fatalf("buildUniverse error = %v, want mcp connection list failed", err)
+	}
+}
+
+func TestBuildUniversePropagatesMCPCatalogError(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	resolver := newResolverFixture()
+	resolver.toolDefs.items = []repo.ToolDefinition{{Name: "memory.query", ToolTier: "tier1", ToolDomain: "memory"}}
+	resolver.connections.items = []repo.MCPConnection{
+		{ID: uuid.New(), OrganizationID: orgID, ProjectID: &projectID, IsEnabled: true},
+	}
+	resolver.catalog.err = errors.New("mcp catalog failed")
+
+	_, err := resolver.resolver.buildUniverse(context.Background(), repo.ChatSession{OrganizationID: orgID}, &projectID)
+	if err == nil || err.Error() != "mcp catalog failed" {
+		t.Fatalf("buildUniverse error = %v, want mcp catalog failed", err)
+	}
+}
+
+func TestResolveToolSetPropagatesAgentError(t *testing.T) {
+	orgID := uuid.New()
+	agentID := uuid.New()
+	resolver := newResolverFixture()
+	resolver.toolDefs.items = []repo.ToolDefinition{{Name: "memory.query", ToolTier: "tier1", ToolDomain: "memory"}}
+	resolver.agents.err = errors.New("agent load failed")
+
+	_, err := resolver.resolver.resolveToolSet(context.Background(), repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "organization",
+		ScopeID:        orgID,
+	}, agentID)
+	if err == nil || err.Error() != "agent load failed" {
+		t.Fatalf("resolveToolSet error = %v, want agent load failed", err)
+	}
+}
+
+func TestResolveToolSetPropagatesFlowExecutionError(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	agentID := uuid.New()
+	resolver := newResolverFixture()
+	resolver.toolDefs.items = []repo.ToolDefinition{{Name: "memory.query", ToolTier: "tier1", ToolDomain: "memory"}}
+	resolver.agents.items[agentID] = repo.Agent{ID: agentID}
+	resolver.tasks.items[taskID] = repo.ProjectTask{ID: taskID, ProjectID: projectID, CurrentFlowNodeID: &nodeID}
+	resolver.flowExecutions.err = errors.New("flow execution failed")
+
+	_, err := resolver.resolver.resolveToolSet(context.Background(), repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project_task",
+		ScopeID:        taskID,
+	}, agentID)
+	if err == nil || err.Error() != "flow execution failed" {
+		t.Fatalf("resolveToolSet error = %v, want flow execution failed", err)
+	}
+}
+
+func TestApplyFlowNodeOrderingHandlesCurrentNodeNil(t *testing.T) {
+	taskID := uuid.New()
+	session := repo.ChatSession{ScopeType: "project_task", ScopeID: taskID}
+	input := []ToolDescriptor{{Name: "memory.query", Domain: "memory"}}
+
+	resolver := newResolverFixture()
+	resolver.tasks.items[taskID] = repo.ProjectTask{ID: taskID}
+
+	got, err := resolver.resolver.applyFlowNodeOrdering(context.Background(), session, input)
+	if err != nil {
+		t.Fatalf("applyFlowNodeOrdering: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "memory.query" {
+		t.Fatalf("unexpected ordering output: %+v", got)
+	}
+}
+
+func TestApplyFlowNodeOrderingHandlesMissingActiveExecution(t *testing.T) {
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	session := repo.ChatSession{ScopeType: "project_task", ScopeID: taskID}
+	input := []ToolDescriptor{{Name: "memory.query", Domain: "memory"}}
+
+	resolver := newResolverFixture()
+	resolver.tasks.items[taskID] = repo.ProjectTask{ID: taskID, CurrentFlowNodeID: &nodeID}
+
+	got, err := resolver.resolver.applyFlowNodeOrdering(context.Background(), session, input)
+	if err != nil {
+		t.Fatalf("applyFlowNodeOrdering: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "memory.query" {
+		t.Fatalf("unexpected ordering output: %+v", got)
+	}
+}
+
+func TestApplyFlowNodeOrderingPropagatesFlowNodeError(t *testing.T) {
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	session := repo.ChatSession{ScopeType: "project_task", ScopeID: taskID}
+	input := []ToolDescriptor{{Name: "memory.query", Domain: "memory"}}
+
+	resolver := newResolverFixture()
+	resolver.tasks.items[taskID] = repo.ProjectTask{ID: taskID, CurrentFlowNodeID: &nodeID}
+	resolver.flowExecutions.active[taskID.String()+"|"+nodeID.String()] = repo.FlowNodeExecution{TaskID: taskID, FlowNodeID: nodeID}
+	resolver.flowNodes.err = errors.New("flow node load failed")
+
+	_, err := resolver.resolver.applyFlowNodeOrdering(context.Background(), session, input)
+	if err == nil || err.Error() != "flow node load failed" {
+		t.Fatalf("applyFlowNodeOrdering error = %v, want flow node load failed", err)
+	}
+}
+
+func TestTrimCapabilityReturnsTrimmedValue(t *testing.T) {
+	value := "  memory.read  "
+	got := trimCapability(&value)
+	if got == nil || *got != "memory.read" {
+		t.Fatalf("trimCapability(trimmed) = %v, want memory.read", got)
+	}
+}
+
+func TestToolDomainFromNameEdgeCases(t *testing.T) {
+	if got := toolDomainFromName("single"); got != "single" {
+		t.Fatalf("toolDomainFromName(single) = %q, want single", got)
+	}
+	if got := toolDomainFromName(""); got != "" {
+		t.Fatalf("toolDomainFromName(empty) = %q, want empty", got)
+	}
+	if got := toolDomainFromName(" git.status "); got != "git" {
+		t.Fatalf("toolDomainFromName(trimmed) = %q, want git", got)
+	}
+}
+
+func TestApplyCapabilityGateWithoutPolicyEvaluatorReturnsInput(t *testing.T) {
+	resolver := newResolverFixture()
+	resolver.resolver.policies = nil
+	input := []ToolDescriptor{{Name: "memory.query", Tier: "tier1"}}
+
+	got, err := resolver.resolver.applyCapabilityGate(context.Background(), uuid.New(), nil, uuid.New(), input)
+	if err != nil {
+		t.Fatalf("applyCapabilityGate: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "memory.query" {
+		t.Fatalf("applyCapabilityGate output = %+v, want unchanged input", got)
+	}
+}
+
 type resolverFixture struct {
 	resolver       *ToolResolver
 	sessionSets    *fakeSessionToolSetRepo
@@ -273,6 +843,7 @@ type resolverFixture struct {
 	connections    *fakeMCPConnectionRepo
 	catalog        *fakeMCPCatalogRepo
 	policies       *fakePolicyEvaluator
+	events         *fakeEventSubscriber
 }
 
 func newResolverFixture() resolverFixture {
@@ -286,6 +857,7 @@ func newResolverFixture() resolverFixture {
 	connections := &fakeMCPConnectionRepo{}
 	catalog := &fakeMCPCatalogRepo{entries: make(map[uuid.UUID][]repo.MCPToolCatalogEntry)}
 	policies := &fakePolicyEvaluator{decisions: make(map[string]policy.PolicyDecision)}
+	events := &fakeEventSubscriber{}
 
 	resolver, err := NewToolResolver(ToolResolverOptions{
 		SessionToolSets: sessionSets,
@@ -298,6 +870,7 @@ func newResolverFixture() resolverFixture {
 		MCPConnections:  connections,
 		MCPCatalog:      catalog,
 		Policies:        policies,
+		Events:          events,
 	})
 	if err != nil {
 		panic(err)
@@ -314,14 +887,19 @@ func newResolverFixture() resolverFixture {
 		connections:    connections,
 		catalog:        catalog,
 		policies:       policies,
+		events:         events,
 	}
 }
 
 type fakeSessionToolSetRepo struct {
-	items       []*repo.SessionToolSet
-	active      map[string]*repo.SessionToolSet
-	activeByOrg map[uuid.UUID][]repo.SessionToolSet
-	createCalls int
+	items         []*repo.SessionToolSet
+	active        map[string]*repo.SessionToolSet
+	activeByOrg   map[uuid.UUID][]repo.SessionToolSet
+	createCalls   int
+	createErr     error
+	getErr        error
+	invalidateErr error
+	listErr       error
 }
 
 func newFakeSessionToolSetRepo() *fakeSessionToolSetRepo {
@@ -333,6 +911,9 @@ func newFakeSessionToolSetRepo() *fakeSessionToolSetRepo {
 }
 
 func (f *fakeSessionToolSetRepo) Create(_ context.Context, sessionID, agentID uuid.UUID, toolSet json.RawMessage) (*repo.SessionToolSet, error) {
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
 	f.createCalls++
 	now := time.Now().UTC()
 	item := &repo.SessionToolSet{
@@ -349,6 +930,9 @@ func (f *fakeSessionToolSetRepo) Create(_ context.Context, sessionID, agentID uu
 }
 
 func (f *fakeSessionToolSetRepo) GetActive(_ context.Context, sessionID, agentID uuid.UUID) (*repo.SessionToolSet, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	key := sessionID.String() + "|" + agentID.String()
 	item, ok := f.active[key]
 	if !ok || item.InvalidatedAt != nil {
@@ -358,6 +942,9 @@ func (f *fakeSessionToolSetRepo) GetActive(_ context.Context, sessionID, agentID
 }
 
 func (f *fakeSessionToolSetRepo) Invalidate(_ context.Context, sessionID, agentID uuid.UUID) error {
+	if f.invalidateErr != nil {
+		return f.invalidateErr
+	}
 	key := sessionID.String() + "|" + agentID.String()
 	item, ok := f.active[key]
 	if !ok {
@@ -377,6 +964,9 @@ func (f *fakeSessionToolSetRepo) ReplaceToolSet(ctx context.Context, sessionID, 
 }
 
 func (f *fakeSessionToolSetRepo) ListActiveByOrganization(_ context.Context, organizationID uuid.UUID) ([]repo.SessionToolSet, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	items := f.activeByOrg[organizationID]
 	out := make([]repo.SessionToolSet, len(items))
 	copy(out, items)
@@ -385,9 +975,13 @@ func (f *fakeSessionToolSetRepo) ListActiveByOrganization(_ context.Context, org
 
 type fakeChatSessionRepo struct {
 	items map[uuid.UUID]repo.ChatSession
+	err   error
 }
 
 func (f *fakeChatSessionRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+	if f.err != nil {
+		return repo.ChatSession{}, f.err
+	}
 	item, ok := f.items[id]
 	if !ok {
 		return repo.ChatSession{}, repo.ErrNotFound
@@ -397,9 +991,13 @@ func (f *fakeChatSessionRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Cha
 
 type fakeAgentRepo struct {
 	items map[uuid.UUID]repo.Agent
+	err   error
 }
 
 func (f *fakeAgentRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Agent, error) {
+	if f.err != nil {
+		return repo.Agent{}, f.err
+	}
 	item, ok := f.items[id]
 	if !ok {
 		return repo.Agent{}, repo.ErrNotFound
@@ -409,9 +1007,13 @@ func (f *fakeAgentRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Agent, er
 
 type fakeTaskRepo struct {
 	items map[uuid.UUID]repo.ProjectTask
+	err   error
 }
 
 func (f *fakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectTask, error) {
+	if f.err != nil {
+		return repo.ProjectTask{}, f.err
+	}
 	item, ok := f.items[id]
 	if !ok {
 		return repo.ProjectTask{}, repo.ErrNotFound
@@ -421,9 +1023,13 @@ func (f *fakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectTas
 
 type fakeFlowExecutionRepo struct {
 	active map[string]repo.FlowNodeExecution
+	err    error
 }
 
 func (f *fakeFlowExecutionRepo) GetActive(_ context.Context, taskID, flowNodeID uuid.UUID) (repo.FlowNodeExecution, error) {
+	if f.err != nil {
+		return repo.FlowNodeExecution{}, f.err
+	}
 	key := taskID.String() + "|" + flowNodeID.String()
 	item, ok := f.active[key]
 	if !ok {
@@ -434,9 +1040,13 @@ func (f *fakeFlowExecutionRepo) GetActive(_ context.Context, taskID, flowNodeID 
 
 type fakeFlowNodeRepo struct {
 	items map[uuid.UUID]repo.FlowNode
+	err   error
 }
 
 func (f *fakeFlowNodeRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNode, error) {
+	if f.err != nil {
+		return repo.FlowNode{}, f.err
+	}
 	item, ok := f.items[id]
 	if !ok {
 		return repo.FlowNode{}, repo.ErrNotFound
@@ -501,6 +1111,19 @@ func containsTool(items []ToolDescriptor, name string) bool {
 	return false
 }
 
+type fakeEventSubscriber struct {
+	consumerName string
+	orgID        *uuid.UUID
+	handler      eventbus.EventHandler
+}
+
+func (f *fakeEventSubscriber) Subscribe(consumerName string, orgID *uuid.UUID, handler eventbus.EventHandler) eventbus.Subscription {
+	f.consumerName = consumerName
+	f.orgID = orgID
+	f.handler = handler
+	return eventbus.Subscription{}
+}
+
 var _ sessionToolSetRepository = (*fakeSessionToolSetRepo)(nil)
 var _ chatSessionRepository = (*fakeChatSessionRepo)(nil)
 var _ agentRepository = (*fakeAgentRepo)(nil)
@@ -511,3 +1134,4 @@ var _ toolDefinitionRepository = (*fakeToolDefinitionRepo)(nil)
 var _ mcpConnectionRepository = (*fakeMCPConnectionRepo)(nil)
 var _ mcpToolCatalogRepository = (*fakeMCPCatalogRepo)(nil)
 var _ policyEvaluator = (*fakePolicyEvaluator)(nil)
+var _ eventSubscriber = (*fakeEventSubscriber)(nil)

@@ -601,9 +601,10 @@ func trimCapability(value *string) *string {
 }
 
 func toolDomainFromName(toolName string) string {
-	parts := strings.Split(strings.TrimSpace(toolName), ".")
-	if len(parts) == 0 {
+	trimmed := strings.TrimSpace(toolName)
+	if trimmed == "" {
 		return ""
 	}
+	parts := strings.Split(trimmed, ".")
 	return parts[0]
 }
