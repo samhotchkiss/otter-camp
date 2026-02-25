@@ -457,6 +457,65 @@ func TestPolicy_Eval_BudgetGate(t *testing.T) {
 		t.Fatal("expected agent budget cap to deny after reaching cap")
 	}
 
+	t.Run("agent_cap_denies_with_org_project_headroom", func(t *testing.T) {
+		agentOnlyFX := newPolicyFixture(t)
+		defer agentOnlyFX.Close()
+
+		agentOnlyUsage := budget.NewPostgresUsageQuerier(agentOnlyFX.Pool)
+		agentOnlyBaseBudgets, err := budget.NewService(budget.Options{
+			Pool:   agentOnlyFX.Pool,
+			Usage:  agentOnlyUsage,
+			Logger: discardLogger(),
+		})
+		if err != nil {
+			t.Fatalf("new budget service (agent-only fixture): %v", err)
+		}
+		agentOnlyProvider := mustCreateProvider(t, agentOnlyFX.Pool)
+		agentOnlyBudgets := &recordingBudgetService{
+			BudgetService: agentOnlyBaseBudgets,
+			pool:          agentOnlyFX.Pool,
+			providerID:    agentOnlyProvider.ID,
+		}
+
+		orgHeadroom := int64(10000)
+		if _, err := agentOnlyBudgets.Create(ctx, budget.CreateBudgetRequest{
+			OrganizationID:  agentOnlyFX.Org.ID,
+			ProjectID:       nil,
+			Period:          "daily",
+			HardLimitTokens: &orgHeadroom,
+			CreatedByType:   "system",
+			CreatedByID:     uuid.Nil,
+		}); err != nil {
+			t.Fatalf("create headroom org budget: %v", err)
+		}
+
+		const cappedUsage int64 = 5
+		if err := agentOnlyBudgets.RecordUsage(ctx, agentOnlyFX.Org.ID, &agentOnlyFX.Project.ID, &agentOnlyFX.Agent.ID, cappedUsage); err != nil {
+			t.Fatalf("RecordUsage headroom fixture seed: %v", err)
+		}
+
+		if _, err := agentOnlyFX.Pool.Exec(ctx, `
+			UPDATE agent
+			SET budget_cap_tokens = $2, budget_period = 'daily'
+			WHERE id = $1
+		`, agentOnlyFX.Agent.ID, cappedUsage); err != nil {
+			t.Fatalf("update agent budget cap (headroom fixture): %v", err)
+		}
+
+		agentOnlyEvaluator, err := policy.NewPolicyEvaluator(policy.EvaluatorOptions{
+			Policies: repo.NewCapabilityPolicyRepo(agentOnlyFX.Pool),
+			Budgets:  agentOnlyBudgets,
+		})
+		if err != nil {
+			t.Fatalf("new policy evaluator (headroom fixture): %v", err)
+		}
+
+		allowed, reason := agentOnlyEvaluator.CheckBudgetGate(ctx, agentOnlyFX.Org.ID, &agentOnlyFX.Project.ID, &agentOnlyFX.Agent.ID)
+		if allowed {
+			t.Fatalf("CheckBudgetGate allowed=%v reason=%q, want denied from agent cap with org/project headroom", allowed, reason)
+		}
+	})
+
 	since := time.Now().UTC().Add(-time.Hour)
 	orgBefore := sumTokens(t, usage, fx.Org.ID, nil, nil, since)
 	projectBefore := sumTokens(t, usage, fx.Org.ID, &fx.Project.ID, nil, since)
