@@ -464,6 +464,8 @@ func mapMCPError(err error) (status int, code, message string) {
 		return http.StatusUnprocessableEntity, api.ErrCodeValidation, "invalid slug"
 	case errors.Is(err, mcp.ErrInvalidSecretBinding):
 		return http.StatusUnprocessableEntity, api.ErrCodeValidation, "invalid secret binding"
+	case errors.Is(err, mcp.ErrSecretNotFound):
+		return http.StatusUnprocessableEntity, "mcp.secret_not_found", "secret reference not found"
 	case errors.Is(err, repo.ErrConflict):
 		return http.StatusConflict, api.ErrCodeConflict, "conflict"
 	case errors.Is(err, mcp.ErrConnectionOrg), errors.Is(err, repo.ErrNotFound):

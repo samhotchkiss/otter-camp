@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/security"
 )
 
 var (
@@ -90,6 +91,7 @@ type ExecutorOptions struct {
 	Resources        MCPResourceReader
 	Logs             MCPExecutionLogWriter
 	Now              func() time.Time
+	Scrubber         *security.SecretScrubber
 }
 
 type Executor struct {
@@ -101,6 +103,7 @@ type Executor struct {
 	resources        MCPResourceReader
 	logs             MCPExecutionLogWriter
 	now              func() time.Time
+	scrubber         *security.SecretScrubber
 }
 
 func NewExecutor(opts ExecutorOptions) (*Executor, error) {
@@ -123,9 +126,13 @@ func NewExecutor(opts ExecutorOptions) (*Executor, error) {
 		resources:        opts.Resources,
 		logs:             opts.Logs,
 		now:              opts.Now,
+		scrubber:         opts.Scrubber,
 	}
 	if exec.now == nil {
 		exec.now = func() time.Time { return time.Now().UTC() }
+	}
+	if exec.scrubber == nil {
+		exec.scrubber = security.NewSecretScrubber()
 	}
 	return exec, nil
 }
@@ -200,7 +207,8 @@ func (e *Executor) Execute(ctx context.Context, toolName string, input map[strin
 		return nil, resultErr
 	}
 
-	if _, completeErr := e.logs.Complete(ctx, createdLog.ID, "success", normalizeRawJSON(result), nil, &latencyMS); completeErr != nil {
+	scrubbedResult := e.scrubber.ScrubJSON(normalizeRawJSON(result))
+	if _, completeErr := e.logs.Complete(ctx, createdLog.ID, "success", scrubbedResult, nil, &latencyMS); completeErr != nil {
 		return nil, completeErr
 	}
 	decoded, err := toMap(result)
@@ -277,7 +285,8 @@ func (e *Executor) ReadResource(ctx context.Context, resourceURI string, mcpConn
 		return nil, readErr
 	}
 
-	if _, completeErr := e.logs.Complete(ctx, createdLog.ID, "success", normalizeRawJSON(resourcePayload), nil, &latencyMS); completeErr != nil {
+	scrubbedPayload := e.scrubber.ScrubJSON(normalizeRawJSON(resourcePayload))
+	if _, completeErr := e.logs.Complete(ctx, createdLog.ID, "success", scrubbedPayload, nil, &latencyMS); completeErr != nil {
 		return nil, completeErr
 	}
 	decoded, err := toMap(resourcePayload)
