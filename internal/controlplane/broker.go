@@ -175,16 +175,20 @@ func (b *ToolBroker) Dispatch(ctx context.Context, input DispatchInput) (ToolExe
 		return ToolExecution{}, err
 	}
 
-	var projectID *uuid.UUID
+	var (
+		projectID *uuid.UUID
+		runRecord *Run
+	)
 	if input.RunID != nil {
-		runRecord, getErr := b.runs.Get(ctx, *input.RunID)
+		record, getErr := b.runs.Get(ctx, *input.RunID)
 		if getErr != nil {
 			return ToolExecution{}, getErr
 		}
-		if runRecord.OrganizationID != agent.OrganizationID {
+		if record.OrganizationID != agent.OrganizationID {
 			return ToolExecution{}, fmt.Errorf("run and agent organization mismatch")
 		}
-		projectID = runRecord.ProjectID
+		projectID = record.ProjectID
+		runRecord = &record
 	}
 
 	policyDecision := "allowed"
@@ -256,7 +260,7 @@ func (b *ToolBroker) Dispatch(ctx context.Context, input DispatchInput) (ToolExe
 		SessionID:       input.SessionID,
 	})
 
-	output, dispatchErr := b.dispatchToExecutor(execCtx, toolDomain, toolName, input.Input)
+	output, dispatchErr := b.dispatchToExecutor(execCtx, toolDomain, toolName, input.Input, input, runRecord)
 	if dispatchErr != nil {
 		status := "failed"
 		if errors.Is(dispatchErr, context.DeadlineExceeded) || errors.Is(dispatchErr, mcp.ErrTimeout) {
@@ -287,7 +291,7 @@ func (b *ToolBroker) Dispatch(ctx context.Context, input DispatchInput) (ToolExe
 	return updated, nil
 }
 
-func (b *ToolBroker) dispatchToExecutor(ctx context.Context, domain, toolName string, input map[string]any) (map[string]any, error) {
+func (b *ToolBroker) dispatchToExecutor(ctx context.Context, domain, toolName string, input map[string]any, dispatch DispatchInput, runRecord *Run) (map[string]any, error) {
 	safeInput := cloneMap(input)
 	switch domain {
 	case "native":
@@ -299,6 +303,7 @@ func (b *ToolBroker) dispatchToExecutor(ctx context.Context, domain, toolName st
 		if b.cli == nil {
 			return nil, ErrToolNotSupported
 		}
+		safeInput = injectCLIExecutionContext(ctx, safeInput, dispatch, runRecord)
 		return b.cli.Execute(ctx, safeInput)
 	case "browser":
 		if b.browser == nil {
@@ -317,6 +322,50 @@ func (b *ToolBroker) dispatchToExecutor(ctx context.Context, domain, toolName st
 	default:
 		return nil, fmt.Errorf("unsupported tool domain %q", domain)
 	}
+}
+
+func injectCLIExecutionContext(ctx context.Context, input map[string]any, dispatch DispatchInput, runRecord *Run) map[string]any {
+	if input == nil {
+		input = map[string]any{}
+	}
+	if dispatch.RunID != nil {
+		if _, ok := input["run_id"]; !ok {
+			input["run_id"] = dispatch.RunID.String()
+		}
+	}
+	if dispatch.RunStepID != nil {
+		if _, ok := input["run_step_id"]; !ok {
+			input["run_step_id"] = dispatch.RunStepID.String()
+		}
+	}
+	if dispatch.RunAttemptID != nil {
+		if _, ok := input["run_attempt_id"]; !ok {
+			input["run_attempt_id"] = dispatch.RunAttemptID.String()
+		}
+	}
+	if dispatch.AgentID != uuid.Nil {
+		if _, ok := input["agent_id"]; !ok {
+			input["agent_id"] = dispatch.AgentID.String()
+		}
+	}
+	if runRecord != nil {
+		if runRecord.ProjectID != nil {
+			if _, ok := input["project_id"]; !ok {
+				input["project_id"] = runRecord.ProjectID.String()
+			}
+		}
+		if runRecord.TaskID != nil {
+			if _, ok := input["task_id"]; !ok {
+				input["task_id"] = runRecord.TaskID.String()
+			}
+		}
+	}
+	if execCtx := mcp.ExecutionContextFromContext(ctx); execCtx.OrganizationID != uuid.Nil {
+		if _, ok := input["organization_id"]; !ok {
+			input["organization_id"] = execCtx.OrganizationID.String()
+		}
+	}
+	return input
 }
 
 func (b *ToolBroker) createDeniedExecution(ctx context.Context, input DispatchInput, toolName, toolTier, toolDomain string, capability *string, payload, metadata json.RawMessage, reason string) (ToolExecution, error) {

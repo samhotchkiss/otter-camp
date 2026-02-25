@@ -155,6 +155,69 @@ func TestToolBrokerDispatchTier1RedactsSecretsAndSkipsPolicy(t *testing.T) {
 	}
 }
 
+func TestToolBrokerDispatchCLIAugmentsExecutionContext(t *testing.T) {
+	agentID := uuid.New()
+	orgID := uuid.New()
+	runID := uuid.New()
+	runStepID := uuid.New()
+	runAttemptID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	cliExec := &fakeCLIExecutor{output: map[string]any{"ok": true}}
+
+	broker, err := NewToolBroker(ToolBrokerOptions{
+		Executions: newFakeToolExecutionRepo(),
+		Runs: &brokerFakeRunRepo{byID: map[uuid.UUID]Run{
+			runID: {ID: runID, OrganizationID: orgID, ProjectID: &projectID, TaskID: &taskID},
+		}},
+		Agents: &brokerFakeAgentRepo{byID: map[uuid.UUID]repo.Agent{
+			agentID: {ID: agentID, OrganizationID: orgID},
+		}},
+		ToolDefinitions: &brokerFakeToolDefinitionRepo{byName: map[string]repo.ToolDefinition{
+			"cli.execute": {Name: "cli.execute", ToolDomain: "cli", ToolTier: "tier2", RequiredCapability: strPtr("system.cli.execute")},
+		}},
+		Policy: &fakeCapabilityPolicy{decision: CapabilityDecision{Allowed: true}},
+		CLI:    cliExec,
+	})
+	if err != nil {
+		t.Fatalf("NewToolBroker: %v", err)
+	}
+
+	_, err = broker.Dispatch(context.Background(), DispatchInput{
+		RunID:        &runID,
+		RunStepID:    &runStepID,
+		RunAttemptID: &runAttemptID,
+		AgentID:      agentID,
+		ToolName:     "cli.execute",
+		ToolTier:     "tier2",
+		Input: map[string]any{
+			"command": "echo hello",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	if cliExec.lastInput["run_id"] != runID.String() {
+		t.Fatalf("run_id = %v, want %s", cliExec.lastInput["run_id"], runID)
+	}
+	if cliExec.lastInput["run_step_id"] != runStepID.String() {
+		t.Fatalf("run_step_id = %v, want %s", cliExec.lastInput["run_step_id"], runStepID)
+	}
+	if cliExec.lastInput["run_attempt_id"] != runAttemptID.String() {
+		t.Fatalf("run_attempt_id = %v, want %s", cliExec.lastInput["run_attempt_id"], runAttemptID)
+	}
+	if cliExec.lastInput["project_id"] != projectID.String() {
+		t.Fatalf("project_id = %v, want %s", cliExec.lastInput["project_id"], projectID)
+	}
+	if cliExec.lastInput["task_id"] != taskID.String() {
+		t.Fatalf("task_id = %v, want %s", cliExec.lastInput["task_id"], taskID)
+	}
+	if cliExec.lastInput["agent_id"] != agentID.String() {
+		t.Fatalf("agent_id = %v, want %s", cliExec.lastInput["agent_id"], agentID)
+	}
+}
+
 func mustNewTestBroker(t *testing.T, execRepo *fakeToolExecutionRepo, agentID uuid.UUID, agent repo.Agent, definition repo.ToolDefinition) *ToolBroker {
 	t.Helper()
 	broker, err := NewToolBroker(ToolBrokerOptions{
@@ -274,14 +337,16 @@ func (f *fakeNativeExecutor) Execute(_ context.Context, _ string, _ map[string]a
 }
 
 type fakeCLIExecutor struct {
-	output map[string]any
-	err    error
+	output    map[string]any
+	err       error
+	lastInput map[string]any
 }
 
-func (f *fakeCLIExecutor) Execute(_ context.Context, _ map[string]any) (map[string]any, error) {
+func (f *fakeCLIExecutor) Execute(_ context.Context, input map[string]any) (map[string]any, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
+	f.lastInput = cloneMap(input)
 	if f.output == nil {
 		return map[string]any{}, nil
 	}
