@@ -283,6 +283,10 @@ func TestRun_Lifecycle_AllStates(t *testing.T) {
 			t.Fatalf("missing cancel-chain run_event type %q", eventType)
 		}
 	}
+
+	assertRunEventTypes(t, pool, completeRun.ID, "run_started", "run_completed")
+	assertRunEventTypes(t, pool, timedOutRun.ID, "run_started", "run_timed_out")
+	assertRunEventTypes(t, pool, deadLetterRun.ID, "run_started", "run_failed")
 }
 
 func TestRun_Lifecycle_TimedOut(t *testing.T) {
@@ -982,6 +986,24 @@ func postJSON(t *testing.T, client *http.Client, endpoint string, payload any, h
 	return jsonHTTPResponse{
 		StatusCode: resp.StatusCode,
 		Body:       body,
+	}
+}
+
+func assertRunEventTypes(t *testing.T, pool *pgxpool.Pool, runID uuid.UUID, expected ...string) {
+	t.Helper()
+	events, err := NewRunEventRepository(pool).ListByRun(context.Background(), runID, 0)
+	if err != nil {
+		t.Fatalf("ListByRun events for %s: %v", runID, err)
+	}
+
+	seen := make(map[string]bool, len(events))
+	for _, event := range events {
+		seen[event.EventType] = true
+	}
+	for _, eventType := range expected {
+		if !seen[eventType] {
+			t.Fatalf("run %s missing run_event type %q", runID, eventType)
+		}
 	}
 }
 

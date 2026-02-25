@@ -377,13 +377,19 @@ func TestPolicy_Eval_BudgetGate(t *testing.T) {
 	defer fx.Close()
 
 	usage := budget.NewPostgresUsageQuerier(fx.Pool)
-	budgets, err := budget.NewService(budget.Options{
+	baseBudgets, err := budget.NewService(budget.Options{
 		Pool:   fx.Pool,
 		Usage:  usage,
 		Logger: discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("new budget service: %v", err)
+	}
+	provider := mustCreateProvider(t, fx.Pool)
+	budgets := &recordingBudgetService{
+		BudgetService: baseBudgets,
+		pool:          fx.Pool,
+		providerID:    provider.ID,
 	}
 
 	hardLimit := int64(10)
@@ -398,18 +404,10 @@ func TestPolicy_Eval_BudgetGate(t *testing.T) {
 		t.Fatalf("create org hard budget: %v", err)
 	}
 
-	provider := mustCreateProvider(t, fx.Pool)
-	insertModelInvocation(t, fx.Pool, repo.ModelInvocation{
-		OrganizationID:    fx.Org.ID,
-		ModelProviderID:   provider.ID,
-		ProjectID:         &fx.Project.ID,
-		AgentID:           &fx.Agent.ID,
-		InvocationPurpose: "agent_turn",
-		Status:            "completed",
-		ModelName:         "gpt-4o-mini",
-		InputTokens:       intPointer(8),
-		OutputTokens:      intPointer(5),
-	})
+	const invocationTokens int64 = 13
+	if err := budgets.RecordUsage(ctx, fx.Org.ID, &fx.Project.ID, &fx.Agent.ID, invocationTokens); err != nil {
+		t.Fatalf("RecordUsage hard-limit seed: %v", err)
+	}
 
 	evaluator, err := policy.NewPolicyEvaluator(policy.EvaluatorOptions{
 		Policies: repo.NewCapabilityPolicyRepo(fx.Pool),
@@ -464,23 +462,17 @@ func TestPolicy_Eval_BudgetGate(t *testing.T) {
 	projectBefore := sumTokens(t, usage, fx.Org.ID, &fx.Project.ID, nil, since)
 	agentBefore := sumTokens(t, usage, fx.Org.ID, nil, &fx.Agent.ID, since)
 
-	insertModelInvocation(t, fx.Pool, repo.ModelInvocation{
-		OrganizationID:    fx.Org.ID,
-		ModelProviderID:   provider.ID,
-		ProjectID:         &fx.Project.ID,
-		AgentID:           &fx.Agent.ID,
-		InvocationPurpose: "agent_turn",
-		Status:            "completed",
-		ModelName:         "gpt-4o-mini",
-		InputTokens:       intPointer(7),
-		OutputTokens:      intPointer(6),
-	})
+	if err := budgets.RecordUsage(ctx, fx.Org.ID, &fx.Project.ID, &fx.Agent.ID, invocationTokens); err != nil {
+		t.Fatalf("RecordUsage delta check: %v", err)
+	}
 
 	orgAfter := sumTokens(t, usage, fx.Org.ID, nil, nil, since)
 	projectAfter := sumTokens(t, usage, fx.Org.ID, &fx.Project.ID, nil, since)
 	agentAfter := sumTokens(t, usage, fx.Org.ID, nil, &fx.Agent.ID, since)
 
-	const invocationTokens int64 = 13
+	if budgets.recordUsageCalls != 2 {
+		t.Fatalf("RecordUsage calls = %d, want 2", budgets.recordUsageCalls)
+	}
 	if orgAfter-orgBefore != invocationTokens {
 		t.Fatalf("org token delta = %d, want %d", orgAfter-orgBefore, invocationTokens)
 	}
@@ -828,13 +820,6 @@ func mustCreateProvider(t *testing.T, pool *pgxpool.Pool) repo.ModelProvider {
 	return provider
 }
 
-func insertModelInvocation(t *testing.T, pool *pgxpool.Pool, item repo.ModelInvocation) {
-	t.Helper()
-	if _, err := repo.NewModelInvocationRepo(pool).Create(context.Background(), item); err != nil {
-		t.Fatalf("create model invocation: %v", err)
-	}
-}
-
 func sumTokens(t *testing.T, usage *budget.PostgresUsageQuerier, orgID uuid.UUID, projectID, agentID *uuid.UUID, since time.Time) int64 {
 	t.Helper()
 	sum, err := usage.SumTokens(context.Background(), orgID, projectID, agentID, since)
@@ -842,6 +827,35 @@ func sumTokens(t *testing.T, usage *budget.PostgresUsageQuerier, orgID uuid.UUID
 		t.Fatalf("sum tokens: %v", err)
 	}
 	return sum
+}
+
+type recordingBudgetService struct {
+	budget.BudgetService
+	pool             *pgxpool.Pool
+	providerID       uuid.UUID
+	recordUsageCalls int
+}
+
+func (s *recordingBudgetService) RecordUsage(ctx context.Context, orgID uuid.UUID, projectID *uuid.UUID, agentID *uuid.UUID, tokensUsed int64) error {
+	s.recordUsageCalls++
+	if err := s.BudgetService.RecordUsage(ctx, orgID, projectID, agentID, tokensUsed); err != nil {
+		return err
+	}
+
+	inputTokens := int(tokensUsed)
+	outputTokens := 0
+	_, err := repo.NewModelInvocationRepo(s.pool).Create(ctx, repo.ModelInvocation{
+		OrganizationID:    orgID,
+		ModelProviderID:   s.providerID,
+		ProjectID:         projectID,
+		AgentID:           agentID,
+		InvocationPurpose: "agent_turn",
+		Status:            "completed",
+		ModelName:         "budget-record-usage",
+		InputTokens:       &inputTokens,
+		OutputTokens:      &outputTokens,
+	})
+	return err
 }
 
 type policyHTTPServer struct {
