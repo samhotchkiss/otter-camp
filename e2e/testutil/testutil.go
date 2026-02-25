@@ -3,9 +3,11 @@
 package testutil
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -43,6 +45,12 @@ type ServerProcess struct {
 	stderr  bytes.Buffer
 	wstdout bytes.Buffer
 	wstderr bytes.Buffer
+}
+
+type SSEEvent struct {
+	ID    string
+	Event string
+	Data  string
 }
 
 var (
@@ -294,7 +302,6 @@ func POST(t *testing.T, baseURL, path, token string, body any) ([]byte, int) {
 func DELETE(t *testing.T, baseURL, path, token string) ([]byte, int) {
 	t.Helper()
 	url := strings.TrimRight(baseURL, "/") + path
-
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
 		t.Fatalf("new DELETE request: %v", err)
@@ -314,6 +321,138 @@ func DELETE(t *testing.T, baseURL, path, token string) ([]byte, int) {
 		t.Fatalf("read DELETE %s body: %v", path, err)
 	}
 	return rawBody, resp.StatusCode
+}
+
+func SSEClient(t *testing.T, baseURL, path, token string) (<-chan SSEEvent, func()) {
+	t.Helper()
+
+	url := strings.TrimRight(baseURL, "/") + path
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("new SSE request: %v", err)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	}
+
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		t.Fatalf("open SSE stream %s: %v", path, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		t.Fatalf("open SSE stream %s status=%d want=%d body=%s", path, resp.StatusCode, http.StatusOK, string(body))
+	}
+	if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		t.Fatalf("open SSE stream %s content-type=%q want text/event-stream body=%s", path, resp.Header.Get("Content-Type"), string(body))
+	}
+
+	events := make(chan SSEEvent, 64)
+	done := make(chan struct{})
+	var once sync.Once
+	closeFn := func() {
+		once.Do(func() {
+			close(done)
+			_ = resp.Body.Close()
+		})
+	}
+
+	go func() {
+		defer close(events)
+		defer closeFn()
+
+		reader := bufio.NewReader(resp.Body)
+		for {
+			eventName, id, data, err := readSSEFrame(reader)
+			if err != nil {
+				return
+			}
+			if strings.TrimSpace(eventName) == "" {
+				continue
+			}
+			select {
+			case events <- SSEEvent{
+				ID:    id,
+				Event: eventName,
+				Data:  data,
+			}:
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	return events, closeFn
+}
+
+func WaitForSSEEvent(t *testing.T, ch <-chan SSEEvent, eventType string, timeout time.Duration) SSEEvent {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	expected := strings.TrimSpace(eventType)
+	seen := make(map[string]int)
+	for {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				t.Fatalf("sse stream closed before event %q", expected)
+			}
+			name := strings.TrimSpace(evt.Event)
+			seen[name]++
+			if name == expected {
+				return evt
+			}
+		case <-timer.C:
+			t.Fatalf("timed out waiting for SSE event %q (seen=%v)", expected, seen)
+		}
+	}
+}
+
+func readSSEFrame(reader *bufio.Reader) (eventName string, id string, data string, err error) {
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) && line == "" {
+				return "", "", "", io.EOF
+			}
+			if line == "" {
+				return "", "", "", readErr
+			}
+		}
+
+		line = strings.TrimRight(line, "\r\n")
+		if strings.HasPrefix(line, ":") {
+			if readErr != nil {
+				return "", "", "", readErr
+			}
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(line, "event:"):
+			eventName = strings.TrimSpace(line[len("event:"):])
+		case strings.HasPrefix(line, "id:"):
+			id = strings.TrimSpace(line[len("id:"):])
+		case strings.HasPrefix(line, "data:"):
+			segment := strings.TrimSpace(line[len("data:"):])
+			if data == "" {
+				data = segment
+			} else {
+				data += "\n" + segment
+			}
+		case strings.TrimSpace(line) == "":
+			return eventName, id, data, nil
+		}
+
+		if readErr != nil {
+			return eventName, id, data, readErr
+		}
+	}
 }
 
 func JSONPath(t *testing.T, body []byte, path ...string) any {
