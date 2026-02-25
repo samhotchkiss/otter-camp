@@ -38,6 +38,8 @@ func allowedPrefixBypass(path string) bool {
 	switch path {
 	case "/health", "/health/live", "/health/ready", "/ready", "/metrics", "/test/reset":
 		return true
+	case "/auth/magic":
+		return true
 	default:
 		return false
 	}

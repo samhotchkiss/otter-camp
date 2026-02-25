@@ -1,7 +1,10 @@
 package main
 
 import (
+	"archive/tar"
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,18 +12,23 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/audit"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
@@ -28,6 +36,7 @@ import (
 	browsersvc "github.com/samhotchkiss/otter-camp/internal/browser"
 	"github.com/samhotchkiss/otter-camp/internal/budget"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
+	clitools "github.com/samhotchkiss/otter-camp/internal/cli"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/controlplane"
@@ -49,13 +58,27 @@ import (
 	skillsvc "github.com/samhotchkiss/otter-camp/internal/skill"
 	"github.com/samhotchkiss/otter-camp/internal/storage"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 	"github.com/samhotchkiss/otter-camp/internal/worker"
 )
 
 var (
-	version = "dev"
-	commit  = "unknown"
-	builtAt = "unknown"
+	version = versionpkg.Version
+	commit  = versionpkg.Commit
+	builtAt = versionpkg.BuiltAt
+
+	defaultOutputMode  = clitools.OutputModeTable
+	defaultNoColor     bool
+	globalServerURL    string
+	globalAPIKey       string
+	credentialStore    = clitools.NewCredentialStore()
+	ottercampDirectory = func() string {
+		home, _ := os.UserHomeDir()
+		if strings.TrimSpace(home) == "" {
+			return ".ottercamp"
+		}
+		return filepath.Join(home, ".ottercamp")
+	}
 
 	newMemoryImportStore = func() (storage.Store, error) {
 		return storage.New(storage.ConfigFromEnv(os.LookupEnv))
@@ -96,41 +119,61 @@ func main() {
 }
 
 func run(args []string) int {
-	if len(args) == 0 {
+	options, remaining, err := parseGlobalCLIOptions(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "global flags error: %v\n", err)
+		return 1
+	}
+	applyGlobalCLIOptions(options)
+
+	if len(remaining) == 0 {
 		printUsage(os.Stderr)
 		return 1
 	}
 
-	switch args[0] {
+	switch remaining[0] {
+	case "server":
+		return runServerCommand(remaining[1:])
+	case "db":
+		return runDBCommand(remaining[1:])
+	case "auth":
+		return runAuthCommand(remaining[1:])
+	case "health":
+		return runHealthCommand(remaining[1:])
+	case "backup":
+		return runBackupCommand(remaining[1:])
 	case "serve":
-		return runServe()
+		return runServerCommand(append([]string{"start"}, remaining[1:]...))
+	case "stop":
+		return runServerCommand([]string{"stop"})
 	case "worker":
 		return runWorker()
 	case "bootstrap":
 		return runBootstrap()
 	case "migrate":
-		return runMigrate()
-	case "backup":
-		return runBackup(args[1:])
+		return runDBCommand(append([]string{"migrate"}, remaining[1:]...))
+	case "restore":
+		return runBackupCommand(append([]string{"restore"}, remaining[1:]...))
 	case "secret":
-		return runSecret(args[1:])
+		return runSecret(remaining[1:])
 	case "skill":
-		return runSkill(args[1:])
+		return runSkill(remaining[1:])
 	case "schedule":
-		return runSchedule(args[1:])
+		return runSchedule(remaining[1:])
+	case "chat":
+		return runChatCommand(remaining[1:])
 	case "memory":
-		return runMemory(args[1:])
+		return runMemory(remaining[1:])
 	case "magic-link":
-		return runMagicLink(args[1:])
+		return runAuthCommand(append([]string{"magic-link"}, remaining[1:]...))
 	case "reset-password":
-		return runResetPassword(args[1:])
+		return runAuthCommand(append([]string{"reset-password"}, remaining[1:]...))
 	case "unlock-account":
-		return runUnlockAccount(args[1:])
+		return runAuthCommand(append([]string{"unlock-account"}, remaining[1:]...))
 	case "version":
-		fmt.Fprintln(os.Stdout, version)
-		return 0
+		return runVersionCommand(remaining[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n", remaining[0])
 		printUsage(os.Stderr)
 		return 1
 	}
@@ -409,6 +452,12 @@ func runServe() int {
 		Logger:          logger,
 		Version:         version,
 		Handler:         handler,
+		TLSMode:         strings.TrimSpace(os.Getenv("OTTERCAMP_TLS_MODE")),
+		TLSCertFile:     strings.TrimSpace(os.Getenv("OTTERCAMP_TLS_CERT")),
+		TLSKeyFile:      strings.TrimSpace(os.Getenv("OTTERCAMP_TLS_KEY")),
+		ACMEDomain:      strings.TrimSpace(os.Getenv("OTTERCAMP_TLS_ACME_DOMAIN")),
+		ACMEEmail:       strings.TrimSpace(os.Getenv("OTTERCAMP_TLS_ACME_EMAIL")),
+		ACMECacheDir:    filepath.Join(ottercampDirectory(), "acme"),
 		SignalCh:        signalCh,
 		ShutdownTimeout: 30 * time.Second,
 	})
@@ -454,7 +503,11 @@ func runMigrate() int {
 	defer pool.Close()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	runner := migrate.NewRunner(pool.Raw(), logger)
+	runner, err := migrate.NewRunnerFromEnv(pool.Raw(), logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migration setup error: %v\n", err)
+		return 1
+	}
 	if err := runner.Run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "migration error: %v\n", err)
 		return 1
@@ -501,21 +554,7 @@ func runBootstrap() int {
 }
 
 func runBackup(args []string) int {
-	flags := flag.NewFlagSet("backup", flag.ContinueOnError)
-	outputDir := flags.String("output-dir", "./backups", "output directory for backup files")
-	if err := flags.Parse(args); err != nil {
-		fmt.Fprintf(os.Stderr, "backup argument error: %v\n", err)
-		return 1
-	}
-	_ = outputDir
-
-	if _, err := storage.New(storage.ConfigFromEnv(os.LookupEnv)); err != nil {
-		fmt.Fprintf(os.Stderr, "storage config error: %v\n", err)
-		return 1
-	}
-
-	fmt.Fprintln(os.Stdout, "backup not yet implemented")
-	return 0
+	return runBackupCreate(args)
 }
 
 func runSecret(args []string) int {
@@ -541,10 +580,11 @@ func runSecret(args []string) int {
 func runSecretSet(args []string) int {
 	flags := flag.NewFlagSet("secret set", flag.ContinueOnError)
 	orgIDRaw := flags.String("org-id", "", "organization id (or OTTERCAMP_ORG_ID)")
-	slug := flags.String("slug", "", "secret slug")
+	slugFlag := flags.String("slug", "", "secret slug (legacy alias; prefer positional <slug>)")
 	displayName := flags.String("display-name", "", "secret display name")
 	description := flags.String("description", "", "secret description")
 	valueFlag := flags.String("value", "", "secret value (prefer stdin)")
+	fromFile := flags.String("from-file", "", "read secret value from file path")
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "secret set argument error: %v\n", err)
 		return 1
@@ -555,8 +595,9 @@ func runSecretSet(args []string) int {
 		fmt.Fprintf(os.Stderr, "secret set org error: %v\n", err)
 		return 1
 	}
-	if strings.TrimSpace(*slug) == "" {
-		fmt.Fprintln(os.Stderr, "secret set requires --slug")
+	slug := resolveSecretSlug(flags.Args(), *slugFlag)
+	if strings.TrimSpace(slug) == "" {
+		fmt.Fprintln(os.Stderr, "secret set requires <slug> (or --slug)")
 		return 1
 	}
 	if strings.TrimSpace(*displayName) == "" {
@@ -564,7 +605,7 @@ func runSecretSet(args []string) int {
 		return 1
 	}
 
-	value, err := readSecretValue(*valueFlag, os.Stdin)
+	value, err := readSecretValue(*valueFlag, *fromFile, os.Stdin, os.Stderr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "secret set value error: %v\n", err)
 		return 1
@@ -577,7 +618,7 @@ func runSecretSet(args []string) int {
 	}
 	defer cleanup()
 
-	if err := service.Set(context.Background(), orgID, strings.TrimSpace(*slug), *displayName, *description, value, secretsvc.Principal{
+	if err := service.Set(context.Background(), orgID, strings.TrimSpace(slug), *displayName, *description, value, secretsvc.Principal{
 		Type: "human",
 		ID:   uuid.Nil,
 	}); err != nil {
@@ -585,13 +626,14 @@ func runSecretSet(args []string) int {
 		return 1
 	}
 
-	fmt.Fprintf(os.Stdout, "saved secret %s\n", strings.TrimSpace(*slug))
+	fmt.Fprintf(os.Stdout, "saved secret %s\n", strings.TrimSpace(slug))
 	return 0
 }
 
 func runSecretList(args []string) int {
 	flags := flag.NewFlagSet("secret list", flag.ContinueOnError)
 	orgIDRaw := flags.String("org-id", "", "organization id (or OTTERCAMP_ORG_ID)")
+	outputMode := flags.String("output", defaultOutputMode, "output mode: table|json|quiet")
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "secret list argument error: %v\n", err)
 		return 1
@@ -616,13 +658,37 @@ func runSecretList(args []string) int {
 		return 1
 	}
 
-	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "slug\tdisplay_name\tkey_version\tupdated_at")
-	for _, secret := range secrets {
-		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\n", secret.Slug, secret.DisplayName, secret.KeyVersion, secret.UpdatedAt.UTC().Format(time.RFC3339))
+	formatter, err := clitools.NewOutputFormatter(*outputMode, os.Stdout, defaultNoColor)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "secret list output error: %v\n", err)
+		return 1
 	}
-	_ = tw.Flush()
-	return 0
+	switch formatter.Mode() {
+	case clitools.OutputModeJSON:
+		if err := formatter.WriteJSON(secrets); err != nil {
+			fmt.Fprintf(os.Stderr, "secret list output error: %v\n", err)
+			return 1
+		}
+		return 0
+	case clitools.OutputModeQuiet:
+		for _, secret := range secrets {
+			if err := formatter.WriteQuiet(secret.Slug); err != nil {
+				fmt.Fprintf(os.Stderr, "secret list output error: %v\n", err)
+				return 1
+			}
+		}
+		return 0
+	default:
+		rows := make([][]string, 0, len(secrets))
+		for _, secret := range secrets {
+			rows = append(rows, []string{secret.Slug, secret.DisplayName, fmt.Sprintf("%d", secret.KeyVersion), secret.UpdatedAt.UTC().Format(time.RFC3339)})
+		}
+		if err := formatter.WriteTable([]string{"slug", "display_name", "key_version", "updated_at"}, rows); err != nil {
+			fmt.Fprintf(os.Stderr, "secret list output error: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 }
 
 func runSecretDelete(args []string) int {
@@ -704,13 +770,43 @@ func runSecretDelete(args []string) int {
 	return 0
 }
 
-func readSecretValue(valueFlag string, stdin *os.File) (string, error) {
-	if stdin != nil {
-		info, err := stdin.Stat()
+func resolveSecretSlug(positional []string, slugFlag string) string {
+	if len(positional) > 0 && strings.TrimSpace(positional[0]) != "" {
+		return strings.TrimSpace(positional[0])
+	}
+	return strings.TrimSpace(slugFlag)
+}
+
+func readSecretValue(valueFlag, fromFile string, stdin *os.File, stderr io.Writer) (string, error) {
+	return readSecretValueWithTerminal(valueFlag, fromFile, stdin, stderr, isTerminalFile)
+}
+
+func readSecretValueWithTerminal(valueFlag, fromFile string, stdin *os.File, stderr io.Writer, terminalFn func(*os.File) (bool, error)) (string, error) {
+	fromFile = strings.TrimSpace(fromFile)
+	if fromFile != "" {
+		data, err := os.ReadFile(fromFile)
 		if err != nil {
-			return "", fmt.Errorf("stat stdin: %w", err)
+			return "", fmt.Errorf("read --from-file: %w", err)
 		}
-		if info.Mode()&os.ModeCharDevice == 0 {
+		value := strings.TrimRight(string(data), "\r\n")
+		if strings.TrimSpace(value) == "" {
+			return "", fmt.Errorf("--from-file is empty")
+		}
+		return value, nil
+	}
+
+	valueFlag = strings.TrimSpace(valueFlag)
+	if valueFlag != "" {
+		return valueFlag, nil
+	}
+
+	if stdin != nil {
+		isTTY, err := terminalFn(stdin)
+		if err != nil {
+			return "", err
+		}
+
+		if !isTTY {
 			data, err := io.ReadAll(stdin)
 			if err != nil {
 				return "", fmt.Errorf("read stdin: %w", err)
@@ -720,12 +816,34 @@ func readSecretValue(valueFlag string, stdin *os.File) (string, error) {
 			}
 			return strings.TrimRight(string(data), "\r\n"), nil
 		}
+
+		if stderr != nil {
+			fmt.Fprint(stderr, "Secret value: ")
+		}
+		reader := bufio.NewReader(stdin)
+		line, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", fmt.Errorf("read stdin: %w", err)
+		}
+		value := strings.TrimRight(line, "\r\n")
+		if strings.TrimSpace(value) == "" {
+			return "", fmt.Errorf("secret value is empty")
+		}
+		return value, nil
 	}
 
-	if strings.TrimSpace(valueFlag) == "" {
-		return "", fmt.Errorf("provide secret value via stdin or --value")
+	return "", fmt.Errorf("provide secret value via --from-file, --value, or stdin")
+}
+
+func isTerminalFile(stdin *os.File) (bool, error) {
+	if stdin == nil {
+		return false, nil
 	}
-	return valueFlag, nil
+	info, err := stdin.Stat()
+	if err != nil {
+		return false, fmt.Errorf("stat stdin: %w", err)
+	}
+	return info.Mode()&os.ModeCharDevice != 0, nil
 }
 
 func promptDeleteConfirmation(stdin *os.File) (bool, error) {
@@ -1342,25 +1460,28 @@ type cliAPIClient struct {
 }
 
 func newCLIAPIClient(apiURL, apiKey string) (*cliAPIClient, error) {
-	creds, err := loadCLIStoredCredentials()
+	creds, err := credentialStore.Load()
 	if err != nil {
 		return nil, err
 	}
 
 	baseURL := strings.TrimSpace(apiURL)
 	if baseURL == "" {
+		baseURL = strings.TrimSpace(globalServerURL)
+	}
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(creds.ServerURL)
+	}
+	if baseURL == "" {
 		baseURL = strings.TrimSpace(os.Getenv("OTTERCAMP_API_URL"))
 	}
 	if baseURL == "" {
-		baseURL = strings.TrimSpace(creds.APIURL)
-	}
-	if baseURL == "" {
-		baseURL = "http://127.0.0.1:8080"
+		baseURL = clitools.ResolveServerURL("", creds)
 	}
 
 	key := strings.TrimSpace(apiKey)
 	if key == "" {
-		key = strings.TrimSpace(os.Getenv("OTTERCAMP_API_KEY"))
+		key = strings.TrimSpace(globalAPIKey)
 	}
 	if key == "" {
 		key = strings.TrimSpace(creds.APIKey)
@@ -1374,89 +1495,6 @@ func newCLIAPIClient(apiURL, apiKey string) (*cliAPIClient, error) {
 		apiKey:  key,
 		client:  &http.Client{Timeout: 15 * time.Second},
 	}, nil
-}
-
-type cliStoredCredentials struct {
-	APIURL string
-	APIKey string
-}
-
-func loadCLIStoredCredentials() (cliStoredCredentials, error) {
-	home, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(home) == "" {
-		return cliStoredCredentials{}, nil
-	}
-
-	path := filepath.Join(home, ".ottercamp", "credentials")
-	content, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return cliStoredCredentials{}, nil
-	}
-	if err != nil {
-		return cliStoredCredentials{}, err
-	}
-
-	return parseCLIStoredCredentials(content), nil
-}
-
-func parseCLIStoredCredentials(raw []byte) cliStoredCredentials {
-	text := strings.TrimSpace(string(raw))
-	if text == "" {
-		return cliStoredCredentials{}
-	}
-
-	var jsonObject map[string]any
-	if err := json.Unmarshal(raw, &jsonObject); err == nil {
-		return cliStoredCredentials{
-			APIURL: pickString(jsonObject, "api_url", "apiURL", "url"),
-			APIKey: pickString(jsonObject, "api_key", "apiKey", "key"),
-		}
-	}
-
-	creds := cliStoredCredentials{}
-	scanner := bufio.NewScanner(strings.NewReader(text))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
-			continue
-		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.ToLower(strings.TrimSpace(parts[0]))
-		value := strings.TrimSpace(parts[1])
-		switch key {
-		case "api_url":
-			if creds.APIURL == "" {
-				creds.APIURL = value
-			}
-		case "api_key":
-			if creds.APIKey == "" {
-				creds.APIKey = value
-			}
-		}
-	}
-	if creds.APIKey == "" && !strings.ContainsAny(text, "\n\r=") {
-		creds.APIKey = text
-	}
-	return creds
-}
-
-func pickString(values map[string]any, keys ...string) string {
-	for _, key := range keys {
-		value, ok := values[key]
-		if !ok {
-			continue
-		}
-		if s, ok := value.(string); ok {
-			return strings.TrimSpace(s)
-		}
-	}
-	return ""
 }
 
 func (c *cliAPIClient) lookupProjectID(ctx context.Context, slug string) (string, error) {
@@ -1529,6 +1567,11 @@ type cliScheduleToggleResult struct {
 	NextRunAt  string `json:"next_run_at,omitempty"`
 }
 
+type cliAdminUser struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
+}
+
 func (c *cliAPIClient) toggleSchedule(ctx context.Context, projectID, scheduleID string, enable bool) (*cliScheduleToggleResult, error) {
 	action := "disable"
 	if enable {
@@ -1542,6 +1585,47 @@ func (c *cliAPIClient) toggleSchedule(ctx context.Context, projectID, scheduleID
 		return nil, err
 	}
 	return &resp.Data, nil
+}
+
+func (c *cliAPIClient) lookupUserIDByEmail(ctx context.Context, email string) (string, error) {
+	query := url.Values{}
+	query.Set("email", strings.TrimSpace(email))
+
+	var resp struct {
+		Data []cliAdminUser `json:"data"`
+	}
+	if err := c.request(ctx, http.MethodGet, "/v1/admin/users?"+query.Encode(), nil, &resp); err != nil {
+		return "", err
+	}
+	for _, item := range resp.Data {
+		if strings.EqualFold(strings.TrimSpace(item.Email), strings.TrimSpace(email)) {
+			return item.ID, nil
+		}
+	}
+	return "", fmt.Errorf("user %q not found", email)
+}
+
+func (c *cliAPIClient) adminResetPassword(ctx context.Context, userID, newPassword string) error {
+	path := fmt.Sprintf("/v1/admin/users/%s/reset-password", url.PathEscape(strings.TrimSpace(userID)))
+	return c.request(ctx, http.MethodPost, path, map[string]any{"new_password": newPassword}, nil)
+}
+
+func (c *cliAPIClient) adminMagicLink(ctx context.Context, userID string) (string, error) {
+	path := fmt.Sprintf("/v1/admin/users/%s/magic-link", url.PathEscape(strings.TrimSpace(userID)))
+	var resp struct {
+		Data struct {
+			MagicLinkURL string `json:"magic_link_url"`
+		} `json:"data"`
+	}
+	if err := c.request(ctx, http.MethodPost, path, map[string]any{}, &resp); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(resp.Data.MagicLinkURL), nil
+}
+
+func (c *cliAPIClient) adminUnlockAccount(ctx context.Context, userID string) error {
+	path := fmt.Sprintf("/v1/admin/users/%s/unlock", url.PathEscape(strings.TrimSpace(userID)))
+	return c.request(ctx, http.MethodPost, path, map[string]any{}, nil)
 }
 
 func (c *cliAPIClient) request(ctx context.Context, method, path string, payload any, out any) error {
@@ -1821,7 +1905,7 @@ func printSecretUsage(w *os.File) {
 }
 
 func printUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp <serve|worker|bootstrap|migrate|backup|secret|skill|schedule|memory|magic-link|reset-password|unlock-account|version>")
+	fmt.Fprintln(w, "usage: ottercamp [--server-url URL] [--api-key KEY] [--output table|json|quiet] [--no-color] <server|db|auth|secret|backup|health|version|schedule|chat>")
 }
 
 func valueOrZero(value *int) int {
@@ -1829,4 +1913,1074 @@ func valueOrZero(value *int) int {
 		return 0
 	}
 	return *value
+}
+
+type globalCLIOptions struct {
+	ServerURL string
+	APIKey    string
+	Output    string
+	NoColor   bool
+}
+
+func parseGlobalCLIOptions(args []string) (globalCLIOptions, []string, error) {
+	flags := flag.NewFlagSet("ottercamp", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	serverURL := flags.String("server-url", "", "server URL (or OTTERCAMP_SERVER_URL)")
+	apiKey := flags.String("api-key", "", "API key (or OTTERCAMP_API_KEY)")
+	output := flags.String("output", defaultOutputMode, "output mode: table|json|quiet")
+	noColor := flags.Bool("no-color", false, "disable ANSI color in table output")
+	if err := flags.Parse(args); err != nil {
+		return globalCLIOptions{}, nil, err
+	}
+	return globalCLIOptions{
+		ServerURL: strings.TrimSpace(*serverURL),
+		APIKey:    strings.TrimSpace(*apiKey),
+		Output:    strings.ToLower(strings.TrimSpace(*output)),
+		NoColor:   *noColor,
+	}, flags.Args(), nil
+}
+
+func applyGlobalCLIOptions(options globalCLIOptions) {
+	if strings.TrimSpace(options.ServerURL) != "" {
+		globalServerURL = strings.TrimSpace(options.ServerURL)
+	}
+	if strings.TrimSpace(options.APIKey) != "" {
+		globalAPIKey = strings.TrimSpace(options.APIKey)
+	}
+	if strings.TrimSpace(options.Output) != "" {
+		defaultOutputMode = strings.TrimSpace(options.Output)
+	}
+	defaultNoColor = options.NoColor
+}
+
+func runVersionCommand(args []string) int {
+	flags := flag.NewFlagSet("version", flag.ContinueOnError)
+	jsonOutput := flags.Bool("json", false, "emit JSON output")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "version argument error: %v\n", err)
+		return 1
+	}
+
+	payload := map[string]string{
+		"version":    versionpkg.Version,
+		"commit":     versionpkg.Commit,
+		"built_at":   versionpkg.BuiltAt,
+		"go_version": versionpkg.GoVersion,
+	}
+	if *jsonOutput {
+		formatter, _ := clitools.NewOutputFormatter(clitools.OutputModeJSON, os.Stdout, defaultNoColor)
+		if err := formatter.WriteJSON(payload); err != nil {
+			fmt.Fprintf(os.Stderr, "version output error: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	fmt.Fprintf(os.Stdout, "version=%s commit=%s built_at=%s\n", versionpkg.Version, versionpkg.Commit, versionpkg.BuiltAt)
+	return 0
+}
+
+func runChatCommand(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: ottercamp chat <start|send|list|history> [flags]")
+		return 1
+	}
+	fmt.Fprintln(os.Stderr, "chat command group is wired in task 051")
+	return 1
+}
+
+func runServerCommand(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: ottercamp server <start|stop> [flags]")
+		return 1
+	}
+	switch args[0] {
+	case "start":
+		return runServerStart(args[1:])
+	case "stop":
+		return runServerStop()
+	default:
+		fmt.Fprintf(os.Stderr, "unknown server command: %s\n", args[0])
+		return 1
+	}
+}
+
+func runServerStart(args []string) int {
+	flags := flag.NewFlagSet("server start", flag.ContinueOnError)
+	port := flags.Int("port", 4110, "server port")
+	_ = flags.Int("worker-concurrency", 4, "worker concurrency")
+	tlsMode := flags.String("tls-mode", "none", "tls mode: none|manual|acme")
+	tlsCert := flags.String("tls-cert", "", "manual tls certificate path")
+	tlsKey := flags.String("tls-key", "", "manual tls key path")
+	acmeDomain := flags.String("acme-domain", "", "acme domain")
+	acmeEmail := flags.String("acme-email", "", "acme contact email")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "server start argument error: %v\n", err)
+		return 1
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(*tlsMode))
+	switch mode {
+	case "none":
+	case "manual":
+		if strings.TrimSpace(*tlsCert) == "" || strings.TrimSpace(*tlsKey) == "" {
+			fmt.Fprintln(os.Stderr, "server start requires --tls-cert and --tls-key when --tls-mode=manual")
+			return 1
+		}
+	case "acme":
+		if strings.TrimSpace(*acmeDomain) == "" {
+			fmt.Fprintln(os.Stderr, "server start requires --acme-domain when --tls-mode=acme")
+			return 1
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "invalid --tls-mode %q\n", *tlsMode)
+		return 1
+	}
+
+	if err := os.MkdirAll(ottercampDirectory(), 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "server start pid path error: %v\n", err)
+		return 1
+	}
+	pidPath := filepath.Join(ottercampDirectory(), "server.pid")
+	if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o600); err != nil {
+		fmt.Fprintf(os.Stderr, "server start pid write error: %v\n", err)
+		return 1
+	}
+	defer func() {
+		_ = os.Remove(pidPath)
+	}()
+
+	_ = os.Setenv("OTTERCAMP_ADDR", fmt.Sprintf(":%d", *port))
+	_ = os.Setenv("OTTERCAMP_TLS_MODE", mode)
+	_ = os.Setenv("OTTERCAMP_TLS_CERT", strings.TrimSpace(*tlsCert))
+	_ = os.Setenv("OTTERCAMP_TLS_KEY", strings.TrimSpace(*tlsKey))
+	_ = os.Setenv("OTTERCAMP_TLS_ACME_DOMAIN", strings.TrimSpace(*acmeDomain))
+	_ = os.Setenv("OTTERCAMP_TLS_ACME_EMAIL", strings.TrimSpace(*acmeEmail))
+
+	return runServe()
+}
+
+func runServerStop() int {
+	pidPath := filepath.Join(ottercampDirectory(), "server.pid")
+	raw, err := os.ReadFile(pidPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintln(os.Stderr, "Server is not running")
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "server stop pid read error: %v\n", err)
+		return 1
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 0 {
+		fmt.Fprintln(os.Stderr, "server stop pid file is invalid")
+		return 1
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Server is not running")
+		return 1
+	}
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		fmt.Fprintln(os.Stderr, "Server is not running")
+		return 1
+	}
+	_ = os.Remove(pidPath)
+	fmt.Fprintln(os.Stdout, "server stop signal sent")
+	return 0
+}
+
+func runDBCommand(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: ottercamp db <migrate|status|reset> [flags]")
+		return 1
+	}
+	switch args[0] {
+	case "migrate":
+		return runDBMigrate(args[1:])
+	case "status":
+		return runDBStatus(args[1:])
+	case "reset":
+		return runDBReset(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown db command: %s\n", args[0])
+		return 1
+	}
+}
+
+func runDBMigrate(args []string) int {
+	flags := flag.NewFlagSet("db migrate", flag.ContinueOnError)
+	dryRun := flags.Bool("dry-run", false, "print pending migrations without applying")
+	target := flags.Int("target", 0, "apply up to this migration version")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "db migrate argument error: %v\n", err)
+		return 1
+	}
+
+	pool, err := db.NewFromEnv(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "db migrate setup error: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+
+	all, err := migrate.LoadMigrationsFromEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "db migrate setup error: %v\n", err)
+		return 1
+	}
+	if *target > 0 {
+		all = filterMigrationsToTarget(all, *target)
+	}
+
+	applied, _, err := loadAppliedMigrationState(context.Background(), pool.Raw())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "db migrate state error: %v\n", err)
+		return 1
+	}
+	pending := migrate.PendingMigrations(all, applied)
+	if *dryRun {
+		if len(pending) == 0 {
+			fmt.Fprintln(os.Stdout, "no pending migrations")
+			return 0
+		}
+		for _, item := range pending {
+			fmt.Fprintf(os.Stdout, "pending %04d_%s\n", item.Version, item.Name)
+		}
+		return 0
+	}
+
+	for _, item := range pending {
+		startedAt := time.Now()
+		runner := migrate.NewRunnerWithFS(
+			pool.Raw(),
+			slog.New(slog.NewTextHandler(io.Discard, nil)),
+			migrationMapFS([]migrate.Migration{item}),
+		)
+		if err := runner.Run(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "db migrate failed: %v\n", err)
+			return 1
+		}
+		fmt.Fprint(os.Stdout, migrationAppliedLine(item, time.Since(startedAt)))
+	}
+	return 0
+}
+
+func runDBStatus(args []string) int {
+	flags := flag.NewFlagSet("db status", flag.ContinueOnError)
+	outputMode := flags.String("output", defaultOutputMode, "output mode: table|json|quiet")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "db status argument error: %v\n", err)
+		return 1
+	}
+
+	pool, err := db.NewFromEnv(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "db status setup error: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+
+	all, err := migrate.LoadMigrationsFromEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "db status setup error: %v\n", err)
+		return 1
+	}
+	applied, appliedAt, err := loadAppliedMigrationState(context.Background(), pool.Raw())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "db status setup error: %v\n", err)
+		return 1
+	}
+
+	type row struct {
+		Version   int        `json:"version"`
+		File      string     `json:"file"`
+		Applied   bool       `json:"applied"`
+		AppliedAt *time.Time `json:"applied_at,omitempty"`
+	}
+	rows := make([]row, 0, len(all))
+	for _, migration := range all {
+		_, ok := applied[migration.Version]
+		record := row{
+			Version: migration.Version,
+			File:    migration.File,
+			Applied: ok,
+		}
+		if ok {
+			value := appliedAt[migration.Version]
+			record.AppliedAt = &value
+		}
+		rows = append(rows, record)
+	}
+
+	formatter, err := clitools.NewOutputFormatter(*outputMode, os.Stdout, defaultNoColor)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "db status output error: %v\n", err)
+		return 1
+	}
+	switch formatter.Mode() {
+	case clitools.OutputModeJSON:
+		if err := formatter.WriteJSON(rows); err != nil {
+			fmt.Fprintf(os.Stderr, "db status output error: %v\n", err)
+			return 1
+		}
+	case clitools.OutputModeQuiet:
+		pending := 0
+		for _, item := range rows {
+			if !item.Applied {
+				pending++
+			}
+		}
+		if err := formatter.WriteQuiet(fmt.Sprintf("%d", pending)); err != nil {
+			fmt.Fprintf(os.Stderr, "db status output error: %v\n", err)
+			return 1
+		}
+	default:
+		tableRows := make([][]string, 0, len(rows))
+		for _, item := range rows {
+			appliedAt := ""
+			if item.AppliedAt != nil {
+				appliedAt = item.AppliedAt.UTC().Format(time.RFC3339)
+			}
+			tableRows = append(tableRows, []string{
+				fmt.Sprintf("%04d", item.Version),
+				item.File,
+				fmt.Sprintf("%t", item.Applied),
+				appliedAt,
+			})
+		}
+		if err := formatter.WriteTable([]string{"#", "File", "Applied", "Applied At"}, tableRows); err != nil {
+			fmt.Fprintf(os.Stderr, "db status output error: %v\n", err)
+			return 1
+		}
+	}
+	return 0
+}
+
+func runDBReset(args []string) int {
+	flags := flag.NewFlagSet("db reset", flag.ContinueOnError)
+	force := flags.Bool("force", false, "skip confirmation prompt")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "db reset argument error: %v\n", err)
+		return 1
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("OTTERCAMP_MODE")))
+	if mode != "test" && mode != "dev" && mode != "development" {
+		fmt.Fprintln(os.Stderr, "db reset is only allowed in OTTERCAMP_MODE=test or OTTERCAMP_MODE=dev")
+		return 1
+	}
+	if !*force {
+		ok, err := promptDeleteConfirmation(os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "db reset confirmation error: %v\n", err)
+			return 1
+		}
+		if !ok {
+			fmt.Fprintln(os.Stdout, "db reset cancelled")
+			return 1
+		}
+	}
+
+	pool, err := db.NewFromEnv(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "db reset setup error: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+
+	if _, err := pool.Raw().Exec(context.Background(), `DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public; CREATE EXTENSION IF NOT EXISTS vector;`); err != nil {
+		fmt.Fprintf(os.Stderr, "db reset schema reset error: %v\n", err)
+		return 1
+	}
+
+	runner, err := migrate.NewRunnerFromEnv(pool.Raw(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "db reset migration setup error: %v\n", err)
+		return 1
+	}
+	if err := runner.Run(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "db reset migration error: %v\n", err)
+		return 1
+	}
+
+	store, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "db reset storage setup error: %v\n", err)
+		return 1
+	}
+	bootstrapper := bootstrap.NewBootstrapper(bootstrap.Options{
+		Pool:    pool.Raw(),
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Store:   store,
+		Version: versionpkg.Version,
+	})
+	if err := bootstrapper.Run(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "db reset bootstrap error: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(os.Stdout, "database reset complete")
+	return 0
+}
+
+func runAuthCommand(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: ottercamp auth <reset-password|magic-link|unlock-account> [flags]")
+		return 1
+	}
+	switch args[0] {
+	case "reset-password":
+		return runAuthResetPassword(args[1:])
+	case "magic-link":
+		return runAuthMagicLink(args[1:])
+	case "unlock-account":
+		return runAuthUnlockAccount(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown auth command: %s\n", args[0])
+		return 1
+	}
+}
+
+func runAuthResetPassword(args []string) int {
+	flags := flag.NewFlagSet("auth reset-password", flag.ContinueOnError)
+	userEmail := flags.String("user", "", "user email")
+	newPassword := flags.String("new-password", "", "new password")
+	serverURL := flags.String("server-url", "", "server URL override")
+	apiKey := flags.String("api-key", "", "api key override")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "auth reset-password argument error: %v\n", err)
+		return 1
+	}
+	if strings.TrimSpace(*userEmail) == "" || strings.TrimSpace(*newPassword) == "" {
+		fmt.Fprintln(os.Stderr, "auth reset-password requires --user and --new-password")
+		return 1
+	}
+
+	client, err := newCLIAPIClient(*serverURL, *apiKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "auth reset-password setup error: %v\n", err)
+		return 1
+	}
+	userID, err := client.lookupUserIDByEmail(context.Background(), strings.TrimSpace(*userEmail))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "auth reset-password user lookup failed: %v\n", err)
+		return 1
+	}
+	if err := client.adminResetPassword(context.Background(), userID, strings.TrimSpace(*newPassword)); err != nil {
+		fmt.Fprintf(os.Stderr, "auth reset-password failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stdout, "reset password for %s\n", strings.TrimSpace(*userEmail))
+	return 0
+}
+
+func runAuthMagicLink(args []string) int {
+	flags := flag.NewFlagSet("auth magic-link", flag.ContinueOnError)
+	userEmail := flags.String("user", "", "user email")
+	serverURL := flags.String("server-url", "", "server URL override")
+	apiKey := flags.String("api-key", "", "api key override")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "auth magic-link argument error: %v\n", err)
+		return 1
+	}
+	if strings.TrimSpace(*userEmail) == "" {
+		fmt.Fprintln(os.Stderr, "auth magic-link requires --user")
+		return 1
+	}
+
+	client, err := newCLIAPIClient(*serverURL, *apiKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "auth magic-link setup error: %v\n", err)
+		return 1
+	}
+	userID, err := client.lookupUserIDByEmail(context.Background(), strings.TrimSpace(*userEmail))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "auth magic-link user lookup failed: %v\n", err)
+		return 1
+	}
+	linkURL, err := client.adminMagicLink(context.Background(), userID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "auth magic-link failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(os.Stdout, linkURL)
+	return 0
+}
+
+func runAuthUnlockAccount(args []string) int {
+	flags := flag.NewFlagSet("auth unlock-account", flag.ContinueOnError)
+	userEmail := flags.String("user", "", "user email")
+	serverURL := flags.String("server-url", "", "server URL override")
+	apiKey := flags.String("api-key", "", "api key override")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "auth unlock-account argument error: %v\n", err)
+		return 1
+	}
+	if strings.TrimSpace(*userEmail) == "" {
+		fmt.Fprintln(os.Stderr, "auth unlock-account requires --user")
+		return 1
+	}
+
+	client, err := newCLIAPIClient(*serverURL, *apiKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "auth unlock-account setup error: %v\n", err)
+		return 1
+	}
+	userID, err := client.lookupUserIDByEmail(context.Background(), strings.TrimSpace(*userEmail))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "auth unlock-account user lookup failed: %v\n", err)
+		return 1
+	}
+	if err := client.adminUnlockAccount(context.Background(), userID); err != nil {
+		fmt.Fprintf(os.Stderr, "auth unlock-account failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stdout, "unlocked %s\n", strings.TrimSpace(*userEmail))
+	return 0
+}
+
+func runHealthCommand(args []string) int {
+	flags := flag.NewFlagSet("health", flag.ContinueOnError)
+	jsonOutput := flags.Bool("json", false, "emit JSON output")
+	outputMode := flags.String("output", defaultOutputMode, "output mode: table|json|quiet")
+	serverURL := flags.String("server-url", "", "server URL override")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "health argument error: %v\n", err)
+		return 1
+	}
+	if *jsonOutput {
+		*outputMode = clitools.OutputModeJSON
+	}
+
+	creds, err := credentialStore.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "health setup error: %v\n", err)
+		return 1
+	}
+	baseURL := clitools.ResolveServerURL(strings.TrimSpace(*serverURL), creds)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, strings.TrimRight(baseURL, "/")+"/health/ready", nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "health setup error: %v\n", err)
+		return 1
+	}
+	res, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "health request failed: %v\n", err)
+		return 1
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "health read failed: %v\n", err)
+		return 1
+	}
+
+	formatter, err := clitools.NewOutputFormatter(*outputMode, os.Stdout, defaultNoColor)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "health output error: %v\n", err)
+		return 1
+	}
+	if formatter.Mode() == clitools.OutputModeJSON {
+		fmt.Fprintln(os.Stdout, strings.TrimSpace(string(body)))
+		if res.StatusCode >= 200 && res.StatusCode < 300 {
+			return 0
+		}
+		return 1
+	}
+
+	var payload struct {
+		Data struct {
+			Status string          `json:"status"`
+			Checks map[string]bool `json:"checks"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		fmt.Fprintln(os.Stdout, strings.TrimSpace(string(body)))
+		if res.StatusCode >= 200 && res.StatusCode < 300 {
+			return 0
+		}
+		return 1
+	}
+
+	rows := make([][]string, 0, len(payload.Data.Checks))
+	allPass := true
+	for name, pass := range payload.Data.Checks {
+		if !pass {
+			allPass = false
+		}
+		rows = append(rows, []string{name, fmt.Sprintf("%t", pass)})
+	}
+	if err := formatter.WriteTable([]string{"Check", "Pass"}, rows); err != nil {
+		fmt.Fprintf(os.Stderr, "health output error: %v\n", err)
+		return 1
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 || !allPass {
+		return 1
+	}
+	return 0
+}
+
+func runBackupCommand(args []string) int {
+	if len(args) == 0 {
+		return runBackupCreate(nil)
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return runBackupCreate(args)
+	}
+	switch args[0] {
+	case "create":
+		return runBackupCreate(args[1:])
+	case "restore":
+		return runBackupRestore(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown backup command: %s\n", args[0])
+		return 1
+	}
+}
+
+func runBackupCreate(args []string) int {
+	flags := flag.NewFlagSet("backup create", flag.ContinueOnError)
+	outputPath := flags.String("output", "", "output .tar.gz path")
+	includeObjects := flags.Bool("include-objects", false, "include local object store files")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "backup argument error: %v\n", err)
+		return 1
+	}
+	if strings.TrimSpace(*outputPath) == "" {
+		fmt.Fprintln(os.Stderr, "backup requires --output")
+		return 1
+	}
+
+	databaseURL := strings.TrimSpace(os.Getenv("OTTERCAMP_DATABASE_URL"))
+	if databaseURL == "" {
+		fmt.Fprintln(os.Stderr, "backup requires OTTERCAMP_DATABASE_URL")
+		return 1
+	}
+
+	tmpDir, err := os.MkdirTemp("", "ottercamp-backup-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "backup temp dir error: %v\n", err)
+		return 1
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sqlPath := filepath.Join(tmpDir, "ottercamp_backup.sql")
+	if err := runExternalCommand("pg_dump", "--file", sqlPath, databaseURL); err != nil {
+		fmt.Fprintf(os.Stderr, "backup pg_dump error: %v\n", err)
+		return 1
+	}
+
+	var objectsRoot string
+	if *includeObjects {
+		storageConfig := storage.ConfigFromEnv(os.LookupEnv)
+		if strings.ToLower(strings.TrimSpace(storageConfig.Backend)) == storage.BackendS3 {
+			fmt.Fprintln(os.Stderr, "backup --include-objects supports only fs storage backend")
+			return 1
+		}
+		objectsRoot = storageConfig.FSRoot
+		if err := copyTree(objectsRoot, filepath.Join(tmpDir, "objects")); err != nil {
+			fmt.Fprintf(os.Stderr, "backup object copy error: %v\n", err)
+			return 1
+		}
+	}
+
+	if err := writeBackupArchive(*outputPath, sqlPath, filepath.Join(tmpDir, "objects"), *includeObjects && strings.TrimSpace(objectsRoot) != ""); err != nil {
+		fmt.Fprintf(os.Stderr, "backup archive error: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(os.Stdout, strings.TrimSpace(*outputPath))
+	return 0
+}
+
+func runBackupRestore(args []string) int {
+	flags := flag.NewFlagSet("backup restore", flag.ContinueOnError)
+	inputPath := flags.String("input", "", "input .tar.gz path")
+	force := flags.Bool("force", false, "skip confirmation")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "restore argument error: %v\n", err)
+		return 1
+	}
+	if strings.TrimSpace(*inputPath) == "" {
+		fmt.Fprintln(os.Stderr, "restore requires --input")
+		return 1
+	}
+	if !*force {
+		ok, err := promptDeleteConfirmation(os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "restore confirmation error: %v\n", err)
+			return 1
+		}
+		if !ok {
+			fmt.Fprintln(os.Stdout, "restore cancelled")
+			return 1
+		}
+	}
+
+	databaseURL := strings.TrimSpace(os.Getenv("OTTERCAMP_DATABASE_URL"))
+	if databaseURL == "" {
+		fmt.Fprintln(os.Stderr, "restore requires OTTERCAMP_DATABASE_URL")
+		return 1
+	}
+
+	tmpDir, err := os.MkdirTemp("", "ottercamp-restore-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "restore temp dir error: %v\n", err)
+		return 1
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := extractBackupArchive(strings.TrimSpace(*inputPath), tmpDir); err != nil {
+		fmt.Fprintf(os.Stderr, "restore extract error: %v\n", err)
+		return 1
+	}
+
+	sqlPath := filepath.Join(tmpDir, "ottercamp_backup.sql")
+	if err := runExternalCommand("psql", databaseURL, "-f", sqlPath); err != nil {
+		fmt.Fprintf(os.Stderr, "restore psql error: %v\n", err)
+		return 1
+	}
+
+	objectsDir := filepath.Join(tmpDir, "objects")
+	if stat, err := os.Stat(objectsDir); err == nil && stat.IsDir() {
+		storageConfig := storage.ConfigFromEnv(os.LookupEnv)
+		if strings.ToLower(strings.TrimSpace(storageConfig.Backend)) != storage.BackendS3 {
+			if err := copyTree(objectsDir, storageConfig.FSRoot); err != nil {
+				fmt.Fprintf(os.Stderr, "restore object copy error: %v\n", err)
+				return 1
+			}
+		}
+	}
+	fmt.Fprintln(os.Stdout, "restore completed")
+	return 0
+}
+
+func loadAppliedMigrationState(ctx context.Context, pool *pgxpool.Pool) (map[int]struct{}, map[int]time.Time, error) {
+	applied := make(map[int]struct{})
+	appliedAt := make(map[int]time.Time)
+	if pool == nil {
+		return applied, appliedAt, fmt.Errorf("db pool is required")
+	}
+
+	var exists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('public.schema_migrations') IS NOT NULL`).Scan(&exists); err != nil {
+		return nil, nil, err
+	}
+	if !exists {
+		return applied, appliedAt, nil
+	}
+
+	rows, err := pool.Query(ctx, `SELECT version, applied_at FROM schema_migrations`)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var version int
+		var at time.Time
+		if err := rows.Scan(&version, &at); err != nil {
+			return nil, nil, err
+		}
+		applied[version] = struct{}{}
+		appliedAt[version] = at
+	}
+	if rows.Err() != nil {
+		return nil, nil, rows.Err()
+	}
+	return applied, appliedAt, nil
+}
+
+func filterMigrationsToTarget(all []migrate.Migration, target int) []migrate.Migration {
+	if target <= 0 {
+		return all
+	}
+	out := make([]migrate.Migration, 0, len(all))
+	for _, item := range all {
+		if item.Version <= target {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func migrationAppliedLine(item migrate.Migration, elapsed time.Duration) string {
+	return fmt.Sprintf("Applying %04d_%s... done (%dms)\n", item.Version, item.Name, elapsed.Milliseconds())
+}
+
+func migrationMapFS(items []migrate.Migration) mapFS {
+	files := make(mapFS, len(items))
+	for _, item := range items {
+		files[item.File] = []byte(item.SQL)
+	}
+	return files
+}
+
+type mapFS map[string][]byte
+
+func (m mapFS) Open(name string) (fs.File, error) {
+	clean := strings.TrimSpace(filepath.Clean(name))
+	if clean == "." {
+		return nil, fs.ErrNotExist
+	}
+	data, ok := m[clean]
+	if !ok {
+		return nil, fs.ErrNotExist
+	}
+	reader := bytes.NewReader(data)
+	return &mapFile{
+		name:   filepath.Base(clean),
+		reader: reader,
+		size:   int64(len(data)),
+	}, nil
+}
+
+func (m mapFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	if strings.TrimSpace(name) != "." {
+		return nil, fs.ErrNotExist
+	}
+	names := make([]string, 0, len(m))
+	for file := range m {
+		names = append(names, file)
+	}
+	sort.Strings(names)
+	entries := make([]fs.DirEntry, 0, len(names))
+	for _, file := range names {
+		entries = append(entries, mapDirEntry{
+			name: filepath.Base(file),
+			size: int64(len(m[file])),
+		})
+	}
+	return entries, nil
+}
+
+type mapFile struct {
+	name   string
+	reader *bytes.Reader
+	size   int64
+}
+
+func (f *mapFile) Stat() (fs.FileInfo, error) {
+	return mapFileInfo{name: f.name, size: f.size}, nil
+}
+
+func (f *mapFile) Read(p []byte) (int, error) {
+	return f.reader.Read(p)
+}
+
+func (f *mapFile) Close() error {
+	return nil
+}
+
+type mapDirEntry struct {
+	name string
+	size int64
+}
+
+func (e mapDirEntry) Name() string {
+	return e.name
+}
+
+func (e mapDirEntry) IsDir() bool {
+	return false
+}
+
+func (e mapDirEntry) Type() fs.FileMode {
+	return 0
+}
+
+func (e mapDirEntry) Info() (fs.FileInfo, error) {
+	return mapFileInfo{name: e.name, size: e.size}, nil
+}
+
+type mapFileInfo struct {
+	name string
+	size int64
+}
+
+func (i mapFileInfo) Name() string {
+	return i.name
+}
+
+func (i mapFileInfo) Size() int64 {
+	return i.size
+}
+
+func (i mapFileInfo) Mode() fs.FileMode {
+	return 0o444
+}
+
+func (i mapFileInfo) ModTime() time.Time {
+	return time.Time{}
+}
+
+func (i mapFileInfo) IsDir() bool {
+	return false
+}
+
+func (i mapFileInfo) Sys() any {
+	return nil
+}
+
+func runExternalCommand(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func writeBackupArchive(outputPath, sqlPath, objectsPath string, includeObjects bool) error {
+	file, err := os.Create(strings.TrimSpace(outputPath))
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	gz := gzip.NewWriter(file)
+	defer gz.Close()
+	tw := tar.NewWriter(gz)
+	defer tw.Close()
+
+	if err := addFileToTar(tw, sqlPath, "ottercamp_backup.sql"); err != nil {
+		return err
+	}
+	if includeObjects {
+		if err := addDirectoryToTar(tw, objectsPath, "objects"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func extractBackupArchive(inputPath, destination string) error {
+	file, err := os.Open(strings.TrimSpace(inputPath))
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	gz, err := gzip.NewReader(file)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(destination, filepath.Clean(header.Name))
+		if header.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		out, err := os.Create(target)
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(out, tr); err != nil {
+			_ = out.Close()
+			return err
+		}
+		if err := out.Close(); err != nil {
+			return err
+		}
+	}
+}
+
+func addFileToTar(tw *tar.Writer, sourcePath, targetPath string) error {
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		return err
+	}
+	header, err := tar.FileInfoHeader(info, "")
+	if err != nil {
+		return err
+	}
+	header.Name = filepath.ToSlash(targetPath)
+	if err := tw.WriteHeader(header); err != nil {
+		return err
+	}
+	file, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = io.Copy(tw, file)
+	return err
+}
+
+func addDirectoryToTar(tw *tar.Writer, sourceDir, targetDir string) error {
+	return filepath.WalkDir(sourceDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.ToSlash(filepath.Join(targetDir, rel))
+		if d.IsDir() {
+			if rel == "." {
+				return nil
+			}
+			header := &tar.Header{
+				Name:     targetPath + "/",
+				Typeflag: tar.TypeDir,
+				Mode:     0o755,
+			}
+			return tw.WriteHeader(header)
+		}
+		return addFileToTar(tw, path, targetPath)
+	})
+}
+
+func copyTree(sourceDir, destinationDir string) error {
+	sourceDir = strings.TrimSpace(sourceDir)
+	if sourceDir == "" {
+		return nil
+	}
+	return filepath.WalkDir(sourceDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if errors.Is(walkErr, os.ErrNotExist) {
+				return nil
+			}
+			return walkErr
+		}
+		rel, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(destinationDir, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		out, err := os.Create(target)
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(out, in); err != nil {
+			_ = out.Close()
+			return err
+		}
+		return out.Close()
+	})
 }

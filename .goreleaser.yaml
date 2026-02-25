@@ -1,0 +1,38 @@
+version: 2
+
+project_name: ottercamp
+
+builds:
+  - id: ottercamp
+    main: ./cmd/ottercamp
+    binary: ottercamp
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/samhotchkiss/otter-camp/internal/version.Version={{ .Version }}
+        -X github.com/samhotchkiss/otter-camp/internal/version.Commit={{ .Commit }}
+        -X github.com/samhotchkiss/otter-camp/internal/version.BuiltAt={{ .Date }}
+
+archives:
+  - id: default
+    builds:
+      - ottercamp
+    formats:
+      - tar.gz
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+    
+release:
+  draft: true
