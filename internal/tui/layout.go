@@ -259,10 +259,6 @@ func renderPanelHeader(name string, focused bool, width int, visible bool) strin
 	return text + strings.Repeat(" ", padding)
 }
 
-func panelWidths(total int, proportions [3]float64, visible [3]bool) [3]int {
-	return partitionWidths(total, proportions, visible)
-}
-
 func describeLayoutForShell(class SizeClass, shell string, layout layoutState) string {
 	return fmt.Sprintf(
 		"size=%s shell=%s visible(sidebar=%t,main=%t,chat=%t) widths=%v",
