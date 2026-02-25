@@ -685,7 +685,15 @@ func (s *service) ActOnInboxItem(ctx context.Context, itemID, userID uuid.UUID, 
 		default:
 			return ErrUnknownInboxAction
 		}
-	case "blocker_filed", "task_review", "comment_mention", "draft_action_review", "system_alert":
+	case "task_review":
+		switch normalizedAction {
+		case "approve", "reject", "dismiss", "ack", "acknowledge":
+			_, err := s.inbox.MarkActed(ctx, item.ID, userID)
+			return err
+		default:
+			return ErrUnknownInboxAction
+		}
+	case "blocker_filed", "comment_mention", "draft_action_review", "system_alert":
 		switch normalizedAction {
 		case "dismiss", "ack", "acknowledge":
 			_, err := s.inbox.MarkActed(ctx, item.ID, userID)

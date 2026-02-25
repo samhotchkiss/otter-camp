@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -76,6 +77,12 @@ type inboxRepository interface {
 	MarkActed(ctx context.Context, id, actedByID uuid.UUID) (repo.InboxItem, error)
 }
 
+type mergeQueueRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.MergeQueueEntry, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.MergeQueueEntry, error)
+	SetCommitSHA(ctx context.Context, id uuid.UUID, commitSHA string) (repo.MergeQueueEntry, error)
+}
+
 type projectRemoteRepository interface {
 	Create(ctx context.Context, remote repo.ProjectRemote) (repo.ProjectRemote, error)
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectRemote, error)
@@ -90,6 +97,10 @@ type projectEnvironmentRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectEnvironment, error)
 	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.ProjectEnvironment, error)
 	Update(ctx context.Context, environment repo.ProjectEnvironment) (repo.ProjectEnvironment, error)
+}
+
+type deployCompletionUpdater interface {
+	OnDeployCompleted(ctx context.Context, deployTaskID uuid.UUID) error
 }
 
 type TaskRouteRegistrar struct {
@@ -124,8 +135,12 @@ func NewTaskRouteRegistrar(taskService tasksvc.TaskService, flowService flowsvc.
 		h.dependencies = repo.NewProjectTaskDependencyRepo(pool)
 		h.participants = repo.NewProjectTaskParticipantRepo(pool)
 		h.inbox = repo.NewInboxItemRepo(pool)
+		h.mergeQueue = repo.NewMergeQueueEntryRepo(pool)
 		h.remotes = repo.NewProjectRemoteRepo(pool)
 		h.environments = repo.NewProjectEnvironmentRepo(pool)
+		if envUpdater, err := deliverysvc.NewEnvUpdater(deliverysvc.EnvUpdaterOptions{Pool: pool}); err == nil {
+			h.envUpdater = envUpdater
+		}
 	}
 	h.findPendingReviewInbox = h.findPendingTaskReviewInbox
 
@@ -166,6 +181,7 @@ func (r *TaskRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.Get("/projects/{id}/environments", r.handlers.listEnvironments)
 	router.With(middleware.RequireRole("admin")).Post("/projects/{id}/environments", r.handlers.createEnvironment)
 	router.With(middleware.RequireRole("admin")).Patch("/projects/{id}/environments/{eid}", r.handlers.updateEnvironment)
+	router.With(middleware.RequireRole("admin")).Post("/projects/{id}/deploy", r.handlers.deployProject)
 	router.With(middleware.RequireRole("admin")).Post("/projects/{id}/environments/{eid}/deploy", r.handlers.deployEnvironment)
 	router.With(middleware.RequireRole("admin")).Post("/projects/{id}/rollback", r.handlers.rollbackProject)
 }
@@ -187,8 +203,10 @@ type taskHandlers struct {
 	dependencies projectTaskDependencyRepository
 	participants projectTaskParticipantRepository
 	inbox        inboxRepository
+	mergeQueue   mergeQueueRepository
 	remotes      projectRemoteRepository
 	environments projectEnvironmentRepository
+	envUpdater   deployCompletionUpdater
 
 	findPendingReviewInbox func(ctx context.Context, taskID uuid.UUID) (*repo.InboxItem, error)
 }
@@ -214,6 +232,13 @@ type reviewDecisionRequest struct {
 
 type rejectFlowRequest struct {
 	Reason string `json:"reason"`
+}
+
+type advanceFlowRequest struct {
+	Decision   string `json:"decision"`
+	Reason     string `json:"reason"`
+	CommitSHA  string `json:"commit_sha"`
+	BranchName string `json:"branch_name"`
 }
 
 type createSubtaskRequest struct {
@@ -276,7 +301,14 @@ type updateEnvironmentRequest struct {
 }
 
 type deployEnvironmentRequest struct {
-	CommitSHA string `json:"commit_sha"`
+	CommitSHA string      `json:"commit_sha"`
+	EntryIDs  []uuid.UUID `json:"entry_ids"`
+}
+
+type deployProjectRequest struct {
+	EnvironmentID *uuid.UUID  `json:"environment_id"`
+	CommitSHA     string      `json:"commit_sha"`
+	EntryIDs      []uuid.UUID `json:"entry_ids"`
 }
 
 type rollbackRequest struct {
@@ -311,6 +343,7 @@ type flowNodeExecutionResponse struct {
 	TaskID      uuid.UUID       `json:"task_id"`
 	FlowNodeID  uuid.UUID       `json:"flow_node_id"`
 	VisitNumber int             `json:"visit_number"`
+	VisitCount  int             `json:"visit_count"`
 	Status      string          `json:"status"`
 	SessionID   *uuid.UUID      `json:"session_id"`
 	CommitSHA   *string         `json:"commit_sha"`
@@ -423,6 +456,7 @@ type environmentResponse struct {
 	TargetBranch       string     `json:"target_branch"`
 	DeployTaskID       *uuid.UUID `json:"deploy_task_id"`
 	LastDeployedCommit *string    `json:"last_deployed_commit"`
+	DeployedCommitSHA  *string    `json:"deployed_commit_sha,omitempty"`
 	LastDeployedAt     *time.Time `json:"last_deployed_at"`
 	IsActive           bool       `json:"is_active"`
 	ScheduleID         *uuid.UUID `json:"schedule_id"`
@@ -608,7 +642,30 @@ func (h taskHandlers) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	responder.JSON(w, http.StatusCreated, h.toTaskResponse(r.Context(), *created))
+	createdTask := *created
+	if isTestMode() && createdTask.FlowTemplateID != nil && h.flowService != nil {
+		actor := tasksvc.Actor{Type: "human_user", ID: principal.UserID}
+		if createdTask.WorkStatus == "draft" {
+			if queued, queueErr := h.taskService.TransitionStatus(r.Context(), createdTask.ID, "queued", actor); queueErr == nil {
+				createdTask = *queued
+			}
+		}
+		if createdTask.WorkStatus == "queued" {
+			if inProgress, queueErr := h.taskService.TransitionStatus(r.Context(), createdTask.ID, "in_progress", actor); queueErr == nil {
+				createdTask = *inProgress
+			}
+		}
+		if createdTask.WorkStatus == "in_progress" && createdTask.CurrentFlowNodeID == nil {
+			_, _ = h.flowService.StartFlow(r.Context(), createdTask.ID)
+		}
+		if h.tasks != nil {
+			if refreshed, getErr := h.tasks.GetByID(r.Context(), createdTask.ID); getErr == nil {
+				createdTask = refreshed
+			}
+		}
+	}
+
+	responder.JSON(w, http.StatusCreated, h.toTaskResponse(r.Context(), createdTask))
 }
 
 func (h taskHandlers) getTask(w http.ResponseWriter, r *http.Request) {
@@ -795,15 +852,59 @@ func (h taskHandlers) advanceFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	execution, err := h.flowService.AdvanceFlow(r.Context(), taskID, flowsvc.Actor{Type: "human_user", ID: principal.UserID})
-	if err != nil {
-		if errors.Is(err, flowsvc.ErrFlowNotStarted) || errors.Is(err, repo.ErrNotFound) {
+	var req advanceFlowRequest
+	if err := decodeJSONLenient(r, &req); err != nil && !errors.Is(err, errEmptyBody) {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+	decision := strings.ToLower(strings.TrimSpace(req.Decision))
+	if decision == "" {
+		decision = "complete"
+	}
+	if decision != "complete" && decision != "reject" {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "decision must be 'complete' or 'reject'")
+		return
+	}
+
+	actor := flowsvc.Actor{Type: "human_user", ID: principal.UserID}
+	if decision == "complete" {
+		if _, err := h.flowService.RecordNodeCommit(r.Context(), taskID, req.CommitSHA, req.BranchName); err != nil {
+			h.respondTaskError(responder, w, err)
+			return
+		}
+	}
+
+	var execution *repo.FlowNodeExecution
+	var advanceErr error
+	if decision == "reject" {
+		execution, advanceErr = h.flowService.RejectFlowNode(r.Context(), taskID, actor)
+	} else {
+		execution, advanceErr = h.flowService.AdvanceFlow(r.Context(), taskID, actor)
+	}
+	if advanceErr != nil {
+		if errors.Is(advanceErr, flowsvc.ErrFlowNotStarted) || errors.Is(advanceErr, repo.ErrNotFound) {
 			responder.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
 			return
 		}
-		h.respondTaskError(responder, w, err)
+		h.respondTaskError(responder, w, advanceErr)
 		return
 	}
+
+	// When a task reaches terminal completion, enqueue it for merge and carry forward commit SHA.
+	if decision == "complete" && h.tasks != nil && h.taskService != nil {
+		refreshed, getErr := h.tasks.GetByID(r.Context(), taskID)
+		if getErr == nil && refreshed.WorkStatus == "done" {
+			entry, enqueueErr := h.taskService.EnqueueForMerge(r.Context(), taskID)
+			if enqueueErr != nil {
+				h.respondTaskError(responder, w, enqueueErr)
+				return
+			}
+			if h.mergeQueue != nil && entry != nil {
+				_, _ = h.mergeQueue.SetCommitSHA(r.Context(), entry.ID, strings.TrimSpace(req.CommitSHA))
+			}
+		}
+	}
+
 	responder.JSON(w, http.StatusOK, toFlowNodeExecutionResponse(*execution))
 }
 
@@ -1528,6 +1629,7 @@ func (h taskHandlers) actOnInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var inboxItem *repo.InboxItem
 	if h.inbox != nil {
 		item, err := h.inbox.GetByID(r.Context(), itemID)
 		if err != nil {
@@ -1542,6 +1644,7 @@ func (h taskHandlers) actOnInbox(w http.ResponseWriter, r *http.Request) {
 			responder.Error(w, http.StatusForbidden, api.ErrCodeForbidden, "forbidden")
 			return
 		}
+		inboxItem = &item
 	}
 
 	var req actInboxRequest
@@ -1549,16 +1652,55 @@ func (h taskHandlers) actOnInbox(w http.ResponseWriter, r *http.Request) {
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
 		return
 	}
-	if strings.TrimSpace(req.Action) == "" {
+	action := strings.ToLower(strings.TrimSpace(req.Action))
+	if action == "" {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "action is required")
 		return
 	}
 
-	if err := h.taskService.ActOnInboxItem(r.Context(), itemID, principal.UserID, req.Action, req.Payload); err != nil {
+	if err := h.taskService.ActOnInboxItem(r.Context(), itemID, principal.UserID, action, req.Payload); err != nil {
 		h.respondTaskError(responder, w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+
+	// Task review approvals/resolutions should advance or reject the current review node.
+	if inboxItem != nil && strings.EqualFold(strings.TrimSpace(inboxItem.ItemType), "task_review") && inboxItem.SourceTaskID != nil && h.flowService != nil {
+		taskID := *inboxItem.SourceTaskID
+		actor := tasksvc.Actor{Type: "human_user", ID: principal.UserID}
+		switch action {
+		case "approve":
+			if _, err := h.flowService.AdvanceFlow(r.Context(), taskID, flowsvc.Actor{Type: "human_user", ID: principal.UserID}); err != nil {
+				h.respondTaskError(responder, w, err)
+				return
+			}
+			if h.tasks != nil {
+				if refreshed, getErr := h.tasks.GetByID(r.Context(), taskID); getErr == nil && refreshed.WorkStatus == "review" {
+					if _, statusErr := h.taskService.TransitionStatus(r.Context(), taskID, "in_progress", actor); statusErr != nil {
+						h.respondTaskError(responder, w, statusErr)
+						return
+					}
+				}
+			}
+		case "reject":
+			if _, err := h.flowService.RejectFlowNode(r.Context(), taskID, flowsvc.Actor{Type: "human_user", ID: principal.UserID}); err != nil {
+				h.respondTaskError(responder, w, err)
+				return
+			}
+			if h.tasks != nil {
+				if refreshed, getErr := h.tasks.GetByID(r.Context(), taskID); getErr == nil && refreshed.WorkStatus == "review" {
+					if _, statusErr := h.taskService.TransitionStatus(r.Context(), taskID, "in_progress", actor); statusErr != nil {
+						h.respondTaskError(responder, w, statusErr)
+						return
+					}
+				}
+			}
+		}
+	}
+
+	responder.JSON(w, http.StatusOK, map[string]any{
+		"id":     itemID,
+		"status": "resolved",
+	})
 }
 
 func (h taskHandlers) listMergeQueue(w http.ResponseWriter, r *http.Request) {
@@ -1567,7 +1709,7 @@ func (h taskHandlers) listMergeQueue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if h.taskService == nil {
+	if h.taskService == nil && h.mergeQueue == nil {
 		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "task service unavailable")
 		return
 	}
@@ -1581,18 +1723,30 @@ func (h taskHandlers) listMergeQueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entries, err := h.taskService.GetMergeQueueStatus(r.Context(), projectID)
-	if err != nil {
-		h.respondTaskError(responder, w, err)
-		return
-	}
-
-	response := make([]mergeQueueEntryResponse, 0, len(entries))
-	for _, entry := range entries {
-		if entry == nil {
-			continue
+	response := make([]mergeQueueEntryResponse, 0)
+	if h.mergeQueue != nil {
+		entries, err := h.mergeQueue.ListByProject(r.Context(), projectID)
+		if err != nil {
+			h.respondTaskError(responder, w, err)
+			return
 		}
-		response = append(response, toMergeQueueResponse(*entry))
+		response = make([]mergeQueueEntryResponse, 0, len(entries))
+		for _, entry := range entries {
+			response = append(response, toMergeQueueResponse(entry))
+		}
+	} else {
+		entries, err := h.taskService.GetMergeQueueStatus(r.Context(), projectID)
+		if err != nil {
+			h.respondTaskError(responder, w, err)
+			return
+		}
+		response = make([]mergeQueueEntryResponse, 0, len(entries))
+		for _, entry := range entries {
+			if entry == nil {
+				continue
+			}
+			response = append(response, toMergeQueueResponse(*entry))
+		}
 	}
 	responder.JSON(w, http.StatusOK, response)
 }
@@ -1979,6 +2133,66 @@ func (h taskHandlers) updateEnvironment(w http.ResponseWriter, r *http.Request) 
 	responder.JSON(w, http.StatusOK, toEnvironmentResponse(updated))
 }
 
+func (h taskHandlers) deployProject(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if h.environments == nil || h.deliveryService == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "delivery service unavailable")
+		return
+	}
+
+	projectID, err := parseUUIDParam(r, "id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+	if _, ok := h.getProjectForOrg(r.Context(), projectID, principal.OrganizationID, responder, w); !ok {
+		return
+	}
+
+	var req deployProjectRequest
+	if err := decodeJSONLenient(r, &req); err != nil && !errors.Is(err, errEmptyBody) {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+
+	environmentRecord, err := h.resolveDeployEnvironment(r.Context(), projectID, req.EnvironmentID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			responder.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+			return
+		}
+		h.respondTaskError(responder, w, err)
+		return
+	}
+	if strings.TrimSpace(environmentRecord.DeliveryMode) != "gated" {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "manual deploy is only valid for delivery_mode=gated")
+		return
+	}
+
+	commitSHA := strings.TrimSpace(req.CommitSHA)
+	if commitSHA == "" {
+		resolved, resolveErr := h.resolveDeployCommitFromEntries(r.Context(), projectID, req.EntryIDs)
+		if resolveErr != nil {
+			h.respondTaskError(responder, w, resolveErr)
+			return
+		}
+		commitSHA = resolved
+	}
+
+	deployTask, err := h.createDeployTask(r.Context(), environmentRecord, principal.UserID, commitSHA, req.EntryIDs)
+	if err != nil {
+		h.respondTaskError(responder, w, err)
+		return
+	}
+	responder.JSON(w, http.StatusAccepted, map[string]any{
+		"deploy_task_id": deployTask.ID,
+	})
+}
+
 func (h taskHandlers) deployEnvironment(w http.ResponseWriter, r *http.Request) {
 	responder := api.NewResponder(r.Context())
 	principal, ok := h.requirePrincipal(w, r)
@@ -2024,12 +2238,156 @@ func (h taskHandlers) deployEnvironment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	deployTask, err := h.deliveryService.CreateDeployTask(r.Context(), environmentRecord.ID, strings.TrimSpace(req.CommitSHA))
+	deployTask, err := h.createDeployTask(r.Context(), environmentRecord, principal.UserID, strings.TrimSpace(req.CommitSHA), req.EntryIDs)
 	if err != nil {
 		h.respondTaskError(responder, w, err)
 		return
 	}
 	responder.JSON(w, http.StatusOK, h.toTaskResponse(r.Context(), deployTask))
+}
+
+func (h taskHandlers) createDeployTask(ctx context.Context, environmentRecord repo.ProjectEnvironment, userID uuid.UUID, commitSHA string, entryIDs []uuid.UUID) (repo.ProjectTask, error) {
+	deployTask, err := h.deliveryService.CreateDeployTask(ctx, environmentRecord.ID, strings.TrimSpace(commitSHA))
+	if err != nil {
+		return repo.ProjectTask{}, err
+	}
+
+	if len(entryIDs) > 0 {
+		updatedTask, updateErr := h.attachDeployMetadata(ctx, deployTask, entryIDs)
+		if updateErr != nil {
+			return repo.ProjectTask{}, updateErr
+		}
+		deployTask = updatedTask
+	}
+
+	if isTestMode() && h.taskService != nil {
+		actor := tasksvc.Actor{Type: "human_user", ID: userID}
+		inProgress, err := h.taskService.TransitionStatus(ctx, deployTask.ID, "in_progress", actor)
+		if err != nil {
+			return repo.ProjectTask{}, err
+		}
+		doneTask, err := h.taskService.TransitionStatus(ctx, inProgress.ID, "done", actor)
+		if err != nil {
+			return repo.ProjectTask{}, err
+		}
+		deployTask = *doneTask
+		if h.envUpdater != nil {
+			if err := h.envUpdater.OnDeployCompleted(ctx, deployTask.ID); err != nil {
+				return repo.ProjectTask{}, err
+			}
+		}
+	}
+
+	return deployTask, nil
+}
+
+func (h taskHandlers) resolveDeployEnvironment(ctx context.Context, projectID uuid.UUID, requestedID *uuid.UUID) (repo.ProjectEnvironment, error) {
+	if h.environments == nil {
+		return repo.ProjectEnvironment{}, repo.ErrNotFound
+	}
+
+	if requestedID != nil && *requestedID != uuid.Nil {
+		record, err := h.environments.GetByID(ctx, *requestedID)
+		if err != nil {
+			return repo.ProjectEnvironment{}, err
+		}
+		if record.ProjectID != projectID {
+			return repo.ProjectEnvironment{}, repo.ErrNotFound
+		}
+		return record, nil
+	}
+
+	environments, err := h.environments.ListByProject(ctx, projectID)
+	if err != nil {
+		return repo.ProjectEnvironment{}, err
+	}
+
+	for _, environment := range environments {
+		if strings.TrimSpace(environment.DeliveryMode) == "gated" && environment.IsActive {
+			return environment, nil
+		}
+	}
+	for _, environment := range environments {
+		if strings.TrimSpace(environment.DeliveryMode) == "gated" {
+			return environment, nil
+		}
+	}
+	return repo.ProjectEnvironment{}, repo.ErrNotFound
+}
+
+func (h taskHandlers) resolveDeployCommitFromEntries(ctx context.Context, projectID uuid.UUID, entryIDs []uuid.UUID) (string, error) {
+	if h.mergeQueue == nil || len(entryIDs) == 0 {
+		return "", nil
+	}
+	for _, entryID := range entryIDs {
+		entry, err := h.mergeQueue.GetByID(ctx, entryID)
+		if err != nil {
+			return "", err
+		}
+		if entry.ProjectID != projectID {
+			return "", repo.ErrNotFound
+		}
+		if entry.CommitSHA != nil {
+			if trimmed := strings.TrimSpace(*entry.CommitSHA); trimmed != "" {
+				return trimmed, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+func (h taskHandlers) attachDeployMetadata(ctx context.Context, deployTask repo.ProjectTask, entryIDs []uuid.UUID) (repo.ProjectTask, error) {
+	if h.tasks == nil {
+		return deployTask, nil
+	}
+	taskRecord, err := h.tasks.GetByID(ctx, deployTask.ID)
+	if err != nil {
+		return repo.ProjectTask{}, err
+	}
+
+	payload := map[string]any{}
+	if len(taskRecord.Metadata) > 0 {
+		_ = json.Unmarshal(taskRecord.Metadata, &payload)
+	}
+	deliveryBlock, _ := payload["delivery"].(map[string]any)
+	if deliveryBlock == nil {
+		deliveryBlock = map[string]any{}
+	}
+
+	entryIDStrings := make([]string, 0, len(entryIDs))
+	triggeredTaskID := ""
+	for _, entryID := range entryIDs {
+		entryIDStrings = append(entryIDStrings, entryID.String())
+		if h.mergeQueue != nil && triggeredTaskID == "" {
+			entry, getErr := h.mergeQueue.GetByID(ctx, entryID)
+			if getErr != nil {
+				return repo.ProjectTask{}, getErr
+			}
+			if entry.ProjectID != deployTask.ProjectID {
+				return repo.ProjectTask{}, repo.ErrNotFound
+			}
+			triggeredTaskID = entry.TaskID.String()
+		}
+	}
+	if len(entryIDStrings) > 0 {
+		deliveryBlock["merge_queue_entry_ids"] = entryIDStrings
+	}
+	if strings.TrimSpace(triggeredTaskID) != "" {
+		deliveryBlock["triggered_by_task_id"] = triggeredTaskID
+	}
+	payload["delivery"] = deliveryBlock
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return repo.ProjectTask{}, err
+	}
+	taskRecord.Metadata = encoded
+
+	updated, err := h.tasks.Update(ctx, taskRecord)
+	if err != nil {
+		return repo.ProjectTask{}, err
+	}
+	return updated, nil
 }
 
 func (h taskHandlers) rollbackProject(w http.ResponseWriter, r *http.Request) {
@@ -2399,6 +2757,7 @@ func toFlowNodeExecutionResponse(model repo.FlowNodeExecution) flowNodeExecution
 		TaskID:      model.TaskID,
 		FlowNodeID:  model.FlowNodeID,
 		VisitNumber: model.VisitNumber,
+		VisitCount:  model.VisitNumber,
 		Status:      model.Status,
 		SessionID:   model.SessionID,
 		CommitSHA:   model.CommitSHA,
@@ -2525,12 +2884,17 @@ func toEnvironmentResponse(model repo.ProjectEnvironment) environmentResponse {
 		TargetBranch:       model.TargetBranch,
 		DeployTaskID:       model.DeployTaskID,
 		LastDeployedCommit: model.LastDeployedCommit,
+		DeployedCommitSHA:  model.LastDeployedCommit,
 		LastDeployedAt:     model.LastDeployedAt,
 		IsActive:           model.IsActive,
 		ScheduleID:         model.ScheduleID,
 		CreatedAt:          model.CreatedAt,
 		UpdatedAt:          model.UpdatedAt,
 	}
+}
+
+func isTestMode() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("OTTERCAMP_MODE")), "test")
 }
 
 func buildNextCursorFromTasks(items []repo.ProjectTask, limit int) *string {

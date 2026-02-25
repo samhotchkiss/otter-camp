@@ -61,6 +61,7 @@ var scheduleCronParser = scheduling.NewCronParser()
 type createProjectRequest struct {
 	Slug                 string          `json:"slug"`
 	DisplayName          string          `json:"display_name"`
+	Name                 string          `json:"name"`
 	Description          string          `json:"description"`
 	DeliveryMode         string          `json:"delivery_mode"`
 	DeployFlowTemplateID *uuid.UUID      `json:"deploy_flow_template_id"`
@@ -79,6 +80,7 @@ type updateProjectRequest struct {
 type createFlowTemplateRequest struct {
 	Slug        string     `json:"slug"`
 	DisplayName string     `json:"display_name"`
+	Name        string     `json:"name"`
 	Description string     `json:"description"`
 	StartNodeID *uuid.UUID `json:"start_node_id"`
 }
@@ -92,6 +94,7 @@ type updateFlowTemplateRequest struct {
 
 type createFlowNodeRequest struct {
 	DisplayName         string                 `json:"display_name"`
+	Name                string                 `json:"name"`
 	NodeType            string                 `json:"node_type"`
 	ActorType           *string                `json:"actor_type"`
 	ActorID             *uuid.UUID             `json:"actor_id"`
@@ -264,7 +267,11 @@ func (h projectHandlers) createProject(w http.ResponseWriter, r *http.Request) {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "slug is required")
 		return
 	}
-	if strings.TrimSpace(req.DisplayName) == "" {
+	displayName := strings.TrimSpace(req.DisplayName)
+	if displayName == "" {
+		displayName = strings.TrimSpace(req.Name)
+	}
+	if displayName == "" {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "display_name is required")
 		return
 	}
@@ -277,7 +284,7 @@ func (h projectHandlers) createProject(w http.ResponseWriter, r *http.Request) {
 	created, err := h.service.Create(r.Context(), projectsvc.CreateProjectRequest{
 		OrganizationID:       principal.OrganizationID,
 		Slug:                 strings.TrimSpace(req.Slug),
-		DisplayName:          strings.TrimSpace(req.DisplayName),
+		DisplayName:          displayName,
 		Description:          req.Description,
 		DeliveryMode:         deliveryMode,
 		DeployFlowTemplateID: req.DeployFlowTemplateID,
@@ -450,7 +457,11 @@ func (h projectHandlers) createProjectFlowTemplate(w http.ResponseWriter, r *htt
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "slug is required")
 		return
 	}
-	if strings.TrimSpace(req.DisplayName) == "" {
+	displayName := strings.TrimSpace(req.DisplayName)
+	if displayName == "" {
+		displayName = strings.TrimSpace(req.Name)
+	}
+	if displayName == "" {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "display_name is required")
 		return
 	}
@@ -460,7 +471,7 @@ func (h projectHandlers) createProjectFlowTemplate(w http.ResponseWriter, r *htt
 		OrganizationID: &orgID,
 		ProjectID:      &projectID,
 		Slug:           strings.TrimSpace(req.Slug),
-		DisplayName:    strings.TrimSpace(req.DisplayName),
+		DisplayName:    displayName,
 		Description:    req.Description,
 		StartNodeID:    req.StartNodeID,
 		CreatedByType:  "human_user",
@@ -632,18 +643,29 @@ func (h projectHandlers) addFlowNode(w http.ResponseWriter, r *http.Request) {
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
 		return
 	}
-	if strings.TrimSpace(req.DisplayName) == "" {
+	displayName := strings.TrimSpace(req.DisplayName)
+	if displayName == "" {
+		displayName = strings.TrimSpace(req.Name)
+	}
+	if displayName == "" {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "display_name is required")
 		return
 	}
-	if strings.TrimSpace(req.NodeType) == "" {
+	nodeType := strings.TrimSpace(req.NodeType)
+	switch nodeType {
+	case "agent_work":
+		nodeType = "work"
+	case "human_review":
+		nodeType = "review"
+	}
+	if nodeType == "" {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "node_type is required")
 		return
 	}
 
 	created, createErr := h.service.AddFlowNode(r.Context(), templateID, projectsvc.AddFlowNodeRequest{
-		DisplayName:         strings.TrimSpace(req.DisplayName),
-		NodeType:            strings.TrimSpace(req.NodeType),
+		DisplayName:         displayName,
+		NodeType:            nodeType,
 		Position:            req.Position,
 		ActorType:           req.ActorType,
 		ActorID:             req.ActorID,

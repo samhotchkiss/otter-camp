@@ -58,6 +58,7 @@ func TestTaskRoutesRegistered(t *testing.T) {
 		"GET /projects/{id}/environments",
 		"POST /projects/{id}/environments",
 		"PATCH /projects/{id}/environments/{eid}",
+		"POST /projects/{id}/deploy",
 		"POST /projects/{id}/environments/{eid}/deploy",
 		"POST /projects/{id}/rollback",
 	}

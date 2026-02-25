@@ -323,22 +323,7 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 			return nil, err
 		}
 
-		title := "Task review required"
-		body := "Flow advancement paused pending human review."
-		payload, _ := json.Marshal(map[string]any{
-			"task_id":      taskRecord.ID,
-			"flow_node_id": currentNode.ID,
-		})
-		if _, err := s.inbox.Create(ctx, repo.InboxItem{
-			OrganizationID:  taskRecord.OrganizationID,
-			ItemType:        "task_review",
-			SourceProjectID: &taskRecord.ProjectID,
-			SourceTaskID:    &taskRecord.ID,
-			CreatedByType:   "system",
-			Title:           title,
-			Body:            &body,
-			ActionPayload:   payload,
-		}); err != nil {
+		if err := s.createTaskReviewInbox(ctx, taskRecord, currentNode.ID); err != nil {
 			return nil, err
 		}
 		return &activeExecution, nil
@@ -374,6 +359,19 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 			return nil, err
 		}
 		nextExecution = &created
+
+		nextNode, nodeErr := s.flowNodes.GetByID(ctx, *currentNode.NextNodeID)
+		if nodeErr != nil {
+			return nil, nodeErr
+		}
+		if nextNode.RequiresHumanReview {
+			if _, statusErr := s.taskService.TransitionStatus(ctx, taskRecord.ID, "review", toTaskActor(actor)); statusErr != nil {
+				return nil, statusErr
+			}
+			if err := s.createTaskReviewInbox(ctx, taskRecord, nextNode.ID); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	payload := map[string]any{
@@ -396,6 +394,26 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 		return nextExecution, nil
 	}
 	return &completedExecution, nil
+}
+
+func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.ProjectTask, flowNodeID uuid.UUID) error {
+	title := "Task review required"
+	body := "Flow advancement paused pending human review."
+	payload, _ := json.Marshal(map[string]any{
+		"task_id":      taskRecord.ID,
+		"flow_node_id": flowNodeID,
+	})
+	_, err := s.inbox.Create(ctx, repo.InboxItem{
+		OrganizationID:  taskRecord.OrganizationID,
+		ItemType:        "task_review",
+		SourceProjectID: &taskRecord.ProjectID,
+		SourceTaskID:    &taskRecord.ID,
+		CreatedByType:   "system",
+		Title:           title,
+		Body:            &body,
+		ActionPayload:   payload,
+	})
+	return err
 }
 
 func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Actor) (*repo.FlowNodeExecution, error) {
@@ -487,6 +505,9 @@ func (s *service) RecordNodeCommit(ctx context.Context, taskID uuid.UUID, commit
 
 	if taskRecord.BranchName == nil || strings.TrimSpace(*taskRecord.BranchName) == "" {
 		trimmed := strings.TrimSpace(branchName)
+		if trimmed == "" {
+			trimmed = fmt.Sprintf("task/%d", taskRecord.TaskNumber)
+		}
 		if trimmed != "" {
 			if _, err := s.tasks.SetBranch(ctx, taskRecord.ID, &trimmed); err != nil {
 				return nil, err

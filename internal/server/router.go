@@ -72,8 +72,14 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	staticFileServer := web.NewStaticFileServer(web.Options{})
 	healthHandler := health.NewHandler(health.Options{Pool: opts.Pool, Store: opts.Store})
 	scrubber := security.NewSecretScrubber()
-	perIPLimiter := security.NewRateLimiter(100, 20)
-	perAPIKeyLimiter := security.NewRateLimiter(1000, 100)
+	ipRequests, ipBurst := 100, 20
+	apiKeyRequests, apiKeyBurst := 1000, 100
+	if opts.TestMode {
+		ipRequests, ipBurst = 10000, 10000
+		apiKeyRequests, apiKeyBurst = 100000, 100000
+	}
+	perIPLimiter := security.NewRateLimiter(ipRequests, ipBurst)
+	perAPIKeyLimiter := security.NewRateLimiter(apiKeyRequests, apiKeyBurst)
 	metrics.Register()
 
 	r := chi.NewRouter()
