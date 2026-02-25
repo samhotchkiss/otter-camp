@@ -1307,6 +1307,14 @@ func (r *RunEventRepository) Append(ctx context.Context, event RunEvent) (RunEve
 	if err != nil {
 		return RunEvent{}, mapDBError(err)
 	}
+
+	notificationPayload, err := marshalRunEventNotificationPayload(created)
+	if err != nil {
+		return RunEvent{}, err
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, RunEventsChannel(runID), notificationPayload); err != nil {
+		return RunEvent{}, mapDBError(err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return RunEvent{}, mapDBError(err)
 	}
@@ -1611,6 +1619,25 @@ func normalizeJSON(value json.RawMessage, fallback json.RawMessage) json.RawMess
 		return fallback
 	}
 	return value
+}
+
+func marshalRunEventNotificationPayload(event RunEvent) (string, error) {
+	encoded, err := json.Marshal(map[string]any{
+		"id":             event.ID,
+		"run_id":         event.RunID,
+		"run_step_id":    event.RunStepID,
+		"run_attempt_id": event.RunAttemptID,
+		"sequence":       event.Sequence,
+		"event_type":     event.EventType,
+		"actor_type":     event.ActorType,
+		"actor_id":       event.ActorID,
+		"payload":        normalizeJSON(event.Payload, json.RawMessage(`{}`)),
+		"created_at":     event.CreatedAt.UTC(),
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal run event notification: %w", err)
+	}
+	return string(encoded), nil
 }
 
 func nullableJSON(value json.RawMessage) json.RawMessage {

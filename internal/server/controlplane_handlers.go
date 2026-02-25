@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/api"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
@@ -328,9 +329,15 @@ type costSummaryGroup struct {
 }
 
 type controlHealthResponse struct {
-	Status             string     `json:"status"`
-	ActiveRuns         int        `json:"active_runs"`
-	SupervisorLastTick *time.Time `json:"supervisor_last_tick"`
+	Status             string                     `json:"status"`
+	ActiveRuns         int                        `json:"active_runs"`
+	SupervisorLastTick *time.Time                 `json:"supervisor_last_tick"`
+	ToolExecutionAudit *controlHealthAuditSummary `json:"tool_execution_audit,omitempty"`
+}
+
+type controlHealthAuditSummary struct {
+	RunsChecked int `json:"runs_checked"`
+	Violations  int `json:"violations"`
 }
 
 func (h controlPlaneHandlers) createRun(w http.ResponseWriter, r *http.Request) {
@@ -714,6 +721,14 @@ func (h controlPlaneHandlers) streamRunEvents(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	if h.pool == nil {
+		h.streamRunEventsByPolling(w, r, flusher, principal.OrganizationID, runID, sequence)
+		return
+	}
+	h.streamRunEventsByListenNotify(w, r, flusher, principal.OrganizationID, runID, sequence)
+}
+
+func (h controlPlaneHandlers) streamRunEventsByPolling(w http.ResponseWriter, r *http.Request, flusher http.Flusher, organizationID, runID uuid.UUID, sequence int) {
 	ticker := time.NewTicker(runEventStreamPoll)
 	defer ticker.Stop()
 
@@ -734,13 +749,65 @@ func (h controlPlaneHandlers) streamRunEvents(w http.ResponseWriter, r *http.Req
 				flusher.Flush()
 			}
 
-			runRecord, found = h.getRunForOrg(r.Context(), principal.OrganizationID, runID)
+			runRecord, found := h.getRunForOrg(r.Context(), organizationID, runID)
 			if !found {
 				return
 			}
 			if isTerminalRunStatus(runRecord.Status) && len(nextEvents) == 0 {
 				return
 			}
+		}
+	}
+}
+
+func (h controlPlaneHandlers) streamRunEventsByListenNotify(w http.ResponseWriter, r *http.Request, flusher http.Flusher, organizationID, runID uuid.UUID, sequence int) {
+	conn, err := h.pool.Acquire(r.Context())
+	if err != nil {
+		h.streamRunEventsByPolling(w, r, flusher, organizationID, runID, sequence)
+		return
+	}
+	defer conn.Release()
+
+	channel := controlplane.RunEventsChannel(runID)
+	listenSQL := "LISTEN " + pgx.Identifier{channel}.Sanitize()
+	unlistenSQL := "UNLISTEN " + pgx.Identifier{channel}.Sanitize()
+	if _, err := conn.Exec(r.Context(), listenSQL); err != nil {
+		h.streamRunEventsByPolling(w, r, flusher, organizationID, runID, sequence)
+		return
+	}
+	defer func() {
+		_, _ = conn.Exec(context.Background(), unlistenSQL)
+	}()
+
+	for {
+		waitCtx, cancel := context.WithTimeout(r.Context(), runEventStreamPoll)
+		_, waitErr := conn.Conn().WaitForNotification(waitCtx)
+		cancel()
+		if waitErr != nil && !errors.Is(waitErr, context.DeadlineExceeded) && !errors.Is(waitErr, context.Canceled) {
+			return
+		}
+
+		nextEvents, err := h.runEvents.ListByRun(r.Context(), runID, sequence)
+		if err != nil {
+			return
+		}
+		for _, event := range nextEvents {
+			if err := writeSSEEvent(w, strconv.Itoa(event.Sequence), "run_event", toRunEventResponse(event)); err != nil {
+				return
+			}
+			sequence = event.Sequence
+			flusher.Flush()
+		}
+
+		runRecord, found := h.getRunForOrg(r.Context(), organizationID, runID)
+		if !found {
+			return
+		}
+		if isTerminalRunStatus(runRecord.Status) && len(nextEvents) == 0 {
+			return
+		}
+		if r.Context().Err() != nil {
+			return
 		}
 	}
 }
@@ -1152,10 +1219,34 @@ func (h controlPlaneHandlers) getControlHealth(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	auditSummary := &controlHealthAuditSummary{}
+	verifier := controlplane.NewToolExecutionAuditVerifier(h.pool)
+	rows, err := h.pool.Query(r.Context(), `
+		SELECT id
+		FROM run
+		WHERE organization_id = $1
+		  AND status IN ('created', 'in_progress', 'paused', 'cancelling')
+		ORDER BY created_at DESC
+		LIMIT 20
+	`, principal.OrganizationID)
+	if err == nil {
+		for rows.Next() {
+			var runID uuid.UUID
+			if scanErr := rows.Scan(&runID); scanErr != nil {
+				continue
+			}
+			report := verifier.Verify(r.Context(), runID)
+			auditSummary.RunsChecked++
+			auditSummary.Violations += len(report.Violations)
+		}
+		rows.Close()
+	}
+
 	writeControlResponse(w, r.Context(), http.StatusOK, controlHealthResponse{
 		Status:             "ok",
 		ActiveRuns:         activeRuns,
 		SupervisorLastTick: supervisorLastTick,
+		ToolExecutionAudit: auditSummary,
 	}, nil)
 }
 

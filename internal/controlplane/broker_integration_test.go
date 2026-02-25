@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
@@ -153,9 +154,10 @@ func TestToolBrokerDispatchPolicyDeniedIntegration(t *testing.T) {
 	runRecord, step, attempt := seedBrokerRunContext(t, ctx, pool, org.ID)
 
 	broker, err := NewToolBroker(ToolBrokerOptions{
-		Pool:    pool,
-		Policy:  &integrationPolicyService{decision: CapabilityDecision{Allowed: false, Reason: "blocked"}},
-		Browser: &integrationBrowserExecutor{output: map[string]any{"ok": true}},
+		Pool:     pool,
+		EventBus: eventbus.New(pool, nil, eventbus.Config{}),
+		Policy:   &integrationPolicyService{decision: CapabilityDecision{Allowed: false, Reason: "blocked"}},
+		Browser:  &integrationBrowserExecutor{output: map[string]any{"ok": true}},
 	})
 	if err != nil {
 		t.Fatalf("NewToolBroker: %v", err)
@@ -183,6 +185,20 @@ func TestToolBrokerDispatchPolicyDeniedIntegration(t *testing.T) {
 	}
 	if stored.PolicyDecision != "denied" || stored.Status != "policy_denied" {
 		t.Fatalf("stored execution = %+v, want denied/policy_denied", stored)
+	}
+
+	var deniedCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM domain_event
+		WHERE organization_id = $1
+		  AND event_type = 'tool.capability_denied'
+		  AND payload->>'run_id' = $2
+	`, org.ID, runRecord.ID.String()).Scan(&deniedCount); err != nil {
+		t.Fatalf("count tool.capability_denied events: %v", err)
+	}
+	if deniedCount == 0 {
+		t.Fatal("expected tool.capability_denied domain_event")
 	}
 }
 

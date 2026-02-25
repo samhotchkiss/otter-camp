@@ -164,13 +164,25 @@ func TestRunServiceIntegrationRetryEnvelopeAndDeadLetter(t *testing.T) {
 		SELECT COUNT(*)
 		FROM domain_event
 		WHERE organization_id = $1
-		  AND event_type = 'run.failed'
-		  AND payload->>'dead_lettered' = 'true'
+		  AND event_type = 'run.dead_lettered'
 	`, org.ID).Scan(&deadLetteredCount); err != nil {
-		t.Fatalf("count dead_lettered run.failed domain events: %v", err)
+		t.Fatalf("count run.dead_lettered domain events: %v", err)
 	}
 	if deadLetteredCount == 0 {
-		t.Fatal("expected run.failed domain_event with dead_lettered=true")
+		t.Fatal("expected run.dead_lettered domain_event")
+	}
+
+	var taskEventCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'run_dead_lettered'
+	`, taskRecord.ID).Scan(&taskEventCount); err != nil {
+		t.Fatalf("count run_dead_lettered project_task_event: %v", err)
+	}
+	if taskEventCount == 0 {
+		t.Fatal("expected project_task_event run_dead_lettered row")
 	}
 }
 

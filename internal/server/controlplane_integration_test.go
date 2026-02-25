@@ -119,7 +119,7 @@ func TestControlPlaneAPIRunEventStreamReplayWithLastEventID(t *testing.T) {
 		t.Fatalf("stream status=%d want=%d", streamResp.StatusCode, http.StatusOK)
 	}
 
-	for i := 1; i <= 3; i++ {
+	for i := 1; i <= 10; i++ {
 		if _, err := eventRepo.Append(context.Background(), controlplane.RunEvent{
 			RunID:     runRecord.ID,
 			EventType: "heartbeat",
@@ -131,9 +131,9 @@ func TestControlPlaneAPIRunEventStreamReplayWithLastEventID(t *testing.T) {
 	}
 
 	reader := bufio.NewReader(streamResp.Body)
-	received := make([]int, 0, 3)
+	received := make([]int, 0, 10)
 	deadline := time.Now().Add(5 * time.Second)
-	for len(received) < 3 {
+	for len(received) < 10 {
 		if time.Now().After(deadline) {
 			t.Fatalf("timeout waiting for stream events, got=%v", received)
 		}
@@ -153,11 +153,13 @@ func TestControlPlaneAPIRunEventStreamReplayWithLastEventID(t *testing.T) {
 		}
 		received = append(received, seq)
 	}
-	if len(received) != 3 {
-		t.Fatalf("received events=%v, want [1 2 3]", received)
+	if len(received) != 10 {
+		t.Fatalf("received events=%v, want 10 events", received)
 	}
-	if received[0] != 1 || received[1] != 2 || received[2] != 3 {
-		t.Fatalf("received events=%v, want [1 2 3]", received)
+	for i := 1; i <= 10; i++ {
+		if received[i-1] != i {
+			t.Fatalf("received events=%v, want [1..10]", received)
+		}
 	}
 
 	if _, err := runRepo.UpdateStatus(context.Background(), runRecord.ID, runRecord.Version, "completed", nil, nil); err != nil {
@@ -169,7 +171,7 @@ func TestControlPlaneAPIRunEventStreamReplayWithLastEventID(t *testing.T) {
 		t.Fatalf("new replay request: %v", err)
 	}
 	replayReq.Header.Set("Authorization", "Bearer "+token)
-	replayReq.Header.Set("Last-Event-ID", "2")
+	replayReq.Header.Set("Last-Event-ID", "5")
 	replayResp, err := http.DefaultClient.Do(replayReq)
 	if err != nil {
 		t.Fatalf("open replay stream: %v", err)
@@ -180,7 +182,7 @@ func TestControlPlaneAPIRunEventStreamReplayWithLastEventID(t *testing.T) {
 	}
 
 	replayReader := bufio.NewReader(replayResp.Body)
-	replayed := make([]int, 0, 2)
+	replayed := make([]int, 0, 5)
 	for {
 		eventName, id, _, err := readSSEFrame(replayReader)
 		if err != nil {
@@ -198,12 +200,13 @@ func TestControlPlaneAPIRunEventStreamReplayWithLastEventID(t *testing.T) {
 		}
 		replayed = append(replayed, seq)
 	}
-	if len(replayed) == 0 {
-		t.Fatalf("expected replayed events > 2")
+	if len(replayed) != 5 {
+		t.Fatalf("replayed len=%d, want 5 replayed events (6..10), got=%v", len(replayed), replayed)
 	}
-	for _, seq := range replayed {
-		if seq <= 2 {
-			t.Fatalf("replayed sequence=%d, want > 2", seq)
+	for idx, seq := range replayed {
+		want := idx + 6
+		if seq != want {
+			t.Fatalf("replayed sequence[%d]=%d, want %d; replayed=%v", idx, seq, want, replayed)
 		}
 	}
 }

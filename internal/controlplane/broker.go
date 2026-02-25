@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
@@ -87,6 +88,7 @@ type ToolBrokerOptions struct {
 	Runs            brokerRunRepository
 	Agents          brokerAgentRepository
 	ToolDefinitions brokerToolDefinitionRepository
+	EventBus        eventPublisher
 	Policy          CapabilityPolicyService
 	Native          NativeToolExecutor
 	CLI             CLIExecutor
@@ -100,6 +102,7 @@ type ToolBroker struct {
 	runs            brokerRunRepository
 	agents          brokerAgentRepository
 	toolDefinitions brokerToolDefinitionRepository
+	eventBus        eventPublisher
 	policy          CapabilityPolicyService
 	native          NativeToolExecutor
 	cli             CLIExecutor
@@ -115,12 +118,13 @@ func NewToolBroker(opts ToolBrokerOptions) (*ToolBroker, error) {
 	}
 
 	broker := &ToolBroker{
-		policy:  opts.Policy,
-		native:  opts.Native,
-		cli:     opts.CLI,
-		browser: opts.Browser,
-		mcp:     opts.MCP,
-		now:     opts.Now,
+		eventBus: opts.EventBus,
+		policy:   opts.Policy,
+		native:   opts.Native,
+		cli:      opts.CLI,
+		browser:  opts.Browser,
+		mcp:      opts.MCP,
+		now:      opts.Now,
 	}
 	if broker.now == nil {
 		broker.now = func() time.Time { return time.Now().UTC() }
@@ -427,7 +431,7 @@ func (b *ToolBroker) createDeniedExecution(ctx context.Context, input DispatchIn
 	started := b.now()
 	completed := started
 	duration := 0
-	return b.executions.Create(ctx, ToolExecution{
+	created, err := b.executions.Create(ctx, ToolExecution{
 		RunID:          input.RunID,
 		RunStepID:      input.RunStepID,
 		RunAttemptID:   input.RunAttemptID,
@@ -444,6 +448,11 @@ func (b *ToolBroker) createDeniedExecution(ctx context.Context, input DispatchIn
 		DurationMS:     &duration,
 		Metadata:       metadata,
 	})
+	if err != nil {
+		return ToolExecution{}, err
+	}
+	b.emitCapabilityDeniedEvent(ctx, created)
+	return created, nil
 }
 
 func normalizeToolTier(value string) string {
@@ -610,6 +619,51 @@ func trimmedPointer(value *string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func (b *ToolBroker) emitCapabilityDeniedEvent(ctx context.Context, exec ToolExecution) {
+	if b == nil || b.eventBus == nil || strings.TrimSpace(exec.PolicyDecision) != "denied" {
+		return
+	}
+
+	orgID := uuid.Nil
+	if exec.RunID != nil {
+		runRecord, err := b.runs.Get(ctx, *exec.RunID)
+		if err == nil {
+			orgID = runRecord.OrganizationID
+		}
+	}
+	if orgID == uuid.Nil {
+		return
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"tool_name":  strings.TrimSpace(exec.ToolName),
+		"capability": strings.TrimSpace(stringPointerValue(exec.Capability)),
+		"run_id":     uuidPointerToString(exec.RunID),
+		"agent_id":   extractAgentIDFromExecutionMetadata(exec.Metadata),
+	})
+	if err != nil {
+		return
+	}
+	_ = b.eventBus.Publish(ctx, nil, eventbus.DomainEvent{
+		OrganizationID: orgID,
+		EventType:      "tool.capability_denied",
+		ActorType:      "system",
+		Payload:        payload,
+	})
+}
+
+func extractAgentIDFromExecutionMetadata(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return ""
+	}
+	agentID, _ := decoded["agent_id"].(string)
+	return strings.TrimSpace(agentID)
 }
 
 type ToolExecutionService struct {
