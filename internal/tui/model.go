@@ -191,11 +191,13 @@ func (m *Model) handleEnterKey() {
 	case SidebarPanel:
 		m.workspace.selectSidebarNode()
 		m.state.LastActiveChatSession = m.workspace.activeSessionID
+		m.activeSession = m.workspace.activeSessionID
 		m.statusMessage = "Sidebar selection applied."
 	case MainPanel:
 		if m.workspace.mainView == ViewInbox {
 			if m.workspace.applyInboxAction("open") {
 				m.state.LastActiveChatSession = m.workspace.activeSessionID
+				m.activeSession = m.workspace.activeSessionID
 				m.statusMessage = "Opened inbox item in context."
 				return
 			}
@@ -276,6 +278,7 @@ func (m *Model) handleWorkspaceRune(r rune) bool {
 	case 'o':
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("open") {
 			m.state.LastActiveChatSession = m.workspace.activeSessionID
+			m.activeSession = m.workspace.activeSessionID
 			m.statusMessage = "Opened inbox item in context."
 			return true
 		}
@@ -634,8 +637,6 @@ func (m Model) State() UIState {
 	next.SidebarVisible = m.sidebarVisible
 	if strings.TrimSpace(m.activeSession) != "" {
 		next.LastActiveChatSession = m.activeSession
-	} else if strings.TrimSpace(m.workspace.activeSessionID) != "" {
-		next.LastActiveChatSession = m.workspace.activeSessionID
 	}
 	return normalizeState(next)
 }
