@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -497,7 +498,7 @@ func (e *Executor) ExecuteCommand(ctx context.Context, input CLIExecuteInput) (C
 		return CLIExecuteOutput{ExitCode: exitCode, StdoutTruncated: stdoutTruncated, StderrTruncated: stderrTruncated, StdoutInline: stdoutInline, StderrInline: stderrInline, StdoutArtifactID: stdoutArtifactID, StderrArtifactID: stderrArtifactID, DurationMS: duration}, ErrOutputTooLarge
 	}
 	if eventErr != nil {
-		return CLIExecuteOutput{}, eventErr
+		slog.Error("cli execution run_event append failed", "run_id", input.RunID, "run_step_id", input.RunStepID, "error", eventErr)
 	}
 
 	return CLIExecuteOutput{
@@ -550,6 +551,9 @@ func (e *Executor) buildEnvironment(ctx context.Context, orgID uuid.UUID, input 
 		return nil, nil, err
 	}
 	for key, value := range projectVars {
+		if isBlockedEnvKey(key, true) {
+			continue
+		}
 		result[key] = value
 		used[key] = "project"
 	}

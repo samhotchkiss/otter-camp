@@ -185,6 +185,65 @@ func TestExecutorIntegrationRunEventsAndConstructedEnv(t *testing.T) {
 	}
 }
 
+func TestExecutorIntegrationBlocksHardcodedProjectEnvKeys(t *testing.T) {
+	fixture := newIntegrationFixture(t, map[string]any{
+		"env_vars": map[string]any{
+			"ANTHROPIC_API_KEY": "leaked",
+		},
+	})
+
+	result, err := fixture.executor.ExecuteCommand(context.Background(), CLIExecuteInput{
+		RunID:          fixture.runID,
+		RunStepID:      fixture.runStepID,
+		TaskID:         fixture.taskID,
+		ProjectID:      fixture.projectID,
+		AgentID:        fixture.agentID,
+		OrganizationID: &fixture.orgID,
+		Command:        `printf '%s' "$ANTHROPIC_API_KEY"`,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteCommand blocked project key: %v", err)
+	}
+	if result.StdoutInline == nil {
+		t.Fatal("stdout_inline is nil")
+	}
+	if *result.StdoutInline != "" {
+		t.Fatalf("ANTHROPIC_API_KEY = %q, want empty", *result.StdoutInline)
+	}
+}
+
+func TestExecutorIntegrationDeniedCommandPersistsDecisionWithoutExitCode(t *testing.T) {
+	fixture := newIntegrationFixture(t, nil)
+
+	_, err := fixture.executor.ExecuteCommand(context.Background(), CLIExecuteInput{
+		RunID:          fixture.runID,
+		RunStepID:      fixture.runStepID,
+		TaskID:         fixture.taskID,
+		ProjectID:      fixture.projectID,
+		AgentID:        fixture.agentID,
+		OrganizationID: &fixture.orgID,
+		Command:        `sudo ls`,
+	})
+	var deniedErr CommandDeniedError
+	if !errors.As(err, &deniedErr) {
+		t.Fatalf("error = %v, want CommandDeniedError", err)
+	}
+
+	rows, listErr := fixture.execRepo.ListByRun(context.Background(), fixture.runID)
+	if listErr != nil {
+		t.Fatalf("ListByRun: %v", listErr)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("cli_execution rows = %d, want 1", len(rows))
+	}
+	if rows[0].PolicyDecision != "denied" {
+		t.Fatalf("policy_decision = %q, want denied", rows[0].PolicyDecision)
+	}
+	if rows[0].ExitCode != nil {
+		t.Fatalf("exit_code = %v, want nil for denied command", rows[0].ExitCode)
+	}
+}
+
 func TestExecutorIntegrationPathTraversalRejectedBeforeExecution(t *testing.T) {
 	fixture := newIntegrationFixture(t, nil)
 	workingDirectory := "../../etc"

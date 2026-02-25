@@ -79,3 +79,14 @@ func TestRiskClassifierSudoDenied(t *testing.T) {
 		t.Fatalf("error_code = %q, want command_denied", result.ErrorCode)
 	}
 }
+
+func TestRiskClassifierRedirectDenied(t *testing.T) {
+	classifier := NewRiskClassifier()
+	result := classifier.Evaluate("echo hello > /tmp/out.txt")
+	if !result.Denied {
+		t.Fatal("expected redirect command to be denied")
+	}
+	if result.ErrorCode != "redirect_not_supported" {
+		t.Fatalf("error_code = %q, want redirect_not_supported", result.ErrorCode)
+	}
+}
