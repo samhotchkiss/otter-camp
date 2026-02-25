@@ -122,6 +122,10 @@ func TestModelProviderRepoCRUDAndUniqueConflict(t *testing.T) {
 func TestToolDefinitionRepoCRUDListAndBulkUpsert(t *testing.T) {
 	pool := testdb.New(t)
 	repo := NewToolDefinitionRepo(pool)
+	var initialTotal int
+	if err := pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM tool_definition`).Scan(&initialTotal); err != nil {
+		t.Fatalf("initial count tools failed: %v", err)
+	}
 
 	created, err := repo.Create(context.Background(), ToolDefinition{
 		Name:        "file.read",
@@ -186,8 +190,8 @@ func TestToolDefinitionRepoCRUDListAndBulkUpsert(t *testing.T) {
 	if err := pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM tool_definition`).Scan(&total); err != nil {
 		t.Fatalf("count tools failed: %v", err)
 	}
-	if total != 8 {
-		t.Fatalf("tool_definition count = %d, want 8", total)
+	if total != initialTotal+8 {
+		t.Fatalf("tool_definition count = %d, want %d", total, initialTotal+8)
 	}
 
 	_, err = repo.Create(context.Background(), ToolDefinition{
@@ -200,6 +204,57 @@ func TestToolDefinitionRepoCRUDListAndBulkUpsert(t *testing.T) {
 	})
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("invalid tier error = %v, want ErrConflict", err)
+	}
+}
+
+func TestToolDefinitionTier1SeedMigration(t *testing.T) {
+	pool := testdb.New(t)
+	expected := []string{
+		"file.read",
+		"file.list",
+		"file.search",
+		"git.status",
+		"git.diff",
+		"git.log",
+		"memory.query",
+		"project.list",
+		"project.get",
+		"task.list",
+		"task.get",
+		"inbox.list",
+		"session.list",
+		"session.get",
+		"session.history",
+		"agent.list",
+		"agent.get",
+		"flow.get_template",
+		"flow.get_execution",
+		"schedule.list",
+		"merge_queue.status",
+	}
+
+	for _, name := range expected {
+		var (
+			tier   string
+			domain string
+			cap    *string
+		)
+		if err := pool.QueryRow(context.Background(), `
+			SELECT tool_tier, tool_domain, required_capability
+			FROM tool_definition
+			WHERE name = $1
+		`, name).Scan(&tier, &domain, &cap); err != nil {
+			t.Fatalf("seeded tool %q missing: %v", name, err)
+		}
+		if tier != "tier1" {
+			t.Fatalf("tool %q tier = %q, want tier1", name, tier)
+		}
+		if domain != "native" {
+			t.Fatalf("tool %q domain = %q, want native", name, domain)
+		}
+		if cap != nil {
+			t.Fatalf("tool %q capability = %v, want nil", name, *cap)
+		}
 	}
 }
 
