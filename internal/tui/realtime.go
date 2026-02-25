@@ -125,6 +125,7 @@ func NewEventReducer(logger *slog.Logger) *EventReducer {
 		"chat.message.created":   {},
 		"chat.message.delta":     {},
 		"chat.message.finalized": {},
+		"chat.tool_call.status":  {},
 		"task.status.changed":    {},
 		"task.flow.advanced":     {},
 	}
