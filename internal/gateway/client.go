@@ -948,6 +948,17 @@ func normalizeToolSchema(schema json.RawMessage) any {
 			"properties": map[string]any{},
 		}
 	}
+
+	// OpenAI and Anthropic require object schemas to include a "properties" key.
+	// If the parsed schema is an object type without "properties", inject an empty one.
+	if obj, ok := parsed.(map[string]any); ok {
+		if t, _ := obj["type"].(string); t == "object" {
+			if _, hasProps := obj["properties"]; !hasProps {
+				obj["properties"] = map[string]any{}
+			}
+		}
+	}
+
 	return parsed
 }
 
