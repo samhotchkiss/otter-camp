@@ -68,6 +68,54 @@ func TestListeningEvalRunsForAsyncSession(t *testing.T) {
 	}
 }
 
+func TestListeningEvalWaitReenqueuesAndSkipsPhase2(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700000000, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+	fixture.model.completeFn = func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "wait"}, nil
+		}
+		return ModelResponse{Content: "respond"}, nil
+	}
+	fixture.model.streamFn = func(context.Context, ModelRequest, func(string) error) (ModelResponse, error) {
+		t.Fatal("phase 2 model call should be skipped when listening eval returns wait")
+		return ModelResponse{}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if fixture.model.listeningEvalCalls != 1 {
+		t.Fatalf("listening eval calls = %d, want 1", fixture.model.listeningEvalCalls)
+	}
+	if fixture.model.streamCalls != 0 {
+		t.Fatalf("stream calls = %d, want 0", fixture.model.streamCalls)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	job := jobs[0]
+	if job.payload == nil {
+		t.Fatal("agent_turn payload missing")
+	}
+	if job.payload.SessionID != fixture.session.ID || job.payload.MessageID != fixture.userMessageID {
+		t.Fatalf("unexpected re-enqueue payload: %+v", *job.payload)
+	}
+	if job.runAfter == nil {
+		t.Fatal("expected run_after to be set")
+	}
+	wantRunAfter := base.Add(fixture.engine.listeningEvalDelay)
+	if !job.runAfter.Equal(wantRunAfter) {
+		t.Fatalf("run_after = %s, want %s", job.runAfter, wantRunAfter)
+	}
+	if !job.runAfter.After(base) {
+		t.Fatalf("run_after = %s, want > %s", job.runAfter, base)
+	}
+}
+
 func TestTierRoutingExecutesTier1ParallelThenTier2Sequential(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 
@@ -126,6 +174,59 @@ func TestTierRoutingExecutesTier1ParallelThenTier2Sequential(t *testing.T) {
 	}
 }
 
+func TestTierRoutingTwoTier2ToolsAreSequential(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+
+	var (
+		mu          sync.Mutex
+		startedAt   = map[string]time.Time{}
+		completedAt = map[string]time.Time{}
+	)
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+
+		start := time.Now()
+		mu.Lock()
+		startedAt[call.ID] = start
+		mu.Unlock()
+
+		if call.ID == "tier2-a" {
+			time.Sleep(40 * time.Millisecond)
+		}
+
+		end := time.Now()
+		mu.Lock()
+		completedAt[call.ID] = end
+		mu.Unlock()
+
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}, RunID: &runID}, nil
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		round++
+		if round == 1 {
+			return ModelResponse{ToolCalls: []ModelToolCall{
+				{ID: "tier2-a", Name: "cli.execute", Tier: "tier2"},
+				{ID: "tier2-b", Name: "run.deploy", Tier: "tier2"},
+			}}, nil
+		}
+		return ModelResponse{Content: "final"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if len(startedAt) != 2 || len(completedAt) != 2 {
+		t.Fatalf("tier2 calls recorded start=%d complete=%d, want 2 each", len(startedAt), len(completedAt))
+	}
+	if startedAt["tier2-b"].Before(completedAt["tier2-a"]) {
+		t.Fatalf("tier2-b started before tier2-a completed: start=%s first_done=%s", startedAt["tier2-b"], completedAt["tier2-a"])
+	}
+}
+
 func TestMaxToolCallsStopCondition(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.engine.maxToolCalls = 3
@@ -141,6 +242,59 @@ func TestMaxToolCallsStopCondition(t *testing.T) {
 
 	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
 		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if !fixture.messages.containsContent("[Max tool calls reached. Turn ended.]") {
+		t.Fatal("missing max tool calls stop system message")
+	}
+}
+
+func TestMaxToolCallsBudgetAccumulatesAcrossRounds(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.engine.maxToolCalls = 3
+
+	var (
+		mu              sync.Mutex
+		dispatchedTier1 []string
+	)
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		mu.Lock()
+		dispatchedTier1 = append(dispatchedTier1, call.ID)
+		mu.Unlock()
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}}, nil
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		round++
+		switch round {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{
+				{ID: "a", Name: "file.read", Tier: "tier1"},
+				{ID: "b", Name: "memory.query", Tier: "tier1"},
+			}}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{
+				{ID: "c", Name: "chat.search", Tier: "tier1"},
+				{ID: "d", Name: "task.list", Tier: "tier1"},
+			}}, nil
+		default:
+			return ModelResponse{Content: "final"}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	mu.Lock()
+	got := append([]string(nil), dispatchedTier1...)
+	mu.Unlock()
+	sort.Strings(got)
+	if len(got) != 3 {
+		t.Fatalf("tier1 dispatches = %v, want 3 total tool calls", got)
+	}
+	if strings.Join(got, ",") != "a,b,c" {
+		t.Fatalf("tier1 dispatch calls = %v, want [a b c]", got)
 	}
 	if !fixture.messages.containsContent("[Max tool calls reached. Turn ended.]") {
 		t.Fatal("missing max tool calls stop system message")
@@ -347,6 +501,7 @@ type unitFixture struct {
 	model        *fakeModelGateway
 	dispatcher   *fakeDispatcher
 	runCanceler  *fakeRunCanceler
+	enqueuer     *fakeEnqueuer
 	assembler    *fakeAssembler
 	memories     *fakeMemoryRepo
 	session      *chat.ChatSession
@@ -439,6 +594,7 @@ func newUnitFixture(t *testing.T, mode string) *unitFixture {
 		model:         modelGateway,
 		dispatcher:    dispatcher,
 		runCanceler:   runCanceler,
+		enqueuer:      enqueuer,
 		assembler:     assembler,
 		memories:      memories,
 		session:       session,
@@ -946,20 +1102,55 @@ func (f *fakeEventBus) Unsubscribe(_ eventbus.Subscription) {}
 
 type fakeEnqueuer struct {
 	mu   sync.Mutex
-	jobs []AgentTurnPayload
+	jobs []enqueuedJob
+}
+
+type enqueuedJob struct {
+	jobType  string
+	payload  *AgentTurnPayload
+	runAfter *time.Time
 }
 
 func (f *fakeEnqueuer) Enqueue(ctx context.Context, tx pgx.Tx, jobType string, priority int, payload any, runAfter *time.Time) (uuid.UUID, error) {
-	if strings.TrimSpace(jobType) == AgentTurnJobType {
+	entry := enqueuedJob{jobType: strings.TrimSpace(jobType)}
+	if runAfter != nil {
+		at := *runAfter
+		entry.runAfter = &at
+	}
+	if entry.jobType == AgentTurnJobType {
 		typed, ok := payload.(AgentTurnPayload)
 		if !ok {
 			return uuid.Nil, fmt.Errorf("unexpected payload type %T", payload)
 		}
-		f.mu.Lock()
-		f.jobs = append(f.jobs, typed)
-		f.mu.Unlock()
+		copyPayload := typed
+		entry.payload = &copyPayload
 	}
+	f.mu.Lock()
+	f.jobs = append(f.jobs, entry)
+	f.mu.Unlock()
 	return uuid.New(), nil
+}
+
+func (f *fakeEnqueuer) agentTurnJobs() []enqueuedJob {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]enqueuedJob, 0)
+	for _, job := range f.jobs {
+		if job.jobType != AgentTurnJobType {
+			continue
+		}
+		copyJob := job
+		if job.payload != nil {
+			payload := *job.payload
+			copyJob.payload = &payload
+		}
+		if job.runAfter != nil {
+			runAfter := *job.runAfter
+			copyJob.runAfter = &runAfter
+		}
+		out = append(out, copyJob)
+	}
+	return out
 }
 
 type fakeInvocationRepo struct {

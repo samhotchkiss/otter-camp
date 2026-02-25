@@ -299,6 +299,7 @@ type turnRuntime struct {
 	turn              *chat.ChatTurn
 	initialMessageID  uuid.UUID
 	startedAt         time.Time
+	toolCallsUsed     int
 	activeTier2RunID  *uuid.UUID
 	activeTier2RunMu  sync.RWMutex
 	modelRetryUsed    int
@@ -877,10 +878,15 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		maxDuration = e.asyncMaxDuration
 	}
 
-	remainingBudget := e.maxToolCalls
-	if remainingBudget < 1 {
-		remainingBudget = 1
+	toolBudget := e.maxToolCalls
+	if toolBudget < 1 {
+		toolBudget = 1
 	}
+	if rt.toolCallsUsed >= toolBudget {
+		_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
+		return true, nil
+	}
+
 	tier1 := make([]ToolCall, 0, len(toolCalls))
 	tier2 := make([]ToolCall, 0, len(toolCalls))
 	for _, call := range toolCalls {
@@ -891,19 +897,19 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 	}
 
-	processed := 0
 	if len(tier1) > 0 {
 		if e.now().After(rt.startedAt.Add(maxDuration)) {
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Turn duration limit reached. Turn ended.]")
 			return true, nil
 		}
-		if processed >= remainingBudget {
+		if rt.toolCallsUsed >= toolBudget {
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
 			return true, nil
 		}
 		runCalls := tier1
-		if len(runCalls) > remainingBudget-processed {
-			runCalls = runCalls[:remainingBudget-processed]
+		budgetRemaining := toolBudget - rt.toolCallsUsed
+		if len(runCalls) > budgetRemaining {
+			runCalls = runCalls[:budgetRemaining]
 		}
 		results, err := e.dispatchTier1Concurrent(ctx, runCalls)
 		if err != nil {
@@ -912,8 +918,8 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if err := e.appendToolResults(ctx, rt, results); err != nil {
 			return false, err
 		}
-		processed += len(runCalls)
-		if processed >= remainingBudget {
+		rt.toolCallsUsed += len(runCalls)
+		if rt.toolCallsUsed >= toolBudget {
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
 			return true, nil
 		}
@@ -924,7 +930,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Turn duration limit reached. Turn ended.]")
 			return true, nil
 		}
-		if processed >= remainingBudget {
+		if rt.toolCallsUsed >= toolBudget {
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
 			return true, nil
 		}
@@ -941,8 +947,8 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if err := e.appendToolResults(ctx, rt, []ToolResult{result}); err != nil {
 			return false, err
 		}
-		processed++
-		if processed >= remainingBudget {
+		rt.toolCallsUsed++
+		if rt.toolCallsUsed >= toolBudget {
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
 			return true, nil
 		}
