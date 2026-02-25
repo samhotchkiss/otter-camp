@@ -270,3 +270,185 @@ func expectMapValue(t *testing.T, value any, name string) map[string]any {
 	}
 	return out
 }
+
+// TestParseOpenAIStreamEventAccumulatesToolCallDeltas verifies that
+// parseOpenAIStreamEvent correctly returns tool_call deltas from the SSE data.
+func TestParseOpenAIStreamEventAccumulatesToolCallDeltas(t *testing.T) {
+	// First delta: id + name arrive on index 0.
+	data1 := `{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"file_read","arguments":""}}]}}]}`
+	chunk, deltas, usage, done, err := parseOpenAIStreamEvent(data1)
+	if err != nil {
+		t.Fatalf("parseOpenAIStreamEvent() error = %v", err)
+	}
+	if done {
+		t.Fatal("done = true, want false")
+	}
+	if chunk != "" {
+		t.Fatalf("chunk = %q, want empty", chunk)
+	}
+	if usage != nil {
+		t.Fatalf("usage = %v, want nil", usage)
+	}
+	if len(deltas) != 1 {
+		t.Fatalf("len(deltas) = %d, want 1", len(deltas))
+	}
+	if deltas[0].Index != 0 || deltas[0].ID != "call_abc" || deltas[0].Function.Name != "file_read" {
+		t.Fatalf("delta[0] unexpected: %+v", deltas[0])
+	}
+
+	// Second delta: arguments chunk arrives.
+	data2 := `{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":\"/tmp\""}}]}}]}`
+	_, deltas2, _, _, err := parseOpenAIStreamEvent(data2)
+	if err != nil {
+		t.Fatalf("parseOpenAIStreamEvent() error = %v", err)
+	}
+	if len(deltas2) != 1 || deltas2[0].Function.Arguments != `{"path":"/tmp"` {
+		t.Fatalf("delta[0].arguments = %q, want partial JSON", deltas2[0].Function.Arguments)
+	}
+
+	// [DONE] signals completion.
+	_, _, _, done2, err := parseOpenAIStreamEvent("[DONE]")
+	if err != nil {
+		t.Fatalf("parseOpenAIStreamEvent([DONE]) error = %v", err)
+	}
+	if !done2 {
+		t.Fatal("done = false, want true on [DONE]")
+	}
+}
+
+// TestParseOpenAICompletionExtractsToolCalls verifies non-streaming tool call parsing.
+func TestParseOpenAICompletionExtractsToolCalls(t *testing.T) {
+	raw := []byte(`{
+		"choices":[{
+			"message":{
+				"content":null,
+				"tool_calls":[{
+					"id":"call_xyz",
+					"type":"function",
+					"function":{"name":"memory_query","arguments":"{\"q\":\"hello\"}"}
+				}]
+			}
+		}],
+		"usage":{"prompt_tokens":10,"completion_tokens":19}
+	}`)
+
+	result, err := parseOpenAICompletion(raw)
+	if err != nil {
+		t.Fatalf("parseOpenAICompletion() error = %v", err)
+	}
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("len(ToolCalls) = %d, want 1", len(result.ToolCalls))
+	}
+	tc := result.ToolCalls[0]
+	if tc.ID != "call_xyz" {
+		t.Fatalf("ToolCall.ID = %q, want call_xyz", tc.ID)
+	}
+	if tc.Name != "memory_query" {
+		t.Fatalf("ToolCall.Name = %q, want memory_query", tc.Name)
+	}
+	if q, _ := tc.Arguments["q"].(string); q != "hello" {
+		t.Fatalf("ToolCall.Arguments[q] = %v, want hello", tc.Arguments["q"])
+	}
+	if result.Usage == nil || result.Usage.InputTokens != 10 || result.Usage.OutputTokens != 19 {
+		t.Fatalf("Usage = %+v, want {10 19 0}", result.Usage)
+	}
+}
+
+// TestParseAnthropicStreamEventAccumulatesToolUseBlocks verifies that
+// parseAnthropicStreamEvent surfaces tool_use content_block_start and
+// input_json_delta events correctly.
+func TestParseAnthropicStreamEventAccumulatesToolUseBlocks(t *testing.T) {
+	// content_block_start for a tool_use block.
+	startData := `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_001","name":"task_create"}}`
+	chunk, toolStart, toolDelta, usage, done, err := parseAnthropicStreamEvent("content_block_start", startData)
+	if err != nil {
+		t.Fatalf("parseAnthropicStreamEvent() error = %v", err)
+	}
+	if done || chunk != "" || toolDelta != nil || usage != nil {
+		t.Fatalf("unexpected non-nil fields: chunk=%q done=%v toolDelta=%v usage=%v", chunk, done, toolDelta, usage)
+	}
+	if toolStart == nil {
+		t.Fatal("toolStart = nil, want non-nil")
+	}
+	if toolStart.Index != 0 || toolStart.ID != "toolu_001" || toolStart.Name != "task_create" {
+		t.Fatalf("toolStart = %+v, unexpected", toolStart)
+	}
+
+	// input_json_delta with partial JSON.
+	deltaData := `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"title\":\"Fix"}}`
+	_, toolStart2, toolDelta2, _, _, err := parseAnthropicStreamEvent("content_block_delta", deltaData)
+	if err != nil {
+		t.Fatalf("parseAnthropicStreamEvent() error = %v", err)
+	}
+	if toolStart2 != nil {
+		t.Fatalf("toolStart2 non-nil on delta event: %+v", toolStart2)
+	}
+	if toolDelta2 == nil {
+		t.Fatal("toolDelta2 = nil, want non-nil")
+	}
+	if toolDelta2.Index != 0 || toolDelta2.PartialJSON != `{"title":"Fix` {
+		t.Fatalf("toolDelta2 = %+v, unexpected", toolDelta2)
+	}
+
+	// message_stop signals done.
+	_, _, _, _, done2, err := parseAnthropicStreamEvent("message_stop", `{"type":"message_stop"}`)
+	if err != nil {
+		t.Fatalf("parseAnthropicStreamEvent(message_stop) error = %v", err)
+	}
+	if !done2 {
+		t.Fatal("done = false, want true on message_stop")
+	}
+}
+
+// TestParseAnthropicCompletionExtractsToolCalls verifies non-streaming tool_use parsing.
+func TestParseAnthropicCompletionExtractsToolCalls(t *testing.T) {
+	raw := []byte(`{
+		"content":[
+			{"type":"tool_use","id":"toolu_002","name":"file_read","input":{"path":"/etc/hosts"}}
+		],
+		"usage":{"input_tokens":5,"output_tokens":12,"cache_read_input_tokens":0}
+	}`)
+
+	result, err := parseAnthropicCompletion(raw)
+	if err != nil {
+		t.Fatalf("parseAnthropicCompletion() error = %v", err)
+	}
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("len(ToolCalls) = %d, want 1", len(result.ToolCalls))
+	}
+	tc := result.ToolCalls[0]
+	if tc.ID != "toolu_002" || tc.Name != "file_read" {
+		t.Fatalf("ToolCall = %+v, unexpected", tc)
+	}
+	if p, _ := tc.Arguments["path"].(string); p != "/etc/hosts" {
+		t.Fatalf("ToolCall.Arguments[path] = %v, want /etc/hosts", tc.Arguments["path"])
+	}
+}
+
+// TestToolNameSanitizedNamePreservedInDispatch verifies the sanitized name is
+// stored in ModelToolCall.Name (reverse-mapping is done by dispatchTools in engine.go).
+func TestToolNameSanitizedNamePreservedInModelToolCall(t *testing.T) {
+	raw := []byte(`{
+		"choices":[{
+			"message":{
+				"tool_calls":[{
+					"id":"call_san",
+					"type":"function",
+					"function":{"name":"file_read","arguments":"{}"}
+				}]
+			}
+		}]
+	}`)
+	result, err := parseOpenAICompletion(raw)
+	if err != nil {
+		t.Fatalf("parseOpenAICompletion() error = %v", err)
+	}
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("len(ToolCalls) = %d, want 1", len(result.ToolCalls))
+	}
+	// The sanitized name (file_read) should be preserved as-is in ModelToolCall.Name.
+	// dispatchTools in engine.go will reverse-map it to file.read before broker dispatch.
+	if result.ToolCalls[0].Name != "file_read" {
+		t.Fatalf("Name = %q, want file_read", result.ToolCalls[0].Name)
+	}
+}

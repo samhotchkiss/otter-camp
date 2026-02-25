@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -447,6 +448,22 @@ func parseProviderStream(body io.Reader, providerType string, onChunk func(strin
 		firstChunkAt time.Time
 	)
 
+	// OpenAI streaming tool call accumulator keyed by delta index.
+	type openAIToolAccum struct {
+		id   string
+		name string
+		args strings.Builder
+	}
+	openAIAccums := map[int]*openAIToolAccum{}
+
+	// Anthropic streaming tool block accumulator keyed by block index.
+	type anthropicToolAccum struct {
+		id   string
+		name string
+		json strings.Builder
+	}
+	anthropicAccums := map[int]*anthropicToolAccum{}
+
 	err := parseSSE(body, func(eventType, data string) error {
 		if strings.TrimSpace(data) == "" {
 			return nil
@@ -454,7 +471,7 @@ func parseProviderStream(body io.Reader, providerType string, onChunk func(strin
 
 		switch providerType {
 		case "anthropic":
-			chunk, eventUsage, done, err := parseAnthropicStreamEvent(eventType, data)
+			chunk, toolStart, toolDelta, eventUsage, done, err := parseAnthropicStreamEvent(eventType, data)
 			if err != nil {
 				return err
 			}
@@ -464,6 +481,17 @@ func parseProviderStream(body io.Reader, providerType string, onChunk func(strin
 			if eventUsage != nil {
 				usageSeen = true
 				mergeUsage(&usage, eventUsage)
+			}
+			if toolStart != nil {
+				anthropicAccums[toolStart.Index] = &anthropicToolAccum{
+					id:   toolStart.ID,
+					name: toolStart.Name,
+				}
+			}
+			if toolDelta != nil {
+				if accum, ok := anthropicAccums[toolDelta.Index]; ok {
+					accum.json.WriteString(toolDelta.PartialJSON)
+				}
 			}
 			if chunk != "" {
 				if firstChunkAt.IsZero() {
@@ -476,7 +504,7 @@ func parseProviderStream(body io.Reader, providerType string, onChunk func(strin
 			}
 			return nil
 		default:
-			chunk, eventUsage, done, err := parseOpenAIStreamEvent(data)
+			chunk, toolCallDeltas, eventUsage, done, err := parseOpenAIStreamEvent(data)
 			if err != nil {
 				return err
 			}
@@ -486,6 +514,20 @@ func parseProviderStream(body io.Reader, providerType string, onChunk func(strin
 			if eventUsage != nil {
 				usageSeen = true
 				mergeUsage(&usage, eventUsage)
+			}
+			for _, delta := range toolCallDeltas {
+				accum := openAIAccums[delta.Index]
+				if accum == nil {
+					accum = &openAIToolAccum{}
+					openAIAccums[delta.Index] = accum
+				}
+				if delta.ID != "" {
+					accum.id = delta.ID
+				}
+				if delta.Function.Name != "" {
+					accum.name = delta.Function.Name
+				}
+				accum.args.WriteString(delta.Function.Arguments)
 			}
 			if chunk != "" {
 				if firstChunkAt.IsZero() {
@@ -503,8 +545,56 @@ func parseProviderStream(body io.Reader, providerType string, onChunk func(strin
 		return providerCallResult{}, err
 	}
 
+	// Finalize accumulated streaming tool calls.
+	var toolCalls []turn.ModelToolCall
+
+	if len(openAIAccums) > 0 {
+		indices := make([]int, 0, len(openAIAccums))
+		for idx := range openAIAccums {
+			indices = append(indices, idx)
+		}
+		sort.Ints(indices)
+		for _, idx := range indices {
+			accum := openAIAccums[idx]
+			var args map[string]any
+			if s := accum.args.String(); s != "" {
+				if jsonErr := json.Unmarshal([]byte(s), &args); jsonErr != nil {
+					args = map[string]any{"_raw": s}
+				}
+			}
+			toolCalls = append(toolCalls, turn.ModelToolCall{
+				ID:        accum.id,
+				Name:      accum.name,
+				Arguments: args,
+			})
+		}
+	}
+
+	if len(anthropicAccums) > 0 {
+		indices := make([]int, 0, len(anthropicAccums))
+		for idx := range anthropicAccums {
+			indices = append(indices, idx)
+		}
+		sort.Ints(indices)
+		for _, idx := range indices {
+			accum := anthropicAccums[idx]
+			var args map[string]any
+			if s := accum.json.String(); s != "" {
+				if jsonErr := json.Unmarshal([]byte(s), &args); jsonErr != nil {
+					args = map[string]any{"_raw": s}
+				}
+			}
+			toolCalls = append(toolCalls, turn.ModelToolCall{
+				ID:        accum.id,
+				Name:      accum.name,
+				Arguments: args,
+			})
+		}
+	}
+
 	result := providerCallResult{
 		Content:      builder.String(),
+		ToolCalls:    toolCalls,
 		FirstChunkAt: firstChunkAt,
 	}
 	if usageSeen {
@@ -558,10 +648,21 @@ func parseSSE(body io.Reader, onEvent func(eventType, data string) error) error 
 	return flush()
 }
 
+type openAIStreamToolCallDelta struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
 type openAIStreamPayload struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content   string                      `json:"content"`
+			ToolCalls []openAIStreamToolCallDelta `json:"tool_calls"`
 		} `json:"delta"`
 	} `json:"choices"`
 	Usage *struct {
@@ -573,14 +674,14 @@ type openAIStreamPayload struct {
 	} `json:"usage"`
 }
 
-func parseOpenAIStreamEvent(data string) (chunk string, usage *turn.ModelUsage, done bool, err error) {
+func parseOpenAIStreamEvent(data string) (chunk string, toolCallDeltas []openAIStreamToolCallDelta, usage *turn.ModelUsage, done bool, err error) {
 	if strings.EqualFold(strings.TrimSpace(data), "[DONE]") {
-		return "", nil, true, nil
+		return "", nil, nil, true, nil
 	}
 
 	var payload openAIStreamPayload
 	if err := json.Unmarshal([]byte(data), &payload); err != nil {
-		return "", nil, false, err
+		return "", nil, nil, false, err
 	}
 
 	if payload.Usage != nil {
@@ -598,18 +699,35 @@ func parseOpenAIStreamEvent(data string) (chunk string, usage *turn.ModelUsage, 
 		if strings.TrimSpace(choice.Delta.Content) != "" {
 			chunk += choice.Delta.Content
 		}
+		toolCallDeltas = append(toolCallDeltas, choice.Delta.ToolCalls...)
 	}
-	return chunk, usage, false, nil
+	return chunk, toolCallDeltas, usage, false, nil
+}
+
+type anthropicToolBlockStart struct {
+	Index int
+	ID    string
+	Name  string
+}
+
+type anthropicToolBlockDelta struct {
+	Index       int
+	PartialJSON string
 }
 
 type anthropicStreamPayload struct {
 	Type  string `json:"type"`
+	Index int    `json:"index"`
 	Delta *struct {
-		Text string `json:"text"`
+		Type        string `json:"type"`
+		Text        string `json:"text"`
+		PartialJSON string `json:"partial_json"`
 	} `json:"delta"`
 	ContentBlock *struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
 	} `json:"content_block"`
 	Usage *struct {
 		InputTokens          int `json:"input_tokens"`
@@ -625,10 +743,10 @@ type anthropicStreamPayload struct {
 	} `json:"message"`
 }
 
-func parseAnthropicStreamEvent(eventType, data string) (chunk string, usage *turn.ModelUsage, done bool, err error) {
+func parseAnthropicStreamEvent(eventType, data string) (chunk string, toolStart *anthropicToolBlockStart, toolDelta *anthropicToolBlockDelta, usage *turn.ModelUsage, done bool, err error) {
 	var payload anthropicStreamPayload
 	if err := json.Unmarshal([]byte(data), &payload); err != nil {
-		return "", nil, false, err
+		return "", nil, nil, nil, false, err
 	}
 
 	if payload.Usage != nil {
@@ -648,14 +766,27 @@ func parseAnthropicStreamEvent(eventType, data string) (chunk string, usage *tur
 
 	switch strings.TrimSpace(eventType) {
 	case "message_stop":
-		return "", usage, true, nil
+		return "", nil, nil, usage, true, nil
+	case "content_block_start":
+		if payload.ContentBlock != nil && payload.ContentBlock.Type == "tool_use" {
+			toolStart = &anthropicToolBlockStart{
+				Index: payload.Index,
+				ID:    payload.ContentBlock.ID,
+				Name:  payload.ContentBlock.Name,
+			}
+		} else if payload.ContentBlock != nil {
+			chunk = payload.ContentBlock.Text
+		}
 	case "content_block_delta":
 		if payload.Delta != nil {
-			chunk = payload.Delta.Text
-		}
-	case "content_block_start":
-		if payload.ContentBlock != nil {
-			chunk = payload.ContentBlock.Text
+			if payload.Delta.Type == "input_json_delta" {
+				toolDelta = &anthropicToolBlockDelta{
+					Index:       payload.Index,
+					PartialJSON: payload.Delta.PartialJSON,
+				}
+			} else {
+				chunk = payload.Delta.Text
+			}
 		}
 	default:
 		if payload.Delta != nil {
@@ -663,13 +794,21 @@ func parseAnthropicStreamEvent(eventType, data string) (chunk string, usage *tur
 		}
 	}
 
-	return chunk, usage, false, nil
+	return chunk, toolStart, toolDelta, usage, false, nil
 }
 
 type openAICompletionPayload struct {
 	Choices []struct {
 		Message struct {
-			Content string `json:"content"`
+			Content   string `json:"content"`
+			ToolCalls []struct {
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
 		} `json:"message"`
 	} `json:"choices"`
 	Usage *struct {
@@ -688,15 +827,29 @@ func parseOpenAICompletion(raw []byte) (providerCallResult, error) {
 	}
 
 	contentBuilder := strings.Builder{}
+	var toolCalls []turn.ModelToolCall
 	for _, choice := range payload.Choices {
-		if strings.TrimSpace(choice.Message.Content) == "" {
-			continue
+		if strings.TrimSpace(choice.Message.Content) != "" {
+			contentBuilder.WriteString(choice.Message.Content)
 		}
-		contentBuilder.WriteString(choice.Message.Content)
+		for _, tc := range choice.Message.ToolCalls {
+			var args map[string]any
+			if tc.Function.Arguments != "" {
+				if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+					args = map[string]any{"_raw": tc.Function.Arguments}
+				}
+			}
+			toolCalls = append(toolCalls, turn.ModelToolCall{
+				ID:        tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: args,
+			})
+		}
 	}
 
 	result := providerCallResult{
-		Content: contentBuilder.String(),
+		Content:   contentBuilder.String(),
+		ToolCalls: toolCalls,
 	}
 	if payload.Usage != nil {
 		result.Usage = &turn.ModelUsage{
@@ -712,8 +865,11 @@ func parseOpenAICompletion(raw []byte) (providerCallResult, error) {
 
 type anthropicCompletionPayload struct {
 	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type  string          `json:"type"`
+		Text  string          `json:"text"`
+		ID    string          `json:"id"`
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input"`
 	} `json:"content"`
 	Usage *struct {
 		InputTokens          int `json:"input_tokens"`
@@ -729,15 +885,31 @@ func parseAnthropicCompletion(raw []byte) (providerCallResult, error) {
 	}
 
 	contentBuilder := strings.Builder{}
+	var toolCalls []turn.ModelToolCall
 	for _, block := range payload.Content {
-		if strings.TrimSpace(block.Text) == "" {
-			continue
+		switch block.Type {
+		case "tool_use":
+			var args map[string]any
+			if len(block.Input) > 0 {
+				if err := json.Unmarshal(block.Input, &args); err != nil {
+					args = map[string]any{"_raw": string(block.Input)}
+				}
+			}
+			toolCalls = append(toolCalls, turn.ModelToolCall{
+				ID:        block.ID,
+				Name:      block.Name,
+				Arguments: args,
+			})
+		default:
+			if strings.TrimSpace(block.Text) != "" {
+				contentBuilder.WriteString(block.Text)
+			}
 		}
-		contentBuilder.WriteString(block.Text)
 	}
 
 	result := providerCallResult{
-		Content: contentBuilder.String(),
+		Content:   contentBuilder.String(),
+		ToolCalls: toolCalls,
 	}
 	if payload.Usage != nil {
 		result.Usage = &turn.ModelUsage{
