@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -333,10 +334,25 @@ func newFlowFixture073(t *testing.T) flowFixture073 {
 	if err != nil {
 		t.Fatalf("new task service: %v", err)
 	}
+	chatService, err := chat.NewService(chat.Options{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("new chat service: %v", err)
+	}
+	flowSessionBridge, err := NewFlowSessionBridge(FlowSessionBridgeOptions{
+		Pool:  pool,
+		Chats: chatService,
+	})
+	if err != nil {
+		t.Fatalf("new flow session bridge: %v", err)
+	}
 	flowService, err := flowsvc.NewService(flowsvc.Options{
-		Pool:         pool,
-		TasksService: taskService,
-		Events:       bus,
+		Pool:          pool,
+		TasksService:  taskService,
+		Events:        bus,
+		SessionBridge: flowSessionBridge,
 	})
 	if err != nil {
 		t.Fatalf("new flow service: %v", err)

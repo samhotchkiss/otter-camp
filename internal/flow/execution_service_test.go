@@ -138,12 +138,16 @@ func TestRejectFlowNodeMaxVisitsExceeded(t *testing.T) {
 type fakeExecutionRepo struct {
 	active repo.FlowNodeExecution
 	byTask map[uuid.UUID][]repo.FlowNodeExecution
+	byID   map[uuid.UUID]repo.FlowNodeExecution
 }
 
 func (f *fakeExecutionRepo) Create(context.Context, repo.FlowNodeExecution) (repo.FlowNodeExecution, error) {
 	return repo.FlowNodeExecution{}, nil
 }
-func (f *fakeExecutionRepo) GetByID(context.Context, uuid.UUID) (repo.FlowNodeExecution, error) {
+func (f *fakeExecutionRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNodeExecution, error) {
+	if item, ok := f.byID[id]; ok {
+		return item, nil
+	}
 	return repo.FlowNodeExecution{}, repo.ErrNotFound
 }
 func (f *fakeExecutionRepo) GetActive(_ context.Context, taskID, flowNodeID uuid.UUID) (repo.FlowNodeExecution, error) {
@@ -181,11 +185,13 @@ func (f *fakeDependencyRepo) ListInbound(context.Context, string, uuid.UUID) ([]
 }
 
 type fakeSubtaskRepo struct {
-	items map[uuid.UUID]repo.ProjectSubtask
+	items       map[uuid.UUID]repo.ProjectSubtask
+	createCalls int
 }
 
-func (f *fakeSubtaskRepo) Create(context.Context, repo.ProjectSubtask) (repo.ProjectSubtask, error) {
-	return repo.ProjectSubtask{}, nil
+func (f *fakeSubtaskRepo) Create(_ context.Context, item repo.ProjectSubtask) (repo.ProjectSubtask, error) {
+	f.createCalls++
+	return item, nil
 }
 func (f *fakeSubtaskRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectSubtask, error) {
 	item, ok := f.items[id]
@@ -204,6 +210,28 @@ func (f *fakeSubtaskRepo) UpdateStatus(_ context.Context, id uuid.UUID, status s
 	return item, nil
 }
 func (f *fakeSubtaskRepo) NextSequenceNumber(context.Context, uuid.UUID) (int, error) { return 1, nil }
+
+type fakeAgentRepo struct {
+	err error
+}
+
+func (f *fakeAgentRepo) GetByID(context.Context, uuid.UUID) (repo.Agent, error) {
+	if f.err != nil {
+		return repo.Agent{}, f.err
+	}
+	return repo.Agent{ID: uuid.New()}, nil
+}
+
+type fakeUserRepo struct {
+	err error
+}
+
+func (f *fakeUserRepo) GetByID(context.Context, uuid.UUID) (repo.HumanUser, error) {
+	if f.err != nil {
+		return repo.HumanUser{}, f.err
+	}
+	return repo.HumanUser{ID: uuid.New()}, nil
+}
 
 type fakeTaskRepo struct {
 	items map[uuid.UUID]repo.ProjectTask
@@ -248,4 +276,37 @@ func (f *fakeTaskCoordinator) TransitionStatus(context.Context, uuid.UUID, strin
 }
 func (f *fakeTaskCoordinator) MarkBlocked(context.Context, uuid.UUID, string, tasksvc.Actor) (*tasksvc.ProjectTask, error) {
 	return &tasksvc.ProjectTask{}, nil
+}
+
+func TestCreateSubtaskMissingAgentReturnsErrAgentNotFound(t *testing.T) {
+	executionID := uuid.New()
+	taskID := uuid.New()
+	assigneeType := "agent"
+	assigneeID := uuid.New()
+
+	subtasks := &fakeSubtaskRepo{items: make(map[uuid.UUID]repo.ProjectSubtask)}
+	svc := &service{
+		executions: &fakeExecutionRepo{
+			byID: map[uuid.UUID]repo.FlowNodeExecution{
+				executionID: {
+					ID:     executionID,
+					TaskID: taskID,
+				},
+			},
+		},
+		subtasks: subtasks,
+		agents:   &fakeAgentRepo{err: repo.ErrNotFound},
+		users:    &fakeUserRepo{},
+	}
+
+	_, err := svc.CreateSubtask(context.Background(), executionID, "missing agent", nil, SubtaskAssignee{
+		Type: &assigneeType,
+		ID:   &assigneeID,
+	})
+	if !errors.Is(err, ErrAgentNotFound) {
+		t.Fatalf("CreateSubtask error = %v, want ErrAgentNotFound", err)
+	}
+	if subtasks.createCalls != 0 {
+		t.Fatalf("Create calls = %d, want 0", subtasks.createCalls)
+	}
 }
