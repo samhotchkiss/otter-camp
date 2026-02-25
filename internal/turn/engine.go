@@ -52,6 +52,7 @@ type AgentTurnPayload struct {
 }
 
 type ModelRequest struct {
+	OrganizationID  uuid.UUID
 	SessionID       uuid.UUID
 	TurnID          uuid.UUID
 	AgentID         uuid.UUID
@@ -803,6 +804,7 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	messages, _ := e.messages.ListBySession(ctx, rt.session.ID)
 	recent := lastNUserMessages(messages, 3)
 	resp, err := e.models.Complete(ctx, ModelRequest{
+		OrganizationID:  rt.session.OrganizationID,
 		SessionID:       rt.session.ID,
 		TurnID:          rt.turn.ID,
 		AgentID:         rt.agent.ID,
@@ -839,6 +841,7 @@ func (e *TurnEngine) runListeningEval(ctx context.Context, rt *turnRuntime, asse
 	messages, _ := e.messages.ListBySession(ctx, rt.session.ID)
 	last3 := lastNUserMessages(messages, 3)
 	resp, err := e.models.Complete(ctx, ModelRequest{
+		OrganizationID:  rt.session.OrganizationID,
 		SessionID:       rt.session.ID,
 		TurnID:          rt.turn.ID,
 		AgentID:         rt.agent.ID,
@@ -866,11 +869,26 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if id == "" {
 			id = fmt.Sprintf("tool-%d", i+1)
 		}
+		arguments := cloneMap(call.Arguments)
+		arguments["organization_id"] = rt.session.OrganizationID.String()
+		arguments["session_id"] = rt.session.ID.String()
+		arguments["turn_id"] = rt.turn.ID.String()
+		arguments["agent_id"] = rt.agent.ID.String()
+		if projectID := resolveProjectID(ctx, rt.session, e.tasks); projectID != nil {
+			if _, exists := arguments["project_id"]; !exists {
+				arguments["project_id"] = projectID.String()
+			}
+		}
+		if taskID := resolveTaskID(rt.session); taskID != nil {
+			if _, exists := arguments["task_id"]; !exists {
+				arguments["task_id"] = taskID.String()
+			}
+		}
 		toolCalls = append(toolCalls, ToolCall{
 			ID:              id,
 			Name:            strings.TrimSpace(call.Name),
 			Tier:            strings.TrimSpace(strings.ToLower(call.Tier)),
-			Arguments:       cloneMap(call.Arguments),
+			Arguments:       arguments,
 			MCPConnectionID: call.MCPConnectionID,
 		})
 	}
@@ -1069,12 +1087,13 @@ func (e *TurnEngine) callMainModel(
 		lastSteerPollChunks := 0
 
 		response, callErr := e.models.StreamComplete(ctx, ModelRequest{
-			SessionID: rt.session.ID,
-			TurnID:    rt.turn.ID,
-			AgentID:   rt.agent.ID,
-			Purpose:   "agent_turn",
-			Profile:   profile,
-			Prompt:    assembled,
+			OrganizationID: rt.session.OrganizationID,
+			SessionID:      rt.session.ID,
+			TurnID:         rt.turn.ID,
+			AgentID:        rt.agent.ID,
+			Purpose:        "agent_turn",
+			Profile:        profile,
+			Prompt:         assembled,
 		}, func(token string) error {
 			if !streamingMarked {
 				if err := e.chat.UpdateMessageStatus(ctx, assistant.ID, "streaming", ""); err != nil {
@@ -1466,6 +1485,9 @@ func isTransientModelError(err error) bool {
 		return false
 	}
 	if errors.Is(err, ErrModelTransient) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if errors.Is(err, ErrRateLimited) {
 		return true
 	}
 	var netErr net.Error

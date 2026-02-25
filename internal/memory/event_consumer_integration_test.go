@@ -5,9 +5,12 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/memory/compaction"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
@@ -142,6 +146,162 @@ func TestTaskConsolidationTriggeredByTaskCompletedEvent(t *testing.T) {
 	}
 }
 
+func TestTurnExtractionTriggeredByTurnCompletedEvent(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org := seedMemoryOrg(t, ctx, pool)
+	sessionID, turnID := seedAgentTurnForMemoryExtraction(t, ctx, pool, org.ID, "Frank noted that db-prod-01 handles production traffic and requires strict backup windows every Monday morning.")
+
+	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{PollInterval: 10 * time.Millisecond})
+	worker := jobqueue.New(pool, nil, jobqueue.Config{})
+	extractor := &recordingTurnExtractor{pool: pool}
+	consumer, err := NewEventConsumer(EventConsumerOptions{
+		Pool:      pool,
+		Events:    bus,
+		Enqueuer:  worker,
+		Extractor: extractor,
+	})
+	if err != nil {
+		t.Fatalf("NewEventConsumer: %v", err)
+	}
+	consumer.RegisterJobs(worker)
+
+	sub := consumer.SubscribeTurnCompleted(&org.ID)
+	defer bus.Unsubscribe(sub)
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	workerErr := make(chan error, 1)
+	go func() {
+		workerErr <- worker.Start(runCtx)
+	}()
+	defer func() {
+		_ = worker.Stop()
+		if err := <-workerErr; err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("job worker returned error: %v", err)
+		}
+	}()
+
+	payload, _ := json.Marshal(map[string]any{
+		"session_id": sessionID,
+		"turn_id":    turnID,
+	})
+	if err := bus.Publish(ctx, nil, eventbus.DomainEvent{
+		OrganizationID: org.ID,
+		EventType:      "chat.turn.completed",
+		ActorType:      "system",
+		Payload:        payload,
+	}); err != nil {
+		t.Fatalf("publish chat.turn.completed: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if extractor.CallCount() >= 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if extractor.CallCount() != 1 {
+		t.Fatalf("extractor call count = %d, want 1", extractor.CallCount())
+	}
+
+	var memoryCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM memory
+		WHERE organization_id = $1
+	`, org.ID).Scan(&memoryCount); err != nil {
+		t.Fatalf("count extracted memories: %v", err)
+	}
+	if memoryCount == 0 {
+		t.Fatal("expected extracted memory row")
+	}
+
+	// Re-publishing the same event should be idempotent and not enqueue a second extraction job.
+	if err := bus.Publish(ctx, nil, eventbus.DomainEvent{
+		OrganizationID: org.ID,
+		EventType:      "chat.turn.completed",
+		ActorType:      "system",
+		Payload:        payload,
+	}); err != nil {
+		t.Fatalf("publish duplicate chat.turn.completed: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if extractor.CallCount() != 1 {
+		t.Fatalf("extractor call count after duplicate event = %d, want 1", extractor.CallCount())
+	}
+}
+
+func TestTurnExtractionHandlesEmptyTurnGracefully(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org := seedMemoryOrg(t, ctx, pool)
+	sessionID, turnID := seedAgentTurnForMemoryExtraction(t, ctx, pool, org.ID, "   ")
+
+	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{PollInterval: 10 * time.Millisecond})
+	worker := jobqueue.New(pool, nil, jobqueue.Config{})
+	extractor := &recordingTurnExtractor{pool: pool}
+	consumer, err := NewEventConsumer(EventConsumerOptions{
+		Pool:      pool,
+		Events:    bus,
+		Enqueuer:  worker,
+		Extractor: extractor,
+	})
+	if err != nil {
+		t.Fatalf("NewEventConsumer: %v", err)
+	}
+	consumer.RegisterJobs(worker)
+
+	sub := consumer.SubscribeTurnCompleted(&org.ID)
+	defer bus.Unsubscribe(sub)
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	workerErr := make(chan error, 1)
+	go func() {
+		workerErr <- worker.Start(runCtx)
+	}()
+	defer func() {
+		_ = worker.Stop()
+		if err := <-workerErr; err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("job worker returned error: %v", err)
+		}
+	}()
+
+	payload, _ := json.Marshal(map[string]any{
+		"session_id": sessionID,
+		"turn_id":    turnID,
+	})
+	if err := bus.Publish(ctx, nil, eventbus.DomainEvent{
+		OrganizationID: org.ID,
+		EventType:      "chat.turn.completed",
+		ActorType:      "system",
+		Payload:        payload,
+	}); err != nil {
+		t.Fatalf("publish chat.turn.completed: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	if extractor.CallCount() != 0 {
+		t.Fatalf("extractor call count = %d, want 0 for empty turn", extractor.CallCount())
+	}
+
+	var memoryCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM memory
+		WHERE organization_id = $1
+	`, org.ID).Scan(&memoryCount); err != nil {
+		t.Fatalf("count extracted memories: %v", err)
+	}
+	if memoryCount != 0 {
+		t.Fatalf("memory count = %d, want 0 for empty turn", memoryCount)
+	}
+}
+
 type staticTaskSummaryModel struct {
 	text string
 }
@@ -207,4 +367,102 @@ func seedMemoryTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID
 		t.Fatalf("create task: %v", err)
 	}
 	return task
+}
+
+func seedAgentTurnForMemoryExtraction(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, content string) (uuid.UUID, uuid.UUID) {
+	t.Helper()
+
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "organization",
+		ScopeID:        orgID,
+		Mode:           "sync",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create chat session: %v", err)
+	}
+
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:       orgID,
+		DisplayName:          "Turn Extraction Agent",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		AgentType:            "worker",
+		MemoryReadScopes:     []string{"org"},
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+		PrivateMemory:        false,
+		OperatorInstructions: "",
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:      session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   agent.ID,
+		Status:         "completed",
+	})
+	if err != nil {
+		t.Fatalf("create chat turn: %v", err)
+	}
+
+	authorType := "agent"
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID:      session.ID,
+		TurnID:         &turn.ID,
+		SequenceNumber: 1,
+		AuthorType:     &authorType,
+		AuthorID:       &agent.ID,
+		Role:           "assistant",
+		Content:        content,
+		Status:         "final",
+		Metadata:       json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("create chat message: %v", err)
+	}
+
+	return session.ID, turn.ID
+}
+
+type recordingTurnExtractor struct {
+	pool *pgxpool.Pool
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (e *recordingTurnExtractor) ExtractFromMessages(ctx context.Context, orgID uuid.UUID, msgs []ChatMessage, _ ExtractionSourceContext) error {
+	e.mu.Lock()
+	e.calls++
+	e.mu.Unlock()
+
+	content := strings.TrimSpace(msgs[0].Content)
+	if content == "" {
+		return nil
+	}
+	_, err := repo.NewMemoryRepo(e.pool).Create(ctx, repo.Memory{
+		OrganizationID: orgID,
+		MemoryType:     "semantic",
+		Scope:          "org",
+		Content:        content,
+		ContentHash:    uuid.NewString(),
+		Confidence:     0.8,
+		UtilityScore:   0.8,
+		Status:         "active",
+		TrustTier:      0.8,
+	})
+	return err
+}
+
+func (e *recordingTurnExtractor) CallCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.calls
 }

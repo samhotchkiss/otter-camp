@@ -12,10 +12,60 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
+
+func TestFlowExecutionServiceStartFlowWithDefaultSingleAgentTemplate(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	bootstrapper := bootstrap.NewBootstrapper(bootstrap.Options{
+		Pool:      pool,
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		SkillsDir: t.TempDir(),
+		OrgSlug:   "default",
+		OrgName:   "OtterCamp",
+		Version:   "test-version",
+	})
+	if err := bootstrapper.Run(ctx); err != nil {
+		t.Fatalf("bootstrap run: %v", err)
+	}
+
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, err := fixture.templateRepo.GetCurrentBySlug(ctx, nil, nil, "default-single-agent")
+	if err != nil {
+		t.Fatalf("GetCurrentBySlug default-single-agent: %v", err)
+	}
+	if template.StartNodeID == nil {
+		t.Fatal("default-single-agent start_node_id is nil")
+	}
+
+	taskRecord := seedFlowTask(t, ctx, fixture, "Flow task (default template)", "in_progress", &template.ID)
+
+	started, err := fixture.service.StartFlow(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if started.FlowNodeID != *template.StartNodeID {
+		t.Fatalf("start flow_node_id = %s, want %s", started.FlowNodeID, *template.StartNodeID)
+	}
+
+	var executionCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM flow_node_execution
+		WHERE task_id = $1
+	`, taskRecord.ID).Scan(&executionCount); err != nil {
+		t.Fatalf("count flow_node_execution rows: %v", err)
+	}
+	if executionCount != 1 {
+		t.Fatalf("flow_node_execution count = %d, want 1", executionCount)
+	}
+}
 
 func TestFlowExecutionServiceAdvanceThroughTerminalNode(t *testing.T) {
 	ctx := context.Background()

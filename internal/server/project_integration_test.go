@@ -166,11 +166,31 @@ func TestProjectHTTPFlowTemplateScheduleAndNodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create system template: %v", err)
 	}
-	patchSystem := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/flow-templates/"+systemTemplate.ID.String(), map[string]any{
+	patchSystemMember := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/flow-templates/"+systemTemplate.ID.String(), map[string]any{
 		"display_name": "Nope",
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if patchSystemMember.StatusCode != http.StatusForbidden {
+		t.Fatalf("member patch system template status = %d, want %d body=%s", patchSystemMember.StatusCode, http.StatusForbidden, string(patchSystemMember.Body))
+	}
+
+	patchSystemAdmin := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/flow-templates/"+systemTemplate.ID.String(), map[string]any{
+		"display_name": "System Updated",
 	}, map[string]string{"Authorization": "Bearer " + adminToken})
-	if patchSystem.StatusCode != http.StatusForbidden {
-		t.Fatalf("patch system template status = %d, want %d body=%s", patchSystem.StatusCode, http.StatusForbidden, string(patchSystem.Body))
+	if patchSystemAdmin.StatusCode != http.StatusOK {
+		t.Fatalf("admin patch system template status = %d, want %d body=%s", patchSystemAdmin.StatusCode, http.StatusOK, string(patchSystemAdmin.Body))
+	}
+	if got := jsonPathString(t, patchSystemAdmin.Body, "data", "display_name"); got != "System Updated" {
+		t.Fatalf("system template display_name = %q, want %q body=%s", got, "System Updated", string(patchSystemAdmin.Body))
+	}
+
+	memberSystemNodeCreate := mustJSON(t, http.MethodPost, testServer.URL+"/v1/flow-templates/"+systemTemplate.ID.String()+"/nodes", map[string]any{
+		"display_name": "System Node",
+		"node_type":    "work",
+		"position":     0,
+		"max_visits":   10,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if memberSystemNodeCreate.StatusCode != http.StatusForbidden {
+		t.Fatalf("member create system node status = %d, want %d body=%s", memberSystemNodeCreate.StatusCode, http.StatusForbidden, string(memberSystemNodeCreate.Body))
 	}
 
 	ensureProjectTaskTableForHTTP(t, testServer.Pool)
@@ -331,6 +351,61 @@ func TestProjectHTTPFlowTemplateScheduleAndNodes(t *testing.T) {
 	}
 	if len(data) != 1 {
 		t.Fatalf("node count = %d, want 1 body=%s", len(data), string(nodesAfterDelete.Body))
+	}
+}
+
+func TestProjectHTTPFlowNodeCreatePersistsNextNodeID(t *testing.T) {
+	testServer, _, adminUser, memberUser := newProjectTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	memberToken := loginToken(t, testServer.URL, memberUser.Email, "member-password")
+
+	createdProject := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects", map[string]any{
+		"slug":          "template-next-" + strings.ToLower(uuid.NewString()[:8]),
+		"display_name":  "Template Next",
+		"delivery_mode": "gated",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if createdProject.StatusCode != http.StatusCreated {
+		t.Fatalf("create project status = %d, want %d body=%s", createdProject.StatusCode, http.StatusCreated, string(createdProject.Body))
+	}
+	projectID := jsonPathString(t, createdProject.Body, "data", "id")
+
+	projectTemplate := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+projectID+"/flow-templates", map[string]any{
+		"slug":         "build-flow-next",
+		"display_name": "Build Flow Next",
+		"description":  "v1",
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if projectTemplate.StatusCode != http.StatusCreated {
+		t.Fatalf("create flow template status = %d, want %d body=%s", projectTemplate.StatusCode, http.StatusCreated, string(projectTemplate.Body))
+	}
+	templateID := jsonPathString(t, projectTemplate.Body, "data", "id")
+
+	nodeA := mustJSON(t, http.MethodPost, testServer.URL+"/v1/flow-templates/"+templateID+"/nodes", map[string]any{
+		"display_name":          "Node A",
+		"node_type":             "work",
+		"requires_human_review": false,
+		"position":              0,
+		"max_visits":            10,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if nodeA.StatusCode != http.StatusCreated {
+		t.Fatalf("create node A status = %d, want %d body=%s", nodeA.StatusCode, http.StatusCreated, string(nodeA.Body))
+	}
+	nodeAID := jsonPathString(t, nodeA.Body, "data", "id")
+
+	nodeB := mustJSON(t, http.MethodPost, testServer.URL+"/v1/flow-templates/"+templateID+"/nodes", map[string]any{
+		"display_name":          "Node B",
+		"node_type":             "review",
+		"requires_human_review": true,
+		"position":              1,
+		"next_node_id":          nodeAID,
+		"max_visits":            10,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if nodeB.StatusCode != http.StatusCreated {
+		t.Fatalf("create node B status = %d, want %d body=%s", nodeB.StatusCode, http.StatusCreated, string(nodeB.Body))
+	}
+	if got := jsonPathString(t, nodeB.Body, "data", "next_node_id"); got != nodeAID {
+		t.Fatalf("created node next_node_id = %q, want %q body=%s", got, nodeAID, string(nodeB.Body))
 	}
 }
 
