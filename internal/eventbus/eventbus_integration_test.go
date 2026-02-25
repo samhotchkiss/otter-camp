@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
-	"github.com/samhotchkiss/otter-camp/internal/testutil"
 )
 
 func TestEventBus_Publish_OrderedBySeq(t *testing.T) {
@@ -69,7 +68,7 @@ func TestEventBus_ConsumerCursor_Tracking(t *testing.T) {
 	org := createEventBusOrg079(t, pool, "eventbus-cursor")
 
 	for i := 0; i < 12; i++ {
-		testutil.PublishEvent(t, pool, org.ID, "event.cursor", map[string]any{"n": i})
+		testdb.PublishEvent(t, pool, org.ID, "event.cursor", map[string]any{"n": i})
 	}
 
 	if _, err := pool.Exec(context.Background(), `
@@ -163,7 +162,7 @@ func TestEventBus_MultipleConsumers_Independent(t *testing.T) {
 	org := createEventBusOrg079(t, pool, "eventbus-multi-consumers")
 
 	for i := 0; i < 10; i++ {
-		testutil.PublishEvent(t, pool, org.ID, "event.multi", map[string]any{"n": i})
+		testdb.PublishEvent(t, pool, org.ID, "event.multi", map[string]any{"n": i})
 	}
 
 	consumers := []string{"consumer-1", "consumer-2", "consumer-3"}
@@ -206,7 +205,7 @@ func TestEventBus_GapDetection(t *testing.T) {
 
 	var lastSeq int64
 	for i := 0; i < 5; i++ {
-		lastSeq = testutil.PublishEvent(t, pool, org.ID, "event.gap", map[string]any{"n": i})
+		lastSeq = testdb.PublishEvent(t, pool, org.ID, "event.gap", map[string]any{"n": i})
 	}
 
 	if _, err := pool.Exec(context.Background(), `
@@ -216,7 +215,7 @@ func TestEventBus_GapDetection(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		testutil.PublishEvent(t, pool, org.ID, "event.gap", map[string]any{"post_gap": i})
+		testdb.PublishEvent(t, pool, org.ID, "event.gap", map[string]any{"post_gap": i})
 	}
 
 	rows, err := pool.Query(context.Background(), `
