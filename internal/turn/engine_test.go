@@ -227,6 +227,40 @@ func TestTierRoutingTwoTier2ToolsAreSequential(t *testing.T) {
 	}
 }
 
+func TestDispatchToolsResolvesSanitizedNameToOriginal(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "file.read", APIName: "file_read", Tier: "tier1"},
+	}}
+
+	var dispatched []ToolCall
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		dispatched = append(dispatched, call)
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}}, nil
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		round++
+		if round == 1 {
+			return ModelResponse{ToolCalls: []ModelToolCall{
+				{ID: "call-1", Name: "file_read", Arguments: map[string]any{"path": "/tmp/readme.md"}},
+			}}, nil
+		}
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if len(dispatched) != 1 {
+		t.Fatalf("dispatched calls = %d, want 1", len(dispatched))
+	}
+	if dispatched[0].Name != "file.read" {
+		t.Fatalf("dispatched tool name = %q, want file.read", dispatched[0].Name)
+	}
+}
+
 func TestMaxToolCallsStopCondition(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.engine.maxToolCalls = 3
@@ -494,17 +528,17 @@ func TestContinuationTurnOnContextCompressed(t *testing.T) {
 }
 
 type unitFixture struct {
-	engine       *TurnEngine
-	events       *fakeEventBus
-	chat         *fakeChatService
-	messages     *fakeMessageRepo
-	model        *fakeModelGateway
-	dispatcher   *fakeDispatcher
-	runCanceler  *fakeRunCanceler
-	enqueuer     *fakeEnqueuer
-	assembler    *fakeAssembler
-	memories     *fakeMemoryRepo
-	session      *chat.ChatSession
+	engine        *TurnEngine
+	events        *fakeEventBus
+	chat          *fakeChatService
+	messages      *fakeMessageRepo
+	model         *fakeModelGateway
+	dispatcher    *fakeDispatcher
+	runCanceler   *fakeRunCanceler
+	enqueuer      *fakeEnqueuer
+	assembler     *fakeAssembler
+	memories      *fakeMemoryRepo
+	session       *chat.ChatSession
 	userMessageID uuid.UUID
 }
 
@@ -532,16 +566,16 @@ func newUnitFixture(t *testing.T, mode string) *unitFixture {
 	}
 
 	profile := repo.ModelProfile{
-		ID:                 uuid.New(),
-		LogicalProfileID:   "test-profile",
-		Version:            1,
-		IsCurrent:          true,
-		ProviderID:         uuid.New(),
-		ModelName:          "test-model",
-		InvocationPurpose:  "agent_turn",
-		SupportsStreaming:  true,
+		ID:                  uuid.New(),
+		LogicalProfileID:    "test-profile",
+		Version:             1,
+		IsCurrent:           true,
+		ProviderID:          uuid.New(),
+		ModelName:           "test-model",
+		InvocationPurpose:   "agent_turn",
+		SupportsStreaming:   true,
 		ContextWindowTokens: 4096,
-		MaxOutputTokens:    1024,
+		MaxOutputTokens:     1024,
 	}
 
 	toolResolver := &fakeToolResolver{}
@@ -603,17 +637,17 @@ func newUnitFixture(t *testing.T, mode string) *unitFixture {
 }
 
 type fakeChatService struct {
-	mu           sync.Mutex
-	session      *chat.ChatSession
-	participants []*chat.ChatParticipant
-	messages     *fakeMessageRepo
-	turns        map[uuid.UUID]*chat.ChatTurn
-	turnOrder    []uuid.UUID
-	turnCh       chan uuid.UUID
-	startedAt    time.Time
-	cancelCalls  int
+	mu            sync.Mutex
+	session       *chat.ChatSession
+	participants  []*chat.ChatParticipant
+	messages      *fakeMessageRepo
+	turns         map[uuid.UUID]*chat.ChatTurn
+	turnOrder     []uuid.UUID
+	turnCh        chan uuid.UUID
+	startedAt     time.Time
+	cancelCalls   int
 	completeCalls int
-	failCalls    int
+	failCalls     int
 }
 
 func (f *fakeChatService) GetSession(ctx context.Context, id uuid.UUID) (*chat.ChatSession, error) {
@@ -838,10 +872,10 @@ func (f *fakeChatService) IncrementCounts(ctx context.Context, id uuid.UUID, tur
 }
 
 type fakeMessageRepo struct {
-	mu       sync.Mutex
-	items    map[uuid.UUID]repo.ChatMessage
-	order    []uuid.UUID
-	nextSeq  int64
+	mu      sync.Mutex
+	items   map[uuid.UUID]repo.ChatMessage
+	order   []uuid.UUID
+	nextSeq int64
 }
 
 func newFakeMessageRepo() *fakeMessageRepo {
@@ -998,7 +1032,7 @@ func (*fakeSummarizationChecker) ShouldSummarize(context.Context, uuid.UUID, int
 }
 
 type fakeModelGateway struct {
-	streamFn func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error)
+	streamFn   func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error)
 	completeFn func(ctx context.Context, req ModelRequest) (ModelResponse, error)
 
 	streamCalls              int
@@ -1062,8 +1096,8 @@ func (f *fakeRunCanceler) RequestCancel(ctx context.Context, runID uuid.UUID, re
 }
 
 type fakeEventBus struct {
-	mu    sync.Mutex
-	subs  []fakeSubscription
+	mu     sync.Mutex
+	subs   []fakeSubscription
 	events []eventbus.DomainEvent
 }
 

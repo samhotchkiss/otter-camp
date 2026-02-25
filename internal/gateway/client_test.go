@@ -227,6 +227,177 @@ func TestAnthropicToolsSanitizesNames(t *testing.T) {
 	}
 }
 
+func TestParseOpenAIStreamEventAccumulatesToolCallDeltas(t *testing.T) {
+	accumulators := make(map[int]*openAIStreamToolAccumulator)
+	events := []string{
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"/tmp/"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"readme.md\"}"}}]}}]}`,
+	}
+
+	for _, data := range events {
+		chunk, deltas, usage, done, err := parseOpenAIStreamEvent(data)
+		if err != nil {
+			t.Fatalf("parseOpenAIStreamEvent error = %v", err)
+		}
+		if chunk != "" {
+			t.Fatalf("chunk = %q, want empty", chunk)
+		}
+		if usage != nil {
+			t.Fatalf("usage = %v, want nil", usage)
+		}
+		if done {
+			t.Fatal("done = true, want false")
+		}
+		accumulateOpenAIStreamToolCalls(accumulators, deltas)
+	}
+
+	toolCalls := finalizeOpenAIStreamToolCalls(accumulators)
+	if len(toolCalls) != 1 {
+		t.Fatalf("tool call count = %d, want 1", len(toolCalls))
+	}
+	if toolCalls[0].ID != "call_1" {
+		t.Fatalf("tool id = %q, want call_1", toolCalls[0].ID)
+	}
+	if toolCalls[0].Name != "file_read" {
+		t.Fatalf("tool name = %q, want file_read", toolCalls[0].Name)
+	}
+	if got := toolCalls[0].Arguments["path"]; got != "/tmp/readme.md" {
+		t.Fatalf("arguments.path = %v, want /tmp/readme.md", got)
+	}
+}
+
+func TestParseOpenAICompletionExtractsToolCalls(t *testing.T) {
+	raw := []byte(`{
+		"choices":[
+			{
+				"message":{
+					"content":"",
+					"tool_calls":[
+						{
+							"id":"call_9",
+							"type":"function",
+							"function":{
+								"name":"task_create",
+								"arguments":"{\"title\":\"Fix parser\"}"
+							}
+						}
+					]
+				}
+			}
+		]
+	}`)
+
+	result, err := parseOpenAICompletion(raw)
+	if err != nil {
+		t.Fatalf("parseOpenAICompletion error = %v", err)
+	}
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("tool call count = %d, want 1", len(result.ToolCalls))
+	}
+	call := result.ToolCalls[0]
+	if call.ID != "call_9" {
+		t.Fatalf("tool id = %q, want call_9", call.ID)
+	}
+	if call.Name != "task_create" {
+		t.Fatalf("tool name = %q, want task_create", call.Name)
+	}
+	if got := call.Arguments["title"]; got != "Fix parser" {
+		t.Fatalf("arguments.title = %v, want Fix parser", got)
+	}
+}
+
+func TestParseAnthropicStreamEventAccumulatesToolUseBlocks(t *testing.T) {
+	accumulators := make(map[int]*anthropicStreamToolAccumulator)
+
+	start := `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_123","name":"file_read"}}`
+	_, delta, usage, done, err := parseAnthropicStreamEvent("content_block_start", start)
+	if err != nil {
+		t.Fatalf("parseAnthropicStreamEvent start error = %v", err)
+	}
+	if usage != nil {
+		t.Fatalf("usage = %v, want nil", usage)
+	}
+	if done {
+		t.Fatal("done = true, want false")
+	}
+	accumulateAnthropicStreamToolCall(accumulators, delta)
+
+	parts := []string{
+		`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"/tmp/"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"readme.md\"}"}}`,
+	}
+	for _, data := range parts {
+		_, delta, _, done, err := parseAnthropicStreamEvent("content_block_delta", data)
+		if err != nil {
+			t.Fatalf("parseAnthropicStreamEvent delta error = %v", err)
+		}
+		if done {
+			t.Fatal("done = true, want false")
+		}
+		accumulateAnthropicStreamToolCall(accumulators, delta)
+	}
+
+	stop := `{"type":"content_block_stop","index":0}`
+	_, delta, _, done, err = parseAnthropicStreamEvent("content_block_stop", stop)
+	if err != nil {
+		t.Fatalf("parseAnthropicStreamEvent stop error = %v", err)
+	}
+	if done {
+		t.Fatal("done = true, want false")
+	}
+	accumulateAnthropicStreamToolCall(accumulators, delta)
+
+	toolCalls := finalizeAnthropicStreamToolCalls(accumulators)
+	if len(toolCalls) != 1 {
+		t.Fatalf("tool call count = %d, want 1", len(toolCalls))
+	}
+	call := toolCalls[0]
+	if call.ID != "toolu_123" {
+		t.Fatalf("tool id = %q, want toolu_123", call.ID)
+	}
+	if call.Name != "file_read" {
+		t.Fatalf("tool name = %q, want file_read", call.Name)
+	}
+	if got := call.Arguments["path"]; got != "/tmp/readme.md" {
+		t.Fatalf("arguments.path = %v, want /tmp/readme.md", got)
+	}
+}
+
+func TestParseAnthropicCompletionExtractsToolUseBlocks(t *testing.T) {
+	raw := []byte(`{
+		"content":[
+			{"type":"text","text":"Working..."},
+			{
+				"type":"tool_use",
+				"id":"toolu_777",
+				"name":"file_read",
+				"input":{"path":"/tmp/file.txt"}
+			}
+		]
+	}`)
+
+	result, err := parseAnthropicCompletion(raw)
+	if err != nil {
+		t.Fatalf("parseAnthropicCompletion error = %v", err)
+	}
+	if result.Content != "Working..." {
+		t.Fatalf("content = %q, want Working...", result.Content)
+	}
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("tool call count = %d, want 1", len(result.ToolCalls))
+	}
+	call := result.ToolCalls[0]
+	if call.ID != "toolu_777" {
+		t.Fatalf("tool id = %q, want toolu_777", call.ID)
+	}
+	if call.Name != "file_read" {
+		t.Fatalf("tool name = %q, want file_read", call.Name)
+	}
+	if got := call.Arguments["path"]; got != "/tmp/file.txt" {
+		t.Fatalf("arguments.path = %v, want /tmp/file.txt", got)
+	}
+}
+
 func decodeBody(t *testing.T, body []byte) map[string]any {
 	t.Helper()
 	var payload map[string]any
