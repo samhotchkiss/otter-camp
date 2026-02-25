@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,6 +204,247 @@ func TestVersionAndPrefixEnforcement(t *testing.T) {
 	}
 	if got := jsonPathString(t, prefixResp.Body, "error", "message"); got != "This API uses the /v1/ prefix. See docs." {
 		t.Fatalf("prefix message = %q, want %q", got, "This API uses the /v1/ prefix. See docs.")
+	}
+}
+
+func TestAuthHTTPSessionListAndRevokeEndpoints(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, _ := newAuthTestServer(t, "standard")
+	defer testServer.Close()
+
+	loginWithHeaders := func(userAgent, ipAddress string) string {
+		resp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/auth/login", map[string]any{
+			"email":    adminUser.Email,
+			"password": "admin-password",
+		}, map[string]string{
+			"User-Agent":      userAgent,
+			"X-Forwarded-For": ipAddress,
+		})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("login status = %d, want %d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+		}
+		return jsonPathString(t, resp.Body, "data", "token")
+	}
+
+	currentToken := loginWithHeaders("OtterCamp-iOS/1.0", "203.0.113.11")
+	revokeByIDToken := loginWithHeaders("Mozilla/5.0", "203.0.113.22")
+	otherToken := loginWithHeaders("OtterCamp-TUI/1.0", "203.0.113.33")
+
+	listResp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/auth/sessions", nil, map[string]string{
+		"Authorization": "Bearer " + currentToken,
+	})
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("list sessions status = %d, want %d body=%s", listResp.StatusCode, http.StatusOK, string(listResp.Body))
+	}
+	sessionItems, ok := jsonPathValue(t, listResp.Body, "data", "sessions").([]any)
+	if !ok {
+		t.Fatalf("sessions payload type = %T, want []any body=%s", jsonPathValue(t, listResp.Body, "data", "sessions"), string(listResp.Body))
+	}
+	if len(sessionItems) != 3 {
+		t.Fatalf("session count = %d, want 3 body=%s", len(sessionItems), string(listResp.Body))
+	}
+
+	var revokeSessionID string
+	for _, item := range sessionItems {
+		record, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(stringValue(record["ip_address"])) == "203.0.113.22" {
+			revokeSessionID = strings.TrimSpace(stringValue(record["session_id"]))
+			break
+		}
+	}
+	if revokeSessionID == "" {
+		t.Fatalf("expected to find session for ip 203.0.113.22 in body=%s", string(listResp.Body))
+	}
+
+	deleteByID := mustJSON(t, http.MethodDelete, testServer.URL+"/v1/auth/sessions/"+revokeSessionID, nil, map[string]string{
+		"Authorization": "Bearer " + currentToken,
+	})
+	if deleteByID.StatusCode != http.StatusOK {
+		t.Fatalf("delete by id status = %d, want %d body=%s", deleteByID.StatusCode, http.StatusOK, string(deleteByID.Body))
+	}
+
+	revokedByIDMe := mustJSON(t, http.MethodGet, testServer.URL+"/v1/auth/me", nil, map[string]string{
+		"Authorization": "Bearer " + revokeByIDToken,
+	})
+	if revokedByIDMe.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("revoked-by-id token status = %d, want %d body=%s", revokedByIDMe.StatusCode, http.StatusUnauthorized, string(revokedByIDMe.Body))
+	}
+
+	deleteOthers := mustJSON(t, http.MethodDelete, testServer.URL+"/v1/auth/sessions", nil, map[string]string{
+		"Authorization": "Bearer " + currentToken,
+	})
+	if deleteOthers.StatusCode != http.StatusOK {
+		t.Fatalf("delete others status = %d, want %d body=%s", deleteOthers.StatusCode, http.StatusOK, string(deleteOthers.Body))
+	}
+	if got := intValue(jsonPathValue(t, deleteOthers.Body, "data", "revoked_count")); got != 1 {
+		t.Fatalf("revoked_count = %d, want 1 body=%s", got, string(deleteOthers.Body))
+	}
+
+	currentMe := mustJSON(t, http.MethodGet, testServer.URL+"/v1/auth/me", nil, map[string]string{
+		"Authorization": "Bearer " + currentToken,
+	})
+	if currentMe.StatusCode != http.StatusOK {
+		t.Fatalf("current session me status = %d, want %d body=%s", currentMe.StatusCode, http.StatusOK, string(currentMe.Body))
+	}
+
+	otherMe := mustJSON(t, http.MethodGet, testServer.URL+"/v1/auth/me", nil, map[string]string{
+		"Authorization": "Bearer " + otherToken,
+	})
+	if otherMe.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("other session me status = %d, want %d body=%s", otherMe.StatusCode, http.StatusUnauthorized, string(otherMe.Body))
+	}
+}
+
+func TestMobileDashboardAggregation(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, _ := newAuthTestServer(t, "standard")
+	defer testServer.Close()
+
+	token := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	ctx := context.Background()
+
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	environmentRepo := repo.NewProjectEnvironmentRepo(testServer.Pool)
+	inboxRepo := repo.NewInboxItemRepo(testServer.Pool)
+	sessionRepo := repo.NewChatSessionRepo(testServer.Pool)
+	messageRepo := repo.NewChatMessageRepo(testServer.Pool)
+	readCursorRepo := repo.NewChatReadCursorRepo(testServer.Pool)
+
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: adminUser.OrganizationID,
+		Slug:           "mobile-dashboard",
+		DisplayName:    "Mobile Dashboard",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminUser.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	createdByID := adminUser.ID
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: adminUser.OrganizationID,
+		ProjectID:      project.ID,
+		Title:          "Active task",
+		WorkStatus:     "in_progress",
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	}); err != nil {
+		t.Fatalf("create active task: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: adminUser.OrganizationID,
+		ProjectID:      project.ID,
+		Title:          "Blocked task",
+		WorkStatus:     "blocked",
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	}); err != nil {
+		t.Fatalf("create blocked task: %v", err)
+	}
+
+	deployedAt := time.Now().UTC().Add(-10 * time.Minute)
+	commitSHA := "0123456789abcdef"
+	if _, err := environmentRepo.Create(ctx, repo.ProjectEnvironment{
+		ProjectID:          project.ID,
+		Name:               "prod",
+		DeliveryMode:       "continuous",
+		LastDeployedCommit: &commitSHA,
+		LastDeployedAt:     &deployedAt,
+		IsActive:           true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+
+	body := "Please review"
+	if _, err := inboxRepo.Create(ctx, repo.InboxItem{
+		OrganizationID: adminUser.OrganizationID,
+		TargetUserID:   &adminUser.ID,
+		ItemType:       "task_review",
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+		Title:          "Inbox one",
+		Body:           &body,
+	}); err != nil {
+		t.Fatalf("create inbox one: %v", err)
+	}
+	if _, err := inboxRepo.Create(ctx, repo.InboxItem{
+		OrganizationID: adminUser.OrganizationID,
+		TargetUserID:   &adminUser.ID,
+		ItemType:       "comment_mention",
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+		Title:          "Inbox two",
+	}); err != nil {
+		t.Fatalf("create inbox two: %v", err)
+	}
+
+	lastMessageAt := time.Now().UTC().Add(-2 * time.Minute)
+	session, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: adminUser.OrganizationID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "sync",
+		Status:         "active",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminUser.ID,
+		LastMessageAt:  &lastMessageAt,
+	})
+	if err != nil {
+		t.Fatalf("create chat session: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		role := "assistant"
+		if i == 0 {
+			role = "user"
+		}
+		if _, err := messageRepo.Create(ctx, repo.ChatMessage{
+			SessionID: session.ID,
+			Role:      role,
+			Content:   "message",
+			Status:    "final",
+		}); err != nil {
+			t.Fatalf("create chat message %d: %v", i, err)
+		}
+	}
+
+	if _, err := readCursorRepo.Upsert(ctx, repo.ChatReadCursor{
+		SessionID:        session.ID,
+		UserID:           adminUser.ID,
+		LastReadSequence: 2,
+	}); err != nil {
+		t.Fatalf("upsert read cursor: %v", err)
+	}
+
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/mobile/dashboard?project_ids="+project.ID.String()+"&inbox_limit=10", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard status = %d, want %d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	if got := intValue(jsonPathValue(t, resp.Body, "data", "inbox", "unread_count")); got != 2 {
+		t.Fatalf("inbox unread_count = %d, want 2 body=%s", got, string(resp.Body))
+	}
+	if got := intValue(jsonPathValue(t, resp.Body, "data", "projects", "0", "active_task_count")); got != 1 {
+		t.Fatalf("active_task_count = %d, want 1 body=%s", got, string(resp.Body))
+	}
+	if got := intValue(jsonPathValue(t, resp.Body, "data", "projects", "0", "blocked_task_count")); got != 1 {
+		t.Fatalf("blocked_task_count = %d, want 1 body=%s", got, string(resp.Body))
+	}
+	if got := jsonPathString(t, resp.Body, "data", "projects", "0", "latest_deploy", "status"); got != "deployed" {
+		t.Fatalf("latest_deploy.status = %q, want %q body=%s", got, "deployed", string(resp.Body))
+	}
+	if got := intValue(jsonPathValue(t, resp.Body, "data", "recent_sessions", "0", "unread_message_count")); got != 1 {
+		t.Fatalf("recent_sessions unread_message_count = %d, want 1 body=%s", got, string(resp.Body))
 	}
 }
 
@@ -400,6 +642,24 @@ func jsonPathValue(t *testing.T, body []byte, path ...string) any {
 	}
 
 	return current
+}
+
+func intValue(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
+}
+
+func stringValue(value any) string {
+	str, _ := value.(string)
+	return str
 }
 
 func sha256Hex(raw string) string {

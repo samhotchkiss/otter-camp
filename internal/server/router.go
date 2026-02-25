@@ -46,7 +46,12 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 		logger = slog.Default()
 	}
 
-	authHandlers := newAuthHandlers(opts.AuthService)
+	var authSessionRepo *repo.AuthSessionRepo
+	if opts.Pool != nil {
+		authSessionRepo = repo.NewAuthSessionRepo(opts.Pool)
+	}
+	authHandlers := newAuthHandlers(opts.AuthService, authSessionRepo)
+	mobileHandlers := newMobileHandlers(opts.Pool)
 	versionHandler := api.NewVersionHandler(api.BuildInfo{
 		Version: opts.Version,
 		Commit:  opts.Commit,
@@ -98,9 +103,13 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 			protected.Post("/auth/logout", authHandlers.logout)
 			protected.Post("/auth/refresh", authHandlers.refresh)
 			protected.Get("/auth/me", authHandlers.me)
+			protected.Get("/auth/sessions", authHandlers.listSessions)
+			protected.Delete("/auth/sessions/{id}", authHandlers.revokeSession)
+			protected.Delete("/auth/sessions", authHandlers.revokeOtherSessions)
 			protected.Post("/api-keys", authHandlers.issueAPIKey)
 			protected.Delete("/api-keys/{id}", authHandlers.revokeAPIKey)
 			protected.Get("/api-keys", authHandlers.listAPIKeys)
+			protected.Get("/mobile/dashboard", mobileHandlers.dashboard)
 			protected.Get("/search", searchHandler.Search)
 			protected.Get("/tasks/{id}/diff", diffHandler.GetTaskDiff)
 

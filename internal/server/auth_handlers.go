@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,14 +15,21 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/api"
 	"github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
 type authHandlers struct {
-	service auth.Service
+	service  auth.Service
+	sessions authSessionRepository
 }
 
-func newAuthHandlers(service auth.Service) authHandlers {
-	return authHandlers{service: service}
+type authSessionRepository interface {
+	ListActive(ctx context.Context, userID uuid.UUID) ([]repo.AuthSession, error)
+	Revoke(ctx context.Context, id uuid.UUID) error
+}
+
+func newAuthHandlers(service auth.Service, sessions authSessionRepository) authHandlers {
+	return authHandlers{service: service, sessions: sessions}
 }
 
 type loginRequest struct {
@@ -55,11 +63,20 @@ type apiKeyResponse struct {
 	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
 }
 
+type authSessionResponse struct {
+	SessionID  uuid.UUID `json:"session_id"`
+	ClientType string    `json:"client_type"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastUsedAt time.Time `json:"last_used_at"`
+	IPAddress  string    `json:"ip_address"`
+}
+
 func (h authHandlers) login(w http.ResponseWriter, r *http.Request) {
 	if h.service == nil {
 		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "auth service unavailable")
 		return
 	}
+	// Biometric auth is intentionally client-side only. The server receives normal credentials/API keys.
 
 	var req loginRequest
 	if err := decodeJSON(r, &req); err != nil {
@@ -153,6 +170,140 @@ func (h authHandlers) me(w http.ResponseWriter, r *http.Request) {
 		DisplayName:    principal.DisplayName,
 		Role:           principal.Role,
 	})
+}
+
+func (h authHandlers) listSessions(w http.ResponseWriter, r *http.Request) {
+	if h.sessions == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "session repository unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		api.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	sessions, err := h.sessions.ListActive(r.Context(), principal.UserID)
+	if err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to list sessions")
+		return
+	}
+
+	items := make([]authSessionResponse, 0, len(sessions))
+	for _, session := range sessions {
+		ipAddress := ""
+		if session.IPAddress != nil {
+			ipAddress = strings.TrimSpace(*session.IPAddress)
+		}
+		userAgent := ""
+		if session.UserAgent != nil {
+			userAgent = strings.TrimSpace(*session.UserAgent)
+		}
+		items = append(items, authSessionResponse{
+			SessionID:  session.ID,
+			ClientType: detectClientType(userAgent),
+			CreatedAt:  session.CreatedAt,
+			LastUsedAt: session.LastUsedAt,
+			IPAddress:  ipAddress,
+		})
+	}
+
+	api.JSON(w, http.StatusOK, map[string]any{"sessions": items})
+}
+
+func (h authHandlers) revokeSession(w http.ResponseWriter, r *http.Request) {
+	if h.sessions == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "session repository unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		api.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	targetSessionID, err := uuid.Parse(strings.TrimSpace(chi.URLParam(r, "id")))
+	if err != nil || targetSessionID == uuid.Nil {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid session id")
+		return
+	}
+
+	sessions, err := h.sessions.ListActive(r.Context(), principal.UserID)
+	if err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to list sessions")
+		return
+	}
+
+	found := false
+	for _, session := range sessions {
+		if session.ID == targetSessionID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		api.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "session not found")
+		return
+	}
+
+	if err := h.sessions.Revoke(r.Context(), targetSessionID); err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to revoke session")
+		return
+	}
+
+	api.JSON(w, http.StatusOK, map[string]bool{"revoked": true})
+}
+
+func (h authHandlers) revokeOtherSessions(w http.ResponseWriter, r *http.Request) {
+	if h.service == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "auth service unavailable")
+		return
+	}
+	if h.sessions == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "session repository unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		api.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	currentSessionToken, ok := middleware.SessionTokenFromContext(r.Context())
+	if !ok {
+		api.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "session token required")
+		return
+	}
+
+	current, err := h.service.ValidateSession(r.Context(), currentSessionToken)
+	if err != nil {
+		status, code, message := mapAuthError(err)
+		api.Error(w, status, code, message)
+		return
+	}
+
+	sessions, err := h.sessions.ListActive(r.Context(), principal.UserID)
+	if err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to list sessions")
+		return
+	}
+
+	revokedCount := 0
+	for _, session := range sessions {
+		if session.ID == current.ID {
+			continue
+		}
+		if err := h.sessions.Revoke(r.Context(), session.ID); err != nil {
+			api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to revoke sessions")
+			return
+		}
+		revokedCount++
+	}
+
+	api.JSON(w, http.StatusOK, map[string]int{"revoked_count": revokedCount})
 }
 
 func (h authHandlers) issueAPIKey(w http.ResponseWriter, r *http.Request) {
@@ -341,4 +492,22 @@ func requestClientIP(r *http.Request) string {
 		return strings.TrimSpace(host)
 	}
 	return strings.TrimSpace(r.RemoteAddr)
+}
+
+func requestBaseURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
+		scheme = strings.ToLower(proto)
+	}
+	host := strings.TrimSpace(r.Host)
+	if forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); forwardedHost != "" {
+		host = forwardedHost
+	}
+	if host == "" {
+		host = "localhost:4110"
+	}
+	return scheme + "://" + host
 }

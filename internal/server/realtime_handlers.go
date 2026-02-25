@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -67,6 +68,7 @@ func NewRealtimeRouteRegistrar(opts RealtimeRouteOptions) *RealtimeRouteRegistra
 
 func (r *RealtimeRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.Get("/events/stream", r.handlers.streamEvents)
+	router.Get("/ws/negotiate", r.handlers.negotiateTransport)
 	router.Get("/ws", r.handlers.websocket)
 }
 
@@ -519,6 +521,32 @@ func (h *realtimeHub) resolveMessageContext(ctx context.Context, event eventbus.
 	return content, authorID, true
 }
 
+func (h *realtimeHandlers) negotiateTransport(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if _, ok := middleware.PrincipalFromContext(r.Context()); !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	preferred := "sse"
+	fallback := "websocket"
+	if isMobileUserAgent(r.UserAgent()) {
+		preferred = "websocket"
+		fallback = "sse"
+	}
+
+	baseURL := requestBaseURL(r)
+	websocketURL := strings.Replace(baseURL, "https://", "wss://", 1)
+	websocketURL = strings.Replace(websocketURL, "http://", "ws://", 1)
+
+	responder.JSON(w, http.StatusOK, map[string]any{
+		"preferred":     preferred,
+		"fallback":      fallback,
+		"websocket_url": websocketURL + "/v1/ws",
+		"sse_url":       baseURL + "/v1/events/stream",
+	})
+}
+
 func (h *realtimeHandlers) streamEvents(w http.ResponseWriter, r *http.Request) {
 	responder := api.NewResponder(r.Context())
 	principal, ok := middleware.PrincipalFromContext(r.Context())
@@ -552,7 +580,12 @@ func (h *realtimeHandlers) streamEvents(w http.ResponseWriter, r *http.Request) 
 		responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to query event cursor")
 		return
 	}
-	gap := detectEventGap(lastEventID, minSeq)
+	replay, err := h.hub.loadReplayEvents(r.Context(), principal.OrganizationID, lastEventID)
+	if err != nil {
+		responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to replay events")
+		return
+	}
+	gap := detectEventGap(lastEventID, minSeq) || detectReplayGap(lastEventID, replay)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -578,15 +611,10 @@ func (h *realtimeHandlers) streamEvents(w http.ResponseWriter, r *http.Request) 
 		connectedPayload["gap"] = true
 	}
 	if err := writeSSEEvent(w, "", "connected", connectedPayload); err != nil {
+		h.logClientDisconnect("sse", err)
 		return
 	}
 	flusher.Flush()
-
-	replay, err := h.hub.loadReplayEvents(r.Context(), principal.OrganizationID, lastEventID)
-	if err != nil {
-		responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to replay events")
-		return
-	}
 	for _, event := range replay {
 		payload := decodeRealtimePayload(event.Payload)
 		if !routeEventToScopes(event.EventType, payload, conn.snapshotScopes()) {
@@ -596,6 +624,7 @@ func (h *realtimeHandlers) streamEvents(w http.ResponseWriter, r *http.Request) 
 			continue
 		}
 		if err := writeSSEDomainEvent(w, event); err != nil {
+			h.logClientDisconnect("sse", err)
 			return
 		}
 		flusher.Flush()
@@ -607,6 +636,7 @@ func (h *realtimeHandlers) streamEvents(w http.ResponseWriter, r *http.Request) 
 	for {
 		select {
 		case <-r.Context().Done():
+			h.logger.Debug("sse client disconnected")
 			conn.close("")
 			return
 		case <-conn.closed:
@@ -617,6 +647,7 @@ func (h *realtimeHandlers) streamEvents(w http.ResponseWriter, r *http.Request) 
 			return
 		case <-heartbeatTicker.C:
 			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {
+				h.logClientDisconnect("sse", err)
 				return
 			}
 			flusher.Flush()
@@ -627,6 +658,7 @@ func (h *realtimeHandlers) streamEvents(w http.ResponseWriter, r *http.Request) 
 					continue
 				}
 				if err := writeSSEDomainEvent(w, *frame.Event); err != nil {
+					h.logClientDisconnect("sse", err)
 					return
 				}
 			case realtimeFrameTyping:
@@ -637,6 +669,7 @@ func (h *realtimeHandlers) streamEvents(w http.ResponseWriter, r *http.Request) 
 					"expires_at": frame.ExpiresAt.UTC().Format(time.RFC3339Nano),
 				}
 				if err := writeSSEEvent(w, "", "typing", payload); err != nil {
+					h.logClientDisconnect("sse", err)
 					return
 				}
 			case realtimeFrameBufferOverflow:
@@ -694,7 +727,12 @@ func (h *realtimeHandlers) websocket(w http.ResponseWriter, r *http.Request) {
 		_ = wsConn.WriteJSON(map[string]any{"type": "error", "error": "failed to query event cursor"})
 		return
 	}
-	gap := detectEventGap(lastEventID, minSeq)
+	replay, err := h.hub.loadReplayEvents(r.Context(), principal.OrganizationID, lastEventID)
+	if err != nil {
+		_ = wsConn.WriteJSON(map[string]any{"type": "error", "error": "failed to replay events"})
+		return
+	}
+	gap := detectEventGap(lastEventID, minSeq) || detectReplayGap(lastEventID, replay)
 
 	conn := newRealtimeConnection(principal, scopes, "ws")
 	h.hub.addConnection(conn)
@@ -708,11 +746,6 @@ func (h *realtimeHandlers) websocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	replay, err := h.hub.loadReplayEvents(r.Context(), principal.OrganizationID, lastEventID)
-	if err != nil {
-		_ = wsConn.WriteJSON(map[string]any{"type": "error", "error": "failed to replay events"})
-		return
-	}
 	for _, event := range replay {
 		payload := decodeRealtimePayload(event.Payload)
 		if !routeEventToScopes(event.EventType, payload, conn.snapshotScopes()) {
@@ -722,6 +755,7 @@ func (h *realtimeHandlers) websocket(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if err := wsConn.WriteJSON(domainEventFrame(event)); err != nil {
+			h.logClientDisconnect("websocket", err)
 			return
 		}
 	}
@@ -782,7 +816,7 @@ func (h *realtimeHandlers) websocket(w http.ResponseWriter, r *http.Request) {
 		select {
 		case err := <-writeErrCh:
 			if err != nil {
-				h.logger.Debug("websocket writer closed", "error", err)
+				h.logClientDisconnect("websocket", err)
 			}
 			conn.close("")
 			return
@@ -791,6 +825,7 @@ func (h *realtimeHandlers) websocket(w http.ResponseWriter, r *http.Request) {
 
 		_, payload, err := wsConn.ReadMessage()
 		if err != nil {
+			h.logClientDisconnect("websocket", err)
 			conn.close("")
 			return
 		}
@@ -952,6 +987,40 @@ func detectEventGap(lastEventID int64, minSeq int64) bool {
 		return false
 	}
 	return lastEventID+1 < minSeq
+}
+
+func detectReplayGap(lastEventID int64, events []eventbus.DomainEvent) bool {
+	if len(events) == 0 {
+		return false
+	}
+	previous := lastEventID
+	for _, event := range events {
+		if previous > 0 && event.Seq-previous > 1 {
+			return true
+		}
+		previous = event.Seq
+	}
+	return false
+}
+
+func (h *realtimeHandlers) logClientDisconnect(transport string, err error) {
+	if h == nil || h.logger == nil {
+		return
+	}
+	if err == nil {
+		h.logger.Debug(transport + " client disconnected")
+		return
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
+		h.logger.Debug(transport+" client disconnected", "error", err)
+		return
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	if strings.Contains(message, "broken pipe") || strings.Contains(message, "connection reset by peer") || strings.Contains(message, "close sent") {
+		h.logger.Debug(transport+" client disconnected", "error", err)
+		return
+	}
+	h.logger.Debug(transport+" stream closed", "error", err)
 }
 
 func routeEventToScopes(eventType string, payload map[string]any, scopes map[realtimeScope]struct{}) bool {
