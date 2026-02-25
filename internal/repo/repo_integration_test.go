@@ -258,6 +258,64 @@ func TestToolDefinitionTier1SeedMigration(t *testing.T) {
 	}
 }
 
+func TestToolDefinitionTier2SeedMigration(t *testing.T) {
+	pool := testdb.New(t)
+	expectedCapabilities := map[string]string{
+		"file.write":             "system.file.write",
+		"file.edit":              "system.file.write",
+		"file.delete":            "system.file.write",
+		"git.commit":             "system.file.write",
+		"git.push":               "system.git.push",
+		"cli.execute":            "system.cli.execute",
+		"memory.record":          "memory.write",
+		"project.create":         "project.manage",
+		"project.update":         "project.manage",
+		"task.create":            "task.manage",
+		"task.update":            "task.manage",
+		"task.add_dependency":    "task.manage",
+		"task.remove_dependency": "task.manage",
+		"subtask.create":         "task.manage",
+		"subtask.update":         "task.manage",
+		"flow.advance":           "flow.control",
+		"flow.review_decision":   "flow.control",
+		"flow.create_template":   "project.manage",
+		"schedule.create":        "project.manage",
+		"schedule.update":        "project.manage",
+		"schedule.delete":        "project.manage",
+		"agent.create_temp":      "agent.create_temp",
+		"agent.update":           "agent.manage",
+		"session.create":         "session.manage",
+		"session.invite_agent":   "session.manage",
+		"message.send":           "message.send",
+		"email.compose":          "communication.send",
+		"slack.post":             "communication.send",
+	}
+
+	for name, expectedCapability := range expectedCapabilities {
+		var (
+			tier   string
+			domain string
+			cap    *string
+		)
+		if err := pool.QueryRow(context.Background(), `
+			SELECT tool_tier, tool_domain, required_capability
+			FROM tool_definition
+			WHERE name = $1
+		`, name).Scan(&tier, &domain, &cap); err != nil {
+			t.Fatalf("seeded tool %q missing: %v", name, err)
+		}
+		if tier != "tier2" {
+			t.Fatalf("tool %q tier = %q, want tier2", name, tier)
+		}
+		if domain != "native" {
+			t.Fatalf("tool %q domain = %q, want native", name, domain)
+		}
+		if cap == nil || *cap != expectedCapability {
+			t.Fatalf("tool %q capability = %v, want %q", name, cap, expectedCapability)
+		}
+	}
+}
+
 func TestMemoryTaxonomyRepoSubtreeDeleteRestrictAndConflict(t *testing.T) {
 	pool := testdb.New(t)
 	orgRepo := NewOrgRepo(pool)
