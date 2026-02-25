@@ -85,6 +85,101 @@ func TestProfileNeedsRotation(t *testing.T) {
 	}
 }
 
+func TestBuildSystemTemplateNodeSeedPlan(t *testing.T) {
+	templateID := uuid.New()
+	startID := uuid.New()
+	existingNodeID := uuid.New()
+
+	t.Run("single-agent template seeds one work node", func(t *testing.T) {
+		plan, err := buildSystemTemplateNodeSeedPlan(repo.FlowTemplate{
+			ID:       templateID,
+			Slug:     "default-single-agent",
+			IsSystem: true,
+		}, nil)
+		if err != nil {
+			t.Fatalf("buildSystemTemplateNodeSeedPlan: %v", err)
+		}
+		if plan.StartNodeID != nil {
+			t.Fatalf("StartNodeID = %v, want nil", plan.StartNodeID)
+		}
+		if len(plan.Seeds) != 1 {
+			t.Fatalf("seed count = %d, want 1", len(plan.Seeds))
+		}
+		if plan.Seeds[0].NodeType != "work" {
+			t.Fatalf("seed node_type = %q, want %q", plan.Seeds[0].NodeType, "work")
+		}
+		if plan.Seeds[0].ActorType == nil || *plan.Seeds[0].ActorType != "role" {
+			t.Fatalf("seed actor_type = %v, want role", plan.Seeds[0].ActorType)
+		}
+	})
+
+	t.Run("review template seeds work then review with edge", func(t *testing.T) {
+		plan, err := buildSystemTemplateNodeSeedPlan(repo.FlowTemplate{
+			ID:       templateID,
+			Slug:     "default-review",
+			IsSystem: true,
+		}, nil)
+		if err != nil {
+			t.Fatalf("buildSystemTemplateNodeSeedPlan: %v", err)
+		}
+		if len(plan.Seeds) != 2 {
+			t.Fatalf("seed count = %d, want 2", len(plan.Seeds))
+		}
+		if plan.Seeds[0].NodeType != "work" {
+			t.Fatalf("first node_type = %q, want %q", plan.Seeds[0].NodeType, "work")
+		}
+		if plan.Seeds[0].NextSeedIndex == nil || *plan.Seeds[0].NextSeedIndex != 1 {
+			t.Fatalf("first NextSeedIndex = %v, want 1", plan.Seeds[0].NextSeedIndex)
+		}
+		if plan.Seeds[1].NodeType != "review" {
+			t.Fatalf("second node_type = %q, want %q", plan.Seeds[1].NodeType, "review")
+		}
+		if !plan.Seeds[1].RequiresHumanReview {
+			t.Fatal("second node RequiresHumanReview = false, want true")
+		}
+	})
+
+	t.Run("existing nodes skip creation and backfill start node", func(t *testing.T) {
+		plan, err := buildSystemTemplateNodeSeedPlan(repo.FlowTemplate{
+			ID:          templateID,
+			Slug:        "default-single-agent",
+			IsSystem:    true,
+			StartNodeID: nil,
+		}, []repo.FlowNode{
+			{ID: existingNodeID, FlowTemplateID: templateID},
+		})
+		if err != nil {
+			t.Fatalf("buildSystemTemplateNodeSeedPlan: %v", err)
+		}
+		if len(plan.Seeds) != 0 {
+			t.Fatalf("seed count = %d, want 0", len(plan.Seeds))
+		}
+		if plan.StartNodeID == nil || *plan.StartNodeID != existingNodeID {
+			t.Fatalf("StartNodeID = %v, want %s", plan.StartNodeID, existingNodeID)
+		}
+	})
+
+	t.Run("existing nodes with start node remain unchanged", func(t *testing.T) {
+		plan, err := buildSystemTemplateNodeSeedPlan(repo.FlowTemplate{
+			ID:          templateID,
+			Slug:        "default-single-agent",
+			IsSystem:    true,
+			StartNodeID: &startID,
+		}, []repo.FlowNode{
+			{ID: existingNodeID, FlowTemplateID: templateID},
+		})
+		if err != nil {
+			t.Fatalf("buildSystemTemplateNodeSeedPlan: %v", err)
+		}
+		if len(plan.Seeds) != 0 {
+			t.Fatalf("seed count = %d, want 0", len(plan.Seeds))
+		}
+		if plan.StartNodeID != nil {
+			t.Fatalf("StartNodeID = %v, want nil", plan.StartNodeID)
+		}
+	})
+}
+
 func TestNormalizeStepNameAlias(t *testing.T) {
 	if got := normalizeStepName("create-agents"); got != "create-starter-trio" {
 		t.Fatalf("normalized step name = %q, want %q", got, "create-starter-trio")
