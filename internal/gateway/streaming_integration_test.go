@@ -38,7 +38,21 @@ func TestStreamResponseDeterministicUpdatesInvocationAndRollup(t *testing.T) {
 	connectionRepo := repo.NewProviderConnectionRepo(pool)
 	invocationRepo := repo.NewModelInvocationRepo(pool)
 	rollupRepo := repo.NewModelUsageRollupRepo(pool)
-	enqueuer := jobqueue.New(pool, nil, jobqueue.Config{})
+	enqueuer := jobqueue.New(pool, nil, jobqueue.Config{
+		PollInterval:         10 * time.Millisecond,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+	rollupWorker := NewRollupWorker(pool, rollupRepo, nil)
+	rollupWorker.RegisterJobs(enqueuer)
+	workerCtx, stopWorker := context.WithCancel(ctx)
+	defer func() {
+		stopWorker()
+		_ = enqueuer.Stop()
+	}()
+	go func() {
+		_ = enqueuer.Start(workerCtx)
+	}()
 
 	org := mustCreateOrg(t, ctx, orgRepo, repo.Organization{
 		Slug:        "stream-deterministic-org",
@@ -98,14 +112,17 @@ func TestStreamResponseDeterministicUpdatesInvocationAndRollup(t *testing.T) {
 		t.Fatalf("output_tokens = %v, want 21", stored.OutputTokens)
 	}
 
-	var payloadJSON []byte
+	var (
+		rollupJobID uuid.UUID
+		payloadJSON []byte
+	)
 	if err := pool.QueryRow(ctx, `
-		SELECT payload
+		SELECT id, payload
 		FROM job_queue
 		WHERE job_type = $1
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, rollupUpdateJobType).Scan(&payloadJSON); err != nil {
+	`, rollupUpdateJobType).Scan(&rollupJobID, &payloadJSON); err != nil {
 		t.Fatalf("select rollup_update job: %v", err)
 	}
 
@@ -114,15 +131,25 @@ func TestStreamResponseDeterministicUpdatesInvocationAndRollup(t *testing.T) {
 		t.Fatalf("decode rollup payload: %v", err)
 	}
 
+	var rollupStatus string
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, rollupJobID).Scan(&rollupStatus); err != nil {
+			t.Fatalf("read rollup job status: %v", err)
+		}
+		if rollupStatus == "done" || rollupStatus == "dead_letter" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if rollupStatus != "done" {
+		t.Fatalf("rollup job status = %q, want done", rollupStatus)
+	}
+
 	rollupDate, err := time.Parse(defaultRollupQueueDate, payload.RollupDate)
 	if err != nil {
 		t.Fatalf("parse rollup date: %v", err)
 	}
-	worker := NewRollupWorker(pool, rollupRepo, nil)
-	if err := worker.RunRollupForDate(ctx, payload.OrgID, rollupDate); err != nil {
-		t.Fatalf("RunRollupForDate: %v", err)
-	}
-
 	rollups, err := rollupRepo.GetForDate(ctx, org.ID, rollupDate)
 	if err != nil {
 		t.Fatalf("GetForDate: %v", err)
