@@ -96,36 +96,70 @@ func TestScrubber_Invariant3_NotInAuditEvent(t *testing.T) {
 	orgID := makeSecurityOrgID(t, pool)
 	user := makeSecurityUser(t, pool, orgID, "admin")
 
-	secretValue := "OPENAI_API_KEY=sk-abc123def456ghi789jklmnopqrst"
-	err := repo.NewAuditEventRepo(pool).Insert(ctx, repo.AuditEvent{
-		OrganizationID: orgID,
-		EventType:      "integration.audit.secret",
-		PrincipalType:  "human",
-		PrincipalID:    user.ID,
-		Metadata: map[string]any{
-			"payload": secretValue,
+	testCases := []struct {
+		eventType string
+		metadata  map[string]any
+		rawSecret string
+	}{
+		{
+			eventType: "integration.audit.secret.bearer",
+			metadata: map[string]any{
+				"auth": "Bearer abcdefghijklmnopqrstuvwxy12345",
+			},
+			rawSecret: "Bearer abcdefghijklmnopqrstuvwxy12345",
 		},
-	})
-	if err != nil {
-		t.Fatalf("insert audit event: %v", err)
+		{
+			eventType: "integration.audit.secret.jwt",
+			metadata: map[string]any{
+				"token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abc123.def456",
+			},
+			rawSecret: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abc123.def456",
+		},
+		{
+			eventType: "integration.audit.secret.openai-env",
+			metadata: map[string]any{
+				"payload": "OPENAI_API_KEY=sk-abc123def456ghi789jklmnopqrst",
+			},
+			rawSecret: "OPENAI_API_KEY=sk-abc123def456ghi789jklmnopqrst",
+		},
+		{
+			eventType: "integration.audit.secret.anthropic-env",
+			metadata: map[string]any{
+				"payload": "ANTHROPIC_API_KEY=sk-ant-api03-9p6m3s4wX0bNEjDZUlSmvBe",
+			},
+			rawSecret: "ANTHROPIC_API_KEY=sk-ant-api03-9p6m3s4wX0bNEjDZUlSmvBe",
+		},
 	}
 
-	var metadataText string
-	if err := pool.QueryRow(ctx, `
-		SELECT metadata::text
-		FROM audit_event
-		WHERE organization_id = $1
-		  AND event_type = 'integration.audit.secret'
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, orgID).Scan(&metadataText); err != nil {
-		t.Fatalf("query audit metadata: %v", err)
-	}
-	if strings.Contains(metadataText, secretValue) {
-		t.Fatalf("audit metadata leaked secret: %s", metadataText)
-	}
-	if !strings.Contains(metadataText, "[REDACTED]") {
-		t.Fatalf("audit metadata missing redaction marker: %s", metadataText)
+	auditRepo := repo.NewAuditEventRepo(pool)
+	for _, tc := range testCases {
+		if err := auditRepo.Insert(ctx, repo.AuditEvent{
+			OrganizationID: orgID,
+			EventType:      tc.eventType,
+			PrincipalType:  "human",
+			PrincipalID:    user.ID,
+			Metadata:       tc.metadata,
+		}); err != nil {
+			t.Fatalf("insert audit event %s: %v", tc.eventType, err)
+		}
+
+		var metadataText string
+		if err := pool.QueryRow(ctx, `
+			SELECT metadata::text
+			FROM audit_event
+			WHERE organization_id = $1
+			  AND event_type = $2
+			ORDER BY created_at DESC
+			LIMIT 1
+		`, orgID, tc.eventType).Scan(&metadataText); err != nil {
+			t.Fatalf("query audit metadata %s: %v", tc.eventType, err)
+		}
+		if strings.Contains(metadataText, tc.rawSecret) {
+			t.Fatalf("audit metadata leaked raw secret for %s: %s", tc.eventType, metadataText)
+		}
+		if !strings.Contains(metadataText, "[REDACTED]") && !strings.Contains(metadataText, "[JWT_REDACTED]") {
+			t.Fatalf("audit metadata missing redaction marker for %s: %s", tc.eventType, metadataText)
+		}
 	}
 }
 
@@ -186,6 +220,7 @@ func TestScrubber_KnownPatterns(t *testing.T) {
 	input := strings.Join([]string{
 		"$secret.db-password",
 		"OPENAI_API_KEY=sk-abc123def456ghi789jklmnopqrst",
+		"sk-ant-api03-9p6m3s4wX0bNEjDZUlSmvBe",
 		"Authorization: Bearer abcdefghijklmnopqrstuvwxy12345",
 		"token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abc123.def456",
 	}, "\n")
@@ -196,6 +231,9 @@ func TestScrubber_KnownPatterns(t *testing.T) {
 	}
 	if strings.Contains(output, "sk-abc123def456ghi789jklmnopqrst") {
 		t.Fatalf("OpenAI key pattern not scrubbed: %s", output)
+	}
+	if strings.Contains(output, "sk-ant-api03-9p6m3s4wX0bNEjDZUlSmvBe") {
+		t.Fatalf("Anthropic key pattern not scrubbed: %s", output)
 	}
 	if strings.Contains(strings.ToLower(output), "bearer abcdefghijklmnopqrstuvwxy12345") {
 		t.Fatalf("bearer token pattern not scrubbed: %s", output)
