@@ -583,6 +583,14 @@ func (s *service) GetOrCreateNodeSession(ctx context.Context, flowNodeExecutionI
 	`, agentRecord.OrganizationID, flowNodeExecutionID.String()).Scan(&existingID)
 	switch {
 	case err == nil:
+		if _, err := tx.Exec(ctx, `
+			UPDATE flow_node_execution
+			SET session_id = $2
+			WHERE id = $1
+			  AND (session_id IS NULL OR session_id = $2)
+		`, flowNodeExecutionID, existingID); err != nil {
+			return nil, mapDBError(err)
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return nil, err
 		}
@@ -627,6 +635,13 @@ func (s *service) GetOrCreateNodeSession(ctx context.Context, flowNodeExecutionI
 		VALUES ($1, 'project_task', $2, 'async', 'active', 'agent', $3, $4::jsonb)
 		RETURNING id
 	`, agentRecord.OrganizationID, taskID, agentID, metadata).Scan(&createdID); err != nil {
+		return nil, mapDBError(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE flow_node_execution
+		SET session_id = $2
+		WHERE id = $1
+	`, flowNodeExecutionID, createdID); err != nil {
 		return nil, mapDBError(err)
 	}
 

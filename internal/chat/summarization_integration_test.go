@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
@@ -88,6 +89,260 @@ func TestSummarizerIntegrationRunForSessionIdempotentWhenRangeAlreadyCovered(t *
 	}
 	if count != 1 {
 		t.Fatalf("chat_summary rows = %d, want 1", count)
+	}
+}
+
+func TestSummarization_Trigger_ThresholdCheck(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	seedSummarizationProfile(t, ctx, pool, org.ID)
+
+	svc := newIntegrationService(t, pool, nil)
+	session := mustCreateSession(t, ctx, svc, org.ID)
+	agent := seedChatServiceAgent(t, ctx, pool, org.ID)
+	seedTurnMessages(t, ctx, pool, session.ID, agent.ID, 6, 2)
+
+	checker, err := NewSummarizationChecker(SummarizationCheckerOptions{Pool: pool})
+	if err != nil {
+		t.Fatalf("NewSummarizationChecker: %v", err)
+	}
+
+	should, err := checker.ShouldSummarize(ctx, session.ID, 80)
+	if err != nil {
+		t.Fatalf("ShouldSummarize: %v", err)
+	}
+	if !should {
+		t.Fatal("ShouldSummarize = false, want true")
+	}
+
+	modelStub := &integrationSummarizationModel{invocations: repo.NewModelInvocationRepo(pool)}
+	summarizer, err := NewSummarizer(SummarizerOptions{Pool: pool, Model: modelStub})
+	if err != nil {
+		t.Fatalf("NewSummarizer: %v", err)
+	}
+	if _, err := summarizer.RunForSession(ctx, session.ID); err != nil {
+		t.Fatalf("RunForSession: %v", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chat_summary WHERE session_id = $1`, session.ID).Scan(&count); err != nil {
+		t.Fatalf("count chat_summary: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("chat_summary rows = %d, want 1", count)
+	}
+}
+
+func TestSummarization_ImmutableRow(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	seedSummarizationProfile(t, ctx, pool, org.ID)
+
+	svc := newIntegrationService(t, pool, nil)
+	session := mustCreateSession(t, ctx, svc, org.ID)
+	agent := seedChatServiceAgent(t, ctx, pool, org.ID)
+	seedTurnMessages(t, ctx, pool, session.ID, agent.ID, 1, 2)
+
+	modelStub := &integrationSummarizationModel{invocations: repo.NewModelInvocationRepo(pool)}
+	summarizer, err := NewSummarizer(SummarizerOptions{Pool: pool, Model: modelStub})
+	if err != nil {
+		t.Fatalf("NewSummarizer: %v", err)
+	}
+
+	first, err := summarizer.RunForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("RunForSession first: %v", err)
+	}
+	if _, err := summarizer.RunForSession(ctx, session.ID); !errors.Is(err, ErrAlreadySummarized) {
+		t.Fatalf("RunForSession second error = %v, want ErrAlreadySummarized", err)
+	}
+
+	stored, err := repo.NewChatSummaryRepo(pool).GetLatestForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("GetLatestForSession: %v", err)
+	}
+	if stored.FromSequence != first.FromSequence || stored.ToSequence != first.ToSequence {
+		t.Fatalf("summary range changed to %d-%d, want %d-%d", stored.FromSequence, stored.ToSequence, first.FromSequence, first.ToSequence)
+	}
+}
+
+func TestSummarization_PreservesArtifactRefs(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	seedSummarizationProfile(t, ctx, pool, org.ID)
+
+	svc := newIntegrationService(t, pool, nil)
+	session := mustCreateSession(t, ctx, svc, org.ID)
+	agent := seedChatServiceAgent(t, ctx, pool, org.ID)
+
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:      session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   agent.ID,
+		Status:         "completed",
+	})
+	if err != nil {
+		t.Fatalf("create turn: %v", err)
+	}
+	refOne := "/workspace/src/main.go"
+	refTwo := "s3://build-artifacts/run-42/output.log"
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &turn.ID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "Preserve refs: " + refOne + " and " + refTwo,
+	}); err != nil {
+		t.Fatalf("create message with refs: %v", err)
+	}
+
+	summarizer, err := NewSummarizer(SummarizerOptions{
+		Pool:  pool,
+		Model: echoSummarizationModel{},
+	})
+	if err != nil {
+		t.Fatalf("NewSummarizer: %v", err)
+	}
+	summary, err := summarizer.RunForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("RunForSession: %v", err)
+	}
+	if !strings.Contains(summary.SummaryText, refOne) {
+		t.Fatalf("summary missing ref %q in %q", refOne, summary.SummaryText)
+	}
+	if !strings.Contains(summary.SummaryText, refTwo) {
+		t.Fatalf("summary missing ref %q in %q", refTwo, summary.SummaryText)
+	}
+}
+
+func TestSummarization_SummarizesOldestTurns(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	seedSummarizationProfile(t, ctx, pool, org.ID)
+
+	svc := newIntegrationService(t, pool, nil)
+	session := mustCreateSession(t, ctx, svc, org.ID)
+	agent := seedChatServiceAgent(t, ctx, pool, org.ID)
+	seedTurnMessages(t, ctx, pool, session.ID, agent.ID, 10, 1)
+
+	modelStub := &integrationSummarizationModel{invocations: repo.NewModelInvocationRepo(pool)}
+	summarizer, err := NewSummarizer(SummarizerOptions{Pool: pool, Model: modelStub})
+	if err != nil {
+		t.Fatalf("NewSummarizer: %v", err)
+	}
+
+	summary, err := summarizer.RunForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("RunForSession: %v", err)
+	}
+
+	var maxSequence int64
+	if err := pool.QueryRow(ctx, `SELECT MAX(sequence_number) FROM chat_message WHERE session_id = $1`, session.ID).Scan(&maxSequence); err != nil {
+		t.Fatalf("query max sequence: %v", err)
+	}
+	if summary.FromSequence != 1 {
+		t.Fatalf("summary.FromSequence = %d, want 1", summary.FromSequence)
+	}
+	if summary.ToSequence >= maxSequence {
+		t.Fatalf("summary.ToSequence = %d, want < max sequence %d", summary.ToSequence, maxSequence)
+	}
+
+	var recentUnsummarizedCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_message
+		WHERE session_id = $1
+		  AND sequence_number > $2
+	`, session.ID, summary.ToSequence).Scan(&recentUnsummarizedCount); err != nil {
+		t.Fatalf("count recent unsummarized messages: %v", err)
+	}
+	if recentUnsummarizedCount == 0 {
+		t.Fatal("expected most recent messages to remain unsummarized, found none")
+	}
+}
+
+func TestRetention_SessionCleanup(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	bus := newIntegrationEventBus(pool)
+	svc := newIntegrationService(t, pool, bus)
+	session := mustCreateSession(t, ctx, svc, org.ID)
+
+	events := make(chan eventbus.DomainEvent, 1)
+	sub := bus.Subscribe("chat-session-cleanup-"+uuid.NewString(), &org.ID, func(_ context.Context, event eventbus.DomainEvent) error {
+		if event.EventType == "chat.session.closed" {
+			events <- event
+		}
+		return nil
+	})
+	defer bus.Unsubscribe(sub)
+
+	if err := svc.CloseSession(ctx, session.ID); err != nil {
+		t.Fatalf("CloseSession: %v", err)
+	}
+
+	select {
+	case <-events:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for chat.session.closed event")
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT job_type, payload, run_after
+		FROM job_queue
+		WHERE payload->>'session_id' = $1
+	`, session.ID.String())
+	if err != nil {
+		t.Fatalf("query session cleanup jobs: %v", err)
+	}
+	defer rows.Close()
+
+	seenSummarize := false
+	cleanupTypes := map[string]bool{}
+	for rows.Next() {
+		var jobType string
+		var payload json.RawMessage
+		var runAfter *time.Time
+		if err := rows.Scan(&jobType, &payload, &runAfter); err != nil {
+			t.Fatalf("scan job row: %v", err)
+		}
+
+		switch jobType {
+		case ChatSummarizeJobType:
+			seenSummarize = true
+		case ChatSessionCleanupJobType:
+			var decoded map[string]any
+			if err := json.Unmarshal(payload, &decoded); err != nil {
+				t.Fatalf("unmarshal cleanup payload: %v", err)
+			}
+			cleanupType, _ := decoded["cleanup_type"].(string)
+			cleanupTypes[cleanupType] = true
+			if runAfter == nil {
+				t.Fatalf("cleanup job %q has nil run_after", cleanupType)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate jobs: %v", err)
+	}
+
+	if !seenSummarize {
+		t.Fatal("missing chat_summarize job")
+	}
+	for _, cleanupType := range []string{
+		CleanupTypeEphemeralPurge,
+		CleanupTypeToolCompaction,
+		CleanupTypeSummaryConsolidate,
+	} {
+		if !cleanupTypes[cleanupType] {
+			t.Fatalf("missing cleanup job type %q", cleanupType)
+		}
 	}
 }
 
@@ -292,6 +547,28 @@ func TestRetentionSweeperIntegrationArchivesClosedSessions(t *testing.T) {
 type integrationSummarizationModel struct {
 	invocations *repo.ModelInvocationRepo
 	calls       []SummarizationRequest
+}
+
+type echoSummarizationModel struct{}
+
+func (echoSummarizationModel) Summarize(_ context.Context, req SummarizationRequest) (SummarizationResponse, error) {
+	parts := make([]string, 0, len(req.Messages)+len(req.Summaries))
+	for _, item := range req.Messages {
+		if strings.TrimSpace(item.Content) == "" {
+			continue
+		}
+		parts = append(parts, item.Content)
+	}
+	for _, item := range req.Summaries {
+		if strings.TrimSpace(item.SummaryText) == "" {
+			continue
+		}
+		parts = append(parts, item.SummaryText)
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "summary")
+	}
+	return SummarizationResponse{SummaryText: strings.Join(parts, "\n")}, nil
 }
 
 func (m *integrationSummarizationModel) Summarize(ctx context.Context, req SummarizationRequest) (SummarizationResponse, error) {
