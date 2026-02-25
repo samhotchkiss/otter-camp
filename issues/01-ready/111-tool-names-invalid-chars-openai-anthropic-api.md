@@ -56,7 +56,18 @@ Example: `file.read` → `file_read`, `git.status` → `git_status`
 
 The cleanest fix: add a `sanitized_name` field to `ToolDescriptor` that is computed once and used in API calls. The dispatcher can look up tools by `sanitized_name` when processing model responses.
 
-Alternatively, if the tool dispatcher already looks up by name, simply add a DB lookup fallback: try original name first, then try with dots replaced by underscores.
+**Dispatch path analysis** (traced in `internal/worker/tool_dispatcher.go` → `internal/controlplane/broker.go`):
+- `liveToolDispatcher.DispatchTier1` calls `broker.Dispatch({ToolName: call.Name})`
+- `broker.Dispatch` calls `b.toolDefinitions.GetByName(ctx, toolName)` which queries DB with the exact name
+- If model returns `file_read` but DB has `file.read`, `GetByName` returns ErrNotFound
+
+**Recommended implementation**:
+1. Add `APIName string` field to `ToolDescriptor` (populated as sanitized version of `Name`)
+2. In `openAITools`/`anthropicTools`: use `descriptor.APIName` in the payload
+3. In `internal/turn/engine.go`, when parsing model tool call response, look up the tool in the session tool set by matching `descriptor.APIName == call.Name` → use `descriptor.Name` for dispatch
+4. Pass the original `Name` (not sanitized) to the broker dispatch
+
+This keeps the DB/tool_definition names unchanged while correctly round-tripping through the provider API.
 
 ## Acceptance Criteria
 
