@@ -30,6 +30,8 @@ func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)
 	defer fx.bus.Unsubscribe(fx.subscription)
+	stopTurnRuntime := startTaskQueueTurnRuntime(t, ctx, fx.pool, fx.bus, fx.org.ID)
+	defer stopTurnRuntime()
 
 	template := seedTaskQueueFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID)
 
@@ -50,11 +52,15 @@ func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.
 	taskRepo := repo.NewProjectTaskRepo(fx.pool)
 	executionRepo := repo.NewFlowNodeExecutionRepo(fx.pool)
 	runRepo := NewRunRepository(fx.pool)
+	messageRepo := repo.NewChatMessageRepo(fx.pool)
+	participantRepo := repo.NewChatParticipantRepo(fx.pool)
 
 	var (
-		taskRecord repo.ProjectTask
-		execution  repo.FlowNodeExecution
-		runRecord  Run
+		taskRecord      repo.ProjectTask
+		execution       repo.FlowNodeExecution
+		runRecord       Run
+		agentTurnStatus string
+		foundResponse   bool
 	)
 	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
 		var err error
@@ -82,13 +88,52 @@ func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.
 		if err != nil {
 			return false, err
 		}
+		var hasInProgressRun bool
 		for _, candidate := range runs {
 			if candidate.FlowNodeID != nil && *candidate.FlowNodeID == *taskRecord.CurrentFlowNodeID && candidate.Status == "in_progress" {
 				runRecord = candidate
-				return true, nil
+				hasInProgressRun = true
+				break
 			}
 		}
-		return false, nil
+		if !hasInProgressRun {
+			return false, nil
+		}
+		if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+			return false, nil
+		}
+
+		err = fx.pool.QueryRow(ctx, `
+			SELECT status
+			FROM job_queue
+			WHERE job_type = $1
+			ORDER BY created_at DESC
+			LIMIT 1
+		`, testAgentTurnJobType).Scan(&agentTurnStatus)
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				return false, nil
+			}
+			return false, err
+		}
+		if agentTurnStatus == "dead_letter" {
+			return false, fmt.Errorf("agent_turn moved to dead_letter")
+		}
+		if agentTurnStatus != "done" {
+			return false, nil
+		}
+
+		messages, err := messageRepo.ListBySession(ctx, *execution.SessionID)
+		if err != nil {
+			return false, err
+		}
+		for _, message := range messages {
+			if message.Role == "assistant" && message.Status == "final" && message.Content != "" {
+				foundResponse = true
+				break
+			}
+		}
+		return foundResponse, nil
 	})
 
 	if taskRecord.WorkStatus != "in_progress" {
@@ -105,6 +150,52 @@ func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.
 	}
 	if runRecord.Status != "in_progress" {
 		t.Fatalf("run status = %q, want in_progress", runRecord.Status)
+	}
+	if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+		t.Fatal("flow execution session_id is nil")
+	}
+	if agentTurnStatus != "done" {
+		t.Fatalf("agent_turn status = %q, want done", agentTurnStatus)
+	}
+
+	messages, err := messageRepo.ListBySession(ctx, *execution.SessionID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var foundKickoff bool
+	for _, message := range messages {
+		if message.Role != "user" || len(message.Metadata) == 0 {
+			continue
+		}
+		var metadata map[string]any
+		if unmarshalErr := json.Unmarshal(message.Metadata, &metadata); unmarshalErr != nil {
+			continue
+		}
+		if metadata["source"] == "task_queue_processor" {
+			foundKickoff = true
+			break
+		}
+	}
+	if !foundKickoff {
+		t.Fatal("expected user kickoff message for flow run")
+	}
+
+	participants, err := participantRepo.ListBySession(ctx, *execution.SessionID)
+	if err != nil {
+		t.Fatalf("ListBySession participants: %v", err)
+	}
+	var foundAgentParticipant bool
+	for _, participant := range participants {
+		if participant.ParticipantType == "agent" && participant.ParticipantID == fx.agent.ID {
+			foundAgentParticipant = true
+			break
+		}
+	}
+	if !foundAgentParticipant {
+		t.Fatal("expected agent participant on flow node session")
+	}
+	if !foundResponse {
+		t.Fatal("expected assistant response message for flow kickoff")
 	}
 }
 

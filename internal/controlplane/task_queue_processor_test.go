@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -135,6 +136,118 @@ func TestEnsureAssignedAgentRunIgnoresDuplicateParticipant(t *testing.T) {
 	}
 }
 
+func TestEnsureFlowRunAddsParticipantAndKickoffMessage(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	flowNodeID := uuid.New()
+	executionID := uuid.New()
+	agentID := uuid.New()
+	sessionID := uuid.New()
+	runID := uuid.New()
+
+	chatService := &fakeTaskQueueChatService{}
+	processor := &TaskQueueProcessor{
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: flowNodeID, SessionID: &sessionID},
+		},
+		runs: &fakeTaskQueueRunStarter{
+			run: Run{ID: runID, SessionID: &sessionID},
+		},
+		chats: chatService,
+	}
+
+	err := processor.ensureFlowRun(ctx, eventbus.DomainEvent{ID: uuid.New()}, repo.ProjectTask{
+		ID:                taskID,
+		OrganizationID:    orgID,
+		ProjectID:         projectID,
+		WorkStatus:        "in_progress",
+		Title:             "Flow task",
+		CurrentFlowNodeID: &flowNodeID,
+		AssignedAgentID:   &agentID,
+	})
+	if err != nil {
+		t.Fatalf("ensureFlowRun() error = %v", err)
+	}
+
+	if len(chatService.addParticipantCalls) != 1 {
+		t.Fatalf("addParticipant calls = %d, want 1", len(chatService.addParticipantCalls))
+	}
+	if len(chatService.appendMessages) != 1 {
+		t.Fatalf("appendMessage calls = %d, want 1", len(chatService.appendMessages))
+	}
+
+	addIdx := indexOfCall(chatService.calls, "add_participant")
+	appendIdx := indexOfCall(chatService.calls, "append_message")
+	if addIdx == -1 || appendIdx == -1 || addIdx > appendIdx {
+		t.Fatalf("call order = %v, want add_participant before append_message", chatService.calls)
+	}
+
+	appended := chatService.appendMessages[0]
+	if appended.Role != "user" {
+		t.Fatalf("kickoff role = %q, want user", appended.Role)
+	}
+	if !strings.Contains(appended.Content, "Flow node execution: "+executionID.String()) {
+		t.Fatalf("kickoff content = %q, want flow execution id", appended.Content)
+	}
+}
+
+func TestEnsureFlowRunKickoffIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	flowNodeID := uuid.New()
+	executionID := uuid.New()
+	agentID := uuid.New()
+	sessionID := uuid.New()
+	runID := uuid.New()
+	existingMetadata, err := json.Marshal(map[string]any{
+		"source": "task_queue_processor",
+		"run_id": runID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	chatService := &fakeTaskQueueChatService{
+		listMessages: []*chat.ChatMessage{
+			{
+				ID:        uuid.New(),
+				SessionID: sessionID,
+				Role:      "user",
+				Metadata:  existingMetadata,
+			},
+		},
+	}
+	processor := &TaskQueueProcessor{
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: flowNodeID, SessionID: &sessionID},
+		},
+		runs: &fakeTaskQueueRunStarter{
+			run: Run{ID: runID, SessionID: &sessionID},
+		},
+		chats: chatService,
+	}
+
+	err = processor.ensureFlowRun(ctx, eventbus.DomainEvent{ID: uuid.New()}, repo.ProjectTask{
+		ID:                taskID,
+		OrganizationID:    orgID,
+		ProjectID:         projectID,
+		WorkStatus:        "in_progress",
+		Title:             "Flow task",
+		CurrentFlowNodeID: &flowNodeID,
+		AssignedAgentID:   &agentID,
+	})
+	if err != nil {
+		t.Fatalf("ensureFlowRun() error = %v", err)
+	}
+	if len(chatService.appendMessages) != 0 {
+		t.Fatalf("appendMessage calls = %d, want 0 for existing kickoff", len(chatService.appendMessages))
+	}
+}
+
 func indexOfCall(calls []string, target string) int {
 	for idx, call := range calls {
 		if call == target {
@@ -183,6 +296,18 @@ func (f *fakeTaskQueueRunStarter) StartRun(context.Context, uuid.UUID) error {
 	return nil
 }
 
+type fakeTaskQueueFlowExecutionRepository struct {
+	execution repo.FlowNodeExecution
+	err       error
+}
+
+func (f *fakeTaskQueueFlowExecutionRepository) GetActive(context.Context, uuid.UUID, uuid.UUID) (repo.FlowNodeExecution, error) {
+	if f.err != nil {
+		return repo.FlowNodeExecution{}, f.err
+	}
+	return f.execution, nil
+}
+
 type addParticipantCall struct {
 	sessionID       uuid.UUID
 	participantType string
@@ -197,6 +322,7 @@ type fakeTaskQueueChatService struct {
 	addParticipantCalls []addParticipantCall
 	addParticipantErr   error
 	appendMessageErr    error
+	appendMessages      []chat.AppendMessageInput
 	listMessages        []*chat.ChatMessage
 	listMessagesErr     error
 }
@@ -242,6 +368,7 @@ func (f *fakeTaskQueueChatService) AddParticipant(_ context.Context, sessionID u
 
 func (f *fakeTaskQueueChatService) AppendMessage(_ context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error) {
 	f.calls = append(f.calls, "append_message")
+	f.appendMessages = append(f.appendMessages, input)
 	if f.appendMessageErr != nil {
 		return nil, f.appendMessageErr
 	}
@@ -264,3 +391,4 @@ func (f *fakeTaskQueueChatService) ListMessages(context.Context, uuid.UUID, chat
 var _ taskQueueChatService = (*fakeTaskQueueChatService)(nil)
 var _ taskQueueSessionRepository = (*fakeTaskQueueSessionRepository)(nil)
 var _ taskQueueRunStarter = (*fakeTaskQueueRunStarter)(nil)
+var _ taskQueueFlowExecutionRepository = (*fakeTaskQueueFlowExecutionRepository)(nil)
