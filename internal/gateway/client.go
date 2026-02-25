@@ -864,6 +864,9 @@ func buildProviderBody(providerType string, req turn.ModelRequest, stream bool) 
 		if systemPrompt != "" {
 			payload["system"] = systemPrompt
 		}
+		if toolDefs := anthropicTools(req); len(toolDefs) > 0 {
+			payload["tools"] = toolDefs
+		}
 		return json.Marshal(payload)
 	default:
 		payload := map[string]any{
@@ -877,8 +880,66 @@ func buildProviderBody(providerType string, req turn.ModelRequest, stream bool) 
 		if stream {
 			payload["stream_options"] = map[string]any{"include_usage": true}
 		}
+		if toolDefs := openAITools(req); len(toolDefs) > 0 {
+			payload["tools"] = toolDefs
+			payload["tool_choice"] = "auto"
+		}
 		return json.Marshal(payload)
 	}
+}
+
+func openAITools(req turn.ModelRequest) []map[string]any {
+	if req.Prompt == nil || len(req.Prompt.ToolDescriptors) == 0 {
+		return nil
+	}
+
+	result := make([]map[string]any, 0, len(req.Prompt.ToolDescriptors))
+	for _, descriptor := range req.Prompt.ToolDescriptors {
+		result = append(result, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        strings.TrimSpace(descriptor.Name),
+				"description": strings.TrimSpace(descriptor.Description),
+				"parameters":  normalizeToolSchema(descriptor.InputSchema),
+			},
+		})
+	}
+	return result
+}
+
+func anthropicTools(req turn.ModelRequest) []map[string]any {
+	if req.Prompt == nil || len(req.Prompt.ToolDescriptors) == 0 {
+		return nil
+	}
+
+	result := make([]map[string]any, 0, len(req.Prompt.ToolDescriptors))
+	for _, descriptor := range req.Prompt.ToolDescriptors {
+		result = append(result, map[string]any{
+			"name":         strings.TrimSpace(descriptor.Name),
+			"description":  strings.TrimSpace(descriptor.Description),
+			"input_schema": normalizeToolSchema(descriptor.InputSchema),
+		})
+	}
+	return result
+}
+
+func normalizeToolSchema(schema json.RawMessage) any {
+	trimmed := bytes.TrimSpace(schema)
+	if len(trimmed) == 0 {
+		return map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}
+	}
+
+	var parsed any
+	if err := json.Unmarshal(trimmed, &parsed); err != nil || parsed == nil {
+		return map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}
+	}
+	return parsed
 }
 
 type providerMessage struct {
