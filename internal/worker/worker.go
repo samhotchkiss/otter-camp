@@ -13,6 +13,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/db"
 	"github.com/samhotchkiss/otter-camp/internal/delivery"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/gateway"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/jobs"
 	"github.com/samhotchkiss/otter-camp/internal/model"
@@ -22,6 +23,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/push/adapters"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/scheduling"
+	"github.com/samhotchkiss/otter-camp/internal/secret"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 	"github.com/samhotchkiss/otter-camp/internal/turn"
@@ -187,7 +189,23 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		repo.NewModelProfileAssignmentRepo(pool.Raw()),
 		repo.NewModelProfileRepo(pool.Raw()),
 	)
-	modelGateway := turn.ModelGateway(turn.UnavailableModelGateway{})
+
+	modelInvocationRepo := repo.NewModelInvocationRepo(pool.Raw())
+	healthChecker := gateway.NewHealthChecker()
+	liveModelGateway, err := gateway.NewLiveModelGateway(gateway.LiveModelGatewayOptions{
+		Router:      gateway.NewRouter(repo.NewModelProfileRepo(pool.Raw()), repo.NewProviderConnectionRepo(pool.Raw()), healthChecker),
+		Providers:   repo.NewModelProviderRepo(pool.Raw()),
+		Secrets:     secret.NewService(repo.NewSecretRepo(pool.Raw())),
+		Invocations: modelInvocationRepo,
+		Enqueuer:    jqWorker,
+		Health:      healthChecker,
+		Logger:      logger,
+	})
+	if err != nil {
+		return fmt.Errorf("worker live model gateway setup: %w", err)
+	}
+
+	modelGateway := turn.ModelGateway(liveModelGateway)
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("OTTERCAMP_MODE")), "test") {
 		modelGateway = deterministicTurnModelGateway{}
 	}
@@ -202,7 +220,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		RunCanceler:   runService,
 		Events:        bus,
 		Enqueuer:      jqWorker,
-		Invocations:   repo.NewModelInvocationRepo(pool.Raw()),
+		Invocations:   modelInvocationRepo,
 		ModelProfiles: repo.NewModelProfileRepo(pool.Raw()),
 		Profiles:      profileResolver,
 		Messages:      repo.NewChatMessageRepo(pool.Raw()),
