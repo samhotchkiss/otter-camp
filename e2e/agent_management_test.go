@@ -78,6 +78,9 @@ func TestAgent_StaffLifecycle(t *testing.T) {
 		if strings.TrimSpace(asString(entry["project_id"])) != projectID {
 			continue
 		}
+		if active, ok := entry["is_active"].(bool); !ok || !active {
+			t.Fatalf("assignment list is_active=%v want=true body=%s", entry["is_active"], string(listBody))
+		}
 		found = true
 		break
 	}
@@ -270,17 +273,16 @@ func setupAgentScenario(t *testing.T) (*testutil.ServerProcess, string, string) 
 func activateAgent(t *testing.T, baseURL, token, agentID string) {
 	t.Helper()
 
-	activateBody, activateStatus := testutil.POST(t, baseURL, "/v1/agents/"+agentID+"/activate", token, map[string]any{})
-	if activateStatus == http.StatusOK {
-		return
-	}
-	if activateStatus != http.StatusNotFound {
-		t.Fatalf("POST /v1/agents/%s/activate status=%d body=%s", agentID, activateStatus, string(activateBody))
-	}
-
+	// Canonical server endpoint is /unpause; /activate is a forward-compat fallback.
 	unpauseBody, unpauseStatus := testutil.POST(t, baseURL, "/v1/agents/"+agentID+"/unpause", token, map[string]any{})
 	if unpauseStatus != http.StatusOK {
-		t.Fatalf("POST /v1/agents/%s/unpause status=%d want=%d body=%s", agentID, unpauseStatus, http.StatusOK, string(unpauseBody))
+		if unpauseStatus != http.StatusNotFound {
+			t.Fatalf("POST /v1/agents/%s/unpause status=%d body=%s", agentID, unpauseStatus, string(unpauseBody))
+		}
+		activateBody, activateStatus := testutil.POST(t, baseURL, "/v1/agents/"+agentID+"/activate", token, map[string]any{})
+		if activateStatus != http.StatusOK {
+			t.Fatalf("POST /v1/agents/%s/activate status=%d want=%d body=%s", agentID, activateStatus, http.StatusOK, string(activateBody))
+		}
 	}
 }
 

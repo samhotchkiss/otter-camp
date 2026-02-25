@@ -285,6 +285,7 @@ type projectAssignmentListItemResponse struct {
 	ProjectID   uuid.UUID `json:"project_id"`
 	ProjectSlug string    `json:"project_slug"`
 	Role        string    `json:"role"`
+	IsActive    bool      `json:"is_active"`
 	AssignedAt  time.Time `json:"assigned_at"`
 }
 
@@ -1424,6 +1425,7 @@ func toProjectAssignmentListItemResponse(item repo.AgentProjectAssignment, proje
 		ProjectID:   item.ProjectID,
 		ProjectSlug: projectSlug,
 		Role:        item.Role,
+		IsActive:    item.IsActive,
 		AssignedAt:  item.AssignedAt,
 	}
 }
