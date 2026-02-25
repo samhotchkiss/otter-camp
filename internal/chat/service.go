@@ -583,6 +583,14 @@ func (s *service) GetOrCreateNodeSession(ctx context.Context, flowNodeExecutionI
 	`, agentRecord.OrganizationID, flowNodeExecutionID.String()).Scan(&existingID)
 	switch {
 	case err == nil:
+		if _, err := tx.Exec(ctx, `
+			UPDATE flow_node_execution
+			SET session_id = $2
+			WHERE id = $1
+			  AND (session_id IS NULL OR session_id = $2)
+		`, flowNodeExecutionID, existingID); err != nil {
+			return nil, mapDBError(err)
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return nil, err
 		}
@@ -627,6 +635,13 @@ func (s *service) GetOrCreateNodeSession(ctx context.Context, flowNodeExecutionI
 		VALUES ($1, 'project_task', $2, 'async', 'active', 'agent', $3, $4::jsonb)
 		RETURNING id
 	`, agentRecord.OrganizationID, taskID, agentID, metadata).Scan(&createdID); err != nil {
+		return nil, mapDBError(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE flow_node_execution
+		SET session_id = $2
+		WHERE id = $1
+	`, flowNodeExecutionID, createdID); err != nil {
 		return nil, mapDBError(err)
 	}
 
@@ -1153,14 +1168,27 @@ func (s *service) SteerTurn(ctx context.Context, sessionID, messageID uuid.UUID,
 		return repo.ErrNotFound
 	}
 
-	// Turn engine contract: poll for new user messages created after turn.started_at and
-	// treat metadata.steer_message_id as an in-flight steering instruction.
+	if err := s.CancelTurn(ctx, turn.ID, "steer_turn"); err != nil {
+		return err
+	}
+	if err := s.RedactMessage(ctx, message.ID); err != nil {
+		return err
+	}
+
+	nextTurn, err := s.CreateTurn(ctx, sessionID, turn.RespondingID)
+	if err != nil {
+		return err
+	}
+
+	// Preserve linkage to the steered message/turn and attach the steer input to
+	// the newly queued pending turn so the executor can resume from this direction.
 	steerMetadata := mustJSON(map[string]any{
 		"steer_message_id": messageID,
 		"steer_turn_id":    turn.ID,
 	})
 	_, err = s.AppendMessage(ctx, AppendMessageInput{
 		SessionID: sessionID,
+		TurnID:    &nextTurn.ID,
 		Role:      "user",
 		Content:   steerContent,
 		Metadata:  steerMetadata,
