@@ -26,9 +26,24 @@ func TestQueuedMessageStateMachineSendEditSteerDeleteCancel(t *testing.T) {
 	}
 
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	if got := model.ChatInput(); got != "queued" {
+		t.Fatalf("chat input after edit action = %q, want %q", got, "queued")
+	}
+	if model.QueueDepth() != 0 {
+		t.Fatalf("queue depth after edit action = %d, want 0", model.QueueDepth())
+	}
+
+	model.chatInput = model.ChatInput() + " updated"
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
 	queue := model.QueueSnapshot()
+	if model.QueueDepth() != 1 {
+		t.Fatalf("queue depth after re-send = %d, want 1", model.QueueDepth())
+	}
 	if !queue[0].Edited {
-		t.Fatal("queue item should be edited after e action")
+		t.Fatal("re-queued item should be marked edited")
+	}
+	if got := queue[0].Text; got != "queued updated" {
+		t.Fatalf("re-queued text = %q, want %q", got, "queued updated")
 	}
 
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
@@ -53,13 +68,18 @@ func TestChatInputBehaviorsNewlineHistoryAndMentionAutocomplete(t *testing.T) {
 	model.focus = ChatPanel
 
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	if got := model.ChatInput(); got != "@frank " {
-		t.Fatalf("mention autocomplete = %q, want %q", got, "@frank ")
+		t.Fatalf("mention autocomplete with prefix = %q, want %q", got, "@frank ")
 	}
 
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
 	if got := model.ChatInput(); got != "@frank \n" {
 		t.Fatalf("alt-enter newline input = %q, want %q", got, "@frank \n")
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\n'}})
+	if got := model.ChatInput(); got != "@frank \n\n" {
+		t.Fatalf("shift-enter newline input = %q, want %q", got, "@frank \\n\\n")
 	}
 
 	model.chatInput = "history-entry"

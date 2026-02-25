@@ -171,13 +171,14 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+			if m.focus == ChatPanel {
+				m.handleChatRunes(key)
+				return m, nil
+			}
+
 			if handled := m.handleWorkspaceRune(r); handled {
 				return m, nil
 			}
-		}
-		if m.focus == ChatPanel {
-			m.handleChatRunes(key)
-			return m, nil
 		}
 		return m, nil
 	default:

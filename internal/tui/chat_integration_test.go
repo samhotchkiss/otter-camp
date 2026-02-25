@@ -71,7 +71,6 @@ func TestScopeSwitchPreservesMainViewState(t *testing.T) {
 	t.Parallel()
 
 	model := NewModel(DefaultState())
-	model.mainView = "inbox"
 	initialMainView := model.MainView()
 	initialSession := model.ActiveChatSession()
 
