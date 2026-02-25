@@ -331,6 +331,47 @@ func TestTaskHTTPRemoteDeleteProtectionWithActiveEnvironment(t *testing.T) {
 	}
 }
 
+func TestTaskHTTPDeliveryEndpointsListAndCreate(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "delivery-list", false)
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	remotes := mustJSON(t, http.MethodGet, testServer.URL+"/v1/projects/"+project.ID.String()+"/remotes", nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if remotes.StatusCode != http.StatusOK {
+		t.Fatalf("list remotes status = %d, want %d body=%s", remotes.StatusCode, http.StatusOK, string(remotes.Body))
+	}
+	remoteItems, ok := jsonPathValue(t, remotes.Body, "data").([]any)
+	if !ok {
+		t.Fatalf("list remotes data type = %T, want []any body=%s", jsonPathValue(t, remotes.Body, "data"), string(remotes.Body))
+	}
+	if len(remoteItems) != 0 {
+		t.Fatalf("list remotes count = %d, want 0 body=%s", len(remoteItems), string(remotes.Body))
+	}
+
+	createdRemote := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+project.ID.String()+"/remotes", map[string]any{
+		"name":      "origin",
+		"url":       "https://example.com/repo.git",
+		"transport": "https",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if createdRemote.StatusCode != http.StatusCreated {
+		t.Fatalf("create remote status = %d, want %d body=%s", createdRemote.StatusCode, http.StatusCreated, string(createdRemote.Body))
+	}
+
+	environments := mustJSON(t, http.MethodGet, testServer.URL+"/v1/projects/"+project.ID.String()+"/environments", nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if environments.StatusCode != http.StatusOK {
+		t.Fatalf("list environments status = %d, want %d body=%s", environments.StatusCode, http.StatusOK, string(environments.Body))
+	}
+	environmentItems, ok := jsonPathValue(t, environments.Body, "data").([]any)
+	if !ok {
+		t.Fatalf("list environments data type = %T, want []any body=%s", jsonPathValue(t, environments.Body, "data"), string(environments.Body))
+	}
+	if len(environmentItems) != 0 {
+		t.Fatalf("list environments count = %d, want 0 body=%s", len(environmentItems), string(environments.Body))
+	}
+}
+
 func newTaskTestServer(t *testing.T) (*authIntegrationServer, repo.Organization, repo.HumanUser, repo.HumanUser) {
 	t.Helper()
 

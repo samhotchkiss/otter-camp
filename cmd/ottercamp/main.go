@@ -214,15 +214,6 @@ func runServe() int {
 		fmt.Fprintf(os.Stderr, "task service setup error: %v\n", err)
 		return 1
 	}
-	flowService, err := flowsvc.NewService(flowsvc.Options{
-		Pool:         pool.Raw(),
-		TasksService: taskService,
-		Events:       bus,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "flow service setup error: %v\n", err)
-		return 1
-	}
 	deliveryService, err := deliverysvc.NewService(deliverysvc.Options{
 		Pool: pool.Raw(),
 	})
@@ -236,6 +227,24 @@ func runServe() int {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "chat service setup error: %v\n", err)
+		return 1
+	}
+	flowSessionBridge, err := projectsvc.NewFlowSessionBridge(projectsvc.FlowSessionBridgeOptions{
+		Pool:  pool.Raw(),
+		Chats: chatService,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "flow session bridge setup error: %v\n", err)
+		return 1
+	}
+	flowService, err := flowsvc.NewService(flowsvc.Options{
+		Pool:          pool.Raw(),
+		TasksService:  taskService,
+		Events:        bus,
+		SessionBridge: flowSessionBridge,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "flow service setup error: %v\n", err)
 		return 1
 	}
 	pushPreferenceRepo := push.NewPreferenceRepository(pool.Raw())

@@ -29,6 +29,8 @@ var (
 	ErrSubtaskIDRequired         = errors.New("subtask_id is required")
 	ErrFlowNodeExecutionRequired = errors.New("flow_node_execution_id is required")
 	ErrInvalidSubtaskTransition  = errors.New("invalid subtask status transition")
+	ErrAgentNotFound             = errors.New("agent not found")
+	ErrUserNotFound              = errors.New("user not found")
 )
 
 type Actor struct {
@@ -111,6 +113,19 @@ type eventBus interface {
 	Subscribe(consumerName string, orgID *uuid.UUID, handler eventbus.EventHandler) eventbus.Subscription
 }
 
+type subtaskAgentRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.Agent, error)
+}
+
+type subtaskUserRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.HumanUser, error)
+}
+
+type flowSessionBridge interface {
+	EnsureNodeSession(ctx context.Context, execution repo.FlowNodeExecution) (repo.ChatSession, error)
+	RecordCommitSHA(ctx context.Context, flowNodeExecutionID uuid.UUID, commitSHA string) error
+}
+
 type Options struct {
 	Pool *pgxpool.Pool
 
@@ -125,6 +140,9 @@ type Options struct {
 	TaskEvents    taskEventRepository
 	TasksService  taskCoordinator
 	Events        eventBus
+	Agents        subtaskAgentRepository
+	Users         subtaskUserRepository
+	SessionBridge flowSessionBridge
 }
 
 type FlowExecutionService interface {
@@ -155,6 +173,9 @@ type service struct {
 	taskEvents    taskEventRepository
 	taskService   taskCoordinator
 	events        eventBus
+	agents        subtaskAgentRepository
+	users         subtaskUserRepository
+	sessionBridge flowSessionBridge
 }
 
 func NewService(opts Options) (FlowExecutionService, error) {
@@ -225,6 +246,17 @@ func NewService(opts Options) (FlowExecutionService, error) {
 		}
 		svc.taskService = taskService
 	}
+	if opts.Agents != nil {
+		svc.agents = opts.Agents
+	} else {
+		svc.agents = repo.NewAgentRepo(opts.Pool)
+	}
+	if opts.Users != nil {
+		svc.users = opts.Users
+	} else {
+		svc.users = repo.NewHumanUserRepo(opts.Pool)
+	}
+	svc.sessionBridge = opts.SessionBridge
 
 	return svc, nil
 }
@@ -259,9 +291,11 @@ func (s *service) StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNo
 		FlowNodeID:  *template.StartNodeID,
 		VisitNumber: 1,
 		Status:      "active",
-		SessionID:   newExecutionSessionID(),
 	})
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureExecutionSession(ctx, &execution); err != nil {
 		return nil, err
 	}
 
@@ -332,10 +366,12 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 			FlowNodeID:  *currentNode.NextNodeID,
 			VisitNumber: 1,
 			Status:      "active",
-			SessionID:   newExecutionSessionID(),
 		})
 		if createErr != nil {
 			return nil, createErr
+		}
+		if err := s.ensureExecutionSession(ctx, &created); err != nil {
+			return nil, err
 		}
 		nextExecution = &created
 	}
@@ -400,9 +436,11 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 		FlowNodeID:  rejectNode.ID,
 		VisitNumber: nextVisit,
 		Status:      "active",
-		SessionID:   newExecutionSessionID(),
 	})
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureExecutionSession(ctx, &created); err != nil {
 		return nil, err
 	}
 
@@ -431,7 +469,18 @@ func (s *service) RecordNodeCommit(ctx context.Context, taskID uuid.UUID, commit
 		return nil, err
 	}
 
-	updatedExecution, err := s.executions.RecordCommitSHA(ctx, activeExecution.ID, strings.TrimSpace(commitSHA))
+	trimmedCommit := strings.TrimSpace(commitSHA)
+	if s.sessionBridge != nil {
+		if err := s.sessionBridge.RecordCommitSHA(ctx, activeExecution.ID, trimmedCommit); err != nil {
+			return nil, err
+		}
+	} else {
+		if _, err := s.executions.RecordCommitSHA(ctx, activeExecution.ID, trimmedCommit); err != nil {
+			return nil, err
+		}
+	}
+
+	updatedExecution, err := s.executions.GetByID(ctx, activeExecution.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -455,6 +504,9 @@ func (s *service) CreateSubtask(ctx context.Context, flowNodeExecutionID uuid.UU
 
 	execution, err := s.executions.GetByID(ctx, flowNodeExecutionID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.validateSubtaskAssignee(ctx, assignee); err != nil {
 		return nil, err
 	}
 	nextSequence, err := s.subtasks.NextSequenceNumber(ctx, flowNodeExecutionID)
@@ -615,6 +667,56 @@ func (s *service) SubscribeTaskCancellationHandler(orgID *uuid.UUID) eventbus.Su
 		}
 		return s.OnTaskCancelled(ctx, payload.TaskID)
 	})
+}
+
+func (s *service) ensureExecutionSession(ctx context.Context, execution *repo.FlowNodeExecution) error {
+	if s.sessionBridge == nil || execution == nil {
+		return nil
+	}
+	session, err := s.sessionBridge.EnsureNodeSession(ctx, *execution)
+	if err != nil {
+		return err
+	}
+	execution.SessionID = &session.ID
+	return nil
+}
+
+func (s *service) validateSubtaskAssignee(ctx context.Context, assignee SubtaskAssignee) error {
+	assigneeType := ""
+	if assignee.Type != nil {
+		assigneeType = strings.TrimSpace(*assignee.Type)
+	}
+	if assigneeType == "" {
+		return nil
+	}
+
+	if assignee.ID == nil || *assignee.ID == uuid.Nil {
+		switch assigneeType {
+		case "agent":
+			return ErrAgentNotFound
+		case "human_user":
+			return ErrUserNotFound
+		default:
+			return fmt.Errorf("invalid assignee_type %q", assigneeType)
+		}
+	}
+
+	switch assigneeType {
+	case "agent":
+		_, err := s.agents.GetByID(ctx, *assignee.ID)
+		if errors.Is(err, repo.ErrNotFound) {
+			return ErrAgentNotFound
+		}
+		return err
+	case "human_user":
+		_, err := s.users.GetByID(ctx, *assignee.ID)
+		if errors.Is(err, repo.ErrNotFound) {
+			return ErrUserNotFound
+		}
+		return err
+	default:
+		return fmt.Errorf("invalid assignee_type %q", assigneeType)
+	}
 }
 
 func (s *service) loadActiveFlowState(ctx context.Context, taskID uuid.UUID) (repo.ProjectTask, repo.FlowNode, repo.FlowNodeExecution, error) {
@@ -779,11 +881,6 @@ func actorIDPtr(actor Actor) *uuid.UUID {
 		return nil
 	}
 	id := actor.ID
-	return &id
-}
-
-func newExecutionSessionID() *uuid.UUID {
-	id := uuid.New()
 	return &id
 }
 

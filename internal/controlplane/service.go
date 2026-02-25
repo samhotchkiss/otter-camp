@@ -16,6 +16,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/budget"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
@@ -124,6 +125,10 @@ type budgetChecker interface {
 	CheckBudget(ctx context.Context, orgID uuid.UUID, projectID *uuid.UUID, agentID *uuid.UUID, estimatedTokens int64) (*budget.BudgetCheckResult, error)
 }
 
+type runSessionRouter interface {
+	RouteRunToSession(ctx context.Context, run projectsvc.FlowRun) error
+}
+
 type RunService interface {
 	CreateRun(ctx context.Context, input CreateRunInput) (Run, error)
 	StartRun(ctx context.Context, runID uuid.UUID) error
@@ -157,11 +162,12 @@ type RunServiceOptions struct {
 	Agents      agentReader
 	Users       userReader
 
-	EventBus eventPublisher
-	Policy   RunCreationPolicyService
-	Budget   budgetChecker
-	Clock    clock.Clock
-	Logger   *slog.Logger
+	EventBus      eventPublisher
+	Policy        RunCreationPolicyService
+	Budget        budgetChecker
+	SessionBridge runSessionRouter
+	Clock         clock.Clock
+	Logger        *slog.Logger
 }
 
 type runService struct {
@@ -176,11 +182,12 @@ type runService struct {
 	agents      agentReader
 	users       userReader
 
-	eventBus eventPublisher
-	policy   RunCreationPolicyService
-	budget   budgetChecker
-	clock    clock.Clock
-	logger   *slog.Logger
+	eventBus      eventPublisher
+	policy        RunCreationPolicyService
+	budget        budgetChecker
+	sessionBridge runSessionRouter
+	clock         clock.Clock
+	logger        *slog.Logger
 }
 
 func NewRunService(opts RunServiceOptions) (RunService, error) {
@@ -194,11 +201,12 @@ func NewRunService(opts RunServiceOptions) (RunService, error) {
 	}
 
 	svc := &runService{
-		eventBus: opts.EventBus,
-		policy:   opts.Policy,
-		budget:   opts.Budget,
-		clock:    opts.Clock,
-		logger:   opts.Logger,
+		eventBus:      opts.EventBus,
+		policy:        opts.Policy,
+		budget:        opts.Budget,
+		sessionBridge: opts.SessionBridge,
+		clock:         opts.Clock,
+		logger:        opts.Logger,
 	}
 	if svc.clock == nil {
 		svc.clock = clock.Real{}
@@ -373,6 +381,16 @@ func (s *runService) CreateRun(ctx context.Context, input CreateRunInput) (Run, 
 		"task_id":         uuidToString(created.TaskID),
 	}); err != nil {
 		return Run{}, err
+	}
+	if s.sessionBridge != nil && created.FlowNodeID != nil {
+		if err := s.sessionBridge.RouteRunToSession(ctx, projectsvc.FlowRun{
+			ID:         created.ID,
+			TaskID:     created.TaskID,
+			FlowNodeID: created.FlowNodeID,
+			Summary:    created.TriggerType,
+		}); err != nil {
+			return Run{}, err
+		}
 	}
 
 	if softBudgetWarning {

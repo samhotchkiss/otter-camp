@@ -17,6 +17,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/budget"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
@@ -132,6 +133,47 @@ func TestCreateRunBudgetSoftExceededAppendsRunEvent(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected run_event budget_exceeded")
+	}
+}
+
+func TestCreateRunRoutesFlowNodeRunToSession(t *testing.T) {
+	repos := newFakeRunDeps()
+	bridge := &fakeRunSessionBridge{}
+	repos.sessionBridge = bridge
+	svc := repos.newService(t)
+
+	taskID := uuid.New()
+	flowNodeID := uuid.New()
+	created, err := svc.CreateRun(context.Background(), CreateRunInput{
+		OrganizationID: uuid.New(),
+		PrincipalType:  "system",
+		PrincipalID:    uuid.Nil,
+		TriggerType:    "agent_tool",
+		TaskID:         &taskID,
+		FlowNodeID:     &flowNodeID,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	if bridge.calls != 1 {
+		t.Fatalf("RouteRunToSession calls = %d, want 1", bridge.calls)
+	}
+	if len(bridge.runs) != 1 {
+		t.Fatalf("routed runs = %d, want 1", len(bridge.runs))
+	}
+	routed := bridge.runs[0]
+	if routed.ID != created.ID {
+		t.Fatalf("routed id = %s, want %s", routed.ID, created.ID)
+	}
+	if routed.TaskID == nil || *routed.TaskID != taskID {
+		t.Fatalf("routed task_id = %v, want %s", routed.TaskID, taskID)
+	}
+	if routed.FlowNodeID == nil || *routed.FlowNodeID != flowNodeID {
+		t.Fatalf("routed flow_node_id = %v, want %s", routed.FlowNodeID, flowNodeID)
+	}
+	if routed.Summary != "agent_tool" {
+		t.Fatalf("routed summary = %q, want %q", routed.Summary, "agent_tool")
 	}
 }
 
@@ -306,13 +348,14 @@ func TestSupervisorSkipsRecoveryAfterThreeDeadLettersFilesBlocker(t *testing.T) 
 }
 
 type fakeRunDeps struct {
-	runs     *fakeRunRepo
-	steps    *fakeRunStepRepo
-	attempts *fakeRunAttemptRepo
-	events   *fakeRunEventRepo
-	bus      *fakeDomainBus
-	policy   *fakeRunPolicyService
-	budget   *fakeBudgetChecker
+	runs          *fakeRunRepo
+	steps         *fakeRunStepRepo
+	attempts      *fakeRunAttemptRepo
+	events        *fakeRunEventRepo
+	bus           *fakeDomainBus
+	policy        *fakeRunPolicyService
+	budget        *fakeBudgetChecker
+	sessionBridge runSessionRouter
 }
 
 func newFakeRunDeps() *fakeRunDeps {
@@ -341,19 +384,20 @@ func newFakeRunDeps() *fakeRunDeps {
 func (d *fakeRunDeps) newService(t *testing.T) RunService {
 	t.Helper()
 	svc, err := NewRunService(RunServiceOptions{
-		Runs:        d.runs,
-		RunSteps:    d.steps,
-		Attempts:    d.attempts,
-		RunEvent:    d.events,
-		EventBus:    d.bus,
-		Policy:      d.policy,
-		Budget:      d.budget,
-		TaskEvents:  &noopTaskEvents{},
-		Inbox:       &noopInboxCreator{},
-		Assignments: &noopAssignments{},
-		Agents:      &noopAgentReader{},
-		Users:       &noopUserReader{},
-		Clock:       clock.NewFake(time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)),
+		Runs:          d.runs,
+		RunSteps:      d.steps,
+		Attempts:      d.attempts,
+		RunEvent:      d.events,
+		EventBus:      d.bus,
+		Policy:        d.policy,
+		Budget:        d.budget,
+		SessionBridge: d.sessionBridge,
+		TaskEvents:    &noopTaskEvents{},
+		Inbox:         &noopInboxCreator{},
+		Assignments:   &noopAssignments{},
+		Agents:        &noopAgentReader{},
+		Users:         &noopUserReader{},
+		Clock:         clock.NewFake(time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)),
 	})
 	if err != nil {
 		t.Fatalf("NewRunService: %v", err)
@@ -656,6 +700,18 @@ func (b *fakeBudgetChecker) CheckBudget(context.Context, uuid.UUID, *uuid.UUID, 
 		return &budget.BudgetCheckResult{Allowed: true}, nil
 	}
 	return b.result, nil
+}
+
+type fakeRunSessionBridge struct {
+	calls int
+	runs  []projectsvc.FlowRun
+	err   error
+}
+
+func (f *fakeRunSessionBridge) RouteRunToSession(_ context.Context, run projectsvc.FlowRun) error {
+	f.calls++
+	f.runs = append(f.runs, run)
+	return f.err
 }
 
 type noopTaskEvents struct{}
