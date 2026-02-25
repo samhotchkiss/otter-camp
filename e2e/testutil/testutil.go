@@ -350,6 +350,84 @@ func stringPath(t *testing.T, body []byte, path ...string) string {
 	return str
 }
 
+type ToolExecutionFilter struct {
+	RunID          string
+	ToolName       string
+	PolicyDecision string
+}
+
+func WaitForRunStatus(t *testing.T, baseURL, token, runID, status string, timeout time.Duration) map[string]any {
+	t.Helper()
+
+	want := strings.ToLower(strings.TrimSpace(status))
+	deadline := time.Now().Add(timeout)
+	lastStatus := 0
+	lastBody := []byte("{}")
+	for time.Now().Before(deadline) {
+		body, httpStatus := GET(t, baseURL, "/v1/control/runs/"+strings.TrimSpace(runID), token)
+		lastStatus = httpStatus
+		lastBody = body
+		if httpStatus == http.StatusOK {
+			item, ok := JSONPath(t, body, "data").(map[string]any)
+			if !ok {
+				t.Fatalf("run data type=%T want=map body=%s", JSONPath(t, body, "data"), string(body))
+			}
+			current := strings.ToLower(strings.TrimSpace(stringValue(item["status"])))
+			if current == want {
+				return item
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for run status run_id=%s want=%s last_http_status=%d last_body=%s", runID, want, lastStatus, string(lastBody))
+	return nil
+}
+
+func WaitForToolExecution(t *testing.T, baseURL, token string, filter ToolExecutionFilter, timeout time.Duration) map[string]any {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	lastStatus := 0
+	lastBody := []byte("{}")
+	for time.Now().Before(deadline) {
+		values := url.Values{}
+		if runID := strings.TrimSpace(filter.RunID); runID != "" {
+			values.Set("run_id", runID)
+		}
+		if toolName := strings.TrimSpace(filter.ToolName); toolName != "" {
+			values.Set("tool_name", toolName)
+		}
+		if decision := strings.TrimSpace(filter.PolicyDecision); decision != "" {
+			values.Set("policy_decision", decision)
+		}
+
+		path := "/v1/control/tool-executions"
+		encoded := values.Encode()
+		if encoded != "" {
+			path += "?" + encoded
+		}
+		body, httpStatus := GET(t, baseURL, path, token)
+		lastStatus = httpStatus
+		lastBody = body
+		if httpStatus == http.StatusOK {
+			items, ok := JSONPath(t, body, "data").([]any)
+			if !ok {
+				t.Fatalf("tool execution data type=%T want=[]any body=%s", JSONPath(t, body, "data"), string(body))
+			}
+			if len(items) > 0 {
+				item, ok := items[0].(map[string]any)
+				if !ok {
+					t.Fatalf("tool execution item type=%T want=map", items[0])
+				}
+				return item
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for tool execution filter=%+v last_http_status=%d last_body=%s", filter, lastStatus, string(lastBody))
+	return nil
+}
+
 type MemoryFilter struct {
 	ScopeType    string
 	ContainsText string
@@ -625,6 +703,15 @@ func defaultEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func stringValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	default:
+		return fmt.Sprint(value)
+	}
 }
 
 func parseIndex(raw string, length int) (int, error) {

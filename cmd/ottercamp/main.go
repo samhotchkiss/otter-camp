@@ -315,6 +315,19 @@ func runServe() int {
 		fmt.Fprintf(os.Stderr, "run service setup error: %v\n", err)
 		return 1
 	}
+	controlRunService := runService
+	if cfg.Mode == config.ModeTest {
+		controlRunService, err = controlplane.NewTestModeRunService(controlplane.TestModeRunServiceOptions{
+			Base:            runService,
+			Pool:            pool.Raw(),
+			PolicyEvaluator: policyEvaluator,
+			Logger:          logger,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "test mode run service setup error: %v\n", err)
+			return 1
+		}
+	}
 
 	store, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
 	if err != nil {
@@ -323,7 +336,7 @@ func runServe() int {
 	}
 	browserExecutor, err := browsersvc.NewExecutor(browsersvc.ExecutorOptions{
 		Pool:      pool.Raw(),
-		Runs:      runService,
+		Runs:      controlRunService,
 		Artifacts: controlplane.NewRunArtifactRepository(pool.Raw()),
 		Store:     store,
 	})
@@ -436,7 +449,7 @@ func runServe() int {
 			}),
 			server.NewControlPlaneRouteRegistrar(server.ControlPlaneRouteOptions{
 				Pool:       pool.Raw(),
-				RunService: runService,
+				RunService: controlRunService,
 			}),
 		},
 		TestMode:     cfg.Mode == config.ModeTest,
