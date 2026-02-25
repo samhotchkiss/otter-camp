@@ -1147,6 +1147,10 @@ type providerMessage struct {
 func openAIMessages(req turn.ModelRequest) []any {
 	base := requestMessages(req)
 	messages := make([]any, 0, len(base))
+	// Track whether the most recent assistant message carried tool_calls,
+	// so we can skip orphaned tool-result messages (from previous broken turns
+	// where tool_calls were not stored in the assistant message metadata).
+	lastAssistantHadToolCalls := false
 	for _, item := range base {
 		role := strings.ToLower(strings.TrimSpace(item.Role))
 		switch role {
@@ -1155,6 +1159,16 @@ func openAIMessages(req turn.ModelRequest) []any {
 			role = "tool"
 		default:
 			role = "user"
+		}
+
+		// Skip orphaned tool messages that have no preceding assistant+tool_calls.
+		// This handles old conversation history from before this fix was deployed.
+		if role == "tool" && !lastAssistantHadToolCalls {
+			continue
+		}
+
+		if role != "tool" {
+			lastAssistantHadToolCalls = false
 		}
 
 		// Assistant messages that triggered tool calls must carry tool_calls
@@ -1179,6 +1193,7 @@ func openAIMessages(req turn.ModelRequest) []any {
 			if item.Content != "" {
 				msg["content"] = item.Content
 			}
+			lastAssistantHadToolCalls = true
 			messages = append(messages, msg)
 			continue
 		}
@@ -1202,6 +1217,7 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 	base := requestMessages(req)
 	systemParts := make([]string, 0, 2)
 	out := make([]any, 0, len(base))
+	lastAssistantHadToolCalls := false
 	for _, item := range base {
 		role := strings.ToLower(strings.TrimSpace(item.Role))
 		switch role {
@@ -1211,6 +1227,7 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 			}
 			continue
 		case "assistant":
+			lastAssistantHadToolCalls = false
 			if len(item.ToolCalls) > 0 {
 				// Anthropic: assistant with tool_use blocks.
 				content := make([]map[string]any, 0, len(item.ToolCalls)+1)
@@ -1225,11 +1242,17 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 						"input": tc.Arguments,
 					})
 				}
+				lastAssistantHadToolCalls = true
 				out = append(out, map[string]any{"role": "assistant", "content": content})
 				continue
 			}
 			out = append(out, map[string]any{"role": "assistant", "content": item.Content})
 		case "tool_result":
+			// Skip orphaned tool results with no preceding assistant+tool_calls.
+			if !lastAssistantHadToolCalls {
+				continue
+			}
+			lastAssistantHadToolCalls = false
 			// Anthropic: tool results go inside a user message as tool_result blocks.
 			toolResultContent := map[string]any{
 				"type":    "tool_result",
@@ -1243,6 +1266,7 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 				"content": []any{toolResultContent},
 			})
 		default:
+			lastAssistantHadToolCalls = false
 			out = append(out, map[string]any{"role": "user", "content": item.Content})
 		}
 	}
