@@ -1,0 +1,18 @@
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+
+  ottercamp:
+    environment:
+      OTTERCAMP_MODE: development
+      OTTERCAMP_LOG_LEVEL: debug
+      OTTERCAMP_AUTH_MODE: local
+    ports:
+      - "4110:4110"
+
+  ottercamp-worker:
+    environment:
+      OTTERCAMP_MODE: development
+      OTTERCAMP_LOG_LEVEL: debug
+      OTTERCAMP_AUTH_MODE: local
