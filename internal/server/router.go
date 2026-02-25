@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -16,6 +17,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/security"
 	"github.com/samhotchkiss/otter-camp/internal/storage"
+	"github.com/samhotchkiss/otter-camp/internal/web"
 )
 
 type RouteRegistrar interface {
@@ -59,6 +61,7 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	})
 	searchHandler := api.NewSearchHandler(opts.Pool)
 	diffHandler := api.NewDiffHandler(opts.Pool, opts.GitService)
+	staticFileServer := web.NewStaticFileServer(web.Options{})
 	healthHandler := health.NewHandler(health.Options{Pool: opts.Pool, Store: opts.Store})
 	scrubber := security.NewSecretScrubber()
 	perIPLimiter := security.NewRateLimiter(100, 20)
@@ -67,16 +70,17 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID(logger))
+	r.Use(security.SecurityHeadersMiddleware())
 	r.Use(security.CORSMiddleware(security.AllowedOriginsFromEnv()))
 	r.Use(security.PerIPRateLimitMiddleware(perIPLimiter, time.Minute))
 	r.Use(security.InputValidationMiddleware(security.NewInputValidator()))
 	r.Use(security.OutputSanitizerMiddleware(security.NewOutputSanitizer(scrubber)))
 	r.Use(middleware.PrefixEnforcement())
+	r.Handle("/metrics", metrics.Handler())
 	r.Get("/health/live", healthHandler.Liveness)
 	r.Get("/health/ready", healthHandler.Readiness)
 	r.Get("/health", healthHandler.Liveness)
 	r.Get("/ready", healthHandler.Readiness)
-	r.Handle("/metrics", metrics.Handler())
 	if opts.TestMode && opts.TestResetter != nil {
 		r.Post("/test/reset", func(w http.ResponseWriter, req *http.Request) {
 			if err := opts.TestResetter.Reset(req.Context()); err != nil {
@@ -88,6 +92,12 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	}
 
 	r.Route("/v1", func(v1 chi.Router) {
+		v1.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Cache-Control", "no-store")
+				next.ServeHTTP(w, r)
+			})
+		})
 		if opts.Pool != nil {
 			v1.Use(middleware.Idempotency(middleware.IdempotencyOptions{
 				Repository: repo.NewIdempotencyKeyRepo(opts.Pool),
@@ -96,6 +106,9 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 
 		v1.Get("/version", versionHandler.Get)
 		v1.Post("/auth/login", authHandlers.login)
+		v1.NotFound(func(w http.ResponseWriter, _ *http.Request) {
+			api.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+		})
 
 		v1.Group(func(protected chi.Router) {
 			protected.Use(middleware.Auth(middleware.AuthOptions{Service: opts.AuthService, Logger: logger}))
@@ -110,6 +123,8 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 			protected.Delete("/api-keys/{id}", authHandlers.revokeAPIKey)
 			protected.Get("/api-keys", authHandlers.listAPIKeys)
 			protected.Get("/mobile/dashboard", mobileHandlers.dashboard)
+			// GET /v1/search is the Cmd-K global search endpoint.
+			// It is registered explicitly here (before the SPA fallback) to prevent interception.
 			protected.Get("/search", searchHandler.Search)
 			protected.Get("/tasks/{id}/diff", diffHandler.GetTaskDiff)
 
@@ -120,6 +135,20 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 				registrar.RegisterRoutes(protected)
 			}
 		})
+	})
+	r.Get("/assets/*", staticFileServer.ServeAsset)
+	r.Get("/favicon.ico", staticFileServer.ServeFavicon)
+	spaFallback := web.SPAFallbackHandler(staticFileServer)
+	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/") || r.URL.Path == "/v1" {
+			api.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+			return
+		}
+		if web.ShouldServeSPAFallback(r) {
+			spaFallback.ServeHTTP(w, r)
+			return
+		}
+		http.NotFound(w, r)
 	})
 
 	return r
