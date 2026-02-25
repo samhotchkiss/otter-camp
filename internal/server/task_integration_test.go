@@ -372,6 +372,45 @@ func TestTaskHTTPDeliveryEndpointsListAndCreate(t *testing.T) {
 	}
 }
 
+func TestTaskHTTPRollbackCreatesQueuedDeployTask(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "rollback", false)
+	seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	resp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+project.ID.String()+"/rollback", map[string]any{
+		"target_commit_sha": "deadbeefcafefeed",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("rollback status = %d, want %d body=%s", resp.StatusCode, http.StatusAccepted, string(resp.Body))
+	}
+
+	rollbackTaskID := uuid.MustParse(jsonPathString(t, resp.Body, "data", "rollback_task_id"))
+	taskRecord, err := repo.NewProjectTaskRepo(testServer.Pool).GetByID(context.Background(), rollbackTaskID)
+	if err != nil {
+		t.Fatalf("get rollback task: %v", err)
+	}
+	if taskRecord.ProjectID != project.ID {
+		t.Fatalf("rollback task project_id = %s, want %s", taskRecord.ProjectID, project.ID)
+	}
+	if taskRecord.WorkStatus != "queued" {
+		t.Fatalf("rollback task work_status = %q, want queued", taskRecord.WorkStatus)
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal(taskRecord.Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal rollback metadata: %v", err)
+	}
+	if rollback, _ := metadata["rollback"].(bool); !rollback {
+		t.Fatalf("rollback metadata flag = %v, want true", metadata["rollback"])
+	}
+	if got, _ := metadata["target_commit_sha"].(string); got != "deadbeefcafefeed" {
+		t.Fatalf("target_commit_sha = %q, want deadbeefcafefeed", got)
+	}
+}
+
 func newTaskTestServer(t *testing.T) (*authIntegrationServer, repo.Organization, repo.HumanUser, repo.HumanUser) {
 	t.Helper()
 

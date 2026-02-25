@@ -10,6 +10,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/db"
+	"github.com/samhotchkiss/otter-camp/internal/delivery"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/jobs"
@@ -76,7 +77,47 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		return fmt.Errorf("worker trace partition job setup: %w", err)
 	}
 	tracePartitionJob.RegisterJobs(jqWorker)
-
+	mergeWorker, err := delivery.NewMergeWorker(delivery.MergeWorkerOptions{
+		Pool:   pool.Raw(),
+		Git:    delivery.UnavailableGitService{},
+		Events: bus,
+		Logger: logger,
+	})
+	if err != nil {
+		return fmt.Errorf("worker merge worker setup: %w", err)
+	}
+	pushWorker, err := delivery.NewPushWorker(delivery.PushWorkerOptions{
+		Pool:   pool.Raw(),
+		Git:    delivery.UnavailableGitService{},
+		Events: bus,
+		Logger: logger,
+	})
+	if err != nil {
+		return fmt.Errorf("worker push worker setup: %w", err)
+	}
+	deployWorker, err := delivery.NewDeployWorker(delivery.DeployWorkerOptions{
+		Pool:   pool.Raw(),
+		Events: bus,
+		Logger: logger,
+	})
+	if err != nil {
+		return fmt.Errorf("worker deploy worker setup: %w", err)
+	}
+	envUpdater, err := delivery.NewEnvUpdater(delivery.EnvUpdaterOptions{
+		Pool:   pool.Raw(),
+		Events: bus,
+	})
+	if err != nil {
+		return fmt.Errorf("worker deploy env updater setup: %w", err)
+	}
+	deliveryConsumer := delivery.NewEventConsumer(delivery.EventConsumerOptions{
+		Bus:     bus,
+		Updater: envUpdater,
+		Logger:  logger,
+	})
+	jqWorker.Register(delivery.MergeExecuteJobType, mergeWorker.Execute)
+	jqWorker.Register("push_execute", pushWorker.Execute)
+	jqWorker.Register(delivery.DeployTaskCreateJobType, deployWorker.Execute)
 	dailyRollupJob, err := model.NewDailyRollupJob(model.DailyRollupJobOptions{
 		Pool:   pool.Raw(),
 		Events: bus,
@@ -214,6 +255,8 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	stopDeliveryConsumer := deliveryConsumer.Start(runCtx)
+	defer stopDeliveryConsumer()
 
 	heartbeat := scheduling.NewSchedulerHeartbeat(pool.Raw(), jqWorker, logger, nil)
 	heartbeat.Start(runCtx)

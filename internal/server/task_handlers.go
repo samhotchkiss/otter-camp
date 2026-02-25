@@ -29,6 +29,10 @@ type deliveryTaskCreator interface {
 	CreateDeployTask(ctx context.Context, environmentID uuid.UUID, commitSHA string) (repo.ProjectTask, error)
 }
 
+type rollbackInitiator interface {
+	InitiateRollback(ctx context.Context, projectID uuid.UUID, targetCommitSHA string) (uuid.UUID, error)
+}
+
 type projectTaskRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
 	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
@@ -99,6 +103,17 @@ func NewTaskRouteRegistrar(taskService tasksvc.TaskService, flowService flowsvc.
 		flowService:     flowService,
 		deliveryService: deliveryService,
 	}
+	if rollbackService, ok := deliveryService.(rollbackInitiator); ok {
+		h.rollbackService = rollbackService
+	} else if pool != nil {
+		rollbackService, err := deliverysvc.NewRollbackService(deliverysvc.RollbackServiceOptions{
+			Pool: pool,
+			Git:  deliverysvc.AllowAllCommitGitService{},
+		})
+		if err == nil {
+			h.rollbackService = rollbackService
+		}
+	}
 	if pool != nil {
 		h.tasks = repo.NewProjectTaskRepo(pool)
 		h.projects = repo.NewProjectRepo(pool)
@@ -152,6 +167,7 @@ func (r *TaskRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.With(middleware.RequireRole("admin")).Post("/projects/{id}/environments", r.handlers.createEnvironment)
 	router.With(middleware.RequireRole("admin")).Patch("/projects/{id}/environments/{eid}", r.handlers.updateEnvironment)
 	router.With(middleware.RequireRole("admin")).Post("/projects/{id}/environments/{eid}/deploy", r.handlers.deployEnvironment)
+	router.With(middleware.RequireRole("admin")).Post("/projects/{id}/rollback", r.handlers.rollbackProject)
 }
 
 type taskHandlers struct {
@@ -160,6 +176,7 @@ type taskHandlers struct {
 	taskService     tasksvc.TaskService
 	flowService     flowsvc.FlowExecutionService
 	deliveryService deliveryTaskCreator
+	rollbackService rollbackInitiator
 
 	tasks        projectTaskRepository
 	projects     projectRepository
@@ -260,6 +277,10 @@ type updateEnvironmentRequest struct {
 
 type deployEnvironmentRequest struct {
 	CommitSHA string `json:"commit_sha"`
+}
+
+type rollbackRequest struct {
+	TargetCommitSHA string `json:"target_commit_sha"`
 }
 
 type taskResponse struct {
@@ -2011,6 +2032,43 @@ func (h taskHandlers) deployEnvironment(w http.ResponseWriter, r *http.Request) 
 	responder.JSON(w, http.StatusOK, h.toTaskResponse(r.Context(), deployTask))
 }
 
+func (h taskHandlers) rollbackProject(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if h.rollbackService == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "delivery rollback service unavailable")
+		return
+	}
+
+	projectID, err := parseUUIDParam(r, "id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+	if _, ok := h.getProjectForOrg(r.Context(), projectID, principal.OrganizationID, responder, w); !ok {
+		return
+	}
+
+	var req rollbackRequest
+	if err := decodeJSON(r, &req); err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+
+	rollbackTaskID, err := h.rollbackService.InitiateRollback(r.Context(), projectID, strings.TrimSpace(req.TargetCommitSHA))
+	if err != nil {
+		h.respondTaskError(responder, w, err)
+		return
+	}
+
+	responder.JSON(w, http.StatusAccepted, map[string]any{
+		"rollback_task_id": rollbackTaskID,
+	})
+}
+
 func (h taskHandlers) requirePrincipal(w http.ResponseWriter, r *http.Request) (middleware.Principal, bool) {
 	responder := api.NewResponder(r.Context())
 	principal, ok := middleware.PrincipalFromContext(r.Context())
@@ -2298,6 +2356,9 @@ func mapTaskError(err error) (int, string, string) {
 		errors.Is(err, tasksvc.ErrTransitionTargetRequired),
 		errors.Is(err, tasksvc.ErrActorTypeInvalidForAction),
 		errors.Is(err, tasksvc.ErrAgentNotAssigned),
+		errors.Is(err, deliverysvc.ErrProjectIDRequired),
+		errors.Is(err, deliverysvc.ErrTargetCommitSHARequired),
+		errors.Is(err, deliverysvc.ErrTargetCommitNotFound),
 		errors.Is(err, flowsvc.ErrCrossLevelDependency),
 		errors.Is(err, flowsvc.ErrSelfDependency),
 		errors.Is(err, flowsvc.ErrCyclicDependency),
