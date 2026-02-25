@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -18,10 +20,10 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
-	"testing/fstest"
 	"text/tabwriter"
 	"time"
 
@@ -2069,11 +2071,6 @@ func runDBMigrate(args []string) int {
 	}
 	defer pool.Close()
 
-	runner, err := migrate.NewRunnerFromEnv(pool.Raw(), slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "db migrate setup error: %v\n", err)
-		return 1
-	}
 	all, err := migrate.LoadMigrationsFromEnv()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "db migrate setup error: %v\n", err)
@@ -2101,15 +2098,17 @@ func runDBMigrate(args []string) int {
 	}
 
 	for _, item := range pending {
-		fmt.Fprintf(os.Stdout, "Applying %04d_%s... ", item.Version, item.Name)
-		fmt.Fprintln(os.Stdout, "queued")
-	}
-	if *target > 0 {
-		runner = migrate.NewRunnerWithFS(pool.Raw(), slog.New(slog.NewTextHandler(io.Discard, nil)), migrationMapFS(all))
-	}
-	if err := runner.Run(context.Background()); err != nil {
-		fmt.Fprintf(os.Stderr, "db migrate failed: %v\n", err)
-		return 1
+		startedAt := time.Now()
+		runner := migrate.NewRunnerWithFS(
+			pool.Raw(),
+			slog.New(slog.NewTextHandler(io.Discard, nil)),
+			migrationMapFS([]migrate.Migration{item}),
+		)
+		if err := runner.Run(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "db migrate failed: %v\n", err)
+			return 1
+		}
+		fmt.Fprint(os.Stdout, migrationAppliedLine(item, time.Since(startedAt)))
 	}
 	return 0
 }
@@ -2651,12 +2650,122 @@ func filterMigrationsToTarget(all []migrate.Migration, target int) []migrate.Mig
 	return out
 }
 
-func migrationMapFS(items []migrate.Migration) fstest.MapFS {
-	files := make(fstest.MapFS, len(items))
+func migrationAppliedLine(item migrate.Migration, elapsed time.Duration) string {
+	return fmt.Sprintf("Applying %04d_%s... done (%dms)\n", item.Version, item.Name, elapsed.Milliseconds())
+}
+
+func migrationMapFS(items []migrate.Migration) mapFS {
+	files := make(mapFS, len(items))
 	for _, item := range items {
-		files[item.File] = &fstest.MapFile{Data: []byte(item.SQL)}
+		files[item.File] = []byte(item.SQL)
 	}
 	return files
+}
+
+type mapFS map[string][]byte
+
+func (m mapFS) Open(name string) (fs.File, error) {
+	clean := strings.TrimSpace(filepath.Clean(name))
+	if clean == "." {
+		return nil, fs.ErrNotExist
+	}
+	data, ok := m[clean]
+	if !ok {
+		return nil, fs.ErrNotExist
+	}
+	reader := bytes.NewReader(data)
+	return &mapFile{
+		name:   filepath.Base(clean),
+		reader: reader,
+		size:   int64(len(data)),
+	}, nil
+}
+
+func (m mapFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	if strings.TrimSpace(name) != "." {
+		return nil, fs.ErrNotExist
+	}
+	names := make([]string, 0, len(m))
+	for file := range m {
+		names = append(names, file)
+	}
+	sort.Strings(names)
+	entries := make([]fs.DirEntry, 0, len(names))
+	for _, file := range names {
+		entries = append(entries, mapDirEntry{
+			name: filepath.Base(file),
+			size: int64(len(m[file])),
+		})
+	}
+	return entries, nil
+}
+
+type mapFile struct {
+	name   string
+	reader *bytes.Reader
+	size   int64
+}
+
+func (f *mapFile) Stat() (fs.FileInfo, error) {
+	return mapFileInfo{name: f.name, size: f.size}, nil
+}
+
+func (f *mapFile) Read(p []byte) (int, error) {
+	return f.reader.Read(p)
+}
+
+func (f *mapFile) Close() error {
+	return nil
+}
+
+type mapDirEntry struct {
+	name string
+	size int64
+}
+
+func (e mapDirEntry) Name() string {
+	return e.name
+}
+
+func (e mapDirEntry) IsDir() bool {
+	return false
+}
+
+func (e mapDirEntry) Type() fs.FileMode {
+	return 0
+}
+
+func (e mapDirEntry) Info() (fs.FileInfo, error) {
+	return mapFileInfo{name: e.name, size: e.size}, nil
+}
+
+type mapFileInfo struct {
+	name string
+	size int64
+}
+
+func (i mapFileInfo) Name() string {
+	return i.name
+}
+
+func (i mapFileInfo) Size() int64 {
+	return i.size
+}
+
+func (i mapFileInfo) Mode() fs.FileMode {
+	return 0o444
+}
+
+func (i mapFileInfo) ModTime() time.Time {
+	return time.Time{}
+}
+
+func (i mapFileInfo) IsDir() bool {
+	return false
+}
+
+func (i mapFileInfo) Sys() any {
+	return nil
 }
 
 func runExternalCommand(name string, args ...string) error {

@@ -41,6 +41,23 @@ func TestDBMigrateDryRunAndStatus(t *testing.T) {
 		t.Fatalf("expected dry-run not to apply migration, count=%d", count)
 	}
 
+	applyCode, applyOut, applyErr := captureCommandOutput(t, func() int {
+		return runDBMigrate([]string{})
+	})
+	if applyCode != 0 {
+		t.Fatalf("db migrate apply exit=%d stderr=%q", applyCode, applyErr)
+	}
+	if !strings.Contains(applyOut, "Applying 9999_cli_dry_run_probe... done (") {
+		t.Fatalf("db migrate apply output = %q", applyOut)
+	}
+
+	if err := pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM schema_migrations WHERE version = 9999`).Scan(&count); err != nil {
+		t.Fatalf("query schema_migrations after apply: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected apply to record migration, count=%d", count)
+	}
+
 	statusCode, statusOut, statusErr := captureCommandOutput(t, func() int {
 		return runDBStatus([]string{"--output", "json"})
 	})
@@ -50,7 +67,7 @@ func TestDBMigrateDryRunAndStatus(t *testing.T) {
 	if !strings.Contains(statusOut, `"version": 9999`) {
 		t.Fatalf("db status output missing target migration: %q", statusOut)
 	}
-	if !strings.Contains(statusOut, `"applied": false`) {
-		t.Fatalf("db status output missing pending flag: %q", statusOut)
+	if !strings.Contains(statusOut, `"applied": true`) {
+		t.Fatalf("db status output missing applied flag: %q", statusOut)
 	}
 }
