@@ -1,0 +1,14 @@
+### XL board
+                    [Sidebar]                            | [*Main*]                                                                 | [Chat]                                                                  
+                    size=XL shell=board visible(sidebar=true,main=true,chat=true) widths=[36 72 72]
+                    Status: snapshot | Realtime=disconnected | Size=XL | Focus=main | ChatSession=none
+
+### XL chat
+                    [Sidebar]                            | [*Main*]                                                                 | [Chat]                                                                  
+                    size=XL shell=chat visible(sidebar=true,main=true,chat=true) widths=[36 72 72]
+                    Status: snapshot | Realtime=disconnected | Size=XL | Focus=main | ChatSession=none
+
+### XL inbox
+                    [Sidebar]                            | [*Main*]                                                                 | [Chat]                                                                  
+                    size=XL shell=inbox visible(sidebar=true,main=true,chat=true) widths=[36 72 72]
+                    Status: snapshot | Realtime=disconnected | Size=XL | Focus=main | ChatSession=none

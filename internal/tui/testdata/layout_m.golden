@@ -1,0 +1,14 @@
+### M board
+[Sidebar:hidden] | [*Main*]                                                                 | [Chat]                                          
+size=M shell=board visible(sidebar=false,main=true,chat=true) widths=[0 72 48]
+Status: snapshot | Realtime=disconnected | Size=M | Focus=main | ChatSession=none | Hidden panes: sidebar hidden (1 or :focus sidebar)
+
+### M chat
+[Sidebar:hidden] | [*Main*]                                                                 | [Chat]                                          
+size=M shell=chat visible(sidebar=false,main=true,chat=true) widths=[0 72 48]
+Status: snapshot | Realtime=disconnected | Size=M | Focus=main | ChatSession=none | Hidden panes: sidebar hidden (1 or :focus sidebar)
+
+### M inbox
+[Sidebar:hidden] | [*Main*]                                                                 | [Chat]                                          
+size=M shell=inbox visible(sidebar=false,main=true,chat=true) widths=[0 72 48]
+Status: snapshot | Realtime=disconnected | Size=M | Focus=main | ChatSession=none | Hidden panes: sidebar hidden (1 or :focus sidebar)

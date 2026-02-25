@@ -27,6 +27,7 @@ type Model struct {
 	height         int
 	quitting       bool
 	sidebarVisible bool
+	sizeClass      SizeClass
 }
 
 func NewModel(state UIState) Model {
@@ -35,13 +36,15 @@ func NewModel(state UIState) Model {
 	if !ok {
 		panel = MainPanel
 	}
-	return Model{
+	model := Model{
 		state:          normalized,
 		focus:          panel,
-		statusMessage:  "Tab/Shift-Tab cycle focus. Alt-1/2/3 direct focus. :focus or :quit commands available.",
+		statusMessage:  "Tab/Shift-Tab cycle focus. 1/2/3 direct focus. :focus and :quit commands available.",
 		connection:     ConnectionDisconnected,
 		sidebarVisible: normalized.SidebarVisible,
 	}
+	model.applyResponsiveLayout()
+	return model
 }
 
 func (m Model) Init() tea.Cmd {
@@ -53,6 +56,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = typed.Width
 		m.height = typed.Height
+		previousClass := m.sizeClass
+		m.applyResponsiveLayout()
+		if previousClass != "" && previousClass != m.sizeClass {
+			m.statusMessage = fmt.Sprintf("Layout changed: %s", m.sizeClass)
+		}
 		return m, nil
 	case ConnectionStateMsg:
 		m.connection = typed.State
@@ -70,38 +78,39 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateCommandInput(key)
 	}
 
+	m.applyResponsiveLayout()
+	order := m.focusOrder()
+
 	switch key.Type {
 	case tea.KeyCtrlC:
 		m.quitting = true
 		m.statusMessage = "Exiting TUI."
 		return m, tea.Quit
 	case tea.KeyTab:
-		m.focus = nextPanel(m.focus)
+		m.focus = nextPanelInOrder(order, m.focus)
+		m.applyResponsiveLayout()
 		m.statusMessage = "Focus: " + panelLabel(m.focus)
 		return m, nil
 	case tea.KeyShiftTab:
-		m.focus = previousPanel(m.focus)
+		m.focus = previousPanelInOrder(order, m.focus)
+		m.applyResponsiveLayout()
 		m.statusMessage = "Focus: " + panelLabel(m.focus)
 		return m, nil
 	case tea.KeyRunes:
-		if len(key.Runes) == 1 && key.Runes[0] == ':' {
-			m.commandMode = true
-			m.commandBuffer = ":"
-			m.statusMessage = "Command mode"
-			return m, nil
-		}
-		if key.Alt && len(key.Runes) == 1 {
-			switch key.Runes[0] {
-			case '1':
-				m.focus = SidebarPanel
-			case '2':
-				m.focus = MainPanel
-			case '3':
-				m.focus = ChatPanel
-			default:
+		if len(key.Runes) == 1 {
+			r := key.Runes[0]
+			if r == ':' {
+				m.commandMode = true
+				m.commandBuffer = ":"
+				m.statusMessage = "Command mode"
 				return m, nil
 			}
-			m.statusMessage = "Focus: " + panelLabel(m.focus)
+
+			if panel, ok := panelFromShortcut(key.Alt, r); ok {
+				m.setFocus(panel)
+				m.statusMessage = "Focus: " + panelLabel(m.focus)
+				return m, nil
+			}
 		}
 		return m, nil
 	default:
@@ -165,7 +174,7 @@ func (m *Model) executeCommand(raw string) {
 			m.statusMessage = "Unknown panel. Use sidebar, main, or chat."
 			return
 		}
-		m.focus = panel
+		m.setFocus(panel)
 		m.statusMessage = "Focus: " + panelLabel(m.focus)
 	default:
 		m.statusMessage = "Unknown command: " + fields[0]
@@ -173,34 +182,49 @@ func (m *Model) executeCommand(raw string) {
 }
 
 func (m Model) View() string {
-	width := m.width
-	if width <= 0 {
-		width = 120
+	return m.viewForShell("board")
+}
+
+func (m Model) viewForShell(shell string) string {
+	layout := computeLayout(m.width, m.height, m.focus, m.sidebarVisible, m.state.PanelProportions)
+	focus := normalizeFocus(layout, m.focus)
+	if focus != m.focus {
+		layout = computeLayout(m.width, m.height, focus, m.sidebarVisible, m.state.PanelProportions)
 	}
 
-	state := m.State()
-	widths := panelWidths(width, state.PanelProportions, state.SidebarVisible)
 	header := fmt.Sprintf(
 		"%s | %s | %s",
-		renderPanelHeader("Sidebar", SidebarPanel == m.focus, widths[0], state.SidebarVisible),
-		renderPanelHeader("Main", MainPanel == m.focus, widths[1], true),
-		renderPanelHeader("Chat", ChatPanel == m.focus, widths[2], true),
+		renderPanelHeader("Sidebar", SidebarPanel == focus, layout.widths[0], layout.visible[0]),
+		renderPanelHeader("Main", MainPanel == focus, layout.widths[1], layout.visible[1]),
+		renderPanelHeader("Chat", ChatPanel == focus, layout.widths[2], layout.visible[2]),
 	)
-
-	commandLine := ""
-	if m.commandMode {
-		commandLine = "\nCommand> " + m.commandBuffer
-	}
-
+	shellLine := describeLayoutForShell(layout.sizeClass, shell, layout)
 	status := fmt.Sprintf(
-		"Status: %s | Realtime=%s%s | View=%s | ChatSession=%s",
+		"Status: %s | Realtime=%s%s | Size=%s | Focus=%s | ChatSession=%s",
 		m.statusMessage,
 		m.connection,
 		realtimeDegradedSuffix(m.streamDegraded),
-		state.LastActiveView,
-		valueOrPlaceholder(state.LastActiveChatSession),
+		layout.sizeClass,
+		panelLabel(focus),
+		valueOrPlaceholder(m.state.LastActiveChatSession),
 	)
-	return header + "\n" + status + commandLine
+	if layout.hiddenHints != "" {
+		status += " | " + layout.hiddenHints
+	}
+
+	prefix := ""
+	if layout.gutters > 0 {
+		prefix = strings.Repeat(" ", layout.gutters)
+	}
+	lines := []string{
+		prefix + header,
+		prefix + shellLine,
+		prefix + status,
+	}
+	if m.commandMode {
+		lines = append(lines, prefix+"Command> "+m.commandBuffer)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) FocusedPanel() Panel {
@@ -219,19 +243,80 @@ func (m Model) StreamDegraded() bool {
 	return m.streamDegraded
 }
 
+func (m Model) SizeClass() SizeClass {
+	if m.sizeClass == "" {
+		return resolveSizeClass(m.width, m.height)
+	}
+	return m.sizeClass
+}
+
+func (m Model) CurrentLayout() layoutState {
+	layout := computeLayout(m.width, m.height, m.focus, m.sidebarVisible, m.state.PanelProportions)
+	normalized := normalizeFocus(layout, m.focus)
+	if normalized != m.focus {
+		return computeLayout(m.width, m.height, normalized, m.sidebarVisible, m.state.PanelProportions)
+	}
+	return layout
+}
+
 func (m Model) State() UIState {
+	layout := m.CurrentLayout()
+	focus := normalizeFocus(layout, m.focus)
 	next := m.state
-	next.LastActiveView = viewFromPanel(m.focus)
+	next.LastActiveView = viewFromPanel(focus)
 	next.SidebarVisible = m.sidebarVisible
 	return normalizeState(next)
 }
 
-func nextPanel(panel Panel) Panel {
-	return Panel((int(panel) + 1) % 3)
+func (m Model) focusOrder() []Panel {
+	layout := m.CurrentLayout()
+	return layout.focusOrder
 }
 
-func previousPanel(panel Panel) Panel {
-	return Panel((int(panel) + 2) % 3)
+func (m *Model) setFocus(panel Panel) {
+	m.focus = panel
+	if panel == SidebarPanel {
+		m.sidebarVisible = true
+	}
+	if m.sizeClass == SizeS && panel != SidebarPanel {
+		m.sidebarVisible = false
+	}
+	m.applyResponsiveLayout()
+}
+
+func (m *Model) applyResponsiveLayout() {
+	layout := computeLayout(m.width, m.height, m.focus, m.sidebarVisible, m.state.PanelProportions)
+	m.sizeClass = layout.sizeClass
+	m.focus = normalizeFocus(layout, m.focus)
+	if m.sizeClass == SizeS && m.focus != SidebarPanel {
+		m.sidebarVisible = false
+	}
+}
+
+func panelFromShortcut(alt bool, r rune) (Panel, bool) {
+	if alt {
+		switch r {
+		case '1':
+			return SidebarPanel, true
+		case '2':
+			return MainPanel, true
+		case '3':
+			return ChatPanel, true
+		default:
+			return MainPanel, false
+		}
+	}
+
+	switch r {
+	case '1':
+		return SidebarPanel, true
+	case '2':
+		return MainPanel, true
+	case '3':
+		return ChatPanel, true
+	default:
+		return MainPanel, false
+	}
 }
 
 func panelFromView(view string) (Panel, bool) {
@@ -267,39 +352,6 @@ func panelLabel(panel Panel) string {
 	default:
 		return "main"
 	}
-}
-
-func panelWidths(total int, proportions [3]float64, sidebarVisible bool) [3]int {
-	activeProportions := proportions
-	if !sidebarVisible {
-		activeProportions[0] = 0
-		activeProportions = normalizeProportions(activeProportions, [3]float64{0, 0.6, 0.4})
-	}
-
-	sidebarWidth := int(activeProportions[0] * float64(total))
-	mainWidth := int(activeProportions[1] * float64(total))
-	chatWidth := total - sidebarWidth - mainWidth
-	if chatWidth < 1 {
-		chatWidth = 1
-	}
-	return [3]int{sidebarWidth, mainWidth, chatWidth}
-}
-
-func renderPanelHeader(name string, focused bool, width int, visible bool) string {
-	if !visible || width <= 0 {
-		return "[hidden]"
-	}
-
-	label := name
-	if focused {
-		label = "*" + name + "*"
-	}
-	text := "[" + label + "]"
-	if width <= len(text) {
-		return text
-	}
-	padding := width - len(text)
-	return text + strings.Repeat(" ", padding)
 }
 
 func valueOrPlaceholder(value string) string {
