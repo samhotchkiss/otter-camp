@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -42,6 +43,13 @@ type Pagination struct {
 type AuditEventRepo struct {
 	pool *pgxpool.Pool
 }
+
+var (
+	auditOpenAIKeyPattern      = regexp.MustCompile(`sk-[A-Za-z0-9]{20,}`)
+	auditBearerPattern         = regexp.MustCompile(`(?i)Bearer\\s+[A-Za-z0-9._-]{20,}`)
+	auditJWTPattern            = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+`)
+	auditKnownEnvSecretPattern = regexp.MustCompile(`(?m)(OPENAI_API_KEY|ANTHROPIC_API_KEY|OTTERCAMP_MASTER_KEY|OTTERCAMP_DB_URL)=([^\\s\"']+)`)
+)
 
 func NewAuditEventRepo(pool *pgxpool.Pool) *AuditEventRepo {
 	return &AuditEventRepo{pool: pool}
@@ -204,7 +212,41 @@ func normalizeMetadata(metadata map[string]any) ([]byte, error) {
 	if len(metadata) == 0 {
 		return []byte(`{}`), nil
 	}
+	metadata = scrubMetadata(metadata)
 	return json.Marshal(metadata)
+}
+
+func scrubMetadata(metadata map[string]any) map[string]any {
+	cloned := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		cloned[key] = scrubMetadataValue(value)
+	}
+	return cloned
+}
+
+func scrubMetadataValue(value any) any {
+	switch typed := value.(type) {
+	case string:
+		return scrubAuditString(typed)
+	case map[string]any:
+		return scrubMetadata(typed)
+	case []any:
+		items := make([]any, len(typed))
+		for idx := range typed {
+			items[idx] = scrubMetadataValue(typed[idx])
+		}
+		return items
+	default:
+		return typed
+	}
+}
+
+func scrubAuditString(input string) string {
+	out := auditOpenAIKeyPattern.ReplaceAllString(input, "[REDACTED]")
+	out = auditBearerPattern.ReplaceAllString(out, "Bearer [REDACTED]")
+	out = auditJWTPattern.ReplaceAllString(out, "[JWT_REDACTED]")
+	out = auditKnownEnvSecretPattern.ReplaceAllString(out, "${1}=[REDACTED]")
+	return out
 }
 
 func validateTargetFilter(targetType *string, targetID *uuid.UUID) error {
