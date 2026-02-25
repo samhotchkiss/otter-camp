@@ -240,6 +240,49 @@ func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.D
 	if err := p.runs.StartRun(ctx, runRecord.ID); err != nil && !errors.Is(err, ErrInvalidTransition) {
 		return err
 	}
+
+	if taskRecord.AssignedAgentID == nil || *taskRecord.AssignedAgentID == uuid.Nil {
+		return nil
+	}
+
+	sessionID := execution.SessionID
+	if runRecord.SessionID != nil && *runRecord.SessionID != uuid.Nil {
+		sessionID = runRecord.SessionID
+	}
+	if sessionID == nil || *sessionID == uuid.Nil {
+		return nil
+	}
+
+	if _, err := p.chats.AddParticipant(ctx, *sessionID, "agent", *taskRecord.AssignedAgentID, "responder"); err != nil && !errors.Is(err, chat.ErrAlreadyParticipant) {
+		return err
+	}
+
+	hasKickoffMessage, err := p.sessionHasKickoffMessage(ctx, *sessionID, runRecord.ID)
+	if err != nil {
+		return err
+	}
+	if hasKickoffMessage {
+		return nil
+	}
+
+	messageMetadata, err := json.Marshal(map[string]any{
+		"source":                 "task_queue_processor",
+		"run_id":                 runRecord.ID.String(),
+		"task_id":                taskRecord.ID.String(),
+		"flow_node_execution_id": execution.ID.String(),
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := p.chats.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: *sessionID,
+		Role:      "user",
+		Content:   buildFlowKickoffMessage(taskRecord, execution),
+		Metadata:  messageMetadata,
+	}); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -362,6 +405,14 @@ func buildQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 		return "Start work on task: " + title
 	}
 	return "Start work on task: " + title + "\n\nTask description:\n" + description
+}
+
+func buildFlowKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNodeExecution) string {
+	base := buildQueueKickoffMessage(taskRecord)
+	if execution.ID == uuid.Nil {
+		return base
+	}
+	return base + "\n\nFlow node execution: " + execution.ID.String()
 }
 
 func valueOrEmpty(value *string) string {
