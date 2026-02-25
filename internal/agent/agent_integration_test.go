@@ -277,6 +277,35 @@ func TestAgent_TempAgent_TaskCompletion_AutoRetire(t *testing.T) {
 	}
 }
 
+func TestAgent_TempAgent_ExplicitRetire(t *testing.T) {
+	ctx := context.Background()
+	fixture := newAgentFixture(t, ctx)
+
+	temp, err := fixture.service.CreateTemp(ctx, fixture.org.ID, CreateTempAgentRequest{
+		DisplayName:   "Retire Temp",
+		AgentType:     "worker",
+		TempProjectID: fixture.project.ID,
+		CreatedByType: "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+
+	if err := fixture.service.Retire(ctx, fixture.org.ID, temp.ID); err != nil {
+		t.Fatalf("Retire temp: %v", err)
+	}
+
+	updated, err := fixture.agentRepo.GetByID(ctx, temp.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if updated.LifecycleStatus != statusRetired {
+		t.Fatalf("lifecycle_status = %q, want %q", updated.LifecycleStatus, statusRetired)
+	}
+
+	assertDomainEventCount(t, ctx, fixture.pool, fixture.org.ID, "agent.retired", 1)
+}
+
 func TestAgent_TempAgent_ConcurrentLimit(t *testing.T) {
 	ctx := context.Background()
 	fixture := newAgentFixture(t, ctx)
