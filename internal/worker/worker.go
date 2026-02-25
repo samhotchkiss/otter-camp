@@ -12,6 +12,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/db"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
+	"github.com/samhotchkiss/otter-camp/internal/model"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/push"
 	"github.com/samhotchkiss/otter-camp/internal/push/adapters"
@@ -52,6 +53,15 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	jqWorker := jobqueue.New(pool.Raw(), logger, jobqueue.Config{})
 	tickWorker := scheduling.NewScheduleTickWorker(pool.Raw(), scheduleEngine, logger)
 	jqWorker.Register(scheduling.ScheduleTickJobType, tickWorker.Execute)
+	dailyRollupJob, err := model.NewDailyRollupJob(model.DailyRollupJobOptions{
+		Pool:   pool.Raw(),
+		Events: bus,
+		Logger: logger,
+	})
+	if err != nil {
+		return fmt.Errorf("worker model usage rollup setup: %w", err)
+	}
+	dailyRollupJob.RegisterJobs(jqWorker)
 
 	budgetService, err := budget.NewService(budget.Options{
 		Pool:   pool.Raw(),
@@ -126,6 +136,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 
 	heartbeat := scheduling.NewSchedulerHeartbeat(pool.Raw(), jqWorker, logger, nil)
 	heartbeat.Start(runCtx)
+	model.NewDailyRollupTicker(jqWorker, logger, nil).Start(runCtx)
 	supervisor.Start(runCtx)
 	defer supervisor.Stop()
 

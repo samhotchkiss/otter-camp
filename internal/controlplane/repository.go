@@ -50,6 +50,8 @@ type Run struct {
 	Version        int
 	FailureReason  *string
 	FailureClass   *string
+	InputTokens    int
+	OutputTokens   int
 	Metadata       json.RawMessage
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
@@ -101,17 +103,19 @@ func (r *RunRepository) Create(ctx context.Context, run Run) (Run, error) {
 			version,
 			failure_reason,
 			failure_class,
+			input_tokens,
+			output_tokens,
 			metadata,
 			started_at,
 			completed_at
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
-			$10, $11, COALESCE(NULLIF($12, 0), 1), $13, $14, $15::jsonb, $16, $17
+			$10, $11, COALESCE(NULLIF($12, 0), 1), $13, $14, $15, $16, $17::jsonb, $18, $19
 		)
 		RETURNING id, organization_id, project_id, task_id, flow_node_id, session_id, turn_id,
 		          principal_type, principal_id, status, idempotency_key, trigger_type, version,
-		          failure_reason, failure_class, metadata, created_at, updated_at, started_at, completed_at
+		          failure_reason, failure_class, input_tokens, output_tokens, metadata, created_at, updated_at, started_at, completed_at
 	`,
 		run.OrganizationID,
 		run.ProjectID,
@@ -127,6 +131,8 @@ func (r *RunRepository) Create(ctx context.Context, run Run) (Run, error) {
 		run.Version,
 		trimStringPointer(run.FailureReason),
 		trimStringPointer(run.FailureClass),
+		run.InputTokens,
+		run.OutputTokens,
 		metadata,
 		run.StartedAt,
 		run.CompletedAt,
@@ -143,7 +149,7 @@ func (r *RunRepository) Get(ctx context.Context, id uuid.UUID) (Run, error) {
 	row := r.db.QueryRow(ctx, `
 		SELECT id, organization_id, project_id, task_id, flow_node_id, session_id, turn_id,
 		       principal_type, principal_id, status, idempotency_key, trigger_type, version,
-		       failure_reason, failure_class, metadata, created_at, updated_at, started_at, completed_at
+		       failure_reason, failure_class, input_tokens, output_tokens, metadata, created_at, updated_at, started_at, completed_at
 		FROM run
 		WHERE id = $1
 	`, id)
@@ -162,7 +168,7 @@ func (r *RunRepository) GetByIdempotencyKey(ctx context.Context, organizationID 
 	row := r.db.QueryRow(ctx, `
 		SELECT id, organization_id, project_id, task_id, flow_node_id, session_id, turn_id,
 		       principal_type, principal_id, status, idempotency_key, trigger_type, version,
-		       failure_reason, failure_class, metadata, created_at, updated_at, started_at, completed_at
+		       failure_reason, failure_class, input_tokens, output_tokens, metadata, created_at, updated_at, started_at, completed_at
 		FROM run
 		WHERE organization_id = $1
 		  AND idempotency_key = $2
@@ -206,7 +212,7 @@ func (r *RunRepository) UpdateStatus(ctx context.Context, id uuid.UUID, expected
 		  AND version = $2
 		RETURNING id, organization_id, project_id, task_id, flow_node_id, session_id, turn_id,
 		          principal_type, principal_id, status, idempotency_key, trigger_type, version,
-		          failure_reason, failure_class, metadata, created_at, updated_at, started_at, completed_at
+		          failure_reason, failure_class, input_tokens, output_tokens, metadata, created_at, updated_at, started_at, completed_at
 	`, id, expectedVersion, status, trimStringPointer(failureReason), trimStringPointer(failureClass))
 
 	item, err := scanRun(row)
@@ -236,7 +242,7 @@ func (r *RunRepository) List(ctx context.Context, filter RunListFilter) ([]Run, 
 	query := `
 		SELECT id, organization_id, project_id, task_id, flow_node_id, session_id, turn_id,
 		       principal_type, principal_id, status, idempotency_key, trigger_type, version,
-		       failure_reason, failure_class, metadata, created_at, updated_at, started_at, completed_at
+		       failure_reason, failure_class, input_tokens, output_tokens, metadata, created_at, updated_at, started_at, completed_at
 		FROM run
 		WHERE organization_id = $1`
 	args := []any{filter.OrganizationID}
@@ -305,7 +311,7 @@ func (r *RunRepository) ListInProgressUpdatedBefore(ctx context.Context, before 
 	rows, err := r.db.Query(ctx, `
 		SELECT id, organization_id, project_id, task_id, flow_node_id, session_id, turn_id,
 		       principal_type, principal_id, status, idempotency_key, trigger_type, version,
-		       failure_reason, failure_class, metadata, created_at, updated_at, started_at, completed_at
+		       failure_reason, failure_class, input_tokens, output_tokens, metadata, created_at, updated_at, started_at, completed_at
 		FROM run
 		WHERE status = 'in_progress'
 		  AND updated_at < $1
@@ -334,7 +340,7 @@ func (r *RunRepository) ListPausedUpdatedBefore(ctx context.Context, before time
 	rows, err := r.db.Query(ctx, `
 		SELECT id, organization_id, project_id, task_id, flow_node_id, session_id, turn_id,
 		       principal_type, principal_id, status, idempotency_key, trigger_type, version,
-		       failure_reason, failure_class, metadata, created_at, updated_at, started_at, completed_at
+		       failure_reason, failure_class, input_tokens, output_tokens, metadata, created_at, updated_at, started_at, completed_at
 		FROM run
 		WHERE status = 'paused'
 		  AND updated_at < $1
@@ -363,7 +369,7 @@ func (r *RunRepository) ListOrphanedInProgress(ctx context.Context, since time.T
 	rows, err := r.db.Query(ctx, `
 		SELECT r.id, r.organization_id, r.project_id, r.task_id, r.flow_node_id, r.session_id, r.turn_id,
 		       r.principal_type, r.principal_id, r.status, r.idempotency_key, r.trigger_type, r.version,
-		       r.failure_reason, r.failure_class, r.metadata, r.created_at, r.updated_at, r.started_at, r.completed_at
+		       r.failure_reason, r.failure_class, r.input_tokens, r.output_tokens, r.metadata, r.created_at, r.updated_at, r.started_at, r.completed_at
 		FROM run r
 		WHERE r.status = 'in_progress'
 		  AND NOT EXISTS (
@@ -415,16 +421,18 @@ func (r *RunRepository) Cancel(ctx context.Context, id uuid.UUID, expectedVersio
 }
 
 type RunStep struct {
-	ID          uuid.UUID
-	RunID       uuid.UUID
-	StepNumber  int
-	Status      string
-	ToolName    *string
-	ToolTier    *string
-	StartedAt   *time.Time
-	CompletedAt *time.Time
-	Metadata    json.RawMessage
-	CreatedAt   time.Time
+	ID           uuid.UUID
+	RunID        uuid.UUID
+	StepNumber   int
+	Status       string
+	ToolName     *string
+	ToolTier     *string
+	InputTokens  int
+	OutputTokens int
+	StartedAt    *time.Time
+	CompletedAt  *time.Time
+	Metadata     json.RawMessage
+	CreatedAt    time.Time
 }
 
 type RunStepRepository struct {
@@ -449,13 +457,15 @@ func (r *RunStepRepository) Create(ctx context.Context, step RunStep) (RunStep, 
 			status,
 			tool_name,
 			tool_tier,
+			input_tokens,
+			output_tokens,
 			started_at,
 			completed_at,
 			metadata
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
-		RETURNING id, run_id, step_number, status, tool_name, tool_tier, started_at, completed_at, metadata, created_at
-	`, step.RunID, step.StepNumber, status, trimStringPointer(step.ToolName), trimStringPointer(step.ToolTier), step.StartedAt, step.CompletedAt, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+		RETURNING id, run_id, step_number, status, tool_name, tool_tier, input_tokens, output_tokens, started_at, completed_at, metadata, created_at
+	`, step.RunID, step.StepNumber, status, trimStringPointer(step.ToolName), trimStringPointer(step.ToolTier), step.InputTokens, step.OutputTokens, step.StartedAt, step.CompletedAt, metadata)
 
 	item, err := scanRunStep(row)
 	if err != nil {
@@ -466,7 +476,7 @@ func (r *RunStepRepository) Create(ctx context.Context, step RunStep) (RunStep, 
 
 func (r *RunStepRepository) Get(ctx context.Context, id uuid.UUID) (RunStep, error) {
 	row := r.db.QueryRow(ctx, `
-		SELECT id, run_id, step_number, status, tool_name, tool_tier, started_at, completed_at, metadata, created_at
+		SELECT id, run_id, step_number, status, tool_name, tool_tier, input_tokens, output_tokens, started_at, completed_at, metadata, created_at
 		FROM run_step
 		WHERE id = $1
 	`, id)
@@ -482,7 +492,7 @@ func (r *RunStepRepository) Get(ctx context.Context, id uuid.UUID) (RunStep, err
 
 func (r *RunStepRepository) GetByRunAndNumber(ctx context.Context, runID uuid.UUID, stepNumber int) (RunStep, error) {
 	row := r.db.QueryRow(ctx, `
-		SELECT id, run_id, step_number, status, tool_name, tool_tier, started_at, completed_at, metadata, created_at
+		SELECT id, run_id, step_number, status, tool_name, tool_tier, input_tokens, output_tokens, started_at, completed_at, metadata, created_at
 		FROM run_step
 		WHERE run_id = $1
 		  AND step_number = $2
@@ -509,7 +519,7 @@ func (r *RunStepRepository) UpdateStatus(ctx context.Context, id uuid.UUID, stat
 		    started_at = CASE WHEN $2 = 'in_progress' THEN COALESCE(started_at, now()) ELSE started_at END,
 		    completed_at = CASE WHEN $2 IN ('completed', 'failed', 'cancelled', 'skipped') THEN COALESCE(completed_at, now()) ELSE completed_at END
 		WHERE id = $1
-		RETURNING id, run_id, step_number, status, tool_name, tool_tier, started_at, completed_at, metadata, created_at
+		RETURNING id, run_id, step_number, status, tool_name, tool_tier, input_tokens, output_tokens, started_at, completed_at, metadata, created_at
 	`, id, status)
 	item, err := scanRunStep(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -523,7 +533,7 @@ func (r *RunStepRepository) UpdateStatus(ctx context.Context, id uuid.UUID, stat
 
 func (r *RunStepRepository) ListByRun(ctx context.Context, runID uuid.UUID) ([]RunStep, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT id, run_id, step_number, status, tool_name, tool_tier, started_at, completed_at, metadata, created_at
+		SELECT id, run_id, step_number, status, tool_name, tool_tier, input_tokens, output_tokens, started_at, completed_at, metadata, created_at
 		FROM run_step
 		WHERE run_id = $1
 		ORDER BY step_number ASC
@@ -1380,6 +1390,8 @@ func scanRun(row pgx.Row) (Run, error) {
 		&item.Version,
 		&item.FailureReason,
 		&item.FailureClass,
+		&item.InputTokens,
+		&item.OutputTokens,
 		&item.Metadata,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -1401,6 +1413,8 @@ func scanRunStep(row pgx.Row) (RunStep, error) {
 		&item.Status,
 		&item.ToolName,
 		&item.ToolTier,
+		&item.InputTokens,
+		&item.OutputTokens,
 		&item.StartedAt,
 		&item.CompletedAt,
 		&item.Metadata,

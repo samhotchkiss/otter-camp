@@ -157,11 +157,13 @@ func fakeRunRow(id, orgID uuid.UUID, version int, status string) fakeRow {
 		*dest[12].(*int) = version
 		*dest[13].(**string) = nil
 		*dest[14].(**string) = nil
-		*dest[15].(*json.RawMessage) = json.RawMessage(`{}`)
-		*dest[16].(*time.Time) = now
-		*dest[17].(*time.Time) = now
-		*dest[18].(**time.Time) = nil
-		*dest[19].(**time.Time) = nil
+		*dest[15].(*int) = 0
+		*dest[16].(*int) = 0
+		*dest[17].(*json.RawMessage) = json.RawMessage(`{}`)
+		*dest[18].(*time.Time) = now
+		*dest[19].(*time.Time) = now
+		*dest[20].(**time.Time) = nil
+		*dest[21].(**time.Time) = nil
 		return nil
 	}}
 }
