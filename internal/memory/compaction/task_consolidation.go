@@ -176,9 +176,10 @@ func (c *TaskConsolidator) Consolidate(ctx context.Context, orgID, projectID, ta
 			if _, execErr := c.pool.Exec(ctx, `
 				UPDATE memory
 				SET scope = 'project',
+				    project_id = COALESCE(project_id, $2),
 				    project_task_id = NULL
 				WHERE id = $1
-			`, memoryItem.ID); execErr != nil {
+			`, memoryItem.ID, projectID); execErr != nil {
 				return execErr
 			}
 			updated++
