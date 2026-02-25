@@ -249,6 +249,109 @@ func TestRealtimeScopeValidation(t *testing.T) {
 	}
 }
 
+func TestRealtimeWebSocketNegotiateByUserAgent(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+	fixture := newRealtimeTestServer(t)
+	defer fixture.Close()
+
+	token := loginToken(t, fixture.URL, fixture.Admin.Email, "admin-password")
+
+	mobileResp := mustJSON(t, http.MethodGet, fixture.URL+"/v1/ws/negotiate", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+		"User-Agent":    "OtterCamp-iOS/1.0",
+	})
+	if mobileResp.StatusCode != http.StatusOK {
+		t.Fatalf("mobile negotiate status = %d, want %d body=%s", mobileResp.StatusCode, http.StatusOK, string(mobileResp.Body))
+	}
+	if got := jsonPathString(t, mobileResp.Body, "data", "preferred"); got != "websocket" {
+		t.Fatalf("mobile preferred = %q, want %q body=%s", got, "websocket", string(mobileResp.Body))
+	}
+
+	webResp := mustJSON(t, http.MethodGet, fixture.URL+"/v1/ws/negotiate", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+		"User-Agent":    "Mozilla/5.0",
+	})
+	if webResp.StatusCode != http.StatusOK {
+		t.Fatalf("web negotiate status = %d, want %d body=%s", webResp.StatusCode, http.StatusOK, string(webResp.Body))
+	}
+	if got := jsonPathString(t, webResp.Body, "data", "preferred"); got != "sse" {
+		t.Fatalf("web preferred = %q, want %q body=%s", got, "sse", string(webResp.Body))
+	}
+}
+
+func TestRealtimeSSEMalformedLastEventIDReturnsBadRequest(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+	fixture := newRealtimeTestServer(t)
+	defer fixture.Close()
+
+	token := loginToken(t, fixture.URL, fixture.Admin.Email, "admin-password")
+
+	req, err := http.NewRequest(http.MethodGet, fixture.URL+"/v1/events/stream?scopes=org", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Last-Event-ID", "not-a-number")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("stream request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want %d body=%s", resp.StatusCode, http.StatusBadRequest, string(body))
+	}
+}
+
+func TestRealtimeSSEReconnectFromHeaderReplaysExpectedEvents(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+	fixture := newRealtimeTestServer(t)
+	defer fixture.Close()
+
+	token := loginToken(t, fixture.URL, fixture.Admin.Email, "admin-password")
+	sessionID := createChatSessionForTest(t, fixture.URL, token)
+	sessionUUID := mustUUID(t, sessionID)
+
+	baseSeq := fixture.currentMaxSeq(t)
+	for i := 0; i < 10; i++ {
+		fixture.publishSessionEvent(t, "chat.message.created", sessionUUID)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, fixture.URL+"/v1/events/stream?scopes=session:"+sessionID, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Last-Event-ID", strconv.FormatInt(baseSeq+7, 10))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("open sse stream: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("open sse status = %d, want %d body=%s", resp.StatusCode, http.StatusOK, string(body))
+	}
+	stream := &sseStream{resp: resp, reader: bufio.NewReader(resp.Body)}
+	defer stream.close()
+
+	stream.expectEvent(t, "connected", 2*time.Second)
+	first := stream.expectEvent(t, "chat.message.created", time.Second)
+	second := stream.expectEvent(t, "chat.message.created", time.Second)
+	third := stream.expectEvent(t, "chat.message.created", time.Second)
+
+	want := []int64{baseSeq + 8, baseSeq + 9, baseSeq + 10}
+	got := []int64{mustInt64(t, first.id), mustInt64(t, second.id), mustInt64(t, third.id)}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("replayed seq[%d] = %d, want %d (all=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
 type realtimeFixture struct {
 	URL         string
 	Pool        *pgxpool.Pool
