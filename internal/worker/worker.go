@@ -15,6 +15,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/db"
 	"github.com/samhotchkiss/otter-camp/internal/delivery"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/gateway"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/jobs"
@@ -160,6 +161,15 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	if err != nil {
 		return fmt.Errorf("worker flow session bridge setup: %w", err)
 	}
+	flowService, err := flowsvc.NewService(flowsvc.Options{
+		Pool:          pool.Raw(),
+		Events:        bus,
+		TasksService:  tasks,
+		SessionBridge: flowSessionBridge,
+	})
+	if err != nil {
+		return fmt.Errorf("worker flow service setup: %w", err)
+	}
 
 	runService, err := controlplane.NewRunService(controlplane.RunServiceOptions{
 		Pool:          pool.Raw(),
@@ -171,6 +181,21 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	if err != nil {
 		return fmt.Errorf("worker run service setup: %w", err)
 	}
+	queueProcessor, err := controlplane.NewTaskQueueProcessor(controlplane.TaskQueueProcessorOptions{
+		Events:         bus,
+		Tasks:          repo.NewProjectTaskRepo(pool.Raw()),
+		TaskService:    tasks,
+		Flow:           flowService,
+		FlowExecutions: repo.NewFlowNodeExecutionRepo(pool.Raw()),
+		Runs:           runService,
+		Chats:          chatService,
+		Sessions:       repo.NewChatSessionRepo(pool.Raw()),
+	})
+	if err != nil {
+		return fmt.Errorf("worker task queue processor setup: %w", err)
+	}
+	taskQueuedSub := queueProcessor.SubscribeTaskQueued(nil)
+	defer bus.Unsubscribe(taskQueuedSub)
 	toolResolver, err := tools.NewToolResolver(tools.ToolResolverOptions{
 		Pool:   pool.Raw(),
 		Events: bus,
