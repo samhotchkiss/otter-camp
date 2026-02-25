@@ -198,7 +198,7 @@ func TestMemory_ScopeFilter(t *testing.T) {
 	postUserMessage(t, baseURL, token, orgSessionID, "[memory-fact] Org infrastructure baseline uses db-prod-01 and shared observability.")
 	testutil.TriggerExtractionJob(t, baseURL, token, orgSessionID)
 
-	projectID := createProject(t, baseURL, token, "memory-scope")
+	projectID := createScopedProject(t, baseURL, token, "memory-scope")
 	projectSessionID := createSession(t, baseURL, token, "project", projectID)
 	addParticipant(t, baseURL, token, projectSessionID, frankID)
 	postUserMessage(t, baseURL, token, projectSessionID, "[memory-fact] Project infrastructure uses a dedicated cache cluster project-cache-7.")
@@ -340,7 +340,7 @@ func postUserMessage(t *testing.T, baseURL, token, sessionID, content string) in
 	return int64(asFloat(seq))
 }
 
-func createProject(t *testing.T, baseURL, token, prefix string) string {
+func createScopedProject(t *testing.T, baseURL, token, prefix string) string {
 	t.Helper()
 	slug := fmt.Sprintf("%s-%d", strings.TrimSpace(prefix), time.Now().UnixNano())
 	body, status := testutil.POST(t, baseURL, "/v1/projects", token, map[string]any{
