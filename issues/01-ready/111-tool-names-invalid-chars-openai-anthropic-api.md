@@ -1,4 +1,4 @@
-# Task 103: Tool function names contain dots — rejected by OpenAI and Anthropic API
+# Task 111: Tool function names contain dots — rejected by OpenAI and Anthropic API
 
 Layer: L2
 Effort: S
