@@ -2,12 +2,17 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
+
+	"golang.org/x/crypto/acme/autocert"
 )
 
 type Options struct {
@@ -15,6 +20,12 @@ type Options struct {
 	Version         string
 	Logger          *slog.Logger
 	Handler         http.Handler
+	TLSMode         string
+	TLSCertFile     string
+	TLSKeyFile      string
+	ACMEDomain      string
+	ACMEEmail       string
+	ACMECacheDir    string
 	Listener        net.Listener
 	SignalCh        <-chan os.Signal
 	ShutdownTimeout time.Duration
@@ -45,9 +56,51 @@ func Run(ctx context.Context, opts Options) error {
 	defer ln.Close()
 
 	srv := &http.Server{Handler: opts.Handler}
+	serveFn := func() error { return srv.Serve(ln) }
+	tlsMode := strings.ToLower(strings.TrimSpace(opts.TLSMode))
+	switch tlsMode {
+	case "", "none":
+		// Default plain HTTP.
+	case "manual":
+		if strings.TrimSpace(opts.TLSCertFile) == "" || strings.TrimSpace(opts.TLSKeyFile) == "" {
+			return fmt.Errorf("manual TLS mode requires certificate and key files")
+		}
+		serveFn = func() error {
+			return srv.ServeTLS(ln, strings.TrimSpace(opts.TLSCertFile), strings.TrimSpace(opts.TLSKeyFile))
+		}
+	case "acme":
+		if strings.TrimSpace(opts.ACMEDomain) == "" {
+			return fmt.Errorf("acme TLS mode requires a domain")
+		}
+		cacheDir := strings.TrimSpace(opts.ACMECacheDir)
+		if cacheDir == "" {
+			home, _ := os.UserHomeDir()
+			if strings.TrimSpace(home) == "" {
+				cacheDir = ".ottercamp/acme"
+			} else {
+				cacheDir = filepath.Join(home, ".ottercamp", "acme")
+			}
+		}
+		_ = os.MkdirAll(cacheDir, 0o700)
+		manager := &autocert.Manager{
+			Cache:      autocert.DirCache(cacheDir),
+			Prompt:     autocert.AcceptTOS,
+			HostPolicy: autocert.HostWhitelist(strings.TrimSpace(opts.ACMEDomain)),
+			Email:      strings.TrimSpace(opts.ACMEEmail),
+		}
+		srv.TLSConfig = &tls.Config{
+			MinVersion:     tls.VersionTLS12,
+			GetCertificate: manager.GetCertificate,
+		}
+		serveFn = func() error {
+			return srv.ServeTLS(ln, "", "")
+		}
+	default:
+		return fmt.Errorf("invalid tls mode %q", opts.TLSMode)
+	}
 	serveErrCh := make(chan error, 1)
 	go func() {
-		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		if err := serveFn(); err != nil && err != http.ErrServerClosed {
 			serveErrCh <- err
 		}
 		close(serveErrCh)

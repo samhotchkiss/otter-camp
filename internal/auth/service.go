@@ -564,6 +564,37 @@ func (s *service) MagicLink(ctx context.Context, email string) (*MagicLinkResult
 	}, nil
 }
 
+func (s *service) ConsumeMagicLink(ctx context.Context, token, ipAddr, userAgent string) (*LoginResult, error) {
+	normalizedToken := strings.TrimSpace(token)
+	if normalizedToken == "" {
+		return nil, ErrTokenExpired
+	}
+
+	now := s.clock.Now()
+	s.magicLinksMu.Lock()
+	record, ok := s.magicLinks[normalizedToken]
+	if !ok || record.used || !record.expiresAt.After(now) {
+		s.magicLinksMu.Unlock()
+		return nil, ErrTokenExpired
+	}
+	record.used = true
+	s.magicLinks[normalizedToken] = record
+	s.magicLinksMu.Unlock()
+
+	user, err := s.users.GetByEmail(ctx, record.orgID, record.email)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil, ErrInvalidCredentials
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !user.IsActive {
+		return nil, ErrInvalidCredentials
+	}
+
+	return s.createSession(ctx, user, ipAddr, userAgent)
+}
+
 func (s *service) ResetPassword(ctx context.Context, token, newPassword string) error {
 	normalizedToken := strings.TrimSpace(token)
 	normalizedPassword := strings.TrimSpace(newPassword)

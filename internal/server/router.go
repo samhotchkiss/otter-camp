@@ -52,7 +52,11 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	if opts.Pool != nil {
 		authSessionRepo = repo.NewAuthSessionRepo(opts.Pool)
 	}
-	authHandlers := newAuthHandlers(opts.AuthService, authSessionRepo)
+	var userRepo *repo.HumanUserRepo
+	if opts.Pool != nil {
+		userRepo = repo.NewHumanUserRepo(opts.Pool)
+	}
+	authHandlers := newAuthHandlers(opts.AuthService, userRepo, authSessionRepo)
 	mobileHandlers := newMobileHandlers(opts.Pool)
 	versionHandler := api.NewVersionHandler(api.BuildInfo{
 		Version: opts.Version,
@@ -81,6 +85,7 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	r.Get("/health/ready", healthHandler.Readiness)
 	r.Get("/health", healthHandler.Liveness)
 	r.Get("/ready", healthHandler.Readiness)
+	r.Get("/auth/magic", authHandlers.consumeMagicLink)
 	if opts.TestMode && opts.TestResetter != nil {
 		r.Post("/test/reset", func(w http.ResponseWriter, req *http.Request) {
 			if err := opts.TestResetter.Reset(req.Context()); err != nil {
@@ -123,6 +128,10 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 			protected.Delete("/api-keys/{id}", authHandlers.revokeAPIKey)
 			protected.Get("/api-keys", authHandlers.listAPIKeys)
 			protected.Get("/mobile/dashboard", mobileHandlers.dashboard)
+			protected.With(middleware.RequireRole("admin")).Get("/admin/users", authHandlers.listAdminUsers)
+			protected.With(middleware.RequireRole("admin")).Post("/admin/users/{id}/reset-password", authHandlers.adminResetPassword)
+			protected.With(middleware.RequireRole("admin")).Post("/admin/users/{id}/magic-link", authHandlers.adminMagicLink)
+			protected.With(middleware.RequireRole("admin")).Post("/admin/users/{id}/unlock", authHandlers.adminUnlockAccount)
 			// GET /v1/search is the Cmd-K global search endpoint.
 			// It is registered explicitly here (before the SPA fallback) to prevent interception.
 			protected.Get("/search", searchHandler.Search)
