@@ -12,6 +12,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/db"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
+	"github.com/samhotchkiss/otter-camp/internal/jobs"
 	"github.com/samhotchkiss/otter-camp/internal/model"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/push"
@@ -53,6 +54,25 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	jqWorker := jobqueue.New(pool.Raw(), logger, jobqueue.Config{})
 	tickWorker := scheduling.NewScheduleTickWorker(pool.Raw(), scheduleEngine, logger)
 	jqWorker.Register(scheduling.ScheduleTickJobType, tickWorker.Execute)
+
+	retentionJob, err := jobs.NewRetentionJob(jobs.RetentionJobOptions{
+		Pool:   pool.Raw(),
+		Events: bus,
+		Store:  nil,
+	})
+	if err != nil {
+		return fmt.Errorf("worker retention job setup: %w", err)
+	}
+	retentionJob.RegisterJobs(jqWorker)
+
+	tracePartitionJob, err := jobs.NewTraceSpanPartitionJob(jobs.TraceSpanPartitionJobOptions{
+		Pool: pool.Raw(),
+	})
+	if err != nil {
+		return fmt.Errorf("worker trace partition job setup: %w", err)
+	}
+	tracePartitionJob.RegisterJobs(jqWorker)
+
 	dailyRollupJob, err := model.NewDailyRollupJob(model.DailyRollupJobOptions{
 		Pool:   pool.Raw(),
 		Events: bus,
@@ -137,6 +157,8 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	heartbeat := scheduling.NewSchedulerHeartbeat(pool.Raw(), jqWorker, logger, nil)
 	heartbeat.Start(runCtx)
 	model.NewDailyRollupTicker(jqWorker, logger, nil).Start(runCtx)
+	jobs.NewDailyTicker(jqWorker, logger, jobs.RetentionEnforceJobType, 90, map[string]any{"source": "retention_ticker"}).Start(runCtx)
+	jobs.NewDailyTicker(jqWorker, logger, jobs.TraceSpanPartitionCreateJobType, 90, map[string]any{"source": "trace_partition_ticker"}).Start(runCtx)
 	supervisor.Start(runCtx)
 	defer supervisor.Stop()
 

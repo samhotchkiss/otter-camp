@@ -12,6 +12,7 @@ import (
 
 	"github.com/samhotchkiss/otter-camp/internal/api"
 	"github.com/samhotchkiss/otter-camp/internal/auth"
+	"github.com/samhotchkiss/otter-camp/internal/logging"
 )
 
 type AuthOptions struct {
@@ -46,6 +47,7 @@ func Auth(opts AuthOptions) func(http.Handler) http.Handler {
 					ctx := withSessionPrincipal(r.Context(), login.Session, AuthMethodLocal)
 					if login.Session != nil {
 						ctx = api.WithOrganizationID(ctx, login.Session.OrganizationID)
+						ctx = logging.WithOrgID(ctx, login.Session.OrganizationID)
 					}
 					ctx = WithSessionToken(ctx, login.SessionToken)
 					next.ServeHTTP(w, r.WithContext(ctx))
@@ -63,6 +65,7 @@ func Auth(opts AuthOptions) func(http.Handler) http.Handler {
 					ctx := withSessionPrincipal(r.Context(), sessionInfo, AuthMethodSession)
 					if sessionInfo != nil {
 						ctx = api.WithOrganizationID(ctx, sessionInfo.OrganizationID)
+						ctx = logging.WithOrgID(ctx, sessionInfo.OrganizationID)
 					}
 					ctx = WithSessionToken(ctx, bearerToken)
 					next.ServeHTTP(w, r.WithContext(ctx))
@@ -83,6 +86,7 @@ func Auth(opts AuthOptions) func(http.Handler) http.Handler {
 						APIKey:         keyInfo,
 					})
 					ctx = api.WithOrganizationID(ctx, keyInfo.OrganizationID)
+					ctx = logging.WithOrgID(ctx, keyInfo.OrganizationID)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
@@ -109,6 +113,7 @@ func Auth(opts AuthOptions) func(http.Handler) http.Handler {
 				APIKey:         keyInfo,
 			})
 			ctx = api.WithOrganizationID(ctx, keyInfo.OrganizationID)
+			ctx = logging.WithOrgID(ctx, keyInfo.OrganizationID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/samhotchkiss/otter-camp/internal/config"
+	"github.com/samhotchkiss/otter-camp/internal/security"
 )
 
 func New(cfg config.Config, out io.Writer) (*slog.Logger, error) {
@@ -20,11 +21,14 @@ func New(cfg config.Config, out io.Writer) (*slog.Logger, error) {
 	}
 
 	opts := &slog.HandlerOptions{Level: level}
+	scrubber := security.NewSecretScrubber()
 	if cfg.Mode == config.ModeProduction {
-		return slog.New(slog.NewJSONHandler(out, opts)), nil
+		base := slog.NewJSONHandler(out, opts)
+		return slog.New(security.NewScrubbingHandler(base, scrubber)), nil
 	}
 
-	return slog.New(slog.NewTextHandler(out, opts)), nil
+	base := slog.NewTextHandler(out, opts)
+	return slog.New(security.NewScrubbingHandler(base, scrubber)), nil
 }
 
 func toSlogLevel(level config.LogLevel) (slog.Level, error) {

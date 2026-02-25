@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/security"
 )
 
 const domainEventsChannel = "domain_events"
@@ -59,6 +60,7 @@ type Bus struct {
 
 	mu            sync.Mutex
 	subscriptions map[uuid.UUID]*subscriptionControl
+	scrubber      *security.SecretScrubber
 }
 
 type subscriptionControl struct {
@@ -93,6 +95,7 @@ func New(pool *pgxpool.Pool, logger *slog.Logger, cfg Config) *Bus {
 		listenReconnectDelay: cfg.ListenReconnectDelay,
 		batchSize:            cfg.BatchSize,
 		subscriptions:        make(map[uuid.UUID]*subscriptionControl),
+		scrubber:             security.NewSecretScrubber(),
 	}
 }
 
@@ -174,6 +177,9 @@ func (b *Bus) publishWithExecutor(ctx context.Context, executor queryExec, event
 	payload := event.Payload
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
+	}
+	if b.scrubber != nil {
+		payload = b.scrubber.ScrubJSON(payload)
 	}
 	if !json.Valid(payload) {
 		return 0, fmt.Errorf("invalid event payload json")

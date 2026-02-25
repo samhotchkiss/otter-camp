@@ -4,13 +4,18 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/api"
 	"github.com/samhotchkiss/otter-camp/internal/auth"
+	"github.com/samhotchkiss/otter-camp/internal/health"
+	"github.com/samhotchkiss/otter-camp/internal/metrics"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/security"
+	"github.com/samhotchkiss/otter-camp/internal/storage"
 )
 
 type RouteRegistrar interface {
@@ -28,6 +33,7 @@ type HandlerOptions struct {
 	Logger          *slog.Logger
 	AuthService     auth.Service
 	Pool            *pgxpool.Pool
+	Store           storage.Store
 	GitService      api.GitService
 	RouteRegistrars []RouteRegistrar
 	TestMode        bool
@@ -48,14 +54,24 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	})
 	searchHandler := api.NewSearchHandler(opts.Pool)
 	diffHandler := api.NewDiffHandler(opts.Pool, opts.GitService)
+	healthHandler := health.NewHandler(health.Options{Pool: opts.Pool, Store: opts.Store})
+	scrubber := security.NewSecretScrubber()
+	perIPLimiter := security.NewRateLimiter(100, 20)
+	perAPIKeyLimiter := security.NewRateLimiter(1000, 100)
+	metrics.Register()
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID(logger))
+	r.Use(security.CORSMiddleware(security.AllowedOriginsFromEnv()))
+	r.Use(security.PerIPRateLimitMiddleware(perIPLimiter, time.Minute))
+	r.Use(security.InputValidationMiddleware(security.NewInputValidator()))
+	r.Use(security.OutputSanitizerMiddleware(security.NewOutputSanitizer(scrubber)))
 	r.Use(middleware.PrefixEnforcement())
-	r.Get("/health/live", healthOK)
-	r.Get("/health/ready", healthOK)
-	r.Get("/health", healthOK)
-	r.Get("/ready", healthOK)
+	r.Get("/health/live", healthHandler.Liveness)
+	r.Get("/health/ready", healthHandler.Readiness)
+	r.Get("/health", healthHandler.Liveness)
+	r.Get("/ready", healthHandler.Readiness)
+	r.Handle("/metrics", metrics.Handler())
 	if opts.TestMode && opts.TestResetter != nil {
 		r.Post("/test/reset", func(w http.ResponseWriter, req *http.Request) {
 			if err := opts.TestResetter.Reset(req.Context()); err != nil {
@@ -78,6 +94,7 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 
 		v1.Group(func(protected chi.Router) {
 			protected.Use(middleware.Auth(middleware.AuthOptions{Service: opts.AuthService, Logger: logger}))
+			protected.Use(security.PerAPIKeyRateLimitMiddleware(perAPIKeyLimiter, time.Minute))
 			protected.Post("/auth/logout", authHandlers.logout)
 			protected.Post("/auth/refresh", authHandlers.refresh)
 			protected.Get("/auth/me", authHandlers.me)
@@ -97,8 +114,4 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	})
 
 	return r
-}
-
-func healthOK(w http.ResponseWriter, _ *http.Request) {
-	api.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

@@ -350,6 +350,7 @@ func runServe() int {
 		Logger:      logger,
 		AuthService: authService,
 		Pool:        pool.Raw(),
+		Store:       store,
 		RouteRegistrars: []server.RouteRegistrar{
 			server.NewRealtimeRouteRegistrar(server.RealtimeRouteOptions{
 				Pool:   pool.Raw(),
