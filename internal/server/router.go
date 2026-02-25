@@ -50,7 +50,11 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	if opts.Pool != nil {
 		authSessionRepo = repo.NewAuthSessionRepo(opts.Pool)
 	}
-	authHandlers := newAuthHandlers(opts.AuthService, authSessionRepo)
+	var userRepo *repo.HumanUserRepo
+	if opts.Pool != nil {
+		userRepo = repo.NewHumanUserRepo(opts.Pool)
+	}
+	authHandlers := newAuthHandlers(opts.AuthService, userRepo, authSessionRepo)
 	mobileHandlers := newMobileHandlers(opts.Pool)
 	versionHandler := api.NewVersionHandler(api.BuildInfo{
 		Version: opts.Version,
@@ -76,6 +80,7 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	r.Get("/health/ready", healthHandler.Readiness)
 	r.Get("/health", healthHandler.Liveness)
 	r.Get("/ready", healthHandler.Readiness)
+	r.Get("/auth/magic", authHandlers.consumeMagicLink)
 	r.Handle("/metrics", metrics.Handler())
 	if opts.TestMode && opts.TestResetter != nil {
 		r.Post("/test/reset", func(w http.ResponseWriter, req *http.Request) {
@@ -109,6 +114,11 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 			protected.Post("/api-keys", authHandlers.issueAPIKey)
 			protected.Delete("/api-keys/{id}", authHandlers.revokeAPIKey)
 			protected.Get("/api-keys", authHandlers.listAPIKeys)
+			protected.Get("/mobile/dashboard", mobileHandlers.dashboard)
+			protected.With(middleware.RequireRole("admin")).Get("/admin/users", authHandlers.listAdminUsers)
+			protected.With(middleware.RequireRole("admin")).Post("/admin/users/{id}/reset-password", authHandlers.adminResetPassword)
+			protected.With(middleware.RequireRole("admin")).Post("/admin/users/{id}/magic-link", authHandlers.adminMagicLink)
+			protected.With(middleware.RequireRole("admin")).Post("/admin/users/{id}/unlock", authHandlers.adminUnlockAccount)
 			protected.Get("/mobile/dashboard", mobileHandlers.dashboard)
 			protected.Get("/search", searchHandler.Search)
 			protected.Get("/tasks/{id}/diff", diffHandler.GetTaskDiff)

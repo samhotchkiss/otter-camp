@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -20,7 +21,13 @@ import (
 
 type authHandlers struct {
 	service  auth.Service
+	users    authUserRepository
 	sessions authSessionRepository
+}
+
+type authUserRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.HumanUser, error)
+	GetByEmail(ctx context.Context, organizationID uuid.UUID, email string) (repo.HumanUser, error)
 }
 
 type authSessionRepository interface {
@@ -28,8 +35,8 @@ type authSessionRepository interface {
 	Revoke(ctx context.Context, id uuid.UUID) error
 }
 
-func newAuthHandlers(service auth.Service, sessions authSessionRepository) authHandlers {
-	return authHandlers{service: service, sessions: sessions}
+func newAuthHandlers(service auth.Service, users authUserRepository, sessions authSessionRepository) authHandlers {
+	return authHandlers{service: service, users: users, sessions: sessions}
 }
 
 type loginRequest struct {
@@ -41,6 +48,10 @@ type issueAPIKeyRequest struct {
 	DisplayName string     `json:"display_name"`
 	Scopes      []string   `json:"scopes"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+}
+
+type adminResetPasswordRequest struct {
+	NewPassword string `json:"new_password"`
 }
 
 type userResponse struct {
@@ -418,6 +429,192 @@ func (h authHandlers) listAPIKeys(w http.ResponseWriter, r *http.Request) {
 	api.JSON(w, http.StatusOK, response)
 }
 
+func (h authHandlers) listAdminUsers(w http.ResponseWriter, r *http.Request) {
+	if h.users == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "user repository unavailable")
+		return
+	}
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		api.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	email := strings.TrimSpace(r.URL.Query().Get("email"))
+	if email == "" {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "email query parameter is required")
+		return
+	}
+
+	user, err := h.users.GetByEmail(r.Context(), principal.OrganizationID, email)
+	if errors.Is(err, repo.ErrNotFound) {
+		api.JSON(w, http.StatusOK, []userResponse{})
+		return
+	}
+	if err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to fetch user")
+		return
+	}
+	api.JSON(w, http.StatusOK, []userResponse{
+		{
+			ID:             user.ID,
+			OrganizationID: user.OrganizationID,
+			Email:          user.Email,
+			DisplayName:    user.DisplayName,
+			Role:           user.Role,
+		},
+	})
+}
+
+func (h authHandlers) adminResetPassword(w http.ResponseWriter, r *http.Request) {
+	target, ok := h.loadAdminTargetUser(w, r)
+	if !ok {
+		return
+	}
+	var req adminResetPasswordRequest
+	if err := decodeJSON(r, &req); err != nil {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+	if strings.TrimSpace(req.NewPassword) == "" {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "new_password is required")
+		return
+	}
+
+	ctx := auth.WithOrganizationID(r.Context(), target.OrganizationID)
+	magic, err := h.service.MagicLink(ctx, target.Email)
+	if err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to generate reset token")
+		return
+	}
+	if err := h.service.ResetPassword(ctx, magic.Token, req.NewPassword); err != nil {
+		status, code, message := mapAuthError(err)
+		api.Error(w, status, code, message)
+		return
+	}
+	api.JSON(w, http.StatusOK, map[string]bool{"reset": true})
+}
+
+func (h authHandlers) adminMagicLink(w http.ResponseWriter, r *http.Request) {
+	target, ok := h.loadAdminTargetUser(w, r)
+	if !ok {
+		return
+	}
+	ctx := auth.WithOrganizationID(r.Context(), target.OrganizationID)
+	magic, err := h.service.MagicLink(ctx, target.Email)
+	if err != nil {
+		status, code, message := mapAuthError(err)
+		api.Error(w, status, code, message)
+		return
+	}
+
+	baseURL := requestBaseURL(r)
+	magicLinkURL := baseURL + "/auth/magic?token=" + url.QueryEscape(strings.TrimSpace(magic.Token))
+	api.JSON(w, http.StatusOK, map[string]string{"magic_link_url": magicLinkURL})
+}
+
+func (h authHandlers) adminUnlockAccount(w http.ResponseWriter, r *http.Request) {
+	target, ok := h.loadAdminTargetUser(w, r)
+	if !ok {
+		return
+	}
+	if err := h.service.UnlockAccount(r.Context(), target.ID); err != nil {
+		status, code, message := mapAuthError(err)
+		api.Error(w, status, code, message)
+		return
+	}
+	api.JSON(w, http.StatusOK, map[string]bool{"unlocked": true})
+}
+
+func (h authHandlers) consumeMagicLink(w http.ResponseWriter, r *http.Request) {
+	consumer, ok := h.service.(interface {
+		ConsumeMagicLink(ctx context.Context, token, ipAddr, userAgent string) (*auth.LoginResult, error)
+	})
+	if !ok {
+		api.Error(w, http.StatusNotImplemented, api.ErrCodeNotImplemented, "magic link login is unavailable")
+		return
+	}
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token == "" {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "token is required")
+		return
+	}
+	result, err := consumer.ConsumeMagicLink(r.Context(), token, requestClientIP(r), r.UserAgent())
+	if err != nil {
+		status, code, message := mapAuthError(err)
+		api.Error(w, status, code, message)
+		return
+	}
+	if result == nil || result.Session == nil {
+		api.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "invalid magic link")
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "ottercamp_session",
+		Value:    result.SessionToken,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  result.Session.ExpiresAt,
+	})
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func (h authHandlers) loadAdminTargetUser(w http.ResponseWriter, r *http.Request) (repo.HumanUser, bool) {
+	if h.service == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "auth service unavailable")
+		return repo.HumanUser{}, false
+	}
+	if h.users == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "user repository unavailable")
+		return repo.HumanUser{}, false
+	}
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		api.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return repo.HumanUser{}, false
+	}
+	userID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid user id")
+		return repo.HumanUser{}, false
+	}
+	target, err := h.users.GetByID(r.Context(), userID)
+	if errors.Is(err, repo.ErrNotFound) {
+		api.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "user not found")
+		return repo.HumanUser{}, false
+	}
+	if err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to fetch user")
+		return repo.HumanUser{}, false
+	}
+	if target.OrganizationID != principal.OrganizationID {
+		api.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "user not found")
+		return repo.HumanUser{}, false
+	}
+	return target, true
+}
+
+func requestBaseURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
+		scheme = strings.ToLower(proto)
+	}
+	host := strings.TrimSpace(r.Host)
+	if forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); forwardedHost != "" {
+		host = forwardedHost
+	}
+	if host == "" {
+		host = "localhost:4110"
+	}
+	return scheme + "://" + host
+}
+
 func decodeJSON(r *http.Request, out any) error {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -470,6 +667,8 @@ func mapAuthError(err error) (status int, code, message string) {
 		return http.StatusUnauthorized, api.ErrCodeUnauthorized, "invalid session"
 	case errors.Is(err, auth.ErrInvalidAPIKey):
 		return http.StatusUnauthorized, api.ErrCodeUnauthorized, "invalid api key"
+	case errors.Is(err, auth.ErrTokenExpired):
+		return http.StatusUnauthorized, api.ErrCodeUnauthorized, "token expired"
 	case errors.Is(err, auth.ErrForbidden):
 		return http.StatusForbidden, api.ErrCodeForbidden, "forbidden"
 	default:

@@ -26,6 +26,14 @@ func NewRunner(pool *pgxpool.Pool, logger *slog.Logger) *Runner {
 	return NewRunnerWithFS(pool, logger, migrationsfs.Files)
 }
 
+func NewRunnerFromEnv(pool *pgxpool.Pool, logger *slog.Logger) (*Runner, error) {
+	fsys, err := ResolveMigrationsFSFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	return NewRunnerWithFS(pool, logger, fsys), nil
+}
+
 func NewRunnerWithFS(pool *pgxpool.Pool, logger *slog.Logger, fsys fs.FS) *Runner {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
