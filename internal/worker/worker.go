@@ -7,10 +7,12 @@ import (
 	"os"
 
 	"github.com/samhotchkiss/otter-camp/internal/budget"
+	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/db"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
+	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/push"
 	"github.com/samhotchkiss/otter-camp/internal/push/adapters"
 	"github.com/samhotchkiss/otter-camp/internal/scheduling"
@@ -59,12 +61,27 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	if err != nil {
 		return fmt.Errorf("worker budget service setup: %w", err)
 	}
+	chatService, err := chat.NewService(chat.Options{
+		Pool:   pool.Raw(),
+		Events: bus,
+	})
+	if err != nil {
+		return fmt.Errorf("worker chat service setup: %w", err)
+	}
+	flowSessionBridge, err := projectsvc.NewFlowSessionBridge(projectsvc.FlowSessionBridgeOptions{
+		Pool:  pool.Raw(),
+		Chats: chatService,
+	})
+	if err != nil {
+		return fmt.Errorf("worker flow session bridge setup: %w", err)
+	}
 
 	runService, err := controlplane.NewRunService(controlplane.RunServiceOptions{
-		Pool:     pool.Raw(),
-		EventBus: bus,
-		Budget:   budgetService,
-		Logger:   logger,
+		Pool:          pool.Raw(),
+		EventBus:      bus,
+		Budget:        budgetService,
+		SessionBridge: flowSessionBridge,
+		Logger:        logger,
 	})
 	if err != nil {
 		return fmt.Errorf("worker run service setup: %w", err)

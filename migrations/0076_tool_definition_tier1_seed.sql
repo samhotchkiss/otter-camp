@@ -1,0 +1,32 @@
+INSERT INTO tool_definition (
+    name,
+    display_name,
+    description,
+    tool_tier,
+    tool_domain,
+    required_capability,
+    input_schema,
+    is_enabled
+) VALUES
+    ('file.read', 'File Read', 'Read a file from the session workspace', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('file.list', 'File List', 'List files and directories from the session workspace', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('file.search', 'File Search', 'Search files in the session workspace with a regex pattern', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('git.status', 'Git Status', 'Read git working tree status', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('git.diff', 'Git Diff', 'Read git diff output', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('git.log', 'Git Log', 'Read git commit log', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('memory.query', 'Memory Query', 'Query memory retrieval service', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('project.list', 'Project List', 'List projects in organization scope', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('project.get', 'Project Get', 'Read one project', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('task.list', 'Task List', 'List tasks in organization or project scope', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('task.get', 'Task Get', 'Read one task', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('inbox.list', 'Inbox List', 'List inbox items available to the requesting session', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('session.list', 'Session List', 'List chat sessions in organization scope', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('session.get', 'Session Get', 'Read one chat session', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('session.history', 'Session History', 'Read chat message history from a session', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('agent.list', 'Agent List', 'List agents in organization scope', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('agent.get', 'Agent Get', 'Read one agent', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('flow.get_template', 'Flow Get Template', 'Read a flow template and nodes', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('flow.get_execution', 'Flow Get Execution', 'Read a flow node execution', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('schedule.list', 'Schedule List', 'List schedules for a project', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true),
+    ('merge_queue.status', 'Merge Queue Status', 'Read merge queue status for a project', 'tier1', 'native', NULL, '{"type":"object"}'::jsonb, true)
+ON CONFLICT (name) DO NOTHING;

@@ -253,6 +253,7 @@ func (b *ToolBroker) Dispatch(ctx context.Context, input DispatchInput) (ToolExe
 		ToolExecutionID: &execution.ID,
 		RunID:           input.RunID,
 		AgentID:         &input.AgentID,
+		SessionID:       input.SessionID,
 	})
 
 	output, dispatchErr := b.dispatchToExecutor(execCtx, toolDomain, toolName, input.Input)

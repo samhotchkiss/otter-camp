@@ -205,7 +205,7 @@ func (r *FlowNodeExecutionRepo) RecordCommitSHA(ctx context.Context, id uuid.UUI
 	trimmedCommit := strings.TrimSpace(commitSHA)
 	row := r.pool.QueryRow(ctx, `
 		UPDATE flow_node_execution
-		SET commit_sha = $2
+		SET commit_sha = NULLIF($2, '')
 		WHERE id = $1
 		RETURNING id, task_id, flow_node_id, visit_number, status, session_id, commit_sha, started_at, completed_at, metadata
 	`, id, trimmedCommit)
