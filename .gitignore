@@ -32,6 +32,8 @@ data/repos/
 /issues/
 .autowork/
 scripts/*
+!scripts/init-pgvector.sql
+!scripts/seed-dev.sh
 !scripts/install.sh
 !scripts/install_test.sh
 !scripts/setup.sh
