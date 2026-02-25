@@ -164,6 +164,8 @@ func run(args []string) int {
 		return runChatCommand(remaining[1:])
 	case "memory":
 		return runMemory(remaining[1:])
+	case "tui":
+		return runTUICommand(remaining[1:])
 	case "magic-link":
 		return runAuthCommand(append([]string{"magic-link"}, remaining[1:]...))
 	case "reset-password":
@@ -1925,7 +1927,7 @@ func printSecretUsage(w *os.File) {
 }
 
 func printUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp [--server-url URL] [--api-key KEY] [--output table|json|quiet] [--no-color] <server|db|auth|secret|backup|health|version|schedule|chat>")
+	fmt.Fprintln(w, "usage: ottercamp [--server-url URL] [--api-key KEY] [--output table|json|quiet] [--no-color] <server|db|auth|secret|backup|health|version|schedule|chat|tui>")
 }
 
 func valueOrZero(value *int) int {
