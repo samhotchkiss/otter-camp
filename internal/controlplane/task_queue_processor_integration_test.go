@@ -5,21 +5,26 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
+	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
+
+const testAgentTurnJobType = "agent_turn"
 
 func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.T) {
 	ctx := context.Background()
@@ -107,6 +112,8 @@ func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testin
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)
 	defer fx.bus.Unsubscribe(fx.subscription)
+	stopTurnRuntime := startTaskQueueTurnRuntime(t, ctx, fx.pool, fx.bus, fx.org.ID)
+	defer stopTurnRuntime()
 
 	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
 		ProjectID:       fx.project.ID,
@@ -126,10 +133,13 @@ func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testin
 	runRepo := NewRunRepository(fx.pool)
 	sessionRepo := repo.NewChatSessionRepo(fx.pool)
 	messageRepo := repo.NewChatMessageRepo(fx.pool)
+	participantRepo := repo.NewChatParticipantRepo(fx.pool)
 
 	var (
-		taskRecord repo.ProjectTask
-		runRecord  Run
+		taskRecord      repo.ProjectTask
+		runRecord       Run
+		agentTurnStatus string
+		foundResponse   bool
 	)
 	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
 		var err error
@@ -149,13 +159,53 @@ func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testin
 		if err != nil {
 			return false, err
 		}
+		var hasInProgressRun bool
 		for _, candidate := range runs {
 			if candidate.FlowNodeID == nil && candidate.Status == "in_progress" {
 				runRecord = candidate
-				return true, nil
+				hasInProgressRun = true
+				break
 			}
 		}
-		return false, nil
+		if !hasInProgressRun {
+			return false, nil
+		}
+
+		err = fx.pool.QueryRow(ctx, `
+			SELECT status
+			FROM job_queue
+			WHERE job_type = $1
+			ORDER BY created_at DESC
+			LIMIT 1
+		`, testAgentTurnJobType).Scan(&agentTurnStatus)
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				return false, nil
+			}
+			return false, err
+		}
+		if agentTurnStatus == "dead_letter" {
+			return false, fmt.Errorf("agent_turn moved to dead_letter")
+		}
+		if agentTurnStatus != "done" {
+			return false, nil
+		}
+
+		session, err := sessionRepo.GetByScopeAndMode(ctx, "project_task", created.ID, "async")
+		if err != nil || session == nil {
+			return false, err
+		}
+		messages, err := messageRepo.ListBySession(ctx, session.ID)
+		if err != nil {
+			return false, err
+		}
+		for _, message := range messages {
+			if message.Role == "assistant" && message.Status == "final" && message.Content != "" {
+				foundResponse = true
+				break
+			}
+		}
+		return foundResponse, nil
 	})
 
 	if taskRecord.WorkStatus != "in_progress" {
@@ -178,6 +228,9 @@ func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testin
 	if runRecord.SessionID == nil || *runRecord.SessionID != session.ID {
 		t.Fatalf("run session_id = %v, want %s", runRecord.SessionID, session.ID)
 	}
+	if agentTurnStatus != "done" {
+		t.Fatalf("agent_turn status = %q, want done", agentTurnStatus)
+	}
 
 	messages, err := messageRepo.ListBySession(ctx, session.ID)
 	if err != nil {
@@ -199,6 +252,24 @@ func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testin
 	}
 	if !foundKickoff {
 		t.Fatal("expected user kickoff message from task_queue_processor")
+	}
+
+	participants, err := participantRepo.ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession participants: %v", err)
+	}
+	var foundAgentResponder bool
+	for _, participant := range participants {
+		if participant.ParticipantType == "agent" && participant.ParticipantID == fx.agent.ID {
+			foundAgentResponder = true
+			break
+		}
+	}
+	if !foundAgentResponder {
+		t.Fatal("expected active responder agent participant on task session")
+	}
+	if !foundResponse {
+		t.Fatal("expected assistant response message after kickoff")
 	}
 }
 
@@ -408,6 +479,105 @@ func waitForTaskQueueCondition(t *testing.T, timeout time.Duration, check func()
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
+}
+
+func startTaskQueueTurnRuntime(t *testing.T, ctx context.Context, pool *pgxpool.Pool, bus *eventbus.Bus, orgID uuid.UUID) func() {
+	t.Helper()
+
+	chatService, err := chat.NewService(chat.Options{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("new chat service: %v", err)
+	}
+
+	jqWorker := jobqueue.New(pool, nil, jobqueue.Config{
+		PollInterval:         10 * time.Millisecond,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	enqueueSub := bus.Subscribe("task-queue-test-agent-turn-enqueue", &orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
+		if event.EventType != "chat.message.user_sent" {
+			return nil
+		}
+		var payload taskQueueAgentTurnPayload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return nil
+		}
+		if payload.SessionID == uuid.Nil || payload.MessageID == uuid.Nil {
+			return nil
+		}
+		_, err := jqWorker.Enqueue(ctx, nil, testAgentTurnJobType, 70, payload, nil)
+		return err
+	})
+
+	jqWorker.Register(testAgentTurnJobType, func(ctx context.Context, job jobqueue.Job) error {
+		var payload taskQueueAgentTurnPayload
+		if err := json.Unmarshal(job.Payload, &payload); err != nil {
+			return err
+		}
+		participants, err := chatService.ListParticipants(ctx, payload.SessionID)
+		if err != nil {
+			return err
+		}
+
+		var responderID uuid.UUID
+		for _, participant := range participants {
+			if participant == nil {
+				continue
+			}
+			if participant.ParticipantType == "agent" {
+				responderID = participant.ParticipantID
+				break
+			}
+		}
+		if responderID == uuid.Nil {
+			return repo.ErrNotFound
+		}
+
+		authorType := "agent"
+		message, err := chatService.AppendMessage(ctx, chat.AppendMessageInput{
+			SessionID:  payload.SessionID,
+			AuthorType: &authorType,
+			AuthorID:   &responderID,
+			Role:       "assistant",
+			Content:    "Task started.",
+		})
+		if err != nil {
+			return err
+		}
+		if err := chatService.UpdateMessageStatus(ctx, message.ID, "streaming", ""); err != nil {
+			return err
+		}
+		return chatService.UpdateMessageStatus(ctx, message.ID, "final", "")
+	})
+
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		done <- jqWorker.Start(runCtx)
+	}()
+
+	return func() {
+		bus.Unsubscribe(enqueueSub)
+		cancel()
+		_ = jqWorker.Stop()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("job worker stopped with error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for job worker shutdown")
+		}
+	}
+}
+
+type taskQueueAgentTurnPayload struct {
+	SessionID uuid.UUID `json:"session_id"`
+	MessageID uuid.UUID `json:"message_id"`
 }
 
 func stringPtr(value string) *string {

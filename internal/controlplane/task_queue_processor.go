@@ -46,6 +46,7 @@ type taskQueueRunStarter interface {
 
 type taskQueueChatService interface {
 	CreateSession(ctx context.Context, input chat.CreateSessionInput) (*chat.ChatSession, error)
+	AddParticipant(ctx context.Context, sessionID uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error)
 	AppendMessage(ctx context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error)
 	ListMessages(ctx context.Context, sessionID uuid.UUID, filter chat.MessageFilter) ([]*chat.ChatMessage, error)
 }
@@ -266,6 +267,9 @@ func (p *TaskQueueProcessor) ensureAssignedAgentRun(ctx context.Context, event e
 	}
 	if session == nil {
 		return fmt.Errorf("task %s missing async session", taskRecord.ID)
+	}
+	if _, err := p.chats.AddParticipant(ctx, session.ID, "agent", *taskRecord.AssignedAgentID, "responder"); err != nil && !errors.Is(err, chat.ErrAlreadyParticipant) {
+		return err
 	}
 
 	idempotencyKey := fmt.Sprintf("task-queued:agent-turn:%s:%s", taskRecord.ID, event.ID)
