@@ -143,6 +143,16 @@ func (u *EnvUpdater) applyCompletionTx(ctx context.Context, update deployComplet
 			return err
 		}
 	}
+	if len(update.MergeEntryIDs) == 0 && update.TriggeredByTaskID == uuid.Nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE merge_queue_entry
+			SET archived_at = $2
+			WHERE project_id = $1
+			  AND archived_at IS NULL
+		`, update.ProjectID, update.CompletedAt); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE merge_queue_entry
 		SET archived_at = $2

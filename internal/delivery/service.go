@@ -293,6 +293,8 @@ func (s *Service) CreateDeployTask(ctx context.Context, environmentID uuid.UUID,
 	}
 
 	payloadJSON, err := json.Marshal(map[string]any{
+		"task_type":  deliveryTaskTypeDeploy,
+		"commit_sha": strings.TrimSpace(commitSHA),
 		"delivery": map[string]any{
 			"environment_id": environment.ID,
 			"commit_sha":     strings.TrimSpace(commitSHA),

@@ -1023,6 +1023,75 @@ func (r *MergeQueueEntryRepo) GetByTask(ctx context.Context, taskID uuid.UUID) (
 	return entry, nil
 }
 
+func (r *MergeQueueEntryRepo) GetByID(ctx context.Context, id uuid.UUID) (MergeQueueEntry, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT
+			id,
+			project_id,
+			task_id,
+			branch_name,
+			target_branch,
+			commit_sha,
+			position,
+			status,
+			enqueued_at,
+			merged_at,
+			archived_at,
+			failure_reason,
+			metadata
+		FROM merge_queue_entry
+		WHERE id = $1
+	`, id)
+
+	entry, err := scanMergeQueueEntry(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MergeQueueEntry{}, ErrNotFound
+	}
+	if err != nil {
+		return MergeQueueEntry{}, mapDBError(err)
+	}
+	return entry, nil
+}
+
+func (r *MergeQueueEntryRepo) ListByProject(ctx context.Context, projectID uuid.UUID) ([]MergeQueueEntry, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT
+			id,
+			project_id,
+			task_id,
+			branch_name,
+			target_branch,
+			commit_sha,
+			position,
+			status,
+			enqueued_at,
+			merged_at,
+			archived_at,
+			failure_reason,
+			metadata
+		FROM merge_queue_entry
+		WHERE project_id = $1
+		ORDER BY position ASC, id ASC
+	`, projectID)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	entries := make([]MergeQueueEntry, 0)
+	for rows.Next() {
+		entry, scanErr := scanMergeQueueEntry(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		entries = append(entries, entry)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return entries, nil
+}
+
 func (r *MergeQueueEntryRepo) ListActive(ctx context.Context, projectID uuid.UUID) ([]MergeQueueEntry, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT
@@ -1061,6 +1130,37 @@ func (r *MergeQueueEntryRepo) ListActive(ctx context.Context, projectID uuid.UUI
 		return nil, mapDBError(rows.Err())
 	}
 	return entries, nil
+}
+
+func (r *MergeQueueEntryRepo) SetCommitSHA(ctx context.Context, id uuid.UUID, commitSHA string) (MergeQueueEntry, error) {
+	row := r.pool.QueryRow(ctx, `
+		UPDATE merge_queue_entry
+		SET commit_sha = NULLIF($2, '')
+		WHERE id = $1
+		RETURNING
+			id,
+			project_id,
+			task_id,
+			branch_name,
+			target_branch,
+			commit_sha,
+			position,
+			status,
+			enqueued_at,
+			merged_at,
+			archived_at,
+			failure_reason,
+			metadata
+	`, id, strings.TrimSpace(commitSHA))
+
+	updated, err := scanMergeQueueEntry(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MergeQueueEntry{}, ErrNotFound
+	}
+	if err != nil {
+		return MergeQueueEntry{}, mapDBError(err)
+	}
+	return updated, nil
 }
 
 func (r *MergeQueueEntryRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string, failureReason *string, mergedAt *time.Time) (MergeQueueEntry, error) {

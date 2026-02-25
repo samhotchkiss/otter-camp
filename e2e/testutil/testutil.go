@@ -455,6 +455,83 @@ func readSSEFrame(reader *bufio.Reader) (eventName string, id string, data strin
 	}
 }
 
+func WaitForInboxItem(t *testing.T, baseURL, token string, filter map[string]string, timeout time.Duration) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	pollInterval := 2 * time.Second
+	var lastBody []byte
+	var lastStatus int
+
+	for time.Now().Before(deadline) {
+		body, status := GET(t, baseURL, "/v1/inbox?is_acted=false", token)
+		lastBody, lastStatus = body, status
+		if status == http.StatusOK {
+			items := asArray(JSONPath(t, body, "data"))
+			for _, itemValue := range items {
+				item := asMap(itemValue)
+				if inboxItemMatches(item, filter) {
+					return item
+				}
+			}
+		}
+		time.Sleep(pollInterval)
+	}
+
+	t.Fatalf("wait for inbox item timed out after %s status=%d body=%s", timeout, lastStatus, string(lastBody))
+	return nil
+}
+
+func WaitForTaskStatus(t *testing.T, baseURL, token, taskID, status string, timeout time.Duration) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	pollInterval := 2 * time.Second
+	path := "/v1/tasks/" + strings.TrimSpace(taskID)
+	var lastBody []byte
+	var lastStatus int
+
+	for time.Now().Before(deadline) {
+		body, code := GET(t, baseURL, path, token)
+		lastBody, lastStatus = body, code
+		if code == http.StatusOK {
+			task := asMap(JSONPath(t, body, "data"))
+			if strings.EqualFold(asString(task["work_status"]), strings.TrimSpace(status)) {
+				return task
+			}
+		}
+		time.Sleep(pollInterval)
+	}
+
+	t.Fatalf("wait for task status timed out after %s task=%s target=%s status=%d body=%s", timeout, taskID, status, lastStatus, string(lastBody))
+	return nil
+}
+
+func WaitForMergeQueueEntry(t *testing.T, baseURL, token, projectID, taskID string, timeout time.Duration) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	pollInterval := 2 * time.Second
+	path := "/v1/projects/" + strings.TrimSpace(projectID) + "/merge-queue"
+	var lastBody []byte
+	var lastStatus int
+
+	for time.Now().Before(deadline) {
+		body, status := GET(t, baseURL, path, token)
+		lastBody, lastStatus = body, status
+		if status == http.StatusOK {
+			items := asArray(JSONPath(t, body, "data"))
+			for _, itemValue := range items {
+				item := asMap(itemValue)
+				if asString(item["task_id"]) == strings.TrimSpace(taskID) {
+					return item
+				}
+			}
+		}
+		time.Sleep(pollInterval)
+	}
+
+	t.Fatalf("wait for merge queue entry timed out after %s project=%s task=%s status=%d body=%s", timeout, projectID, taskID, lastStatus, string(lastBody))
+	return nil
+}
+
 func JSONPath(t *testing.T, body []byte, path ...string) any {
 	t.Helper()
 	var current any
@@ -775,6 +852,49 @@ func parseIndex(raw string, length int) (int, error) {
 		return 0, fmt.Errorf("index %d out of range", value)
 	}
 	return value, nil
+}
+
+func inboxItemMatches(item map[string]any, filter map[string]string) bool {
+	for key, expected := range filter {
+		expected = strings.TrimSpace(expected)
+		switch strings.TrimSpace(key) {
+		case "item_type":
+			if asString(item["item_type"]) != expected {
+				return false
+			}
+		case "source_task_id":
+			sourceTask := asMap(item["source_task"])
+			if asString(sourceTask["task_id"]) != expected {
+				return false
+			}
+		default:
+			if asString(item[key]) != expected {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func asArray(value any) []any {
+	items, _ := value.([]any)
+	if items == nil {
+		return []any{}
+	}
+	return items
+}
+
+func asMap(value any) map[string]any {
+	item, _ := value.(map[string]any)
+	if item == nil {
+		return map[string]any{}
+	}
+	return item
+}
+
+func asString(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 func provisionTestDatabase(t *testing.T) (string, func()) {
