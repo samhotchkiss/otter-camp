@@ -413,6 +413,65 @@ func WaitForSSEEvent(t *testing.T, ch <-chan SSEEvent, eventType string, timeout
 	}
 }
 
+func WaitForInboxItem(t *testing.T, baseURL, token string, filter map[string]string, timeout time.Duration) map[string]any {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	var lastBody []byte
+	var lastStatus int
+	for time.Now().Before(deadline) {
+		body, status := GET(t, baseURL, "/v1/inbox?is_acted=false", token)
+		lastBody = body
+		lastStatus = status
+		if status == http.StatusOK {
+			items, ok := JSONPath(t, body, "data").([]any)
+			if ok {
+				for _, raw := range items {
+					item, ok := raw.(map[string]any)
+					if !ok {
+						continue
+					}
+					if inboxItemMatches(item, filter) {
+						return item
+					}
+				}
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	t.Fatalf("wait for inbox item timed out after %s status=%d body=%s", timeout, lastStatus, string(lastBody))
+	return nil
+}
+
+func WaitForTaskStatus(t *testing.T, baseURL, token, taskID, status string, timeout time.Duration) map[string]any {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	path := "/v1/tasks/" + strings.TrimSpace(taskID)
+	target := strings.ToLower(strings.TrimSpace(status))
+	var lastBody []byte
+	var lastStatus int
+	for time.Now().Before(deadline) {
+		body, httpStatus := GET(t, baseURL, path, token)
+		lastBody = body
+		lastStatus = httpStatus
+		if httpStatus == http.StatusOK {
+			task, ok := JSONPath(t, body, "data").(map[string]any)
+			if ok {
+				current := strings.ToLower(strings.TrimSpace(stringValue(task["work_status"])))
+				if current == target {
+					return task
+				}
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	t.Fatalf("wait for task status timed out after %s task=%s target=%s status=%d body=%s", timeout, taskID, target, lastStatus, string(lastBody))
+	return nil
+}
+
 func readSSEFrame(reader *bufio.Reader) (eventName string, id string, data string, err error) {
 	for {
 		line, readErr := reader.ReadString('\n')
@@ -842,6 +901,24 @@ func defaultEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func inboxItemMatches(item map[string]any, filter map[string]string) bool {
+	for key, expected := range filter {
+		expected = strings.TrimSpace(expected)
+		switch strings.TrimSpace(key) {
+		case "source_task_id":
+			sourceTask, _ := item["source_task"].(map[string]any)
+			if strings.TrimSpace(stringValue(sourceTask["task_id"])) != expected {
+				return false
+			}
+		default:
+			if strings.TrimSpace(stringValue(item[key])) != expected {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func stringValue(value any) string {
