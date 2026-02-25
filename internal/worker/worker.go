@@ -7,8 +7,10 @@ import (
 	"os"
 	"strings"
 
+	"github.com/samhotchkiss/otter-camp/internal/browser"
 	"github.com/samhotchkiss/otter-camp/internal/budget"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
+	"github.com/samhotchkiss/otter-camp/internal/cli"
 	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/db"
 	"github.com/samhotchkiss/otter-camp/internal/delivery"
@@ -16,7 +18,9 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/gateway"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/jobs"
+	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/model"
+	"github.com/samhotchkiss/otter-camp/internal/policy"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/push"
@@ -24,8 +28,10 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/scheduling"
 	"github.com/samhotchkiss/otter-camp/internal/secret"
+	"github.com/samhotchkiss/otter-camp/internal/storage"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
+	nativetools "github.com/samhotchkiss/otter-camp/internal/tools/native"
 	"github.com/samhotchkiss/otter-camp/internal/turn"
 )
 
@@ -172,6 +178,86 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	if err != nil {
 		return fmt.Errorf("worker tool resolver setup: %w", err)
 	}
+	secretService := secret.NewService(repo.NewSecretRepo(pool.Raw()))
+
+	storageBackend, err := storage.New(storage.ConfigFromEnv(os.LookupEnv))
+	if err != nil {
+		return fmt.Errorf("worker object storage setup: %w", err)
+	}
+
+	policyEvaluator, err := policy.NewPolicyEvaluator(policy.EvaluatorOptions{
+		Policies: repo.NewCapabilityPolicyRepo(pool.Raw()),
+		Budgets:  budgetService,
+	})
+	if err != nil {
+		return fmt.Errorf("worker policy evaluator setup: %w", err)
+	}
+	if err := policyEvaluator.LoadInstancePolicies(ctx); err != nil {
+		return fmt.Errorf("worker policy evaluator load: %w", err)
+	}
+	capabilityPolicy := &capabilityPolicyEvaluator{evaluator: policyEvaluator}
+
+	cliExecutor := cli.NewExecutor(cli.ExecutorOptions{
+		Pool:          pool.Raw(),
+		SecretService: secretService,
+		Store:         storageBackend,
+	})
+	nativeExecutor := nativetools.NewExecutor(nativetools.ExecutorOptions{
+		Pool: pool.Raw(),
+		CLI:  cliExecutor,
+	})
+	browserExecutor, err := browser.NewExecutor(browser.ExecutorOptions{
+		Pool:      pool.Raw(),
+		Runs:      runService,
+		Artifacts: controlplane.NewRunArtifactRepository(pool.Raw()),
+		Store:     storageBackend,
+	})
+	if err != nil {
+		return fmt.Errorf("worker browser executor setup: %w", err)
+	}
+
+	mcpConnectionRepo := repo.NewMCPConnectionRepo(pool.Raw())
+	mcpCatalogRepo := repo.NewMCPToolCatalogRepo(pool.Raw())
+	mcpService, err := mcp.NewService(mcp.ServiceOptions{
+		Connections:      mcpConnectionRepo,
+		Catalog:          mcpCatalogRepo,
+		Bindings:         repo.NewMCPSecretBindingRepo(pool.Raw()),
+		Resolver:         secretService,
+		EventBus:         bus,
+		TransportFactory: mcp.NewDefaultTransportFactory(nil),
+	})
+	if err != nil {
+		return fmt.Errorf("worker mcp service setup: %w", err)
+	}
+	mcpExecutor, err := mcp.NewExecutor(mcp.ExecutorOptions{
+		Connections:      mcpConnectionRepo,
+		ConnectionStatus: mcpConnectionRepo,
+		Catalog:          mcpCatalogRepo,
+		Assignments:      repo.NewAgentProjectAssignmentRepo(pool.Raw()),
+		Caller:           mcpService,
+		Logs:             repo.NewMCPExecutionLogRepo(pool.Raw()),
+	})
+	if err != nil {
+		return fmt.Errorf("worker mcp executor setup: %w", err)
+	}
+
+	toolBroker, err := controlplane.NewToolBroker(controlplane.ToolBrokerOptions{
+		Pool:     pool.Raw(),
+		EventBus: bus,
+		Policy:   capabilityPolicy,
+		Native:   nativeExecutor,
+		CLI:      cliExecutor,
+		Browser:  browserExecutor,
+		MCP:      mcpExecutor,
+	})
+	if err != nil {
+		return fmt.Errorf("worker tool broker setup: %w", err)
+	}
+	toolDispatcher, err := newLiveToolDispatcher(toolBroker, runService, repo.NewAgentRepo(pool.Raw()))
+	if err != nil {
+		return fmt.Errorf("worker tool dispatcher setup: %w", err)
+	}
+
 	promptAssembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{
 		Pool:   pool.Raw(),
 		Logger: logger,
@@ -216,7 +302,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		Assembler:     promptAssembler,
 		Summarization: summarizationChecker,
 		ModelGateway:  modelGateway,
-		Dispatcher:    turn.UnavailableToolDispatcher{},
+		Dispatcher:    toolDispatcher,
 		RunCanceler:   runService,
 		Events:        bus,
 		Enqueuer:      jqWorker,
@@ -280,6 +366,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	defer cancel()
 	stopDeliveryConsumer := deliveryConsumer.Start(runCtx)
 	defer stopDeliveryConsumer()
+	mcpService.StartHealthScheduler(runCtx)
 
 	heartbeat := scheduling.NewSchedulerHeartbeat(pool.Raw(), jqWorker, logger, nil)
 	heartbeat.Start(runCtx)

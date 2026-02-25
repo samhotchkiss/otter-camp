@@ -869,11 +869,26 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if id == "" {
 			id = fmt.Sprintf("tool-%d", i+1)
 		}
+		arguments := cloneMap(call.Arguments)
+		arguments["organization_id"] = rt.session.OrganizationID.String()
+		arguments["session_id"] = rt.session.ID.String()
+		arguments["turn_id"] = rt.turn.ID.String()
+		arguments["agent_id"] = rt.agent.ID.String()
+		if projectID := resolveProjectID(ctx, rt.session, e.tasks); projectID != nil {
+			if _, exists := arguments["project_id"]; !exists {
+				arguments["project_id"] = projectID.String()
+			}
+		}
+		if taskID := resolveTaskID(rt.session); taskID != nil {
+			if _, exists := arguments["task_id"]; !exists {
+				arguments["task_id"] = taskID.String()
+			}
+		}
 		toolCalls = append(toolCalls, ToolCall{
 			ID:              id,
 			Name:            strings.TrimSpace(call.Name),
 			Tier:            strings.TrimSpace(strings.ToLower(call.Tier)),
-			Arguments:       cloneMap(call.Arguments),
+			Arguments:       arguments,
 			MCPConnectionID: call.MCPConnectionID,
 		})
 	}
