@@ -760,7 +760,7 @@ func (r *RunAttemptRepository) ListByRun(ctx context.Context, runID uuid.UUID) (
 
 type ToolExecution struct {
 	ID             uuid.UUID
-	RunID          uuid.UUID
+	RunID          *uuid.UUID
 	RunStepID      *uuid.UUID
 	RunAttemptID   *uuid.UUID
 	ToolName       string
