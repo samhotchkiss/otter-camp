@@ -10,6 +10,7 @@ import (
 )
 
 const TraceSpanPartitionCreateJobType = "trace_span_partition_create"
+const tracePartitionTimestampLayout = "2006-01-02 15:04:05Z07:00"
 
 type TraceSpanPartitionJob struct {
 	pool *pgxpool.Pool
@@ -47,10 +48,7 @@ func (j *TraceSpanPartitionJob) Run(ctx context.Context) error {
 	end := start.Add(24 * time.Hour)
 	partitionName := fmt.Sprintf("trace_span_p_%s", start.Format("20060102"))
 
-	if _, err := j.pool.Exec(ctx, fmt.Sprintf(`
-		CREATE TABLE IF NOT EXISTS %s PARTITION OF trace_span
-		FOR VALUES FROM ($1) TO ($2)
-	`, partitionName), start, end); err != nil {
+	if _, err := j.pool.Exec(ctx, buildTraceSpanPartitionDDL(partitionName, start, end)); err != nil {
 		return fmt.Errorf("create trace span partition: %w", err)
 	}
 
@@ -66,4 +64,15 @@ func (j *TraceSpanPartitionJob) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func buildTraceSpanPartitionDDL(partitionName string, start, end time.Time) string {
+	return fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s PARTITION OF trace_span
+		FOR VALUES FROM ('%s') TO ('%s')
+	`, partitionName, formatTracePartitionTimestamp(start), formatTracePartitionTimestamp(end))
+}
+
+func formatTracePartitionTimestamp(value time.Time) string {
+	return value.UTC().Format(tracePartitionTimestampLayout)
 }
