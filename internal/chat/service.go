@@ -794,6 +794,16 @@ func (s *service) AppendMessage(ctx context.Context, input AppendMessageInput) (
 	}); err != nil {
 		return nil, err
 	}
+	if message.Role == "user" && !isSteerMetadata(message.Metadata) {
+		if err := s.publishEvent(ctx, session.OrganizationID, "chat.message.user_sent", actorType, actorID, map[string]any{
+			"session_id":      session.ID,
+			"message_id":      message.ID,
+			"sequence_number": message.SequenceNumber,
+			"status":          message.Status,
+		}); err != nil {
+			return nil, err
+		}
+	}
 
 	return message, nil
 }
@@ -1700,4 +1710,21 @@ func mapDBError(err error) error {
 		}
 	}
 	return err
+}
+
+func isSteerMetadata(metadata json.RawMessage) bool {
+	if len(metadata) == 0 {
+		return false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return false
+	}
+	if _, ok := payload["steer_turn_id"]; ok {
+		return true
+	}
+	if _, ok := payload["steer_message_id"]; ok {
+		return true
+	}
+	return false
 }
