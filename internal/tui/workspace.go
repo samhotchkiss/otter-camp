@@ -36,6 +36,9 @@ type sidebarKind string
 const (
 	sidebarKindSession sidebarKind = "session"
 	sidebarKindProject sidebarKind = "project"
+
+	generalSidebarNodeID = "session-general"
+	generalSessionID     = "session-org-general"
 )
 
 type sidebarNode struct {
@@ -93,11 +96,11 @@ type workspaceState struct {
 
 func newWorkspaceState() workspaceState {
 	nodes := map[string]*sidebarNode{
-		"session-general": {
-			ID:        "session-general",
+		generalSidebarNodeID: {
+			ID:        generalSidebarNodeID,
 			Label:     "General / Frank",
 			Kind:      sidebarKindSession,
-			SessionID: "session-org-general",
+			SessionID: generalSessionID,
 		},
 		"project-alpha": {
 			ID:       "project-alpha",
@@ -131,7 +134,7 @@ func newWorkspaceState() workspaceState {
 	return workspaceState{
 		mainView:      ViewDashboard,
 		nodes:         nodes,
-		topLevel:      []string{"session-general", "project-alpha"},
+		topLevel:      []string{generalSidebarNodeID, "project-alpha"},
 		sidebarCursor: 0,
 		tasks:         tasks,
 		taskOrder:     []string{"task-1", "task-2"},
@@ -151,7 +154,7 @@ func newWorkspaceState() workspaceState {
 			"PR#1500 task-106",
 		},
 		schedules:       []string{"daily standup 09:00", "nightly regression 01:00"},
-		activeSessionID: "session-org-general",
+		activeSessionID: generalSessionID,
 	}
 }
 
@@ -284,6 +287,43 @@ func (w *workspaceState) selectSidebarNode() {
 		node.Unread = 0
 		w.propagateUnread()
 	}
+}
+
+func (w *workspaceState) pinGeneralSessionTop() {
+	if len(w.topLevel) == 0 {
+		w.topLevel = []string{generalSidebarNodeID}
+		return
+	}
+
+	next := make([]string, 0, len(w.topLevel)+1)
+	next = append(next, generalSidebarNodeID)
+	for _, id := range w.topLevel {
+		if id == generalSidebarNodeID {
+			continue
+		}
+		next = append(next, id)
+	}
+	w.topLevel = next
+}
+
+func (w *workspaceState) activateGeneralSession() error {
+	node := w.nodes[generalSidebarNodeID]
+	if node == nil || node.Kind != sidebarKindSession || strings.TrimSpace(node.SessionID) == "" {
+		return fmt.Errorf("general session unavailable")
+	}
+
+	w.pinGeneralSessionTop()
+	w.activeSessionID = node.SessionID
+	node.Unread = 0
+	w.propagateUnread()
+
+	for i, id := range w.visibleSidebarIDs() {
+		if id == generalSidebarNodeID {
+			w.sidebarCursor = i
+			break
+		}
+	}
+	return nil
 }
 
 func (w *workspaceState) markSessionUnread(sessionID string) {

@@ -63,7 +63,7 @@ func NewModel(state UIState) Model {
 	model := Model{
 		state:            normalized,
 		focus:            panel,
-		statusMessage:    "Tab/Shift-Tab cycle focus. 1/2/3 direct focus. :focus/:scope/:quit commands available.",
+		statusMessage:    initialStatusMessage(normalized),
 		connection:       ConnectionDisconnected,
 		sidebarVisible:   normalized.SidebarVisible,
 		workspace:        newWorkspaceState(),
@@ -121,6 +121,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		m.statusMessage = "Exiting TUI."
 		return m, tea.Quit
+	case tea.KeyCtrlG:
+		m.jumpToFrankSession()
+		return m, nil
 	case tea.KeyTab:
 		m.focus = nextPanelInOrder(order, m.focus)
 		m.applyResponsiveLayout()
@@ -153,6 +156,10 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.commandMode = true
 				m.commandBuffer = ":"
 				m.statusMessage = "Command mode"
+				return m, nil
+			}
+			if r == '0' && !m.chatTextInputActive() {
+				m.jumpToFrankSession()
 				return m, nil
 			}
 
@@ -367,6 +374,11 @@ func (m *Model) tryAutocompleteMention() {
 
 func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.Type {
+	case tea.KeyCtrlG:
+		m.commandMode = false
+		m.commandBuffer = ""
+		m.jumpToFrankSession()
+		return m, nil
 	case tea.KeyEsc:
 		m.commandMode = false
 		m.commandBuffer = ""
@@ -429,6 +441,12 @@ func (m *Model) executeCommand(raw string) {
 			return
 		}
 		m.switchScope(normalizeScope(fields[1]))
+	case "general", "frank":
+		if len(fields) != 1 {
+			m.statusMessage = "Usage: :" + strings.ToLower(fields[0])
+			return
+		}
+		m.jumpToFrankSession()
 	case "dashboard", "project", "task", "inbox", "activity", "agents", "merges", "schedules":
 		view, ok := resolveMainViewCommand(fields[0])
 		if !ok {
@@ -569,6 +587,7 @@ func (m Model) ChatMessages() []ChatMessage {
 
 func (m Model) MainView() MainView       { return m.workspace.mainView }
 func (m Model) WorkspaceSession() string { return m.workspace.activeSessionID }
+func (m Model) StatusMessage() string    { return m.statusMessage }
 func (m Model) WorkspaceRender(class SizeClass) string {
 	return m.workspace.render(m.workspace.mainView, class)
 }
@@ -589,6 +608,9 @@ func (m Model) SidebarVisibleEntries() []string {
 			continue
 		}
 		label := node.Label
+		if node.Kind == sidebarKindSession && node.SessionID == m.workspace.activeSessionID {
+			label = "> " + label
+		}
 		if node.Unread > 0 {
 			label = fmt.Sprintf("%s (%d)", label, node.Unread)
 		}
@@ -818,6 +840,21 @@ func (m *Model) switchScope(next ChatScope) {
 	m.statusMessage = fmt.Sprintf("Scope switched to %s.", next)
 }
 
+func (m *Model) jumpToFrankSession() {
+	if err := m.workspace.activateGeneralSession(); err != nil {
+		m.statusMessage = "Unable to load Frank session. Press Ctrl-G or :frank to retry."
+		return
+	}
+	m.activeScope = ScopeOrg
+	m.activeSession = m.workspace.activeSessionID
+	m.state.LastActiveChatSession = m.workspace.activeSessionID
+	m.statusMessage = "Switched to Frank session."
+}
+
+func (m Model) chatTextInputActive() bool {
+	return m.focus == ChatPanel
+}
+
 func inferScopeFromSession(session string) ChatScope {
 	trimmed := strings.ToLower(strings.TrimSpace(session))
 	switch {
@@ -917,6 +954,14 @@ func valueOrPlaceholder(value string) string {
 		return "none"
 	}
 	return trimmed
+}
+
+func initialStatusMessage(state UIState) string {
+	base := "Tab/Shift-Tab cycle focus. 1/2/3 direct focus. :focus/:scope/:quit commands available."
+	if strings.TrimSpace(state.LastActiveChatSession) == "" {
+		return base + " Frank jump: Ctrl-G, 0 (outside chat input), or :frank."
+	}
+	return base
 }
 
 func realtimeDegradedSuffix(degraded bool) string {
