@@ -1,0 +1,12 @@
+// Example vite.config.ts for development
+// Copy to web/vite.config.ts and adjust as needed
+import { defineConfig } from 'vite'
+
+export default defineConfig({
+  server: {
+    proxy: {
+      '/v1': 'http://localhost:4110',
+      '/health': 'http://localhost:4110',
+    }
+  }
+})

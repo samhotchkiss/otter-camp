@@ -14,13 +14,12 @@ func PrefixEnforcement() func(http.Handler) http.Handler {
 			if path == "" {
 				path = "/"
 			}
-
-			if path == "/" {
-				http.Redirect(w, r, "/v1/", http.StatusPermanentRedirect)
+			if strings.HasPrefix(path, "/v1/") || path == "/v1" || allowedPrefixBypass(path) {
+				next.ServeHTTP(w, r)
 				return
 			}
 
-			if strings.HasPrefix(path, "/v1/") || path == "/v1" || allowedPrefixBypass(path) {
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
 				next.ServeHTTP(w, r)
 				return
 			}

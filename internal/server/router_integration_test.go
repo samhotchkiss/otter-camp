@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -198,12 +200,62 @@ func TestVersionAndPrefixEnforcement(t *testing.T) {
 		t.Fatalf("version = %q, want %q", got, "test-version")
 	}
 
-	prefixResp := mustJSON(t, http.MethodGet, testServer.URL+"/api/projects", nil, nil)
+	prefixResp := mustJSON(t, http.MethodPost, testServer.URL+"/api/projects", map[string]any{}, nil)
 	if prefixResp.StatusCode != http.StatusNotFound {
 		t.Fatalf("prefix status = %d, want %d body=%s", prefixResp.StatusCode, http.StatusNotFound, string(prefixResp.Body))
 	}
 	if got := jsonPathString(t, prefixResp.Body, "error", "message"); got != "This API uses the /v1/ prefix. See docs." {
 		t.Fatalf("prefix message = %q, want %q", got, "This API uses the /v1/ prefix. See docs.")
+	}
+}
+
+func TestStaticServingAndAPIRoutePrecedence(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+	t.Setenv("OTTERCAMP_WEB_MODE", "directory")
+	webDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(webDir, "index.html"), []byte("<html>spa index</html>"), 0o600); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(webDir, "assets"), 0o700); err != nil {
+		t.Fatalf("mkdir assets: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(webDir, "assets", "main.abc123.js"), []byte("console.log('ok')"), 0o600); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+	t.Setenv("OTTERCAMP_WEB_DIR", webDir)
+
+	testServer, _, _ := newAuthTestServer(t, "standard")
+	defer testServer.Close()
+
+	spaRoute := mustJSON(t, http.MethodGet, testServer.URL+"/some/spa/route", nil, nil)
+	if spaRoute.StatusCode != http.StatusOK {
+		t.Fatalf("spa route status = %d, want %d body=%s", spaRoute.StatusCode, http.StatusOK, string(spaRoute.Body))
+	}
+	if !strings.Contains(string(spaRoute.Body), "spa index") {
+		t.Fatalf("spa route body = %q", string(spaRoute.Body))
+	}
+
+	if got := spaRoute.Headers.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q, want %q", got, "nosniff")
+	}
+	if got := spaRoute.Headers.Get("X-Frame-Options"); got != "SAMEORIGIN" {
+		t.Fatalf("X-Frame-Options = %q, want %q", got, "SAMEORIGIN")
+	}
+
+	missingAPI := mustJSON(t, http.MethodGet, testServer.URL+"/v1/nonexistent", nil, nil)
+	if missingAPI.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing API status = %d, want %d body=%s", missingAPI.StatusCode, http.StatusNotFound, string(missingAPI.Body))
+	}
+	if got := jsonPathString(t, missingAPI.Body, "error", "code"); got != "not_found" {
+		t.Fatalf("missing API error code = %q, want %q body=%s", got, "not_found", string(missingAPI.Body))
+	}
+
+	asset := mustJSON(t, http.MethodGet, testServer.URL+"/assets/main.abc123.js", nil, nil)
+	if asset.StatusCode != http.StatusOK {
+		t.Fatalf("asset status = %d, want %d body=%s", asset.StatusCode, http.StatusOK, string(asset.Body))
+	}
+	if got := asset.Headers.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("asset cache-control = %q, want %q", got, "no-store")
 	}
 }
 
