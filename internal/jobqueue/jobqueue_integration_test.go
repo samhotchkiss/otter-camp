@@ -16,7 +16,6 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
-	"github.com/samhotchkiss/otter-camp/internal/testutil"
 )
 
 func TestJobQueue_Priority_Ordering(t *testing.T) {
@@ -29,10 +28,10 @@ func TestJobQueue_Priority_Ordering(t *testing.T) {
 		CleanupEnqueuePeriod: time.Hour,
 	})
 
-	idHigh := testutil.EnqueueJob(t, pool, "priority", 10, map[string]any{"name": "high"})
-	idMid := testutil.EnqueueJob(t, pool, "priority", 5, map[string]any{"name": "mid"})
-	idLow1 := testutil.EnqueueJob(t, pool, "priority", 1, map[string]any{"name": "low1"})
-	idLow2 := testutil.EnqueueJob(t, pool, "priority", 1, map[string]any{"name": "low2"})
+	idHigh := testdb.EnqueueJob(t, pool, "priority", 10, map[string]any{"name": "high"})
+	idMid := testdb.EnqueueJob(t, pool, "priority", 5, map[string]any{"name": "mid"})
+	idLow1 := testdb.EnqueueJob(t, pool, "priority", 1, map[string]any{"name": "low1"})
+	idLow2 := testdb.EnqueueJob(t, pool, "priority", 1, map[string]any{"name": "low2"})
 
 	jobs, err := worker.claimPending(context.Background())
 	if err != nil {
@@ -81,7 +80,7 @@ func TestJobQueue_SKIP_LOCKED_Concurrency(t *testing.T) {
 	workerB.Register("skiplocked.job", handler)
 
 	for i := 0; i < 10; i++ {
-		testutil.EnqueueJob(t, pool, "skiplocked.job", 5, map[string]any{"n": i})
+		testdb.EnqueueJob(t, pool, "skiplocked.job", 5, map[string]any{"n": i})
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -119,7 +118,7 @@ func TestJobQueue_Retry_OnTransientFailure(t *testing.T) {
 		return errors.New("transient failure")
 	})
 
-	jobID := testutil.EnqueueJob(t, pool, "retry.transient", 5, map[string]any{"k": "v"})
+	jobID := testdb.EnqueueJob(t, pool, "retry.transient", 5, map[string]any{"k": "v"})
 	if _, err := pool.Exec(context.Background(), `
 		UPDATE job_queue
 		SET max_attempts = 2
@@ -195,7 +194,7 @@ func TestJobQueue_DeadLetter_Promotion(t *testing.T) {
 		return errors.New("permanent failure")
 	})
 
-	jobID := testutil.EnqueueJob(t, pool, "deadletter.job", 5, map[string]any{"n": 1})
+	jobID := testdb.EnqueueJob(t, pool, "deadletter.job", 5, map[string]any{"n": 1})
 	if _, err := pool.Exec(context.Background(), `
 		UPDATE job_queue
 		SET max_attempts = 1
@@ -244,7 +243,7 @@ func TestJobQueue_StaleClaim_Recovery(t *testing.T) {
 		Clock:                fakeClock,
 	})
 
-	jobID := testutil.EnqueueJob(t, pool, "stale.job", 5, map[string]any{"kind": "stale"})
+	jobID := testdb.EnqueueJob(t, pool, "stale.job", 5, map[string]any{"kind": "stale"})
 	if _, err := pool.Exec(context.Background(), `
 		UPDATE job_queue
 		SET status = 'claimed',
@@ -456,7 +455,8 @@ func TestJobQueue_at_least_once_delivery(t *testing.T) {
 	pool := testdb.New(t)
 	org := createJobQueueOrg079(t, pool, "at-least-once")
 	idemRepo := repo.NewIdempotencyKeyRepo(pool)
-	fakeClock := clock.NewFake(time.Date(2026, 2, 24, 16, 0, 0, 0, time.UTC))
+	// Keep fake clock near database now() because claim timestamps are written in SQL.
+	fakeClock := clock.NewFake(time.Now().UTC())
 
 	crashClaimer := New(pool, nil, Config{
 		WorkerID:             "crash-claimer",
