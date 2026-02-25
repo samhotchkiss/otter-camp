@@ -191,6 +191,7 @@ type messageRepository interface {
 	ListBySession(ctx context.Context, sessionID uuid.UUID) ([]repo.ChatMessage, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, errorMessage string) (repo.ChatMessage, error)
 	UpdateContent(ctx context.Context, id uuid.UUID, content string) (repo.ChatMessage, error)
+	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ChatMessage, error)
 }
 
 type turnRepository interface {
@@ -713,6 +714,13 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 				return err
 			}
 			return nil
+		}
+
+		// Persist tool_calls in the assistant message metadata so the prompt
+		// assembler can include them in the conversation history on the next
+		// model call (required by OpenAI/Anthropic for tool result messages).
+		if toolCallMeta := buildToolCallMetadata(response.ToolCalls); toolCallMeta != nil {
+			_, _ = e.messages.UpdateMetadata(ctx, assistantMessage.ID, toolCallMeta)
 		}
 
 		stop, dispatchErr := e.dispatchTools(ctx, rt, response.ToolCalls)
@@ -1652,4 +1660,32 @@ func cloneMap(input map[string]any) map[string]any {
 		copied[key] = value
 	}
 	return copied
+}
+
+// buildToolCallMetadata serializes tool calls into JSONB metadata for the
+// assistant chat_message. The prompt assembler reads this metadata so that
+// the assistant message can carry its tool_calls in the conversation history.
+func buildToolCallMetadata(calls []ModelToolCall) json.RawMessage {
+	if len(calls) == 0 {
+		return nil
+	}
+	type storedToolCall struct {
+		ID        string         `json:"id"`
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments,omitempty"`
+	}
+	stored := make([]storedToolCall, 0, len(calls))
+	for _, c := range calls {
+		stored = append(stored, storedToolCall{
+			ID:        c.ID,
+			Name:      c.Name,
+			Arguments: c.Arguments,
+		})
+	}
+	meta := map[string]any{"tool_calls": stored}
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		return nil
+	}
+	return raw
 }

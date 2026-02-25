@@ -50,10 +50,20 @@ var coreTier1Tools = map[string]struct{}{
 	"chat.search":  {},
 }
 
+// PromptToolCall carries a tool call from an assistant message so the
+// conversation history is valid for providers that require a preceding
+// assistant+tool_calls message before any tool result messages.
+type PromptToolCall struct {
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+}
+
 type PromptMessage struct {
-	Role       string  `json:"role"`
-	Content    string  `json:"content"`
-	ToolCallID *string `json:"tool_call_id,omitempty"`
+	Role       string          `json:"role"`
+	Content    string          `json:"content"`
+	ToolCallID *string         `json:"tool_call_id,omitempty"`
+	ToolCalls  []PromptToolCall `json:"tool_calls,omitempty"`
 }
 
 type MemoryManifest struct {
@@ -1228,11 +1238,22 @@ func summarizeHistory(messages []repo.ChatMessage, summaries []repo.ChatSummary)
 		if coveredBySummary(message.SequenceNumber, summaryRanges) {
 			continue
 		}
-		out = append(out, PromptMessage{
+		pm := PromptMessage{
 			Role:       strings.TrimSpace(message.Role),
 			Content:    strings.TrimSpace(message.Content),
 			ToolCallID: message.ToolCallID,
-		})
+		}
+		// Read tool_calls persisted in message metadata (set by the turn engine
+		// when the model returns tool_calls instead of text content).
+		if len(message.Metadata) > 0 {
+			var meta struct {
+				ToolCalls []PromptToolCall `json:"tool_calls"`
+			}
+			if err := json.Unmarshal(message.Metadata, &meta); err == nil {
+				pm.ToolCalls = meta.ToolCalls
+			}
+		}
+		out = append(out, pm)
 	}
 	for nextSummary < len(summaryRanges) {
 		summary := summaryRanges[nextSummary]

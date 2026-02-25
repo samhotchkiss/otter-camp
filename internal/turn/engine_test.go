@@ -935,6 +935,19 @@ func (f *fakeMessageRepo) UpdateContent(ctx context.Context, id uuid.UUID, conte
 	return item, nil
 }
 
+func (f *fakeMessageRepo) UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ChatMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	item, ok := f.items[id]
+	if !ok {
+		return repo.ChatMessage{}, repo.ErrNotFound
+	}
+	item.Metadata = metadata
+	item.UpdatedAt = time.Now().UTC()
+	f.items[id] = item
+	return item, nil
+}
+
 func (f *fakeMessageRepo) containsContent(content string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()

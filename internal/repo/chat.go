@@ -844,6 +844,17 @@ func (r *ChatMessageRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status
 	return scanChatMessageWithNotFound(row)
 }
 
+func (r *ChatMessageRepo) UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (ChatMessage, error) {
+	row := r.db.QueryRow(ctx, `
+		UPDATE chat_message
+		SET metadata = $2
+		WHERE id = $1
+		RETURNING id, session_id, turn_id, sequence_number, author_type, author_id, role, content, content_format, status,
+		          is_redacted, redacted_at, tool_call_id, error_message, metadata, created_at, updated_at
+	`, id, normalizeChatJSON(metadata, json.RawMessage(`{}`)))
+	return scanChatMessageWithNotFound(row)
+}
+
 func (r *ChatMessageRepo) UpdateContent(ctx context.Context, id uuid.UUID, content string) (ChatMessage, error) {
 	var status string
 	if err := r.db.QueryRow(ctx, `SELECT status FROM chat_message WHERE id = $1`, id).Scan(&status); err != nil {

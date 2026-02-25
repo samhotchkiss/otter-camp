@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 	"github.com/samhotchkiss/otter-camp/internal/turn"
@@ -1140,9 +1141,12 @@ type providerMessage struct {
 	ToolCallID *string `json:"tool_call_id,omitempty"`
 }
 
-func openAIMessages(req turn.ModelRequest) []providerMessage {
+// openAIMessages converts prompt messages to OpenAI API format.
+// Returns []any so assistant messages with tool_calls can have a different
+// shape (object with "tool_calls" array) than regular text messages.
+func openAIMessages(req turn.ModelRequest) []any {
 	base := requestMessages(req)
-	messages := make([]providerMessage, 0, len(base))
+	messages := make([]any, 0, len(base))
 	for _, item := range base {
 		role := strings.ToLower(strings.TrimSpace(item.Role))
 		switch role {
@@ -1152,25 +1156,52 @@ func openAIMessages(req turn.ModelRequest) []providerMessage {
 		default:
 			role = "user"
 		}
-		message := providerMessage{
-			Role:    role,
-			Content: item.Content,
+
+		// Assistant messages that triggered tool calls must carry tool_calls
+		// so OpenAI can match them to subsequent tool result messages.
+		if role == "assistant" && len(item.ToolCalls) > 0 {
+			tcs := make([]map[string]any, 0, len(item.ToolCalls))
+			for _, tc := range item.ToolCalls {
+				argsJSON, _ := json.Marshal(tc.Arguments)
+				tcs = append(tcs, map[string]any{
+					"id":   tc.ID,
+					"type": "function",
+					"function": map[string]any{
+						"name":      tc.Name,
+						"arguments": string(argsJSON),
+					},
+				})
+			}
+			msg := map[string]any{
+				"role":       "assistant",
+				"tool_calls": tcs,
+			}
+			if item.Content != "" {
+				msg["content"] = item.Content
+			}
+			messages = append(messages, msg)
+			continue
+		}
+
+		msg := map[string]any{
+			"role":    role,
+			"content": item.Content,
 		}
 		if role == "tool" && item.ToolCallID != nil {
-			message.ToolCallID = item.ToolCallID
+			msg["tool_call_id"] = *item.ToolCallID
 		}
-		messages = append(messages, message)
+		messages = append(messages, msg)
 	}
 	if len(messages) == 0 {
-		messages = append(messages, providerMessage{Role: "user", Content: "Respond with a concise answer."})
+		messages = append(messages, map[string]any{"role": "user", "content": "Respond with a concise answer."})
 	}
 	return messages
 }
 
-func anthropicMessages(req turn.ModelRequest) (string, []providerMessage) {
+func anthropicMessages(req turn.ModelRequest) (string, []any) {
 	base := requestMessages(req)
 	systemParts := make([]string, 0, 2)
-	out := make([]providerMessage, 0, len(base))
+	out := make([]any, 0, len(base))
 	for _, item := range base {
 		role := strings.ToLower(strings.TrimSpace(item.Role))
 		switch role {
@@ -1178,30 +1209,62 @@ func anthropicMessages(req turn.ModelRequest) (string, []providerMessage) {
 			if strings.TrimSpace(item.Content) != "" {
 				systemParts = append(systemParts, item.Content)
 			}
+			continue
 		case "assistant":
-			out = append(out, providerMessage{Role: "assistant", Content: item.Content})
+			if len(item.ToolCalls) > 0 {
+				// Anthropic: assistant with tool_use blocks.
+				content := make([]map[string]any, 0, len(item.ToolCalls)+1)
+				if item.Content != "" {
+					content = append(content, map[string]any{"type": "text", "text": item.Content})
+				}
+				for _, tc := range item.ToolCalls {
+					content = append(content, map[string]any{
+						"type":  "tool_use",
+						"id":    tc.ID,
+						"name":  tc.Name,
+						"input": tc.Arguments,
+					})
+				}
+				out = append(out, map[string]any{"role": "assistant", "content": content})
+				continue
+			}
+			out = append(out, map[string]any{"role": "assistant", "content": item.Content})
+		case "tool_result":
+			// Anthropic: tool results go inside a user message as tool_result blocks.
+			toolResultContent := map[string]any{
+				"type":    "tool_result",
+				"content": item.Content,
+			}
+			if item.ToolCallID != nil {
+				toolResultContent["tool_use_id"] = *item.ToolCallID
+			}
+			out = append(out, map[string]any{
+				"role":    "user",
+				"content": []any{toolResultContent},
+			})
 		default:
-			out = append(out, providerMessage{Role: "user", Content: item.Content})
+			out = append(out, map[string]any{"role": "user", "content": item.Content})
 		}
 	}
 	if len(out) == 0 {
-		out = append(out, providerMessage{Role: "user", Content: "Respond with a concise answer."})
+		out = append(out, map[string]any{"role": "user", "content": "Respond with a concise answer."})
 	}
 	return strings.Join(systemParts, "\n\n"), out
 }
 
-func requestMessages(req turn.ModelRequest) []providerMessage {
-	messages := make([]providerMessage, 0)
+func requestMessages(req turn.ModelRequest) []prompt.PromptMessage {
+	messages := make([]prompt.PromptMessage, 0)
 	if req.Prompt != nil && len(req.Prompt.Messages) > 0 {
 		for _, item := range req.Prompt.Messages {
-			if strings.TrimSpace(item.Content) == "" {
+			isEmpty := strings.TrimSpace(item.Content) == ""
+			hasToolCalls := len(item.ToolCalls) > 0
+			// Include messages that have content OR tool_calls (or both).
+			// Previously empty-content messages were dropped, which removed the
+			// assistant message that triggered tool calls from the history.
+			if isEmpty && !hasToolCalls && item.ToolCallID == nil {
 				continue
 			}
-			messages = append(messages, providerMessage{
-				Role:       strings.TrimSpace(item.Role),
-				Content:    item.Content,
-				ToolCallID: item.ToolCallID,
-			})
+			messages = append(messages, item)
 		}
 	}
 	if len(messages) > 0 {
@@ -1209,14 +1272,14 @@ func requestMessages(req turn.ModelRequest) []providerMessage {
 	}
 
 	if strings.TrimSpace(req.InstructionHint) != "" {
-		messages = append(messages, providerMessage{Role: "system", Content: strings.TrimSpace(req.InstructionHint)})
+		messages = append(messages, prompt.PromptMessage{Role: "system", Content: strings.TrimSpace(req.InstructionHint)})
 	}
 	for _, item := range req.HumanMessages {
 		trimmed := strings.TrimSpace(item)
 		if trimmed == "" {
 			continue
 		}
-		messages = append(messages, providerMessage{Role: "user", Content: trimmed})
+		messages = append(messages, prompt.PromptMessage{Role: "user", Content: trimmed})
 	}
 	return messages
 }
