@@ -44,6 +44,7 @@ func NewOrgAuditRouteRegistrar(pool *pgxpool.Pool) *OrgAuditRouteRegistrar {
 func (r *OrgAuditRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.Get("/orgs/current", r.handlers.getCurrentOrg)
 	router.Get("/audit", r.handlers.listAudit)
+	router.Get("/audit/events", r.handlers.listAudit) // alias for REST-style clients
 }
 
 type orgAuditHandlers struct {
