@@ -469,26 +469,15 @@ func (e *TurnEngine) HandleTurnJob(ctx context.Context, job jobqueue.Job) error 
 }
 
 func (e *TurnEngine) HandleUserMessageEvent(ctx context.Context, event eventbus.DomainEvent) error {
+	// Only enqueue on user_sent, not on the generic created event, to avoid
+	// duplicate jobs (both events fire for the same user message).
 	if event.EventType != "chat.message.user_sent" {
-		if event.EventType != "chat.message.created" {
-			return nil
-		}
+		return nil
 	}
 	payload, err := parseAgentTurnPayload(event.Payload)
 	if err != nil {
 		return nil
 	}
-
-	if event.EventType == "chat.message.created" {
-		message, getErr := e.messages.GetByID(ctx, payload.MessageID)
-		if getErr != nil {
-			return nil
-		}
-		if strings.TrimSpace(strings.ToLower(message.Role)) != "user" {
-			return nil
-		}
-	}
-
 	_, err = e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, payload, nil)
 	return err
 }
@@ -722,6 +711,10 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 		if toolCallMeta := buildToolCallMetadata(response.ToolCalls); toolCallMeta != nil {
 			_, _ = e.messages.UpdateMetadata(ctx, assistantMessage.ID, toolCallMeta)
 		}
+		// Mark the assistant message final now — it was fully streamed even
+		// though it contained tool calls. The next iteration creates a new
+		// assistant placeholder for the follow-up model response.
+		_, _ = e.messages.UpdateStatus(ctx, assistantMessage.ID, "final", "")
 
 		stop, dispatchErr := e.dispatchTools(ctx, rt, response.ToolCalls)
 		if dispatchErr != nil {

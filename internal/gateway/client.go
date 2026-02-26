@@ -580,7 +580,7 @@ func parseProviderStream(body io.Reader, providerType string, onChunk func(strin
 		sort.Ints(indices)
 		for _, idx := range indices {
 			accum := anthropicAccums[idx]
-			var args map[string]any
+			args := map[string]any{}
 			if s := accum.json.String(); s != "" {
 				if jsonErr := json.Unmarshal([]byte(s), &args); jsonErr != nil {
 					args = map[string]any{"_raw": s}
@@ -1252,6 +1252,22 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 	systemParts := make([]string, 0, 2)
 	out := make([]any, 0, len(base))
 	lastAssistantHadToolCalls := false
+	// pendingToolResults collects consecutive tool_result blocks to merge into
+	// one Anthropic user message (Anthropic requires all tool results for a
+	// parallel tool call to appear as a single user turn).
+	var pendingToolResults []any
+
+	flushToolResults := func() {
+		if len(pendingToolResults) > 0 {
+			out = append(out, map[string]any{
+				"role":    "user",
+				"content": pendingToolResults,
+			})
+			pendingToolResults = nil
+		}
+		lastAssistantHadToolCalls = false
+	}
+
 	for _, item := range base {
 		role := strings.ToLower(strings.TrimSpace(item.Role))
 		switch role {
@@ -1261,7 +1277,8 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 			}
 			continue
 		case "assistant":
-			lastAssistantHadToolCalls = false
+			// Flush any pending tool results before new assistant turn.
+			flushToolResults()
 			if len(item.ToolCalls) > 0 {
 				// Anthropic: assistant with tool_use blocks.
 				content := make([]map[string]any, 0, len(item.ToolCalls)+1)
@@ -1269,11 +1286,15 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 					content = append(content, map[string]any{"type": "text", "text": item.Content})
 				}
 				for _, tc := range item.ToolCalls {
+					inputArgs := any(tc.Arguments)
+					if tc.Arguments == nil {
+						inputArgs = map[string]any{}
+					}
 					content = append(content, map[string]any{
 						"type":  "tool_use",
 						"id":    tc.ID,
 						"name":  tc.Name,
-						"input": tc.Arguments,
+						"input": inputArgs,
 					})
 				}
 				lastAssistantHadToolCalls = true
@@ -1286,8 +1307,7 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 			if !lastAssistantHadToolCalls {
 				continue
 			}
-			lastAssistantHadToolCalls = false
-			// Anthropic: tool results go inside a user message as tool_result blocks.
+			// Accumulate tool results — they'll be flushed as one user message.
 			toolResultContent := map[string]any{
 				"type":    "tool_result",
 				"content": item.Content,
@@ -1295,15 +1315,30 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 			if item.ToolCallID != nil {
 				toolResultContent["tool_use_id"] = *item.ToolCallID
 			}
-			out = append(out, map[string]any{
-				"role":    "user",
-				"content": []any{toolResultContent},
-			})
+			pendingToolResults = append(pendingToolResults, toolResultContent)
 		default:
-			lastAssistantHadToolCalls = false
+			// Flush pending tool results before a user/other message.
+			flushToolResults()
 			out = append(out, map[string]any{"role": "user", "content": item.Content})
 		}
 	}
+	// Flush any trailing tool results.
+	flushToolResults()
+
+	// Anthropic rejects requests where the last message is from the assistant
+	// (prefill is not supported on most models). Drop any trailing assistant
+	// messages so the conversation always ends on a user turn.
+	for len(out) > 0 {
+		last := out[len(out)-1]
+		if m, ok := last.(map[string]any); ok {
+			if r, _ := m["role"].(string); r == "assistant" {
+				out = out[:len(out)-1]
+				continue
+			}
+		}
+		break
+	}
+
 	if len(out) == 0 {
 		out = append(out, map[string]any{"role": "user", "content": "Respond with a concise answer."})
 	}
