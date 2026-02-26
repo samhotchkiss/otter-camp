@@ -349,6 +349,16 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	}
 	summarizer.RegisterJobs(jqWorker)
 
+	sessionCleaner, err := chat.NewSessionCleaner(chat.SessionCleanerOptions{
+		Pool:     pool.Raw(),
+		Resolver: profileResolver,
+		Model:    &gatewaySummarizationModel{gateway: liveModelGateway},
+	})
+	if err != nil {
+		return fmt.Errorf("worker session cleaner setup: %w", err)
+	}
+	sessionCleaner.RegisterJobs(jqWorker)
+
 	modelGateway := turn.ModelGateway(liveModelGateway)
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("OTTERCAMP_MODE")), "test") {
 		modelGateway = deterministicTurnModelGateway{}
