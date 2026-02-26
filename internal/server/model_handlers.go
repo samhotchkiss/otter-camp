@@ -78,6 +78,7 @@ func NewModelRouteRegistrar(pool *pgxpool.Pool) *ModelRouteRegistrar {
 
 func (r *ModelRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.Get("/model/providers", r.handlers.listProviders)
+	router.Get("/model/providers/{id}", r.handlers.getProvider)
 	router.With(middleware.RequireRole("admin")).Patch("/model/providers/{id}", r.handlers.patchProvider)
 	router.Get("/model/providers/{id}/connections", r.handlers.listProviderConnections)
 	router.With(middleware.RequireRole("admin")).Post("/model/providers/{id}/connections", r.handlers.createProviderConnection)
@@ -302,6 +303,28 @@ func (h modelHandlers) listProviders(w http.ResponseWriter, r *http.Request) {
 		Limit:      params.Limit,
 		Total:      &total,
 	})
+}
+
+func (h modelHandlers) getProvider(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if _, ok := h.requirePrincipal(w, r); !ok {
+		return
+	}
+	if h.providers == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "model provider repository unavailable")
+		return
+	}
+	providerID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeValidation, "invalid provider id")
+		return
+	}
+	item, err := h.providers.GetByID(r.Context(), providerID)
+	if err != nil {
+		h.respondModelError(responder, w, err)
+		return
+	}
+	responder.JSON(w, http.StatusOK, toProviderResponse(item))
 }
 
 func (h modelHandlers) patchProvider(w http.ResponseWriter, r *http.Request) {

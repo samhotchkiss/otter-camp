@@ -128,6 +128,7 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 		v1.Group(func(protected chi.Router) {
 			protected.Use(middleware.Auth(middleware.AuthOptions{Service: opts.AuthService, Logger: logger}))
 			protected.Use(security.PerAPIKeyRateLimitMiddleware(perAPIKeyLimiter, time.Minute))
+			protected.Use(middleware.EnforceAPIKeyScopes())
 			protected.Post("/auth/logout", authHandlers.logout)
 			protected.Post("/auth/refresh", authHandlers.refresh)
 			protected.Get("/auth/me", authHandlers.me)
