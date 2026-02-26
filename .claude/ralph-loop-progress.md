@@ -166,8 +166,43 @@ Last updated: 2026-02-26T03:15
 - Agent turn verified: Frank used agent_list tool and responded correctly
 - Trace spans: 2 new ok spans from agent turns
 
+## Fixes Made This Loop (Iteration 8)
+- Issue 130 (FIXED): GET /tasks/{id}/dependencies returned 405 (only POST/DELETE registered)
+  - Added `listTaskDependencies` handler using existing `dependencies.ListOutbound`
+  - Registered `router.Get("/tasks/{id}/dependencies", ...)` before POST/DELETE
+  - Verified end-to-end: empty list, POST dependency, non-empty list all work
+- Commit: 9bc89ebe
+
+## Validation Results (Iteration 8 - final)
+All spec areas PASSING:
+- 02-chat: PASS (session CRUD, messages, participants, close via DELETE)
+- 03-projects-and-task-flow: PASS (projects, tasks, dependencies GET now works)
+- 03a-shipping-and-delivery: PASS (environments/schedules/remotes are project-scoped)
+- 04-auth-tenancy-and-identity: PASS (login, me, api-keys, users/me alias)
+- 05-agents-staff-and-temps: PASS (agents, config, tools, project-assignments, templates)
+- 06-memory: PASS (items, query, compaction-runs, consolidation-runs)
+- 07-models-and-inference: PASS (providers, profiles, invocations, usage/summary)
+- 09-mcp-integration: PASS (connections, catalog is connection-scoped /mcp/connections/{id}/catalog)
+- 10-skills-integration: PASS (skills, catalog alias, agent skills)
+- 12-api-events-and-realtime: PASS (SSE stream, ws/negotiate)
+- 13-security-observability-costs: PASS (metrics, audit, health/live, health/ready)
+- 16-agent-control-plane: PASS (runs, policies, evaluate, health, cost/summary)
+- 20-tools-and-tool-policy: PASS (GET /v1/tools = 67 tools)
+
+Agent turn verified: Frank used project_list tool, returned project list correctly
+Trace spans: 9 new ok spans from recent agent turns (total 24 ok)
+All go tests: PASS (all packages)
+
+## DB State (verified 2026-02-26T02:55)
+- Chat messages: 1296 (up from 1291)
+- Candidate memories: 81 (up from 80)
+- Trace spans ok: 24 (12 pre-current session + 12 new)
+- Completed model invocations: 436 (up from 431)
+- Agent turn jobs done (last 30min): 1 done, 1 dead-letter (session-close race condition)
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
 - MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
 - total_cost_microcents=0 (no pricing configured in model_provider)
 - push.delivery.consumer "closed pool" errors in worker - cosmetic in dev
+- agent_turn race: message sent to session + immediate close → dead_letter "repo: not found" (edge case, not in normal flow)
