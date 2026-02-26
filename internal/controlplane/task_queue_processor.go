@@ -209,6 +209,7 @@ func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.D
 		"source":                 "task_queue_processor",
 		"task_status_event_id":   event.ID,
 		"flow_node_execution_id": execution.ID,
+		"run_mode":               "async",
 	})
 	if err != nil {
 		return err
@@ -327,6 +328,7 @@ func (p *TaskQueueProcessor) ensureAssignedAgentRun(ctx context.Context, event e
 	metadata, err := json.Marshal(map[string]any{
 		"source":               "task_queue_processor",
 		"task_status_event_id": event.ID,
+		"run_mode":             "async",
 	})
 	if err != nil {
 		return err
