@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/http"
 	"os"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	clitools "github.com/samhotchkiss/otter-camp/internal/cli"
 	tuiapp "github.com/samhotchkiss/otter-camp/internal/tui"
 )
 
@@ -16,6 +21,8 @@ func runTUICommand(args []string) int {
 	flags.SetOutput(io.Discard)
 	help := flags.Bool("help", false, "show help for tui command")
 	nonInteractive := flags.Bool("non-interactive", false, "validate startup path and exit without opening UI")
+	serverURLFlag := flags.String("server-url", "", "server URL (or OTTERCAMP_SERVER_URL)")
+	apiKeyFlag := flags.String("api-key", "", "API key (or OTTERCAMP_API_KEY)")
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -60,10 +67,50 @@ func runTUICommand(args []string) int {
 		return 0
 	}
 
+	serverURL, apiKey, err := resolveTUIRealtimeCredentials(*serverURLFlag, *apiKeyFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tui realtime setup error: %v\n", err)
+		return 1
+	}
+
 	runtimeHints := tuiapp.DetectRuntimeHints(os.Getenv)
 	runtimeHints.FirstRun = !stateExists
 	program := tea.NewProgram(tuiapp.NewModelWithRuntime(state, runtimeHints), tea.WithAltScreen())
+	client := &tuiapp.RealtimeClient{
+		Connector: tuiapp.HTTPSSEConnector{
+			Client: &http.Client{},
+			URL:    strings.TrimRight(serverURL, "/") + "/v1/events/stream",
+			APIKey: apiKey,
+			Scopes: "org",
+		},
+		Reducer: tuiapp.NewEventReducer(slog.New(slog.NewTextHandler(io.Discard, nil))),
+		OnStateChange: func(state tuiapp.ConnectionState, degraded bool) {
+			program.Send(tuiapp.ConnectionStateMsg{State: state, Degraded: degraded})
+		},
+		OnEvent: func(event tuiapp.EventEnvelope, applied bool) {
+			if !applied {
+				return
+			}
+			if strings.HasPrefix(event.EventType, "chat.") {
+				program.Send(tuiapp.ChatEnvelopeMsg{Envelope: event})
+				return
+			}
+			if strings.HasPrefix(event.EventType, "task.") {
+				program.Send(tuiapp.WorkspaceEnvelopeMsg{Envelope: event})
+			}
+		},
+		OnReplaySynced: func() {
+			program.Send(tuiapp.ReplaySyncedMsg{})
+		},
+	}
+	realtimeCtx, cancelRealtime := context.WithCancel(context.Background())
+	defer cancelRealtime()
+	go func() {
+		_ = client.Run(realtimeCtx)
+	}()
+
 	finalModel, err := program.Run()
+	cancelRealtime()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tui runtime error: %v\n", err)
 		return 1
@@ -84,6 +131,32 @@ func runTUICommand(args []string) int {
 	return 0
 }
 
+func resolveTUIRealtimeCredentials(serverURLFlag, apiKeyFlag string) (string, string, error) {
+	creds, err := credentialStore.Load()
+	if err != nil {
+		return "", "", err
+	}
+
+	serverURL := strings.TrimSpace(serverURLFlag)
+	if serverURL == "" {
+		serverURL = strings.TrimSpace(globalServerURL)
+	}
+	serverURL = clitools.ResolveServerURL(serverURL, creds)
+
+	apiKey := strings.TrimSpace(apiKeyFlag)
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(globalAPIKey)
+	}
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(creds.APIKey)
+	}
+	if apiKey == "" {
+		return "", "", fmt.Errorf("api key required via --api-key, OTTERCAMP_API_KEY, or ~/.ottercamp/credentials")
+	}
+
+	return serverURL, apiKey, nil
+}
+
 func printTUIUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp tui [--non-interactive]")
+	fmt.Fprintln(w, "usage: ottercamp tui [--server-url URL] [--api-key KEY] [--non-interactive]")
 }
