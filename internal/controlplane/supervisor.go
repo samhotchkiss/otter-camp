@@ -249,6 +249,12 @@ func (s *Supervisor) detectStuckRuns(ctx context.Context) error {
 		if recoverErr := s.recoverRun(ctx, runRecord, "heartbeat silence exceeded"); recoverErr != nil {
 			return recoverErr
 		}
+
+		// Fail the original stuck run so it won't be detected again on the next tick.
+		// recoverRun creates a fresh recovery run; the stuck run should no longer be in_progress.
+		if failErr := s.runService.FailRun(ctx, runRecord.ID, "supervisor recovery: heartbeat silence exceeded", "transient"); failErr != nil && !errors.Is(failErr, ErrInvalidTransition) {
+			s.logger.Warn("supervisor: failed to transition stuck run after recovery", "run_id", runRecord.ID, "error", failErr)
+		}
 	}
 	return nil
 }

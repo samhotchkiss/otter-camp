@@ -245,6 +245,14 @@ func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.D
 		return nil
 	}
 
+	// Re-fetch execution to pick up the session_id set by CreateRun → RouteRunToSession → EnsureNodeSession.
+	// The local execution variable is stale (fetched before the session was created).
+	if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+		if refreshed, refreshErr := p.flowExecutions.GetActive(ctx, taskRecord.ID, *taskRecord.CurrentFlowNodeID); refreshErr == nil {
+			execution = refreshed
+		}
+	}
+
 	sessionID := execution.SessionID
 	if runRecord.SessionID != nil && *runRecord.SessionID != uuid.Nil {
 		sessionID = runRecord.SessionID
