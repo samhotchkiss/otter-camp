@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 )
@@ -46,12 +47,18 @@ type deadLetterNotifier interface {
 	createBlockerInboxItem(ctx context.Context, runRecord Run, actorType, title, body string, urgent bool) error
 }
 
+type supervisorChatService interface {
+	AddParticipant(ctx context.Context, sessionID uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error)
+	AppendMessage(ctx context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error)
+}
+
 type SupervisorOptions struct {
 	Pool *pgxpool.Pool
 
-	RunService RunService
-	Runs       supervisorRunRepository
-	RunEvents  supervisorRunEventRepository
+	RunService  RunService
+	Runs        supervisorRunRepository
+	RunEvents   supervisorRunEventRepository
+	ChatService supervisorChatService
 
 	EventBus eventbus.EventBus
 	Clock    clock.Clock
@@ -63,13 +70,14 @@ type SupervisorOptions struct {
 type Supervisor struct {
 	pool *pgxpool.Pool
 
-	runService RunService
-	runs       supervisorRunRepository
-	events     supervisorRunEventRepository
-	notifier   deadLetterNotifier
-	eventBus   eventbus.EventBus
-	clock      clock.Clock
-	logger     *slog.Logger
+	runService  RunService
+	runs        supervisorRunRepository
+	events      supervisorRunEventRepository
+	notifier    deadLetterNotifier
+	chatService supervisorChatService
+	eventBus    eventbus.EventBus
+	clock       clock.Clock
+	logger      *slog.Logger
 
 	pollInterval time.Duration
 
@@ -107,6 +115,9 @@ func NewSupervisor(opts SupervisorOptions) (*Supervisor, error) {
 	}
 	if opts.RunEvents != nil {
 		supervisor.events = opts.RunEvents
+	}
+	if opts.ChatService != nil {
+		supervisor.chatService = opts.ChatService
 	}
 
 	if internalService, ok := opts.RunService.(*runService); ok {
@@ -434,6 +445,32 @@ func (s *Supervisor) recoverRun(ctx context.Context, runRecord Run, reason strin
 			return fileErr
 		}
 		return s.maybeEscalateStaleBlocker(ctx, runRecord)
+	}
+
+	if startErr := s.runService.StartRun(ctx, created.ID); startErr != nil && !errors.Is(startErr, ErrInvalidTransition) {
+		s.logger.Warn("supervisor: failed to start recovery run", "recovery_run_id", created.ID, "error", startErr)
+	}
+
+	if s.chatService != nil && created.SessionID != nil && *created.SessionID != uuid.Nil {
+		sessionID := *created.SessionID
+		if strings.EqualFold(runRecord.PrincipalType, "agent") && runRecord.PrincipalID != uuid.Nil {
+			if _, addErr := s.chatService.AddParticipant(ctx, sessionID, "agent", runRecord.PrincipalID, "responder"); addErr != nil && !errors.Is(addErr, chat.ErrAlreadyParticipant) {
+				s.logger.Warn("supervisor: failed to add agent participant for recovery", "session_id", sessionID, "agent_id", runRecord.PrincipalID, "error", addErr)
+			}
+		}
+		msgMeta, _ := json.Marshal(map[string]any{
+			"source":  "supervisor",
+			"run_id":  created.ID.String(),
+			"reason":  strings.TrimSpace(reason),
+		})
+		if _, msgErr := s.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+			SessionID: sessionID,
+			Role:      "user",
+			Content:   "supervisor recovery: resume task",
+			Metadata:  msgMeta,
+		}); msgErr != nil {
+			s.logger.Warn("supervisor: failed to append recovery kickoff message", "session_id", sessionID, "error", msgErr)
+		}
 	}
 
 	payload := map[string]any{

@@ -446,10 +446,11 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	budgetService.RegisterJobs(jqWorker)
 
 	supervisor, err := controlplane.NewSupervisor(controlplane.SupervisorOptions{
-		Pool:       pool.Raw(),
-		RunService: runService,
-		EventBus:   bus,
-		Logger:     logger,
+		Pool:        pool.Raw(),
+		RunService:  runService,
+		ChatService: chatService,
+		EventBus:    bus,
+		Logger:      logger,
 	})
 	if err != nil {
 		return fmt.Errorf("worker supervisor setup: %w", err)
