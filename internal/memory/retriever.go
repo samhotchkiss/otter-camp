@@ -183,7 +183,9 @@ func (r *Retriever) stage1ScopeFilter(ctx context.Context, req RetrievalRequest)
 
 func (r *Retriever) resolveReadScopes(ctx context.Context, req RetrievalRequest) ([]string, error) {
 	if req.AgentID == nil || *req.AgentID == uuid.Nil {
-		scopes := []string{"org"}
+		// Human/operator queries include org-wide memories AND agent-extracted memories
+		// (scope='agent'). Agent-private memories (scope='agent_private') are excluded.
+		scopes := []string{"org", "agent"}
 		if req.ProjectID != nil && *req.ProjectID != uuid.Nil {
 			scopes = append(scopes, "project")
 		}
@@ -255,6 +257,9 @@ func buildScopeFilterSQL(req RetrievalRequest, readScopes []string) (string, []a
 			scopeClauses = append(scopeClauses, fmt.Sprintf("(scope = 'task' AND project_task_id = $%d)", nextArg))
 			args = append(args, *req.TaskID)
 			nextArg++
+		case "agent":
+			// All agent-extracted memories in the org (not private).
+			scopeClauses = append(scopeClauses, "scope = 'agent'")
 		case "agent_private":
 			if req.AgentID == nil || *req.AgentID == uuid.Nil {
 				continue
@@ -269,7 +274,15 @@ func buildScopeFilterSQL(req RetrievalRequest, readScopes []string) (string, []a
 		return "organization_id = $1 AND status = 'active' AND false", args, nil
 	}
 
-	where := "organization_id = $1 AND status = 'active' AND (" + strings.Join(scopeClauses, " OR ") + ")"
+	// Include active memories and high-quality candidates (confidence >= 0.75,
+	// extraction_score >= 50). This prevents the "cold-start" dead zone where a
+	// new installation has zero active memories for the first 7 days because all
+	// freshly-extracted memories are in the candidate hold period.
+	scopeExpr := strings.Join(scopeClauses, " OR ")
+	where := fmt.Sprintf(
+		"organization_id = $1 AND (status = 'active' OR (status = 'candidate' AND confidence >= 0.75 AND extraction_score >= 50)) AND (%s)",
+		scopeExpr,
+	)
 	if req.SensitivityGate {
 		where += " AND sensitivity = 'normal'"
 	}
