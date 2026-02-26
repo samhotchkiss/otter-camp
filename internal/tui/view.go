@@ -707,7 +707,22 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	if msgAreaH < 1 {
 		msgAreaH = 1
 	}
-	msgLines, _, _ := chatViewportLines(m.renderChatMessages(cw), msgAreaH, m.chatScrollOffset)
+	msgLines, scrollOffset, scrollMax := chatViewportLines(m.renderChatMessages(cw), msgAreaH, m.chatScrollOffset)
+
+	// Show scroll indicator when not at the bottom
+	if scrollMax > 0 && scrollOffset < scrollMax {
+		scrollHint := fmt.Sprintf("↓ %d more · PgDn to scroll", scrollMax-scrollOffset)
+		bottomLines = append([]string{lipgloss.NewStyle().
+			Foreground(colMuted).Italic(true).
+			Width(cw).Align(lipgloss.Center).
+			Render(scrollHint)}, bottomLines...)
+		// Recalculate msgAreaH since bottomLines grew by 1
+		msgAreaH = targetH - len(headerLines) - len(bottomLines)
+		if msgAreaH < 1 {
+			msgAreaH = 1
+		}
+		msgLines, _, _ = chatViewportLines(m.renderChatMessages(cw), msgAreaH, m.chatScrollOffset)
+	}
 
 	lines := make([]string, 0, len(headerLines)+len(msgLines)+len(bottomLines))
 	lines = append(lines, headerLines...)
