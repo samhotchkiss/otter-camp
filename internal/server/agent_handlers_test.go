@@ -159,7 +159,7 @@ func TestCreateAgentProjectAssignmentRejectsInvalidRoleBeforeServiceCall(t *test
 			return repo.Project{ID: id, OrganizationID: orgID, Slug: "proj"}, nil
 		},
 	}
-	h := newAgentHandlersWithAssignments(nil, nil, assignments, agents, projects, nil, nil, nil)
+	h := newAgentHandlersWithAssignments(nil, nil, assignments, agents, projects, nil, nil, nil, nil)
 
 	req := newAssignmentRequest(t, http.MethodPost, "/v1/agents/"+agentID.String()+"/project-assignments", map[string]any{
 		"project_id": projectID.String(),
@@ -201,7 +201,7 @@ func TestAttachAgentSkillPriorityValidation(t *testing.T) {
 
 	t.Run("priority below range rejected", func(t *testing.T) {
 		assignments := &fakeAssignmentService{}
-		h := newAgentHandlersWithAssignments(nil, nil, assignments, agents, nil, skills, nil, attachments)
+		h := newAgentHandlersWithAssignments(nil, nil, assignments, agents, nil, skills, nil, attachments, nil)
 
 		req := newAssignmentRequest(t, http.MethodPost, "/v1/agents/"+agentID.String()+"/skills", map[string]any{
 			"skill_id": skillID.String(),
@@ -222,7 +222,7 @@ func TestAttachAgentSkillPriorityValidation(t *testing.T) {
 
 	t.Run("priority above range rejected", func(t *testing.T) {
 		assignments := &fakeAssignmentService{}
-		h := newAgentHandlersWithAssignments(nil, nil, assignments, agents, nil, skills, nil, attachments)
+		h := newAgentHandlersWithAssignments(nil, nil, assignments, agents, nil, skills, nil, attachments, nil)
 
 		req := newAssignmentRequest(t, http.MethodPost, "/v1/agents/"+agentID.String()+"/skills", map[string]any{
 			"skill_id": skillID.String(),
@@ -254,7 +254,7 @@ func TestAttachAgentSkillPriorityValidation(t *testing.T) {
 				}, nil
 			},
 		}
-		h := newAgentHandlersWithAssignments(nil, nil, assignments, agents, nil, skills, nil, attachments)
+		h := newAgentHandlersWithAssignments(nil, nil, assignments, agents, nil, skills, nil, attachments, nil)
 
 		req := newAssignmentRequest(t, http.MethodPost, "/v1/agents/"+agentID.String()+"/skills", map[string]any{
 			"skill_id": skillID.String(),
@@ -286,7 +286,7 @@ func TestAttachAgentSkillPriorityValidation(t *testing.T) {
 				}, nil
 			},
 		}
-		h := newAgentHandlersWithAssignments(nil, nil, assignments, agents, nil, skills, nil, attachments)
+		h := newAgentHandlersWithAssignments(nil, nil, assignments, agents, nil, skills, nil, attachments, nil)
 
 		req := newAssignmentRequest(t, http.MethodPost, "/v1/agents/"+agentID.String()+"/skills", map[string]any{
 			"skill_id": skillID.String(),
@@ -329,7 +329,7 @@ func TestCreateAgentProjectAssignmentCrossOrgRejectedBeforeServiceCall(t *testin
 			}, nil
 		},
 	}
-	h := newAgentHandlersWithAssignments(nil, nil, assignments, agents, projects, nil, nil, nil)
+	h := newAgentHandlersWithAssignments(nil, nil, assignments, agents, projects, nil, nil, nil, nil)
 
 	req := newAssignmentRequest(t, http.MethodPost, "/v1/agents/"+agentID.String()+"/project-assignments", map[string]any{
 		"project_id": projectID.String(),
