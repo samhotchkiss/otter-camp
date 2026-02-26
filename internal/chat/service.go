@@ -1027,6 +1027,7 @@ func (s *service) StartTurn(ctx context.Context, turnID uuid.UUID) error {
 	if err != nil {
 		return err
 	}
+	metrics.RecordAgentTurn("started")
 	actorType, actorID := actorFromContext(ctx)
 	return s.publishEvent(ctx, session.OrganizationID, "chat.turn.started", actorType, actorID, map[string]any{
 		"session_id": session.ID,

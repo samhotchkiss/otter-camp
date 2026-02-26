@@ -5,6 +5,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 )
 
 const metricsQueryTimeout = 2 * time.Second
+const metricsSecretEnv = "OTTERCAMP_METRICS_SECRET"
 
 var (
 	registerBaseOnce sync.Once
@@ -81,6 +83,12 @@ func Handler() http.Handler {
 	handlerOnce.Do(func() {
 		promHandler := promhttp.Handler()
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// When no secret is configured, /metrics remains intentionally open.
+			if secret := strings.TrimSpace(os.Getenv(metricsSecretEnv)); secret != "" && !hasMetricsSecret(r, secret) {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte("unauthorized"))
+				return
+			}
 			refreshDynamicMetrics(r.Context())
 			promHandler.ServeHTTP(w, r)
 		})
@@ -154,22 +162,39 @@ func refreshDynamicMetrics(ctx context.Context) {
 	queryCtx, cancel := context.WithTimeout(ctx, metricsQueryTimeout)
 	defer cancel()
 
-	refreshJobQueueDepth(queryCtx, dbPool)
-	refreshMemoryItems(queryCtx, dbPool)
+	query := func(ctx context.Context, sql string, args ...any) (metricsRows, error) {
+		return dbPool.Query(ctx, sql, args...)
+	}
+	_ = refreshJobQueueDepth(queryCtx, query)
+	_ = refreshMemoryItems(queryCtx, query)
 }
 
-func refreshJobQueueDepth(ctx context.Context, dbPool *pgxpool.Pool) {
-	rows, err := dbPool.Query(ctx, `
+type metricsRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+	Close()
+}
+
+type metricsQueryFunc func(ctx context.Context, sql string, args ...any) (metricsRows, error)
+
+func refreshJobQueueDepth(ctx context.Context, query metricsQueryFunc) error {
+	rows, err := query(ctx, `
 		SELECT job_type, status, COUNT(*)::bigint
 		FROM job_queue
 		GROUP BY job_type, status
 	`)
 	if err != nil {
-		return
+		return err
 	}
 	defer rows.Close()
 
-	JobQueueDepth.Reset()
+	type rowValue struct {
+		jobType string
+		status  string
+		count   int64
+	}
+	values := make([]rowValue, 0, 8)
 	for rows.Next() {
 		var (
 			jobType string
@@ -177,34 +202,63 @@ func refreshJobQueueDepth(ctx context.Context, dbPool *pgxpool.Pool) {
 			count   int64
 		)
 		if scanErr := rows.Scan(&jobType, &status, &count); scanErr != nil {
-			return
+			return scanErr
 		}
-		SetJobQueueDepth(jobType, status, float64(count))
+		values = append(values, rowValue{
+			jobType: jobType,
+			status:  status,
+			count:   count,
+		})
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	JobQueueDepth.Reset()
+	for _, value := range values {
+		SetJobQueueDepth(value.jobType, value.status, float64(value.count))
+	}
+	return nil
 }
 
-func refreshMemoryItems(ctx context.Context, dbPool *pgxpool.Pool) {
-	rows, err := dbPool.Query(ctx, `
+func refreshMemoryItems(ctx context.Context, query metricsQueryFunc) error {
+	rows, err := query(ctx, `
 		SELECT status, COUNT(*)::bigint
 		FROM memory
 		GROUP BY status
 	`)
 	if err != nil {
-		return
+		return err
 	}
 	defer rows.Close()
 
-	MemoryItemsTotal.Reset()
+	type rowValue struct {
+		status string
+		count  int64
+	}
+	values := make([]rowValue, 0, 8)
 	for rows.Next() {
 		var (
 			status string
 			count  int64
 		)
 		if scanErr := rows.Scan(&status, &count); scanErr != nil {
-			return
+			return scanErr
 		}
-		SetMemoryItemsTotal(status, float64(count))
+		values = append(values, rowValue{
+			status: status,
+			count:  count,
+		})
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	MemoryItemsTotal.Reset()
+	for _, value := range values {
+		SetMemoryItemsTotal(value.status, float64(value.count))
+	}
+	return nil
 }
 
 func routePatternOrPath(r *http.Request) string {
@@ -229,6 +283,25 @@ func normalizeLabel(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func hasMetricsSecret(r *http.Request, expected string) bool {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return true
+	}
+	if r == nil {
+		return false
+	}
+	if token := strings.TrimSpace(r.Header.Get("X-Metrics-Token")); token == expected {
+		return true
+	}
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+		token := strings.TrimSpace(authHeader[len("Bearer "):])
+		return token == expected
+	}
+	return false
 }
 
 type statusRecorder struct {
