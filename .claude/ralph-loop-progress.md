@@ -1,6 +1,6 @@
 # Ralph Loop Progress
 Started: 2026-02-25T22:41
-Last updated: 2026-02-26T02:50
+Last updated: 2026-02-26T03:15
 
 ## Session Goal
 1. Full spec validation (every method/action in every spec doc) ✅ COMPLETE (iteration 2)
@@ -115,9 +115,36 @@ Last updated: 2026-02-26T02:50
 - Model invocations: 3 completed (recent, post-fix)
 - Chat messages: 1279 (up from 1250)
 
+## Fixes Made This Loop (Iteration 6)
+- Merged origin/v2 parallel session changes (issues 120-123):
+  - Issue 120: memory cold-start - better staged active+candidate fallback in retriever
+  - Issue 121: Prometheus /metrics with secret auth and HTTPMiddleware
+  - Issue 122: /audit-events endpoint with filters (+ kept /audit/events alias)
+  - Issue 123: per-route RequireAnyScope enforcement (replaces global EnforceAPIKeyScopes)
+  - Conflict resolution kept: trace spans, dangling tool calls, skills/tools routes, consolidation alias
+  - Fixed duplicate migration 0090 → renamed ours to 0089
+- Issue 128 (FIXED): TraceSpanPartitionJob now creates sliding window (today+14 days)
+  - ALL spec areas re-validated, all passing ✅
+  - Frank agent turn verified with tool use (project_list, agent_list) ✅
+- trace_span daily/weekly bounds conflict FIXED:
+  - `traceSpanWeekBounds` was creating 7-day weekly partitions conflicting with daily job
+  - Changed to single-day UTC bounds matching YYYYMMDD convention
+  - Verified: 3 new ok spans from agent turns
+
+## Commits Made This Loop (Iteration 6)
+- 96f89442: merge: integrate origin/v2 parallel session changes (issues 120-123)
+- 7d47cbb9: fix(jobs): trace span partition sliding window (issue 128)
+- 96becc24: fix(repo): use daily bounds in ensureCreatedAtPartition
+
+## DB State (verified 2026-02-26T03:15)
+- Trace spans: 19 (12 error pre-fix, 7 ok post-fix including new agent turns)
+- Trace partitions: 15 (Feb 26 through Mar 12)
+- Chat messages: 1289 (up from 1280)
+- Candidate memories: 79 (up from 77)
+- Completed model invocations: 428
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
-- Issue 128: trace_span partition gap on fresh start (LOW priority)
 - MCP catalog empty (degraded connections in dev)
 - total_cost_microcents=0 (no pricing configured in model_provider)
 - push.delivery.consumer "closed pool" errors in worker - cosmetic in dev
