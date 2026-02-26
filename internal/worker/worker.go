@@ -426,6 +426,25 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	}
 	memImporter.RegisterJobs(jqWorker)
 
+	memHardener, err := memory.NewHardener(memory.HardenerOptions{
+		Pool:   pool.Raw(),
+		Logger: logger,
+	})
+	if err != nil {
+		return fmt.Errorf("worker memory hardener setup: %w", err)
+	}
+	memHardener.RegisterJobs(jqWorker)
+
+	retentionSweeper, err := chat.NewRetentionSweeper(chat.RetentionSweeperOptions{
+		Pool: pool.Raw(),
+	})
+	if err != nil {
+		return fmt.Errorf("worker retention sweeper setup: %w", err)
+	}
+	retentionSweeper.RegisterJobs(jqWorker)
+
+	budgetService.RegisterJobs(jqWorker)
+
 	supervisor, err := controlplane.NewSupervisor(controlplane.SupervisorOptions{
 		Pool:       pool.Raw(),
 		RunService: runService,
