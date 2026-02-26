@@ -915,6 +915,10 @@ func NewMergeQueueEntryRepo(pool *pgxpool.Pool) *MergeQueueEntryRepo {
 }
 
 func (r *MergeQueueEntryRepo) Enqueue(ctx context.Context, entry MergeQueueEntry) (MergeQueueEntry, error) {
+	if entry.EnqueuedAt.IsZero() {
+		entry.EnqueuedAt = time.Now().UTC()
+	}
+
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return MergeQueueEntry{}, mapDBError(err)
