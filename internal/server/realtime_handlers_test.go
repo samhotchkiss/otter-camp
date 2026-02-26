@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 )
 
@@ -49,6 +50,23 @@ func TestDetectEventGap(t *testing.T) {
 	}
 	if detectEventGap(0, 60) {
 		t.Fatal("did not expect gap without reconnect cursor")
+	}
+}
+
+func TestDetectReplayGap(t *testing.T) {
+	historicalGap := []eventbus.DomainEvent{{Seq: 1}, {Seq: 3}}
+	if detectReplayGap(0, historicalGap) {
+		t.Fatal("did not expect gap on fresh connect with historical sequence gaps")
+	}
+
+	continuousReplay := []eventbus.DomainEvent{{Seq: 101}, {Seq: 102}, {Seq: 103}}
+	if detectReplayGap(100, continuousReplay) {
+		t.Fatal("did not expect gap on reconnect with continuous replay")
+	}
+
+	gappedReplay := []eventbus.DomainEvent{{Seq: 101}, {Seq: 103}}
+	if !detectReplayGap(100, gappedReplay) {
+		t.Fatal("expected gap on reconnect when replay skips sequence")
 	}
 }
 

@@ -990,12 +990,12 @@ func detectEventGap(lastEventID int64, minSeq int64) bool {
 }
 
 func detectReplayGap(lastEventID int64, events []eventbus.DomainEvent) bool {
-	if len(events) == 0 {
+	if lastEventID <= 0 || len(events) == 0 {
 		return false
 	}
 	previous := lastEventID
 	for _, event := range events {
-		if previous > 0 && event.Seq-previous > 1 {
+		if event.Seq-previous > 1 {
 			return true
 		}
 		previous = event.Seq
