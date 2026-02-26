@@ -80,7 +80,7 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	}
 	perIPLimiter := security.NewRateLimiter(ipRequests, ipBurst)
 	perAPIKeyLimiter := security.NewRateLimiter(apiKeyRequests, apiKeyBurst)
-	metrics.Register()
+	metrics.RegisterWithPool(opts.Pool)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID(logger))
@@ -90,6 +90,7 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	r.Use(security.InputValidationMiddleware(security.NewInputValidator()))
 	r.Use(security.OutputSanitizerMiddleware(security.NewOutputSanitizer(scrubber)))
 	r.Use(middleware.PrefixEnforcement())
+	r.Use(metrics.HTTPMiddleware())
 	r.Handle("/metrics", metrics.Handler())
 	r.Get("/health/live", healthHandler.Liveness)
 	r.Get("/health/ready", healthHandler.Readiness)
