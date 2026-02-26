@@ -102,6 +102,13 @@ func NewImporter(opts ImporterOptions) (*Importer, error) {
 	if imp.now == nil {
 		imp.now = time.Now
 	}
+	if imp.extractor == nil && opts.Pool != nil {
+		defaultExtractor, err := memory.NewDefaultExtractor(opts.Pool)
+		if err != nil {
+			return nil, fmt.Errorf("importer default extractor: %w", err)
+		}
+		imp.extractor = defaultExtractor
+	}
 	return imp, nil
 }
 

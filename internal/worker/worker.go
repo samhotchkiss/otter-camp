@@ -24,6 +24,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/memory/compaction"
+	"github.com/samhotchkiss/otter-camp/internal/memory/importer"
 	"github.com/samhotchkiss/otter-camp/internal/model"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
@@ -405,6 +406,15 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	}
 	sleepReflector.RegisterJobs(jqWorker)
 	// TaskConsolidator requires a TaskSummaryModel (LLM) — not yet wired (issue 126)
+
+	memImporter, err := importer.NewImporter(importer.ImporterOptions{
+		Pool:  pool.Raw(),
+		Store: storageBackend,
+	})
+	if err != nil {
+		return fmt.Errorf("worker memory importer setup: %w", err)
+	}
+	memImporter.RegisterJobs(jqWorker)
 
 	supervisor, err := controlplane.NewSupervisor(controlplane.SupervisorOptions{
 		Pool:       pool.Raw(),
