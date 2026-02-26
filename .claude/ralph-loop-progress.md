@@ -481,6 +481,47 @@ Go build: PASS
 - Completed model invocations: 498 (up from 493)
 - Recent dead letters (1hr): 2 - both historical (memory_import at 03:51 pre-fix, agent_turn "repo: not found" edge case)
 
+## Fixes Made This Loop (Iteration 16)
+- No new code fixes needed - all spec areas already PASSING
+- Deep-dive validation of control plane, observability, and memory sub-routes
+
+## Routes Validated (Iteration 16 - previously untested)
+- GET /v1/control/policies?policy_layer=instance: returns 1 instance policy ✓ (filter param is policy_layer)
+- GET /v1/control/policies?policy_layer=org: returns 3 org policies ✓
+- GET /v1/control/health: {status, active_runs, supervisor_last_tick, tool_execution_audit} ✓
+- POST /v1/control/policies/evaluate: {effect, layer, reason, trace[]} ✓ (layer=none/silence passes)
+- GET /v1/control/runs?status=failed: returns runs with {failure_reason, failure_class} ✓
+- GET /v1/control/runs/{id}: enriched detail with {step_count, latest_status, duration_ms} ✓
+- GET /v1/control/runs/{id}/steps/{sid}/attempts: returns 0 for completed steps (attempts = retries only) ✓
+- GET /v1/control/runs/{id}/artifacts: returns empty list for non-CLI/browser runs ✓
+- GET /v1/audit/events?action=policy.created: returns 3 matching events ✓ (action = full event name)
+- GET /v1/audit/events: event structure = {id, action, event_type, principal_type, principal_id, target_type, target_id, created_at} ✓
+- GET /metrics: ottercamp_api_request_duration_seconds histogram populated ✓ (custom metrics working)
+- GET /v1/memory/compaction-runs/{id}: not_found (route not registered - not in spec, list-only) ✓
+- GET /v1/memory/imports/{id}: {id, status, total_records, processed_records, imported_records, rejected_records} ✓
+
+## API Field Corrections (iteration 16 additions)
+- Policy list filter: policy_layer (not layer); valid values: instance, org, project, agent_profile, request
+- Audit event action filter: use full event name (policy.created, not policy; bootstrap_complete, etc.)
+- Run detail by ID (GET /runs/{id}): includes step_count, latest_status, duration_ms
+- Run list (GET /runs): does NOT include steps (steps is sub-resource via /steps)
+- Memory import fields: total_records, imported_records, rejected_records (not total/imported/rejected)
+- Memory compaction run by ID: not registered (list-only route by spec)
+- Run step attempts: empty for successful steps (attempts = retries only)
+
+## Validation Results (Iteration 16 - all PASS)
+- All 13 spec areas PASS (same as iter 15)
+- Agent turn verified: Frank used memory.query tool, correctly reported 0 active items (89 candidates in hold)
+- All 45 go test packages: PASS (cached)
+- go build: PASS
+
+## DB State (verified 2026-02-26T04:55)
+- Chat messages: 1352 (up from 1348)
+- Candidate memories: 89 (same - in 7-day hold)
+- Trace spans ok: 52 (up from 49)
+- Completed model invocations: 502 (up from 498)
+- Recent dead letters (1hr): 2 - both historical pre-fix
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
 - MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
