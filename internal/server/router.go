@@ -90,7 +90,7 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	r.Use(security.InputValidationMiddleware(security.NewInputValidator()))
 	r.Use(security.OutputSanitizerMiddleware(security.NewOutputSanitizer(scrubber)))
 	r.Use(middleware.PrefixEnforcement())
-	r.Handle("/metrics", metrics.Handler())
+	r.Handle("/metrics", localhostOnly(metrics.Handler()))
 	r.Get("/health/live", healthHandler.Liveness)
 	r.Get("/health/ready", healthHandler.Readiness)
 	r.Get("/health", healthHandler.Liveness)
@@ -179,4 +179,24 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	})
 
 	return r
+}
+
+// localhostOnly wraps a handler so it only responds to requests from loopback
+// addresses (127.0.0.1, ::1). Other callers receive 403. This is used to
+// restrict the /metrics endpoint to local Prometheus scrapers.
+func localhostOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.RemoteAddr
+		// Strip port if present.
+		if i := strings.LastIndex(host, ":"); i >= 0 {
+			host = host[:i]
+		}
+		host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+		switch host {
+		case "127.0.0.1", "::1", "localhost":
+			next.ServeHTTP(w, r)
+		default:
+			http.Error(w, "forbidden", http.StatusForbidden)
+		}
+	})
 }

@@ -885,7 +885,9 @@ func mapLoginError(err error) (status int, code, message string) {
 	case errors.Is(err, auth.ErrRateLimited):
 		return http.StatusTooManyRequests, api.ErrCodeRateLimited, "too many authentication attempts"
 	case errors.Is(err, auth.ErrAccountLocked):
-		return http.StatusLocked, api.ErrCodeUnauthorized, "account is locked"
+		// Return the same message as invalid credentials to prevent user enumeration
+		// via account lockout state disclosure.
+		return http.StatusUnauthorized, api.ErrCodeInvalidCredentials, "invalid credentials"
 	default:
 		return http.StatusInternalServerError, api.ErrCodeInternal, "login failed"
 	}
