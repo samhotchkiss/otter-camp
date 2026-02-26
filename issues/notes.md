@@ -8597,3 +8597,50 @@ The integration test `TestControlPlaneAPICostSummaryTotals` only seeds `rollup_t
 - [2026-02-26 00:32:33 MST] supervisor failed to start builder after 3 attempts
 - [2026-02-26 01:02:33 MST] supervisor failed to start builder after 3 attempts
 - [2026-02-26 01:32:33 MST] supervisor failed to start builder after 3 attempts
+- [2026-02-26 03:58:33 MST] supervisor failed to start builder after 3 attempts
+- [2026-02-26 04:28:33 MST] supervisor failed to start builder after 3 attempts
+- [2026-02-26 07:36:34 MST] supervisor failed to start builder after 3 attempts
+- [2026-02-26 08:14:33 MST] supervisor failed to start builder after 3 attempts
+- [2026-02-26 08:44:33 MST] supervisor failed to start builder after 3 attempts
+
+## 2026-02-26 - 137-scheduler-runs-never-completed-after-flow-done.md
+- Fixes applied:
+  - Added `TaskQueueProcessor.SubscribeTaskCompleted` (`controlplane.task-completed`) to consume `task.status_changed` terminal transitions (`done`, `cancelled`, `blocked`).
+  - Added scheduler run finalization logic in `internal/controlplane/task_queue_processor.go`:
+    - loads task runs via `RunRepository.ListByTask`
+    - completes `in_progress` scheduler runs on `done`/`blocked` via `runService.CompleteRun`
+    - requests + confirms cancellation on `cancelled` via `RequestCancel` + `ConfirmCancelled`
+    - ignores non-scheduler and non-`in_progress` runs.
+  - Wired the new subscription in `internal/worker/worker.go` and added required `RunRecords` dependency to task queue processor options.
+  - Added unit tests for done/cancelled terminal handling and an integration test proving a `task.status_changed` done event completes an in-progress scheduler run.
+- Tests run:
+  - `go test ./internal/controlplane ./internal/worker` (pass)
+  - `go test -tags integration ./internal/controlplane -run TaskQueueProcessor -count=1` (pass)
+
+## 2026-02-26 - 138-supervisor-runs-stuck-in-created-state.md
+- Fixes applied:
+  - Added stale-created supervisor run cleanup in `internal/controlplane/supervisor.go`:
+    - new `detectStaleCreatedRuns` step runs on each supervisor tick
+    - finds `trigger_type='supervisor'` runs stuck in `created` for >5 minutes
+    - cancels them via `runService.RequestCancel(..., actor=supervisor)`
+    - records a `supervisor_recovery` run event with reason `created_timeout_exceeded`.
+  - Added `RunRepository.ListCreatedByTriggerUpdatedBefore` and extended the supervisor run repository interface to support targeted stale-created lookup.
+  - Added integration test `TestSupervisor_StaleCreatedSupervisorRun_Cancelled` to verify stale created supervisor runs transition to `cancelled` and emit a supervisor recovery event.
+  - Updated `internal/controlplane/service_test.go` fake supervisor run repository for the new interface method.
+- Tests run:
+  - `go test ./internal/controlplane` (pass)
+  - `go test -tags integration ./internal/controlplane -run Supervisor -count=1` (pass)
+
+## 2026-02-26 - 137-scheduler-runs-never-completed-after-flow-done.md (reviewer decision: changes required)
+Reviewer: Claude claude-sonnet-4-5 (reviewer agent)
+PR: #1534 (task/137-scheduler-runs-complete-on-task-finish → v2) — NOT merged, changes required.
+Moved: 03-needs-review → 04-in-review → 01-ready
+
+### Code review summary
+Implementation is logically correct: `SubscribeTaskCompleted` handler with consumer name `controlplane.task-completed` subscribes to `task.status_changed`, filters for terminal statuses (`done`, `cancelled`, `blocked`), fetches in-progress scheduler runs via `RunRepository.ListByTask`, then calls `CompleteRun` for `done`/`blocked` and `RequestCancel`+`ConfirmCancelled` for `cancelled`. `ErrInvalidTransition`/`ErrTerminalState` handled idempotently. Worker wired correctly in `internal/worker/worker.go`. Unit tests for `done` and `cancelled` pass; integration test for `done` path passes.
+
+### P1 blocker: Merge conflict
+PR #1534 `mergeStateStatus=DIRTY` — conflicts in `internal/controlplane/task_queue_processor.go`, `internal/controlplane/task_queue_processor_test.go`, `internal/worker/worker.go`. Branch must be rebased on current tip of `v2`.
+
+### P3: Missing unit test for `blocked` status
+`handleTaskCompletedEvent` branches on `blocked` (calls `CompleteRun`, same as `done`) but no unit test asserts this path. Need `TestTaskQueueProcessorHandleTaskCompletedEventCompletesSchedulerRunOnBlocked` in `task_queue_processor_test.go`.

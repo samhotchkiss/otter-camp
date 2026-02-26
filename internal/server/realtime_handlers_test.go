@@ -54,19 +54,33 @@ func TestDetectEventGap(t *testing.T) {
 }
 
 func TestDetectReplayGap(t *testing.T) {
-	historicalGap := []eventbus.DomainEvent{{Seq: 1}, {Seq: 3}}
-	if detectReplayGap(0, historicalGap) {
-		t.Fatal("did not expect gap on fresh connect with historical sequence gaps")
+	makeEvents := func(seqs ...int64) []eventbus.DomainEvent {
+		events := make([]eventbus.DomainEvent, len(seqs))
+		for i, s := range seqs {
+			events[i].Seq = s
+		}
+		return events
 	}
 
-	continuousReplay := []eventbus.DomainEvent{{Seq: 101}, {Seq: 102}, {Seq: 103}}
-	if detectReplayGap(100, continuousReplay) {
-		t.Fatal("did not expect gap on reconnect with continuous replay")
+	// Fresh connect (lastEventID=0): no gap even if historical events have gaps.
+	if detectReplayGap(0, makeEvents(1, 3, 5)) {
+		t.Fatal("expected no gap on fresh connect (lastEventID=0) even with historical seq gaps")
 	}
-
-	gappedReplay := []eventbus.DomainEvent{{Seq: 101}, {Seq: 103}}
-	if !detectReplayGap(100, gappedReplay) {
-		t.Fatal("expected gap on reconnect when replay skips sequence")
+	// Fresh connect with empty events: no gap.
+	if detectReplayGap(0, nil) {
+		t.Fatal("expected no gap on fresh connect with no events")
+	}
+	// Reconnect with continuous events: no gap.
+	if detectReplayGap(10, makeEvents(11, 12, 13)) {
+		t.Fatal("expected no gap for continuous replay from lastEventID")
+	}
+	// Reconnect with gap in replay: gap.
+	if !detectReplayGap(10, makeEvents(11, 13)) {
+		t.Fatal("expected gap when replay events skip seq 12")
+	}
+	// Reconnect but no replay events (all purged): handled by detectEventGap, not here.
+	if detectReplayGap(10, nil) {
+		t.Fatal("expected no gap from detectReplayGap with empty events (purge handled by detectEventGap)")
 	}
 }
 
