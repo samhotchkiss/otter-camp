@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -283,7 +284,27 @@ func (r *ToolResolver) resolveToolSet(ctx context.Context, session repo.ChatSess
 	if err != nil {
 		return nil, err
 	}
-	return stage4, nil
+	// Sort tier1 tools before tier2 so they appear first in the model's tool list.
+	// LLMs have diminishing attention for tools that appear late in long lists, so
+	// putting tier1 (read/query) tools first improves their reliability of being called.
+	stage5 := sortToolsByTier(stage4)
+	return stage5, nil
+}
+
+// sortToolsByTier returns tools sorted so tier1 tools appear before tier2 tools.
+// Within each tier the original relative order is preserved.
+func sortToolsByTier(tools []ToolDescriptor) []ToolDescriptor {
+	out := append([]ToolDescriptor(nil), tools...)
+	sort.SliceStable(out, func(i, j int) bool {
+		ti := strings.ToLower(strings.TrimSpace(out[i].Tier))
+		tj := strings.ToLower(strings.TrimSpace(out[j].Tier))
+		if ti == tj {
+			return false
+		}
+		// tier1 < tier2 (sort tier1 first)
+		return ti == "tier1"
+	})
+	return out
 }
 
 func (r *ToolResolver) resolveSessionProjectID(ctx context.Context, session repo.ChatSession) (*uuid.UUID, error) {

@@ -1069,11 +1069,13 @@ func openAITools(req turn.ModelRequest) []map[string]any {
 	}
 
 	result := make([]map[string]any, 0, len(req.Prompt.ToolDescriptors))
+	names := make([]string, 0, len(req.Prompt.ToolDescriptors))
 	for _, descriptor := range req.Prompt.ToolDescriptors {
 		apiName := strings.TrimSpace(descriptor.APIName)
 		if apiName == "" {
 			apiName = tools.SanitizeToolNameForAPI(strings.TrimSpace(descriptor.Name))
 		}
+		names = append(names, apiName)
 		result = append(result, map[string]any{
 			"type": "function",
 			"function": map[string]any{
@@ -1083,6 +1085,7 @@ func openAITools(req turn.ModelRequest) []map[string]any {
 			},
 		})
 	}
+	slog.Debug("openai_tools_sent", "count", len(result), "names", names)
 	return result
 }
 
@@ -1125,10 +1128,26 @@ func normalizeToolSchema(schema json.RawMessage) any {
 
 	// OpenAI and Anthropic require object schemas to include a "properties" key.
 	// If the parsed schema is an object type without "properties", inject an empty one.
+	// Also: OpenAI standard function calling does not support additionalProperties:false
+	// without strict mode. When all params are optional (required is absent or empty),
+	// remove additionalProperties:false to prevent OpenAI from silently dropping the tool.
 	if obj, ok := parsed.(map[string]any); ok {
 		if t, _ := obj["type"].(string); t == "object" {
 			if _, hasProps := obj["properties"]; !hasProps {
 				obj["properties"] = map[string]any{}
+			}
+			if _, hasAddl := obj["additionalProperties"]; hasAddl {
+				req, hasReq := obj["required"]
+				isEmpty := !hasReq
+				if hasReq {
+					if arr, ok := req.([]any); ok && len(arr) == 0 {
+						isEmpty = true
+					}
+				}
+				if isEmpty {
+					delete(obj, "additionalProperties")
+					delete(obj, "required")
+				}
 			}
 		}
 	}
