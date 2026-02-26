@@ -229,7 +229,7 @@ func (c HTTPSSEConnector) Connect(ctx context.Context, sinceSeq int64) (io.ReadC
 		return nil, fmt.Errorf("parse stream url: %w", err)
 	}
 	query := parsed.Query()
-	query.Set("since_seq", strconv.FormatInt(sinceSeq, 10))
+	query.Set("last-event-id", strconv.FormatInt(sinceSeq, 10))
 	if strings.TrimSpace(c.Scopes) != "" {
 		query.Set("scopes", strings.TrimSpace(c.Scopes))
 	}
