@@ -80,7 +80,7 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	}
 	perIPLimiter := security.NewRateLimiter(ipRequests, ipBurst)
 	perAPIKeyLimiter := security.NewRateLimiter(apiKeyRequests, apiKeyBurst)
-	metrics.Register()
+	metrics.RegisterWithPool(opts.Pool)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID(logger))
@@ -90,7 +90,8 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	r.Use(security.InputValidationMiddleware(security.NewInputValidator()))
 	r.Use(security.OutputSanitizerMiddleware(security.NewOutputSanitizer(scrubber)))
 	r.Use(middleware.PrefixEnforcement())
-	r.Handle("/metrics", localhostOnly(metrics.Handler()))
+	r.Use(metrics.HTTPMiddleware())
+	r.Handle("/metrics", metrics.Handler())
 	r.Get("/health/live", healthHandler.Liveness)
 	r.Get("/health/ready", healthHandler.Readiness)
 	r.Get("/health", healthHandler.Liveness)
@@ -133,7 +134,6 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 		v1.Group(func(protected chi.Router) {
 			protected.Use(middleware.Auth(middleware.AuthOptions{Service: opts.AuthService, Logger: logger}))
 			protected.Use(security.PerAPIKeyRateLimitMiddleware(perAPIKeyLimiter, time.Minute))
-			protected.Use(middleware.EnforceAPIKeyScopes())
 			protected.Post("/auth/logout", authHandlers.logout)
 			protected.Post("/auth/refresh", authHandlers.refresh)
 			protected.Get("/auth/me", authHandlers.me)
@@ -144,13 +144,31 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 			protected.Post("/api-keys", authHandlers.issueAPIKey)
 			protected.Delete("/api-keys/{id}", authHandlers.revokeAPIKey)
 			protected.Get("/api-keys", authHandlers.listAPIKeys)
-			protected.With(middleware.RequireRole("admin")).Post("/users", authHandlers.createUser)
-			protected.With(middleware.RequireRole("admin")).Post("/orgs", authHandlers.createOrganization)
+			protected.With(
+				middleware.RequireRole("admin"),
+				middleware.RequireAnyScope(requireAdminScope("auth")...),
+			).Post("/users", authHandlers.createUser)
+			protected.With(
+				middleware.RequireRole("admin"),
+				middleware.RequireAnyScope(requireAdminScope("auth")...),
+			).Post("/orgs", authHandlers.createOrganization)
 			protected.Get("/mobile/dashboard", mobileHandlers.dashboard)
-			protected.With(middleware.RequireRole("admin")).Get("/admin/users", authHandlers.listAdminUsers)
-			protected.With(middleware.RequireRole("admin")).Post("/admin/users/{id}/reset-password", authHandlers.adminResetPassword)
-			protected.With(middleware.RequireRole("admin")).Post("/admin/users/{id}/magic-link", authHandlers.adminMagicLink)
-			protected.With(middleware.RequireRole("admin")).Post("/admin/users/{id}/unlock", authHandlers.adminUnlockAccount)
+			protected.With(
+				middleware.RequireRole("admin"),
+				middleware.RequireAnyScope(requireAdminScope("auth")...),
+			).Get("/admin/users", authHandlers.listAdminUsers)
+			protected.With(
+				middleware.RequireRole("admin"),
+				middleware.RequireAnyScope(requireAdminScope("auth")...),
+			).Post("/admin/users/{id}/reset-password", authHandlers.adminResetPassword)
+			protected.With(
+				middleware.RequireRole("admin"),
+				middleware.RequireAnyScope(requireAdminScope("auth")...),
+			).Post("/admin/users/{id}/magic-link", authHandlers.adminMagicLink)
+			protected.With(
+				middleware.RequireRole("admin"),
+				middleware.RequireAnyScope(requireAdminScope("auth")...),
+			).Post("/admin/users/{id}/unlock", authHandlers.adminUnlockAccount)
 			// GET /v1/search is the Cmd-K global search endpoint.
 			// It is registered explicitly here (before the SPA fallback) to prevent interception.
 			protected.Get("/search", searchHandler.Search)

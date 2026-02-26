@@ -322,7 +322,7 @@ WITH schema_updates(name, input_schema) AS (
                 "new_string": {"type": "string"},
                 "replace_all": {"type": "boolean"}
               },
-              "required": ["path", "old_string"],
+              "required": ["path", "old_string", "new_string"],
               "additionalProperties": false
             }
             $$::jsonb

@@ -2,6 +2,64 @@
 
 Use this file to track blockers, follow-ups, and handoff notes.
 
+## [2026-02-26] Issue 123 — APPROVED and COMPLETED
+
+**Task:** 123-api-key-scopes-not-enforced
+**Reviewed by:** Claude claude-sonnet-4-7 (reviewer agent)
+**PR:** #1531 (`task-123-api-key-scopes-enforcement`) merged into v2 at 2026-02-26T07:21:28Z
+**Result:** ACCEPTED
+
+### Summary
+Adds proper API key scope enforcement at the route level using a new `RequireAnyScope` middleware with bidirectional alias matching (`write:projects` ↔ `projects:write`). New `scope_helpers.go` provides `requireReadScope/requireWriteScope/requireAdminScope` helpers that generate full scope lists including wildcards.
+
+All 5 minimum-required resource types are now gated:
+- `read:projects`/`write:projects` → project CRUD + flow templates + schedules
+- `read:chat`/`write:chat` → all chat session, message, turn, reaction, participant routes
+- `read:memory`/`write:memory` → all memory query, items, entities, taxonomy, import routes
+- `read:agents`/`write:agents` → all agent, template, assignment, skill routes
+- `admin:*` / `admin:auth` → POST /users, POST /orgs, all /admin/* routes
+- Bonus: `read:audit` → GET /audit and GET /audit-events
+
+Session-based auth (no API key) continues to pass through all scope checks unchanged.
+
+### Verified
+- `RequireAnyScope` passes when `principal.APIKey == nil` (session auth) or `len(required) == 0`
+- Bidirectional alias: `projects:write` matches `write:projects` requirement ✅
+- `admin:*` passes all read/write/admin-gated routes (all helpers include it)
+- Unit test: `TestRequireAnyScopeAcceptsBidirectionalAlias`
+- Integration tests: `TestProjectHTTPAPIKeyScopeEnforcement`, `TestChatHTTPAPIKeyScopeEnforcement`, `TestMemoryHTTPAPIKeyScopeEnforcement`, `TestAgentHTTPAPIKeyScopeEnforcement`, `TestAuthHTTPAdminRoutesRequireAdminScopeForAPIKeys`, `TestOrgAuditHTTPAPIKeyScopeEnforcement`
+- 0 new lint errors introduced; all 39 CI lint failures are pre-existing in v2
+- PR targets v2; merged successfully
+
+---
+
+## [2026-02-26] Issue 121 — APPROVED and COMPLETED
+
+**Task:** 121-missing-prometheus-metrics-endpoint
+**Reviewed by:** Claude claude-sonnet-4-7 (reviewer agent)
+**PR:** #1532 (`task-121-metrics-endpoint-review-rework`) merged into v2 at 2026-02-26T07:17:25Z
+**Result:** ACCEPTED
+
+### Summary
+Adds `GET /metrics` (Prometheus-compatible) at `/metrics` (outside `/v1/`). Implements all 6 required metric families:
+- `ottercamp_api_requests_total{method,path,status}` — via `HTTPMiddleware()` on all routes
+- `ottercamp_api_request_duration_seconds{method,path}` — same middleware
+- `ottercamp_model_tokens_total{provider,model,type}` — recorded in `gateway/client.go` after successful invocation
+- `ottercamp_job_queue_depth{job_type,status}` — dynamic DB gauge refreshed per `/metrics` scrape
+- `ottercamp_memory_items_total{status}` — dynamic DB gauge refreshed per `/metrics` scrape
+- `ottercamp_agent_turns_total{status}` — recorded in `chat/service.go` at StartTurn/CompleteTurn/CancelTurn/FailTurn
+
+Optional secret auth via `OTTERCAMP_METRICS_SECRET` (X-Metrics-Token or Bearer). SSE-safe `statusRecorder` delegates Flush/Hijack/Push. Gauge refresh stages rows before reset to preserve prior values on DB errors. Also fixes 0089 migration duplicate (→ 0090) and trace_span partition auto-creation.
+
+### Verified
+- All 6 metric families from issue spec implemented
+- Unit tests: `internal/metrics/metrics_test.go` — full metric body assertions, error recovery (rows.Err, scan err), flusher preservation
+- Integration tests: `TestMetricsEndpointSecretAccessControl`, `TestMetricsEndpointOpenWhenSecretUnset`
+- 0 new lint errors introduced (CI lint failures are pre-existing: 39 errors on both v2 and PR branch)
+- PR targets v2; merged successfully
+
+---
+
 ## [2026-02-26] Issue 118 — APPROVED and COMPLETED
 
 **Task:** 118-tool-input-schemas-missing-parameter-properties
@@ -8433,3 +8491,109 @@ All 6 spec metrics are implemented with correct names and label dimensions. The 
 
 Note: `go test ./...` also fails due to the pre-existing duplicate migration 0089 issue (same blocker as Issue 123).
 Full required-changes block written into task file.
+
+## 2026-02-26 - 123-api-key-scopes-not-enforced.md (reviewer rework pass)
+- Fixes applied:
+  - Added `middleware.RequireAnyScope(...)` and alias-aware matching so `projects:write` satisfies `write:projects`; `RequireScope(...)` now delegates.
+  - Added server scope helpers (`requireReadScope`, `requireWriteScope`, `requireAdminScope`) and applied scope guards to project/chat/agent/memory route registrars plus router admin routes.
+  - Updated `internal/server/org_audit_handlers.go` to enforce `requireReadScope("audit")` on both `/audit` and `/audit-events`.
+  - Added integration tests:
+    - `TestProjectHTTPAPIKeyScopeEnforcement`
+    - `TestChatHTTPAPIKeyScopeEnforcement`
+    - `TestMemoryHTTPAPIKeyScopeEnforcement`
+    - `TestAgentHTTPAPIKeyScopeEnforcement` (with `t.Setenv("OTTERCAMP_AUTH_MODE", "standard")`)
+    - `TestAuthHTTPAdminRoutesRequireAdminScopeForAPIKeys`
+    - `TestOrgAuditHTTPAPIKeyScopeEnforcement`
+  - Added unit test `TestRequireAnyScopeAcceptsBidirectionalAlias`.
+  - Resolved duplicate migration version by renaming `migrations/0089_tool_definition_input_schema_properties.sql` to `migrations/0090_tool_definition_input_schema_properties.sql` and reconciled `file.edit` required fields.
+  - Updated `cmd/ottercamp` chat integration fixture to issue explicit chat scopes (`read:chat`, `write:chat`).
+  - Fixed `internal/repo/trace_span.go` to auto-create weekly `trace_span` partitions before inserts so integration retention suites remain green.
+- Tests run:
+  - `go test ./internal/middleware -run TestRequireAnyScopeAcceptsBidirectionalAlias` (pass)
+  - `go test ./internal/server -tags integration -run TestAgentHTTPAPIKeyScopeEnforcement` (pass)
+  - `go test ./internal/repo -tags integration -run TestToolDefinitionSeedSchemasIncludePropertiesAndRequiredParameters` (pass)
+  - `go test ./cmd/ottercamp -tags integration -run 'TestChat(StartRoundTripAndListIntegration|SendWaitUsesSSEIntegration|HistoryPaginationIntegration)'` (pass)
+  - `go test ./internal/observability -tags integration -run 'TestRetention_TraceSpans_7Days|TestTraceSpanInsertAppendOnlyAndRetention'` (pass)
+  - `go test ./... -tags integration` (pass)
+  - `go test ./...` (pass)
+
+---
+
+## Issue 123: API key scopes not enforced — Review 2026-02-26 07:30 UTC (rework pass 2)
+Reviewer: Claude Sonnet 4.5 (claude-sonnet-4-5)
+PR: #1531 (task-123-api-key-scopes-enforcement → v2) — MERGEABLE, CI Lint FAIL (pre-existing)
+Status: **Returned to 01-ready — P2 required change**
+
+### Summary
+PR #1531 is a well-executed rework that resolves all blockers from the prior review (PR #1529):
+- Merge conflict in `org_audit_handlers.go` → fixed (audit routes now have `requireReadScope("audit")`)
+- Duplicate migration 0089 → fixed (renamed to `0090`, `file.edit` required fields corrected)
+- Missing `t.Setenv("OTTERCAMP_AUTH_MODE","standard")` in agent test → fixed
+- Missing bidirectional alias unit test → fixed (`TestRequireAnyScopeAcceptsBidirectionalAlias`)
+- Integration test for `TestOrgAuditHTTPAPIKeyScopeEnforcement` added
+
+Lint failures in CI are identical to those already present on `v2` HEAD (pre-existing, not introduced by this PR). All minimum scope-enforcement requirements are addressed.
+
+### Blocker (P2)
+`POST /memory/query` is guarded by `requireWriteScope("memory")` instead of `requireReadScope("memory")`.
+The issue explicitly states `read:memory → memory routes`. A query is a read operation (POST is used only because GET cannot carry a body). A key with `read:memory` scope receives `403` on `/memory/query`, which contradicts the issue requirement and creates confusing UX. Fix: swap to `requireReadScope("memory")` and update `TestMemoryHTTPAPIKeyScopeEnforcement` assertions.
+
+### Non-blocking observations
+- SSE/WebSocket routes (`/v1/events/stream`, `/v1/ws/*`) have no scope enforcement (was in original PR 1529 but dropped in rework). Out of minimum requirements scope, acceptable as follow-on.
+- `/v1/api-keys` POST/GET/DELETE have no scope enforcement — pre-existing design, out of minimum scope for this issue.
+
+## 2026-02-26 - 121-missing-prometheus-metrics-endpoint.md (reviewer rework pass)
+- Fixes applied:
+  - Added `/metrics` secret gating via `OTTERCAMP_METRICS_SECRET`: when set, `/metrics` requires `X-Metrics-Token` or `Authorization: Bearer <secret>`; when unset, endpoint remains open.
+  - Hardened dynamic gauge refreshes in `internal/metrics/metrics.go`:
+    - return early on `rows.Err()` and `Scan()` errors
+    - stage row data first, then call `GaugeVec.Reset()` only after successful full scan
+    - preserve previous gauge values on scrape/query failures
+  - Added `metrics.RecordAgentTurn("started")` in `chat.Service.StartTurn()`.
+  - Expanded metrics tests to assert full metric lines with labels and numeric values, including `ottercamp_agent_turns_total{status="started"}`.
+  - Added failure-path unit tests for job queue and memory gauge refreshes (`rows.Err()` and mid-scan error scenarios).
+  - Added integration tests for `/metrics` secret access control in `internal/server/router_integration_test.go`.
+  - Included pre-existing migration unblock in this branch by renaming duplicate migration `0089_tool_definition_input_schema_properties.sql` to `0090_tool_definition_input_schema_properties.sql` and reconciling `file.edit` required fields; also applied trace-span partition auto-create fix so full integration suite is green.
+- Tests run:
+  - `go test ./internal/metrics` (pass)
+  - `go test ./internal/server -tags integration -run 'TestMetricsEndpoint(SecretAccessControl|OpenWhenSecretUnset)'` (pass)
+  - `go test ./internal/chat` (pass)
+  - `go test ./internal/observability -tags integration -run 'TestRetention_TraceSpans_7Days|TestTraceSpanInsertAppendOnlyAndRetention'` (pass)
+  - `go test ./... -tags integration` (pass)
+  - `go test ./...` (pass)
+
+## 2026-02-26 - 123-api-key-scopes-not-enforced.md (reviewer follow-up P2)
+- Fixes applied:
+  - Changed `/v1/memory/query` scope gate from `requireWriteScope("memory")` to `requireReadScope("memory")` in `internal/server/memory_handlers.go`.
+  - Updated `TestMemoryHTTPAPIKeyScopeEnforcement` so `read:memory` is accepted (`200`) for `POST /v1/memory/query` and `write:memory` remains accepted.
+  - Removed the top-level `## Reviewer Required Changes` block from the task file after resolving the item.
+- Tests run:
+  - `go test ./internal/server -tags integration -run TestMemoryHTTPAPIKeyScopeEnforcement` (pass)
+  - `go test ./... -tags integration` (pass)
+  - `go test ./...` (pass)
+
+## 2026-02-26 - 124-control-plane-cost-summary-always-returns-0.md
+- Fixes applied:
+  - Updated `GET /v1/control/cost/summary` aggregation in `internal/server/controlplane_handlers.go` to read token totals from `model_usage_rollup` for `group_by=project` and `group_by=agent` (without `project_id` filter), which aligns with the active usage rollup source.
+  - Kept a documented fallback to the existing `run_attempt` query path for `group_by=tool_domain` and for `group_by=agent` with `project_id`, because rollups currently do not include those dimensions.
+  - Updated `TestControlPlaneAPICostSummaryTotals` to seed `model_usage_rollup` rows directly and assert non-zero totals plus `project_id` filtering.
+  - Applied pre-existing migration unblock on this branch by renaming duplicate `migrations/0089_tool_definition_input_schema_properties.sql` to `migrations/0090_tool_definition_input_schema_properties.sql` and reconciling `file.edit` required fields to include `new_string`.
+- Tests run:
+  - `go test ./internal/server` (pass)
+  - `go test ./internal/server -tags integration -run TestControlPlaneAPICostSummaryTotals` (pass)
+  - `go test ./internal/server -tags integration` (pass)
+  - `go test ./internal/repo -tags integration -run TestToolDefinitionSeedSchemasIncludePropertiesAndRequiredParameters` (pass)
+
+## 2026-02-26 - 124-control-plane-cost-summary-always-returns-0.md (reviewer decision: changes required)
+Reviewer: Claude Sonnet 4.5 (reviewer agent)
+PR: #1533 (task-124-control-plane-cost-summary-rollups → v2) — NOT merged, changes required.
+Moved: 03-needs-review → 04-in-review → 01-ready
+
+### P1 blocker: SQL argument count mismatch for `group_by=agent`
+`queryCostSummaryRowsFromRollups` always passes 5 args to `pool.Query` but builds no `$5` placeholder when `groupBy == "agent"` (projectFilter is empty string). PostgreSQL extended query protocol returns "bind message supplies too many parameters" — `GET /v1/control/cost/summary?group_by=agent` (without project_id) returns HTTP 500 instead of data. Fix: build args slice dynamically, appending projectID only when projectFilter != "".
+
+### P2: No test coverage for `group_by=agent` rollup path
+The integration test `TestControlPlaneAPICostSummaryTotals` only seeds `rollup_type='project'` rows and exercises `group_by=project`. The new `group_by=agent` rollup branch is untested. Add a test seeding `rollup_type='agent'` rows and asserting `group_by=agent` returns non-zero totals.
+- [2026-02-26 00:32:33 MST] supervisor failed to start builder after 3 attempts
+- [2026-02-26 01:02:33 MST] supervisor failed to start builder after 3 attempts
+- [2026-02-26 01:32:33 MST] supervisor failed to start builder after 3 attempts

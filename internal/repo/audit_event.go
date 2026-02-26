@@ -28,6 +28,7 @@ type AuditEvent struct {
 
 type AuditEventFilters struct {
 	EventType     *string
+	PrincipalType *string
 	PrincipalID   *uuid.UUID
 	TargetType    *string
 	TargetID      *uuid.UUID
@@ -97,20 +98,22 @@ func (r *AuditEventRepo) ListByOrg(ctx context.Context, organizationID uuid.UUID
 			target_id,
 			metadata,
 			created_at
-		FROM audit_event
-		WHERE organization_id = $1
-		  AND ($2::text IS NULL OR event_type = $2)
-		  AND ($3::uuid IS NULL OR principal_id = $3)
-		  AND ($4::text IS NULL OR target_type = $4)
-		  AND ($5::uuid IS NULL OR target_id = $5)
-		  AND ($6::timestamptz IS NULL OR created_at >= $6)
-		  AND ($7::timestamptz IS NULL OR created_at <= $7)
-		ORDER BY created_at DESC
-		LIMIT $8
-		OFFSET $9
-	`,
+			FROM audit_event
+			WHERE organization_id = $1
+			  AND ($2::text IS NULL OR event_type = $2)
+			  AND ($3::text IS NULL OR principal_type = $3)
+			  AND ($4::uuid IS NULL OR principal_id = $4)
+			  AND ($5::text IS NULL OR target_type = $5)
+			  AND ($6::uuid IS NULL OR target_id = $6)
+			  AND ($7::timestamptz IS NULL OR created_at >= $7)
+			  AND ($8::timestamptz IS NULL OR created_at <= $8)
+			ORDER BY created_at DESC
+			LIMIT $9
+			OFFSET $10
+		`,
 		organizationID,
 		normalizeOptionalText(filters.EventType),
+		normalizeOptionalText(filters.PrincipalType),
 		filters.PrincipalID,
 		normalizeOptionalText(filters.TargetType),
 		filters.TargetID,
@@ -146,18 +149,20 @@ func (r *AuditEventRepo) CountByOrg(ctx context.Context, organizationID uuid.UUI
 
 	var count int64
 	err := r.pool.QueryRow(ctx, `
-		SELECT COUNT(*)
-		FROM audit_event
-		WHERE organization_id = $1
-		  AND ($2::text IS NULL OR event_type = $2)
-		  AND ($3::uuid IS NULL OR principal_id = $3)
-		  AND ($4::text IS NULL OR target_type = $4)
-		  AND ($5::uuid IS NULL OR target_id = $5)
-		  AND ($6::timestamptz IS NULL OR created_at >= $6)
-		  AND ($7::timestamptz IS NULL OR created_at <= $7)
-	`,
+			SELECT COUNT(*)
+			FROM audit_event
+			WHERE organization_id = $1
+			  AND ($2::text IS NULL OR event_type = $2)
+			  AND ($3::text IS NULL OR principal_type = $3)
+			  AND ($4::uuid IS NULL OR principal_id = $4)
+			  AND ($5::text IS NULL OR target_type = $5)
+			  AND ($6::uuid IS NULL OR target_id = $6)
+			  AND ($7::timestamptz IS NULL OR created_at >= $7)
+			  AND ($8::timestamptz IS NULL OR created_at <= $8)
+		`,
 		organizationID,
 		normalizeOptionalText(filters.EventType),
+		normalizeOptionalText(filters.PrincipalType),
 		filters.PrincipalID,
 		normalizeOptionalText(filters.TargetType),
 		filters.TargetID,

@@ -185,19 +185,37 @@ func NewMemoryRouteRegistrar(opts MemoryRouteOptions) *MemoryRouteRegistrar {
 }
 
 func (r *MemoryRouteRegistrar) RegisterRoutes(router chi.Router) {
-	router.Post("/memory/query", r.handlers.queryMemory)
-	router.Get("/memory/items", r.handlers.listMemoryItems)
-	router.Get("/memory/items/{id}", r.handlers.getMemoryItem)
-	router.Get("/memory/entities", r.handlers.listMemoryEntities)
-	router.Get("/memory/entities/{id}", r.handlers.getMemoryEntity)
-	router.Get("/memory/taxonomy", r.handlers.getMemoryTaxonomy)
+	router.With(middleware.RequireAnyScope(requireReadScope("memory")...)).Post("/memory/query", r.handlers.queryMemory)
+	router.With(middleware.RequireAnyScope(requireReadScope("memory")...)).Get("/memory/items", r.handlers.listMemoryItems)
+	router.With(middleware.RequireAnyScope(requireReadScope("memory")...)).Get("/memory/items/{id}", r.handlers.getMemoryItem)
+	router.With(middleware.RequireAnyScope(requireReadScope("memory")...)).Get("/memory/entities", r.handlers.listMemoryEntities)
+	router.With(middleware.RequireAnyScope(requireReadScope("memory")...)).Get("/memory/entities/{id}", r.handlers.getMemoryEntity)
+	router.With(middleware.RequireAnyScope(requireReadScope("memory")...)).Get("/memory/taxonomy", r.handlers.getMemoryTaxonomy)
 
-	router.With(middleware.RequireRole("admin")).Post("/memory/import", r.handlers.createMemoryImport)
-	router.With(middleware.RequireRole("admin")).Get("/memory/imports/{id}", r.handlers.getMemoryImport)
-	router.With(middleware.RequireRole("admin")).Get("/memory/imports", r.handlers.listMemoryImports)
-	router.With(middleware.RequireRole("admin")).Get("/memory/compaction-runs", r.handlers.listMemoryCompactionRuns)
-	router.With(middleware.RequireRole("admin")).Get("/memory/consolidation-runs", r.handlers.listMemoryCompactionRuns) // spec alias
-	router.With(middleware.RequireRole("admin")).Post("/memory/consolidate", r.handlers.createMemoryCompactionRun)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("memory")...),
+	).Post("/memory/import", r.handlers.createMemoryImport)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireReadScope("memory")...),
+	).Get("/memory/imports/{id}", r.handlers.getMemoryImport)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireReadScope("memory")...),
+	).Get("/memory/imports", r.handlers.listMemoryImports)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireReadScope("memory")...),
+	).Get("/memory/compaction-runs", r.handlers.listMemoryCompactionRuns)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireReadScope("memory")...),
+	).Get("/memory/consolidation-runs", r.handlers.listMemoryCompactionRuns) // spec alias
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("memory")...),
+	).Post("/memory/consolidate", r.handlers.createMemoryCompactionRun)
 }
 
 type memoryHandlers struct {

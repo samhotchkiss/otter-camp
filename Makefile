@@ -1,4 +1,4 @@
-.PHONY: build test-unit test-integration test-e2e test-tui-quality lint clean coverage-report
+.PHONY: build install test-unit test-integration test-e2e test-tui-quality lint clean coverage-report
 
 BINARY_NAME = ottercamp
 BIN_DIR = ./bin
@@ -15,6 +15,9 @@ LDFLAGS := -X github.com/samhotchkiss/otter-camp/internal/version.Version=$(VERS
 build:
 	mkdir -p $(BIN_DIR)
 	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY_NAME) $(CMD_DIR)
+
+install:
+	./scripts/install.sh
 
 test-unit:
 	go test ./... -short -count=1 \

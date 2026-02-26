@@ -19,8 +19,7 @@ import (
 const (
 	MemoryCandidateReviewJobType = "memory_candidate_review"
 
-	candidateHoldDuration = 7 * 24 * time.Hour
-	hardeningDuration     = 30 * 24 * time.Hour
+	hardeningDuration = 30 * 24 * time.Hour
 )
 
 type candidateReviewPayload struct {
@@ -143,7 +142,7 @@ func (h *Hardener) RunCandidateReview(ctx context.Context, orgID *uuid.UUID) err
 }
 
 func (h *Hardener) reviewOrganization(ctx context.Context, orgID uuid.UUID) error {
-	candidates, err := h.memories.ListCandidates(ctx, orgID, h.now().UTC().Add(-candidateHoldDuration))
+	candidates, err := h.memories.ListCandidates(ctx, orgID, repo.CandidatePromotionCutoff(h.now()))
 	if err != nil {
 		return err
 	}

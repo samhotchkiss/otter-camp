@@ -87,6 +87,18 @@ func TestAuditEventRepoInsertConstraintsAndFilters(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CountByOrg by event_type: %v", err)
 	}
+	principalTypeFiltered, err := auditRepo.ListByOrg(ctx, org.ID, AuditEventFilters{
+		PrincipalType: ptrString("system"),
+	}, Pagination{Limit: 25})
+	if err != nil {
+		t.Fatalf("ListByOrg by principal_type: %v", err)
+	}
+	if len(principalTypeFiltered) != 1 {
+		t.Fatalf("ListByOrg by principal_type count = %d, want 1", len(principalTypeFiltered))
+	}
+	if principalTypeFiltered[0].EventType != "auth.logout" {
+		t.Fatalf("principal_type filtered event_type = %q, want %q", principalTypeFiltered[0].EventType, "auth.logout")
+	}
 
 	if err := auditRepo.Insert(ctx, AuditEvent{
 		OrganizationID: org.ID,

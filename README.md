@@ -42,6 +42,13 @@ curl http://localhost:4110/health/live
 
 Expected response: `{"data":{"status":"healthy"...}}` (or `ok` depending on build).
 
+### Local CLI install
+
+```bash
+make install
+ottercamp tui
+```
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
