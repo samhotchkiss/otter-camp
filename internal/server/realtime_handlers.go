@@ -1184,6 +1184,9 @@ func writeSSEEvent(w io.Writer, id, event string, data any) error {
 
 func writeSSEDomainEvent(w io.Writer, event eventbus.DomainEvent) error {
 	return writeSSEEvent(w, strconv.FormatInt(event.Seq, 10), event.EventType, map[string]any{
+		"seq":         event.Seq,
+		"event_id":    event.ID.String(),
+		"org_id":      event.OrganizationID.String(),
 		"event_type":  event.EventType,
 		"payload":     json.RawMessage(event.Payload),
 		"occurred_at": event.CreatedAt.UTC().Format(time.RFC3339Nano),
