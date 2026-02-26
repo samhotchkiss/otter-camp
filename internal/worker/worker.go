@@ -23,6 +23,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/jobs"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
+	"github.com/samhotchkiss/otter-camp/internal/memory/compaction"
 	"github.com/samhotchkiss/otter-camp/internal/model"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
@@ -378,6 +379,16 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	memoryConsumer.RegisterJobs(jqWorker)
 	memoryTurnCompletedSub := memoryConsumer.SubscribeTurnCompleted(nil)
 	defer bus.Unsubscribe(memoryTurnCompletedSub)
+
+	sleepReflector, err := compaction.NewSleepReflector(compaction.SleepReflectorOptions{
+		Pool:         pool.Raw(),
+		Deduplicator: compaction.DefaultThresholdDeduplicator(),
+	})
+	if err != nil {
+		return fmt.Errorf("worker sleep reflector setup: %w", err)
+	}
+	sleepReflector.RegisterJobs(jqWorker)
+	// TaskConsolidator requires a TaskSummaryModel (LLM) — not yet wired (issue 126)
 
 	supervisor, err := controlplane.NewSupervisor(controlplane.SupervisorOptions{
 		Pool:       pool.Raw(),
