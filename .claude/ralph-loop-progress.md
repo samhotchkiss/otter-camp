@@ -276,6 +276,52 @@ Go build: PASS
 - All 40 go test packages: PASS
 - go build: PASS
 
+## Fixes Made This Loop (Iteration 11)
+- No new code fixes needed - deeper coverage of previously-untested routes
+
+## Routes Validated (Iteration 11 - previously untested)
+- POST/PATCH /v1/chat-sessions/{id}/cancel-turn: returns 409 "no_active_turn" when none active ✓
+- POST /v1/chat-sessions/{id}/messages/{id}/steer: returns 409 "no_active_turn" when none active ✓
+- GET /v1/chat-sessions/{id}/messages/{id}: individual message GET ✓
+- POST /v1/tasks/{id}/subtasks: requires active flow node execution; create subtask ✓
+  - PATCH /v1/tasks/{id}/subtasks/{sid}: uses work_status field; transitions pending→in_progress→done ✓
+- POST /v1/tasks/{id}/advance-flow: requires in_progress status AND active flow node execution ✓
+  - decision values: "complete" or "reject" (not "done" or "approve")
+- GET /v1/model/providers/{id}/connections: provider connections list ✓
+  - PATCH /v1/model/providers/{id}/connections/{cid}: failover_priority field (not priority) ✓
+- GET /v1/events/stream?since_seq=N: TUI replay compatibility confirmed ✓
+  - X-API-Key header auth works for SSE stream ✓
+- GET /v1/usage?group_by=X&period=Y: returns data (period required!) ✓
+  - group_by=agent: 2 rows; group_by=model_provider: 2 rows; etc.
+
+## API Field Corrections (iteration 11 additions)
+- advance-flow: decision="complete" or "reject" (not "done" or "approve")
+- review-decision: decision field (not action field)
+- subtask PATCH: work_status field (not status)
+- subtask transitions: pending→in_progress→done (can't skip states)
+- provider connection PATCH: failover_priority field (not priority)
+- subtask create: requires active flow_node_execution (returns validation_error if not)
+
+## TUI Spec Coverage (Iteration 11)
+- HTTPSSEConnector uses configurable URL (not hardcoded path); since_seq + scopes params ✓
+- SSE events: 6 of 14+ spec events implemented (Phase 1: chat.* + task.*) by design
+- Quality gates: 4 thresholds (IIP≤1200ms, keypress≤100ms, SSE render≤250ms, RAM≤128MB)
+- All 6 TUI tests pass (workspace golden, sidebar unread, sidebar nav, terminal matrix, quality gate, perf budget)
+- State persistence at ~/.config/ottercamp/tui-state.json implemented ✓
+
+## DB State (verified 2026-02-26T03:35)
+- Chat messages: 1313 (up from 1306)
+- Candidate memories: 85 (up from 83)
+- Trace spans ok: 26 (+5 from agent turns)
+- Completed model invocations: 458 (up from 450)
+- Recent dead letters (1hr): 2 (known "repo: not found" edge case only)
+
+## Validation Results (Iteration 11 - all PASS)
+- All 13 spec areas PASS (same as iter 10)
+- Agent turn verified: Frank used project_list tool, returned top 3 projects
+- All 45 go test packages: PASS (5 more packages discovered: cli, clock, config, controlplane, chat)
+- go build: PASS
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
 - MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
