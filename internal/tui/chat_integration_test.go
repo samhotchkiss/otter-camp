@@ -143,6 +143,74 @@ func TestFrankJumpFailureShowsRetryMessage(t *testing.T) {
 	}
 }
 
+func TestTmuxFallbackCommandsCoverCoreWorkflow(t *testing.T) {
+	t.Parallel()
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{ModifierReliabilityUncertain: true})
+	model = pressChatIntegrationMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	model = runPaletteCommand(model, "focus sidebar")
+	model = runPaletteCommand(model, "sidebar down")
+	model = runPaletteCommand(model, "sidebar down")
+	model = runPaletteCommand(model, "sidebar select")
+	if got := model.ActiveChatSession(); got != "session-task-1" {
+		t.Fatalf("session after sidebar select = %q, want session-task-1", got)
+	}
+	if got := model.MainView(); got != ViewTask {
+		t.Fatalf("main view after sidebar select = %s, want %s", got, ViewTask)
+	}
+
+	model = runPaletteCommand(model, "focus chat")
+	for _, r := range []rune("first tmux message") {
+		model = pressChatIntegrationMsg(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	model = runPaletteCommand(model, "send")
+	if !model.ActiveTurn() {
+		t.Fatal("active turn should be true after :send")
+	}
+
+	for _, r := range []rune("queued follow-up") {
+		model = pressChatIntegrationMsg(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	model = runPaletteCommand(model, "send")
+	if got := model.QueueDepth(); got != 1 {
+		t.Fatalf("queue depth after second :send = %d, want 1", got)
+	}
+
+	model = runPaletteCommand(model, "queue steer")
+	queue := model.QueueSnapshot()
+	if len(queue) != 1 || !queue[0].Steer {
+		t.Fatalf("queue steer not applied: %+v", queue)
+	}
+
+	model = runPaletteCommand(model, "cancel-turn")
+	if model.ActiveTurn() {
+		t.Fatal("active turn should be false after :cancel-turn")
+	}
+
+	initialMain := model.MainView()
+	model = runPaletteCommand(model, "frank")
+	if got := model.ActiveChatSession(); got != "session-org-general" {
+		t.Fatalf("session after :frank = %q, want session-org-general", got)
+	}
+	if got := model.MainView(); got != initialMain {
+		t.Fatalf("main view after :frank changed: got=%s want=%s", got, initialMain)
+	}
+}
+
+func TestFrankJumpFailureSurfacesRetryHint(t *testing.T) {
+	t.Parallel()
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{ModifierReliabilityUncertain: true})
+	delete(model.workspace.nodes, "session-general")
+
+	model = pressChatIntegrationMsg(model, tea.KeyMsg{Type: tea.KeyCtrlG})
+	view := model.View()
+	if !strings.Contains(view, "Unable to load Frank session") || !strings.Contains(view, ":frank") {
+		t.Fatalf("view missing frank jump retry hint: %q", view)
+	}
+}
+
 func pressChatIntegrationMsg(model Model, msg tea.Msg) Model {
 	updated, _ := model.Update(msg)
 	next, ok := updated.(Model)
@@ -150,4 +218,12 @@ func pressChatIntegrationMsg(model Model, msg tea.Msg) Model {
 		panic("unexpected model type")
 	}
 	return next
+}
+
+func runPaletteCommand(model Model, command string) Model {
+	model = pressChatIntegrationMsg(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	for _, r := range []rune(command) {
+		model = pressChatIntegrationMsg(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	return pressChatIntegrationMsg(model, tea.KeyMsg{Type: tea.KeyEnter})
 }

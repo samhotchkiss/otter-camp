@@ -36,3 +36,28 @@ func TestResizeTransitionsRemainStable(t *testing.T) {
 		}
 	}
 }
+
+func TestTmuxResizeTransitionsDeterministic(t *testing.T) {
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{ModifierReliabilityUncertain: true})
+	sequence := []tea.WindowSizeMsg{
+		{Width: 95, Height: 28},
+		{Width: 95, Height: 28},
+		{Width: 70, Height: 22},
+		{Width: 150, Height: 34},
+		{Width: 68, Height: 24},
+		{Width: 150, Height: 34},
+		{Width: 150, Height: 34},
+	}
+
+	wantByIndex := []SizeClass{SizeS, SizeS, SizeXS, SizeL, SizeXS, SizeL, SizeL}
+	for i, msg := range sequence {
+		model = pressMsg(model, msg)
+		if got, want := model.SizeClass(), wantByIndex[i]; got != want {
+			t.Fatalf("step %d size class = %s, want %s", i, got, want)
+		}
+		layout := model.CurrentLayout()
+		if !layout.visible[model.FocusedPanel()] {
+			t.Fatalf("step %d: focused panel %s hidden for size class %s", i, panelLabel(model.FocusedPanel()), layout.sizeClass)
+		}
+	}
+}
