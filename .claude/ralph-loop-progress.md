@@ -368,6 +368,42 @@ Go build: PASS
 - All 45 go test packages: PASS (cached)
 - go build: PASS
 
+## Fixes Made This Loop (Iteration 13)
+- Issue 131 (NEW+FIXED): memory_import_process handler not registered in worker
+  - Created internal/memory/default_extractor.go — exports NewDefaultExtractor(pool)
+  - Modified importer.NewImporter to create default extractor when opts.Extractor is nil
+  - Added memImporter.RegisterJobs(jqWorker) in worker.go after sleepReflector
+  - Verified: POST /v1/memory/import → ZIP with 3 JSONL records → status=completed, imported=3
+
+## Commits Made This Loop (Iteration 13)
+- 48650834: fix(worker): register memory_import_process handler (issue 131)
+
+## API Field Corrections (iteration 13 additions)
+- Participant add: fields are participant_type + participant_id (NOT type + agent_id)
+- Policy evaluate: returns effect (not decision); requires organization_id
+- Policy evaluate returns: {effect: "allow"|"deny", layer, reason, trace: [...]}
+- Agent templates: GET /v1/agent-templates returns count, POST works for all agent_types
+- Memory imports: GET /v1/memory/imports returns list; GET /v1/memory/imports/{id} returns detail
+- Memory import format: ZIP containing .jsonl files (NOT raw JSONL)
+- Run events stream since_seq: Last-Event-ID header (not ?since_seq= param)
+- /v1/admin/config → 404 (not implemented - not in spec)
+- /v1/notification-preferences → 404 (not implemented - not in spec)
+- /v1/secrets → 404 (not a REST endpoint; secret storage is internal)
+- /v1/browser-sessions → 404 (not a public REST endpoint)
+
+## DB State (verified 2026-02-26T04:10)
+- Chat messages: 1326 (up from 1317)
+- Candidate memories: 88 (up from 86)
+- Trace spans ok: 35 (+6 from agent turns this iteration)
+- Completed model invocations: 473 (up from 463)
+- Memory imports: 2 total, 1 completed
+
+## Validation Results (Iteration 13 - all PASS)
+- All 13 spec areas PASS (same as iter 12)
+- Agent turn verified: Frank used project_list tool, correctly reported 20 projects
+- All 45 go test packages: PASS
+- go build: PASS
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
 - MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
