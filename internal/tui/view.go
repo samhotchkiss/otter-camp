@@ -269,15 +269,34 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 
 	// Sidebar nodes
 	visible := m.workspace.visibleSidebarIDs()
-	maxNodes := innerH - 4 // title + divider + 2 margin
-	if maxNodes < 1 {
-		maxNodes = 1
+	inboxFooter := ""
+	if n := len(m.workspace.inbox); n > 0 {
+		inboxFooter = styleMuted.Render(fmt.Sprintf("▼ %d inbox", n))
+	}
+
+	// Rows below title+divider are split between nodes, optional "+N more", and optional inbox footer.
+	rowsForBody := innerH - 2
+	if rowsForBody < 0 {
+		rowsForBody = 0
+	}
+	rowsForNodesAndMore := rowsForBody
+	if inboxFooter != "" {
+		rowsForNodesAndMore--
+	}
+	if rowsForNodesAndMore < 0 {
+		rowsForNodesAndMore = 0
+	}
+
+	maxNodeLines := rowsForNodesAndMore
+	if len(visible) > maxNodeLines && maxNodeLines > 0 {
+		maxNodeLines--
+	}
+	if maxNodeLines < 0 {
+		maxNodeLines = 0
 	}
 
 	for i, id := range visible {
-		if i >= maxNodes {
-			more := len(visible) - maxNodes
-			lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more", more)))
+		if i >= maxNodeLines {
 			break
 		}
 		node := m.workspace.nodes[id]
@@ -285,6 +304,12 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 			continue
 		}
 		lines = append(lines, m.renderSidebarNode(node, i == m.workspace.sidebarCursor, cw))
+	}
+	if remaining := len(visible) - maxNodeLines; remaining > 0 && rowsForNodesAndMore > 0 {
+		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more", remaining)))
+	}
+	if inboxFooter != "" {
+		lines = append(lines, inboxFooter)
 	}
 
 	// Fill remaining space
