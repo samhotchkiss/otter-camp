@@ -404,9 +404,58 @@ Go build: PASS
 - All 45 go test packages: PASS
 - go build: PASS
 
+## Fixes Made This Loop (Iteration 14)
+- Issue 132 (NEW+FIXED): chat_session_cleanup handler not registered in worker
+  - session close enqueues 3 jobs: ephemeral_purge, tool_result_compaction, summary_consolidation
+  - All 3 dead-lettered after every session close (9 pending jobs at 20:00)
+  - Fix: added chat.NewSessionCleaner + sessionCleaner.RegisterJobs(jqWorker)
+  - Uses same gatewaySummarizationModel as chat.Summarizer
+  - Verified: forced run_after=now(), all 3 jobs completed status=done attempts=1
+- Issue 133 (NEW, prophylactic fix): additional unregistered handlers
+  - memory.NewHardener → memHardener.RegisterJobs (memory_candidate_review)
+  - chat.NewRetentionSweeper → retentionSweeper.RegisterJobs (chat_retention_sweep)
+  - budgetService.RegisterJobs (budget.anomaly_scan)
+  - None had pending jobs yet, but handlers now available
+
+## Commits Made This Loop (Iteration 14)
+- c5397e9c: fix(worker): register chat_session_cleanup handler (issue 132)
+- 5b1e15c9: fix(worker): register memory_hardener, retention_sweeper, budget_anomaly handlers
+
+## API Field Corrections (iteration 14 additions)
+- Remote create: fields are name, url, transport (NOT remote_type); admin role required
+- GET /v1/budgets → 404 (budget system is internal to control plane, no standalone CRUD)
+- GET /v1/usage → data.data array (nested pagination wrapper)
+- Policy evaluate: returns effect (not decision); effect="allow" when all layers pass
+- job_queue columns: job_type, last_error, attempts (NOT error_message)
+
+## Worker Job Handler Status (all now registered)
+- agent_turn ✅ schedule_tick ✅ retention_enforce ✅ trace_span_partition_create ✅
+- merge_execute ✅ push_execute ✅ deploy_task_create ✅ model_usage_rollup_daily ✅
+- rollup_update ✅ chat_summarize ✅ chat_session_cleanup ✅ (NEW)
+- memory_extract_turn ✅ memory_sleep_reflection ✅ memory_import_process ✅ (NEW)
+- memory_candidate_review ✅ (NEW) chat_retention_sweep ✅ (NEW) budget.anomaly_scan ✅ (NEW)
+- memory_task_consolidation: NOT registered (requires TaskSummaryModel LLM - issue 126 partial)
+
+## DB State (verified 2026-02-26T04:25)
+- Chat messages: 1344 (up from 1326)
+- Candidate memories: 89 (up from 88)
+- Trace spans ok: 46 (+11 from agent turns this iteration)
+- Completed model invocations: 493 (up from 473)
+- Completed memory imports: 1 (import fixed, job completes end-to-end)
+- Active runs: 0 (clean)
+- Closed sessions: 4 (cleanup jobs verified)
+
+## Validation Results (Iteration 14 - all PASS)
+- All 13 spec areas PASS (same as iter 13)
+- Agent turn verified: Frank used task_list tool (paginated), responded correctly
+- All 45 go test packages: PASS
+- TUI tests: PASS (all 6 tests)
+- go build: PASS
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
 - MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
 - total_cost_microcents=0 (no pricing configured in model_provider)
 - push.delivery.consumer "closed pool" errors in worker - cosmetic in dev
 - agent_turn race: message sent to session + immediate close → dead_letter "repo: not found" (edge case, not in normal flow)
+- memory_task_consolidation: not registered (requires LLM TaskSummaryModel)
