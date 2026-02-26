@@ -137,6 +137,7 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 			protected.Post("/auth/logout", authHandlers.logout)
 			protected.Post("/auth/refresh", authHandlers.refresh)
 			protected.Get("/auth/me", authHandlers.me)
+			protected.Get("/users/me", authHandlers.me) // alias for spec compatibility
 			protected.Get("/auth/sessions", authHandlers.listSessions)
 			protected.Delete("/auth/sessions/{id}", authHandlers.revokeSession)
 			protected.Delete("/auth/sessions", authHandlers.revokeOtherSessions)
