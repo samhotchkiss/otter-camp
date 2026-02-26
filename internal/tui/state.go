@@ -63,6 +63,17 @@ func LoadState(path string) (UIState, error) {
 	return normalizeState(state), nil
 }
 
+func StateFileExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
+}
+
 func SaveState(path string, state UIState) error {
 	normalized := normalizeState(state)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

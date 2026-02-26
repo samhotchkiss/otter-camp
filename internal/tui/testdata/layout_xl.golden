@@ -1,17 +1,29 @@
 ### XL board
+                    DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
                     [Sidebar]                            | [*Main*]                                                                 | [Chat]                                                                  
                     size=XL shell=board visible(sidebar=true,main=true,chat=true) widths=[36 72 72]
                     Status: snapshot | Realtime=disconnected | Size=XL | Focus=main | ChatSession=none
-                    Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit
+                    Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit
+                    Sidebar state: error | current=General / Frank unread=0
+                    Main state: error | view=dashboard size=XL tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
+                    Chat state: error | empty: type a prompt and press Enter
 
 ### XL chat
+                    DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
                     [Sidebar]                            | [*Main*]                                                                 | [Chat]                                                                  
                     size=XL shell=chat visible(sidebar=true,main=true,chat=true) widths=[36 72 72]
                     Status: snapshot | Realtime=disconnected | Size=XL | Focus=main | ChatSession=none
-                    Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit
+                    Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit
+                    Sidebar state: error | current=General / Frank unread=0
+                    Main state: error | view=dashboard size=XL tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
+                    Chat state: error | empty: type a prompt and press Enter
 
 ### XL inbox
+                    DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
                     [Sidebar]                            | [*Main*]                                                                 | [Chat]                                                                  
                     size=XL shell=inbox visible(sidebar=true,main=true,chat=true) widths=[36 72 72]
                     Status: snapshot | Realtime=disconnected | Size=XL | Focus=main | ChatSession=none
-                    Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit
+                    Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit
+                    Sidebar state: error | current=General / Frank unread=0
+                    Main state: error | view=dashboard size=XL tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
+                    Chat state: error | empty: type a prompt and press Enter

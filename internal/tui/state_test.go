@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -67,5 +68,29 @@ func TestStateRoundTrip(t *testing.T) {
 	}
 	if loaded.PanelProportions != original.PanelProportions {
 		t.Fatalf("PanelProportions = %v, want %v", loaded.PanelProportions, original.PanelProportions)
+	}
+}
+
+func TestStateFileExists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	exists, err := StateFileExists(path)
+	if err != nil {
+		t.Fatalf("StateFileExists() error = %v", err)
+	}
+	if exists {
+		t.Fatal("StateFileExists() = true, want false for missing file")
+	}
+
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	exists, err = StateFileExists(path)
+	if err != nil {
+		t.Fatalf("StateFileExists() after write error = %v", err)
+	}
+	if !exists {
+		t.Fatal("StateFileExists() = false, want true for existing file")
 	}
 }
