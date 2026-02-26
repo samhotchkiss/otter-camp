@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -156,4 +159,132 @@ func TestEventReducerOrderingDedupeAndUnknownEvents(t *testing.T) {
 	if got := reducer.AppliedCount("chat.message.delta"); got != 2 {
 		t.Fatalf("AppliedCount(chat.message.delta) = %d, want 2", got)
 	}
+}
+
+func TestRealtimeConnectedMetaFrameNoGap(t *testing.T) {
+	t.Parallel()
+
+	var stateUpdates []ConnectionStateMsg
+	replaySyncedCount := 0
+	snapshotRefreshCount := 0
+	replayComplete := false
+
+	client := &RealtimeClient{
+		Reducer: NewEventReducer(nil),
+		Snapshots: SnapshotFetcherFunc(func(context.Context, []string) error {
+			snapshotRefreshCount++
+			return nil
+		}),
+		OnStateChange: func(state ConnectionState, degraded bool) {
+			stateUpdates = append(stateUpdates, ConnectionStateMsg{State: state, Degraded: degraded})
+		},
+		OnReplaySynced: func() {
+			replaySyncedCount++
+		},
+	}
+
+	stream := io.NopCloser(strings.NewReader("event: connected\ndata: {\"high_watermark\":5}\n\n"))
+	err := client.consumeStream(context.Background(), stream, &replayComplete)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("consumeStream() error = %v, want io.EOF", err)
+	}
+
+	if snapshotRefreshCount != 0 {
+		t.Fatalf("snapshot refreshes = %d, want 0", snapshotRefreshCount)
+	}
+	if len(stateUpdates) != 1 {
+		t.Fatalf("state updates = %d, want 1", len(stateUpdates))
+	}
+	if stateUpdates[0].State != ConnectionConnected || stateUpdates[0].Degraded {
+		t.Fatalf("state update = %+v, want connected/degraded=false", stateUpdates[0])
+	}
+	if replaySyncedCount != 1 {
+		t.Fatalf("replay synced count = %d, want 1", replaySyncedCount)
+	}
+	if !replayComplete {
+		t.Fatal("replayComplete = false, want true")
+	}
+	if client.degraded {
+		t.Fatal("client.degraded = true, want false")
+	}
+}
+
+func TestRealtimeConnectedMetaFrameWithGapDegrades(t *testing.T) {
+	t.Parallel()
+
+	var stateUpdates []ConnectionStateMsg
+	replaySyncedCount := 0
+	snapshotRefreshCount := 0
+	replayComplete := false
+
+	client := &RealtimeClient{
+		Reducer: NewEventReducer(nil),
+		Snapshots: SnapshotFetcherFunc(func(context.Context, []string) error {
+			snapshotRefreshCount++
+			return nil
+		}),
+		OnStateChange: func(state ConnectionState, degraded bool) {
+			stateUpdates = append(stateUpdates, ConnectionStateMsg{State: state, Degraded: degraded})
+		},
+		OnReplaySynced: func() {
+			replaySyncedCount++
+		},
+	}
+
+	stream := io.NopCloser(strings.NewReader(fmt.Sprintf(
+		"event: connected\ndata: {\"high_watermark\":10,\"gap\":true}\n\n%s",
+		mustEncodeEnvelopeFrameForTest(t, 1, "evt-1", "chat.message.delta"),
+	)))
+	err := client.consumeStream(context.Background(), stream, &replayComplete)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("consumeStream() error = %v, want io.EOF", err)
+	}
+
+	if snapshotRefreshCount != 1 {
+		t.Fatalf("snapshot refreshes = %d, want 1", snapshotRefreshCount)
+	}
+	if !containsRealtimeState(stateUpdates, true) {
+		t.Fatalf("state updates = %+v, want at least one degraded state", stateUpdates)
+	}
+	if !containsRealtimeState(stateUpdates, false) {
+		t.Fatalf("state updates = %+v, want degraded=false after first good event", stateUpdates)
+	}
+	if replaySyncedCount != 1 {
+		t.Fatalf("replay synced count = %d, want 1", replaySyncedCount)
+	}
+	if !replayComplete {
+		t.Fatal("replayComplete = false, want true")
+	}
+	if client.degraded {
+		t.Fatal("client.degraded = true, want false")
+	}
+	if got := client.Reducer.LastSeq(); got != 1 {
+		t.Fatalf("Reducer.LastSeq() = %d, want 1", got)
+	}
+}
+
+func mustEncodeEnvelopeFrameForTest(t *testing.T, seq int64, eventID, eventType string) string {
+	t.Helper()
+	envelope := map[string]any{
+		"seq":         seq,
+		"event_id":    eventID,
+		"event_type":  eventType,
+		"occurred_at": time.Unix(seq, 0).UTC().Format(time.RFC3339Nano),
+		"org_id":      "org-1",
+		"payload":     map[string]any{"delta": "ok"},
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	return fmt.Sprintf("event: %s\nid: %d\ndata: %s\n\n", eventType, seq, string(encoded))
+}
+
+func containsRealtimeState(states []ConnectionStateMsg, degraded bool) bool {
+	for _, state := range states {
+		if state.Degraded == degraded {
+			return true
+		}
+	}
+	return false
 }
