@@ -8362,3 +8362,74 @@ security hardening, or user delight.
 
 50. **Task dependency visualization** — Show a simple DAG/graph of task dependencies when viewing a project, making the relationship between tasks obvious at a glance.
 
+
+## 2026-02-26 - 123-api-key-scopes-not-enforced.md
+- Fixes applied:
+  - Added `middleware.RequireAnyScope(...)` with API-key scope checks and `admin:*` wildcard handling; `RequireScope(...)` now delegates to it.
+  - Added shared scope helpers in server routing (`requireReadScope`, `requireWriteScope`, `requireAdminScope`) with compatibility aliases for both `read:chat` and legacy `chat:read` style tokens.
+  - Applied scope middleware across all route registrars (`projects`, `chat`, `agents`, `memory`, `tasks`, `mcp`, `models`, `control`, `policies`, `org/audit`, `push`, `realtime`) and router-level admin endpoints.
+  - Added integration coverage for API-key scope enforcement on representative routes:
+    - `TestProjectHTTPAPIKeyScopeEnforcement`
+    - `TestChatHTTPAPIKeyScopeEnforcement`
+    - `TestAgentHTTPAPIKeyScopeEnforcement`
+    - `TestMemoryHTTPAPIKeyScopeEnforcement`
+    - `TestAuthHTTPAdminRoutesRequireAdminScopeForAPIKeys`
+  - Added middleware unit tests for scope checks and wildcard behavior.
+- Tests run:
+  - `go test ./internal/middleware` (pass)
+  - `go test ./internal/server` (pass)
+  - `go test ./internal/server -tags integration -run 'Test(ProjectHTTPAPIKeyScopeEnforcement|ChatHTTPAPIKeyScopeEnforcement|AgentHTTPAPIKeyScopeEnforcement|MemoryHTTPAPIKeyScopeEnforcement|AuthHTTPAdminRoutesRequireAdminScopeForAPIKeys|RealtimeScopeValidation)'` (fails: duplicate migration version `0089`)
+  - `go test ./...` (fails: `internal/migrate` duplicate migration version `0089`)
+  - `go test ./... -tags integration` (fails broadly: duplicate migration version `0089`)
+
+## 2026-02-26 - 121-missing-prometheus-metrics-endpoint.md (reviewer rework)
+- Fixes applied:
+  - Reapplied Prometheus endpoint/instrumentation implementation from prior 121 branch onto current `v2` head.
+  - Ensured `internal/metrics/statusRecorder` preserves streaming and upgraded response interfaces via delegated `Flush()`, `Hijack()`, and `Push()` methods.
+  - Added regression test `TestHTTPMiddlewarePreservesFlusher` in `internal/metrics/metrics_test.go`.
+  - Removed the top-level `## Reviewer Required Changes` block from the task file after resolving all required items.
+- Tests run:
+  - `go test ./internal/metrics ./internal/server` (pass)
+  - `go test ./...` (fails: `internal/migrate` duplicate migration version `0089`)
+
+---
+
+## Issue 123: API key scopes not enforced — Review 2026-02-25 18:45 MST
+Reviewer: Claude Sonnet 4.5
+PR: #1529 (issue-123-enforce-api-key-scopes → v2)
+Status: **Returned to 01-ready — required changes**
+
+### Summary
+The core implementation is correct and comprehensive: `RequireAnyScope` middleware in `rbac.go` works properly; `route_scopes.go` defines clean read/write/admin helpers with bidirectional legacy aliases; all handler files (agents, projects, chat, memory, tasks, models, MCP, control plane, policies, push, realtime, org/audit) now apply scope guards. Unit tests in `rbac_test.go` pass.
+
+### Blockers
+1. **P0 — Merge conflict** (`internal/server/org_audit_handlers.go`): Commit `3ea667ff` on `v2` added a new `/audit-events` route after this branch was cut. PR is in `CONFLICTING` state and cannot merge. Fix: rebase onto current `v2`, add `requireReadScope("audit")` to the new `/audit-events` route, add a scope-enforcement integration test for that route.
+2. **P1 — Duplicate migration `0089`**: `migrations/0089_tool_definition_input_schemas.sql` and `migrations/0089_tool_definition_input_schema_properties.sql` both exist on `v2` (pre-existing Task 118 issue). All integration tests fail. Fix: rename the second file to `0090_*` (check for further version collisions; reconcile divergent tool schemas).
+
+### Non-blocking findings (required before approve)
+- **P2**: `TestAgentHTTPAPIKeyScopeEnforcement` missing `t.Setenv("OTTERCAMP_AUTH_MODE", "standard")` — inconsistent with all other scope-enforcement integration tests.
+- **P3**: No unit test for bidirectional scope alias (`projects:write` satisfying `requireWriteScope("projects")`).
+
+Full required-changes block written into task file.
+
+---
+
+## Issue 121: Missing /metrics endpoint — Review 2026-02-25 19:05 MST
+Reviewer: Claude Sonnet 4.5
+PR: #1530 (issue-121-prometheus-metrics-endpoint-r3 → v2) — MERGEABLE
+Status: **Returned to 01-ready — required changes**
+
+### Summary
+All 6 spec metrics are implemented with correct names and label dimensions. The endpoint is at `/metrics` (outside `/v1/`), the `statusRecorder` Flusher/Hijack/Push delegation is correct, and router-level tests confirm reachability. Core work is solid.
+
+### Blockers (P1 — must fix)
+1. **Access control gap (spec violation)**: `/metrics` is publicly accessible with no auth/loopback binding/secret. The issue spec explicitly required "bind to loopback or require secret". Exposes operational data (queue depths, token usage, request rates) to unauthenticated callers.
+2. **`rows.Err()` not checked** in `refreshJobQueueDepth` / `refreshMemoryItems`: silent data loss on pgx stream errors.
+3. **`GaugeVec.Reset()` before complete row scan**: mid-loop `Scan()` error zeroes all gauge values and leaves them partially repopulated, producing transiently incorrect metrics.
+
+### Required (P2)
+4. **`StartTurn()` not instrumented**: `ottercamp_agent_turns_total` tracks terminal states only; in-flight turns cannot be derived without recording `"started"`.
+5. **Shallow test assertions**: tests confirm metric family name presence but not label dimensions or values. Need at least one complete metric line assertion per family.
+
+Note: `go test ./...` also fails due to the pre-existing duplicate migration 0089 issue (same blocker as Issue 123).
+Full required-changes block written into task file.
