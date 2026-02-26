@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	taskQueuedConsumerName = "controlplane.task-queued"
-	taskQueueTriggerType   = "scheduler"
+	taskQueuedConsumerName   = "controlplane.task-queued"
+	taskCompletedConsumerName = "controlplane.task-completed"
+	taskQueueTriggerType     = "scheduler"
 )
 
 type taskQueueEventSubscriber interface {
@@ -42,6 +43,8 @@ type taskQueueFlowExecutionRepository interface {
 type taskQueueRunStarter interface {
 	CreateRun(ctx context.Context, input CreateRunInput) (Run, error)
 	StartRun(ctx context.Context, runID uuid.UUID) error
+	CompleteRun(ctx context.Context, runID uuid.UUID, output json.RawMessage) error
+	ListRunsByTask(ctx context.Context, organizationID, taskID uuid.UUID, status, triggerType string) ([]Run, error)
 }
 
 type taskQueueChatService interface {
@@ -423,6 +426,46 @@ func buildFlowKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNod
 		return base
 	}
 	return base + "\n\nFlow node execution: " + execution.ID.String()
+}
+
+// SubscribeTaskCompleted subscribes to task terminal status events and completes
+// any in_progress scheduler runs for the task. This ensures scheduler runs created
+// by ensureFlowRun are properly closed when the task finishes via flow.advance.
+func (p *TaskQueueProcessor) SubscribeTaskCompleted(orgID *uuid.UUID) eventbus.Subscription {
+	return p.events.Subscribe(taskCompletedConsumerName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
+		return p.handleTaskCompletedEvent(ctx, event)
+	})
+}
+
+func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event eventbus.DomainEvent) error {
+	if event.EventType != "task.status_changed" {
+		return nil
+	}
+
+	var payload struct {
+		TaskID   uuid.UUID `json:"task_id"`
+		ToStatus string    `json:"to_status"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return nil
+	}
+
+	toStatus := strings.ToLower(strings.TrimSpace(payload.ToStatus))
+	if toStatus != "done" && toStatus != "cancelled" {
+		return nil
+	}
+	if payload.TaskID == uuid.Nil || event.OrganizationID == uuid.Nil {
+		return nil
+	}
+
+	runs, err := p.runs.ListRunsByTask(ctx, event.OrganizationID, payload.TaskID, "in_progress", taskQueueTriggerType)
+	if err != nil {
+		return nil // best-effort
+	}
+	for _, r := range runs {
+		_ = p.runs.CompleteRun(ctx, r.ID, json.RawMessage(`{"source":"task_completed_handler","task_status":"`+toStatus+`"}`))
+	}
+	return nil
 }
 
 func valueOrEmpty(value *string) string {

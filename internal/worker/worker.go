@@ -203,6 +203,8 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	}
 	taskQueuedSub := queueProcessor.SubscribeTaskQueued(nil)
 	defer bus.Unsubscribe(taskQueuedSub)
+	taskCompletedSub := queueProcessor.SubscribeTaskCompleted(nil)
+	defer bus.Unsubscribe(taskCompletedSub)
 	toolResolver, err := tools.NewToolResolver(tools.ToolResolverOptions{
 		Pool:   pool.Raw(),
 		Events: bus,

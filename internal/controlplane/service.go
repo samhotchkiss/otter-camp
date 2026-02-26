@@ -103,6 +103,7 @@ type runRepository interface {
 	Get(ctx context.Context, id uuid.UUID) (Run, error)
 	GetByIdempotencyKey(ctx context.Context, organizationID uuid.UUID, key string) (Run, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, expectedVersion int, status string, failureReason, failureClass *string) (Run, error)
+	List(ctx context.Context, filter RunListFilter) ([]Run, error)
 }
 
 type runStepRepository interface {
@@ -147,6 +148,7 @@ type RunService interface {
 	CompleteStep(ctx context.Context, stepID uuid.UUID) error
 	FailStep(ctx context.Context, stepID uuid.UUID, reason string) error
 	GetRun(ctx context.Context, runID uuid.UUID) (Run, error)
+	ListRunsByTask(ctx context.Context, organizationID, taskID uuid.UUID, status, triggerType string) ([]Run, error)
 }
 
 type RunServiceOptions struct {
@@ -268,6 +270,19 @@ func (s *runService) GetRun(ctx context.Context, runID uuid.UUID) (Run, error) {
 		return Run{}, ErrRunIDRequired
 	}
 	return s.runs.Get(ctx, runID)
+}
+
+func (s *runService) ListRunsByTask(ctx context.Context, organizationID, taskID uuid.UUID, status, triggerType string) ([]Run, error) {
+	if organizationID == uuid.Nil || taskID == uuid.Nil {
+		return nil, fmt.Errorf("organization_id and task_id are required")
+	}
+	return s.runs.List(ctx, RunListFilter{
+		OrganizationID: organizationID,
+		TaskID:         &taskID,
+		Status:         status,
+		TriggerType:    triggerType,
+		Limit:          50,
+	})
 }
 
 func (s *runService) CreateRun(ctx context.Context, input CreateRunInput) (Run, error) {
