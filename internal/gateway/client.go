@@ -1149,6 +1149,20 @@ func normalizeToolSchema(schema json.RawMessage) any {
 					delete(obj, "required")
 				}
 			}
+			// OpenAI rejects array properties that don't specify an items schema.
+			// Inject an empty items schema (accepts any value) for bare array types.
+			if props, ok := obj["properties"].(map[string]any); ok {
+				for k, v := range props {
+					if propObj, ok := v.(map[string]any); ok {
+						if propObj["type"] == "array" {
+							if _, hasItems := propObj["items"]; !hasItems {
+								propObj["items"] = map[string]any{}
+								props[k] = propObj
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 
