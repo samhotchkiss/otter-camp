@@ -138,13 +138,31 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 			protected.Post("/api-keys", authHandlers.issueAPIKey)
 			protected.Delete("/api-keys/{id}", authHandlers.revokeAPIKey)
 			protected.Get("/api-keys", authHandlers.listAPIKeys)
-			protected.With(middleware.RequireRole("admin")).Post("/users", authHandlers.createUser)
-			protected.With(middleware.RequireRole("admin")).Post("/orgs", authHandlers.createOrganization)
+			protected.With(
+				middleware.RequireRole("admin"),
+				middleware.RequireAnyScope(requireAdminScope("auth")...),
+			).Post("/users", authHandlers.createUser)
+			protected.With(
+				middleware.RequireRole("admin"),
+				middleware.RequireAnyScope(requireAdminScope("auth")...),
+			).Post("/orgs", authHandlers.createOrganization)
 			protected.Get("/mobile/dashboard", mobileHandlers.dashboard)
-			protected.With(middleware.RequireRole("admin")).Get("/admin/users", authHandlers.listAdminUsers)
-			protected.With(middleware.RequireRole("admin")).Post("/admin/users/{id}/reset-password", authHandlers.adminResetPassword)
-			protected.With(middleware.RequireRole("admin")).Post("/admin/users/{id}/magic-link", authHandlers.adminMagicLink)
-			protected.With(middleware.RequireRole("admin")).Post("/admin/users/{id}/unlock", authHandlers.adminUnlockAccount)
+			protected.With(
+				middleware.RequireRole("admin"),
+				middleware.RequireAnyScope(requireAdminScope("auth")...),
+			).Get("/admin/users", authHandlers.listAdminUsers)
+			protected.With(
+				middleware.RequireRole("admin"),
+				middleware.RequireAnyScope(requireAdminScope("auth")...),
+			).Post("/admin/users/{id}/reset-password", authHandlers.adminResetPassword)
+			protected.With(
+				middleware.RequireRole("admin"),
+				middleware.RequireAnyScope(requireAdminScope("auth")...),
+			).Post("/admin/users/{id}/magic-link", authHandlers.adminMagicLink)
+			protected.With(
+				middleware.RequireRole("admin"),
+				middleware.RequireAnyScope(requireAdminScope("auth")...),
+			).Post("/admin/users/{id}/unlock", authHandlers.adminUnlockAccount)
 			// GET /v1/search is the Cmd-K global search endpoint.
 			// It is registered explicitly here (before the SPA fallback) to prevent interception.
 			protected.Get("/search", searchHandler.Search)
