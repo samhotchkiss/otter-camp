@@ -190,6 +190,73 @@ func TestRunEventRepositoryAppendPublishesNotify(t *testing.T) {
 	}
 }
 
+func TestRunRepositoryListCreatedByTriggerUpdatedBefore(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	runRepo := NewRunRepository(pool)
+
+	now := time.Date(2026, 2, 26, 17, 0, 0, 0, time.UTC)
+	cutoff := now.Add(-5 * time.Minute)
+
+	staleSupervisor, err := runRepo.Create(ctx, Run{
+		OrganizationID: org.ID,
+		PrincipalType:  "system",
+		PrincipalID:    uuid.Nil,
+		Status:         "created",
+		TriggerType:    "supervisor",
+		Metadata:       jsonRaw(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create stale supervisor run: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE run SET updated_at = $2 WHERE id = $1`, staleSupervisor.ID, now.Add(-6*time.Minute)); err != nil {
+		t.Fatalf("backdate stale supervisor run: %v", err)
+	}
+
+	recentSupervisor, err := runRepo.Create(ctx, Run{
+		OrganizationID: org.ID,
+		PrincipalType:  "system",
+		PrincipalID:    uuid.Nil,
+		Status:         "created",
+		TriggerType:    "supervisor",
+		Metadata:       jsonRaw(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create recent supervisor run: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE run SET updated_at = $2 WHERE id = $1`, recentSupervisor.ID, now.Add(-2*time.Minute)); err != nil {
+		t.Fatalf("set recent supervisor run updated_at: %v", err)
+	}
+
+	staleAPIRun, err := runRepo.Create(ctx, Run{
+		OrganizationID: org.ID,
+		PrincipalType:  "system",
+		PrincipalID:    uuid.Nil,
+		Status:         "created",
+		TriggerType:    "api",
+		Metadata:       jsonRaw(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create stale api run: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE run SET updated_at = $2 WHERE id = $1`, staleAPIRun.ID, now.Add(-7*time.Minute)); err != nil {
+		t.Fatalf("backdate stale api run: %v", err)
+	}
+
+	results, err := runRepo.ListCreatedByTriggerUpdatedBefore(ctx, "supervisor", cutoff)
+	if err != nil {
+		t.Fatalf("ListCreatedByTriggerUpdatedBefore: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("result count = %d, want 1", len(results))
+	}
+	if results[0].ID != staleSupervisor.ID {
+		t.Fatalf("returned run id = %s, want %s", results[0].ID, staleSupervisor.ID)
+	}
+}
+
 func TestRunFkFixupModelInvocationOnDeleteSetNull(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
