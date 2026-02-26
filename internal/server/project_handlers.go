@@ -281,6 +281,13 @@ func (h projectHandlers) createProject(w http.ResponseWriter, r *http.Request) {
 	if deliveryMode == "" {
 		deliveryMode = "gated"
 	}
+	switch deliveryMode {
+	case "gated", "continuous", "scheduled":
+		// valid
+	default:
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "delivery_mode must be one of: gated, continuous, scheduled")
+		return
+	}
 
 	created, err := h.service.Create(r.Context(), projectsvc.CreateProjectRequest{
 		OrganizationID:       principal.OrganizationID,
