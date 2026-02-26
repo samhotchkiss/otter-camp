@@ -522,6 +522,42 @@ Go build: PASS
 - Completed model invocations: 502 (up from 498)
 - Recent dead letters (1hr): 2 - both historical pre-fix
 
+## Fixes Made This Loop (Iteration 17)
+- No new code fixes needed - all spec areas already PASSING
+- Additional route discovery and edge case validation
+
+## Routes Validated (Iteration 17 - previously untested)
+- GET /v1/model/profiles/{logical_profile_id}: returns profile detail (key=logical_profile_id, not UUID) ✓
+- PATCH /v1/model/profiles/haiku: re-confirmed still works ✓
+- GET /v1/ws/negotiate (GET not POST): returns {preferred:"sse", fallback:"websocket", sse_url, websocket_url} ✓
+- GET /v1/usage/summary: returns {period_start, period_end, total_invocations, total_input_tokens, total_output_tokens, total_cost_microcents} ✓
+- GET /v1/projects/{id}/merge-queue: returns empty list ✓
+- GET /v1/projects/{id}/tasks?work_status=in_progress: filter works ✓
+- GET /v1/projects/{id}/tasks?priority=high: filter works ✓
+- GET /v1/tasks/{id}: task detail with full schema ✓
+- GET /v1/audit/events?action=policy.created: action filter works with full event names ✓
+- Agent tool domains: Frank has 49 native, 17 browser, 1 mcp = 67 total ✓
+
+## API Field Corrections (iteration 17 additions)
+- Model profile GET: uses logical_profile_id in path (high-capability/standard/haiku), NOT UUID
+- WS negotiate: GET method (not POST); returns preferred/fallback and URL routing
+- Usage summary: GET /v1/usage/summary (not /v1/model/usage/summary)
+- Control cost summary response: {total_tokens, by_group, period_start, period_end} (no total_cost_microcents)
+- Push history: no REST endpoint (delivery system internal only)
+- Model invocation detail: no GET by ID route (list only)
+
+## Validation Results (Iteration 17 - all PASS)
+- All 13 spec areas PASS (same as iter 16)
+- Agent turn verified: Frank used memory.query tool (iter 16 agent turn confirmed correct)
+- All 45 go test packages: PASS (cached)
+- go build: PASS
+
+## DB State (verified 2026-02-26T05:10)
+- Chat messages: 1355 (up from 1352)
+- Candidate memories: 89 (same - in 7-day hold)
+- Trace spans ok: 55 (up from 52)
+- Completed model invocations: 505 (up from 502)
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
 - MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
