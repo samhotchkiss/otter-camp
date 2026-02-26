@@ -31,17 +31,19 @@ func TestTerminalMatrixNativeAndTmux(t *testing.T) {
 				view := model.View()
 				layout := model.CurrentLayout()
 
-				if layout.visible[MainPanel] && !strings.Contains(view, "Main state:") {
-					t.Fatalf("missing main panel state line for %s/%s: %q", scenario.name, class, view)
+				// Verify main content panel renders its title when visible
+				if layout.visible[MainPanel] && !strings.Contains(view, "DASHBOARD") {
+					t.Fatalf("missing main panel content for %s/%s: %q", scenario.name, class, view)
 				}
-				if layout.visible[ChatPanel] && !strings.Contains(view, "Chat state:") {
-					t.Fatalf("missing chat panel state line for %s/%s: %q", scenario.name, class, view)
+				// Verify debug state lines are NOT present (removed from production UI)
+				if strings.Contains(view, "Main state:") {
+					t.Fatalf("debug main state line unexpectedly rendered for %s/%s", scenario.name, class)
 				}
-				if layout.visible[SidebarPanel] && !strings.Contains(view, "Sidebar state:") {
-					t.Fatalf("missing sidebar panel state line for %s/%s: %q", scenario.name, class, view)
+				if strings.Contains(view, "Chat state:") {
+					t.Fatalf("debug chat state line unexpectedly rendered for %s/%s", scenario.name, class)
 				}
-				if strings.Contains(view, "[Main:hidden]") && strings.Contains(view, "Main state:") {
-					t.Fatalf("main state rendered while main panel hidden for %s/%s: %q", scenario.name, class, view)
+				if strings.Contains(view, "Sidebar state:") {
+					t.Fatalf("debug sidebar state line unexpectedly rendered for %s/%s", scenario.name, class)
 				}
 				if strings.Contains(view, "DEGRADED MODE") {
 					t.Fatalf("unexpected degraded banner in healthy matrix case %s/%s: %q", scenario.name, class, view)

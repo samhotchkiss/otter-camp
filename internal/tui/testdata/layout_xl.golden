@@ -35,8 +35,8 @@
 │                                  ││                                                                      ││                                                                      │
 │                                  ││                                                                      ││                                                                      │
 │                                  ││                                                                      ││                                                                      │
-│ Sidebar state: error | current=… ││                                                                      ││ Chat state: error | empty: type a prompt and press Enter | PgUp/PgD… │
-╰──────────────────────────────────╯│ Main state: error | view=dashboard size=XL tasks(todo=1,in_progress… │╰──────────────────────────────────────────────────────────────────────╯
+│                                  ││                                                                      ││                                                                      │
+╰──────────────────────────────────╯│                                                                      │╰──────────────────────────────────────────────────────────────────────╯
                                     ╰──────────────────────────────────────────────────────────────────────╯                                                                        
                      ○  disconnected  ·  none  ·  XL/main  ·  snapshot 
                     Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
@@ -78,8 +78,8 @@
 │                                  ││                                                                      ││                                                                      │
 │                                  ││                                                                      ││                                                                      │
 │                                  ││                                                                      ││                                                                      │
-│ Sidebar state: error | current=… ││                                                                      ││ Chat state: error | empty: type a prompt and press Enter | PgUp/PgD… │
-╰──────────────────────────────────╯│ Main state: error | view=dashboard size=XL tasks(todo=1,in_progress… │╰──────────────────────────────────────────────────────────────────────╯
+│                                  ││                                                                      ││                                                                      │
+╰──────────────────────────────────╯│                                                                      │╰──────────────────────────────────────────────────────────────────────╯
                                     ╰──────────────────────────────────────────────────────────────────────╯                                                                        
                      ○  disconnected  ·  none  ·  XL/main  ·  snapshot 
                     Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
@@ -121,8 +121,8 @@
 │                                  ││                                                                      ││                                                                      │
 │                                  ││                                                                      ││                                                                      │
 │                                  ││                                                                      ││                                                                      │
-│ Sidebar state: error | current=… ││                                                                      ││ Chat state: error | empty: type a prompt and press Enter | PgUp/PgD… │
-╰──────────────────────────────────╯│ Main state: error | view=dashboard size=XL tasks(todo=1,in_progress… │╰──────────────────────────────────────────────────────────────────────╯
+│                                  ││                                                                      ││                                                                      │
+╰──────────────────────────────────╯│                                                                      │╰──────────────────────────────────────────────────────────────────────╯
                                     ╰──────────────────────────────────────────────────────────────────────╯                                                                        
                      ○  disconnected  ·  none  ·  XL/main  ·  snapshot 
                     Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit

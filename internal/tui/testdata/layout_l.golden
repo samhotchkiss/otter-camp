@@ -29,8 +29,8 @@
 │                              ││                                                              ││                                                              │
 │                              ││                                                              ││                                                              │
 │                              ││                                                              ││                                                              │
-│ Sidebar state: error | curr… ││                                                              ││ Chat state: error | empty: type a prompt and press Enter | … │
-╰──────────────────────────────╯│ Main state: error | view=dashboard size=L tasks(todo=1,in_p… │╰──────────────────────────────────────────────────────────────╯
+│                              ││                                                              ││                                                              │
+╰──────────────────────────────╯│                                                              │╰──────────────────────────────────────────────────────────────╯
                                 ╰──────────────────────────────────────────────────────────────╯                                                                
  ○  disconnected  ·  none  ·  L/main  ·  snapshot 
 Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
@@ -66,8 +66,8 @@ Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project
 │                              ││                                                              ││                                                              │
 │                              ││                                                              ││                                                              │
 │                              ││                                                              ││                                                              │
-│ Sidebar state: error | curr… ││                                                              ││ Chat state: error | empty: type a prompt and press Enter | … │
-╰──────────────────────────────╯│ Main state: error | view=dashboard size=L tasks(todo=1,in_p… │╰──────────────────────────────────────────────────────────────╯
+│                              ││                                                              ││                                                              │
+╰──────────────────────────────╯│                                                              │╰──────────────────────────────────────────────────────────────╯
                                 ╰──────────────────────────────────────────────────────────────╯                                                                
  ○  disconnected  ·  none  ·  L/main  ·  snapshot 
 Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
@@ -103,8 +103,8 @@ Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project
 │                              ││                                                              ││                                                              │
 │                              ││                                                              ││                                                              │
 │                              ││                                                              ││                                                              │
-│ Sidebar state: error | curr… ││                                                              ││ Chat state: error | empty: type a prompt and press Enter | … │
-╰──────────────────────────────╯│ Main state: error | view=dashboard size=L tasks(todo=1,in_p… │╰──────────────────────────────────────────────────────────────╯
+│                              ││                                                              ││                                                              │
+╰──────────────────────────────╯│                                                              │╰──────────────────────────────────────────────────────────────╯
                                 ╰──────────────────────────────────────────────────────────────╯                                                                
  ○  disconnected  ·  none  ·  L/main  ·  snapshot 
 Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit

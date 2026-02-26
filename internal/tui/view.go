@@ -195,8 +195,6 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 		cw = 4
 	}
 
-	panelState := m.panelLifecycleState()
-
 	var lines []string
 
 	// Title
@@ -211,7 +209,7 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 
 	// Sidebar nodes
 	visible := m.workspace.visibleSidebarIDs()
-	maxNodes := innerH - 5 // title + divider + state footer + 2 margin
+	maxNodes := innerH - 4 // title + divider + 2 margin
 	if maxNodes < 1 {
 		maxNodes = 1
 	}
@@ -229,10 +227,8 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 		lines = append(lines, m.renderSidebarNode(node, i == m.workspace.sidebarCursor, cw))
 	}
 
-	// Fill remaining space + state footer
-	stateText := fmt.Sprintf("Sidebar state: %s | %s", panelState, m.sidebarSummary())
-	content := buildPanelContent(lines, innerH-1, cw) +
-		"\n" + styleMuted.Render(truncate(stateText, cw))
+	// Fill remaining space
+	content := buildPanelContent(lines, innerH, cw)
 
 	return panelStyle(innerW, innerH, focused).Render(content)
 }
@@ -289,9 +285,6 @@ func (m Model) renderMainPanel(innerW, innerH int, focused bool, layout layoutSt
 		cw = 4
 	}
 
-	panelState := m.panelLifecycleState()
-	stateText := fmt.Sprintf("Main state: %s | %s", panelState, m.workspace.render(m.workspace.mainView, layout.sizeClass))
-
 	var lines []string
 
 	// Title
@@ -305,11 +298,10 @@ func (m Model) renderMainPanel(innerW, innerH int, focused bool, layout layoutSt
 	lines = append(lines, styleDivider.Render(strings.Repeat("─", cw)))
 
 	// View-specific content
-	viewLines := m.renderMainViewContent(m.workspace.mainView, cw, innerH-5)
+	viewLines := m.renderMainViewContent(m.workspace.mainView, cw, innerH-4)
 	lines = append(lines, viewLines...)
 
-	content := buildPanelContent(lines, innerH-1, cw) +
-		"\n" + styleMuted.Render(truncate(stateText, cw))
+	content := buildPanelContent(lines, innerH, cw)
 
 	return panelStyle(innerW, innerH, focused).Render(content)
 }
@@ -624,8 +616,6 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 		cw = 4
 	}
 
-	panelState := m.panelLifecycleState()
-
 	// Session header
 	sessionLabel := strings.TrimSpace(m.activeSession)
 	if sessionLabel == "" {
@@ -641,7 +631,7 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	}
 
 	// Keep bottom chrome visible first, then allocate remaining lines to message viewport.
-	targetH := innerH - 1 // reserve final line for chat state text
+	targetH := innerH
 	if targetH < 1 {
 		targetH = 1
 	}
@@ -665,20 +655,7 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	if msgAreaH < 1 {
 		msgAreaH = 1
 	}
-	msgLines, scrollOffset, scrollMax := chatViewportLines(m.renderChatMessages(cw), msgAreaH, m.chatScrollOffset)
-
-	var chatSummary string
-	if len(m.chatMessages) == 0 && strings.TrimSpace(m.chatInput) == "" && !m.activeTurn {
-		chatSummary = "empty: type a prompt and press Enter"
-	} else if m.activeTurn {
-		chatSummary = "loading: waiting for assistant response"
-	} else {
-		chatSummary = fmt.Sprintf("ready: messages=%d queued=%d", len(m.chatMessages), len(m.queuedMessages))
-	}
-	if scrollMax > 0 {
-		chatSummary += fmt.Sprintf(" scroll=%d/%d", scrollOffset, scrollMax)
-	}
-	stateText := fmt.Sprintf("Chat state: %s | %s | PgUp/PgDn scroll", panelState, chatSummary)
+	msgLines, _, _ := chatViewportLines(m.renderChatMessages(cw), msgAreaH, m.chatScrollOffset)
 
 	lines := make([]string, 0, len(headerLines)+len(msgLines)+len(bottomLines))
 	lines = append(lines, headerLines...)
@@ -698,8 +675,7 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 		lines = append(lines, bottomLines...)
 	}
 
-	content := buildPanelContent(lines, targetH, cw) +
-		"\n" + styleMuted.Render(truncate(stateText, cw))
+	content := buildPanelContent(lines, targetH, cw)
 
 	return panelStyle(innerW, innerH, focused).Render(content)
 }

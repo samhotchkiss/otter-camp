@@ -25,9 +25,9 @@
 │                                                  ││                                    │
 │                                                  ││                                    │
 │                                                  ││                                    │
-│                                                  ││ Chat state: error | empty: type a… │
+│                                                  ││                                    │
 │                                                  │╰────────────────────────────────────╯
-│ Main state: error | view=dashboard size=S tasks… │                                      
+│                                                  │                                      
 ╰──────────────────────────────────────────────────╯                                      
  ○  disconnected  ·  none  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
 Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
@@ -59,9 +59,9 @@ Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project
 │                                                  ││                                    │
 │                                                  ││                                    │
 │                                                  ││                                    │
-│                                                  ││ Chat state: error | empty: type a… │
+│                                                  ││                                    │
 │                                                  │╰────────────────────────────────────╯
-│ Main state: error | view=dashboard size=S tasks… │                                      
+│                                                  │                                      
 ╰──────────────────────────────────────────────────╯                                      
  ○  disconnected  ·  none  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
 Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
@@ -93,9 +93,9 @@ Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project
 │                                                  ││                                    │
 │                                                  ││                                    │
 │                                                  ││                                    │
-│                                                  ││ Chat state: error | empty: type a… │
+│                                                  ││                                    │
 │                                                  │╰────────────────────────────────────╯
-│ Main state: error | view=dashboard size=S tasks… │                                      
+│                                                  │                                      
 ╰──────────────────────────────────────────────────╯                                      
  ○  disconnected  ·  none  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
 Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
