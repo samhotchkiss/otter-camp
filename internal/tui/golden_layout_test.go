@@ -31,6 +31,15 @@ func TestLayoutGoldenSnapshots(t *testing.T) {
 				builder.WriteString(model.viewForShell(shell))
 				builder.WriteString("\n\n")
 			}
+			if class == SizeS {
+				sidebarModel := model
+				sidebarModel.setFocus(SidebarPanel)
+				builder.WriteString("### ")
+				builder.WriteString(string(class))
+				builder.WriteString(" board-sidebar-focus\n")
+				builder.WriteString(sidebarModel.viewForShell("board"))
+				builder.WriteString("\n\n")
+			}
 			got := strings.TrimSpace(builder.String()) + "\n"
 
 			goldenPath := filepath.Join("testdata", "layout_"+strings.ToLower(string(class))+".golden")

@@ -65,6 +65,16 @@ func TestLayoutVisibilityAndHintsBySizeClass(t *testing.T) {
 			hiddenHintContain: "sidebar hidden",
 		},
 		{
+			name:              "s sidebar+chat when sidebar focused",
+			width:             90,
+			height:            30,
+			focus:             SidebarPanel,
+			sidebarVisible:    true,
+			wantClass:         SizeS,
+			wantVisible:       [3]bool{true, false, true},
+			hiddenHintContain: "main hidden",
+		},
+		{
 			name:              "m collapsed sidebar default",
 			width:             120,
 			height:            30,
@@ -111,6 +121,56 @@ func TestLayoutVisibilityAndHintsBySizeClass(t *testing.T) {
 				}
 			} else if !strings.Contains(layout.hiddenHints, tc.hiddenHintContain) {
 				t.Fatalf("hidden hints = %q, want substring %q", layout.hiddenHints, tc.hiddenHintContain)
+			}
+		})
+	}
+}
+
+func TestLayoutSsizeSidebarFocusShowsChatPane(t *testing.T) {
+	proportions := DefaultState().PanelProportions
+	cases := []struct {
+		name           string
+		focus          Panel
+		sidebarVisible bool
+	}{
+		{
+			name:           "sidebar focus",
+			focus:          SidebarPanel,
+			sidebarVisible: false,
+		},
+		{
+			name:           "sidebar visible flag",
+			focus:          MainPanel,
+			sidebarVisible: true,
+		},
+		{
+			name:           "chat focus",
+			focus:          ChatPanel,
+			sidebarVisible: false,
+		},
+		{
+			name:           "main focus",
+			focus:          MainPanel,
+			sidebarVisible: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			layout := computeLayout(90, 30, tc.focus, tc.sidebarVisible, proportions)
+			if layout.sizeClass != SizeS {
+				t.Fatalf("size class = %s, want %s", layout.sizeClass, SizeS)
+			}
+			if !layout.visible[ChatPanel] {
+				t.Fatalf("chat panel must be visible at S size; focus=%v sidebarVisible=%t", tc.focus, tc.sidebarVisible)
+			}
+			if tc.focus == SidebarPanel || tc.sidebarVisible {
+				if !layout.visible[SidebarPanel] {
+					t.Fatalf("sidebar panel must be visible when focused or explicitly visible")
+				}
+				if layout.visible[MainPanel] {
+					t.Fatalf("main panel must be hidden in sidebar+chat S layout")
+				}
 			}
 		})
 	}
