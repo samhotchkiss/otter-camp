@@ -283,6 +283,145 @@ func TestIntegrationFlowAdvanceMovesToNextNode(t *testing.T) {
 	}
 }
 
+func TestIntegrationFlowAdvanceTerminalMarksTaskDone(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	template := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(context.Background(), template.ID)
+	if err != nil {
+		t.Fatalf("list flow nodes: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("nodes count = %d, want 1", len(nodes))
+	}
+
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "in_progress",
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(context.Background(), task.ID, &nodes[0].ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  nodes[0].ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	ctx := integrationExecCtxWith(orgID, agent.ID)
+	out, err := executor.Execute(ctx, "flow.advance", map[string]any{
+		"flow_node_execution_id": execution.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("flow.advance: %v", err)
+	}
+	if out["flow_completed"] != true {
+		t.Fatalf("flow_completed = %v, want true", out["flow_completed"])
+	}
+	if out["advanced_to_node_id"] != nil {
+		t.Fatalf("advanced_to_node_id = %v, want nil", out["advanced_to_node_id"])
+	}
+
+	updatedTask, err := taskRepo.GetByID(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("load updated task: %v", err)
+	}
+	if updatedTask.WorkStatus != "done" {
+		t.Fatalf("task work_status = %q, want done", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID != nil {
+		t.Fatalf("task current_flow_node_id = %v, want nil", updatedTask.CurrentFlowNodeID)
+	}
+	if updatedTask.CompletedAt == nil {
+		t.Fatal("task completed_at is nil, want populated")
+	}
+}
+
+func TestIntegrationFlowAdvanceTerminalRequiresReviewStaysReview(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	template := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(context.Background(), template.ID)
+	if err != nil {
+		t.Fatalf("list flow nodes: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("nodes count = %d, want 1", len(nodes))
+	}
+
+	requiresReview := true
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID:      &template.ID,
+		WorkStatus:          "in_progress",
+		RequiresHumanReview: &requiresReview,
+		CreatedByType:       "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(context.Background(), task.ID, &nodes[0].ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  nodes[0].ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	ctx := integrationExecCtxWith(orgID, agent.ID)
+	out, err := executor.Execute(ctx, "flow.advance", map[string]any{
+		"flow_node_execution_id": execution.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("flow.advance: %v", err)
+	}
+	if out["flow_completed"] != true {
+		t.Fatalf("flow_completed = %v, want true", out["flow_completed"])
+	}
+
+	updatedTask, err := taskRepo.GetByID(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("load updated task: %v", err)
+	}
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID != nil {
+		t.Fatalf("task current_flow_node_id = %v, want nil", updatedTask.CurrentFlowNodeID)
+	}
+	if updatedTask.CompletedAt != nil {
+		t.Fatalf("task completed_at = %v, want nil", updatedTask.CompletedAt)
+	}
+}
+
 func integrationExecCtxWith(orgID, agentID uuid.UUID) context.Context {
 	return mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
 		OrganizationID: orgID,

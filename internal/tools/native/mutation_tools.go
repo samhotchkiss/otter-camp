@@ -825,6 +825,17 @@ func (e *NativeToolExecutor) advanceExecutionToNode(ctx context.Context, taskID 
 		return nil, err
 	}
 	if nextNodeID == nil {
+		taskRecord, err := e.tasks.GetByID(ctx, taskID)
+		if err != nil {
+			return nil, err
+		}
+		targetStatus := "done"
+		if taskRecord.RequiresHumanReview {
+			targetStatus = "review"
+		}
+		if _, err := e.tasks.UpdateStatus(ctx, taskID, targetStatus); err != nil {
+			return nil, err
+		}
 		return map[string]any{
 			"advanced_to_node_id": nil,
 			"flow_completed":      true,

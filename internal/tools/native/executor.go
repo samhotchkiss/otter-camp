@@ -55,6 +55,7 @@ type taskReader interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
 	ListByProject(ctx context.Context, projectID uuid.UUID, statuses ...string) ([]repo.ProjectTask, error)
 	SetFlowNode(ctx context.Context, id uuid.UUID, flowNodeID *uuid.UUID) (repo.ProjectTask, error)
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string) (repo.ProjectTask, error)
 	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 }
 
