@@ -336,6 +336,12 @@ func (c *RealtimeClient) consumeStream(ctx context.Context, stream io.ReadCloser
 		if strings.TrimSpace(frame.Data) == "" {
 			continue
 		}
+		if strings.EqualFold(strings.TrimSpace(frame.Event), "connected") {
+			if err := c.handleConnectedFrame(ctx, frame.Data, replayComplete); err != nil {
+				return err
+			}
+			continue
+		}
 
 		envelope, err := DecodeEventEnvelope([]byte(frame.Data))
 		if err != nil {
@@ -377,6 +383,35 @@ func (c *RealtimeClient) consumeStream(ctx context.Context, stream io.ReadCloser
 	}
 }
 
+func (c *RealtimeClient) handleConnectedFrame(ctx context.Context, data string, replayComplete *bool) error {
+	var meta struct {
+		Gap bool `json:"gap"`
+	}
+	if err := json.Unmarshal([]byte(data), &meta); err != nil {
+		if degradeErr := c.markDegradedAndRefresh(ctx, "invalid_connected_meta", err); degradeErr != nil {
+			return degradeErr
+		}
+		return nil
+	}
+	if meta.Gap {
+		if err := c.markDegradedAndRefresh(ctx, "connected_gap", ErrSequenceGap); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	c.degraded = false
+	c.emitState(ConnectionConnected)
+	if !*replayComplete {
+		*replayComplete = true
+		if c.OnReplaySynced != nil && !c.replaySynced {
+			c.replaySynced = true
+			c.OnReplaySynced()
+		}
+	}
+	return nil
+}
+
 func (c *RealtimeClient) handleGap(ctx context.Context, event EventEnvelope, cause error) error {
 	if err := c.markDegradedAndRefresh(ctx, "sequence_gap", cause); err != nil {
 		return err
@@ -388,6 +423,9 @@ func (c *RealtimeClient) handleGap(ctx context.Context, event EventEnvelope, cau
 func (c *RealtimeClient) markDegradedAndRefresh(ctx context.Context, reason string, cause error) error {
 	c.degraded = true
 	c.emitState(ConnectionConnected)
+	if c.Logger == nil {
+		c.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 	c.Logger.Debug("tui realtime stream degraded", "reason", reason, "error", cause)
 	return c.refreshSnapshots(ctx)
 }
