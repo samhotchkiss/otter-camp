@@ -218,36 +218,32 @@ func TestControlPlaneAPICostSummaryTotals(t *testing.T) {
 	defer testServer.Close()
 	token := loginToken(t, testServer.URL, adminA.Email, "admin-password")
 
-	runRepo := controlplane.NewRunRepository(testServer.Pool)
-	stepRepo := controlplane.NewRunStepRepository(testServer.Pool)
-	attemptRepo := controlplane.NewRunAttemptRepository(testServer.Pool)
-
-	runRecord, err := runRepo.Create(context.Background(), controlplane.Run{
-		OrganizationID: orgA.ID,
-		PrincipalType:  "human_user",
-		PrincipalID:    adminA.ID,
-		Status:         "completed",
-		TriggerType:    "api",
-	})
-	if err != nil {
-		t.Fatalf("seed run: %v", err)
-	}
-	step1, err := stepRepo.Create(context.Background(), controlplane.RunStep{RunID: runRecord.ID, StepNumber: 1, Status: "completed"})
-	if err != nil {
-		t.Fatalf("seed step1: %v", err)
-	}
-	step2, err := stepRepo.Create(context.Background(), controlplane.RunStep{RunID: runRecord.ID, StepNumber: 2, Status: "completed"})
-	if err != nil {
-		t.Fatalf("seed step2: %v", err)
-	}
-
-	for _, attempt := range []controlplane.RunAttempt{
-		{RunStepID: step1.ID, AttemptNumber: 1, Trigger: "initial", Status: "completed", InputTokens: 10, OutputTokens: 5},
-		{RunStepID: step1.ID, AttemptNumber: 2, Trigger: "retry_transient", Status: "completed", InputTokens: 3, OutputTokens: 2},
-		{RunStepID: step2.ID, AttemptNumber: 1, Trigger: "initial", Status: "completed", InputTokens: 20, OutputTokens: 10},
+	projectA := uuid.New()
+	projectB := uuid.New()
+	rollupDate := time.Now().UTC()
+	for _, row := range []struct {
+		projectID    uuid.UUID
+		inputTokens  int64
+		outputTokens int64
+	}{
+		{projectID: projectA, inputTokens: 10, outputTokens: 5},
+		{projectID: projectB, inputTokens: 30, outputTokens: 5},
 	} {
-		if _, err := attemptRepo.Create(context.Background(), attempt); err != nil {
-			t.Fatalf("seed attempt %+v: %v", attempt, err)
+		if _, err := testServer.Pool.Exec(context.Background(), `
+			INSERT INTO model_usage_rollup (
+				organization_id,
+				rollup_date,
+				rollup_type,
+				rollup_id,
+				model_name,
+				invocation_purpose,
+				total_invocations,
+				total_input_tokens,
+				total_output_tokens
+			)
+			VALUES ($1, $2, 'project', $3, 'gpt-4o-mini', 'agent_turn', 1, $4, $5)
+		`, orgA.ID, rollupDate, row.projectID, row.inputTokens, row.outputTokens); err != nil {
+			t.Fatalf("seed model_usage_rollup row: %v", err)
 		}
 	}
 
@@ -257,6 +253,21 @@ func TestControlPlaneAPICostSummaryTotals(t *testing.T) {
 	}
 	if got := int(jsonPathFloatValue(t, summary.Body, "data", "total_tokens")); got != 50 {
 		t.Fatalf("total_tokens=%d want=%d body=%s", got, 50, string(summary.Body))
+	}
+	byGroup, ok := jsonPathValue(t, summary.Body, "data", "by_group").([]any)
+	if !ok {
+		t.Fatalf("by_group type=%T want=[]any body=%s", jsonPathValue(t, summary.Body, "data", "by_group"), string(summary.Body))
+	}
+	if len(byGroup) != 2 {
+		t.Fatalf("by_group len=%d want=2 body=%s", len(byGroup), string(summary.Body))
+	}
+
+	filtered := mustJSON(t, http.MethodGet, testServer.URL+"/v1/control/cost/summary?period=30d&group_by=project&project_id="+projectA.String(), nil, map[string]string{"Authorization": "Bearer " + token})
+	if filtered.StatusCode != http.StatusOK {
+		t.Fatalf("filtered cost summary status=%d want=%d body=%s", filtered.StatusCode, http.StatusOK, string(filtered.Body))
+	}
+	if got := int(jsonPathFloatValue(t, filtered.Body, "data", "total_tokens")); got != 15 {
+		t.Fatalf("filtered total_tokens=%d want=%d body=%s", got, 15, string(filtered.Body))
 	}
 }
 

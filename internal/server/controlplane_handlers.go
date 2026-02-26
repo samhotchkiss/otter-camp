@@ -1251,6 +1251,53 @@ func (h controlPlaneHandlers) getControlHealth(w http.ResponseWriter, r *http.Re
 }
 
 func (h controlPlaneHandlers) queryCostSummaryRows(ctx context.Context, orgID uuid.UUID, periodStart, periodEnd time.Time, groupBy string, projectID *uuid.UUID) ([]costSummaryGroup, error) {
+	if groupBy == "project" || (groupBy == "agent" && projectID == nil) {
+		return h.queryCostSummaryRowsFromRollups(ctx, orgID, periodStart, periodEnd, groupBy, projectID)
+	}
+	// model_usage_rollup does not currently include tool_domain or agent+project dimensions.
+	return h.queryCostSummaryRowsFromRunAttempts(ctx, orgID, periodStart, periodEnd, groupBy, projectID)
+}
+
+func (h controlPlaneHandlers) queryCostSummaryRowsFromRollups(ctx context.Context, orgID uuid.UUID, periodStart, periodEnd time.Time, groupBy string, projectID *uuid.UUID) ([]costSummaryGroup, error) {
+	rollupType := groupBy
+	groupExpr := "mur.rollup_id::text"
+	projectFilter := ""
+	if groupBy == "project" {
+		groupExpr = "COALESCE(mur.rollup_id::text, 'unassigned')"
+		projectFilter = "AND ($5::uuid IS NULL OR mur.rollup_id = $5)"
+	}
+
+	rows, err := h.pool.Query(ctx, fmt.Sprintf(`
+		SELECT %s AS group_key,
+		       COALESCE(SUM(mur.total_input_tokens + mur.total_output_tokens), 0)::bigint AS tokens
+		FROM model_usage_rollup mur
+		WHERE mur.organization_id = $1
+		  AND mur.rollup_type = $2
+		  AND mur.rollup_date BETWEEN $3::date AND $4::date
+		  %s
+		GROUP BY 1
+		ORDER BY tokens DESC, group_key ASC
+	`, groupExpr, projectFilter), orgID, rollupType, periodStart, periodEnd, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]costSummaryGroup, 0)
+	for rows.Next() {
+		var item costSummaryGroup
+		if err := rows.Scan(&item.GroupKey, &item.Tokens); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	return items, nil
+}
+
+func (h controlPlaneHandlers) queryCostSummaryRowsFromRunAttempts(ctx context.Context, orgID uuid.UUID, periodStart, periodEnd time.Time, groupBy string, projectID *uuid.UUID) ([]costSummaryGroup, error) {
 	baseQuery := `
 		SELECT %s AS group_key,
 		       COALESCE(SUM(ra.input_tokens + ra.output_tokens), 0)::bigint AS tokens
