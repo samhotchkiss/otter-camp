@@ -316,8 +316,9 @@ func TestTmuxHelpLineUsesFallbackCommandHints(t *testing.T) {
 	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
 
 	view := model.View()
-	if !containsAll(view, []string{"Help:", "tmux-safe commands:", ":focus", ":frank"}) {
-		t.Fatalf("view missing tmux fallback help text: %q", view)
+	// Context-aware help: should show relevant keybindings including : commands
+	if !containsAll(view, []string{"Help:", ": commands"}) {
+		t.Fatalf("view missing help text: %q", view)
 	}
 }
 

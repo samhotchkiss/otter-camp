@@ -49,11 +49,9 @@ func TestTerminalMatrixNativeAndTmux(t *testing.T) {
 					t.Fatalf("unexpected degraded banner in healthy matrix case %s/%s: %q", scenario.name, class, view)
 				}
 
-				if scenario.runtime.ModifierReliabilityUncertain && !strings.Contains(view, "tmux-safe commands") {
-					t.Fatalf("tmux matrix view missing tmux-safe help for %s: %q", class, view)
-				}
-				if !scenario.runtime.ModifierReliabilityUncertain && !strings.Contains(view, "fallback commands") {
-					t.Fatalf("native matrix view missing fallback help for %s: %q", class, view)
+				// Help line should always contain : commands hint (context-aware help)
+				if !strings.Contains(view, ": commands") && !strings.Contains(view, ":frank") {
+					t.Fatalf("help line missing command hints for %s/%s: %q", scenario.name, class, view)
 				}
 			}
 		})

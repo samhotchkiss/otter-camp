@@ -29,7 +29,7 @@
 │                                                                      │╰──────────────────────────────────────────────╯
 ╰──────────────────────────────────────────────────────────────────────╯                                                
  ○  disconnected  ·  none  ·  M/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
+Help: j/k navigate · Enter open task · : commands · ? help
 
 ### M chat
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
@@ -62,7 +62,7 @@ Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project
 │                                                                      │╰──────────────────────────────────────────────╯
 ╰──────────────────────────────────────────────────────────────────────╯                                                
  ○  disconnected  ·  none  ·  M/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
+Help: j/k navigate · Enter open task · : commands · ? help
 
 ### M inbox
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
@@ -95,4 +95,4 @@ Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project
 │                                                                      │╰──────────────────────────────────────────────╯
 ╰──────────────────────────────────────────────────────────────────────╯                                                
  ○  disconnected  ·  none  ·  M/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
+Help: j/k navigate · Enter open task · : commands · ? help

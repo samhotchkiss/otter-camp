@@ -324,6 +324,8 @@ func (m Model) renderMainViewContent(view MainView, width, maxLines int) []strin
 		return m.renderMergesView(width, maxLines)
 	case ViewSchedules:
 		return m.renderSchedulesView(width, maxLines)
+	case ViewHelp:
+		return m.renderHelpView(width, maxLines)
 	default:
 		return []string{styleMuted.Render(fmt.Sprintf("view: %s", view))}
 	}
@@ -604,6 +606,56 @@ func (m Model) renderSchedulesView(width, maxLines int) []string {
 	}
 	if len(lines) == 1 {
 		lines = append(lines, styleMuted.Render("  No schedules"))
+	}
+	return lines
+}
+
+func (m Model) renderHelpView(width, maxLines int) []string {
+	header := func(s string) string {
+		return lipgloss.NewStyle().Foreground(colFocus).Bold(true).Render(s)
+	}
+	kw := 16 // key column width
+	key := func(k, desc string) string {
+		col := lipgloss.NewStyle().Foreground(colPrimary).Bold(true).Render(fmt.Sprintf("%-*s", kw, k))
+		return "  " + col + "  " + styleMuted.Render(desc)
+	}
+
+	lines := []string{
+		"",
+		header("Navigation"),
+		key("j / k", "move up/down in lists"),
+		key("h / l", "collapse/expand sidebar"),
+		key("g / G", "jump to top/bottom"),
+		key("Tab/Shift-Tab", "cycle panel focus"),
+		key("1 / 2 / 3", "jump to sidebar/main/chat"),
+		key("[ / ]", "cycle chat scope"),
+		"",
+		header("Chat"),
+		key("Enter", "send message"),
+		key("PgUp / PgDn", "scroll messages"),
+		key("Esc", "cancel active agent turn"),
+		key("Shift-Enter", "insert newline"),
+		"",
+		header("Main Panel"),
+		key("Enter", "open task / select item"),
+		key("Esc", "return to dashboard"),
+		key("a/x/f/o", "approve/reject/defer/open"),
+		"",
+		header("Commands  (press : to open command bar)"),
+		key(":frank", "switch to Frank session"),
+		key(":dashboard", "show dashboard view"),
+		key(":project", "show project tree"),
+		key(":task", "show task detail"),
+		key(":inbox", "show inbox"),
+		key(":focus <panel>", "focus sidebar|main|chat"),
+		key(":send <message>", "send message to Frank"),
+		key(":cancel-turn", "cancel agent turn"),
+		key(":quit", "quit OtterCamp"),
+		"",
+		styleMuted.Render("  Press ? or Esc to close"),
+	}
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
 	}
 	return lines
 }

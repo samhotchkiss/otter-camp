@@ -18,6 +18,7 @@ const (
 	ViewAgents    MainView = "agents"
 	ViewMerges    MainView = "merges"
 	ViewSchedules MainView = "schedules"
+	ViewHelp      MainView = "help"
 )
 
 var commandToView = map[string]MainView{

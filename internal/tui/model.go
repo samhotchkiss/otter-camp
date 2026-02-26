@@ -336,6 +336,17 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.switchScope(cycleScope(m.activeScope, true))
 				return m, nil
 			}
+			if r == '?' {
+				if m.workspace.mainView == ViewHelp {
+					m.workspace.setMainView(ViewDashboard)
+					m.statusMessage = "Returned to dashboard."
+				} else {
+					m.workspace.setMainView(ViewHelp)
+					m.setFocus(MainPanel)
+					m.statusMessage = "Keybinding reference. Press ? or Esc to close."
+				}
+				return m, nil
+			}
 
 			if m.focus == ChatPanel {
 				m.handleChatRunes(key)
@@ -1319,11 +1330,30 @@ func initialStatusMessage(state UIState, runtime RuntimeHints) string {
 }
 
 func (m Model) commandFallbackHelp() string {
-	base := ":focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit"
-	if m.runtimeHints.ModifierReliabilityUncertain {
-		return "tmux-safe commands: " + base
+	if m.commandMode {
+		return ":frank · :dashboard · :project · :task · :inbox · :focus sidebar|main|chat · :send · :cancel-turn · :quit  ·  Esc cancel"
 	}
-	return "fallback commands: " + base
+	switch m.focus {
+	case SidebarPanel:
+		return "j/k navigate · Enter select session · h/l collapse/expand · 1/2/3 focus panel · : commands · ? help"
+	case MainPanel:
+		switch m.workspace.mainView {
+		case ViewInbox:
+			return "a approve · x reject · f defer · o open · j/k navigate · Esc back · : commands"
+		case ViewTask:
+			return "Esc back to dashboard · : commands · ? help"
+		case ViewProject:
+			return "j/k navigate · Enter open task · Esc back · : commands · ? help"
+		default:
+			return "j/k navigate · Enter open task · : commands · ? help"
+		}
+	case ChatPanel:
+		return "Enter send · PgUp/PgDn scroll · [/] scope · Esc cancel turn · : commands · ? help"
+	}
+	if m.runtimeHints.ModifierReliabilityUncertain {
+		return "tmux-safe: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit"
+	}
+	return ":focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn scroll | :quit"
 }
 
 func panelFromView(view string) (Panel, bool) {

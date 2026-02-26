@@ -21,7 +21,7 @@
 │                                                                   │
 ╰───────────────────────────────────────────────────────────────────╯
  ○  disconnected  ·  none  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
+Help: j/k navigate · Enter open task · : commands · ? help
 
 ### XS chat
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
@@ -46,7 +46,7 @@ Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project
 │                                                                   │
 ╰───────────────────────────────────────────────────────────────────╯
  ○  disconnected  ·  none  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
+Help: j/k navigate · Enter open task · : commands · ? help
 
 ### XS inbox
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
@@ -71,4 +71,4 @@ Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project
 │                                                                   │
 ╰───────────────────────────────────────────────────────────────────╯
  ○  disconnected  ·  none  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
+Help: j/k navigate · Enter open task · : commands · ? help
