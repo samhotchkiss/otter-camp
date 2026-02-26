@@ -110,6 +110,11 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 		v1.Use(func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Cache-Control", "no-store")
+				// Limit request body size to 4MB for all /v1 endpoints to prevent DoS.
+				// File upload endpoints apply their own limit on top of this.
+				if r.Body != nil && r.Body != http.NoBody {
+					r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
+				}
 				next.ServeHTTP(w, r)
 			})
 		})

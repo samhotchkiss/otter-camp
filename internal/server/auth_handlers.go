@@ -138,7 +138,7 @@ func (h authHandlers) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email := strings.TrimSpace(req.Email)
+	email := strings.ToLower(strings.TrimSpace(req.Email))
 	result, err := h.service.Login(r.Context(), email, req.Password, requestClientIP(r), r.UserAgent())
 	if errors.Is(err, auth.ErrNoDefaultOrganization) {
 		if lookup, ok := h.users.(orgLookupByEmailRepository); ok {
@@ -534,7 +534,7 @@ func (h authHandlers) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email := strings.TrimSpace(req.Email)
+	email := strings.ToLower(strings.TrimSpace(req.Email))
 	password := strings.TrimSpace(req.Password)
 	displayName := strings.TrimSpace(req.Name)
 	if email == "" || password == "" || displayName == "" {
