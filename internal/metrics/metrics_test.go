@@ -51,3 +51,32 @@ func TestMetricsHandlerExposesRequiredMetricFamilies(t *testing.T) {
 		}
 	}
 }
+
+func TestHTTPMiddlewarePreservesFlusher(t *testing.T) {
+	wrapped := HTTPMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("wrapped writer does not implement http.Flusher")
+		}
+		flusher.Flush()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/stream", nil)
+	rec := &flusherRecorder{ResponseRecorder: httptest.NewRecorder()}
+	wrapped.ServeHTTP(rec, req)
+
+	if !rec.flushed {
+		t.Fatal("expected wrapped flusher to delegate Flush to underlying response writer")
+	}
+}
+
+type flusherRecorder struct {
+	*httptest.ResponseRecorder
+	flushed bool
+}
+
+func (r *flusherRecorder) Flush() {
+	r.flushed = true
+	r.ResponseRecorder.Flush()
+}
