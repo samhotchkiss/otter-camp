@@ -84,6 +84,7 @@ RE_ITER = re.compile(r"^Current iteration:\s*(\d+)")
 RE_NEXT_ISSUE = re.compile(r"^Next issue number:\s*(\d+)")
 RE_CURRENT_SECTION = re.compile(r"^Currently testing:\s*(.+)$")
 RE_EX_TESTED_COUNT = re.compile(r"^Tested \(counts toward 20\):\s*(\d+)")
+RE_STARTED = re.compile(r"^Loop started:\s*(.+)$")
 
 # Dance frames
 OTTER_DANCE = [r"(>'-')>", r"<('-'<)", r"^('-')^", r"v('-')v"]
@@ -132,6 +133,7 @@ class LoopProgress:
     current_section: str = ""
     ex_tested: int = 0
     last_mtime: float = 0.0
+    loop_started: Optional[str] = None  # ISO/human timestamp written by the loop
 
 
 @dataclass
@@ -387,6 +389,10 @@ def load_progress(path: str) -> LoopProgress:
                 m = RE_EX_TESTED_COUNT.match(stripped)
                 if m:
                     prog.ex_tested = int(m.group(1))
+                    continue
+                m = RE_STARTED.match(stripped)
+                if m:
+                    prog.loop_started = m.group(1).strip()
     except OSError:
         pass
 
@@ -518,7 +524,19 @@ class UIState:
     scroll: int = 0
 
 
-def render_status_line(snap: Snapshot, frame: int, color_enabled: bool, cols: int) -> str:
+def format_elapsed(seconds: float) -> str:
+    """Format elapsed seconds as Xh Ym Zs, omitting leading zero units."""
+    s = int(seconds)
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}m {sec:02d}s"
+    if m:
+        return f"{m}m {sec:02d}s"
+    return f"{sec}s"
+
+
+def render_status_line(snap: Snapshot, frame: int, color_enabled: bool, cols: int, dashboard_start: float) -> str:
     # Server dot
     if snap.server.up:
         srv = clr("● UP", "38;5;82", color_enabled) + clr(f" {snap.server.latency_ms}ms", "38;5;244", color_enabled)
@@ -539,10 +557,30 @@ def render_status_line(snap: Snapshot, frame: int, color_enabled: bool, cols: in
     itr = snap.progress.iteration
     itr_str = clr(f"iter #{itr}", "38;5;45", color_enabled) if itr else clr("iter ?", "38;5;244", color_enabled)
 
+    # Elapsed: prefer timestamp written by the loop, fall back to dashboard uptime
+    loop_started_ts = snap.progress.loop_started
+    if loop_started_ts:
+        # Try to parse common formats written by the loop
+        elapsed_str = None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                import datetime
+                started_dt = datetime.datetime.strptime(loop_started_ts, fmt)
+                elapsed_s = (datetime.datetime.now() - started_dt).total_seconds()
+                elapsed_str = format_elapsed(elapsed_s)
+                break
+            except ValueError:
+                continue
+        if elapsed_str is None:
+            elapsed_str = loop_started_ts  # show raw if unparseable
+    else:
+        elapsed_str = format_elapsed(time.monotonic() - dashboard_start) + " (dashboard)"
+
     sp = SPINNER[frame % 4]
     parts = [
         f"{BOLD}TUI UX LOOP{RESET}  {sp}",
         itr_str,
+        clr(f"⏱ {elapsed_str}", "38;5;51", color_enabled),
         f"server: {srv}",
         f"worker: {wkr}",
         time.strftime("%H:%M:%S"),
@@ -746,14 +784,14 @@ def render_events(events: Deque[str], color_enabled: bool, cols: int, n: int = 6
     return lines
 
 
-def render_overview(snap: Snapshot, frame: int, color_enabled: bool, cols: int, rows: int) -> None:
+def render_overview(snap: Snapshot, frame: int, color_enabled: bool, cols: int, rows: int, dashboard_start: float = 0.0) -> None:
     """Compact all-up overview — fits in a normal terminal."""
     sections = snap.sections
     ex_entries = snap.ex_entries
     progress = snap.progress
 
     # --- header row ---
-    print(render_status_line(snap, frame, color_enabled, cols))
+    print(render_status_line(snap, frame, color_enabled, cols, dashboard_start))
     print(clr("─" * min(cols, 120), "38;5;237", color_enabled))
 
     # --- current task ---
@@ -888,6 +926,7 @@ def render(
     color_enabled: bool,
     hype: bool,
     ui: UIState,
+    dashboard_start: float = 0.0,
 ) -> None:
     cols, rows = shutil.get_terminal_size((140, 42))
     os.write(sys.stdout.fileno(), b"\033[?25l\033[2J\033[H")
@@ -909,7 +948,7 @@ def render(
         print(clr(f"  {otter}  OtterCamp TUI UX Loop — Live Dashboard", "38;5;51", color_enabled))
 
     if ui.view == VIEW_OVERVIEW:
-        render_overview(snap, frame, color_enabled, cols, rows)
+        render_overview(snap, frame, color_enabled, cols, rows, dashboard_start)
         # events at bottom
         for line in render_events(events, color_enabled, cols, n=5):
             print(line)
@@ -966,6 +1005,7 @@ def main() -> int:
     events: Deque[str] = collections.deque(maxlen=100)
     frame = 0
     ui = UIState()
+    dashboard_start = time.monotonic()
 
     with InputReader() as inp:
         while running:
@@ -974,7 +1014,7 @@ def main() -> int:
             if added > 0 and sound_enabled:
                 os.write(sys.stdout.fileno(), b"\a")
 
-            render(repo, snap, events, frame, color_enabled, args.hype, ui)
+            render(repo, snap, events, frame, color_enabled, args.hype, ui, dashboard_start=dashboard_start)
             prev = snap
             frame += 1
 
