@@ -163,6 +163,7 @@ func (r *TaskRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.Get("/tasks/{id}/subtasks", r.handlers.listTaskSubtasks)
 	router.With(middleware.RequireRole("member")).Post("/tasks/{id}/subtasks", r.handlers.createTaskSubtask)
 	router.With(middleware.RequireRole("member")).Patch("/tasks/{id}/subtasks/{sid}", r.handlers.patchTaskSubtask)
+	router.Get("/tasks/{id}/dependencies", r.handlers.listTaskDependencies)
 	router.With(middleware.RequireRole("member")).Post("/tasks/{id}/dependencies", r.handlers.addTaskDependency)
 	router.With(middleware.RequireRole("member")).Delete("/tasks/{id}/dependencies/{did}", r.handlers.deleteTaskDependency)
 	router.Get("/tasks/{id}/events", r.handlers.listTaskEvents)
@@ -1270,6 +1271,38 @@ func (h taskHandlers) patchTaskSubtask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	responder.JSON(w, http.StatusOK, toSubtaskResponse(subtask))
+}
+
+func (h taskHandlers) listTaskDependencies(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if h.dependencies == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "dependency service unavailable")
+		return
+	}
+
+	taskID, err := parseUUIDParam(r, "id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid task id")
+		return
+	}
+	if _, ok := h.getTaskForOrg(r.Context(), taskID, principal.OrganizationID, responder, w); !ok {
+		return
+	}
+
+	deps, err := h.dependencies.ListOutbound(r.Context(), "project_task", taskID)
+	if err != nil {
+		h.respondTaskError(responder, w, err)
+		return
+	}
+	response := make([]dependencyResponse, 0, len(deps))
+	for _, dep := range deps {
+		response = append(response, toDependencyResponse(dep))
+	}
+	responder.JSON(w, http.StatusOK, response)
 }
 
 func (h taskHandlers) addTaskDependency(w http.ResponseWriter, r *http.Request) {
