@@ -205,6 +205,8 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	defer bus.Unsubscribe(taskQueuedSub)
 	taskCompletedSub := queueProcessor.SubscribeTaskCompleted(nil)
 	defer bus.Unsubscribe(taskCompletedSub)
+	runCancellationSub := queueProcessor.SubscribeRunCancellationRequested(nil)
+	defer bus.Unsubscribe(runCancellationSub)
 	toolResolver, err := tools.NewToolResolver(tools.ToolResolverOptions{
 		Pool:   pool.Raw(),
 		Events: bus,

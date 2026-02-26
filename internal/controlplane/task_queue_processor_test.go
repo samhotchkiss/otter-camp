@@ -300,6 +300,14 @@ func (f *fakeTaskQueueRunStarter) CompleteRun(_ context.Context, _ uuid.UUID, _ 
 	return nil
 }
 
+func (f *fakeTaskQueueRunStarter) ConfirmCancelled(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+
+func (f *fakeTaskQueueRunStarter) GetRun(_ context.Context, _ uuid.UUID) (Run, error) {
+	return Run{}, nil
+}
+
 func (f *fakeTaskQueueRunStarter) ListRunsByTask(_ context.Context, _, _ uuid.UUID, _, _ string) ([]Run, error) {
 	return nil, nil
 }

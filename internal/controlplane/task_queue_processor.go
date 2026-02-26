@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	taskQueuedConsumerName   = "controlplane.task-queued"
-	taskCompletedConsumerName = "controlplane.task-completed"
-	taskQueueTriggerType     = "scheduler"
+	taskQueuedConsumerName             = "controlplane.task-queued"
+	taskCompletedConsumerName          = "controlplane.task-completed"
+	taskRunCancellationConsumerName    = "controlplane.run-cancellation"
+	taskQueueTriggerType               = "scheduler"
 )
 
 type taskQueueEventSubscriber interface {
@@ -44,6 +45,8 @@ type taskQueueRunStarter interface {
 	CreateRun(ctx context.Context, input CreateRunInput) (Run, error)
 	StartRun(ctx context.Context, runID uuid.UUID) error
 	CompleteRun(ctx context.Context, runID uuid.UUID, output json.RawMessage) error
+	ConfirmCancelled(ctx context.Context, runID uuid.UUID) error
+	GetRun(ctx context.Context, runID uuid.UUID) (Run, error)
 	ListRunsByTask(ctx context.Context, organizationID, taskID uuid.UUID, status, triggerType string) ([]Run, error)
 }
 
@@ -458,13 +461,53 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 		return nil
 	}
 
-	runs, err := p.runs.ListRunsByTask(ctx, event.OrganizationID, payload.TaskID, "in_progress", taskQueueTriggerType)
+	// Complete any in_progress scheduler runs for this task.
+	if runs, err := p.runs.ListRunsByTask(ctx, event.OrganizationID, payload.TaskID, "in_progress", taskQueueTriggerType); err == nil {
+		for _, r := range runs {
+			_ = p.runs.CompleteRun(ctx, r.ID, json.RawMessage(`{"source":"task_completed_handler","task_status":"`+toStatus+`"}`))
+		}
+	}
+	// Confirm cancellation for any scheduler runs that are already in cancelling state.
+	if runs, err := p.runs.ListRunsByTask(ctx, event.OrganizationID, payload.TaskID, "cancelling", taskQueueTriggerType); err == nil {
+		for _, r := range runs {
+			_ = p.runs.ConfirmCancelled(ctx, r.ID)
+		}
+	}
+	return nil
+}
+
+// SubscribeRunCancellationRequested subscribes to run.cancellation_requested events
+// and immediately confirms cancellation for scheduler runs (which have no live
+// processing to wait for — they are pure tracking records).
+func (p *TaskQueueProcessor) SubscribeRunCancellationRequested(orgID *uuid.UUID) eventbus.Subscription {
+	return p.events.Subscribe(taskRunCancellationConsumerName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
+		return p.handleRunCancellationRequestedEvent(ctx, event)
+	})
+}
+
+func (p *TaskQueueProcessor) handleRunCancellationRequestedEvent(ctx context.Context, event eventbus.DomainEvent) error {
+	if event.EventType != "run.cancellation_requested" {
+		return nil
+	}
+	var payload struct {
+		RunID uuid.UUID `json:"run_id"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return nil
+	}
+	if payload.RunID == uuid.Nil {
+		return nil
+	}
+	run, err := p.runs.GetRun(ctx, payload.RunID)
 	if err != nil {
 		return nil // best-effort
 	}
-	for _, r := range runs {
-		_ = p.runs.CompleteRun(ctx, r.ID, json.RawMessage(`{"source":"task_completed_handler","task_status":"`+toStatus+`"}`))
+	// Only auto-confirm for scheduler and supervisor trigger types.
+	// agent_tool runs are confirmed by the turn engine after it stops processing.
+	if run.TriggerType != "scheduler" && run.TriggerType != "supervisor" {
+		return nil
 	}
+	_ = p.runs.ConfirmCancelled(ctx, run.ID)
 	return nil
 }
 
