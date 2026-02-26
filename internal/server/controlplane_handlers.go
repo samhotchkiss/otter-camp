@@ -1251,39 +1251,52 @@ func (h controlPlaneHandlers) getControlHealth(w http.ResponseWriter, r *http.Re
 }
 
 func (h controlPlaneHandlers) queryCostSummaryRows(ctx context.Context, orgID uuid.UUID, periodStart, periodEnd time.Time, groupBy string, projectID *uuid.UUID) ([]costSummaryGroup, error) {
-	baseQuery := `
-		SELECT %s AS group_key,
-		       COALESCE(SUM(ra.input_tokens + ra.output_tokens), 0)::bigint AS tokens
-		FROM run_attempt ra
-		JOIN run_step rs ON rs.id = ra.run_step_id
-		JOIN run r ON r.id = rs.run_id
-		%s
-		WHERE r.organization_id = $1
-		  AND ra.created_at >= $2
-		  AND ra.created_at <= $3
-		  AND ($4::uuid IS NULL OR r.project_id = $4)
-		GROUP BY 1
-		ORDER BY tokens DESC, group_key ASC`
-
-	groupExpr := "COALESCE(r.project_id::text, 'unassigned')"
-	joinExpr := ""
+	// Query model_usage_rollup which is always populated by the turn engine.
+	// run_attempt is never populated, so using it always returned zeros (issue 124).
+	rollupType := "project"
+	filterByRollupID := true // for project grouping, projectID filter maps to rollup_id
 	switch groupBy {
 	case "agent":
-		groupExpr = "CASE WHEN r.principal_type = 'agent' THEN r.principal_id::text ELSE r.principal_type END"
+		rollupType = "agent"
+		filterByRollupID = false // project filter doesn't map to agent rollup_id
 	case "tool_domain":
-		joinExpr = `
-			LEFT JOIN LATERAL (
-				SELECT te.tool_domain
-				FROM tool_execution te
-				WHERE te.run_attempt_id = ra.id
-				ORDER BY te.created_at ASC
-				LIMIT 1
-			) td ON true`
-		groupExpr = "COALESCE(td.tool_domain, 'unknown')"
+		// model_usage_rollup doesn't track tool domains; use invocation_purpose as proxy
+		rollupType = "agent"
+		filterByRollupID = false
 	}
 
-	query := fmt.Sprintf(baseQuery, groupExpr, joinExpr)
-	rows, err := h.pool.Query(ctx, query, orgID, periodStart, periodEnd, projectID)
+	var filterExpr string
+	var args []any
+	if filterByRollupID {
+		filterExpr = "AND ($5::uuid IS NULL OR mur.rollup_id = $5)"
+		args = []any{orgID, rollupType, periodStart, periodEnd, projectID}
+	} else {
+		filterExpr = ""
+		args = []any{orgID, rollupType, periodStart, periodEnd}
+	}
+
+	var groupExpr string
+	switch groupBy {
+	case "agent":
+		groupExpr = "COALESCE(mur.rollup_id::text, 'unknown')"
+	case "tool_domain":
+		groupExpr = "COALESCE(mur.invocation_purpose, 'unknown')"
+	default:
+		groupExpr = "COALESCE(mur.rollup_id::text, 'unassigned')"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT %s AS group_key,
+		       COALESCE(SUM(mur.total_input_tokens + mur.total_output_tokens), 0)::bigint AS tokens
+		FROM model_usage_rollup mur
+		WHERE mur.organization_id = $1
+		  AND mur.rollup_type = $2
+		  AND mur.rollup_date BETWEEN $3 AND $4
+		  %s
+		GROUP BY 1
+		ORDER BY tokens DESC, group_key ASC`, groupExpr, filterExpr)
+
+	rows, err := h.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
