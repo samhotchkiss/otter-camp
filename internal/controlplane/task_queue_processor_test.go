@@ -296,6 +296,14 @@ func (f *fakeTaskQueueRunStarter) StartRun(context.Context, uuid.UUID) error {
 	return nil
 }
 
+func (f *fakeTaskQueueRunStarter) CompleteRun(_ context.Context, _ uuid.UUID, _ json.RawMessage) error {
+	return nil
+}
+
+func (f *fakeTaskQueueRunStarter) ListRunsByTask(_ context.Context, _, _ uuid.UUID, _, _ string) ([]Run, error) {
+	return nil, nil
+}
+
 type fakeTaskQueueFlowExecutionRepository struct {
 	execution repo.FlowNodeExecution
 	err       error

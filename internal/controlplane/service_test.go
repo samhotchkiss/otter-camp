@@ -525,6 +525,22 @@ func (r *fakeRunRepo) UpdateStatus(_ context.Context, id uuid.UUID, expectedVers
 	return runRecord, nil
 }
 
+func (r *fakeRunRepo) List(_ context.Context, filter RunListFilter) ([]Run, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []Run
+	for _, run := range r.byID {
+		if filter.Status != "" && run.Status != filter.Status {
+			continue
+		}
+		if filter.TaskID != nil && (run.TaskID == nil || *run.TaskID != *filter.TaskID) {
+			continue
+		}
+		out = append(out, run)
+	}
+	return out, nil
+}
+
 type fakeRunStepRepo struct {
 	mu      sync.Mutex
 	byID    map[uuid.UUID]RunStep
@@ -830,6 +846,9 @@ func (*fakeSupervisorRunService) CompleteStep(context.Context, uuid.UUID) error 
 func (*fakeSupervisorRunService) FailStep(context.Context, uuid.UUID, string) error { return nil }
 func (*fakeSupervisorRunService) GetRun(context.Context, uuid.UUID) (Run, error) {
 	return Run{}, ErrNotFound
+}
+func (*fakeSupervisorRunService) ListRunsByTask(context.Context, uuid.UUID, uuid.UUID, string, string) ([]Run, error) {
+	return nil, nil
 }
 
 type fakeSupervisorNotifier struct {
