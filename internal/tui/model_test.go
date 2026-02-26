@@ -322,6 +322,110 @@ func TestTmuxHelpLineUsesFallbackCommandHints(t *testing.T) {
 	}
 }
 
+func TestForwardHistoryNavigation(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}}) // chat focus
+
+	// Type and send two messages to populate history (direct pointer call since ChatPanel
+	// suppresses actual send without a SendChatMessage hook)
+	for _, r := range []rune("first message") {
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	model.sendOrQueueInput() // adds "first message" to chatHistory
+
+	for _, r := range []rune("second message") {
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	model.sendOrQueueInput() // adds "second message" to chatHistory
+
+	// Up recall works from empty input: gets last sent message
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyUp})
+	if got := model.ChatInput(); got != "second message" {
+		t.Fatalf("after Up press, chat input = %q, want %q", got, "second message")
+	}
+
+	// Down advances history forward, clearing input (since historyIndex == len-1 → goes past end)
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyDown})
+	if got := model.ChatInput(); got != "" {
+		t.Fatalf("after Down press from last history entry, chat input = %q, want empty", got)
+	}
+
+	// Down from empty (not in history mode) does nothing to input
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyDown})
+	if got := model.ChatInput(); got != "" {
+		t.Fatalf("after Down press from empty non-history input, chat input = %q, want empty", got)
+	}
+}
+
+func TestQuitKeyClosesHelpView(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// Open help
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	if got := model.MainView(); got != ViewHelp {
+		t.Fatalf("main view after ? = %s, want %s", got, ViewHelp)
+	}
+
+	// 'q' should close help from main panel
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}}) // focus main
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if got := model.MainView(); got != ViewDashboard {
+		t.Fatalf("main view after q = %s, want %s", got, ViewDashboard)
+	}
+}
+
+func TestStatusBarShowsHumanReadableSession(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	view := model.View()
+	// Status bar should show "Frank" (default) not "none" or raw session ID
+	if strings.Contains(view, "· none ·") {
+		t.Fatalf("status bar shows 'none' instead of human-readable session label: %q", view)
+	}
+	if strings.Contains(view, "· session-") {
+		t.Fatalf("status bar shows raw session ID: %q", view)
+	}
+	if !strings.Contains(view, "Frank") {
+		t.Fatalf("status bar missing 'Frank' session label: %q", view)
+	}
+}
+
+func TestMainViewTitleIsHumanReadable(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// DASHBOARD stays the same
+	if got := model.MainView(); got != ViewDashboard {
+		t.Fatalf("initial main view = %s, want dashboard", got)
+	}
+
+	// Navigate to task view — title should be "TASK DETAIL"
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.workspace.setMainView(ViewTask)
+	view := model.View()
+	if !strings.Contains(view, "TASK DETAIL") {
+		t.Fatalf("task view title missing 'TASK DETAIL' in: %q", view)
+	}
+}
+
+func TestFormatTaskStatus(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"todo", "Todo"},
+		{"in_progress", "In Progress"},
+		{"done", "Done"},
+		{"approved", "Approved"},
+		{"blocked", "Blocked"},
+		{"rejected", "Rejected"},
+		{"custom_status", "Custom Status"},
+	}
+	for _, tc := range cases {
+		if got := formatTaskStatus(tc.in); got != tc.want {
+			t.Errorf("formatTaskStatus(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func containsAll(raw string, wants []string) bool {
 	for _, want := range wants {
 		if !strings.Contains(raw, want) {

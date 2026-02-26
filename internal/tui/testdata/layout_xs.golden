@@ -1,5 +1,5 @@
 ### XS board
-⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recover…
 ╭───────────────────────────────────────────────────────────────────╮
 │ DASHBOARD                                                         │
 │ ───────────────────────────────────────────────────────────────── │
@@ -20,11 +20,11 @@
 │                                                                   │
 │                                                                   │
 ╰───────────────────────────────────────────────────────────────────╯
- ○  disconnected  ·  none  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
+ ○  disconnected  ·  Frank  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
 Help: j/k navigate · Enter open task · : commands · ? help
 
 ### XS chat
-⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recover…
 ╭───────────────────────────────────────────────────────────────────╮
 │ DASHBOARD                                                         │
 │ ───────────────────────────────────────────────────────────────── │
@@ -45,11 +45,11 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │                                                                   │
 │                                                                   │
 ╰───────────────────────────────────────────────────────────────────╯
- ○  disconnected  ·  none  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
+ ○  disconnected  ·  Frank  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
 Help: j/k navigate · Enter open task · : commands · ? help
 
 ### XS inbox
-⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recover…
 ╭───────────────────────────────────────────────────────────────────╮
 │ DASHBOARD                                                         │
 │ ───────────────────────────────────────────────────────────────── │
@@ -70,5 +70,5 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │                                                                   │
 │                                                                   │
 ╰───────────────────────────────────────────────────────────────────╯
- ○  disconnected  ·  none  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
+ ○  disconnected  ·  Frank  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
 Help: j/k navigate · Enter open task · : commands · ? help

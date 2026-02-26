@@ -438,8 +438,17 @@ func (m *Model) handleWorkspaceRune(r rune) bool {
 			m.workspace.inboxEnd()
 		}
 		return true
+	case 'q':
+		// EX-013: 'q' closes the help screen from any non-chat panel
+		if m.workspace.mainView == ViewHelp {
+			m.workspace.setMainView(ViewDashboard)
+			m.statusMessage = "Returned to dashboard."
+			return true
+		}
 	case 'r':
-		m.statusMessage = "Workspace refreshed."
+		m.workspace.activity = append(m.workspace.activity,
+			"manual refresh requested at "+m.now().Format("15:04:05"))
+		m.statusMessage = "Refresh requested. Awaiting SSE sync."
 		return true
 	case 'a':
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("approve") {
@@ -506,6 +515,11 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 	case tea.KeyDown:
 		if strings.TrimSpace(m.chatInput) == "" && m.chatScrollOffset > 0 {
 			m.scrollChatBy(-1)
+			return true, nil
+		}
+		// EX-011: advance through history when in history navigation mode
+		if m.chatHistoryIndex >= 0 && m.chatHistoryIndex < len(m.chatHistory) {
+			m.forwardHistory()
 			return true, nil
 		}
 	case tea.KeyEsc:
@@ -886,6 +900,23 @@ func (m *Model) recallHistory() {
 	}
 	m.chatInput = m.chatHistory[m.chatHistoryIndex]
 	m.statusMessage = "Recalled previous message."
+}
+
+// forwardHistory advances the chat history index toward the most recent entry.
+// EX-011: called when Down arrow is pressed while in history navigation mode.
+func (m *Model) forwardHistory() {
+	if m.chatHistoryIndex < 0 || m.chatHistoryIndex >= len(m.chatHistory) {
+		return
+	}
+	m.chatHistoryIndex++
+	if m.chatHistoryIndex >= len(m.chatHistory) {
+		m.chatInput = ""
+		m.chatHistoryIndex = len(m.chatHistory)
+		m.statusMessage = "Cleared chat input."
+	} else {
+		m.chatInput = m.chatHistory[m.chatHistoryIndex]
+		m.statusMessage = "Recalled next message."
+	}
 }
 
 func (m *Model) applyQueueActionEdit() {

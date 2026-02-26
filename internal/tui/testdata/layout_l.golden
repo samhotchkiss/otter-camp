@@ -3,10 +3,10 @@
 ╭──────────────────────────────╮╭──────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────────────────────╮
 │ SESSIONS                     ││ DASHBOARD                                                    ││ General / Frank  ·  org                                      │
 │ ──────────────────────────── ││ ──────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────────────────────── │
-│   General / Frank            ││                                                              ││                                                              │
+│   General / Frank ✓          ││                                                              ││                                                              │
 │ ▾ Project Alpha              ││ Task Board                                                   ││                       no messages yet                        │
-│   › Task 1 / Launch docs     ││ TODO (1)           IN PROGRESS (1)    DONE (0)               ││                  Tab·focus chat  Enter·send                  │
-│   › Task 2 / CI hardening    ││ ─────────────────  ─────────────────  ─────────────────      ││                                                              │
+│   › Task 1 / Launch docs ○   ││ TODO (1)           IN PROGRESS (1)    DONE (0)               ││                  Tab·focus chat  Enter·send                  │
+│   › Task 2 / CI hardening ◌  ││ ─────────────────  ─────────────────  ─────────────────      ││                                                              │
 │                              ││   Launch docs       CI hardening                             ││ ╭────────────────────────────────────────────────────────╮   │
 │                              ││                                                              ││ │ type a message...                                      │   │
 │                              ││ ───────────────────────── Inbox  2 ───────────────────────── ││ ╰────────────────────────────────────────────────────────╯   │
@@ -32,7 +32,7 @@
 │                              ││                                                              ││                                                              │
 ╰──────────────────────────────╯│                                                              │╰──────────────────────────────────────────────────────────────╯
                                 ╰──────────────────────────────────────────────────────────────╯                                                                
- ○  disconnected  ·  none  ·  L/main  ·  snapshot 
+ ○  disconnected  ·  Frank  ·  L/main  ·  snapshot 
 Help: j/k navigate · Enter open task · : commands · ? help
 
 ### L chat
@@ -40,10 +40,10 @@ Help: j/k navigate · Enter open task · : commands · ? help
 ╭──────────────────────────────╮╭──────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────────────────────╮
 │ SESSIONS                     ││ DASHBOARD                                                    ││ General / Frank  ·  org                                      │
 │ ──────────────────────────── ││ ──────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────────────────────── │
-│   General / Frank            ││                                                              ││                                                              │
+│   General / Frank ✓          ││                                                              ││                                                              │
 │ ▾ Project Alpha              ││ Task Board                                                   ││                       no messages yet                        │
-│   › Task 1 / Launch docs     ││ TODO (1)           IN PROGRESS (1)    DONE (0)               ││                  Tab·focus chat  Enter·send                  │
-│   › Task 2 / CI hardening    ││ ─────────────────  ─────────────────  ─────────────────      ││                                                              │
+│   › Task 1 / Launch docs ○   ││ TODO (1)           IN PROGRESS (1)    DONE (0)               ││                  Tab·focus chat  Enter·send                  │
+│   › Task 2 / CI hardening ◌  ││ ─────────────────  ─────────────────  ─────────────────      ││                                                              │
 │                              ││   Launch docs       CI hardening                             ││ ╭────────────────────────────────────────────────────────╮   │
 │                              ││                                                              ││ │ type a message...                                      │   │
 │                              ││ ───────────────────────── Inbox  2 ───────────────────────── ││ ╰────────────────────────────────────────────────────────╯   │
@@ -69,7 +69,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │                              ││                                                              ││                                                              │
 ╰──────────────────────────────╯│                                                              │╰──────────────────────────────────────────────────────────────╯
                                 ╰──────────────────────────────────────────────────────────────╯                                                                
- ○  disconnected  ·  none  ·  L/main  ·  snapshot 
+ ○  disconnected  ·  Frank  ·  L/main  ·  snapshot 
 Help: j/k navigate · Enter open task · : commands · ? help
 
 ### L inbox
@@ -77,10 +77,10 @@ Help: j/k navigate · Enter open task · : commands · ? help
 ╭──────────────────────────────╮╭──────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────────────────────╮
 │ SESSIONS                     ││ DASHBOARD                                                    ││ General / Frank  ·  org                                      │
 │ ──────────────────────────── ││ ──────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────────────────────── │
-│   General / Frank            ││                                                              ││                                                              │
+│   General / Frank ✓          ││                                                              ││                                                              │
 │ ▾ Project Alpha              ││ Task Board                                                   ││                       no messages yet                        │
-│   › Task 1 / Launch docs     ││ TODO (1)           IN PROGRESS (1)    DONE (0)               ││                  Tab·focus chat  Enter·send                  │
-│   › Task 2 / CI hardening    ││ ─────────────────  ─────────────────  ─────────────────      ││                                                              │
+│   › Task 1 / Launch docs ○   ││ TODO (1)           IN PROGRESS (1)    DONE (0)               ││                  Tab·focus chat  Enter·send                  │
+│   › Task 2 / CI hardening ◌  ││ ─────────────────  ─────────────────  ─────────────────      ││                                                              │
 │                              ││   Launch docs       CI hardening                             ││ ╭────────────────────────────────────────────────────────╮   │
 │                              ││                                                              ││ │ type a message...                                      │   │
 │                              ││ ───────────────────────── Inbox  2 ───────────────────────── ││ ╰────────────────────────────────────────────────────────╯   │
@@ -106,5 +106,5 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │                              ││                                                              ││                                                              │
 ╰──────────────────────────────╯│                                                              │╰──────────────────────────────────────────────────────────────╯
                                 ╰──────────────────────────────────────────────────────────────╯                                                                
- ○  disconnected  ·  none  ·  L/main  ·  snapshot 
+ ○  disconnected  ·  Frank  ·  L/main  ·  snapshot 
 Help: j/k navigate · Enter open task · : commands · ? help

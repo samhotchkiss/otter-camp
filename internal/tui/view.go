@@ -58,6 +58,58 @@ var (
 	styleActive = lipgloss.NewStyle().Foreground(colFocus).Bold(true)
 )
 
+// formatTaskStatus converts raw status strings to human-readable Title Case labels.
+func formatTaskStatus(s string) string {
+	switch strings.ToLower(s) {
+	case "todo":
+		return "Todo"
+	case "in_progress":
+		return "In Progress"
+	case "done":
+		return "Done"
+	case "approved":
+		return "Approved"
+	case "blocked":
+		return "Blocked"
+	case "rejected":
+		return "Rejected"
+	default:
+		parts := strings.Split(s, "_")
+		for i, p := range parts {
+			if len(p) > 0 {
+				parts[i] = strings.ToUpper(p[:1]) + p[1:]
+			}
+		}
+		return strings.Join(parts, " ")
+	}
+}
+
+// mainViewTitle returns the human-readable uppercase title for a main panel view.
+func mainViewTitle(view MainView) string {
+	switch view {
+	case ViewDashboard:
+		return "DASHBOARD"
+	case ViewProject:
+		return "PROJECT"
+	case ViewTask:
+		return "TASK DETAIL"
+	case ViewInbox:
+		return "INBOX"
+	case ViewActivity:
+		return "ACTIVITY"
+	case ViewAgents:
+		return "AGENTS"
+	case ViewMerges:
+		return "MERGE QUEUE"
+	case ViewSchedules:
+		return "SCHEDULES"
+	case ViewHelp:
+		return "HELP"
+	default:
+		return strings.ToUpper(string(view))
+	}
+}
+
 func panelStyle(innerW, innerH int, focused bool) lipgloss.Style {
 	bc := colBorder
 	if focused {
@@ -197,13 +249,21 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 
 	var lines []string
 
-	// Title
-	titleText := "SESSIONS"
+	// Title — with optional unread total badge (EX-012)
 	titleColor := colMuted
 	if focused {
 		titleColor = colFocus
 	}
-	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(titleText)
+	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render("SESSIONS")
+	unreadTotal := 0
+	for _, node := range m.workspace.nodes {
+		if node.Kind == sidebarKindSession {
+			unreadTotal += node.Unread
+		}
+	}
+	if unreadTotal > 0 {
+		title += " " + styleUnread.Render(fmt.Sprintf("(%d)", unreadTotal))
+	}
 	lines = append(lines, title)
 	lines = append(lines, styleDivider.Render(strings.Repeat("─", cw)))
 
@@ -255,6 +315,23 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int) stri
 		label = node.Label
 	}
 
+	// EX-018: task status icon for task-linked sessions
+	var statusBadge string
+	if node.Kind == sidebarKindSession && node.TaskID != "" {
+		if task := m.workspace.tasks[node.TaskID]; task != nil {
+			switch task.Status {
+			case "todo":
+				statusBadge = " " + styleMuted.Render("○")
+			case "in_progress":
+				statusBadge = " " + styleReconnecting.Render("◌")
+			case "done", "approved":
+				statusBadge = " " + styleConnected.Render("●")
+			case "blocked", "rejected":
+				statusBadge = " " + styleDisconnected.Render("⚠")
+			}
+		}
+	}
+
 	var unreadSuffix string
 	if node.Unread > 0 {
 		unreadSuffix = " " + styleUnread.Render(fmt.Sprintf("(%d)", node.Unread))
@@ -265,16 +342,18 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int) stri
 	var rendered string
 	switch {
 	case cursor && isActive:
-		rendered = styleSelected.Render(truncate(line, width-2)) + unreadSuffix
+		// EX-010: show ✓ check to distinguish active+cursor from cursor-only
+		check := " " + styleConnected.Render("✓")
+		rendered = styleSelected.Render(truncate(line, width-4)) + check
 	case cursor:
-		rendered = styleSelected.Render(truncate(line, width-2)) + unreadSuffix
+		rendered = styleSelected.Render(truncate(line, width-2))
 	case isActive:
-		rendered = styleActive.Render(truncate(line, width-2)) + unreadSuffix
+		rendered = styleActive.Render(truncate(line, width-2))
 	default:
-		rendered = styleText.Render(truncate(line, width-2)) + unreadSuffix
+		rendered = styleText.Render(truncate(line, width-2))
 	}
 
-	return rendered
+	return rendered + statusBadge + unreadSuffix
 }
 
 // ── Main panel ──────────────────────────────────────────────────────────────
@@ -287,8 +366,22 @@ func (m Model) renderMainPanel(innerW, innerH int, focused bool, layout layoutSt
 
 	var lines []string
 
-	// Title
-	titleText := strings.ToUpper(string(m.workspace.mainView))
+	// Title — EX-014: human-readable title; EX-015/EX-019: count badges
+	titleText := mainViewTitle(m.workspace.mainView)
+	switch m.workspace.mainView {
+	case ViewInbox:
+		if n := len(m.workspace.inbox); n > 0 {
+			titleText += fmt.Sprintf(" (%d)", n)
+		}
+	case ViewActivity:
+		if n := len(m.workspace.activity); n > 0 {
+			titleText += fmt.Sprintf(" (%d)", n)
+		}
+	case ViewAgents:
+		if n := len(m.workspace.agents); n > 0 {
+			titleText += fmt.Sprintf(" (%d)", n)
+		}
+	}
 	titleColor := colMuted
 	if focused {
 		titleColor = colFocus
@@ -390,6 +483,10 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		r2 := lipgloss.NewStyle().Width(colW).Render(row[2])
 		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, r0, r1, r2))
 	}
+	// EX-008: show overflow indicator when more than 4 task rows are hidden
+	if taskRowCount > 4 {
+		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more tasks", taskRowCount-4)))
+	}
 
 	// Inbox section
 	if len(m.workspace.inbox) > 0 {
@@ -478,7 +575,7 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	}
 
 	titleLine := styleBold.Render(truncate(task.Title, width-4))
-	statusLine := lipgloss.NewStyle().Foreground(statusColor).Render("  Status: " + task.Status)
+	statusLine := lipgloss.NewStyle().Foreground(statusColor).Render("  Status: " + formatTaskStatus(task.Status))
 	flowLine := styleMuted.Render(fmt.Sprintf("  Flow step: %d", task.Flow))
 
 	lines = append(lines, titleLine)
@@ -692,14 +789,21 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	bottomLines := make([]string, 0, len(inputLines)+2)
 	bottomLines = append(bottomLines, "")
 	bottomLines = append(bottomLines, inputLines...)
-	if len(m.queuedMessages) > 0 {
-		q := m.queuedMessages[0]
-		qText := truncate(q.Text, cw-8)
+	// EX-017: show all queued messages (up to 3), with overflow indicator
+	const maxQueueVisible = 3
+	for i, q := range m.queuedMessages {
+		if i >= maxQueueVisible {
+			more := len(m.queuedMessages) - maxQueueVisible
+			bottomLines = append(bottomLines, styleMuted.Render(fmt.Sprintf("  +%d more queued", more)))
+			break
+		}
+		qText := truncate(q.Text, cw-12)
 		flags := ""
 		if q.Steer {
 			flags += " [steer]"
 		}
-		bottomLines = append(bottomLines, styleMuted.Render("  queued: ")+
+		prefix := fmt.Sprintf("  q%d: ", i+1)
+		bottomLines = append(bottomLines, styleMuted.Render(prefix)+
 			styleSubtle.Render(qText)+
 			styleMuted.Render(flags))
 	}
@@ -902,6 +1006,12 @@ func (m Model) renderChatInputBox(width int, focused bool) string {
 	}
 
 	displayText := inputText
+
+	// EX-016: show character count when message is getting long
+	if !m.commandMode && len([]rune(m.chatInput)) > 100 {
+		displayText += styleMuted.Render(fmt.Sprintf(" [%d]", len([]rune(m.chatInput))))
+	}
+
 	if focused && !m.commandMode {
 		displayText += "▌" // cursor
 	}
@@ -928,6 +1038,7 @@ func (m Model) renderChatInputBox(width int, focused bool) string {
 	if m.commandMode {
 		prefix = styleReconnecting.Render(":") + " "
 		displayText = strings.TrimPrefix(displayText, ":")
+		displayText += "▌" // EX-009: cursor always visible in command mode
 	}
 
 	return boxStyle.Render(prefix + displayText)
@@ -952,7 +1063,12 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 		connStyle = styleDisconnected
 	}
 
-	session := valueOrPlaceholder(m.State().LastActiveChatSession)
+	// EX-006: show human-readable session label instead of raw session ID
+	rawSession := strings.TrimSpace(m.State().LastActiveChatSession)
+	session := m.workspace.sessionLabel(rawSession)
+	if session == "" {
+		session = "Frank"
+	}
 	sizeStr := string(layout.sizeClass)
 	focusStr := panelLabel(focus)
 
@@ -1005,6 +1121,14 @@ func (m Model) degradedModeBanner() string {
 	icon := styleDisconnected.Render("⚠ ")
 	label := lipgloss.NewStyle().Foreground(colError).Bold(true).Render("DEGRADED MODE") + ": "
 	msg := "upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync."
+	// EX-020: truncate the banner message to fit the terminal width
+	if m.width > 0 {
+		overhead := lipgloss.Width(icon) + lipgloss.Width(label) + 2
+		available := m.width - overhead
+		if available > 10 {
+			msg = truncate(msg, available)
+		}
+	}
 	return icon + label + styleDegraded.Render(msg)
 }
 
