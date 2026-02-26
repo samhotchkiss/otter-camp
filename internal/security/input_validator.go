@@ -44,6 +44,11 @@ func (v *InputValidator) ValidateRequest(r *http.Request) error {
 	if !strings.HasPrefix(strings.TrimSpace(r.URL.Path), "/v1/") {
 		return nil
 	}
+	// Skip Content-Type check for bodyless requests (e.g. action endpoints like /queue, /approve).
+	// ContentLength == 0 means explicitly no body; == -1 means unknown (body may follow).
+	if r.ContentLength == 0 && (r.Body == nil || r.Body == http.NoBody) {
+		return nil
+	}
 	if !isJSONContentType(r.Header.Get("Content-Type")) {
 		return &ValidationError{StatusCode: http.StatusUnsupportedMediaType, Message: "content-type must be application/json"}
 	}

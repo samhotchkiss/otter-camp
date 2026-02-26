@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -15,6 +18,43 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
+
+// validateMCPTransportURL checks the URL in transport_config against SSRF attack vectors.
+// It blocks non-http(s) schemes, cloud metadata endpoints, and loopback/link-local addresses.
+// Local addresses (localhost, 127.x) are allowed to support dev-mode MCP servers.
+func validateMCPTransportURL(rawConfig json.RawMessage) error {
+	if len(rawConfig) == 0 {
+		return nil
+	}
+	var cfg struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(rawConfig, &cfg); err != nil || cfg.URL == "" {
+		return nil
+	}
+	u, err := url.Parse(cfg.URL)
+	if err != nil {
+		return fmt.Errorf("invalid transport URL")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("transport URL scheme must be http or https")
+	}
+	host := u.Hostname()
+	// Block well-known cloud metadata endpoints
+	if strings.EqualFold(host, "169.254.169.254") || // AWS/Azure/GCP instance metadata
+		strings.EqualFold(host, "metadata.google.internal") ||
+		strings.EqualFold(host, "metadata.internal") {
+		return fmt.Errorf("transport URL host is not allowed")
+	}
+	// Block link-local addresses (169.254.x.x) if not caught above
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("transport URL host is not allowed")
+		}
+	}
+	return nil
+}
 
 type mcpHandlers struct {
 	service mcp.MCPService
@@ -163,6 +203,11 @@ func (h mcpHandlers) createConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validateMCPTransportURL(req.TransportConfig); err != nil {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, err.Error())
+		return
+	}
+
 	created, err := h.service.CreateConnection(r.Context(), mcp.CreateConnectionRequest{
 		OrganizationID:  principal.OrganizationID,
 		ProjectID:       req.ProjectID,
@@ -227,6 +272,10 @@ func (h mcpHandlers) updateConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Transport != nil {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "transport cannot be changed after creation")
+		return
+	}
+	if err := validateMCPTransportURL(req.TransportConfig); err != nil {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, err.Error())
 		return
 	}
 
