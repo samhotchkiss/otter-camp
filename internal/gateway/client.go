@@ -1262,6 +1262,11 @@ func openAIMessages(req turn.ModelRequest) []any {
 	// Whether any tool_result messages were added after the last assistant+tool_calls.
 	// Only remove the assistant+tool_calls retroactively if no tool_results followed.
 	toolResultsAdded := false
+	// Valid tool_call_id values from the most recent assistant+tool_calls message.
+	// Tool results that reference IDs not in this set are dropped (handles race
+	// conditions where two workers both stored an assistant+tool_calls message for
+	// the same turn; the earlier one is dropped but its tool_results remain).
+	validToolCallIDs := map[string]bool{}
 	for _, item := range base {
 		role := strings.ToLower(strings.TrimSpace(item.Role))
 		switch role {
@@ -1278,6 +1283,17 @@ func openAIMessages(req turn.ModelRequest) []any {
 			continue
 		}
 
+		// Skip tool_result messages whose call_id does not match any of the
+		// IDs declared in the current assistant+tool_calls message. This handles
+		// duplicate-worker race conditions where two assistant+tool_calls blocks
+		// were stored back-to-back; the first is dropped as dangling but its
+		// corresponding tool_result would otherwise survive and mismatch.
+		if role == "tool" && item.ToolCallID != nil && len(validToolCallIDs) > 0 {
+			if !validToolCallIDs[*item.ToolCallID] {
+				continue
+			}
+		}
+
 		// A non-tool message signals the end of a tool exchange. If no tool_results
 		// were added after the assistant+tool_calls, the sequence is dangling
 		// (user replied before results were stored, or dispatch was interrupted).
@@ -1289,6 +1305,7 @@ func openAIMessages(req turn.ModelRequest) []any {
 			lastAssistantHadToolCalls = false
 			lastToolCallsIdx = -1
 			toolResultsAdded = false
+			validToolCallIDs = map[string]bool{}
 		}
 
 		if role != "tool" {
@@ -1299,6 +1316,7 @@ func openAIMessages(req turn.ModelRequest) []any {
 		// so OpenAI can match them to subsequent tool result messages.
 		if role == "assistant" && len(item.ToolCalls) > 0 {
 			tcs := make([]map[string]any, 0, len(item.ToolCalls))
+			validToolCallIDs = map[string]bool{}
 			for _, tc := range item.ToolCalls {
 				argsJSON, _ := json.Marshal(tc.Arguments)
 				tcs = append(tcs, map[string]any{
@@ -1309,6 +1327,7 @@ func openAIMessages(req turn.ModelRequest) []any {
 						"arguments": string(argsJSON),
 					},
 				})
+				validToolCallIDs[tc.ID] = true
 			}
 			msg := map[string]any{
 				"role":       "assistant",
@@ -1356,6 +1375,11 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 	// Used to retroactively remove it if a non-tool message appears before
 	// the matching tool_result (conversation history with interleaved messages).
 	lastToolCallsIdx := -1
+	// Valid tool_call_id values from the most recent assistant+tool_calls message.
+	// Tool results whose tool_use_id is not in this set are dropped (handles race
+	// conditions where two workers both stored an assistant+tool_calls message for
+	// the same turn; the earlier one is dropped but its tool_results remain).
+	validToolCallIDs := map[string]bool{}
 	// pendingToolResults collects consecutive tool_result blocks to merge into
 	// one Anthropic user message (Anthropic requires all tool results for a
 	// parallel tool call to appear as a single user turn).
@@ -1378,6 +1402,7 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 		// Empty pendingToolResults → either no tool_calls preceded this, or they were dangling.
 		lastAssistantHadToolCalls = false
 		lastToolCallsIdx = -1
+		validToolCallIDs = map[string]bool{}
 	}
 
 	for _, item := range base {
@@ -1397,6 +1422,7 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 				if item.Content != "" {
 					content = append(content, map[string]any{"type": "text", "text": item.Content})
 				}
+				validToolCallIDs = map[string]bool{}
 				for _, tc := range item.ToolCalls {
 					inputArgs := any(tc.Arguments)
 					if tc.Arguments == nil {
@@ -1408,6 +1434,7 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 						"name":  tc.Name,
 						"input": inputArgs,
 					})
+					validToolCallIDs[tc.ID] = true
 				}
 				lastAssistantHadToolCalls = true
 				lastToolCallsIdx = len(out)
@@ -1419,6 +1446,13 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 			// Skip orphaned tool results with no preceding assistant+tool_calls.
 			if !lastAssistantHadToolCalls {
 				continue
+			}
+			// Skip tool_result messages whose call_id does not match the current
+			// assistant+tool_calls block (handles duplicate-worker race condition).
+			if item.ToolCallID != nil && len(validToolCallIDs) > 0 {
+				if !validToolCallIDs[*item.ToolCallID] {
+					continue
+				}
 			}
 			// Accumulate tool results — they'll be flushed as one user message.
 			toolResultContent := map[string]any{
