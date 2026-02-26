@@ -711,37 +711,6 @@ func (m Model) View() string {
 	return m.viewForShell("board")
 }
 
-func (m Model) panelLifecycleState() string {
-	if m.connection == ConnectionDisconnected {
-		return "error"
-	}
-	if m.connection == ConnectionReconnecting || m.streamDegraded {
-		return "stale"
-	}
-	if !m.proofRealtime {
-		return "loading"
-	}
-	return "ready"
-}
-
-func (m Model) sidebarSummary() string {
-	node := m.workspace.currentSidebarNode()
-	if node == nil {
-		return "empty: no sessions available"
-	}
-	return fmt.Sprintf("current=%s unread=%d", node.Label, node.Unread)
-}
-
-func (m Model) chatPanelSummary() string {
-	if len(m.chatMessages) == 0 && strings.TrimSpace(m.chatInput) == "" && !m.activeTurn {
-		return "empty: type a prompt and press Enter"
-	}
-	if m.activeTurn {
-		return "loading: waiting for assistant response"
-	}
-	return fmt.Sprintf("ready: messages=%d queued=%d", len(m.chatMessages), len(m.queuedMessages))
-}
-
 func (m Model) FocusedPanel() Panel { return m.focus }
 func (m Model) Quitting() bool      { return m.quitting }
 

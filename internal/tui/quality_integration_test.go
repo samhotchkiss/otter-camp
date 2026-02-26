@@ -27,8 +27,10 @@ func TestDegradedModeBannerShowsRecoveryGuidance(t *testing.T) {
 	if !strings.Contains(view, "Recovery:") {
 		t.Fatalf("view missing degraded recovery guidance: %q", view)
 	}
-	if !strings.Contains(view, "Main state: error") {
-		t.Fatalf("view missing explicit panel error state: %q", view)
+	for _, marker := range []string{"Main state:", "Chat state:", "Sidebar state:"} {
+		if strings.Contains(view, marker) {
+			t.Fatalf("view contains debug panel state marker %q: %q", marker, view)
+		}
 	}
 
 	model = pressRealtimeMsg(model, ConnectionStateMsg{State: ConnectionConnected, Degraded: false})
