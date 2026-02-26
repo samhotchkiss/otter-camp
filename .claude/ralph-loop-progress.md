@@ -143,8 +143,31 @@ Last updated: 2026-02-26T03:15
 - Candidate memories: 79 (up from 77)
 - Completed model invocations: 428
 
+## Fixes Made This Loop (Iteration 7)
+- Issue 129 (NEW+FIXED): chat_summarize handler not registered in worker
+  - Created gatewaySummarizationModel adapter in internal/worker/summarization_model.go
+  - Wraps turn.ModelGateway to implement chat.SummarizationModel interface
+  - Registered chat.Summarizer.RegisterJobs(jqWorker) in worker.go
+  - All 30+ unit test packages pass
+
+## Commits Made This Loop (Iteration 7)
+- c7014b31: fix(worker): register chat_summarize handler via gatewaySummarizationModel
+
+## DB State (verified 2026-02-26T03:20)
+- Trace spans: 21 (12 error pre-fix, 9 ok post-fix)
+- Chat messages: 1291 (up from 1289)
+- Candidate memories: 80 (up from 79)
+- Completed model invocations: 431
+- chat_summarize dead_letter: 16 (pre-fix, won't be retried)
+- chat_summarize pending: 0 (new ones will be handled)
+
+## All Spec Areas (iteration 7 re-validation)
+- All spec areas PASS ✅ (same as iteration 6)
+- Agent turn verified: Frank used agent_list tool and responded correctly
+- Trace spans: 2 new ok spans from agent turns
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
-- MCP catalog empty (degraded connections in dev)
+- MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
 - total_cost_microcents=0 (no pricing configured in model_provider)
 - push.delivery.consumer "closed pool" errors in worker - cosmetic in dev
