@@ -701,6 +701,37 @@ Go build: PASS
 - Trace spans ok: ~63 (growing)
 - Completed model invocations: ~525
 
+## Fixes Made This Loop (Iteration 22)
+- No new code fixes needed - all spec areas PASSING
+- Auth logout, turn list, and edge cases validated
+
+## Routes Validated (Iteration 22 - previously untested)
+- POST /v1/auth/logout: 204 No Content; token immediately invalidated ✓
+- GET /v1/auth/me with invalidated token: returns 401 unauthorized ✓
+- GET /v1/chat-sessions/{id}/turns: list with {id, session_id, turn_number, responding_type, responding_id, status, started_at, completed_at, duration_ms} ✓
+- GET /v1/chat-sessions/{id}/turns/{id}: not found (no detail route, list-only) ✓
+- POST /v1/chat-sessions/{id}/cancel-turn: correct method (POST not PATCH); 409 when no active turn ✓
+- POST /v1/chat-sessions/{id}/messages/{id}/steer: 409 when no active turn ✓
+
+## API Field Corrections (iteration 22 additions)
+- Auth logout: POST /v1/auth/logout returns 204 No Content
+- Turn list: GET /sessions/{id}/turns (not /turns/active or similar)
+- Turn detail: no GET by ID (list-only)
+- Cancel turn: POST (not PATCH); returns 409 no_active_turn when no turn in progress
+- Steer: POST /messages/{id}/steer; requires active turn (409 otherwise)
+
+## Validation Results (Iteration 22 - all PASS)
+- All 13 spec areas PASS (same as iter 21)
+- Auth flow verified end-to-end: login → use → logout → invalidated ✓
+- All 45 go test packages: PASS (cached)
+- go build: PASS
+
+## DB State (verified 2026-02-26T06:45)
+- Chat messages: 1360 (stable)
+- Candidate memories: 90 (same - in 7-day hold)
+- Trace spans ok: 60 (up from 57)
+- Completed model invocations: 514 (up from 510)
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
 - MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
