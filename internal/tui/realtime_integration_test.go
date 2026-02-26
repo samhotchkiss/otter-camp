@@ -66,7 +66,7 @@ func TestRealtimeClientReconnectsWithSinceSeqReplay(t *testing.T) {
 		t.Fatalf("connect attempts = %d, want at least 2", len(since))
 	}
 	if since[0] != 0 || since[1] != 2 {
-		t.Fatalf("since_seq values = %v, want prefix [0 2]", since)
+		t.Fatalf("last-event-id values = %v, want prefix [0 2]", since)
 	}
 	if got := reducer.LastSeq(); got != 3 {
 		t.Fatalf("LastSeq() = %d, want 3", got)
@@ -221,12 +221,12 @@ func newScriptedSSEServer(t *testing.T, scripts []scriptedResponse) *scriptedSSE
 
 func (s *scriptedSSEServer) handle(w http.ResponseWriter, r *http.Request) {
 	s.t.Helper()
-	sinceRaw := strings.TrimSpace(r.URL.Query().Get("since_seq"))
+	sinceRaw := strings.TrimSpace(r.URL.Query().Get("last-event-id"))
 	since := int64(0)
 	if sinceRaw != "" {
 		parsed, err := strconv.ParseInt(sinceRaw, 10, 64)
 		if err != nil {
-			s.t.Fatalf("invalid since_seq %q: %v", sinceRaw, err)
+			s.t.Fatalf("invalid last-event-id %q: %v", sinceRaw, err)
 		}
 		since = parsed
 	}
