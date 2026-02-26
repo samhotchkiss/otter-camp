@@ -334,19 +334,20 @@ func (g *LiveModelGateway) mapProviderError(connectionID uuid.UUID, err error) (
 	var providerErr ProviderHTTPError
 	if errors.As(err, &providerErr) {
 		switch providerErr.StatusCode {
-		case http.StatusUnauthorized, http.StatusForbidden:
+		case http.StatusUnauthorized:
 			g.health.MarkUnavailable(connectionID)
+			return fmt.Errorf("%w", turn.ErrAuthFailed), false
+		case http.StatusForbidden:
 			return fmt.Errorf("%w", turn.ErrAuthFailed), false
 		case http.StatusTooManyRequests:
 			g.health.MarkRateLimited(connectionID)
 			return fmt.Errorf("%w", turn.ErrRateLimited), true
 		default:
 			if providerErr.StatusCode >= http.StatusInternalServerError {
-				g.health.MarkDegraded(connectionID)
+				g.health.RecordFailure(connectionID, err)
 				return fmt.Errorf("%w", turn.ErrModelTransient), true
 			}
 		}
-		g.health.RecordFailure(connectionID, err)
 		return err, false
 	}
 
@@ -355,13 +356,13 @@ func (g *LiveModelGateway) mapProviderError(connectionID uuid.UUID, err error) (
 	}
 
 	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		g.health.MarkDegraded(connectionID)
+	if errors.As(err, &netErr) {
+		g.health.RecordFailure(connectionID, err)
 		return fmt.Errorf("%w", turn.ErrModelTransient), true
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
-		g.health.MarkDegraded(connectionID)
+		g.health.RecordFailure(connectionID, err)
 		return fmt.Errorf("%w", turn.ErrModelTransient), true
 	}
 
