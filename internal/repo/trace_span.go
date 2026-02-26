@@ -137,11 +137,13 @@ func (r *TraceSpanRepo) ensureCreatedAtPartition(ctx context.Context, createdAt 
 	return nil
 }
 
+// traceSpanWeekBounds returns the [start, end) UTC day boundary for the given
+// timestamp. The name is kept for backward compatibility; it now returns a
+// single-day window to match the daily partition naming convention used by
+// TraceSpanPartitionJob (trace_span_p_YYYYMMDD = one UTC day each).
 func traceSpanWeekBounds(at time.Time) (time.Time, time.Time) {
-	utcMidnight := time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, time.UTC)
-	offset := (int(utcMidnight.Weekday()) + 6) % 7
-	start := utcMidnight.AddDate(0, 0, -offset)
-	return start, start.AddDate(0, 0, 7)
+	start := time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, time.UTC)
+	return start, start.Add(24 * time.Hour)
 }
 
 func (r *TraceSpanRepo) GetByID(ctx context.Context, id uuid.UUID) (TraceSpan, error) {
