@@ -8739,3 +8739,172 @@ No merge conflicts. Interface compliance assert (`var _ taskQueueRunStarter = (*
 - Tests run:
   - `go test ./internal/tui` (pass)
   - `go test -tags integration ./internal/tui -run Realtime -count=1` (pass)
+
+## 2026-02-26 - Issue 137: scheduler-runs-never-completed-after-flow-done (PR #1534)
+- **Verdict**: Changes required — moved back to 01-ready
+- **PR**: https://github.com/samhotchkiss/otter-camp/pull/1534 (branch: task/137-scheduler-runs-complete-on-task-finish → v2)
+- **Fix is correct**: Adds `blocked` to the terminal status filter in `handleTaskCompletedEvent`; `SubscribeTaskCompleted` subscription properly wired in worker.go
+- **P2 — Missing unit test for `cancelled`**: The code handles `cancelled` but no unit test exists for it; only `done` and `blocked` are unit-tested
+- **P2 — Missing integration test**: The integration test file (`task_queue_processor_integration_test.go`) was not modified at all; no test verifies the end-to-end event-driven behavior (task reaches `done` → scheduler run status = `completed` in DB). Fixture only wires `SubscribeTaskQueued`, never `SubscribeTaskCompleted`.
+
+## 2026-02-26 - Issue 140: tui-sse-reconnect-uses-wrong-query-param (PR #1537)
+- **Verdict**: Approved and merged to v2 (commit 4977921)
+- **PR**: https://github.com/samhotchkiss/otter-camp/pull/1537 (branch: task/140-tui-sse-last-event-id → v2)
+- **Fix**: Changed `query.Set("since_seq", ...)` → `query.Set("last-event-id", ...)` in `HTTPSSEConnector.Connect`
+- **Tests**: Integration test stub updated to read `last-event-id`; `TestRealtimeClientReconnectsWithSinceSeqReplay` correctly verifies reconnect cursor param
+- **Note**: CI lint failures are pre-existing in v2 base branch and unrelated to this 4-line change
+
+## 2026-02-26 - 138-supervisor-runs-stuck-in-created-state.md (reviewer rework pass)
+- Fixes applied:
+  - Added stale-created supervisor run cleanup path:
+    - `Supervisor.tick()` now calls `detectStaleCreatedRuns`.
+    - stale threshold constant: `createdRunStaleLimit = 5m`.
+    - stale runs are loaded via new repository method `RunRepository.ListCreatedByTriggerUpdatedBefore`.
+    - stale `created` supervisor runs are cancelled via `runService.RequestCancel(..., actor=supervisor)` and record `supervisor_recovery` with reason `created_timeout_exceeded`.
+  - Added reviewer-requested non-integration unit coverage in `internal/controlplane/service_test.go`:
+    - `TestSupervisorDetectStaleCreatedRunsCancelsThem`.
+    - extended `fakeSupervisorRuns` with `created []Run` and `ListCreatedByTriggerUpdatedBefore`.
+    - extended `fakeSupervisorRunService` to capture `RequestCancel` calls.
+  - Force-pushed updated branch for PR #1535.
+  - Removed the top-level `## Reviewer Required Changes` block from the task file after resolving required items.
+- Tests run:
+  - `go test ./internal/controlplane ./internal/worker` (pass)
+  - `go test -tags integration ./internal/controlplane -run Supervisor -count=1` (pass)
+  - `./.bin/golangci-lint-v1.64.8 run --new-from-rev=origin/v2 ./internal/controlplane/...` (pass, no new lint issues introduced by this change)
+- Lint note:
+  - PR CI lint job currently fails on pre-existing repository-wide lint debt unrelated to this task branch; no new lint issues were reported by new-from-rev scoped lint.
+
+## 2026-02-26 - 137-scheduler-runs-never-completed-after-flow-done.md (reviewer rework pass 2)
+- Fixes applied:
+  - Added reviewer-requested unit test `TestTaskQueueProcessorHandleTaskCompletedEventCompletesSchedulerRunOnCancelled` in `internal/controlplane/task_queue_processor_test.go` to cover `to_status=cancelled` with `CompleteRun` assertion.
+  - Added reviewer-requested integration test `TestTaskQueueProcessorIntegrationSchedulerRunCompletedOnTaskDone` in `internal/controlplane/task_queue_processor_integration_test.go` to validate end-to-end event-driven scheduler run completion when a queued flow task transitions to `done`.
+  - Force-pushed updated branch for PR #1534.
+  - Removed the top-level `## Reviewer Required Changes` block from the task file after resolving all listed items.
+- Tests run:
+  - `go test ./internal/controlplane ./internal/worker` (pass)
+  - `go test -tags integration ./internal/controlplane -run TaskQueueProcessor -count=1` (pass)
+
+## 2026-02-26 - 141-supervisor-runs-stuck-in-progress-for-completed-tasks.md
+- Fixes applied:
+  - Updated `internal/controlplane/task_queue_processor.go` so `handleTaskCompletedEvent` finalizes both `scheduler` and `supervisor` trigger runs when tasks hit terminal status (`done`/`cancelled`).
+  - Added `taskSupervisorTriggerType = "supervisor"` constant and iterated trigger types for both:
+    - completing `in_progress` tracking runs
+    - confirming `cancelling` tracking runs.
+  - Added unit coverage in `internal/controlplane/task_queue_processor_test.go` to assert supervisor + scheduler runs are both completed on `to_status=cancelled`.
+  - Added integration coverage in `internal/controlplane/task_queue_processor_integration_test.go` (`TestTaskQueueProcessorIntegrationSupervisorRunCompletedOnTaskDone`) to verify event-driven completion of an in-progress supervisor run.
+- Tests run:
+  - `go test ./internal/controlplane ./internal/worker` (pass)
+  - `go test -tags integration ./internal/controlplane -run TaskQueueProcessor -count=1` (pass)
+
+## 2026-02-26 - 142-sse-gap-flag-fires-on-fresh-connect-for-historical-db-gaps.md
+- Fixes applied:
+  - Updated `internal/server/realtime_handlers.go` so `detectReplayGap` returns `false` when `lastEventID <= 0` (fresh connect), preventing false `gap:true` signals from historical DB sequence holes.
+  - Kept reconnect gap detection active by comparing replay event continuity from the reconnect cursor.
+  - Added `TestDetectReplayGap` in `internal/server/realtime_handlers_test.go` covering fresh-connect historical gaps, continuous reconnect replay, and true reconnect gaps.
+- Tests run:
+  - `go test ./internal/server` (pass)
+- PR:
+  - https://github.com/samhotchkiss/otter-camp/pull/1539
+
+## 2026-02-26 - Review: 138-supervisor-runs-stuck-in-created-state.md — CHANGES REQUIRED
+- PR: #1535 `task/138-supervisor-created-run-cleanup` → `v2`
+- Reviewer: Claude claude-sonnet-4-5
+- Result: Sent back to 01-ready (changes required)
+- Implementation assessment: Logic is correct — `detectStaleCreatedRuns` properly queries and cancels stale supervisor runs, `RequestCancel` allows `created`→`cancelled` transitions, error handling is sound, unit test is valid.
+- Lint: CI lint is failing but failures are pre-existing on v2 branch (confirmed by run 22450542971 which predates this PR). PR does not introduce new lint errors.
+- Blockers:
+  - P2: No integration test for `ListCreatedByTriggerUpdatedBefore` (repository_integration_test.go) — analogous to existing SQL-query integration tests
+  - P2: No integration test for `detectStaleCreatedRuns` supervisor flow (supervisor_integration_test.go) — analogous to `TestSupervisor_StuckRun_Detection`
+
+## 2026-02-26 - 143-tui-sse-connection-never-started-degraded-mode-on-launch.md
+- Fixes applied:
+  - Updated `cmd/ottercamp/tui.go` to resolve realtime credentials from `--server-url`/`--api-key`, global CLI flags, and credential store (`~/.ottercamp/credentials` + env).
+  - Wired production realtime startup in `runTUICommand`: `HTTPSSEConnector` now targets `/v1/events/stream` with `scopes=org`, and `RealtimeClient` runs in a goroutine with cancellation tied to program lifecycle.
+  - Routed realtime callbacks into Bubble Tea messages: `ConnectionStateMsg`, `ReplaySyncedMsg`, `ChatEnvelopeMsg`, and `WorkspaceEnvelopeMsg`.
+  - Expanded TUI usage text to include realtime auth/server flags.
+  - Added `cmd/ottercamp/tui_realtime_test.go` covering credential resolution precedence and missing-key failure behavior.
+- Tests run:
+  - `go test ./cmd/ottercamp` (pass)
+  - `go test ./internal/tui` (pass)
+  - `go build -o /tmp/ottercamp ./cmd/ottercamp` (pass)
+  - `/tmp/ottercamp tui --help` (pass)
+  - `OTTERCAMP_API_KEY=smoke-key /tmp/ottercamp tui --non-interactive` (pass)
+- PR:
+  - https://github.com/samhotchkiss/otter-camp/pull/1540
+
+## 2026-02-26 - 138-supervisor-runs-stuck-in-created-state.md (reviewer rework pass 2)
+- Fixes applied:
+  - Added repository integration coverage in `internal/controlplane/repository_integration_test.go`:
+    - `TestRunRepositoryListCreatedByTriggerUpdatedBefore` seeds stale/recent `created` runs and verifies only stale `trigger_type='supervisor'` rows are returned.
+  - Added supervisor integration coverage in `internal/controlplane/supervisor_integration_test.go`:
+    - `TestSupervisor_StaleCreatedRun_CancelledAndLogged` verifies stale `created` supervisor runs are cancelled, emit `supervisor_recovery` with `reason=created_timeout_exceeded`, and recent created runs remain unchanged.
+  - Removed the top-level `## Reviewer Required Changes` block from the task file after completing all required items.
+  - Pushed updates to existing PR branch `task/138-supervisor-created-run-cleanup` (PR #1535).
+- Tests run:
+  - `go test ./internal/controlplane ./internal/worker` (pass)
+  - `go test -tags integration ./internal/controlplane -run 'TestRunRepositoryListCreatedByTriggerUpdatedBefore|TestSupervisor_StaleCreatedRun_CancelledAndLogged' -count=1` (pass)
+  - `go test -tags integration ./internal/controlplane -run Supervisor -count=1` (pass)
+
+## 2026-02-26 - Review: 137-scheduler-runs-never-completed-after-flow-done.md — ACCEPTED + MERGED
+- PR: #1534 `task/137-scheduler-runs-complete-on-task-finish` → `v2`
+- Reviewer: Claude claude-sonnet-4-5
+- Result: Accepted and merged to v2 (commit a2de2004)
+- Summary: Adds unit test `TestTaskQueueProcessorHandleTaskCompletedEventCompletesSchedulerRunOnCancelled` and integration test `TestTaskQueueProcessorIntegrationSchedulerRunCompletedOnTaskDone`. All P2 requirements from previous reviews addressed. Note: `blocked` status (P3 from original review) is still not handled in v2 — non-blocking.
+- Moved: 04-in-review → 05-completed
+
+## 2026-02-26 - Review: 142-sse-gap-flag-fires-on-fresh-connect-for-historical-db-gaps.md — ACCEPTED + MERGED
+- PR: #1539 `task/142-sse-gap-on-fresh-connect` → `v2`
+- Reviewer: Claude claude-sonnet-4-5
+- Result: Accepted and merged to v2 (commit eb9536b4)
+- Summary: `detectReplayGap` updated to return `false` when `lastEventID <= 0` (fresh connect). Removes redundant `previous > 0` guard (now covered by the early return). `TestDetectReplayGap` unit tests cover fresh connect with gaps, continuous reconnect, and reconnect with true gap. Clean implementation.
+- Moved: 04-in-review → 05-completed
+
+## 2026-02-26 - Review: 141-supervisor-runs-stuck-in-progress-for-completed-tasks.md — CHANGES REQUIRED
+- PR: #1538 `task/141-complete-supervisor-runs-on-task-done` → `v2`
+- Reviewer: Claude claude-sonnet-4-5
+- Result: Sent back to 01-ready (merge conflict after PR #1534 merged)
+- Implementation is correct: loops over both `taskQueueTriggerType` and `taskSupervisorTriggerType` in `handleTaskCompletedEvent`. Tests are well-written.
+- P1 Blocker: Branch is now CONFLICTING (mergeStateStatus=DIRTY) after PR #1534 was merged to v2. Both PRs inserted tests at the same location in `task_queue_processor_test.go`. Must rebase on v2 tip (a2de2004) and force-push.
+- Moved: 04-in-review → 01-ready
+
+## 2026-02-26 - 141-supervisor-runs-stuck-in-progress-for-completed-tasks.md (reviewer rework pass)
+- Fixes applied:
+  - Rebases `task/141-complete-supervisor-runs-on-task-done` onto `v2` (tip `a2de2004`) and resolves conflicts in:
+    - `internal/controlplane/task_queue_processor_test.go`
+    - `internal/controlplane/task_queue_processor_integration_test.go`
+  - Preserved both scheduler and supervisor completion coverage in `TestTaskQueueProcessorHandleTaskCompletedEventCompletesSupervisorAndCancelledSchedulerRuns`.
+  - Removed the top-level `## Reviewer Required Changes` block from the task file after all required items were completed.
+- Tests run:
+  - `go test ./internal/controlplane ./internal/worker` (pass)
+  - `go test -tags integration ./internal/controlplane -run TaskQueueProcessor -count=1` (pass)
+
+## 2026-02-26 - Review: 138-supervisor-runs-stuck-in-created-state.md — ACCEPTED + MERGED (second pass)
+- PR: #1535 `task/138-supervisor-created-run-cleanup` → `v2`
+- Reviewer: Claude claude-sonnet-4-7
+- Result: Accepted — PR already merged to v2 (commit 7454079d)
+- Summary: `detectStaleCreatedRuns` added to supervisor tick cycle, queries via `ListCreatedByTriggerUpdatedBefore` and cancels supervisor runs in `created` for >5 minutes. `createdRunStaleLimit` constant (5 min) is clean. Integration test `TestRunRepositoryListCreatedByTriggerUpdatedBefore` verifies stale/recent/trigger-type filtering. Integration test `TestSupervisor_StaleCreatedRun_CancelledAndLogged` verifies stale run cancelled + `supervisor_recovery` event logged + recent run untouched. Lint failures are pre-existing on v2, not introduced by this PR.
+- Moved: 04-in-review → 05-completed
+
+## 2026-02-26 - Review: 141-supervisor-runs-stuck-in-progress-for-completed-tasks.md — ACCEPTED + MERGED
+- PR: #1538 `task/141-complete-supervisor-runs-on-task-done` → `v2`
+- Reviewer: Claude claude-sonnet-4-7
+- Merge commit: 323f4fdd452c8046082c44d72b9ff6c38eb5b8e3
+- Result: Accepted and merged to v2
+- Summary: `taskSupervisorTriggerType = "supervisor"` constant added. `handleTaskCompletedEvent` now loops over both `taskQueueTriggerType` and `taskSupervisorTriggerType`, completing in_progress runs and confirming cancelling runs for both trigger types. Unit test `TestTaskQueueProcessorHandleTaskCompletedEventCompletesSupervisorAndCancelledSchedulerRuns` verifies both scheduler and supervisor run completion calls. Integration test `TestTaskQueueProcessorIntegrationSupervisorRunCompletedOnTaskDone` verifies end-to-end event-driven completion of supervisor runs. Lint failures (projectTaskExecutor, defaultCircuitBreakerConfig) are pre-existing on v2.
+- Moved: 04-in-review → 05-completed
+
+## 2026-02-26 - Review: 143-tui-sse-connection-never-started-degraded-mode-on-launch.md — ACCEPTED + MERGED
+- PR: #1540 `task/143-tui-realtime-startup` → `v2`
+- Reviewer: Claude claude-sonnet-4-7
+- Merge commit: 3256e24edea9a86c6185a2b554edd095460dd307
+- Result: Accepted and merged to v2
+- Summary: `cmd/ottercamp/tui.go` updated to resolve credentials (flag > global > credstore/env), create `HTTPSSEConnector` targeting `serverURL+"/v1/events/stream"` with `scopes=org`, create `RealtimeClient` with callbacks that route `ConnectionStateMsg`/`ReplaySyncedMsg`/`ChatEnvelopeMsg`/`WorkspaceEnvelopeMsg` to the Bubble Tea program, and start the client in a goroutine cancelled on program exit. Unit tests in `tui_realtime_test.go` cover all four credential resolution paths (flags, globals, credstore, missing-key error). Existing `internal/tui/realtime_integration_test.go` covers the full RealtimeClient pipeline. Binary verified working with `--non-interactive` and `OTTERCAMP_API_KEY`. Lint failures (projectTaskExecutor, dedupBatchSize) are pre-existing on v2.
+- Moved: 04-in-review → 05-completed
+
+## 2026-02-26 - Review: 143-tui-sse-degraded-mode-on-every-launch.md — ACCEPTED + MERGED
+- PR: #1541 `task-143-tui-sse-degraded-mode` → `v2`
+- Reviewer: Claude claude-sonnet-4-7
+- Merge commit: a374a7ac8360b002d8fcfc7ec9e25a3c5dd333ff
+- Result: Accepted and merged to v2
+- Summary: Two-part fix for TUI always showing DEGRADED MODE. Fix 1 (`cmd/ottercamp/tui.go`): wires `HTTPSSEConnector` targeting `serverURL+"/v1/events/stream"` with `scopes=org`, creates `RealtimeClient` with correct callbacks (`ConnectionStateMsg`, `ReplaySyncedMsg`, `ChatEnvelopeMsg`, `WorkspaceEnvelopeMsg`), starts `client.Run(ctx)` in goroutine cancelled on program exit, loads credentials from flags/env/credstore. Fix 2 (`internal/tui/realtime.go`): `consumeStream` detects `event: connected` meta-frames before `DecodeEventEnvelope`; routes to `handleConnectedFrame` which: sets `degraded=false` and emits `ConnectionConnected` when no gap, or calls `markDegradedAndRefresh` when `gap:true`. Tests `TestRealtimeConnectedMetaFrameNoGap` and `TestRealtimeConnectedMetaFrameWithGapDegrades` both correct and present on PR branch. Lint failures are all pre-existing on v2; PR introduced no new lint errors.
+- Moved: 04-in-review → 05-completed
