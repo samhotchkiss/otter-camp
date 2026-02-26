@@ -263,10 +263,6 @@ func (h projectHandlers) createProject(w http.ResponseWriter, r *http.Request) {
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
 		return
 	}
-	if strings.TrimSpace(req.Slug) == "" {
-		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "slug is required")
-		return
-	}
 	displayName := strings.TrimSpace(req.DisplayName)
 	if displayName == "" {
 		displayName = strings.TrimSpace(req.Name)
@@ -276,6 +272,11 @@ func (h projectHandlers) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	slug := strings.TrimSpace(req.Slug)
+	if slug == "" {
+		slug = slugifyProjectName(displayName)
+	}
+
 	deliveryMode := strings.TrimSpace(req.DeliveryMode)
 	if deliveryMode == "" {
 		deliveryMode = "gated"
@@ -283,7 +284,7 @@ func (h projectHandlers) createProject(w http.ResponseWriter, r *http.Request) {
 
 	created, err := h.service.Create(r.Context(), projectsvc.CreateProjectRequest{
 		OrganizationID:       principal.OrganizationID,
-		Slug:                 strings.TrimSpace(req.Slug),
+		Slug:                 slug,
 		DisplayName:          displayName,
 		Description:          req.Description,
 		DeliveryMode:         deliveryMode,
@@ -1345,6 +1346,34 @@ func toFlowNodeResponse(model *projectsvc.FlowNode) flowNodeResponse {
 		CreatedAt:           model.CreatedAt,
 		UpdatedAt:           model.UpdatedAt,
 	}
+}
+
+// slugifyProjectName converts a human-readable name into a lowercase slug
+// suitable for use as a project URL slug. Used when a slug is not explicitly
+// provided in a create-project request.
+func slugifyProjectName(name string) string {
+	s := strings.ToLower(strings.TrimSpace(name))
+	s = strings.ReplaceAll(s, "_", "-")
+	s = strings.ReplaceAll(s, " ", "-")
+	// Strip characters that are not alphanumeric or hyphen
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	s = b.String()
+	// Collapse runs of hyphens
+	for strings.Contains(s, "--") {
+		s = strings.ReplaceAll(s, "--", "-")
+	}
+	s = strings.Trim(s, "-")
+	if s == "" {
+		s = "project-" + strings.ToLower(uuid.NewString()[:8])
+	}
+	return s
 }
 
 func toScheduleResponse(model *projectsvc.TaskSchedule) scheduleResponse {
