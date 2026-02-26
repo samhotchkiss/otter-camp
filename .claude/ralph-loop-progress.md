@@ -732,6 +732,34 @@ Go build: PASS
 - Trace spans ok: 60 (up from 57)
 - Completed model invocations: 514 (up from 510)
 
+## Fixes Made This Loop (Iteration 23)
+- Moved issue 131 from 01-ready to 05-completed (already fixed, file not moved)
+- Created issue files 130, 132, 133 in 05-completed (were fixed but never filed)
+
+## Routes Validated (Iteration 23 - previously untested)
+- GET /v1/model/invocations?status=completed: filter works, 50 results ✓
+- GET /v1/model/invocations keys: {id, organization_id, model_provider_id, model_profile_id, invocation_purpose, status, input_tokens, output_tokens, model_name, session_id, turn_id, run_id} ✓
+- GET /v1/model/providers: 2 providers (openai, anthropic) both enabled ✓
+- GET /v1/model/providers/{id}/connections: 1 OpenAI connection with {failover_priority, max_concurrent} ✓
+- PATCH /v1/model/providers/{id}/connections/{cid}: failover_priority update works ✓
+- GET /v1/usage?period=today&group_by=agent: Frank with 467 invocations, 29802 output tokens ✓
+- memory.record tool: tier2, requires capability memory.write, previously completed successfully ✓
+  (Frank refused in new session - model decision, not system bug)
+- TUI tests: 6+ tests PASS (layout snapshots, state machine, chat reducer, size class boundaries)
+
+## Validation Results (Iteration 23 - all PASS)
+- All 13 spec areas PASS
+- Agent turn verified: Frank used project_list, identified most recently created project
+- All 45 go test packages: PASS (all cached)
+- TUI tests: all 6+ pass
+- Worker: 0 dead letters in 30 minutes ✓
+
+## DB State (verified 2026-02-26T07:00)
+- Chat messages: 1368 (up from 1360)
+- Candidate memories: 92 (up from 90)
+- Trace spans ok: 67 (up from 60)
+- Completed model invocations: 525 (up from 514)
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
 - MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
