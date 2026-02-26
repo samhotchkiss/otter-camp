@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
@@ -820,15 +822,182 @@ func (e *NativeToolExecutor) handleSubtaskUpdate(ctx context.Context, input map[
 	}, nil
 }
 
-func (e *NativeToolExecutor) advanceExecutionToNode(ctx context.Context, taskID uuid.UUID, nextNodeID *uuid.UUID) (map[string]any, error) {
-	if _, err := e.tasks.SetFlowNode(ctx, taskID, nextNodeID); err != nil {
+func (e *NativeToolExecutor) completeFlowTask(ctx context.Context, taskID uuid.UUID) (map[string]any, error) {
+	if e.tasks == nil {
+		return map[string]any{"error": "task_repository_unavailable"}, nil
+	}
+	if e.pool != nil {
+		return e.completeFlowTaskTx(ctx, taskID)
+	}
+
+	current, err := e.tasks.GetByID(ctx, taskID)
+	if err != nil {
 		return nil, err
 	}
+	targetStatus := "done"
+	if current.RequiresHumanReview {
+		targetStatus = "review"
+	}
+	if _, err := e.tasks.SetFlowNode(ctx, taskID, nil); err != nil {
+		return nil, err
+	}
+	if _, err := e.tasks.UpdateStatus(ctx, taskID, targetStatus); err != nil {
+		return nil, err
+	}
+	if err := e.publishTaskStatusEvents(ctx, nil, current, targetStatus); err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"advanced_to_node_id": nil,
+		"flow_completed":      true,
+	}, nil
+}
+
+func (e *NativeToolExecutor) completeFlowTaskTx(ctx context.Context, taskID uuid.UUID) (map[string]any, error) {
+	tx, err := e.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	current, err := e.getTaskForTerminalAdvanceTx(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	targetStatus := "done"
+	if current.RequiresHumanReview {
+		targetStatus = "review"
+	}
+
+	commandTag, err := tx.Exec(ctx, `
+		UPDATE project_task
+		SET
+			current_flow_node_id = NULL,
+			work_status = $2,
+			completed_at = CASE WHEN $2 IN ('done', 'cancelled') THEN now() ELSE NULL END
+		WHERE id = $1
+	`, taskID, targetStatus)
+	if err != nil {
+		return nil, err
+	}
+	if commandTag.RowsAffected() == 0 {
+		return nil, repo.ErrNotFound
+	}
+
+	if err := e.publishTaskStatusEvents(ctx, tx, current, targetStatus); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"advanced_to_node_id": nil,
+		"flow_completed":      true,
+	}, nil
+}
+
+func (e *NativeToolExecutor) getTaskForTerminalAdvanceTx(ctx context.Context, tx pgx.Tx, taskID uuid.UUID) (repo.ProjectTask, error) {
+	row := tx.QueryRow(ctx, `
+		SELECT
+			id,
+			organization_id,
+			project_id,
+			work_status,
+			requires_human_review
+		FROM project_task
+		WHERE id = $1
+		FOR UPDATE
+	`, taskID)
+
+	var task repo.ProjectTask
+	if err := row.Scan(
+		&task.ID,
+		&task.OrganizationID,
+		&task.ProjectID,
+		&task.WorkStatus,
+		&task.RequiresHumanReview,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return repo.ProjectTask{}, repo.ErrNotFound
+		}
+		return repo.ProjectTask{}, err
+	}
+	return task, nil
+}
+
+func (e *NativeToolExecutor) publishTaskStatusEvents(ctx context.Context, tx pgx.Tx, task repo.ProjectTask, targetStatus string) error {
+	if e.events == nil {
+		return nil
+	}
+	actorType, actorID := domainActorFromExecutionActor(actorFromContext(ctx))
+
+	payload := map[string]any{
+		"from_status": strings.TrimSpace(task.WorkStatus),
+		"to_status":   strings.TrimSpace(targetStatus),
+		"task_id":     task.ID,
+		"project_id":  task.ProjectID,
+	}
+	encodedPayload, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if err := e.events.Publish(ctx, tx, eventbus.DomainEvent{
+		OrganizationID: task.OrganizationID,
+		EventType:      "task.status_changed",
+		ActorType:      actorType,
+		ActorID:        actorID,
+		Payload:        encodedPayload,
+	}); err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(targetStatus) == "done" {
+		if err := e.events.Publish(ctx, tx, eventbus.DomainEvent{
+			OrganizationID: task.OrganizationID,
+			EventType:      "task.completed",
+			ActorType:      actorType,
+			ActorID:        actorID,
+			Payload:        encodedPayload,
+		}); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func domainActorFromExecutionActor(actor executionActor) (string, *uuid.UUID) {
+	switch strings.TrimSpace(actor.principalType) {
+	case "agent":
+		id := actor.principalID
+		if id == uuid.Nil {
+			return "system", nil
+		}
+		return "agent", &id
+	case "supervisor":
+		return "supervisor", nil
+	case "human_user":
+		id := actor.principalID
+		if id == uuid.Nil {
+			return "system", nil
+		}
+		return "human", &id
+	default:
+		return "system", nil
+	}
+}
+
+func (e *NativeToolExecutor) advanceExecutionToNode(ctx context.Context, taskID uuid.UUID, nextNodeID *uuid.UUID) (map[string]any, error) {
 	if nextNodeID == nil {
-		return map[string]any{
-			"advanced_to_node_id": nil,
-			"flow_completed":      true,
-		}, nil
+		return e.completeFlowTask(ctx, taskID)
+	}
+	if _, err := e.tasks.SetFlowNode(ctx, taskID, nextNodeID); err != nil {
+		return nil, err
 	}
 	if _, err := e.flowExecs.Create(ctx, repo.FlowNodeExecution{
 		TaskID:      taskID,
