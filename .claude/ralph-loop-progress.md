@@ -627,6 +627,45 @@ Go build: PASS
 - Completed model invocations: 510 (up from 509)
 - Cleanup jobs: 12 pending at 20:00 (all correctly scheduled, none dead-lettering) ✓
 
+## Fixes Made This Loop (Iteration 20)
+- No new code fixes needed - all spec areas PASSING
+- Sync mode sessions, task sub-routes, project CRUD fully validated
+
+## Routes Validated (Iteration 20 - previously untested)
+- Sync mode chat session: create → enqueue message → Frank responds (same flow, different mode label) ✓
+  - active_sync_session_exists error: only one active sync session allowed per org ✓
+  - chat-sessions?mode=sync filter works ✓
+- PATCH /v1/projects/{id}: update description ✓; DELETE /v1/projects/{id}: 204 No Content ✓
+- PATCH /v1/tasks/{id}: update description ✓
+- GET /v1/tasks/{id}/flow: {current_execution, current_node, executions, flow_template_id, subtasks, task_id} ✓
+- GET /v1/tasks/{id}/events: task event log with event_type, actor, payload ✓
+- GET /v1/tasks/{id}/participants: empty list ✓
+- GET /v1/tasks/{id}/diff: no_remote error (expected - no git remote configured) ✓
+- POST /v1/tasks/{id}/cancel: 200 OK ✓
+- GET /v1/chat-sessions?scope_type=organization: filter works ✓
+- GET /v1/chat-sessions?mode=sync: returns 1 active sync session ✓
+- GET /v1/projects/{id}: same as list item (no extra fields in detail) ✓
+- GET /v1/projects: 20 projects with full schema ✓
+
+## API Field Corrections (iteration 20 additions)
+- Sync session: one active sync session per org (active_sync_session_exists error code)
+- Task flow route: GET /tasks/{id}/flow (not /tasks/{id}/flow-execution)
+- Task diff: no_remote error when no git remote configured (by design)
+- Project DELETE: 204 No Content (soft delete)
+- Session list filter: scope_type and mode query params both work
+
+## Validation Results (Iteration 20 - all PASS)
+- All 13 spec areas PASS (same as iter 19)
+- Sync mode verified: Frank responded to sync session question correctly
+- All 45 go test packages: PASS (cached)
+- go build: PASS
+
+## DB State (verified 2026-02-26T06:15)
+- Chat messages: ~1380 (up from 1358, including new test sessions)
+- Candidate memories: 90 (same)
+- Trace spans ok: ~60 (up from 57)
+- Completed model invocations: ~520 (up from 510)
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
 - MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
