@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -55,6 +57,7 @@ type taskReader interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
 	ListByProject(ctx context.Context, projectID uuid.UUID, statuses ...string) ([]repo.ProjectTask, error)
 	SetFlowNode(ctx context.Context, id uuid.UUID, flowNodeID *uuid.UUID) (repo.ProjectTask, error)
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string) (repo.ProjectTask, error)
 	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 }
 
@@ -128,6 +131,10 @@ type dependencyRepository interface {
 	Remove(ctx context.Context, id uuid.UUID) error
 }
 
+type eventPublisher interface {
+	Publish(ctx context.Context, tx pgx.Tx, event eventbus.DomainEvent) error
+}
+
 type cliExecutor interface {
 	Execute(ctx context.Context, input map[string]any) (map[string]any, error)
 }
@@ -141,6 +148,7 @@ type ExecutorOptions struct {
 	Memory         memoryQueryService
 	MemoryRecorder memoryRecordService
 	CLI            cliExecutor
+	Events         eventPublisher
 	Command        commandContextFunc
 }
 
@@ -151,6 +159,7 @@ type NativeToolExecutor struct {
 	memory         memoryQueryService
 	memoryRecorder memoryRecordService
 	cli            cliExecutor
+	events         eventPublisher
 	command        commandContextFunc
 	chatSessions   chatSessionReader
 	projects       projectReader
@@ -189,6 +198,7 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 		memory:         opts.Memory,
 		memoryRecorder: opts.MemoryRecorder,
 		cli:            opts.CLI,
+		events:         opts.Events,
 		command:        command,
 		workspaces:     make(map[string]SessionWorkDir),
 	}
@@ -210,6 +220,9 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 		exec.dependencies = repo.NewProjectTaskDependencyRepo(opts.Pool)
 		exec.audit = repo.NewAuditEventRepo(opts.Pool)
 		exec.memories = repo.NewMemoryRepo(opts.Pool)
+		if exec.events == nil {
+			exec.events = eventbus.New(opts.Pool, nil, eventbus.Config{})
+		}
 	}
 
 	return exec

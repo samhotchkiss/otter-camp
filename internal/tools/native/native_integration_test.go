@@ -5,6 +5,7 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
@@ -280,6 +283,172 @@ func TestIntegrationFlowAdvanceMovesToNextNode(t *testing.T) {
 	}
 	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[1].ID {
 		t.Fatalf("task current_flow_node_id = %v, want %s", updatedTask.CurrentFlowNodeID, nodes[1].ID)
+	}
+}
+
+func TestIntegrationFlowAdvanceTerminalPublishesStatusChangedDomainEvent(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	template := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(context.Background(), template.ID)
+	if err != nil {
+		t.Fatalf("list flow nodes: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("nodes count = %d, want 1", len(nodes))
+	}
+
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "in_progress",
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(context.Background(), task.ID, &nodes[0].ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	execution, err := executionRepo.Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  nodes[0].ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	ctx := integrationExecCtxWith(orgID, agent.ID)
+	out, err := executor.Execute(ctx, "flow.advance", map[string]any{
+		"flow_node_execution_id": execution.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("flow.advance: %v", err)
+	}
+	if out["flow_completed"] != true {
+		t.Fatalf("flow_completed = %v, want true", out["flow_completed"])
+	}
+
+	var updatedStatus string
+	if err := pool.QueryRow(context.Background(), `SELECT work_status FROM project_task WHERE id = $1`, task.ID).Scan(&updatedStatus); err != nil {
+		t.Fatalf("load task status: %v", err)
+	}
+	if updatedStatus != "done" {
+		t.Fatalf("task work_status = %q, want done", updatedStatus)
+	}
+
+	var statusChangedEvents int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM domain_event
+		WHERE organization_id = $1
+		  AND event_type = 'task.status_changed'
+		  AND payload->>'task_id' = $2
+	`, orgID, task.ID.String()).Scan(&statusChangedEvents); err != nil {
+		t.Fatalf("count task.status_changed domain events: %v", err)
+	}
+	if statusChangedEvents < 1 {
+		t.Fatalf("task.status_changed domain events = %d, want >= 1", statusChangedEvents)
+	}
+}
+
+type failEventPublisher struct {
+	failOn string
+}
+
+func (f *failEventPublisher) Publish(_ context.Context, _ pgx.Tx, event eventbus.DomainEvent) error {
+	if strings.TrimSpace(event.EventType) == strings.TrimSpace(f.failOn) {
+		return fmt.Errorf("forced publish failure for %s", event.EventType)
+	}
+	return nil
+}
+
+func TestIntegrationFlowAdvanceTerminalRollsBackTaskUpdateWhenEventPublishFails(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	template := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(context.Background(), template.ID)
+	if err != nil {
+		t.Fatalf("list flow nodes: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("nodes count = %d, want 1", len(nodes))
+	}
+
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "in_progress",
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(context.Background(), task.ID, &nodes[0].ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	execution, err := executionRepo.Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  nodes[0].ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:          pool,
+		WorkspaceRoot: t.TempDir(),
+		Events:        &failEventPublisher{failOn: "task.status_changed"},
+	})
+	ctx := integrationExecCtxWith(orgID, agent.ID)
+	if _, err := executor.Execute(ctx, "flow.advance", map[string]any{
+		"flow_node_execution_id": execution.ID.String(),
+	}); err == nil {
+		t.Fatal("expected flow.advance failure when domain event publish fails")
+	}
+
+	updatedTask, err := taskRepo.GetByID(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("load updated task: %v", err)
+	}
+	if updatedTask.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress after rollback", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[0].ID {
+		t.Fatalf("task current_flow_node_id = %v, want %s after rollback", updatedTask.CurrentFlowNodeID, nodes[0].ID)
+	}
+
+	var statusChangedEvents int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM domain_event
+		WHERE organization_id = $1
+		  AND event_type = 'task.status_changed'
+		  AND payload->>'task_id' = $2
+	`, orgID, task.ID.String()).Scan(&statusChangedEvents); err != nil {
+		t.Fatalf("count task.status_changed domain events: %v", err)
+	}
+	if statusChangedEvents != 0 {
+		t.Fatalf("task.status_changed domain events = %d, want 0 after rollback", statusChangedEvents)
 	}
 }
 

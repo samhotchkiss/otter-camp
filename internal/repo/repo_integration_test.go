@@ -316,6 +316,113 @@ func TestToolDefinitionTier2SeedMigration(t *testing.T) {
 	}
 }
 
+func TestToolDefinitionSeedSchemasIncludePropertiesAndRequiredParameters(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+
+	var schemaCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM tool_definition
+		WHERE tool_domain IN ('native', 'browser')
+	`).Scan(&schemaCount); err != nil {
+		t.Fatalf("count native/browser tool definitions: %v", err)
+	}
+	if schemaCount != 66 {
+		t.Fatalf("native/browser tool definition count = %d, want 66", schemaCount)
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT name, input_schema
+		FROM tool_definition
+		WHERE tool_domain IN ('native', 'browser')
+	`)
+	if err != nil {
+		t.Fatalf("query tool schemas: %v", err)
+	}
+	defer rows.Close()
+
+	requiredExpectations := map[string][]string{
+		"file.write":         {"path"},
+		"file.edit":          {"path", "old_string", "new_string"},
+		"task.create":        {"project_id", "title"},
+		"task.update":        {"task_id"},
+		"flow.advance":       {"flow_node_execution_id"},
+		"schedule.create":    {"project_id", "flow_template_id", "cron"},
+		"message.send":       {"session_id", "content"},
+		"browser.navigate":   {"url"},
+		"browser.type":       {"selector", "text"},
+		"browser.press_key":  {"key"},
+		"browser.evaluate":   {"script"},
+		"project.get":        {"project_id"},
+		"flow.get_template":  {"flow_template_id"},
+		"flow.get_execution": {"flow_node_execution_id"},
+	}
+
+	seen := map[string]struct{}{}
+	for rows.Next() {
+		var (
+			name      string
+			schemaRaw json.RawMessage
+		)
+		if err := rows.Scan(&name, &schemaRaw); err != nil {
+			t.Fatalf("scan tool schema: %v", err)
+		}
+
+		var schema map[string]any
+		if err := json.Unmarshal(schemaRaw, &schema); err != nil {
+			t.Fatalf("unmarshal schema for %s: %v", name, err)
+		}
+
+		if schemaType, _ := schema["type"].(string); schemaType != "object" {
+			t.Fatalf("schema type for %s = %q, want object", name, schemaType)
+		}
+		propertiesRaw, ok := schema["properties"]
+		if !ok {
+			t.Fatalf("schema for %s missing properties", name)
+		}
+		properties, ok := propertiesRaw.(map[string]any)
+		if !ok {
+			t.Fatalf("schema properties for %s are not an object", name)
+		}
+
+		expectedRequired, mustCheckRequired := requiredExpectations[name]
+		if !mustCheckRequired {
+			continue
+		}
+		seen[name] = struct{}{}
+
+		requiredFields := map[string]struct{}{}
+		if requiredRaw, ok := schema["required"]; ok {
+			if requiredList, ok := requiredRaw.([]any); ok {
+				for _, item := range requiredList {
+					if value, ok := item.(string); ok {
+						requiredFields[value] = struct{}{}
+					}
+				}
+			}
+		}
+
+		for _, field := range expectedRequired {
+			if _, ok := properties[field]; !ok {
+				t.Fatalf("schema for %s missing property %q", name, field)
+			}
+			if _, ok := requiredFields[field]; !ok {
+				t.Fatalf("schema for %s missing required field %q", name, field)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate tool schema rows: %v", err)
+	}
+
+	for name := range requiredExpectations {
+		if _, ok := seen[name]; !ok {
+			t.Fatalf("missing tool definition row for %s", name)
+		}
+	}
+}
+
 func TestMemoryTaxonomyRepoSubtreeDeleteRestrictAndConflict(t *testing.T) {
 	pool := testdb.New(t)
 	orgRepo := NewOrgRepo(pool)

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -24,6 +25,22 @@ func TestRegisterNativeToolDefinitions(t *testing.T) {
 	}
 	if tool.ToolDomain != "mcp" {
 		t.Fatalf("tool domain = %q, want mcp", tool.ToolDomain)
+	}
+
+	var schema map[string]any
+	if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
+		t.Fatalf("unmarshal input schema: %v", err)
+	}
+	propertiesRaw, ok := schema["properties"]
+	if !ok {
+		t.Fatal("discover tool schema missing properties")
+	}
+	properties, ok := propertiesRaw.(map[string]any)
+	if !ok {
+		t.Fatal("discover tool schema properties should be an object")
+	}
+	if _, ok := properties["connection_id"]; !ok {
+		t.Fatal("discover tool schema missing connection_id property")
 	}
 }
 
