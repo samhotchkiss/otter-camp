@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,6 +19,8 @@ import (
 const (
 	bootstrapAuditAction    = "bootstrap_complete"
 	bootstrapAuditEventType = "system.bootstrap"
+	defaultAuditLimit       = 50
+	maxAuditLimit           = 200
 )
 
 type orgRepository interface {
@@ -44,6 +47,7 @@ func NewOrgAuditRouteRegistrar(pool *pgxpool.Pool) *OrgAuditRouteRegistrar {
 func (r *OrgAuditRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.Get("/orgs/current", r.handlers.getCurrentOrg)
 	router.Get("/audit", r.handlers.listAudit)
+	router.Get("/audit-events", r.handlers.listAuditEvents)
 }
 
 type orgAuditHandlers struct {
@@ -66,6 +70,15 @@ type auditEventResponse struct {
 	TargetType    *string    `json:"target_type"`
 	TargetID      *uuid.UUID `json:"target_id"`
 	CreatedAt     time.Time  `json:"created_at"`
+}
+
+type auditEventListResponse struct {
+	ID            uuid.UUID      `json:"id"`
+	Action        string         `json:"action"`
+	PrincipalType string         `json:"principal_type"`
+	PrincipalID   uuid.UUID      `json:"principal_id"`
+	Context       map[string]any `json:"context"`
+	CreatedAt     time.Time      `json:"created_at"`
 }
 
 func (h orgAuditHandlers) getCurrentOrg(w http.ResponseWriter, r *http.Request) {
@@ -111,12 +124,14 @@ func (h orgAuditHandlers) listAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filters := repo.AuditEventFilters{
-		EventType: actionToEventType(r.URL.Query().Get("action")),
+	filters, err := parseAuditFilters(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeValidation, err.Error())
+		return
 	}
 
 	events, err := h.audits.ListByOrg(r.Context(), principal.OrganizationID, filters, repo.Pagination{
-		Limit:  parseQueryInt(r.URL.Query().Get("limit"), 50),
+		Limit:  parseAuditLimit(r.URL.Query().Get("limit"), defaultAuditLimit),
 		Offset: parseQueryInt(r.URL.Query().Get("offset"), 0),
 	})
 	if err != nil {
@@ -134,6 +149,52 @@ func (h orgAuditHandlers) listAudit(w http.ResponseWriter, r *http.Request) {
 			PrincipalID:   event.PrincipalID,
 			TargetType:    event.TargetType,
 			TargetID:      event.TargetID,
+			CreatedAt:     event.CreatedAt,
+		})
+	}
+	responder.JSON(w, http.StatusOK, response)
+}
+
+func (h orgAuditHandlers) listAuditEvents(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.audits == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "audit repository unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+	if !isOwnerOrAdmin(principal.Role) {
+		responder.Error(w, http.StatusForbidden, api.ErrCodeForbidden, "forbidden")
+		return
+	}
+
+	filters, err := parseAuditFilters(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeValidation, err.Error())
+		return
+	}
+
+	events, err := h.audits.ListByOrg(r.Context(), principal.OrganizationID, filters, repo.Pagination{
+		Limit:  parseAuditLimit(r.URL.Query().Get("limit"), defaultAuditLimit),
+		Offset: parseQueryInt(r.URL.Query().Get("offset"), 0),
+	})
+	if err != nil {
+		responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to list audit events")
+		return
+	}
+
+	response := make([]auditEventListResponse, 0, len(events))
+	for _, event := range events {
+		response = append(response, auditEventListResponse{
+			ID:            event.ID,
+			Action:        eventTypeToAction(event.EventType),
+			PrincipalType: event.PrincipalType,
+			PrincipalID:   event.PrincipalID,
+			Context:       cloneMetadata(event.Metadata),
 			CreatedAt:     event.CreatedAt,
 		})
 	}
@@ -169,4 +230,89 @@ func parseQueryInt(raw string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func parseAuditLimit(raw string, fallback int) int {
+	limit := parseQueryInt(raw, fallback)
+	if limit <= 0 {
+		return fallback
+	}
+	if limit > maxAuditLimit {
+		return maxAuditLimit
+	}
+	return limit
+}
+
+func parseAuditFilters(r *http.Request) (repo.AuditEventFilters, error) {
+	filters := repo.AuditEventFilters{
+		EventType: actionToEventType(r.URL.Query().Get("action")),
+	}
+
+	principalType := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("principal_type")))
+	if principalType != "" {
+		switch principalType {
+		case "human", "agent", "system":
+			filters.PrincipalType = &principalType
+		default:
+			return repo.AuditEventFilters{}, fmt.Errorf("principal_type must be one of: human, agent, system")
+		}
+	}
+
+	principalIDRaw := strings.TrimSpace(r.URL.Query().Get("principal_id"))
+	if principalIDRaw != "" {
+		principalID, err := uuid.Parse(principalIDRaw)
+		if err != nil {
+			return repo.AuditEventFilters{}, fmt.Errorf("principal_id must be a valid UUID")
+		}
+		filters.PrincipalID = &principalID
+	}
+
+	from, err := parseRFC3339QueryTime(r.URL.Query().Get("from"))
+	if err != nil {
+		return repo.AuditEventFilters{}, fmt.Errorf("from must be an RFC3339 timestamp")
+	}
+	to, err := parseRFC3339QueryTime(r.URL.Query().Get("to"))
+	if err != nil {
+		return repo.AuditEventFilters{}, fmt.Errorf("to must be an RFC3339 timestamp")
+	}
+	if from != nil && to != nil && from.After(*to) {
+		return repo.AuditEventFilters{}, fmt.Errorf("from must be before to")
+	}
+	filters.CreatedAfter = from
+	filters.CreatedBefore = to
+
+	return filters, nil
+}
+
+func parseRFC3339QueryTime(raw string) (*time.Time, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, trimmed)
+	if err != nil {
+		return nil, err
+	}
+	utc := parsed.UTC()
+	return &utc, nil
+}
+
+func isOwnerOrAdmin(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "owner", "admin":
+		return true
+	default:
+		return false
+	}
+}
+
+func cloneMetadata(source map[string]any) map[string]any {
+	if len(source) == 0 {
+		return map[string]any{}
+	}
+	cloned := make(map[string]any, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
 }

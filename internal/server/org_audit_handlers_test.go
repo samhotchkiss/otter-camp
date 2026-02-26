@@ -32,6 +32,7 @@ func TestOrgAuditRoutesRegistered(t *testing.T) {
 	required := []string{
 		"GET /orgs/current",
 		"GET /audit",
+		"GET /audit-events",
 	}
 	for _, route := range required {
 		if _, ok := routes[route]; !ok {
@@ -146,6 +147,110 @@ func TestListAuditRepositoryError(t *testing.T) {
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d want=%d body=%s", rr.Code, http.StatusInternalServerError, rr.Body.String())
+	}
+}
+
+func TestListAuditEventsRequiresAdminOrOwner(t *testing.T) {
+	h := orgAuditHandlers{
+		audits: &fakeAuditRepo{},
+	}
+
+	req := withPrincipal(t, httptest.NewRequest(http.MethodGet, "/v1/audit-events", nil), middleware.Principal{
+		UserID:         uuid.New(),
+		OrganizationID: uuid.New(),
+		Role:           "member",
+	})
+	rr := httptest.NewRecorder()
+	h.listAuditEvents(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want=%d body=%s", rr.Code, http.StatusForbidden, rr.Body.String())
+	}
+}
+
+func TestListAuditEventsParsesFiltersAndReturnsData(t *testing.T) {
+	orgID := uuid.New()
+	principalID := uuid.New()
+	from := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+	to := time.Now().UTC().Add(-1 * time.Hour).Truncate(time.Second)
+	now := time.Now().UTC()
+
+	repo := &fakeAuditRepo{
+		events: []repo.AuditEvent{
+			{
+				ID:             uuid.New(),
+				OrganizationID: orgID,
+				EventType:      "auth.login",
+				PrincipalType:  "agent",
+				PrincipalID:    principalID,
+				Metadata: map[string]any{
+					"ip_address": "127.0.0.1",
+				},
+				CreatedAt: now,
+			},
+		},
+	}
+	h := orgAuditHandlers{audits: repo}
+
+	req := withPrincipal(t, httptest.NewRequest(
+		http.MethodGet,
+		"/v1/audit-events?action=auth.login&principal_type=agent&principal_id="+principalID.String()+"&from="+from.Format(time.RFC3339)+"&to="+to.Format(time.RFC3339)+"&limit=20",
+		nil,
+	), middleware.Principal{
+		UserID:         uuid.New(),
+		OrganizationID: orgID,
+		Role:           "owner",
+	})
+	rr := httptest.NewRecorder()
+	h.listAuditEvents(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if repo.filters.EventType == nil || *repo.filters.EventType != "auth.login" {
+		t.Fatalf("event type filter=%v want=%q", repo.filters.EventType, "auth.login")
+	}
+	if repo.filters.PrincipalType == nil || *repo.filters.PrincipalType != "agent" {
+		t.Fatalf("principal type filter=%v want=%q", repo.filters.PrincipalType, "agent")
+	}
+	if repo.filters.PrincipalID == nil || *repo.filters.PrincipalID != principalID {
+		t.Fatalf("principal id filter=%v want=%s", repo.filters.PrincipalID, principalID)
+	}
+	if repo.filters.CreatedAfter == nil || !repo.filters.CreatedAfter.Equal(from) {
+		t.Fatalf("created_after=%v want=%s", repo.filters.CreatedAfter, from)
+	}
+	if repo.filters.CreatedBefore == nil || !repo.filters.CreatedBefore.Equal(to) {
+		t.Fatalf("created_before=%v want=%s", repo.filters.CreatedBefore, to)
+	}
+	if repo.page.Limit != 20 {
+		t.Fatalf("limit=%d want=%d", repo.page.Limit, 20)
+	}
+	if got := stringJSONPath(t, rr.Body.Bytes(), "data", "0", "action"); got != "auth.login" {
+		t.Fatalf("data[0].action=%q want=%q body=%s", got, "auth.login", rr.Body.String())
+	}
+	if got := stringJSONPath(t, rr.Body.Bytes(), "data", "0", "principal_type"); got != "agent" {
+		t.Fatalf("data[0].principal_type=%q want=%q body=%s", got, "agent", rr.Body.String())
+	}
+	if got := stringJSONPath(t, rr.Body.Bytes(), "data", "0", "context", "ip_address"); got != "127.0.0.1" {
+		t.Fatalf("data[0].context.ip_address=%q want=%q body=%s", got, "127.0.0.1", rr.Body.String())
+	}
+}
+
+func TestListAuditEventsRejectsInvalidPrincipalType(t *testing.T) {
+	h := orgAuditHandlers{
+		audits: &fakeAuditRepo{},
+	}
+
+	req := withPrincipal(t, httptest.NewRequest(http.MethodGet, "/v1/audit-events?principal_type=robot", nil), middleware.Principal{
+		UserID:         uuid.New(),
+		OrganizationID: uuid.New(),
+		Role:           "admin",
+	})
+	rr := httptest.NewRecorder()
+	h.listAuditEvents(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want=%d body=%s", rr.Code, http.StatusBadRequest, rr.Body.String())
 	}
 }
 
