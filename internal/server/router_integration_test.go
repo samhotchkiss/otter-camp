@@ -209,6 +209,53 @@ func TestVersionAndPrefixEnforcement(t *testing.T) {
 	}
 }
 
+func TestMetricsEndpointSecretAccessControl(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+	t.Setenv("OTTERCAMP_METRICS_SECRET", "metrics-secret")
+
+	testServer, _, _ := newAuthTestServer(t, "standard")
+	defer testServer.Close()
+
+	noSecret := mustJSON(t, http.MethodGet, testServer.URL+"/metrics", nil, nil)
+	if noSecret.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("metrics without secret status = %d, want %d body=%s", noSecret.StatusCode, http.StatusUnauthorized, string(noSecret.Body))
+	}
+
+	wrongSecret := mustJSON(t, http.MethodGet, testServer.URL+"/metrics", nil, map[string]string{
+		"X-Metrics-Token": "wrong-secret",
+	})
+	if wrongSecret.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("metrics with wrong secret status = %d, want %d body=%s", wrongSecret.StatusCode, http.StatusUnauthorized, string(wrongSecret.Body))
+	}
+
+	withHeader := mustJSON(t, http.MethodGet, testServer.URL+"/metrics", nil, map[string]string{
+		"X-Metrics-Token": "metrics-secret",
+	})
+	if withHeader.StatusCode != http.StatusOK {
+		t.Fatalf("metrics with X-Metrics-Token status = %d, want %d body=%s", withHeader.StatusCode, http.StatusOK, string(withHeader.Body))
+	}
+
+	withBearer := mustJSON(t, http.MethodGet, testServer.URL+"/metrics", nil, map[string]string{
+		"Authorization": "Bearer metrics-secret",
+	})
+	if withBearer.StatusCode != http.StatusOK {
+		t.Fatalf("metrics with bearer secret status = %d, want %d body=%s", withBearer.StatusCode, http.StatusOK, string(withBearer.Body))
+	}
+}
+
+func TestMetricsEndpointOpenWhenSecretUnset(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+	t.Setenv("OTTERCAMP_METRICS_SECRET", "")
+
+	testServer, _, _ := newAuthTestServer(t, "standard")
+	defer testServer.Close()
+
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/metrics", nil, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("metrics status = %d, want %d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+}
+
 func TestStaticServingAndAPIRoutePrecedence(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 	t.Setenv("OTTERCAMP_WEB_MODE", "directory")

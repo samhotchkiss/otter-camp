@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/samhotchkiss/otter-camp/internal/metrics"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
@@ -203,6 +204,9 @@ func (g *LiveModelGateway) complete(ctx context.Context, req turn.ModelRequest, 
 		usageOverride := tokenUsageFromModelUsage(result.Usage)
 		if err := g.completeInvocation(ctx, invocation, result.Content, startedAt, result.FirstChunkAt, usageOverride); err != nil {
 			return turn.ModelResponse{}, err
+		}
+		if usageOverride != nil {
+			metrics.RecordModelTokens(provider.Slug, req.Profile.ModelName, usageOverride.InputTokens, usageOverride.OutputTokens, usageOverride.CacheReadTokens)
 		}
 		return turn.ModelResponse{
 			Content:   result.Content,
