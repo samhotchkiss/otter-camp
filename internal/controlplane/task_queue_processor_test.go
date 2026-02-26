@@ -45,6 +45,88 @@ func TestTaskQueueProcessorHandleTaskQueuedEventIgnoresNonQueuedEvents(t *testin
 	}
 }
 
+func TestTaskQueueProcessorHandleTaskCompletedEventConfirmsCancellingSchedulerRuns(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	taskID := uuid.New()
+	inProgressRunID := uuid.New()
+	cancellingRunID := uuid.New()
+
+	runService := &fakeTaskQueueRunStarter{
+		listRunsByTaskResponses: map[string][]Run{
+			"in_progress|scheduler": {
+				{ID: inProgressRunID, TriggerType: "scheduler", Status: "in_progress"},
+			},
+			"cancelling|scheduler": {
+				{ID: cancellingRunID, TriggerType: "scheduler", Status: "cancelling"},
+			},
+		},
+	}
+	processor := &TaskQueueProcessor{runs: runService}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":   taskID,
+		"to_status": "done",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	event := eventbus.DomainEvent{
+		OrganizationID: orgID,
+		EventType:      "task.status_changed",
+		Payload:        payload,
+	}
+	if err := processor.handleTaskCompletedEvent(ctx, event); err != nil {
+		t.Fatalf("handleTaskCompletedEvent: %v", err)
+	}
+
+	if len(runService.completeRunCalls) != 1 || runService.completeRunCalls[0].runID != inProgressRunID {
+		t.Fatalf("CompleteRun calls = %+v, want run %s", runService.completeRunCalls, inProgressRunID)
+	}
+	if len(runService.confirmCancelledCalls) != 1 || runService.confirmCancelledCalls[0] != cancellingRunID {
+		t.Fatalf("ConfirmCancelled calls = %+v, want run %s", runService.confirmCancelledCalls, cancellingRunID)
+	}
+}
+
+func TestTaskQueueProcessorHandleRunCancellationRequestedEventAutoConfirmsSchedulerAndSupervisor(t *testing.T) {
+	ctx := context.Background()
+	schedulerRunID := uuid.New()
+	supervisorRunID := uuid.New()
+	agentToolRunID := uuid.New()
+
+	runService := &fakeTaskQueueRunStarter{
+		runByID: map[uuid.UUID]Run{
+			schedulerRunID:  {ID: schedulerRunID, TriggerType: "scheduler", Status: "cancelling"},
+			supervisorRunID: {ID: supervisorRunID, TriggerType: "supervisor", Status: "cancelling"},
+			agentToolRunID:  {ID: agentToolRunID, TriggerType: "agent_tool", Status: "cancelling"},
+		},
+	}
+	processor := &TaskQueueProcessor{runs: runService}
+
+	for _, runID := range []uuid.UUID{schedulerRunID, supervisorRunID, agentToolRunID} {
+		payload, err := json.Marshal(map[string]any{"run_id": runID.String()})
+		if err != nil {
+			t.Fatalf("marshal payload: %v", err)
+		}
+		if err := processor.handleRunCancellationRequestedEvent(ctx, eventbus.DomainEvent{
+			EventType: "run.cancellation_requested",
+			Payload:   payload,
+		}); err != nil {
+			t.Fatalf("handleRunCancellationRequestedEvent(%s): %v", runID, err)
+		}
+	}
+
+	if len(runService.confirmCancelledCalls) != 2 {
+		t.Fatalf("ConfirmCancelled calls = %d, want 2", len(runService.confirmCancelledCalls))
+	}
+	if runService.confirmCancelledCalls[0] != schedulerRunID && runService.confirmCancelledCalls[1] != schedulerRunID {
+		t.Fatalf("missing scheduler run confirm: %+v", runService.confirmCancelledCalls)
+	}
+	if runService.confirmCancelledCalls[0] != supervisorRunID && runService.confirmCancelledCalls[1] != supervisorRunID {
+		t.Fatalf("missing supervisor run confirm: %+v", runService.confirmCancelledCalls)
+	}
+}
+
 func TestEnsureAssignedAgentRunAddsParticipantBeforeKickoff(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
@@ -270,9 +352,29 @@ func (f *fakeTaskQueueSessionRepository) GetByScopeAndMode(context.Context, stri
 }
 
 type fakeTaskQueueRunStarter struct {
-	run       Run
-	createErr error
-	startErr  error
+	run                     Run
+	createErr               error
+	startErr                error
+	completeErr             error
+	confirmCancelledErr     error
+	getRunErr               error
+	runByID                 map[uuid.UUID]Run
+	listRunsByTaskResponses map[string][]Run
+	completeRunCalls        []completeRunCall
+	confirmCancelledCalls   []uuid.UUID
+	listRunsByTaskCalls     []listRunsByTaskCall
+}
+
+type completeRunCall struct {
+	runID  uuid.UUID
+	output json.RawMessage
+}
+
+type listRunsByTaskCall struct {
+	organizationID uuid.UUID
+	taskID         uuid.UUID
+	status         string
+	triggerType    string
 }
 
 func (f *fakeTaskQueueRunStarter) CreateRun(_ context.Context, input CreateRunInput) (Run, error) {
@@ -296,19 +398,48 @@ func (f *fakeTaskQueueRunStarter) StartRun(context.Context, uuid.UUID) error {
 	return nil
 }
 
-func (f *fakeTaskQueueRunStarter) CompleteRun(_ context.Context, _ uuid.UUID, _ json.RawMessage) error {
+func (f *fakeTaskQueueRunStarter) CompleteRun(_ context.Context, runID uuid.UUID, output json.RawMessage) error {
+	f.completeRunCalls = append(f.completeRunCalls, completeRunCall{
+		runID:  runID,
+		output: append(json.RawMessage(nil), output...),
+	})
+	if f.completeErr != nil {
+		return f.completeErr
+	}
 	return nil
 }
 
-func (f *fakeTaskQueueRunStarter) ConfirmCancelled(_ context.Context, _ uuid.UUID) error {
+func (f *fakeTaskQueueRunStarter) ConfirmCancelled(_ context.Context, runID uuid.UUID) error {
+	f.confirmCancelledCalls = append(f.confirmCancelledCalls, runID)
+	if f.confirmCancelledErr != nil {
+		return f.confirmCancelledErr
+	}
 	return nil
 }
 
-func (f *fakeTaskQueueRunStarter) GetRun(_ context.Context, _ uuid.UUID) (Run, error) {
-	return Run{}, nil
+func (f *fakeTaskQueueRunStarter) GetRun(_ context.Context, runID uuid.UUID) (Run, error) {
+	if f.getRunErr != nil {
+		return Run{}, f.getRunErr
+	}
+	if runRecord, ok := f.runByID[runID]; ok {
+		return runRecord, nil
+	}
+	return Run{}, ErrNotFound
 }
 
-func (f *fakeTaskQueueRunStarter) ListRunsByTask(_ context.Context, _, _ uuid.UUID, _, _ string) ([]Run, error) {
+func (f *fakeTaskQueueRunStarter) ListRunsByTask(_ context.Context, organizationID, taskID uuid.UUID, status, triggerType string) ([]Run, error) {
+	f.listRunsByTaskCalls = append(f.listRunsByTaskCalls, listRunsByTaskCall{
+		organizationID: organizationID,
+		taskID:         taskID,
+		status:         status,
+		triggerType:    triggerType,
+	})
+	if f.listRunsByTaskResponses != nil {
+		key := status + "|" + triggerType
+		if runs, ok := f.listRunsByTaskResponses[key]; ok {
+			return append([]Run(nil), runs...), nil
+		}
+	}
 	return nil, nil
 }
 
