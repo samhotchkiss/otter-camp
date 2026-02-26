@@ -8,6 +8,7 @@ import (
 
 func TestChatReducerDeltaFinalizeSequencing(t *testing.T) {
 	model := NewModel(DefaultState())
+	model.turnsSynced = true
 	model.activeTurn = true
 
 	deltaEvent := EventEnvelope{
@@ -61,6 +62,7 @@ func TestChatReducerDeltaFinalizeSequencing(t *testing.T) {
 
 func TestChatReducerChunkEventCompatibility(t *testing.T) {
 	model := NewModel(DefaultState())
+	model.turnsSynced = true
 	model.activeTurn = true
 
 	chunkEvent := EventEnvelope{
@@ -90,6 +92,7 @@ func TestChatReducerChunkEventCompatibility(t *testing.T) {
 
 func TestChatReducerTurnCompletedClearsAndPromotesQueue(t *testing.T) {
 	model := NewModel(DefaultState())
+	model.turnsSynced = true
 
 	model.chatInput = "first"
 	model.sendOrQueueInput()

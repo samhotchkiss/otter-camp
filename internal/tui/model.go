@@ -101,6 +101,7 @@ type Model struct {
 	editingQueued    bool
 	activeTurn          bool
 	activeTurnSessionID string // resolved UUID of the session whose turn is active
+	turnsSynced         bool   // true once ReplaySyncedMsg received; gates live turn events
 	activeScope         ChatScope
 	activeSession       string
 	localMessageSeq     int
@@ -183,6 +184,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case ReplaySyncedMsg:
+		m.turnsSynced = true
 		if !m.proofReplay {
 			m.proofReplay = true
 			m.workspace.activity = append(m.workspace.activity, "proof-of-life replay synced")
@@ -336,6 +338,12 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.switchScope(cycleScope(m.activeScope, true))
 				return m, nil
 			}
+				if m.focus == ChatPanel {
+				m.handleChatRunes(key)
+				return m, nil
+			}
+
+			// ? opens help only when not typing in the chat input
 			if r == '?' {
 				if m.workspace.mainView == ViewHelp {
 					m.workspace.setMainView(ViewDashboard)
@@ -345,11 +353,6 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.setFocus(MainPanel)
 					m.statusMessage = "Keybinding reference. Press ? or Esc to close."
 				}
-				return m, nil
-			}
-
-			if m.focus == ChatPanel {
-				m.handleChatRunes(key)
 				return m, nil
 			}
 
@@ -959,6 +962,10 @@ func (m *Model) sessionMatchesActive(sessionID string) bool {
 func (m *Model) applyChatEnvelope(event EventEnvelope) {
 	switch event.EventType {
 	case "chat.message.delta", "chat.message.chunk":
+		// Skip streaming delta events during replay — we only show finalized snapshots
+		if !m.turnsSynced {
+			return
+		}
 		var payload struct {
 			MessageID string `json:"message_id"`
 			SessionID string `json:"session_id"`
@@ -988,6 +995,16 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 		if !decodePayload(event.Payload, &payload) {
 			return
 		}
+		if !m.turnsSynced {
+			// During replay: load finalized messages directly as conversation history
+			// without requiring an active turn. This builds the chat snapshot cleanly.
+			index := m.ensureMessage(payload.MessageID, payload.Role, event.OccurredAt)
+			if strings.TrimSpace(payload.Content) != "" {
+				m.chatMessages[index].Content = payload.Content
+			}
+			m.chatMessages[index].Finalized = true
+			return
+		}
 		if !m.activeTurn {
 			return
 		}
@@ -1001,6 +1018,11 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 		m.chatMessages[index].Finalized = true
 		m.completeTurnAndPromoteQueue("Promoted queued message after finalize.")
 	case "chat.turn.started":
+		// Ignore historical turn lifecycle events during replay — they would
+		// set activeTurn=true and cause all replayed delta events to stream in.
+		if !m.turnsSynced {
+			return
+		}
 		var payload struct {
 			SessionID string `json:"session_id"`
 		}
@@ -1009,6 +1031,9 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 		}
 		m.activeTurn = true
 	case "chat.turn.completed":
+		if !m.turnsSynced {
+			return
+		}
 		var payload struct {
 			SessionID string `json:"session_id"`
 		}
@@ -1021,6 +1046,9 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 		}
 		m.completeTurnAndPromoteQueue("Promoted queued message after turn completion.")
 	case "chat.turn.cancelled":
+		if !m.turnsSynced {
+			return
+		}
 		var payload struct {
 			SessionID string `json:"session_id"`
 		}

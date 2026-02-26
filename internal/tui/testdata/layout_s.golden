@@ -5,12 +5,11 @@
 │ ──────────────────────────────────────────────── ││ ────────────────────────────────── │
 │                                                  ││                                    │
 │ Task Board                                       ││          no messages yet           │
-│ TODO (1)       IN PROGRESS    DONE (0)           ││     Tab·focus chat  Enter·send     │
-│ ─────────────  (1)            ─────────────      ││                                    │
-│                ─────────────                     ││ ╭──────────────────────────────╮   │
-│   Launch docs   CI hardening                     ││ │ type a message...            │   │
-│                                                  ││ ╰──────────────────────────────╯   │
-│ ─────────────────── Inbox  2 ─────────────────── ││                                    │
+│ TODO (1)       IN PROGRE… (1) DONE (0)           ││     Tab·focus chat  Enter·send     │
+│ ─────────────  ─────────────  ─────────────      ││                                    │
+│   Launch docs   CI hardening                     ││ ╭──────────────────────────────╮   │
+│                                                  ││ │ type a message...            │   │
+│ ─────────────────── Inbox  2 ─────────────────── ││ ╰──────────────────────────────╯   │
 │ ▸ Approve launch checklist                       ││                                    │
 │ ▸ Review flaky test quarantine                   ││                                    │
 │                                                  ││                                    │
@@ -26,9 +25,8 @@
 │                                                  ││                                    │
 │                                                  ││                                    │
 │                                                  ││                                    │
-│                                                  │╰────────────────────────────────────╯
-│                                                  │                                      
-╰──────────────────────────────────────────────────╯                                      
+│                                                  ││                                    │
+╰──────────────────────────────────────────────────╯╰────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
 Help: j/k navigate · Enter open task · : commands · ? help
 
@@ -39,12 +37,11 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │ ──────────────────────────────────────────────── ││ ────────────────────────────────── │
 │                                                  ││                                    │
 │ Task Board                                       ││          no messages yet           │
-│ TODO (1)       IN PROGRESS    DONE (0)           ││     Tab·focus chat  Enter·send     │
-│ ─────────────  (1)            ─────────────      ││                                    │
-│                ─────────────                     ││ ╭──────────────────────────────╮   │
-│   Launch docs   CI hardening                     ││ │ type a message...            │   │
-│                                                  ││ ╰──────────────────────────────╯   │
-│ ─────────────────── Inbox  2 ─────────────────── ││                                    │
+│ TODO (1)       IN PROGRE… (1) DONE (0)           ││     Tab·focus chat  Enter·send     │
+│ ─────────────  ─────────────  ─────────────      ││                                    │
+│   Launch docs   CI hardening                     ││ ╭──────────────────────────────╮   │
+│                                                  ││ │ type a message...            │   │
+│ ─────────────────── Inbox  2 ─────────────────── ││ ╰──────────────────────────────╯   │
 │ ▸ Approve launch checklist                       ││                                    │
 │ ▸ Review flaky test quarantine                   ││                                    │
 │                                                  ││                                    │
@@ -60,9 +57,8 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │                                                  ││                                    │
 │                                                  ││                                    │
 │                                                  ││                                    │
-│                                                  │╰────────────────────────────────────╯
-│                                                  │                                      
-╰──────────────────────────────────────────────────╯                                      
+│                                                  ││                                    │
+╰──────────────────────────────────────────────────╯╰────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
 Help: j/k navigate · Enter open task · : commands · ? help
 
@@ -73,12 +69,11 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │ ──────────────────────────────────────────────── ││ ────────────────────────────────── │
 │                                                  ││                                    │
 │ Task Board                                       ││          no messages yet           │
-│ TODO (1)       IN PROGRESS    DONE (0)           ││     Tab·focus chat  Enter·send     │
-│ ─────────────  (1)            ─────────────      ││                                    │
-│                ─────────────                     ││ ╭──────────────────────────────╮   │
-│   Launch docs   CI hardening                     ││ │ type a message...            │   │
-│                                                  ││ ╰──────────────────────────────╯   │
-│ ─────────────────── Inbox  2 ─────────────────── ││                                    │
+│ TODO (1)       IN PROGRE… (1) DONE (0)           ││     Tab·focus chat  Enter·send     │
+│ ─────────────  ─────────────  ─────────────      ││                                    │
+│   Launch docs   CI hardening                     ││ ╭──────────────────────────────╮   │
+│                                                  ││ │ type a message...            │   │
+│ ─────────────────── Inbox  2 ─────────────────── ││ ╰──────────────────────────────╯   │
 │ ▸ Approve launch checklist                       ││                                    │
 │ ▸ Review flaky test quarantine                   ││                                    │
 │                                                  ││                                    │
@@ -94,8 +89,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │                                                  ││                                    │
 │                                                  ││                                    │
 │                                                  ││                                    │
-│                                                  │╰────────────────────────────────────╯
-│                                                  │                                      
-╰──────────────────────────────────────────────────╯                                      
+│                                                  ││                                    │
+╰──────────────────────────────────────────────────╯╰────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
 Help: j/k navigate · Enter open task · : commands · ? help

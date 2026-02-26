@@ -223,7 +223,7 @@ func (m Model) viewForShell(shell string) string {
 		sections = append(sections, prefix+banner)
 	}
 
-	sections = append(sections, prefix+panelRow)
+	sections = append(sections, prefixLines(panelRow, prefix))
 	sections = append(sections, prefix+m.renderStatusBar(layout, focus))
 	sections = append(sections, prefix+m.renderHelpLine())
 
@@ -438,16 +438,24 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		colW = 8
 	}
 
-	todoHdr := buildColumn("TODO", counts.Todo, colW, colConnected)
-	inProgHdr := buildColumn("IN PROGRESS", counts.InProgress, colW, colWarning)
-	doneHdr := buildColumn("DONE", counts.Done, colW, colMuted)
-	blockedHdr := buildColumn("BLOCKED", counts.Blocked, colW, colError)
+	todoHdr := buildColumnHeader("TODO", counts.Todo, colW, colConnected)
+	inProgHdr := buildColumnHeader("IN PROGRESS", counts.InProgress, colW, colWarning)
+	doneHdr := buildColumnHeader("DONE", counts.Done, colW, colMuted)
+	blockedHdr := buildColumnHeader("BLOCKED", counts.Blocked, colW, colError)
+	todoSep := buildColumnSep(colW)
+	inProgSep := buildColumnSep(colW)
+	doneSep := buildColumnSep(colW)
+	blockedSep := buildColumnSep(colW)
 
-	visibleCols := []string{todoHdr, inProgHdr, doneHdr}
+	visibleHdrs := []string{todoHdr, inProgHdr, doneHdr}
+	visibleSeps := []string{todoSep, inProgSep, doneSep}
 	if width > 80 && counts.Blocked > 0 {
-		visibleCols = append(visibleCols, blockedHdr)
+		visibleHdrs = append(visibleHdrs, blockedHdr)
+		visibleSeps = append(visibleSeps, blockedSep)
 	}
-	lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, visibleCols...))
+	// Render header and separator as two separate lines (no embedded newlines)
+	lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, visibleHdrs...))
+	lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, visibleSeps...))
 
 	// Task rows under each column
 	todoTasks, inProgTasks, doneTasks := []string{}, []string{}, []string{}
@@ -518,14 +526,24 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 	return lines
 }
 
-func buildColumn(name string, count, width int, color lipgloss.Color) string {
-	label := lipgloss.NewStyle().Foreground(color).Bold(true).
-		Render(name)
-	countStr := lipgloss.NewStyle().Foreground(color).
-		Render(fmt.Sprintf(" (%d)", count))
-	header := label + countStr
-	line := styleDivider.Render(strings.Repeat("─", width-1))
-	return lipgloss.NewStyle().Width(width).Render(header+"\n"+line) + " "
+// buildColumnHeader returns just the column name+count header (single line, no separator).
+// The name is truncated if necessary so the header never exceeds width, preventing lipgloss wrapping.
+func buildColumnHeader(name string, count, width int, color lipgloss.Color) string {
+	countStr := fmt.Sprintf(" (%d)", count)
+	// Ensure name+count fits within width to prevent wrapping
+	available := width - len(countStr)
+	if available < 1 {
+		available = 1
+	}
+	displayName := truncate(name, available)
+	label := lipgloss.NewStyle().Foreground(color).Bold(true).Render(displayName)
+	cs := lipgloss.NewStyle().Foreground(color).Render(countStr)
+	return lipgloss.NewStyle().Width(width).Render(label+cs) + " "
+}
+
+// buildColumnSep returns the separator line for a column (single line).
+func buildColumnSep(width int) string {
+	return lipgloss.NewStyle().Width(width).Render(styleDivider.Render(strings.Repeat("─", width-1))) + " "
 }
 
 func (m Model) renderProjectView(width, maxLines int) []string {
@@ -1133,6 +1151,19 @@ func (m Model) degradedModeBanner() string {
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────────
+
+// prefixLines prepends prefix to every line in a potentially multi-line string.
+// Used to apply gutter indent to the full panel row in XL layouts.
+func prefixLines(s, prefix string) string {
+	if prefix == "" {
+		return s
+	}
+	parts := strings.Split(s, "\n")
+	for i, p := range parts {
+		parts[i] = prefix + p
+	}
+	return strings.Join(parts, "\n")
+}
 
 // buildPanelContent joins lines and pads/trims to exactly targetH lines of content.
 func buildPanelContent(lines []string, targetH, width int) string {
