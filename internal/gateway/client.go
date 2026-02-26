@@ -40,6 +40,10 @@ type liveModelInvocationRepo interface {
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, errorCode, errorMessage *string) (repo.ModelInvocation, error)
 }
 
+type traceSpanCreator interface {
+	Create(ctx context.Context, span repo.TraceSpan) (repo.TraceSpan, error)
+}
+
 type LiveModelGatewayOptions struct {
 	Router      *Router
 	Profiles    modelProfileLookup
@@ -50,6 +54,7 @@ type LiveModelGatewayOptions struct {
 	Enqueuer    rollupJobEnqueuer
 	Health      *HealthChecker
 	Concurrency *ConcurrencyManager
+	Spans       traceSpanCreator
 	HTTPClient  *http.Client
 	Logger      *slog.Logger
 	Now         func() time.Time
@@ -63,6 +68,7 @@ type LiveModelGateway struct {
 	enqueuer    rollupJobEnqueuer
 	health      *HealthChecker
 	concurrency *ConcurrencyManager
+	spans       traceSpanCreator
 	httpClient  *http.Client
 	logger      *slog.Logger
 	now         func() time.Time
@@ -108,6 +114,7 @@ func NewLiveModelGateway(opts LiveModelGatewayOptions) (*LiveModelGateway, error
 		enqueuer:    opts.Enqueuer,
 		health:      opts.Health,
 		concurrency: opts.Concurrency,
+		spans:       opts.Spans,
 		httpClient:  opts.HTTPClient,
 		logger:      opts.Logger,
 		now:         opts.Now,
@@ -191,6 +198,7 @@ func (g *LiveModelGateway) complete(ctx context.Context, req turn.ModelRequest, 
 
 		if callErr != nil {
 			g.markInvocationFailed(ctx, invocation.ID, callErr)
+			g.recordSpan(orgID, req, provider, connection, invocation.ID, startedAt, stream, callErr)
 			mapped, retryable := g.mapProviderError(connection.ID, callErr)
 			lastErr = mapped
 			if !retryable {
@@ -204,6 +212,7 @@ func (g *LiveModelGateway) complete(ctx context.Context, req turn.ModelRequest, 
 		if err := g.completeInvocation(ctx, invocation, result.Content, startedAt, result.FirstChunkAt, usageOverride); err != nil {
 			return turn.ModelResponse{}, err
 		}
+		g.recordSpan(orgID, req, provider, connection, invocation.ID, startedAt, stream, nil)
 		return turn.ModelResponse{
 			Content:   result.Content,
 			ToolCalls: result.ToolCalls,
@@ -287,6 +296,62 @@ func (g *LiveModelGateway) markInvocationFailed(ctx context.Context, invocationI
 	}
 	if _, err := g.invocations.UpdateStatus(ctx, invocationID, "failed", &errCode, &errMsg); err != nil {
 		g.logger.Warn("failed to mark model invocation as failed", "invocation_id", invocationID, "error", err)
+	}
+}
+
+func (g *LiveModelGateway) recordSpan(
+	orgID uuid.UUID,
+	req turn.ModelRequest,
+	provider repo.ModelProvider,
+	connection repo.ProviderConnection,
+	invocationID uuid.UUID,
+	startedAt time.Time,
+	stream bool,
+	callErr error,
+) {
+	if g == nil || g.spans == nil {
+		return
+	}
+
+	endedAt := g.now().UTC()
+	durationMS := int(endedAt.Sub(startedAt).Milliseconds())
+
+	status := "ok"
+	if callErr != nil {
+		status = "error"
+	}
+
+	traceID := req.TurnID
+	if traceID == uuid.Nil {
+		traceID = invocationID
+	}
+
+	attrs, _ := json.Marshal(map[string]any{
+		"model.name":       req.Profile.ModelName,
+		"model.profile_id": req.Profile.LogicalProfileID,
+		"model.purpose":    req.Purpose,
+		"model.streaming":  stream,
+		"provider.id":   provider.ID.String(),
+		"provider.slug": provider.Slug,
+		"connection.id":    connection.ID.String(),
+		"invocation.id":    invocationID.String(),
+	})
+
+	span := repo.TraceSpan{
+		TraceID:        traceID,
+		OrganizationID: &orgID,
+		SpanName:       "model.invoke",
+		Service:        "gateway",
+		Kind:           "client",
+		Status:         status,
+		Attributes:     attrs,
+		StartedAt:      startedAt,
+		EndedAt:        &endedAt,
+		DurationMS:     &durationMS,
+	}
+
+	if _, err := g.spans.Create(context.Background(), span); err != nil {
+		g.logger.Warn("failed to record model invocation trace span", "invocation_id", invocationID, "error", err)
 	}
 }
 
@@ -1185,6 +1250,14 @@ func openAIMessages(req turn.ModelRequest) []any {
 	// so we can skip orphaned tool-result messages (from previous broken turns
 	// where tool_calls were not stored in the assistant message metadata).
 	lastAssistantHadToolCalls := false
+	// Index of the most recently added assistant+tool_calls message. Used to
+	// retroactively remove it if a non-tool message appears before any tool
+	// results were added (conversation history with interleaved user messages
+	// or dispatch interrupted before results were stored).
+	lastToolCallsIdx := -1
+	// Whether any tool_result messages were added after the last assistant+tool_calls.
+	// Only remove the assistant+tool_calls retroactively if no tool_results followed.
+	toolResultsAdded := false
 	for _, item := range base {
 		role := strings.ToLower(strings.TrimSpace(item.Role))
 		switch role {
@@ -1199,6 +1272,19 @@ func openAIMessages(req turn.ModelRequest) []any {
 		// This handles old conversation history from before this fix was deployed.
 		if role == "tool" && !lastAssistantHadToolCalls {
 			continue
+		}
+
+		// A non-tool message signals the end of a tool exchange. If no tool_results
+		// were added after the assistant+tool_calls, the sequence is dangling
+		// (user replied before results were stored, or dispatch was interrupted).
+		// Retroactively drop the assistant+tool_calls so the API doesn't reject.
+		if role != "tool" && lastAssistantHadToolCalls {
+			if !toolResultsAdded && lastToolCallsIdx >= 0 {
+				messages = append(messages[:lastToolCallsIdx], messages[lastToolCallsIdx+1:]...)
+			}
+			lastAssistantHadToolCalls = false
+			lastToolCallsIdx = -1
+			toolResultsAdded = false
 		}
 
 		if role != "tool" {
@@ -1228,6 +1314,8 @@ func openAIMessages(req turn.ModelRequest) []any {
 				msg["content"] = item.Content
 			}
 			lastAssistantHadToolCalls = true
+			lastToolCallsIdx = len(messages)
+			toolResultsAdded = false
 			messages = append(messages, msg)
 			continue
 		}
@@ -1239,7 +1327,15 @@ func openAIMessages(req turn.ModelRequest) []any {
 		if role == "tool" && item.ToolCallID != nil {
 			msg["tool_call_id"] = *item.ToolCallID
 		}
+		if role == "tool" {
+			toolResultsAdded = true
+		}
 		messages = append(messages, msg)
+	}
+	// If the conversation ends with a dangling assistant+tool_calls (no tool
+	// results were added after it), remove it from the output.
+	if lastAssistantHadToolCalls && !toolResultsAdded && lastToolCallsIdx >= 0 {
+		messages = append(messages[:lastToolCallsIdx], messages[lastToolCallsIdx+1:]...)
 	}
 	if len(messages) == 0 {
 		messages = append(messages, map[string]any{"role": "user", "content": "Respond with a concise answer."})
@@ -1252,6 +1348,10 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 	systemParts := make([]string, 0, 2)
 	out := make([]any, 0, len(base))
 	lastAssistantHadToolCalls := false
+	// Index of the most recently added assistant+tool_calls message in out.
+	// Used to retroactively remove it if a non-tool message appears before
+	// the matching tool_result (conversation history with interleaved messages).
+	lastToolCallsIdx := -1
 	// pendingToolResults collects consecutive tool_result blocks to merge into
 	// one Anthropic user message (Anthropic requires all tool results for a
 	// parallel tool call to appear as a single user turn).
@@ -1264,8 +1364,16 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 				"content": pendingToolResults,
 			})
 			pendingToolResults = nil
+		} else if lastAssistantHadToolCalls && lastToolCallsIdx >= 0 {
+			// No tool results were accumulated despite having an assistant+tool_calls.
+			// Retroactively drop the dangling assistant+tool_calls so the Anthropic
+			// API doesn't reject the request.
+			out = append(out[:lastToolCallsIdx], out[lastToolCallsIdx+1:]...)
 		}
+		// pendingToolResults populated → tool results were consumed (valid sequence).
+		// Empty pendingToolResults → either no tool_calls preceded this, or they were dangling.
 		lastAssistantHadToolCalls = false
+		lastToolCallsIdx = -1
 	}
 
 	for _, item := range base {
@@ -1298,6 +1406,7 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 					})
 				}
 				lastAssistantHadToolCalls = true
+				lastToolCallsIdx = len(out)
 				out = append(out, map[string]any{"role": "assistant", "content": content})
 				continue
 			}

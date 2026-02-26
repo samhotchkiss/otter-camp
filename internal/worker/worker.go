@@ -35,6 +35,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/secret"
 	"github.com/samhotchkiss/otter-camp/internal/storage"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/observability"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 	nativetools "github.com/samhotchkiss/otter-camp/internal/tools/native"
 	"github.com/samhotchkiss/otter-camp/internal/turn"
@@ -317,6 +318,10 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 
 	modelInvocationRepo := repo.NewModelInvocationRepo(pool.Raw())
 	healthChecker := gateway.NewHealthChecker()
+	traceSpanService, err := observability.NewTraceSpanService(pool.Raw())
+	if err != nil {
+		return fmt.Errorf("worker trace span service setup: %w", err)
+	}
 	liveModelGateway, err := gateway.NewLiveModelGateway(gateway.LiveModelGatewayOptions{
 		Router:      gateway.NewRouter(repo.NewModelProfileRepo(pool.Raw()), repo.NewProviderConnectionRepo(pool.Raw()), healthChecker),
 		Providers:   repo.NewModelProviderRepo(pool.Raw()),
@@ -324,6 +329,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		Invocations: modelInvocationRepo,
 		Enqueuer:    jqWorker,
 		Health:      healthChecker,
+		Spans:       traceSpanService,
 		Logger:      logger,
 	})
 	if err != nil {
