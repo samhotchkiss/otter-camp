@@ -452,6 +452,35 @@ Go build: PASS
 - TUI tests: PASS (all 6 tests)
 - go build: PASS
 
+## Fixes Made This Loop (Iteration 15)
+- No new code fixes needed - all spec areas already PASSING
+- Deeper coverage of previously-untested routes and field corrections:
+  - MCP connection response: display_name (not name), transport (not transport_type), is_enabled (not status)
+  - Schedule enable/disable: response is {next_run_at, schedule_id} (not full schedule object)
+  - Remote create: transport field (not remote_type)
+  - Policy CRUD: policy_layer (not layer), capability (not capability_pattern), agent_id directly (not subject_id/subject_type)
+  - Deploy 404: by design — requires gated environment + configured remote + PM agent assignment
+
+## API Field Corrections (iteration 15 additions)
+- MCP connection response: display_name (not name), transport (not transport_type), is_enabled (not status)
+- Schedule enable/disable: response is {next_run_at, schedule_id} (not full schedule object)
+- Remote create: transport field (not remote_type); admin role required
+- Policy create/update: policy_layer (not layer), capability (not capability_pattern), agent_id directly
+- Deploy: requires gated environment + configured remote + PM agent assignment (404 otherwise - by design)
+
+## Validation Results (Iteration 15 - all PASS)
+- All 13 spec areas PASS (same as iter 14)
+- Agent turn verified: Frank used memory.query tool, reported 0 active memories (89 all candidate - by design)
+- All 45 go test packages: PASS
+- go build: PASS
+
+## DB State (verified 2026-02-26T04:40)
+- Chat messages: 1348 (up from 1344)
+- Candidate memories: 89 (same - in 7-day hold)
+- Trace spans ok: 49 (up from 46)
+- Completed model invocations: 498 (up from 493)
+- Recent dead letters (1hr): 2 - both historical (memory_import at 03:51 pre-fix, agent_turn "repo: not found" edge case)
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
 - MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
