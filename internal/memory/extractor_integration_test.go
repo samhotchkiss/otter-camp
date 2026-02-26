@@ -218,10 +218,10 @@ func TestHardenerIntegrationCandidateHoldPromotion(t *testing.T) {
 
 	oldA := makeCandidate("Candidate A for hold promotion with sufficiently specific durable utility-rich content for activation.")
 	oldB := makeCandidate("Candidate B for hold promotion with sufficiently specific durable utility-rich content for activation.")
-	recent := makeCandidate("Recent candidate should remain candidate because it has not crossed the seven day hold period yet.")
+	recent := makeCandidate("Recent candidate should remain candidate because it has not crossed the 24 hour hold period yet.")
 
-	oldAt := time.Now().UTC().Add(-8 * 24 * time.Hour)
-	recentAt := time.Now().UTC().Add(-2 * 24 * time.Hour)
+	oldAt := time.Now().UTC().Add(-48 * time.Hour)
+	recentAt := time.Now().UTC().Add(-12 * time.Hour)
 	if _, err := pool.Exec(ctx, `UPDATE memory SET created_at = $2 WHERE id = $1`, oldA.ID, oldAt); err != nil {
 		t.Fatalf("backdate oldA: %v", err)
 	}
