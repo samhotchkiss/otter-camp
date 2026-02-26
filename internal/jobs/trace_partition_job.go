@@ -43,26 +43,34 @@ func (j *TraceSpanPartitionJob) RegisterJobs(registrar interface {
 	})
 }
 
+// partitionWindow is the number of days ahead (and including today) to ensure partitions exist.
+const partitionWindow = 14
+
+// Run creates partitions for today through today+partitionWindow days. Using
+// CREATE TABLE IF NOT EXISTS makes it safe to re-run daily without errors.
+// This sliding window ensures partitions always cover the current day even on
+// fresh installs or after date gaps in daily tick execution.
 func (j *TraceSpanPartitionJob) Run(ctx context.Context) error {
-	start := j.now().UTC().Truncate(24 * time.Hour).Add(7 * 24 * time.Hour)
-	end := start.Add(24 * time.Hour)
-	partitionName := fmt.Sprintf("trace_span_p_%s", start.Format("20060102"))
+	today := j.now().UTC().Truncate(24 * time.Hour)
+	for i := 0; i <= partitionWindow; i++ {
+		start := today.Add(time.Duration(i) * 24 * time.Hour)
+		end := start.Add(24 * time.Hour)
+		partitionName := fmt.Sprintf("trace_span_p_%s", start.Format("20060102"))
 
-	if _, err := j.pool.Exec(ctx, buildTraceSpanPartitionDDL(partitionName, start, end)); err != nil {
-		return fmt.Errorf("create trace span partition: %w", err)
+		if _, err := j.pool.Exec(ctx, buildTraceSpanPartitionDDL(partitionName, start, end)); err != nil {
+			return fmt.Errorf("create trace span partition %s: %w", partitionName, err)
+		}
+		if _, err := j.pool.Exec(ctx, fmt.Sprintf(`
+			CREATE INDEX IF NOT EXISTS %s_trace_id_idx ON %s (trace_id)
+		`, partitionName, partitionName)); err != nil {
+			return fmt.Errorf("create trace span trace_id index %s: %w", partitionName, err)
+		}
+		if _, err := j.pool.Exec(ctx, fmt.Sprintf(`
+			CREATE INDEX IF NOT EXISTS %s_org_created_idx ON %s (organization_id, created_at)
+		`, partitionName, partitionName)); err != nil {
+			return fmt.Errorf("create trace span org/created index %s: %w", partitionName, err)
+		}
 	}
-
-	if _, err := j.pool.Exec(ctx, fmt.Sprintf(`
-		CREATE INDEX IF NOT EXISTS %s_trace_id_idx ON %s (trace_id)
-	`, partitionName, partitionName)); err != nil {
-		return fmt.Errorf("create trace span trace_id index: %w", err)
-	}
-	if _, err := j.pool.Exec(ctx, fmt.Sprintf(`
-		CREATE INDEX IF NOT EXISTS %s_org_created_idx ON %s (organization_id, created_at)
-	`, partitionName, partitionName)); err != nil {
-		return fmt.Errorf("create trace span organization/created index: %w", err)
-	}
-
 	return nil
 }
 
