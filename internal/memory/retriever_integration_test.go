@@ -201,6 +201,105 @@ func TestRetrieverScopeAndSensitivityGates(t *testing.T) {
 	}
 }
 
+func TestRetrieverFallsBackToHighQualityCandidatesWhenNoActiveMemories(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org, agent := seedOrgAndAgent(t, ctx, pool, []string{"org"})
+	memoryRepo := repo.NewMemoryRepo(pool)
+
+	highScore := 80
+	if _, err := memoryRepo.Create(ctx, repo.Memory{
+		OrganizationID:  org.ID,
+		MemoryType:      "semantic",
+		Scope:           "org",
+		Content:         "high-quality-candidate",
+		ContentHash:     "candidate-high-quality",
+		Embedding:       embeddingWithSignal(4),
+		Status:          "candidate",
+		Confidence:      0.9,
+		ExtractionScore: &highScore,
+		Sensitivity:     "normal",
+	}); err != nil {
+		t.Fatalf("create high quality candidate: %v", err)
+	}
+
+	lowScore := 50
+	if _, err := memoryRepo.Create(ctx, repo.Memory{
+		OrganizationID:  org.ID,
+		MemoryType:      "semantic",
+		Scope:           "org",
+		Content:         "low-quality-candidate",
+		ContentHash:     "candidate-low-quality",
+		Embedding:       embeddingWithSignal(3),
+		Status:          "candidate",
+		Confidence:      0.7,
+		ExtractionScore: &lowScore,
+		Sensitivity:     "normal",
+	}); err != nil {
+		t.Fatalf("create low quality candidate: %v", err)
+	}
+
+	retriever, err := NewRetriever(RetrieverOptions{
+		Pool:     pool,
+		Embedder: staticEmbedder{vector: embeddingWithSignal(4)},
+	})
+	if err != nil {
+		t.Fatalf("NewRetriever: %v", err)
+	}
+
+	fallbackResult, err := retriever.Query(ctx, RetrievalRequest{
+		OrganizationID: org.ID,
+		AgentID:        &agent.ID,
+		Mode:           RetrievalModePassive,
+		Query:          "candidate fallback check",
+		MaxResults:     10,
+	})
+	if err != nil {
+		t.Fatalf("fallback Query: %v", err)
+	}
+	if len(fallbackResult.Memories) != 1 {
+		t.Fatalf("fallback result len = %d, want 1", len(fallbackResult.Memories))
+	}
+	if fallbackResult.Memories[0].Memory.Status != "candidate" {
+		t.Fatalf("fallback status = %q, want candidate", fallbackResult.Memories[0].Memory.Status)
+	}
+	if fallbackResult.Memories[0].Memory.Content != "high-quality-candidate" {
+		t.Fatalf("fallback content = %q, want high-quality-candidate", fallbackResult.Memories[0].Memory.Content)
+	}
+
+	if _, err := memoryRepo.Create(ctx, repo.Memory{
+		OrganizationID: org.ID,
+		MemoryType:     "semantic",
+		Scope:          "org",
+		Content:        "active-memory",
+		ContentHash:    "active-memory-hash",
+		Embedding:      embeddingWithSignal(5),
+		Status:         "active",
+		Confidence:     0.9,
+		Sensitivity:    "normal",
+	}); err != nil {
+		t.Fatalf("create active memory: %v", err)
+	}
+
+	activeResult, err := retriever.Query(ctx, RetrievalRequest{
+		OrganizationID: org.ID,
+		AgentID:        &agent.ID,
+		Mode:           RetrievalModePassive,
+		Query:          "active pool check",
+		MaxResults:     10,
+	})
+	if err != nil {
+		t.Fatalf("active Query: %v", err)
+	}
+	if len(activeResult.Memories) != 1 {
+		t.Fatalf("active result len = %d, want 1", len(activeResult.Memories))
+	}
+	if activeResult.Memories[0].Memory.Status != "active" {
+		t.Fatalf("active result status = %q, want active", activeResult.Memories[0].Memory.Status)
+	}
+}
+
 func TestRetrieverTaxonomySubtreeFilter(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

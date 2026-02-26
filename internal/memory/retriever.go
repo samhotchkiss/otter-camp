@@ -13,10 +13,12 @@ import (
 )
 
 const (
-	retrievalInvocationPurpose = "memory_retrieval"
-	stage1CandidateLimit       = 500
-	defaultMaxResults          = 20
-	maxTaxonomyClassifications = 3
+	retrievalInvocationPurpose          = "memory_retrieval"
+	stage1CandidateLimit                = 500
+	defaultMaxResults                   = 20
+	maxTaxonomyClassifications          = 3
+	candidateFallbackMinConfidence      = 0.8
+	candidateFallbackMinExtractionScore = 60
 )
 
 type agentLookup interface {
@@ -163,6 +165,21 @@ func (r *Retriever) stage1ScopeFilter(ctx context.Context, req RetrievalRequest)
 	if err != nil {
 		return nil, err
 	}
+	memories, err := r.queryStage1(ctx, where, args)
+	if err != nil {
+		return nil, err
+	}
+	if len(memories) > 0 {
+		return memories, nil
+	}
+	candidateWhere, candidateArgs, err := buildCandidateFallbackScopeFilterSQL(req, scopes)
+	if err != nil {
+		return nil, err
+	}
+	return r.queryStage1(ctx, candidateWhere, candidateArgs)
+}
+
+func (r *Retriever) queryStage1(ctx context.Context, where string, args []any) ([]repo.Memory, error) {
 	query := `
 		SELECT id, organization_id, project_id, project_task_id, agent_id, memory_type, scope, content, content_hash,
 		       embedding::text, confidence, utility_score, extraction_score, status, is_hardened, sensitivity, trust_tier,
@@ -216,6 +233,22 @@ func (r *Retriever) resolveReadScopes(ctx context.Context, req RetrievalRequest)
 }
 
 func buildScopeFilterSQL(req RetrievalRequest, readScopes []string) (string, []any, error) {
+	return buildScopeFilterSQLForStatus(req, readScopes, "status = 'active'")
+}
+
+func buildCandidateFallbackScopeFilterSQL(req RetrievalRequest, readScopes []string) (string, []any, error) {
+	return buildScopeFilterSQLForStatus(
+		req,
+		readScopes,
+		fmt.Sprintf(
+			"status = 'candidate' AND confidence >= %.1f AND COALESCE(extraction_score, 0) >= %d",
+			candidateFallbackMinConfidence,
+			candidateFallbackMinExtractionScore,
+		),
+	)
+}
+
+func buildScopeFilterSQLForStatus(req RetrievalRequest, readScopes []string, statusClause string) (string, []any, error) {
 	if req.OrganizationID == uuid.Nil {
 		return "", nil, fmt.Errorf("organization id is required")
 	}
@@ -266,10 +299,10 @@ func buildScopeFilterSQL(req RetrievalRequest, readScopes []string) (string, []a
 	}
 
 	if len(scopeClauses) == 0 {
-		return "organization_id = $1 AND status = 'active' AND false", args, nil
+		return "organization_id = $1 AND " + statusClause + " AND false", args, nil
 	}
 
-	where := "organization_id = $1 AND status = 'active' AND (" + strings.Join(scopeClauses, " OR ") + ")"
+	where := "organization_id = $1 AND " + statusClause + " AND (" + strings.Join(scopeClauses, " OR ") + ")"
 	if req.SensitivityGate {
 		where += " AND sensitivity = 'normal'"
 	}

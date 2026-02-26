@@ -58,6 +58,12 @@ type RetrievalFilter struct {
 	Limit          int
 }
 
+const CandidatePromotionHoldDuration = 24 * time.Hour
+
+func CandidatePromotionCutoff(now time.Time) time.Time {
+	return now.UTC().Add(-CandidatePromotionHoldDuration)
+}
+
 type MemoryRepo struct {
 	pool *pgxpool.Pool
 }

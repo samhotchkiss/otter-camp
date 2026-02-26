@@ -71,6 +71,31 @@ func TestBuildScopeFilterSQLAgentPrivateRequiresScopeAndAgentID(t *testing.T) {
 	}
 }
 
+func TestBuildCandidateFallbackScopeFilterSQLUsesCandidateThresholds(t *testing.T) {
+	orgID := uuid.New()
+	req := RetrievalRequest{OrganizationID: orgID}
+
+	where, args, err := buildCandidateFallbackScopeFilterSQL(req, []string{"org"})
+	if err != nil {
+		t.Fatalf("buildCandidateFallbackScopeFilterSQL: %v", err)
+	}
+	if !strings.Contains(where, "status = 'candidate'") {
+		t.Fatalf("where clause missing candidate status: %s", where)
+	}
+	if !strings.Contains(where, "confidence >= 0.8") {
+		t.Fatalf("where clause missing confidence threshold: %s", where)
+	}
+	if !strings.Contains(where, "COALESCE(extraction_score, 0) >= 60") {
+		t.Fatalf("where clause missing extraction threshold: %s", where)
+	}
+	if len(args) != 1 {
+		t.Fatalf("args len = %d, want 1", len(args))
+	}
+	if got := args[0].(uuid.UUID); got != orgID {
+		t.Fatalf("org arg = %s, want %s", got, orgID)
+	}
+}
+
 func TestRelevanceScoreFormula(t *testing.T) {
 	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
 	createdAt := now.AddDate(0, 0, -30) // episodic half-life boundary => recency score 0.5
