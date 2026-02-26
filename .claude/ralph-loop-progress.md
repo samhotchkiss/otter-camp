@@ -241,6 +241,41 @@ TUI tests: PASS
 All go tests: PASS
 Go build: PASS
 
+## Fixes Made This Loop (Iteration 10)
+- No new code fixes needed - all spec areas already PASSING
+- Deeper coverage of previously-untested routes validated:
+  - GET /v1/flow-templates/{id}/nodes: PASS (2 nodes returned)
+  - POST /v1/projects/{id}/schedules (with flow_template_id): PASS
+  - GET /v1/agents/{id}/skills + POST/PATCH/DELETE: all PASS
+  - GET/POST /v1/memory/taxonomy, /memory/entities, /memory/items/{id}: PASS
+  - POST /v1/memory/consolidate (run_type required): PASS (returns compaction_run_id)
+  - GET /v1/admin/users?email=...: PASS (email query param required)
+  - GET /v1/usage?group_by=X&period=Y: PASS (period required; valid: today/yesterday/7d/30d/YYYY-MM-DD)
+  - POST /v1/mcp/connections (transport_config:{url:...} not url at top-level): PASS
+  - POST /v1/memory/consolidate run_type options: "sleep_reflection", "task_consolidation"
+
+## API Field Corrections (iteration 10 additions)
+- MCP connection create: slug required; URL in transport_config.url (not top-level url field)
+- Memory consolidate: run_type required ("sleep_reflection" or "task_consolidation")
+- Usage GET: period required (today/yesterday/7d/30d/YYYY-MM-DD); group_by=provider_connection|model_provider|agent|project
+- Admin users: GET /v1/admin/users?email=X (email query param required)
+- Agent skill PATCH/DELETE: uses skill_id in path (not assignment_id)
+- test infrastructure (/test/reset, /test/time/advance) only registered when TestMode=true
+
+## DB State (verified 2026-02-26T03:25)
+- Chat messages: 1306 (up from 1302)
+- Candidate memories: 83 (up from 82)
+- Trace spans ok: 21 (+3 from agent turn)
+- Trace spans error: 12 (all historical pre-fix, static)
+- Completed model invocations: 450 (up from 445)
+- Recent dead letters (1hr): 1 (known "repo: not found" edge case only)
+
+## Validation Results (Iteration 10 - all PASS)
+- All 13 spec areas PASS (same as iter 9)
+- Agent turn verified: Frank used agent_list tool, listed all 7 agents correctly
+- All 40 go test packages: PASS
+- go build: PASS
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
 - MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
