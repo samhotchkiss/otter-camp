@@ -29,7 +29,9 @@ const testAgentTurnJobType = "agent_turn"
 func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)
-	defer fx.bus.Unsubscribe(fx.subscription)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
 	stopTurnRuntime := startTaskQueueTurnRuntime(t, ctx, fx.pool, fx.bus, fx.org.ID)
 	defer stopTurnRuntime()
 
@@ -202,7 +204,9 @@ func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.
 func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)
-	defer fx.bus.Unsubscribe(fx.subscription)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
 	stopTurnRuntime := startTaskQueueTurnRuntime(t, ctx, fx.pool, fx.bus, fx.org.ID)
 	defer stopTurnRuntime()
 
@@ -364,14 +368,91 @@ func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testin
 	}
 }
 
+func TestTaskQueueProcessorIntegrationRunCancellationRequestedConfirmsSchedulerAndSupervisor(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+
+	runRepo := NewRunRepository(fx.pool)
+	projectRecord, taskRecord := seedRunProjectTaskWithPM(t, ctx, fx.pool, fx.org.ID)
+	flowNodeID := seedSupervisorFlowNode(t, ctx, fx.pool, fx.org.ID, projectRecord.ID)
+
+	createCancellingRun := func(triggerType string) Run {
+		t.Helper()
+		runRecord, err := runRepo.Create(ctx, Run{
+			OrganizationID: fx.org.ID,
+			ProjectID:      &projectRecord.ID,
+			TaskID:         &taskRecord.ID,
+			FlowNodeID:     &flowNodeID,
+			PrincipalType:  "system",
+			PrincipalID:    uuid.Nil,
+			Status:         "cancelling",
+			TriggerType:    triggerType,
+			Metadata:       json.RawMessage(`{"source":"task_queue_processor_integration_test"}`),
+		})
+		if err != nil {
+			t.Fatalf("create %s run: %v", triggerType, err)
+		}
+		return runRecord
+	}
+
+	schedulerRun := createCancellingRun("scheduler")
+	supervisorRun := createCancellingRun("supervisor")
+	agentToolRun := createCancellingRun("agent_tool")
+
+	publishCancelRequested := func(runID uuid.UUID) {
+		t.Helper()
+		payload, err := json.Marshal(map[string]any{"run_id": runID.String()})
+		if err != nil {
+			t.Fatalf("marshal cancellation payload: %v", err)
+		}
+		if err := fx.bus.Publish(ctx, nil, eventbus.DomainEvent{
+			OrganizationID: fx.org.ID,
+			EventType:      "run.cancellation_requested",
+			ActorType:      "system",
+			Payload:        payload,
+		}); err != nil {
+			t.Fatalf("publish run.cancellation_requested: %v", err)
+		}
+	}
+
+	publishCancelRequested(schedulerRun.ID)
+	publishCancelRequested(supervisorRun.ID)
+	publishCancelRequested(agentToolRun.ID)
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		scheduler, err := runRepo.Get(ctx, schedulerRun.ID)
+		if err != nil {
+			return false, err
+		}
+		supervisor, err := runRepo.Get(ctx, supervisorRun.ID)
+		if err != nil {
+			return false, err
+		}
+		return scheduler.Status == "cancelled" && supervisor.Status == "cancelled", nil
+	})
+
+	agentTool, err := runRepo.Get(ctx, agentToolRun.ID)
+	if err != nil {
+		t.Fatalf("Get agent_tool run: %v", err)
+	}
+	if agentTool.Status != "cancelling" {
+		t.Fatalf("agent_tool run status = %q, want cancelling", agentTool.Status)
+	}
+}
+
 type taskQueueProcessorFixture struct {
-	pool         *pgxpool.Pool
-	bus          *eventbus.Bus
-	subscription eventbus.Subscription
-	tasks        tasksvc.TaskService
-	org          repo.Organization
-	project      repo.Project
-	agent        repo.Agent
+	pool               *pgxpool.Pool
+	bus                *eventbus.Bus
+	taskQueuedSub      eventbus.Subscription
+	taskCompletedSub   eventbus.Subscription
+	runCancellationSub eventbus.Subscription
+	tasks              tasksvc.TaskService
+	org                repo.Organization
+	project            repo.Project
+	agent              repo.Agent
 }
 
 func seedTaskQueueProcessorFixture(t *testing.T, ctx context.Context) taskQueueProcessorFixture {
@@ -438,15 +519,19 @@ func seedTaskQueueProcessorFixture(t *testing.T, ctx context.Context) taskQueueP
 	}
 
 	subscription := processor.SubscribeTaskQueued(&org.ID)
+	taskCompletedSub := processor.SubscribeTaskCompleted(&org.ID)
+	runCancellationSub := processor.SubscribeRunCancellationRequested(&org.ID)
 
 	return taskQueueProcessorFixture{
-		pool:         pool,
-		bus:          bus,
-		subscription: subscription,
-		tasks:        taskService,
-		org:          org,
-		project:      project,
-		agent:        agent,
+		pool:               pool,
+		bus:                bus,
+		taskQueuedSub:      subscription,
+		taskCompletedSub:   taskCompletedSub,
+		runCancellationSub: runCancellationSub,
+		tasks:              taskService,
+		org:                org,
+		project:            project,
+		agent:              agent,
 	}
 }
 
