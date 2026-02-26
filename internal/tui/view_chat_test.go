@@ -1,0 +1,60 @@
+package tui
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestChatHeaderSegmentsIncludesTimestampWhenSpaceAllows(t *testing.T) {
+	ts := time.Date(2026, time.January, 2, 15, 4, 0, 0, time.Local)
+	left, right, gap := chatHeaderSegments("Frank", ts, 20)
+
+	if left != "Frank" {
+		t.Fatalf("left label = %q, want %q", left, "Frank")
+	}
+	want := ts.Local().Format("15:04")
+	if right != want {
+		t.Fatalf("right label = %q, want %q", right, want)
+	}
+	if gap < 1 {
+		t.Fatalf("gap = %d, want >= 1", gap)
+	}
+}
+
+func TestChatHeaderSegmentsDropsTimestampWhenNarrow(t *testing.T) {
+	ts := time.Date(2026, time.January, 2, 15, 4, 0, 0, time.Local)
+	_, right, _ := chatHeaderSegments("Frank", ts, 5)
+
+	if right != "" {
+		t.Fatalf("right label = %q, want empty for narrow width", right)
+	}
+}
+
+func TestChatViewportLinesClampsOffset(t *testing.T) {
+	lines := []string{"0", "1", "2", "3", "4", "5", "6"}
+	visible, offset, maxOffset := chatViewportLines(lines, 3, 99)
+
+	if maxOffset != 4 {
+		t.Fatalf("max offset = %d, want 4", maxOffset)
+	}
+	if offset != 4 {
+		t.Fatalf("clamped offset = %d, want 4", offset)
+	}
+	if got := strings.Join(visible, ","); got != "0,1,2" {
+		t.Fatalf("visible lines = %q, want %q", got, "0,1,2")
+	}
+}
+
+func TestChatPanelKeepsInputVisibleWithLongHistory(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = ChatPanel
+	for i := 0; i < 40; i++ {
+		model.appendMessage("seed", "assistant", strings.Repeat("very long message ", 6), true)
+	}
+
+	panel := model.renderChatPanel(80, 20, true)
+	if !strings.Contains(panel, "▌") {
+		t.Fatalf("chat input cursor missing from panel: %q", panel)
+	}
+}

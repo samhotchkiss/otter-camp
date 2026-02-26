@@ -8,6 +8,7 @@ import (
 
 func TestChatReducerDeltaFinalizeSequencing(t *testing.T) {
 	model := NewModel(DefaultState())
+	model.activeTurn = true
 
 	deltaEvent := EventEnvelope{
 		Seq:        1,
@@ -55,6 +56,104 @@ func TestChatReducerDeltaFinalizeSequencing(t *testing.T) {
 	}
 	if !messages[0].Finalized {
 		t.Fatal("message should be finalized")
+	}
+}
+
+func TestChatReducerChunkEventCompatibility(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.activeTurn = true
+
+	chunkEvent := EventEnvelope{
+		Seq:        1,
+		EventID:    "evt-1",
+		EventType:  "chat.message.chunk",
+		OccurredAt: time.Now().UTC(),
+		OrgID:      "org-1",
+		Payload:    mustJSON(t, map[string]any{"message_id": "msg-1", "delta": "Hello"}),
+	}
+	model.applyChatEnvelope(chunkEvent)
+
+	if !model.ActiveTurn() {
+		t.Fatal("expected active turn after chunk")
+	}
+	messages := model.ChatMessages()
+	if len(messages) != 1 {
+		t.Fatalf("message count = %d, want 1", len(messages))
+	}
+	if got := messages[0].Content; got != "Hello" {
+		t.Fatalf("chunk content = %q, want %q", got, "Hello")
+	}
+	if messages[0].Role != "assistant" {
+		t.Fatalf("message role = %q, want assistant", messages[0].Role)
+	}
+}
+
+func TestChatReducerTurnCompletedClearsAndPromotesQueue(t *testing.T) {
+	model := NewModel(DefaultState())
+
+	model.chatInput = "first"
+	model.sendOrQueueInput()
+
+	model.applyChatEnvelope(EventEnvelope{
+		Seq:        1,
+		EventID:    "evt-1",
+		EventType:  "chat.message.chunk",
+		OccurredAt: time.Now().UTC(),
+		OrgID:      "org-1",
+		Payload:    mustJSON(t, map[string]any{"message_id": "msg-assistant", "delta": "working..."}),
+	})
+
+	model.chatInput = "follow up"
+	model.sendOrQueueInput()
+	if got := model.QueueDepth(); got != 1 {
+		t.Fatalf("queue depth before turn completed = %d, want 1", got)
+	}
+
+	model.applyChatEnvelope(EventEnvelope{
+		Seq:        2,
+		EventID:    "evt-2",
+		EventType:  "chat.turn.completed",
+		OccurredAt: time.Now().UTC(),
+		OrgID:      "org-1",
+		Payload:    mustJSON(t, map[string]any{"turn_id": "turn-1"}),
+	})
+
+	if got := model.QueueDepth(); got != 0 {
+		t.Fatalf("queue depth after turn completed = %d, want 0", got)
+	}
+	if !model.ActiveTurn() {
+		t.Fatal("expected active turn after queued promotion")
+	}
+
+	messages := model.ChatMessages()
+	if len(messages) != 3 {
+		t.Fatalf("message count after turn completed = %d, want 3", len(messages))
+	}
+	if !messages[1].Finalized {
+		t.Fatal("assistant message should be finalized on turn completion")
+	}
+	if got := messages[2].Content; got != "follow up" {
+		t.Fatalf("promoted queued content = %q, want %q", got, "follow up")
+	}
+}
+
+func TestChatReducerIgnoresUnsolicitedChunkWhenNoActiveTurn(t *testing.T) {
+	model := NewModel(DefaultState())
+
+	model.applyChatEnvelope(EventEnvelope{
+		Seq:        1,
+		EventID:    "evt-1",
+		EventType:  "chat.message.chunk",
+		OccurredAt: time.Now().UTC(),
+		OrgID:      "org-1",
+		Payload:    mustJSON(t, map[string]any{"message_id": "msg-1", "delta": "ignored"}),
+	})
+
+	if model.ActiveTurn() {
+		t.Fatal("active turn should remain false for unsolicited chunk")
+	}
+	if got := len(model.ChatMessages()); got != 0 {
+		t.Fatalf("message count = %d, want 0", got)
 	}
 }
 

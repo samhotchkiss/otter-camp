@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"runtime"
@@ -31,11 +32,31 @@ type ReplaySyncedMsg struct{}
 type coldOpenCompleteMsg struct{}
 type tourOverlayExpiredMsg struct{}
 type memorySampleMsg struct{}
+type chatSendRequestedMsg struct {
+	SessionID string
+	Content   string
+}
+type chatSendCompletedMsg struct {
+	Err error
+}
+type chatCancelRequestedMsg struct {
+	SessionID string
+}
+type chatCancelCompletedMsg struct {
+	Err error
+}
+
+// SessionResolvedMsg carries the resolved UUID of the session when a message is sent.
+// Used to filter SSE events by session, preventing cross-session leakage.
+type SessionResolvedMsg struct {
+	SessionID string
+}
 
 const (
 	memorySampleInterval   = 5 * time.Second
 	keypressLatencyBudget  = 100 * time.Millisecond
 	sseRenderLatencyBudget = 250 * time.Millisecond
+	chatScrollStepLines    = 8
 )
 
 type TUIPerformanceMetrics struct {
@@ -75,12 +96,14 @@ type Model struct {
 	chatHistoryIndex int
 	chatMessages     []ChatMessage
 	chatMessageIndex map[string]int
+	chatScrollOffset int
 	queuedMessages   []QueuedMessage
 	editingQueued    bool
-	activeTurn       bool
-	activeScope      ChatScope
-	activeSession    string
-	localMessageSeq  int
+	activeTurn          bool
+	activeTurnSessionID string // resolved UUID of the session whose turn is active
+	activeScope         ChatScope
+	activeSession       string
+	localMessageSeq     int
 }
 
 func NewModel(state UIState) Model {
@@ -195,6 +218,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, memorySamplerCmd(memorySampleInterval)
+	case chatSendRequestedMsg:
+		if m.runtimeHints.SendChatMessage == nil {
+			m.activeTurn = false
+			m.statusMessage = "Message send failed: chat send is not configured."
+			return m, nil
+		}
+		return m, sendChatMessageCmd(typed, m.runtimeHints.SendChatMessage)
+	case SessionResolvedMsg:
+		m.activeTurnSessionID = strings.TrimSpace(typed.SessionID)
+		return m, nil
+	case chatSendCompletedMsg:
+		if typed.Err != nil {
+			m.activeTurn = false
+			m.activeTurnSessionID = ""
+			m.statusMessage = "Message send failed: " + strings.TrimSpace(typed.Err.Error())
+		}
+		return m, nil
+	case chatCancelRequestedMsg:
+		if m.runtimeHints.CancelChatTurn == nil {
+			m.statusMessage = "Cancel request skipped: chat cancel is not configured."
+			return m, nil
+		}
+		return m, cancelChatTurnCmd(typed, m.runtimeHints.CancelChatTurn)
+	case chatCancelCompletedMsg:
+		if typed.Err != nil {
+			m.statusMessage = "Cancel request failed: " + strings.TrimSpace(typed.Err.Error())
+		}
+		return m, nil
 	case tea.KeyMsg:
 		started := m.now()
 		updated, cmd := m.updateKey(typed)
@@ -238,10 +289,10 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.applyResponsiveLayout()
 		m.statusMessage = "Focus: " + panelLabel(m.focus)
 		return m, nil
-	case tea.KeyEnter, tea.KeyEsc, tea.KeyBackspace, tea.KeyUp:
+	case tea.KeyEnter, tea.KeyEsc, tea.KeyBackspace, tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown, tea.KeyHome, tea.KeyEnd:
 		if m.focus == ChatPanel {
-			if handled := m.handleChatControlKey(key); handled {
-				return m, nil
+			if handled, cmd := m.handleChatControlKey(key); handled {
+				return m, cmd
 			}
 		}
 		if key.Type == tea.KeyEnter {
@@ -250,6 +301,12 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if key.Type == tea.KeyEsc {
 			m.handleEscapeKey()
+			return m, nil
+		}
+		return m, nil
+	case tea.KeySpace:
+		if m.focus == ChatPanel {
+			m.chatInput += " "
 			return m, nil
 		}
 		return m, nil
@@ -288,6 +345,10 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if handled := m.handleWorkspaceRune(r); handled {
 				return m, nil
 			}
+		}
+		if m.focus == ChatPanel && len(key.Runes) > 0 {
+			m.handleChatRunes(key)
+			return m, nil
 		}
 		return m, nil
 	default:
@@ -395,35 +456,55 @@ func (m *Model) handleWorkspaceRune(r rune) bool {
 	return false
 }
 
-func (m *Model) handleChatControlKey(key tea.KeyMsg) bool {
+func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 	switch key.Type {
 	case tea.KeyEnter:
 		if key.Alt {
 			m.chatInput += "\n"
 			m.statusMessage = "Inserted newline."
-			return true
+			return true, nil
 		}
-		m.sendOrQueueInput()
-		return true
+		return true, m.sendOrQueueInput()
+	case tea.KeyPgUp:
+		m.scrollChatBy(chatScrollStepLines)
+		m.statusMessage = "Chat scrolled up."
+		return true, nil
+	case tea.KeyPgDown:
+		m.scrollChatBy(-chatScrollStepLines)
+		m.statusMessage = "Chat scrolled down."
+		return true, nil
+	case tea.KeyHome:
+		m.scrollChatBy(1 << 20)
+		m.statusMessage = "Chat scrolled to oldest."
+		return true, nil
+	case tea.KeyEnd:
+		m.chatScrollOffset = 0
+		m.statusMessage = "Chat scrolled to latest."
+		return true, nil
 	case tea.KeyBackspace:
 		runes := []rune(m.chatInput)
 		if len(runes) > 0 {
 			m.chatInput = string(runes[:len(runes)-1])
 		}
-		return true
+		return true, nil
 	case tea.KeyUp:
 		if strings.TrimSpace(m.chatInput) == "" {
 			m.recallHistory()
-			return true
+			return true, nil
+		}
+	case tea.KeyDown:
+		if strings.TrimSpace(m.chatInput) == "" && m.chatScrollOffset > 0 {
+			m.scrollChatBy(-1)
+			return true, nil
 		}
 	case tea.KeyEsc:
 		if m.activeTurn {
 			m.activeTurn = false
 			m.statusMessage = "Active turn cancelled."
-			return true
+			return true, requestChatCancelCmd(m.ActiveChatSession())
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (m *Model) handleChatRunes(key tea.KeyMsg) {
@@ -490,11 +571,11 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.commandMode = false
 		command := strings.TrimSpace(m.commandBuffer)
 		m.commandBuffer = ""
-		m.executeCommand(command)
+		cmd := m.executeCommand(command)
 		if m.quitting {
 			return m, tea.Quit
 		}
-		return m, nil
+		return m, cmd
 	case tea.KeyBackspace:
 		runes := []rune(m.commandBuffer)
 		if len(runes) > 1 {
@@ -502,6 +583,9 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.commandBuffer = ":"
 		}
+		return m, nil
+	case tea.KeySpace:
+		m.commandBuffer += " "
 		return m, nil
 	case tea.KeyRunes:
 		if len(key.Runes) > 0 {
@@ -513,17 +597,17 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m *Model) executeCommand(raw string) {
+func (m *Model) executeCommand(raw string) tea.Cmd {
 	trimmed := strings.TrimSpace(strings.TrimPrefix(raw, ":"))
 	if trimmed == "" {
 		m.statusMessage = "No command entered."
-		return
+		return nil
 	}
 
 	fields := strings.Fields(trimmed)
 	if strings.EqualFold(fields[0], "inbox") && len(fields) > 1 {
 		m.executeInboxCommand(fields[1:])
-		return
+		return nil
 	}
 
 	switch strings.ToLower(fields[0]) {
@@ -535,55 +619,56 @@ func (m *Model) executeCommand(raw string) {
 	case "focus":
 		if len(fields) != 2 {
 			m.statusMessage = "Usage: :focus sidebar|main|chat"
-			return
+			return nil
 		}
 		panel, ok := panelFromView(fields[1])
 		if !ok {
 			m.statusMessage = "Unknown panel. Use sidebar, main, or chat."
-			return
+			return nil
 		}
 		m.setFocus(panel)
 		m.statusMessage = "Focus: " + panelLabel(m.focus)
 	case "frank", "general":
 		if len(fields) != 1 {
 			m.statusMessage = "Usage: :" + strings.ToLower(fields[0])
-			return
+			return nil
 		}
 		m.jumpToFrankSession(":" + strings.ToLower(fields[0]))
 	case "scope":
 		if len(fields) != 2 {
 			m.statusMessage = "Usage: :scope org|project|task"
-			return
+			return nil
 		}
 		m.switchScope(normalizeScope(fields[1]))
 	case "send":
-		m.sendOrQueueInput()
+		return m.sendOrQueueInput()
 	case "tour":
 		if len(fields) != 2 {
 			m.statusMessage = "Usage: :tour dismiss"
-			return
+			return nil
 		}
 		if strings.EqualFold(fields[1], "dismiss") {
 			if !m.tourActive {
 				m.statusMessage = "Tour overlay is not active."
-				return
+				return nil
 			}
 			m.tourActive = false
 			m.statusMessage = "Tour overlay dismissed."
-			return
+			return nil
 		}
 		m.statusMessage = "Unknown tour action. Use :tour dismiss."
 	case "cancel", "cancel-turn":
 		if !m.activeTurn {
 			m.statusMessage = "No active turn to cancel."
-			return
+			return nil
 		}
 		m.activeTurn = false
 		m.statusMessage = "Active turn cancelled."
+		return requestChatCancelCmd(m.ActiveChatSession())
 	case "queue":
 		if len(fields) != 2 {
 			m.statusMessage = "Usage: :queue edit|steer|delete"
-			return
+			return nil
 		}
 		switch strings.ToLower(fields[1]) {
 		case "edit":
@@ -601,159 +686,18 @@ func (m *Model) executeCommand(raw string) {
 		view, ok := resolveMainViewCommand(fields[0])
 		if !ok {
 			m.statusMessage = "Unknown workspace command: " + fields[0]
-			return
+			return nil
 		}
 		m.workspace.setMainView(view)
 		m.statusMessage = "Main view: " + string(view)
 	default:
 		m.statusMessage = "Unknown command: " + fields[0]
 	}
+	return nil
 }
 
 func (m Model) View() string {
 	return m.viewForShell("board")
-}
-
-func (m Model) viewForShell(shell string) string {
-	layout := computeLayout(m.width, m.height, m.focus, m.sidebarVisible, m.state.PanelProportions)
-	focus := normalizeFocus(layout, m.focus)
-	if focus != m.focus {
-		layout = computeLayout(m.width, m.height, focus, m.sidebarVisible, m.state.PanelProportions)
-	}
-
-	header := fmt.Sprintf(
-		"%s | %s | %s",
-		renderPanelHeader("Sidebar", SidebarPanel == focus, layout.widths[0], layout.visible[0]),
-		renderPanelHeader("Main", MainPanel == focus, layout.widths[1], layout.visible[1]),
-		renderPanelHeader("Chat", ChatPanel == focus, layout.widths[2], layout.visible[2]),
-	)
-	shellLine := describeLayoutForShell(layout.sizeClass, shell, layout)
-	status := fmt.Sprintf(
-		"Status: %s | Realtime=%s%s | Size=%s | Focus=%s | ChatSession=%s",
-		m.statusMessage,
-		m.connection,
-		realtimeDegradedSuffix(m.streamDegraded),
-		layout.sizeClass,
-		panelLabel(focus),
-		valueOrPlaceholder(m.State().LastActiveChatSession),
-	)
-	if layout.hiddenHints != "" {
-		status += " | " + layout.hiddenHints
-	}
-	help := "Help: " + m.commandFallbackHelp()
-
-	prefix := ""
-	if layout.gutters > 0 {
-		prefix = strings.Repeat(" ", layout.gutters)
-	}
-	lines := []string{}
-	if m.coldOpenActive {
-		lines = append(lines, prefix+"=== OTTERCAMP // FIRST RUN ===")
-		lines = append(lines, prefix+"Booting operator console...")
-	}
-	if banner := m.degradedModeBanner(); banner != "" {
-		lines = append(lines, prefix+banner)
-	}
-	lines = append(lines, prefix+header, prefix+shellLine, prefix+status, prefix+help)
-	for _, line := range m.renderPanelStates(layout) {
-		lines = append(lines, prefix+line)
-	}
-	if m.firstRun {
-		lines = append(lines, prefix+m.proofOfLifeLine())
-	}
-	if m.tourActive {
-		lines = append(lines, prefix+"Tour overlay (non-blocking): 1/sidebar, 2/main, 3/chat, :frank, :inbox open, :tour dismiss")
-	}
-	if m.shouldRenderChatDetails() {
-		for _, line := range m.renderChatPane(maxInt(24, layout.widths[2])) {
-			lines = append(lines, prefix+line)
-		}
-		if m.focus == ChatPanel && !m.commandMode {
-			lines = append(lines, prefix+"Input> "+m.chatInput)
-		}
-	}
-	if m.commandMode {
-		lines = append(lines, prefix+"Command> "+m.commandBuffer)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func (m Model) shouldRenderChatDetails() bool {
-	return len(m.chatMessages) > 0 || len(m.queuedMessages) > 0 || strings.TrimSpace(m.chatInput) != "" || m.activeTurn
-}
-
-func (m Model) renderPanelStates(layout layoutState) []string {
-	lines := make([]string, 0, 3)
-	panelState := m.panelLifecycleState()
-	if layout.visible[SidebarPanel] {
-		lines = append(lines, fmt.Sprintf("Sidebar state: %s | %s", panelState, m.sidebarSummary()))
-	}
-	if layout.visible[MainPanel] {
-		lines = append(lines, fmt.Sprintf("Main state: %s | %s", panelState, m.workspace.render(m.workspace.mainView, layout.sizeClass)))
-	}
-	if layout.visible[ChatPanel] {
-		lines = append(lines, fmt.Sprintf("Chat state: %s | %s", panelState, m.chatPanelSummary()))
-	}
-	return lines
-}
-
-func (m Model) renderChatPane(width int) []string {
-	if len(m.chatMessages) == 0 {
-		return []string{"Chat: (no messages yet)"}
-	}
-	lines := []string{"Chat:"}
-	start := 0
-	if len(m.chatMessages) > 8 {
-		start = len(m.chatMessages) - 8
-	}
-	for _, msg := range m.chatMessages[start:] {
-		content := markdownToPlain(msg.Content, width)
-		if strings.TrimSpace(content) == "" {
-			content = msg.Content
-		}
-		roleLabel := strings.ToUpper(msg.Role)
-		if roleLabel == "" {
-			roleLabel = "ASSISTANT"
-		}
-		lines = append(lines, fmt.Sprintf("  [%s] %s", roleLabel, strings.TrimSpace(content)))
-		for _, toolCall := range msg.ToolCalls {
-			lines = append(lines, fmt.Sprintf("    tool %s (%s)", toolCall.Name, toolCall.Status))
-		}
-	}
-	if len(m.queuedMessages) > 0 {
-		queue := m.queuedMessages[0]
-		queueLine := fmt.Sprintf("Queued next: %s", queue.Text)
-		if queue.Steer {
-			queueLine += " [steer]"
-		}
-		if queue.Edited {
-			queueLine += " [edited]"
-		}
-		lines = append(lines, queueLine)
-		if len(m.queuedMessages) > 1 {
-			lines = append(lines, fmt.Sprintf("Queued backlog: %d", len(m.queuedMessages)-1))
-		}
-	}
-	return lines
-}
-
-func (m Model) proofOfLifeLine() string {
-	realtime := "pending"
-	if m.proofRealtime {
-		realtime = "realtime connected"
-	}
-	replay := "pending"
-	if m.proofReplay {
-		replay = "replay synced"
-	}
-	return fmt.Sprintf("Proof-of-life: %s | %s", realtime, replay)
-}
-
-func (m Model) degradedModeBanner() string {
-	if m.connection == ConnectionConnected && !m.streamDegraded {
-		return ""
-	}
-	return "DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync."
 }
 
 func (m Model) panelLifecycleState() string {
@@ -921,15 +865,16 @@ func (m Model) focusOrder() []Panel {
 	return layout.focusOrder
 }
 
-func (m *Model) sendOrQueueInput() {
+func (m *Model) sendOrQueueInput() tea.Cmd {
 	text := strings.TrimSpace(m.chatInput)
 	if text == "" {
 		m.statusMessage = "Cannot send empty message."
-		return
+		return nil
 	}
 
 	m.chatHistory = append(m.chatHistory, text)
 	m.chatHistoryIndex = len(m.chatHistory)
+	var cmd tea.Cmd
 	if m.activeTurn {
 		queued := QueuedMessage{Text: text}
 		if m.editingQueued {
@@ -941,9 +886,12 @@ func (m *Model) sendOrQueueInput() {
 	} else {
 		m.appendMessage("local-user", "user", text, true)
 		m.activeTurn = true
+		m.chatScrollOffset = 0
 		m.statusMessage = "Message sent. Waiting for assistant response."
+		cmd = requestChatSendCmd(m.ActiveChatSession(), text)
 	}
 	m.chatInput = ""
+	return cmd
 }
 
 func (m *Model) recallHistory() {
@@ -987,43 +935,94 @@ func (m *Model) applyQueueActionDelete() {
 	m.statusMessage = "Queued message deleted."
 }
 
+// sessionMatchesActive returns true if the given session_id matches the current
+// active turn session. If activeTurnSessionID is unset (e.g. at startup or before
+// first send), all session IDs are accepted to allow replay to work.
+func (m *Model) sessionMatchesActive(sessionID string) bool {
+	if m.activeTurnSessionID == "" {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(sessionID), m.activeTurnSessionID)
+}
+
 func (m *Model) applyChatEnvelope(event EventEnvelope) {
 	switch event.EventType {
-	case "chat.message.delta":
+	case "chat.message.delta", "chat.message.chunk":
 		var payload struct {
 			MessageID string `json:"message_id"`
+			SessionID string `json:"session_id"`
 			Role      string `json:"role"`
 			Delta     string `json:"delta"`
 		}
 		if !decodePayload(event.Payload, &payload) {
 			return
 		}
-		index := m.ensureMessage(payload.MessageID, payload.Role)
+		if !m.activeTurn {
+			return
+		}
+		if !m.sessionMatchesActive(payload.SessionID) {
+			return
+		}
+		index := m.ensureMessage(payload.MessageID, payload.Role, event.OccurredAt)
 		m.chatMessages[index].Content += payload.Delta
 		m.chatMessages[index].Finalized = false
 		m.activeTurn = true
 	case "chat.message.finalized":
 		var payload struct {
 			MessageID string `json:"message_id"`
+			SessionID string `json:"session_id"`
 			Role      string `json:"role"`
 			Content   string `json:"content"`
 		}
 		if !decodePayload(event.Payload, &payload) {
 			return
 		}
-		index := m.ensureMessage(payload.MessageID, payload.Role)
+		if !m.activeTurn {
+			return
+		}
+		if !m.sessionMatchesActive(payload.SessionID) {
+			return
+		}
+		index := m.ensureMessage(payload.MessageID, payload.Role, event.OccurredAt)
 		if strings.TrimSpace(payload.Content) != "" {
 			m.chatMessages[index].Content = payload.Content
 		}
 		m.chatMessages[index].Finalized = true
-		m.activeTurn = false
-		if len(m.queuedMessages) > 0 {
-			next := m.queuedMessages[0]
-			m.queuedMessages = append([]QueuedMessage{}, m.queuedMessages[1:]...)
-			m.appendMessage("local-user", "user", next.Text, true)
-			m.activeTurn = true
-			m.statusMessage = "Promoted queued message after finalize."
+		m.completeTurnAndPromoteQueue("Promoted queued message after finalize.")
+	case "chat.turn.started":
+		var payload struct {
+			SessionID string `json:"session_id"`
 		}
+		if decodePayload(event.Payload, &payload) && !m.sessionMatchesActive(payload.SessionID) {
+			return
+		}
+		m.activeTurn = true
+	case "chat.turn.completed":
+		var payload struct {
+			SessionID string `json:"session_id"`
+		}
+		_ = decodePayload(event.Payload, &payload)
+		if !m.sessionMatchesActive(payload.SessionID) {
+			return
+		}
+		if !m.activeTurn && len(m.queuedMessages) == 0 {
+			return
+		}
+		m.completeTurnAndPromoteQueue("Promoted queued message after turn completion.")
+	case "chat.turn.cancelled":
+		var payload struct {
+			SessionID string `json:"session_id"`
+		}
+		_ = decodePayload(event.Payload, &payload)
+		if !m.sessionMatchesActive(payload.SessionID) {
+			return
+		}
+		if !m.activeTurn {
+			return
+		}
+		m.activeTurn = false
+		m.activeTurnSessionID = ""
+		m.statusMessage = "Active turn cancelled."
 	case "chat.tool_call.status":
 		var payload struct {
 			MessageID string `json:"message_id"`
@@ -1033,20 +1032,53 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 		if !decodePayload(event.Payload, &payload) {
 			return
 		}
-		index := m.ensureMessage(payload.MessageID, "assistant")
+		if !m.activeTurn {
+			return
+		}
+		index := m.ensureMessage(payload.MessageID, "assistant", event.OccurredAt)
 		m.upsertToolCall(index, strings.TrimSpace(payload.Name), strings.TrimSpace(payload.Status))
+	}
+}
+
+func (m *Model) completeTurnAndPromoteQueue(promoteStatus string) {
+	m.activeTurn = false
+	m.activeTurnSessionID = ""
+	m.finalizePendingAssistantMessages()
+	if len(m.queuedMessages) == 0 {
+		m.statusMessage = ""
+		return
+	}
+	next := m.queuedMessages[0]
+	m.queuedMessages = append([]QueuedMessage{}, m.queuedMessages[1:]...)
+	m.appendMessage("local-user", "user", next.Text, true)
+	m.activeTurn = true
+	m.chatScrollOffset = 0
+	if strings.TrimSpace(promoteStatus) != "" {
+		m.statusMessage = promoteStatus
+	}
+}
+
+func (m *Model) finalizePendingAssistantMessages() {
+	for i := range m.chatMessages {
+		if m.chatMessages[i].Role != "assistant" {
+			continue
+		}
+		if m.chatMessages[i].Finalized {
+			continue
+		}
+		m.chatMessages[i].Finalized = true
 	}
 }
 
 func (m *Model) appendMessage(prefix, role, content string, finalized bool) {
 	m.localMessageSeq++
 	id := fmt.Sprintf("%s-%d", strings.TrimSpace(prefix), m.localMessageSeq)
-	message := ChatMessage{ID: id, Role: normalizeRole(role), Content: content, Finalized: finalized}
+	message := ChatMessage{ID: id, Role: normalizeRole(role), Content: content, Finalized: finalized, Timestamp: m.now()}
 	m.chatMessageIndex[id] = len(m.chatMessages)
 	m.chatMessages = append(m.chatMessages, message)
 }
 
-func (m *Model) ensureMessage(messageID, role string) int {
+func (m *Model) ensureMessage(messageID, role string, occurredAt time.Time) int {
 	id := strings.TrimSpace(messageID)
 	if id == "" {
 		m.localMessageSeq++
@@ -1056,9 +1088,19 @@ func (m *Model) ensureMessage(messageID, role string) int {
 		if normalized := normalizeRole(role); normalized != "" {
 			m.chatMessages[index].Role = normalized
 		}
+		if m.chatMessages[index].Timestamp.IsZero() {
+			if occurredAt.IsZero() {
+				m.chatMessages[index].Timestamp = m.now()
+			} else {
+				m.chatMessages[index].Timestamp = occurredAt
+			}
+		}
 		return index
 	}
-	message := ChatMessage{ID: id, Role: normalizeRole(role), Finalized: false}
+	if occurredAt.IsZero() {
+		occurredAt = m.now()
+	}
+	message := ChatMessage{ID: id, Role: normalizeRole(role), Finalized: false, Timestamp: occurredAt}
 	m.chatMessageIndex[id] = len(m.chatMessages)
 	m.chatMessages = append(m.chatMessages, message)
 	return len(m.chatMessages) - 1
@@ -1090,6 +1132,7 @@ func decodePayload(raw json.RawMessage, out any) bool {
 func (m *Model) switchScope(next ChatScope) {
 	m.activeScope = next
 	m.activeSession = sessionForScope(next)
+	m.chatScrollOffset = 0
 	m.statusMessage = fmt.Sprintf("Scope switched to %s.", next)
 }
 
@@ -1101,6 +1144,7 @@ func (m *Model) jumpToFrankSession(trigger string) {
 	m.activeScope = ScopeOrg
 	m.activeSession = m.workspace.activeSessionID
 	m.state.LastActiveChatSession = m.workspace.activeSessionID
+	m.chatScrollOffset = 0
 	if strings.TrimSpace(trigger) == "" {
 		m.statusMessage = "Switched to Frank session."
 		return
@@ -1115,12 +1159,14 @@ func (m Model) chatTextInputActive() bool {
 func inferScopeFromSession(session string) ChatScope {
 	trimmed := strings.ToLower(strings.TrimSpace(session))
 	switch {
-	case strings.HasPrefix(trimmed, "org"):
+	case strings.HasPrefix(trimmed, "org") || strings.Contains(trimmed, "-org-"):
 		return ScopeOrg
-	case strings.HasPrefix(trimmed, "task"):
+	case strings.HasPrefix(trimmed, "task") || strings.Contains(trimmed, "-task-"):
 		return ScopeTask
-	default:
+	case strings.HasPrefix(trimmed, "project") || strings.Contains(trimmed, "-project-"):
 		return ScopeProject
+	default:
+		return ScopeOrg
 	}
 }
 
@@ -1273,7 +1319,7 @@ func initialStatusMessage(state UIState, runtime RuntimeHints) string {
 }
 
 func (m Model) commandFallbackHelp() string {
-	base := ":focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit"
+	base := ":focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit"
 	if m.runtimeHints.ModifierReliabilityUncertain {
 		return "tmux-safe commands: " + base
 	}
@@ -1338,6 +1384,16 @@ func (m *Model) markReplaySynced() {
 	m.workspace.activity = append(m.workspace.activity, "proof-of-life replay synced")
 }
 
+func (m *Model) scrollChatBy(delta int) {
+	if delta == 0 {
+		return
+	}
+	m.chatScrollOffset += delta
+	if m.chatScrollOffset < 0 {
+		m.chatScrollOffset = 0
+	}
+}
+
 func (m *Model) recordStreamRenderLatency(event EventEnvelope) {
 	if event.EventType != "chat.message.delta" {
 		return
@@ -1357,6 +1413,47 @@ func (m *Model) sampleMemory() {
 	runtime.ReadMemStats(&stats)
 	if stats.Alloc > m.perfMetrics.PeakMemoryBytes {
 		m.perfMetrics.PeakMemoryBytes = stats.Alloc
+	}
+}
+
+func requestChatSendCmd(sessionID, content string) tea.Cmd {
+	return func() tea.Msg {
+		return chatSendRequestedMsg{
+			SessionID: strings.TrimSpace(sessionID),
+			Content:   content,
+		}
+	}
+}
+
+func sendChatMessageCmd(
+	request chatSendRequestedMsg,
+	sendFn func(ctx context.Context, sessionID, content string) error,
+) tea.Cmd {
+	return func() tea.Msg {
+		if sendFn == nil {
+			return chatSendCompletedMsg{Err: fmt.Errorf("chat send is not configured")}
+		}
+		err := sendFn(context.Background(), strings.TrimSpace(request.SessionID), request.Content)
+		return chatSendCompletedMsg{Err: err}
+	}
+}
+
+func requestChatCancelCmd(sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		return chatCancelRequestedMsg{SessionID: strings.TrimSpace(sessionID)}
+	}
+}
+
+func cancelChatTurnCmd(
+	request chatCancelRequestedMsg,
+	cancelFn func(ctx context.Context, sessionID string) error,
+) tea.Cmd {
+	return func() tea.Msg {
+		if cancelFn == nil {
+			return chatCancelCompletedMsg{Err: fmt.Errorf("chat cancel is not configured")}
+		}
+		err := cancelFn(context.Background(), strings.TrimSpace(request.SessionID))
+		return chatCancelCompletedMsg{Err: err}
 	}
 }
 

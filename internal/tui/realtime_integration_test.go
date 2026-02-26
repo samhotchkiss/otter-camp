@@ -197,6 +197,106 @@ func TestRealtimeConnectionStateReflectedInModelStatus(t *testing.T) {
 	}
 }
 
+func TestRealtimeConnectedMetaFrameNoGap(t *testing.T) {
+	t.Parallel()
+
+	server := newScriptedSSEServer(t, []scriptedResponse{
+		{frames: []string{
+			"event: connected\ndata: {\"high_watermark\":0}\n\n",
+			encodeEnvelopeFrame(1, "evt-1", "chat.message.delta", map[string]any{"delta": "a"}),
+		}},
+	})
+	defer server.Close()
+
+	reducer := NewEventReducer(nil)
+	var states []ConnectionStateMsg
+	var mu sync.Mutex
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	client := &RealtimeClient{
+		Connector: HTTPSSEConnector{URL: server.URL()},
+		Reducer:   reducer,
+		Backoff:   []time.Duration{10 * time.Millisecond},
+		OnStateChange: func(state ConnectionState, degraded bool) {
+			mu.Lock()
+			states = append(states, ConnectionStateMsg{State: state, Degraded: degraded})
+			mu.Unlock()
+		},
+		OnEvent: func(event EventEnvelope, _ bool) {
+			if event.Seq == 1 {
+				cancel()
+			}
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- client.Run(ctx) }()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	// connected frame with no gap must NOT trigger degraded=true.
+	if containsDegradedState(states, true) {
+		t.Fatalf("states=%v: got degraded=true, want no degraded states when connected frame has no gap", states)
+	}
+}
+
+func TestRealtimeConnectedMetaFrameWithGapDegrades(t *testing.T) {
+	t.Parallel()
+
+	server := newScriptedSSEServer(t, []scriptedResponse{
+		{frames: []string{
+			"event: connected\ndata: {\"gap\":true,\"high_watermark\":100}\n\n",
+			encodeEnvelopeFrame(101, "evt-101", "chat.message.delta", map[string]any{"delta": "x"}),
+		}},
+	})
+	defer server.Close()
+
+	reducer := NewEventReducer(nil)
+	var states []ConnectionStateMsg
+	var mu sync.Mutex
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	client := &RealtimeClient{
+		Connector: HTTPSSEConnector{URL: server.URL()},
+		Reducer:   reducer,
+		Backoff:   []time.Duration{10 * time.Millisecond},
+		OnStateChange: func(state ConnectionState, degraded bool) {
+			mu.Lock()
+			states = append(states, ConnectionStateMsg{State: state, Degraded: degraded})
+			mu.Unlock()
+		},
+		OnEvent: func(event EventEnvelope, _ bool) {
+			if event.Seq == 101 {
+				cancel()
+			}
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- client.Run(ctx) }()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	// connected frame with gap=true must trigger degraded.
+	if !containsDegradedState(states, true) {
+		t.Fatalf("states=%v: want degraded=true state when connected frame has gap=true", states)
+	}
+	// after the event is applied, degraded must clear.
+	if !containsDegradedState(states, false) {
+		t.Fatalf("states=%v: want degraded=false state after event processed post-gap", states)
+	}
+}
+
 type scriptedResponse struct {
 	status int
 	frames []string

@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/glamour"
 )
@@ -27,6 +28,7 @@ type ChatMessage struct {
 	Role      string
 	Content   string
 	Finalized bool
+	Timestamp time.Time
 	ToolCalls []ToolCallStatus
 }
 
@@ -64,7 +66,14 @@ func cycleScope(current ChatScope, forward bool) ChatScope {
 }
 
 func sessionForScope(scope ChatScope) string {
-	return fmt.Sprintf("%s-session", scope)
+	switch scope {
+	case ScopeOrg:
+		return "session-org-general"
+	case ScopeTask:
+		return "session-task-current"
+	default:
+		return fmt.Sprintf("session-%s-current", scope)
+	}
 }
 
 func normalizeRole(raw string) string {

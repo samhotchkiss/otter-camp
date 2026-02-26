@@ -1,29 +1,110 @@
 ### L board
-DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
-[Sidebar]                        | [*Main*]                                                         | [Chat]                                                          
-size=L shell=board visible(sidebar=true,main=true,chat=true) widths=[32 64 64]
-Status: snapshot | Realtime=disconnected | Size=L | Focus=main | ChatSession=none
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit
-Sidebar state: error | current=General / Frank unread=0
-Main state: error | view=dashboard size=L tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
-Chat state: error | empty: type a prompt and press Enter
+⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+╭──────────────────────────────╮╭──────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────────────────────╮
+│ SESSIONS                     ││ DASHBOARD                                                    ││ General / Frank  ·  org                                      │
+│ ──────────────────────────── ││ ──────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────────────────────── │
+│   General / Frank            ││                                                              ││                                                              │
+│ ▾ Project Alpha              ││ Task Board                                                   ││                       no messages yet                        │
+│   › Task 1 / Launch docs     ││ TODO (1)           IN PROGRESS (1)    DONE (0)               ││                  Tab·focus chat  Enter·send                  │
+│   › Task 2 / CI hardening    ││ ─────────────────  ─────────────────  ─────────────────      ││                                                              │
+│                              ││   Launch docs       CI hardening                             ││ ╭────────────────────────────────────────────────────────╮   │
+│                              ││                                                              ││ │ type a message...                                      │   │
+│                              ││ ───────────────────────── Inbox  2 ───────────────────────── ││ ╰────────────────────────────────────────────────────────╯   │
+│                              ││ ▸ Approve launch checklist                                   ││                                                              │
+│                              ││ ▸ Review flaky test quarantine                               ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││ ───────────────────────── Activity ───────────────────────── ││                                                              │
+│                              ││   ✓ workspace booted                                         ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│ Sidebar state: error | curr… ││                                                              ││ Chat state: error | empty: type a prompt and press Enter | … │
+╰──────────────────────────────╯│ Main state: error | view=dashboard size=L tasks(todo=1,in_p… │╰──────────────────────────────────────────────────────────────╯
+                                ╰──────────────────────────────────────────────────────────────╯                                                                
+ ○  disconnected  ·  none  ·  L/main  ·  snapshot 
+Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
 
 ### L chat
-DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
-[Sidebar]                        | [*Main*]                                                         | [Chat]                                                          
-size=L shell=chat visible(sidebar=true,main=true,chat=true) widths=[32 64 64]
-Status: snapshot | Realtime=disconnected | Size=L | Focus=main | ChatSession=none
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit
-Sidebar state: error | current=General / Frank unread=0
-Main state: error | view=dashboard size=L tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
-Chat state: error | empty: type a prompt and press Enter
+⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+╭──────────────────────────────╮╭──────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────────────────────╮
+│ SESSIONS                     ││ DASHBOARD                                                    ││ General / Frank  ·  org                                      │
+│ ──────────────────────────── ││ ──────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────────────────────── │
+│   General / Frank            ││                                                              ││                                                              │
+│ ▾ Project Alpha              ││ Task Board                                                   ││                       no messages yet                        │
+│   › Task 1 / Launch docs     ││ TODO (1)           IN PROGRESS (1)    DONE (0)               ││                  Tab·focus chat  Enter·send                  │
+│   › Task 2 / CI hardening    ││ ─────────────────  ─────────────────  ─────────────────      ││                                                              │
+│                              ││   Launch docs       CI hardening                             ││ ╭────────────────────────────────────────────────────────╮   │
+│                              ││                                                              ││ │ type a message...                                      │   │
+│                              ││ ───────────────────────── Inbox  2 ───────────────────────── ││ ╰────────────────────────────────────────────────────────╯   │
+│                              ││ ▸ Approve launch checklist                                   ││                                                              │
+│                              ││ ▸ Review flaky test quarantine                               ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││ ───────────────────────── Activity ───────────────────────── ││                                                              │
+│                              ││   ✓ workspace booted                                         ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│ Sidebar state: error | curr… ││                                                              ││ Chat state: error | empty: type a prompt and press Enter | … │
+╰──────────────────────────────╯│ Main state: error | view=dashboard size=L tasks(todo=1,in_p… │╰──────────────────────────────────────────────────────────────╯
+                                ╰──────────────────────────────────────────────────────────────╯                                                                
+ ○  disconnected  ·  none  ·  L/main  ·  snapshot 
+Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
 
 ### L inbox
-DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
-[Sidebar]                        | [*Main*]                                                         | [Chat]                                                          
-size=L shell=inbox visible(sidebar=true,main=true,chat=true) widths=[32 64 64]
-Status: snapshot | Realtime=disconnected | Size=L | Focus=main | ChatSession=none
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit
-Sidebar state: error | current=General / Frank unread=0
-Main state: error | view=dashboard size=L tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
-Chat state: error | empty: type a prompt and press Enter
+⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+╭──────────────────────────────╮╭──────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────────────────────╮
+│ SESSIONS                     ││ DASHBOARD                                                    ││ General / Frank  ·  org                                      │
+│ ──────────────────────────── ││ ──────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────────────────────── │
+│   General / Frank            ││                                                              ││                                                              │
+│ ▾ Project Alpha              ││ Task Board                                                   ││                       no messages yet                        │
+│   › Task 1 / Launch docs     ││ TODO (1)           IN PROGRESS (1)    DONE (0)               ││                  Tab·focus chat  Enter·send                  │
+│   › Task 2 / CI hardening    ││ ─────────────────  ─────────────────  ─────────────────      ││                                                              │
+│                              ││   Launch docs       CI hardening                             ││ ╭────────────────────────────────────────────────────────╮   │
+│                              ││                                                              ││ │ type a message...                                      │   │
+│                              ││ ───────────────────────── Inbox  2 ───────────────────────── ││ ╰────────────────────────────────────────────────────────╯   │
+│                              ││ ▸ Approve launch checklist                                   ││                                                              │
+│                              ││ ▸ Review flaky test quarantine                               ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││ ───────────────────────── Activity ───────────────────────── ││                                                              │
+│                              ││   ✓ workspace booted                                         ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│                              ││                                                              ││                                                              │
+│ Sidebar state: error | curr… ││                                                              ││ Chat state: error | empty: type a prompt and press Enter | … │
+╰──────────────────────────────╯│ Main state: error | view=dashboard size=L tasks(todo=1,in_p… │╰──────────────────────────────────────────────────────────────╯
+                                ╰──────────────────────────────────────────────────────────────╯                                                                
+ ○  disconnected  ·  none  ·  L/main  ·  snapshot 
+Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit

@@ -51,6 +51,79 @@ func TestFocusCommandFallback(t *testing.T) {
 	}
 }
 
+func TestSpaceKeyWorksInChatInput(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeySpace})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+
+	if got := model.ChatInput(); got != "h i" {
+		t.Fatalf("chat input after space key = %q, want %q", got, "h i")
+	}
+}
+
+func TestChatInputAcceptsMultiRuneEvents(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello from dictation")})
+
+	if got := model.ChatInput(); got != "hello from dictation" {
+		t.Fatalf("chat input after multi-rune event = %q, want %q", got, "hello from dictation")
+	}
+}
+
+func TestChatScrollHotkeys(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+
+	for i := 0; i < 40; i++ {
+		model.appendMessage("seed", "assistant", "line line line line line", true)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyPgUp})
+	if model.chatScrollOffset <= 0 {
+		t.Fatalf("chat scroll offset after PgUp = %d, want > 0", model.chatScrollOffset)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyPgDown})
+	if model.chatScrollOffset != 0 {
+		t.Fatalf("chat scroll offset after PgDown = %d, want 0", model.chatScrollOffset)
+	}
+}
+
+func TestSendResetsChatScrollOffset(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = ChatPanel
+	model.chatScrollOffset = 12
+	model.chatInput = "hello"
+
+	model.sendOrQueueInput()
+
+	if model.chatScrollOffset != 0 {
+		t.Fatalf("chat scroll offset after send = %d, want 0", model.chatScrollOffset)
+	}
+}
+
+func TestSpaceKeyWorksInCommandMode(t *testing.T) {
+	model := NewModel(DefaultState())
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	for _, r := range []rune("focus") {
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeySpace})
+	for _, r := range []rune("chat") {
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if got := model.FocusedPanel(); got != ChatPanel {
+		t.Fatalf("focus after :focus chat with KeySpace = %v, want chat", got)
+	}
+}
+
 func TestQuitCommandAndCtrlC(t *testing.T) {
 	model := NewModel(DefaultState())
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})

@@ -1,26 +1,101 @@
 ### S board
-DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
-[Sidebar:hidden] | [*Main*]                                             | [Chat]                                
-size=S shell=board visible(sidebar=false,main=true,chat=true) widths=[0 52 38]
-Status: snapshot | Realtime=disconnected | Size=S | Focus=main | ChatSession=none | Hidden panes: sidebar hidden (1 or :focus sidebar)
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit
-Main state: error | view=dashboard size=S tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
-Chat state: error | empty: type a prompt and press Enter
+⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+╭──────────────────────────────────────────────────╮╭────────────────────────────────────╮
+│ DASHBOARD                                        ││ General / Frank  ·  org            │
+│ ──────────────────────────────────────────────── ││ ────────────────────────────────── │
+│                                                  ││                                    │
+│ Task Board                                       ││          no messages yet           │
+│ TODO (1)       IN PROGRESS    DONE (0)           ││     Tab·focus chat  Enter·send     │
+│ ─────────────  (1)            ─────────────      ││                                    │
+│                ─────────────                     ││ ╭──────────────────────────────╮   │
+│   Launch docs   CI hardening                     ││ │ type a message...            │   │
+│                                                  ││ ╰──────────────────────────────╯   │
+│ ─────────────────── Inbox  2 ─────────────────── ││                                    │
+│ ▸ Approve launch checklist                       ││                                    │
+│ ▸ Review flaky test quarantine                   ││                                    │
+│                                                  ││                                    │
+│ ─────────────────── Activity ─────────────────── ││                                    │
+│   ✓ workspace booted                             ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││ Chat state: error | empty: type a… │
+│                                                  │╰────────────────────────────────────╯
+│ Main state: error | view=dashboard size=S tasks… │                                      
+╰──────────────────────────────────────────────────╯                                      
+ ○  disconnected  ·  none  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
+Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
 
 ### S chat
-DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
-[Sidebar:hidden] | [*Main*]                                             | [Chat]                                
-size=S shell=chat visible(sidebar=false,main=true,chat=true) widths=[0 52 38]
-Status: snapshot | Realtime=disconnected | Size=S | Focus=main | ChatSession=none | Hidden panes: sidebar hidden (1 or :focus sidebar)
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit
-Main state: error | view=dashboard size=S tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
-Chat state: error | empty: type a prompt and press Enter
+⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+╭──────────────────────────────────────────────────╮╭────────────────────────────────────╮
+│ DASHBOARD                                        ││ General / Frank  ·  org            │
+│ ──────────────────────────────────────────────── ││ ────────────────────────────────── │
+│                                                  ││                                    │
+│ Task Board                                       ││          no messages yet           │
+│ TODO (1)       IN PROGRESS    DONE (0)           ││     Tab·focus chat  Enter·send     │
+│ ─────────────  (1)            ─────────────      ││                                    │
+│                ─────────────                     ││ ╭──────────────────────────────╮   │
+│   Launch docs   CI hardening                     ││ │ type a message...            │   │
+│                                                  ││ ╰──────────────────────────────╯   │
+│ ─────────────────── Inbox  2 ─────────────────── ││                                    │
+│ ▸ Approve launch checklist                       ││                                    │
+│ ▸ Review flaky test quarantine                   ││                                    │
+│                                                  ││                                    │
+│ ─────────────────── Activity ─────────────────── ││                                    │
+│   ✓ workspace booted                             ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││ Chat state: error | empty: type a… │
+│                                                  │╰────────────────────────────────────╯
+│ Main state: error | view=dashboard size=S tasks… │                                      
+╰──────────────────────────────────────────────────╯                                      
+ ○  disconnected  ·  none  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
+Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
 
 ### S inbox
-DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
-[Sidebar:hidden] | [*Main*]                                             | [Chat]                                
-size=S shell=inbox visible(sidebar=false,main=true,chat=true) widths=[0 52 38]
-Status: snapshot | Realtime=disconnected | Size=S | Focus=main | ChatSession=none | Hidden panes: sidebar hidden (1 or :focus sidebar)
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit
-Main state: error | view=dashboard size=S tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
-Chat state: error | empty: type a prompt and press Enter
+⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+╭──────────────────────────────────────────────────╮╭────────────────────────────────────╮
+│ DASHBOARD                                        ││ General / Frank  ·  org            │
+│ ──────────────────────────────────────────────── ││ ────────────────────────────────── │
+│                                                  ││                                    │
+│ Task Board                                       ││          no messages yet           │
+│ TODO (1)       IN PROGRESS    DONE (0)           ││     Tab·focus chat  Enter·send     │
+│ ─────────────  (1)            ─────────────      ││                                    │
+│                ─────────────                     ││ ╭──────────────────────────────╮   │
+│   Launch docs   CI hardening                     ││ │ type a message...            │   │
+│                                                  ││ ╰──────────────────────────────╯   │
+│ ─────────────────── Inbox  2 ─────────────────── ││                                    │
+│ ▸ Approve launch checklist                       ││                                    │
+│ ▸ Review flaky test quarantine                   ││                                    │
+│                                                  ││                                    │
+│ ─────────────────── Activity ─────────────────── ││                                    │
+│   ✓ workspace booted                             ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││ Chat state: error | empty: type a… │
+│                                                  │╰────────────────────────────────────╯
+│ Main state: error | view=dashboard size=S tasks… │                                      
+╰──────────────────────────────────────────────────╯                                      
+ ○  disconnected  ·  none  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
+Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit

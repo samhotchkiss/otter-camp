@@ -1,26 +1,98 @@
 ### M board
-DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
-[Sidebar:hidden] | [*Main*]                                                                 | [Chat]                                          
-size=M shell=board visible(sidebar=false,main=true,chat=true) widths=[0 72 48]
-Status: snapshot | Realtime=disconnected | Size=M | Focus=main | ChatSession=none | Hidden panes: sidebar hidden (1 or :focus sidebar)
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit
-Main state: error | view=dashboard size=M tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
-Chat state: error | empty: type a prompt and press Enter
+⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+╭──────────────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────╮
+│ DASHBOARD                                                            ││ General / Frank  ·  org                      │
+│ ──────────────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────── │
+│                                                                      ││                                              │
+│ Task Board                                                           ││               no messages yet                │
+│ TODO (1)             IN PROGRESS (1)      DONE (0)                   ││          Tab·focus chat  Enter·send          │
+│ ───────────────────  ───────────────────  ───────────────────        ││                                              │
+│   Launch docs         CI hardening                                   ││ ╭────────────────────────────────────────╮   │
+│                                                                      ││ │ type a message...                      │   │
+│ ───────────────────────────── Inbox  2 ───────────────────────────── ││ ╰────────────────────────────────────────╯   │
+│ ▸ Approve launch checklist                                           ││                                              │
+│ ▸ Review flaky test quarantine                                       ││                                              │
+│                                                                      ││                                              │
+│ ───────────────────────────── Activity ───────────────────────────── ││                                              │
+│   ✓ workspace booted                                                 ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││ Chat state: error | empty: type a prompt an… │
+│ Main state: error | view=dashboard size=M tasks(todo=1,in_progress=… │╰──────────────────────────────────────────────╯
+╰──────────────────────────────────────────────────────────────────────╯                                                
+ ○  disconnected  ·  none  ·  M/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
+Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
 
 ### M chat
-DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
-[Sidebar:hidden] | [*Main*]                                                                 | [Chat]                                          
-size=M shell=chat visible(sidebar=false,main=true,chat=true) widths=[0 72 48]
-Status: snapshot | Realtime=disconnected | Size=M | Focus=main | ChatSession=none | Hidden panes: sidebar hidden (1 or :focus sidebar)
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit
-Main state: error | view=dashboard size=M tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
-Chat state: error | empty: type a prompt and press Enter
+⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+╭──────────────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────╮
+│ DASHBOARD                                                            ││ General / Frank  ·  org                      │
+│ ──────────────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────── │
+│                                                                      ││                                              │
+│ Task Board                                                           ││               no messages yet                │
+│ TODO (1)             IN PROGRESS (1)      DONE (0)                   ││          Tab·focus chat  Enter·send          │
+│ ───────────────────  ───────────────────  ───────────────────        ││                                              │
+│   Launch docs         CI hardening                                   ││ ╭────────────────────────────────────────╮   │
+│                                                                      ││ │ type a message...                      │   │
+│ ───────────────────────────── Inbox  2 ───────────────────────────── ││ ╰────────────────────────────────────────╯   │
+│ ▸ Approve launch checklist                                           ││                                              │
+│ ▸ Review flaky test quarantine                                       ││                                              │
+│                                                                      ││                                              │
+│ ───────────────────────────── Activity ───────────────────────────── ││                                              │
+│   ✓ workspace booted                                                 ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││ Chat state: error | empty: type a prompt an… │
+│ Main state: error | view=dashboard size=M tasks(todo=1,in_progress=… │╰──────────────────────────────────────────────╯
+╰──────────────────────────────────────────────────────────────────────╯                                                
+ ○  disconnected  ·  none  ·  M/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
+Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
 
 ### M inbox
-DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
-[Sidebar:hidden] | [*Main*]                                                                 | [Chat]                                          
-size=M shell=inbox visible(sidebar=false,main=true,chat=true) widths=[0 72 48]
-Status: snapshot | Realtime=disconnected | Size=M | Focus=main | ChatSession=none | Hidden panes: sidebar hidden (1 or :focus sidebar)
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit
-Main state: error | view=dashboard size=M tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
-Chat state: error | empty: type a prompt and press Enter
+⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+╭──────────────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────╮
+│ DASHBOARD                                                            ││ General / Frank  ·  org                      │
+│ ──────────────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────── │
+│                                                                      ││                                              │
+│ Task Board                                                           ││               no messages yet                │
+│ TODO (1)             IN PROGRESS (1)      DONE (0)                   ││          Tab·focus chat  Enter·send          │
+│ ───────────────────  ───────────────────  ───────────────────        ││                                              │
+│   Launch docs         CI hardening                                   ││ ╭────────────────────────────────────────╮   │
+│                                                                      ││ │ type a message...                      │   │
+│ ───────────────────────────── Inbox  2 ───────────────────────────── ││ ╰────────────────────────────────────────╯   │
+│ ▸ Approve launch checklist                                           ││                                              │
+│ ▸ Review flaky test quarantine                                       ││                                              │
+│                                                                      ││                                              │
+│ ───────────────────────────── Activity ───────────────────────────── ││                                              │
+│   ✓ workspace booted                                                 ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││ Chat state: error | empty: type a prompt an… │
+│ Main state: error | view=dashboard size=M tasks(todo=1,in_progress=… │╰──────────────────────────────────────────────╯
+╰──────────────────────────────────────────────────────────────────────╯                                                
+ ○  disconnected  ·  none  ·  M/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
+Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit

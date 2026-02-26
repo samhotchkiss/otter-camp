@@ -1,23 +1,74 @@
 ### XS board
-DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
-[Sidebar:hidden] | [*Main*]                                                              | [Chat:hidden]
-size=XS shell=board visible(sidebar=false,main=true,chat=false) widths=[0 69 0]
-Status: snapshot | Realtime=disconnected | Size=XS | Focus=main | ChatSession=none | Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat)
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit
-Main state: error | view=dashboard size=XS tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
+⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+╭───────────────────────────────────────────────────────────────────╮
+│ DASHBOARD                                                         │
+│ ───────────────────────────────────────────────────────────────── │
+│                                                                   │
+│ Task Board                                                        │
+│ TODO (1)            IN PROGRESS (1)     DONE (0)                  │
+│ ──────────────────  ──────────────────  ──────────────────        │
+│   Launch docs        CI hardening                                 │
+│                                                                   │
+│ ─────────────────────────── Inbox  2 ──────────────────────────── │
+│ ▸ Approve launch checklist                                        │
+│ ▸ Review flaky test quarantine                                    │
+│                                                                   │
+│ ─────────────────────────── Activity ──────────────────────────── │
+│   ✓ workspace booted                                              │
+│                                                                   │
+│                                                                   │
+│                                                                   │
+│ Main state: error | view=dashboard size=XS tasks(todo=1,in_progr… │
+╰───────────────────────────────────────────────────────────────────╯
+ ○  disconnected  ·  none  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
+Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
 
 ### XS chat
-DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
-[Sidebar:hidden] | [*Main*]                                                              | [Chat:hidden]
-size=XS shell=chat visible(sidebar=false,main=true,chat=false) widths=[0 69 0]
-Status: snapshot | Realtime=disconnected | Size=XS | Focus=main | ChatSession=none | Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat)
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit
-Main state: error | view=dashboard size=XS tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
+⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+╭───────────────────────────────────────────────────────────────────╮
+│ DASHBOARD                                                         │
+│ ───────────────────────────────────────────────────────────────── │
+│                                                                   │
+│ Task Board                                                        │
+│ TODO (1)            IN PROGRESS (1)     DONE (0)                  │
+│ ──────────────────  ──────────────────  ──────────────────        │
+│   Launch docs        CI hardening                                 │
+│                                                                   │
+│ ─────────────────────────── Inbox  2 ──────────────────────────── │
+│ ▸ Approve launch checklist                                        │
+│ ▸ Review flaky test quarantine                                    │
+│                                                                   │
+│ ─────────────────────────── Activity ──────────────────────────── │
+│   ✓ workspace booted                                              │
+│                                                                   │
+│                                                                   │
+│                                                                   │
+│ Main state: error | view=dashboard size=XS tasks(todo=1,in_progr… │
+╰───────────────────────────────────────────────────────────────────╯
+ ○  disconnected  ·  none  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
+Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit
 
 ### XS inbox
-DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
-[Sidebar:hidden] | [*Main*]                                                              | [Chat:hidden]
-size=XS shell=inbox visible(sidebar=false,main=true,chat=false) widths=[0 69 0]
-Status: snapshot | Realtime=disconnected | Size=XS | Focus=main | ChatSession=none | Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat)
-Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit
-Main state: error | view=dashboard size=XS tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=2
+⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+╭───────────────────────────────────────────────────────────────────╮
+│ DASHBOARD                                                         │
+│ ───────────────────────────────────────────────────────────────── │
+│                                                                   │
+│ Task Board                                                        │
+│ TODO (1)            IN PROGRESS (1)     DONE (0)                  │
+│ ──────────────────  ──────────────────  ──────────────────        │
+│   Launch docs        CI hardening                                 │
+│                                                                   │
+│ ─────────────────────────── Inbox  2 ──────────────────────────── │
+│ ▸ Approve launch checklist                                        │
+│ ▸ Review flaky test quarantine                                    │
+│                                                                   │
+│ ─────────────────────────── Activity ──────────────────────────── │
+│   ✓ workspace booted                                              │
+│                                                                   │
+│                                                                   │
+│                                                                   │
+│ Main state: error | view=dashboard size=XS tasks(todo=1,in_progr… │
+╰───────────────────────────────────────────────────────────────────╯
+ ○  disconnected  ·  none  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
+Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn chat scroll | :tour dismiss | :quit

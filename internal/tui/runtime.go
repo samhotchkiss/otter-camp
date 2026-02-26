@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,8 @@ type RuntimeHints struct {
 	TourDuration                 time.Duration
 	MemorySteadyStateBoundBytes  uint64
 	DisableMemorySampler         bool
+	SendChatMessage              func(ctx context.Context, sessionID, content string) error
+	CancelChatTurn               func(ctx context.Context, sessionID string) error
 }
 
 func (h RuntimeHints) now() time.Time {
