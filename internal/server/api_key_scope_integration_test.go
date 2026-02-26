@@ -102,8 +102,8 @@ func TestMemoryHTTPAPIKeyScopeEnforcement(t *testing.T) {
 	readOnlyQuery := mustJSON(t, http.MethodPost, fixture.URL+"/v1/memory/query", map[string]any{
 		"query": "scope check",
 	}, map[string]string{"X-API-Key": readKey})
-	if readOnlyQuery.StatusCode != http.StatusForbidden {
-		t.Fatalf("query via read scope status = %d, want %d body=%s", readOnlyQuery.StatusCode, http.StatusForbidden, string(readOnlyQuery.Body))
+	if readOnlyQuery.StatusCode != http.StatusOK {
+		t.Fatalf("query via read scope status = %d, want %d body=%s", readOnlyQuery.StatusCode, http.StatusOK, string(readOnlyQuery.Body))
 	}
 
 	writeKey := issueAPIKeyRaw(t, fixture.URL, adminToken, []string{"write:memory"})

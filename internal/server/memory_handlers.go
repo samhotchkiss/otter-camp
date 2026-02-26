@@ -185,7 +185,7 @@ func NewMemoryRouteRegistrar(opts MemoryRouteOptions) *MemoryRouteRegistrar {
 }
 
 func (r *MemoryRouteRegistrar) RegisterRoutes(router chi.Router) {
-	router.With(middleware.RequireAnyScope(requireWriteScope("memory")...)).Post("/memory/query", r.handlers.queryMemory)
+	router.With(middleware.RequireAnyScope(requireReadScope("memory")...)).Post("/memory/query", r.handlers.queryMemory)
 	router.With(middleware.RequireAnyScope(requireReadScope("memory")...)).Get("/memory/items", r.handlers.listMemoryItems)
 	router.With(middleware.RequireAnyScope(requireReadScope("memory")...)).Get("/memory/items/{id}", r.handlers.getMemoryItem)
 	router.With(middleware.RequireAnyScope(requireReadScope("memory")...)).Get("/memory/entities", r.handlers.listMemoryEntities)
