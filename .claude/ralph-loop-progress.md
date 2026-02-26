@@ -558,6 +558,43 @@ Go build: PASS
 - Trace spans ok: 55 (up from 52)
 - Completed model invocations: 505 (up from 502)
 
+## Fixes Made This Loop (Iteration 18)
+- No new code fixes needed - all spec areas already PASSING
+- Deep validation of auth/API key, agent assignment, agent detail routes
+
+## Routes Validated (Iteration 18 - previously untested)
+- GET /v1/api-keys: list returns {id, key_prefix, name, display_name, scopes, created_at} (no raw key) ✓
+- POST /v1/api-keys: create returns {id, key, key_prefix, name, display_name, scopes} (key shown once) ✓
+- DELETE /v1/api-keys/{id}: returns 204 No Content ✓
+- GET /v1/agents/{id}: full agent detail with all config fields ✓
+- PATCH /v1/agents/{id}: update agent fields (operator_instructions etc) ✓
+- GET /v1/agents/{id}/project-assignments: list with {id, project_id, project_slug, role, is_active, assigned_at} ✓
+- POST /v1/agents/{id}/project-assignments: add assignment with project_id + role ✓
+- DELETE /v1/agents/{id}/project-assignments/{pid}: {pid}=project_id (not assignment_id) ✓
+- Chat session scope_type=project_task: works with task UUID as scope_id ✓
+- GET /v1/admin/users?email=X: returns {id, organization_id, email, display_name, role} ✓
+- Worker health check: 0 dead letters in last 30min ✓ (all handlers now registered and working)
+
+## API Field Corrections (iteration 18 additions)
+- API key create: scopes is array (not scope string); route is /v1/api-keys (not /v1/auth/api-keys)
+- Agent project assignment roles: pm/worker/reviewer/observer (NOT "member")
+- Agent project assignment DELETE: {pid} in path = project_id (not assignment_id)
+- Agent detail response: includes budget_cap_tokens, budget_period, tool_allow_list, tool_deny_list, etc.
+- API key DELETE: returns 204 No Content (no JSON body)
+
+## Validation Results (Iteration 18 - all PASS)
+- All 13 spec areas PASS (same as iter 17)
+- Worker healthy: 0 dead letters in recent 30 minutes
+- All 45 go test packages: PASS (cached)
+- go build: PASS
+
+## DB State (verified 2026-02-26T05:35)
+- Chat messages: 1360 (up from 1355)
+- Candidate memories: 89 (same - in 7-day hold)
+- Trace spans ok: 58 (up from 55)
+- Completed model invocations: 509 (up from 505)
+- Cleanup jobs: 9 pending at 20:00 (scheduled, not dead-lettering) ✓
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
 - MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
