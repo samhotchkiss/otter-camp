@@ -365,6 +365,41 @@ func (r *RunRepository) ListPausedUpdatedBefore(ctx context.Context, before time
 	return items, nil
 }
 
+func (r *RunRepository) ListCreatedByTriggerUpdatedBefore(ctx context.Context, triggerType string, before time.Time) ([]Run, error) {
+	trigger := normalizeTriggerType(triggerType)
+	if trigger == "" {
+		return nil, nil
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT id, organization_id, project_id, task_id, flow_node_id, session_id, turn_id,
+		       principal_type, principal_id, status, idempotency_key, trigger_type, version,
+		       failure_reason, failure_class, input_tokens, output_tokens, metadata, created_at, updated_at, started_at, completed_at
+		FROM run
+		WHERE status = 'created'
+		  AND trigger_type = $1
+		  AND updated_at < $2
+		ORDER BY updated_at ASC, id ASC
+	`, trigger, before.UTC())
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	items := make([]Run, 0)
+	for rows.Next() {
+		item, scanErr := scanRun(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		items = append(items, item)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return items, nil
+}
+
 func (r *RunRepository) ListOrphanedInProgress(ctx context.Context, since time.Time) ([]Run, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT r.id, r.organization_id, r.project_id, r.task_id, r.flow_node_id, r.session_id, r.turn_id,

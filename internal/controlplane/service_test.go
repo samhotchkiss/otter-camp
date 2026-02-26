@@ -347,6 +347,45 @@ func TestSupervisorSkipsRecoveryAfterThreeDeadLettersFilesBlocker(t *testing.T) 
 	}
 }
 
+func TestSupervisorDetectStaleCreatedRunsCancelsThem(t *testing.T) {
+	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
+	staleRun := Run{
+		ID:             uuid.New(),
+		OrganizationID: uuid.New(),
+		Status:         "created",
+		TriggerType:    "supervisor",
+		UpdatedAt:      now.Add(-10 * time.Minute),
+	}
+
+	runs := &fakeSupervisorRuns{
+		created: []Run{staleRun},
+	}
+	events := &fakeSupervisorEvents{}
+	runSvc := &fakeSupervisorRunService{}
+	supervisor := &Supervisor{
+		runService: runSvc,
+		runs:       runs,
+		events:     events,
+		clock:      clock.NewFake(now),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := supervisor.detectStaleCreatedRuns(context.Background()); err != nil {
+		t.Fatalf("detectStaleCreatedRuns: %v", err)
+	}
+
+	if len(runSvc.requestCancelCalls) != 1 || runSvc.requestCancelCalls[0] != staleRun.ID {
+		t.Fatalf("RequestCancel calls = %v, want [%s]", runSvc.requestCancelCalls, staleRun.ID)
+	}
+	if len(events.appended) == 0 {
+		t.Fatal("expected supervisor_recovery event for stale created run")
+	}
+	last := events.appended[len(events.appended)-1]
+	if last.RunID != staleRun.ID || last.ActorType != "supervisor" || last.EventType != "supervisor_recovery" {
+		t.Fatalf("unexpected appended event: %+v", last)
+	}
+}
+
 type fakeRunDeps struct {
 	runs          *fakeRunRepo
 	steps         *fakeRunStepRepo
@@ -766,6 +805,7 @@ func (noopUserReader) List(context.Context, uuid.UUID) ([]repo.HumanUser, error)
 
 type fakeSupervisorRuns struct {
 	inProgress      []Run
+	created         []Run
 	deadLetterCount int
 }
 
@@ -775,6 +815,10 @@ func (f *fakeSupervisorRuns) ListInProgressUpdatedBefore(context.Context, time.T
 
 func (f *fakeSupervisorRuns) ListPausedUpdatedBefore(context.Context, time.Time) ([]Run, error) {
 	return nil, nil
+}
+
+func (f *fakeSupervisorRuns) ListCreatedByTriggerUpdatedBefore(context.Context, string, time.Time) ([]Run, error) {
+	return f.created, nil
 }
 
 func (f *fakeSupervisorRuns) ListOrphanedInProgress(context.Context, time.Time) ([]Run, error) {
@@ -803,7 +847,8 @@ func (f *fakeSupervisorEvents) GetLatestHeartbeat(context.Context, uuid.UUID) (R
 }
 
 type fakeSupervisorRunService struct {
-	createRunCalls int
+	createRunCalls     int
+	requestCancelCalls []uuid.UUID
 }
 
 func (f *fakeSupervisorRunService) CreateRun(_ context.Context, input CreateRunInput) (Run, error) {
@@ -823,7 +868,8 @@ func (*fakeSupervisorRunService) CompleteRun(context.Context, uuid.UUID, json.Ra
 func (*fakeSupervisorRunService) FailRun(context.Context, uuid.UUID, string, string) error {
 	return nil
 }
-func (*fakeSupervisorRunService) RequestCancel(context.Context, uuid.UUID, CancelRequestActor) error {
+func (f *fakeSupervisorRunService) RequestCancel(_ context.Context, runID uuid.UUID, _ CancelRequestActor) error {
+	f.requestCancelCalls = append(f.requestCancelCalls, runID)
 	return nil
 }
 func (*fakeSupervisorRunService) ConfirmCancelled(context.Context, uuid.UUID) error { return nil }

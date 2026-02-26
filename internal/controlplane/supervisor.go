@@ -22,6 +22,7 @@ const (
 	defaultSupervisorPollInterval = 60 * time.Second
 	syncHeartbeatSilenceThreshold = 90 * time.Second
 	asyncHeartbeatSilenceLimit    = 5 * time.Minute
+	createdRunStaleLimit          = 5 * time.Minute
 	orphanedEventSilenceLimit     = 10 * time.Minute
 	pausedTimeoutLimit            = 24 * time.Hour
 	urgentBlockerEscalationAfter  = 4 * time.Hour
@@ -32,6 +33,7 @@ const (
 type supervisorRunRepository interface {
 	ListInProgressUpdatedBefore(ctx context.Context, before time.Time) ([]Run, error)
 	ListPausedUpdatedBefore(ctx context.Context, before time.Time) ([]Run, error)
+	ListCreatedByTriggerUpdatedBefore(ctx context.Context, triggerType string, before time.Time) ([]Run, error)
 	ListOrphanedInProgress(ctx context.Context, since time.Time) ([]Run, error)
 	CountDeadLetterByTaskFlowNode(ctx context.Context, taskID, flowNodeID uuid.UUID) (int, error)
 }
@@ -208,6 +210,9 @@ func (s *Supervisor) tick(ctx context.Context) error {
 	if err := s.detectStuckRuns(ctx); err != nil {
 		return err
 	}
+	if err := s.detectStaleCreatedRuns(ctx); err != nil {
+		return err
+	}
 	if err := s.detectOrphanedRuns(ctx); err != nil {
 		return err
 	}
@@ -216,6 +221,34 @@ func (s *Supervisor) tick(ctx context.Context) error {
 	}
 	if err := s.detectExpiredBrowserHandoffs(ctx); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (s *Supervisor) detectStaleCreatedRuns(ctx context.Context) error {
+	now := s.clock.Now().UTC()
+	staleRuns, err := s.runs.ListCreatedByTriggerUpdatedBefore(ctx, "supervisor", now.Add(-createdRunStaleLimit))
+	if err != nil {
+		return err
+	}
+
+	for _, runRecord := range staleRuns {
+		cancelErr := s.runService.RequestCancel(ctx, runRecord.ID, CancelRequestActor{Type: "supervisor"})
+		if cancelErr != nil && !errors.Is(cancelErr, ErrInvalidTransition) && !errors.Is(cancelErr, ErrTerminalState) {
+			return cancelErr
+		}
+		if cancelErr != nil {
+			continue
+		}
+
+		if _, appendErr := s.events.Append(ctx, RunEvent{
+			RunID:     runRecord.ID,
+			EventType: "supervisor_recovery",
+			ActorType: "supervisor",
+			Payload:   []byte(`{"reason":"created_timeout_exceeded"}`),
+		}); appendErr != nil {
+			return appendErr
+		}
 	}
 	return nil
 }
@@ -459,9 +492,9 @@ func (s *Supervisor) recoverRun(ctx context.Context, runRecord Run, reason strin
 			}
 		}
 		msgMeta, _ := json.Marshal(map[string]any{
-			"source":  "supervisor",
-			"run_id":  created.ID.String(),
-			"reason":  strings.TrimSpace(reason),
+			"source": "supervisor",
+			"run_id": created.ID.String(),
+			"reason": strings.TrimSpace(reason),
 		})
 		if _, msgErr := s.chatService.AppendMessage(ctx, chat.AppendMessageInput{
 			SessionID: sessionID,
