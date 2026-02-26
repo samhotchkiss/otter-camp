@@ -2,13 +2,16 @@
                     [Sidebar]                            | [*Main*]                                                                 | [Chat]                                                                  
                     size=XL shell=board visible(sidebar=true,main=true,chat=true) widths=[36 72 72]
                     Status: snapshot | Realtime=disconnected | Size=XL | Focus=main | ChatSession=none
+                    Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit
 
 ### XL chat
                     [Sidebar]                            | [*Main*]                                                                 | [Chat]                                                                  
                     size=XL shell=chat visible(sidebar=true,main=true,chat=true) widths=[36 72 72]
                     Status: snapshot | Realtime=disconnected | Size=XL | Focus=main | ChatSession=none
+                    Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit
 
 ### XL inbox
                     [Sidebar]                            | [*Main*]                                                                 | [Chat]                                                                  
                     size=XL shell=inbox visible(sidebar=true,main=true,chat=true) widths=[36 72 72]
                     Status: snapshot | Realtime=disconnected | Size=XL | Focus=main | ChatSession=none
+                    Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit

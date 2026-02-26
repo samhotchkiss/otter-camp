@@ -30,6 +30,7 @@ type Model struct {
 	commandMode    bool
 	commandBuffer  string
 	statusMessage  string
+	runtimeHints   RuntimeHints
 	connection     ConnectionState
 	streamDegraded bool
 	width          int
@@ -53,6 +54,10 @@ type Model struct {
 }
 
 func NewModel(state UIState) Model {
+	return NewModelWithRuntime(state, RuntimeHints{})
+}
+
+func NewModelWithRuntime(state UIState, runtime RuntimeHints) Model {
 	normalized := normalizeState(state)
 	panel, ok := panelFromView(normalized.LastActiveView)
 	if !ok {
@@ -63,7 +68,8 @@ func NewModel(state UIState) Model {
 	model := Model{
 		state:            normalized,
 		focus:            panel,
-		statusMessage:    initialStatusMessage(normalized),
+		statusMessage:    initialStatusMessage(normalized, runtime),
+		runtimeHints:     runtime,
 		connection:       ConnectionDisconnected,
 		sidebarVisible:   normalized.SidebarVisible,
 		workspace:        newWorkspaceState(),
@@ -83,8 +89,7 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch typed := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = typed.Width
-		m.height = typed.Height
+		m.width, m.height = normalizeDimensions(typed.Width, typed.Height)
 		previousClass := m.sizeClass
 		m.applyResponsiveLayout()
 		if previousClass != "" && previousClass != m.sizeClass {
@@ -122,7 +127,10 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.statusMessage = "Exiting TUI."
 		return m, tea.Quit
 	case tea.KeyCtrlG:
-		m.jumpToFrankSession()
+		m.jumpToFrankSession("Ctrl-G")
+		return m, nil
+	case tea.KeyCtrlP:
+		m.enterCommandMode()
 		return m, nil
 	case tea.KeyTab:
 		m.focus = nextPanelInOrder(order, m.focus)
@@ -153,13 +161,11 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(key.Runes) == 1 {
 			r := key.Runes[0]
 			if r == ':' {
-				m.commandMode = true
-				m.commandBuffer = ":"
-				m.statusMessage = "Command mode"
+				m.enterCommandMode()
 				return m, nil
 			}
 			if r == '0' && !m.chatTextInputActive() {
-				m.jumpToFrankSession()
+				m.jumpToFrankSession("0")
 				return m, nil
 			}
 
@@ -377,7 +383,7 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlG:
 		m.commandMode = false
 		m.commandBuffer = ""
-		m.jumpToFrankSession()
+		m.jumpToFrankSession("Ctrl-G")
 		return m, nil
 	case tea.KeyEsc:
 		m.commandMode = false
@@ -419,10 +425,17 @@ func (m *Model) executeCommand(raw string) {
 	}
 
 	fields := strings.Fields(trimmed)
+	if strings.EqualFold(fields[0], "inbox") && len(fields) > 1 {
+		m.executeInboxCommand(fields[1:])
+		return
+	}
+
 	switch strings.ToLower(fields[0]) {
 	case "quit":
 		m.quitting = true
 		m.statusMessage = "Exiting TUI."
+	case "help", "palette":
+		m.statusMessage = "Commands: :focus :frank :dashboard :inbox :send :cancel-turn :sidebar :quit"
 	case "focus":
 		if len(fields) != 2 {
 			m.statusMessage = "Usage: :focus sidebar|main|chat"
@@ -435,18 +448,44 @@ func (m *Model) executeCommand(raw string) {
 		}
 		m.setFocus(panel)
 		m.statusMessage = "Focus: " + panelLabel(m.focus)
+	case "frank", "general":
+		if len(fields) != 1 {
+			m.statusMessage = "Usage: :" + strings.ToLower(fields[0])
+			return
+		}
+		m.jumpToFrankSession(":" + strings.ToLower(fields[0]))
 	case "scope":
 		if len(fields) != 2 {
 			m.statusMessage = "Usage: :scope org|project|task"
 			return
 		}
 		m.switchScope(normalizeScope(fields[1]))
-	case "general", "frank":
-		if len(fields) != 1 {
-			m.statusMessage = "Usage: :" + strings.ToLower(fields[0])
+	case "send":
+		m.sendOrQueueInput()
+	case "cancel", "cancel-turn":
+		if !m.activeTurn {
+			m.statusMessage = "No active turn to cancel."
 			return
 		}
-		m.jumpToFrankSession()
+		m.activeTurn = false
+		m.statusMessage = "Active turn cancelled."
+	case "queue":
+		if len(fields) != 2 {
+			m.statusMessage = "Usage: :queue edit|steer|delete"
+			return
+		}
+		switch strings.ToLower(fields[1]) {
+		case "edit":
+			m.applyQueueActionEdit()
+		case "steer":
+			m.applyQueueActionSteer()
+		case "delete", "drop":
+			m.applyQueueActionDelete()
+		default:
+			m.statusMessage = "Unknown queue action. Use edit, steer, or delete."
+		}
+	case "sidebar":
+		m.executeSidebarCommand(fields[1:])
 	case "dashboard", "project", "task", "inbox", "activity", "agents", "merges", "schedules":
 		view, ok := resolveMainViewCommand(fields[0])
 		if !ok {
@@ -490,12 +529,13 @@ func (m Model) viewForShell(shell string) string {
 	if layout.hiddenHints != "" {
 		status += " | " + layout.hiddenHints
 	}
+	help := "Help: " + m.commandFallbackHelp()
 
 	prefix := ""
 	if layout.gutters > 0 {
 		prefix = strings.Repeat(" ", layout.gutters)
 	}
-	lines := []string{prefix + header, prefix + shellLine, prefix + status}
+	lines := []string{prefix + header, prefix + shellLine, prefix + status, prefix + help}
 	if m.shouldRenderChatDetails() {
 		for _, line := range m.renderChatPane(maxInt(24, layout.widths[2])) {
 			lines = append(lines, prefix+line)
@@ -840,7 +880,7 @@ func (m *Model) switchScope(next ChatScope) {
 	m.statusMessage = fmt.Sprintf("Scope switched to %s.", next)
 }
 
-func (m *Model) jumpToFrankSession() {
+func (m *Model) jumpToFrankSession(trigger string) {
 	if err := m.workspace.activateGeneralSession(); err != nil {
 		m.statusMessage = "Unable to load Frank session. Press Ctrl-G or :frank to retry."
 		return
@@ -848,7 +888,11 @@ func (m *Model) jumpToFrankSession() {
 	m.activeScope = ScopeOrg
 	m.activeSession = m.workspace.activeSessionID
 	m.state.LastActiveChatSession = m.workspace.activeSessionID
-	m.statusMessage = "Switched to Frank session."
+	if strings.TrimSpace(trigger) == "" {
+		m.statusMessage = "Switched to Frank session."
+		return
+	}
+	m.statusMessage = fmt.Sprintf("Switched to Frank session (%s).", trigger)
 }
 
 func (m Model) chatTextInputActive() bool {
@@ -876,6 +920,94 @@ func (m *Model) setFocus(panel Panel) {
 		m.sidebarVisible = false
 	}
 	m.applyResponsiveLayout()
+}
+
+func (m *Model) enterCommandMode() {
+	m.commandMode = true
+	m.commandBuffer = ":"
+	m.statusMessage = "Command mode"
+}
+
+func (m *Model) executeSidebarCommand(args []string) {
+	if len(args) != 1 {
+		m.statusMessage = "Usage: :sidebar up|down|home|end|expand|collapse|select"
+		return
+	}
+	m.setFocus(SidebarPanel)
+	switch strings.ToLower(args[0]) {
+	case "up":
+		m.workspace.moveSidebar(-1)
+		m.statusMessage = "Sidebar cursor moved up."
+	case "down":
+		m.workspace.moveSidebar(1)
+		m.statusMessage = "Sidebar cursor moved down."
+	case "home":
+		m.workspace.sidebarHome()
+		m.statusMessage = "Sidebar cursor moved home."
+	case "end":
+		m.workspace.sidebarEnd()
+		m.statusMessage = "Sidebar cursor moved end."
+	case "expand":
+		m.workspace.expandSidebarNode()
+		m.statusMessage = "Sidebar node expanded."
+	case "collapse":
+		m.workspace.collapseSidebarNode()
+		m.statusMessage = "Sidebar node collapsed."
+	case "select", "open":
+		m.workspace.selectSidebarNode()
+		m.state.LastActiveChatSession = m.workspace.activeSessionID
+		m.activeSession = m.workspace.activeSessionID
+		m.statusMessage = "Sidebar selection applied."
+	default:
+		m.statusMessage = "Unknown sidebar action. Use up, down, home, end, expand, collapse, or select."
+	}
+}
+
+func (m *Model) executeInboxCommand(args []string) {
+	if len(args) != 1 {
+		m.statusMessage = "Usage: :inbox up|down|home|end|open|approve|reject|defer"
+		return
+	}
+	m.workspace.setMainView(ViewInbox)
+	m.setFocus(MainPanel)
+	switch strings.ToLower(args[0]) {
+	case "up":
+		m.workspace.moveInbox(-1)
+		m.statusMessage = "Inbox cursor moved up."
+	case "down":
+		m.workspace.moveInbox(1)
+		m.statusMessage = "Inbox cursor moved down."
+	case "home":
+		m.workspace.inboxHome()
+		m.statusMessage = "Inbox cursor moved home."
+	case "end":
+		m.workspace.inboxEnd()
+		m.statusMessage = "Inbox cursor moved end."
+	case "open":
+		if !m.workspace.applyInboxAction("open") {
+			m.statusMessage = "No inbox item available."
+			return
+		}
+		m.state.LastActiveChatSession = m.workspace.activeSessionID
+		m.activeSession = m.workspace.activeSessionID
+		m.statusMessage = "Opened inbox item in context."
+	case "approve", "reject", "defer":
+		action := strings.ToLower(args[0])
+		if !m.workspace.applyInboxAction(action) {
+			m.statusMessage = "No inbox item available."
+			return
+		}
+		switch action {
+		case "approve":
+			m.statusMessage = "Inbox item approved."
+		case "reject":
+			m.statusMessage = "Inbox item rejected."
+		default:
+			m.statusMessage = "Inbox item deferred."
+		}
+	default:
+		m.statusMessage = "Unknown inbox action. Use up, down, home, end, open, approve, reject, or defer."
+	}
 }
 
 func (m *Model) applyResponsiveLayout() {
@@ -911,6 +1043,25 @@ func panelFromShortcut(alt bool, r rune) (Panel, bool) {
 	default:
 		return MainPanel, false
 	}
+}
+
+func initialStatusMessage(state UIState, runtime RuntimeHints) string {
+	if runtime.ModifierReliabilityUncertain {
+		return "tmux mode: use :focus/:frank/:dashboard/:inbox fallbacks if modifiers are unreliable."
+	}
+	base := "Tab/Shift-Tab cycle focus. 1/2/3 direct focus. :focus/:scope/:quit commands available."
+	if strings.TrimSpace(state.LastActiveChatSession) == "" {
+		return base + " Frank jump: Ctrl-G, 0 (outside chat input), or :frank."
+	}
+	return base
+}
+
+func (m Model) commandFallbackHelp() string {
+	base := ":focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit"
+	if m.runtimeHints.ModifierReliabilityUncertain {
+		return "tmux-safe commands: " + base
+	}
+	return "fallback commands: " + base
 }
 
 func panelFromView(view string) (Panel, bool) {
@@ -954,14 +1105,6 @@ func valueOrPlaceholder(value string) string {
 		return "none"
 	}
 	return trimmed
-}
-
-func initialStatusMessage(state UIState) string {
-	base := "Tab/Shift-Tab cycle focus. 1/2/3 direct focus. :focus/:scope/:quit commands available."
-	if strings.TrimSpace(state.LastActiveChatSession) == "" {
-		return base + " Frank jump: Ctrl-G, 0 (outside chat input), or :frank."
-	}
-	return base
 }
 
 func realtimeDegradedSuffix(degraded bool) string {

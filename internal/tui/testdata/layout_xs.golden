@@ -2,13 +2,16 @@
 [Sidebar:hidden] | [*Main*]                                                              | [Chat:hidden]
 size=XS shell=board visible(sidebar=false,main=true,chat=false) widths=[0 69 0]
 Status: snapshot | Realtime=disconnected | Size=XS | Focus=main | ChatSession=none | Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat)
+Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit
 
 ### XS chat
 [Sidebar:hidden] | [*Main*]                                                              | [Chat:hidden]
 size=XS shell=chat visible(sidebar=false,main=true,chat=false) widths=[0 69 0]
 Status: snapshot | Realtime=disconnected | Size=XS | Focus=main | ChatSession=none | Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat)
+Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit
 
 ### XS inbox
 [Sidebar:hidden] | [*Main*]                                                              | [Chat:hidden]
 size=XS shell=inbox visible(sidebar=false,main=true,chat=false) widths=[0 69 0]
 Status: snapshot | Realtime=disconnected | Size=XS | Focus=main | ChatSession=none | Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat)
+Help: fallback commands: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit

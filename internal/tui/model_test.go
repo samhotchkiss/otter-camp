@@ -69,6 +69,62 @@ func TestQuitCommandAndCtrlC(t *testing.T) {
 	}
 }
 
+func TestFrankJumpControlsPreserveMainView(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.setMainView(ViewInbox)
+	model.workspace.activeSessionID = "session-task-2"
+	model.activeSession = "session-task-2"
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'0'}})
+	if got := model.ActiveChatSession(); got != "session-org-general" {
+		t.Fatalf("session after 0 jump = %q, want session-org-general", got)
+	}
+	if got := model.MainView(); got != ViewInbox {
+		t.Fatalf("main view after 0 jump = %s, want %s", got, ViewInbox)
+	}
+
+	model.workspace.activeSessionID = "session-task-1"
+	model.activeSession = "session-task-1"
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyCtrlG})
+	if got := model.ActiveChatSession(); got != "session-org-general" {
+		t.Fatalf("session after Ctrl-G jump = %q, want session-org-general", got)
+	}
+	if got := model.MainView(); got != ViewInbox {
+		t.Fatalf("main view after Ctrl-G jump = %s, want %s", got, ViewInbox)
+	}
+}
+
+func TestZeroFrankFallbackGuardWhenChatInputIsActive(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.activeSessionID = "session-task-2"
+	model.activeSession = "session-task-2"
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'0'}})
+	if got := model.ChatInput(); got != "0" {
+		t.Fatalf("chat input after 0 in chat focus = %q, want 0", got)
+	}
+	if got := model.ActiveChatSession(); got != "session-task-2" {
+		t.Fatalf("session after 0 in chat focus = %q, want session-task-2", got)
+	}
+}
+
+func TestFrankCommandAlias(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.activeSessionID = "session-task-1"
+	model.activeSession = "session-task-1"
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	for _, r := range []rune("frank") {
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if got := model.ActiveChatSession(); got != "session-org-general" {
+		t.Fatalf("session after :frank = %q, want session-org-general", got)
+	}
+}
+
 func TestResizeKeepsFocusValid(t *testing.T) {
 	model := NewModel(DefaultState())
 	model = pressMsg(model, tea.WindowSizeMsg{Width: 90, Height: 30})
@@ -180,6 +236,25 @@ func TestFrankCommandAliasMatchesGeneral(t *testing.T) {
 	if viaFrank.MainView() != viaGeneral.MainView() {
 		t.Fatalf("main view mismatch :frank=%s :general=%s", viaFrank.MainView(), viaGeneral.MainView())
 	}
+}
+
+func TestTmuxHelpLineUsesFallbackCommandHints(t *testing.T) {
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{ModifierReliabilityUncertain: true})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	view := model.View()
+	if !containsAll(view, []string{"Help:", "tmux-safe commands:", ":focus", ":frank"}) {
+		t.Fatalf("view missing tmux fallback help text: %q", view)
+	}
+}
+
+func containsAll(raw string, wants []string) bool {
+	for _, want := range wants {
+		if !strings.Contains(raw, want) {
+			return false
+		}
+	}
+	return true
 }
 
 func pressKey(model Model, key tea.KeyMsg) Model {

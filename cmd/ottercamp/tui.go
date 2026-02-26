@@ -55,7 +55,8 @@ func runTUICommand(args []string) int {
 		return 0
 	}
 
-	program := tea.NewProgram(tuiapp.NewModel(state), tea.WithAltScreen())
+	runtimeHints := tuiapp.DetectRuntimeHints(os.Getenv)
+	program := tea.NewProgram(tuiapp.NewModelWithRuntime(state, runtimeHints), tea.WithAltScreen())
 	finalModel, err := program.Run()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tui runtime error: %v\n", err)

@@ -289,6 +289,15 @@ go test ./... -tags integration
 go test ./... -tags e2e
 ```
 
+**tmux verification checklist (TUI work):**
+- Run the TUI in tmux and confirm fallback-first paths remain usable:
+  - `:focus sidebar|main|chat`
+  - `:frank` (and key paths `Ctrl-G`, `0` outside chat input)
+  - `:dashboard`, `:inbox`, and other explicit nav commands
+  - chat commands `:send`, `:cancel-turn`, `:queue edit|steer|delete`
+- Resize tmux panes through XS/S/M/L/XL widths and confirm focus/layout stay deterministic.
+- Capture at least one tmux-mode command-palette workflow in integration/E2E validation before review.
+
 **CI budget (task 089):**
 - Lint: < 30s
 - Unit tests: < 2 min
