@@ -257,16 +257,18 @@ func (c HTTPSSEConnector) Connect(ctx context.Context, sinceSeq int64) (io.ReadC
 }
 
 type RealtimeClient struct {
-	Connector     SSEConnector
-	Snapshots     SnapshotFetcher
-	Reducer       *EventReducer
-	VisibleViews  func() []string
-	Logger        *slog.Logger
-	Backoff       []time.Duration
-	OnStateChange func(state ConnectionState, degraded bool)
-	OnEvent       func(event EventEnvelope, applied bool)
+	Connector      SSEConnector
+	Snapshots      SnapshotFetcher
+	Reducer        *EventReducer
+	VisibleViews   func() []string
+	Logger         *slog.Logger
+	Backoff        []time.Duration
+	OnStateChange  func(state ConnectionState, degraded bool)
+	OnEvent        func(event EventEnvelope, applied bool)
+	OnReplaySynced func()
 
-	degraded bool
+	degraded     bool
+	replaySynced bool
 }
 
 func (c *RealtimeClient) Run(ctx context.Context) error {
@@ -363,6 +365,10 @@ func (c *RealtimeClient) consumeStream(ctx context.Context, stream io.ReadCloser
 		}
 		if !*replayComplete {
 			*replayComplete = true
+			if c.OnReplaySynced != nil && !c.replaySynced {
+				c.replaySynced = true
+				c.OnReplaySynced()
+			}
 		}
 		c.emitState(ConnectionConnected)
 		if c.OnEvent != nil {

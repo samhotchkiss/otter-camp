@@ -1,4 +1,4 @@
-.PHONY: build test-unit test-integration test-e2e lint clean coverage-report
+.PHONY: build test-unit test-integration test-e2e test-tui-quality lint clean coverage-report
 
 BINARY_NAME = ottercamp
 BIN_DIR = ./bin
@@ -34,6 +34,9 @@ test-e2e: build
 	  -timeout 12m \
 	  -parallel 4 \
 	  $(GOFLAGS)
+
+test-tui-quality:
+	./build/verify-tui-quality-gates.sh
 
 lint:
 	golangci-lint run --timeout=3m

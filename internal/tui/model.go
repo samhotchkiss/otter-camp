@@ -3,7 +3,9 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -24,6 +26,26 @@ type ChatEnvelopeMsg struct {
 	Envelope EventEnvelope
 }
 
+type ReplaySyncedMsg struct{}
+
+type coldOpenCompleteMsg struct{}
+type tourOverlayExpiredMsg struct{}
+type memorySampleMsg struct{}
+
+const (
+	memorySampleInterval   = 5 * time.Second
+	keypressLatencyBudget  = 100 * time.Millisecond
+	sseRenderLatencyBudget = 250 * time.Millisecond
+)
+
+type TUIPerformanceMetrics struct {
+	InitialInteractivePaint time.Duration
+	KeypressToVisible       time.Duration
+	SSEDeltaRenderLatency   time.Duration
+	PeakMemoryBytes         uint64
+	MemoryBoundBytes        uint64
+}
+
 type Model struct {
 	state          UIState
 	focus          Panel
@@ -39,6 +61,14 @@ type Model struct {
 	sidebarVisible bool
 	sizeClass      SizeClass
 	workspace      workspaceState
+	now            func() time.Time
+	startedAt      time.Time
+	firstRun       bool
+	coldOpenActive bool
+	tourActive     bool
+	proofRealtime  bool
+	proofReplay    bool
+	perfMetrics    TUIPerformanceMetrics
 
 	chatInput        string
 	chatHistory      []string
@@ -65,6 +95,8 @@ func NewModelWithRuntime(state UIState, runtime RuntimeHints) Model {
 	}
 	scope := inferScopeFromSession(normalized.LastActiveChatSession)
 
+	nowFn := runtime.now
+	startedAt := nowFn()
 	model := Model{
 		state:            normalized,
 		focus:            panel,
@@ -73,17 +105,37 @@ func NewModelWithRuntime(state UIState, runtime RuntimeHints) Model {
 		connection:       ConnectionDisconnected,
 		sidebarVisible:   normalized.SidebarVisible,
 		workspace:        newWorkspaceState(),
+		now:              nowFn,
+		startedAt:        startedAt,
+		firstRun:         runtime.FirstRun,
+		coldOpenActive:   runtime.FirstRun,
 		chatHistoryIndex: -1,
 		chatMessageIndex: map[string]int{},
 		activeScope:      scope,
 		activeSession:    strings.TrimSpace(normalized.LastActiveChatSession),
+		perfMetrics: TUIPerformanceMetrics{
+			MemoryBoundBytes: runtime.memoryBoundBytes(),
+		},
+	}
+	if runtime.FirstRun {
+		model.workspace.setMainView(ViewDashboard)
 	}
 	model.applyResponsiveLayout()
 	return model
 }
 
 func (m Model) Init() tea.Cmd {
-	return nil
+	commands := make([]tea.Cmd, 0, 2)
+	if m.coldOpenActive {
+		commands = append(commands, coldOpenTimerCmd(m.runtimeHints.coldOpenDuration()))
+	}
+	if !m.runtimeHints.DisableMemorySampler {
+		commands = append(commands, memorySamplerCmd(memorySampleInterval))
+	}
+	if len(commands) == 0 {
+		return nil
+	}
+	return tea.Batch(commands...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -92,6 +144,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = normalizeDimensions(typed.Width, typed.Height)
 		previousClass := m.sizeClass
 		m.applyResponsiveLayout()
+		if m.perfMetrics.InitialInteractivePaint == 0 {
+			m.perfMetrics.InitialInteractivePaint = m.now().Sub(m.startedAt)
+		}
 		if previousClass != "" && previousClass != m.sizeClass {
 			m.statusMessage = fmt.Sprintf("Layout changed: %s", m.sizeClass)
 		}
@@ -99,15 +154,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ConnectionStateMsg:
 		m.connection = typed.State
 		m.streamDegraded = typed.Degraded
+		if typed.State == ConnectionConnected && !m.proofRealtime {
+			m.proofRealtime = true
+			m.workspace.activity = append(m.workspace.activity, "proof-of-life realtime connected")
+		}
+		return m, nil
+	case ReplaySyncedMsg:
+		if !m.proofReplay {
+			m.proofReplay = true
+			m.workspace.activity = append(m.workspace.activity, "proof-of-life replay synced")
+		}
 		return m, nil
 	case WorkspaceEnvelopeMsg:
 		m.workspace.applyRealtimeEnvelope(typed.Envelope)
+		m.recordStreamRenderLatency(typed.Envelope)
+		m.markReplaySynced()
 		return m, nil
 	case ChatEnvelopeMsg:
 		m.applyChatEnvelope(typed.Envelope)
+		m.recordStreamRenderLatency(typed.Envelope)
+		m.markReplaySynced()
 		return m, nil
+	case coldOpenCompleteMsg:
+		if m.coldOpenActive {
+			m.coldOpenActive = false
+			m.tourActive = true
+			m.statusMessage = "Operator-ready dashboard loaded. Tour overlay active for 2m (non-blocking)."
+			return m, tourOverlayTimerCmd(m.runtimeHints.tourDuration())
+		}
+		return m, nil
+	case tourOverlayExpiredMsg:
+		if m.tourActive {
+			m.tourActive = false
+			m.statusMessage = "Tour overlay dismissed. Normal workspace interaction continues."
+		}
+		return m, nil
+	case memorySampleMsg:
+		m.sampleMemory()
+		if m.runtimeHints.DisableMemorySampler {
+			return m, nil
+		}
+		return m, memorySamplerCmd(memorySampleInterval)
 	case tea.KeyMsg:
-		return m.updateKey(typed)
+		started := m.now()
+		updated, cmd := m.updateKey(typed)
+		typedModel, ok := updated.(Model)
+		if !ok {
+			return updated, cmd
+		}
+		typedModel.perfMetrics.KeypressToVisible = typedModel.now().Sub(started)
+		return typedModel, cmd
 	default:
 		return m, nil
 	}
@@ -435,7 +531,7 @@ func (m *Model) executeCommand(raw string) {
 		m.quitting = true
 		m.statusMessage = "Exiting TUI."
 	case "help", "palette":
-		m.statusMessage = "Commands: :focus :frank :dashboard :inbox :send :cancel-turn :sidebar :quit"
+		m.statusMessage = "Commands: :focus :frank :dashboard :inbox :send :cancel-turn :sidebar :tour dismiss :quit"
 	case "focus":
 		if len(fields) != 2 {
 			m.statusMessage = "Usage: :focus sidebar|main|chat"
@@ -462,6 +558,21 @@ func (m *Model) executeCommand(raw string) {
 		m.switchScope(normalizeScope(fields[1]))
 	case "send":
 		m.sendOrQueueInput()
+	case "tour":
+		if len(fields) != 2 {
+			m.statusMessage = "Usage: :tour dismiss"
+			return
+		}
+		if strings.EqualFold(fields[1], "dismiss") {
+			if !m.tourActive {
+				m.statusMessage = "Tour overlay is not active."
+				return
+			}
+			m.tourActive = false
+			m.statusMessage = "Tour overlay dismissed."
+			return
+		}
+		m.statusMessage = "Unknown tour action. Use :tour dismiss."
 	case "cancel", "cancel-turn":
 		if !m.activeTurn {
 			m.statusMessage = "No active turn to cancel."
@@ -535,7 +646,24 @@ func (m Model) viewForShell(shell string) string {
 	if layout.gutters > 0 {
 		prefix = strings.Repeat(" ", layout.gutters)
 	}
-	lines := []string{prefix + header, prefix + shellLine, prefix + status, prefix + help}
+	lines := []string{}
+	if m.coldOpenActive {
+		lines = append(lines, prefix+"=== OTTERCAMP // FIRST RUN ===")
+		lines = append(lines, prefix+"Booting operator console...")
+	}
+	if banner := m.degradedModeBanner(); banner != "" {
+		lines = append(lines, prefix+banner)
+	}
+	lines = append(lines, prefix+header, prefix+shellLine, prefix+status, prefix+help)
+	for _, line := range m.renderPanelStates(layout) {
+		lines = append(lines, prefix+line)
+	}
+	if m.firstRun {
+		lines = append(lines, prefix+m.proofOfLifeLine())
+	}
+	if m.tourActive {
+		lines = append(lines, prefix+"Tour overlay (non-blocking): 1/sidebar, 2/main, 3/chat, :frank, :inbox open, :tour dismiss")
+	}
 	if m.shouldRenderChatDetails() {
 		for _, line := range m.renderChatPane(maxInt(24, layout.widths[2])) {
 			lines = append(lines, prefix+line)
@@ -552,6 +680,21 @@ func (m Model) viewForShell(shell string) string {
 
 func (m Model) shouldRenderChatDetails() bool {
 	return len(m.chatMessages) > 0 || len(m.queuedMessages) > 0 || strings.TrimSpace(m.chatInput) != "" || m.activeTurn
+}
+
+func (m Model) renderPanelStates(layout layoutState) []string {
+	lines := make([]string, 0, 3)
+	panelState := m.panelLifecycleState()
+	if layout.visible[SidebarPanel] {
+		lines = append(lines, fmt.Sprintf("Sidebar state: %s | %s", panelState, m.sidebarSummary()))
+	}
+	if layout.visible[MainPanel] {
+		lines = append(lines, fmt.Sprintf("Main state: %s | %s", panelState, m.workspace.render(m.workspace.mainView, layout.sizeClass)))
+	}
+	if layout.visible[ChatPanel] {
+		lines = append(lines, fmt.Sprintf("Chat state: %s | %s", panelState, m.chatPanelSummary()))
+	}
+	return lines
 }
 
 func (m Model) renderChatPane(width int) []string {
@@ -594,6 +737,56 @@ func (m Model) renderChatPane(width int) []string {
 	return lines
 }
 
+func (m Model) proofOfLifeLine() string {
+	realtime := "pending"
+	if m.proofRealtime {
+		realtime = "realtime connected"
+	}
+	replay := "pending"
+	if m.proofReplay {
+		replay = "replay synced"
+	}
+	return fmt.Sprintf("Proof-of-life: %s | %s", realtime, replay)
+}
+
+func (m Model) degradedModeBanner() string {
+	if m.connection == ConnectionConnected && !m.streamDegraded {
+		return ""
+	}
+	return "DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync."
+}
+
+func (m Model) panelLifecycleState() string {
+	if m.connection == ConnectionDisconnected {
+		return "error"
+	}
+	if m.connection == ConnectionReconnecting || m.streamDegraded {
+		return "stale"
+	}
+	if !m.proofRealtime {
+		return "loading"
+	}
+	return "ready"
+}
+
+func (m Model) sidebarSummary() string {
+	node := m.workspace.currentSidebarNode()
+	if node == nil {
+		return "empty: no sessions available"
+	}
+	return fmt.Sprintf("current=%s unread=%d", node.Label, node.Unread)
+}
+
+func (m Model) chatPanelSummary() string {
+	if len(m.chatMessages) == 0 && strings.TrimSpace(m.chatInput) == "" && !m.activeTurn {
+		return "empty: type a prompt and press Enter"
+	}
+	if m.activeTurn {
+		return "loading: waiting for assistant response"
+	}
+	return fmt.Sprintf("ready: messages=%d queued=%d", len(m.chatMessages), len(m.queuedMessages))
+}
+
 func (m Model) FocusedPanel() Panel { return m.focus }
 func (m Model) Quitting() bool      { return m.quitting }
 
@@ -632,6 +825,26 @@ func (m Model) WorkspaceRender(class SizeClass) string {
 	return m.workspace.render(m.workspace.mainView, class)
 }
 func (m Model) BoardCounts() boardCounts { return m.workspace.boardCounts() }
+func (m Model) PerformanceMetrics() TUIPerformanceMetrics {
+	return m.perfMetrics
+}
+
+func (m Model) QualityGateFailures() []string {
+	failures := make([]string, 0, 4)
+	if m.perfMetrics.InitialInteractivePaint <= 0 || m.perfMetrics.InitialInteractivePaint > 1200*time.Millisecond {
+		failures = append(failures, fmt.Sprintf("initial interactive paint out of budget: %v", m.perfMetrics.InitialInteractivePaint))
+	}
+	if m.perfMetrics.KeypressToVisible <= 0 || m.perfMetrics.KeypressToVisible > keypressLatencyBudget {
+		failures = append(failures, fmt.Sprintf("keypress latency out of budget: %v", m.perfMetrics.KeypressToVisible))
+	}
+	if m.perfMetrics.SSEDeltaRenderLatency <= 0 || m.perfMetrics.SSEDeltaRenderLatency > sseRenderLatencyBudget {
+		failures = append(failures, fmt.Sprintf("sse delta latency out of budget: %v", m.perfMetrics.SSEDeltaRenderLatency))
+	}
+	if m.perfMetrics.MemoryBoundBytes > 0 && m.perfMetrics.PeakMemoryBytes > m.perfMetrics.MemoryBoundBytes {
+		failures = append(failures, fmt.Sprintf("memory ceiling exceeded: peak=%d bound=%d", m.perfMetrics.PeakMemoryBytes, m.perfMetrics.MemoryBoundBytes))
+	}
+	return failures
+}
 
 func (m Model) ActivityEntries() []string {
 	out := make([]string, len(m.workspace.activity))
@@ -1046,6 +1259,9 @@ func panelFromShortcut(alt bool, r rune) (Panel, bool) {
 }
 
 func initialStatusMessage(state UIState, runtime RuntimeHints) string {
+	if runtime.FirstRun {
+		return "First run: cold-open, dashboard landing, tour overlay, and proof-of-life checks are active."
+	}
 	if runtime.ModifierReliabilityUncertain {
 		return "tmux mode: use :focus/:frank/:dashboard/:inbox fallbacks if modifiers are unreliable."
 	}
@@ -1057,7 +1273,7 @@ func initialStatusMessage(state UIState, runtime RuntimeHints) string {
 }
 
 func (m Model) commandFallbackHelp() string {
-	base := ":focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit"
+	base := ":focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :tour dismiss | :quit"
 	if m.runtimeHints.ModifierReliabilityUncertain {
 		return "tmux-safe commands: " + base
 	}
@@ -1112,6 +1328,54 @@ func realtimeDegradedSuffix(degraded bool) string {
 		return " (degraded)"
 	}
 	return ""
+}
+
+func (m *Model) markReplaySynced() {
+	if m.proofReplay {
+		return
+	}
+	m.proofReplay = true
+	m.workspace.activity = append(m.workspace.activity, "proof-of-life replay synced")
+}
+
+func (m *Model) recordStreamRenderLatency(event EventEnvelope) {
+	if event.EventType != "chat.message.delta" {
+		return
+	}
+	if event.OccurredAt.IsZero() {
+		return
+	}
+	latency := m.now().Sub(event.OccurredAt)
+	if latency < 0 {
+		latency = 0
+	}
+	m.perfMetrics.SSEDeltaRenderLatency = latency
+}
+
+func (m *Model) sampleMemory() {
+	stats := runtime.MemStats{}
+	runtime.ReadMemStats(&stats)
+	if stats.Alloc > m.perfMetrics.PeakMemoryBytes {
+		m.perfMetrics.PeakMemoryBytes = stats.Alloc
+	}
+}
+
+func coldOpenTimerCmd(duration time.Duration) tea.Cmd {
+	return tea.Tick(duration, func(time.Time) tea.Msg {
+		return coldOpenCompleteMsg{}
+	})
+}
+
+func tourOverlayTimerCmd(duration time.Duration) tea.Cmd {
+	return tea.Tick(duration, func(time.Time) tea.Msg {
+		return tourOverlayExpiredMsg{}
+	})
+}
+
+func memorySamplerCmd(duration time.Duration) tea.Cmd {
+	return tea.Tick(duration, func(time.Time) tea.Msg {
+		return memorySampleMsg{}
+	})
 }
 
 func maxInt(a, b int) int {

@@ -46,6 +46,11 @@ func runTUICommand(args []string) int {
 		fmt.Fprintf(os.Stderr, "tui state load error: %v\n", err)
 		return 1
 	}
+	stateExists, err := tuiapp.StateFileExists(statePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tui state stat error: %v\n", err)
+		return 1
+	}
 
 	if *nonInteractive {
 		if err := tuiapp.SaveState(statePath, state); err != nil {
@@ -56,6 +61,7 @@ func runTUICommand(args []string) int {
 	}
 
 	runtimeHints := tuiapp.DetectRuntimeHints(os.Getenv)
+	runtimeHints.FirstRun = !stateExists
 	program := tea.NewProgram(tuiapp.NewModelWithRuntime(state, runtimeHints), tea.WithAltScreen())
 	finalModel, err := program.Run()
 	if err != nil {
