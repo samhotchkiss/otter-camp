@@ -431,7 +431,7 @@ func runServe() int {
 			server.NewMCPRouteRegistrar(mcpService, repo.NewMCPToolCatalogRepo(pool.Raw())),
 			server.NewModelRouteRegistrar(pool.Raw()),
 			server.NewOrgAuditRouteRegistrar(pool.Raw()),
-			server.NewProjectRouteRegistrar(projectService),
+			server.NewProjectRouteRegistrar(projectService, repo.NewSkillRepo(pool.Raw())),
 			server.NewTaskRouteRegistrar(taskService, flowService, deliveryService, pool.Raw()),
 			server.NewChatRouteRegistrar(chatService, pool.Raw()),
 			server.NewMemoryRouteRegistrar(server.MemoryRouteOptions{

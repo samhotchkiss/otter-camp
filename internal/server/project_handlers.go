@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,12 +19,17 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/scheduling"
 )
 
+type skillOrgRepo interface {
+	ListByOrg(ctx context.Context, organizationID uuid.UUID, includeInactive bool) ([]repo.Skill, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID, includeInactive bool) ([]repo.Skill, error)
+}
+
 type ProjectRouteRegistrar struct {
 	handlers projectHandlers
 }
 
-func NewProjectRouteRegistrar(service projectsvc.ProjectService) *ProjectRouteRegistrar {
-	return &ProjectRouteRegistrar{handlers: projectHandlers{service: service}}
+func NewProjectRouteRegistrar(service projectsvc.ProjectService, skills skillOrgRepo) *ProjectRouteRegistrar {
+	return &ProjectRouteRegistrar{handlers: projectHandlers{service: service, skills: skills}}
 }
 
 func (r *ProjectRouteRegistrar) RegisterRoutes(router chi.Router) {
@@ -44,6 +50,9 @@ func (r *ProjectRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.With(middleware.RequireRole("member")).Patch("/flow-templates/{id}/nodes/{node_id}", r.handlers.updateFlowNode)
 	router.With(middleware.RequireRole("member")).Delete("/flow-templates/{id}/nodes/{node_id}", r.handlers.deleteFlowNode)
 
+	router.Get("/skills", r.handlers.listSkills)
+	router.Get("/projects/{id}/skills", r.handlers.listProjectSkills)
+
 	router.Get("/projects/{id}/schedules", r.handlers.listSchedules)
 	router.With(middleware.RequireRole("member")).Post("/projects/{id}/schedules", r.handlers.createSchedule)
 	router.With(middleware.RequireRole("member")).Patch("/projects/{id}/schedules/{schedule_id}", r.handlers.updateSchedule)
@@ -54,6 +63,7 @@ func (r *ProjectRouteRegistrar) RegisterRoutes(router chi.Router) {
 
 type projectHandlers struct {
 	service projectsvc.ProjectService
+	skills  skillOrgRepo
 }
 
 var scheduleCronParser = scheduling.NewCronParser()
@@ -1401,4 +1411,93 @@ func toScheduleResponse(model *projectsvc.TaskSchedule) scheduleResponse {
 		CreatedAt:      model.CreatedAt,
 		UpdatedAt:      model.UpdatedAt,
 	}
+}
+
+type skillResponse struct {
+	ID             uuid.UUID  `json:"id"`
+	OrganizationID uuid.UUID  `json:"organization_id"`
+	ProjectID      *uuid.UUID `json:"project_id"`
+	Slug           string     `json:"slug"`
+	DisplayName    string     `json:"display_name"`
+	Description    string     `json:"description"`
+	FilePath       string     `json:"file_path"`
+	Version        int        `json:"version"`
+	IsActive       bool       `json:"is_active"`
+	CreatedByType  string     `json:"created_by_type"`
+	CreatedByID    uuid.UUID  `json:"created_by_id"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+func toSkillResponse(s repo.Skill) skillResponse {
+	return skillResponse{
+		ID:             s.ID,
+		OrganizationID: s.OrganizationID,
+		ProjectID:      s.ProjectID,
+		Slug:           s.Slug,
+		DisplayName:    s.DisplayName,
+		Description:    s.Description,
+		FilePath:       s.FilePath,
+		Version:        s.Version,
+		IsActive:       s.IsActive,
+		CreatedByType:  s.CreatedByType,
+		CreatedByID:    s.CreatedByID,
+		CreatedAt:      s.CreatedAt,
+		UpdatedAt:      s.UpdatedAt,
+	}
+}
+
+// listSkills returns all org-level skills. Pass ?include_inactive=true to
+// include disabled skills.
+func (h projectHandlers) listSkills(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+	if h.skills == nil {
+		responder.JSON(w, http.StatusOK, []skillResponse{})
+		return
+	}
+	includeInactive := r.URL.Query().Get("include_inactive") == "true"
+	items, err := h.skills.ListByOrg(r.Context(), principal.OrganizationID, includeInactive)
+	if err != nil {
+		responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to list skills")
+		return
+	}
+	out := make([]skillResponse, 0, len(items))
+	for _, s := range items {
+		out = append(out, toSkillResponse(s))
+	}
+	responder.JSON(w, http.StatusOK, out)
+}
+
+// listProjectSkills returns skills scoped to a specific project.
+func (h projectHandlers) listProjectSkills(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if _, ok := middleware.PrincipalFromContext(r.Context()); !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+	projectID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+	if h.skills == nil {
+		responder.JSON(w, http.StatusOK, []skillResponse{})
+		return
+	}
+	includeInactive := r.URL.Query().Get("include_inactive") == "true"
+	items, err := h.skills.ListByProject(r.Context(), projectID, includeInactive)
+	if err != nil {
+		responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to list project skills")
+		return
+	}
+	out := make([]skillResponse, 0, len(items))
+	for _, s := range items {
+		out = append(out, toSkillResponse(s))
+	}
+	responder.JSON(w, http.StatusOK, out)
 }
