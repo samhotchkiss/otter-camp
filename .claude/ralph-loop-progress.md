@@ -666,6 +666,41 @@ Go build: PASS
 - Trace spans ok: ~60 (up from 57)
 - Completed model invocations: ~520 (up from 510)
 
+## Fixes Made This Loop (Iteration 21)
+- No new code fixes needed - all spec areas PASSING
+- SSE scope types, tool execution filters, and flow template routes validated
+
+## Routes Validated (Iteration 21 - previously untested)
+- GET /v1/events/stream?scopes=project:{id}: correct scope type, returns gap+replay ✓
+- GET /v1/events/stream?scopes=session:{id}: correct scope type ✓
+- GET /v1/events/stream?since_seq=N: both URL param AND Last-Event-ID header work ✓
+- GET /v1/control/tool-executions?tool_name=cli.execute: filter by tool_name works ✓
+- GET /v1/control/tool-executions?tool_domain=native: filter by domain works ✓
+- GET /v1/control/tool-executions?policy_decision=allowed: filter by decision works ✓
+- GET /v1/control/tool-executions/{id}: full detail with {tool_name, tier, domain, capability, decision, input, output} ✓
+- GET /v1/flow-templates: global list of 2 templates ✓
+- GET /v1/flow-templates/{id}: template detail (no node_count in response) ✓
+- GET /v1/flow-templates/{id}/nodes: node detail with all fields ✓
+- GET /health/ready: checks = {db:true, migrations:true, pgvector:true, storage:true} ✓
+
+## API Field Corrections (iteration 21 additions)
+- SSE scope format: {kind}:{uuid} where kind is project/session/task (NOT organization)
+- SSE since_seq: works as BOTH ?since_seq=N query param AND Last-Event-ID header
+- Tool execution list filters: status, tool_name, tool_domain, policy_decision, run_id (NOT tool_tier)
+- Run step detail: no GET by step_id (list-only; attempts list available via /steps/{id}/attempts)
+- Tool executions: all 15 existing are tier2 (cli.execute, browser tools)
+
+## Validation Results (Iteration 21 - all PASS)
+- All 13 spec areas PASS (same as iter 20)
+- All 45 go test packages: PASS (cached)
+- go build: PASS
+
+## DB State (verified 2026-02-26T06:30)
+- Chat messages: ~1395 (up from 1380)
+- Candidate memories: 90 (same)
+- Trace spans ok: ~63 (growing)
+- Completed model invocations: ~525
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
 - MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
