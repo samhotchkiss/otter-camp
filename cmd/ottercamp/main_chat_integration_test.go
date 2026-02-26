@@ -228,7 +228,7 @@ func newChatCLIIntegrationFixture(t *testing.T) *chatCLIIntegrationFixture {
 		t.Fatalf("NewService auth: %v", err)
 	}
 
-	issued, err := authService.IssueAPIKey(context.Background(), user.ID, "chat-cli-test", []string{"*"}, nil)
+	issued, err := authService.IssueAPIKey(context.Background(), user.ID, "chat-cli-test", []string{"read:chat", "write:chat"}, nil)
 	if err != nil {
 		t.Fatalf("IssueAPIKey: %v", err)
 	}

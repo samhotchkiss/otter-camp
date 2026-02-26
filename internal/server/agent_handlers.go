@@ -98,28 +98,61 @@ func NewAgentRouteRegistrar(
 }
 
 func (r *AgentRouteRegistrar) RegisterRoutes(router chi.Router) {
-	router.Get("/agents", r.handlers.listAgents)
-	router.Post("/agents", r.handlers.createAgent)
-	router.Get("/agents/{id}", r.handlers.getAgent)
+	router.With(middleware.RequireAnyScope(requireReadScope("agents")...)).Get("/agents", r.handlers.listAgents)
+	router.With(middleware.RequireAnyScope(requireWriteScope("agents")...)).Post("/agents", r.handlers.createAgent)
+	router.With(middleware.RequireAnyScope(requireReadScope("agents")...)).Get("/agents/{id}", r.handlers.getAgent)
 
-	router.With(middleware.RequireRole("admin")).Patch("/agents/{id}", r.handlers.updateAgent)
-	router.With(middleware.RequireRole("admin")).Post("/agents/{id}/pause", r.handlers.pauseAgent)
-	router.With(middleware.RequireRole("admin")).Post("/agents/{id}/unpause", r.handlers.unpauseAgent)
-	router.With(middleware.RequireRole("admin")).Post("/agents/{id}/retire", r.handlers.retireAgent)
-	router.With(middleware.RequireRole("admin")).Post("/agents/{id}/cancel", r.handlers.cancelAgent)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("agents")...),
+	).Patch("/agents/{id}", r.handlers.updateAgent)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("agents")...),
+	).Post("/agents/{id}/pause", r.handlers.pauseAgent)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("agents")...),
+	).Post("/agents/{id}/unpause", r.handlers.unpauseAgent)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("agents")...),
+	).Post("/agents/{id}/retire", r.handlers.retireAgent)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("agents")...),
+	).Post("/agents/{id}/cancel", r.handlers.cancelAgent)
 
-	router.Get("/agent-templates", r.handlers.listAgentTemplates)
-	router.With(middleware.RequireRole("admin")).Post("/agent-templates", r.handlers.createAgentTemplate)
-	router.Get("/agent-templates/{id}", r.handlers.getAgentTemplate)
+	router.With(middleware.RequireAnyScope(requireReadScope("agents")...)).Get("/agent-templates", r.handlers.listAgentTemplates)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("agents")...),
+	).Post("/agent-templates", r.handlers.createAgentTemplate)
+	router.With(middleware.RequireAnyScope(requireReadScope("agents")...)).Get("/agent-templates/{id}", r.handlers.getAgentTemplate)
 
-	router.Get("/agents/{id}/project-assignments", r.handlers.listAgentProjectAssignments)
-	router.With(middleware.RequireRole("admin")).Post("/agents/{id}/project-assignments", r.handlers.createAgentProjectAssignment)
-	router.With(middleware.RequireRole("admin")).Delete("/agents/{id}/project-assignments/{pid}", r.handlers.deleteAgentProjectAssignment)
+	router.With(middleware.RequireAnyScope(requireReadScope("agents")...)).Get("/agents/{id}/project-assignments", r.handlers.listAgentProjectAssignments)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("agents")...),
+	).Post("/agents/{id}/project-assignments", r.handlers.createAgentProjectAssignment)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("agents")...),
+	).Delete("/agents/{id}/project-assignments/{pid}", r.handlers.deleteAgentProjectAssignment)
 
-	router.Get("/agents/{id}/skills", r.handlers.listAgentSkills)
-	router.With(middleware.RequireRole("admin")).Post("/agents/{id}/skills", r.handlers.attachAgentSkill)
-	router.With(middleware.RequireRole("admin")).Patch("/agents/{id}/skills/{sid}", r.handlers.updateAgentSkillPriority)
-	router.With(middleware.RequireRole("admin")).Delete("/agents/{id}/skills/{sid}", r.handlers.detachAgentSkill)
+	router.With(middleware.RequireAnyScope(requireReadScope("agents")...)).Get("/agents/{id}/skills", r.handlers.listAgentSkills)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("agents")...),
+	).Post("/agents/{id}/skills", r.handlers.attachAgentSkill)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("agents")...),
+	).Patch("/agents/{id}/skills/{sid}", r.handlers.updateAgentSkillPriority)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("agents")...),
+	).Delete("/agents/{id}/skills/{sid}", r.handlers.detachAgentSkill)
 }
 
 type agentHandlers struct {

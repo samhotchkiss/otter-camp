@@ -63,33 +63,33 @@ func NewChatRouteRegistrar(service chat.ChatService, pool *pgxpool.Pool) *ChatRo
 }
 
 func (r *ChatRouteRegistrar) RegisterRoutes(router chi.Router) {
-	router.Get("/chat-sessions", r.handlers.listSessions)
-	router.Post("/chat-sessions", r.handlers.createSession)
-	router.Get("/chat-sessions/{id}", r.handlers.getSession)
-	router.Patch("/chat-sessions/{id}", r.handlers.patchSession)
-	router.Delete("/chat-sessions/{id}", r.handlers.deleteSession)
+	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions", r.handlers.listSessions)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions", r.handlers.createSession)
+	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}", r.handlers.getSession)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Patch("/chat-sessions/{id}", r.handlers.patchSession)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Delete("/chat-sessions/{id}", r.handlers.deleteSession)
 
-	router.Get("/chat-sessions/{id}/messages", r.handlers.listMessages)
-	router.Get("/chat-sessions/{id}/messages/{mid}", r.handlers.getMessage)
-	router.Post("/chat-sessions/{id}/messages", r.handlers.appendMessage)
-	router.Patch("/chat-sessions/{id}/messages/{mid}", r.handlers.editQueuedMessage)
-	router.Get("/chat-sessions/{id}/turns", r.handlers.listTurns)
+	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/messages", r.handlers.listMessages)
+	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/messages/{mid}", r.handlers.getMessage)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions/{id}/messages", r.handlers.appendMessage)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Patch("/chat-sessions/{id}/messages/{mid}", r.handlers.editQueuedMessage)
+	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/turns", r.handlers.listTurns)
 
-	router.Post("/chat-sessions/{id}/cancel-turn", r.handlers.cancelTurn)
-	router.Post("/chat-sessions/{id}/messages/{mid}/steer", r.handlers.steerTurn)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions/{id}/cancel-turn", r.handlers.cancelTurn)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions/{id}/messages/{mid}/steer", r.handlers.steerTurn)
 
-	router.Get("/chat-sessions/{id}/messages/{mid}/reactions", r.handlers.listReactions)
-	router.Post("/chat-sessions/{id}/messages/{mid}/reactions", r.handlers.addReaction)
-	router.Delete("/chat-sessions/{id}/messages/{mid}/reactions/{rid}", r.handlers.removeReaction)
+	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/messages/{mid}/reactions", r.handlers.listReactions)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions/{id}/messages/{mid}/reactions", r.handlers.addReaction)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Delete("/chat-sessions/{id}/messages/{mid}/reactions/{rid}", r.handlers.removeReaction)
 
-	router.Get("/chat-sessions/{id}/participants", r.handlers.listParticipants)
-	router.Post("/chat-sessions/{id}/participants", r.handlers.addParticipant)
-	router.Delete("/chat-sessions/{id}/participants/{pid}", r.handlers.removeParticipant)
+	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/participants", r.handlers.listParticipants)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions/{id}/participants", r.handlers.addParticipant)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Delete("/chat-sessions/{id}/participants/{pid}", r.handlers.removeParticipant)
 
-	router.Get("/chat-sessions/{id}/read-cursor", r.handlers.getReadCursor)
-	router.Put("/chat-sessions/{id}/read-cursor", r.handlers.putReadCursor)
+	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/read-cursor", r.handlers.getReadCursor)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Put("/chat-sessions/{id}/read-cursor", r.handlers.putReadCursor)
 
-	router.Get("/chat-sessions/{id}/artifacts", r.handlers.listArtifacts)
+	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/artifacts", r.handlers.listArtifacts)
 }
 
 type chatHandlers struct {
