@@ -51,6 +51,7 @@ func (r *ProjectRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.With(middleware.RequireRole("member")).Delete("/flow-templates/{id}/nodes/{node_id}", r.handlers.deleteFlowNode)
 
 	router.Get("/skills", r.handlers.listSkills)
+	router.Get("/skills/catalog", r.handlers.listSkills) // spec alias for skills catalog
 	router.Get("/projects/{id}/skills", r.handlers.listProjectSkills)
 
 	router.Get("/projects/{id}/schedules", r.handlers.listSchedules)

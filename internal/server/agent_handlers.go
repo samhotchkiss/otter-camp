@@ -108,6 +108,7 @@ func (r *AgentRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.Get("/agents/{id}", r.handlers.getAgent)
 	router.Get("/agents/{id}/config", r.handlers.getAgentConfig)
 	router.Get("/agents/{id}/tools", r.handlers.getAgentTools)
+	router.Get("/tools", r.handlers.listAllTools)
 
 	router.With(middleware.RequireRole("admin")).Patch("/agents/{id}", r.handlers.updateAgent)
 	router.With(middleware.RequireRole("admin")).Post("/agents/{id}/pause", r.handlers.pauseAgent)
@@ -725,6 +726,34 @@ func (h agentHandlers) getAgentTools(w http.ResponseWriter, r *http.Request) {
 		if len(allowSet) > 0 && !allowSet[t.Name] {
 			continue
 		}
+		result = append(result, agentToolResponse{
+			ID:                 t.ID,
+			Name:               t.Name,
+			DisplayName:        t.DisplayName,
+			Description:        t.Description,
+			ToolTier:           t.ToolTier,
+			ToolDomain:         t.ToolDomain,
+			RequiredCapability: t.RequiredCapability,
+			InputSchema:        t.InputSchema,
+			Allowed:            true,
+		})
+	}
+	responder.JSON(w, http.StatusOK, result)
+}
+
+func (h agentHandlers) listAllTools(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.toolDefs == nil {
+		responder.JSON(w, http.StatusOK, []agentToolResponse{})
+		return
+	}
+	allTools, err := h.toolDefs.ListEnabled(r.Context())
+	if err != nil {
+		responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to list tools")
+		return
+	}
+	result := make([]agentToolResponse, 0, len(allTools))
+	for _, t := range allTools {
 		result = append(result, agentToolResponse{
 			ID:                 t.ID,
 			Name:               t.Name,

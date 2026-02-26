@@ -196,6 +196,7 @@ func (r *MemoryRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.With(middleware.RequireRole("admin")).Get("/memory/imports/{id}", r.handlers.getMemoryImport)
 	router.With(middleware.RequireRole("admin")).Get("/memory/imports", r.handlers.listMemoryImports)
 	router.With(middleware.RequireRole("admin")).Get("/memory/compaction-runs", r.handlers.listMemoryCompactionRuns)
+	router.With(middleware.RequireRole("admin")).Get("/memory/consolidation-runs", r.handlers.listMemoryCompactionRuns) // spec alias
 	router.With(middleware.RequireRole("admin")).Post("/memory/consolidate", r.handlers.createMemoryCompactionRun)
 }
 
