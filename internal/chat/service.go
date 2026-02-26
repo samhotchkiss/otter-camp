@@ -16,6 +16,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
+	"github.com/samhotchkiss/otter-camp/internal/metrics"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
@@ -1054,6 +1055,7 @@ func (s *service) CompleteTurn(ctx context.Context, turnID uuid.UUID) error {
 	if _, err := s.turns.SetCompleted(ctx, turn.ID, completedAt, durationMS); err != nil {
 		return err
 	}
+	metrics.RecordAgentTurn("completed")
 	_, _ = s.sessions.UpdateCurrentTurn(ctx, turn.SessionID, nil)
 
 	session, err := s.GetSession(ctx, turn.SessionID)
@@ -1082,6 +1084,7 @@ func (s *service) CancelTurn(ctx context.Context, turnID uuid.UUID, reason strin
 	if _, err := s.turns.SetCancelled(ctx, turn.ID, now, now); err != nil {
 		return err
 	}
+	metrics.RecordAgentTurn("cancelled")
 	_, _ = s.sessions.UpdateCurrentTurn(ctx, turn.SessionID, nil)
 
 	session, err := s.GetSession(ctx, turn.SessionID)
@@ -1107,6 +1110,7 @@ func (s *service) FailTurn(ctx context.Context, turnID uuid.UUID, errorMsg strin
 	if _, err := s.turns.SetFailed(ctx, turn.ID, strings.TrimSpace(errorMsg), s.clock.Now().UTC()); err != nil {
 		return err
 	}
+	metrics.RecordAgentTurn("failed")
 	_, _ = s.sessions.UpdateCurrentTurn(ctx, turn.SessionID, nil)
 	return nil
 }
