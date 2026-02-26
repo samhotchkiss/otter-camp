@@ -668,8 +668,9 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 		cw = 4
 	}
 
-	// Session header
-	sessionLabel := strings.TrimSpace(m.activeSession)
+	// Session header — use human-readable label from sidebar node
+	rawSession := strings.TrimSpace(m.activeSession)
+	sessionLabel := m.workspace.sessionLabel(rawSession)
 	if sessionLabel == "" {
 		sessionLabel = "General / Frank"
 	}

@@ -213,6 +213,17 @@ func (w *workspaceState) currentSidebarNode() *sidebarNode {
 	return w.nodes[w.currentSidebarID()]
 }
 
+// sessionLabel returns the human-readable label for a session ID by looking
+// up the matching sidebar node. Falls back to the raw session ID.
+func (w *workspaceState) sessionLabel(sessionID string) string {
+	for _, node := range w.nodes {
+		if node.Kind == sidebarKindSession && node.SessionID == sessionID {
+			return node.Label
+		}
+	}
+	return sessionID
+}
+
 func (w *workspaceState) moveSidebar(delta int) {
 	visible := w.visibleSidebarIDs()
 	if len(visible) == 0 {
