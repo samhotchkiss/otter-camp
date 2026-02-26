@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/term"
 	"github.com/jackc/pgx/v5/pgxpool"
 	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/audit"
@@ -2347,10 +2348,12 @@ func runDBReset(args []string) int {
 
 func runAuthCommand(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: ottercamp auth <reset-password|magic-link|unlock-account> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: ottercamp auth <login|reset-password|magic-link|unlock-account> [flags]")
 		return 1
 	}
 	switch args[0] {
+	case "login":
+		return runAuthLogin(args[1:])
 	case "reset-password":
 		return runAuthResetPassword(args[1:])
 	case "magic-link":
@@ -2361,6 +2364,120 @@ func runAuthCommand(args []string) int {
 		fmt.Fprintf(os.Stderr, "unknown auth command: %s\n", args[0])
 		return 1
 	}
+}
+
+func runAuthLogin(args []string) int {
+	flags := flag.NewFlagSet("auth login", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	emailFlag := flags.String("email", "", "user email")
+	passwordFlag := flags.String("password", "", "password")
+	serverURLFlag := flags.String("server-url", "", "server URL (default: http://localhost:4110)")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "auth login argument error: %v\n", err)
+		return 1
+	}
+
+	serverURL := strings.TrimSpace(*serverURLFlag)
+	if serverURL == "" {
+		serverURL = strings.TrimSpace(globalServerURL)
+	}
+	if serverURL == "" {
+		serverURL = "http://localhost:4110"
+	}
+
+	email := strings.TrimSpace(*emailFlag)
+	if email == "" {
+		fmt.Fprint(os.Stdout, "Email: ")
+		fmt.Fscan(os.Stdin, &email)
+		email = strings.TrimSpace(email)
+	}
+	if email == "" {
+		fmt.Fprintln(os.Stderr, "auth login: email is required")
+		return 1
+	}
+
+	password := strings.TrimSpace(*passwordFlag)
+	if password == "" {
+		fmt.Fprint(os.Stdout, "Password: ")
+		raw, err := readPassword(int(os.Stdin.Fd()))
+		fmt.Fprintln(os.Stdout)
+		if err != nil {
+			// fallback: read as plain text if not a TTY
+			fmt.Fscan(os.Stdin, &password)
+		} else {
+			password = strings.TrimSpace(string(raw))
+		}
+	}
+	if password == "" {
+		fmt.Fprintln(os.Stderr, "auth login: password is required")
+		return 1
+	}
+
+	// Step 1: authenticate with email/password.
+	loginBody, _ := json.Marshal(map[string]string{"email": email, "password": password})
+	loginResp, err := http.Post(strings.TrimRight(serverURL, "/")+"/v1/auth/login", "application/json", bytes.NewReader(loginBody))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "auth login: connect error: %v\n", err)
+		return 1
+	}
+	defer loginResp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(loginResp.Body, 64<<10))
+	if loginResp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "auth login: server returned %d: %s\n", loginResp.StatusCode, strings.TrimSpace(string(body)))
+		return 1
+	}
+	var loginResult struct {
+		Data struct {
+			SessionToken string `json:"session_token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &loginResult); err != nil || strings.TrimSpace(loginResult.Data.SessionToken) == "" {
+		fmt.Fprintf(os.Stderr, "auth login: failed to parse session token: %v\n", err)
+		return 1
+	}
+	sessionToken := loginResult.Data.SessionToken
+
+	// Step 2: create a persistent API key using the session token.
+	keyBody, _ := json.Marshal(map[string]any{
+		"display_name": "ottercamp-cli",
+		"scopes":       []string{"realtime:read", "workspace:read", "chat:read", "chat:write"},
+	})
+	keyReq, _ := http.NewRequest(http.MethodPost, strings.TrimRight(serverURL, "/")+"/v1/api-keys", bytes.NewReader(keyBody))
+	keyReq.Header.Set("Content-Type", "application/json")
+	keyReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	keyResp, err := http.DefaultClient.Do(keyReq)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "auth login: create API key error: %v\n", err)
+		return 1
+	}
+	defer keyResp.Body.Close()
+	keyRespBody, _ := io.ReadAll(io.LimitReader(keyResp.Body, 64<<10))
+	if keyResp.StatusCode != http.StatusOK && keyResp.StatusCode != http.StatusCreated {
+		fmt.Fprintf(os.Stderr, "auth login: API key creation returned %d: %s\n", keyResp.StatusCode, strings.TrimSpace(string(keyRespBody)))
+		return 1
+	}
+	var keyResult struct {
+		Data struct {
+			Key string `json:"key"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(keyRespBody, &keyResult); err != nil || strings.TrimSpace(keyResult.Data.Key) == "" {
+		fmt.Fprintf(os.Stderr, "auth login: failed to parse API key: %v\n", err)
+		return 1
+	}
+
+	// Step 3: save credentials.
+	store := clitools.NewCredentialStore()
+	if err := store.Save(clitools.Credentials{ServerURL: serverURL, APIKey: keyResult.Data.Key}); err != nil {
+		fmt.Fprintf(os.Stderr, "auth login: save credentials error: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stdout, "logged in as %s — credentials saved to %s\n", email, store.Path)
+	return 0
+}
+
+func readPassword(fd int) ([]byte, error) {
+	return term.ReadPassword(fd)
 }
 
 func runAuthResetPassword(args []string) int {
