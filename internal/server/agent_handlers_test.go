@@ -115,7 +115,7 @@ func TestMapAgentErrorMappings(t *testing.T) {
 }
 
 func TestAgentAssignmentRoutesRegistered(t *testing.T) {
-	registrar := NewAgentRouteRegistrar(nil, nil, nil, nil, nil, nil, nil, nil)
+	registrar := NewAgentRouteRegistrar(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := chi.NewRouter()
 	registrar.RegisterRoutes(router)
 

@@ -237,6 +237,7 @@ func newAgentTestServer(t *testing.T) (*authIntegrationServer, repo.Organization
 				repo.NewSkillRepo(pool),
 				repo.NewAgentProjectAssignmentRepo(pool),
 				repo.NewAgentSkillAttachmentRepo(pool),
+				repo.NewToolDefinitionRepo(pool),
 			),
 		},
 	})

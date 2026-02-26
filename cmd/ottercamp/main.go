@@ -426,6 +426,7 @@ func runServe() int {
 				repo.NewSkillRepo(pool.Raw()),
 				repo.NewAgentProjectAssignmentRepo(pool.Raw()),
 				repo.NewAgentSkillAttachmentRepo(pool.Raw()),
+				repo.NewToolDefinitionRepo(pool.Raw()),
 			),
 			server.NewMCPRouteRegistrar(mcpService, repo.NewMCPToolCatalogRepo(pool.Raw())),
 			server.NewModelRouteRegistrar(pool.Raw()),

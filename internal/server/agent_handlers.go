@@ -78,6 +78,10 @@ type agentSkillAttachmentListRepository interface {
 	ListByAgent(ctx context.Context, agentID uuid.UUID) ([]repo.AgentSkillAttachment, error)
 }
 
+type toolDefinitionLister interface {
+	ListEnabled(ctx context.Context) ([]repo.ToolDefinition, error)
+}
+
 type AgentRouteRegistrar struct {
 	handlers agentHandlers
 }
@@ -91,9 +95,10 @@ func NewAgentRouteRegistrar(
 	skills skillAssignmentLookupRepository,
 	projectAssignments agentProjectAssignmentListRepository,
 	skillAttachments agentSkillAttachmentListRepository,
+	toolDefs toolDefinitionLister,
 ) *AgentRouteRegistrar {
 	return &AgentRouteRegistrar{
-		handlers: newAgentHandlersWithAssignments(service, templates, assignments, agents, projects, skills, projectAssignments, skillAttachments),
+		handlers: newAgentHandlersWithAssignments(service, templates, assignments, agents, projects, skills, projectAssignments, skillAttachments, toolDefs),
 	}
 }
 
@@ -101,6 +106,8 @@ func (r *AgentRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.Get("/agents", r.handlers.listAgents)
 	router.Post("/agents", r.handlers.createAgent)
 	router.Get("/agents/{id}", r.handlers.getAgent)
+	router.Get("/agents/{id}/config", r.handlers.getAgentConfig)
+	router.Get("/agents/{id}/tools", r.handlers.getAgentTools)
 
 	router.With(middleware.RequireRole("admin")).Patch("/agents/{id}", r.handlers.updateAgent)
 	router.With(middleware.RequireRole("admin")).Post("/agents/{id}/pause", r.handlers.pauseAgent)
@@ -131,6 +138,7 @@ type agentHandlers struct {
 	skills             skillAssignmentLookupRepository
 	projectAssignments agentProjectAssignmentListRepository
 	skillAttachments   agentSkillAttachmentListRepository
+	toolDefs           toolDefinitionLister
 	totals             *agentTotalCache
 }
 
@@ -151,6 +159,7 @@ func newAgentHandlersWithAssignments(
 	skills skillAssignmentLookupRepository,
 	projectAssignments agentProjectAssignmentListRepository,
 	skillAttachments agentSkillAttachmentListRepository,
+	toolDefs toolDefinitionLister,
 ) agentHandlers {
 	return agentHandlers{
 		service:            service,
@@ -161,6 +170,7 @@ func newAgentHandlersWithAssignments(
 		skills:             skills,
 		projectAssignments: projectAssignments,
 		skillAttachments:   skillAttachments,
+		toolDefs:           toolDefs,
 		totals:             newAgentTotalCache(60 * time.Second),
 	}
 }
@@ -583,6 +593,151 @@ func (h agentHandlers) getAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	responder.JSON(w, http.StatusOK, toAgentResponse(found))
+}
+
+// agentConfigResponse is the configuration-focused subset of an agent, returned
+// by GET /v1/agents/{id}/config. It exposes editable fields that govern agent
+// behavior — system prompt, tool policy, model profile, memory scopes, and
+// budgets — without the identity/lifecycle metadata present in the full agent
+// response.
+type agentConfigResponse struct {
+	AgentID               uuid.UUID `json:"agent_id"`
+	SystemPrompt          string    `json:"system_prompt"`
+	OperatorInstructions  string    `json:"operator_instructions"`
+	DefaultModelProfileID *string   `json:"default_model_profile_id"`
+	MemoryReadScopes      []string  `json:"memory_read_scopes"`
+	PrivateMemory         bool      `json:"private_memory"`
+	ToolAllowList         []string  `json:"tool_allow_list"`
+	ToolDenyList          []string  `json:"tool_deny_list"`
+	BudgetCapTokens       *int64    `json:"budget_cap_tokens"`
+	BudgetPeriod          *string   `json:"budget_period"`
+}
+
+func (h agentHandlers) getAgentConfig(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.service == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "agent service unavailable")
+		return
+	}
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+	agentID, err := uuid.Parse(strings.TrimSpace(chi.URLParam(r, "id")))
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid agent id")
+		return
+	}
+	found, getErr := h.service.Get(r.Context(), principal.OrganizationID, agentID)
+	if getErr != nil {
+		status, code, message := mapAgentError(getErr)
+		responder.Error(w, status, code, message)
+		return
+	}
+	cfg := agentConfigResponse{
+		AgentID:               found.ID,
+		SystemPrompt:          found.SystemPrompt,
+		OperatorInstructions:  found.OperatorInstructions,
+		DefaultModelProfileID: found.DefaultModelProfileID,
+		MemoryReadScopes:      found.MemoryReadScopes,
+		PrivateMemory:         found.PrivateMemory,
+		ToolAllowList:         found.ToolAllowList,
+		ToolDenyList:          found.ToolDenyList,
+		BudgetCapTokens:       found.BudgetCapTokens,
+		BudgetPeriod:          found.BudgetPeriod,
+	}
+	if cfg.MemoryReadScopes == nil {
+		cfg.MemoryReadScopes = []string{}
+	}
+	if cfg.ToolAllowList == nil {
+		cfg.ToolAllowList = []string{}
+	}
+	if cfg.ToolDenyList == nil {
+		cfg.ToolDenyList = []string{}
+	}
+	responder.JSON(w, http.StatusOK, cfg)
+}
+
+type agentToolResponse struct {
+	ID                 uuid.UUID       `json:"id"`
+	Name               string          `json:"name"`
+	DisplayName        string          `json:"display_name"`
+	Description        string          `json:"description"`
+	ToolTier           string          `json:"tool_tier"`
+	ToolDomain         string          `json:"tool_domain"`
+	RequiredCapability *string         `json:"required_capability"`
+	InputSchema        json.RawMessage `json:"input_schema"`
+	Allowed            bool            `json:"allowed"`
+}
+
+// getAgentTools returns the enabled tools visible to an agent, filtered by its
+// ToolAllowList and ToolDenyList. If ToolAllowList is non-empty only those tools
+// appear; ToolDenyList then removes entries from the result.
+func (h agentHandlers) getAgentTools(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.service == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "agent service unavailable")
+		return
+	}
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+	agentID, err := uuid.Parse(strings.TrimSpace(chi.URLParam(r, "id")))
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid agent id")
+		return
+	}
+	found, getErr := h.service.Get(r.Context(), principal.OrganizationID, agentID)
+	if getErr != nil {
+		status, code, message := mapAgentError(getErr)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	if h.toolDefs == nil {
+		responder.JSON(w, http.StatusOK, []agentToolResponse{})
+		return
+	}
+
+	allTools, listErr := h.toolDefs.ListEnabled(r.Context())
+	if listErr != nil {
+		responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to list tools")
+		return
+	}
+
+	allowSet := make(map[string]bool, len(found.ToolAllowList))
+	for _, name := range found.ToolAllowList {
+		allowSet[name] = true
+	}
+	denySet := make(map[string]bool, len(found.ToolDenyList))
+	for _, name := range found.ToolDenyList {
+		denySet[name] = true
+	}
+
+	result := make([]agentToolResponse, 0, len(allTools))
+	for _, t := range allTools {
+		if denySet[t.Name] {
+			continue
+		}
+		if len(allowSet) > 0 && !allowSet[t.Name] {
+			continue
+		}
+		result = append(result, agentToolResponse{
+			ID:                 t.ID,
+			Name:               t.Name,
+			DisplayName:        t.DisplayName,
+			Description:        t.Description,
+			ToolTier:           t.ToolTier,
+			ToolDomain:         t.ToolDomain,
+			RequiredCapability: t.RequiredCapability,
+			InputSchema:        t.InputSchema,
+			Allowed:            true,
+		})
+	}
+	responder.JSON(w, http.StatusOK, result)
 }
 
 func (h agentHandlers) updateAgent(w http.ResponseWriter, r *http.Request) {
