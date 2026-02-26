@@ -150,6 +150,104 @@ func TestSupervisor_OrphanedRun_Recovery(t *testing.T) {
 	}
 }
 
+func TestSupervisor_StaleCreatedRun_CancelledAndLogged(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+
+	now := time.Date(2026, 2, 26, 18, 0, 0, 0, time.UTC)
+	fakeClock := clock.NewFake(now)
+	svc := newRunServiceIntegrationWithClock(t, pool, fakeClock)
+	runRepo := NewRunRepository(pool)
+
+	staleRun, err := svc.CreateRun(ctx, CreateRunInput{
+		OrganizationID: org.ID,
+		PrincipalType:  "system",
+		PrincipalID:    uuid.Nil,
+		TriggerType:    "supervisor",
+		Metadata:       json.RawMessage(`{"run_mode":"sync"}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateRun stale run: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE run SET updated_at = $2 WHERE id = $1`, staleRun.ID, now.Add(-6*time.Minute)); err != nil {
+		t.Fatalf("backdate stale run updated_at: %v", err)
+	}
+
+	recentRun, err := svc.CreateRun(ctx, CreateRunInput{
+		OrganizationID: org.ID,
+		PrincipalType:  "system",
+		PrincipalID:    uuid.Nil,
+		TriggerType:    "supervisor",
+		Metadata:       json.RawMessage(`{"run_mode":"sync"}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateRun recent run: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE run SET updated_at = $2 WHERE id = $1`, recentRun.ID, now.Add(-2*time.Minute)); err != nil {
+		t.Fatalf("set recent run updated_at: %v", err)
+	}
+
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:       pool,
+		RunService: svc,
+		EventBus:   eventbus.New(pool, newDiscardLogger(), eventbus.Config{}),
+		Clock:      fakeClock,
+		Logger:     newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+	if err := supervisor.detectStaleCreatedRuns(ctx); err != nil {
+		t.Fatalf("detectStaleCreatedRuns: %v", err)
+	}
+
+	updatedStaleRun, err := runRepo.Get(ctx, staleRun.ID)
+	if err != nil {
+		t.Fatalf("Get stale run: %v", err)
+	}
+	if updatedStaleRun.Status != "cancelled" {
+		t.Fatalf("stale run status = %s, want cancelled", updatedStaleRun.Status)
+	}
+
+	var reason string
+	if err := pool.QueryRow(ctx, `
+		SELECT payload->>'reason'
+		FROM run_event
+		WHERE run_id = $1
+		  AND event_type = 'supervisor_recovery'
+		  AND actor_type = 'supervisor'
+		ORDER BY sequence DESC
+		LIMIT 1
+	`, staleRun.ID).Scan(&reason); err != nil {
+		t.Fatalf("load supervisor_recovery reason: %v", err)
+	}
+	if reason != "created_timeout_exceeded" {
+		t.Fatalf("supervisor recovery reason = %q, want %q", reason, "created_timeout_exceeded")
+	}
+
+	updatedRecentRun, err := runRepo.Get(ctx, recentRun.ID)
+	if err != nil {
+		t.Fatalf("Get recent run: %v", err)
+	}
+	if updatedRecentRun.Status != "created" {
+		t.Fatalf("recent run status = %s, want created", updatedRecentRun.Status)
+	}
+
+	var recentRecoveryEvents int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM run_event
+		WHERE run_id = $1
+		  AND event_type = 'supervisor_recovery'
+	`, recentRun.ID).Scan(&recentRecoveryEvents); err != nil {
+		t.Fatalf("count recent supervisor_recovery events: %v", err)
+	}
+	if recentRecoveryEvents != 0 {
+		t.Fatalf("recent run supervisor_recovery events = %d, want 0", recentRecoveryEvents)
+	}
+}
+
 func TestSupervisor_MaxRecoveryAttempts(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
