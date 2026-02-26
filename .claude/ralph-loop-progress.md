@@ -200,6 +200,47 @@ All go tests: PASS (all packages)
 - Completed model invocations: 436 (up from 431)
 - Agent turn jobs done (last 30min): 1 done, 1 dead-letter (session-close race condition)
 
+## Fixes Made This Loop (Iteration 9)
+- No new fixes needed - all spec areas already PASSING
+- Confirmed: all pre-fix tool_calls dead letters are historical (from session dca17db2 at 01:17-01:31,
+  before fix was deployed at 02:29); 0 new tool_calls dead letters since fix
+
+## API Field Corrections (documentation from iteration 9 testing)
+- Task creation: `title` field (not `display_name`); work_status is optional
+- Task dependency add: `source_type`, `source_id`, `depends_on_type`, `depends_on_id` (not `dependency_type`)
+- Policy evaluate: `capability` field (not `action`)
+- Environment creation: `name`, `delivery_mode` (not `display_name`, `environment_type`)
+- GET /v1/projects/{id}/schedules/{id}: 405 by design — spec only requires list/create/enable/disable
+
+## DB State (verified 2026-02-26T03:15)
+- Chat messages: 1302 (up from 1296)
+- Candidate memories: 82 (up from 81)
+- Trace spans ok: 18 (+5 from this iteration's agent turns)
+- Trace spans error: 12 (all historical pre-fix, static)
+- Completed model invocations: 445 (up from 436)
+- Recent dead letters (1hr): 1 (known "repo: not found" edge case only)
+- Active runs: 6 (in-flight from recent agent turns)
+
+## Validation Results (Iteration 9 - all PASS)
+- 02-chat: PASS (sessions, messages, participants, reactions, read-cursor, turns)
+- 03-projects-and-task-flow: PASS (projects, tasks, dependencies GET/POST work)
+- 03a-shipping-and-delivery: PASS (environments, schedules, remotes)
+- 04-auth-tenancy-and-identity: PASS (auth/me, users/me, api-keys)
+- 05-agents-staff-and-temps: PASS (agents, config, tools, project-assignments, templates)
+- 06-memory: PASS (items, query, compaction-runs)
+- 07-models-and-inference: PASS (providers, profiles, invocations, usage/summary)
+- 09-mcp-integration: PASS (connections, catalog connection-scoped)
+- 10-skills-integration: PASS (skills, catalog alias)
+- 12-api-events-and-realtime: PASS (SSE stream, ws/negotiate)
+- 13-security-observability-costs: PASS (metrics, audit/events, health/live, health/ready)
+- 16-agent-control-plane: PASS (runs, policies, evaluate, health, cost/summary)
+- 20-tools-and-tool-policy: PASS (67 tools)
+Agent turn verified: Frank used task_list tool, counted 32 tasks, responded correctly
+Trace spans: 5 new ok spans from agent turns
+TUI tests: PASS
+All go tests: PASS
+Go build: PASS
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
 - MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
