@@ -67,9 +67,9 @@ func NewRealtimeRouteRegistrar(opts RealtimeRouteOptions) *RealtimeRouteRegistra
 }
 
 func (r *RealtimeRouteRegistrar) RegisterRoutes(router chi.Router) {
-	router.Get("/events/stream", r.handlers.streamEvents)
-	router.Get("/ws/negotiate", r.handlers.negotiateTransport)
-	router.Get("/ws", r.handlers.websocket)
+	router.With(requireReadScope("realtime")).Get("/events/stream", r.handlers.streamEvents)
+	router.With(requireReadScope("realtime")).Get("/ws/negotiate", r.handlers.negotiateTransport)
+	router.With(requireReadScope("realtime")).Get("/ws", r.handlers.websocket)
 }
 
 func (r *RealtimeRouteRegistrar) Close() error {

@@ -144,11 +144,11 @@ func NewCapabilityPolicyRouteRegistrar(opts CapabilityPolicyRouteOptions) *Capab
 }
 
 func (r *CapabilityPolicyRouteRegistrar) RegisterRoutes(router chi.Router) {
-	router.With(middleware.RequireRole("admin")).Get("/control/policies", r.handlers.listPolicies)
-	router.With(middleware.RequireRole("admin")).Post("/control/policies", r.handlers.createPolicy)
-	router.With(middleware.RequireRole("admin")).Put("/control/policies/{id}", r.handlers.updatePolicy)
-	router.With(middleware.RequireRole("admin")).Delete("/control/policies/{id}", r.handlers.deletePolicy)
-	router.Post("/control/policies/evaluate", r.handlers.evaluatePolicy)
+	router.With(middleware.RequireRole("admin"), requireReadScope("policies")).Get("/control/policies", r.handlers.listPolicies)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("policies")).Post("/control/policies", r.handlers.createPolicy)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("policies")).Put("/control/policies/{id}", r.handlers.updatePolicy)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("policies")).Delete("/control/policies/{id}", r.handlers.deletePolicy)
+	router.With(requireReadScope("policies")).Post("/control/policies/evaluate", r.handlers.evaluatePolicy)
 }
 
 func (h capabilityPolicyHandlers) listPolicies(w http.ResponseWriter, r *http.Request) {

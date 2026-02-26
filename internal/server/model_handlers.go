@@ -77,26 +77,26 @@ func NewModelRouteRegistrar(pool *pgxpool.Pool) *ModelRouteRegistrar {
 }
 
 func (r *ModelRouteRegistrar) RegisterRoutes(router chi.Router) {
-	router.Get("/model/providers", r.handlers.listProviders)
-	router.With(middleware.RequireRole("admin")).Patch("/model/providers/{id}", r.handlers.patchProvider)
-	router.Get("/model/providers/{id}/connections", r.handlers.listProviderConnections)
-	router.With(middleware.RequireRole("admin")).Post("/model/providers/{id}/connections", r.handlers.createProviderConnection)
-	router.With(middleware.RequireRole("admin")).Patch("/model/providers/{id}/connections/{cid}", r.handlers.patchProviderConnection)
-	router.With(middleware.RequireRole("admin")).Delete("/model/providers/{id}/connections/{cid}", r.handlers.deleteProviderConnection)
+	router.With(requireReadScope("models")).Get("/model/providers", r.handlers.listProviders)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("models")).Patch("/model/providers/{id}", r.handlers.patchProvider)
+	router.With(requireReadScope("models")).Get("/model/providers/{id}/connections", r.handlers.listProviderConnections)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("models")).Post("/model/providers/{id}/connections", r.handlers.createProviderConnection)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("models")).Patch("/model/providers/{id}/connections/{cid}", r.handlers.patchProviderConnection)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("models")).Delete("/model/providers/{id}/connections/{cid}", r.handlers.deleteProviderConnection)
 
-	router.Get("/model/profiles", r.handlers.listProfiles)
-	router.With(middleware.RequireRole("admin")).Post("/model/profiles", r.handlers.createProfile)
-	router.With(middleware.RequireRole("admin")).Patch("/model/profiles/{logical_profile_id}", r.handlers.patchProfile)
-	router.Get("/model/profiles/{logical_profile_id}", r.handlers.getProfile)
-	router.Get("/model/profiles/{logical_profile_id}/history", r.handlers.profileHistory)
+	router.With(requireReadScope("models")).Get("/model/profiles", r.handlers.listProfiles)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("models")).Post("/model/profiles", r.handlers.createProfile)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("models")).Patch("/model/profiles/{logical_profile_id}", r.handlers.patchProfile)
+	router.With(requireReadScope("models")).Get("/model/profiles/{logical_profile_id}", r.handlers.getProfile)
+	router.With(requireReadScope("models")).Get("/model/profiles/{logical_profile_id}/history", r.handlers.profileHistory)
 
-	router.Get("/model/assignments", r.handlers.listAssignments)
-	router.With(middleware.RequireRole("admin")).Put("/model/assignments/{scope_type}/{scope_id}", r.handlers.putAssignment)
-	router.With(middleware.RequireRole("admin")).Delete("/model/assignments/{scope_type}/{scope_id}", r.handlers.deleteAssignment)
-	router.Get("/model/invocations", r.handlers.listInvocations)
+	router.With(requireReadScope("models")).Get("/model/assignments", r.handlers.listAssignments)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("models")).Put("/model/assignments/{scope_type}/{scope_id}", r.handlers.putAssignment)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("models")).Delete("/model/assignments/{scope_type}/{scope_id}", r.handlers.deleteAssignment)
+	router.With(requireReadScope("models")).Get("/model/invocations", r.handlers.listInvocations)
 
-	router.Get("/usage", r.handlers.getUsage)
-	router.Get("/usage/summary", r.handlers.getUsageSummary)
+	router.With(requireReadScope("models")).Get("/usage", r.handlers.getUsage)
+	router.With(requireReadScope("models")).Get("/usage/summary", r.handlers.getUsageSummary)
 }
 
 type modelHandlers struct {

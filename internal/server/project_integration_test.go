@@ -125,6 +125,40 @@ func TestProjectHTTPCRUDAndRBAC(t *testing.T) {
 	}
 }
 
+func TestProjectHTTPAPIKeyScopeEnforcement(t *testing.T) {
+	testServer, _, adminUser, _ := newProjectTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	issued := mustJSON(t, http.MethodPost, testServer.URL+"/v1/api-keys", map[string]any{
+		"display_name": "projects-read-only",
+		"scopes":       []string{"read:projects"},
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if issued.StatusCode != http.StatusCreated {
+		t.Fatalf("issue key status = %d, want %d body=%s", issued.StatusCode, http.StatusCreated, string(issued.Body))
+	}
+	rawKey := jsonPathString(t, issued.Body, "data", "key")
+	if rawKey == "" {
+		t.Fatalf("missing api key in response body=%s", string(issued.Body))
+	}
+
+	listed := mustJSON(t, http.MethodGet, testServer.URL+"/v1/projects", nil, map[string]string{
+		"X-API-Key": rawKey,
+	})
+	if listed.StatusCode != http.StatusOK {
+		t.Fatalf("list projects status = %d, want %d body=%s", listed.StatusCode, http.StatusOK, string(listed.Body))
+	}
+
+	createDenied := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects", map[string]any{
+		"slug":          "blocked-by-scope",
+		"display_name":  "Blocked",
+		"delivery_mode": "gated",
+	}, map[string]string{"X-API-Key": rawKey})
+	if createDenied.StatusCode != http.StatusForbidden {
+		t.Fatalf("create status = %d, want %d body=%s", createDenied.StatusCode, http.StatusForbidden, string(createDenied.Body))
+	}
+}
+
 func TestProjectHTTPFlowTemplateScheduleAndNodes(t *testing.T) {
 	testServer, org, adminUser, memberUser := newProjectTestServer(t)
 	defer testServer.Close()

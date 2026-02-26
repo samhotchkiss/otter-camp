@@ -27,29 +27,29 @@ func NewProjectRouteRegistrar(service projectsvc.ProjectService) *ProjectRouteRe
 }
 
 func (r *ProjectRouteRegistrar) RegisterRoutes(router chi.Router) {
-	router.Get("/projects", r.handlers.listProjects)
-	router.With(middleware.RequireRole("admin")).Post("/projects", r.handlers.createProject)
-	router.Get("/projects/{id}", r.handlers.getProject)
-	router.With(middleware.RequireRole("member")).Patch("/projects/{id}", r.handlers.updateProject)
-	router.With(middleware.RequireRole("admin")).Delete("/projects/{id}", r.handlers.deleteProject)
+	router.With(requireReadScope("projects")).Get("/projects", r.handlers.listProjects)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("projects")).Post("/projects", r.handlers.createProject)
+	router.With(requireReadScope("projects")).Get("/projects/{id}", r.handlers.getProject)
+	router.With(middleware.RequireRole("member"), requireWriteScope("projects")).Patch("/projects/{id}", r.handlers.updateProject)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("projects")).Delete("/projects/{id}", r.handlers.deleteProject)
 
-	router.Get("/projects/{id}/flow-templates", r.handlers.listProjectFlowTemplates)
-	router.With(middleware.RequireRole("member")).Post("/projects/{id}/flow-templates", r.handlers.createProjectFlowTemplate)
-	router.Get("/flow-templates", r.handlers.listFlowTemplates)
-	router.Get("/flow-templates/{id}", r.handlers.getFlowTemplate)
-	router.With(middleware.RequireRole("member")).Patch("/flow-templates/{id}", r.handlers.updateFlowTemplate)
+	router.With(requireReadScope("projects")).Get("/projects/{id}/flow-templates", r.handlers.listProjectFlowTemplates)
+	router.With(middleware.RequireRole("member"), requireWriteScope("projects")).Post("/projects/{id}/flow-templates", r.handlers.createProjectFlowTemplate)
+	router.With(requireReadScope("projects")).Get("/flow-templates", r.handlers.listFlowTemplates)
+	router.With(requireReadScope("projects")).Get("/flow-templates/{id}", r.handlers.getFlowTemplate)
+	router.With(middleware.RequireRole("member"), requireWriteScope("projects")).Patch("/flow-templates/{id}", r.handlers.updateFlowTemplate)
 
-	router.Get("/flow-templates/{id}/nodes", r.handlers.listFlowNodes)
-	router.With(middleware.RequireRole("member")).Post("/flow-templates/{id}/nodes", r.handlers.addFlowNode)
-	router.With(middleware.RequireRole("member")).Patch("/flow-templates/{id}/nodes/{node_id}", r.handlers.updateFlowNode)
-	router.With(middleware.RequireRole("member")).Delete("/flow-templates/{id}/nodes/{node_id}", r.handlers.deleteFlowNode)
+	router.With(requireReadScope("projects")).Get("/flow-templates/{id}/nodes", r.handlers.listFlowNodes)
+	router.With(middleware.RequireRole("member"), requireWriteScope("projects")).Post("/flow-templates/{id}/nodes", r.handlers.addFlowNode)
+	router.With(middleware.RequireRole("member"), requireWriteScope("projects")).Patch("/flow-templates/{id}/nodes/{node_id}", r.handlers.updateFlowNode)
+	router.With(middleware.RequireRole("member"), requireWriteScope("projects")).Delete("/flow-templates/{id}/nodes/{node_id}", r.handlers.deleteFlowNode)
 
-	router.Get("/projects/{id}/schedules", r.handlers.listSchedules)
-	router.With(middleware.RequireRole("member")).Post("/projects/{id}/schedules", r.handlers.createSchedule)
-	router.With(middleware.RequireRole("member")).Patch("/projects/{id}/schedules/{schedule_id}", r.handlers.updateSchedule)
-	router.With(middleware.RequireRole("member")).Delete("/projects/{id}/schedules/{schedule_id}", r.handlers.deleteSchedule)
-	router.With(middleware.RequireRole("member")).Post("/projects/{id}/schedules/{schedule_id}/enable", r.handlers.enableSchedule)
-	router.With(middleware.RequireRole("member")).Post("/projects/{id}/schedules/{schedule_id}/disable", r.handlers.disableSchedule)
+	router.With(requireReadScope("projects")).Get("/projects/{id}/schedules", r.handlers.listSchedules)
+	router.With(middleware.RequireRole("member"), requireWriteScope("projects")).Post("/projects/{id}/schedules", r.handlers.createSchedule)
+	router.With(middleware.RequireRole("member"), requireWriteScope("projects")).Patch("/projects/{id}/schedules/{schedule_id}", r.handlers.updateSchedule)
+	router.With(middleware.RequireRole("member"), requireWriteScope("projects")).Delete("/projects/{id}/schedules/{schedule_id}", r.handlers.deleteSchedule)
+	router.With(middleware.RequireRole("member"), requireWriteScope("projects")).Post("/projects/{id}/schedules/{schedule_id}/enable", r.handlers.enableSchedule)
+	router.With(middleware.RequireRole("member"), requireWriteScope("projects")).Post("/projects/{id}/schedules/{schedule_id}/disable", r.handlers.disableSchedule)
 }
 
 type projectHandlers struct {

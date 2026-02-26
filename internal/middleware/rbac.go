@@ -34,7 +34,18 @@ func RequireRole(role string) func(http.Handler) http.Handler {
 }
 
 func RequireScope(scope string) func(http.Handler) http.Handler {
-	normalized := strings.TrimSpace(scope)
+	return RequireAnyScope(scope)
+}
+
+func RequireAnyScope(scopes ...string) func(http.Handler) http.Handler {
+	required := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		normalized := strings.ToLower(strings.TrimSpace(scope))
+		if normalized == "" {
+			continue
+		}
+		required[normalized] = struct{}{}
+	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -48,9 +59,21 @@ func RequireScope(scope string) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
+			if len(required) == 0 {
+				next.ServeHTTP(w, r)
+				return
+			}
 
 			for _, granted := range principal.APIKey.Scopes {
-				if strings.TrimSpace(granted) == normalized {
+				normalized := strings.ToLower(strings.TrimSpace(granted))
+				if normalized == "" {
+					continue
+				}
+				if normalized == "admin:*" {
+					next.ServeHTTP(w, r)
+					return
+				}
+				if _, ok := required[normalized]; ok {
 					next.ServeHTTP(w, r)
 					return
 				}

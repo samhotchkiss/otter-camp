@@ -33,10 +33,10 @@ func NewPushRouteRegistrar(service *push.PreferenceService, repository *push.Pre
 }
 
 func (r *PushRouteRegistrar) RegisterRoutes(router chi.Router) {
-	router.Get("/me/push-preferences", r.handlers.getPushPreferences)
-	router.Patch("/me/push-preferences", r.handlers.patchPushPreferences)
-	router.Post("/me/push-token", r.handlers.registerPushToken)
-	router.Delete("/me/push-token/{device_id}", r.handlers.revokePushToken)
+	router.With(requireReadScope("push")).Get("/me/push-preferences", r.handlers.getPushPreferences)
+	router.With(requireWriteScope("push")).Patch("/me/push-preferences", r.handlers.patchPushPreferences)
+	router.With(requireWriteScope("push")).Post("/me/push-token", r.handlers.registerPushToken)
+	router.With(requireWriteScope("push")).Delete("/me/push-token/{device_id}", r.handlers.revokePushToken)
 }
 
 type pushHandlers struct {

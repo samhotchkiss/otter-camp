@@ -30,19 +30,19 @@ func NewMCPRouteRegistrar(service mcp.MCPService, catalog *repo.MCPToolCatalogRe
 }
 
 func (r *MCPRouteRegistrar) RegisterRoutes(router chi.Router) {
-	router.Get("/mcp/connections", r.handlers.listConnections)
-	router.With(middleware.RequireRole("admin")).Post("/mcp/connections", r.handlers.createConnection)
-	router.Get("/mcp/connections/{id}", r.handlers.getConnection)
-	router.With(middleware.RequireRole("admin")).Patch("/mcp/connections/{id}", r.handlers.updateConnection)
-	router.With(middleware.RequireRole("admin")).Delete("/mcp/connections/{id}", r.handlers.deleteConnection)
+	router.With(requireReadScope("mcp")).Get("/mcp/connections", r.handlers.listConnections)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("mcp")).Post("/mcp/connections", r.handlers.createConnection)
+	router.With(requireReadScope("mcp")).Get("/mcp/connections/{id}", r.handlers.getConnection)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("mcp")).Patch("/mcp/connections/{id}", r.handlers.updateConnection)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("mcp")).Delete("/mcp/connections/{id}", r.handlers.deleteConnection)
 
-	router.With(middleware.RequireRole("member")).Post("/mcp/connections/{id}/refresh", r.handlers.refreshConnection)
-	router.With(middleware.RequireRole("member")).Post("/mcp/connections/{id}/test", r.handlers.testConnection)
+	router.With(middleware.RequireRole("member"), requireWriteScope("mcp")).Post("/mcp/connections/{id}/refresh", r.handlers.refreshConnection)
+	router.With(middleware.RequireRole("member"), requireWriteScope("mcp")).Post("/mcp/connections/{id}/test", r.handlers.testConnection)
 
-	router.Get("/mcp/connections/{id}/catalog", r.handlers.listCatalog)
-	router.With(middleware.RequireRole("admin")).Patch("/mcp/connections/{id}/catalog/{entry_id}", r.handlers.setCatalogEntry)
+	router.With(requireReadScope("mcp")).Get("/mcp/connections/{id}/catalog", r.handlers.listCatalog)
+	router.With(middleware.RequireRole("admin"), requireWriteScope("mcp")).Patch("/mcp/connections/{id}/catalog/{entry_id}", r.handlers.setCatalogEntry)
 
-	router.Get("/mcp/connections/{id}/executions", r.handlers.listExecutionsStub)
+	router.With(requireReadScope("mcp")).Get("/mcp/connections/{id}/executions", r.handlers.listExecutionsStub)
 }
 
 type createMCPConnectionRequest struct {

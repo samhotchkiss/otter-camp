@@ -41,6 +41,39 @@ func TestMemoryItemsRequiresAuth(t *testing.T) {
 	}
 }
 
+func TestMemoryHTTPAPIKeyScopeEnforcement(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+	fixture := newMemoryAPITestServer(t)
+	defer fixture.Close()
+
+	adminToken := loginToken(t, fixture.URL, fixture.Admin.Email, "admin-password")
+	issued := mustJSON(t, http.MethodPost, fixture.URL+"/v1/api-keys", map[string]any{
+		"display_name": "memory-read-only",
+		"scopes":       []string{"read:memory"},
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if issued.StatusCode != http.StatusCreated {
+		t.Fatalf("issue key status = %d, want %d body=%s", issued.StatusCode, http.StatusCreated, string(issued.Body))
+	}
+	rawKey := jsonPathString(t, issued.Body, "data", "key")
+	if rawKey == "" {
+		t.Fatalf("missing api key in response body=%s", string(issued.Body))
+	}
+
+	listed := mustJSON(t, http.MethodGet, fixture.URL+"/v1/memory/items", nil, map[string]string{
+		"X-API-Key": rawKey,
+	})
+	if listed.StatusCode != http.StatusOK {
+		t.Fatalf("list memory items status = %d, want %d body=%s", listed.StatusCode, http.StatusOK, string(listed.Body))
+	}
+
+	writeDenied := mustJSON(t, http.MethodPost, fixture.URL+"/v1/memory/import", map[string]any{}, map[string]string{
+		"X-API-Key": rawKey,
+	})
+	if writeDenied.StatusCode != http.StatusForbidden {
+		t.Fatalf("memory import status = %d, want %d body=%s", writeDenied.StatusCode, http.StatusForbidden, string(writeDenied.Body))
+	}
+}
+
 func TestMemoryQueryPassiveIncludeRestrictedReturns422(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 	fixture := newMemoryAPITestServer(t)

@@ -71,6 +71,38 @@ func TestAgentHTTPCreatePauseAndGet(t *testing.T) {
 	}
 }
 
+func TestAgentHTTPAPIKeyScopeEnforcement(t *testing.T) {
+	testServer, _, adminUser, _ := newAgentTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	issued := mustJSON(t, http.MethodPost, testServer.URL+"/v1/api-keys", map[string]any{
+		"display_name": "agents-read-only",
+		"scopes":       []string{"read:agents"},
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if issued.StatusCode != http.StatusCreated {
+		t.Fatalf("issue key status = %d, want %d body=%s", issued.StatusCode, http.StatusCreated, string(issued.Body))
+	}
+	rawKey := jsonPathString(t, issued.Body, "data", "key")
+	if rawKey == "" {
+		t.Fatalf("missing api key in response body=%s", string(issued.Body))
+	}
+
+	listed := mustJSON(t, http.MethodGet, testServer.URL+"/v1/agents", nil, map[string]string{
+		"X-API-Key": rawKey,
+	})
+	if listed.StatusCode != http.StatusOK {
+		t.Fatalf("list agents status = %d, want %d body=%s", listed.StatusCode, http.StatusOK, string(listed.Body))
+	}
+
+	createDenied := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents", map[string]any{}, map[string]string{
+		"X-API-Key": rawKey,
+	})
+	if createDenied.StatusCode != http.StatusForbidden {
+		t.Fatalf("create agent status = %d, want %d body=%s", createDenied.StatusCode, http.StatusForbidden, string(createDenied.Body))
+	}
+}
+
 func TestAgentHTTPCreateTempLimitExceeded(t *testing.T) {
 	testServer, org, adminUser, _ := newAgentTestServer(t)
 	defer testServer.Close()

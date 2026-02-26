@@ -65,6 +65,40 @@ func TestChatHTTPSessionCreateListGetRoundTrip(t *testing.T) {
 	}
 }
 
+func TestChatHTTPAPIKeyScopeEnforcement(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, _ := newChatTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	issued := mustJSON(t, http.MethodPost, testServer.URL+"/v1/api-keys", map[string]any{
+		"display_name": "chat-read-only",
+		"scopes":       []string{"read:chat"},
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if issued.StatusCode != http.StatusCreated {
+		t.Fatalf("issue key status = %d, want %d body=%s", issued.StatusCode, http.StatusCreated, string(issued.Body))
+	}
+	rawKey := jsonPathString(t, issued.Body, "data", "key")
+	if rawKey == "" {
+		t.Fatalf("missing api key in response body=%s", string(issued.Body))
+	}
+
+	listed := mustJSON(t, http.MethodGet, testServer.URL+"/v1/chat-sessions", nil, map[string]string{
+		"X-API-Key": rawKey,
+	})
+	if listed.StatusCode != http.StatusOK {
+		t.Fatalf("list sessions status = %d, want %d body=%s", listed.StatusCode, http.StatusOK, string(listed.Body))
+	}
+
+	createDenied := mustJSON(t, http.MethodPost, testServer.URL+"/v1/chat-sessions", map[string]any{}, map[string]string{
+		"X-API-Key": rawKey,
+	})
+	if createDenied.StatusCode != http.StatusForbidden {
+		t.Fatalf("create session status = %d, want %d body=%s", createDenied.StatusCode, http.StatusForbidden, string(createDenied.Body))
+	}
+}
+
 func TestChatHTTPMessageSendAndList(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 

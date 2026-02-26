@@ -148,6 +148,52 @@ func TestAuthHTTPAPIKeyLifecycleAndAdminRevoke(t *testing.T) {
 	}
 }
 
+func TestAuthHTTPAdminRoutesRequireAdminScopeForAPIKeys(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, _ := newAuthTestServer(t, "standard")
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	noAdminScope := mustJSON(t, http.MethodPost, testServer.URL+"/v1/api-keys", map[string]any{
+		"display_name": "no-admin-scope",
+		"scopes":       []string{"write:projects"},
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if noAdminScope.StatusCode != http.StatusCreated {
+		t.Fatalf("issue no-admin key status = %d, want %d body=%s", noAdminScope.StatusCode, http.StatusCreated, string(noAdminScope.Body))
+	}
+	noAdminKey := jsonPathString(t, noAdminScope.Body, "data", "key")
+	if noAdminKey == "" {
+		t.Fatalf("missing no-admin key body=%s", string(noAdminScope.Body))
+	}
+
+	adminUsersDenied := mustJSON(t, http.MethodGet, testServer.URL+"/v1/admin/users", nil, map[string]string{
+		"X-API-Key": noAdminKey,
+	})
+	if adminUsersDenied.StatusCode != http.StatusForbidden {
+		t.Fatalf("admin users status = %d, want %d body=%s", adminUsersDenied.StatusCode, http.StatusForbidden, string(adminUsersDenied.Body))
+	}
+
+	withAdminScope := mustJSON(t, http.MethodPost, testServer.URL+"/v1/api-keys", map[string]any{
+		"display_name": "with-admin-scope",
+		"scopes":       []string{"admin:*"},
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if withAdminScope.StatusCode != http.StatusCreated {
+		t.Fatalf("issue admin key status = %d, want %d body=%s", withAdminScope.StatusCode, http.StatusCreated, string(withAdminScope.Body))
+	}
+	adminKey := jsonPathString(t, withAdminScope.Body, "data", "key")
+	if adminKey == "" {
+		t.Fatalf("missing admin key body=%s", string(withAdminScope.Body))
+	}
+
+	adminUsersAllowed := mustJSON(t, http.MethodGet, testServer.URL+"/v1/admin/users", nil, map[string]string{
+		"X-API-Key": adminKey,
+	})
+	if adminUsersAllowed.StatusCode != http.StatusOK {
+		t.Fatalf("admin users with admin scope status = %d, want %d body=%s", adminUsersAllowed.StatusCode, http.StatusOK, string(adminUsersAllowed.Body))
+	}
+}
+
 func TestAuthHTTPLoginRateLimit(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 

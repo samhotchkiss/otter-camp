@@ -172,23 +172,23 @@ func NewControlPlaneRouteRegistrar(opts ControlPlaneRouteOptions) *ControlPlaneR
 }
 
 func (r *ControlPlaneRouteRegistrar) RegisterRoutes(router chi.Router) {
-	router.Post("/control/runs", r.handlers.createRun)
-	router.Get("/control/runs", r.handlers.listRuns)
-	router.Get("/control/runs/{id}", r.handlers.getRun)
-	router.Get("/control/runs/{id}/steps", r.handlers.listRunSteps)
-	router.Get("/control/runs/{id}/steps/{step_id}/attempts", r.handlers.listRunAttempts)
-	router.Get("/control/runs/{id}/events", r.handlers.listRunEvents)
-	router.Get("/control/runs/{id}/events/stream", r.handlers.streamRunEvents)
-	router.Get("/control/runs/{id}/artifacts", r.handlers.listRunArtifacts)
-	router.Get("/control/runs/{id}/artifacts/{artifact_id}/download", r.handlers.downloadRunArtifact)
-	router.Post("/control/runs/{id}/cancel", r.handlers.cancelRun)
-	router.Post("/control/runs/{id}/retry", r.handlers.retryRun)
+	router.With(requireWriteScope("control")).Post("/control/runs", r.handlers.createRun)
+	router.With(requireReadScope("control")).Get("/control/runs", r.handlers.listRuns)
+	router.With(requireReadScope("control")).Get("/control/runs/{id}", r.handlers.getRun)
+	router.With(requireReadScope("control")).Get("/control/runs/{id}/steps", r.handlers.listRunSteps)
+	router.With(requireReadScope("control")).Get("/control/runs/{id}/steps/{step_id}/attempts", r.handlers.listRunAttempts)
+	router.With(requireReadScope("control")).Get("/control/runs/{id}/events", r.handlers.listRunEvents)
+	router.With(requireReadScope("control")).Get("/control/runs/{id}/events/stream", r.handlers.streamRunEvents)
+	router.With(requireReadScope("control")).Get("/control/runs/{id}/artifacts", r.handlers.listRunArtifacts)
+	router.With(requireReadScope("control")).Get("/control/runs/{id}/artifacts/{artifact_id}/download", r.handlers.downloadRunArtifact)
+	router.With(requireWriteScope("control")).Post("/control/runs/{id}/cancel", r.handlers.cancelRun)
+	router.With(requireWriteScope("control")).Post("/control/runs/{id}/retry", r.handlers.retryRun)
 
-	router.Get("/control/tool-executions", r.handlers.listToolExecutions)
-	router.Get("/control/tool-executions/{id}", r.handlers.getToolExecution)
+	router.With(requireReadScope("control")).Get("/control/tool-executions", r.handlers.listToolExecutions)
+	router.With(requireReadScope("control")).Get("/control/tool-executions/{id}", r.handlers.getToolExecution)
 
-	router.Get("/control/cost/summary", r.handlers.getCostSummary)
-	router.Get("/control/health", r.handlers.getControlHealth)
+	router.With(requireReadScope("control")).Get("/control/cost/summary", r.handlers.getCostSummary)
+	router.With(requireReadScope("control")).Get("/control/health", r.handlers.getControlHealth)
 }
 
 type createRunRequest struct {
