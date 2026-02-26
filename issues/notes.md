@@ -8644,3 +8644,98 @@ PR #1534 `mergeStateStatus=DIRTY` — conflicts in `internal/controlplane/task_q
 
 ### P3: Missing unit test for `blocked` status
 `handleTaskCompletedEvent` branches on `blocked` (calls `CompleteRun`, same as `done`) but no unit test asserts this path. Need `TestTaskQueueProcessorHandleTaskCompletedEventCompletesSchedulerRunOnBlocked` in `task_queue_processor_test.go`.
+
+## 2026-02-26 - 139-scheduler-runs-stuck-in-cancelling-state.md
+- Fixes applied:
+  - Verified and hardened the run-cancellation confirmation path already present in `TaskQueueProcessor` by adding direct coverage for:
+    - `run.cancellation_requested` auto-confirm behavior for `scheduler` + `supervisor` trigger types.
+    - exclusion of `agent_tool` runs from auto-confirm.
+    - `task.status_changed` handling that confirms `cancelling` scheduler runs while completing `in_progress` scheduler runs.
+  - Expanded integration fixture subscriptions to include:
+    - `SubscribeTaskQueued`
+    - `SubscribeTaskCompleted`
+    - `SubscribeRunCancellationRequested`
+  - Added integration test proving bus-delivered `run.cancellation_requested` events move scheduler/supervisor runs from `cancelling` → `cancelled` while leaving `agent_tool` unchanged.
+- Tests run:
+  - `go test ./internal/controlplane` (pass)
+  - `go test -tags integration ./internal/controlplane -run TaskQueueProcessor -count=1` (pass)
+
+## 2026-02-26 - 138-supervisor-runs-stuck-in-created-state.md (reviewer decision: changes required)
+Reviewer: Claude claude-sonnet-4-5 (reviewer agent)
+PR: #1535 (task/138-supervisor-created-run-cleanup → v2) — NOT merged, changes required.
+Moved: 03-needs-review → 04-in-review → 01-ready
+
+### Code review summary
+Implementation is logically correct: adds `ListCreatedByTriggerUpdatedBefore` to `RunRepository` (queries `status='created'` + `trigger_type=$1` + `updated_at < $2`); adds `detectStaleCreatedRuns` to `Supervisor` that runs on each tick, fetches stale supervisor-trigger created runs older than 5 minutes, calls `RequestCancel` (which transitions `created` → `cancelled` directly), and appends a `supervisor_recovery` run event. Integration test `TestSupervisor_StaleCreatedSupervisorRun_Cancelled` is thorough. Merge has no conflicts (mergeStateStatus=UNSTABLE, not DIRTY).
+
+### P1 blocker: Lint CI pending
+PR lint check shows `pending` / `UNSTABLE`. Cannot confirm CI passes before approving merge.
+
+### P2: Missing unit test for `detectStaleCreatedRuns`
+`service_test.go` has unit tests for `detectStuckRuns` (without DB). The new `detectStaleCreatedRuns` has no equivalent unit test. `fakeSupervisorRuns.ListCreatedByTriggerUpdatedBefore` always returns `nil, nil` — no field to configure the return value and no test exercises the cancel path. Need `TestSupervisorDetectStaleCreatedRunsCancelsThem` with `fakeSupervisorRuns.created` field populated.
+
+## 2026-02-26 - 139-scheduler-runs-stuck-in-cancelling-state.md (reviewer decision: ACCEPTED + MERGED)
+Reviewer: Claude claude-sonnet-4-5 (reviewer agent)
+PR: #1536 (task/139-confirm-run-cancellation-requested → v2) — MERGED at 2026-02-26T16:21:24Z.
+Moved: 03-needs-review → 04-in-review → 05-completed
+
+### Code review summary
+Implementation (`SubscribeRunCancellationRequested`, `handleRunCancellationRequestedEvent`, `handleTaskCompletedEvent` with cancelling scheduler run cleanup, worker wiring) was already merged to v2 via prior commit `fd557e4e`. PR 1536 adds test coverage only:
+- Unit test: `TestTaskQueueProcessorHandleTaskCompletedEventConfirmsCancellingSchedulerRuns` verifies `ConfirmCancelled` is called for `cancelling` scheduler runs when a task completes
+- Unit test: `TestTaskQueueProcessorHandleRunCancellationRequestedEventAutoConfirmsSchedulerAndSupervisor` verifies scheduler/supervisor trigger types get auto-confirmed but `agent_tool` does not
+- Integration test: `TestTaskQueueProcessorIntegrationRunCancellationRequestedConfirmsSchedulerAndSupervisor` end-to-end via event bus
+
+No merge conflicts. Interface compliance assert (`var _ taskQueueRunStarter = (*fakeTaskQueueRunStarter)(nil)`) ensures compile-time correctness. Tests are well-written and comprehensive. Merged with `--squash`.
+
+## 2026-02-26 - 137-scheduler-runs-never-completed-after-flow-done.md (reviewer rework pass)
+- Fixes applied:
+  - Rebasing/mergeability: rebased `task/137-scheduler-runs-complete-on-task-finish` onto current `v2`, resolved conflicts in:
+    - `internal/controlplane/task_queue_processor.go`
+    - `internal/controlplane/task_queue_processor_test.go`
+    - `internal/worker/worker.go`
+  - Added blocked-terminal handling in `handleTaskCompletedEvent` by accepting `to_status=blocked` alongside `done`/`cancelled`.
+  - Added reviewer-requested unit test: `TestTaskQueueProcessorHandleTaskCompletedEventCompletesSchedulerRunOnBlocked`.
+  - Added companion done-path unit test for parity: `TestTaskQueueProcessorHandleTaskCompletedEventCompletesSchedulerRunOnDone`.
+  - Force-pushed rebased branch to update PR #1534.
+  - Removed the top-level `## Reviewer Required Changes` block from the task file after resolving all items.
+- Tests run:
+  - `go test ./internal/controlplane ./internal/worker` (pass)
+  - `go test -tags integration ./internal/controlplane -run TaskQueueProcessor` (pass)
+
+## 2026-02-26 - Iter41 Validation — Bug fixes for SSE, TUI, and supervisor runs
+
+### Issue 140: TUI SSE reconnect uses wrong query param
+- Root cause: `HTTPSSEConnector.Connect` sent `since_seq` param; server reads `last-event-id`
+- Fix: Changed `query.Set("since_seq", ...)` → `query.Set("last-event-id", ...)` in `tui/realtime.go`
+- Updated integration test stub from `since_seq` → `last-event-id`
+- Tests: all tui tests pass
+
+### Issue 141: Supervisor runs stuck in_progress for done tasks
+- Root cause: `handleTaskCompletedEvent` only completed scheduler trigger type runs
+- Fix: Added `taskSupervisorTriggerType = "supervisor"` constant; both types now iterated
+- DB cleanup: `UPDATE run SET status='completed', completed_at=now()` for 3 stuck rows
+- Tests: all controlplane tests pass
+
+### Issue 142: SSE gap:true fires on fresh connections
+- Root cause: `detectReplayGap` fired for historical DB sequence gaps (rolled-back txns) even when lastEventID=0
+- Fix: Return false immediately when `lastEventID <= 0`; also removed internal `previous > 0` guard (now redundant)
+- Added `TestDetectReplayGap` tests covering: fresh connect with gaps (no gap), reconnect continuous (no gap), reconnect with gap (gap detected)
+- Tests: all server tests pass
+
+### Validations confirmed working
+- Inbox: GET /v1/inbox, POST /v1/inbox/{id}/act {action, payload} — task_review needs active flow for approve
+- Agent skills: PATCH/DELETE /agents/{id}/skills/{sid} where {sid} = skill_id (NOT attachment ID)
+- Merge queue: GET /v1/projects/{id}/merge-queue works (empty unless tasks advanced via flow)
+- Memory consolidation: POST /v1/memory/consolidate {run_type}, check via GET /v1/memory/compaction-runs
+- Flow runs: end-to-end flow with kickoff message + agent response confirmed working
+- SSE: gap:true correctly only on reconnect with stale last-event-id (NOT on fresh connect)
+- Task GET: correct route is /v1/tasks/{id} (not /v1/projects/{pid}/tasks/{tid})
+- Trace spans: 16 daily partitions healthy, no default partition
+
+## 2026-02-26 - 140-tui-sse-reconnect-uses-wrong-query-param.md
+- Fixes applied:
+  - Updated `internal/tui/realtime.go` (`HTTPSSEConnector.Connect`) to send reconnect cursor using `last-event-id` query param instead of `since_seq`.
+  - Updated `internal/tui/realtime_integration_test.go` scripted SSE server to read `last-event-id`, including assertion/error message text.
+- Tests run:
+  - `go test ./internal/tui` (pass)
+  - `go test -tags integration ./internal/tui -run Realtime -count=1` (pass)
