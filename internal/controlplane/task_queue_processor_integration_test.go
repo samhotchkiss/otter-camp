@@ -422,6 +422,62 @@ func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testin
 	}
 }
 
+func TestTaskQueueProcessorIntegrationSupervisorRunCompletedOnTaskDone(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:     fx.project.ID,
+		Title:         "Supervisor completion task",
+		CreatedByType: "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	runRepo := NewRunRepository(fx.pool)
+	supervisorRun, err := runRepo.Create(ctx, Run{
+		OrganizationID: fx.org.ID,
+		ProjectID:      &fx.project.ID,
+		TaskID:         &created.ID,
+		PrincipalType:  "system",
+		PrincipalID:    uuid.Nil,
+		Status:         "in_progress",
+		TriggerType:    "supervisor",
+		Metadata:       json.RawMessage(`{"source":"task_queue_processor_integration_test"}`),
+	})
+	if err != nil {
+		t.Fatalf("create supervisor run: %v", err)
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":   created.ID.String(),
+		"to_status": "done",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fx.bus.Publish(ctx, nil, eventbus.DomainEvent{
+		OrganizationID: fx.org.ID,
+		EventType:      "task.status_changed",
+		ActorType:      "system",
+		Payload:        payload,
+	}); err != nil {
+		t.Fatalf("publish task.status_changed: %v", err)
+	}
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		updated, getErr := runRepo.Get(ctx, supervisorRun.ID)
+		if getErr != nil {
+			return false, getErr
+		}
+		return updated.Status == "completed" && updated.CompletedAt != nil, nil
+	})
+}
+
 func TestTaskQueueProcessorIntegrationRunCancellationRequestedConfirmsSchedulerAndSupervisor(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)
