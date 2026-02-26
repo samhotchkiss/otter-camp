@@ -338,6 +338,16 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	rollupWorker := gateway.NewRollupWorker(pool.Raw(), nil, logger)
 	rollupWorker.RegisterJobs(jqWorker)
 
+	summarizer, err := chat.NewSummarizer(chat.SummarizerOptions{
+		Pool:     pool.Raw(),
+		Resolver: profileResolver,
+		Model:    &gatewaySummarizationModel{gateway: liveModelGateway},
+	})
+	if err != nil {
+		return fmt.Errorf("worker summarizer setup: %w", err)
+	}
+	summarizer.RegisterJobs(jqWorker)
+
 	modelGateway := turn.ModelGateway(liveModelGateway)
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("OTTERCAMP_MODE")), "test") {
 		modelGateway = deterministicTurnModelGateway{}
