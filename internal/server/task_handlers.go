@@ -485,7 +485,8 @@ func (h taskHandlers) listProjectTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	statuses := normalizeMultiValue(r.URL.Query()["status"])
+	// accept both ?status= and ?work_status= as aliases for the work_status column
+	statuses := normalizeMultiValue(append(r.URL.Query()["status"], r.URL.Query()["work_status"]...))
 	assignedAgentID, parseErr := parseOptionalUUID(r.URL.Query().Get("assigned_agent_id"))
 	if parseErr != nil {
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid assigned_agent_id")
