@@ -2,11 +2,13 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/browser"
 	"github.com/samhotchkiss/otter-camp/internal/budget"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
@@ -36,6 +38,8 @@ import (
 	nativetools "github.com/samhotchkiss/otter-camp/internal/tools/native"
 	"github.com/samhotchkiss/otter-camp/internal/turn"
 )
+
+const deterministicQueryEmbeddingDimensions = 1536
 
 func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) error {
 	if logger == nil {
@@ -228,9 +232,17 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		SecretService: secretService,
 		Store:         storageBackend,
 	})
+	memoryRetriever, err := memory.NewRetriever(memory.RetrieverOptions{
+		Pool:     pool.Raw(),
+		Embedder: deterministicQueryEmbedder{},
+	})
+	if err != nil {
+		return fmt.Errorf("worker memory retriever setup: %w", err)
+	}
 	nativeExecutor := nativetools.NewExecutor(nativetools.ExecutorOptions{
-		Pool: pool.Raw(),
-		CLI:  cliExecutor,
+		Pool:   pool.Raw(),
+		Memory: memoryRetriever,
+		CLI:    cliExecutor,
 	})
 	browserExecutor, err := browser.NewExecutor(browser.ExecutorOptions{
 		Pool:      pool.Raw(),
@@ -441,4 +453,21 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	}
 
 	return nil
+}
+
+type deterministicQueryEmbedder struct{}
+
+func (deterministicQueryEmbedder) Embed(_ context.Context, _ uuid.UUID, _ string, inputs []string) ([][]float32, error) {
+	vectors := make([][]float32, 0, len(inputs))
+	for _, input := range inputs {
+		sum := sha256.Sum256([]byte(strings.TrimSpace(input)))
+		vector := make([]float32, deterministicQueryEmbeddingDimensions)
+		vector[0] = float32(sum[0]) / 255.0
+		vector[1] = 1
+		for i := 0; i < len(sum) && i+2 < len(vector); i++ {
+			vector[i+2] = float32(sum[i]) / 255.0
+		}
+		vectors = append(vectors, vector)
+	}
+	return vectors, nil
 }
