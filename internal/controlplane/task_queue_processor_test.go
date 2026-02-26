@@ -88,16 +88,20 @@ func TestTaskQueueProcessorHandleTaskCompletedEventConfirmsCancellingSchedulerRu
 	}
 }
 
-func TestTaskQueueProcessorHandleTaskCompletedEventCompletesSchedulerRunOnCancelled(t *testing.T) {
+func TestTaskQueueProcessorHandleTaskCompletedEventCompletesSupervisorAndCancelledSchedulerRuns(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
 	taskID := uuid.New()
-	inProgressRunID := uuid.New()
+	schedulerRunID := uuid.New()
+	supervisorRunID := uuid.New()
 
 	runService := &fakeTaskQueueRunStarter{
 		listRunsByTaskResponses: map[string][]Run{
 			"in_progress|scheduler": {
-				{ID: inProgressRunID, TriggerType: "scheduler", Status: "in_progress"},
+				{ID: schedulerRunID, TriggerType: "scheduler", Status: "in_progress"},
+			},
+			"in_progress|supervisor": {
+				{ID: supervisorRunID, TriggerType: "supervisor", Status: "in_progress"},
 			},
 		},
 	}
@@ -119,8 +123,24 @@ func TestTaskQueueProcessorHandleTaskCompletedEventCompletesSchedulerRunOnCancel
 		t.Fatalf("handleTaskCompletedEvent: %v", err)
 	}
 
-	if len(runService.completeRunCalls) != 1 || runService.completeRunCalls[0].runID != inProgressRunID {
-		t.Fatalf("CompleteRun calls = %+v, want run %s", runService.completeRunCalls, inProgressRunID)
+	if len(runService.completeRunCalls) != 2 {
+		t.Fatalf("CompleteRun calls = %d, want 2", len(runService.completeRunCalls))
+	}
+	var sawScheduler bool
+	var sawSupervisor bool
+	for _, call := range runService.completeRunCalls {
+		if call.runID == schedulerRunID {
+			sawScheduler = true
+		}
+		if call.runID == supervisorRunID {
+			sawSupervisor = true
+		}
+	}
+	if !sawScheduler {
+		t.Fatalf("missing scheduler completion call: %+v", runService.completeRunCalls)
+	}
+	if !sawSupervisor {
+		t.Fatalf("missing supervisor completion call: %+v", runService.completeRunCalls)
 	}
 }
 

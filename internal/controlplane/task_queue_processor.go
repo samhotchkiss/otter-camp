@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	taskQueuedConsumerName             = "controlplane.task-queued"
-	taskCompletedConsumerName          = "controlplane.task-completed"
-	taskRunCancellationConsumerName    = "controlplane.run-cancellation"
-	taskQueueTriggerType               = "scheduler"
+	taskQueuedConsumerName          = "controlplane.task-queued"
+	taskCompletedConsumerName       = "controlplane.task-completed"
+	taskRunCancellationConsumerName = "controlplane.run-cancellation"
+	taskQueueTriggerType            = "scheduler"
+	taskSupervisorTriggerType       = "supervisor"
 )
 
 type taskQueueEventSubscriber interface {
@@ -461,16 +462,18 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 		return nil
 	}
 
-	// Complete any in_progress scheduler runs for this task.
-	if runs, err := p.runs.ListRunsByTask(ctx, event.OrganizationID, payload.TaskID, "in_progress", taskQueueTriggerType); err == nil {
-		for _, r := range runs {
-			_ = p.runs.CompleteRun(ctx, r.ID, json.RawMessage(`{"source":"task_completed_handler","task_status":"`+toStatus+`"}`))
+	for _, triggerType := range []string{taskQueueTriggerType, taskSupervisorTriggerType} {
+		// Complete any in_progress tracking runs for this task.
+		if runs, err := p.runs.ListRunsByTask(ctx, event.OrganizationID, payload.TaskID, "in_progress", triggerType); err == nil {
+			for _, r := range runs {
+				_ = p.runs.CompleteRun(ctx, r.ID, json.RawMessage(`{"source":"task_completed_handler","task_status":"`+toStatus+`"}`))
+			}
 		}
-	}
-	// Confirm cancellation for any scheduler runs that are already in cancelling state.
-	if runs, err := p.runs.ListRunsByTask(ctx, event.OrganizationID, payload.TaskID, "cancelling", taskQueueTriggerType); err == nil {
-		for _, r := range runs {
-			_ = p.runs.ConfirmCancelled(ctx, r.ID)
+		// Confirm cancellation for tracking runs that are already in cancelling state.
+		if runs, err := p.runs.ListRunsByTask(ctx, event.OrganizationID, payload.TaskID, "cancelling", triggerType); err == nil {
+			for _, r := range runs {
+				_ = p.runs.ConfirmCancelled(ctx, r.ID)
+			}
 		}
 	}
 	return nil
