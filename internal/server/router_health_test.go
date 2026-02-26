@@ -17,6 +17,7 @@ func TestHealthRoutesAndRequestIDHeader(t *testing.T) {
 		{path: "/health", statusCode: http.StatusOK},
 		{path: "/health/ready", statusCode: http.StatusServiceUnavailable},
 		{path: "/ready", statusCode: http.StatusServiceUnavailable},
+		{path: "/metrics", statusCode: http.StatusOK},
 	}
 
 	for _, tc := range cases {
