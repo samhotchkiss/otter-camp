@@ -201,6 +201,60 @@ func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.
 	}
 }
 
+func TestTaskQueueProcessorIntegrationSchedulerRunCompletedOnTaskDone(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+
+	template := seedTaskQueueFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID)
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:      fx.project.ID,
+		Title:          "Queued flow completion task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+
+	runRepo := NewRunRepository(fx.pool)
+	var schedulerRun Run
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		runs, listErr := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			Status:         "in_progress",
+			TriggerType:    "scheduler",
+			Limit:          20,
+		})
+		if listErr != nil {
+			return false, listErr
+		}
+		if len(runs) == 0 {
+			return false, nil
+		}
+		schedulerRun = runs[0]
+		return true, nil
+	})
+
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "done", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus done: %v", err)
+	}
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		updated, getErr := runRepo.Get(ctx, schedulerRun.ID)
+		if getErr != nil {
+			return false, getErr
+		}
+		return updated.Status == "completed" && updated.CompletedAt != nil, nil
+	})
+}
+
 func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)

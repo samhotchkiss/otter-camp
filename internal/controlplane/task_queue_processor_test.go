@@ -88,6 +88,42 @@ func TestTaskQueueProcessorHandleTaskCompletedEventConfirmsCancellingSchedulerRu
 	}
 }
 
+func TestTaskQueueProcessorHandleTaskCompletedEventCompletesSchedulerRunOnCancelled(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	taskID := uuid.New()
+	inProgressRunID := uuid.New()
+
+	runService := &fakeTaskQueueRunStarter{
+		listRunsByTaskResponses: map[string][]Run{
+			"in_progress|scheduler": {
+				{ID: inProgressRunID, TriggerType: "scheduler", Status: "in_progress"},
+			},
+		},
+	}
+	processor := &TaskQueueProcessor{runs: runService}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":   taskID,
+		"to_status": "cancelled",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	event := eventbus.DomainEvent{
+		OrganizationID: orgID,
+		EventType:      "task.status_changed",
+		Payload:        payload,
+	}
+	if err := processor.handleTaskCompletedEvent(ctx, event); err != nil {
+		t.Fatalf("handleTaskCompletedEvent: %v", err)
+	}
+
+	if len(runService.completeRunCalls) != 1 || runService.completeRunCalls[0].runID != inProgressRunID {
+		t.Fatalf("CompleteRun calls = %+v, want run %s", runService.completeRunCalls, inProgressRunID)
+	}
+}
+
 func TestTaskQueueProcessorHandleRunCancellationRequestedEventAutoConfirmsSchedulerAndSupervisor(t *testing.T) {
 	ctx := context.Background()
 	schedulerRunID := uuid.New()
