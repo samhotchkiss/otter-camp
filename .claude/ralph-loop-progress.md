@@ -322,6 +322,52 @@ Go build: PASS
 - All 45 go test packages: PASS (5 more packages discovered: cli, clock, config, controlplane, chat)
 - go build: PASS
 
+## Fixes Made This Loop (Iteration 12)
+- No new code fixes needed - all spec areas already PASSING
+
+## Routes Validated (Iteration 12 - previously untested)
+- POST /v1/control/runs: create run manually with trigger_type ✓
+- GET /v1/control/runs/{id}/steps/{step_id}/attempts: empty list for new steps ✓
+- GET /v1/control/runs/{id}/events/stream: SSE replay with Last-Event-ID header ✓
+  - since_seq uses Last-Event-ID header (not ?since_seq= query param!) ✓
+- POST /v1/control/runs/{id}/cancel: returns cancelled run ✓
+- POST /v1/control/runs/{id}/retry: returns 409 "run is not in failed state" ✓
+- GET /v1/control/tool-executions: lists tier2 tool executions ✓
+- GET /v1/control/tool-executions/{id}: returns full tool execution detail ✓
+- GET/POST /v1/chat-sessions/{id}/messages/{mid}/reactions/{rid}: list/add/delete ✓
+  - DELETE path: /reactions/{rid} where {rid}=reaction_id (not message-scoped DELETE) ✓
+- PUT /v1/chat-sessions/{id}/read-cursor: uses last_read_sequence field (not message_id) ✓
+- GET /v1/chat-sessions/{id}/read-cursor: returns cursor state ✓
+- POST /v1/projects/{id}/flow-templates (requires slug): creates project flow template ✓
+- GET /v1/flow-templates/{id}/nodes: lists nodes ✓
+- POST /v1/flow-templates/{id}/nodes: creates node ✓
+- PATCH /v1/flow-templates/{id}/nodes/{nid}: updates node ✓
+- DELETE /v1/flow-templates/{id}/nodes/{nid}: returns 409 if node has active refs ✓
+- GET /v1/inbox: lists inbox items ✓
+- POST /v1/inbox/{id}/act: marks as acted (returns {status:"resolved"}) ✓
+
+## API Field Corrections (iteration 12 additions)
+- Read cursor PUT: uses last_read_sequence field (not message_id)
+- Reaction DELETE: uses reaction ID in path /reactions/{rid}
+- Flow template create: POST /v1/projects/{id}/flow-templates (not global /v1/flow-templates)
+  - Requires slug field
+- Run events stream since_seq: uses Last-Event-ID header (not ?since_seq= param)
+- Tool execution route: /v1/control/tool-executions (not /v1/runs/{id}/tool-executions)
+- No /v1/control/trace-spans API route - trace spans are internal only (OTLP export)
+
+## DB State (verified 2026-02-26T03:50)
+- Chat messages: 1317 (up from 1313)
+- Candidate memories: 86 (up from 85)
+- Trace spans ok: 29 (+3 from agent turns this iteration)
+- Completed model invocations: 463 (up from 458)
+- Recent dead letters (2hr): 4 (all "repo: not found" edge case from iter 11)
+
+## Validation Results (Iteration 12 - all PASS)
+- All 13 spec areas PASS (same as iter 11)
+- Agent turn verified: Frank used agent_list tool, counted 7 agents (3 active, 4 draft)
+- All 45 go test packages: PASS (cached)
+- go build: PASS
+
 ## Known Remaining Issues
 - Memory entity synthesis not running yet (issue 126) - waiting for 7-day candidate hold
 - MCP catalog empty (degraded connections in dev) - not a bug, degraded test env
