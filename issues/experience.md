@@ -1165,3 +1165,109 @@ Additionally, the `?` help screen listed `d` only under "Global" as "jump to Das
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-084: Sidebar done-task sessions use ✓ instead of ●
+
+**Observation:** In the sidebar CHATS section, task-scoped sessions with `done` or `approved` work status used the `●` prefix icon (filled circle). `●` is also used by the connection indicator in the status bar to mean "SSE connected/active". A done task showing `● OC-5: Test agent participant validation` looked like it was actively running — the exact opposite of what's true. Meanwhile the project view's DONE section uses `✓` to indicate completed tasks, and the general chat session `Frank / General ✓` uses `✓` as a "read" marker.
+
+**Improvement:** Changed the done/approved task session sidebar prefix from `● ` to `✓ `. Now:
+- `✓ OC-5: Test agent participant validation 2h` — done task (clear completion indicator)
+- `◌ OC-3: Test Task Queue Processor` — in_progress (unchanged)
+- `⚠ ...` — blocked/rejected (unchanged)
+- `○ ...` — draft/todo (unchanged)
+
+This matches the `✓` used in the project view's DONE section for done tasks.
+
+**Why it matters:** `●` carries the strong visual meaning of "active" or "live" (it's used for the SSE connection indicator). A done task wearing the `●` badge looks like it's running, which is misleading. `✓` communicates completion unambiguously and is already used elsewhere in the TUI for the same semantic.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-083: Explicit Esc destinations in hints — "Esc·project" and "Esc·dashboard"
+
+**Observation:** Both the project view and task detail view showed `Esc·back` in their navigation hint rows, but "back" is ambiguous — it doesn't tell the user where they'll end up. In project view, Esc goes to the dashboard. In task detail, Esc goes to the project view (if a project is selected) or the dashboard (if there's no project context). A user learning keyboard shortcuts had to mentally model the two-level hierarchy to predict what Esc would do.
+
+**Improvement:**
+- Project view hint: `Esc·back` → `Esc·dashboard`
+- Task detail hint (with project context): `Esc·back` → `Esc·project`
+- Task detail hint (without project context): `Esc·back` → `Esc·dashboard`
+- Updated the context-sensitive bottom help bar for both ViewProject and ViewTask to use the same destination labels.
+
+**Why it matters:** Explicit navigation destinations in hint rows make keyboard navigation feel safe and predictable. A user who sees `Esc·project` knows exactly where they'll land. Without it, they have to guess or press Esc speculatively. The destination labels also serve as a reminder of the breadcrumb hierarchy (task → project → dashboard).
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-082: Consistent dot separators in dashboard hint and task detail field alignment
+
+**Observation:** Two small but noticeable formatting inconsistencies remained after EX-078's separator standardization:
+
+1. **Dashboard hint**: The hint line showing the selected task name used `  ` (double space) to separate the task name from the navigation actions: `OC-4: Test Flow Template Task  Enter·open  ·  j/k·navigate`. The gap between the name and the first action looked different from the `  ·  ` separators between the actions.
+2. **Task detail fields**: Labels `Agent:` and `Flow:` had extra trailing spaces (`Agent:  Frank`, `Flow:   Work`) to visually align values with the longer `Project:` label. But `Status:` did not receive the same treatment, so values were aligned to column 10 for Status/Agent/Flow but column 11 for Project — a hidden inconsistency that still caused subtle misalignment.
+
+**Improvement:**
+1. Changed the dashboard hint separator: `styleMuted.Render("  ·  Enter·open  ·  j/k·navigate")` — the dot separator now bridges the selected task name and the actions.
+2. Removed the extra padding from `Agent:` and `Flow:`, switching to a single space after the colon for all four fields (Status/Project/Agent/Flow). The values no longer attempt forced alignment (which was broken anyway since values have different lengths).
+
+**Why it matters:** Every hint row and metadata block in the TUI uses `  ·  ` as a separator. The dashboard hint was the one remaining exception, making the line feel like two separate text fragments pasted together. The field alignment fix removes the hidden "someone added extra spaces" feel from task details.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-081: Suppress spurious "Layout changed: XL" on startup
+
+**Observation:** Every TUI startup in tmux showed a persistent `Layout changed: XL` in the status bar, overwriting the more useful initial status message (e.g., the tmux key-binding note). The message appeared because tmux sends two `SIGWINCH` events when a pane is created: a first event with the initial (possibly smaller) terminal size, and a second event with the actual terminal size. The first sets `sizeClass` from `""` to `"M"` (no message), but the second changes from `"M"` to `"XL"` (triggers the notification). Since no user interaction had cleared the status, it persisted forever.
+
+**Improvement:** Added a 3-second startup suppression window in the `WindowSizeMsg` handler. If the TUI has been running for fewer than 3 seconds, layout-class changes are silently applied (layout still updates correctly) but no status notification is shown. After the first 3 seconds any genuine terminal resize by the user still triggers the notification as expected.
+
+**Why it matters:** The startup status message communicates important setup hints (like tmux modifier fallbacks). Having it immediately overwritten by a noise event from the terminal driver was confusing and made the TUI feel slightly broken on every startup.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-080: Auto-expand active project sidebar node on startup
+
+**Observation:** After EX-079 restored the project view and project detail on TUI restart, the sidebar still showed the project node as collapsed (`▸ OtterCamp Sales Site (5)`). Users had to click the project in the sidebar to expand it and see the task list, even though the main panel was already showing the project board. The sidebar and main panel were out of sync on startup.
+
+**Improvement:** In `sidebarDataLoadedMsg`, when dispatching `loadProjectTasksCmd` for each project, pass `expand=true` if the project ID matches `selectedProjectID`. `setProjectTasks` already supports an `expandNode` flag that sets `node.Expanded = true`; we just weren't using it on restore. After this change the sidebar auto-expands the active project's task list on startup, matching the state the user had before quitting.
+
+**Why it matters:** The sidebar and main panel should stay in sync. If the main panel is showing a project board, the sidebar should be showing that project's tasks expanded. Otherwise the sidebar is useless until the user re-clicks the project.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-085: Chat panel shows "◌  thinking…" while waiting for first assistant token
+
+**Observation:** After sending a message to Frank, there was a gap between the user's sent message and the first assistant token appearing. During this window, `activeTurn` is true (the `◌` shows in the session header and status bar), but the message area showed nothing — just the user's message at the bottom followed by the input box. A user watching the chat area had no way to know whether the request was actually being processed or had silently failed.
+
+The existing `◌ waiting for response...` indicator only appears when the chat history is **empty** (zero messages). With an active conversation, the same gap existed with no feedback in the message area.
+
+**Improvement:** Added a `◌  thinking…` indicator that appears at the bottom of the message area when all of the following are true:
+1. `activeTurn` is true
+2. The active turn is for the currently-visible session (uses the same `activeTurnSessionID` check as the header indicator)
+3. The last message in `chatMessages` is NOT an unfinalized (in-progress) assistant message — once Frank starts streaming, the existing `▌` streaming cursor takes over
+
+Three unit tests were added: one confirming the indicator appears correctly, one confirming it's absent when `activeTurn=false`, and one confirming it doesn't appear when an assistant message is already streaming (the `▌` cursor takes that role).
+
+**Why it matters:** The window between "message sent" and "first token streamed" is especially noticeable for slow workers or high-latency model providers. Without feedback in the message area, users aren't sure if the system received their message or is working on it. The `◌  thinking…` line closes that loop: you see your message, then `◌  thinking…`, then Frank's response starts to appear.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

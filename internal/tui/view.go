@@ -1749,6 +1749,24 @@ func (m Model) renderChatMessages(width int) []string {
 		lines = append(lines, "")
 	}
 
+	// EX-085: show "◌ thinking…" when a turn is active but no in-flight
+	// assistant message exists yet (gap between user send and first token).
+	if m.activeTurn {
+		isTurnForSession := m.activeTurnSessionID == "" ||
+			strings.EqualFold(strings.TrimSpace(m.activeSession), m.activeTurnSessionID)
+		if isTurnForSession {
+			alreadyStreaming := false
+			if n := len(m.chatMessages); n > 0 {
+				last := m.chatMessages[n-1]
+				alreadyStreaming = !last.Finalized && strings.EqualFold(last.Role, "assistant")
+			}
+			if !alreadyStreaming {
+				lines = append(lines, styleReconnecting.Render("  ◌  thinking…"))
+				lines = append(lines, "")
+			}
+		}
+	}
+
 	return lines
 }
 

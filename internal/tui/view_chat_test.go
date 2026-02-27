@@ -176,6 +176,79 @@ func TestStreamingAssistantMessageRendersMarkdown(t *testing.T) {
 	}
 }
 
+func TestThinkingIndicatorShowsWhenActiveTurnAndNoStreamingMessage(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.chatMessages = []ChatMessage{
+		{
+			ID:        "msg-user",
+			Role:      "user",
+			Content:   "Hello Frank",
+			Finalized: true,
+			Timestamp: time.Date(2026, time.January, 2, 15, 10, 0, 0, time.Local),
+		},
+	}
+	// Simulate a turn having been started but no assistant response yet
+	model.activeTurn = true
+	model.activeTurnSessionID = ""
+
+	rendered := strings.Join(model.renderChatMessages(80), "\n")
+	if !strings.Contains(rendered, "thinking") {
+		t.Fatalf("thinking indicator missing when activeTurn=true and no streaming message: %q", rendered)
+	}
+	if !strings.Contains(rendered, "◌") {
+		t.Fatalf("◌ spinner missing when activeTurn=true and no streaming message: %q", rendered)
+	}
+}
+
+func TestThinkingIndicatorHiddenWhenActiveTurnFalse(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.chatMessages = []ChatMessage{
+		{
+			ID:        "msg-user",
+			Role:      "user",
+			Content:   "Hello Frank",
+			Finalized: true,
+			Timestamp: time.Date(2026, time.January, 2, 15, 10, 0, 0, time.Local),
+		},
+	}
+	model.activeTurn = false
+
+	rendered := strings.Join(model.renderChatMessages(80), "\n")
+	if strings.Contains(rendered, "thinking") {
+		t.Fatalf("thinking indicator should not appear when activeTurn=false: %q", rendered)
+	}
+}
+
+func TestThinkingIndicatorHiddenWhenAssistantAlreadyStreaming(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.chatMessages = []ChatMessage{
+		{
+			ID:        "msg-user",
+			Role:      "user",
+			Content:   "Hello Frank",
+			Finalized: true,
+			Timestamp: time.Date(2026, time.January, 2, 15, 10, 0, 0, time.Local),
+		},
+		{
+			ID:        "msg-streaming",
+			Role:      "assistant",
+			Content:   "I'm responding now...",
+			Finalized: false, // currently streaming
+			Timestamp: time.Date(2026, time.January, 2, 15, 10, 1, 0, time.Local),
+		},
+	}
+	model.activeTurn = true
+
+	rendered := strings.Join(model.renderChatMessages(80), "\n")
+	// Should show ▌ streaming cursor but NOT the thinking indicator
+	if !strings.Contains(rendered, "▌") {
+		t.Fatalf("streaming cursor missing when assistant is streaming: %q", rendered)
+	}
+	if strings.Contains(rendered, "thinking") {
+		t.Fatalf("thinking indicator should not show when assistant is already streaming: %q", rendered)
+	}
+}
+
 func TestNormalizeRenderedMarkdownRemovesInlineCodeBackticks(t *testing.T) {
 	raw := "### Heading\n\n**bold** and `code`"
 	normalized := normalizeRenderedMarkdown(raw)
