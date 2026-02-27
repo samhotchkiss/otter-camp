@@ -38,7 +38,7 @@
                     │                                  ││                                                                      ││                                                                      │
                     ╰──────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯
                      ○  disconnected  ·  Frank  ·  XL/main  ·  snapshot 
-                    Help: j/k navigate · Enter open task · : commands · ? help
+                    Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### XL chat
                     ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
@@ -80,7 +80,7 @@
                     │                                  ││                                                                      ││                                                                      │
                     ╰──────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯
                      ○  disconnected  ·  Frank  ·  XL/main  ·  snapshot 
-                    Help: j/k navigate · Enter open task · : commands · ? help
+                    Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### XL inbox
                     ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
@@ -122,4 +122,4 @@
                     │                                  ││                                                                      ││                                                                      │
                     ╰──────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯
                      ○  disconnected  ·  Frank  ·  XL/main  ·  snapshot 
-                    Help: j/k navigate · Enter open task · : commands · ? help
+                    Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help

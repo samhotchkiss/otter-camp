@@ -32,7 +32,7 @@
 │                              ││                                                              ││                                                              │
 ╰──────────────────────────────╯╰──────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  L/main  ·  snapshot 
-Help: j/k navigate · Enter open task · : commands · ? help
+Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### L chat
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
@@ -68,7 +68,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │                              ││                                                              ││                                                              │
 ╰──────────────────────────────╯╰──────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  L/main  ·  snapshot 
-Help: j/k navigate · Enter open task · : commands · ? help
+Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### L inbox
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
@@ -104,4 +104,4 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │                              ││                                                              ││                                                              │
 ╰──────────────────────────────╯╰──────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  L/main  ·  snapshot 
-Help: j/k navigate · Enter open task · : commands · ? help
+Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
