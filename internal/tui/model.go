@@ -820,7 +820,21 @@ func (m *Model) handleEnterKey() tea.Cmd {
 			m.workspace.setMainView(ViewTask)
 			m.statusMessage = "Opened task detail."
 			if m.workspace.selectedTaskID != "" {
-				return loadTaskDetailCmd(m.workspace.selectedTaskID, m.runtimeHints)
+				// Sync sidebar cursor, project cursor, and project context for
+				// consistency with other task-entry paths (enables j/k, p, Esc·back).
+				taskNodeID := "task-" + m.workspace.selectedTaskID
+				if taskNode := m.workspace.nodes[taskNodeID]; taskNode != nil && taskNode.ParentID != "" {
+					if projNode := m.workspace.nodes[taskNode.ParentID]; projNode != nil && projNode.Kind == sidebarKindProject {
+						m.workspace.selectedProjectID = projNode.ProjectID
+					}
+				}
+				m.workspace.syncSidebarToTask(m.workspace.selectedTaskID)
+				m.workspace.syncProjectCursorToTask(m.workspace.selectedTaskID)
+				cmds := []tea.Cmd{loadTaskDetailCmd(m.workspace.selectedTaskID, m.runtimeHints)}
+				if m.workspace.selectedProjectID != "" && m.workspace.selectedProject == nil && m.runtimeHints.LoadProjectDetail != nil {
+					cmds = append(cmds, loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints))
+				}
+				return tea.Batch(cmds...)
 			}
 			return nil
 		}
