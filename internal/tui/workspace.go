@@ -167,7 +167,7 @@ func newWorkspaceState() workspaceState {
 		sessionToTaskLabel: map[string]string{},
 		selectedTaskID:     "",
 		inbox:            []inboxItem{},
-		activity:         []string{"workspace booted"},
+		activity:         []string{"workspace initialized"},
 		agents:           []string{},
 		mergeQueue:       []string{},
 		schedules:        []string{},
@@ -590,20 +590,31 @@ func (w *workspaceState) applyInboxAction(action string) bool {
 		return false
 	}
 
+	taskLabel := item.TaskID
+	if t := w.tasks[item.TaskID]; t != nil && t.TaskNumber > 0 {
+		taskLabel = fmt.Sprintf("OC-%d", t.TaskNumber)
+	} else if len(item.Summary) > 0 {
+		s := item.Summary
+		if len(s) > 30 {
+			s = s[:27] + "..."
+		}
+		taskLabel = s
+	}
+
 	switch action {
 	case "approve":
 		w.setTaskStatus(item.TaskID, "approved")
-		w.activity = append(w.activity, fmt.Sprintf("inbox approve %s", item.TaskID))
+		w.activity = append(w.activity, fmt.Sprintf("approved: %s", taskLabel))
 		w.removeInboxItem(item.ID)
 		return true
 	case "reject":
 		w.setTaskStatus(item.TaskID, "rejected")
-		w.activity = append(w.activity, fmt.Sprintf("inbox reject %s", item.TaskID))
+		w.activity = append(w.activity, fmt.Sprintf("rejected: %s", taskLabel))
 		w.removeInboxItem(item.ID)
 		return true
 	case "defer":
 		w.setTaskStatus(item.TaskID, "deferred")
-		w.activity = append(w.activity, fmt.Sprintf("inbox defer %s", item.TaskID))
+		w.activity = append(w.activity, fmt.Sprintf("deferred: %s", taskLabel))
 		w.removeInboxItem(item.ID)
 		return true
 	case "open":
@@ -612,7 +623,7 @@ func (w *workspaceState) applyInboxAction(action string) bool {
 		if sessionID := w.taskSessionID(item.TaskID); sessionID != "" {
 			w.activeSessionID = sessionID
 		}
-		w.activity = append(w.activity, fmt.Sprintf("open in context %s", item.TaskID))
+		w.activity = append(w.activity, fmt.Sprintf("opened: %s", taskLabel))
 		return true
 	default:
 		return false
@@ -832,8 +843,14 @@ func (w *workspaceState) applyRealtimeEnvelope(event EventEnvelope) {
 		if !workspaceDecode(event.Payload, &payload) {
 			return
 		}
-		w.setTaskStatus(strings.TrimSpace(payload.TaskID), strings.TrimSpace(payload.Status))
-		w.activity = append(w.activity, fmt.Sprintf("realtime status %s=%s", payload.TaskID, payload.Status))
+		taskID := strings.TrimSpace(payload.TaskID)
+		status := strings.TrimSpace(payload.Status)
+		w.setTaskStatus(taskID, status)
+		taskLabel := taskID
+		if t := w.tasks[taskID]; t != nil && t.TaskNumber > 0 {
+			taskLabel = fmt.Sprintf("OC-%d", t.TaskNumber)
+		}
+		w.activity = append(w.activity, fmt.Sprintf("%s: status → %s", taskLabel, status))
 		w.markSessionUnread(payload.SessionID)
 	case "task.flow.advanced":
 		var payload struct {
@@ -844,8 +861,13 @@ func (w *workspaceState) applyRealtimeEnvelope(event EventEnvelope) {
 		if !workspaceDecode(event.Payload, &payload) {
 			return
 		}
-		w.advanceTaskFlow(strings.TrimSpace(payload.TaskID), payload.FlowStep)
-		w.activity = append(w.activity, fmt.Sprintf("realtime flow %s=%d", payload.TaskID, payload.FlowStep))
+		taskID := strings.TrimSpace(payload.TaskID)
+		w.advanceTaskFlow(taskID, payload.FlowStep)
+		taskLabel := taskID
+		if t := w.tasks[taskID]; t != nil && t.TaskNumber > 0 {
+			taskLabel = fmt.Sprintf("OC-%d", t.TaskNumber)
+		}
+		w.activity = append(w.activity, fmt.Sprintf("%s: flow step → %d", taskLabel, payload.FlowStep))
 		w.markSessionUnread(payload.SessionID)
 	}
 }

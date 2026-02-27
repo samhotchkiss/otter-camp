@@ -9,7 +9,7 @@
 │ ──────────────────  ──────────────────  ──────────────────        │
 │                                                                   │
 │ ─────────────────────────── Activity ──────────────────────────── │
-│   ✓ workspace booted                                              │
+│   ✓ workspace initialized                                         │
 │                                                                   │
 │                                                                   │
 │                                                                   │
@@ -35,7 +35,7 @@ Help: r refresh · s toggle sidebar · / filter · : commands · ? help
 │ ──────────────────  ──────────────────  ──────────────────        │
 │                                                                   │
 │ ─────────────────────────── Activity ──────────────────────────── │
-│   ✓ workspace booted                                              │
+│   ✓ workspace initialized                                         │
 │                                                                   │
 │                                                                   │
 │                                                                   │
@@ -61,7 +61,7 @@ Help: r refresh · s toggle sidebar · / filter · : commands · ? help
 │ ──────────────────  ──────────────────  ──────────────────        │
 │                                                                   │
 │ ─────────────────────────── Activity ──────────────────────────── │
-│   ✓ workspace booted                                              │
+│   ✓ workspace initialized                                         │
 │                                                                   │
 │                                                                   │
 │                                                                   │

@@ -11,7 +11,7 @@ view=task size=M task=none
 view=inbox size=M empty
 
 ### M activity
-view=activity size=M entries=1 last=workspace booted
+view=activity size=M entries=1 last=workspace initialized
 
 ### M agents
 view=agents size=M count=0

@@ -239,7 +239,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamDegraded = typed.Degraded
 		if typed.State == ConnectionConnected && !m.proofRealtime {
 			m.proofRealtime = true
-			m.workspace.activity = append(m.workspace.activity, "proof-of-life realtime connected")
+			m.workspace.activity = append(m.workspace.activity, "realtime events connected")
 			// Load sidebar data on first successful connection.
 			if m.runtimeHints.LoadOrgSession != nil || m.runtimeHints.LoadInboxCount != nil || m.runtimeHints.LoadRecentChats != nil || m.runtimeHints.LoadProjects != nil {
 				return m, loadSidebarDataCmd(m.runtimeHints)
@@ -250,7 +250,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.turnsSynced = true
 		if !m.proofReplay {
 			m.proofReplay = true
-			m.workspace.activity = append(m.workspace.activity, "proof-of-life replay synced")
+			m.workspace.activity = append(m.workspace.activity, "event replay complete")
 		}
 		var histCmd tea.Cmd
 		if m.runtimeHints.LoadChatHistory != nil {
@@ -815,7 +815,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		}
 	case 'r':
 		m.workspace.activity = append(m.workspace.activity,
-			"manual refresh at "+m.now().Format("15:04:05"))
+			"sidebar refreshed at "+m.now().Format("15:04:05"))
 		m.statusMessage = "Refreshing sidebar data…"
 		return true, loadSidebarDataCmd(m.runtimeHints)
 	case 'a':
@@ -2106,7 +2106,7 @@ func (m *Model) markReplaySynced() {
 		return
 	}
 	m.proofReplay = true
-	m.workspace.activity = append(m.workspace.activity, "proof-of-life replay synced")
+	m.workspace.activity = append(m.workspace.activity, "event replay complete")
 }
 
 func (m *Model) scrollChatBy(delta int) {
