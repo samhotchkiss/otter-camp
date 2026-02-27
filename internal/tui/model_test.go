@@ -2669,3 +2669,37 @@ func TestProjectViewNoReviewBadgeWhenNotRequired(t *testing.T) {
 		t.Fatalf("project view task line shows ⚠ badge when RequiresHumanReview=false")
 	}
 }
+
+// EX-151: sidebar task node should show ⚠ badge for tasks requiring human review.
+
+func TestSidebarTaskNodeShowsHumanReviewBadge(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	taskID := "task-sidebar-review"
+	model.workspace.tasks[taskID] = &taskRecord{
+		ID:                  taskID,
+		TaskNumber:          12,
+		Title:               "Sidebar Review Task",
+		Status:              "in_progress",
+		RequiresHumanReview: true,
+	}
+	// Add a task node to the sidebar
+	model.workspace.nodes["task-"+taskID] = &sidebarNode{
+		ID:         "task-" + taskID,
+		Kind:       sidebarKindTask,
+		Label:      "OC-12: Sidebar Review Task",
+		TaskID:     taskID,
+		WorkStatus: "in_progress",
+		ParentID:   "project-proj-3",
+	}
+
+	// Render the sidebar node directly
+	node := model.workspace.nodes["task-"+taskID]
+	rendered := model.renderSidebarNode(node, false, 80, false)
+
+	if !strings.Contains(rendered, "⚠") {
+		t.Fatalf("sidebar task node missing ⚠ badge for RequiresHumanReview task: %q", rendered)
+	}
+}

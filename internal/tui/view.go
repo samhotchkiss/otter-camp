@@ -427,6 +427,11 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 			prefix = "    ○ "
 		}
 		label = node.Label
+		// EX-151: append ⚠ when the task requires human review, consistent with
+		// the dashboard board (EX-094) and project view (EX-150).
+		if rec := m.workspace.tasks[node.TaskID]; rec != nil && rec.RequiresHumanReview {
+			label = label + " ⚠"
+		}
 	case sidebarKindSession:
 		if node.ParentID != "" {
 			prefix = "    › "
