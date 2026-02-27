@@ -72,6 +72,11 @@ type Model struct {
 	focus          Panel
 	commandMode    bool
 	commandBuffer  string
+	searchMode     bool
+	searchPanel    Panel
+	searchQuery    string
+	sidebarFilter  string
+	mainFilter     string
 	statusMessage  string
 	runtimeHints   RuntimeHints
 	connection     ConnectionState
@@ -91,20 +96,22 @@ type Model struct {
 	proofReplay    bool
 	perfMetrics    TUIPerformanceMetrics
 
-	chatInput        string
-	chatHistory      []string
-	chatHistoryIndex int
-	chatMessages     []ChatMessage
-	chatMessageIndex map[string]int
-	chatScrollOffset int
-	queuedMessages   []QueuedMessage
-	editingQueued    bool
-	activeTurn          bool
-	activeTurnSessionID string // resolved UUID of the session whose turn is active
-	turnsSynced         bool   // true once ReplaySyncedMsg received; gates live turn events
-	activeScope         ChatScope
-	activeSession       string
-	localMessageSeq     int
+	chatInput            string
+	chatHistory          []string
+	chatHistoryIndex     int
+	chatMessages         []ChatMessage
+	chatMessageIndex     map[string]int
+	toolCallExpanded     map[string]map[string]bool
+	toolCallMessageIndex map[string]int
+	chatScrollOffset     int
+	queuedMessages       []QueuedMessage
+	editingQueued        bool
+	activeTurn           bool
+	activeTurnSessionID  string // resolved UUID of the session whose turn is active
+	turnsSynced          bool   // true once ReplaySyncedMsg received; gates live turn events
+	activeScope          ChatScope
+	activeSession        string
+	localMessageSeq      int
 }
 
 func NewModel(state UIState) Model {
@@ -122,21 +129,23 @@ func NewModelWithRuntime(state UIState, runtime RuntimeHints) Model {
 	nowFn := runtime.now
 	startedAt := nowFn()
 	model := Model{
-		state:            normalized,
-		focus:            panel,
-		statusMessage:    initialStatusMessage(normalized, runtime),
-		runtimeHints:     runtime,
-		connection:       ConnectionDisconnected,
-		sidebarVisible:   normalized.SidebarVisible,
-		workspace:        newWorkspaceState(),
-		now:              nowFn,
-		startedAt:        startedAt,
-		firstRun:         runtime.FirstRun,
-		coldOpenActive:   runtime.FirstRun,
-		chatHistoryIndex: -1,
-		chatMessageIndex: map[string]int{},
-		activeScope:      scope,
-		activeSession:    strings.TrimSpace(normalized.LastActiveChatSession),
+		state:                normalized,
+		focus:                panel,
+		statusMessage:        initialStatusMessage(normalized, runtime),
+		runtimeHints:         runtime,
+		connection:           ConnectionDisconnected,
+		sidebarVisible:       normalized.SidebarVisible,
+		workspace:            newWorkspaceState(),
+		now:                  nowFn,
+		startedAt:            startedAt,
+		firstRun:             runtime.FirstRun,
+		coldOpenActive:       runtime.FirstRun,
+		chatHistoryIndex:     -1,
+		chatMessageIndex:     map[string]int{},
+		toolCallExpanded:     map[string]map[string]bool{},
+		toolCallMessageIndex: map[string]int{},
+		activeScope:          scope,
+		activeSession:        strings.TrimSpace(normalized.LastActiveChatSession),
 		perfMetrics: TUIPerformanceMetrics{
 			MemoryBoundBytes: runtime.memoryBoundBytes(),
 		},
@@ -266,6 +275,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.commandMode {
 		return m.updateCommandInput(key)
 	}
+	if m.searchMode {
+		return m.updateSearchInput(key)
+	}
 
 	m.applyResponsiveLayout()
 	order := m.focusOrder()
@@ -338,7 +350,11 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.switchScope(cycleScope(m.activeScope, true))
 				return m, nil
 			}
-				if m.focus == ChatPanel {
+			if r == '/' && (m.focus == SidebarPanel || m.focus == MainPanel) {
+				m.enterSearchMode(m.focus)
+				return m, nil
+			}
+			if m.focus == ChatPanel {
 				m.handleChatRunes(key)
 				return m, nil
 			}
@@ -386,6 +402,15 @@ func (m *Model) handleEnterKey() {
 				return
 			}
 		}
+		if m.workspace.mainView == ViewTask {
+			if sessionID, ok := m.workspace.openSelectedTaskSession(); ok {
+				m.state.LastActiveChatSession = sessionID
+				m.activeSession = sessionID
+				m.setFocus(ChatPanel)
+				m.statusMessage = "Opened async session."
+				return
+			}
+		}
 		if m.workspace.mainView == ViewProject || m.workspace.mainView == ViewDashboard {
 			m.workspace.setMainView(ViewTask)
 			m.statusMessage = "Opened task detail."
@@ -425,6 +450,11 @@ func (m *Model) handleWorkspaceRune(r rune) bool {
 	case 'l':
 		if m.focus == SidebarPanel {
 			m.workspace.expandSidebarNode()
+			return true
+		}
+	case 's':
+		if m.focus == MainPanel || m.focus == SidebarPanel {
+			m.toggleSidebar()
 			return true
 		}
 	case 'g':
@@ -485,6 +515,9 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		if key.Alt {
 			m.chatInput += "\n"
 			m.statusMessage = "Inserted newline."
+			return true, nil
+		}
+		if strings.TrimSpace(m.chatInput) == "" && m.toggleLatestToolCallExpansion() {
 			return true, nil
 		}
 		return true, m.sendOrQueueInput()
@@ -581,6 +614,72 @@ func (m *Model) tryAutocompleteMention() {
 	}
 	m.chatInput = trimmedRight[:tokenStart] + completion + " "
 	m.statusMessage = "Mention autocomplete applied."
+}
+
+func (m *Model) enterSearchMode(panel Panel) {
+	m.searchMode = true
+	m.searchPanel = panel
+	m.searchQuery = m.filterForPanel(panel)
+	m.statusMessage = "Search active. Type to filter; Enter keep, Esc clear."
+}
+
+func (m *Model) setFilterForPanel(panel Panel, query string) {
+	switch panel {
+	case SidebarPanel:
+		m.sidebarFilter = query
+	case MainPanel:
+		m.mainFilter = query
+	}
+}
+
+func (m Model) filterForPanel(panel Panel) string {
+	switch panel {
+	case SidebarPanel:
+		return m.sidebarFilter
+	case MainPanel:
+		return m.mainFilter
+	default:
+		return ""
+	}
+}
+
+func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key.Type {
+	case tea.KeyCtrlC:
+		m.quitting = true
+		m.statusMessage = "Exiting TUI."
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.setFilterForPanel(m.searchPanel, "")
+		m.searchMode = false
+		m.searchQuery = ""
+		m.statusMessage = "Search cleared."
+		return m, nil
+	case tea.KeyEnter:
+		m.setFilterForPanel(m.searchPanel, m.searchQuery)
+		m.searchMode = false
+		m.statusMessage = "Search applied."
+		return m, nil
+	case tea.KeyBackspace:
+		runes := []rune(m.searchQuery)
+		if len(runes) > 0 {
+			m.searchQuery = string(runes[:len(runes)-1])
+		}
+		m.setFilterForPanel(m.searchPanel, m.searchQuery)
+		return m, nil
+	case tea.KeySpace:
+		m.searchQuery += " "
+		m.setFilterForPanel(m.searchPanel, m.searchQuery)
+		return m, nil
+	case tea.KeyRunes:
+		if len(key.Runes) > 0 {
+			m.searchQuery += string(key.Runes)
+			m.setFilterForPanel(m.searchPanel, m.searchQuery)
+		}
+		return m, nil
+	default:
+		return m, nil
+	}
 }
 
 func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -987,12 +1086,17 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 		m.activeTurn = true
 	case "chat.message.finalized":
 		var payload struct {
-			MessageID string `json:"message_id"`
-			SessionID string `json:"session_id"`
-			Role      string `json:"role"`
-			Content   string `json:"content"`
+			MessageID  string `json:"message_id"`
+			SessionID  string `json:"session_id"`
+			Role       string `json:"role"`
+			Content    string `json:"content"`
+			ToolCallID string `json:"tool_call_id"`
 		}
 		if !decodePayload(event.Payload, &payload) {
+			return
+		}
+		if strings.EqualFold(strings.TrimSpace(payload.Role), "tool_result") {
+			m.attachToolResult(strings.TrimSpace(payload.ToolCallID), payload.Content)
 			return
 		}
 		if !m.turnsSynced {
@@ -1064,9 +1168,10 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 		m.statusMessage = "Active turn cancelled."
 	case "chat.tool_call.status":
 		var payload struct {
-			MessageID string `json:"message_id"`
-			Name      string `json:"name"`
-			Status    string `json:"status"`
+			MessageID  string `json:"message_id"`
+			ToolCallID string `json:"tool_call_id"`
+			Name       string `json:"name"`
+			Status     string `json:"status"`
 		}
 		if !decodePayload(event.Payload, &payload) {
 			return
@@ -1075,7 +1180,7 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 			return
 		}
 		index := m.ensureMessage(payload.MessageID, "assistant", event.OccurredAt)
-		m.upsertToolCall(index, strings.TrimSpace(payload.Name), strings.TrimSpace(payload.Status))
+		m.upsertToolCall(index, strings.TrimSpace(payload.ToolCallID), strings.TrimSpace(payload.Name), strings.TrimSpace(payload.Status))
 	}
 }
 
@@ -1145,17 +1250,115 @@ func (m *Model) ensureMessage(messageID, role string, occurredAt time.Time) int 
 	return len(m.chatMessages) - 1
 }
 
-func (m *Model) upsertToolCall(index int, name, status string) {
-	if index < 0 || index >= len(m.chatMessages) || name == "" {
+func (m *Model) upsertToolCall(index int, toolCallID, name, status string) {
+	if index < 0 || index >= len(m.chatMessages) {
 		return
 	}
 	for i := range m.chatMessages[index].ToolCalls {
-		if m.chatMessages[index].ToolCalls[i].Name == name {
+		call := m.chatMessages[index].ToolCalls[i]
+		if (toolCallID != "" && call.ID == toolCallID) || (toolCallID == "" && name != "" && call.Name == name) {
+			if toolCallID != "" {
+				m.chatMessages[index].ToolCalls[i].ID = toolCallID
+				m.toolCallMessageIndex[toolCallID] = index
+			}
+			if name != "" {
+				m.chatMessages[index].ToolCalls[i].Name = name
+			}
 			m.chatMessages[index].ToolCalls[i].Status = status
 			return
 		}
 	}
-	m.chatMessages[index].ToolCalls = append(m.chatMessages[index].ToolCalls, ToolCallStatus{Name: name, Status: status})
+	if name == "" {
+		name = "tool"
+	}
+	call := ToolCallStatus{
+		ID:     toolCallID,
+		Name:   name,
+		Status: status,
+	}
+	m.chatMessages[index].ToolCalls = append(m.chatMessages[index].ToolCalls, call)
+	if toolCallID != "" {
+		m.toolCallMessageIndex[toolCallID] = index
+	}
+}
+
+func (m *Model) attachToolResult(toolCallID, content string) {
+	result := strings.TrimSpace(content)
+	if result == "" {
+		return
+	}
+	if toolCallID != "" {
+		if messageIndex, ok := m.toolCallMessageIndex[toolCallID]; ok && messageIndex >= 0 && messageIndex < len(m.chatMessages) {
+			for i := range m.chatMessages[messageIndex].ToolCalls {
+				if m.chatMessages[messageIndex].ToolCalls[i].ID == toolCallID {
+					m.chatMessages[messageIndex].ToolCalls[i].Result = result
+					return
+				}
+			}
+		}
+		for messageIndex := len(m.chatMessages) - 1; messageIndex >= 0; messageIndex-- {
+			for i := range m.chatMessages[messageIndex].ToolCalls {
+				if m.chatMessages[messageIndex].ToolCalls[i].ID == toolCallID {
+					m.chatMessages[messageIndex].ToolCalls[i].Result = result
+					m.toolCallMessageIndex[toolCallID] = messageIndex
+					return
+				}
+			}
+		}
+	}
+	for messageIndex := len(m.chatMessages) - 1; messageIndex >= 0; messageIndex-- {
+		calls := m.chatMessages[messageIndex].ToolCalls
+		for i := len(calls) - 1; i >= 0; i-- {
+			if strings.TrimSpace(m.chatMessages[messageIndex].ToolCalls[i].Result) != "" {
+				continue
+			}
+			m.chatMessages[messageIndex].ToolCalls[i].Result = result
+			return
+		}
+	}
+}
+
+func (m *Model) isToolCallExpanded(messageID, callID string) bool {
+	if strings.TrimSpace(messageID) == "" || strings.TrimSpace(callID) == "" {
+		return false
+	}
+	calls := m.toolCallExpanded[messageID]
+	if calls == nil {
+		return false
+	}
+	return calls[callID]
+}
+
+func (m *Model) setToolCallExpanded(messageID, callID string, expanded bool) {
+	if strings.TrimSpace(messageID) == "" || strings.TrimSpace(callID) == "" {
+		return
+	}
+	if m.toolCallExpanded[messageID] == nil {
+		m.toolCallExpanded[messageID] = map[string]bool{}
+	}
+	m.toolCallExpanded[messageID][callID] = expanded
+}
+
+func (m *Model) toggleLatestToolCallExpansion() bool {
+	for msgIndex := len(m.chatMessages) - 1; msgIndex >= 0; msgIndex-- {
+		message := &m.chatMessages[msgIndex]
+		for callIndex := len(message.ToolCalls) - 1; callIndex >= 0; callIndex-- {
+			call := message.ToolCalls[callIndex]
+			callID := toolCallIdentity(call, callIndex)
+			if callID == "" {
+				continue
+			}
+			nextExpanded := !m.isToolCallExpanded(message.ID, callID)
+			m.setToolCallExpanded(message.ID, callID, nextExpanded)
+			if nextExpanded {
+				m.statusMessage = "Tool call expanded."
+			} else {
+				m.statusMessage = "Tool call collapsed."
+			}
+			return true
+		}
+	}
+	return false
 }
 
 func decodePayload(raw json.RawMessage, out any) bool {
@@ -1218,6 +1421,24 @@ func (m *Model) setFocus(panel Panel) {
 		m.sidebarVisible = false
 	}
 	m.applyResponsiveLayout()
+}
+
+func (m *Model) toggleSidebar() {
+	if m.sizeClass != SizeS {
+		m.statusMessage = "Sidebar toggle is available below 100 columns."
+		return
+	}
+	if m.sidebarVisible || m.focus == SidebarPanel {
+		m.sidebarVisible = false
+		m.focus = MainPanel
+		m.applyResponsiveLayout()
+		m.statusMessage = "Sidebar hidden."
+		return
+	}
+	m.sidebarVisible = true
+	m.focus = SidebarPanel
+	m.applyResponsiveLayout()
+	m.statusMessage = "Sidebar shown."
 }
 
 func (m *Model) enterCommandMode() {
@@ -1363,20 +1584,20 @@ func (m Model) commandFallbackHelp() string {
 	}
 	switch m.focus {
 	case SidebarPanel:
-		return "j/k navigate · Enter select session · h/l collapse/expand · 1/2/3 focus panel · : commands · ? help"
+		return "j/k navigate · Enter select session · h/l collapse/expand · s toggle sidebar · 1/2/3 focus panel · : commands · ? help"
 	case MainPanel:
 		switch m.workspace.mainView {
 		case ViewInbox:
-			return "a approve · x reject · f defer · o open · j/k navigate · Esc back · : commands"
+			return "a approve · x reject · f defer · o open · j/k navigate · s toggle sidebar · Esc back · : commands"
 		case ViewTask:
-			return "Esc back to dashboard · : commands · ? help"
+			return "Esc back to dashboard · s toggle sidebar · : commands · ? help"
 		case ViewProject:
-			return "j/k navigate · Enter open task · Esc back · : commands · ? help"
+			return "j/k navigate · Enter open task · s toggle sidebar · Esc back · : commands · ? help"
 		default:
-			return "j/k navigate · Enter open task · : commands · ? help"
+			return "j/k navigate · Enter open task · s toggle sidebar · : commands · ? help"
 		}
 	case ChatPanel:
-		return "Enter send · PgUp/PgDn scroll · [/] scope · Esc cancel turn · : commands · ? help"
+		return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · [/] scope · Esc cancel turn · : commands · ? help"
 	}
 	if m.runtimeHints.ModifierReliabilityUncertain {
 		return "tmux-safe: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit"

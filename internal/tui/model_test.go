@@ -51,6 +51,30 @@ func TestFocusCommandFallback(t *testing.T) {
 	}
 }
 
+func TestSidebarToggleKeybindingAtSSize(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 90, Height: 30})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}}) // main
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if got := model.FocusedPanel(); got != SidebarPanel {
+		t.Fatalf("focus after sidebar toggle on = %s, want sidebar", panelLabel(got))
+	}
+	layout := model.CurrentLayout()
+	if !layout.visible[SidebarPanel] {
+		t.Fatalf("sidebar should be visible after toggle on")
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if got := model.FocusedPanel(); got != MainPanel {
+		t.Fatalf("focus after sidebar toggle off = %s, want main", panelLabel(got))
+	}
+	layout = model.CurrentLayout()
+	if layout.visible[SidebarPanel] {
+		t.Fatalf("sidebar should be hidden after toggle off")
+	}
+}
+
 func TestSpaceKeyWorksInChatInput(t *testing.T) {
 	model := NewModel(DefaultState())
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
@@ -70,6 +94,87 @@ func TestChatInputAcceptsMultiRuneEvents(t *testing.T) {
 
 	if got := model.ChatInput(); got != "hello from dictation" {
 		t.Fatalf("chat input after multi-rune event = %q, want %q", got, "hello from dictation")
+	}
+}
+
+func TestSlashSearchMainPanelEnterKeepsFilter(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}}) // main
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+
+	for _, r := range []rune("launch") {
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	filtered := model.View()
+	if !strings.Contains(filtered, "Launch docs") {
+		t.Fatalf("filtered dashboard missing Launch docs: %q", filtered)
+	}
+	if strings.Contains(filtered, "CI hardening") {
+		t.Fatalf("filtered dashboard should hide CI hardening: %q", filtered)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.searchMode {
+		t.Fatalf("search mode should exit on Enter")
+	}
+	if got := model.mainFilter; got != "launch" {
+		t.Fatalf("main filter after Enter = %q, want %q", got, "launch")
+	}
+
+	filtered = model.View()
+	if strings.Contains(filtered, "CI hardening") {
+		t.Fatalf("accepted filter should remain active: %q", filtered)
+	}
+}
+
+func TestSlashSearchMainPanelEscClearsFilter(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}}) // main
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	for _, r := range []rune("launch") {
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEsc})
+	if model.searchMode {
+		t.Fatalf("search mode should exit on Esc")
+	}
+	if got := model.mainFilter; got != "" {
+		t.Fatalf("main filter after Esc = %q, want empty", got)
+	}
+
+	view := model.View()
+	if !containsAll(view, []string{"Launch docs", "CI hardening"}) {
+		t.Fatalf("cleared filter should restore task list: %q", view)
+	}
+}
+
+func TestSlashSearchSidebarFiltersSessions(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}}) // sidebar
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	for _, r := range []rune("Task 2") {
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	sidebar := model.renderSidebarPanel(56, 14, true)
+	if !strings.Contains(sidebar, "Task 2 / CI hardening") {
+		t.Fatalf("filtered sidebar missing Task 2 session: %q", sidebar)
+	}
+	if strings.Contains(sidebar, "Task 1 / Launch docs") {
+		t.Fatalf("filtered sidebar should hide Task 1 session: %q", sidebar)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.searchMode {
+		t.Fatalf("search mode should exit on Enter")
+	}
+	if got := model.sidebarFilter; got != "Task 2" {
+		t.Fatalf("sidebar filter after Enter = %q, want %q", got, "Task 2")
 	}
 }
 
@@ -322,6 +427,39 @@ func TestTmuxHelpLineUsesFallbackCommandHints(t *testing.T) {
 	}
 }
 
+func TestChatHelpHintUsesAltEnterNewline(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = ChatPanel
+
+	help := model.commandFallbackHelp()
+	if !strings.Contains(help, "Alt-Enter newline") {
+		t.Fatalf("chat help hint missing Alt-Enter newline: %q", help)
+	}
+	if strings.Contains(help, "Shift-Enter") {
+		t.Fatalf("chat help hint contains stale Shift-Enter label: %q", help)
+	}
+}
+
+func TestHelpViewUsesAltEnterNewline(t *testing.T) {
+	model := NewModel(DefaultState())
+	rendered := strings.Join(model.renderHelpView(100, 100), "\n")
+
+	if !strings.Contains(rendered, "Alt-Enter") {
+		t.Fatalf("help view missing Alt-Enter label: %q", rendered)
+	}
+	if strings.Contains(rendered, "Shift-Enter") {
+		t.Fatalf("help view contains stale Shift-Enter label: %q", rendered)
+	}
+}
+
+func TestHelpViewDocumentsSidebarToggleKeybinding(t *testing.T) {
+	model := NewModel(DefaultState())
+	rendered := strings.Join(model.renderHelpView(100, 100), "\n")
+	if !strings.Contains(rendered, "toggle sidebar") {
+		t.Fatalf("help view missing sidebar toggle keybinding: %q", rendered)
+	}
+}
+
 func TestForwardHistoryNavigation(t *testing.T) {
 	model := NewModel(DefaultState())
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}}) // chat focus
@@ -354,6 +492,39 @@ func TestForwardHistoryNavigation(t *testing.T) {
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyDown})
 	if got := model.ChatInput(); got != "" {
 		t.Fatalf("after Down press from empty non-history input, chat input = %q, want empty", got)
+	}
+}
+
+func TestScopeCycleShortcutsTraverseAllScopeLevels(t *testing.T) {
+	model := NewModel(DefaultState())
+	if got := model.ChatScope(); got != ScopeOrg {
+		t.Fatalf("initial scope = %s, want %s", got, ScopeOrg)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	if got := model.ChatScope(); got != ScopeProject {
+		t.Fatalf("scope after ] = %s, want %s", got, ScopeProject)
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	if got := model.ChatScope(); got != ScopeTask {
+		t.Fatalf("scope after second ] = %s, want %s", got, ScopeTask)
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	if got := model.ChatScope(); got != ScopeOrg {
+		t.Fatalf("scope after third ] = %s, want %s", got, ScopeOrg)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+	if got := model.ChatScope(); got != ScopeTask {
+		t.Fatalf("scope after [ from org = %s, want %s", got, ScopeTask)
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+	if got := model.ChatScope(); got != ScopeProject {
+		t.Fatalf("scope after second [ = %s, want %s", got, ScopeProject)
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+	if got := model.ChatScope(); got != ScopeOrg {
+		t.Fatalf("scope after third [ = %s, want %s", got, ScopeOrg)
 	}
 }
 
@@ -406,6 +577,59 @@ func TestMainViewTitleIsHumanReadable(t *testing.T) {
 	view := model.View()
 	if !strings.Contains(view, "TASK DETAIL") {
 		t.Fatalf("task view title missing 'TASK DETAIL' in: %q", view)
+	}
+}
+
+func TestTaskDetailViewShowsExtendedFieldsAndFullEventLog(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-1"
+	model.workspace.tasks["task-1"].History = []string{
+		"created",
+		"owner=frank",
+		"priority=high",
+		"scope=project-alpha",
+		"queued review",
+		"awaiting operator approval",
+	}
+
+	view := strings.Join(model.renderTaskView(120, 40), "\n")
+	for _, want := range []string{
+		"Description",
+		"Acceptance Criteria",
+		"Subtasks",
+		"Async Session",
+		"session-task-1",
+		"created",
+		"awaiting operator approval",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("task detail missing %q: %q", want, view)
+		}
+	}
+}
+
+func TestEnterOnTaskDetailOpensAsyncSession(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = MainPanel
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-2"
+	model.workspace.activeSessionID = generalSessionID
+	model.activeSession = generalSessionID
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if got := model.WorkspaceSession(); got != "session-task-2" {
+		t.Fatalf("workspace session after Enter on task detail = %q, want %q", got, "session-task-2")
+	}
+	if got := model.ActiveChatSession(); got != "session-task-2" {
+		t.Fatalf("active chat session after Enter on task detail = %q, want %q", got, "session-task-2")
+	}
+	if got := model.State().LastActiveChatSession; got != "session-task-2" {
+		t.Fatalf("persisted chat session after Enter on task detail = %q, want %q", got, "session-task-2")
+	}
+	if got := model.FocusedPanel(); got != ChatPanel {
+		t.Fatalf("focus after Enter on task detail = %s, want chat", panelLabel(got))
 	}
 }
 

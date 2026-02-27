@@ -19,8 +19,10 @@ const (
 var scopeOrder = []ChatScope{ScopeOrg, ScopeProject, ScopeTask}
 
 type ToolCallStatus struct {
+	ID     string
 	Name   string
 	Status string
+	Result string
 }
 
 type ChatMessage struct {
@@ -36,6 +38,16 @@ type QueuedMessage struct {
 	Text   string
 	Steer  bool
 	Edited bool
+}
+
+func toolCallIdentity(call ToolCallStatus, fallbackIndex int) string {
+	if strings.TrimSpace(call.ID) != "" {
+		return strings.TrimSpace(call.ID)
+	}
+	if strings.TrimSpace(call.Name) != "" {
+		return strings.TrimSpace(call.Name)
+	}
+	return fmt.Sprintf("tool-%d", fallbackIndex)
 }
 
 func normalizeScope(raw string) ChatScope {
@@ -78,7 +90,7 @@ func sessionForScope(scope ChatScope) string {
 
 func normalizeRole(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "user", "assistant", "system", "tool":
+	case "user", "assistant", "system", "tool", "interjection":
 		return strings.ToLower(strings.TrimSpace(raw))
 	default:
 		return "assistant"
