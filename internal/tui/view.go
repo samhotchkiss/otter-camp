@@ -774,7 +774,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("Enter", "send message"),
 		key("PgUp / PgDn", "scroll messages"),
 		key("Esc", "cancel active agent turn"),
-		key("Shift-Enter", "insert newline"),
+		key("Alt-Enter", "insert newline"),
 		"",
 		header("Main Panel"),
 		key("Enter", "open task / select item"),

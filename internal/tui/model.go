@@ -1487,7 +1487,7 @@ func (m Model) commandFallbackHelp() string {
 			return "j/k navigate · Enter open task · : commands · ? help"
 		}
 	case ChatPanel:
-		return "Enter send · PgUp/PgDn scroll · [/] scope · Esc cancel turn · : commands · ? help"
+		return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · [/] scope · Esc cancel turn · : commands · ? help"
 	}
 	if m.runtimeHints.ModifierReliabilityUncertain {
 		return "tmux-safe: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit"
