@@ -223,15 +223,12 @@ func runTUICommand(args []string) int {
 						TaskNumber int    `json:"task_number"`
 					} `json:"data"`
 				}
-				path := "/v1/projects/" + url.PathEscape(projectID) + "/tasks?limit=10"
+				path := "/v1/projects/" + url.PathEscape(projectID) + "/tasks?limit=20"
 				if err := apiClient.request(ctx, "GET", path, nil, &resp); err != nil {
 					return nil, err
 				}
 				out := make([]tuiapp.SidebarTaskItem, 0, len(resp.Data))
 				for _, t := range resp.Data {
-					if t.WorkStatus == "done" || t.WorkStatus == "approved" || t.WorkStatus == "cancelled" {
-						continue
-					}
 					out = append(out, tuiapp.SidebarTaskItem{
 						ID:         t.ID,
 						Title:      t.Title,

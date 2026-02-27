@@ -759,22 +759,30 @@ func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskIt
 		}
 	}
 	// Add new task nodes and populate w.tasks with basic records.
+	// Active tasks (not done/approved/cancelled) get sidebar nodes so they appear
+	// under expanded projects. All tasks are seeded into w.tasks so the dashboard
+	// board can count and display done tasks as well.
 	for _, task := range tasks {
 		id := "task-" + task.ID
 		label := task.Title
 		if task.TaskNumber > 0 {
 			label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, task.Title)
 		}
-		w.nodes[id] = &sidebarNode{
-			ID:         id,
-			Label:      label,
-			Kind:       sidebarKindTask,
-			ParentID:   nodeID,
-			TaskID:     task.ID,
-			TaskNumber: task.TaskNumber,
-			WorkStatus: task.WorkStatus,
+		// Only add active tasks to the sidebar tree (PROJECTS section shows open tasks).
+		isCompleted := task.WorkStatus == "done" || task.WorkStatus == "approved" || task.WorkStatus == "cancelled"
+		if !isCompleted {
+			w.nodes[id] = &sidebarNode{
+				ID:         id,
+				Label:      label,
+				Kind:       sidebarKindTask,
+				ParentID:   nodeID,
+				TaskID:     task.ID,
+				TaskNumber: task.TaskNumber,
+				WorkStatus: task.WorkStatus,
+			}
 		}
-		// Seed basic task record so the TASK DETAIL center pane renders immediately.
+		// Seed basic task record so the TASK DETAIL center pane renders immediately,
+		// and so the dashboard board can include done tasks in boardCounts().
 		if _, exists := w.tasks[task.ID]; !exists {
 			w.tasks[task.ID] = &taskRecord{
 				ID:         task.ID,
