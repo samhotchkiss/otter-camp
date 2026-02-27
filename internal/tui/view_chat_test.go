@@ -328,3 +328,40 @@ func TestAssistantMessagesShowAgentNameFromTask(t *testing.T) {
 		t.Fatalf("hardcoded Frank label should not appear when task has agent name: %q", rendered)
 	}
 }
+
+func TestQueuedMessageAndHintVisibleInChatPanel(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = ChatPanel
+	model.activeTurn = true
+	model.queuedMessages = []QueuedMessage{
+		{Text: "follow-up question"},
+	}
+	// chatInput is empty so the hint should appear
+	model.chatInput = ""
+
+	panel := model.renderChatPanel(80, 20, true)
+	if !strings.Contains(panel, "q1:") {
+		t.Fatalf("queued message q1 label missing from chat panel: %q", panel)
+	}
+	if !strings.Contains(panel, "follow-up question") {
+		t.Fatalf("queued message text missing from chat panel: %q", panel)
+	}
+	if !strings.Contains(panel, "e·edit") {
+		t.Fatalf("queue action hint missing from chat panel: %q", panel)
+	}
+}
+
+func TestQueueHintHiddenWhenInputIsNonEmpty(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = ChatPanel
+	model.activeTurn = true
+	model.queuedMessages = []QueuedMessage{
+		{Text: "queued text"},
+	}
+	model.chatInput = "typing something"
+
+	panel := model.renderChatPanel(80, 20, true)
+	if strings.Contains(panel, "e·edit") {
+		t.Fatalf("queue action hint should be hidden when input is non-empty: %q", panel)
+	}
+}

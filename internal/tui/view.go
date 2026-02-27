@@ -1493,18 +1493,10 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 		targetH = 1
 	}
 	inputLines := strings.Split(m.renderChatInputBox(cw, focused), "\n")
-	bottomLines := make([]string, 0, len(inputLines)+2)
+	bottomLines := make([]string, 0, len(inputLines)+8)
 	bottomLines = append(bottomLines, "")
-	bottomLines = append(bottomLines, inputLines...)
-	if m.commandMode {
-		if suggestions := m.commandPaletteSuggestions(4); len(suggestions) > 0 {
-			bottomLines = append(bottomLines, styleMuted.Render("  suggestions"))
-			for _, suggestion := range suggestions {
-				bottomLines = append(bottomLines, styleSubtle.Render("  "+truncate(suggestion, cw-2)))
-			}
-		}
-	}
-	// EX-017: show all queued messages (up to 3), with overflow indicator
+	// EX-017: show all queued messages (up to 3) ABOVE the input box so they
+	// are never clipped by buildPanelContent's end-trim.
 	const maxQueueVisible = 3
 	for i, q := range m.queuedMessages {
 		if i >= maxQueueVisible {
@@ -1521,6 +1513,20 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 		bottomLines = append(bottomLines, styleMuted.Render(prefix)+
 			styleSubtle.Render(qText)+
 			styleMuted.Render(flags))
+	}
+	// EX-088: show queue management hint when messages are pending and input is empty.
+	// Placed above the input box so it remains visible even on short panels.
+	if len(m.queuedMessages) > 0 && strings.TrimSpace(m.chatInput) == "" {
+		bottomLines = append(bottomLines, styleMuted.Render("  e·edit  ·  s·steer  ·  d·delete queued"))
+	}
+	bottomLines = append(bottomLines, inputLines...)
+	if m.commandMode {
+		if suggestions := m.commandPaletteSuggestions(4); len(suggestions) > 0 {
+			bottomLines = append(bottomLines, styleMuted.Render("  suggestions"))
+			for _, suggestion := range suggestions {
+				bottomLines = append(bottomLines, styleSubtle.Render("  "+truncate(suggestion, cw-2)))
+			}
+		}
 	}
 
 	msgAreaH := targetH - len(headerLines) - len(bottomLines)
