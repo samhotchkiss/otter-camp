@@ -2320,3 +2320,124 @@ But pressing `a`, `x`, or `f` from ViewTask did nothing — the handlers only ch
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-150---
+
+## EX-150: Project view task list missing ⚠ human review badge
+
+**Observation:** The dashboard task board (EX-094) shows `⚠` on tasks with `RequiresHumanReview=true`. But the project view task list did not. A user switching from the dashboard to the project view after an `inbox.item_created` event would see the task without any review indicator — potentially missing an urgent action item.
+
+**Improvement:** `renderProjectView` now cross-references `m.workspace.tasks[task.ID].RequiresHumanReview` for each task in the list. When true, appends `" ⚠"` to the truncated title, consistent with the dashboard board behavior.
+
+**Why it matters:** Both the dashboard and project view should give consistent visual signals. An operator switching to project view for detailed navigation shouldn't lose the ⚠ badge visibility.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-151---
+
+## EX-151: Sidebar task nodes missing ⚠ human review badge
+
+**Observation:** Completing the consistency set from EX-094/EX-150: the dashboard board and project view showed `⚠` for tasks requiring human review, but the sidebar task nodes under expanded project trees did not. A user navigating via the sidebar would see no visual indicator that a task needs their attention.
+
+**Improvement:** `renderSidebarNode` `sidebarKindTask` case now cross-references `m.workspace.tasks[node.TaskID].RequiresHumanReview`. When true, appends `" ⚠"` to the label.
+
+**Why it matters:** The ⚠ badge is the primary discoverability signal for urgent human-in-the-loop tasks. If it only appears in some views but not the sidebar (the main navigation surface), users miss it when they're not on the dashboard.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-152---
+
+## EX-152: `RequiresHumanReview` not synced when project tasks load after inbox
+
+**Observation:** Race condition in task loading order. `syncTaskHumanReviewFromInbox` is called when inbox items are loaded, but it silently skips task IDs that don't yet exist in `w.tasks`. If inbox loads before project tasks (the common startup order), the newly-seeded task records in `setProjectTasks` never get `RequiresHumanReview=true`, so the ⚠ badge would not appear in the sidebar or project view until the next inbox reload.
+
+**Improvement:** `projectTasksLoadedMsg` handler now calls `m.workspace.syncTaskHumanReviewFromInbox()` after `setProjectTasks` seeds new records. This re-applies the inbox cross-reference to all task records including the newly created ones.
+
+**Why it matters:** The ⚠ badge (EX-094, EX-150, EX-151) is the primary discovery signal for human review items. If it only appears after a subsequent event (like another inbox reload) rather than immediately on first load, users would miss urgent action items during their initial session.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-153---
+
+## EX-153: Four high-priority events not persisted in activity log (lost on 5s auto-clear)
+
+**Observation:** Four important SSE events only set `statusMessage` and were wiped when the 5-second auto-clear timer fired:
+- `supervisor.escalation_created` — agent stuck, recovery triggered
+- `tool.capability_denied` — policy blocked an agent's tool call (security event)
+- `mcp.catalog.changed` — MCP tool catalog changed (affects agent capabilities)
+- `budget.anomaly_detected` — token usage spike (financial risk)
+
+A user who missed the 5-second window had no way to know these events occurred.
+
+**Improvement:** Each event handler now also calls `appendActivity` with a brief entry, so the information persists in the Activity view after the status bar clears.
+
+**Why it matters:** Escalations and policy denials are operational signals that operators need to review even if they weren't watching the status bar at the exact moment the event arrived. The Activity log is the audit trail for these events.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-154---
+
+## EX-154: `:help` command output missing `:merges` and `:schedules`
+
+**Observation:** The `:help` command listed view navigation commands but was missing `:merges` and `:schedules`, both of which are valid commands handled by `executeCommand`. Users who discovered these views through the `m` and `v` keybindings couldn't find the matching `:` commands.
+
+**Improvement:** Added `:merges` and `:schedules` to the `:help` output string.
+
+**Why it matters:** The command palette is a discovery mechanism. Missing commands imply they don't exist, leading users to think features aren't available.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-155---
+
+## EX-155: Help view and command mode bar missing key commands
+
+**Observation:** Two related documentation gaps:
+
+1. The `?` help view's Commands section only listed 7 commands (`:frank`, `:dashboard`, `:inbox`, `:project`, `:task`, `:focus`, `:send`, `:cancel-turn`, `:quit`), omitting: `:agents`, `:activity`, `:merges`, `:schedules`, `:scope`, `:queue`, `:sidebar`, `:inbox <action>`, `:tour dismiss`. These are all fully-implemented commands that users can't discover from the help screen.
+
+2. The command mode bar (status line shown while typing `:`) didn't mention `:agents`, `:merges`, `:schedules`, `:scope`, or `?·help`, making it hard to discover navigation commands beyond the basic set.
+
+**Improvement:**
+- `renderHelpView` Commands section now lists all command categories with usage descriptions.
+- `commandFallbackHelp` commandMode branch now includes the full view navigation set and a `? help` reminder.
+
+**Why it matters:** The `?` help screen is the primary discovery surface for commands. An incomplete help screen leads users to believe commands don't exist when they do — resulting in unnecessary workarounds or feature ignorance.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-156---
+
+## EX-156: Project view fallback path used sidebar node IDs instead of task UUIDs
+
+**Observation:** When `proj.Tasks` is empty (project detail not yet loaded from API) and the project view falls back to sidebar child task nodes, `SidebarTaskItem.ID` was set to `child.ID` (the sidebar node ID like `"task-abc123"`) instead of `child.TaskID` (the raw UUID `"abc123"`). This caused three bugs:
+
+1. `m.workspace.tasks[task.ID]` lookup used the wrong key → `RequiresHumanReview` check always failed → ⚠ badge never appeared in the fallback path
+2. `loadTaskDetailCmd(taskID)` received the wrong key → task detail API call used wrong ID
+3. `TaskNumber` was not copied → `"OC-N:"` prefix never rendered in the fallback list
+
+**Improvement:** Changed `ID: child.ID` to `ID: child.TaskID` and added `TaskNumber: child.TaskNumber` in the fallback path.
+
+**Why it matters:** The fallback path is triggered whenever a user selects a project before the project detail API call completes (common when navigating quickly). All three bugs combined mean the fallback view was effectively broken for navigation and showed incorrect badges.
+
+**Effort:** Low (one-line fix + field addition)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
