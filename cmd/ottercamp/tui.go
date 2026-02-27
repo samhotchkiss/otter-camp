@@ -101,13 +101,15 @@ func runTUICommand(args []string) int {
 			runtimeHints.LoadInboxCount = func(ctx context.Context) (int, error) {
 				var resp struct {
 					Meta struct {
-						Total int `json:"total"`
+						Pagination struct {
+							Total int `json:"total"`
+						} `json:"pagination"`
 					} `json:"meta"`
 				}
 				if err := apiClient.request(ctx, "GET", "/v1/inbox?is_acted=false&limit=1", nil, &resp); err != nil {
 					return 0, err
 				}
-				return resp.Meta.Total, nil
+				return resp.Meta.Pagination.Total, nil
 			}
 			runtimeHints.LoadRecentChats = func(ctx context.Context) ([]tuiapp.SidebarChatItem, error) {
 				sessions, err := apiClient.ListChatSessions(ctx, chatListSessionsFilter{
