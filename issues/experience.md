@@ -1692,3 +1692,23 @@ Applied to both the full Activity view and the dashboard Activity widget (EX-103
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-114: Dashboard BLOCKED column header overflows available width
+
+**Observation:** When `counts.Blocked > 0` and `width > 80`, a 4th `BLOCKED (N)` column header was appended to the 3-column header row. However:
+1. `colW` was computed as `(width-6)/3` — sized for 3 columns. A 4th column header at this width overflowed the available space.
+2. The 4th column header appeared, but blocked task rows were never rendered in any column — so the `BLOCKED (N)` count was a header with no rows underneath.
+
+**Improvement:**
+- When `showBlockedCol` is true, recompute `colW = (width-6)/4` so all 4 columns fit within the available width.
+- Render blocked/rejected/deferred tasks as rows in the 4th column with `✗` icon and `colError` color.
+- Update overflow indicators to include the blocked column.
+- Add `safeIndex` helper to simplify row slot access (replaces bounds-checked `if i < len(slice)` pattern).
+
+**Why it matters:** The old layout had a visual bug — a column header with no rows underneath, and text overflowing the panel width on screens wider than 80 columns. Blocked tasks are the most attention-critical items; they deserve a visible column.
+
+**Effort:** Medium
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

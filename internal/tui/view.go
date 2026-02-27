@@ -724,8 +724,14 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 	}
 	lines = append(lines, styleLabel.Render(boardTitle))
 
-	// Build three columns
-	colW := (width - 6) / 3
+	// EX-114: use 4-column layout when blocked tasks exist and width allows.
+	// colW must be computed based on actual column count to prevent header overflow.
+	showBlockedCol := width > 80 && counts.Blocked > 0
+	numCols := 3
+	if showBlockedCol {
+		numCols = 4
+	}
+	colW := (width - 6) / numCols
 	if colW < 8 {
 		colW = 8
 	}
@@ -741,7 +747,7 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 
 	visibleHdrs := []string{todoHdr, inProgHdr, doneHdr}
 	visibleSeps := []string{todoSep, inProgSep, doneSep}
-	if width > 80 && counts.Blocked > 0 {
+	if showBlockedCol {
 		visibleHdrs = append(visibleHdrs, blockedHdr)
 		visibleSeps = append(visibleSeps, blockedSep)
 	}
@@ -751,7 +757,7 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 
 	// Task rows under each column
 	cursorID := m.workspace.selectedTaskID
-	todoTasks, inProgTasks, doneTasks := []string{}, []string{}, []string{}
+	todoTasks, inProgTasks, doneTasks, blockedTasks := []string{}, []string{}, []string{}, []string{}
 	for _, id := range m.workspace.taskOrder {
 		task := m.workspace.tasks[id]
 		if task == nil {
@@ -783,7 +789,9 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 			entry := truncate("✓ "+taskLabel, colW)
 			doneTasks = append(doneTasks, styleMuted.Render(entry))
 		case "blocked", "rejected", "deferred":
-			// omit from column view; reflected in blocked count only
+			// EX-114: render in blocked column when the column is visible.
+			entry := truncate("✗ "+taskLabel, colW)
+			blockedTasks = append(blockedTasks, lipgloss.NewStyle().Foreground(colError).Render(entry))
 		default: // in_progress and unknown active statuses
 			if isCursor {
 				entry := truncate("► "+taskLabel, colW)
@@ -801,26 +809,21 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 			}
 		}
 	}
-	taskRowCount := maxInt(len(todoTasks), maxInt(len(inProgTasks), len(doneTasks)))
+	taskRowCount := maxInt(len(todoTasks), maxInt(len(inProgTasks), maxInt(len(doneTasks), len(blockedTasks))))
 	for i := 0; i < taskRowCount && i < 4; i++ {
-		row := [3]string{"", "", ""}
-		if i < len(todoTasks) {
-			row[0] = todoTasks[i]
+		r0 := lipgloss.NewStyle().Width(colW).Render(safeIndex(todoTasks, i))
+		r1 := lipgloss.NewStyle().Width(colW).Render(safeIndex(inProgTasks, i))
+		r2 := lipgloss.NewStyle().Width(colW).Render(safeIndex(doneTasks, i))
+		if showBlockedCol {
+			r3 := lipgloss.NewStyle().Width(colW).Render(safeIndex(blockedTasks, i))
+			lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, r0, r1, r2, r3))
+		} else {
+			lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, r0, r1, r2))
 		}
-		if i < len(inProgTasks) {
-			row[1] = inProgTasks[i]
-		}
-		if i < len(doneTasks) {
-			row[2] = doneTasks[i]
-		}
-		r0 := lipgloss.NewStyle().Width(colW).Render(row[0])
-		r1 := lipgloss.NewStyle().Width(colW).Render(row[1])
-		r2 := lipgloss.NewStyle().Width(colW).Render(row[2])
-		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, r0, r1, r2))
 	}
 	// EX-008: show per-column overflow indicator when more than 4 tasks in any column
 	if taskRowCount > 4 {
-		todoOver, inProgOver, doneOver := "", "", ""
+		todoOver, inProgOver, doneOver, blockedOver := "", "", "", ""
 		if len(todoTasks) > 4 {
 			todoOver = styleMuted.Render(fmt.Sprintf("  +%d more", len(todoTasks)-4))
 		}
@@ -830,10 +833,18 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		if len(doneTasks) > 4 {
 			doneOver = styleMuted.Render(fmt.Sprintf("  +%d more", len(doneTasks)-4))
 		}
+		if len(blockedTasks) > 4 {
+			blockedOver = styleMuted.Render(fmt.Sprintf("  +%d more", len(blockedTasks)-4))
+		}
 		r0 := lipgloss.NewStyle().Width(colW).Render(todoOver)
 		r1 := lipgloss.NewStyle().Width(colW).Render(inProgOver)
 		r2 := lipgloss.NewStyle().Width(colW).Render(doneOver)
-		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, r0, r1, r2))
+		if showBlockedCol {
+			r3 := lipgloss.NewStyle().Width(colW).Render(blockedOver)
+			lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, r0, r1, r2, r3))
+		} else {
+			lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, r0, r1, r2))
+		}
 	}
 
 	// Inbox section

@@ -2524,6 +2524,14 @@ func maxInt(a, b int) int {
 	return b
 }
 
+// safeIndex returns s[i] if i is in bounds, otherwise returns "".
+func safeIndex(s []string, i int) string {
+	if i < len(s) {
+		return s[i]
+	}
+	return ""
+}
+
 // looksLikeUUID returns true when s resembles a UUID (36 chars with dashes at
 // positions 8, 13, 18, 23). Placeholder IDs like "session-org-general" return false.
 func looksLikeUUID(s string) bool {
