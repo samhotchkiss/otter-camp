@@ -898,9 +898,15 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		}
 	}
 
-	// Navigation hint — show selected task name when cursor could be off-screen
+	// Navigation hint — show selected task name when cursor could be off-screen.
+	// EX-117: when a filter is active and no tasks are visible in the board
+	// columns, show a "no matches" message instead of a misleading task hint.
 	activeTasks := m.workspace.dashboardActiveTasks()
-	if len(activeTasks) > 0 {
+	visibleTaskCount := len(todoTasks) + len(inProgTasks) + len(doneTasks) + len(blockedTasks)
+	if query != "" && visibleTaskCount == 0 && len(activeTasks) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, styleMuted.Render(fmt.Sprintf("  no tasks matching %q", query)))
+	} else if len(activeTasks) > 0 {
 		lines = append(lines, "")
 		if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
 			var nameLabel string

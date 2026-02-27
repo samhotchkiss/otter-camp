@@ -1740,3 +1740,17 @@ Applied to both the full Activity view and the dashboard Activity widget (EX-103
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-117: Dashboard navigation hint shows task name even when filter hides all tasks
+
+**Observation:** When a search filter excluded all tasks from the board columns (`todoTasks + inProgTasks + doneTasks + blockedTasks` all empty), the navigation hint at the bottom still showed the selected task name and `"Enter·open  ·  j/k·navigate"` hints. The task wasn't visible anywhere in the filtered board, making the navigation hint misleading.
+
+**Improvement:** When `query != ""` and all board column task lists are empty (filter excluded everything), show `"no tasks matching <query>"` instead of the selected task name hint.
+
+**Why it matters:** Showing navigation hints for tasks that aren't visible implies those tasks are in the current view. It's a subtle but confusing inconsistency that would make users wonder where the task went.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
