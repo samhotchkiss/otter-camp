@@ -1290,7 +1290,8 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	if msgAreaH < 1 {
 		msgAreaH = 1
 	}
-	msgLines, scrollOffset, _ := chatViewportLines(m.renderChatMessages(cw), msgAreaH, m.chatScrollOffset)
+	allMsgLines := m.renderChatMessages(cw)
+	msgLines, scrollOffset, maxOffset := chatViewportLines(allMsgLines, msgAreaH, m.chatScrollOffset)
 
 	// Show scroll indicator when user has scrolled up (newer messages are below)
 	if scrollOffset > 0 {
@@ -1304,7 +1305,21 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 		if msgAreaH < 1 {
 			msgAreaH = 1
 		}
-		msgLines, _, _ = chatViewportLines(m.renderChatMessages(cw), msgAreaH, m.chatScrollOffset)
+		msgLines, _, _ = chatViewportLines(allMsgLines, msgAreaH, m.chatScrollOffset)
+	}
+
+	// Show indicator when older messages are hidden above the current view
+	hiddenAbove := maxOffset - scrollOffset
+	if hiddenAbove > 0 {
+		upHint := fmt.Sprintf("↑ %d older messages · PgUp to scroll", hiddenAbove)
+		upLine := lipgloss.NewStyle().
+			Foreground(colMuted).Italic(true).
+			Width(cw).Align(lipgloss.Center).
+			Render(upHint)
+		msgLines = append([]string{upLine}, msgLines...)
+		if len(msgLines) > msgAreaH {
+			msgLines = msgLines[:msgAreaH]
+		}
 	}
 
 	lines := make([]string, 0, len(headerLines)+len(msgLines)+len(bottomLines))
@@ -1544,7 +1559,16 @@ func chatTimestampLabel(ts time.Time) string {
 	if ts.IsZero() {
 		return ""
 	}
-	return ts.Local().Format("15:04")
+	local := ts.Local()
+	now := time.Now()
+	if local.Year() == now.Year() && local.YearDay() == now.YearDay() {
+		return local.Format("15:04")
+	}
+	yesterday := now.AddDate(0, 0, -1)
+	if local.Year() == yesterday.Year() && local.YearDay() == yesterday.YearDay() {
+		return "yesterday " + local.Format("15:04")
+	}
+	return local.Format("Jan 2 15:04")
 }
 
 func (m Model) renderChatInputBox(width int, focused bool) string {

@@ -7,7 +7,9 @@ import (
 )
 
 func TestChatHeaderSegmentsIncludesTimestampWhenSpaceAllows(t *testing.T) {
-	ts := time.Date(2026, time.January, 2, 15, 4, 0, 0, time.Local)
+	// Use today's date so chatTimestampLabel returns just "HH:MM" (same-day format)
+	now := time.Now()
+	ts := time.Date(now.Year(), now.Month(), now.Day(), 15, 4, 0, 0, time.Local)
 	left, right, gap := chatHeaderSegments("Frank", ts, 20)
 
 	if left != "Frank" {
@@ -23,7 +25,8 @@ func TestChatHeaderSegmentsIncludesTimestampWhenSpaceAllows(t *testing.T) {
 }
 
 func TestChatHeaderSegmentsDropsTimestampWhenNarrow(t *testing.T) {
-	ts := time.Date(2026, time.January, 2, 15, 4, 0, 0, time.Local)
+	now := time.Now()
+	ts := time.Date(now.Year(), now.Month(), now.Day(), 15, 4, 0, 0, time.Local)
 	_, right, _ := chatHeaderSegments("Frank", ts, 5)
 
 	if right != "" {
