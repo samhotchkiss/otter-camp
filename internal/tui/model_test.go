@@ -3832,3 +3832,50 @@ func TestInboxOpenLoadsTaskDetail(t *testing.T) {
 		})
 	}
 }
+
+// EX-176: 'p' key should trigger project detail and tasks load when project detail
+// is missing (e.g. user pressed 'p' while the initial detail load was still in-flight).
+func TestPKeyLoadsProjectDataWhenMissing(t *testing.T) {
+	t.Parallel()
+	projectID := "proj-ex-176"
+	detailLoaded := false
+	tasksLoaded := false
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjectDetail: func(_ context.Context, id string) (*ProjectDetail, error) {
+			if id == projectID {
+				detailLoaded = true
+			}
+			return &ProjectDetail{ID: id, DisplayName: "EX-176 Project"}, nil
+		},
+		LoadProjectTasks: func(_ context.Context, id string) ([]SidebarTaskItem, error) {
+			if id == projectID {
+				tasksLoaded = true
+			}
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	// selectedProjectID is set but selectedProject has not loaded yet
+	model.workspace.selectedProjectID = projectID
+	model.workspace.selectedProject = nil
+	model.workspace.mainView = ViewTask
+	model.focus = MainPanel
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	m := updated.(Model)
+
+	if m.workspace.mainView != ViewProject {
+		t.Fatalf("'p' key should switch to ViewProject, got %v", m.workspace.mainView)
+	}
+	if cmd == nil {
+		t.Fatal("'p' key should return a non-nil cmd when project detail is missing")
+	}
+	runNonTimerCmds(cmd)
+	if !detailLoaded {
+		t.Fatal("'p' key did not call LoadProjectDetail (EX-176)")
+	}
+	if !tasksLoaded {
+		t.Fatal("'p' key did not call LoadProjectTasks (EX-176)")
+	}
+}

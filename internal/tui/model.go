@@ -1134,6 +1134,17 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.workspace.setMainView(ViewProject)
 			m.setFocus(MainPanel)
 			m.statusMessage = "Project view"
+			// EX-176: if project detail hasn't loaded yet (e.g. user pressed 'p'
+			// while the detail load from selecting the project was still in-flight),
+			// trigger a fresh load so the task list renders immediately.
+			if m.workspace.selectedProject == nil {
+				var cmds []tea.Cmd
+				if m.runtimeHints.LoadProjectDetail != nil {
+					cmds = append(cmds, loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints))
+				}
+				cmds = append(cmds, loadProjectTasksCmd(m.workspace.selectedProjectID, m.runtimeHints, false))
+				return true, tea.Batch(cmds...)
+			}
 			return true, nil
 		}
 	case 't':

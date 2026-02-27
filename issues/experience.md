@@ -2612,6 +2612,21 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-176---
+
+## EX-176: 'p' key showed empty project view when detail hadn't loaded yet
+
+**Observation:** The 'p' key handler switched to ViewProject and returned `nil` for the command — it never checked whether `selectedProject` was actually loaded. This created a blank task list when the user pressed 'p' before the project detail load (dispatched when expanding the project in the sidebar) had completed. Example: user clicks a project to expand it, immediately clicks a child task, then presses 'p' — the initial project detail load was still in-flight.
+
+**Improvement:** In the 'p' handler, when `selectedProject == nil`, added a `tea.Batch` of `loadProjectDetailCmd` + `loadProjectTasksCmd`. Once both return, the project view renders with the full task list as expected.
+
+**Why it matters:** The project view is the primary task management surface. On slow connections or after jumping from inbox to task, the project view could be blank indefinitely with no indication that anything was loading.
+
+**Effort:** Trivial (guard + two-cmd Batch)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
 ---EX-175---
 
 ## EX-175: Inbox "open" paths didn't load task detail
