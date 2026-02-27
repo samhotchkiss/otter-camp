@@ -1128,3 +1128,22 @@ No extra state is required — the scroll position is derived purely from the cu
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-078: Consistent hint separators across task detail and inbox views
+
+**Observation:** The task detail view's action hint used plain double spaces as separators between actions: `Enter·resume session  Esc·back to project  p·project view  j/k·next/prev task`. Compare with the project view hint that uses `  ·  ` (dot) separators: `Enter·open  ·  j/k·navigate  ·  Esc·back`. The inconsistency made the task hint harder to scan — the word boundaries between separate actions were not visually clear. Same issue in the inbox action hint row.
+
+Additionally, the `?` help screen listed `d` only under "Global" as "jump to Dashboard", but `d` now has context-sensitive behavior: in the project view (main panel focused) it toggles the done tasks section instead. Users reading the help screen had no way to discover this.
+
+**Improvement:** 
+1. Refactored `renderTaskView` to collect all hint parts into a slice and join them with `"  ·  "`, matching the project view style. The "Esc·back to project", "p·project view", and "j/k·next/prev task" parts each become separate entries. Also fixed the inbox view action hint to use `  ·  ` separators.
+2. Added `d · toggle done tasks section (project view only)` to the Main Panel section of the `?` help screen.
+3. Updated the Global `d` entry to read `d · jump to Dashboard (or toggle done in project view)`.
+
+**Why it matters:** Consistent separators make the hint bar feel like a coherent UI element rather than freeform text. Dots are a recognized "menu divider" pattern — the eye quickly segments `Enter·open  ·  j/k·navigate  ·  Esc·back` as three distinct actions. The help screen update ensures that the context-sensitive `d` behavior is discoverable.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

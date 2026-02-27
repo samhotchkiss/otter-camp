@@ -1200,35 +1200,30 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	}
 
 	lines = append(lines, "")
-	backHint := "Esc·back"
-	if m.workspace.selectedProjectID != "" {
-		backHint = "Esc·back to project  p·project view"
-	}
 	if task.RequiresHumanReview {
-		lines = append(lines, lipgloss.NewStyle().Foreground(colWarning).Render("  a·approve  x·reject  f·defer  o·open task session"))
+		lines = append(lines, lipgloss.NewStyle().Foreground(colWarning).Render("  a·approve  ·  x·reject  ·  f·defer  ·  o·open task session"))
 	}
-	// j/k navigation hint when project context is loaded with multiple tasks.
-	var stepHint string
-	if m.workspace.selectedProjectID != "" {
-		openTasks := m.workspace.openTasksForProject()
-		if len(openTasks) >= 2 {
-			stepHint = "  j/k·next/prev task"
-		}
-	}
+	// Build hint parts using "  ·  " separator (consistent with project view).
+	var hintParts []string
 	if sessionID != "" {
-		var enterHint string
 		switch task.Status {
 		case "in_progress":
-			enterHint = "Enter·resume session"
+			hintParts = append(hintParts, "Enter·resume session")
 		case "done", "approved":
-			enterHint = "Enter·view session log"
+			hintParts = append(hintParts, "Enter·view session log")
 		default:
-			enterHint = "Enter·open session"
+			hintParts = append(hintParts, "Enter·open session")
 		}
-		lines = append(lines, styleMuted.Render("  "+enterHint+"  "+backHint+stepHint))
-	} else {
-		lines = append(lines, styleMuted.Render("  "+backHint+stepHint))
 	}
+	hintParts = append(hintParts, "Esc·back")
+	if m.workspace.selectedProjectID != "" {
+		hintParts = append(hintParts, "p·project view")
+		openTasks := m.workspace.openTasksForProject()
+		if len(openTasks) >= 2 {
+			hintParts = append(hintParts, "j/k·next/prev task")
+		}
+	}
+	lines = append(lines, styleMuted.Render("  "+strings.Join(hintParts, "  ·  ")))
 
 	return lines
 }
@@ -1287,7 +1282,7 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 		lines = append(lines, rowStyle.Render(prefix+summary)+taskBadge)
 
 		if isCursor {
-			actions := styleMuted.Render("  a·approve  x·reject  f·defer  o·open  j/k·navigate")
+			actions := styleMuted.Render("  a·approve  ·  x·reject  ·  f·defer  ·  o·open  ·  j/k·navigate")
 			lines = append(lines, actions)
 		}
 	}
@@ -1401,6 +1396,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("g / G", "jump to top/bottom of view"),
 		key("Enter", "open task detail or inbox item"),
 		key("Esc", "back to project (from task) / dashboard"),
+		key("d", "toggle done tasks section (project view only)"),
 		key("a / x / f / o", "inbox: approve/reject/defer/open"),
 		"",
 		header("Chat  (press 3 to focus)"),
@@ -1416,7 +1412,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("Tab / Shift-Tab", "cycle panel focus"),
 		key("1 / 2 / 3", "jump to sidebar/main/chat"),
 		key("i", "jump to Inbox"),
-		key("d", "jump to Dashboard"),
+		key("d", "jump to Dashboard (or toggle done in project view)"),
 		key("p", "return to selected project (if any)"),
 		key("t", "return to selected task (if any)"),
 		key("n", "jump to next unread session"),
