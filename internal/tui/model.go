@@ -452,6 +452,11 @@ func (m *Model) handleWorkspaceRune(r rune) bool {
 			m.workspace.expandSidebarNode()
 			return true
 		}
+	case 's':
+		if m.focus == MainPanel || m.focus == SidebarPanel {
+			m.toggleSidebar()
+			return true
+		}
 	case 'g':
 		if m.focus == SidebarPanel {
 			m.workspace.sidebarHome()
@@ -1418,6 +1423,24 @@ func (m *Model) setFocus(panel Panel) {
 	m.applyResponsiveLayout()
 }
 
+func (m *Model) toggleSidebar() {
+	if m.sizeClass != SizeS {
+		m.statusMessage = "Sidebar toggle is available below 100 columns."
+		return
+	}
+	if m.sidebarVisible || m.focus == SidebarPanel {
+		m.sidebarVisible = false
+		m.focus = MainPanel
+		m.applyResponsiveLayout()
+		m.statusMessage = "Sidebar hidden."
+		return
+	}
+	m.sidebarVisible = true
+	m.focus = SidebarPanel
+	m.applyResponsiveLayout()
+	m.statusMessage = "Sidebar shown."
+}
+
 func (m *Model) enterCommandMode() {
 	m.commandMode = true
 	m.commandBuffer = ":"
@@ -1561,17 +1584,17 @@ func (m Model) commandFallbackHelp() string {
 	}
 	switch m.focus {
 	case SidebarPanel:
-		return "j/k navigate · Enter select session · h/l collapse/expand · 1/2/3 focus panel · : commands · ? help"
+		return "j/k navigate · Enter select session · h/l collapse/expand · s toggle sidebar · 1/2/3 focus panel · : commands · ? help"
 	case MainPanel:
 		switch m.workspace.mainView {
 		case ViewInbox:
-			return "a approve · x reject · f defer · o open · j/k navigate · Esc back · : commands"
+			return "a approve · x reject · f defer · o open · j/k navigate · s toggle sidebar · Esc back · : commands"
 		case ViewTask:
-			return "Esc back to dashboard · : commands · ? help"
+			return "Esc back to dashboard · s toggle sidebar · : commands · ? help"
 		case ViewProject:
-			return "j/k navigate · Enter open task · Esc back · : commands · ? help"
+			return "j/k navigate · Enter open task · s toggle sidebar · Esc back · : commands · ? help"
 		default:
-			return "j/k navigate · Enter open task · : commands · ? help"
+			return "j/k navigate · Enter open task · s toggle sidebar · : commands · ? help"
 		}
 	case ChatPanel:
 		return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · [/] scope · Esc cancel turn · : commands · ? help"

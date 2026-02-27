@@ -28,11 +28,11 @@ type layoutState struct {
 func resolveSizeClass(width, height int) SizeClass {
 	w, h := normalizeDimensions(width, height)
 	switch {
-	case w <= 69 || h <= 22:
+	case w < 80 || h <= 22:
 		return SizeXS
-	case w <= 99:
+	case w < 100:
 		return SizeS
-	case w <= 139:
+	case w < 140:
 		return SizeM
 	case w <= 199:
 		return SizeL
@@ -83,15 +83,13 @@ func computeLayout(width, height int, focus Panel, sidebarVisible bool, proporti
 			weights = [3]float64{0, 0.58, 0.42}
 		}
 	case SizeM:
-		if focus == SidebarPanel || sidebarVisible {
-			visible[SidebarPanel] = true
-			visible[MainPanel] = true
-			visible[ChatPanel] = true
-			weights = [3]float64{0.18, 0.46, 0.36}
+		visible[SidebarPanel] = true
+		visible[MainPanel] = true
+		visible[ChatPanel] = true
+		if w < 120 {
+			weights = [3]float64{0.12, 0.50, 0.38}
 		} else {
-			visible[MainPanel] = true
-			visible[ChatPanel] = true
-			weights = [3]float64{0, 0.6, 0.4}
+			weights = [3]float64{0.18, 0.46, 0.36}
 		}
 	case SizeL, SizeXL:
 		visible[SidebarPanel] = true

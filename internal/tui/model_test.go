@@ -51,6 +51,30 @@ func TestFocusCommandFallback(t *testing.T) {
 	}
 }
 
+func TestSidebarToggleKeybindingAtSSize(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 90, Height: 30})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}}) // main
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if got := model.FocusedPanel(); got != SidebarPanel {
+		t.Fatalf("focus after sidebar toggle on = %s, want sidebar", panelLabel(got))
+	}
+	layout := model.CurrentLayout()
+	if !layout.visible[SidebarPanel] {
+		t.Fatalf("sidebar should be visible after toggle on")
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if got := model.FocusedPanel(); got != MainPanel {
+		t.Fatalf("focus after sidebar toggle off = %s, want main", panelLabel(got))
+	}
+	layout = model.CurrentLayout()
+	if layout.visible[SidebarPanel] {
+		t.Fatalf("sidebar should be hidden after toggle off")
+	}
+}
+
 func TestSpaceKeyWorksInChatInput(t *testing.T) {
 	model := NewModel(DefaultState())
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
@@ -425,6 +449,14 @@ func TestHelpViewUsesAltEnterNewline(t *testing.T) {
 	}
 	if strings.Contains(rendered, "Shift-Enter") {
 		t.Fatalf("help view contains stale Shift-Enter label: %q", rendered)
+	}
+}
+
+func TestHelpViewDocumentsSidebarToggleKeybinding(t *testing.T) {
+	model := NewModel(DefaultState())
+	rendered := strings.Join(model.renderHelpView(100, 100), "\n")
+	if !strings.Contains(rendered, "toggle sidebar") {
+		t.Fatalf("help view missing sidebar toggle keybinding: %q", rendered)
 	}
 }
 
