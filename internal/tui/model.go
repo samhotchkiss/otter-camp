@@ -309,6 +309,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// arrives before or after ReplaySyncedMsg; always load when we first get the UUID).
 		if typed.OrgSessionID != "" && (m.activeSession == "" || m.activeSession == generalSessionID) {
 			m.activeSession = typed.OrgSessionID
+			m.activeScope = ScopeOrg
 			m.workspace.activeSessionID = typed.OrgSessionID
 			m.state.LastActiveChatSession = typed.OrgSessionID
 			if m.runtimeHints.LoadChatHistory != nil {
@@ -594,6 +595,8 @@ func (m *Model) handleEnterKey() tea.Cmd {
 		if node != nil {
 			switch node.Kind {
 			case sidebarKindSession:
+				// Sidebar CHATS sessions are org-scope; update scope indicator accordingly
+				m.activeScope = ScopeOrg
 				// Reload chat history for the newly selected session
 				if m.runtimeHints.LoadChatHistory != nil {
 					m.chatMessages = nil
