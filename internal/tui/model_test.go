@@ -2129,6 +2129,104 @@ func TestChatMessageRedactedIgnoresNonActiveSession(t *testing.T) {
 	}
 }
 
+// --- EX-141: agent lifecycle, supervisor escalation, status bar truncation ---
+
+func TestAgentExpiredAddsActivityAndReloadsAgents(t *testing.T) {
+	t.Parallel()
+	agentLoadCalled := false
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadAgents: func(_ context.Context) ([]string, error) {
+			agentLoadCalled = true
+			return []string{}, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	raw, _ := json.Marshal(map[string]any{"agent_id": "agent-1", "reason": "budget exhausted"})
+	updated, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "agent.expired",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "agent expired") && strings.Contains(entry, "budget exhausted") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing 'agent expired: budget exhausted': %v", m.workspace.activity)
+	}
+	if cmd == nil {
+		t.Fatal("agent.expired should return loadAgentsCmd (non-nil cmd)")
+	}
+	cmd()
+	if !agentLoadCalled {
+		t.Fatal("agent.expired cmd should call LoadAgents")
+	}
+}
+
+func TestAgentPromotedAddsActivityAndReloadsAgents(t *testing.T) {
+	t.Parallel()
+	agentLoadCalled := false
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadAgents: func(_ context.Context) ([]string, error) {
+			agentLoadCalled = true
+			return []string{}, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	updated, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "agent.promoted",
+		OrgID:     "org-1",
+		Payload:   json.RawMessage(`{"temp_agent_id":"a1","promoted_staff_agent_id":"a2"}`),
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "promoted") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing 'promoted': %v", m.workspace.activity)
+	}
+	if cmd == nil {
+		t.Fatal("agent.promoted should return loadAgentsCmd (non-nil cmd)")
+	}
+	cmd()
+	if !agentLoadCalled {
+		t.Fatal("agent.promoted cmd should call LoadAgents")
+	}
+}
+
+func TestSupervisorEscalationCreatedSetsStatusMessage(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	raw, _ := json.Marshal(map[string]any{"run_id": "abc12345-0000-0000-0000-000000000000"})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "supervisor.escalation_created",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	if !strings.Contains(m.statusMessage, "Supervisor escalation") {
+		t.Fatalf("statusMessage %q should contain 'Supervisor escalation'", m.statusMessage)
+	}
+	if !strings.Contains(m.statusMessage, "Recovery") {
+		t.Fatalf("statusMessage %q should mention recovery", m.statusMessage)
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

@@ -3069,6 +3069,38 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		}
 		return nil
 	}
+	// EX-141: agent lifecycle events — reload agents view and add activity entry
+	// so the AGENTS panel reflects promotions and expirations in real-time.
+	if event.EventType == "agent.expired" {
+		var payload struct {
+			AgentID string `json:"agent_id"`
+			Reason  string `json:"reason"`
+		}
+		if decodePayload(event.Payload, &payload) {
+			entry := "agent expired"
+			if payload.Reason != "" {
+				entry = "agent expired: " + truncate(payload.Reason, 40)
+			}
+			m.workspace.activity = appendActivity(m.workspace.activity, entry)
+		}
+		return loadAgentsCmd(m.runtimeHints)
+	}
+	if event.EventType == "agent.promoted" {
+		m.workspace.activity = appendActivity(m.workspace.activity, "agent promoted to staff")
+		return loadAgentsCmd(m.runtimeHints)
+	}
+	// EX-141: supervisor escalation — surface immediately so the user knows an
+	// agent is stuck and a supervisor recovery has been triggered.
+	if event.EventType == "supervisor.escalation_created" {
+		var payload struct {
+			RunID string `json:"run_id"`
+		}
+		if decodePayload(event.Payload, &payload) {
+			runLabel := truncate(payload.RunID, 8)
+			m.statusMessage = "⚠ Supervisor escalation: run " + runLabel + " appears stuck. Recovery initiated."
+		}
+		return nil
+	}
 	// EX-140: project lifecycle — reload sidebar on structural changes (new,
 	// deleted, archived) and reload detail on updates to the current project.
 	if event.EventType == "project.created" {

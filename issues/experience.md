@@ -2148,3 +2148,27 @@ Additionally, `workspace.go`'s `applyRealtimeEnvelope` had two matching dead-cod
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-141---
+
+## EX-141: Agent lifecycle, supervisor escalation, and status bar truncation too short
+
+**Observation:** Three groups of issues:
+
+1. `agent.expired` and `agent.promoted` events were unhandled. AGENTS view showed stale data after lifecycle changes.
+2. `supervisor.escalation_created` was unhandled. Users had no visibility into stuck-run recovery.
+3. Status bar truncated at 60 chars; ⚠ warning messages added in EX-140 were cut off.
+
+**Improvement:**
+- `agent.expired`: appends "agent expired: reason" to activity + calls `loadAgentsCmd`
+- `agent.promoted`: appends "agent promoted to staff" to activity + calls `loadAgentsCmd`
+- `supervisor.escalation_created`: sets statusMessage `"⚠ Supervisor escalation: run <id[:8]> appears stuck. Recovery initiated."`
+- Status bar truncation raised from 60 → 80 chars
+- All 3 event types added to `knownEventTypes`
+
+**Why it matters:** Agent lifecycle and supervisor escalations are key operational signals in a multi-agent workspace. 80-char status bar fits all current warning messages.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

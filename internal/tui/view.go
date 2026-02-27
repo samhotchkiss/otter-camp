@@ -2329,9 +2329,11 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 
 	status := ""
 	if m.statusMessage != "" {
-		// EX-095: 60 chars fits the worker-offline message without cutting the
-		// command name; still safe on terminals as narrow as ~90 columns.
-		status = styleMuted.Render("  ·  ") + styleSubtle.Render(truncate(m.statusMessage, 60))
+		// EX-141: raised from 60 to 80 to accommodate warning messages (⚠ prefix)
+		// and the worker-offline message (~67 chars) without truncation. Still safe
+		// on terminals as narrow as ~90 columns since the status bar has room after
+		// the connection dot, scope label, and size indicator.
+		status = styleMuted.Render("  ·  ") + styleSubtle.Render(truncate(m.statusMessage, 80))
 	}
 
 	// EX-043: show ◌ in status bar when agent turn is active

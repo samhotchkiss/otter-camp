@@ -160,6 +160,10 @@ func NewEventReducer(logger *slog.Logger) *EventReducer {
 		"run.dead_lettered":          {},
 		"tui.command":                {},
 		"worker.unresponsive":        {},
+		// Agent lifecycle (EX-141)
+		"agent.expired":                 {},
+		"agent.promoted":                {},
+		"supervisor.escalation_created": {},
 		// Chat events also include redaction (handled in applyChatEnvelope)
 		"chat.message.redacted": {},
 	}
