@@ -22,7 +22,7 @@ func DefaultState() UIState {
 	return UIState{
 		LastActiveView:        "main",
 		LastActiveChatSession: "",
-		PanelProportions:      [3]float64{0.22, 0.46, 0.32},
+		PanelProportions:      [3]float64{0.18, 0.50, 0.32},
 		SidebarVisible:        false,
 	}
 }

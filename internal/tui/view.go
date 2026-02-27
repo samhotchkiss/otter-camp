@@ -1051,6 +1051,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("j / k", "move up/down in lists"),
 		key("h / l", "collapse/expand sidebar"),
 		key("s", "toggle sidebar (below 100 cols)"),
+		key("< / >", "narrow/widen sidebar panel"),
 		key("g / G", "jump to top/bottom"),
 		key("Tab/Shift-Tab", "cycle panel focus"),
 		key("1 / 2 / 3", "jump to sidebar/main/chat"),

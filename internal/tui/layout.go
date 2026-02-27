@@ -88,7 +88,11 @@ func computeLayout(width, height int, focus Panel, sidebarVisible bool, proporti
 		visible[SidebarPanel] = true
 		visible[MainPanel] = true
 		visible[ChatPanel] = true
-		weights = [3]float64{0.18, 0.50, 0.32}
+		// Use state proportions for L/XL so the user can resize panels.
+		// proportions is normalised by state.go; if all zeros (unset) fall back.
+		if proportions[0] == 0 {
+			weights = [3]float64{0.18, 0.50, 0.32}
+		}
 	default:
 		visible[MainPanel] = true
 		visible[ChatPanel] = true

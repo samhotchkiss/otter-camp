@@ -582,6 +582,16 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 			return true, nil
 		}
+	case '<':
+		if m.focus == SidebarPanel || m.focus == MainPanel {
+			m.shiftSidebarWidth(-0.02)
+			return true, nil
+		}
+	case '>':
+		if m.focus == SidebarPanel || m.focus == MainPanel {
+			m.shiftSidebarWidth(0.02)
+			return true, nil
+		}
 	case 's':
 		if m.focus == MainPanel || m.focus == SidebarPanel {
 			m.toggleSidebar()
@@ -1607,6 +1617,29 @@ func (m *Model) toggleSidebar() {
 	m.statusMessage = "Sidebar shown."
 }
 
+// shiftSidebarWidth adjusts the sidebar panel proportion by delta, clamped to
+// [0.10, 0.35]. The difference is taken from / given to the main panel so the
+// total stays at 1.0. Only effective at SizeL/XL where proportions are used.
+func (m *Model) shiftSidebarWidth(delta float64) {
+	p := m.state.PanelProportions
+	newS := p[0] + delta
+	if newS < 0.10 {
+		newS = 0.10
+	}
+	if newS > 0.35 {
+		newS = 0.35
+	}
+	diff := newS - p[0]
+	newM := p[1] - diff
+	if newM < 0.25 {
+		m.statusMessage = "Sidebar at maximum width."
+		return
+	}
+	m.state.PanelProportions = [3]float64{newS, newM, p[2]}
+	m.applyResponsiveLayout()
+	m.statusMessage = fmt.Sprintf("Sidebar: %d%%", int(newS*100))
+}
+
 func (m *Model) enterCommandMode() {
 	m.commandMode = true
 	m.commandBuffer = ":"
@@ -1750,7 +1783,7 @@ func (m Model) commandFallbackHelp() string {
 	}
 	switch m.focus {
 	case SidebarPanel:
-		return "j/k navigate · Enter select session · h/l collapse/expand · s toggle sidebar · 1/2/3 focus panel · : commands · ? help"
+		return "j/k navigate · Enter select session · h/l collapse/expand · </> resize · s toggle sidebar · 1/2/3 focus panel · : commands · ? help"
 	case MainPanel:
 		switch m.workspace.mainView {
 		case ViewInbox:

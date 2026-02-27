@@ -855,19 +855,19 @@
 
 ### Overview
 
-- [ ] Primary interface for Phases 1 and 2 (before web UI exists in Phase 3)
-- [ ] Full functional parity with web UI for all Phase 1-2 features
-- [ ] Built with Bubble Tea (Go), Lip Gloss (styling), Bubbles (widgets), Glamour (markdown), Huh (forms)
+- [x] Primary interface for Phases 1 and 2 (before web UI exists in Phase 3)
+- [~] Full functional parity with web UI for all Phase 1-2 features — most Phase 1-2 features are accessible
+- [x] Built with Bubble Tea (Go), Lip Gloss (styling), Bubbles (widgets), Glamour (markdown), Huh (forms)
 - [~] Three-panel layout: sidebar (20%), main content (40%), chat pane (40%) — see test 001 (ratio differs at M size)
 - [!] Chat pane always visible — see Issue #163 (hidden at S size when sidebar focused)
 - [x] Exactly one panel has focus at a time
 - [x] Focus cycles: Tab/Shift-Tab or Alt-1/2/3 jumps directly — see test 003
-- [ ] Panels resizable via keybinding (shift ratio; collapse sidebar entirely)
+- [x] Panels resizable via keybinding (shift ratio; collapse sidebar entirely) — < / > keys narrow/widen sidebar 2% per press (clamped 10%–35%); s key collapses sidebar in narrow layouts
 
 ### Sidebar
 
 - [x] Sessions grouped by scope: org at top, then projects with task sessions nested — see test 004
-- [ ] Unread indicator (`*`) on sessions with unseen messages; bubbles up to project level
+- [x] Unread indicator on sessions with unseen messages; bubbles up to project level — shown as (N) count badge in orange on session nodes, propagates to parent project via propagateUnread()
 - [~] Selecting session (Enter) switches chat pane; main content unchanged — see test 006 (main also switches, spec says unchanged)
 - [x] j/k navigation; l/h expand/collapse project groups — see test 005
 - [x] Active session highlighted with distinct background — see test 007
