@@ -1840,3 +1840,36 @@ Also updated `INBOX` treatment: now only included when `inbox` or the node's lab
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-124: Inbox view had no position indicator
+
+**Observation:** When multiple inbox items were queued, the action hint beneath the current item (`a·approve  ·  x·reject  ·  f·defer  ·  o·open  ·  j/k·navigate`) gave no indication of position. The user couldn't tell if they were on item 3 of 10 or item 1 of 2.
+
+**Improvement:** When `len(filteredInbox) > 1`, the action hint now includes `  ·  N of M` at the end. When there is only one item, the position hint is suppressed since it would be redundant.
+
+**Why it matters:** Spatial awareness in a list is table-stakes UX. Without it, users can't plan how much work remains or know when they've reached the end. The `N of M` pattern is already used in the project view task list (EX-106).
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-125: flow.advanced SSE event was silently dropped — task flow step never updated in real-time
+
+**Observation:** The server publishes `"flow.advanced"` events when a task advances to the next flow node. The TUI had a handler for `"task.flow.advanced"` in `workspace.applyRealtimeEnvelope` — but the server sends `"flow.advanced"`, not `"task.flow.advanced"`. The names never matched, so the handler was dead code and the task detail view's "Flow: step N" and "FlowNodeName" fields were never updated via SSE. Users saw stale flow step information until they manually navigated away and back to the task.
+
+**Improvement:** Added a `"flow.advanced"` handler in `applyWorkspaceCommand` that:
+1. Decodes `task_id` from the payload  
+2. Appends `"OC-N: flow advanced"` to the activity log
+3. Returns `loadTaskDetailCmd(taskID, ...)` to reload the full task detail asynchronously
+
+Since `applyWorkspaceCommand` can return `tea.Cmd`, this approach naturally picks up the current flow node name from the API without needing the server to include it in the event payload.
+
+**Why it matters:** If a task flow advances (e.g., from "In Progress" to "Review"), the task detail view should reflect that immediately. Stale flow step information misleads the user about where in the pipeline their work is.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
