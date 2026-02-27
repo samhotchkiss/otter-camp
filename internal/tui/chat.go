@@ -22,6 +22,7 @@ var scopeOrder = []ChatScope{ScopeOrg, ScopeProject, ScopeTask}
 var (
 	headingMarkerPattern = regexp.MustCompile(`^\s{0,3}#{1,6}\s+`)
 	boldMarkerPattern    = regexp.MustCompile(`\*\*([^*\n]+)\*\*`)
+	inlineCodePattern    = regexp.MustCompile("`([^`\\n]+)`")
 )
 
 type ToolCallStatus struct {
@@ -139,6 +140,9 @@ func containsLiteralMarkdownMarkers(rendered string) bool {
 	if strings.Contains(rendered, "**") {
 		return true
 	}
+	if strings.Contains(rendered, "`") {
+		return true
+	}
 	for _, line := range strings.Split(rendered, "\n") {
 		if headingMarkerPattern.MatchString(line) {
 			return true
@@ -165,6 +169,13 @@ func normalizeRenderedMarkdown(rendered string) string {
 				return token
 			}
 			return styleBold.Render(matches[1])
+		})
+		lines[i] = inlineCodePattern.ReplaceAllStringFunc(lines[i], func(token string) string {
+			matches := inlineCodePattern.FindStringSubmatch(token)
+			if len(matches) != 2 {
+				return token
+			}
+			return matches[1]
 		})
 	}
 	return strings.Join(lines, "\n")

@@ -148,3 +148,16 @@ func TestStreamingMessageKeepsLiteralMarkdown(t *testing.T) {
 		t.Fatalf("streaming cursor missing: %q", rendered)
 	}
 }
+
+func TestNormalizeRenderedMarkdownRemovesInlineCodeBackticks(t *testing.T) {
+	raw := "### Heading\n\n**bold** and `code`"
+	normalized := normalizeRenderedMarkdown(raw)
+	if strings.Contains(normalized, "`code`") {
+		t.Fatalf("inline code backticks were not removed: %q", normalized)
+	}
+	for _, want := range []string{"Heading", "bold", "code"} {
+		if !strings.Contains(normalized, want) {
+			t.Fatalf("normalized output missing %q: %q", want, normalized)
+		}
+	}
+}
