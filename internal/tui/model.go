@@ -2321,7 +2321,13 @@ func (m Model) commandFallbackHelp() string {
 			return "j/k navigate tasks · Enter open task · d toggle done · Esc dashboard · n next unread · : commands · ? help"
 		case ViewDashboard:
 			if len(m.workspace.dashboardActiveTasks()) > 0 {
-				return "j/k select task · Enter open · i inbox · n next unread · / filter · : commands · ? help"
+				// EX-116: include "t·task" hint when a task is selected so users know
+				// how to jump back to the task detail view from the dashboard.
+				taskHint := "j/k select task · Enter open"
+				if m.workspace.selectedTaskID != "" {
+					taskHint += " · t task detail"
+				}
+				return taskHint + " · i inbox · n next unread · / filter · : commands · ? help"
 			}
 			return "i inbox · n next unread · r refresh · : commands · ? help"
 		default:

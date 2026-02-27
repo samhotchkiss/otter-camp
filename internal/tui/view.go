@@ -1917,7 +1917,7 @@ func (m Model) renderChatMessages(width int) []string {
 				if truncated {
 					// EX-097: "[show more]" looked interactive but had no key handler.
 					// Passive indicator makes it clear the display is capped.
-				lines = append(lines, styleMuted.Render("    … (result truncated)"))
+					lines = append(lines, styleMuted.Render("    … (result truncated)"))
 				}
 			}
 		}

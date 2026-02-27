@@ -1726,3 +1726,17 @@ Applied to both the full Activity view and the dashboard Activity widget (EX-103
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-116: Dashboard help line missing "t·task detail" hint
+
+**Observation:** When tasks are present in the dashboard, the help line showed `"j/k select task · Enter open · i inbox · ..."`. Once a task is selected, pressing `t` jumps to the task detail view — but this key was never mentioned in the dashboard context hint. Users had no way to discover it without opening the full help screen.
+
+**Improvement:** When `selectedTaskID != ""` in the dashboard, the help line now reads `"j/k select task · Enter open · t task detail · i inbox · ..."`.
+
+**Why it matters:** `t` is the primary shortcut for revisiting a task you were just working on. Not surfacing it in the dashboard hint means users fall back to the slower sidebar navigation path.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
