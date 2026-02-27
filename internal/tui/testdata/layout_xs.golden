@@ -20,7 +20,7 @@
 │                                                                   │
 ╰───────────────────────────────────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
-Help: j/k navigate · Enter open task · : commands · ? help
+Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### XS chat
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recover…
@@ -44,7 +44,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │                                                                   │
 ╰───────────────────────────────────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
-Help: j/k navigate · Enter open task · : commands · ? help
+Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### XS inbox
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recover…
@@ -68,4 +68,4 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │                                                                   │
 ╰───────────────────────────────────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
-Help: j/k navigate · Enter open task · : commands · ? help
+Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help

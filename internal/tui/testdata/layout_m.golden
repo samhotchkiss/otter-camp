@@ -1,95 +1,95 @@
 ### M board
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
-╭──────────────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────╮
-│ DASHBOARD                                                            ││ General / Frank  ·  [task] [project] [org]   │
-│ ──────────────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────── │
-│                                                                      ││                                              │
-│ Task Board                                                           ││               no messages yet                │
-│ TODO (1)             IN PROGRESS (1)      DONE (0)                   ││          Tab·focus chat  Enter·send          │
-│ ───────────────────  ───────────────────  ───────────────────        ││                                              │
-│   Launch docs         CI hardening                                   ││ ╭────────────────────────────────────────╮   │
-│                                                                      ││ │ type a message...                      │   │
-│ ───────────────────────────── Inbox  2 ───────────────────────────── ││ ╰────────────────────────────────────────╯   │
-│ ▸ Approve launch checklist                                           ││                                              │
-│ ▸ Review flaky test quarantine                                       ││                                              │
-│                                                                      ││                                              │
-│ ───────────────────────────── Activity ───────────────────────────── ││                                              │
-│   ✓ workspace booted                                                 ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  M/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
-Help: j/k navigate · Enter open task · : commands · ? help
+╭───────────────────╮╭─────────────────────────────────────────────────────╮╭──────────────────────────────────────────╮
+│ SESSIONS          ││ DASHBOARD                                           ││ General / Fr…  ·  [task] [project] [org] │
+│ ───────────────── ││ ─────────────────────────────────────────────────── ││ ──────────────────────────────────────── │
+│   General / … ✓   ││                                                     ││                                          │
+│ ▾ Project Alpha   ││ Task Board                                          ││             no messages yet              │
+│   › Task 1 / L… ○ ││ TODO (1)        IN PROGRESS (1) DONE (0)            ││        Tab·focus chat  Enter·send        │
+│   › Task 2 / C… ◌ ││ ──────────────  ──────────────  ──────────────      ││                                          │
+│ ▼ 2 inbox         ││   Launch docs    CI hardening                       ││ ╭────────────────────────────────────╮   │
+│                   ││                                                     ││ │ type a message...                  │   │
+│                   ││ ──────────────────── Inbox  2 ───────────────────── ││ ╰────────────────────────────────────╯   │
+│                   ││ ▸ Approve launch checklist                          ││                                          │
+│                   ││ ▸ Review flaky test quarantine                      ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││ ──────────────────── Activity ───────────────────── ││                                          │
+│                   ││   ✓ workspace booted                                ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+╰───────────────────╯╰─────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+ ○  disconnected  ·  Frank  ·  M/main  ·  snapshot 
+Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### M chat
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
-╭──────────────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────╮
-│ DASHBOARD                                                            ││ General / Frank  ·  [task] [project] [org]   │
-│ ──────────────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────── │
-│                                                                      ││                                              │
-│ Task Board                                                           ││               no messages yet                │
-│ TODO (1)             IN PROGRESS (1)      DONE (0)                   ││          Tab·focus chat  Enter·send          │
-│ ───────────────────  ───────────────────  ───────────────────        ││                                              │
-│   Launch docs         CI hardening                                   ││ ╭────────────────────────────────────────╮   │
-│                                                                      ││ │ type a message...                      │   │
-│ ───────────────────────────── Inbox  2 ───────────────────────────── ││ ╰────────────────────────────────────────╯   │
-│ ▸ Approve launch checklist                                           ││                                              │
-│ ▸ Review flaky test quarantine                                       ││                                              │
-│                                                                      ││                                              │
-│ ───────────────────────────── Activity ───────────────────────────── ││                                              │
-│   ✓ workspace booted                                                 ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  M/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
-Help: j/k navigate · Enter open task · : commands · ? help
+╭───────────────────╮╭─────────────────────────────────────────────────────╮╭──────────────────────────────────────────╮
+│ SESSIONS          ││ DASHBOARD                                           ││ General / Fr…  ·  [task] [project] [org] │
+│ ───────────────── ││ ─────────────────────────────────────────────────── ││ ──────────────────────────────────────── │
+│   General / … ✓   ││                                                     ││                                          │
+│ ▾ Project Alpha   ││ Task Board                                          ││             no messages yet              │
+│   › Task 1 / L… ○ ││ TODO (1)        IN PROGRESS (1) DONE (0)            ││        Tab·focus chat  Enter·send        │
+│   › Task 2 / C… ◌ ││ ──────────────  ──────────────  ──────────────      ││                                          │
+│ ▼ 2 inbox         ││   Launch docs    CI hardening                       ││ ╭────────────────────────────────────╮   │
+│                   ││                                                     ││ │ type a message...                  │   │
+│                   ││ ──────────────────── Inbox  2 ───────────────────── ││ ╰────────────────────────────────────╯   │
+│                   ││ ▸ Approve launch checklist                          ││                                          │
+│                   ││ ▸ Review flaky test quarantine                      ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││ ──────────────────── Activity ───────────────────── ││                                          │
+│                   ││   ✓ workspace booted                                ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+╰───────────────────╯╰─────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+ ○  disconnected  ·  Frank  ·  M/main  ·  snapshot 
+Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### M inbox
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
-╭──────────────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────╮
-│ DASHBOARD                                                            ││ General / Frank  ·  [task] [project] [org]   │
-│ ──────────────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────── │
-│                                                                      ││                                              │
-│ Task Board                                                           ││               no messages yet                │
-│ TODO (1)             IN PROGRESS (1)      DONE (0)                   ││          Tab·focus chat  Enter·send          │
-│ ───────────────────  ───────────────────  ───────────────────        ││                                              │
-│   Launch docs         CI hardening                                   ││ ╭────────────────────────────────────────╮   │
-│                                                                      ││ │ type a message...                      │   │
-│ ───────────────────────────── Inbox  2 ───────────────────────────── ││ ╰────────────────────────────────────────╯   │
-│ ▸ Approve launch checklist                                           ││                                              │
-│ ▸ Review flaky test quarantine                                       ││                                              │
-│                                                                      ││                                              │
-│ ───────────────────────────── Activity ───────────────────────────── ││                                              │
-│   ✓ workspace booted                                                 ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  M/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
-Help: j/k navigate · Enter open task · : commands · ? help
+╭───────────────────╮╭─────────────────────────────────────────────────────╮╭──────────────────────────────────────────╮
+│ SESSIONS          ││ DASHBOARD                                           ││ General / Fr…  ·  [task] [project] [org] │
+│ ───────────────── ││ ─────────────────────────────────────────────────── ││ ──────────────────────────────────────── │
+│   General / … ✓   ││                                                     ││                                          │
+│ ▾ Project Alpha   ││ Task Board                                          ││             no messages yet              │
+│   › Task 1 / L… ○ ││ TODO (1)        IN PROGRESS (1) DONE (0)            ││        Tab·focus chat  Enter·send        │
+│   › Task 2 / C… ◌ ││ ──────────────  ──────────────  ──────────────      ││                                          │
+│ ▼ 2 inbox         ││   Launch docs    CI hardening                       ││ ╭────────────────────────────────────╮   │
+│                   ││                                                     ││ │ type a message...                  │   │
+│                   ││ ──────────────────── Inbox  2 ───────────────────── ││ ╰────────────────────────────────────╯   │
+│                   ││ ▸ Approve launch checklist                          ││                                          │
+│                   ││ ▸ Review flaky test quarantine                      ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││ ──────────────────── Activity ───────────────────── ││                                          │
+│                   ││   ✓ workspace booted                                ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+╰───────────────────╯╰─────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+ ○  disconnected  ·  Frank  ·  M/main  ·  snapshot 
+Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
