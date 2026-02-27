@@ -4182,3 +4182,55 @@ func TestSwitchScopeClearsChatMessages(t *testing.T) {
 		t.Fatal("switchScope should return a non-nil cmd when session is a valid UUID")
 	}
 }
+
+// EX-182: opening a task session from ViewTask (Enter key) should clear stale messages
+// and set chatHistoryLoading so the loading indicator appears while history loads.
+func TestViewTaskEnterClearsMessagesAndSetsLoading(t *testing.T) {
+	t.Parallel()
+	sessionID := "00000000-0000-0000-0000-000000000182"
+	taskID := "task-ex-182"
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, _ string) ([]ChatMessage, error) {
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	// Seed stale messages from a different session
+	model.chatMessages = []ChatMessage{
+		{ID: "old-msg", Role: "user", Content: "From previous session", Finalized: true},
+	}
+	model.chatMessageIndex = map[string]int{"old-msg": 0}
+	model.chatHistoryLoading = false
+	// Set up task session
+	if model.workspace.tasks == nil {
+		model.workspace.tasks = make(map[string]*taskRecord)
+	}
+	model.workspace.tasks[taskID] = &taskRecord{
+		ID:        taskID,
+		Title:     "EX-182 Task",
+		Status:    "in_progress",
+		SessionID: sessionID,
+	}
+	model.workspace.taskSessionIDs = map[string]string{taskID: sessionID}
+	model.workspace.selectedTaskID = taskID
+	model.workspace.mainView = ViewTask
+	model.focus = MainPanel
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m := updated.(Model)
+
+	// Messages should be cleared immediately
+	if len(m.chatMessages) != 0 {
+		t.Fatalf("ViewTask Enter should clear chatMessages, got %d messages", len(m.chatMessages))
+	}
+	if !m.chatHistoryLoading {
+		t.Fatal("ViewTask Enter should set chatHistoryLoading=true when dispatching history load")
+	}
+	if cmd == nil {
+		t.Fatal("ViewTask Enter should return a non-nil cmd (history load)")
+	}
+	if m.focus != ChatPanel {
+		t.Fatalf("ViewTask Enter should focus ChatPanel, got %v", m.focus)
+	}
+}

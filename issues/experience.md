@@ -2612,6 +2612,23 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-182---
+
+## EX-182: Two paths dispatched history load without clearing stale messages
+
+**Observation:** Two code paths dispatched `loadChatHistoryCmd` without the standard `chatMessages = nil` / `chatHistoryLoading = true` clear:
+1. **sidebarKindProject Enter**: when navigating to a project and switching to the Frank/org session, `chatMessages` and `chatMessageIndex` were cleared but `chatHistoryLoading` was NOT set. The loading indicator never appeared; the panel would show blank content briefly.
+2. **ViewTask → Enter to open session**: `loadChatHistoryCmd` was dispatched but `chatMessages` wasn't cleared and `chatHistoryLoading` wasn't set. The task session's messages loaded "in the background" while the previous session's messages remained visible.
+
+**Improvement:** Added the standard clear-and-loading block (`chatMessages = nil`, `chatHistoryLoading = true`, `chatMessageIndex = make(...)`) at both call sites.
+
+**Why it matters:** Inconsistency in the loading state causes visual artifacts: the user sees one session's messages while another session is loading. The `chatHistoryLoading` flag drives the `◌ loading messages...` indicator.
+
+**Effort:** Trivial (three lines each)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
 ---EX-181---
 
 ## EX-181: `switchScope` didn't clear stale chat messages before loading new session history

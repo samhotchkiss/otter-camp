@@ -800,6 +800,9 @@ func (m *Model) handleEnterKey() tea.Cmd {
 						m.activeSession = frankNode.SessionID
 						m.workspace.activeSessionID = frankNode.SessionID
 						m.chatMessages = nil
+						// EX-182: mark as loading so the chat panel shows the loading
+						// indicator while history loads rather than blank content.
+						m.chatHistoryLoading = true
 						m.chatMessageIndex = make(map[string]int)
 						m.chatScrollOffset = 0
 					}
@@ -887,6 +890,11 @@ func (m *Model) handleEnterKey() tea.Cmd {
 					m.statusMessage = "Opened task session."
 				}
 				if m.runtimeHints.LoadChatHistory != nil {
+					// EX-182: clear stale messages so the loading indicator
+					// appears while the task session's history loads.
+					m.chatMessages = nil
+					m.chatHistoryLoading = true
+					m.chatMessageIndex = make(map[string]int)
 					return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
 				}
 				return nil
