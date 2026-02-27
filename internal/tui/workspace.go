@@ -402,6 +402,9 @@ func (w *workspaceState) selectSidebarNode() {
 		node.Expanded = !node.Expanded
 	case sidebarKindTask:
 		w.mainView = ViewTask
+		if node.TaskID != "" {
+			w.selectedTaskID = node.TaskID
+		}
 	case sidebarKindSession:
 		if node.TaskID != "" {
 			w.mainView = ViewTask
@@ -704,7 +707,7 @@ func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskIt
 			delete(w.nodes, id)
 		}
 	}
-	// Add new task nodes
+	// Add new task nodes and populate w.tasks with basic records.
 	for _, task := range tasks {
 		id := "task-" + task.ID
 		w.nodes[id] = &sidebarNode{
@@ -712,7 +715,16 @@ func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskIt
 			Label:      task.Title,
 			Kind:       sidebarKindTask,
 			ParentID:   nodeID,
+			TaskID:     task.ID,
 			WorkStatus: task.WorkStatus,
+		}
+		// Seed basic task record so the TASK DETAIL center pane renders immediately.
+		if _, exists := w.tasks[task.ID]; !exists {
+			w.tasks[task.ID] = &taskRecord{
+				ID:     task.ID,
+				Title:  task.Title,
+				Status: task.WorkStatus,
+			}
 		}
 	}
 	// Mark the project as expanded
