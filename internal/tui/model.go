@@ -1863,6 +1863,24 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 		}
 		index := m.ensureMessage(payload.MessageID, "assistant", event.OccurredAt)
 		m.upsertToolCall(index, strings.TrimSpace(payload.ToolCallID), strings.TrimSpace(payload.Name), strings.TrimSpace(payload.Status))
+	case "chat.message.redacted":
+		// EX-140: replace redacted message content with a placeholder so the
+		// user knows the message was removed rather than seeing stale content.
+		var payload struct {
+			SessionID string `json:"session_id"`
+			MessageID string `json:"message_id"`
+		}
+		if !decodePayload(event.Payload, &payload) {
+			return
+		}
+		if !m.sessionMatchesActive(payload.SessionID) {
+			return
+		}
+		msgID := strings.TrimSpace(payload.MessageID)
+		if idx, ok := m.chatMessageIndex[msgID]; ok {
+			m.chatMessages[idx].Content = "[Redacted]"
+			m.chatMessages[idx].Finalized = true
+		}
 	}
 }
 
@@ -3048,6 +3066,94 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		}
 		if decodePayload(event.Payload, &payload) && m.sessionMatchesActive(payload.SessionID) {
 			m.statusMessage = payload.Message
+		}
+		return nil
+	}
+	// EX-140: project lifecycle — reload sidebar on structural changes (new,
+	// deleted, archived) and reload detail on updates to the current project.
+	if event.EventType == "project.created" {
+		var payload struct {
+			Slug string `json:"slug"`
+		}
+		if decodePayload(event.Payload, &payload) && payload.Slug != "" {
+			m.workspace.activity = appendActivity(m.workspace.activity, "project created: "+payload.Slug)
+		}
+		return loadSidebarDataCmd(m.runtimeHints)
+	}
+	if event.EventType == "project.updated" {
+		var payload struct {
+			ProjectID string `json:"project_id"`
+		}
+		if decodePayload(event.Payload, &payload) &&
+			m.workspace.selectedProjectID != "" &&
+			strings.EqualFold(m.workspace.selectedProjectID, payload.ProjectID) {
+			return loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints)
+		}
+		return nil
+	}
+	if event.EventType == "project.archived" {
+		var payload struct {
+			Slug string `json:"slug"`
+		}
+		if decodePayload(event.Payload, &payload) && payload.Slug != "" {
+			m.workspace.activity = appendActivity(m.workspace.activity, "project archived: "+payload.Slug)
+		}
+		return loadSidebarDataCmd(m.runtimeHints)
+	}
+	if event.EventType == "project.deleted" {
+		var payload struct {
+			Slug string `json:"slug"`
+		}
+		if decodePayload(event.Payload, &payload) && payload.Slug != "" {
+			m.workspace.activity = appendActivity(m.workspace.activity, "project deleted: "+payload.Slug)
+		}
+		return loadSidebarDataCmd(m.runtimeHints)
+	}
+	// EX-140: chat session lifecycle — reload sidebar when sessions are created
+	// (new session node appears) or closed (session archived from sidebar).
+	if event.EventType == "chat.session.created" {
+		return loadSidebarDataCmd(m.runtimeHints)
+	}
+	if event.EventType == "chat.session.closed" {
+		var payload struct {
+			SessionID string `json:"session_id"`
+		}
+		if decodePayload(event.Payload, &payload) && m.sessionMatchesActive(payload.SessionID) {
+			m.workspace.activity = appendActivity(m.workspace.activity, "active session closed")
+		}
+		return loadSidebarDataCmd(m.runtimeHints)
+	}
+	// EX-140: run failure events — surface failures in the status bar so the
+	// user is immediately aware when an agent run fails or is dead-lettered.
+	if event.EventType == "run.failed" {
+		var payload struct {
+			RunID        string `json:"run_id"`
+			FailureClass string `json:"failure_class"`
+			Reason       string `json:"reason"`
+		}
+		if decodePayload(event.Payload, &payload) {
+			reason := payload.Reason
+			if reason == "" {
+				reason = payload.FailureClass
+			}
+			if reason == "" {
+				reason = "unknown reason"
+			}
+			m.statusMessage = "⚠ Run failed: " + truncate(reason, 60)
+		}
+		return nil
+	}
+	if event.EventType == "run.dead_lettered" {
+		var payload struct {
+			RunID        string `json:"run_id"`
+			FailureClass string `json:"failure_class"`
+			LastError    string `json:"last_error"`
+			AttemptCount int    `json:"attempt_count"`
+		}
+		if decodePayload(event.Payload, &payload) {
+			msg := fmt.Sprintf("⚠ Run dead-lettered after %d attempt(s): %s",
+				payload.AttemptCount, truncate(payload.LastError, 50))
+			m.statusMessage = msg
 		}
 		return nil
 	}

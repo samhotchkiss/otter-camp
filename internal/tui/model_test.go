@@ -1889,6 +1889,246 @@ func TestTaskStatusChangedToDoneTriggersProjectDetailReload(t *testing.T) {
 	}
 }
 
+// --- EX-140: project lifecycle, chat session lifecycle, run failures, message redaction ---
+
+func TestProjectCreatedAddsActivityAndReloadsSidebar(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	raw, _ := json.Marshal(map[string]any{"project_id": "proj-1", "slug": "my-project"})
+	updated, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "project.created",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "project created: my-project") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing 'project created: my-project': %v", m.workspace.activity)
+	}
+	if cmd == nil {
+		t.Fatal("project.created should return loadSidebarDataCmd (non-nil cmd)")
+	}
+}
+
+func TestProjectDeletedAddsActivityAndReloadsSidebar(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	raw, _ := json.Marshal(map[string]any{"project_id": "proj-2", "slug": "old-project"})
+	updated, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "project.deleted",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "project deleted: old-project") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing 'project deleted: old-project': %v", m.workspace.activity)
+	}
+	if cmd == nil {
+		t.Fatal("project.deleted should return loadSidebarDataCmd (non-nil cmd)")
+	}
+}
+
+func TestProjectArchivedAddsActivityAndReloadsSidebar(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	raw, _ := json.Marshal(map[string]any{"project_id": "proj-3", "slug": "archived-proj"})
+	updated, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "project.archived",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "project archived: archived-proj") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing 'project archived: archived-proj': %v", m.workspace.activity)
+	}
+	if cmd == nil {
+		t.Fatal("project.archived should return loadSidebarDataCmd (non-nil cmd)")
+	}
+}
+
+func TestProjectUpdatedReloadsDetailForCurrentProject(t *testing.T) {
+	t.Parallel()
+	loadCalled := ""
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjectDetail: func(_ context.Context, id string) (*ProjectDetail, error) {
+			loadCalled = id
+			return &ProjectDetail{}, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.workspace.selectedProjectID = "proj-updated"
+
+	raw, _ := json.Marshal(map[string]any{"project_id": "proj-updated", "slug": "my-proj"})
+	_, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "project.updated",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	if cmd == nil {
+		t.Fatal("project.updated for selected project should return loadProjectDetailCmd")
+	}
+	cmd()
+	if loadCalled != "proj-updated" {
+		t.Fatalf("loadProjectDetail called with %q, want 'proj-updated'", loadCalled)
+	}
+}
+
+func TestProjectUpdatedIgnoredForNonCurrentProject(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.workspace.selectedProjectID = "proj-A"
+
+	raw, _ := json.Marshal(map[string]any{"project_id": "proj-B", "slug": "other"})
+	_, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "project.updated",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	if cmd != nil {
+		t.Fatal("project.updated for non-selected project should return nil cmd")
+	}
+}
+
+func TestRunFailedSetsStatusMessage(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	raw, _ := json.Marshal(map[string]any{
+		"run_id":        "run-1",
+		"failure_class": "transient",
+		"reason":        "connection timeout",
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "run.failed",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	if !strings.Contains(m.statusMessage, "Run failed") {
+		t.Fatalf("statusMessage %q should contain 'Run failed'", m.statusMessage)
+	}
+	if !strings.Contains(m.statusMessage, "connection timeout") {
+		t.Fatalf("statusMessage %q should contain the reason", m.statusMessage)
+	}
+}
+
+func TestRunDeadLetteredSetsStatusMessage(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	raw, _ := json.Marshal(map[string]any{
+		"run_id":        "run-2",
+		"failure_class": "permanent",
+		"last_error":    "max retries exceeded",
+		"attempt_count": 3,
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "run.dead_lettered",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	if !strings.Contains(m.statusMessage, "dead-lettered") {
+		t.Fatalf("statusMessage %q should contain 'dead-lettered'", m.statusMessage)
+	}
+	if !strings.Contains(m.statusMessage, "3") {
+		t.Fatalf("statusMessage %q should contain attempt count", m.statusMessage)
+	}
+}
+
+func TestChatMessageRedactedUpdatesContent(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.activeTurnSessionID = "session-redact-test"
+	model.turnsSynced = true
+	// Add a message to the chat
+	model.chatMessageIndex["msg-redact-1"] = len(model.chatMessages)
+	model.chatMessages = append(model.chatMessages, ChatMessage{
+		ID:        "msg-redact-1",
+		Role:      "assistant",
+		Content:   "sensitive content",
+		Finalized: true,
+	})
+
+	raw, _ := json.Marshal(map[string]any{"session_id": "session-redact-test", "message_id": "msg-redact-1"})
+	updated, _ := model.Update(ChatEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "chat.message.redacted",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	idx, ok := m.chatMessageIndex["msg-redact-1"]
+	if !ok {
+		t.Fatal("message index missing after redaction")
+	}
+	if m.chatMessages[idx].Content != "[Redacted]" {
+		t.Fatalf("content = %q, want '[Redacted]'", m.chatMessages[idx].Content)
+	}
+}
+
+func TestChatMessageRedactedIgnoresNonActiveSession(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.activeTurnSessionID = "session-active"
+	model.turnsSynced = true
+	model.chatMessageIndex["msg-other-1"] = len(model.chatMessages)
+	model.chatMessages = append(model.chatMessages, ChatMessage{
+		ID:      "msg-other-1",
+		Role:    "assistant",
+		Content: "content should stay",
+	})
+
+	raw, _ := json.Marshal(map[string]any{"session_id": "session-other", "message_id": "msg-other-1"})
+	updated, _ := model.Update(ChatEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "chat.message.redacted",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	idx := m.chatMessageIndex["msg-other-1"]
+	if m.chatMessages[idx].Content != "content should stay" {
+		t.Fatalf("content changed for non-active session: %q", m.chatMessages[idx].Content)
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

@@ -2117,3 +2117,34 @@ Additionally, `workspace.go`'s `applyRealtimeEnvelope` had two matching dead-cod
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-140: Project lifecycle, session lifecycle, run failures, and message redaction unhandled
+
+**Observation:** Several server-emitted events had no TUI handlers: `project.created/updated/archived/deleted`, `chat.session.created/closed`, `run.failed`, `run.dead_lettered`, `chat.message.redacted`. These events were previously also blocked by the reducer gap fixed in EX-139 — with the reducer fixed, adding handlers makes them visible.
+
+- Project created/archived/deleted: sidebar needs to reload to show new/missing projects
+- Project updated: if the user is viewing that project's detail, it needs a reload
+- Chat session created/closed: sidebar needs to reload to show the new or archived session
+- Run failed: users need immediate visibility when an agent run fails
+- Run dead-lettered: permanent failure after exhausted retries deserves a prominent warning
+- Chat message redacted: a message removed via API should show `[Redacted]` in the chat view
+
+**Improvement:**
+- `project.created`: appends "project created: slug" to activity log; triggers `loadSidebarDataCmd`
+- `project.archived`: appends "project archived: slug" to activity log; triggers `loadSidebarDataCmd`
+- `project.deleted`: appends "project deleted: slug" to activity log; triggers `loadSidebarDataCmd`
+- `project.updated`: triggers `loadProjectDetailCmd` only if the event's `project_id` matches the currently selected project; no-op otherwise
+- `chat.session.created`: triggers `loadSidebarDataCmd` (new session needs to appear in sidebar)
+- `chat.session.closed`: appends "active session closed" if it's the active session; triggers `loadSidebarDataCmd`
+- `run.failed`: sets statusMessage `"⚠ Run failed: <reason>"` (truncated to 60 chars)
+- `run.dead_lettered`: sets statusMessage `"⚠ Run dead-lettered after N attempt(s): <last_error>"`
+- `chat.message.redacted` (in `applyChatEnvelope`): replaces the message's content with `"[Redacted]"` if the session matches; ignores events for non-active sessions
+- Added all 9 new event types to `knownEventTypes` in `realtime.go`
+
+**Why it matters:** Project lifecycle changes (new sprint, archive old project) and session management are common operations in a team workspace. Without project.created→sidebar reload, users must manually press `r` to see a new project. The run.failed/dead_lettered warnings surface critical agent failures directly in the status bar so users know to investigate. Message redaction compliance means a message removed via the API disappears from the TUI view immediately.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
