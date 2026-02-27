@@ -13,6 +13,27 @@ const (
 	defaultMemorySteadyStateBoundMB = 128
 )
 
+// SidebarChatItem represents a recent chat session for the sidebar.
+type SidebarChatItem struct {
+	SessionID   string
+	DisplayName string
+	UpdatedAt   time.Time
+}
+
+// SidebarProjectItem represents a project for the sidebar.
+type SidebarProjectItem struct {
+	ID          string
+	DisplayName string
+	UpdatedAt   time.Time
+}
+
+// SidebarTaskItem represents an open task under a project in the sidebar.
+type SidebarTaskItem struct {
+	ID         string
+	Title      string
+	WorkStatus string
+}
+
 type RuntimeHints struct {
 	ModifierReliabilityUncertain bool
 	FirstRun                     bool
@@ -23,6 +44,11 @@ type RuntimeHints struct {
 	DisableMemorySampler         bool
 	SendChatMessage              func(ctx context.Context, sessionID, content string) error
 	CancelChatTurn               func(ctx context.Context, sessionID string) error
+	LoadChatHistory              func(ctx context.Context, sessionID string) ([]ChatMessage, error)
+	LoadInboxCount               func(ctx context.Context) (int, error)
+	LoadRecentChats              func(ctx context.Context) ([]SidebarChatItem, error)
+	LoadProjects                 func(ctx context.Context) ([]SidebarProjectItem, error)
+	LoadProjectTasks             func(ctx context.Context, projectID string) ([]SidebarTaskItem, error)
 }
 
 func (h RuntimeHints) now() time.Time {

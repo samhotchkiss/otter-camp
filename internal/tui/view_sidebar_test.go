@@ -9,32 +9,52 @@ import (
 
 func TestSidebarPanelShowsInboxFooterWhenInboxHasItems(t *testing.T) {
 	model := NewModel(DefaultState())
+	// Set inbox count so the INBOX node shows the count.
+	model.workspace.inboxCount = 2
 
 	panel := model.renderSidebarPanel(56, 12, false)
-	if !strings.Contains(panel, "▼ 2 inbox") {
-		t.Fatalf("sidebar inbox footer missing: %q", panel)
+	if !strings.Contains(panel, "INBOX") {
+		t.Fatalf("sidebar INBOX node missing: %q", panel)
+	}
+	if !strings.Contains(panel, "(2)") {
+		t.Fatalf("sidebar INBOX count badge missing: %q", panel)
 	}
 }
 
 func TestSidebarPanelHidesInboxFooterWhenInboxEmpty(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.workspace.inbox = nil
+	model.workspace.inboxCount = 0
 
 	panel := model.renderSidebarPanel(56, 12, false)
-	if strings.Contains(panel, "▼ ") && strings.Contains(panel, " inbox") {
-		t.Fatalf("sidebar inbox footer should be hidden when empty: %q", panel)
+	// INBOX node is always shown; just no count badge.
+	if !strings.Contains(panel, "INBOX") {
+		t.Fatalf("sidebar INBOX node should always be present: %q", panel)
+	}
+	if strings.Contains(panel, "(0)") {
+		t.Fatalf("sidebar INBOX should not show (0) count: %q", panel)
 	}
 }
 
 func TestSidebarPanelTrimsNodesBeforeInboxFooter(t *testing.T) {
 	model := NewModel(DefaultState())
+	// Seed several nodes so that some are trimmed at small height.
+	model.workspace.rebuildSidebar(
+		[]SidebarChatItem{
+			{SessionID: "s1", DisplayName: "Chat 1"},
+			{SessionID: "s2", DisplayName: "Chat 2"},
+			{SessionID: "s3", DisplayName: "Chat 3"},
+		},
+		[]SidebarProjectItem{
+			{ID: "p1", DisplayName: "Project 1"},
+			{ID: "p2", DisplayName: "Project 2"},
+		},
+	)
 
+	// Render at a height that can't fit all nodes.
 	panel := model.renderSidebarPanel(56, 6, false)
-	if !strings.Contains(panel, "▼ 2 inbox") {
-		t.Fatalf("sidebar inbox footer missing in constrained height: %q", panel)
-	}
-	if !strings.Contains(panel, "more") {
-		t.Fatalf("expected truncated sidebar nodes indicator before inbox footer: %q", panel)
+	if !strings.Contains(panel, "+") && !strings.Contains(panel, "more") {
+		t.Fatalf("expected truncated sidebar nodes indicator at constrained height: %q", panel)
 	}
 }
 
@@ -45,10 +65,15 @@ func TestSidebarPanelUsesIconOnlyModeAtMediumNarrowWidths(t *testing.T) {
 	model.setFocus(SidebarPanel)
 
 	panel := model.renderSidebarPanel(56, 12, true)
-	if strings.Contains(panel, "Task 1 / Launch docs") {
+	// In icon-only mode full labels should be replaced with compact tokens.
+	if strings.Contains(panel, "Frank / General") {
 		t.Fatalf("sidebar should not render full session labels in icon-only mode: %q", panel)
 	}
-	if !strings.Contains(panel, "T1") {
-		t.Fatalf("sidebar icon-only mode missing compact task token: %q", panel)
+	// INBOX → "IN", CHATS → "CH"
+	if !strings.Contains(panel, "IN") {
+		t.Fatalf("sidebar icon-only mode missing 'IN' compact token for INBOX: %q", panel)
+	}
+	if !strings.Contains(panel, "CH") {
+		t.Fatalf("sidebar icon-only mode missing 'CH' compact token for CHATS header: %q", panel)
 	}
 }

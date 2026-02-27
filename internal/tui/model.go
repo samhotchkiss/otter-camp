@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -48,8 +49,23 @@ type chatCancelCompletedMsg struct {
 
 // SessionResolvedMsg carries the resolved UUID of the session when a message is sent.
 // Used to filter SSE events by session, preventing cross-session leakage.
+type chatHistoryLoadedMsg struct {
+	Messages []ChatMessage
+}
+
 type SessionResolvedMsg struct {
 	SessionID string
+}
+
+type sidebarDataLoadedMsg struct {
+	InboxCount int
+	Chats      []SidebarChatItem
+	Projects   []SidebarProjectItem
+}
+
+type projectTasksLoadedMsg struct {
+	ProjectID string
+	Tasks     []SidebarTaskItem
 }
 
 const (
@@ -158,12 +174,15 @@ func NewModelWithRuntime(state UIState, runtime RuntimeHints) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	commands := make([]tea.Cmd, 0, 2)
+	commands := make([]tea.Cmd, 0, 4)
 	if m.coldOpenActive {
 		commands = append(commands, coldOpenTimerCmd(m.runtimeHints.coldOpenDuration()))
 	}
 	if !m.runtimeHints.DisableMemorySampler {
 		commands = append(commands, memorySamplerCmd(memorySampleInterval))
+	}
+	if m.runtimeHints.LoadInboxCount != nil || m.runtimeHints.LoadRecentChats != nil || m.runtimeHints.LoadProjects != nil {
+		commands = append(commands, loadSidebarDataCmd(m.runtimeHints))
 	}
 	if len(commands) == 0 {
 		return nil
@@ -198,6 +217,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.proofReplay = true
 			m.workspace.activity = append(m.workspace.activity, "proof-of-life replay synced")
 		}
+		var histCmd tea.Cmd
+		if m.runtimeHints.LoadChatHistory != nil {
+			sessionID := strings.TrimSpace(m.ActiveChatSession())
+			histCmd = loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+		}
+		return m, histCmd
+	case chatHistoryLoadedMsg:
+		if len(typed.Messages) == 0 {
+			return m, nil
+		}
+		// Merge REST history into the local message list:
+		//  - New messages (not in index) are added.
+		//  - Existing messages that are not yet finalized are updated in-place
+		//    with the finalized REST version (handles SSE reconnect mid-turn where
+		//    streaming content was captured but chat.message.finalized was missed).
+		var newMsgs []ChatMessage
+		for _, msg := range typed.Messages {
+			if idx, exists := m.chatMessageIndex[msg.ID]; !exists {
+				newMsgs = append(newMsgs, msg)
+			} else if !m.chatMessages[idx].Finalized && msg.Finalized {
+				m.chatMessages[idx] = msg
+			}
+		}
+		if len(newMsgs) == 0 {
+			return m, nil
+		}
+		combined := append(m.chatMessages, newMsgs...)
+		sort.SliceStable(combined, func(i, j int) bool {
+			return combined[i].Timestamp.Before(combined[j].Timestamp)
+		})
+		m.chatMessages = combined
+		m.chatMessageIndex = make(map[string]int, len(m.chatMessages))
+		for i, msg := range m.chatMessages {
+			m.chatMessageIndex[msg.ID] = i
+		}
+		return m, nil
+	case sidebarDataLoadedMsg:
+		m.workspace.inboxCount = typed.InboxCount
+		m.workspace.rebuildSidebar(typed.Chats, typed.Projects)
+		return m, nil
+	case projectTasksLoadedMsg:
+		m.workspace.setProjectTasks(typed.ProjectID, typed.Tasks)
 		return m, nil
 	case WorkspaceEnvelopeMsg:
 		m.workspace.applyRealtimeEnvelope(typed.Envelope)
@@ -303,15 +364,20 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.applyResponsiveLayout()
 		m.statusMessage = "Focus: " + panelLabel(m.focus)
 		return m, nil
-	case tea.KeyEnter, tea.KeyEsc, tea.KeyBackspace, tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown, tea.KeyHome, tea.KeyEnd:
+	case tea.KeyEnter, tea.KeyEsc, tea.KeyBackspace, tea.KeyUp, tea.KeyDown, tea.KeyLeft, tea.KeyRight, tea.KeyPgUp, tea.KeyPgDown, tea.KeyHome, tea.KeyEnd:
+		if m.focus == SidebarPanel {
+			if handled, cmd := m.handleSidebarControlKey(key); handled {
+				return m, cmd
+			}
+		}
 		if m.focus == ChatPanel {
 			if handled, cmd := m.handleChatControlKey(key); handled {
 				return m, cmd
 			}
 		}
 		if key.Type == tea.KeyEnter {
-			m.handleEnterKey()
-			return m, nil
+			cmd := m.handleEnterKey()
+			return m, cmd
 		}
 		if key.Type == tea.KeyEsc {
 			m.handleEscapeKey()
@@ -321,6 +387,24 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeySpace:
 		if m.focus == ChatPanel {
 			m.chatInput += " "
+			return m, nil
+		}
+		if m.focus == SidebarPanel {
+			node := m.workspace.currentSidebarNode()
+			if node != nil {
+				switch node.Kind {
+				case sidebarKindProject:
+					if node.Expanded {
+						node.Expanded = false
+					} else {
+						node.Expanded = true
+						return m, loadProjectTasksCmd(node.ProjectID, m.runtimeHints)
+					}
+				case sidebarKindHeader:
+					sectionID := sidebarSectionID(strings.TrimPrefix(node.ID, "header-"))
+					m.workspace.sectionCollapsed[sectionID] = !m.workspace.sectionCollapsed[sectionID]
+				}
+			}
 			return m, nil
 		}
 		return m, nil
@@ -372,8 +456,8 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			if handled := m.handleWorkspaceRune(r); handled {
-				return m, nil
+			if handled, cmd := m.handleWorkspaceRune(r); handled {
+				return m, cmd
 			}
 		}
 		if m.focus == ChatPanel && len(key.Runes) > 0 {
@@ -386,20 +470,36 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m *Model) handleEnterKey() {
+func (m *Model) handleEnterKey() tea.Cmd {
 	switch m.focus {
 	case SidebarPanel:
+		node := m.workspace.currentSidebarNode()
 		m.workspace.selectSidebarNode()
 		m.state.LastActiveChatSession = m.workspace.activeSessionID
 		m.activeSession = m.workspace.activeSessionID
 		m.statusMessage = "Sidebar selection applied."
+		if node != nil {
+			switch node.Kind {
+			case sidebarKindSession:
+				// Reload chat history for the newly selected session
+				if m.runtimeHints.LoadChatHistory != nil {
+					m.chatMessages = nil
+					m.chatMessageIndex = make(map[string]int)
+					m.chatScrollOffset = 0
+					return loadChatHistoryCmd(m.workspace.activeSessionID, m.runtimeHints.LoadChatHistory)
+				}
+			case sidebarKindProject:
+				// Load tasks for expanded project
+				return loadProjectTasksCmd(node.ProjectID, m.runtimeHints)
+			}
+		}
 	case MainPanel:
 		if m.workspace.mainView == ViewInbox {
 			if m.workspace.applyInboxAction("open") {
 				m.state.LastActiveChatSession = m.workspace.activeSessionID
 				m.activeSession = m.workspace.activeSessionID
 				m.statusMessage = "Opened inbox item in context."
-				return
+				return nil
 			}
 		}
 		if m.workspace.mainView == ViewTask {
@@ -408,15 +508,16 @@ func (m *Model) handleEnterKey() {
 				m.activeSession = sessionID
 				m.setFocus(ChatPanel)
 				m.statusMessage = "Opened async session."
-				return
+				return nil
 			}
 		}
 		if m.workspace.mainView == ViewProject || m.workspace.mainView == ViewDashboard {
 			m.workspace.setMainView(ViewTask)
 			m.statusMessage = "Opened task detail."
-			return
+			return nil
 		}
 	}
+	return nil
 }
 
 func (m *Model) handleEscapeKey() {
@@ -426,7 +527,7 @@ func (m *Model) handleEscapeKey() {
 	}
 }
 
-func (m *Model) handleWorkspaceRune(r rune) bool {
+func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 	switch r {
 	case 'j':
 		if m.focus == SidebarPanel {
@@ -434,28 +535,32 @@ func (m *Model) handleWorkspaceRune(r rune) bool {
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			m.workspace.moveInbox(1)
 		}
-		return true
+		return true, nil
 	case 'k':
 		if m.focus == SidebarPanel {
 			m.workspace.moveSidebar(-1)
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			m.workspace.moveInbox(-1)
 		}
-		return true
+		return true, nil
 	case 'h':
 		if m.focus == SidebarPanel {
 			m.workspace.collapseSidebarNode()
-			return true
+			return true, nil
 		}
 	case 'l':
 		if m.focus == SidebarPanel {
+			node := m.workspace.currentSidebarNode()
 			m.workspace.expandSidebarNode()
-			return true
+			if node != nil && node.Kind == sidebarKindProject {
+				return true, loadProjectTasksCmd(node.ProjectID, m.runtimeHints)
+			}
+			return true, nil
 		}
 	case 's':
 		if m.focus == MainPanel || m.focus == SidebarPanel {
 			m.toggleSidebar()
-			return true
+			return true, nil
 		}
 	case 'g':
 		if m.focus == SidebarPanel {
@@ -463,50 +568,73 @@ func (m *Model) handleWorkspaceRune(r rune) bool {
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			m.workspace.inboxHome()
 		}
-		return true
+		return true, nil
 	case 'G':
 		if m.focus == SidebarPanel {
 			m.workspace.sidebarEnd()
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			m.workspace.inboxEnd()
 		}
-		return true
+		return true, nil
 	case 'q':
 		// EX-013: 'q' closes the help screen from any non-chat panel
 		if m.workspace.mainView == ViewHelp {
 			m.workspace.setMainView(ViewDashboard)
 			m.statusMessage = "Returned to dashboard."
-			return true
+			return true, nil
 		}
 	case 'r':
 		m.workspace.activity = append(m.workspace.activity,
 			"manual refresh requested at "+m.now().Format("15:04:05"))
 		m.statusMessage = "Refresh requested. Awaiting SSE sync."
-		return true
+		return true, nil
 	case 'a':
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("approve") {
 			m.statusMessage = "Inbox item approved."
-			return true
+			return true, nil
 		}
 	case 'x':
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("reject") {
 			m.statusMessage = "Inbox item rejected."
-			return true
+			return true, nil
 		}
 	case 'f':
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("defer") {
 			m.statusMessage = "Inbox item deferred."
-			return true
+			return true, nil
 		}
 	case 'o':
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("open") {
 			m.state.LastActiveChatSession = m.workspace.activeSessionID
 			m.activeSession = m.workspace.activeSessionID
 			m.statusMessage = "Opened inbox item in context."
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
+}
+
+func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
+	switch key.Type {
+	case tea.KeyUp:
+		m.workspace.moveSidebar(-1)
+		return true, nil
+	case tea.KeyDown:
+		m.workspace.moveSidebar(1)
+		return true, nil
+	case tea.KeyLeft:
+		m.workspace.collapseSidebarNode()
+		return true, nil
+	case tea.KeyRight:
+		node := m.workspace.currentSidebarNode()
+		if node != nil && node.Kind == sidebarKindProject {
+			m.workspace.expandSidebarNode()
+			return true, loadProjectTasksCmd(node.ProjectID, m.runtimeHints)
+		}
+		m.workspace.expandSidebarNode()
+		return true, nil
+	}
+	return false, nil
 }
 
 func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
@@ -1099,28 +1227,39 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 			m.attachToolResult(strings.TrimSpace(payload.ToolCallID), payload.Content)
 			return
 		}
+		// During SSE replay, skip finalized events entirely. History is loaded
+		// from the REST API via LoadChatHistory (triggered by ReplaySyncedMsg).
+		// SSE replay covers all org-level events and would otherwise inject
+		// messages from archived/other sessions into the active chat panel.
 		if !m.turnsSynced {
-			// During replay: load finalized messages directly as conversation history
-			// without requiring an active turn. This builds the chat snapshot cleanly.
-			index := m.ensureMessage(payload.MessageID, payload.Role, event.OccurredAt)
-			if strings.TrimSpace(payload.Content) != "" {
-				m.chatMessages[index].Content = payload.Content
-			}
-			m.chatMessages[index].Finalized = true
 			return
 		}
-		if !m.activeTurn {
+		// In live mode: skip user messages entirely — they are already shown
+		// optimistically via appendMessage("local-user") when the user sends.
+		// Processing them here would (a) create a duplicate entry and (b) call
+		// completeTurnAndPromoteQueue prematurely, resetting activeTurn=false
+		// before the agent turn even begins — which drops streaming chunks.
+		if strings.EqualFold(strings.TrimSpace(payload.Role), "user") {
 			return
 		}
 		if !m.sessionMatchesActive(payload.SessionID) {
 			return
 		}
+		// Always set content — do NOT gate on activeTurn. chat.turn.completed
+		// can arrive before chat.message.finalized and clears activeTurn first,
+		// which would otherwise leave the message with empty content.
 		index := m.ensureMessage(payload.MessageID, payload.Role, event.OccurredAt)
 		if strings.TrimSpace(payload.Content) != "" {
 			m.chatMessages[index].Content = payload.Content
 		}
 		m.chatMessages[index].Finalized = true
-		m.completeTurnAndPromoteQueue("Promoted queued message after finalize.")
+		m.chatScrollOffset = 0 // snap to bottom so the completed message is visible
+		// Only promote the queue if the turn is still marked active; if
+		// chat.turn.completed already fired and cleared activeTurn, the queue
+		// was already promoted there — calling again would double-promote.
+		if m.activeTurn {
+			m.completeTurnAndPromoteQueue("Promoted queued message after finalize.")
+		}
 	case "chat.turn.started":
 		// Ignore historical turn lifecycle events during replay — they would
 		// set activeTurn=true and cause all replayed delta events to stream in.
@@ -1134,6 +1273,7 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 			return
 		}
 		m.activeTurn = true
+		m.chatScrollOffset = 0 // snap to bottom when turn begins
 	case "chat.turn.completed":
 		if !m.turnsSynced {
 			return
@@ -1181,12 +1321,28 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 		}
 		index := m.ensureMessage(payload.MessageID, "assistant", event.OccurredAt)
 		m.upsertToolCall(index, strings.TrimSpace(payload.ToolCallID), strings.TrimSpace(payload.Name), strings.TrimSpace(payload.Status))
+	case "worker.unresponsive":
+		if !m.turnsSynced {
+			return
+		}
+		var payload struct {
+			SessionID string `json:"session_id"`
+			Message   string `json:"message"`
+		}
+		if !decodePayload(event.Payload, &payload) {
+			return
+		}
+		if !m.sessionMatchesActive(payload.SessionID) {
+			return
+		}
+		m.statusMessage = payload.Message
 	}
 }
 
 func (m *Model) completeTurnAndPromoteQueue(promoteStatus string) {
 	m.activeTurn = false
 	m.activeTurnSessionID = ""
+	m.chatScrollOffset = 0 // snap to bottom so the completed response is visible
 	m.finalizePendingAssistantMessages()
 	if len(m.queuedMessages) == 0 {
 		m.statusMessage = ""
@@ -1736,6 +1892,19 @@ func cancelChatTurnCmd(
 	}
 }
 
+func loadChatHistoryCmd(sessionID string, loadFn func(ctx context.Context, sessionID string) ([]ChatMessage, error)) tea.Cmd {
+	return func() tea.Msg {
+		if loadFn == nil {
+			return chatHistoryLoadedMsg{}
+		}
+		messages, err := loadFn(context.Background(), strings.TrimSpace(sessionID))
+		if err != nil || len(messages) == 0 {
+			return chatHistoryLoadedMsg{}
+		}
+		return chatHistoryLoadedMsg{Messages: messages}
+	}
+}
+
 func coldOpenTimerCmd(duration time.Duration) tea.Cmd {
 	return tea.Tick(duration, func(time.Time) tea.Msg {
 		return coldOpenCompleteMsg{}
@@ -1759,4 +1928,46 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func loadSidebarDataCmd(hints RuntimeHints) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		var inboxCount int
+		var chats []SidebarChatItem
+		var projects []SidebarProjectItem
+
+		if hints.LoadInboxCount != nil {
+			n, _ := hints.LoadInboxCount(ctx)
+			inboxCount = n
+		}
+		if hints.LoadRecentChats != nil {
+			c, _ := hints.LoadRecentChats(ctx)
+			chats = c
+		}
+		if hints.LoadProjects != nil {
+			p, _ := hints.LoadProjects(ctx)
+			projects = p
+		}
+
+		return sidebarDataLoadedMsg{
+			InboxCount: inboxCount,
+			Chats:      chats,
+			Projects:   projects,
+		}
+	}
+}
+
+func loadProjectTasksCmd(projectID string, hints RuntimeHints) tea.Cmd {
+	if strings.TrimSpace(projectID) == "" || hints.LoadProjectTasks == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		tasks, _ := hints.LoadProjectTasks(ctx, projectID)
+		return projectTasksLoadedMsg{ProjectID: projectID, Tasks: tasks}
+	}
 }

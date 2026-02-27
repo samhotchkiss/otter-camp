@@ -1,20 +1,20 @@
 ### M board
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
 ╭───────────────────╮╭─────────────────────────────────────────────────────╮╭──────────────────────────────────────────╮
-│ SESSIONS          ││ DASHBOARD                                           ││ General / Fr…  ·  [task] [project] [org] │
-│ ───────────────── ││ ─────────────────────────────────────────────────── ││ ──────────────────────────────────────── │
-│   General / … ✓   ││                                                     ││                                          │
-│ ▾ Project Alpha   ││ Task Board                                          ││             no messages yet              │
-│   › Task 1 / L… ○ ││ TODO (1)        IN PROGRESS (1) DONE (0)            ││        Tab·focus chat  Enter·send        │
-│   › Task 2 / C… ◌ ││ ──────────────  ──────────────  ──────────────      ││                                          │
-│ ▼ 2 inbox         ││   Launch docs    CI hardening                       ││ ╭────────────────────────────────────╮   │
-│ ▼ 2 inbox         ││                                                     ││ │ type a message...                  │   │
-│                   ││ ──────────────────── Inbox  2 ───────────────────── ││ ╰────────────────────────────────────╯   │
-│                   ││ ▸ Approve launch checklist                          ││                                          │
-│                   ││ ▸ Review flaky test quarantine                      ││                                          │
+│ INBOX             ││ DASHBOARD                                           ││ General / Fr…  ·  [task] [project] [org] │
+│ ▾ CHATS           ││ ─────────────────────────────────────────────────── ││ ──────────────────────────────────────── │
+│   Frank / Gene…   ││                                                     ││                                          │
+│ ▾ PROJECTS        ││ Task Board                                          ││             no messages yet              │
+│                   ││ TODO (0)        IN PROGRESS (0) DONE (0)            ││        Tab·focus chat  Enter·send        │
+│                   ││ ──────────────  ──────────────  ──────────────      ││                                          │
+│                   ││                                                     ││ ╭────────────────────────────────────╮   │
+│                   ││ ──────────────────── Activity ───────────────────── ││ │ type a message...                  │   │
+│                   ││   ✓ workspace booted                                ││ ╰────────────────────────────────────╯   │
 │                   ││                                                     ││                                          │
-│                   ││ ──────────────────── Activity ───────────────────── ││                                          │
-│                   ││   ✓ workspace booted                                ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
 │                   ││                                                     ││                                          │
 │                   ││                                                     ││                                          │
 │                   ││                                                     ││                                          │
@@ -27,26 +27,26 @@
 │                   ││                                                     ││                                          │
 │                   ││                                                     ││                                          │
 ╰───────────────────╯╰─────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  M/main  ·  snapshot 
+ ○  disconnected  ·  Frank  ·  M/main  ·  snapshot                                                                      
 Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### M chat
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
 ╭───────────────────╮╭─────────────────────────────────────────────────────╮╭──────────────────────────────────────────╮
-│ SESSIONS          ││ DASHBOARD                                           ││ General / Fr…  ·  [task] [project] [org] │
-│ ───────────────── ││ ─────────────────────────────────────────────────── ││ ──────────────────────────────────────── │
-│   General / … ✓   ││                                                     ││                                          │
-│ ▾ Project Alpha   ││ Task Board                                          ││             no messages yet              │
-│   › Task 1 / L… ○ ││ TODO (1)        IN PROGRESS (1) DONE (0)            ││        Tab·focus chat  Enter·send        │
-│   › Task 2 / C… ◌ ││ ──────────────  ──────────────  ──────────────      ││                                          │
-│ ▼ 2 inbox         ││   Launch docs    CI hardening                       ││ ╭────────────────────────────────────╮   │
-│ ▼ 2 inbox         ││                                                     ││ │ type a message...                  │   │
-│                   ││ ──────────────────── Inbox  2 ───────────────────── ││ ╰────────────────────────────────────╯   │
-│                   ││ ▸ Approve launch checklist                          ││                                          │
-│                   ││ ▸ Review flaky test quarantine                      ││                                          │
+│ INBOX             ││ DASHBOARD                                           ││ General / Fr…  ·  [task] [project] [org] │
+│ ▾ CHATS           ││ ─────────────────────────────────────────────────── ││ ──────────────────────────────────────── │
+│   Frank / Gene…   ││                                                     ││                                          │
+│ ▾ PROJECTS        ││ Task Board                                          ││             no messages yet              │
+│                   ││ TODO (0)        IN PROGRESS (0) DONE (0)            ││        Tab·focus chat  Enter·send        │
+│                   ││ ──────────────  ──────────────  ──────────────      ││                                          │
+│                   ││                                                     ││ ╭────────────────────────────────────╮   │
+│                   ││ ──────────────────── Activity ───────────────────── ││ │ type a message...                  │   │
+│                   ││   ✓ workspace booted                                ││ ╰────────────────────────────────────╯   │
 │                   ││                                                     ││                                          │
-│                   ││ ──────────────────── Activity ───────────────────── ││                                          │
-│                   ││   ✓ workspace booted                                ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
 │                   ││                                                     ││                                          │
 │                   ││                                                     ││                                          │
 │                   ││                                                     ││                                          │
@@ -59,26 +59,26 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │                   ││                                                     ││                                          │
 │                   ││                                                     ││                                          │
 ╰───────────────────╯╰─────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  M/main  ·  snapshot 
+ ○  disconnected  ·  Frank  ·  M/main  ·  snapshot                                                                      
 Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### M inbox
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
 ╭───────────────────╮╭─────────────────────────────────────────────────────╮╭──────────────────────────────────────────╮
-│ SESSIONS          ││ DASHBOARD                                           ││ General / Fr…  ·  [task] [project] [org] │
-│ ───────────────── ││ ─────────────────────────────────────────────────── ││ ──────────────────────────────────────── │
-│   General / … ✓   ││                                                     ││                                          │
-│ ▾ Project Alpha   ││ Task Board                                          ││             no messages yet              │
-│   › Task 1 / L… ○ ││ TODO (1)        IN PROGRESS (1) DONE (0)            ││        Tab·focus chat  Enter·send        │
-│   › Task 2 / C… ◌ ││ ──────────────  ──────────────  ──────────────      ││                                          │
-│ ▼ 2 inbox         ││   Launch docs    CI hardening                       ││ ╭────────────────────────────────────╮   │
-│ ▼ 2 inbox         ││                                                     ││ │ type a message...                  │   │
-│                   ││ ──────────────────── Inbox  2 ───────────────────── ││ ╰────────────────────────────────────╯   │
-│                   ││ ▸ Approve launch checklist                          ││                                          │
-│                   ││ ▸ Review flaky test quarantine                      ││                                          │
+│ INBOX             ││ DASHBOARD                                           ││ General / Fr…  ·  [task] [project] [org] │
+│ ▾ CHATS           ││ ─────────────────────────────────────────────────── ││ ──────────────────────────────────────── │
+│   Frank / Gene…   ││                                                     ││                                          │
+│ ▾ PROJECTS        ││ Task Board                                          ││             no messages yet              │
+│                   ││ TODO (0)        IN PROGRESS (0) DONE (0)            ││        Tab·focus chat  Enter·send        │
+│                   ││ ──────────────  ──────────────  ──────────────      ││                                          │
+│                   ││                                                     ││ ╭────────────────────────────────────╮   │
+│                   ││ ──────────────────── Activity ───────────────────── ││ │ type a message...                  │   │
+│                   ││   ✓ workspace booted                                ││ ╰────────────────────────────────────╯   │
 │                   ││                                                     ││                                          │
-│                   ││ ──────────────────── Activity ───────────────────── ││                                          │
-│                   ││   ✓ workspace booted                                ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
+│                   ││                                                     ││                                          │
 │                   ││                                                     ││                                          │
 │                   ││                                                     ││                                          │
 │                   ││                                                     ││                                          │
@@ -91,5 +91,5 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │                   ││                                                     ││                                          │
 │                   ││                                                     ││                                          │
 ╰───────────────────╯╰─────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  M/main  ·  snapshot 
+ ○  disconnected  ·  Frank  ·  M/main  ·  snapshot                                                                      
 Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help

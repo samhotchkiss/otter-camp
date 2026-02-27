@@ -5,21 +5,23 @@
 │ ───────────────────────────────────────────────────────────────── │
 │                                                                   │
 │ Task Board                                                        │
-│ TODO (1)            IN PROGRESS (1)     DONE (0)                  │
+│ TODO (0)            IN PROGRESS (0)     DONE (0)                  │
 │ ──────────────────  ──────────────────  ──────────────────        │
-│   Launch docs        CI hardening                                 │
-│                                                                   │
-│ ─────────────────────────── Inbox  2 ──────────────────────────── │
-│ ▸ Approve launch checklist                                        │
-│ ▸ Review flaky test quarantine                                    │
 │                                                                   │
 │ ─────────────────────────── Activity ──────────────────────────── │
 │   ✓ workspace booted                                              │
 │                                                                   │
 │                                                                   │
 │                                                                   │
+│                                                                   │
+│                                                                   │
+│                                                                   │
+│                                                                   │
+│                                                                   │
 ╰───────────────────────────────────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
+ ○  disconnected  ·  Frank  ·  XS/main  ·  snapshot  ·  Hidden       
+ panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or      
+ :focus chat)                                                        
 Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### XS chat
@@ -29,21 +31,23 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │ ───────────────────────────────────────────────────────────────── │
 │                                                                   │
 │ Task Board                                                        │
-│ TODO (1)            IN PROGRESS (1)     DONE (0)                  │
+│ TODO (0)            IN PROGRESS (0)     DONE (0)                  │
 │ ──────────────────  ──────────────────  ──────────────────        │
-│   Launch docs        CI hardening                                 │
-│                                                                   │
-│ ─────────────────────────── Inbox  2 ──────────────────────────── │
-│ ▸ Approve launch checklist                                        │
-│ ▸ Review flaky test quarantine                                    │
 │                                                                   │
 │ ─────────────────────────── Activity ──────────────────────────── │
 │   ✓ workspace booted                                              │
 │                                                                   │
 │                                                                   │
 │                                                                   │
+│                                                                   │
+│                                                                   │
+│                                                                   │
+│                                                                   │
+│                                                                   │
 ╰───────────────────────────────────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
+ ○  disconnected  ·  Frank  ·  XS/main  ·  snapshot  ·  Hidden       
+ panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or      
+ :focus chat)                                                        
 Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### XS inbox
@@ -53,19 +57,21 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │ ───────────────────────────────────────────────────────────────── │
 │                                                                   │
 │ Task Board                                                        │
-│ TODO (1)            IN PROGRESS (1)     DONE (0)                  │
+│ TODO (0)            IN PROGRESS (0)     DONE (0)                  │
 │ ──────────────────  ──────────────────  ──────────────────        │
-│   Launch docs        CI hardening                                 │
-│                                                                   │
-│ ─────────────────────────── Inbox  2 ──────────────────────────── │
-│ ▸ Approve launch checklist                                        │
-│ ▸ Review flaky test quarantine                                    │
 │                                                                   │
 │ ─────────────────────────── Activity ──────────────────────────── │
 │   ✓ workspace booted                                              │
 │                                                                   │
 │                                                                   │
 │                                                                   │
+│                                                                   │
+│                                                                   │
+│                                                                   │
+│                                                                   │
+│                                                                   │
 ╰───────────────────────────────────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  XS/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or :focus chat) 
+ ○  disconnected  ·  Frank  ·  XS/main  ·  snapshot  ·  Hidden       
+ panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or      
+ :focus chat)                                                        
 Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help

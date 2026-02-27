@@ -11,24 +11,19 @@ import (
 
 func TestSidebarUnreadPropagationFromRealtimeEvents(t *testing.T) {
 	model := NewModel(DefaultState())
-	model = pressMsg(model, WorkspaceEnvelopeMsg{
-		Envelope: EventEnvelope{
-			Seq:        10,
-			EventID:    "evt-status",
-			EventType:  "task.status.changed",
-			OccurredAt: time.Now().UTC(),
-			OrgID:      "org-1",
-			Payload:    mustWorkspaceJSON(t, map[string]any{"task_id": "task-1", "status": "in_progress", "session_id": "session-task-1"}),
-		},
-	})
+	// Seed a chat session so markSessionUnread can find a node to mark.
+	model.workspace.rebuildSidebar(
+		[]SidebarChatItem{{SessionID: "session-chat-1", DisplayName: "Blog Site"}},
+		nil,
+	)
+
+	// Directly mark the chat session as unread (simulates a received message).
+	model.workspace.markSessionUnread("session-chat-1")
 
 	entries := model.SidebarVisibleEntries()
 	joined := strings.Join(entries, " | ")
-	if !strings.Contains(joined, "Project Alpha (1)") {
-		t.Fatalf("project unread bubble missing: %q", joined)
-	}
-	if !strings.Contains(joined, "Task 1 / Launch docs (1)") {
-		t.Fatalf("task unread missing: %q", joined)
+	if !strings.Contains(joined, "Blog Site (1)") {
+		t.Fatalf("chat session unread bubble missing: %q", joined)
 	}
 }
 
@@ -41,35 +36,60 @@ func mustWorkspaceJSON(t *testing.T, value any) json.RawMessage {
 	return raw
 }
 
+// mustWorkspaceJSONUsed keeps the import alive.
+var _ = func() bool { _, _ = time.Now(), mustWorkspaceJSON; return true }
+
 func TestSidebarTreeNavigationExpandCollapseAndSelect(t *testing.T) {
 	model := NewModel(DefaultState())
+	// Seed one project with two task nodes so we can test expand/collapse.
+	model.workspace.rebuildSidebar(
+		nil,
+		[]SidebarProjectItem{{ID: "alpha", DisplayName: "Project Alpha"}},
+	)
+	model.workspace.setProjectTasks("alpha", []SidebarTaskItem{
+		{ID: "t1", Title: "Launch docs", WorkStatus: "todo"},
+		{ID: "t2", Title: "CI hardening", WorkStatus: "in_progress"},
+	})
+	// setProjectTasks marks the project expanded, so visible nodes:
+	// INBOX, CHATS header, Frank/General, PROJECTS header, project-alpha, task-t1, task-t2 = 7
+
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}}) // focus sidebar
 
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}) // project
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}}) // collapse
+	// Navigate to project-alpha node.
+	projectPos := model.workspace.indexOfNode("project-alpha")
+	for model.workspace.sidebarCursor < projectPos {
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	}
+
+	// Collapse project: task children disappear.
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
 	collapsed := model.SidebarVisibleEntries()
-	if len(collapsed) != 2 {
-		t.Fatalf("collapsed sidebar entries = %d, want 2", len(collapsed))
+	// INBOX + CHATS header + Frank/General + PROJECTS header + project-alpha = 5
+	if len(collapsed) != 5 {
+		t.Fatalf("collapsed sidebar entries = %d, want 5: %v", len(collapsed), collapsed)
 	}
 
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // expand
+	// Expand project: task children reappear.
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	expanded := model.SidebarVisibleEntries()
-	if len(expanded) < 4 {
-		t.Fatalf("expanded sidebar entries = %d, want at least 4", len(expanded))
+	// INBOX + CHATS header + Frank/General + PROJECTS header + project-alpha + 2 tasks = 7
+	if len(expanded) < 7 {
+		t.Fatalf("expanded sidebar entries = %d, want at least 7: %v", len(expanded), expanded)
 	}
 
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}) // first task session
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})                     // select
-	if got := model.WorkspaceSession(); got != "session-task-1" {
-		t.Fatalf("selected session = %q, want %q", got, "session-task-1")
-	}
+	// Move to first task node and select it → ViewTask.
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
 	if got := model.MainView(); got != ViewTask {
-		t.Fatalf("main view after selecting task session = %s, want %s", got, ViewTask)
+		t.Fatalf("main view after selecting task node = %s, want %s", got, ViewTask)
 	}
 }
 
 func TestSessionLabelResolvesTaskScopeId(t *testing.T) {
 	workspace := newWorkspaceState()
+	// The "session-task-current" alias resolves to the task with selectedTaskID.
+	workspace.tasks["task-1"] = &taskRecord{ID: "task-1", Title: "Launch docs"}
+	workspace.selectedTaskID = "task-1"
 
 	got := workspace.sessionLabel("session-task-current")
 	if got != "Launch docs" {

@@ -99,6 +99,11 @@ func TestChatInputAcceptsMultiRuneEvents(t *testing.T) {
 
 func TestSlashSearchMainPanelEnterKeepsFilter(t *testing.T) {
 	model := NewModel(DefaultState())
+	// Seed tasks so the dashboard has content to filter
+	model.workspace.tasks["task-1"] = &taskRecord{ID: "task-1", Title: "Launch docs", Status: "todo"}
+	model.workspace.tasks["task-2"] = &taskRecord{ID: "task-2", Title: "CI hardening", Status: "in_progress"}
+	model.workspace.taskOrder = []string{"task-1", "task-2"}
+
 	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}}) // main
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
@@ -131,6 +136,11 @@ func TestSlashSearchMainPanelEnterKeepsFilter(t *testing.T) {
 
 func TestSlashSearchMainPanelEscClearsFilter(t *testing.T) {
 	model := NewModel(DefaultState())
+	// Seed tasks so the dashboard has content to filter
+	model.workspace.tasks["task-1"] = &taskRecord{ID: "task-1", Title: "Launch docs", Status: "todo"}
+	model.workspace.tasks["task-2"] = &taskRecord{ID: "task-2", Title: "CI hardening", Status: "in_progress"}
+	model.workspace.taskOrder = []string{"task-1", "task-2"}
+
 	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}}) // main
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
@@ -154,27 +164,38 @@ func TestSlashSearchMainPanelEscClearsFilter(t *testing.T) {
 
 func TestSlashSearchSidebarFiltersSessions(t *testing.T) {
 	model := NewModel(DefaultState())
+	// Seed chat nodes so the sidebar has sessions to filter
+	model.workspace.nodes["chat-abc"] = &sidebarNode{
+		ID: "chat-abc", Label: "Blog Site", Kind: sidebarKindSession, SessionID: "sess-abc",
+	}
+	model.workspace.nodes["chat-def"] = &sidebarNode{
+		ID: "chat-def", Label: "Project Alpha", Kind: sidebarKindSession, SessionID: "sess-def",
+	}
+	model.workspace.topLevel = append(model.workspace.topLevel[:3], append(
+		[]string{"chat-abc", "chat-def"}, model.workspace.topLevel[3:]...,
+	)...)
+
 	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}}) // sidebar
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	for _, r := range []rune("Task 2") {
+	for _, r := range []rune("Blog") {
 		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
 
 	sidebar := model.renderSidebarPanel(56, 14, true)
-	if !strings.Contains(sidebar, "Task 2 / CI hardening") {
-		t.Fatalf("filtered sidebar missing Task 2 session: %q", sidebar)
+	if !strings.Contains(sidebar, "Blog Site") {
+		t.Fatalf("filtered sidebar missing Blog Site: %q", sidebar)
 	}
-	if strings.Contains(sidebar, "Task 1 / Launch docs") {
-		t.Fatalf("filtered sidebar should hide Task 1 session: %q", sidebar)
+	if strings.Contains(sidebar, "Project Alpha") {
+		t.Fatalf("filtered sidebar should hide Project Alpha: %q", sidebar)
 	}
 
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
 	if model.searchMode {
 		t.Fatalf("search mode should exit on Enter")
 	}
-	if got := model.sidebarFilter; got != "Task 2" {
-		t.Fatalf("sidebar filter after Enter = %q, want %q", got, "Task 2")
+	if got := model.sidebarFilter; got != "Blog" {
+		t.Fatalf("sidebar filter after Enter = %q, want %q", got, "Blog")
 	}
 }
 
@@ -369,8 +390,8 @@ func TestFrankJumpCtrlGPreservesMainViewAndHighlightsGeneral(t *testing.T) {
 		t.Fatalf("main view changed on Ctrl-G = %s, want %s", got, ViewTask)
 	}
 	entries := model.SidebarVisibleEntries()
-	if len(entries) == 0 || !strings.HasPrefix(entries[0], "> General / Frank") {
-		t.Fatalf("first sidebar entry = %v, want active General / Frank", entries)
+	if len(entries) == 0 || !strings.HasPrefix(entries[0], "> Frank / General") {
+		t.Fatalf("first sidebar entry = %v, want active Frank / General", entries)
 	}
 }
 
@@ -584,6 +605,16 @@ func TestTaskDetailViewShowsExtendedFieldsAndFullEventLog(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.workspace.setMainView(ViewTask)
 	model.workspace.selectedTaskID = "task-1"
+	model.workspace.tasks["task-1"] = &taskRecord{
+		ID:                 "task-1",
+		Title:              "Launch docs",
+		Description:        "Doc launch requirements.",
+		AcceptanceCriteria: "Approved.",
+		Subtasks:           []string{"Draft checklist"},
+		SessionID:          "session-task-1",
+		Status:             "todo",
+		Flow:               1,
+	}
 	model.workspace.tasks["task-1"].History = []string{
 		"created",
 		"owner=frank",
@@ -613,6 +644,13 @@ func TestEnterOnTaskDetailOpensAsyncSession(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.focus = MainPanel
 	model.workspace.setMainView(ViewTask)
+	model.workspace.tasks["task-2"] = &taskRecord{
+		ID:        "task-2",
+		Title:     "CI hardening",
+		SessionID: "session-task-2",
+		Status:    "in_progress",
+	}
+	model.workspace.taskSessionIDs["task-2"] = "session-task-2"
 	model.workspace.selectedTaskID = "task-2"
 	model.workspace.activeSessionID = generalSessionID
 	model.activeSession = generalSessionID
@@ -669,10 +707,19 @@ func pressKey(model Model, key tea.KeyMsg) Model {
 }
 
 func moveToTaskSession(model Model) Model {
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+	// Directly set a non-general task session so MainView == ViewTask.
+	// Simulating key navigation is fragile since the sidebar structure has changed.
+	model.workspace.tasks["test-task"] = &taskRecord{
+		ID:        "test-task",
+		Title:     "Test Task",
+		SessionID: "session-task-test",
+		Status:    "todo",
+	}
+	model.workspace.taskSessionIDs["test-task"] = "session-task-test"
+	model.workspace.selectedTaskID = "test-task"
+	model.workspace.activeSessionID = "session-task-test"
+	model.activeSession = "session-task-test"
+	model.workspace.setMainView(ViewTask)
 	return model
 }
 

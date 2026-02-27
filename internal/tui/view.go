@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -261,47 +262,22 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 
 	var lines []string
 
-	// Title — with optional unread total badge (EX-012)
-	titleColor := colMuted
-	if focused {
-		titleColor = colFocus
-	}
-	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render("SESSIONS")
-	unreadTotal := 0
-	for _, node := range m.workspace.nodes {
-		if node.Kind == sidebarKindSession {
-			unreadTotal += node.Unread
-		}
-	}
-	if unreadTotal > 0 {
-		title += " " + styleUnread.Render(fmt.Sprintf("(%d)", unreadTotal))
-	}
-	lines = append(lines, title)
-	lines = append(lines, styleDivider.Render(strings.Repeat("─", cw)))
-
-	// Sidebar nodes
+	// Sidebar nodes — INBOX / CHATS / PROJECTS sections
 	iconOnly := m.sidebarIconOnlyMode()
 	visible := m.workspace.visibleSidebarIDs()
 	visible = m.filteredSidebarIDs(visible, m.sidebarFilter)
-	inboxFooter := ""
-	if n := len(m.workspace.inbox); n > 0 {
-		inboxFooter = styleMuted.Render(fmt.Sprintf("▼ %d inbox", n))
-	}
 
-	// Rows below title+divider are split between nodes, optional "+N more", and optional inbox footer.
-	rowsForBody := innerH - 2
+	// Reserve rows for search bar if active
+	rowsForBody := innerH
+	searchLine := m.renderSearchBar(SidebarPanel, cw)
+	if searchLine != "" {
+		rowsForBody -= 2 // blank line + search bar
+	}
 	if rowsForBody < 0 {
 		rowsForBody = 0
 	}
-	rowsForNodesAndMore := rowsForBody
-	if inboxFooter != "" {
-		rowsForNodesAndMore--
-	}
-	if rowsForNodesAndMore < 0 {
-		rowsForNodesAndMore = 0
-	}
 
-	maxNodeLines := rowsForNodesAndMore
+	maxNodeLines := rowsForBody
 	if len(visible) > maxNodeLines && maxNodeLines > 0 {
 		maxNodeLines--
 	}
@@ -319,22 +295,13 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 		}
 		lines = append(lines, m.renderSidebarNode(node, i == m.workspace.sidebarCursor, cw, iconOnly))
 	}
-	if remaining := len(visible) - maxNodeLines; remaining > 0 && rowsForNodesAndMore > 0 {
+	if remaining := len(visible) - maxNodeLines; remaining > 0 && rowsForBody > 0 {
 		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more", remaining)))
-	}
-	if inboxFooter != "" {
-		lines = append(lines, inboxFooter)
 	}
 
-	if searchLine := m.renderSearchBar(SidebarPanel, cw); searchLine != "" {
+	if searchLine != "" {
 		lines = append(lines, "")
 		lines = append(lines, searchLine)
-	}
-	if remaining := len(visible) - maxNodeLines; remaining > 0 && rowsForNodesAndMore > 0 {
-		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more", remaining)))
-	}
-	if inboxFooter != "" {
-		lines = append(lines, inboxFooter)
 	}
 
 	// Fill remaining space
@@ -349,16 +316,40 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 
 	var prefix, label string
 	switch node.Kind {
+	case sidebarKindInbox:
+		label = "INBOX"
+		if m.workspace.inboxCount > 0 {
+			label += fmt.Sprintf("  (%d)", m.workspace.inboxCount)
+		}
+		prefix = ""
+	case sidebarKindHeader:
+		sectionID := sidebarSectionID(strings.TrimPrefix(node.ID, "header-"))
+		if m.workspace.sectionCollapsed[sectionID] {
+			prefix = "▸ "
+		} else {
+			prefix = "▾ "
+		}
+		label = node.Label
 	case sidebarKindProject:
 		if node.Expanded {
-			prefix = "▾ "
+			prefix = "  ▾ "
 		} else {
-			prefix = "▸ "
+			prefix = "  ▸ "
+		}
+		label = node.Label
+	case sidebarKindTask:
+		switch node.WorkStatus {
+		case "done", "approved":
+			prefix = "    ✓ "
+		case "in_progress":
+			prefix = "    ◌ "
+		default:
+			prefix = "    ○ "
 		}
 		label = node.Label
 	case sidebarKindSession:
 		if node.ParentID != "" {
-			prefix = "  › "
+			prefix = "    › "
 		} else {
 			prefix = "  "
 		}
@@ -366,23 +357,6 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 	}
 	if iconOnly {
 		label = compactSidebarLabel(node)
-	}
-
-	// EX-018: task status icon for task-linked sessions
-	var statusBadge string
-	if node.Kind == sidebarKindSession && node.TaskID != "" {
-		if task := m.workspace.tasks[node.TaskID]; task != nil {
-			switch task.Status {
-			case "todo":
-				statusBadge = " " + styleMuted.Render("○")
-			case "in_progress":
-				statusBadge = " " + styleReconnecting.Render("◌")
-			case "done", "approved":
-				statusBadge = " " + styleConnected.Render("●")
-			case "blocked", "rejected":
-				statusBadge = " " + styleDisconnected.Render("⚠")
-			}
-		}
 	}
 
 	var unreadSuffix string
@@ -393,20 +367,29 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 	line := prefix + label
 
 	var rendered string
-	switch {
-	case cursor && isActive:
-		// EX-010: show ✓ check to distinguish active+cursor from cursor-only
-		check := " " + styleConnected.Render("✓")
-		rendered = styleSelected.Render(truncate(line, width-4)) + check
-	case cursor:
-		rendered = styleSelected.Render(truncate(line, width-2))
-	case isActive:
-		rendered = styleActive.Render(truncate(line, width-2))
+	switch node.Kind {
+	case sidebarKindHeader, sidebarKindInbox:
+		if cursor {
+			rendered = styleSelected.Render(truncate(line, width-2))
+		} else {
+			rendered = styleBold.Render(truncate(line, width-2))
+		}
 	default:
-		rendered = styleText.Render(truncate(line, width-2))
+		switch {
+		case cursor && isActive:
+			// show ✓ check to distinguish active+cursor from cursor-only
+			check := " " + styleConnected.Render("✓")
+			rendered = styleSelected.Render(truncate(line, width-4)) + check
+		case cursor:
+			rendered = styleSelected.Render(truncate(line, width-2))
+		case isActive:
+			rendered = styleActive.Render(truncate(line, width-2))
+		default:
+			rendered = styleText.Render(truncate(line, width-2))
+		}
 	}
 
-	return rendered + statusBadge + unreadSuffix
+	return rendered + unreadSuffix
 }
 
 func (m Model) filteredSidebarIDs(visible []string, rawQuery string) []string {
@@ -419,6 +402,11 @@ func (m Model) filteredSidebarIDs(visible []string, rawQuery string) []string {
 	for _, id := range visible {
 		node := m.workspace.nodes[id]
 		if node == nil {
+			continue
+		}
+		// Always keep structural anchors
+		if node.Kind == sidebarKindHeader || node.Kind == sidebarKindInbox {
+			include[id] = struct{}{}
 			continue
 		}
 		if matchesFilter(node.Label, query) {
@@ -461,8 +449,18 @@ func compactSidebarLabel(node *sidebarNode) string {
 	if node == nil {
 		return ""
 	}
-	if node.Kind == sidebarKindProject {
+	switch node.Kind {
+	case sidebarKindInbox:
+		return "IN"
+	case sidebarKindHeader:
+		if len(node.Label) >= 2 {
+			return strings.ToUpper(node.Label[:2])
+		}
+		return strings.ToUpper(node.Label)
+	case sidebarKindProject:
 		return "PRJ"
+	case sidebarKindTask:
+		return "TSK"
 	}
 	if node.TaskID != "" {
 		suffix := strings.TrimPrefix(strings.ToLower(node.TaskID), "task-")
@@ -688,42 +686,68 @@ func buildColumnSep(width int) string {
 func (m Model) renderProjectView(width, maxLines int) []string {
 	var lines []string
 	lines = append(lines, "")
-	query := normalizedFilterQuery(m.mainFilter)
-	for _, id := range m.workspace.topLevel {
-		node := m.workspace.nodes[id]
-		if node == nil || node.Kind != sidebarKindProject {
-			continue
-		}
-		children := m.workspace.projectChildren(id)
-		hasMatch := matchesFilter(node.Label, query)
-		if !hasMatch && query != "" {
-			for _, cid := range children {
-				child := m.workspace.nodes[cid]
-				if child != nil && matchesFilter(child.Label, query) {
-					hasMatch = true
-					break
-				}
-			}
-		}
-		if !hasMatch {
-			continue
-		}
-		icon := "▸ "
-		if node.Expanded {
-			icon = "▾ "
-		}
-		lines = append(lines, lipgloss.NewStyle().Foreground(colFocus).Bold(true).Render(icon+node.Label))
-		for _, cid := range children {
-			child := m.workspace.nodes[cid]
-			if child == nil {
+
+	// Find the selected project node
+	projectNodeID := "project-" + m.workspace.selectedProjectID
+	node := m.workspace.nodes[projectNodeID]
+	if node == nil {
+		// Fall back to showing all projects in a list
+		query := normalizedFilterQuery(m.mainFilter)
+		for _, id := range m.workspace.topLevel {
+			n := m.workspace.nodes[id]
+			if n == nil || n.Kind != sidebarKindProject {
 				continue
 			}
-			if !matchesFilter(child.Label, query) {
+			if !matchesFilter(n.Label, query) {
 				continue
 			}
-			lines = append(lines, styleText.Render("    › "+truncate(child.Label, width-8)))
+			icon := "▸ "
+			if n.Expanded {
+				icon = "▾ "
+			}
+			lines = append(lines, lipgloss.NewStyle().Foreground(colFocus).Bold(true).Render(icon+n.Label))
+		}
+		return lines
+	}
+
+	// Show selected project detail with tasks
+	titleStyle := lipgloss.NewStyle().Foreground(colFocus).Bold(true)
+	lines = append(lines, titleStyle.Render(node.Label))
+	lines = append(lines, styleDivider.Render(strings.Repeat("─", maxInt(1, width))))
+
+	// Open tasks
+	children := m.workspace.projectChildren(projectNodeID)
+	openTasks := make([]*sidebarNode, 0, len(children))
+	for _, cid := range children {
+		child := m.workspace.nodes[cid]
+		if child == nil || child.Kind != sidebarKindTask {
+			continue
+		}
+		if child.WorkStatus == "done" || child.WorkStatus == "approved" {
+			continue
+		}
+		openTasks = append(openTasks, child)
+	}
+
+	lines = append(lines, "")
+	if len(openTasks) == 0 {
+		lines = append(lines, styleMuted.Render("  No open tasks."))
+	} else {
+		lines = append(lines, styleLabel.Render(fmt.Sprintf("OPEN TASKS (%d)", len(openTasks))))
+		for _, task := range openTasks {
+			var icon string
+			switch task.WorkStatus {
+			case "in_progress":
+				icon = "◌ "
+			default:
+				icon = "○ "
+			}
+			statusLabel := styleMuted.Render(task.WorkStatus)
+			taskLine := "  " + icon + truncate(task.Label, width-20)
+			lines = append(lines, styleText.Render(taskLine)+"  "+statusLabel)
 		}
 	}
+
 	return lines
 }
 
@@ -1045,11 +1069,11 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	if msgAreaH < 1 {
 		msgAreaH = 1
 	}
-	msgLines, scrollOffset, scrollMax := chatViewportLines(m.renderChatMessages(cw), msgAreaH, m.chatScrollOffset)
+	msgLines, scrollOffset, _ := chatViewportLines(m.renderChatMessages(cw), msgAreaH, m.chatScrollOffset)
 
-	// Show scroll indicator when not at the bottom
-	if scrollMax > 0 && scrollOffset < scrollMax {
-		scrollHint := fmt.Sprintf("↓ %d more · PgDn to scroll", scrollMax-scrollOffset)
+	// Show scroll indicator when user has scrolled up (newer messages are below)
+	if scrollOffset > 0 {
+		scrollHint := fmt.Sprintf("↓ %d more · PgDn to scroll", scrollOffset)
 		bottomLines = append([]string{lipgloss.NewStyle().
 			Foreground(colMuted).Italic(true).
 			Width(cw).Align(lipgloss.Center).
@@ -1168,12 +1192,18 @@ func (m Model) renderChatMessages(width int) []string {
 		}
 		lines = append(lines, styleDivider.Render(strings.Repeat("─", width)))
 
-		// Message content — word-wrapped
+		// Message content
 		content := strings.TrimSpace(msg.Content)
 		if content != "" {
-			wrapped := wrapText(content, width)
-			for _, wl := range wrapped {
-				lines = append(lines, styleText.Render(wl))
+			if msg.Finalized && msg.Role == "assistant" {
+				// Render markdown for finalized assistant messages.
+				// Streaming messages use plain text to avoid flicker mid-response.
+				lines = append(lines, renderMarkdown(content, width)...)
+			} else {
+				wrapped := wrapText(content, width)
+				for _, wl := range wrapped {
+					lines = append(lines, styleText.Render(wl))
+				}
 			}
 		}
 
@@ -1401,6 +1431,7 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 
 	return lipgloss.NewStyle().
 		Background(colStatusBg).
+		Width(layout.contentSize).
 		Padding(0, 1).
 		Render(bar)
 }
@@ -1472,6 +1503,32 @@ func truncate(s string, maxLen int) string {
 		return string(runes[:maxLen])
 	}
 	return string(runes[:maxLen-1]) + "…"
+}
+
+// renderMarkdown renders markdown-formatted text using glamour and returns
+// the output as individual lines ready to append to the chat view.
+// Falls back to plain wrapText on any error.
+func renderMarkdown(content string, width int) []string {
+	if width < 10 {
+		return wrapText(content, width)
+	}
+	r, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return wrapText(content, width)
+	}
+	rendered, err := r.Render(content)
+	if err != nil {
+		return wrapText(content, width)
+	}
+	// Glamour adds a trailing newline; trim it and split into lines.
+	rendered = strings.TrimRight(rendered, "\n")
+	if rendered == "" {
+		return nil
+	}
+	return strings.Split(rendered, "\n")
 }
 
 func wrapText(text string, width int) []string {

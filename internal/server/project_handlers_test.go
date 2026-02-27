@@ -249,3 +249,7 @@ func (f *fakeProjectService) DisableSchedule(context.Context, uuid.UUID) (*proje
 func (f *fakeProjectService) DeleteSchedule(context.Context, uuid.UUID) error {
 	return repo.ErrNotFound
 }
+
+func (f *fakeProjectService) Archive(_ context.Context, _, _ uuid.UUID) (*projectsvc.Project, error) {
+	return nil, repo.ErrNotFound
+}

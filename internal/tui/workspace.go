@@ -37,20 +37,32 @@ type sidebarKind string
 const (
 	sidebarKindSession sidebarKind = "session"
 	sidebarKindProject sidebarKind = "project"
+	sidebarKindInbox   sidebarKind = "inbox"
+	sidebarKindHeader  sidebarKind = "header"
+	sidebarKindTask    sidebarKind = "task"
 
 	generalSidebarNodeID = "session-general"
 	generalSessionID     = "session-org-general"
 )
 
+type sidebarSectionID string
+
+const (
+	sectionChats    sidebarSectionID = "chats"
+	sectionProjects sidebarSectionID = "projects"
+)
+
 type sidebarNode struct {
-	ID        string
-	Label     string
-	Kind      sidebarKind
-	ParentID  string
-	Expanded  bool
-	Unread    int
-	SessionID string
-	TaskID    string
+	ID         string
+	Label      string
+	Kind       sidebarKind
+	ParentID   string
+	Expanded   bool
+	Unread     int
+	SessionID  string
+	TaskID     string
+	ProjectID  string
+	WorkStatus string
 }
 
 type taskRecord struct {
@@ -84,6 +96,10 @@ type workspaceState struct {
 	topLevel      []string
 	sidebarCursor int
 
+	sectionCollapsed  map[sidebarSectionID]bool
+	inboxCount        int
+	selectedProjectID string
+
 	tasks          map[string]*taskRecord
 	taskOrder      []string
 	taskSessionIDs map[string]string
@@ -101,85 +117,44 @@ type workspaceState struct {
 
 func newWorkspaceState() workspaceState {
 	nodes := map[string]*sidebarNode{
+		"inbox": {
+			ID:    "inbox",
+			Kind:  sidebarKindInbox,
+			Label: "INBOX",
+		},
+		"header-chats": {
+			ID:    "header-chats",
+			Kind:  sidebarKindHeader,
+			Label: "CHATS",
+		},
 		generalSidebarNodeID: {
 			ID:        generalSidebarNodeID,
-			Label:     "General / Frank",
+			Label:     "Frank / General",
 			Kind:      sidebarKindSession,
 			SessionID: generalSessionID,
 		},
-		"project-alpha": {
-			ID:       "project-alpha",
-			Label:    "Project Alpha",
-			Kind:     sidebarKindProject,
-			Expanded: true,
-		},
-		"session-alpha-task-1": {
-			ID:        "session-alpha-task-1",
-			Label:     "Task 1 / Launch docs",
-			Kind:      sidebarKindSession,
-			ParentID:  "project-alpha",
-			SessionID: "session-task-1",
-			TaskID:    "task-1",
-		},
-		"session-alpha-task-2": {
-			ID:        "session-alpha-task-2",
-			Label:     "Task 2 / CI hardening",
-			Kind:      sidebarKindSession,
-			ParentID:  "project-alpha",
-			SessionID: "session-task-2",
-			TaskID:    "task-2",
-		},
-	}
-
-	tasks := map[string]*taskRecord{
-		"task-1": {
-			ID:                 "task-1",
-			Title:              "Launch docs",
-			Description:        "Document launch requirements, rollout checklist, and operator handoff notes.",
-			AcceptanceCriteria: "Checklist approved and linked from release runbook.",
-			Subtasks:           []string{"Draft launch checklist", "Add rollback section", "Request reviewer sign-off"},
-			SessionID:          "session-task-1",
-			Status:             "todo",
-			Flow:               1,
-			History:            []string{"created"},
-		},
-		"task-2": {
-			ID:                 "task-2",
-			Title:              "CI hardening",
-			Description:        "Stabilize flaky tests and enforce deterministic retry limits in CI.",
-			AcceptanceCriteria: "Flaky quarantine documented and nightly pipeline green for 3 consecutive runs.",
-			Subtasks:           []string{"Identify flaky suites", "Tune retry/backoff", "Publish CI runbook update"},
-			SessionID:          "session-task-2",
-			Status:             "in_progress",
-			Flow:               2,
-			History:            []string{"created"},
+		"header-projects": {
+			ID:    "header-projects",
+			Kind:  sidebarKindHeader,
+			Label: "PROJECTS",
 		},
 	}
 
 	return workspaceState{
-		mainView:      ViewDashboard,
-		nodes:         nodes,
-		topLevel:      []string{generalSidebarNodeID, "project-alpha"},
-		sidebarCursor: 0,
-		tasks:         tasks,
-		taskOrder:     []string{"task-1", "task-2"},
-		taskSessionIDs: map[string]string{
-			"task-1": "session-task-1",
-			"task-2": "session-task-2",
-		},
-		selectedTaskID: "task-1",
-		inbox: []inboxItem{
-			{ID: "inbox-1", TaskID: "task-1", Summary: "Approve launch checklist"},
-			{ID: "inbox-2", TaskID: "task-2", Summary: "Review flaky test quarantine"},
-		},
-		activity: []string{"workspace booted"},
-		agents:   []string{"Frank=online", "Lori=idle", "Ellie=online"},
-		mergeQueue: []string{
-			"PR#1496 task-104",
-			"PR#1500 task-106",
-		},
-		schedules:       []string{"daily standup 09:00", "nightly regression 01:00"},
-		activeSessionID: generalSessionID,
+		mainView:         ViewDashboard,
+		nodes:            nodes,
+		topLevel:         []string{"inbox", "header-chats", generalSidebarNodeID, "header-projects"},
+		sidebarCursor:    0,
+		sectionCollapsed: map[sidebarSectionID]bool{},
+		tasks:            map[string]*taskRecord{},
+		taskOrder:        []string{},
+		taskSessionIDs:   map[string]string{},
+		inbox:            []inboxItem{},
+		activity:         []string{"workspace booted"},
+		agents:           []string{},
+		mergeQueue:       []string{},
+		schedules:        []string{},
+		activeSessionID:  generalSessionID,
 	}
 }
 
@@ -194,14 +169,28 @@ func (w *workspaceState) setMainView(view MainView) {
 
 func (w *workspaceState) visibleSidebarIDs() []string {
 	visible := make([]string, 0, len(w.nodes))
+	sectionHidden := false
 	for _, id := range w.topLevel {
 		node := w.nodes[id]
 		if node == nil {
 			continue
 		}
-		visible = append(visible, node.ID)
+		if node.Kind == sidebarKindHeader {
+			sectionID := sidebarSectionID(strings.TrimPrefix(id, "header-"))
+			sectionHidden = w.sectionCollapsed[sectionID]
+			visible = append(visible, id)
+			continue
+		}
+		if node.Kind == sidebarKindInbox {
+			visible = append(visible, id)
+			continue
+		}
+		if sectionHidden {
+			continue
+		}
+		visible = append(visible, id)
 		if node.Kind == sidebarKindProject && node.Expanded {
-			children := w.projectChildren(node.ID)
+			children := w.projectChildren(id)
 			visible = append(visible, children...)
 		}
 	}
@@ -327,6 +316,11 @@ func (w *workspaceState) collapseSidebarNode() {
 		node.Expanded = false
 		return
 	}
+	if node.Kind == sidebarKindHeader {
+		sectionID := sidebarSectionID(strings.TrimPrefix(node.ID, "header-"))
+		w.sectionCollapsed[sectionID] = true
+		return
+	}
 	if node.ParentID != "" {
 		visible := w.visibleSidebarIDs()
 		for i, id := range visible {
@@ -343,8 +337,12 @@ func (w *workspaceState) expandSidebarNode() {
 	if node == nil {
 		return
 	}
-	if node.Kind == sidebarKindProject {
+	switch node.Kind {
+	case sidebarKindProject:
 		node.Expanded = true
+	case sidebarKindHeader:
+		sectionID := sidebarSectionID(strings.TrimPrefix(node.ID, "header-"))
+		w.sectionCollapsed[sectionID] = false
 	}
 }
 
@@ -354,8 +352,17 @@ func (w *workspaceState) selectSidebarNode() {
 		return
 	}
 	switch node.Kind {
+	case sidebarKindInbox:
+		w.mainView = ViewInbox
+	case sidebarKindHeader:
+		sectionID := sidebarSectionID(strings.TrimPrefix(node.ID, "header-"))
+		w.sectionCollapsed[sectionID] = !w.sectionCollapsed[sectionID]
 	case sidebarKindProject:
 		w.mainView = ViewProject
+		w.selectedProjectID = node.ProjectID
+		node.Expanded = !node.Expanded
+	case sidebarKindTask:
+		w.mainView = ViewTask
 	case sidebarKindSession:
 		if node.TaskID != "" {
 			w.mainView = ViewTask
@@ -563,6 +570,121 @@ func (w *workspaceState) advanceTaskFlow(taskID string, step int) {
 	}
 	task.Flow = step
 	task.History = append(task.History, fmt.Sprintf("flow=%d", step))
+}
+
+// rebuildSidebar replaces the sidebar nodes/topLevel with real API data.
+// It preserves expanded state for existing project nodes and keeps any task
+// nodes that were already loaded.
+func (w *workspaceState) rebuildSidebar(chats []SidebarChatItem, projects []SidebarProjectItem) {
+	// Preserve expanded state for existing projects
+	expandedProjects := make(map[string]bool)
+	for id, node := range w.nodes {
+		if node.Kind == sidebarKindProject {
+			expandedProjects[id] = node.Expanded
+		}
+	}
+	// Preserve existing task nodes
+	taskNodes := make(map[string]*sidebarNode)
+	for id, node := range w.nodes {
+		if node.Kind == sidebarKindTask {
+			taskNodes[id] = node
+		}
+	}
+
+	frankNode := w.nodes[generalSidebarNodeID]
+	if frankNode == nil {
+		frankNode = &sidebarNode{
+			ID:        generalSidebarNodeID,
+			Label:     "Frank / General",
+			Kind:      sidebarKindSession,
+			SessionID: generalSessionID,
+		}
+	}
+
+	newNodes := map[string]*sidebarNode{
+		"inbox":              {ID: "inbox", Label: "INBOX", Kind: sidebarKindInbox},
+		"header-chats":       {ID: "header-chats", Label: "CHATS", Kind: sidebarKindHeader},
+		generalSidebarNodeID: frankNode,
+		"header-projects":    {ID: "header-projects", Label: "PROJECTS", Kind: sidebarKindHeader},
+	}
+
+	newTopLevel := []string{"inbox", "header-chats", generalSidebarNodeID}
+
+	// Recent chats (up to 4, exclude org-scope which is Frank)
+	for i, chat := range chats {
+		if i >= 4 {
+			break
+		}
+		id := "chat-" + chat.SessionID
+		newNodes[id] = &sidebarNode{
+			ID:        id,
+			Label:     chat.DisplayName,
+			Kind:      sidebarKindSession,
+			SessionID: chat.SessionID,
+		}
+		newTopLevel = append(newTopLevel, id)
+	}
+
+	newTopLevel = append(newTopLevel, "header-projects")
+
+	// Projects
+	for _, proj := range projects {
+		id := "project-" + proj.ID
+		newNodes[id] = &sidebarNode{
+			ID:        id,
+			Label:     proj.DisplayName,
+			Kind:      sidebarKindProject,
+			ProjectID: proj.ID,
+			Expanded:  expandedProjects[id],
+		}
+		newTopLevel = append(newTopLevel, id)
+		// Re-add previously loaded task children for this project
+		for taskID, task := range taskNodes {
+			if task.ParentID == id {
+				newNodes[taskID] = task
+			}
+		}
+	}
+
+	w.nodes = newNodes
+	w.topLevel = newTopLevel
+}
+
+// setProjectTasks replaces the task children for the given project ID.
+// It also marks the project as expanded.
+func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskItem) {
+	nodeID := "project-" + projectID
+	// Remove existing task nodes for this project
+	for id, node := range w.nodes {
+		if node.Kind == sidebarKindTask && node.ParentID == nodeID {
+			delete(w.nodes, id)
+		}
+	}
+	// Add new task nodes
+	for _, task := range tasks {
+		id := "task-" + task.ID
+		w.nodes[id] = &sidebarNode{
+			ID:         id,
+			Label:      task.Title,
+			Kind:       sidebarKindTask,
+			ParentID:   nodeID,
+			WorkStatus: task.WorkStatus,
+		}
+	}
+	// Mark the project as expanded
+	if proj, ok := w.nodes[nodeID]; ok {
+		proj.Expanded = true
+	}
+}
+
+// indexOfNode returns the visible index of the given node ID, or 0 if not found.
+func (w *workspaceState) indexOfNode(nodeID string) int {
+	for i, id := range w.visibleSidebarIDs() {
+		if id == nodeID {
+			return i
+		}
+	}
+	return 0
 }
 
 func (w *workspaceState) applyRealtimeEnvelope(event EventEnvelope) {

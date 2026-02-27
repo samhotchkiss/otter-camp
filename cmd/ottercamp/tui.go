@@ -6,8 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -81,6 +83,98 @@ func runTUICommand(args []string) int {
 	if serverURL != "" && apiKey != "" {
 		apiClient, err := newCLIAPIClient(serverURL, apiKey)
 		if err == nil {
+			runtimeHints.LoadInboxCount = func(ctx context.Context) (int, error) {
+				var resp struct {
+					Meta struct {
+						Total int `json:"total"`
+					} `json:"meta"`
+				}
+				if err := apiClient.request(ctx, "GET", "/v1/inbox?is_acted=false&limit=1", nil, &resp); err != nil {
+					return 0, err
+				}
+				return resp.Meta.Total, nil
+			}
+			runtimeHints.LoadRecentChats = func(ctx context.Context) ([]tuiapp.SidebarChatItem, error) {
+				sessions, err := apiClient.ListChatSessions(ctx, chatListSessionsFilter{
+					Status: "active",
+					Limit:  10,
+				})
+				if err != nil {
+					return nil, err
+				}
+				out := make([]tuiapp.SidebarChatItem, 0, 4)
+				for _, s := range sessions.Data {
+					if strings.EqualFold(s.ScopeType, "organization") {
+						continue // Frank/General is always shown separately
+					}
+					name := ""
+					if s.Title != nil {
+						name = strings.TrimSpace(*s.Title)
+					}
+					if name == "" {
+						name = s.ScopeType + " session"
+					}
+					updatedAt := s.CreatedAt
+					if s.LastMessageAt != nil {
+						updatedAt = *s.LastMessageAt
+					}
+					out = append(out, tuiapp.SidebarChatItem{
+						SessionID:   s.ID.String(),
+						DisplayName: name,
+						UpdatedAt:   updatedAt,
+					})
+					if len(out) >= 4 {
+						break
+					}
+				}
+				return out, nil
+			}
+			runtimeHints.LoadProjects = func(ctx context.Context) ([]tuiapp.SidebarProjectItem, error) {
+				var resp struct {
+					Data []struct {
+						ID          string    `json:"id"`
+						DisplayName string    `json:"display_name"`
+						UpdatedAt   time.Time `json:"updated_at"`
+					} `json:"data"`
+				}
+				if err := apiClient.request(ctx, "GET", "/v1/projects?limit=50", nil, &resp); err != nil {
+					return nil, err
+				}
+				out := make([]tuiapp.SidebarProjectItem, 0, len(resp.Data))
+				for _, p := range resp.Data {
+					out = append(out, tuiapp.SidebarProjectItem{
+						ID:          p.ID,
+						DisplayName: p.DisplayName,
+						UpdatedAt:   p.UpdatedAt,
+					})
+				}
+				return out, nil
+			}
+			runtimeHints.LoadProjectTasks = func(ctx context.Context, projectID string) ([]tuiapp.SidebarTaskItem, error) {
+				var resp struct {
+					Data []struct {
+						ID         string `json:"id"`
+						Title      string `json:"title"`
+						WorkStatus string `json:"work_status"`
+					} `json:"data"`
+				}
+				path := "/v1/projects/" + url.PathEscape(projectID) + "/tasks?limit=10"
+				if err := apiClient.request(ctx, "GET", path, nil, &resp); err != nil {
+					return nil, err
+				}
+				out := make([]tuiapp.SidebarTaskItem, 0, len(resp.Data))
+				for _, t := range resp.Data {
+					if t.WorkStatus == "done" || t.WorkStatus == "approved" || t.WorkStatus == "cancelled" {
+						continue
+					}
+					out = append(out, tuiapp.SidebarTaskItem{
+						ID:         t.ID,
+						Title:      t.Title,
+						WorkStatus: t.WorkStatus,
+					})
+				}
+				return out, nil
+			}
 			runtimeHints.SendChatMessage = func(ctx context.Context, sessionID, content string) error {
 				resolvedID, resolveErr := resolveTUIChatSessionID(ctx, apiClient, sessionID)
 				if resolveErr != nil {
@@ -100,6 +194,38 @@ func runTUICommand(args []string) int {
 					return resolveErr
 				}
 				return apiClient.CancelChatTurn(ctx, resolvedID)
+			}
+			runtimeHints.LoadChatHistory = func(ctx context.Context, sessionID string) ([]tuiapp.ChatMessage, error) {
+				resolvedID, resolveErr := resolveTUIChatSessionID(ctx, apiClient, sessionID)
+				if resolveErr != nil {
+					return nil, resolveErr
+				}
+				result, err := apiClient.ListChatMessages(ctx, resolvedID, chatListMessagesFilter{Limit: 200})
+				if err != nil {
+					return nil, err
+				}
+				out := make([]tuiapp.ChatMessage, 0, len(result.Data))
+				for _, m := range result.Data {
+					role := strings.ToLower(strings.TrimSpace(m.Role))
+					if role == "tool_result" || role == "tool_calls" {
+						continue
+					}
+					content := m.Content
+					if m.IsRedacted {
+						content = "[redacted]"
+					}
+					if strings.TrimSpace(content) == "" {
+						continue
+					}
+					out = append(out, tuiapp.ChatMessage{
+						ID:        m.ID.String(),
+						Role:      m.Role,
+						Content:   content,
+						Finalized: true,
+						Timestamp: m.CreatedAt,
+					})
+				}
+				return out, nil
 			}
 		}
 	}

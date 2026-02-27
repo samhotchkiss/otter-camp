@@ -5,16 +5,16 @@
 │ ──────────────────────────────────────────────── ││ ────────────────────────────────── │
 │                                                  ││                                    │
 │ Task Board                                       ││          no messages yet           │
-│ TODO (1)       IN PROGRE… (1) DONE (0)           ││     Tab·focus chat  Enter·send     │
+│ TODO (0)       IN PROGRE… (0) DONE (0)           ││     Tab·focus chat  Enter·send     │
 │ ─────────────  ─────────────  ─────────────      ││                                    │
-│   Launch docs   CI hardening                     ││ ╭──────────────────────────────╮   │
-│                                                  ││ │ type a message...            │   │
-│ ─────────────────── Inbox  2 ─────────────────── ││ ╰──────────────────────────────╯   │
-│ ▸ Approve launch checklist                       ││                                    │
-│ ▸ Review flaky test quarantine                   ││                                    │
+│                                                  ││ ╭──────────────────────────────╮   │
+│ ─────────────────── Activity ─────────────────── ││ │ type a message...            │   │
+│   ✓ workspace booted                             ││ ╰──────────────────────────────╯   │
 │                                                  ││                                    │
-│ ─────────────────── Activity ─────────────────── ││                                    │
-│   ✓ workspace booted                             ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
 │                                                  ││                                    │
 │                                                  ││                                    │
 │                                                  ││                                    │
@@ -27,7 +27,8 @@
 │                                                  ││                                    │
 │                                                  ││                                    │
 ╰──────────────────────────────────────────────────╯╰────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
+ ○  disconnected  ·  Frank  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or 
+ :focus sidebar)                                                                          
 Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### S chat
@@ -37,16 +38,16 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │ ──────────────────────────────────────────────── ││ ────────────────────────────────── │
 │                                                  ││                                    │
 │ Task Board                                       ││          no messages yet           │
-│ TODO (1)       IN PROGRE… (1) DONE (0)           ││     Tab·focus chat  Enter·send     │
+│ TODO (0)       IN PROGRE… (0) DONE (0)           ││     Tab·focus chat  Enter·send     │
 │ ─────────────  ─────────────  ─────────────      ││                                    │
-│   Launch docs   CI hardening                     ││ ╭──────────────────────────────╮   │
-│                                                  ││ │ type a message...            │   │
-│ ─────────────────── Inbox  2 ─────────────────── ││ ╰──────────────────────────────╯   │
-│ ▸ Approve launch checklist                       ││                                    │
-│ ▸ Review flaky test quarantine                   ││                                    │
+│                                                  ││ ╭──────────────────────────────╮   │
+│ ─────────────────── Activity ─────────────────── ││ │ type a message...            │   │
+│   ✓ workspace booted                             ││ ╰──────────────────────────────╯   │
 │                                                  ││                                    │
-│ ─────────────────── Activity ─────────────────── ││                                    │
-│   ✓ workspace booted                             ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
 │                                                  ││                                    │
 │                                                  ││                                    │
 │                                                  ││                                    │
@@ -59,7 +60,8 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │                                                  ││                                    │
 │                                                  ││                                    │
 ╰──────────────────────────────────────────────────╯╰────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
+ ○  disconnected  ·  Frank  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or 
+ :focus sidebar)                                                                          
 Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### S inbox
@@ -69,16 +71,16 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │ ──────────────────────────────────────────────── ││ ────────────────────────────────── │
 │                                                  ││                                    │
 │ Task Board                                       ││          no messages yet           │
-│ TODO (1)       IN PROGRE… (1) DONE (0)           ││     Tab·focus chat  Enter·send     │
+│ TODO (0)       IN PROGRE… (0) DONE (0)           ││     Tab·focus chat  Enter·send     │
 │ ─────────────  ─────────────  ─────────────      ││                                    │
-│   Launch docs   CI hardening                     ││ ╭──────────────────────────────╮   │
-│                                                  ││ │ type a message...            │   │
-│ ─────────────────── Inbox  2 ─────────────────── ││ ╰──────────────────────────────╯   │
-│ ▸ Approve launch checklist                       ││                                    │
-│ ▸ Review flaky test quarantine                   ││                                    │
+│                                                  ││ ╭──────────────────────────────╮   │
+│ ─────────────────── Activity ─────────────────── ││ │ type a message...            │   │
+│   ✓ workspace booted                             ││ ╰──────────────────────────────╯   │
 │                                                  ││                                    │
-│ ─────────────────── Activity ─────────────────── ││                                    │
-│   ✓ workspace booted                             ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
+│                                                  ││                                    │
 │                                                  ││                                    │
 │                                                  ││                                    │
 │                                                  ││                                    │
@@ -91,20 +93,21 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │                                                  ││                                    │
 │                                                  ││                                    │
 ╰──────────────────────────────────────────────────╯╰────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or :focus sidebar) 
+ ○  disconnected  ·  Frank  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or 
+ :focus sidebar)                                                                          
 Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### S board-sidebar-focus
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivit…
 ╭──────────────────────────────────╮╭────────────────────────────────────────────────────╮
-│ SESSIONS                         ││ General / Frank  ·  [task] [project] [org]         │
-│ ──────────────────────────────── ││ ────────────────────────────────────────────────── │
-│   General / Frank ✓              ││                                                    │
-│ ▾ Project Alpha                  ││                  no messages yet                   │
-│   › Task 1 / Launch docs ○       ││             Tab·focus chat  Enter·send             │
-│   › Task 2 / CI hardening ◌      ││                                                    │
-│ ▼ 2 inbox                        ││ ╭──────────────────────────────────────────────╮   │
-│ ▼ 2 inbox                        ││ │ type a message...                            │   │
+│ INBOX                            ││ General / Frank  ·  [task] [project] [org]         │
+│ ▾ CHATS                          ││ ────────────────────────────────────────────────── │
+│   Frank / General                ││                                                    │
+│ ▾ PROJECTS                       ││                  no messages yet                   │
+│                                  ││             Tab·focus chat  Enter·send             │
+│                                  ││                                                    │
+│                                  ││ ╭──────────────────────────────────────────────╮   │
+│                                  ││ │ type a message...                            │   │
 │                                  ││ ╰──────────────────────────────────────────────╯   │
 │                                  ││                                                    │
 │                                  ││                                                    │
@@ -123,5 +126,6 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │                                  ││                                                    │
 │                                  ││                                                    │
 ╰──────────────────────────────────╯╰────────────────────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  S/sidebar  ·  snapshot  ·  Hidden panes: main hidden (2 or :focus main) 
+ ○  disconnected  ·  Frank  ·  S/sidebar  ·  snapshot  ·  Hidden panes: main hidden (2 or 
+ :focus main)                                                                             
 Help: j/k navigate · Enter select session · h/l collapse/expand · s toggle sidebar · 1/2/3 focus panel · : commands · ? help

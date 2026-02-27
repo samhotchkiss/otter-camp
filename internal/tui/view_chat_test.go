@@ -61,6 +61,9 @@ func TestChatPanelKeepsInputVisibleWithLongHistory(t *testing.T) {
 
 func TestChatHeaderShowsAllScopeLevel(t *testing.T) {
 	model := NewModel(DefaultState())
+	// Seed a selected task so "session-task-current" resolves to a title.
+	model.workspace.tasks["task-current"] = &taskRecord{ID: "task-current", Title: "Current Task"}
+	model.workspace.selectedTaskID = "task-current"
 	model.switchScope(ScopeTask)
 
 	panel := model.renderChatPanel(80, 20, true)
@@ -75,8 +78,8 @@ func TestChatHeaderShowsAllScopeLevel(t *testing.T) {
 
 	model.switchScope(ScopeOrg)
 	panel = model.renderChatPanel(80, 20, true)
-	if !strings.Contains(panel, "General / Frank") {
-		t.Fatalf("org scope header regressed, missing General / Frank: %q", panel)
+	if !strings.Contains(panel, "Frank / General") {
+		t.Fatalf("org scope header regressed, missing Frank / General: %q", panel)
 	}
 }
 
