@@ -819,7 +819,7 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			default:
 				icon = "○ "
 			}
-			statusLabel := styleMuted.Render(task.WorkStatus)
+			statusLabel := styleMuted.Render(formatTaskStatus(task.WorkStatus))
 			taskLine := "  " + icon + truncate(task.Title, width-20)
 			lines = append(lines, styleText.Render(taskLine)+"  "+statusLabel)
 		}
