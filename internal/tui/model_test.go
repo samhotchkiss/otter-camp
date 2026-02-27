@@ -3247,3 +3247,79 @@ func TestQueuedMessageIsDispatchedToServerOnTurnCompletion(t *testing.T) {
 		t.Fatal("queued message was promoted but SendChatMessage was never called (EX-163 regression)")
 	}
 }
+
+// EX-164: :scope command should dispatch loadChatHistoryCmd (previously the
+// returned cmd from switchScope was silently discarded).
+func TestScopeCommandDispatchesChatHistoryReload(t *testing.T) {
+	t.Parallel()
+	loaded := false
+	// Use a proper UUID-format ID so looksLikeUUID returns true.
+	sessionID := "00000000-0000-0000-0000-000000000164"
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, sid string) ([]ChatMessage, error) {
+			if sid == sessionID {
+				loaded = true
+			}
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	// Seed a task session so ScopeTask resolves to a real UUID.
+	if model.workspace.tasks == nil {
+		model.workspace.tasks = make(map[string]*taskRecord)
+	}
+	model.workspace.tasks["task-ex164"] = &taskRecord{ID: "task-ex164", SessionID: sessionID}
+	model.workspace.selectedTaskID = "task-ex164"
+	model.activeSession = sessionID
+
+	// Directly exercise executeCommand to avoid full char-by-char simulation.
+	returned := model.executeCommand(":scope task")
+	if returned == nil {
+		t.Fatal(":scope task should return a non-nil cmd (history reload), but got nil")
+	}
+	runNonTimerCmds(returned)
+	if !loaded {
+		t.Fatal(":scope task did not call LoadChatHistory (EX-164 regression)")
+	}
+}
+
+// EX-165: Ctrl-G / :frank should reload chat history after switching from
+// another session. Previously jumpToFrankSession returned void, so chatMessages
+// was never cleared or refreshed.
+func TestJumpToFrankSessionReloadsChatHistory(t *testing.T) {
+	t.Parallel()
+	// Use a proper UUID-format ID so looksLikeUUID returns true.
+	frankSessionID := "00000000-0000-0000-0000-000000000165"
+	loaded := false
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, sid string) ([]ChatMessage, error) {
+			if sid == frankSessionID {
+				loaded = true
+			}
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	// Seed the general session node in the sidebar so activateGeneralSession works.
+	if model.workspace.nodes == nil {
+		model.workspace.nodes = make(map[string]*sidebarNode)
+	}
+	model.workspace.nodes[generalSidebarNodeID] = &sidebarNode{
+		ID:        generalSidebarNodeID,
+		Kind:      sidebarKindSession,
+		SessionID: frankSessionID,
+	}
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
+	m := updated.(Model)
+	if m.activeSession != frankSessionID {
+		t.Fatalf("Ctrl-G should set activeSession to frank session %q, got %q", frankSessionID, m.activeSession)
+	}
+	if cmd == nil {
+		t.Fatal("Ctrl-G should return a non-nil cmd (history reload)")
+	}
+	runNonTimerCmds(cmd)
+	if !loaded {
+		t.Fatal("Ctrl-G did not call LoadChatHistory for Frank session (EX-165 regression)")
+	}
+}

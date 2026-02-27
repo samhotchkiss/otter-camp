@@ -572,8 +572,8 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.statusMessage = "Exiting TUI."
 		return m, tea.Quit
 	case tea.KeyCtrlG:
-		m.jumpToFrankSession("Ctrl-G")
-		return m, nil
+		// EX-165: jumpToFrankSession now returns a cmd to reload chat history.
+		return m, m.jumpToFrankSession("Ctrl-G")
 	case tea.KeyCtrlP:
 		m.enterCommandMode()
 		return m, nil
@@ -659,8 +659,8 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if r == '0' && !m.chatTextInputActive() {
-				m.jumpToFrankSession("0")
-				return m, nil
+				// EX-165: use the returned cmd to reload history.
+				return m, m.jumpToFrankSession("0")
 			}
 
 			if panel, ok := panelFromShortcut(key.Alt, r); ok {
@@ -1424,8 +1424,8 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlG:
 		m.commandMode = false
 		m.commandBuffer = ""
-		m.jumpToFrankSession("Ctrl-G")
-		return m, nil
+		// EX-165: use the returned cmd to reload history.
+		return m, m.jumpToFrankSession("Ctrl-G")
 	case tea.KeyEsc:
 		m.commandMode = false
 		m.commandBuffer = ""
@@ -1498,13 +1498,15 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 			m.statusMessage = "Usage: :" + strings.ToLower(fields[0])
 			return nil
 		}
-		m.jumpToFrankSession(":" + strings.ToLower(fields[0]))
+		// EX-165: jumpToFrankSession now returns a cmd to reload history.
+		return m.jumpToFrankSession(":" + strings.ToLower(fields[0]))
 	case "scope":
 		if len(fields) != 2 {
 			m.statusMessage = "Usage: :scope org|project|task"
 			return nil
 		}
-		m.switchScope(normalizeScope(fields[1]))
+		// EX-164: switchScope returns a history-reload cmd; don't discard it.
+		return m.switchScope(normalizeScope(fields[1]))
 	case "send":
 		return m.sendOrQueueInput()
 	case "tour":
@@ -2203,20 +2205,31 @@ func (m *Model) switchScope(next ChatScope) tea.Cmd {
 	return nil
 }
 
-func (m *Model) jumpToFrankSession(trigger string) {
+// jumpToFrankSession switches the active session to the org-level (Frank) session
+// and returns a cmd to reload its chat history (EX-165).
+func (m *Model) jumpToFrankSession(trigger string) tea.Cmd {
 	if err := m.workspace.activateGeneralSession(); err != nil {
 		m.statusMessage = "Unable to load Frank session. Press Ctrl-G or :frank to retry."
-		return
+		return nil
 	}
+	sessionID := m.workspace.activeSessionID
 	m.activeScope = ScopeOrg
-	m.activeSession = m.workspace.activeSessionID
-	m.state.LastActiveChatSession = m.workspace.activeSessionID
+	m.activeSession = sessionID
+	m.state.LastActiveChatSession = sessionID
 	m.chatScrollOffset = 0
 	if strings.TrimSpace(trigger) == "" {
 		m.statusMessage = "Switched to Frank session."
-		return
+	} else {
+		m.statusMessage = fmt.Sprintf("Switched to Frank session (%s).", trigger)
 	}
-	m.statusMessage = fmt.Sprintf("Switched to Frank session (%s).", trigger)
+	// EX-165: reload history so chat shows Frank's messages, not the previous session's.
+	if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
+		m.chatMessages = nil
+		m.chatHistoryLoading = true
+		m.chatMessageIndex = make(map[string]int)
+		return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+	}
+	return nil
 }
 
 func (m Model) chatTextInputActive() bool {

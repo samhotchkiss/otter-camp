@@ -2567,3 +2567,33 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-164---
+
+## EX-164: `:scope` command discarded the history-reload cmd
+
+**Observation:** The `[` and `]` keys cycle through chat scopes and correctly use the returned `tea.Cmd` from `switchScope` (which includes a `loadChatHistoryCmd` when switching to a UUID session). But the `:scope` command in `executeCommand` called `m.switchScope(normalizeScope(fields[1]))` and **silently discarded the returned cmd**. Typing `:scope task` would update the scope indicator but the chat panel would remain empty or stale.
+
+**Improvement:** Changed `:scope` handler from `m.switchScope(...)` (discarding return) to `return m.switchScope(...)`.
+
+**Why it matters:** The `:scope task` command is the keyboard path for switching to task context. If history isn't reloaded, users see an empty or wrong chat after typing the command.
+
+**Effort:** Trivial (one-line change)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-165---
+
+## EX-165: Ctrl-G / `:frank` / `0` didn't reload chat history after switching sessions
+
+**Observation:** `jumpToFrankSession` (called by `Ctrl-G`, `0` outside chat input, and `:frank`) set `m.activeSession` to the Frank/org session UUID but never called `loadChatHistoryCmd`. If the user had navigated to a task session (which cleared chat messages and loaded task history), pressing Ctrl-G would switch the scope indicator back to "org" but the chat panel would still show the task session's messages. The chat header would say "Frank" while the content was the task conversation.
+
+**Improvement:** Changed `jumpToFrankSession` from `void` return to `tea.Cmd`. When switching to a valid UUID session, it now clears `chatMessages`, sets `chatHistoryLoading = true`, and returns `loadChatHistoryCmd`. All three call sites (`KeyCtrlG`, `'0'` key, `:frank` command in `updateCommandInput`, and `executeCommand`) updated to use the returned cmd.
+
+**Why it matters:** After pressing Ctrl-G or 0, the chat should immediately show Frank's conversation. Showing stale task messages under the Frank header creates a deeply confusing state where the heading and content don't match.
+
+**Effort:** Low (function signature change + 4 call site updates)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
