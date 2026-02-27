@@ -8,7 +8,7 @@
 │   › Task 1 / Launch docs ○   ││ TODO (1)           IN PROGRESS (1)    DONE (0)               ││                  Tab·focus chat  Enter·send                  │
 │   › Task 2 / CI hardening ◌  ││ ─────────────────  ─────────────────  ─────────────────      ││                                                              │
 │ ▼ 2 inbox                    ││   Launch docs       CI hardening                             ││ ╭────────────────────────────────────────────────────────╮   │
-│                              ││                                                              ││ │ type a message...                                      │   │
+│ ▼ 2 inbox                    ││                                                              ││ │ type a message...                                      │   │
 │                              ││ ───────────────────────── Inbox  2 ───────────────────────── ││ ╰────────────────────────────────────────────────────────╯   │
 │                              ││ ▸ Approve launch checklist                                   ││                                                              │
 │                              ││ ▸ Review flaky test quarantine                               ││                                                              │
@@ -32,7 +32,7 @@
 │                              ││                                                              ││                                                              │
 ╰──────────────────────────────╯╰──────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  L/main  ·  snapshot 
-Help: j/k navigate · Enter open task · : commands · ? help
+Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### L chat
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
@@ -44,7 +44,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │   › Task 1 / Launch docs ○   ││ TODO (1)           IN PROGRESS (1)    DONE (0)               ││                  Tab·focus chat  Enter·send                  │
 │   › Task 2 / CI hardening ◌  ││ ─────────────────  ─────────────────  ─────────────────      ││                                                              │
 │ ▼ 2 inbox                    ││   Launch docs       CI hardening                             ││ ╭────────────────────────────────────────────────────────╮   │
-│                              ││                                                              ││ │ type a message...                                      │   │
+│ ▼ 2 inbox                    ││                                                              ││ │ type a message...                                      │   │
 │                              ││ ───────────────────────── Inbox  2 ───────────────────────── ││ ╰────────────────────────────────────────────────────────╯   │
 │                              ││ ▸ Approve launch checklist                                   ││                                                              │
 │                              ││ ▸ Review flaky test quarantine                               ││                                                              │
@@ -68,7 +68,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │                              ││                                                              ││                                                              │
 ╰──────────────────────────────╯╰──────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  L/main  ·  snapshot 
-Help: j/k navigate · Enter open task · : commands · ? help
+Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### L inbox
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
@@ -80,7 +80,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │   › Task 1 / Launch docs ○   ││ TODO (1)           IN PROGRESS (1)    DONE (0)               ││                  Tab·focus chat  Enter·send                  │
 │   › Task 2 / CI hardening ◌  ││ ─────────────────  ─────────────────  ─────────────────      ││                                                              │
 │ ▼ 2 inbox                    ││   Launch docs       CI hardening                             ││ ╭────────────────────────────────────────────────────────╮   │
-│                              ││                                                              ││ │ type a message...                                      │   │
+│ ▼ 2 inbox                    ││                                                              ││ │ type a message...                                      │   │
 │                              ││ ───────────────────────── Inbox  2 ───────────────────────── ││ ╰────────────────────────────────────────────────────────╯   │
 │                              ││ ▸ Approve launch checklist                                   ││                                                              │
 │                              ││ ▸ Review flaky test quarantine                               ││                                                              │
@@ -104,4 +104,4 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │                              ││                                                              ││                                                              │
 ╰──────────────────────────────╯╰──────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  L/main  ·  snapshot 
-Help: j/k navigate · Enter open task · : commands · ? help
+Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
