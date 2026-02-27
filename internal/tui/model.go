@@ -242,7 +242,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.perfMetrics.InitialInteractivePaint = m.now().Sub(m.startedAt)
 		}
 		if previousClass != "" && previousClass != m.sizeClass {
-			m.statusMessage = fmt.Sprintf("Layout changed: %s", m.sizeClass)
+			// Suppress layout change notification during the startup window (< 3s).
+			// tmux and some terminals send multiple SIGWINCH events before settling
+			// on the real terminal dimensions; we don't want to show a stale
+			// "Layout changed: XL" that persists for the entire session.
+			if m.now().Sub(m.startedAt) >= 3*time.Second {
+				m.statusMessage = fmt.Sprintf("Layout changed: %s", m.sizeClass)
+			}
 		}
 		return m, nil
 	case ConnectionStateMsg:
