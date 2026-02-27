@@ -1557,6 +1557,18 @@ func (e *NativeToolExecutor) createDraftActionReview(ctx context.Context, action
 	if err != nil {
 		return nil, err
 	}
+	if e.events != nil {
+		evtPayload, _ := json.Marshal(map[string]any{
+			"inbox_item_id": created.ID,
+			"item_type":     created.ItemType,
+		})
+		_ = e.events.Publish(ctx, nil, eventbus.DomainEvent{
+			OrganizationID: scope.organizationID,
+			EventType:      "inbox.item_created",
+			ActorType:      "system",
+			Payload:        evtPayload,
+		})
+	}
 	return map[string]any{
 		"inbox_item_id": created.ID,
 		"status":        "pending_review",

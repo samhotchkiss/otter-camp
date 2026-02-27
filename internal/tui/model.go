@@ -1378,6 +1378,10 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 			return
 		}
 		if !m.sessionMatchesActive(payload.SessionID) {
+			// Non-active assistant message → mark the sidebar session as unread
+			if strings.EqualFold(strings.TrimSpace(payload.Role), "assistant") {
+				m.workspace.markSessionUnread(payload.SessionID)
+			}
 			return
 		}
 		// Always set content — do NOT gate on activeTurn. chat.turn.completed
@@ -2227,6 +2231,10 @@ func loadTaskDetailCmd(taskID string, hints RuntimeHints) tea.Cmd {
 // fire tea.Cmds (e.g. tui.command navigation requests). Returns nil if the
 // event is not a model-level command and should fall through to the workspace.
 func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
+	if event.EventType == "inbox.item_created" {
+		m.workspace.inboxCount++
+		return nil
+	}
 	if event.EventType == "worker.unresponsive" {
 		if !m.turnsSynced {
 			return nil

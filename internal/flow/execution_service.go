@@ -403,7 +403,7 @@ func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.Pro
 		"task_id":      taskRecord.ID,
 		"flow_node_id": flowNodeID,
 	})
-	_, err := s.inbox.Create(ctx, repo.InboxItem{
+	created, err := s.inbox.Create(ctx, repo.InboxItem{
 		OrganizationID:  taskRecord.OrganizationID,
 		ItemType:        "task_review",
 		SourceProjectID: &taskRecord.ProjectID,
@@ -413,7 +413,14 @@ func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.Pro
 		Body:            &body,
 		ActionPayload:   payload,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	_ = s.publishDomainEvent(ctx, taskRecord.OrganizationID, "inbox.item_created", "system", nil, map[string]any{
+		"inbox_item_id": created.ID,
+		"item_type":     created.ItemType,
+	})
+	return nil
 }
 
 func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Actor) (*repo.FlowNodeExecution, error) {
