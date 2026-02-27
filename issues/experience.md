@@ -1754,3 +1754,17 @@ Applied to both the full Activity view and the dashboard Activity widget (EX-103
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-118: Project view shows "No open tasks" when filter excludes all tasks
+
+**Observation:** In the project view, when a filter excluded all open tasks, the empty state showed `"No open tasks."` — the same message shown when the project genuinely has no open tasks. Users couldn't tell whether tasks were filtered out or the project was actually empty.
+
+**Improvement:** Track `totalUnfilteredOpenTasks` separately from the filtered `openTasks` slice. When `query != ""` and there are unfiltered open tasks that were filtered out, show `"no open tasks matching <query>"` instead of `"No open tasks."`.
+
+**Why it matters:** Same principle as EX-111/112 — showing "nothing here" when the filter is the cause is misleading. The user would think the project has no work, when actually their search just doesn't match current task labels.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

@@ -1004,11 +1004,13 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 	// Open tasks from selectedProject.Tasks (loaded from API)
 	query := normalizedFilterQuery(m.mainFilter)
 	var openTasks []SidebarTaskItem
+	totalUnfilteredOpenTasks := 0 // EX-118: track total open tasks before filter
 	if len(proj.Tasks) > 0 {
 		for _, t := range proj.Tasks {
 			if t.WorkStatus == "done" || t.WorkStatus == "approved" || t.WorkStatus == "cancelled" {
 				continue
 			}
+			totalUnfilteredOpenTasks++
 			taskLabel := t.Title
 			if t.TaskNumber > 0 {
 				taskLabel = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
@@ -1029,6 +1031,7 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			if child.WorkStatus == "done" || child.WorkStatus == "approved" {
 				continue
 			}
+			totalUnfilteredOpenTasks++
 			taskLabel := child.Label
 			if !matchesFilter(taskLabel, query) && !matchesFilter(child.WorkStatus, query) {
 				continue
@@ -1043,7 +1046,10 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 
 	if len(openTasks) == 0 {
 		lines = append(lines, styleLabel.Render("OPEN TASKS (0)"))
-		if proj.DoneCount > 0 {
+		// EX-118: distinguish between a genuinely empty task list and a filter with no matches.
+		if query != "" && totalUnfilteredOpenTasks > 0 {
+			lines = append(lines, styleMuted.Render(fmt.Sprintf("  no open tasks matching %q", query)))
+		} else if proj.DoneCount > 0 {
 			lines = append(lines, lipgloss.NewStyle().Foreground(colConnected).Render(fmt.Sprintf("  ✓  All %d tasks complete", proj.DoneCount)))
 		} else {
 			lines = append(lines, styleMuted.Render("  No open tasks."))
