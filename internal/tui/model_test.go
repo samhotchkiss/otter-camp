@@ -1714,3 +1714,40 @@ func TestAppendActivityCapsBeyondMaxEntries(t *testing.T) {
 		t.Fatalf("oldest surviving entry = %q, want %q", entries[0], oldest)
 	}
 }
+
+// EX-133: pressing r in ViewTask should set "Refreshing task detail…" status,
+// indicating the context-aware branch was taken (not the sidebar-only path).
+func TestRKeyInViewTaskTriggersTaskDetailReload(t *testing.T) {
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			return &TaskDetailItem{ID: id}, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-r-test"
+	model.focus = MainPanel
+
+	updated := pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if updated.statusMessage != "Refreshing task detail…" {
+		t.Fatalf("r in ViewTask should set 'Refreshing task detail…' status, got: %q", updated.statusMessage)
+	}
+}
+
+// EX-133: pressing r in ViewProject should set "Refreshing project detail…" status.
+func TestRKeyInViewProjectTriggersProjectDetailReload(t *testing.T) {
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjectDetail: func(_ context.Context, id string) (*ProjectDetail, error) {
+			return &ProjectDetail{ID: id}, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.workspace.setMainView(ViewProject)
+	model.workspace.selectedProjectID = "proj-r-test"
+	model.focus = MainPanel
+
+	updated := pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if updated.statusMessage != "Refreshing project detail…" {
+		t.Fatalf("r in ViewProject should set 'Refreshing project detail…' status, got: %q", updated.statusMessage)
+	}
+}

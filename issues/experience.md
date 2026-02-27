@@ -2002,3 +2002,17 @@ Additionally, the `task.status_changed` activity entry code was duplicating the 
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-133: `r` key refreshed only sidebar from task/project detail views — context ignored
+
+**Observation:** In `ViewTask` and `ViewProject`, pressing `r` always triggered `loadSidebarDataCmd` and showed "Refreshing sidebar data…". The sidebar reload doesn't update the task title, status, flow step, description, or event log shown in the main panel. Users who wanted to manually refresh a task detail after an agent made changes had no way to do it via keyboard.
+
+**Improvement:** `r` in `ViewTask` (with `MainPanel` focus + a selected task ID) now calls `loadTaskDetailCmd` and shows "Refreshing task detail…". `r` in `ViewProject` calls `loadProjectDetailCmd` and shows "Refreshing project detail…". All other contexts continue to fall through to the existing sidebar refresh. Help hints for both views were updated to include `r refresh`.
+
+**Why it matters:** Agents can modify task descriptions, change status, update flow steps, and add event log entries. When the user is looking at a task detail view, they need a quick way to pull the latest state without navigating away and back. The `r` key is already the muscle memory for "refresh" — making it context-aware means it does the right thing wherever the user is focused.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

@@ -1076,6 +1076,16 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			return true, nil
 		}
 	case 'r':
+		// EX-133: when focused on task or project detail, refresh that view's
+		// data in addition to the sidebar so manual refresh is context-aware.
+		if m.focus == MainPanel && m.workspace.mainView == ViewTask && m.workspace.selectedTaskID != "" {
+			m.statusMessage = "Refreshing task detail…"
+			return true, loadTaskDetailCmd(m.workspace.selectedTaskID, m.runtimeHints)
+		}
+		if m.focus == MainPanel && m.workspace.mainView == ViewProject && m.workspace.selectedProjectID != "" {
+			m.statusMessage = "Refreshing project detail…"
+			return true, loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints)
+		}
 		m.workspace.activity = appendActivity(m.workspace.activity,
 			"sidebar refreshed at "+m.now().Format("15:04:05"))
 		m.statusMessage = "Refreshing sidebar data…"
@@ -2337,17 +2347,17 @@ func (m Model) commandFallbackHelp() string {
 				if len(m.workspace.openTasksForProject()) >= 2 {
 					taskHelp += " · j/k next/prev"
 				}
-				taskHelp += " · p project view · n next unread · : commands · ? help"
+				taskHelp += " · p project view · r refresh · n next unread · : commands · ? help"
 				return taskHelp
 			}
-			return "Enter open session · Esc dashboard · n next unread · : commands · ? help"
+			return "Enter open session · Esc dashboard · r refresh · n next unread · : commands · ? help"
 		case ViewProject:
 			// EX-121: reflect current showDoneTasks state so the hint is actionable.
 			doneHint := "d show done"
 			if m.workspace.showDoneTasks {
 				doneHint = "d hide done"
 			}
-			return "j/k navigate tasks · Enter open task · " + doneHint + " · Esc dashboard · n next unread · : commands · ? help"
+			return "j/k navigate tasks · Enter open task · " + doneHint + " · r refresh · Esc dashboard · n next unread · : commands · ? help"
 		case ViewDashboard:
 			if len(m.workspace.dashboardActiveTasks()) > 0 {
 				// EX-116: include "t·task" hint when a task is selected so users know
