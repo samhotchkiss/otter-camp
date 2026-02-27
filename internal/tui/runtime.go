@@ -20,6 +20,7 @@ type SidebarChatItem struct {
 	UpdatedAt   time.Time
 	ScopeType   string // "organization", "project", "project_task"
 	ScopeID     string // task ID for project_task, project ID for project scope
+	WorkStatus  string // task work_status for project_task sessions (todo, in_progress, done, etc.)
 }
 
 // SidebarProjectItem represents a project for the sidebar.

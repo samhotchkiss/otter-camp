@@ -391,6 +391,18 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 	case sidebarKindSession:
 		if node.ParentID != "" {
 			prefix = "    › "
+		} else if node.SessionScope == "project_task" && node.WorkStatus != "" {
+			// Show task work status icon for task-scoped chat sessions
+			switch node.WorkStatus {
+			case "done", "approved":
+				prefix = "  ● "
+			case "in_progress":
+				prefix = "  ◌ "
+			case "blocked", "rejected":
+				prefix = "  ⚠ "
+			default:
+				prefix = "  ○ "
+			}
 		} else {
 			prefix = "  "
 		}

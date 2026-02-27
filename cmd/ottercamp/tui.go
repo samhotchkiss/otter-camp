@@ -128,15 +128,18 @@ func runTUICommand(args []string) int {
 					if s.Title != nil {
 						name = strings.TrimSpace(*s.Title)
 					}
-					// For project_task sessions, always fetch task to get OC-N prefix
+					var taskWorkStatus string
+					// For project_task sessions, always fetch task to get OC-N prefix and work status
 					if strings.EqualFold(s.ScopeType, "project_task") && s.ScopeID != uuid.Nil {
 						var taskResp struct {
 							Data struct {
 								Title      string `json:"title"`
 								TaskNumber int    `json:"task_number"`
+								WorkStatus string `json:"work_status"`
 							} `json:"data"`
 						}
 						if apiClient.request(ctx, "GET", "/v1/tasks/"+s.ScopeID.String(), nil, &taskResp) == nil {
+							taskWorkStatus = taskResp.Data.WorkStatus
 							// Prefer session title (user-named); fall back to task title
 							displayTitle := name
 							if displayTitle == "" {
@@ -182,6 +185,7 @@ func runTUICommand(args []string) int {
 						UpdatedAt:   updatedAt,
 						ScopeType:   strings.ToLower(s.ScopeType),
 						ScopeID:     scopeID,
+						WorkStatus:  taskWorkStatus,
 					})
 					if len(out) >= 4 {
 						break

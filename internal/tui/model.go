@@ -651,12 +651,26 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				// Update scope indicator + status bar to show project context
 				m.activeScope = ScopeProject
 				m.statusMessage = node.Label
+				// Switch chat panel to Frank/org session when viewing a project
+				// so the session title matches the context (not a stale task session)
+				if frankNode := m.workspace.nodes[generalSidebarNodeID]; frankNode != nil && frankNode.SessionID != "" {
+					if m.activeSession != frankNode.SessionID {
+						m.activeSession = frankNode.SessionID
+						m.workspace.activeSessionID = frankNode.SessionID
+						m.chatMessages = nil
+						m.chatMessageIndex = make(map[string]int)
+						m.chatScrollOffset = 0
+					}
+				}
 				// Load project detail + tasks
 				m.workspace.selectedProject = nil // clear stale detail
 				m.workspace.projectTaskCursor = 0 // reset cursor for new project
 				cmds := []tea.Cmd{loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true)}
 				if m.runtimeHints.LoadProjectDetail != nil {
 					cmds = append(cmds, loadProjectDetailCmd(node.ProjectID, m.runtimeHints))
+				}
+				if m.runtimeHints.LoadChatHistory != nil && m.workspace.activeSessionID != "" {
+					cmds = append(cmds, loadChatHistoryCmd(m.workspace.activeSessionID, m.runtimeHints.LoadChatHistory))
 				}
 				return tea.Batch(cmds...)
 			case sidebarKindTask:

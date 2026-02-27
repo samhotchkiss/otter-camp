@@ -718,6 +718,7 @@ func (w *workspaceState) rebuildSidebar(orgSessionID string, chats []SidebarChat
 			SessionID:    chat.SessionID,
 			SessionScope: chat.ScopeType,
 			TaskID:       taskID,
+			WorkStatus:   chat.WorkStatus,
 		}
 		newTopLevel = append(newTopLevel, id)
 	}
