@@ -4468,3 +4468,78 @@ func TestSessionResolvedMsgAppliedWhenTurnActive(t *testing.T) {
 		t.Errorf("SessionResolvedMsg not applied during active turn: got %q, want %q (EX-189)", m2.activeTurnSessionID, sessionID)
 	}
 }
+
+// TestDashboardGWithNoTasksShowsFeedback verifies EX-190: pressing 'g' or 'G'
+// on an empty dashboard board shows a status message instead of silently no-op.
+func TestDashboardGWithNoTasksShowsFeedback(t *testing.T) {
+	t.Parallel()
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.focus = MainPanel
+	model.workspace.mainView = ViewDashboard
+	// Ensure no active tasks exist
+	model.workspace.tasks = map[string]*taskRecord{}
+	model.workspace.taskOrder = nil
+
+	for _, key := range []rune{'g', 'G'} {
+		updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		m2 := updated.(Model)
+		if m2.statusMessage == "" {
+			t.Errorf("pressing %q on empty dashboard should set statusMessage (EX-190)", key)
+		}
+		if m2.statusMessage != "No active tasks on dashboard." {
+			t.Errorf("pressing %q: unexpected statusMessage %q (EX-190)", key, m2.statusMessage)
+		}
+	}
+}
+
+// TestProjectEnterWithNoOpenTasksShowsFeedback verifies EX-191: pressing Enter
+// in ViewProject when all tasks are done shows a status message and does NOT
+// transition to a blank ViewTask.
+func TestProjectEnterWithNoOpenTasksShowsFeedback(t *testing.T) {
+	t.Parallel()
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.focus = MainPanel
+	model.workspace.mainView = ViewProject
+	// Project loaded with one done task
+	model.workspace.selectedProject = &ProjectDetail{
+		Tasks: []SidebarTaskItem{
+			{ID: "t1", Title: "Finished task", WorkStatus: "done"},
+		},
+	}
+	model.workspace.projectTaskCursor = 0
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m2 := updated.(Model)
+	if m2.workspace.mainView == ViewTask {
+		t.Error("should NOT transition to ViewTask when all tasks are done (EX-191)")
+	}
+	if m2.statusMessage == "" {
+		t.Error("should set statusMessage when all tasks are done (EX-191)")
+	}
+}
+
+// TestInboxEnterWhenEmptyShowsFeedback verifies EX-192: pressing Enter on an
+// empty inbox sets a status message and returns nil (no silent no-op).
+func TestInboxEnterWhenEmptyShowsFeedback(t *testing.T) {
+	t.Parallel()
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.focus = MainPanel
+	model.workspace.mainView = ViewInbox
+	// Empty inbox — applyInboxAction("open") will return false
+	model.workspace.inbox = nil
+	model.workspace.inboxCursor = 0
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m2 := updated.(Model)
+	if m2.statusMessage == "" {
+		t.Error("should set statusMessage when inbox is empty (EX-192)")
+	}
+	if m2.statusMessage != "No inbox items to open." {
+		t.Errorf("unexpected statusMessage %q (EX-192)", m2.statusMessage)
+	}
+	// cmd may be the statusAutoClearCmd timer (batched by Update when statusMessage != "")
+	_ = cmd
+}

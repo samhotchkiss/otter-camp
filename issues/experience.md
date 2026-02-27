@@ -2958,3 +2958,45 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-190: g/G on empty dashboard board silently does nothing
+
+**Observation:** Pressing `g` or `G` (vim-style first/last jump) on the dashboard when no active tasks exist was a silent no-op — no status message, no visual feedback. The user had no way to tell if the key binding was broken or if the board was genuinely empty.
+
+**Improvement:** Added `else` branches to both `'g'` and `'G'` dashboard handlers: when `dashboardActiveTasks()` returns an empty slice, set `m.statusMessage = "No active tasks on dashboard."` instead of silently returning.
+
+**Why it matters:** Silent no-ops create doubt ("is my keyboard working?"). A clear status line message explains the state immediately.
+
+**Effort:** Trivial (2 else blocks, 1 line each)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-191: Enter in ViewProject with no open tasks silently opens a blank task detail
+
+**Observation:** Pressing Enter on a project view when all tasks were done/approved/cancelled transitioned the main panel to ViewTask even though no task was selected. The blank task detail said "Opened task detail." despite there being nothing to open — and the status message was misleading.
+
+**Improvement:** When `openTasks` is empty (all tasks done/approved/cancelled), return a contextual status message instead of transitioning: "All tasks complete. Press 'd' to show done tasks." if tasks exist but are all finished, or "No tasks in this project." if the project has no tasks at all. The fallback `setMainView(ViewTask)` is now only reached when no project detail has loaded yet (loading state).
+
+**Why it matters:** Transitioning to a blank view after pressing Enter looks broken. A clear message explains the state and suggests the next action.
+
+**Effort:** Low (6 lines replacing one unconditional transition)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-192: Enter on empty inbox silently does nothing
+
+**Observation:** When the inbox was empty (all items actioned or none loaded), pressing Enter in ViewInbox fell through `applyInboxAction("open")` returning false with no status message and no visual feedback.
+
+**Improvement:** Added an `else` path after the `applyInboxAction` block: if the open action fails, set `m.statusMessage = "No inbox items to open."` and return immediately.
+
+**Why it matters:** Same as EX-190 — silent no-ops create uncertainty. The user needs confirmation that the inbox is empty, not just nothing happening.
+
+**Effort:** Trivial (2 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

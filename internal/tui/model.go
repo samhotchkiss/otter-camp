@@ -885,6 +885,9 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				}
 				return nil
 			}
+			// EX-192: inbox open failed (empty inbox or no item selected) — give feedback.
+			m.statusMessage = "No inbox items to open."
+			return nil
 		}
 		if m.workspace.mainView == ViewTask {
 			if sessionID, ok := m.workspace.openSelectedTaskSession(); ok {
@@ -941,7 +944,15 @@ func (m *Model) handleEnterKey() tea.Cmd {
 					m.statusMessage = "Opened task detail."
 					return loadTaskDetailCmd(taskID, m.runtimeHints)
 				}
+				// EX-191: no open tasks — give feedback instead of transitioning to a blank task view.
+				if len(proj.Tasks) > 0 {
+					m.statusMessage = "All tasks complete. Press 'd' to show done tasks."
+				} else {
+					m.statusMessage = "No tasks in this project."
+				}
+				return nil
 			}
+			// No project loaded yet — transition to task view anyway (data may still be loading).
 			m.workspace.setMainView(ViewTask)
 			m.statusMessage = "Opened task detail."
 			return nil
@@ -1115,6 +1126,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					}
 					m.statusMessage = "▸ " + truncate(label, 40)
 				}
+			} else {
+				// EX-190: no active tasks — give feedback instead of silent no-op.
+				m.statusMessage = "No active tasks on dashboard."
 			}
 		}
 		return true, nil
@@ -1140,6 +1154,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					}
 					m.statusMessage = "▸ " + truncate(label, 40)
 				}
+			} else {
+				// EX-190: no active tasks — give feedback instead of silent no-op.
+				m.statusMessage = "No active tasks on dashboard."
 			}
 		}
 		return true, nil
