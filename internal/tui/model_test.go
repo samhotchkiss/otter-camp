@@ -4267,3 +4267,43 @@ func TestInboxActionFailureReloadsInboxItems(t *testing.T) {
 		t.Fatal("failed inbox action did not call LoadInboxItems (EX-183)")
 	}
 }
+
+// EX-184: 'r' in ViewProject should reload both project detail AND project tasks,
+// so manually refreshing picks up newly-created tasks or status changes.
+func TestRefreshKeyInProjectViewLoadsBothDetailAndTasks(t *testing.T) {
+	t.Parallel()
+	projectID := "proj-ex-184"
+	detailLoaded := false
+	tasksLoaded := false
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjectDetail: func(_ context.Context, id string) (*ProjectDetail, error) {
+			if id == projectID {
+				detailLoaded = true
+			}
+			return &ProjectDetail{ID: id}, nil
+		},
+		LoadProjectTasks: func(_ context.Context, id string) ([]SidebarTaskItem, error) {
+			if id == projectID {
+				tasksLoaded = true
+			}
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.workspace.mainView = ViewProject
+	model.focus = MainPanel
+	model.workspace.selectedProjectID = projectID
+
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if cmd == nil {
+		t.Fatal("'r' in ViewProject should return a non-nil cmd")
+	}
+	runNonTimerCmds(cmd)
+	if !detailLoaded {
+		t.Fatal("'r' in ViewProject did not call LoadProjectDetail (EX-184)")
+	}
+	if !tasksLoaded {
+		t.Fatal("'r' in ViewProject did not call LoadProjectTasks (EX-184)")
+	}
+}

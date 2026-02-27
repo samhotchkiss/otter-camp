@@ -2612,6 +2612,21 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-184---
+
+## EX-184: `r` in ViewProject only reloaded project detail, not project tasks
+
+**Observation:** The 'r' refresh key in ViewProject dispatched `loadProjectDetailCmd` but not `loadProjectTasksCmd`. Real-time SSE events (task.created, task.status_changed) keep the task list fresh during an active session, but a user who came back from sleep, or whose connection was briefly interrupted, would have stale task data. Manual refresh with 'r' only updated the project metadata (description, delivery mode, done count) without fetching the task list.
+
+**Improvement:** Changed `return true, loadProjectDetailCmd(...)` to `return true, tea.Batch(loadProjectDetailCmd(...), loadProjectTasksCmd(...))`.
+
+**Why it matters:** The 'r' key is the user's fallback when data looks wrong. If it only partially refreshes, users may think the project is correctly shown even when tasks are missing or have stale statuses.
+
+**Effort:** Trivial (wrap in tea.Batch, add loadProjectTasksCmd)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
 ---EX-183---
 
 ## EX-183: Failed inbox action left inconsistent local state without recovery

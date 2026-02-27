@@ -1223,7 +1223,12 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		}
 		if m.focus == MainPanel && m.workspace.mainView == ViewProject && m.workspace.selectedProjectID != "" {
 			m.statusMessage = "Refreshing project detail…"
-			return true, loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints)
+			// EX-184: also reload project tasks so newly-created tasks and status
+			// changes that arrived while offline appear after a manual refresh.
+			return true, tea.Batch(
+				loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints),
+				loadProjectTasksCmd(m.workspace.selectedProjectID, m.runtimeHints, false),
+			)
 		}
 		// EX-162: refresh the content the user is actually viewing, not just sidebar metadata.
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
