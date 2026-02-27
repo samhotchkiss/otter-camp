@@ -3603,6 +3603,9 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 	case "inbox":
 		m.workspace.mainView = ViewInbox
 		m.statusMessage = "Navigated to inbox."
+		// EX-179: load fresh inbox data so the list is populated immediately,
+		// consistent with the 'i' key and ':inbox' command behaviours.
+		return loadInboxItemsCmd(m.runtimeHints)
 	case "dashboard":
 		m.workspace.mainView = ViewDashboard
 		m.statusMessage = "Navigated to dashboard."

@@ -2612,6 +2612,21 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-179---
+
+## EX-179: `tui.command navigate inbox` didn't load fresh inbox data
+
+**Observation:** The `tui.command` SSE event handler's `"inbox"` navigation case set `mainView = ViewInbox` and returned `nil`. The inbox list would be empty unless inbox data had been previously loaded by another path. The `"project"` and `"task"` cases correctly dispatched data loads, but `"inbox"` was inconsistent.
+
+**Improvement:** Added `return loadInboxItemsCmd(m.runtimeHints)` in the `"inbox"` navigation case, mirroring the `'i'` key and `:inbox` command behaviours.
+
+**Why it matters:** Server-driven navigation to the inbox (e.g. when an agent sends a review request and redirects the user) would show a blank inbox, defeating the purpose of the navigation event.
+
+**Effort:** One line
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
 ---EX-178---
 
 ## EX-178: Opening a task from project view or dashboard didn't set `activeScope = ScopeTask`

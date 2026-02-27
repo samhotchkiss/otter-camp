@@ -4064,3 +4064,35 @@ func TestOpenTaskFromProjectAndDashboardSetsScopeTask(t *testing.T) {
 		}
 	})
 }
+
+// EX-179: tui.command navigate inbox should load fresh inbox data so the list
+// is populated immediately (consistent with 'i' key and ':inbox' command).
+func TestTuiCommandNavigateInboxLoadsData(t *testing.T) {
+	t.Parallel()
+	inboxLoaded := false
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadInboxItems: func(_ context.Context) ([]InboxSummaryItem, error) {
+			inboxLoaded = true
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.turnsSynced = true
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"action": "navigate",
+		"target": "inbox",
+	})
+	_, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "tui.command",
+		Payload:   rawPayload,
+	}})
+
+	if cmd == nil {
+		t.Fatal("tui.command navigate inbox should return a non-nil cmd (inbox data load)")
+	}
+	runNonTimerCmds(cmd)
+	if !inboxLoaded {
+		t.Fatal("tui.command navigate inbox did not call LoadInboxItems (EX-179)")
+	}
+}
