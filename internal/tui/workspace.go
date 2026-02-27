@@ -61,6 +61,7 @@ type sidebarNode struct {
 	Unread     int
 	SessionID  string
 	TaskID     string
+	TaskNumber int
 	ProjectID  string
 	WorkStatus string
 }
@@ -212,13 +213,27 @@ func (w *workspaceState) visibleSidebarIDs() []string {
 }
 
 func (w *workspaceState) projectChildren(projectID string) []string {
-	children := make([]string, 0, 4)
+	type child struct {
+		id         string
+		taskNumber int
+	}
+	var kids []child
 	for id, node := range w.nodes {
 		if node.ParentID == projectID {
-			children = append(children, id)
+			kids = append(kids, child{id: id, taskNumber: node.TaskNumber})
 		}
 	}
-	sort.Strings(children)
+	// Sort by task number descending (highest/newest first); fall back to ID for ties.
+	sort.Slice(kids, func(i, j int) bool {
+		if kids[i].taskNumber != kids[j].taskNumber {
+			return kids[i].taskNumber > kids[j].taskNumber
+		}
+		return kids[i].id < kids[j].id
+	})
+	children := make([]string, len(kids))
+	for i, k := range kids {
+		children[i] = k.id
+	}
 	return children
 }
 
@@ -712,6 +727,7 @@ func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskIt
 			Kind:       sidebarKindTask,
 			ParentID:   nodeID,
 			TaskID:     task.ID,
+			TaskNumber: task.TaskNumber,
 			WorkStatus: task.WorkStatus,
 		}
 		// Seed basic task record so the TASK DETAIL center pane renders immediately.
@@ -726,6 +742,15 @@ func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskIt
 			w.taskOrder = append(w.taskOrder, task.ID)
 		}
 	}
+	// Re-sort taskOrder by task number descending so dashboard board shows newest tasks first.
+	sort.Slice(w.taskOrder, func(i, j int) bool {
+		ti := w.tasks[w.taskOrder[i]]
+		tj := w.tasks[w.taskOrder[j]]
+		if ti == nil || tj == nil {
+			return false
+		}
+		return ti.TaskNumber > tj.TaskNumber
+	})
 	// Expand the project node only when explicitly requested by user interaction.
 	if expandNode {
 		if proj, ok := w.nodes[nodeID]; ok {
