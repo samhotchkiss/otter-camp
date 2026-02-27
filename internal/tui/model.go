@@ -1123,15 +1123,39 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.statusMessage = "Inbox item approved."
 			return true, nil
 		}
+		// EX-148: allow approve from task view when RequiresHumanReview is set.
+		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
+			task := m.workspace.tasks[m.workspace.selectedTaskID]
+			if task != nil && task.RequiresHumanReview && m.workspace.applyInboxActionForTask(task.ID, "approve") {
+				m.statusMessage = "Task approved."
+				return true, nil
+			}
+		}
 	case 'x':
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("reject") {
 			m.statusMessage = "Inbox item rejected."
 			return true, nil
 		}
+		// EX-148: allow reject from task view.
+		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
+			task := m.workspace.tasks[m.workspace.selectedTaskID]
+			if task != nil && task.RequiresHumanReview && m.workspace.applyInboxActionForTask(task.ID, "reject") {
+				m.statusMessage = "Task rejected."
+				return true, nil
+			}
+		}
 	case 'f':
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("defer") {
 			m.statusMessage = "Inbox item deferred."
 			return true, nil
+		}
+		// EX-148: allow defer from task view.
+		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
+			task := m.workspace.tasks[m.workspace.selectedTaskID]
+			if task != nil && task.RequiresHumanReview && m.workspace.applyInboxActionForTask(task.ID, "defer") {
+				m.statusMessage = "Task deferred."
+				return true, nil
+			}
 		}
 	case 'o':
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("open") {

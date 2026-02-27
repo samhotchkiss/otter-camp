@@ -2480,3 +2480,96 @@ func TestActivityIconEX147(t *testing.T) {
 		}
 	}
 }
+
+// EX-148: a/x/f keys should work from ViewTask (not just ViewInbox) when
+// RequiresHumanReview is set. The task view shows these hints — they must be functional.
+
+func TestTaskViewApproveKeyActsOnInboxItem(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// Set up a task with RequiresHumanReview and a matching inbox item
+	taskID := "task-review-axf"
+	model.workspace.tasks[taskID] = &taskRecord{
+		ID:                  taskID,
+		TaskNumber:          9,
+		Title:               "Review me",
+		RequiresHumanReview: true,
+	}
+	model.workspace.inbox = []inboxItem{{ID: "inbox-1", TaskID: taskID, Summary: "Ready for review"}}
+	model.workspace.inboxCount = 1
+	model.workspace.selectedTaskID = taskID
+	model.workspace.setMainView(ViewTask)
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30}) // focus sync
+	model.focus = MainPanel
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m := updated.(Model)
+
+	if m.statusMessage != "Task approved." {
+		t.Fatalf("statusMessage = %q, want 'Task approved.'", m.statusMessage)
+	}
+	// inbox item should be removed
+	if len(m.workspace.inbox) != 0 {
+		t.Fatalf("inbox len = %d, want 0 after approve", len(m.workspace.inbox))
+	}
+	// RequiresHumanReview should be cleared
+	if task := m.workspace.tasks[taskID]; task != nil && task.RequiresHumanReview {
+		t.Fatal("RequiresHumanReview still true after approve")
+	}
+}
+
+func TestTaskViewRejectKeyActsOnInboxItem(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	taskID := "task-review-rej"
+	model.workspace.tasks[taskID] = &taskRecord{
+		ID:                  taskID,
+		TaskNumber:          10,
+		Title:               "Reject me",
+		RequiresHumanReview: true,
+	}
+	model.workspace.inbox = []inboxItem{{ID: "inbox-2", TaskID: taskID, Summary: "Check this"}}
+	model.workspace.inboxCount = 1
+	model.workspace.selectedTaskID = taskID
+	model.workspace.setMainView(ViewTask)
+	model.focus = MainPanel
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m := updated.(Model)
+
+	if m.statusMessage != "Task rejected." {
+		t.Fatalf("statusMessage = %q, want 'Task rejected.'", m.statusMessage)
+	}
+	if len(m.workspace.inbox) != 0 {
+		t.Fatalf("inbox len = %d, want 0 after reject", len(m.workspace.inbox))
+	}
+}
+
+func TestTaskViewApproveNoOpWhenNoInboxItem(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	taskID := "task-no-inbox"
+	model.workspace.tasks[taskID] = &taskRecord{
+		ID:                  taskID,
+		TaskNumber:          11,
+		Title:               "No inbox",
+		RequiresHumanReview: false, // no review needed
+	}
+	model.workspace.selectedTaskID = taskID
+	model.workspace.setMainView(ViewTask)
+	model.focus = MainPanel
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m := updated.(Model)
+
+	// Should not set "Task approved." since there's no inbox item
+	if m.statusMessage == "Task approved." {
+		t.Fatal("statusMessage = 'Task approved.' but no inbox item existed")
+	}
+}
