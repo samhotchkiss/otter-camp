@@ -4096,3 +4096,49 @@ func TestTuiCommandNavigateInboxLoadsData(t *testing.T) {
 		t.Fatal("tui.command navigate inbox did not call LoadInboxItems (EX-179)")
 	}
 }
+
+// EX-180: pressing Escape from ViewTask should load project data when selectedProject is nil,
+// so navigating back to the project view shows the task list immediately.
+func TestEscapeFromTaskLoadsProjectDataWhenMissing(t *testing.T) {
+	t.Parallel()
+	projectID := "proj-ex-180"
+	detailLoaded := false
+	tasksLoaded := false
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjectDetail: func(_ context.Context, id string) (*ProjectDetail, error) {
+			if id == projectID {
+				detailLoaded = true
+			}
+			return &ProjectDetail{ID: id, DisplayName: "EX-180 Project"}, nil
+		},
+		LoadProjectTasks: func(_ context.Context, id string) ([]SidebarTaskItem, error) {
+			if id == projectID {
+				tasksLoaded = true
+			}
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.workspace.mainView = ViewTask
+	model.focus = MainPanel
+	model.workspace.selectedProjectID = projectID
+	model.workspace.selectedProject = nil // not loaded yet
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m := updated.(Model)
+
+	if m.workspace.mainView != ViewProject {
+		t.Fatalf("Escape from ViewTask should navigate to ViewProject, got %v", m.workspace.mainView)
+	}
+	if cmd == nil {
+		t.Fatal("Escape should return a non-nil cmd when project data is missing")
+	}
+	runNonTimerCmds(cmd)
+	if !detailLoaded {
+		t.Fatal("Escape from task did not call LoadProjectDetail (EX-180)")
+	}
+	if !tasksLoaded {
+		t.Fatal("Escape from task did not call LoadProjectTasks (EX-180)")
+	}
+}

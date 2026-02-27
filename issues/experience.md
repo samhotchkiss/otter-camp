@@ -2612,6 +2612,21 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-180---
+
+## EX-180: Escape from ViewTask to ViewProject didn't load data when project detail was missing
+
+**Observation:** `handleEscapeKey` navigated from ViewTask back to ViewProject when `selectedProjectID != ""` but returned `void` — it could never dispatch a tea.Cmd. When the project detail hadn't loaded yet (same timing gap as EX-176 but via the back-button path), pressing Escape would show a blank project view with no task list.
+
+**Improvement:** Changed `handleEscapeKey` signature from `func() void` to `func() tea.Cmd`. The call site now propagates the cmd via `return m, m.handleEscapeKey()`. Added the same `selectedProject == nil` guard from EX-176: when the detail is missing, dispatches `loadProjectDetailCmd + loadProjectTasksCmd` via `tea.Batch`.
+
+**Why it matters:** Escape is the intuitive "back" key. If pressing back from a task shows an empty project board, users will think the project has no tasks rather than recognizing it as a loading issue.
+
+**Effort:** Low (signature change + guard copied from EX-176)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
 ---EX-179---
 
 ## EX-179: `tui.command navigate inbox` didn't load fresh inbox data

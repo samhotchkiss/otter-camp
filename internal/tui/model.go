@@ -639,8 +639,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		if key.Type == tea.KeyEsc {
-			m.handleEscapeKey()
-			return m, nil
+			// EX-180: handleEscapeKey now returns a tea.Cmd so it can load
+			// project data when navigating back from task to project view.
+			return m, m.handleEscapeKey()
 		}
 		return m, nil
 	case tea.KeySpace:
@@ -958,17 +959,28 @@ func (m *Model) handleEnterKey() tea.Cmd {
 	return nil
 }
 
-func (m *Model) handleEscapeKey() {
+func (m *Model) handleEscapeKey() tea.Cmd {
 	if m.focus == MainPanel {
 		// From task detail: go back to project view if we came from one, else dashboard
 		if m.workspace.mainView == ViewTask && m.workspace.selectedProjectID != "" {
 			m.workspace.setMainView(ViewProject)
 			m.statusMessage = "Back to project."
-			return
+			// EX-180: load project data if it hasn't been fetched yet (e.g. user
+			// opened task from dashboard before the initial project detail arrived).
+			if m.workspace.selectedProject == nil {
+				var cmds []tea.Cmd
+				if m.runtimeHints.LoadProjectDetail != nil {
+					cmds = append(cmds, loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints))
+				}
+				cmds = append(cmds, loadProjectTasksCmd(m.workspace.selectedProjectID, m.runtimeHints, false))
+				return tea.Batch(cmds...)
+			}
+			return nil
 		}
 		m.workspace.setMainView(ViewDashboard)
 		m.statusMessage = "Returned to dashboard."
 	}
+	return nil
 }
 
 // stepTaskInProject moves projectTaskCursor by delta (±1) and opens the task
