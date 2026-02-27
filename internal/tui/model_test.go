@@ -621,6 +621,30 @@ func TestScopeCycleShortcutsTraverseAllScopeLevels(t *testing.T) {
 	}
 }
 
+func TestSelectingChatSessionNodeResetsScope(t *testing.T) {
+	// Simulate: start in ScopeTask, then select a session node from the CHATS sidebar.
+	// Scope should reset to ScopeOrg.
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 200, Height: 50})
+
+	// Force scope to ScopeTask to simulate having had a task session open.
+	model.activeScope = ScopeTask
+
+	// Make sure focus is on sidebar.
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	if model.ChatScope() != ScopeTask {
+		t.Fatalf("precondition: scope = %s, want task", model.ChatScope())
+	}
+
+	// Find the Frank/General session node (always present) and press Enter on it.
+	model.workspace.sidebarCursor = model.workspace.indexOfNode(generalSidebarNodeID)
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if got := model.ChatScope(); got != ScopeOrg {
+		t.Fatalf("scope after selecting session node = %s, want %s", got, ScopeOrg)
+	}
+}
+
 func TestQuitKeyClosesHelpView(t *testing.T) {
 	model := NewModel(DefaultState())
 	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
