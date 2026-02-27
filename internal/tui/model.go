@@ -72,6 +72,11 @@ type Model struct {
 	focus          Panel
 	commandMode    bool
 	commandBuffer  string
+	searchMode     bool
+	searchPanel    Panel
+	searchQuery    string
+	sidebarFilter  string
+	mainFilter     string
 	statusMessage  string
 	runtimeHints   RuntimeHints
 	connection     ConnectionState
@@ -270,6 +275,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.commandMode {
 		return m.updateCommandInput(key)
 	}
+	if m.searchMode {
+		return m.updateSearchInput(key)
+	}
 
 	m.applyResponsiveLayout()
 	order := m.focusOrder()
@@ -340,6 +348,10 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			if r == ']' {
 				m.switchScope(cycleScope(m.activeScope, true))
+				return m, nil
+			}
+			if r == '/' && (m.focus == SidebarPanel || m.focus == MainPanel) {
+				m.enterSearchMode(m.focus)
 				return m, nil
 			}
 			if m.focus == ChatPanel {
@@ -588,6 +600,72 @@ func (m *Model) tryAutocompleteMention() {
 	}
 	m.chatInput = trimmedRight[:tokenStart] + completion + " "
 	m.statusMessage = "Mention autocomplete applied."
+}
+
+func (m *Model) enterSearchMode(panel Panel) {
+	m.searchMode = true
+	m.searchPanel = panel
+	m.searchQuery = m.filterForPanel(panel)
+	m.statusMessage = "Search active. Type to filter; Enter keep, Esc clear."
+}
+
+func (m *Model) setFilterForPanel(panel Panel, query string) {
+	switch panel {
+	case SidebarPanel:
+		m.sidebarFilter = query
+	case MainPanel:
+		m.mainFilter = query
+	}
+}
+
+func (m Model) filterForPanel(panel Panel) string {
+	switch panel {
+	case SidebarPanel:
+		return m.sidebarFilter
+	case MainPanel:
+		return m.mainFilter
+	default:
+		return ""
+	}
+}
+
+func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key.Type {
+	case tea.KeyCtrlC:
+		m.quitting = true
+		m.statusMessage = "Exiting TUI."
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.setFilterForPanel(m.searchPanel, "")
+		m.searchMode = false
+		m.searchQuery = ""
+		m.statusMessage = "Search cleared."
+		return m, nil
+	case tea.KeyEnter:
+		m.setFilterForPanel(m.searchPanel, m.searchQuery)
+		m.searchMode = false
+		m.statusMessage = "Search applied."
+		return m, nil
+	case tea.KeyBackspace:
+		runes := []rune(m.searchQuery)
+		if len(runes) > 0 {
+			m.searchQuery = string(runes[:len(runes)-1])
+		}
+		m.setFilterForPanel(m.searchPanel, m.searchQuery)
+		return m, nil
+	case tea.KeySpace:
+		m.searchQuery += " "
+		m.setFilterForPanel(m.searchPanel, m.searchQuery)
+		return m, nil
+	case tea.KeyRunes:
+		if len(key.Runes) > 0 {
+			m.searchQuery += string(key.Runes)
+			m.setFilterForPanel(m.searchPanel, m.searchQuery)
+		}
+		return m, nil
+	default:
+		return m, nil
+	}
 }
 
 func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {

@@ -110,6 +110,17 @@ func mainViewTitle(view MainView) string {
 	}
 }
 
+func normalizedFilterQuery(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+func matchesFilter(value, query string) bool {
+	if query == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(value), query)
+}
+
 func panelStyle(innerW, innerH int, focused bool) lipgloss.Style {
 	bc := colBorder
 	if focused {
@@ -269,6 +280,8 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 
 	// Sidebar nodes
 	visible := m.workspace.visibleSidebarIDs()
+	visible = m.filteredSidebarIDs(visible, m.sidebarFilter)
+	currentSidebarID := m.workspace.currentSidebarID()
 	inboxFooter := ""
 	if n := len(m.workspace.inbox); n > 0 {
 		inboxFooter = styleMuted.Render(fmt.Sprintf("▼ %d inbox", n))
@@ -303,13 +316,18 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 		if node == nil {
 			continue
 		}
-		lines = append(lines, m.renderSidebarNode(node, i == m.workspace.sidebarCursor, cw))
+		lines = append(lines, m.renderSidebarNode(node, id == currentSidebarID, cw))
 	}
 	if remaining := len(visible) - maxNodeLines; remaining > 0 && rowsForNodesAndMore > 0 {
 		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more", remaining)))
 	}
 	if inboxFooter != "" {
 		lines = append(lines, inboxFooter)
+	}
+
+	if searchLine := m.renderSearchBar(SidebarPanel, cw); searchLine != "" {
+		lines = append(lines, "")
+		lines = append(lines, searchLine)
 	}
 
 	// Fill remaining space
@@ -381,6 +399,49 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int) stri
 	return rendered + statusBadge + unreadSuffix
 }
 
+func (m Model) filteredSidebarIDs(visible []string, rawQuery string) []string {
+	query := normalizedFilterQuery(rawQuery)
+	if query == "" {
+		return visible
+	}
+
+	include := make(map[string]struct{}, len(visible))
+	for _, id := range visible {
+		node := m.workspace.nodes[id]
+		if node == nil {
+			continue
+		}
+		if matchesFilter(node.Label, query) {
+			include[id] = struct{}{}
+			if node.ParentID != "" {
+				include[node.ParentID] = struct{}{}
+			}
+		}
+	}
+
+	filtered := make([]string, 0, len(include))
+	for _, id := range visible {
+		if _, ok := include[id]; ok {
+			filtered = append(filtered, id)
+		}
+	}
+	return filtered
+}
+
+func (m Model) renderSearchBar(panel Panel, width int) string {
+	query := m.filterForPanel(panel)
+	editing := m.searchMode && m.searchPanel == panel
+	if !editing && strings.TrimSpace(query) == "" {
+		return ""
+	}
+
+	prompt := "/" + query
+	if editing {
+		prompt += "▌"
+	}
+	return styleMuted.Render(truncate("Search "+prompt, width))
+}
+
 // ── Main panel ──────────────────────────────────────────────────────────────
 
 func (m Model) renderMainPanel(innerW, innerH int, focused bool, layout layoutState) string {
@@ -419,6 +480,11 @@ func (m Model) renderMainPanel(innerW, innerH int, focused bool, layout layoutSt
 	viewLines := m.renderMainViewContent(m.workspace.mainView, cw, innerH-4)
 	lines = append(lines, viewLines...)
 
+	if searchLine := m.renderSearchBar(MainPanel, cw); searchLine != "" {
+		lines = append(lines, "")
+		lines = append(lines, searchLine)
+	}
+
 	content := buildPanelContent(lines, innerH, cw)
 
 	return panelStyle(innerW, innerH, focused).Render(content)
@@ -452,6 +518,7 @@ func (m Model) renderMainViewContent(view MainView, width, maxLines int) []strin
 func (m Model) renderDashboardView(width, maxLines int) []string {
 	var lines []string
 	counts := m.workspace.boardCounts()
+	query := normalizedFilterQuery(m.mainFilter)
 
 	// Board columns
 	lines = append(lines, "")
@@ -489,6 +556,9 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		if task == nil {
 			continue
 		}
+		if !matchesFilter(task.Title, query) && !matchesFilter(task.Status, query) {
+			continue
+		}
 		entry := truncate("  "+task.Title, colW)
 		switch task.Status {
 		case "todo":
@@ -522,12 +592,18 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 	}
 
 	// Inbox section
-	if len(m.workspace.inbox) > 0 {
+	filteredInbox := make([]inboxItem, 0, len(m.workspace.inbox))
+	for _, item := range m.workspace.inbox {
+		if matchesFilter(item.Summary, query) || matchesFilter(item.TaskID, query) {
+			filteredInbox = append(filteredInbox, item)
+		}
+	}
+	if len(filteredInbox) > 0 {
 		lines = append(lines, "")
-		lines = append(lines, divider(width, fmt.Sprintf("Inbox  %d", len(m.workspace.inbox))))
-		for i, item := range m.workspace.inbox {
+		lines = append(lines, divider(width, fmt.Sprintf("Inbox  %d", len(filteredInbox))))
+		for i, item := range filteredInbox {
 			if i >= 3 {
-				lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more", len(m.workspace.inbox)-3)))
+				lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more", len(filteredInbox)-3)))
 				break
 			}
 			bullet := lipgloss.NewStyle().Foreground(colAccent).Render("▸ ")
@@ -536,14 +612,20 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 	}
 
 	// Activity section
-	if len(m.workspace.activity) > 0 {
+	filteredActivity := make([]string, 0, len(m.workspace.activity))
+	for _, entry := range m.workspace.activity {
+		if matchesFilter(entry, query) {
+			filteredActivity = append(filteredActivity, entry)
+		}
+	}
+	if len(filteredActivity) > 0 {
 		lines = append(lines, "")
 		lines = append(lines, divider(width, "Activity"))
 		start := 0
-		if len(m.workspace.activity) > 3 {
-			start = len(m.workspace.activity) - 3
+		if len(filteredActivity) > 3 {
+			start = len(filteredActivity) - 3
 		}
-		for _, entry := range m.workspace.activity[start:] {
+		for _, entry := range filteredActivity[start:] {
 			lines = append(lines, styleMuted.Render("  ✓ "+truncate(entry, width-6)))
 		}
 	}
@@ -574,9 +656,24 @@ func buildColumnSep(width int) string {
 func (m Model) renderProjectView(width, maxLines int) []string {
 	var lines []string
 	lines = append(lines, "")
+	query := normalizedFilterQuery(m.mainFilter)
 	for _, id := range m.workspace.topLevel {
 		node := m.workspace.nodes[id]
 		if node == nil || node.Kind != sidebarKindProject {
+			continue
+		}
+		children := m.workspace.projectChildren(id)
+		hasMatch := matchesFilter(node.Label, query)
+		if !hasMatch && query != "" {
+			for _, cid := range children {
+				child := m.workspace.nodes[cid]
+				if child != nil && matchesFilter(child.Label, query) {
+					hasMatch = true
+					break
+				}
+			}
+		}
+		if !hasMatch {
 			continue
 		}
 		icon := "▸ "
@@ -584,10 +681,12 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			icon = "▾ "
 		}
 		lines = append(lines, lipgloss.NewStyle().Foreground(colFocus).Bold(true).Render(icon+node.Label))
-		children := m.workspace.projectChildren(id)
 		for _, cid := range children {
 			child := m.workspace.nodes[cid]
 			if child == nil {
+				continue
+			}
+			if !matchesFilter(child.Label, query) {
 				continue
 			}
 			lines = append(lines, styleText.Render("    › "+truncate(child.Label, width-8)))
@@ -644,7 +743,15 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 }
 
 func (m Model) renderInboxView(width, maxLines int) []string {
-	if len(m.workspace.inbox) == 0 {
+	query := normalizedFilterQuery(m.mainFilter)
+	filteredInbox := make([]inboxItem, 0, len(m.workspace.inbox))
+	for _, item := range m.workspace.inbox {
+		if matchesFilter(item.Summary, query) || matchesFilter(item.TaskID, query) {
+			filteredInbox = append(filteredInbox, item)
+		}
+	}
+
+	if len(filteredInbox) == 0 {
 		return []string{
 			"",
 			lipgloss.JoinHorizontal(lipgloss.Center,
@@ -656,8 +763,16 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 
 	var lines []string
 	lines = append(lines, "")
-	for i, item := range m.workspace.inbox {
-		isCursor := i == m.workspace.inboxCursor
+	current := m.workspace.currentInboxItem()
+	currentID := ""
+	if current != nil {
+		currentID = current.ID
+	}
+	for i, item := range filteredInbox {
+		isCursor := item.ID == currentID
+		if currentID == "" {
+			isCursor = i == 0
+		}
 
 		var prefix string
 		var rowStyle lipgloss.Style
@@ -685,11 +800,18 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 func (m Model) renderActivityView(width, maxLines int) []string {
 	var lines []string
 	lines = append(lines, "")
-	start := 0
-	if len(m.workspace.activity) > maxLines {
-		start = len(m.workspace.activity) - maxLines
+	query := normalizedFilterQuery(m.mainFilter)
+	filteredActivity := make([]string, 0, len(m.workspace.activity))
+	for _, entry := range m.workspace.activity {
+		if matchesFilter(entry, query) {
+			filteredActivity = append(filteredActivity, entry)
+		}
 	}
-	for _, entry := range m.workspace.activity[start:] {
+	start := 0
+	if len(filteredActivity) > maxLines {
+		start = len(filteredActivity) - maxLines
+	}
+	for _, entry := range filteredActivity[start:] {
 		dot := lipgloss.NewStyle().Foreground(colConnected).Render("✓ ")
 		lines = append(lines, dot+styleText.Render(truncate(entry, width-4)))
 	}
