@@ -1712,3 +1712,17 @@ Applied to both the full Activity view and the dashboard Activity widget (EX-103
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-115: Project view done-tasks section ignores search filter
+
+**Observation:** In the project view, when "d" is toggled to show done tasks, the `DONE (N)` section always showed all done tasks regardless of any active search filter. The open-task section above it correctly filtered tasks by `mainFilter`, but the done-tasks section did not.
+
+**Improvement:** The done-tasks section now applies the same `matchesFilter` predicate used by the open-task section. The section header count reflects filtered results, and the section is skipped entirely when no done tasks match.
+
+**Why it matters:** If a user is searching for "OC-3" to find a specific task, they expect the done section to also filter to matching tasks. Showing all done tasks while the open section is filtered creates a confusing mixed view.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

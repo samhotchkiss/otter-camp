@@ -1139,35 +1139,48 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		lines = append(lines, taskLines...)
 		// Done tasks section (toggle with 'd').
 		if m.workspace.showDoneTasks && proj != nil && len(proj.DoneTasks) > 0 {
-			if len(lines) < maxLines {
-				lines = append(lines, "")
-			}
-			if len(lines) < maxLines {
-				doneHeader := fmt.Sprintf("DONE (%d)", len(proj.DoneTasks))
-				lines = append(lines, styleLabel.Render(doneHeader))
-			}
+			// EX-115: filter done tasks by the active query, consistent with the open-task section.
+			var filteredDone []SidebarTaskItem
 			for _, t := range proj.DoneTasks {
-				if len(lines) >= maxLines {
-					break
-				}
-				taskLabel := t.Title
+				doneLabel := t.Title
 				if t.TaskNumber > 0 {
-					taskLabel = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+					doneLabel = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
 				}
-				statusText := formatTaskStatus(t.WorkStatus)
-				statW := len([]rune(statusText))
-				maxTitleW := width - 8 - statW
-				if maxTitleW < 4 {
-					maxTitleW = 4
+				if matchesFilter(doneLabel, query) || matchesFilter(t.WorkStatus, query) {
+					filteredDone = append(filteredDone, t)
 				}
-				truncTitle := truncate(taskLabel, maxTitleW)
-				leftPart := "  ✓ " + truncTitle
-				padW := width - lipgloss.Width(leftPart) - statW - 1
-				if padW < 1 {
-					padW = 1
+			}
+			if len(filteredDone) > 0 {
+				if len(lines) < maxLines {
+					lines = append(lines, "")
 				}
-				spacer := strings.Repeat(" ", padW)
-				lines = append(lines, styleMuted.Render(leftPart+spacer+statusText))
+				if len(lines) < maxLines {
+					doneHeader := fmt.Sprintf("DONE (%d)", len(filteredDone))
+					lines = append(lines, styleLabel.Render(doneHeader))
+				}
+				for _, t := range filteredDone {
+					if len(lines) >= maxLines {
+						break
+					}
+					taskLabel := t.Title
+					if t.TaskNumber > 0 {
+						taskLabel = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+					}
+					statusText := formatTaskStatus(t.WorkStatus)
+					statW := len([]rune(statusText))
+					maxTitleW := width - 8 - statW
+					if maxTitleW < 4 {
+						maxTitleW = 4
+					}
+					truncTitle := truncate(taskLabel, maxTitleW)
+					leftPart := "  ✓ " + truncTitle
+					padW := width - lipgloss.Width(leftPart) - statW - 1
+					if padW < 1 {
+						padW = 1
+					}
+					spacer := strings.Repeat(" ", padW)
+					lines = append(lines, styleMuted.Render(leftPart+spacer+statusText))
+				}
 			}
 		}
 		// Navigation hint row.
