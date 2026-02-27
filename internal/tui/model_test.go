@@ -1322,3 +1322,58 @@ func TestDashboardBoardScrollsToCursorWhenColumnOverflows(t *testing.T) {
 		t.Fatalf("scroll indicator (↑) should appear when cursor is scrolled into view: %q", rendered)
 	}
 }
+
+// EX-127: chat.turn.started event should capture activeTurnSessionID immediately.
+func TestChatTurnStartedSetsActiveTurnSessionID(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+	// Use a well-formed UUID to exercise the looksLikeUUID path.
+	sessionUUID := "11111111-2222-3333-4444-555555555555"
+	model.activeSession = sessionUUID
+	// activeTurnSessionID empty → sessionMatchesActive accepts any session.
+	model.activeTurnSessionID = ""
+
+	rawPayload, _ := json.Marshal(map[string]string{"session_id": sessionUUID})
+	envelope := EventEnvelope{
+		EventType: "chat.turn.started",
+		Payload:   rawPayload,
+	}
+	updated, _ := model.Update(ChatEnvelopeMsg{Envelope: envelope})
+	m := updated.(Model)
+
+	if !m.activeTurn {
+		t.Fatal("activeTurn should be true after chat.turn.started")
+	}
+	if m.activeTurnSessionID != sessionUUID {
+		t.Fatalf("activeTurnSessionID = %q, want %q", m.activeTurnSessionID, sessionUUID)
+	}
+}
+
+// EX-128: task.created event adds activity entry.
+func TestTaskCreatedEventAddsActivityEntry(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"task_id":    "task-new-123",
+		"project_id": "proj-abc",
+		"task_number": 9,
+	})
+	envelope := EventEnvelope{
+		EventType: "task.created",
+		Payload:   rawPayload,
+	}
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: envelope})
+	m := updated.(Model)
+
+	activityFound := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "OC-9") && strings.Contains(entry, "created") {
+			activityFound = true
+			break
+		}
+	}
+	if !activityFound {
+		t.Fatalf("task.created event should add 'OC-9: created' activity entry: %v", m.workspace.activity)
+	}
+}

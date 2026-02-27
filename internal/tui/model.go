@@ -1771,6 +1771,12 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 			return
 		}
 		m.activeTurn = true
+		// EX-127: capture activeTurnSessionID from the event payload immediately
+		// so cross-session SSE events are filtered correctly from turn start,
+		// without waiting for the async SessionResolvedMsg to arrive.
+		if looksLikeUUID(payload.SessionID) && m.activeTurnSessionID == "" {
+			m.activeTurnSessionID = payload.SessionID
+		}
 		m.chatScrollOffset = 0 // snap to bottom when turn begins
 	case "chat.turn.completed":
 		if !m.turnsSynced {
@@ -2729,6 +2735,30 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			statusLabel := formatTaskStatus(payload.ToStatus)
 			m.workspace.activity = append(m.workspace.activity,
 				label+": "+statusLabel)
+		}
+		return nil
+	}
+	// EX-128: handle task.created so the project view and activity log update
+	// immediately when a new task is added — without requiring a manual refresh.
+	if event.EventType == "task.created" {
+		var payload struct {
+			TaskID     string `json:"task_id"`
+			ProjectID  string `json:"project_id"`
+			TaskNumber int    `json:"task_number"`
+		}
+		if !decodePayload(event.Payload, &payload) || payload.TaskID == "" {
+			return nil
+		}
+		label := payload.TaskID
+		if payload.TaskNumber > 0 {
+			label = fmt.Sprintf("OC-%d", payload.TaskNumber)
+		}
+		m.workspace.activity = append(m.workspace.activity, label+": created")
+		// Reload project detail when the new task belongs to the currently
+		// viewed project so the task list reflects the addition immediately.
+		if m.workspace.selectedProjectID != "" && payload.ProjectID != "" &&
+			strings.EqualFold(m.workspace.selectedProjectID, payload.ProjectID) {
+			return loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints)
 		}
 		return nil
 	}
