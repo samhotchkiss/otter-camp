@@ -909,11 +909,20 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		if cursor >= len(openTasks) {
 			cursor = len(openTasks) - 1
 		}
+		// Build task lines, then trim with "+N more" if they overflow maxLines.
+		headerLineCount := len(lines) + 1 // +1 for the OPEN TASKS header we're about to add
+		availForTasks := maxLines - headerLineCount
+		if availForTasks < 1 {
+			availForTasks = 1
+		}
+		var taskLines []string
 		for i, task := range openTasks {
 			var icon string
 			switch task.WorkStatus {
 			case "in_progress":
 				icon = "◌ "
+			case "blocked", "rejected", "deferred":
+				icon = "✗ "
 			default:
 				icon = "○ "
 			}
@@ -937,12 +946,26 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			}
 			spacer := strings.Repeat(" ", padW)
 			statusLabel := styleMuted.Render(statusText)
+			var taskLine string
 			if i == cursor && m.focus == MainPanel {
-				lines = append(lines, styleSelected.Render(leftPart+spacer)+statusLabel)
+				taskLine = styleSelected.Render(leftPart+spacer) + statusLabel
 			} else {
-				lines = append(lines, styleText.Render(leftPart+spacer)+statusLabel)
+				taskLine = styleText.Render(leftPart+spacer) + statusLabel
 			}
+			taskLines = append(taskLines, taskLine)
 		}
+		// If task list overflows available space, show only what fits + "+N more" footer.
+		if len(taskLines) > availForTasks {
+			visible := availForTasks - 1
+			if visible < 1 {
+				visible = 1
+			}
+			more := len(taskLines) - visible
+			taskLines = taskLines[:visible]
+			taskLines = append(taskLines, styleMuted.Italic(true).Render(fmt.Sprintf("  +%d more tasks · j/k to navigate", more)))
+		}
+		lines = append(lines, styleLabel.Render(taskHeader))
+		lines = append(lines, taskLines...)
 	}
 
 	return lines
@@ -1024,10 +1047,14 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	}
 
 	lines = append(lines, "")
+	backHint := "Esc·back"
+	if m.workspace.selectedProjectID != "" {
+		backHint = "Esc·back to project  p·project view"
+	}
 	if sessionID != "" {
-		lines = append(lines, styleMuted.Render("  Enter·open async session  Esc·back"))
+		lines = append(lines, styleMuted.Render("  Enter·open async session  "+backHint))
 	} else {
-		lines = append(lines, styleMuted.Render("  Esc·back  (no active session)"))
+		lines = append(lines, styleMuted.Render("  "+backHint+"  (no active session)"))
 	}
 
 	return lines
