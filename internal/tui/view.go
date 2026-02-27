@@ -1012,15 +1012,35 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			}
 			taskLines = append(taskLines, taskLine)
 		}
-		// If task list overflows available space, show only what fits + "+N more" footer.
+		// If task list overflows available space, use a stateless scroll window
+		// that keeps the cursor row visible (centered when possible).
 		if len(taskLines) > availForTasks {
 			visible := availForTasks - 1
 			if visible < 1 {
 				visible = 1
 			}
-			more := len(taskLines) - visible
-			taskLines = taskLines[:visible]
-			taskLines = append(taskLines, styleMuted.Italic(true).Render(fmt.Sprintf("  +%d more tasks · j/k to navigate", more)))
+			// Center the window on the cursor.
+			scrollStart := cursor - visible/2
+			if scrollStart < 0 {
+				scrollStart = 0
+			}
+			if scrollStart+visible > len(taskLines) {
+				scrollStart = len(taskLines) - visible
+			}
+			above := scrollStart
+			below := len(taskLines) - (scrollStart + visible)
+			shown := make([]string, visible)
+			copy(shown, taskLines[scrollStart:scrollStart+visible])
+			var footerText string
+			switch {
+			case above > 0 && below > 0:
+				footerText = fmt.Sprintf("  ↑ %d above  ·  +%d more  ·  j/k", above, below)
+			case above > 0:
+				footerText = fmt.Sprintf("  ↑ %d above  ·  j/k", above)
+			default:
+				footerText = fmt.Sprintf("  +%d more tasks  ·  j/k to navigate", below)
+			}
+			taskLines = append(shown, styleMuted.Italic(true).Render(footerText))
 		}
 		lines = append(lines, styleLabel.Render(taskHeader))
 		lines = append(lines, taskLines...)
