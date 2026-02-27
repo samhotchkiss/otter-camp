@@ -350,10 +350,22 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.switchScope(cycleScope(m.activeScope, true))
 				return m, nil
 			}
-			if r == '/' && (m.focus == SidebarPanel || m.focus == MainPanel) {
-				m.enterSearchMode(m.focus)
-				return m, nil
-			}
+				if r == '/' && (m.focus == SidebarPanel || m.focus == MainPanel) {
+					m.enterSearchMode(m.focus)
+					return m, nil
+				}
+				if m.focus == ChatPanel && strings.TrimSpace(m.chatInput) == "" {
+					if r == 'g' {
+						m.scrollChatBy(1 << 20)
+						m.statusMessage = "Chat scrolled to oldest."
+						return m, nil
+					}
+					if r == 'G' {
+						m.chatScrollOffset = 0
+						m.statusMessage = "Chat scrolled to latest."
+						return m, nil
+					}
+				}
 			if m.focus == ChatPanel {
 				m.handleChatRunes(key)
 				return m, nil
