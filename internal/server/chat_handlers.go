@@ -27,6 +27,7 @@ const (
 
 type chatSessionRepository interface {
 	UpdateTitle(ctx context.Context, id uuid.UUID, title *string) (repo.ChatSession, error)
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string) (repo.ChatSession, error)
 }
 
 type chatReadCursorRepository interface {
@@ -42,6 +43,8 @@ type chatArtifactRepository interface {
 type chatMessageRepository interface {
 	ListBySession(ctx context.Context, sessionID uuid.UUID) ([]repo.ChatMessage, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, errorMessage string) (repo.ChatMessage, error)
+	Redact(ctx context.Context, id uuid.UUID) (repo.ChatMessage, error)
+	GetByID(ctx context.Context, id uuid.UUID) (repo.ChatMessage, error)
 }
 
 type ChatRouteRegistrar struct {
@@ -76,6 +79,9 @@ func (r *ChatRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/turns", r.handlers.listTurns)
 
 	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions/{id}/cancel-turn", r.handlers.cancelTurn)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions/{id}/cancel", r.handlers.cancelTurn)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Delete("/chat-sessions/{id}/messages/{mid}", r.handlers.redactMessage)
+	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/export", r.handlers.exportSession)
 	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions/{id}/messages/{mid}/steer", r.handlers.steerTurn)
 
 	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/messages/{mid}/reactions", r.handlers.listReactions)
@@ -110,8 +116,9 @@ type createChatSessionRequest struct {
 }
 
 type patchChatSessionRequest struct {
-	Title *string `json:"title"`
-	Mode  *string `json:"mode"`
+	Title  *string `json:"title"`
+	Mode   *string `json:"mode"`
+	Status *string `json:"status"`
 }
 
 type appendChatMessageRequest struct {
@@ -423,7 +430,7 @@ func (h chatHandlers) patchSession(w http.ResponseWriter, r *http.Request) {
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
 		return
 	}
-	if req.Title == nil && req.Mode == nil {
+	if req.Title == nil && req.Mode == nil && req.Status == nil {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "at least one patch field is required")
 		return
 	}
@@ -441,6 +448,22 @@ func (h chatHandlers) patchSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, err := h.sessions.UpdateTitle(r.Context(), sessionID, trimOptionalString(req.Title)); err != nil {
+			h.respondChatError(responder, w, err)
+			return
+		}
+	}
+
+	if req.Status != nil {
+		if h.sessions == nil {
+			responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "chat session repository unavailable")
+			return
+		}
+		status := strings.TrimSpace(*req.Status)
+		if status != "active" && status != "archived" && status != "closed" {
+			responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "status must be one of: active, archived, closed")
+			return
+		}
+		if _, err := h.sessions.UpdateStatus(r.Context(), sessionID, status); err != nil {
 			h.respondChatError(responder, w, err)
 			return
 		}
@@ -754,6 +777,92 @@ func (h chatHandlers) editQueuedMessage(w http.ResponseWriter, r *http.Request) 
 	}
 
 	responder.JSON(w, http.StatusOK, toChatMessageResponse(updated))
+}
+
+func (h chatHandlers) redactMessage(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	_, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if h.service == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "chat service unavailable")
+		return
+	}
+
+	sessionID, ok := parseChatPathUUID(responder, w, r, "id", "invalid session id")
+	if !ok {
+		return
+	}
+	messageID, ok := parseChatPathUUID(responder, w, r, "mid", "invalid message id")
+	if !ok {
+		return
+	}
+
+	message, err := h.service.GetMessage(r.Context(), messageID)
+	if err != nil {
+		h.respondChatError(responder, w, err)
+		return
+	}
+	if message.SessionID != sessionID {
+		responder.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+		return
+	}
+
+	if err := h.service.RedactMessage(r.Context(), messageID); err != nil {
+		h.respondChatError(responder, w, err)
+		return
+	}
+
+	updated, err := h.service.GetMessage(r.Context(), messageID)
+	if err != nil {
+		h.respondChatError(responder, w, err)
+		return
+	}
+	responder.JSON(w, http.StatusOK, toChatMessageResponse(updated))
+}
+
+func (h chatHandlers) exportSession(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	_, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if h.service == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "chat service unavailable")
+		return
+	}
+	if h.messages == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "chat message repository unavailable")
+		return
+	}
+
+	sessionID, ok := parseChatPathUUID(responder, w, r, "id", "invalid session id")
+	if !ok {
+		return
+	}
+
+	session, err := h.service.GetSession(r.Context(), sessionID)
+	if err != nil {
+		h.respondChatError(responder, w, err)
+		return
+	}
+
+	msgs, err := h.messages.ListBySession(r.Context(), sessionID)
+	if err != nil {
+		h.respondChatError(responder, w, err)
+		return
+	}
+
+	msgRecords := make([]chatMessageRecord, 0, len(msgs))
+	for i := range msgs {
+		msgRecords = append(msgRecords, toChatMessageResponse(&msgs[i]))
+	}
+
+	responder.JSON(w, http.StatusOK, map[string]any{
+		"session":  toChatSessionResponse(session, nil),
+		"messages": msgRecords,
+	})
 }
 
 func (h chatHandlers) cancelTurn(w http.ResponseWriter, r *http.Request) {

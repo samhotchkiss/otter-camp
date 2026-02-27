@@ -9134,3 +9134,62 @@ No merge conflicts. Interface compliance assert (`var _ taskQueueRunStarter = (*
 - Required change:
   - **P1** `internal/tui/view.go` fuzzyMatch function — S1029: `for _, r := range []rune(candidate)` must be `for _, r := range candidate` (ranging over string directly in Go yields runes; no conversion needed in a range clause).
 - Unmerged; moved to 01-ready pending fix.
+
+## 2026-02-27 - Review: 172-responsive-layout-threshold-mismatch.md — ACCEPTED + MERGED
+- PR: #1552 `feat: align responsive breakpoints and add sidebar toggle key` (branch `task/172-layout-thresholds-key-fallback` → `v2`)
+- Reviewer: Claude Sonnet 4.6 (reviewer agent)
+- Merge commit: 540348c16fa916907b396fa5b732214451efeb17
+- Result: Accepted and merged to v2 (required rebase to resolve conflict in model_test.go and view.go)
+- Summary: `resolveSizeClass` thresholds corrected to spec (XS: <80, S: 80-99, M: 100-139). Icon-only sidebar mode implemented via `sidebarIconOnlyMode()` (100-119 col range) with compact labels (PRJ, T#, GEN). Sidebar toggle keybinding `s` added for S-size layouts with status feedback. Toggle documented in help screen and fallback help for sidebar/main panels. Tmux detection via `DetectRuntimeHints()` checks TMUX/STY env vars and TERM contents. Tests added for all new behaviors. Lint failures are all pre-existing on v2 base (confirmed by diffing CI runs).
+- Moved: 04-in-review → 05-completed
+
+## 2026-02-27 - Review: 173-interjection-messages-not-implemented.md — ACCEPTED + MERGED
+- PR: #1553 `feat: support interjection messages in chat rendering` (branch `task/173-interjection-messages` → `v2`)
+- Reviewer: Claude Sonnet 4.6 (reviewer agent)
+- Merge commit: 7bafa652f04352943006f963d2d0f7f25ce5859c
+- Result: Accepted and merged to v2
+- Summary: `interjection` added as recognized role in `normalizeRole()` and `renderChatMessages()` switch. Rendered with distinct amber/italic style (`colWarning + Bold + Italic`) and explicit `"Interjection (interjected)"` role label. SSE `chat.message.finalized` events with role=interjection correctly handled by the chat reducer. Two tests added: `TestChatReducerHandlesInterjectionRole` and `TestInterjectionMessagesRenderWithInterjectedLabel`. All acceptance criteria met.
+- Moved: 04-in-review → 05-completed
+
+## 2026-02-27 - 174-audit-missing-events-and-fields.md
+- Fixes applied:
+  - Extended audit event models to carry normalized `ip` and `outcome`:
+    - `internal/audit.Event` and `internal/repo.AuditEvent` now include `IP` + `Outcome` fields.
+    - `internal/repo/AuditEventRepo.Insert` now guarantees `metadata.ip` and `metadata.outcome` are present for every inserted event (defaults: `ip=""`, `outcome="success"`).
+    - `scanAuditEvent` now hydrates `AuditEvent.IP` and `AuditEvent.Outcome` from metadata for reads.
+  - Added/updated audit event constants for required event names in `internal/audit/event_types.go`:
+    - `auth.login`, `auth.logout`, `api_key.created`, `api_key.deleted`, `api_key.rotated`, `user.role_changed`, `agent.created`, `agent.updated`, `agent.deleted`.
+  - Added auth-handler audit emissions in `internal/server/auth_handlers.go`:
+    - `auth.login` on successful login.
+    - `auth.logout` on logout (success/failure).
+    - `api_key.created` on key issuance.
+    - `api_key.deleted` on key revoke (success/failure).
+    - New admin role-change endpoint `PATCH /v1/admin/users/{id}/role` emits `user.role_changed`.
+  - Wired auth audit recorder in `internal/server/router.go` using `audit.NewService(repo.NewAuditEventRepo(pool), logger)`.
+  - Added agent-handler audit emissions in `internal/server/agent_handlers.go`:
+    - `agent.created` on create (staff/temp).
+    - `agent.updated` on update and pause/unpause transitions.
+    - `agent.deleted` on retire/cancel transitions.
+  - Wired agent registrar to accept audit recorder (variadic) and passed real recorder from `cmd/ottercamp/main.go`.
+  - Extended audit list responses in `internal/server/org_audit_handlers.go` with explicit `ip` and `outcome` fields.
+  - Added/updated tests:
+    - Unit: auth/agent handler audit emission tests, event-type constants test updates.
+    - Integration: auth login/logout + API key + role-change audit assertions, agent create/update/retire audit assertions, repo/audit integration assertions for new fields.
+- Tests run:
+  - `go test ./internal/audit ./internal/repo ./internal/server` (pass)
+  - `go test -tags integration ./internal/audit -run TestServiceRecordInsertsAndReturnsFKViolation` (pass)
+  - `go test -tags integration ./internal/repo -run TestAuditEventRepoInsertConstraintsAndFilters` (pass)
+  - `go test -tags integration ./internal/server -run 'TestAuthHTTPLoginMeLogoutAndExpiredSession|TestAuthHTTPAPIKeyLifecycleAndAdminRevoke|TestAuthHTTPAdminRoleChangeRecordsAudit|TestAgentHTTPAuditEventsCreateUpdateRetire'` (pass)
+  - `go test -tags integration ./internal/audit ./internal/repo ./internal/server` (fails on pre-existing `TestControlPlaneAPICostSummaryTotals`, unrelated to task 174 changes)
+
+## 2026-02-27 - 166-markdown-not-rendered-glamour-dead-code.md (review rework)
+- Fixes applied:
+  - Resolved reviewer P1 in `internal/tui/view.go` by replacing the split-loop with direct variadic append (`lines = append(lines, strings.Split(rendered, "\n")...)`) to satisfy gosimple S1011.
+  - Resolved reviewer P2 in `internal/tui/chat.go` markdown fallback:
+    - `containsLiteralMarkdownMarkers` now detects inline-code backticks.
+    - `normalizeRenderedMarkdown` now strips inline-code backticks via regex replacement while preserving code text.
+  - Added direct fallback test `TestNormalizeRenderedMarkdownRemovesInlineCodeBackticks` in `internal/tui/view_chat_test.go`.
+- Tests run:
+  - `go test ./internal/tui -run 'TestMarkdownRenderedInChatMessages|TestNormalizeRenderedMarkdownRemovesInlineCodeBackticks|TestStreamingMessageKeepsLiteralMarkdown'` (pass)
+  - `go vet ./internal/tui/...` (pass)
+  - `go test ./internal/tui` (fails on pre-existing `TestLayoutGoldenSnapshots/S` golden mismatch unrelated to markdown fallback changes)

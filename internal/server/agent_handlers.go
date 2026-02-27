@@ -71,6 +71,7 @@ type skillAssignmentLookupRepository interface {
 
 type agentProjectAssignmentListRepository interface {
 	ListByAgent(ctx context.Context, agentID uuid.UUID) ([]repo.AgentProjectAssignment, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.AgentProjectAssignment, error)
 }
 
 type agentSkillAttachmentListRepository interface {
@@ -138,6 +139,7 @@ func (r *AgentRouteRegistrar) RegisterRoutes(router chi.Router) {
 	).Post("/agent-templates", r.handlers.createAgentTemplate)
 	router.With(middleware.RequireAnyScope(requireReadScope("agents")...)).Get("/agent-templates/{id}", r.handlers.getAgentTemplate)
 
+	router.With(middleware.RequireAnyScope(requireReadScope("projects")...)).Get("/projects/{id}/agents", r.handlers.listProjectAgents)
 	router.With(middleware.RequireAnyScope(requireReadScope("agents")...)).Get("/agents/{id}/project-assignments", r.handlers.listAgentProjectAssignments)
 	router.With(
 		middleware.RequireRole("admin"),
@@ -1243,6 +1245,61 @@ func (h agentHandlers) listAgentProjectAssignments(w http.ResponseWriter, r *htt
 		NextCursor: nextCursor,
 		Limit:      params.Limit,
 		Total:      &total,
+	})
+}
+
+type projectAgentListItemResponse struct {
+	ID         uuid.UUID `json:"id"`
+	AgentID    uuid.UUID `json:"agent_id"`
+	ProjectID  uuid.UUID `json:"project_id"`
+	Role       string    `json:"role"`
+	IsActive   bool      `json:"is_active"`
+	AssignedAt time.Time `json:"assigned_at"`
+}
+
+func (h agentHandlers) listProjectAgents(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.projectAssignments == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "assignment repository unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+	_ = principal
+
+	projectID, err := parseAgentIDParam(r) // reuse UUID param parser — uses chi.URLParam("id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+
+	items, err := h.projectAssignments.ListByProject(r.Context(), projectID)
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	payload := make([]projectAgentListItemResponse, 0, len(items))
+	for _, item := range items {
+		payload = append(payload, projectAgentListItemResponse{
+			ID:         item.ID,
+			AgentID:    item.AgentID,
+			ProjectID:  item.ProjectID,
+			Role:       item.Role,
+			IsActive:   item.IsActive,
+			AssignedAt: item.AssignedAt,
+		})
+	}
+
+	total := len(payload)
+	responder.JSONList(w, http.StatusOK, payload, api.PaginationMeta{
+		Limit: 100,
+		Total: &total,
 	})
 }
 
