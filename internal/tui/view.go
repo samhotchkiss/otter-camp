@@ -956,6 +956,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("g / G", "jump to top/bottom"),
 		key("Tab/Shift-Tab", "cycle panel focus"),
 		key("1 / 2 / 3", "jump to sidebar/main/chat"),
+		key("< / >", "resize focused sidebar/chat"),
 		key("[ / ]", "cycle chat scope"),
 		"",
 		header("Chat"),

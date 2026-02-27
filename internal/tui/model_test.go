@@ -198,6 +198,20 @@ func TestChatScrollHotkeys(t *testing.T) {
 	}
 }
 
+func TestResizeKeyShrinksSidebarByTwoPercent(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 160, Height: 34})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+
+	before := model.State().PanelProportions
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'<'}})
+	after := model.State().PanelProportions
+
+	if got, want := after[0], before[0]-0.02; absFloat(got-want) > 0.0001 {
+		t.Fatalf("sidebar proportion after '<' = %.2f, want %.2f", got, want)
+	}
+}
+
 func TestGGJumpTopBottomAcrossPanels(t *testing.T) {
 	model := NewModel(DefaultState())
 	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -742,6 +756,13 @@ func containsAll(raw string, wants []string) bool {
 		}
 	}
 	return true
+}
+
+func absFloat(value float64) float64 {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func pressKey(model Model, key tea.KeyMsg) Model {
