@@ -65,8 +65,9 @@ type sidebarDataLoadedMsg struct {
 }
 
 type projectTasksLoadedMsg struct {
-	ProjectID string
-	Tasks     []SidebarTaskItem
+	ProjectID  string
+	Tasks      []SidebarTaskItem
+	ExpandNode bool // true when triggered by user interaction (Space/arrow/Enter)
 }
 
 type projectDetailLoadedMsg struct {
@@ -295,7 +296,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Also load agents for the AGENTS view.
 		var cmds []tea.Cmd
 		for _, proj := range typed.Projects {
-			cmds = append(cmds, loadProjectTasksCmd(proj.ID, m.runtimeHints))
+			cmds = append(cmds, loadProjectTasksCmd(proj.ID, m.runtimeHints, false))
 		}
 		if cmd := loadAgentsCmd(m.runtimeHints); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -316,7 +317,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case projectTasksLoadedMsg:
-		m.workspace.setProjectTasks(typed.ProjectID, typed.Tasks)
+		m.workspace.setProjectTasks(typed.ProjectID, typed.Tasks, typed.ExpandNode)
 		return m, nil
 	case projectDetailLoadedMsg:
 		m.workspace.selectedProject = &typed.Detail
@@ -488,7 +489,7 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						node.Expanded = false
 					} else {
 						node.Expanded = true
-						return m, loadProjectTasksCmd(node.ProjectID, m.runtimeHints)
+						return m, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true)
 					}
 				case sidebarKindHeader:
 					sectionID := sidebarSectionID(strings.TrimPrefix(node.ID, "header-"))
@@ -605,7 +606,7 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				m.statusMessage = node.Label
 				// Load project detail + tasks
 				m.workspace.selectedProject = nil // clear stale detail
-				cmds := []tea.Cmd{loadProjectTasksCmd(node.ProjectID, m.runtimeHints)}
+				cmds := []tea.Cmd{loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true)}
 				if m.runtimeHints.LoadProjectDetail != nil {
 					cmds = append(cmds, loadProjectDetailCmd(node.ProjectID, m.runtimeHints))
 				}
@@ -682,7 +683,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			node := m.workspace.currentSidebarNode()
 			m.workspace.expandSidebarNode()
 			if node != nil && node.Kind == sidebarKindProject {
-				return true, loadProjectTasksCmd(node.ProjectID, m.runtimeHints)
+				return true, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true)
 			}
 			return true, nil
 		}
@@ -758,7 +759,7 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		node := m.workspace.currentSidebarNode()
 		if node != nil && node.Kind == sidebarKindProject {
 			m.workspace.expandSidebarNode()
-			return true, loadProjectTasksCmd(node.ProjectID, m.runtimeHints)
+			return true, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true)
 		}
 		m.workspace.expandSidebarNode()
 		return true, nil
@@ -2132,7 +2133,7 @@ func loadSidebarDataCmd(hints RuntimeHints) tea.Cmd {
 	}
 }
 
-func loadProjectTasksCmd(projectID string, hints RuntimeHints) tea.Cmd {
+func loadProjectTasksCmd(projectID string, hints RuntimeHints, expand bool) tea.Cmd {
 	if strings.TrimSpace(projectID) == "" || hints.LoadProjectTasks == nil {
 		return nil
 	}
@@ -2140,7 +2141,7 @@ func loadProjectTasksCmd(projectID string, hints RuntimeHints) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		tasks, _ := hints.LoadProjectTasks(ctx, projectID)
-		return projectTasksLoadedMsg{ProjectID: projectID, Tasks: tasks}
+		return projectTasksLoadedMsg{ProjectID: projectID, Tasks: tasks, ExpandNode: expand}
 	}
 }
 
@@ -2234,7 +2235,7 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 				break
 			}
 		}
-		cmds := []tea.Cmd{loadProjectTasksCmd(payload.TargetID, m.runtimeHints)}
+		cmds := []tea.Cmd{loadProjectTasksCmd(payload.TargetID, m.runtimeHints, true)}
 		if m.runtimeHints.LoadProjectDetail != nil {
 			cmds = append(cmds, loadProjectDetailCmd(payload.TargetID, m.runtimeHints))
 		}

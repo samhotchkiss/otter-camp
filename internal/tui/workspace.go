@@ -689,8 +689,8 @@ func (w *workspaceState) rebuildSidebar(orgSessionID string, chats []SidebarChat
 }
 
 // setProjectTasks replaces the task children for the given project ID.
-// It also marks the project as expanded.
-func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskItem) {
+// When expandNode is true the project is also marked as expanded in the sidebar.
+func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskItem, expandNode bool) {
 	nodeID := "project-" + projectID
 	// Remove existing task nodes for this project
 	for id, node := range w.nodes {
@@ -720,9 +720,11 @@ func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskIt
 			w.taskOrder = append(w.taskOrder, task.ID)
 		}
 	}
-	// Mark the project as expanded
-	if proj, ok := w.nodes[nodeID]; ok {
-		proj.Expanded = true
+	// Expand the project node only when explicitly requested by user interaction.
+	if expandNode {
+		if proj, ok := w.nodes[nodeID]; ok {
+			proj.Expanded = true
+		}
 	}
 }
 

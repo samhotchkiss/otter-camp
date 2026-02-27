@@ -51,8 +51,8 @@ func TestSidebarTreeNavigationExpandCollapseAndSelect(t *testing.T) {
 	model.workspace.setProjectTasks("alpha", []SidebarTaskItem{
 		{ID: "t1", Title: "Launch docs", WorkStatus: "todo"},
 		{ID: "t2", Title: "CI hardening", WorkStatus: "in_progress"},
-	})
-	// setProjectTasks marks the project expanded, so visible nodes:
+	}, true)
+	// setProjectTasks with expandNode=true marks the project expanded, so visible nodes:
 	// INBOX, CHATS header, Frank/General, PROJECTS header, project-alpha, task-t1, task-t2 = 7
 
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}}) // focus sidebar
