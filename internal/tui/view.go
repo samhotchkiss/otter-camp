@@ -953,18 +953,50 @@ func (m Model) renderChatMessages(width int) []string {
 		}
 
 		// Tool calls
-		for _, tc := range msg.ToolCalls {
+		for i, tc := range msg.ToolCalls {
 			var statusStyle lipgloss.Style
-			switch tc.Status {
-			case "success":
+			statusLabel := strings.ToLower(strings.TrimSpace(tc.Status))
+			switch statusLabel {
+			case "success", "completed", "done":
 				statusStyle = styleTool
-			case "pending":
+			case "pending", "running", "in_progress":
 				statusStyle = styleReconnecting
 			default:
 				statusStyle = styleDisconnected
 			}
-			tcLine := "  ⚙ " + tc.Name + "  " + statusStyle.Render(tc.Status)
+			if strings.TrimSpace(statusLabel) == "" {
+				statusLabel = "pending"
+			}
+			callID := toolCallIdentity(tc, i)
+			expanded := m.isToolCallExpanded(msg.ID, callID)
+			indicator := "▶"
+			if expanded {
+				indicator = "▼"
+			}
+			tcLine := "  " + indicator + " ⚙ " + tc.Name + " (" + statusStyle.Render(statusLabel) + ")"
 			lines = append(lines, styleMuted.Render(tcLine))
+			if expanded {
+				result := strings.TrimSpace(tc.Result)
+				if result == "" {
+					lines = append(lines, styleSubtle.Render("    (no result yet)"))
+					continue
+				}
+				const maxToolResultRunes = 280
+				runes := []rune(result)
+				truncated := false
+				if len(runes) > maxToolResultRunes {
+					result = string(runes[:maxToolResultRunes])
+					truncated = true
+				}
+				for _, rawLine := range strings.Split(result, "\n") {
+					for _, wrapped := range wrapText(rawLine, maxInt(8, width-4)) {
+						lines = append(lines, styleText.Render("    "+wrapped))
+					}
+				}
+				if truncated {
+					lines = append(lines, styleMuted.Render("    [show more]"))
+				}
+			}
 		}
 
 		if !msg.Finalized && msg.Role == "assistant" {
