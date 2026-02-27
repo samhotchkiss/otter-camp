@@ -322,9 +322,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Pre-load tasks for all projects so the dashboard task board is populated on startup.
 		// Also load agents for the AGENTS view.
+		// If a project is the persisted selected project, expand its sidebar node so the user
+		// sees their active project's task list on startup without needing to click.
 		var cmds []tea.Cmd
 		for _, proj := range typed.Projects {
-			cmds = append(cmds, loadProjectTasksCmd(proj.ID, m.runtimeHints, false))
+			expand := m.workspace.selectedProjectID == proj.ID
+			cmds = append(cmds, loadProjectTasksCmd(proj.ID, m.runtimeHints, expand))
 		}
 		if cmd := loadAgentsCmd(m.runtimeHints); cmd != nil {
 			cmds = append(cmds, cmd)
