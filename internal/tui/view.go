@@ -921,12 +921,21 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 	}
 
 	// Open tasks from selectedProject.Tasks (loaded from API)
+	query := normalizedFilterQuery(m.mainFilter)
 	var openTasks []SidebarTaskItem
 	if len(proj.Tasks) > 0 {
 		for _, t := range proj.Tasks {
-			if t.WorkStatus != "done" && t.WorkStatus != "approved" && t.WorkStatus != "cancelled" {
-				openTasks = append(openTasks, t)
+			if t.WorkStatus == "done" || t.WorkStatus == "approved" || t.WorkStatus == "cancelled" {
+				continue
 			}
+			taskLabel := t.Title
+			if t.TaskNumber > 0 {
+				taskLabel = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+			}
+			if !matchesFilter(taskLabel, query) && !matchesFilter(t.WorkStatus, query) {
+				continue
+			}
+			openTasks = append(openTasks, t)
 		}
 	} else {
 		// Fall back to sidebar task nodes if API detail not yet available
@@ -937,6 +946,10 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 				continue
 			}
 			if child.WorkStatus == "done" || child.WorkStatus == "approved" {
+				continue
+			}
+			taskLabel := child.Label
+			if !matchesFilter(taskLabel, query) && !matchesFilter(child.WorkStatus, query) {
 				continue
 			}
 			openTasks = append(openTasks, SidebarTaskItem{

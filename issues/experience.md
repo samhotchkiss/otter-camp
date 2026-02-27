@@ -978,3 +978,111 @@ The sidebar cursor now automatically jumps to the corresponding task node when a
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-069: Sync project task cursor when opening task from sidebar + eagerly load project detail
+
+**Observation:** Two related gaps when opening a task by pressing Enter on a sidebar task node (rather than from the project view task list):
+1. `projectTaskCursor` was never updated, so pressing `p` (project view) would show the cursor on the wrong task (position 0 / OC-6) rather than the task just opened.
+2. `loadProjectDetailCmd` was never called when navigating to a task from the sidebar, so the project view showed "Loading…" indefinitely when you pressed `p`.
+
+**Improvement:**
+1. Added `syncProjectCursorToTask(taskID string)` call in the `sidebarKindTask` Enter handler. The method finds the task's index in the open-tasks list and sets `projectTaskCursor`. If `selectedProject` is nil (not yet loaded), the task ID is stored in `pendingProjectCursorTaskID` and applied when the project detail loads.
+2. In the `sidebarKindTask` handler, also issue `loadProjectDetailCmd` when `selectedProject` is nil, so "p" immediately shows the populated project view.
+3. In the `projectDetailLoadedMsg` handler, apply `pendingProjectCursorTaskID` if set.
+
+**Why it matters:** Pressing `p` from a task detail is a natural shortcut — "show me the other tasks in this project". Before this fix, the cursor snapped to the top of the list regardless of which task you were viewing. The combined fix makes navigation feel seamless: open any task from the sidebar, press `p`, and you see the project view with the correct task highlighted.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-070: j/k navigation through tasks from task detail view
+
+**Observation:** When viewing a task detail, there was no way to move to the next or previous task in the project without pressing Esc (back to project), then j/k to move the cursor, then Enter to open the next task. Three keypresses for a basic "next task" action.
+
+**Improvement:**
+1. Added `j` and `k` handlers for `MainPanel + ViewTask` in `handleWorkspaceRune`. They call `stepTaskInProject(±1)`, a new method that:
+   - Calls `openTasksForProject()` to get the open task list
+   - Increments/decrements `projectTaskCursor` (clamped at boundaries)
+   - Sets `selectedTaskID` to the new task
+   - Calls `syncSidebarToTask` to update the sidebar cursor
+   - Returns `loadTaskDetailCmd` to fetch the new task detail
+2. The task detail hint line now appends `  j/k·next/prev task` when the project context is loaded with multiple tasks.
+3. Updated the help screen description to mention task-detail navigation.
+
+Only works when in a project context (`selectedProject` is loaded with ≥2 tasks). At boundaries (first/last task), pressing k/j is silently ignored.
+
+**Why it matters:** Reviewing tasks one by one is a common workflow — standing up before a daily sync, or triaging a backlog. The j/k muscle memory from the project view transfers naturally to the task detail. One keypress instead of three for each task transition dramatically speeds up task review.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-071: Scroll project task list to keep cursor visible
+
+**Observation:** When a project had more tasks than fit in the available viewport, the task list was always clipped at the first N entries with a `+M more tasks · j/k to navigate` footer. Moving the cursor down past the last visible row would navigate correctly (the cursor position advanced), but the cursor task was invisible — the view still showed tasks 1 through N.
+
+**Improvement:** Replaced the static clip with a stateless scroll window centered on the cursor. When the task list overflows:
+- Compute `scrollStart = clamp(cursor - visible/2, 0, len-visible)` to center the cursor in the window.
+- Show `visible = availForTasks - 1` task rows from `[scrollStart, scrollStart+visible)`.
+- Footer adapts to show context: `↑ N above · +M more · j/k` (both directions), `↑ N above · j/k` (only above), or `+M more tasks · j/k to navigate` (only below, matching original phrasing).
+
+No extra state is required — the scroll position is derived purely from the cursor index each render.
+
+**Why it matters:** A project with 20 tasks is realistic. Without scroll-aware rendering, pressing `j` past row 10 is disorienting — the cursor moves but nothing in the view changes. With the fix, the window slides to always show the selected row, identical to the behavior users expect from any list-based UI.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [ ] Tested (no overflow data in dev env)
+
+---
+
+## EX-072: Full navigation context when opening task from dashboard
+
+**Observation:** When pressing Enter on a task in the dashboard (task board), the task detail opened correctly, but the navigation context was empty: `selectedProjectID` was not set, so the hint showed only `Enter·resume session  Esc·back` (without `p·project view` or `j/k·next/prev task`). Pressing `p` did nothing; Esc went to dashboard (not project). The sidebar didn't expand to highlight the task either.
+
+**Improvement:** In the dashboard Enter handler, after selecting the task:
+1. Look up the task's sidebar node to find its parent project node, and set `selectedProjectID`.
+2. Call `syncSidebarToTask` to expand the project in the sidebar and position the sidebar cursor.
+3. Call `syncProjectCursorToTask` to set the project task cursor for the `p` key.
+4. Eagerly issue `loadProjectDetailCmd` (if project not yet loaded) so `p` immediately shows the populated project view.
+
+**Why it matters:** All four task entry points (sidebar task node, project task list, task detail j/k, and dashboard) now set the same navigation context. From any entry point, the user gets: `Esc·back to project`, `p·project view`, `j/k·next/prev task`, and a correctly positioned sidebar cursor.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-073: Full task title in panel header
+
+**Observation:** When viewing a task detail, the main panel header showed only `OC-6` — just the task number. The project view header shows the full project name in uppercase. Consistency and orientation both argue for showing the full task title in the header.
+
+**Improvement:** Changed the `ViewTask` title case in `renderMainPanel` to produce `OC-N: TASK TITLE` (uppercase, truncated to fit the column width). If the task has no number, the title alone is shown uppercased.
+
+**Why it matters:** The panel header is the primary orientation anchor. Seeing `OC-6: FLOW KICKOFF FIX TEST` at a glance is more informative than `OC-6` alone, especially when switching between tasks rapidly with j/k. It also makes the panel header consistent with the project view which shows the full project name.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-074: Search filter applied in project task list
+
+**Observation:** The `/` search filter worked on the dashboard (recent chats list and task list on the dashboard) but was ignored in the project view. Typing `/flow` while viewing "OtterCamp Sales Site" showed all 5 tasks unchanged — none were filtered out.
+
+**Improvement:** Added `query := normalizedFilterQuery(m.mainFilter)` and a `matchesFilter` check to the open tasks loop in `renderProjectView`. Tasks are now filtered against the query in both their formatted label (`OC-N: Title`) and their `work_status`. The header count reflects the filtered set (e.g. "OPEN TASKS (2) · 1 done"). Pressing Escape clears the filter and all tasks return.
+
+**Why it matters:** The search bar is prominently displayed in all views, so users reasonably expect it to filter the content they're looking at. Silently ignoring the filter in project view creates confusion and forces users to scroll through all tasks to find what they're looking for.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
