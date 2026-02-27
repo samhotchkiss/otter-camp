@@ -954,14 +954,19 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		}
 		var taskLines []string
 		for i, task := range openTasks {
+			isCursor := i == cursor
 			var icon string
-			switch task.WorkStatus {
-			case "in_progress":
-				icon = "◌ "
-			case "blocked", "rejected", "deferred":
-				icon = "✗ "
-			default:
-				icon = "○ "
+			if isCursor {
+				icon = "► "
+			} else {
+				switch task.WorkStatus {
+				case "in_progress":
+					icon = "◌ "
+				case "blocked", "rejected", "deferred":
+					icon = "✗ "
+				default:
+					icon = "○ "
+				}
 			}
 			statusText := formatTaskStatus(task.WorkStatus)
 			statW := len([]rune(statusText))
@@ -984,8 +989,8 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			spacer := strings.Repeat(" ", padW)
 			statusLabel := styleMuted.Render(statusText)
 			var taskLine string
-			if i == cursor && m.focus == MainPanel {
-				taskLine = styleSelected.Render(leftPart+spacer) + statusLabel
+			if isCursor {
+				taskLine = styleBold.Foreground(colFocus).Render(leftPart) + styleMuted.Render(spacer+statusText)
 			} else {
 				taskLine = styleText.Render(leftPart+spacer) + statusLabel
 			}
@@ -1003,10 +1008,20 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		}
 		lines = append(lines, styleLabel.Render(taskHeader))
 		lines = append(lines, taskLines...)
-		// Navigation hint below the task list
-		hintStr := "  j/k navigate  ·  Enter·open task  ·  Esc·back"
+		// Dynamic navigation hint: show selected task name when cursor is active.
 		if len(lines) < maxLines {
-			lines = append(lines, styleMuted.Italic(true).Render(hintStr))
+			if cursor >= 0 && cursor < len(openTasks) {
+				sel := openTasks[cursor]
+				var nameLabel string
+				if sel.TaskNumber > 0 {
+					nameLabel = fmt.Sprintf("OC-%d: %s", sel.TaskNumber, truncate(sel.Title, 32))
+				} else {
+					nameLabel = truncate(sel.Title, 40)
+				}
+				lines = append(lines, styleBold.Foreground(colFocus).Render("  ► "+nameLabel)+"  "+styleMuted.Render("Enter·open  ·  j/k·navigate  ·  Esc·back"))
+			} else {
+				lines = append(lines, styleMuted.Italic(true).Render("  j/k navigate  ·  Enter·open task  ·  Esc·back"))
+			}
 		}
 	}
 

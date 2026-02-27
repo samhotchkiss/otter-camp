@@ -907,3 +907,17 @@ When no sessionID exists: "(no session)" instead of "(no active session)". When 
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-065: Dynamic task name hint and ► cursor in project view
+
+**Observation:** The project view (OPEN TASKS list) showed a static `j/k navigate · Enter·open task · Esc·back` hint at the bottom regardless of cursor position. The task under the cursor showed a work-status icon (`◌`/`○`/`✗`) like every other row, giving no visual indication of which task was selected. This was inconsistent with the dashboard, which shows a `►` cursor icon and a dynamic task name hint.
+
+**Improvement:** Aligned the project view with the dashboard pattern: (1) the task row under the cursor now renders with `►` and focus-colour bold text instead of the work-status icon and `styleSelected` background; (2) the bottom hint changes to `► OC-N: Task Title  Enter·open  ·  j/k·navigate  ·  Esc·back` (rendered with focus colour) when the cursor is on a valid task, falling back to the static `j/k navigate · Enter·open task · Esc·back` when no tasks are present.
+
+**Why it matters:** Visual consistency across dashboard and project views reduces the learning burden. Users learn the `►` + dynamic hint pattern once and it works everywhere. Without the cursor indicator, you can't tell at a glance which task would open on Enter — especially when multiple tasks look similar.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
