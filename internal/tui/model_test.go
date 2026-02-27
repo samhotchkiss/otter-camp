@@ -322,6 +322,31 @@ func TestTmuxHelpLineUsesFallbackCommandHints(t *testing.T) {
 	}
 }
 
+func TestChatHelpHintUsesAltEnterNewline(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = ChatPanel
+
+	help := model.commandFallbackHelp()
+	if !strings.Contains(help, "Alt-Enter newline") {
+		t.Fatalf("chat help hint missing Alt-Enter newline: %q", help)
+	}
+	if strings.Contains(help, "Shift-Enter") {
+		t.Fatalf("chat help hint contains stale Shift-Enter label: %q", help)
+	}
+}
+
+func TestHelpViewUsesAltEnterNewline(t *testing.T) {
+	model := NewModel(DefaultState())
+	rendered := strings.Join(model.renderHelpView(100, 100), "\n")
+
+	if !strings.Contains(rendered, "Alt-Enter") {
+		t.Fatalf("help view missing Alt-Enter label: %q", rendered)
+	}
+	if strings.Contains(rendered, "Shift-Enter") {
+		t.Fatalf("help view contains stale Shift-Enter label: %q", rendered)
+	}
+}
+
 func TestForwardHistoryNavigation(t *testing.T) {
 	model := NewModel(DefaultState())
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}}) // chat focus
