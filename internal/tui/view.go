@@ -608,9 +608,14 @@ func (m Model) renderMainPanel(innerW, innerH int, focused bool, layout layoutSt
 			titleText = truncate(strings.ToUpper(m.workspace.nodes[nodeID].Label), cw-2)
 		}
 	case ViewTask:
-		// Show OC-N in title so user knows which task they're looking at
-		if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil && task.TaskNumber > 0 {
-			titleText = fmt.Sprintf("OC-%d", task.TaskNumber)
+		// Show "OC-N: Title" in panel header for orientation
+		if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
+			if task.TaskNumber > 0 {
+				full := fmt.Sprintf("OC-%d: %s", task.TaskNumber, strings.ToUpper(task.Title))
+				titleText = truncate(full, cw-2)
+			} else if task.Title != "" {
+				titleText = truncate(strings.ToUpper(task.Title), cw-2)
+			}
 		}
 	}
 	titleColor := colMuted
