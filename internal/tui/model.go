@@ -768,9 +768,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		}
 	case 'r':
 		m.workspace.activity = append(m.workspace.activity,
-			"manual refresh requested at "+m.now().Format("15:04:05"))
-		m.statusMessage = "Refresh requested. Awaiting SSE sync."
-		return true, nil
+			"manual refresh at "+m.now().Format("15:04:05"))
+		m.statusMessage = "Refreshing sidebar data…"
+		return true, loadSidebarDataCmd(m.runtimeHints)
 	case 'a':
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("approve") {
 			m.statusMessage = "Inbox item approved."
@@ -1993,7 +1993,7 @@ func (m Model) commandFallbackHelp() string {
 		case ViewProject:
 			return "j/k navigate tasks · Enter open task · Esc back · s toggle sidebar · : commands · ? help"
 		default:
-			return "j/k navigate · Enter open task · s toggle sidebar · : commands · ? help"
+			return "r refresh · s toggle sidebar · / filter · : commands · ? help"
 		}
 	case ChatPanel:
 		return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · ↑/↓ scroll · [/] scope · Esc cancel turn · : commands · ? help"
