@@ -1411,8 +1411,13 @@ func (m Model) renderActivityView(width, maxLines int) []string {
 		icon := activityIcon(entry)
 		lines = append(lines, icon+styleText.Render(truncate(entry, width-4)))
 	}
+	// EX-112: distinguish filtered-out vs genuinely-empty activity log.
 	if len(lines) == 1 {
-		lines = append(lines, styleMuted.Render("  No activity yet"))
+		if query != "" && len(m.workspace.activity) > 0 {
+			lines = append(lines, styleMuted.Render(fmt.Sprintf("  no activity matching %q", query)))
+		} else {
+			lines = append(lines, styleMuted.Render("  No activity yet"))
+		}
 	}
 	return lines
 }
@@ -1462,11 +1467,20 @@ func (m Model) renderAgentsView(width, maxLines int) []string {
 func (m Model) renderMergesView(width, maxLines int) []string {
 	var lines []string
 	lines = append(lines, "")
+	// EX-113: apply filter to merges and schedules views.
+	query := normalizedFilterQuery(m.mainFilter)
 	for _, pr := range m.workspace.mergeQueue {
+		if !matchesFilter(pr, query) {
+			continue
+		}
 		lines = append(lines, lipgloss.NewStyle().Foreground(colAccent).Render("⎇ ")+styleText.Render(pr))
 	}
 	if len(lines) == 1 {
-		lines = append(lines, styleMuted.Render("  No pending merges"))
+		if query != "" && len(m.workspace.mergeQueue) > 0 {
+			lines = append(lines, styleMuted.Render(fmt.Sprintf("  no merges matching %q", query)))
+		} else {
+			lines = append(lines, styleMuted.Render("  No pending merges"))
+		}
 	}
 	return lines
 }
@@ -1474,11 +1488,20 @@ func (m Model) renderMergesView(width, maxLines int) []string {
 func (m Model) renderSchedulesView(width, maxLines int) []string {
 	var lines []string
 	lines = append(lines, "")
+	// EX-113: apply filter to schedules view.
+	query := normalizedFilterQuery(m.mainFilter)
 	for _, s := range m.workspace.schedules {
+		if !matchesFilter(s, query) {
+			continue
+		}
 		lines = append(lines, lipgloss.NewStyle().Foreground(colPrimary).Render("⏰ ")+styleText.Render(s))
 	}
 	if len(lines) == 1 {
-		lines = append(lines, styleMuted.Render("  No schedules"))
+		if query != "" && len(m.workspace.schedules) > 0 {
+			lines = append(lines, styleMuted.Render(fmt.Sprintf("  no schedules matching %q", query)))
+		} else {
+			lines = append(lines, styleMuted.Render("  No schedules"))
+		}
 	}
 	return lines
 }

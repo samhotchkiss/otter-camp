@@ -1638,3 +1638,57 @@ Applied to both the full Activity view and the dashboard Activity widget (EX-103
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-110: Agents view ignores search filter
+
+**Observation:** Unlike every other list view (dashboard, project tasks, inbox, activity), `renderAgentsView` did not apply `mainFilter` to the agents list. Searching for "ellie" while in the Agents view would show no visual feedback — all agents remained visible.
+
+**Improvement:** `renderAgentsView` now applies the same `matchesFilter` predicate used by other views, filtering agents by name and status. When the filter excludes all agents, shows `"no agents matching <query>"` instead of a confusing empty list.
+
+**Why it matters:** Consistency. Users who learn that `/` filters content expect it to work in every view. Silent non-filtering is worse than no filter at all — it makes users think the filter is broken.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-111: Inbox empty state says "✓ Inbox clear" when filter excludes all items
+
+**Observation:** When a search filter was active and no inbox items matched, `renderInboxView` showed `"✓ Inbox clear"`. That message implies there are no pending items — but there were pending items, they just didn't match the filter. Misleading.
+
+**Improvement:** When `query != ""` and there are inbox items that don't match, the empty state now shows `"no inbox items matching <query>"`. The `"✓ Inbox clear"` message is only shown when the inbox is genuinely empty.
+
+**Why it matters:** "✓ Inbox clear" is a signal that no action is needed. Showing it when items exist (but are filtered) creates false confidence that could cause an operator to miss a task requiring review.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-112: Activity view says "No activity yet" when filter excludes all entries
+
+**Observation:** Same pattern as EX-111: when a filter was active and no activity entries matched, `renderActivityView` displayed `"No activity yet"`. That message implies the log is empty, not filtered.
+
+**Improvement:** When `query != ""` and there are activity entries that don't match, shows `"no activity matching <query>"` instead of `"No activity yet"`.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-113: Merges and Schedules views don't apply search filter
+
+**Observation:** `renderMergesView` and `renderSchedulesView` did not apply `mainFilter`. All merges/schedules were always shown regardless of the active search query — the only views that silently ignored the filter.
+
+**Improvement:** Both views now apply `matchesFilter` to their items. Empty state messages distinguish filtered-out vs genuinely empty:
+- Merges: `"no merges matching <query>"` vs `"No pending merges"`
+- Schedules: `"no schedules matching <query>"` vs `"No schedules"`
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
