@@ -815,7 +815,7 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		lines = append(lines, divider(width, fmt.Sprintf("Inbox  %d", len(filteredInbox))))
 		for i, item := range filteredInbox {
 			if i >= 3 {
-				lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more", len(filteredInbox)-3)))
+				lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more  ·  i·view all", len(filteredInbox)-3)))
 				break
 			}
 			bullet := lipgloss.NewStyle().Foreground(colAccent).Render("▸ ")
@@ -824,6 +824,11 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 				taskBadge = styleMuted.Render(fmt.Sprintf("  OC-%d", task.TaskNumber))
 			}
 			lines = append(lines, bullet+styleText.Render(truncate(item.Summary, width-12))+taskBadge)
+		}
+		// EX-107: hint to navigate to the full inbox view.
+		// Only show when overflow wasn't already shown (which includes the hint).
+		if len(filteredInbox) <= 3 {
+			lines = append(lines, styleMuted.Render("  i·open inbox"))
 		}
 	}
 
@@ -1814,7 +1819,7 @@ func (m Model) renderChatMessages(width int) []string {
 				}
 				if truncated {
 					// EX-097: "[show more]" looked interactive but had no key handler.
-				// Passive indicator makes it clear the display is capped.
+					// Passive indicator makes it clear the display is capped.
 				lines = append(lines, styleMuted.Render("    … (result truncated)"))
 				}
 			}
