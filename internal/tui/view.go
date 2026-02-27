@@ -602,6 +602,15 @@ func (m Model) renderMainPanel(innerW, innerH int, focused bool, layout layoutSt
 		if n := len(m.workspace.agents); n > 0 {
 			titleText += fmt.Sprintf(" (%d)", n)
 		}
+	// EX-102: count badges for merges and schedules, consistent with inbox/activity/agents.
+	case ViewMerges:
+		if n := len(m.workspace.mergeQueue); n > 0 {
+			titleText += fmt.Sprintf(" (%d)", n)
+		}
+	case ViewSchedules:
+		if n := len(m.workspace.schedules); n > 0 {
+			titleText += fmt.Sprintf(" (%d)", n)
+		}
 	case ViewProject:
 		// Show selected project name in title for orientation
 		if m.workspace.selectedProject != nil && m.workspace.selectedProject.DisplayName != "" {
@@ -2103,6 +2112,13 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 		styleMuted.Render("  ·  ") + styleSubtle.Render(sizeStr+"/"+focusStr) +
 		status
 
+	// EX-101: inbox badge — alert users to pending inbox items even when the
+	// sidebar is collapsed (narrow screens) and the inbox count isn't visible.
+	if m.workspace.inboxCount > 0 && m.workspace.mainView != ViewInbox {
+		bar += styleMuted.Render("  ·  ") +
+			lipgloss.NewStyle().Foreground(colWarning).Render(fmt.Sprintf("✉ %d", m.workspace.inboxCount))
+	}
+
 	if m.firstRun {
 		poL := ""
 		if m.proofRealtime {
@@ -2142,7 +2158,17 @@ func (m Model) degradedModeBanner() string {
 	}
 	icon := styleDisconnected.Render("⚠ ")
 	label := lipgloss.NewStyle().Foreground(colError).Bold(true).Render("DEGRADED MODE") + ": "
-	msg := "upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync."
+	// EX-100: context-aware message based on the actual connection state so
+	// the banner is actionable rather than showing developer jargon.
+	var msg string
+	switch {
+	case m.connection == ConnectionDisconnected:
+		msg = "Connection lost — data may be stale. Reconnecting automatically."
+	case m.connection == ConnectionReconnecting:
+		msg = "Reconnecting to server…"
+	default: // connected but event stream is stale
+		msg = "Event stream stale — some data may be delayed. Press r to refresh."
+	}
 	// EX-020: truncate the banner message to fit the terminal width
 	if m.width > 0 {
 		overhead := lipgloss.Width(icon) + lipgloss.Width(label) + 2

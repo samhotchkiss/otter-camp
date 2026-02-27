@@ -1,5 +1,5 @@
 ### XL board
-⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+⚠ DEGRADED MODE: Connection lost — data may be stale. Reconnecting automatically.
 ╭─────────────────────────────────────╮╭────────────────────────────────────────────────────────────────────────────────────────────────────────────╮╭─────────────────────────────────────────────────────────────────────╮
 │ INBOX                               ││ DASHBOARD                                                                                                  ││ General / Frank  ·  [task] [project] [org]                          │
 │ ─────────────────────────────────   ││ ────────────────────────────────────────────────────────────────────────────────────────────────────────── ││ ─────────────────────────────────────────────────────────────────── │
@@ -41,7 +41,7 @@
 Help: i inbox · n next unread · r refresh · : commands · ? help
 
 ### XL chat
-⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+⚠ DEGRADED MODE: Connection lost — data may be stale. Reconnecting automatically.
 ╭─────────────────────────────────────╮╭────────────────────────────────────────────────────────────────────────────────────────────────────────────╮╭─────────────────────────────────────────────────────────────────────╮
 │ INBOX                               ││ DASHBOARD                                                                                                  ││ General / Frank  ·  [task] [project] [org]                          │
 │ ─────────────────────────────────   ││ ────────────────────────────────────────────────────────────────────────────────────────────────────────── ││ ─────────────────────────────────────────────────────────────────── │
@@ -83,7 +83,7 @@ Help: i inbox · n next unread · r refresh · : commands · ? help
 Help: i inbox · n next unread · r refresh · : commands · ? help
 
 ### XL inbox
-⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
+⚠ DEGRADED MODE: Connection lost — data may be stale. Reconnecting automatically.
 ╭─────────────────────────────────────╮╭────────────────────────────────────────────────────────────────────────────────────────────────────────────╮╭─────────────────────────────────────────────────────────────────────╮
 │ INBOX                               ││ DASHBOARD                                                                                                  ││ General / Frank  ·  [task] [project] [org]                          │
 │ ─────────────────────────────────   ││ ────────────────────────────────────────────────────────────────────────────────────────────────────────── ││ ─────────────────────────────────────────────────────────────────── │

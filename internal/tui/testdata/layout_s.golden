@@ -1,5 +1,5 @@
 ### S board
-⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivit…
+⚠ DEGRADED MODE: Connection lost — data may be stale. Reconnecting automatically.
 ╭────────────────────────────────────────────────────╮╭──────────────────────────────────╮
 │ DASHBOARD                                          ││ General / Frank  ·  [t] [p] [o]  │
 │ ────────────────────────────────────────────────── ││ ──────────────────────────────── │
@@ -32,7 +32,7 @@
 Help: i inbox · n next unread · r refresh · : commands · ? help
 
 ### S chat
-⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivit…
+⚠ DEGRADED MODE: Connection lost — data may be stale. Reconnecting automatically.
 ╭────────────────────────────────────────────────────╮╭──────────────────────────────────╮
 │ DASHBOARD                                          ││ General / Frank  ·  [t] [p] [o]  │
 │ ────────────────────────────────────────────────── ││ ──────────────────────────────── │
@@ -65,7 +65,7 @@ Help: i inbox · n next unread · r refresh · : commands · ? help
 Help: i inbox · n next unread · r refresh · : commands · ? help
 
 ### S inbox
-⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivit…
+⚠ DEGRADED MODE: Connection lost — data may be stale. Reconnecting automatically.
 ╭────────────────────────────────────────────────────╮╭──────────────────────────────────╮
 │ DASHBOARD                                          ││ General / Frank  ·  [t] [p] [o]  │
 │ ────────────────────────────────────────────────── ││ ──────────────────────────────── │
@@ -98,7 +98,7 @@ Help: i inbox · n next unread · r refresh · : commands · ? help
 Help: i inbox · n next unread · r refresh · : commands · ? help
 
 ### S board-sidebar-focus
-⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivit…
+⚠ DEGRADED MODE: Connection lost — data may be stale. Reconnecting automatically.
 ╭──────────────────────────────╮╭────────────────────────────────────────────────────────╮
 │ INBOX                        ││ General / Frank  ·  [task] [project] [org]             │
 │ ──────────────────────────   ││ ────────────────────────────────────────────────────── │

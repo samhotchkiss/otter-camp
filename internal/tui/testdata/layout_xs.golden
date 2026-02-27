@@ -1,5 +1,5 @@
 ### XS board
-⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recover…
+⚠ DEGRADED MODE: Connection lost — data may be stale. Reconnecting…
 ╭───────────────────────────────────────────────────────────────────╮
 │ DASHBOARD                                                         │
 │ ───────────────────────────────────────────────────────────────── │
@@ -25,7 +25,7 @@
 Help: i inbox · n next unread · r refresh · : commands · ? help
 
 ### XS chat
-⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recover…
+⚠ DEGRADED MODE: Connection lost — data may be stale. Reconnecting…
 ╭───────────────────────────────────────────────────────────────────╮
 │ DASHBOARD                                                         │
 │ ───────────────────────────────────────────────────────────────── │
@@ -51,7 +51,7 @@ Help: i inbox · n next unread · r refresh · : commands · ? help
 Help: i inbox · n next unread · r refresh · : commands · ? help
 
 ### XS inbox
-⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recover…
+⚠ DEGRADED MODE: Connection lost — data may be stale. Reconnecting…
 ╭───────────────────────────────────────────────────────────────────╮
 │ DASHBOARD                                                         │
 │ ───────────────────────────────────────────────────────────────── │
