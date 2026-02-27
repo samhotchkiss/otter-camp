@@ -4307,3 +4307,32 @@ func TestRefreshKeyInProjectViewLoadsBothDetailAndTasks(t *testing.T) {
 		t.Fatal("'r' in ViewProject did not call LoadProjectTasks (EX-184)")
 	}
 }
+
+// EX-185: pressing Escape to cancel an active turn should clear activeTurnSessionID
+// so that the next chat.turn.started SSE event can set it (the guard checks == "").
+func TestEscapeCancelClearsActiveTurnSessionID(t *testing.T) {
+	t.Parallel()
+	sessionID := "sess-ex-185"
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		CancelChatTurn: func(_ context.Context, _ string) error { return nil },
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	// Put the model in an active-turn state with a known session.
+	model.activeTurn = true
+	model.activeTurnSessionID = sessionID
+	model.focus = ChatPanel
+	model.workspace.mainView = ViewInbox
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m2 := updated.(Model)
+	if m2.activeTurn {
+		t.Error("activeTurn should be false after Escape (EX-185)")
+	}
+	if m2.activeTurnSessionID != "" {
+		t.Errorf("activeTurnSessionID should be cleared after Escape, got %q (EX-185)", m2.activeTurnSessionID)
+	}
+	// Escape should dispatch a cancel request cmd (non-nil).
+	if cmd == nil {
+		t.Error("Escape should have dispatched a non-nil cancel cmd (EX-185)")
+	}
+}

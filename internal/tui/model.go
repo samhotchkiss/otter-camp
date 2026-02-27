@@ -1412,6 +1412,9 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 	case tea.KeyEsc:
 		if m.activeTurn {
 			m.activeTurn = false
+			// EX-185: clear activeTurnSessionID so the next turn's
+			// chat.turn.started can update it (the guard is "== """).
+			m.activeTurnSessionID = ""
 			m.statusMessage = "Active turn cancelled."
 			return true, requestChatCancelCmd(m.ActiveChatSession())
 		}

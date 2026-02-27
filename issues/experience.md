@@ -2884,3 +2884,18 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-185---
+
+## EX-185: Escape cancel didn't clear `activeTurnSessionID`, blocking the next turn's SSE update
+
+**Observation:** When the user pressed Escape to cancel an active turn, `m.activeTurn` was cleared to `false` but `m.activeTurnSessionID` was not cleared. On the next turn, `applyChatEnvelope` had the guard `if m.activeTurnSessionID == "" { m.activeTurnSessionID = ... }` — because the field was non-empty, the guard prevented the new turn's session ID from being recorded. If the user cancelled, then sent a new message to a different session, the TUI might still show the cancel/complete state as belonging to the previous session rather than the new one.
+
+**Improvement:** In the `tea.KeyEsc` branch of `handleChatControlKey`, added `m.activeTurnSessionID = ""` alongside `m.activeTurn = false`. The `completeTurnAndPromoteQueue` and `chat.turn.cancelled` paths already cleared it; now Escape is consistent.
+
+**Why it matters:** `activeTurnSessionID` is used to filter cross-session SSE events — it prevents a supervisor recovery run in another session from re-enabling the spinner for the user's current session. If it's stale after a cancel, the next turn's `chat.turn.started` event can't update it, and cross-session filtering breaks.
+
+**Effort:** Trivial (one line + one comment)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
