@@ -917,16 +917,30 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			default:
 				icon = "○ "
 			}
-			statusLabel := styleMuted.Render(formatTaskStatus(task.WorkStatus))
+			statusText := formatTaskStatus(task.WorkStatus)
+			statW := len([]rune(statusText))
 			taskTitle := task.Title
 			if task.TaskNumber > 0 {
 				taskTitle = fmt.Sprintf("OC-%d: %s", task.TaskNumber, task.Title)
 			}
-			taskLine := "  " + icon + truncate(taskTitle, width-20)
+			// Right-align the status label: compute how much to pad between title and status.
+			prefixW := 2 + lipgloss.Width(icon) // "  " + icon
+			maxTitleW := width - prefixW - statW - 2
+			if maxTitleW < 4 {
+				maxTitleW = 4
+			}
+			truncTitle := truncate(taskTitle, maxTitleW)
+			leftPart := "  " + icon + truncTitle
+			padW := width - lipgloss.Width(leftPart) - statW - 1
+			if padW < 1 {
+				padW = 1
+			}
+			spacer := strings.Repeat(" ", padW)
+			statusLabel := styleMuted.Render(statusText)
 			if i == cursor && m.focus == MainPanel {
-				lines = append(lines, styleSelected.Render(taskLine)+"  "+statusLabel)
+				lines = append(lines, styleSelected.Render(leftPart+spacer)+statusLabel)
 			} else {
-				lines = append(lines, styleText.Render(taskLine)+"  "+statusLabel)
+				lines = append(lines, styleText.Render(leftPart+spacer)+statusLabel)
 			}
 		}
 	}
@@ -1241,6 +1255,19 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 			sessionLabel = "Project Session"
 		default:
 			sessionLabel = "General / Frank"
+		}
+	}
+	// When viewing a project, append the project name to the session label
+	// so the chat header shows context: "Frank / General › OtterCamp Sales Site".
+	if m.activeScope == ScopeProject && m.workspace.selectedProjectID != "" {
+		projectName := ""
+		if m.workspace.selectedProject != nil && m.workspace.selectedProject.DisplayName != "" {
+			projectName = m.workspace.selectedProject.DisplayName
+		} else if node := m.workspace.nodes["project-"+m.workspace.selectedProjectID]; node != nil {
+			projectName = node.Label
+		}
+		if projectName != "" {
+			sessionLabel = sessionLabel + " › " + projectName
 		}
 	}
 	isThinking := m.activeTurn && (m.activeTurnSessionID == "" ||

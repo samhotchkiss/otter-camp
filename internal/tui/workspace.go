@@ -490,11 +490,16 @@ func (w *workspaceState) totalUnreadSessions() int {
 	return total
 }
 
-// chatSessionCount returns the number of non-Frank (non-org) session nodes.
+// chatSessionCount returns the number of non-Frank session nodes (recent chats).
+// It counts only session nodes in topLevel (not children of projects).
 func (w *workspaceState) chatSessionCount() int {
 	count := 0
-	for _, node := range w.nodes {
-		if node.Kind == sidebarKindSession && node.ID != generalSidebarNodeID {
+	for _, id := range w.topLevel {
+		if id == generalSidebarNodeID {
+			continue
+		}
+		node := w.nodes[id]
+		if node != nil && node.Kind == sidebarKindSession {
 			count++
 		}
 	}
