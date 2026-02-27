@@ -826,6 +826,9 @@ func (m *Model) handleEnterKey() tea.Cmd {
 			if m.workspace.applyInboxAction("open") {
 				m.state.LastActiveChatSession = m.workspace.activeSessionID
 				m.activeSession = m.workspace.activeSessionID
+				// EX-172: inbox items are task-scoped; set scope so assistantLabel()
+				// and chat header indicators are accurate.
+				m.activeScope = ScopeTask
 				m.statusMessage = "Opened inbox item in context."
 				// EX-169: reload chat history for the task session being opened so the
 				// chat panel shows the task's conversation, not the previous session's.
@@ -1235,6 +1238,10 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("open") {
 			m.state.LastActiveChatSession = m.workspace.activeSessionID
 			m.activeSession = m.workspace.activeSessionID
+			// EX-172: inbox items are task-scoped; set scope so assistantLabel()
+			// resolves the correct agent name and [task]/[project]/[org] indicators
+			// are accurate in the chat header.
+			m.activeScope = ScopeTask
 			m.statusMessage = "Opened inbox item in context."
 			// EX-169: reload chat history for the task session being opened so the
 			// chat panel shows the task's conversation, not the previous session's.
@@ -2449,6 +2456,9 @@ func (m *Model) executeInboxCommand(args []string) tea.Cmd {
 		}
 		m.state.LastActiveChatSession = m.workspace.activeSessionID
 		m.activeSession = m.workspace.activeSessionID
+		// EX-172: inbox items are task-scoped; set scope so assistantLabel()
+		// and chat header indicators are accurate.
+		m.activeScope = ScopeTask
 		m.statusMessage = "Opened inbox item in context."
 		// EX-171: reload chat history for the task session being opened so the
 		// chat panel shows the task's conversation (mirrors 'o' key / Enter path).

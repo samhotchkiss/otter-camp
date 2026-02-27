@@ -3608,3 +3608,50 @@ func TestInboxOpenCommandReloadsChatHistory(t *testing.T) {
 		t.Fatal(":inbox open did not call LoadChatHistory (EX-171 regression)")
 	}
 }
+
+// EX-172: inbox open ('o', Enter, :inbox open) should set activeScope=ScopeTask
+// so the chat header shows the correct agent name and scope indicators.
+func TestInboxOpenSetsScopeTask(t *testing.T) {
+	t.Parallel()
+	sessionID := "00000000-0000-0000-0000-000000000172"
+	for _, name := range []string{"o-key", "enter-key", "inbox-open-cmd"} {
+		t.Run(name, func(t *testing.T) {
+			model := NewModel(DefaultState())
+			model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+			if model.workspace.tasks == nil {
+				model.workspace.tasks = make(map[string]*taskRecord)
+			}
+			taskID := "task-scope-172"
+			model.workspace.tasks[taskID] = &taskRecord{
+				ID:        taskID,
+				AgentName: "Ellie",
+				SessionID: sessionID,
+			}
+			model.workspace.taskSessionIDs = map[string]string{taskID: sessionID}
+			model.workspace.inbox = []inboxItem{{ID: "inbox-172", TaskID: taskID, Summary: "Review"}}
+			model.workspace.inboxCursor = 0
+			model.workspace.mainView = ViewInbox
+			model.focus = MainPanel
+			// Start with org scope to verify it's updated
+			model.activeScope = ScopeOrg
+
+			switch name {
+			case "o-key":
+				updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+				model = updated.(Model)
+			case "enter-key":
+				updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				model = updated.(Model)
+			case "inbox-open-cmd":
+				model.executeCommand(":inbox open")
+			}
+
+			if model.activeScope != ScopeTask {
+				t.Fatalf("[%s] inbox open should set activeScope=ScopeTask, got %v", name, model.activeScope)
+			}
+			if model.activeSession != sessionID {
+				t.Fatalf("[%s] inbox open should set activeSession=%q, got %q", name, sessionID, model.activeSession)
+			}
+		})
+	}
+}

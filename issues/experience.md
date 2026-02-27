@@ -2612,6 +2612,21 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-172---
+
+## EX-172: Inbox open didn't set `activeScope = ScopeTask`
+
+**Observation:** All three inbox open paths ('o' key, Enter in ViewInbox, `:inbox open` command) set `m.activeSession` to the task's session UUID but never updated `m.activeScope`. If the user had been in `ScopeOrg`, opening an inbox item would leave `m.activeScope = ScopeOrg`. This caused two issues: (1) `assistantLabel()` would return "Frank" instead of the task's agent name (e.g., "Ellie"), because it only checks `m.workspace.tasks` when `m.activeScope == ScopeTask`; (2) the `[task]` / `[project]` / `[org]` scope indicator in the chat header would show the wrong scope level.
+
+**Improvement:** Added `m.activeScope = ScopeTask` to all three inbox open paths, immediately after `m.activeSession = m.workspace.activeSessionID`. Added a table-driven test covering all three paths.
+
+**Why it matters:** After approving or rejecting an inbox item, or opening one to inspect the conversation, the user's chat context should reflect the task they just reviewed. Showing "Frank" as the assistant name when they just opened Ellie's task is misleading.
+
+**Effort:** Trivial (one line added to each of three locations)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
 ---EX-171---
 
 ## EX-171: `:inbox open` command didn't reload chat history
