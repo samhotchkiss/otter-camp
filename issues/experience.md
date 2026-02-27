@@ -1887,3 +1887,31 @@ Since `applyWorkspaceCommand` can return `tea.Cmd`, this approach naturally pick
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-127: Cross-session event leakage window after chat.turn.started
+
+**Observation:** `activeTurnSessionID` is set via the async `SessionResolvedMsg` message, which arrives after the session UUID is resolved in `tui.go`. Between receiving `chat.turn.started` and receiving `SessionResolvedMsg`, `activeTurnSessionID` was empty — and `sessionMatchesActive` accepts all sessions when empty. During this window, SSE events from OTHER sessions (e.g., supervisor recovery runs) could incorrectly set `activeTurn = true` or append messages to the wrong session's chat.
+
+**Improvement:** When `chat.turn.started` fires and the payload contains a valid UUID `session_id`, it is immediately stored in `activeTurnSessionID` (unless it's already set). This closes the leakage window at the source.
+
+**Why it matters:** The root cause of EX-144 (cross-session leakage for supervisor recovery runs) was `activeTurnSessionID` being empty at startup. EX-127 applies the same defense at turn start, so even if `SessionResolvedMsg` is delayed, the session filter is already active.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-128: task.created SSE event not handled — project view never updated in real-time
+
+**Observation:** When a new task was created (either by the user, an agent, or an automated flow), the server published a `"task.created"` event. The TUI had no handler for this event, so the project view's task list stayed stale. Users would not see the new task until they manually refreshed (pressed `r`) or navigated away and back.
+
+**Improvement:** `applyWorkspaceCommand` now handles `"task.created"`. It adds `"OC-N: created"` to the activity log and, when the new task's `project_id` matches the currently viewed project, triggers `loadProjectDetailCmd` to refresh the task list immediately.
+
+**Why it matters:** Real-time collaboration requires that both users and agents see new tasks appear as they are created. A stale project board undermines the "live" feel of the system, especially in flow-driven workflows where tasks are created automatically.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
