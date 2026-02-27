@@ -189,6 +189,13 @@ func NewModelWithRuntime(state UIState, runtime RuntimeHints) Model {
 	if model.workspace.mainView == ViewTask && model.workspace.selectedTaskID == "" {
 		model.workspace.setMainView(ViewDashboard)
 	}
+	// If the saved session is a raw UUID (task/project session) that can't be resolved
+	// at startup, reset to the org session to avoid label/content mismatch.
+	if sess := strings.TrimSpace(model.activeSession); sess != "" && sess != generalSessionID &&
+		!strings.HasPrefix(sess, "session-") && model.workspace.sessionLabel(sess) == "" {
+		model.activeSession = generalSessionID
+		model.activeScope = ScopeOrg
+	}
 	model.applyResponsiveLayout()
 	return model
 }
