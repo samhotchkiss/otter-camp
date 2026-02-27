@@ -1448,7 +1448,7 @@ func fuzzyMatch(query, candidate string) bool {
 
 	qr := []rune(query)
 	i := 0
-	for _, r := range []rune(candidate) {
+	for _, r := range candidate {
 		if i < len(qr) && r == qr[i] {
 			i++
 		}
