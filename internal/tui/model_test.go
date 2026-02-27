@@ -3568,3 +3568,43 @@ func TestAgentsCommandLoadsData(t *testing.T) {
 		t.Fatal(":agents command did not call LoadAgents (EX-170 regression)")
 	}
 }
+
+// EX-171: :inbox open command should reload chat history for the task session.
+func TestInboxOpenCommandReloadsChatHistory(t *testing.T) {
+	t.Parallel()
+	sessionID := "00000000-0000-0000-0000-000000000171"
+	loaded := false
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, id string) ([]ChatMessage, error) {
+			if id == sessionID {
+				loaded = true
+			}
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	if model.workspace.tasks == nil {
+		model.workspace.tasks = make(map[string]*taskRecord)
+	}
+	taskID := "task-inbox-171"
+	model.workspace.tasks[taskID] = &taskRecord{
+		ID:        taskID,
+		Title:     "Inbox task cmd",
+		SessionID: sessionID,
+	}
+	model.workspace.taskSessionIDs = map[string]string{taskID: sessionID}
+	model.workspace.inbox = []inboxItem{{ID: "inbox-171", TaskID: taskID, Summary: "Review needed"}}
+	model.workspace.inboxCursor = 0
+
+	cmd := model.executeCommand(":inbox open")
+	if cmd == nil {
+		t.Fatal(":inbox open should return a non-nil cmd (history reload)")
+	}
+	if model.activeSession != sessionID {
+		t.Fatalf(":inbox open should set activeSession to %q, got %q", sessionID, model.activeSession)
+	}
+	runNonTimerCmds(cmd)
+	if !loaded {
+		t.Fatal(":inbox open did not call LoadChatHistory (EX-171 regression)")
+	}
+}

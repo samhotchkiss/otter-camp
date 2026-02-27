@@ -2450,6 +2450,16 @@ func (m *Model) executeInboxCommand(args []string) tea.Cmd {
 		m.state.LastActiveChatSession = m.workspace.activeSessionID
 		m.activeSession = m.workspace.activeSessionID
 		m.statusMessage = "Opened inbox item in context."
+		// EX-171: reload chat history for the task session being opened so the
+		// chat panel shows the task's conversation (mirrors 'o' key / Enter path).
+		sessionID := m.workspace.activeSessionID
+		if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
+			m.chatMessages = nil
+			m.chatHistoryLoading = true
+			m.chatMessageIndex = make(map[string]int)
+			m.chatScrollOffset = 0
+			return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+		}
 	case "approve", "reject", "defer":
 		action := strings.ToLower(args[0])
 		// EX-160: capture item ID before applyInboxAction removes it from the list.

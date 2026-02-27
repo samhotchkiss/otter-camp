@@ -2612,6 +2612,21 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-171---
+
+## EX-171: `:inbox open` command didn't reload chat history
+
+**Observation:** The `executeInboxCommand` handler for `"open"` was fixed in EX-169's set of keyboard paths (the `'o'` key and Enter in ViewInbox) but the command-mode equivalent (`:inbox open`) was missed. It updated `m.activeSession` to the task session but never called `loadChatHistoryCmd`, leaving stale messages visible in the chat panel.
+
+**Improvement:** Added the same history-reload block as EX-169's paths: after setting `m.activeSession`, if the session looks like a UUID and `LoadChatHistory` is configured, clear `chatMessages`, set `chatHistoryLoading = true`, and return `loadChatHistoryCmd`.
+
+**Why it matters:** Command mode is the primary navigation tool in tmux. Inconsistency between the 'o' key and `:inbox open` would have re-introduced the bug for tmux users.
+
+**Effort:** Trivial (eight lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
 ---EX-168---
 
 ## EX-168: `:sidebar select` command didn't reload chat history
