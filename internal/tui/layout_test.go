@@ -12,9 +12,9 @@ func TestResolveSizeClassBoundaries(t *testing.T) {
 		height   int
 		wantSize SizeClass
 	}{
-		{name: "xs width upper boundary", width: 69, height: 30, wantSize: SizeXS},
+		{name: "xs width upper boundary", width: 79, height: 30, wantSize: SizeXS},
 		{name: "xs height override", width: 120, height: 22, wantSize: SizeXS},
-		{name: "s lower boundary", width: 70, height: 30, wantSize: SizeS},
+		{name: "s lower boundary", width: 80, height: 30, wantSize: SizeS},
 		{name: "s upper boundary", width: 99, height: 30, wantSize: SizeS},
 		{name: "m lower boundary", width: 100, height: 30, wantSize: SizeM},
 		{name: "m upper boundary", width: 139, height: 30, wantSize: SizeM},
@@ -75,14 +75,14 @@ func TestLayoutVisibilityAndHintsBySizeClass(t *testing.T) {
 			hiddenHintContain: "main hidden",
 		},
 		{
-			name:              "m collapsed sidebar default",
+			name:              "m shows all panes",
 			width:             120,
 			height:            30,
 			focus:             MainPanel,
 			sidebarVisible:    false,
 			wantClass:         SizeM,
-			wantVisible:       [3]bool{false, true, true},
-			hiddenHintContain: "sidebar hidden",
+			wantVisible:       [3]bool{true, true, true},
+			hiddenHintContain: "",
 		},
 		{
 			name:              "l all panes visible",
