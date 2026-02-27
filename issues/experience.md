@@ -2441,3 +2441,74 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-157---
+
+## EX-157: `tui.command` navigate handler missing `task` case
+
+**Observation:** The `tui.command` SSE event with `action="navigate"` handled `target="project"`, `target="inbox"`, and `target="dashboard"`, but had no `case "task"`. When the server emitted `{action:"navigate",target:"task",target_id:"<uuid>"}` (e.g. from Frank directing the user to a specific task), the TUI silently did nothing — no navigation occurred, no error shown.
+
+**Improvement:** Added `case "task":` to the navigate switch in `applyWorkspaceCommand`. Sets `selectedTaskID`, switches to `ViewTask`, sets `ScopeTask`, syncs sidebar and project cursors, and returns `loadTaskDetailCmd`.
+
+**Why it matters:** Server-initiated navigation is used by Frank to guide users to relevant tasks after completing work. Without the task case, this assistant-driven deep-linking feature was completely broken.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-158---
+
+## EX-158: Activity log icons wrong for budget anomaly and policy denied entries
+
+**Observation:** Activity entries added in EX-153 showed wrong icons:
+- `"budget anomaly: ..."` showed ✓ (green success) — should be ◌ (amber warning)
+- `"policy denied: ..."` showed ✓ (green success) — should be ✗ (red error)
+
+**Improvement:** Updated `activityIcon` to match "budget anomaly" → warning ◌ and "policy denied" → error ✗. Also added "worker unresponsive" → warning ◌ for the EX-159 entries.
+
+**Why it matters:** Activity icon semantics are the primary signal in the scrolling log. A security policy denial showing as a green checkmark conveys completely wrong meaning — the user might ignore a blocked tool call that needs attention.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-159---
+
+## EX-159: `worker.unresponsive` event only set status bar, not activity log
+
+**Observation:** The `worker.unresponsive` event handler set `m.statusMessage` (which auto-clears after 5 seconds) but never called `appendActivity`. If the user was away or navigated in the 5s window, the warning was lost. There was no record in the activity log of the worker being unresponsive.
+
+**Improvement:** Added `appendActivity(m.workspace.activity, "worker unresponsive: check `ottercamp worker`")` to the handler.
+
+**Why it matters:** Worker unavailability is a critical operational event. If a user's chat message silently hangs because the worker is offline, they need a persistent record to diagnose the issue — not a 5-second toast.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-160---
+
+## EX-160: Inbox approve/reject/defer were local-only, never sent to server
+
+**Observation:** Pressing `a`, `x`, `f` in the inbox view (or ``:inbox approve|reject|defer``) updated local TUI state (removed the item from the list, updated task status locally, added activity entry) but **never made an API call**. On the next inbox reload, all "actioned" items would reappear because the server state was unchanged.
+
+**Root cause:** `applyInboxAction` is a pure in-memory mutation. The key handlers returned `nil` cmd instead of an API cmd.
+
+**Improvement:**
+- Added `ActOnInboxItem func(ctx, itemID, action string) error` to `RuntimeHints`
+- Added `actOnInboxItemCmd()` async cmd factory
+- Key handlers ('a','x','f') now capture the item ID before `applyInboxAction` removes the item from the list, then return the API cmd
+- `executeInboxCommand` now returns `tea.Cmd` so `:inbox approve|reject|defer` also sends the server request
+- Added `inboxItemIDForTask()` helper for the task-view approval path
+- `inboxActionCompletedMsg` handler surfaces server errors in the status bar
+- Wired `POST /v1/inbox/{id}/act` in `cmd/ottercamp/tui.go`
+
+**Why it matters:** Inbox actions are the primary human-review workflow. Users pressing approve/reject in the TUI believing they're approving task execution, when in reality nothing happened on the server. This is a data integrity issue — the TUI was silently lying about task approvals.
+
+**Effort:** Medium (architectural threading, 4 key handlers + command handler + RuntimeHints + wiring)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
