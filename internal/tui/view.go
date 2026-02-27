@@ -624,12 +624,12 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		if task == nil {
 			continue
 		}
-		if !matchesFilter(task.Title, query) && !matchesFilter(task.Status, query) {
-			continue
-		}
 		taskLabel := task.Title
 		if task.TaskNumber > 0 {
 			taskLabel = fmt.Sprintf("OC-%d: %s", task.TaskNumber, task.Title)
+		}
+		if !matchesFilter(taskLabel, query) && !matchesFilter(task.Status, query) {
+			continue
 		}
 		entry := truncate("  "+taskLabel, colW)
 		switch task.Status {
