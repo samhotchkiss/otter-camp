@@ -2939,3 +2939,91 @@ func TestProjectViewFallbackUsesTaskUUIDNotNodeID(t *testing.T) {
 		t.Fatalf("project view fallback path should show OC-N prefix (EX-156 regression): %q", rendered)
 	}
 }
+
+// EX-157: tui.command navigate task case was missing — server sends navigate/task
+// to open a specific task by UUID but TUI silently ignored it.
+func TestTUICommandNavigateTaskSetsSelectedTask(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+
+	taskID := "task-uuid-navigate"
+	model.workspace.tasks = map[string]*taskRecord{
+		taskID: {ID: taskID, TaskNumber: 42, Title: "Navigate Me"},
+	}
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"action":    "navigate",
+		"target":    "task",
+		"target_id": taskID,
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "tui.command",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	if m.workspace.selectedTaskID != taskID {
+		t.Fatalf("selectedTaskID = %q, want %q after tui.command navigate task", m.workspace.selectedTaskID, taskID)
+	}
+	if m.workspace.mainView != ViewTask {
+		t.Fatalf("mainView = %q, want ViewTask after tui.command navigate task", m.workspace.mainView)
+	}
+	if m.activeScope != ScopeTask {
+		t.Fatalf("activeScope = %v, want ScopeTask after tui.command navigate task", m.activeScope)
+	}
+	if !strings.Contains(m.statusMessage, "OC-42") {
+		t.Fatalf("statusMessage = %q, want OC-42 label after navigate", m.statusMessage)
+	}
+}
+
+// EX-158: budget anomaly and policy denied entries showed ✓ (green success) in
+// the activity log. Budget anomaly should show ◌ (warning) and policy denied
+// should show ✗ (error).
+func TestActivityIconBudgetAnomalyIsWarning(t *testing.T) {
+	entry := "budget anomaly: daily usage ~3x above avg"
+	icon := activityIcon(entry)
+	if !strings.Contains(icon, "◌") {
+		t.Fatalf("activityIcon(%q) = %q, want ◌ warning icon", entry, icon)
+	}
+}
+
+func TestActivityIconPolicyDeniedIsError(t *testing.T) {
+	entry := "policy denied: file_write"
+	icon := activityIcon(entry)
+	if !strings.Contains(icon, "✗") {
+		t.Fatalf("activityIcon(%q) = %q, want ✗ error icon", entry, icon)
+	}
+}
+
+// EX-159: worker.unresponsive only set statusMessage (5s auto-clear) but did
+// not persist in the activity log, so the warning disappeared after navigation.
+func TestWorkerUnresponsiveAddsActivityEntry(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+	model.activeSession = "session-org-test"
+	model.activeTurnSessionID = "" // matches any session
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"session_id": "session-org-test",
+		"message":    "Worker appears offline — check that `ottercamp worker` is running.",
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "worker.unresponsive",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	if len(m.workspace.activity) == 0 {
+		t.Fatal("activity log is empty after worker.unresponsive event, want at least one entry")
+	}
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "worker unresponsive") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing 'worker unresponsive' entry: %v", m.workspace.activity)
+	}
+}

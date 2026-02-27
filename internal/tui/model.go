@@ -3122,6 +3122,9 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		}
 		if decodePayload(event.Payload, &payload) && m.sessionMatchesActive(payload.SessionID) {
 			m.statusMessage = payload.Message
+			// EX-159: also persist in the activity log so the warning is visible
+			// after the user navigates away and back (status bar auto-clears in 5s).
+			m.workspace.activity = appendActivity(m.workspace.activity, "worker unresponsive: check `ottercamp worker`")
 		}
 		return nil
 	}
@@ -3333,6 +3336,24 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			cmds = append(cmds, loadProjectDetailCmd(payload.TargetID, m.runtimeHints))
 		}
 		return tea.Batch(cmds...)
+	case "task":
+		// EX-157: navigate to a specific task by UUID. Mirrors the :task command but
+		// also sets selectedTaskID and syncs sidebar/project cursors so the task is
+		// immediately visible and in context.
+		m.workspace.selectedTaskID = payload.TargetID
+		m.workspace.setMainView(ViewTask)
+		m.activeScope = ScopeTask
+		m.statusMessage = "Navigated to task."
+		if task := m.workspace.tasks[payload.TargetID]; task != nil {
+			label := task.Title
+			if task.TaskNumber > 0 {
+				label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
+			}
+			m.statusMessage = "Navigated to " + truncate(label, 40) + "."
+		}
+		m.workspace.syncSidebarToTask(payload.TargetID)
+		m.workspace.syncProjectCursorToTask(payload.TargetID)
+		return loadTaskDetailCmd(payload.TargetID, m.runtimeHints)
 	case "inbox":
 		m.workspace.mainView = ViewInbox
 		m.statusMessage = "Navigated to inbox."

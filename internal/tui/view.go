@@ -1517,6 +1517,8 @@ func activityIcon(entry string) string {
 		": blocked", ": rejected", ": deferred", ": failed",
 		"run failed", "dead-lettered", "review rejected",
 		"agent expired",
+		// EX-158: policy denials are errors (tool was blocked from executing).
+		"policy denied",
 	} {
 		if strings.Contains(lower, marker) {
 			return lipgloss.NewStyle().Foreground(colError).Render("✗ ")
@@ -1526,6 +1528,8 @@ func activityIcon(entry string) string {
 	for _, marker := range []string{
 		": in progress", ": in_progress", ": started",
 		"rollback", "deploy pending approval", "supervisor escalation",
+		// EX-158: budget anomalies and worker problems are warnings (not errors, action may not be needed).
+		"budget anomaly", "worker unresponsive",
 	} {
 		if strings.Contains(lower, marker) {
 			return lipgloss.NewStyle().Foreground(colWarning).Render("◌ ")
