@@ -843,13 +843,15 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 		statusColor = colError
 	}
 
-	titleLine := styleBold.Render(truncate(task.Title, width-4))
+	taskTitle := task.Title
+	if task.TaskNumber > 0 {
+		taskTitle = fmt.Sprintf("OC-%d: %s", task.TaskNumber, task.Title)
+	}
+	titleLine := styleBold.Render(truncate(taskTitle, width-4))
 	statusLine := lipgloss.NewStyle().Foreground(statusColor).Render("  Status: " + formatTaskStatus(task.Status))
-	flowLine := styleMuted.Render(fmt.Sprintf("  Flow step: %d", task.Flow))
 
 	lines = append(lines, titleLine)
 	lines = append(lines, statusLine)
-	lines = append(lines, flowLine)
 
 	if desc := strings.TrimSpace(task.Description); desc != "" {
 		lines = append(lines, "")

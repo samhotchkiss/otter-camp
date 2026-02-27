@@ -254,6 +254,32 @@ func runTUICommand(args []string) int {
 					Tasks:        tasks,
 				}, nil
 			}
+			runtimeHints.LoadTaskDetail = func(ctx context.Context, taskID string) (*tuiapp.TaskDetailItem, error) {
+				var resp struct {
+					Data struct {
+						ID          string  `json:"id"`
+						TaskNumber  int     `json:"task_number"`
+						Title       string  `json:"title"`
+						Description *string `json:"description"`
+						WorkStatus  string  `json:"work_status"`
+					} `json:"data"`
+				}
+				if err := apiClient.request(ctx, "GET", "/v1/tasks/"+url.PathEscape(taskID), nil, &resp); err != nil {
+					return nil, err
+				}
+				d := resp.Data
+				desc := ""
+				if d.Description != nil {
+					desc = *d.Description
+				}
+				return &tuiapp.TaskDetailItem{
+					ID:          d.ID,
+					TaskNumber:  d.TaskNumber,
+					Title:       d.Title,
+					Description: desc,
+					WorkStatus:  d.WorkStatus,
+				}, nil
+			}
 			runtimeHints.SendChatMessage = func(ctx context.Context, sessionID, content string) error {
 				resolvedID, resolveErr := resolveTUIChatSessionID(ctx, apiClient, sessionID)
 				if resolveErr != nil {

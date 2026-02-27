@@ -34,6 +34,16 @@ type SidebarTaskItem struct {
 	WorkStatus string
 }
 
+// TaskDetailItem is the full task record fetched on demand when the user selects a task.
+type TaskDetailItem struct {
+	ID          string
+	TaskNumber  int
+	Title       string
+	Description string
+	WorkStatus  string
+	SessionID   string
+}
+
 type RuntimeHints struct {
 	ModifierReliabilityUncertain bool
 	FirstRun                     bool
@@ -51,6 +61,7 @@ type RuntimeHints struct {
 	LoadProjects                 func(ctx context.Context) ([]SidebarProjectItem, error)
 	LoadProjectTasks             func(ctx context.Context, projectID string) ([]SidebarTaskItem, error)
 	LoadProjectDetail            func(ctx context.Context, projectID string) (*ProjectDetail, error)
+	LoadTaskDetail               func(ctx context.Context, taskID string) (*TaskDetailItem, error)
 }
 
 func (h RuntimeHints) now() time.Time {

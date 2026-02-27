@@ -73,6 +73,10 @@ type projectDetailLoadedMsg struct {
 	Detail ProjectDetail
 }
 
+type taskDetailLoadedMsg struct {
+	Detail TaskDetailItem
+}
+
 const (
 	memorySampleInterval   = 5 * time.Second
 	keypressLatencyBudget  = 100 * time.Millisecond
@@ -301,6 +305,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case projectDetailLoadedMsg:
 		m.workspace.selectedProject = &typed.Detail
+		return m, nil
+	case taskDetailLoadedMsg:
+		if rec := m.workspace.tasks[typed.Detail.ID]; rec != nil {
+			rec.Description = typed.Detail.Description
+			rec.SessionID = typed.Detail.SessionID
+			rec.TaskNumber = typed.Detail.TaskNumber
+		}
 		return m, nil
 	case WorkspaceEnvelopeMsg:
 		if cmd := m.applyWorkspaceCommand(typed.Envelope); cmd != nil {
@@ -567,6 +578,9 @@ func (m *Model) handleEnterKey() tea.Cmd {
 					cmds = append(cmds, loadProjectDetailCmd(node.ProjectID, m.runtimeHints))
 				}
 				return tea.Batch(cmds...)
+			case sidebarKindTask:
+				// Load full task detail (description, task number) on demand
+				return loadTaskDetailCmd(node.TaskID, m.runtimeHints)
 			}
 		}
 	case MainPanel:
@@ -2103,6 +2117,21 @@ func loadProjectDetailCmd(projectID string, hints RuntimeHints) tea.Cmd {
 			return projectDetailLoadedMsg{Detail: ProjectDetail{ID: projectID}}
 		}
 		return projectDetailLoadedMsg{Detail: *detail}
+	}
+}
+
+func loadTaskDetailCmd(taskID string, hints RuntimeHints) tea.Cmd {
+	if strings.TrimSpace(taskID) == "" || hints.LoadTaskDetail == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		detail, err := hints.LoadTaskDetail(ctx, taskID)
+		if err != nil || detail == nil {
+			return taskDetailLoadedMsg{Detail: TaskDetailItem{ID: taskID}}
+		}
+		return taskDetailLoadedMsg{Detail: *detail}
 	}
 }
 

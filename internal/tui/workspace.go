@@ -67,6 +67,7 @@ type sidebarNode struct {
 
 type taskRecord struct {
 	ID                 string
+	TaskNumber         int
 	Title              string
 	Description        string
 	AcceptanceCriteria string
