@@ -891,8 +891,9 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 	}
 
 	if len(openTasks) == 0 {
+		lines = append(lines, styleLabel.Render("OPEN TASKS (0)"))
 		if proj.DoneCount > 0 {
-			lines = append(lines, styleMuted.Render(fmt.Sprintf("  All tasks complete (%d done).", proj.DoneCount)))
+			lines = append(lines, lipgloss.NewStyle().Foreground(colConnected).Render(fmt.Sprintf("  ✓  All %d tasks complete", proj.DoneCount)))
 		} else {
 			lines = append(lines, styleMuted.Render("  No open tasks."))
 		}
@@ -965,6 +966,11 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		}
 		lines = append(lines, styleLabel.Render(taskHeader))
 		lines = append(lines, taskLines...)
+		// Navigation hint below the task list
+		hintStr := "  j/k navigate  ·  Enter·open task  ·  Esc·back"
+		if len(lines) < maxLines {
+			lines = append(lines, styleMuted.Italic(true).Render(hintStr))
+		}
 	}
 
 	return lines
@@ -1233,9 +1239,10 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("< / >", "resize sidebar width"),
 		"",
 		header("Main Panel  (press 2 to focus)"),
+		key("j/k  ↑/↓", "navigate tasks in project view"),
 		key("g / G", "jump to top/bottom of view"),
-		key("Enter", "open task or inbox item"),
-		key("Esc", "return to dashboard"),
+		key("Enter", "open task detail or inbox item"),
+		key("Esc", "back to project (from task) / dashboard"),
 		key("a / x / f / o", "inbox: approve/reject/defer/open"),
 		"",
 		header("Chat  (press 3 to focus)"),

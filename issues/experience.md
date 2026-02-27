@@ -703,3 +703,45 @@
 
 ---
 
+## EX-051: Task detail shows assigned agent name and current flow step name
+
+**Observation:** The task detail view showed task number, title, status, description, and subtasks — but no indication of which agent was assigned to the task or what flow step it was currently in.
+
+**Improvement:** `LoadTaskDetail` now fetches `assigned_agent_id` and `current_flow_node` from `/v1/tasks/{id}`, then makes a second API call to `/v1/agents/{id}` to get the agent's `display_name`. The task detail panel shows "Agent: Frank" and "Flow: Work" lines below the status when those fields are present. A "⚠  Human review required" warning appears if the task has `requires_human_review: true`.
+
+**Why it matters:** Users often need to know who is working on a task and what stage of the workflow it's in. Previously this required a separate API call or checking the API directly.
+
+**Effort:** Medium
+**Issue:** N/A (implemented directly in ralph-loop)
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-052: Project view navigation hint at bottom of task list
+
+**Observation:** When a project's task list was shown in the center panel, there was no indication of how to navigate the list or open a task. Users unfamiliar with the vim-style keys had no hint that `j`/`k` navigated tasks or that Enter opened a task.
+
+**Improvement:** A muted italic hint line "j/k navigate  ·  Enter·open task  ·  Esc·back" appears below the task list when space permits. The help screen (`?`) now also lists "j/k ↑/↓ — navigate tasks in project view" in the Main Panel section.
+
+**Why it matters:** Keyboard hint lines dramatically reduce the learning curve. Users expect to see available controls near the UI element they apply to. The one-liner is unobtrusive but always present.
+
+**Effort:** Low
+**Issue:** N/A (implemented directly in ralph-loop)
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-053: Improved empty state for project with no open tasks
+
+**Observation:** When a project had no open tasks, the center pane showed only a bare "All tasks complete (N done)." text line without a section header, which was visually inconsistent with the task list when tasks were present.
+
+**Improvement:** Empty state now shows an "OPEN TASKS (0)" bold section header followed by "✓  All N tasks complete" in the connected/success color, or "No open tasks." in muted style if no tasks exist at all.
+
+**Why it matters:** Consistent visual structure — always showing the "OPEN TASKS" label — makes scanning predictable regardless of whether tasks are present. The green checkmark with the count is a positive signal that distinguishes "all done" from "no tasks added yet".
+
+**Effort:** Low
+**Issue:** N/A (implemented directly in ralph-loop)
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
