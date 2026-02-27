@@ -2657,6 +2657,21 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 				break
 			}
 		}
+		// EX-092: surface task status transitions in the dashboard activity log
+		// so the Activity section reflects real-time progress, not just startup.
+		if payload.ToStatus != "" {
+			label := payload.TaskID
+			if rec := m.workspace.tasks[payload.TaskID]; rec != nil {
+				if rec.TaskNumber > 0 {
+					label = fmt.Sprintf("OC-%d", rec.TaskNumber)
+				} else if rec.Title != "" {
+					label = truncate(rec.Title, 24)
+				}
+			}
+			statusLabel := formatTaskStatus(payload.ToStatus)
+			m.workspace.activity = append(m.workspace.activity,
+				label+": "+statusLabel)
+		}
 		return nil
 	}
 	if event.EventType == "worker.unresponsive" {
