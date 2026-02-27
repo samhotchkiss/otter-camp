@@ -172,11 +172,16 @@ func runTUICommand(args []string) int {
 					if s.LastMessageAt != nil {
 						updatedAt = *s.LastMessageAt
 					}
+					scopeID := ""
+					if s.ScopeID != uuid.Nil {
+						scopeID = s.ScopeID.String()
+					}
 					out = append(out, tuiapp.SidebarChatItem{
 						SessionID:   s.ID.String(),
 						DisplayName: name,
 						UpdatedAt:   updatedAt,
 						ScopeType:   strings.ToLower(s.ScopeType),
+						ScopeID:     scopeID,
 					})
 					if len(out) >= 4 {
 						break

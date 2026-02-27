@@ -707,12 +707,17 @@ func (w *workspaceState) rebuildSidebar(orgSessionID string, chats []SidebarChat
 			break
 		}
 		id := "chat-" + chat.SessionID
+		taskID := ""
+		if chat.ScopeType == "project_task" {
+			taskID = chat.ScopeID
+		}
 		newNodes[id] = &sidebarNode{
 			ID:           id,
 			Label:        chat.DisplayName,
 			Kind:         sidebarKindSession,
 			SessionID:    chat.SessionID,
 			SessionScope: chat.ScopeType,
+			TaskID:       taskID,
 		}
 		newTopLevel = append(newTopLevel, id)
 	}

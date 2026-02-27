@@ -609,17 +609,29 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				switch node.SessionScope {
 				case "project_task":
 					m.activeScope = ScopeTask
+					// Navigate to task detail for task-scoped sessions
+					if node.TaskID != "" {
+						m.workspace.selectedTaskID = node.TaskID
+						m.workspace.setMainView(ViewTask)
+					}
 				case "project":
 					m.activeScope = ScopeProject
 				default:
 					m.activeScope = ScopeOrg
 				}
-				// Reload chat history for the newly selected session
+				// Reload chat history and (if task-scoped) load task detail
+				var cmds []tea.Cmd
 				if m.runtimeHints.LoadChatHistory != nil {
 					m.chatMessages = nil
 					m.chatMessageIndex = make(map[string]int)
 					m.chatScrollOffset = 0
-					return loadChatHistoryCmd(m.workspace.activeSessionID, m.runtimeHints.LoadChatHistory)
+					cmds = append(cmds, loadChatHistoryCmd(m.workspace.activeSessionID, m.runtimeHints.LoadChatHistory))
+				}
+				if node.TaskID != "" {
+					cmds = append(cmds, loadTaskDetailCmd(node.TaskID, m.runtimeHints))
+				}
+				if len(cmds) > 0 {
+					return tea.Batch(cmds...)
 				}
 			case sidebarKindProject:
 				// Update scope indicator + status bar to show project context
