@@ -823,18 +823,18 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		}
 	}
 
-	// Navigation hint — show selected task name when cursor is active, else static hint
+	// Navigation hint — show selected task name when cursor could be off-screen
 	activeTasks := m.workspace.dashboardActiveTasks()
 	if len(activeTasks) > 0 {
 		lines = append(lines, "")
 		if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
 			var nameLabel string
 			if task.TaskNumber > 0 {
-				nameLabel = fmt.Sprintf("OC-%d: %s", task.TaskNumber, truncate(task.Title, 32))
+				nameLabel = fmt.Sprintf("OC-%d: %s", task.TaskNumber, truncate(task.Title, 34))
 			} else {
-				nameLabel = truncate(task.Title, 40)
+				nameLabel = truncate(task.Title, 42)
 			}
-			lines = append(lines, styleBold.Foreground(colFocus).Render("  ► "+nameLabel)+"  "+styleMuted.Render("Enter·open  ·  j/k·navigate"))
+			lines = append(lines, styleBold.Foreground(colFocus).Render("  "+nameLabel)+"  "+styleMuted.Render("Enter·open  ·  j/k·navigate"))
 		} else {
 			lines = append(lines, styleMuted.Render("  j/k·select task  ·  Enter·open"))
 		}
@@ -1062,20 +1062,9 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		}
 		lines = append(lines, styleLabel.Render(taskHeader))
 		lines = append(lines, taskLines...)
-		// Dynamic navigation hint: show selected task name when cursor is active.
+		// Navigation hint row.
 		if len(lines) < maxLines {
-			if cursor >= 0 && cursor < len(openTasks) {
-				sel := openTasks[cursor]
-				var nameLabel string
-				if sel.TaskNumber > 0 {
-					nameLabel = fmt.Sprintf("OC-%d: %s", sel.TaskNumber, truncate(sel.Title, 32))
-				} else {
-					nameLabel = truncate(sel.Title, 40)
-				}
-				lines = append(lines, styleBold.Foreground(colFocus).Render("  ► "+nameLabel)+"  "+styleMuted.Render("Enter·open  ·  j/k·navigate  ·  Esc·back"))
-			} else {
-				lines = append(lines, styleMuted.Italic(true).Render("  j/k navigate  ·  Enter·open task  ·  Esc·back"))
-			}
+			lines = append(lines, styleMuted.Render("  Enter·open  ·  j/k·navigate  ·  Esc·back"))
 		}
 	}
 
@@ -1197,7 +1186,7 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 		}
 		lines = append(lines, styleMuted.Render("  "+enterHint+"  "+backHint+stepHint))
 	} else {
-		lines = append(lines, styleMuted.Render("  "+backHint+stepHint+"  (no session)"))
+		lines = append(lines, styleMuted.Render("  "+backHint+stepHint))
 	}
 
 	return lines

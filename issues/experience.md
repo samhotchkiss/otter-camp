@@ -1086,3 +1086,31 @@ No extra state is required — the scroll position is derived purely from the cu
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-075: Project view footer hint — remove duplicate task name
+
+**Observation:** The project view rendered a hint footer at the bottom of the task list that repeated the selected task's full title with the `►` cursor icon: `► OC-1: Build OtterCamp sales landing p…  Enter·open  ·  j/k·navigate  ·  Esc·back`. The `►` cursor icon and task name were already shown inline in the task list row above, making the footer redundant and visually noisy.
+
+**Improvement:** Simplified the footer to just the keybinding hints: `Enter·open  ·  j/k·navigate  ·  Esc·back`. The cursor position in the task list already tells the user which task is selected. Also updated the ViewTask help line in `commandFallbackHelp` to include `j/k next/prev · p project view` when project context is loaded.
+
+**Why it matters:** Repeating the task name twice in quick succession (task row + hint footer) is distracting. The cleaner footer lets users read the available actions without having to parse repeated context.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-076: Task detail hint — remove "(no session)" marker
+
+**Observation:** When viewing a task that had no associated chat session (e.g., a Draft task), the task detail hint showed `Esc·back to project  p·project view  j/k·next/prev task  (no session)`. The `(no session)` label was added as a parenthetical that communicated why there was no `Enter·open session` hint, but it's awkward and adds no actionable information.
+
+**Improvement:** Removed `(no session)` from the hint. The absence of the `Enter·open session` hint is sufficient context — users can infer the task has no session without an explicit label for it.
+
+**Why it matters:** Parenthetical status labels in action hints read like debug output. Cleaning them up makes the hint row feel like a polished UI element rather than an afterthought.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
