@@ -2612,6 +2612,21 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-178---
+
+## EX-178: Opening a task from project view or dashboard didn't set `activeScope = ScopeTask`
+
+**Observation:** `handleEnterKey` for `ViewProject` and `ViewDashboard` navigated to ViewTask but never set `m.activeScope = ScopeTask`. The sidebar task-node and inbox open paths both set `activeScope` explicitly. Without it, `assistantLabel()` would return the wrong agent name (org-level Frank instead of the task's assigned agent), and the chat header scope indicator ([task]/[project]/[org]) would show the wrong value.
+
+**Improvement:** Added `m.activeScope = ScopeTask` to the `ViewProject → Enter` path (before the `loadTaskDetailCmd` return) and the `ViewDashboard → Enter` path (after `setMainView(ViewTask)`). Both paths already navigated correctly; this was a missing one-liner.
+
+**Why it matters:** The scope indicator is how users know which agent they're talking to in the chat panel. An incorrect scope makes the assistant label misleading, especially when switching between an org session and a task session.
+
+**Effort:** Trivial (two one-line additions)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
 ---EX-177---
 
 ## EX-177: `:sidebar select` didn't dispatch data loads for project/task/inbox nodes

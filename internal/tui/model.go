@@ -908,6 +908,9 @@ func (m *Model) handleEnterKey() tea.Cmd {
 					m.workspace.selectedTaskID = taskID
 					m.workspace.setMainView(ViewTask)
 					m.workspace.syncSidebarToTask(taskID)
+					// EX-178: task-scoped view; set scope so assistantLabel() and
+					// chat header scope indicators are accurate.
+					m.activeScope = ScopeTask
 					m.statusMessage = "Opened task detail."
 					return loadTaskDetailCmd(taskID, m.runtimeHints)
 				}
@@ -928,6 +931,9 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				}
 			}
 			m.workspace.setMainView(ViewTask)
+			// EX-178: task-scoped view; set scope so assistantLabel() and
+			// chat header scope indicators are accurate.
+			m.activeScope = ScopeTask
 			m.statusMessage = "Opened task detail."
 			if m.workspace.selectedTaskID != "" {
 				// Sync sidebar cursor, project cursor, and project context for

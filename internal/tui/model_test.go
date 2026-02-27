@@ -3998,3 +3998,69 @@ func TestSidebarSelectCommandLoadsDataPerNodeKind(t *testing.T) {
 		}
 	})
 }
+
+// EX-178: opening a task from the project view or dashboard should set activeScope=ScopeTask,
+// consistent with the sidebar and inbox open paths.
+func TestOpenTaskFromProjectAndDashboardSetsScopeTask(t *testing.T) {
+	t.Parallel()
+
+	t.Run("project-enter-sets-scope", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+		model.workspace.mainView = ViewProject
+		model.focus = MainPanel
+		model.activeScope = ScopeOrg // start with org scope
+
+		// Seed a project with one open task
+		taskID := "task-ex-178p"
+		model.workspace.selectedProjectID = "proj-178"
+		model.workspace.selectedProject = &ProjectDetail{
+			ID:          "proj-178",
+			DisplayName: "Project 178",
+			Tasks: []SidebarTaskItem{
+				{ID: taskID, Title: "EX-178 Task", WorkStatus: "in_progress"},
+			},
+		}
+		model.workspace.projectTaskCursor = 0
+
+		updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m := updated.(Model)
+
+		if m.activeScope != ScopeTask {
+			t.Fatalf("project Enter should set activeScope=ScopeTask, got %v", m.activeScope)
+		}
+		if m.workspace.selectedTaskID != taskID {
+			t.Fatalf("project Enter should set selectedTaskID=%q, got %q", taskID, m.workspace.selectedTaskID)
+		}
+		if m.workspace.mainView != ViewTask {
+			t.Fatalf("project Enter should navigate to ViewTask, got %v", m.workspace.mainView)
+		}
+	})
+
+	t.Run("dashboard-enter-sets-scope", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+		model.workspace.mainView = ViewDashboard
+		model.focus = MainPanel
+		model.activeScope = ScopeOrg // start with org scope
+
+		// Seed a task on the dashboard
+		taskID := "task-ex-178d"
+		if model.workspace.tasks == nil {
+			model.workspace.tasks = make(map[string]*taskRecord)
+		}
+		model.workspace.tasks[taskID] = &taskRecord{ID: taskID, Title: "EX-178 Dashboard Task", Status: "in_progress"}
+		model.workspace.taskOrder = []string{taskID}
+		model.workspace.selectedTaskID = taskID
+
+		updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m := updated.(Model)
+
+		if m.activeScope != ScopeTask {
+			t.Fatalf("dashboard Enter should set activeScope=ScopeTask, got %v", m.activeScope)
+		}
+		if m.workspace.mainView != ViewTask {
+			t.Fatalf("dashboard Enter should navigate to ViewTask, got %v", m.workspace.mainView)
+		}
+	})
+}
