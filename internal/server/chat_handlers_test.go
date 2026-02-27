@@ -40,6 +40,7 @@ func TestChatRoutesRegistered(t *testing.T) {
 		"GET /chat-sessions/{id}/messages",
 		"POST /chat-sessions/{id}/messages",
 		"PATCH /chat-sessions/{id}/messages/{mid}",
+		"DELETE /chat-sessions/{id}/messages/{mid}",
 		"POST /chat-sessions/{id}/cancel-turn",
 		"POST /chat-sessions/{id}/messages/{mid}/steer",
 		"GET /chat-sessions/{id}/messages/{mid}/reactions",
@@ -111,6 +112,110 @@ func TestEditQueuedMessageRejectsAgentAPIKey(t *testing.T) {
 	}
 	if svc.editQueuedCalls != 0 {
 		t.Fatalf("EditQueuedMessage calls = %d, want 0", svc.editQueuedCalls)
+	}
+}
+
+func TestRedactMessageRedactsAndReturnsUpdatedMessage(t *testing.T) {
+	sessionID := uuid.New()
+	messageID := uuid.New()
+	userID := uuid.New()
+	getCalls := 0
+	redactCalls := 0
+
+	svc := &fakeChatService{
+		getMessageFn: func(context.Context, uuid.UUID) (*chat.ChatMessage, error) {
+			getCalls++
+			if getCalls == 1 {
+				return &chat.ChatMessage{
+					ID:        messageID,
+					SessionID: sessionID,
+					Content:   "sensitive text",
+					Status:    "final",
+				}, nil
+			}
+			return &chat.ChatMessage{
+				ID:         messageID,
+				SessionID:  sessionID,
+				Content:    "",
+				Status:     "redacted",
+				IsRedacted: true,
+			}, nil
+		},
+		redactMessageFn: func(_ context.Context, gotMessageID uuid.UUID) error {
+			redactCalls++
+			if gotMessageID != messageID {
+				t.Fatalf("redact message id = %s, want %s", gotMessageID, messageID)
+			}
+			return nil
+		},
+	}
+	h := chatHandlers{service: svc}
+
+	req := newChatRequest(t, http.MethodDelete, "/v1/chat-sessions/"+sessionID.String()+"/messages/"+messageID.String(), nil, middleware.Principal{
+		UserID:         userID,
+		OrganizationID: uuid.New(),
+		Role:           "member",
+	})
+	req = withRouteParams(req, map[string]string{"id": sessionID.String(), "mid": messageID.String()})
+	rr := httptest.NewRecorder()
+
+	h.redactMessage(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if redactCalls != 1 {
+		t.Fatalf("RedactMessage calls = %d, want 1", redactCalls)
+	}
+	if getCalls != 2 {
+		t.Fatalf("GetMessage calls = %d, want 2", getCalls)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data shape = %T, want map body=%s", payload["data"], rr.Body.String())
+	}
+	if got := data["is_redacted"]; got != true {
+		t.Fatalf("data.is_redacted = %v, want true body=%s", got, rr.Body.String())
+	}
+	if got := data["content"]; got != "[redacted]" {
+		t.Fatalf("data.content = %v, want %q body=%s", got, "[redacted]", rr.Body.String())
+	}
+}
+
+func TestRedactMessageForbidden(t *testing.T) {
+	sessionID := uuid.New()
+	messageID := uuid.New()
+
+	svc := &fakeChatService{
+		getMessageFn: func(context.Context, uuid.UUID) (*chat.ChatMessage, error) {
+			return &chat.ChatMessage{ID: messageID, SessionID: sessionID, Status: "final"}, nil
+		},
+		redactMessageFn: func(context.Context, uuid.UUID) error {
+			return chat.ErrForbidden
+		},
+	}
+	h := chatHandlers{service: svc}
+
+	req := newChatRequest(t, http.MethodDelete, "/v1/chat-sessions/"+sessionID.String()+"/messages/"+messageID.String(), nil, middleware.Principal{
+		UserID:         uuid.New(),
+		OrganizationID: uuid.New(),
+		Role:           "member",
+	})
+	req = withRouteParams(req, map[string]string{"id": sessionID.String(), "mid": messageID.String()})
+	rr := httptest.NewRecorder()
+
+	h.redactMessage(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusForbidden, rr.Body.String())
+	}
+	if got := errorCode(t, rr.Body.Bytes()); got != api.ErrCodeForbidden {
+		t.Fatalf("error.code = %q, want %q body=%s", got, api.ErrCodeForbidden, rr.Body.String())
 	}
 }
 
