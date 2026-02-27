@@ -261,9 +261,11 @@ func (m Model) viewForShell(shell string) string {
 	var sections []string
 
 	if m.coldOpenActive {
+		// EX-108: friendlier first-run banner — "WELCOME" reads better than the
+		// technical "Booting operator console..." for new users.
 		banner := lipgloss.NewStyle().Foreground(colFocus).Bold(true).Render("  OTTERCAMP") +
-			styleMuted.Render(" // FIRST RUN") +
-			"  " + styleMuted.Render("Booting operator console...")
+			styleMuted.Render(" // WELCOME") +
+			"  " + styleMuted.Render("Setting up your workspace…")
 		sections = append(sections, prefix+banner)
 	}
 
@@ -276,10 +278,12 @@ func (m Model) viewForShell(shell string) string {
 	sections = append(sections, prefix+m.renderHelpLine())
 
 	if m.tourActive {
+		// EX-108: promote ?·help so first-run users discover the full keybinding
+		// reference immediately. Dot-separated to match existing hint style.
 		tour := styleMuted.Render("Tour: ") +
-			styleSubtle.Render("1/sidebar  2/main  3/chat") +
+			styleSubtle.Render("1·sidebar  2·main  3·chat") +
 			styleMuted.Render("  ·  ") +
-			styleSubtle.Render(":frank  :inbox  :tour dismiss")
+			styleSubtle.Render("i·inbox  ?·help  :tour dismiss")
 		sections = append(sections, prefix+tour)
 	}
 
