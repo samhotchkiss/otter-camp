@@ -295,6 +295,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebarLoaded = true
 		m.workspace.inboxCount = typed.InboxCount
 		m.workspace.rebuildSidebar(typed.OrgSessionID, typed.Chats, typed.Projects)
+		activityParts := []string{}
+		if len(typed.Projects) > 0 {
+			activityParts = append(activityParts, fmt.Sprintf("%d project(s)", len(typed.Projects)))
+		}
+		if len(typed.Chats) > 0 {
+			activityParts = append(activityParts, fmt.Sprintf("%d recent chat(s)", len(typed.Chats)))
+		}
+		if typed.InboxCount > 0 {
+			activityParts = append(activityParts, fmt.Sprintf("%d inbox item(s)", typed.InboxCount))
+		}
+		if len(activityParts) > 0 {
+			m.workspace.activity = append(m.workspace.activity, "sidebar loaded: "+strings.Join(activityParts, ", "))
+		}
 		// Pre-load tasks for all projects so the dashboard task board is populated on startup.
 		// Also load agents for the AGENTS view.
 		var cmds []tea.Cmd

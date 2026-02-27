@@ -1187,6 +1187,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("Enter", "send message"),
 		key("PgUp / PgDn", "scroll messages"),
 		key("↑ / ↓", "scroll one line"),
+		key("g / G", "scroll to oldest / latest message"),
 		key("Esc", "cancel active agent turn"),
 		key("Alt-Enter", "insert newline"),
 		key("[ / ]", "cycle chat scope"),
