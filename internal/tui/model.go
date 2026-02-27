@@ -2385,19 +2385,30 @@ func (m Model) chatTextInputActive() bool {
 
 // clearTurnIfSwitchingSession must be called just before changing m.activeSession.
 // If the incoming session differs from the current one it:
-//   - clears activeTurn + activeTurnSessionID (EX-186) so the spinner doesn't show
-//     in the new session's chat panel, and
-//   - discards queuedMessages + editingQueued (EX-187) so a stale turn-completed
-//     event for the old session cannot send those messages to the new session.
+//   - clears activeTurn (EX-186) so the spinner doesn't persist in the new session,
+//   - discards queuedMessages + editingQueued (EX-187) so stale turn-completed events
+//     for the old session cannot send those messages to the new session, and
+//   - sets activeTurnSessionID to the new session UUID when available (EX-188), so
+//     events from the old session (or unrelated supervisor recovery runs) are still
+//     filtered by sessionMatchesActive — avoiding a re-introduction of EX-144.
 func (m *Model) clearTurnIfSwitchingSession(newSessionID string) {
 	if strings.EqualFold(strings.TrimSpace(m.activeSession), strings.TrimSpace(newSessionID)) {
 		return // same session — keep all state
 	}
-	if m.activeTurn || len(m.queuedMessages) > 0 {
+	if m.activeTurn || len(m.queuedMessages) > 0 || m.activeTurnSessionID != "" {
 		m.activeTurn = false
-		m.activeTurnSessionID = ""
 		m.queuedMessages = nil
 		m.editingQueued = false
+		// EX-188: point the filter at the new session so events from the old session
+		// and unrelated supervisor runs don't bleed through. When the new session ID
+		// is a UUID, strict filtering applies immediately. When it's a placeholder
+		// (not yet resolved), fall back to "" (accept-all) — it will be tightened on
+		// the first chat.turn.started event.
+		if looksLikeUUID(newSessionID) {
+			m.activeTurnSessionID = strings.TrimSpace(newSessionID)
+		} else {
+			m.activeTurnSessionID = ""
+		}
 	}
 }
 

@@ -2929,3 +2929,18 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-188---
+
+## EX-188: EX-186 re-introduced EX-144 by resetting activeTurnSessionID to "" on session switch
+
+**Observation:** EX-186 cleared `activeTurnSessionID = ""` when switching sessions, inadvertently re-enabling the "accept-all" SSE filter mode. This re-introduced the EX-144 regression: any `chat.turn.started` event from a supervisor recovery run in a different session would pass `sessionMatchesActive` (since `activeTurnSessionID == ""` → `true`), set `activeTurn = true` (showing the spinner in the new session), and overwrite `activeTurnSessionID` with the recovery run's session ID. From that point, normal SSE events from the user's actual new session would be rejected, leaving the TUI in a permanently broken state.
+
+**Improvement:** Changed `clearTurnIfSwitchingSession` to set `activeTurnSessionID = newSessionID` (the UUID of the session being switched to) instead of `""`. This keeps cross-session filtering active. When the new session isn't resolved yet (newSessionID is a placeholder, not a UUID), it falls back to `""` (accept-all) as a safe default, which will be tightened by the next `chat.turn.started` event.
+
+**Why it matters:** This is a second-order correctness fix: EX-186 solved the visible spinner symptom, but the underlying filter state left the TUI vulnerable to EX-144 again. Setting `activeTurnSessionID` to the destination session UUID ensures the TUI correctly accepts events only from the newly active session and rejects everything else from the moment of the switch.
+
+**Effort:** Trivial (conditional assignment instead of clearing to "")
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

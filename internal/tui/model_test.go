@@ -4369,8 +4369,10 @@ func TestSwitchScopeClearsTurnStateForNewSession(t *testing.T) {
 	if model.activeTurn {
 		t.Error("activeTurn should be cleared after scope switch to a different session (EX-186)")
 	}
-	if model.activeTurnSessionID != "" {
-		t.Errorf("activeTurnSessionID should be cleared after scope switch, got %q (EX-186)", model.activeTurnSessionID)
+	// EX-188: activeTurnSessionID should be set to session B (not "") to keep
+	// cross-session event filtering active in the new session.
+	if model.activeTurnSessionID != sessionB {
+		t.Errorf("activeTurnSessionID should be set to sessionB after scope switch, got %q (EX-186/EX-188)", model.activeTurnSessionID)
 	}
 	runNonTimerCmds(cmd)
 	if !historyLoaded {
@@ -4412,7 +4414,9 @@ func TestSwitchScopeClearsQueuedMessages(t *testing.T) {
 	if model.activeTurn {
 		t.Error("activeTurn should be cleared after session switch (EX-187)")
 	}
-	if model.activeTurnSessionID != "" {
-		t.Errorf("activeTurnSessionID should be cleared after session switch, got %q (EX-187)", model.activeTurnSessionID)
+	// EX-188: activeTurnSessionID should be set to session B (not "") so events from
+	// session A and unrelated supervisor runs are still filtered after the switch.
+	if model.activeTurnSessionID != sessionB {
+		t.Errorf("activeTurnSessionID should be set to sessionB after switch, got %q (EX-188)", model.activeTurnSessionID)
 	}
 }
