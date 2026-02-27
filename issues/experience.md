@@ -2612,6 +2612,21 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-175---
+
+## EX-175: Inbox "open" paths didn't load task detail
+
+**Observation:** All three inbox "open" paths ('o' key, Enter on ViewInbox, `:inbox open` command) called `applyInboxAction("open")` which sets `selectedTaskID` and navigates to ViewTask — but none of them dispatched `loadTaskDetailCmd`. If a user navigated directly to the inbox (via 'i' key or `:inbox`) without ever expanding the project in the sidebar, `m.workspace.tasks[taskID]` would have no `TaskNumber`, `Description`, or `AgentName`. The task view would render just the raw task ID.
+
+**Improvement:** In all three open paths, after `applyInboxAction("open")`, added `loadTaskDetailCmd(taskID, m.runtimeHints)` via `tea.Batch` alongside the existing history reload. This mirrors the sidebar task-node Enter path which always fetches full task detail on selection.
+
+**Why it matters:** Users arriving from the inbox are reviewing tasks for the first time. Showing "Task: some-uuid" instead of "OC-42: Build the thing — assigned to Ellie" is a poor first impression and makes the task view useless for approval decisions.
+
+**Effort:** Low (three call sites, each replaced with `tea.Batch(loadTaskDetailCmd, loadChatHistoryCmd)`)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
 ---EX-174---
 
 ## EX-174: Stale project detail overwrote current project after rapid navigation

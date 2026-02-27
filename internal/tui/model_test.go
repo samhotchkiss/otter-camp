@@ -3763,3 +3763,72 @@ func TestCurrentProjectDetailIsAccepted(t *testing.T) {
 		t.Fatalf("project detail ID = %q, want proj-C", m.workspace.selectedProject.ID)
 	}
 }
+
+// EX-175: all three inbox "open" paths should load task detail so the task view
+// renders task number and description even when the task was never loaded via the sidebar.
+func TestInboxOpenLoadsTaskDetail(t *testing.T) {
+	t.Parallel()
+	taskID := "task-inbox-175"
+	sessionID := "00000000-0000-0000-0000-000000000175"
+
+	for _, tc := range []struct {
+		name string
+		act  func(model *Model) tea.Cmd
+	}{
+		{
+			name: "o-key",
+			act: func(model *Model) tea.Cmd {
+				_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+				return cmd
+			},
+		},
+		{
+			name: "enter-key",
+			act: func(model *Model) tea.Cmd {
+				_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				return cmd
+			},
+		},
+		{
+			name: "inbox-open-cmd",
+			act: func(model *Model) tea.Cmd {
+				return model.executeCommand(":inbox open")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			detailLoaded := false
+			model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+				LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+					if id == taskID {
+						detailLoaded = true
+					}
+					return &TaskDetailItem{ID: id, TaskNumber: 42, Title: "EX-175 Task"}, nil
+				},
+				LoadChatHistory: func(_ context.Context, _ string) ([]ChatMessage, error) {
+					return nil, nil
+				},
+			})
+			model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+			if model.workspace.tasks == nil {
+				model.workspace.tasks = make(map[string]*taskRecord)
+			}
+			// Task exists in the map but has no detail loaded yet (no TaskNumber).
+			model.workspace.tasks[taskID] = &taskRecord{ID: taskID, SessionID: sessionID}
+			model.workspace.taskSessionIDs = map[string]string{taskID: sessionID}
+			model.workspace.inbox = []inboxItem{{ID: "inbox-175", TaskID: taskID, Summary: "Review"}}
+			model.workspace.inboxCursor = 0
+			model.workspace.mainView = ViewInbox
+			model.focus = MainPanel
+
+			cmd := tc.act(&model)
+			if cmd == nil {
+				t.Fatalf("[%s] inbox open should return a non-nil cmd", tc.name)
+			}
+			runNonTimerCmds(cmd)
+			if !detailLoaded {
+				t.Fatalf("[%s] inbox open did not call LoadTaskDetail (EX-175)", tc.name)
+			}
+		})
+	}
+}

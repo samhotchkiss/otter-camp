@@ -846,15 +846,22 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				// and chat header indicators are accurate.
 				m.activeScope = ScopeTask
 				m.statusMessage = "Opened inbox item in context."
-				// EX-169: reload chat history for the task session being opened so the
-				// chat panel shows the task's conversation, not the previous session's.
+				// EX-175: load task detail so task view shows number/description.
+				var cmds []tea.Cmd
+				if taskID := m.workspace.selectedTaskID; taskID != "" {
+					cmds = append(cmds, loadTaskDetailCmd(taskID, m.runtimeHints))
+				}
+				// EX-169: reload chat history for the task session being opened.
 				sessionID := m.workspace.activeSessionID
 				if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
 					m.chatMessages = nil
 					m.chatHistoryLoading = true
 					m.chatMessageIndex = make(map[string]int)
 					m.chatScrollOffset = 0
-					return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+					cmds = append(cmds, loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory))
+				}
+				if len(cmds) > 0 {
+					return tea.Batch(cmds...)
 				}
 				return nil
 			}
@@ -1259,15 +1266,24 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			// are accurate in the chat header.
 			m.activeScope = ScopeTask
 			m.statusMessage = "Opened inbox item in context."
-			// EX-169: reload chat history for the task session being opened so the
-			// chat panel shows the task's conversation, not the previous session's.
+			// EX-175: load task detail so the task view shows task number and
+			// description even when the task was never previously loaded via the
+			// sidebar (e.g. user navigated straight to inbox on first launch).
+			var cmds []tea.Cmd
+			if taskID := m.workspace.selectedTaskID; taskID != "" {
+				cmds = append(cmds, loadTaskDetailCmd(taskID, m.runtimeHints))
+			}
+			// EX-169: reload chat history for the task session being opened.
 			sessionID := m.workspace.activeSessionID
 			if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
 				m.chatMessages = nil
 				m.chatHistoryLoading = true
 				m.chatMessageIndex = make(map[string]int)
 				m.chatScrollOffset = 0
-				return true, loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+				cmds = append(cmds, loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory))
+			}
+			if len(cmds) > 0 {
+				return true, tea.Batch(cmds...)
 			}
 			return true, nil
 		}
@@ -2476,15 +2492,22 @@ func (m *Model) executeInboxCommand(args []string) tea.Cmd {
 		// and chat header indicators are accurate.
 		m.activeScope = ScopeTask
 		m.statusMessage = "Opened inbox item in context."
-		// EX-171: reload chat history for the task session being opened so the
-		// chat panel shows the task's conversation (mirrors 'o' key / Enter path).
+		// EX-175: load task detail so task view shows number/description.
+		var cmds []tea.Cmd
+		if taskID := m.workspace.selectedTaskID; taskID != "" {
+			cmds = append(cmds, loadTaskDetailCmd(taskID, m.runtimeHints))
+		}
+		// EX-171: reload chat history for the task session being opened.
 		sessionID := m.workspace.activeSessionID
 		if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
 			m.chatMessages = nil
 			m.chatHistoryLoading = true
 			m.chatMessageIndex = make(map[string]int)
 			m.chatScrollOffset = 0
-			return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+			cmds = append(cmds, loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory))
+		}
+		if len(cmds) > 0 {
+			return tea.Batch(cmds...)
 		}
 	case "approve", "reject", "defer":
 		action := strings.ToLower(args[0])
