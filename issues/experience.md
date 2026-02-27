@@ -2612,6 +2612,21 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-183---
+
+## EX-183: Failed inbox action left inconsistent local state without recovery
+
+**Observation:** `inboxActionCompletedMsg` showed an error in the status bar on failure, but returned `nil` as the cmd. The optimistic local update (item removed from inbox list, task status set to approved/rejected/deferred) was not rolled back and not refreshed from the server. A failed `approve` would leave an inbox item permanently missing from the local list even though it still needed review on the server.
+
+**Improvement:** On error, dispatch `loadInboxItemsCmd` to sync local state with the server. This is simpler and more robust than a manual undo, and ensures the re-review item re-appears.
+
+**Why it matters:** Silently hiding an unreviewed item after a network error could cause an agent to wait indefinitely for approval that never comes because the user doesn't see it.
+
+**Effort:** Trivial (one line — return cmd instead of nil on error)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
 ---EX-182---
 
 ## EX-182: Two paths dispatched history load without clearing stale messages

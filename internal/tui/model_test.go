@@ -4234,3 +4234,36 @@ func TestViewTaskEnterClearsMessagesAndSetsLoading(t *testing.T) {
 		t.Fatalf("ViewTask Enter should focus ChatPanel, got %v", m.focus)
 	}
 }
+
+// EX-183: when an inbox action fails server-side, the TUI should reload inbox items
+// to restore consistent state (the optimistic update already removed the item locally).
+func TestInboxActionFailureReloadsInboxItems(t *testing.T) {
+	t.Parallel()
+	reloaded := false
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadInboxItems: func(_ context.Context) ([]InboxSummaryItem, error) {
+			reloaded = true
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// Simulate a failed approve action
+	updated, cmd := model.Update(inboxActionCompletedMsg{
+		ItemID: "inbox-fail-183",
+		Action: "approve",
+		Err:    fmt.Errorf("server error: 500"),
+	})
+	m := updated.(Model)
+
+	if !strings.Contains(m.statusMessage, "failed") {
+		t.Fatalf("failed action should set status message, got %q", m.statusMessage)
+	}
+	if cmd == nil {
+		t.Fatal("failed inbox action should return a non-nil cmd (inbox reload)")
+	}
+	runNonTimerCmds(cmd)
+	if !reloaded {
+		t.Fatal("failed inbox action did not call LoadInboxItems (EX-183)")
+	}
+}

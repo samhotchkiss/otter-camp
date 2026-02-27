@@ -543,6 +543,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// On success there is nothing to do — local state is already updated optimistically.
 		if typed.Err != nil {
 			m.statusMessage = fmt.Sprintf("Inbox %s failed: %s", typed.Action, strings.TrimSpace(typed.Err.Error()))
+			// EX-183: reload inbox items to restore consistent state. The optimistic
+			// local update already removed the item; reloading syncs us back with
+			// the server so a failed approval doesn't silently hide an unreviewed item.
+			return m, loadInboxItemsCmd(m.runtimeHints)
 		}
 		return m, nil
 	case statusClearMsg:
