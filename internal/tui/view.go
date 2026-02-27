@@ -370,6 +370,10 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 			if unread := m.workspace.totalUnreadSessions(); unread > 0 {
 				label += fmt.Sprintf(" (%d)", unread)
 			}
+		} else if sectionID == sectionProjects {
+			if count := m.workspace.projectCount(); count > 0 {
+				label += fmt.Sprintf(" (%d)", count)
+			}
 		}
 	case sidebarKindProject:
 		if node.Expanded {
