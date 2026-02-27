@@ -68,3 +68,4 @@ bridge/.env
 # Avatar PNGs (keep webp, ignore large PNGs)
 data/agents/*/avatar.png
 data/agents/*/avatar-*.png
+ottercamp
