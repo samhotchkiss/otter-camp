@@ -177,6 +177,10 @@ func NewModelWithRuntime(state UIState, runtime RuntimeHints) Model {
 	if runtime.FirstRun {
 		model.workspace.setMainView(ViewDashboard)
 	}
+	// Task detail view requires a selected task; fall back to dashboard if none is loaded yet.
+	if model.workspace.mainView == ViewTask && model.workspace.selectedTaskID == "" {
+		model.workspace.setMainView(ViewDashboard)
+	}
 	model.applyResponsiveLayout()
 	return model
 }
