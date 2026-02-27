@@ -125,6 +125,7 @@ type workspaceState struct {
 	sessionToTaskLabel map[string]string // session UUID → human-readable task label
 	selectedTaskID    string
 	projectTaskCursor int // cursor within the project view open-task list
+	dashboardCursor   int // cursor within the dashboard task board (index into taskOrder excluding done/cancelled)
 
 	inbox       []inboxItem
 	inboxCursor int
@@ -602,6 +603,48 @@ func (w *workspaceState) moveProjectTaskCursor(delta int) {
 	if w.projectTaskCursor >= openCount {
 		w.projectTaskCursor = openCount - 1
 	}
+}
+
+// dashboardActiveTasks returns the ordered list of task IDs that are visible on the dashboard board
+// (excludes done/approved/cancelled tasks).
+func (w *workspaceState) dashboardActiveTasks() []string {
+	out := make([]string, 0, len(w.taskOrder))
+	for _, id := range w.taskOrder {
+		t := w.tasks[id]
+		if t == nil {
+			continue
+		}
+		if t.Status == "done" || t.Status == "approved" || t.Status == "cancelled" {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+func (w *workspaceState) moveDashboardCursor(delta int) {
+	active := w.dashboardActiveTasks()
+	if len(active) == 0 {
+		w.dashboardCursor = 0
+		return
+	}
+	// When nothing is selected yet, initialise cursor so the first j/k press
+	// lands on the first or last item rather than skipping the first entry.
+	if w.selectedTaskID == "" {
+		if delta > 0 {
+			w.dashboardCursor = -1
+		} else {
+			w.dashboardCursor = len(active)
+		}
+	}
+	w.dashboardCursor += delta
+	if w.dashboardCursor < 0 {
+		w.dashboardCursor = 0
+	}
+	if w.dashboardCursor >= len(active) {
+		w.dashboardCursor = len(active) - 1
+	}
+	w.selectedTaskID = active[w.dashboardCursor]
 }
 
 func (w *workspaceState) moveInbox(delta int) {

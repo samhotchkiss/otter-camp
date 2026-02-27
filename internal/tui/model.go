@@ -826,6 +826,15 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.workspace.moveInbox(1)
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			m.workspace.moveProjectTaskCursor(1)
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
+			m.workspace.moveDashboardCursor(1)
+			if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
+				label := task.Title
+				if task.TaskNumber > 0 {
+					label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
+				}
+				m.statusMessage = "▸ " + truncate(label, 40)
+			}
 		}
 		return true, nil
 	case 'k':
@@ -835,6 +844,15 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.workspace.moveInbox(-1)
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			m.workspace.moveProjectTaskCursor(-1)
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
+			m.workspace.moveDashboardCursor(-1)
+			if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
+				label := task.Title
+				if task.TaskNumber > 0 {
+					label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
+				}
+				m.statusMessage = "▸ " + truncate(label, 40)
+			}
 		}
 		return true, nil
 	case 'h':

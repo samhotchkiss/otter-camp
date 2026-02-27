@@ -686,6 +686,7 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 	lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, visibleSeps...))
 
 	// Task rows under each column
+	cursorID := m.workspace.selectedTaskID
 	todoTasks, inProgTasks, doneTasks := []string{}, []string{}, []string{}
 	for _, id := range m.workspace.taskOrder {
 		task := m.workspace.tasks[id]
@@ -699,18 +700,29 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		if !matchesFilter(taskLabel, query) && !matchesFilter(task.Status, query) {
 			continue
 		}
+		isCursor := id == cursorID
 		switch task.Status {
 		case "draft", "todo":
-			entry := truncate("○ "+taskLabel, colW)
-			todoTasks = append(todoTasks, styleText.Render(entry))
+			if isCursor {
+				entry := truncate("► "+taskLabel, colW)
+				todoTasks = append(todoTasks, styleBold.Foreground(colFocus).Render(entry))
+			} else {
+				entry := truncate("○ "+taskLabel, colW)
+				todoTasks = append(todoTasks, styleText.Render(entry))
+			}
 		case "done", "approved", "cancelled":
 			entry := truncate("✓ "+taskLabel, colW)
 			doneTasks = append(doneTasks, styleMuted.Render(entry))
 		case "blocked", "rejected", "deferred":
 			// omit from column view; reflected in blocked count only
 		default: // in_progress and unknown active statuses
-			entry := truncate("◌ "+taskLabel, colW)
-			inProgTasks = append(inProgTasks, lipgloss.NewStyle().Foreground(colWarning).Render(entry))
+			if isCursor {
+				entry := truncate("► "+taskLabel, colW)
+				inProgTasks = append(inProgTasks, styleBold.Foreground(colFocus).Render(entry))
+			} else {
+				entry := truncate("◌ "+taskLabel, colW)
+				inProgTasks = append(inProgTasks, lipgloss.NewStyle().Foreground(colWarning).Render(entry))
+			}
 		}
 	}
 	taskRowCount := maxInt(len(todoTasks), maxInt(len(inProgTasks), len(doneTasks)))
@@ -789,6 +801,14 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		for _, entry := range filteredActivity[start:] {
 			lines = append(lines, styleMuted.Render("  ✓ "+truncate(entry, width-6)))
 		}
+	}
+
+	// Navigation hint when focused on main panel
+	activeTasks := m.workspace.dashboardActiveTasks()
+	if len(activeTasks) > 0 {
+		lines = append(lines, "")
+		hintParts := "j/k·select task  ·  Enter·open"
+		lines = append(lines, styleMuted.Render("  "+hintParts))
 	}
 
 	return lines

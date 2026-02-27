@@ -861,3 +861,21 @@ When no sessionID exists: "(no session)" instead of "(no active session)". When 
 
 ---
 
+
+## EX-062: Dashboard task board cursor navigation with j/k
+
+**Observation:** The task board (dashboard view) showed tasks in kanban columns but had no selection cursor — you couldn't navigate between tasks and then press Enter to open one. The only way to open a task from the dashboard was through the sidebar.
+
+**Improvement:** Added `dashboardCursor int` to `workspaceState` and `moveDashboardCursor(delta int)` method. Pressing `j`/`k` on the main panel while on the dashboard moves a `►` cursor through the active (non-done) tasks across all kanban columns. Pressing Enter opens the selected task's detail view. The cursor is not shown on done/approved/cancelled tasks. A navigation hint "j/k·select task  ·  Enter·open" appears at the bottom of the board when active tasks exist.
+
+**Bug fixed:** The `dashboardCursor` started at 0, so the first `j` press incremented to 1, selecting the *second* task instead of the first. Fixed by detecting `selectedTaskID == ""` (nothing selected yet) and initialising `dashboardCursor` to -1 (for j) or `len(active)` (for k) before the delta is applied, so the first key press lands on the first or last active task.
+
+**Test added:** `TestDashboardCursorJKMoveSelection` — seeds 2 active + 1 done task, presses j/k, asserts selectedTaskID transitions correctly and `►` appears on the right task in the rendered view.
+
+**Why it matters:** Keyboard-only navigation is a core TUI value. Needing to click the sidebar just to open a task from the board breaks the flow. Now the user can press `d`, navigate with `j/k`, and press Enter — a natural three-key workflow.
+
+**Effort:** Medium (bug in cursor initialisation required unit test to diagnose)
+**Issue:** N/A (implemented directly in ralph-loop)
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

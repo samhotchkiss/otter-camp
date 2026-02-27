@@ -727,7 +727,7 @@ func TestTaskDetailViewShowsExtendedFieldsAndFullEventLog(t *testing.T) {
 		"Subtasks",
 		"created",
 		"awaiting operator approval",
-		"Enter·open async session", // session exists → open action hint shown
+		"Enter·open session", // session exists → open action hint shown
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("task detail missing %q: %q", want, view)
@@ -767,6 +767,53 @@ func TestEnterOnTaskDetailOpensAsyncSession(t *testing.T) {
 	}
 	if got := model.FocusedPanel(); got != ChatPanel {
 		t.Fatalf("focus after Enter on task detail = %s, want chat", panelLabel(got))
+	}
+}
+
+func TestDashboardCursorJKMoveSelection(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.tasks["task-1"] = &taskRecord{ID: "task-1", Title: "Launch docs", Status: "todo"}
+	model.workspace.tasks["task-2"] = &taskRecord{ID: "task-2", Title: "CI hardening", Status: "in_progress"}
+	model.workspace.tasks["task-3"] = &taskRecord{ID: "task-3", Title: "Done task", Status: "done"}
+	model.workspace.taskOrder = []string{"task-1", "task-2", "task-3"}
+
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}) // navigate to dashboard
+	if got := model.FocusedPanel(); got != MainPanel {
+		t.Fatalf("focus after d = %s, want main", panelLabel(got))
+	}
+
+	// Press j — should select first active task (task-1)
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if got := model.workspace.selectedTaskID; got != "task-1" {
+		t.Fatalf("selectedTaskID after first j = %q, want task-1", got)
+	}
+
+	// Press j again — should advance to task-2 (in_progress)
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if got := model.workspace.selectedTaskID; got != "task-2" {
+		t.Fatalf("selectedTaskID after second j = %q, want task-2", got)
+	}
+
+	// Press j again — should stay on task-2 (task-3 is done and excluded)
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if got := model.workspace.selectedTaskID; got != "task-2" {
+		t.Fatalf("selectedTaskID after third j (clamped) = %q, want task-2", got)
+	}
+
+	// Press k — should go back to task-1
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if got := model.workspace.selectedTaskID; got != "task-1" {
+		t.Fatalf("selectedTaskID after k = %q, want task-1", got)
+	}
+
+	// Dashboard view should show ► on selected task
+	view := strings.Join(model.renderDashboardView(120, 20), "\n")
+	if !strings.Contains(view, "► Launch docs") {
+		t.Fatalf("dashboard missing cursor on selected task: %q", view)
+	}
+	if strings.Contains(view, "► CI hardening") {
+		t.Fatalf("dashboard should not have cursor on non-selected task: %q", view)
 	}
 }
 
