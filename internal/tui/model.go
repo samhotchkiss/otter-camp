@@ -2306,6 +2306,11 @@ func (m *Model) switchScope(next ChatScope) tea.Cmd {
 	m.chatScrollOffset = 0
 	m.statusMessage = fmt.Sprintf("Scope switched to %s.", next)
 	if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
+		// EX-181: clear stale messages before loading so the chat panel shows
+		// the loading indicator instead of the previous session's content.
+		m.chatMessages = nil
+		m.chatHistoryLoading = true
+		m.chatMessageIndex = make(map[string]int)
 		return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
 	}
 	return nil

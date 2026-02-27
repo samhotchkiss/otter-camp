@@ -2612,6 +2612,21 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-181---
+
+## EX-181: `switchScope` didn't clear stale chat messages before loading new session history
+
+**Observation:** When the user called `:scope task` or `:scope org` to switch the active chat scope, `switchScope` dispatched `loadChatHistoryCmd` but didn't clear `chatMessages`, `chatMessageIndex`, or set `chatHistoryLoading = true`. This meant the previous session's messages remained visible in the chat panel until the new session's history arrived — sometimes seconds later. A user switching from the org session to a task session would see Frank's messages in the task chat panel briefly.
+
+**Improvement:** Added the standard clear-and-loading block before `loadChatHistoryCmd`, mirroring the pattern used in EX-165 (`jumpToFrankSession`), EX-166 (unread navigation), EX-168 (sidebar select), and EX-169 (inbox open).
+
+**Why it matters:** Stale messages from a different session are confusing and can mislead users about the conversation history of the newly switched-to session.
+
+**Effort:** Trivial (three lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
 ---EX-180---
 
 ## EX-180: Escape from ViewTask to ViewProject didn't load data when project detail was missing

@@ -4142,3 +4142,43 @@ func TestEscapeFromTaskLoadsProjectDataWhenMissing(t *testing.T) {
 		t.Fatal("Escape from task did not call LoadProjectTasks (EX-180)")
 	}
 }
+
+// EX-181: switchScope should clear stale chat messages before loading new session history
+// so the chat panel shows the loading indicator rather than the previous session's content.
+func TestSwitchScopeClearsChatMessages(t *testing.T) {
+	t.Parallel()
+	sessionID := "00000000-0000-0000-0000-000000000181"
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, _ string) ([]ChatMessage, error) {
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	// Seed stale messages from a previous session
+	model.chatMessages = []ChatMessage{
+		{ID: "stale-msg", Role: "user", Content: "Old message from previous session", Finalized: true},
+	}
+	model.chatMessageIndex = map[string]int{"stale-msg": 0}
+	model.activeSession = "old-session"
+	// Set up a task session for the ScopeTask switch
+	taskID := "task-181"
+	if model.workspace.tasks == nil {
+		model.workspace.tasks = make(map[string]*taskRecord)
+	}
+	model.workspace.tasks[taskID] = &taskRecord{ID: taskID, SessionID: sessionID}
+	model.workspace.taskSessionIDs = map[string]string{taskID: sessionID}
+	model.workspace.selectedTaskID = taskID
+
+	cmd := model.switchScope(ScopeTask)
+	// Messages should be cleared immediately (before the cmd runs)
+	if len(model.chatMessages) != 0 {
+		t.Fatalf("switchScope should clear chatMessages immediately, got %d messages", len(model.chatMessages))
+	}
+	if !model.chatHistoryLoading {
+		t.Fatal("switchScope should set chatHistoryLoading=true when dispatching history load")
+	}
+	if cmd == nil {
+		t.Fatal("switchScope should return a non-nil cmd when session is a valid UUID")
+	}
+}
