@@ -1518,3 +1518,104 @@ func TestFlowRejectedEventAddsActivityAndLoadsTaskDetail(t *testing.T) {
 		t.Fatalf("loadTaskDetail called with %q, want 'task-rej-99'", loadCalled)
 	}
 }
+
+// EX-130: project.deployed should add a "deployed <sha>" activity entry.
+func TestProjectDeployedAddsActivityEntry(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"project_id": "proj-123",
+		"commit_sha": "abcdef1234567890",
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "project.deployed",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "deployed") && strings.Contains(entry, "abcdef12") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("project.deployed should add 'deployed <sha>' activity entry: %v", m.workspace.activity)
+	}
+}
+
+// EX-130: project.rollback_initiated should add a "rollback to <sha>" activity entry.
+func TestProjectRollbackInitiatedAddsActivityEntry(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"project_id":        "proj-123",
+		"target_commit_sha": "dead1234beef5678",
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "project.rollback_initiated",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "rollback") && strings.Contains(entry, "dead1234") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("project.rollback_initiated should add 'rollback to <sha>' activity entry: %v", m.workspace.activity)
+	}
+}
+
+// EX-130: deploy.approval_requested should set statusMessage with the commit SHA.
+func TestDeployApprovalRequestedShowsStatusMessage(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"project_id": "proj-abc",
+		"commit_sha": "cafe1234abcd5678",
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "deploy.approval_requested",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	if !strings.Contains(m.statusMessage, "Deploy pending approval") {
+		t.Fatalf("deploy.approval_requested should set statusMessage with approval notice, got: %q", m.statusMessage)
+	}
+	if !strings.Contains(m.statusMessage, "cafe1234") {
+		t.Fatalf("statusMessage should include commit SHA prefix, got: %q", m.statusMessage)
+	}
+}
+
+// EX-130: tool.capability_denied should set statusMessage with the tool name and capability.
+func TestToolCapabilityDeniedShowsStatusWarning(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"tool_name":  "file.write",
+		"capability": "file_write",
+		"run_id":     "run-xyz",
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "tool.capability_denied",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	if !strings.Contains(m.statusMessage, "Policy denied tool") {
+		t.Fatalf("tool.capability_denied should set statusMessage with denial notice, got: %q", m.statusMessage)
+	}
+	if !strings.Contains(m.statusMessage, "file.write") {
+		t.Fatalf("statusMessage should include tool name, got: %q", m.statusMessage)
+	}
+}

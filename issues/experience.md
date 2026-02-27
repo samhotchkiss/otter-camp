@@ -1941,3 +1941,29 @@ Also extracted a `taskLabel(rec *taskRecord, taskID string) string` helper (used
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-130: Four deployment and policy SSE events silently dropped — deployed, rollback, approval, capability denied
+
+**Observation:** Four more server events were published with no TUI handlers:
+- `project.deployed` — fires when a deployment completes successfully (env_updater finalises the deploy task)
+- `project.rollback_initiated` — fires when a rollback is triggered
+- `deploy.approval_requested` — fires when a deploy is waiting on human approval before proceeding
+- `tool.capability_denied` — fires whenever an agent's tool call is blocked by a capability policy
+
+None of these surfaced anywhere in the TUI. Users had to open the delivery view or check logs to know a deploy landed, a rollback happened, or a tool was blocked.
+
+**Improvement:** Added four handlers in `applyWorkspaceCommand`:
+1. **`project.deployed`**: Appends `"deployed <sha[:8]>"` to the activity log.
+2. **`project.rollback_initiated`**: Appends `"rollback to <sha[:8]>"` to the activity log.
+3. **`deploy.approval_requested`**: Sets `statusMessage` to `"Deploy pending approval: <sha[:8]>"` so the user sees it immediately.
+4. **`tool.capability_denied`**: Sets `statusMessage` to `"Policy denied tool: <tool_name> (<capability>)"` so the user knows an agent was blocked.
+
+Commit SHAs are truncated to 8 characters for readability. The `statusMessage` for `deploy.approval_requested` and `tool.capability_denied` will clear naturally when the user takes any action that overwrites the status bar.
+
+**Why it matters:** Deployment events are high-signal — users need to know when code lands in production. A rollback is even higher urgency. A deploy waiting on approval creates a stall if the user doesn't notice. Tool capability denials indicate policy configuration may need tuning; surfacing them inline saves a round-trip to the logs.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

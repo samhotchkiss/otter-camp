@@ -2851,6 +2851,79 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		m.workspace.activity = append(m.workspace.activity, label+": flow rejected")
 		return loadTaskDetailCmd(payload.TaskID, m.runtimeHints)
 	}
+	// EX-130: project.deployed — record in the activity log with a short commit
+	// SHA so the user can see deployments completing without opening the delivery view.
+	if event.EventType == "project.deployed" {
+		var payload struct {
+			CommitSHA string `json:"commit_sha"`
+		}
+		if decodePayload(event.Payload, &payload) {
+			sha := payload.CommitSHA
+			if len(sha) > 8 {
+				sha = sha[:8]
+			}
+			suffix := "deployed"
+			if sha != "" {
+				suffix = "deployed " + sha
+			}
+			m.workspace.activity = append(m.workspace.activity, suffix)
+		}
+		return nil
+	}
+	// EX-130: project.rollback_initiated — show in activity log so the user sees
+	// the rollback was triggered without having to poll the delivery view.
+	if event.EventType == "project.rollback_initiated" {
+		var payload struct {
+			TargetCommitSHA string `json:"target_commit_sha"`
+		}
+		if decodePayload(event.Payload, &payload) {
+			sha := payload.TargetCommitSHA
+			if len(sha) > 8 {
+				sha = sha[:8]
+			}
+			entry := "rollback initiated"
+			if sha != "" {
+				entry = "rollback to " + sha
+			}
+			m.workspace.activity = append(m.workspace.activity, entry)
+		}
+		return nil
+	}
+	// EX-130: deploy.approval_requested — set status bar so the user knows a
+	// deploy is waiting for their approval before it can proceed.
+	if event.EventType == "deploy.approval_requested" {
+		var payload struct {
+			CommitSHA string `json:"commit_sha"`
+		}
+		if decodePayload(event.Payload, &payload) {
+			sha := payload.CommitSHA
+			if len(sha) > 8 {
+				sha = sha[:8]
+			}
+			msg := "Deploy pending approval."
+			if sha != "" {
+				msg = "Deploy pending approval: " + sha
+			}
+			m.statusMessage = msg
+		}
+		return nil
+	}
+	// EX-130: tool.capability_denied — show a brief status bar warning so the
+	// user knows an agent was blocked by a policy without having to check logs.
+	if event.EventType == "tool.capability_denied" {
+		var payload struct {
+			ToolName   string `json:"tool_name"`
+			Capability string `json:"capability"`
+		}
+		if decodePayload(event.Payload, &payload) && payload.ToolName != "" {
+			msg := "Policy denied tool: " + payload.ToolName
+			if payload.Capability != "" {
+				msg += " (" + payload.Capability + ")"
+			}
+			m.statusMessage = msg
+		}
+		return nil
+	}
 	if event.EventType == "worker.unresponsive" {
 		if !m.turnsSynced {
 			return nil
