@@ -1005,12 +1005,12 @@ func (m Model) renderAgentsView(width, maxLines int) []string {
 		}
 		var dot string
 		switch strings.ToLower(status) {
-		case "online":
+		case "active", "online":
 			dot = styleConnected.Render("● ")
-		case "idle":
+		case "paused", "idle", "draft":
+			dot = styleReconnecting.Render("◌ ")
+		default: // retired, cancelled, unknown
 			dot = styleMuted.Render("○ ")
-		default:
-			dot = styleDisconnected.Render("○ ")
 		}
 		agentLine := dot + styleBold.Render(name)
 		if status != "" {

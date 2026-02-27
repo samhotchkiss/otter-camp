@@ -254,6 +254,26 @@ func runTUICommand(args []string) int {
 					Tasks:        tasks,
 				}, nil
 			}
+			runtimeHints.LoadAgents = func(ctx context.Context) ([]string, error) {
+				var resp struct {
+					Data []struct {
+						DisplayName     string `json:"display_name"`
+						LifecycleStatus string `json:"lifecycle_status"`
+					} `json:"data"`
+				}
+				if err := apiClient.request(ctx, "GET", "/v1/agents?limit=20", nil, &resp); err != nil {
+					return nil, err
+				}
+				out := make([]string, 0, len(resp.Data))
+				for _, a := range resp.Data {
+					status := a.LifecycleStatus
+					if status == "" {
+						status = "unknown"
+					}
+					out = append(out, a.DisplayName+"="+status)
+				}
+				return out, nil
+			}
 			runtimeHints.LoadTaskDetail = func(ctx context.Context, taskID string) (*tuiapp.TaskDetailItem, error) {
 				var resp struct {
 					Data struct {

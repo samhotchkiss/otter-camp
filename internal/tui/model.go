@@ -73,6 +73,10 @@ type projectDetailLoadedMsg struct {
 	Detail ProjectDetail
 }
 
+type agentsLoadedMsg struct {
+	Agents []string // "name=lifecycle_status" format
+}
+
 type taskDetailLoadedMsg struct {
 	Detail TaskDetailItem
 }
@@ -281,9 +285,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workspace.inboxCount = typed.InboxCount
 		m.workspace.rebuildSidebar(typed.OrgSessionID, typed.Chats, typed.Projects)
 		// Pre-load tasks for all projects so the dashboard task board is populated on startup.
+		// Also load agents for the AGENTS view.
 		var cmds []tea.Cmd
 		for _, proj := range typed.Projects {
 			cmds = append(cmds, loadProjectTasksCmd(proj.ID, m.runtimeHints))
+		}
+		if cmd := loadAgentsCmd(m.runtimeHints); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 		// If the active session was empty or the placeholder, replace with the real
 		// org session UUID and trigger history load unconditionally (sidebar data
@@ -305,6 +313,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case projectDetailLoadedMsg:
 		m.workspace.selectedProject = &typed.Detail
+		return m, nil
+	case agentsLoadedMsg:
+		if len(typed.Agents) > 0 {
+			m.workspace.agents = typed.Agents
+		}
 		return m, nil
 	case taskDetailLoadedMsg:
 		if rec := m.workspace.tasks[typed.Detail.ID]; rec != nil {
@@ -2120,6 +2133,21 @@ func loadProjectDetailCmd(projectID string, hints RuntimeHints) tea.Cmd {
 			return projectDetailLoadedMsg{Detail: ProjectDetail{ID: projectID}}
 		}
 		return projectDetailLoadedMsg{Detail: *detail}
+	}
+}
+
+func loadAgentsCmd(hints RuntimeHints) tea.Cmd {
+	if hints.LoadAgents == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		agents, err := hints.LoadAgents(ctx)
+		if err != nil {
+			return agentsLoadedMsg{}
+		}
+		return agentsLoadedMsg{Agents: agents}
 	}
 }
 

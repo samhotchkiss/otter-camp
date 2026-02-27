@@ -62,6 +62,7 @@ type RuntimeHints struct {
 	LoadProjectTasks             func(ctx context.Context, projectID string) ([]SidebarTaskItem, error)
 	LoadProjectDetail            func(ctx context.Context, projectID string) (*ProjectDetail, error)
 	LoadTaskDetail               func(ctx context.Context, taskID string) (*TaskDetailItem, error)
+	LoadAgents                   func(ctx context.Context) ([]string, error) // returns "name=lifecycle_status" strings
 }
 
 func (h RuntimeHints) now() time.Time {
