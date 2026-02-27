@@ -697,6 +697,8 @@ func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskIt
 				Title:  task.Title,
 				Status: task.WorkStatus,
 			}
+			// Add to taskOrder for the dashboard board (deduplicated).
+			w.taskOrder = append(w.taskOrder, task.ID)
 		}
 	}
 	// Mark the project as expanded

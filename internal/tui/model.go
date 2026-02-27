@@ -276,6 +276,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebarLoaded = true
 		m.workspace.inboxCount = typed.InboxCount
 		m.workspace.rebuildSidebar(typed.OrgSessionID, typed.Chats, typed.Projects)
+		// Pre-load tasks for all projects so the dashboard task board is populated on startup.
+		var cmds []tea.Cmd
+		for _, proj := range typed.Projects {
+			cmds = append(cmds, loadProjectTasksCmd(proj.ID, m.runtimeHints))
+		}
 		// If the active session was empty or the placeholder, replace with the real
 		// org session UUID and trigger history load unconditionally (sidebar data
 		// arrives before or after ReplaySyncedMsg; always load when we first get the UUID).
@@ -284,10 +289,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.workspace.activeSessionID = typed.OrgSessionID
 			m.state.LastActiveChatSession = typed.OrgSessionID
 			if m.runtimeHints.LoadChatHistory != nil {
-				return m, loadChatHistoryCmd(typed.OrgSessionID, m.runtimeHints.LoadChatHistory)
+				cmds = append(cmds, loadChatHistoryCmd(typed.OrgSessionID, m.runtimeHints.LoadChatHistory))
 			}
 		}
-		return m, nil
+		if len(cmds) == 0 {
+			return m, nil
+		}
+		return m, tea.Batch(cmds...)
 	case projectTasksLoadedMsg:
 		m.workspace.setProjectTasks(typed.ProjectID, typed.Tasks)
 		return m, nil
