@@ -291,6 +291,9 @@ func TestAgentAssignmentRoutesRegistered(t *testing.T) {
 		"POST /agents/{id}/project-assignments",
 		"DELETE /agents/{id}/project-assignments/{pid}",
 		"GET /agents/{id}/project-assignments",
+		"GET /projects/{id}/agents",
+		"POST /projects/{id}/agents",
+		"DELETE /projects/{id}/agents/{agent_id}",
 		"GET /agents/{id}/skills",
 		"POST /agents/{id}/skills",
 		"DELETE /agents/{id}/skills/{sid}",
@@ -715,12 +718,20 @@ func (f *fakeSkillLookupRepo) GetByID(ctx context.Context, id uuid.UUID) (repo.S
 }
 
 type fakeProjectAssignmentRepo struct {
-	listByAgentFn func(ctx context.Context, agentID uuid.UUID) ([]repo.AgentProjectAssignment, error)
+	listByAgentFn   func(ctx context.Context, agentID uuid.UUID) ([]repo.AgentProjectAssignment, error)
+	listByProjectFn func(ctx context.Context, projectID uuid.UUID) ([]repo.AgentProjectAssignment, error)
 }
 
 func (f *fakeProjectAssignmentRepo) ListByAgent(ctx context.Context, agentID uuid.UUID) ([]repo.AgentProjectAssignment, error) {
 	if f.listByAgentFn != nil {
 		return f.listByAgentFn(ctx, agentID)
+	}
+	return nil, nil
+}
+
+func (f *fakeProjectAssignmentRepo) ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.AgentProjectAssignment, error) {
+	if f.listByProjectFn != nil {
+		return f.listByProjectFn(ctx, projectID)
 	}
 	return nil, nil
 }
