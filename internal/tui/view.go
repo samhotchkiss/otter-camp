@@ -402,6 +402,8 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 			prefix = "    ✓ "
 		case "in_progress":
 			prefix = "    ◌ "
+		case "blocked", "rejected", "deferred":
+			prefix = "    ✗ "
 		default:
 			prefix = "    ○ "
 		}
@@ -1006,6 +1008,13 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 
 	lines = append(lines, titleLine)
 	lines = append(lines, statusLine)
+	// Show parent project name if discoverable via sidebar node graph
+	taskNodeID := "task-" + task.ID
+	if taskNode := m.workspace.nodes[taskNodeID]; taskNode != nil && taskNode.ParentID != "" {
+		if projNode := m.workspace.nodes[taskNode.ParentID]; projNode != nil {
+			lines = append(lines, styleMuted.Render("  Project: "+projNode.Label))
+		}
+	}
 	if task.AgentName != "" {
 		lines = append(lines, styleMuted.Render("  Agent:  "+task.AgentName))
 	}

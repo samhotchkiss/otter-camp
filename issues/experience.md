@@ -745,3 +745,31 @@
 
 ---
 
+## EX-054: Task detail shows parent project name
+
+**Observation:** When viewing a task detail (ViewTask), there was no indication of which project the task belonged to. A user navigating from the sidebar's PROJECTS section task tree directly to a task would lose project context.
+
+**Improvement:** The task detail now shows "Project: OtterCamp Sales Site" (or whichever project) below the status line. The project name is resolved via the sidebar node graph: the task's sidebar node (`task-{id}`) has a `ParentID` pointing to the project node (`project-{id}`), whose Label is the project name. Additionally, when navigating to a task via a sidebar task node, `selectedProjectID` is now set so the "Esc·back to project" and "p·project view" navigation hints appear.
+
+**Why it matters:** Users often lose track of which project they're in when deep in task detail. Showing the project name gives immediate context, and the navigation hints make it easy to jump back.
+
+**Effort:** Low
+**Issue:** N/A (implemented directly in ralph-loop)
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-055: Sidebar task nodes show ✗ for blocked/rejected/deferred
+
+**Observation:** Sidebar task nodes under expanded projects only used `◌` (in_progress) and `○` (default) icons. There was no visual distinction for blocked, rejected, or deferred tasks.
+
+**Improvement:** Added `✗` icon for tasks with work_status of `blocked`, `rejected`, or `deferred` in the sidebar node rendering. This matches the icon already used in the project view (renderProjectView) for consistency.
+
+**Why it matters:** Blocked or rejected tasks need immediate attention. The ✗ icon provides instant visual scanning without requiring users to open the task to see its status.
+
+**Effort:** Low
+**Issue:** N/A (implemented directly in ralph-loop)
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+

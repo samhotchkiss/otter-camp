@@ -690,6 +690,12 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				}
 				return tea.Batch(cmds...)
 			case sidebarKindTask:
+				// Set the project context so "p" and "Esc·back to project" work correctly
+				if node.ParentID != "" {
+					if projNode := m.workspace.nodes[node.ParentID]; projNode != nil && projNode.Kind == sidebarKindProject {
+						m.workspace.selectedProjectID = projNode.ProjectID
+					}
+				}
 				// Load full task detail (description, task number) on demand
 				return loadTaskDetailCmd(node.TaskID, m.runtimeHints)
 			}
