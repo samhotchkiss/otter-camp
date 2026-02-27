@@ -2662,7 +2662,10 @@ func loadInboxItemsCmd(hints RuntimeHints) tea.Cmd {
 func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 	if event.EventType == "inbox.item_created" {
 		m.workspace.inboxCount++
-		return nil
+		// EX-120: reload inbox items so the new item appears immediately when
+		// the user opens the inbox. Without this, the badge increments but the
+		// list is stale until the user manually refreshes.
+		return loadInboxItemsCmd(m.runtimeHints)
 	}
 	if event.EventType == "task.status_changed" || event.EventType == "task.completed" {
 		var payload struct {

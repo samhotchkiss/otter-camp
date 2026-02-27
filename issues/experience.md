@@ -1784,3 +1784,17 @@ Also updated `INBOX` treatment: now only included when `inbox` or the node's lab
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-120: New inbox items don't appear until manual refresh
+
+**Observation:** When an `inbox.item_created` SSE event arrived, the TUI incremented `inboxCount` (showing the `✉ N` badge in the status bar) but didn't reload the inbox item list. If the user opened the inbox immediately, the new item wasn't visible — the list was stale from the last load. Only a manual `r` refresh would show it.
+
+**Improvement:** The `inbox.item_created` handler now returns `loadInboxItemsCmd(m.runtimeHints)` to trigger an immediate reload. The badge and the list are now always in sync.
+
+**Why it matters:** A badge that says "1 new item" but shows nothing when you open the inbox is worse than no badge. It makes users think the system is broken. Immediate reload is the correct behavior.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
