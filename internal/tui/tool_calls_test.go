@@ -98,7 +98,7 @@ func TestToolResultTextStoredAndDisplayedOnExpand(t *testing.T) {
 	if !strings.Contains(expanded, "tool result:") {
 		t.Fatalf("expanded tool result text missing: %q", expanded)
 	}
-	if !strings.Contains(expanded, "[show more]") {
+	if !strings.Contains(expanded, "(result truncated)") {
 		t.Fatalf("large tool result should show truncation hint: %q", expanded)
 	}
 }

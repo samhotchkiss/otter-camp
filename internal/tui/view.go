@@ -1767,7 +1767,7 @@ func (m Model) renderChatMessages(width int) []string {
 					lines = append(lines, styleSubtle.Render("    (no result yet)"))
 					continue
 				}
-				const maxToolResultRunes = 280
+				const maxToolResultRunes = 400
 				runes := []rune(result)
 				truncated := false
 				if len(runes) > maxToolResultRunes {
@@ -1780,7 +1780,9 @@ func (m Model) renderChatMessages(width int) []string {
 					}
 				}
 				if truncated {
-					lines = append(lines, styleMuted.Render("    [show more]"))
+					// EX-097: "[show more]" looked interactive but had no key handler.
+				// Passive indicator makes it clear the display is capped.
+				lines = append(lines, styleMuted.Render("    … (result truncated)"))
 				}
 			}
 		}
