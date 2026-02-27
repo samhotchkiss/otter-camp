@@ -28,6 +28,7 @@ const (
 
 type chatSessionRepository interface {
 	UpdateTitle(ctx context.Context, id uuid.UUID, title *string) (repo.ChatSession, error)
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string) (repo.ChatSession, error)
 }
 
 type chatReadCursorRepository interface {
@@ -78,6 +79,7 @@ func (r *ChatRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/turns", r.handlers.listTurns)
 
 	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions/{id}/cancel-turn", r.handlers.cancelTurn)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions/{id}/cancel", r.handlers.cancelTurn)
 	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions/{id}/messages/{mid}/steer", r.handlers.steerTurn)
 
 	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/messages/{mid}/reactions", r.handlers.listReactions)
@@ -112,8 +114,9 @@ type createChatSessionRequest struct {
 }
 
 type patchChatSessionRequest struct {
-	Title *string `json:"title"`
-	Mode  *string `json:"mode"`
+	Title  *string `json:"title"`
+	Mode   *string `json:"mode"`
+	Status *string `json:"status"`
 }
 
 type appendChatMessageRequest struct {
@@ -425,7 +428,7 @@ func (h chatHandlers) patchSession(w http.ResponseWriter, r *http.Request) {
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
 		return
 	}
-	if req.Title == nil && req.Mode == nil {
+	if req.Title == nil && req.Mode == nil && req.Status == nil {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "at least one patch field is required")
 		return
 	}
@@ -445,6 +448,33 @@ func (h chatHandlers) patchSession(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.sessions.UpdateTitle(r.Context(), sessionID, trimOptionalString(req.Title)); err != nil {
 			h.respondChatError(responder, w, err)
 			return
+		}
+	}
+
+	if req.Status != nil {
+		if h.sessions == nil {
+			responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "chat session repository unavailable")
+			return
+		}
+		targetStatus := strings.TrimSpace(strings.ToLower(*req.Status))
+		if targetStatus != "archived" {
+			responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "status must be archived")
+			return
+		}
+		current, err := h.service.GetSession(r.Context(), sessionID)
+		if err != nil {
+			h.respondChatError(responder, w, err)
+			return
+		}
+		if current.Status != "active" && current.Status != "archived" {
+			responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "invalid status transition")
+			return
+		}
+		if current.Status == "active" {
+			if _, err := h.sessions.UpdateStatus(r.Context(), sessionID, "archived"); err != nil {
+				h.respondChatError(responder, w, err)
+				return
+			}
 		}
 	}
 

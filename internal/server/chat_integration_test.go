@@ -3,6 +3,7 @@
 package server
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -103,6 +104,102 @@ func TestChatHTTPMessageSendAndList(t *testing.T) {
 	}
 	if got := jsonPathValue(t, paged.Body, "meta", "pagination", "has_more"); got != true {
 		t.Fatalf("paged meta.pagination.has_more = %v, want true body=%s", got, string(paged.Body))
+	}
+}
+
+func TestChatHTTPSessionPatchSupportsArchivedStatus(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, _ := newChatTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	sessionID := createChatSessionForTest(t, testServer.URL, adminToken)
+
+	patched := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/chat-sessions/"+sessionID, map[string]any{
+		"status": "archived",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if patched.StatusCode != http.StatusOK {
+		t.Fatalf("patch session status = %d, want %d body=%s", patched.StatusCode, http.StatusOK, string(patched.Body))
+	}
+	if got := jsonPathString(t, patched.Body, "data", "status"); got != "archived" {
+		t.Fatalf("patched status = %q, want %q body=%s", got, "archived", string(patched.Body))
+	}
+
+	got := mustJSON(t, http.MethodGet, testServer.URL+"/v1/chat-sessions/"+sessionID, nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if got.StatusCode != http.StatusOK {
+		t.Fatalf("get session status = %d, want %d body=%s", got.StatusCode, http.StatusOK, string(got.Body))
+	}
+	if value := jsonPathString(t, got.Body, "data", "status"); value != "archived" {
+		t.Fatalf("session status = %q, want %q body=%s", value, "archived", string(got.Body))
+	}
+}
+
+func TestChatHTTPCancelAliasCancelsInProgressTurn(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, _ := newChatTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	sessionID := createChatSessionForTest(t, testServer.URL, adminToken)
+	sessionUUID, err := uuid.Parse(sessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+
+	agentRecord, err := repo.NewAgentRepo(testServer.Pool).Create(context.Background(), repo.Agent{
+		OrganizationID:       adminUser.OrganizationID,
+		DisplayName:          "chat-cancel-agent-" + uuid.NewString()[:8],
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "prompt",
+		OperatorInstructions: "",
+		AgentType:            "worker",
+		PrivateMemory:        false,
+		MemoryReadScopes:     []string{"org"},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	bus := eventbus.New(testServer.Pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})
+	chatService, err := chat.NewService(chat.Options{Pool: testServer.Pool, Events: bus})
+	if err != nil {
+		t.Fatalf("new chat service: %v", err)
+	}
+
+	turn, err := chatService.CreateTurn(context.Background(), sessionUUID, agentRecord.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := chatService.StartTurn(context.Background(), turn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+
+	cancel := mustJSON(t, http.MethodPost, testServer.URL+"/v1/chat-sessions/"+sessionID+"/cancel", map[string]any{
+		"reason": "user requested",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if cancel.StatusCode != http.StatusOK {
+		t.Fatalf("cancel alias status = %d, want %d body=%s", cancel.StatusCode, http.StatusOK, string(cancel.Body))
+	}
+	if got := jsonPathString(t, cancel.Body, "data", "status"); got != "cancelled" {
+		t.Fatalf("cancel alias data.status = %q, want %q body=%s", got, "cancelled", string(cancel.Body))
+	}
+	if got := jsonPathString(t, cancel.Body, "data", "turn_id"); got != turn.ID.String() {
+		t.Fatalf("cancel alias data.turn_id = %q, want %q body=%s", got, turn.ID.String(), string(cancel.Body))
+	}
+
+	cancelledTurn, err := chatService.GetTurn(context.Background(), turn.ID)
+	if err != nil {
+		t.Fatalf("GetTurn: %v", err)
+	}
+	if cancelledTurn.Status != "cancelled" {
+		t.Fatalf("turn status = %q, want cancelled", cancelledTurn.Status)
 	}
 }
 

@@ -42,6 +42,7 @@ func TestChatRoutesRegistered(t *testing.T) {
 		"PATCH /chat-sessions/{id}/messages/{mid}",
 		"DELETE /chat-sessions/{id}/messages/{mid}",
 		"POST /chat-sessions/{id}/cancel-turn",
+		"POST /chat-sessions/{id}/cancel",
 		"POST /chat-sessions/{id}/messages/{mid}/steer",
 		"GET /chat-sessions/{id}/messages/{mid}/reactions",
 		"POST /chat-sessions/{id}/messages/{mid}/reactions",
@@ -343,6 +344,38 @@ func TestCancelTurnAcceptsReasonBody(t *testing.T) {
 	h := chatHandlers{service: svc}
 
 	req := newChatRequest(t, http.MethodPost, "/v1/chat-sessions/"+sessionID.String()+"/cancel-turn", map[string]any{
+		"reason": "user requested",
+	}, middleware.Principal{
+		UserID:         uuid.New(),
+		OrganizationID: uuid.New(),
+		Role:           "member",
+	})
+	req = withRouteParams(req, map[string]string{"id": sessionID.String()})
+	rr := httptest.NewRecorder()
+
+	h.cancelTurn(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if cancelCalls != 1 {
+		t.Fatalf("CancelCurrentTurn calls = %d, want 1", cancelCalls)
+	}
+}
+
+func TestCancelAliasAcceptsReasonBody(t *testing.T) {
+	sessionID := uuid.New()
+	var cancelCalls int
+
+	svc := &fakeChatService{
+		cancelCurrentTurnFn: func(context.Context, uuid.UUID) error {
+			cancelCalls++
+			return nil
+		},
+	}
+	h := chatHandlers{service: svc}
+
+	req := newChatRequest(t, http.MethodPost, "/v1/chat-sessions/"+sessionID.String()+"/cancel", map[string]any{
 		"reason": "user requested",
 	}, middleware.Principal{
 		UserID:         uuid.New(),
