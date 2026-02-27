@@ -103,7 +103,7 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │ INBOX                            ││ General / Frank  ·  [task] [project] [org]         │
 │ ──────────────────────────────   ││ ────────────────────────────────────────────────── │
 │ ▾ CHATS                          ││                                                    │
-│   Frank / General                ││                  no messages yet                   │
+│   Frank / General ✓              ││                  no messages yet                   │
 │ ──────────────────────────────   ││             Tab·focus chat  Enter·send             │
 │ ▾ PROJECTS                       ││                                                    │
 │                                  ││ ╭──────────────────────────────────────────────╮   │

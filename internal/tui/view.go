@@ -399,7 +399,9 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 		case cursor:
 			rendered = styleSelected.Render(truncate(line, width-2))
 		case isActive:
-			rendered = styleActive.Render(truncate(line, width-2))
+			// Always show ✓ for the active session so it's visible at a glance
+			check := " " + styleConnected.Render("✓")
+			rendered = styleActive.Render(truncate(line, width-4)) + check
 		default:
 			rendered = styleText.Render(truncate(line, width-2))
 		}

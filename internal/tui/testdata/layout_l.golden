@@ -4,7 +4,7 @@
 │ INBOX                    ││ DASHBOARD                                                                    ││ General / Frank  ·  [task] [project] [org]       │
 │ ──────────────────────   ││ ──────────────────────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────────── │
 │ ▾ CHATS                  ││                                                                              ││                                                  │
-│   Frank / General        ││ Task Board                                                                   ││                 no messages yet                  │
+│   Frank / General ✓      ││ Task Board                                                                   ││                 no messages yet                  │
 │ ──────────────────────   ││ TODO (0)                IN PROGRESS (0)         DONE (0)                     ││            Tab·focus chat  Enter·send            │
 │ ▾ PROJECTS               ││ ──────────────────────  ──────────────────────  ──────────────────────       ││                                                  │
 │                          ││                                                                              ││ ╭────────────────────────────────────────────╮   │
@@ -40,7 +40,7 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │ INBOX                    ││ DASHBOARD                                                                    ││ General / Frank  ·  [task] [project] [org]       │
 │ ──────────────────────   ││ ──────────────────────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────────── │
 │ ▾ CHATS                  ││                                                                              ││                                                  │
-│   Frank / General        ││ Task Board                                                                   ││                 no messages yet                  │
+│   Frank / General ✓      ││ Task Board                                                                   ││                 no messages yet                  │
 │ ──────────────────────   ││ TODO (0)                IN PROGRESS (0)         DONE (0)                     ││            Tab·focus chat  Enter·send            │
 │ ▾ PROJECTS               ││ ──────────────────────  ──────────────────────  ──────────────────────       ││                                                  │
 │                          ││                                                                              ││ ╭────────────────────────────────────────────╮   │
@@ -76,7 +76,7 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │ INBOX                    ││ DASHBOARD                                                                    ││ General / Frank  ·  [task] [project] [org]       │
 │ ──────────────────────   ││ ──────────────────────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────────── │
 │ ▾ CHATS                  ││                                                                              ││                                                  │
-│   Frank / General        ││ Task Board                                                                   ││                 no messages yet                  │
+│   Frank / General ✓      ││ Task Board                                                                   ││                 no messages yet                  │
 │ ──────────────────────   ││ TODO (0)                IN PROGRESS (0)         DONE (0)                     ││            Tab·focus chat  Enter·send            │
 │ ▾ PROJECTS               ││ ──────────────────────  ──────────────────────  ──────────────────────       ││                                                  │
 │                          ││                                                                              ││ ╭────────────────────────────────────────────╮   │
