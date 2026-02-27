@@ -4,10 +4,12 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -200,6 +202,70 @@ func TestChatHTTPCancelAliasCancelsInProgressTurn(t *testing.T) {
 	}
 	if cancelledTurn.Status != "cancelled" {
 		t.Fatalf("turn status = %q, want cancelled", cancelledTurn.Status)
+	}
+}
+
+func TestChatHTTPSessionExportJSONL(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, _ := newChatTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	sessionID := createChatSessionForTest(t, testServer.URL, adminToken)
+
+	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/chat-sessions/"+sessionID+"/messages", map[string]any{
+		"content": "export this line",
+		"role":    "assistant",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if created.StatusCode != http.StatusAccepted {
+		t.Fatalf("append message status = %d, want %d body=%s", created.StatusCode, http.StatusAccepted, string(created.Body))
+	}
+	messageID := jsonPathString(t, created.Body, "data", "id")
+
+	req, err := http.NewRequest(http.MethodGet, testServer.URL+"/v1/chat-sessions/"+sessionID+"/export", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("export request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read export body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("export status = %d, want %d body=%s", resp.StatusCode, http.StatusOK, string(body))
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.Contains(got, "application/x-ndjson") {
+		t.Fatalf("content-type = %q, want application/x-ndjson", got)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if len(lines) == 0 {
+		t.Fatalf("export line count = %d, want >0 body=%s", len(lines), string(body))
+	}
+	found := false
+	for _, line := range lines {
+		var item map[string]any
+		if err := json.Unmarshal([]byte(line), &item); err != nil {
+			t.Fatalf("unmarshal export line: %v line=%q", err, line)
+		}
+		if item["id"] == messageID {
+			found = true
+			if item["role"] != "assistant" {
+				t.Fatalf("exported role = %v, want assistant line=%q", item["role"], line)
+			}
+			if item["content"] != "export this line" {
+				t.Fatalf("exported content = %v, want %q line=%q", item["content"], "export this line", line)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("export missing message id %s body=%s", messageID, string(body))
 	}
 }
 

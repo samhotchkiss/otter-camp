@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -77,6 +78,7 @@ func (r *ChatRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Patch("/chat-sessions/{id}/messages/{mid}", r.handlers.editQueuedMessage)
 	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Delete("/chat-sessions/{id}/messages/{mid}", r.handlers.redactMessage)
 	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/turns", r.handlers.listTurns)
+	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/export", r.handlers.exportSession)
 
 	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions/{id}/cancel-turn", r.handlers.cancelTurn)
 	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions/{id}/cancel", r.handlers.cancelTurn)
@@ -676,6 +678,79 @@ func (h chatHandlers) listTurns(w http.ResponseWriter, r *http.Request) {
 		payload = append(payload, toChatTurnResponse(turn))
 	}
 	responder.JSON(w, http.StatusOK, payload)
+}
+
+func (h chatHandlers) exportSession(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	_, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if h.service == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "chat service unavailable")
+		return
+	}
+
+	sessionID, ok := parseChatPathUUID(responder, w, r, "id", "invalid session id")
+	if !ok {
+		return
+	}
+	if _, err := h.service.GetSession(r.Context(), sessionID); err != nil {
+		h.respondChatError(responder, w, err)
+		return
+	}
+
+	format := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("format")))
+	if format == "" {
+		format = "jsonl"
+	}
+	if format != "jsonl" && format != "json" {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid format")
+		return
+	}
+
+	// Export all messages, paging through the service filter by sequence cursor.
+	items := make([]chatMessageRecord, 0)
+	var cursor *int64
+	for {
+		page, err := h.service.ListMessages(r.Context(), sessionID, chat.MessageFilter{
+			Limit:          chatMaxListLimit,
+			CursorSequence: cursor,
+		})
+		if err != nil {
+			h.respondChatError(responder, w, err)
+			return
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, message := range page {
+			items = append(items, toChatMessageResponse(message))
+		}
+		last := page[len(page)-1].SequenceNumber
+		cursor = &last
+		if len(page) < chatMaxListLimit {
+			break
+		}
+	}
+
+	if format == "json" {
+		responder.JSON(w, http.StatusOK, items)
+		return
+	}
+
+	var body bytes.Buffer
+	encoder := json.NewEncoder(&body)
+	for _, item := range items {
+		if err := encoder.Encode(item); err != nil {
+			responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "request failed")
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body.Bytes())
 }
 
 func (h chatHandlers) appendMessage(w http.ResponseWriter, r *http.Request) {
