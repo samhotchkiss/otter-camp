@@ -1408,12 +1408,13 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		"",
 		header("Chat  (press 3 to focus)"),
 		key("Enter", "send message"),
+		key("Alt-Enter", "insert newline"),
 		key("PgUp / PgDn", "scroll messages"),
 		key("↑ / ↓", "scroll one line"),
-		key("g / G", "scroll to oldest / latest message"),
+		key("g / G", "jump to oldest / latest message"),
 		key("Esc", "cancel active agent turn"),
-		key("Alt-Enter", "insert newline"),
-		key("[ / ]", "cycle chat scope"),
+		key("[ / ]", "cycle chat scope (org / project / task)"),
+		key("e / s / d", "queued msg: edit / steer / delete  (when turn active)"),
 		"",
 		header("Global"),
 		key("Tab / Shift-Tab", "cycle panel focus"),
@@ -1538,7 +1539,7 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 
 	// Show scroll indicator when user has scrolled up (newer messages are below)
 	if scrollOffset > 0 {
-		scrollHint := fmt.Sprintf("↓ %d more · PgDn to scroll", scrollOffset)
+		scrollHint := fmt.Sprintf("↓ %d more  ·  PgDn scroll  ·  G jump to latest", scrollOffset)
 		bottomLines = append([]string{lipgloss.NewStyle().
 			Foreground(colMuted).Italic(true).
 			Width(cw).Align(lipgloss.Center).
@@ -1554,7 +1555,7 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	// Show indicator when older messages are hidden above the current view
 	hiddenAbove := maxOffset - scrollOffset
 	if hiddenAbove > 0 {
-		upHint := fmt.Sprintf("↑ %d older messages · PgUp to scroll", hiddenAbove)
+		upHint := fmt.Sprintf("↑ %d older  ·  PgUp scroll  ·  g jump to oldest", hiddenAbove)
 		upLine := lipgloss.NewStyle().
 			Foreground(colMuted).Italic(true).
 			Width(cw).Align(lipgloss.Center).

@@ -1309,3 +1309,22 @@ Four unit tests added to `view_chat_test.go` covering: org scope fallback, task 
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-088: Queue action hints shown above input box
+
+**Observation:** The `e`, `s`, `d` queue-management keys (edit / steer / delete queued message) were completely undiscoverable. They were documented in the help screen but nothing in the chat panel hinted that they existed. Users who queued a message had no idea they could edit or remove it before the turn ended.
+
+Additionally, the queued message preview lines (`q1: …`) that were added in EX-017 were being rendered *below* the input box in `bottomLines`. Because `buildPanelContent` trims content from the end of the line list when embedded-newline messages inflate the actual row count beyond `targetH`, the queue section was silently dropped — invisible even though it was logically included.
+
+**Improvement:**
+- Reordered `bottomLines` so queue preview lines and the action hint come *before* (above) the input box instead of after it. Visual order: blank separator → `q1: …` lines → `e·edit  ·  s·steer  ·  d·delete queued` hint → input box.
+- The hint only shows when the input field is empty (typing a new message hides it to keep the panel clean).
+- Two unit tests added: `TestQueuedMessageAndHintVisibleInChatPanel` and `TestQueueHintHiddenWhenInputIsNonEmpty`.
+
+**Why it matters:** Queued messages are a first-class feature — the ability to edit or cancel a queued message is the escape hatch that makes async queueing feel safe rather than scary. If users can't see the hint, they won't know the feature exists and will worry about sending something they didn't mean to. The reordering fix also makes the feature actually visible for the first time.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
