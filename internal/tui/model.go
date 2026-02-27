@@ -33,6 +33,10 @@ type ReplaySyncedMsg struct{}
 type coldOpenCompleteMsg struct{}
 type tourOverlayExpiredMsg struct{}
 type memorySampleMsg struct{}
+
+// statusClearMsg is sent after a short timer to auto-clear transient status messages.
+// The Generation field prevents clearing a newer message when an old timer fires.
+type statusClearMsg struct{ Generation int }
 type chatSendRequestedMsg struct {
 	SessionID string
 	Content   string
@@ -110,10 +114,11 @@ type Model struct {
 	searchMode     bool
 	searchPanel    Panel
 	searchQuery    string
-	sidebarFilter  string
-	mainFilter     string
-	statusMessage  string
-	runtimeHints   RuntimeHints
+	sidebarFilter     string
+	mainFilter        string
+	statusMessage     string
+	statusGeneration  int // incremented each time statusMessage is set; used to avoid stale auto-clears
+	runtimeHints      RuntimeHints
 	connection     ConnectionState
 	streamDegraded bool
 	width          int
@@ -495,6 +500,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Cancel request failed: " + strings.TrimSpace(typed.Err.Error())
 		}
 		return m, nil
+	case statusClearMsg:
+		// EX-105: only clear if the generation matches (no newer status was set).
+		if typed.Generation == m.statusGeneration && m.statusMessage != "" {
+			m.statusMessage = ""
+		}
+		return m, nil
 	case tea.KeyMsg:
 		started := m.now()
 		updated, cmd := m.updateKey(typed)
@@ -503,6 +514,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return updated, cmd
 		}
 		typedModel.perfMetrics.KeypressToVisible = typedModel.now().Sub(started)
+		// EX-105: auto-clear transient status messages 5 s after the last key press.
+		// Generation increments each time so only the most recent timer wins.
+		if typedModel.statusMessage != "" {
+			typedModel.statusGeneration++
+			cmd = tea.Batch(cmd, statusAutoClearCmd(typedModel.statusGeneration))
+		}
 		return typedModel, cmd
 	default:
 		return m, nil
@@ -2488,6 +2505,15 @@ func tourOverlayTimerCmd(duration time.Duration) tea.Cmd {
 func memorySamplerCmd(duration time.Duration) tea.Cmd {
 	return tea.Tick(duration, func(time.Time) tea.Msg {
 		return memorySampleMsg{}
+	})
+}
+
+// statusAutoClearCmd schedules a statusClearMsg after 5 s.
+// If a newer status message is set before the timer fires, the generation
+// mismatch prevents the stale clear from taking effect.
+func statusAutoClearCmd(gen int) tea.Cmd {
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg {
+		return statusClearMsg{Generation: gen}
 	})
 }
 
