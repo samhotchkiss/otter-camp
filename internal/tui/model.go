@@ -813,6 +813,20 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.statusMessage = "Returned to dashboard."
 			return true, nil
 		}
+	case 'i':
+		if m.focus != ChatPanel {
+			m.workspace.setMainView(ViewInbox)
+			m.setFocus(MainPanel)
+			m.statusMessage = "Inbox"
+			return true, nil
+		}
+	case 'd':
+		if m.focus != ChatPanel {
+			m.workspace.setMainView(ViewDashboard)
+			m.setFocus(MainPanel)
+			m.statusMessage = "Dashboard"
+			return true, nil
+		}
 	case 'r':
 		m.workspace.activity = append(m.workspace.activity,
 			"sidebar refreshed at "+m.now().Format("15:04:05"))

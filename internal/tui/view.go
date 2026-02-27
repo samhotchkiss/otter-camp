@@ -1141,6 +1141,9 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		header("Global"),
 		key("Tab / Shift-Tab", "cycle panel focus"),
 		key("1 / 2 / 3", "jump to sidebar/main/chat"),
+		key("i", "jump to Inbox"),
+		key("d", "jump to Dashboard"),
+		key("r", "refresh sidebar data"),
 		key("?", "toggle this help screen"),
 		key(":command", "open command palette"),
 		"",
@@ -1183,7 +1186,9 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 			sessionLabel = "General / Frank"
 		}
 	}
-	headerText := renderChatHeader(sessionLabel, m.activeScope, cw)
+	isThinking := m.activeTurn && (m.activeTurnSessionID == "" ||
+		strings.EqualFold(strings.TrimSpace(m.activeSession), m.activeTurnSessionID))
+	headerText := renderChatHeader(sessionLabel, m.activeScope, cw, isThinking)
 	headerLines := []string{
 		headerText,
 		styleDivider.Render(strings.Repeat("─", cw)),
@@ -1269,18 +1274,22 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	return panelStyle(innerW, innerH, focused).Render(content)
 }
 
-func renderChatHeader(sessionLabel string, active ChatScope, width int) string {
+func renderChatHeader(sessionLabel string, active ChatScope, width int, thinking bool) string {
 	separator := styleMuted.Render("  ·  ")
 	indicator := renderScopeIndicator(active, false)
-	sessionWidth := width - lipgloss.Width(separator) - lipgloss.Width(indicator)
+	var thinkingBadge string
+	if thinking {
+		thinkingBadge = "  " + styleReconnecting.Render("◌")
+	}
+	sessionWidth := width - lipgloss.Width(separator) - lipgloss.Width(indicator) - lipgloss.Width(thinkingBadge)
 	if sessionWidth < 8 {
 		indicator = renderScopeIndicator(active, true)
-		sessionWidth = width - lipgloss.Width(separator) - lipgloss.Width(indicator)
+		sessionWidth = width - lipgloss.Width(separator) - lipgloss.Width(indicator) - lipgloss.Width(thinkingBadge)
 	}
 	if sessionWidth < 1 {
 		sessionWidth = 1
 	}
-	return styleActive.Render(truncate(sessionLabel, sessionWidth)) + separator + indicator
+	return styleActive.Render(truncate(sessionLabel, sessionWidth)) + separator + indicator + thinkingBadge
 }
 
 func renderScopeIndicator(active ChatScope, compact bool) string {
