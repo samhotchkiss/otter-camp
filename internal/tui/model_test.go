@@ -199,6 +199,47 @@ func TestSlashSearchSidebarFiltersSessions(t *testing.T) {
 	}
 }
 
+func TestSidebarFilterSuppressesEmptySectionHeaders(t *testing.T) {
+	model := NewModel(DefaultState())
+	// Set up a header + two sessions under it
+	model.workspace.nodes["header-chats"] = &sidebarNode{
+		ID: "header-chats", Label: "CHATS", Kind: sidebarKindHeader,
+	}
+	model.workspace.nodes["sess-alpha"] = &sidebarNode{
+		ID: "sess-alpha", Label: "Alpha Session", Kind: sidebarKindSession, SessionID: "s1",
+	}
+	model.workspace.nodes["sess-beta"] = &sidebarNode{
+		ID: "sess-beta", Label: "Beta Session", Kind: sidebarKindSession, SessionID: "s2",
+	}
+	model.workspace.topLevel = []string{"header-chats", "sess-alpha", "sess-beta"}
+
+	// No filter — header + both sessions visible
+	visible := model.filteredSidebarIDs(model.workspace.topLevel, "")
+	if len(visible) != 3 {
+		t.Fatalf("unfiltered visible IDs = %d, want 3", len(visible))
+	}
+
+	// Filter "alpha" — header should be shown (has matching child)
+	filtered := model.filteredSidebarIDs(model.workspace.topLevel, "alpha")
+	headerPresent := false
+	for _, id := range filtered {
+		if id == "header-chats" {
+			headerPresent = true
+		}
+	}
+	if !headerPresent {
+		t.Fatalf("header should be included when a child matches: %v", filtered)
+	}
+
+	// Filter "zzznomatch" — header should be suppressed (no matching children)
+	noMatchFiltered := model.filteredSidebarIDs(model.workspace.topLevel, "zzznomatch")
+	for _, id := range noMatchFiltered {
+		if id == "header-chats" {
+			t.Fatalf("header should be suppressed when no children match: %v", noMatchFiltered)
+		}
+	}
+}
+
 func TestChatScrollHotkeys(t *testing.T) {
 	model := NewModel(DefaultState())
 	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})

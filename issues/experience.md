@@ -1768,3 +1768,19 @@ Applied to both the full Activity view and the dashboard Activity widget (EX-103
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-119: Sidebar filter shows section headers even when no children match
+
+**Observation:** When filtering the sidebar (e.g., `/ellie`), all section headers (`CHATS`, `PROJECTS`, `INBOX`) were always included in the filtered results regardless of whether any items in that section matched the query. Users would see empty section dividers between sections that had no matching items, adding visual noise.
+
+**Improvement:** `filteredSidebarIDs` now performs a second pass after the initial content matching pass. A section header is only included when at least one of its subsequent sibling nodes (up to the next header) appears in the include set. Headers with no matching children are suppressed.
+
+Also updated `INBOX` treatment: now only included when `inbox` or the node's label matches the query, rather than always being shown.
+
+**Why it matters:** Clean search results. If I search for "ellie" and only task sessions match, showing the `PROJECTS` and `INBOX` section headers with nothing under them adds noise. Suppressing empty sections makes the filtered sidebar immediately readable.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

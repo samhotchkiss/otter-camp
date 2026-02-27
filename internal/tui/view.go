@@ -513,9 +513,15 @@ func (m Model) filteredSidebarIDs(visible []string, rawQuery string) []string {
 		if node == nil {
 			continue
 		}
-		// Always keep structural anchors
-		if node.Kind == sidebarKindHeader || node.Kind == sidebarKindInbox {
-			include[id] = struct{}{}
+		// Inbox is a leaf node with its own match logic — keep when label matches.
+		if node.Kind == sidebarKindInbox {
+			if matchesFilter(node.Label, query) || matchesFilter("inbox", query) {
+				include[id] = struct{}{}
+			}
+			continue
+		}
+		// Section headers are kept conditionally below once we know their children.
+		if node.Kind == sidebarKindHeader {
 			continue
 		}
 		if matchesFilter(node.Label, query) {
@@ -523,6 +529,42 @@ func (m Model) filteredSidebarIDs(visible []string, rawQuery string) []string {
 			if node.ParentID != "" {
 				include[node.ParentID] = struct{}{}
 			}
+		}
+	}
+
+	// EX-119: include section headers only when at least one content node in
+	// their section matched. A header's section contains all subsequent nodes
+	// until the next header — detect this by checking the include set.
+	for _, id := range visible {
+		node := m.workspace.nodes[id]
+		if node == nil || node.Kind != sidebarKindHeader {
+			continue
+		}
+		// Find at least one non-header node following this header that is included.
+		found := false
+		inSection := false
+		for _, vid := range visible {
+			if vid == id {
+				inSection = true
+				continue
+			}
+			if !inSection {
+				continue
+			}
+			vnode := m.workspace.nodes[vid]
+			if vnode == nil {
+				continue
+			}
+			if vnode.Kind == sidebarKindHeader {
+				break // next section header — stop
+			}
+			if _, ok := include[vid]; ok {
+				found = true
+				break
+			}
+		}
+		if found {
+			include[id] = struct{}{}
 		}
 	}
 
