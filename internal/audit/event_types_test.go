@@ -6,15 +6,20 @@ import (
 )
 
 func TestAuthEventTypeConstantsFollowDomainActionNaming(t *testing.T) {
-	pattern := regexp.MustCompile(`^[a-z0-9]+(?:\.[a-z0-9_]+)+$`)
+	pattern := regexp.MustCompile(`^[a-z0-9_]+(?:\.[a-z0-9_]+)+$`)
 
 	eventTypes := []string{
 		EventAuthLogin,
 		EventAuthLogout,
 		EventAuthLoginFailed,
 		EventAuthSessionRevoked,
-		EventAPIKeyIssued,
-		EventAPIKeyRevoked,
+		EventAPIKeyCreated,
+		EventAPIKeyDeleted,
+		EventAPIKeyRotated,
+		EventUserRoleChanged,
+		EventAgentCreated,
+		EventAgentUpdated,
+		EventAgentDeleted,
 	}
 
 	for _, eventType := range eventTypes {

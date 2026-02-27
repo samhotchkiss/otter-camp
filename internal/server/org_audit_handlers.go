@@ -47,7 +47,7 @@ func NewOrgAuditRouteRegistrar(pool *pgxpool.Pool) *OrgAuditRouteRegistrar {
 func (r *OrgAuditRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.Get("/orgs/current", r.handlers.getCurrentOrg)
 	router.With(middleware.RequireAnyScope(requireReadScope("audit")...)).Get("/audit", r.handlers.listAudit)
-	router.With(middleware.RequireAnyScope(requireReadScope("audit")...)).Get("/audit/events", r.handlers.listAudit)   // alias for REST-style clients
+	router.With(middleware.RequireAnyScope(requireReadScope("audit")...)).Get("/audit/events", r.handlers.listAudit) // alias for REST-style clients
 	router.With(middleware.RequireAnyScope(requireReadScope("audit")...)).Get("/audit-events", r.handlers.listAuditEvents)
 }
 
@@ -70,6 +70,8 @@ type auditEventResponse struct {
 	PrincipalID   uuid.UUID  `json:"principal_id"`
 	TargetType    *string    `json:"target_type"`
 	TargetID      *uuid.UUID `json:"target_id"`
+	IP            string     `json:"ip"`
+	Outcome       string     `json:"outcome"`
 	CreatedAt     time.Time  `json:"created_at"`
 }
 
@@ -78,6 +80,8 @@ type auditEventListResponse struct {
 	Action        string         `json:"action"`
 	PrincipalType string         `json:"principal_type"`
 	PrincipalID   uuid.UUID      `json:"principal_id"`
+	IP            string         `json:"ip"`
+	Outcome       string         `json:"outcome"`
 	Context       map[string]any `json:"context"`
 	CreatedAt     time.Time      `json:"created_at"`
 }
@@ -150,6 +154,8 @@ func (h orgAuditHandlers) listAudit(w http.ResponseWriter, r *http.Request) {
 			PrincipalID:   event.PrincipalID,
 			TargetType:    event.TargetType,
 			TargetID:      event.TargetID,
+			IP:            event.IP,
+			Outcome:       event.Outcome,
 			CreatedAt:     event.CreatedAt,
 		})
 	}
@@ -195,6 +201,8 @@ func (h orgAuditHandlers) listAuditEvents(w http.ResponseWriter, r *http.Request
 			Action:        eventTypeToAction(event.EventType),
 			PrincipalType: event.PrincipalType,
 			PrincipalID:   event.PrincipalID,
+			IP:            event.IP,
+			Outcome:       event.Outcome,
 			Context:       cloneMetadata(event.Metadata),
 			CreatedAt:     event.CreatedAt,
 		})

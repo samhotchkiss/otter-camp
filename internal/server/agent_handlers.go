@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/api"
+	"github.com/samhotchkiss/otter-camp/internal/audit"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
@@ -96,9 +97,17 @@ func NewAgentRouteRegistrar(
 	projectAssignments agentProjectAssignmentListRepository,
 	skillAttachments agentSkillAttachmentListRepository,
 	toolDefs toolDefinitionLister,
+	auditRecorders ...audit.AuditRecorder,
 ) *AgentRouteRegistrar {
+	recorder := audit.NewNoopRecorder()
+	if len(auditRecorders) > 0 && auditRecorders[0] != nil {
+		recorder = auditRecorders[0]
+	}
+	handlers := newAgentHandlersWithAssignments(service, templates, assignments, agents, projects, skills, projectAssignments, skillAttachments, toolDefs)
+	handlers.auditRecorder = recorder
+
 	return &AgentRouteRegistrar{
-		handlers: newAgentHandlersWithAssignments(service, templates, assignments, agents, projects, skills, projectAssignments, skillAttachments, toolDefs),
+		handlers: handlers,
 	}
 }
 
@@ -173,14 +182,16 @@ type agentHandlers struct {
 	projectAssignments agentProjectAssignmentListRepository
 	skillAttachments   agentSkillAttachmentListRepository
 	toolDefs           toolDefinitionLister
+	auditRecorder      audit.AuditRecorder
 	totals             *agentTotalCache
 }
 
 func newAgentHandlers(service agent.AgentService, templates agentTemplateRepository) agentHandlers {
 	return agentHandlers{
-		service:   service,
-		templates: templates,
-		totals:    newAgentTotalCache(60 * time.Second),
+		service:       service,
+		templates:     templates,
+		auditRecorder: audit.NewNoopRecorder(),
+		totals:        newAgentTotalCache(60 * time.Second),
 	}
 }
 
@@ -205,6 +216,7 @@ func newAgentHandlersWithAssignments(
 		projectAssignments: projectAssignments,
 		skillAttachments:   skillAttachments,
 		toolDefs:           toolDefs,
+		auditRecorder:      audit.NewNoopRecorder(),
 		totals:             newAgentTotalCache(60 * time.Second),
 	}
 }
@@ -571,6 +583,25 @@ func (h agentHandlers) createAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		h.recordAuditEvent(r.Context(), audit.Event{
+			OrgID:         principal.OrganizationID,
+			EventType:     audit.EventAgentCreated,
+			PrincipalType: "human",
+			PrincipalID:   principal.UserID,
+			TargetType:    pointerToStringValue("agent"),
+			TargetID:      &created.ID,
+			IP:            requestClientIP(r),
+			Outcome:       "success",
+			Metadata: map[string]any{
+				"agent_class":       strings.TrimSpace(created.AgentClass),
+				"agent_type":        strings.TrimSpace(created.AgentType),
+				"lifecycle_status":  strings.TrimSpace(created.LifecycleStatus),
+				"default_model_id":  normalizeOptionalString(created.DefaultModelProfileID),
+				"display_name":      strings.TrimSpace(created.DisplayName),
+				"private_memory_on": created.PrivateMemory,
+			},
+		})
+
 		responder.JSON(w, http.StatusCreated, toAgentResponse(created))
 		return
 	}
@@ -596,6 +627,25 @@ func (h agentHandlers) createAgent(w http.ResponseWriter, r *http.Request) {
 		responder.Error(w, status, code, message)
 		return
 	}
+
+	h.recordAuditEvent(r.Context(), audit.Event{
+		OrgID:         principal.OrganizationID,
+		EventType:     audit.EventAgentCreated,
+		PrincipalType: "human",
+		PrincipalID:   principal.UserID,
+		TargetType:    pointerToStringValue("agent"),
+		TargetID:      &created.ID,
+		IP:            requestClientIP(r),
+		Outcome:       "success",
+		Metadata: map[string]any{
+			"agent_class":       strings.TrimSpace(created.AgentClass),
+			"agent_type":        strings.TrimSpace(created.AgentType),
+			"lifecycle_status":  strings.TrimSpace(created.LifecycleStatus),
+			"default_model_id":  normalizeOptionalString(created.DefaultModelProfileID),
+			"display_name":      strings.TrimSpace(created.DisplayName),
+			"private_memory_on": created.PrivateMemory,
+		},
+	})
 
 	responder.JSON(w, http.StatusCreated, toAgentResponse(created))
 }
@@ -861,34 +911,50 @@ func (h agentHandlers) updateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.recordAuditEvent(r.Context(), audit.Event{
+		OrgID:         principal.OrganizationID,
+		EventType:     audit.EventAgentUpdated,
+		PrincipalType: "human",
+		PrincipalID:   principal.UserID,
+		TargetType:    pointerToStringValue("agent"),
+		TargetID:      &updated.ID,
+		IP:            requestClientIP(r),
+		Outcome:       "success",
+		Metadata: map[string]any{
+			"agent_type":       strings.TrimSpace(updated.AgentType),
+			"display_name":     strings.TrimSpace(updated.DisplayName),
+			"lifecycle_status": strings.TrimSpace(updated.LifecycleStatus),
+		},
+	})
+
 	responder.JSON(w, http.StatusOK, toAgentResponse(updated))
 }
 
 func (h agentHandlers) pauseAgent(w http.ResponseWriter, r *http.Request) {
-	h.transitionAgent(w, r, func(ctx context.Context, orgID, agentID uuid.UUID) error {
+	h.transitionAgent(w, r, audit.EventAgentUpdated, func(ctx context.Context, orgID, agentID uuid.UUID) error {
 		return h.service.Pause(ctx, orgID, agentID)
 	})
 }
 
 func (h agentHandlers) unpauseAgent(w http.ResponseWriter, r *http.Request) {
-	h.transitionAgent(w, r, func(ctx context.Context, orgID, agentID uuid.UUID) error {
+	h.transitionAgent(w, r, audit.EventAgentUpdated, func(ctx context.Context, orgID, agentID uuid.UUID) error {
 		return h.service.Unpause(ctx, orgID, agentID)
 	})
 }
 
 func (h agentHandlers) retireAgent(w http.ResponseWriter, r *http.Request) {
-	h.transitionAgent(w, r, func(ctx context.Context, orgID, agentID uuid.UUID) error {
+	h.transitionAgent(w, r, audit.EventAgentDeleted, func(ctx context.Context, orgID, agentID uuid.UUID) error {
 		return h.service.Retire(ctx, orgID, agentID)
 	})
 }
 
 func (h agentHandlers) cancelAgent(w http.ResponseWriter, r *http.Request) {
-	h.transitionAgent(w, r, func(ctx context.Context, orgID, agentID uuid.UUID) error {
+	h.transitionAgent(w, r, audit.EventAgentDeleted, func(ctx context.Context, orgID, agentID uuid.UUID) error {
 		return h.service.Cancel(ctx, orgID, agentID)
 	})
 }
 
-func (h agentHandlers) transitionAgent(w http.ResponseWriter, r *http.Request, transition func(ctx context.Context, orgID, agentID uuid.UUID) error) {
+func (h agentHandlers) transitionAgent(w http.ResponseWriter, r *http.Request, eventType string, transition func(ctx context.Context, orgID, agentID uuid.UUID) error) {
 	responder := api.NewResponder(r.Context())
 	if h.service == nil {
 		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "agent service unavailable")
@@ -919,6 +985,20 @@ func (h agentHandlers) transitionAgent(w http.ResponseWriter, r *http.Request, t
 		responder.Error(w, status, code, message)
 		return
 	}
+
+	h.recordAuditEvent(r.Context(), audit.Event{
+		OrgID:         principal.OrganizationID,
+		EventType:     strings.TrimSpace(eventType),
+		PrincipalType: "human",
+		PrincipalID:   principal.UserID,
+		TargetType:    pointerToStringValue("agent"),
+		TargetID:      &updated.ID,
+		IP:            requestClientIP(r),
+		Outcome:       "success",
+		Metadata: map[string]any{
+			"lifecycle_status": strings.TrimSpace(updated.LifecycleStatus),
+		},
+	})
 
 	responder.JSON(w, http.StatusOK, toAgentResponse(updated))
 }
@@ -1787,6 +1867,18 @@ func isAdminRole(role string) bool {
 func isAdminOrMemberRole(role string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(role))
 	return normalized == "admin" || normalized == "member"
+}
+
+func (h agentHandlers) recordAuditEvent(ctx context.Context, event audit.Event) {
+	if h.auditRecorder == nil {
+		return
+	}
+	h.auditRecorder.RecordAsync(ctx, event)
+}
+
+func pointerToStringValue(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	return &trimmed
 }
 
 func toAgentResponse(model *agent.Agent) agentResponse {

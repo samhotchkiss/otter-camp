@@ -12,7 +12,9 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/agent"
+	"github.com/samhotchkiss/otter-camp/internal/audit"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -47,7 +49,8 @@ func TestAgentHTTPCreatePauseAndGet(t *testing.T) {
 	}
 
 	activated := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents/"+agentID+"/unpause", map[string]any{}, map[string]string{
-		"Authorization": "Bearer " + adminToken,
+		"Authorization":   "Bearer " + adminToken,
+		"X-Forwarded-For": "203.0.113.131",
 	})
 	if activated.StatusCode != http.StatusOK {
 		t.Fatalf("activate status = %d, want %d body=%s", activated.StatusCode, http.StatusOK, string(activated.Body))
@@ -179,6 +182,58 @@ func TestAgentHTTPListFiltersAuthAndRBAC(t *testing.T) {
 	}
 }
 
+func TestAgentHTTPAuditEventsCreateUpdateRetire(t *testing.T) {
+	testServer, _, adminUser, _ := newAgentTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents", map[string]any{
+		"display_name": "Audited Agent",
+		"agent_class":  "staff",
+		"agent_type":   "worker",
+	}, map[string]string{
+		"Authorization":   "Bearer " + adminToken,
+		"X-Forwarded-For": "203.0.113.130",
+	})
+	if created.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d body=%s", created.StatusCode, http.StatusCreated, string(created.Body))
+	}
+	agentID := jsonPathString(t, created.Body, "data", "id")
+
+	updated := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/agents/"+agentID, map[string]any{
+		"display_name": "Audited Agent Updated",
+	}, map[string]string{
+		"Authorization":   "Bearer " + adminToken,
+		"X-Forwarded-For": "203.0.113.131",
+	})
+	if updated.StatusCode != http.StatusOK {
+		t.Fatalf("update status = %d, want %d body=%s", updated.StatusCode, http.StatusOK, string(updated.Body))
+	}
+
+	activated := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents/"+agentID+"/unpause", map[string]any{}, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if activated.StatusCode != http.StatusOK {
+		t.Fatalf("activate status = %d, want %d body=%s", activated.StatusCode, http.StatusOK, string(activated.Body))
+	}
+
+	retired := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents/"+agentID+"/retire", map[string]any{}, map[string]string{
+		"Authorization":   "Bearer " + adminToken,
+		"X-Forwarded-For": "203.0.113.132",
+	})
+	if retired.StatusCode != http.StatusOK {
+		t.Fatalf("retire status = %d, want %d body=%s", retired.StatusCode, http.StatusOK, string(retired.Body))
+	}
+
+	assertAnyAuditMetadataField(t, testServer.Pool, "agent.created", "ip", "203.0.113.130")
+	assertAnyAuditMetadataField(t, testServer.Pool, "agent.created", "outcome", "success")
+	assertAnyAuditMetadataField(t, testServer.Pool, "agent.updated", "ip", "203.0.113.131")
+	assertAnyAuditMetadataField(t, testServer.Pool, "agent.updated", "outcome", "success")
+	assertAnyAuditMetadataField(t, testServer.Pool, "agent.deleted", "ip", "203.0.113.132")
+	assertAnyAuditMetadataField(t, testServer.Pool, "agent.deleted", "outcome", "success")
+}
+
 func newAgentTestServer(t *testing.T) (*authIntegrationServer, repo.Organization, repo.HumanUser, repo.HumanUser) {
 	t.Helper()
 
@@ -238,10 +293,27 @@ func newAgentTestServer(t *testing.T) (*authIntegrationServer, repo.Organization
 				repo.NewAgentProjectAssignmentRepo(pool),
 				repo.NewAgentSkillAttachmentRepo(pool),
 				repo.NewToolDefinitionRepo(pool),
+				audit.NewService(repo.NewAuditEventRepo(pool), logger),
 			),
 		},
 	})
 
 	ts := httptest.NewServer(handler)
 	return &authIntegrationServer{URL: ts.URL, Pool: pool, ts: ts}, org, adminUser, memberUser
+}
+
+func assertAnyAuditMetadataField(t *testing.T, pool *pgxpool.Pool, eventType, field, want string) {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM audit_event
+		WHERE event_type = $1
+		  AND COALESCE(metadata ->> $2, '') = $3
+	`, eventType, field, want).Scan(&count); err != nil {
+		t.Fatalf("query audit metadata event=%s field=%s: %v", eventType, field, err)
+	}
+	if count < 1 {
+		t.Fatalf("expected audit metadata event=%s field=%s value=%q", eventType, field, want)
+	}
 }

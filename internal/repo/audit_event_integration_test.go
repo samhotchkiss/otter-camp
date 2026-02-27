@@ -81,6 +81,12 @@ func TestAuditEventRepoInsertConstraintsAndFilters(t *testing.T) {
 	if gotIP, _ := listed[0].Metadata["ip_address"].(string); gotIP != "127.0.0.1" {
 		t.Fatalf("metadata ip_address = %v, want %q", listed[0].Metadata["ip_address"], "127.0.0.1")
 	}
+	if listed[0].IP != "127.0.0.1" {
+		t.Fatalf("ip = %q, want %q", listed[0].IP, "127.0.0.1")
+	}
+	if listed[0].Outcome != "success" {
+		t.Fatalf("outcome = %q, want %q", listed[0].Outcome, "success")
+	}
 
 	if _, err := auditRepo.CountByOrg(ctx, org.ID, AuditEventFilters{
 		EventType: ptrString("auth.login"),
@@ -98,6 +104,9 @@ func TestAuditEventRepoInsertConstraintsAndFilters(t *testing.T) {
 	}
 	if principalTypeFiltered[0].EventType != "auth.logout" {
 		t.Fatalf("principal_type filtered event_type = %q, want %q", principalTypeFiltered[0].EventType, "auth.logout")
+	}
+	if principalTypeFiltered[0].Outcome != "success" {
+		t.Fatalf("principal_type filtered outcome = %q, want %q", principalTypeFiltered[0].Outcome, "success")
 	}
 
 	if err := auditRepo.Insert(ctx, AuditEvent{
