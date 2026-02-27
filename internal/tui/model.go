@@ -827,6 +827,27 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.statusMessage = "Dashboard"
 			return true, nil
 		}
+	case 'n':
+		if m.focus != ChatPanel {
+			if nextID := m.workspace.nextUnreadSession(); nextID != "" {
+				// Move cursor to the unread session and activate it
+				visible := m.workspace.visibleSidebarIDs()
+				for i, id := range visible {
+					if id == nextID {
+						m.workspace.sidebarCursor = i
+						break
+					}
+				}
+				m.workspace.selectSidebarNode()
+				m.activeSession = m.workspace.activeSessionID
+				m.chatScrollOffset = 0
+				m.statusMessage = "Jumped to next unread session."
+				m.setFocus(SidebarPanel)
+				return true, nil
+			}
+			m.statusMessage = "No unread sessions."
+			return true, nil
+		}
 	case 'r':
 		m.workspace.activity = append(m.workspace.activity,
 			"sidebar refreshed at "+m.now().Format("15:04:05"))

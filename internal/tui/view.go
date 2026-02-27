@@ -551,7 +551,7 @@ func (m Model) renderMainPanel(innerW, innerH int, focused bool, layout layoutSt
 
 	var lines []string
 
-	// Title — EX-014: human-readable title; EX-015/EX-019: count badges
+	// Title — EX-014: human-readable title; EX-015/EX-019: count badges; EX-039: context names
 	titleText := mainViewTitle(m.workspace.mainView)
 	switch m.workspace.mainView {
 	case ViewInbox:
@@ -565,6 +565,18 @@ func (m Model) renderMainPanel(innerW, innerH int, focused bool, layout layoutSt
 	case ViewAgents:
 		if n := len(m.workspace.agents); n > 0 {
 			titleText += fmt.Sprintf(" (%d)", n)
+		}
+	case ViewProject:
+		// Show selected project name in title for orientation
+		if m.workspace.selectedProject != nil && m.workspace.selectedProject.DisplayName != "" {
+			titleText = truncate(strings.ToUpper(m.workspace.selectedProject.DisplayName), cw-2)
+		} else if nodeID := "project-" + m.workspace.selectedProjectID; m.workspace.nodes[nodeID] != nil {
+			titleText = truncate(strings.ToUpper(m.workspace.nodes[nodeID].Label), cw-2)
+		}
+	case ViewTask:
+		// Show OC-N in title so user knows which task they're looking at
+		if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil && task.TaskNumber > 0 {
+			titleText = fmt.Sprintf("OC-%d", task.TaskNumber)
 		}
 	}
 	titleColor := colMuted
@@ -1143,6 +1155,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("1 / 2 / 3", "jump to sidebar/main/chat"),
 		key("i", "jump to Inbox"),
 		key("d", "jump to Dashboard"),
+		key("n", "jump to next unread session"),
 		key("r", "refresh sidebar data"),
 		key("?", "toggle this help screen"),
 		key(":command", "open command palette"),

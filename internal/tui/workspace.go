@@ -489,6 +489,26 @@ func (w *workspaceState) totalUnreadSessions() int {
 	return total
 }
 
+// nextUnreadSession returns the sidebar node ID of the next session node with
+// Unread > 0, cycling through visible nodes starting after the current cursor.
+// Returns "" if there are no unread sessions.
+func (w *workspaceState) nextUnreadSession() string {
+	visible := w.visibleSidebarIDs()
+	n := len(visible)
+	if n == 0 {
+		return ""
+	}
+	start := (w.sidebarCursor + 1) % n
+	for i := 0; i < n; i++ {
+		id := visible[(start+i)%n]
+		node := w.nodes[id]
+		if node != nil && node.Kind == sidebarKindSession && node.Unread > 0 {
+			return id
+		}
+	}
+	return ""
+}
+
 func (w *workspaceState) propagateUnread() {
 	for _, node := range w.nodes {
 		if node.Kind == sidebarKindProject {
