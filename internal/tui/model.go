@@ -2797,6 +2797,16 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			m.workspace.activity = appendActivity(m.workspace.activity,
 				label+": "+statusLabel)
 		}
+		// EX-138: when the task crosses the done boundary in the currently viewed
+		// project, reload the project detail so DoneTasks is populated correctly.
+		// Without this, toggling 'd' after a real-time completion shows an empty
+		// Done section because DoneTasks is only set by a full project detail load.
+		isNowDone := payload.ToStatus == "done" || payload.ToStatus == "approved" || payload.ToStatus == "cancelled"
+		if isNowDone && m.workspace.selectedProject != nil &&
+			m.workspace.selectedProjectID != "" &&
+			strings.EqualFold(m.workspace.selectedProjectID, payload.ProjectID) {
+			return loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints)
+		}
 		return nil
 	}
 	// EX-128: handle task.created so the project view and activity log update
@@ -2972,6 +2982,27 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 	}
 	// EX-131: memory.extracted — record in the activity log so the user can see
 	// when the background memory extractor has processed a conversation turn.
+	// EX-137: agent.pm_removed — record in activity log so the user can see
+	// when a PM agent is removed from a project.
+	if event.EventType == "agent.pm_removed" {
+		var payload struct {
+			AgentID   string `json:"agent_id"`
+			ProjectID string `json:"project_id"`
+		}
+		if decodePayload(event.Payload, &payload) {
+			entry := "PM agent removed from project"
+			// Try to resolve agent name from cached agents list
+			for _, agentStr := range m.workspace.agents {
+				parts := strings.SplitN(agentStr, "=", 2)
+				if len(parts) == 2 && strings.Contains(parts[0], payload.AgentID) {
+					entry = "PM removed: " + truncate(parts[0], 30)
+					break
+				}
+			}
+			m.workspace.activity = appendActivity(m.workspace.activity, entry)
+		}
+		return nil
+	}
 	if event.EventType == "memory.extracted" {
 		var payload struct {
 			Count int `json:"count"`

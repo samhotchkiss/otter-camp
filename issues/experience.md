@@ -2060,3 +2060,29 @@ Also added `g/G first/last` to the dashboard help hint when tasks are present.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-137: agent.pm_removed event silently dropped — PM removal invisible to user
+
+**Observation:** `agent.pm_removed` fires when a PM agent is removed from a project (via `DELETE /agents/{id}/project-assignments/{pid}`). The event went unhandled, so when an agent was unassigned from the PM role the activity log showed nothing.
+
+**Improvement:** Added a handler in `applyWorkspaceCommand` that appends a "PM agent removed from project" entry to the activity log. When the removed agent's name can be resolved from the cached agents list, the entry is more specific: "PM removed: <agent name>".
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-138: Done section empty after task completion via SSE — DoneTasks not updated in real-time
+
+**Observation:** When `task.status_changed` fired and a task in the selected project moved to "done", the code updated the task's `WorkStatus` in `selectedProject.Tasks` and incremented `DoneCount`. However, `selectedProject.DoneTasks` — the separate list used by the Done section when `d` is toggled — was never updated. If the user pressed `d` to show done tasks after a real-time completion event, the Done section showed the updated count badge but an empty task list (or the stale list from the last full reload).
+
+**Improvement:** When `task.status_changed` (or `task.completed`) fires with a done-boundary transition (`to_status` ∈ {done, approved, cancelled}) in the currently viewed project, `applyWorkspaceCommand` now returns `loadProjectDetailCmd` to refresh the project detail. This ensures `DoneTasks` is populated correctly after real-time completion events.
+
+**Why it matters:** The Done section (`d` key toggle) is a key workflow tool for seeing how much has shipped in a sprint. If it shows a count badge but empty list after an SSE completion event, users lose trust in the real-time data.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

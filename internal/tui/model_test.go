@@ -1822,6 +1822,73 @@ func TestChatHeaderShowsTaskContextForScopeTask(t *testing.T) {
 	}
 }
 
+// EX-137: agent.pm_removed should add an activity entry.
+func TestAgentPMRemovedAddsActivityEntry(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"agent_id":   "agent-123",
+		"project_id": "proj-456",
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "agent.pm_removed",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "PM") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("agent.pm_removed should add activity entry mentioning 'PM': %v", m.workspace.activity)
+	}
+}
+
+// EX-138: task.status_changed to done in selected project should trigger a
+// project detail reload so the Done section is populated correctly.
+func TestTaskStatusChangedToDoneTriggersProjectDetailReload(t *testing.T) {
+	loadCalled := ""
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjectDetail: func(_ context.Context, id string) (*ProjectDetail, error) {
+			loadCalled = id
+			return &ProjectDetail{ID: id}, nil
+		},
+	})
+	model.turnsSynced = true
+	model.workspace.selectedProjectID = "proj-done-test"
+	model.workspace.selectedProject = &ProjectDetail{
+		ID:          "proj-done-test",
+		DisplayName: "Done Test Project",
+	}
+	model.workspace.tasks["task-done-1"] = &taskRecord{ID: "task-done-1", Status: "in_progress"}
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"task_id":    "task-done-1",
+		"project_id": "proj-done-test",
+		"to_status":  "done",
+	})
+	_, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "task.status_changed",
+		Payload:   rawPayload,
+	}})
+
+	if cmd == nil {
+		t.Fatal("task.status_changed to done in selected project should return a non-nil loadProjectDetail cmd")
+	}
+	msg := cmd()
+	if _, ok := msg.(projectDetailLoadedMsg); !ok {
+		t.Fatalf("cmd returned unexpected type %T", msg)
+	}
+	if loadCalled != "proj-done-test" {
+		t.Fatalf("loadProjectDetail called with %q, want 'proj-done-test'", loadCalled)
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
