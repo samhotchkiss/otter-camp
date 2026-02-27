@@ -470,6 +470,16 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 		}
+		if m.focus == MainPanel && m.workspace.mainView == ViewProject {
+			switch key.Type {
+			case tea.KeyUp:
+				m.workspace.moveProjectTaskCursor(-1)
+				return m, nil
+			case tea.KeyDown:
+				m.workspace.moveProjectTaskCursor(1)
+				return m, nil
+			}
+		}
 		if key.Type == tea.KeyEnter {
 			cmd := m.handleEnterKey()
 			return m, cmd
@@ -610,6 +620,7 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				m.statusMessage = node.Label
 				// Load project detail + tasks
 				m.workspace.selectedProject = nil // clear stale detail
+				m.workspace.projectTaskCursor = 0 // reset cursor for new project
 				cmds := []tea.Cmd{loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true)}
 				if m.runtimeHints.LoadProjectDetail != nil {
 					cmds = append(cmds, loadProjectDetailCmd(node.ProjectID, m.runtimeHints))
@@ -645,7 +656,29 @@ func (m *Model) handleEnterKey() tea.Cmd {
 			m.statusMessage = "No active session for this task."
 			return nil
 		}
-		if m.workspace.mainView == ViewProject || m.workspace.mainView == ViewDashboard {
+		if m.workspace.mainView == ViewProject {
+			// Navigate to the task highlighted by projectTaskCursor
+			if proj := m.workspace.selectedProject; proj != nil {
+				openTasks := make([]SidebarTaskItem, 0, len(proj.Tasks))
+				for _, t := range proj.Tasks {
+					if t.WorkStatus != "done" && t.WorkStatus != "approved" && t.WorkStatus != "cancelled" {
+						openTasks = append(openTasks, t)
+					}
+				}
+				cursor := m.workspace.projectTaskCursor
+				if len(openTasks) > 0 && cursor >= 0 && cursor < len(openTasks) {
+					taskID := openTasks[cursor].ID
+					m.workspace.selectedTaskID = taskID
+					m.workspace.setMainView(ViewTask)
+					m.statusMessage = "Opened task detail."
+					return loadTaskDetailCmd(taskID, m.runtimeHints)
+				}
+			}
+			m.workspace.setMainView(ViewTask)
+			m.statusMessage = "Opened task detail."
+			return nil
+		}
+		if m.workspace.mainView == ViewDashboard {
 			m.workspace.setMainView(ViewTask)
 			m.statusMessage = "Opened task detail."
 			return nil
@@ -668,6 +701,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.workspace.moveSidebar(1)
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			m.workspace.moveInbox(1)
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
+			m.workspace.moveProjectTaskCursor(1)
 		}
 		return true, nil
 	case 'k':
@@ -675,6 +710,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.workspace.moveSidebar(-1)
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			m.workspace.moveInbox(-1)
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
+			m.workspace.moveProjectTaskCursor(-1)
 		}
 		return true, nil
 	case 'h':
@@ -701,6 +738,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.workspace.sidebarHome()
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			m.workspace.inboxHome()
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
+			m.workspace.projectTaskCursor = 0
 		}
 		return true, nil
 	case 'G':
@@ -708,6 +747,10 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.workspace.sidebarEnd()
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			m.workspace.inboxEnd()
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
+			if proj := m.workspace.selectedProject; proj != nil {
+				m.workspace.projectTaskCursor = maxInt(0, len(proj.Tasks)-1)
+			}
 		}
 		return true, nil
 	case 'q':
@@ -1942,7 +1985,7 @@ func (m Model) commandFallbackHelp() string {
 		case ViewTask:
 			return "Enter open session · Esc back · s toggle sidebar · : commands · ? help"
 		case ViewProject:
-			return "Esc back to dashboard · s toggle sidebar · : commands · ? help"
+			return "j/k navigate tasks · Enter open task · Esc back · s toggle sidebar · : commands · ? help"
 		default:
 			return "j/k navigate · Enter open task · s toggle sidebar · : commands · ? help"
 		}

@@ -117,6 +117,7 @@ type workspaceState struct {
 	taskSessionIDs    map[string]string
 	sessionToTaskLabel map[string]string // session UUID → human-readable task label
 	selectedTaskID    string
+	projectTaskCursor int // cursor within the project view open-task list
 
 	inbox       []inboxItem
 	inboxCursor int
@@ -535,6 +536,29 @@ func (w *workspaceState) currentInboxItem() *inboxItem {
 		w.inboxCursor = len(w.inbox) - 1
 	}
 	return &w.inbox[w.inboxCursor]
+}
+
+func (w *workspaceState) moveProjectTaskCursor(delta int) {
+	if w.selectedProject == nil {
+		return
+	}
+	openCount := 0
+	for _, t := range w.selectedProject.Tasks {
+		if t.WorkStatus != "done" && t.WorkStatus != "approved" && t.WorkStatus != "cancelled" {
+			openCount++
+		}
+	}
+	if openCount == 0 {
+		w.projectTaskCursor = 0
+		return
+	}
+	w.projectTaskCursor += delta
+	if w.projectTaskCursor < 0 {
+		w.projectTaskCursor = 0
+	}
+	if w.projectTaskCursor >= openCount {
+		w.projectTaskCursor = openCount - 1
+	}
 }
 
 func (w *workspaceState) moveInbox(delta int) {

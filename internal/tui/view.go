@@ -833,7 +833,14 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		lines = append(lines, styleMuted.Render("  No open tasks."))
 	} else {
 		lines = append(lines, styleLabel.Render(fmt.Sprintf("OPEN TASKS (%d)", len(openTasks))))
-		for _, task := range openTasks {
+		cursor := m.workspace.projectTaskCursor
+		if cursor < 0 {
+			cursor = 0
+		}
+		if cursor >= len(openTasks) {
+			cursor = len(openTasks) - 1
+		}
+		for i, task := range openTasks {
 			var icon string
 			switch task.WorkStatus {
 			case "in_progress":
@@ -847,7 +854,11 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 				taskTitle = fmt.Sprintf("OC-%d: %s", task.TaskNumber, task.Title)
 			}
 			taskLine := "  " + icon + truncate(taskTitle, width-20)
-			lines = append(lines, styleText.Render(taskLine)+"  "+statusLabel)
+			if i == cursor && m.focus == MainPanel {
+				lines = append(lines, styleSelected.Render(taskLine)+"  "+statusLabel)
+			} else {
+				lines = append(lines, styleText.Render(taskLine)+"  "+statusLabel)
+			}
 		}
 	}
 
