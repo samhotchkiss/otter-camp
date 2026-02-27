@@ -470,7 +470,10 @@ func runTUICommand(args []string) int {
 				if !applied {
 					return
 				}
-				if strings.HasPrefix(event.EventType, "chat.") {
+				// EX-161: chat.session.* events have workspace handlers (reload sidebar,
+				// add activity entry) in applyWorkspaceCommand — route them there.
+				// All other chat.* events (message, turn, tool_call) go to applyChatEnvelope.
+				if strings.HasPrefix(event.EventType, "chat.") && !strings.HasPrefix(event.EventType, "chat.session.") {
 					program.Send(tuiapp.ChatEnvelopeMsg{Envelope: event})
 				} else {
 					program.Send(tuiapp.WorkspaceEnvelopeMsg{Envelope: event})

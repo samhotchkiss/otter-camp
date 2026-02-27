@@ -3089,3 +3089,50 @@ func runNonTimerCmds(cmd tea.Cmd) {
 		// timer cmd — skip
 	}
 }
+
+// EX-161: chat.session.* events have their handlers in applyWorkspaceCommand.
+// In production (tui.go) they must be routed as WorkspaceEnvelopeMsg. This test
+// confirms that the WorkspaceEnvelopeMsg path produces the expected sidebar reload
+// cmd and activity entry (correct routing), while ChatEnvelopeMsg silently drops
+// the event (documents the old bug).
+func TestChatSessionCreatedRoutedAsWorkspaceEventReloadsAndLogs(t *testing.T) {
+	t.Parallel()
+
+	// Correct path: WorkspaceEnvelopeMsg → applyWorkspaceCommand handler fires
+	model := NewModel(DefaultState())
+	raw, _ := json.Marshal(map[string]any{"scope_type": "project_task"})
+	updated, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "chat.session.created",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+	if cmd == nil {
+		t.Fatal("WorkspaceEnvelopeMsg for chat.session.created returned nil cmd, want sidebar reload")
+	}
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "session created") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing 'session created' entry after WorkspaceEnvelopeMsg: %v", m.workspace.activity)
+	}
+
+	// Old bug path: ChatEnvelopeMsg → applyChatEnvelope → silent drop (no case in switch)
+	model2 := NewModel(DefaultState())
+	updated2, cmd2 := model2.Update(ChatEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "chat.session.created",
+		Payload:   raw,
+	}})
+	m2 := updated2.(Model)
+	if cmd2 != nil {
+		t.Logf("note: ChatEnvelopeMsg for chat.session.created returned a cmd (not expected, but not fatal)")
+	}
+	for _, entry := range m2.workspace.activity {
+		if strings.Contains(entry, "session created") {
+			t.Fatalf("ChatEnvelopeMsg for chat.session.created should be silently dropped (wrong route), but got activity entry: %q", entry)
+		}
+	}
+}
