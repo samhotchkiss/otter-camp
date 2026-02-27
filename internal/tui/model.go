@@ -61,8 +61,12 @@ type inboxActionCompletedMsg struct {
 
 // SessionResolvedMsg carries the resolved UUID of the session when a message is sent.
 // Used to filter SSE events by session, preventing cross-session leakage.
+// SessionID is included so stale history loads (from a session the user has
+// since navigated away from) are discarded rather than merged into the new
+// session's view (EX-173).
 type chatHistoryLoadedMsg struct {
-	Messages []ChatMessage
+	SessionID string
+	Messages  []ChatMessage
 }
 
 type SessionResolvedMsg struct {
@@ -293,6 +297,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, histCmd
 	case chatHistoryLoadedMsg:
 		m.chatHistoryLoading = false
+		// EX-173: discard history loads that no longer match the active session.
+		// Users may switch sessions rapidly (e.g. 'n' multiple times); without
+		// this guard the stale load would corrupt the current session's message list.
+		if sid := strings.TrimSpace(typed.SessionID); sid != "" && sid != strings.TrimSpace(m.activeSession) {
+			return m, nil
+		}
 		if len(typed.Messages) == 0 {
 			return m, nil
 		}
@@ -2769,15 +2779,16 @@ func actOnInboxItemCmd(itemID, action string, actFn func(ctx context.Context, it
 }
 
 func loadChatHistoryCmd(sessionID string, loadFn func(ctx context.Context, sessionID string) ([]ChatMessage, error)) tea.Cmd {
+	sid := strings.TrimSpace(sessionID)
 	return func() tea.Msg {
 		if loadFn == nil {
-			return chatHistoryLoadedMsg{}
+			return chatHistoryLoadedMsg{SessionID: sid}
 		}
-		messages, err := loadFn(context.Background(), strings.TrimSpace(sessionID))
+		messages, err := loadFn(context.Background(), sid)
 		if err != nil || len(messages) == 0 {
-			return chatHistoryLoadedMsg{}
+			return chatHistoryLoadedMsg{SessionID: sid}
 		}
-		return chatHistoryLoadedMsg{Messages: messages}
+		return chatHistoryLoadedMsg{SessionID: sid, Messages: messages}
 	}
 }
 

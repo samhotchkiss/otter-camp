@@ -3655,3 +3655,65 @@ func TestInboxOpenSetsScopeTask(t *testing.T) {
 		})
 	}
 }
+
+// EX-173: stale chat history load (from a session the user navigated away from)
+// should be discarded rather than merged into the current session's message list.
+func TestStaleHistoryLoadIsDiscarded(t *testing.T) {
+	t.Parallel()
+	sessionA := "00000000-0000-0000-0000-00000000173a"
+	sessionB := "00000000-0000-0000-0000-00000000173b"
+
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	// User is currently viewing session B
+	model.activeSession = sessionB
+	model.chatMessages = nil
+	model.chatMessageIndex = make(map[string]int)
+
+	// A stale history load for session A arrives (user had previously been on session A)
+	staleMsg := chatHistoryLoadedMsg{
+		SessionID: sessionA,
+		Messages: []ChatMessage{
+			{ID: "msg-from-A", Role: "user", Content: "Hello from session A", Finalized: true},
+		},
+	}
+	updated, _ := model.Update(staleMsg)
+	m := updated.(Model)
+
+	// The message from session A should NOT appear in the current session B's chat
+	if len(m.chatMessages) != 0 {
+		t.Fatalf("stale history from session A should be discarded when session B is active; got %d messages", len(m.chatMessages))
+	}
+	if m.chatHistoryLoading {
+		t.Fatal("chatHistoryLoading should be cleared even when history is discarded")
+	}
+}
+
+// EX-173: history load matching the current session should still be merged.
+func TestCurrentSessionHistoryIsAccepted(t *testing.T) {
+	t.Parallel()
+	sessionID := "00000000-0000-0000-0000-000000000173"
+
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.activeSession = sessionID
+	model.chatMessages = nil
+	model.chatMessageIndex = make(map[string]int)
+	model.chatHistoryLoading = true
+
+	matchingMsg := chatHistoryLoadedMsg{
+		SessionID: sessionID,
+		Messages: []ChatMessage{
+			{ID: "msg-173", Role: "assistant", Content: "Hello", Finalized: true},
+		},
+	}
+	updated, _ := model.Update(matchingMsg)
+	m := updated.(Model)
+
+	if len(m.chatMessages) != 1 {
+		t.Fatalf("history matching active session should be merged; got %d messages", len(m.chatMessages))
+	}
+	if m.chatHistoryLoading {
+		t.Fatal("chatHistoryLoading should be cleared after successful merge")
+	}
+}

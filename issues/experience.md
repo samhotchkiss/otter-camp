@@ -2612,6 +2612,21 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-173---
+
+## EX-173: Stale chat history merged into wrong session when switching rapidly
+
+**Observation:** `chatHistoryLoadedMsg` did not carry the session ID it was requested for. When a user switches sessions quickly (e.g., pressing 'n' multiple times to step through unread sessions), two or more history loads could be in flight simultaneously. The first load to complete would be merged regardless of which session is currently active. If session A's history arrived after the user had already switched to session B (whose messages were cleared), session A's messages would appear in session B's chat panel.
+
+**Improvement:** Added `SessionID string` to `chatHistoryLoadedMsg` and set it in `loadChatHistoryCmd`. In the `chatHistoryLoadedMsg` handler, if `typed.SessionID != "" && typed.SessionID != m.activeSession`, the load is discarded (with `chatHistoryLoading = false` still cleared so the panel doesn't stay in "loading..." state forever). The guard is skipped when `SessionID` is empty (legacy callsites or empty session) to avoid breaking replays during startup.
+
+**Why it matters:** A user reviewing several unread task sessions in rapid succession would otherwise see messages from session A mixed into session B's view — a corrupted, confusing display that's very hard to debug.
+
+**Effort:** Low (add field to struct, propagate through `loadChatHistoryCmd`, add guard in handler)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
 ---EX-172---
 
 ## EX-172: Inbox open didn't set `activeScope = ScopeTask`
