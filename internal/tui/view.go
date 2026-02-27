@@ -1110,7 +1110,15 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	rawSession := strings.TrimSpace(m.activeSession)
 	sessionLabel := m.workspace.sessionLabel(rawSession)
 	if sessionLabel == "" {
-		sessionLabel = "General / Frank"
+		// Use scope-appropriate fallback if UUID can't be resolved yet
+		switch m.activeScope {
+		case ScopeTask:
+			sessionLabel = "Task Session"
+		case ScopeProject:
+			sessionLabel = "Project Session"
+		default:
+			sessionLabel = "General / Frank"
+		}
 	}
 	headerText := renderChatHeader(sessionLabel, m.activeScope, cw)
 	headerLines := []string{
