@@ -1139,3 +1139,88 @@ func TestKeyPressSchedulesAutoClearWhenStatusNonEmpty(t *testing.T) {
 	// the exact generation depends on the result. Just verify the field exists and code ran.
 	_ = next.statusGeneration
 }
+
+// EX-121: project view "d" help hint should reflect showDoneTasks state.
+func TestProjectViewDoneHintReflectsState(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = MainPanel
+	model.workspace.setMainView(ViewProject)
+
+	model.workspace.showDoneTasks = false
+	hint := model.commandFallbackHelp()
+	if !strings.Contains(hint, "d show done") {
+		t.Fatalf("hint when showDoneTasks=false should say 'd show done': %q", hint)
+	}
+	if strings.Contains(hint, "d hide done") {
+		t.Fatalf("hint when showDoneTasks=false should not say 'd hide done': %q", hint)
+	}
+
+	model.workspace.showDoneTasks = true
+	hint = model.commandFallbackHelp()
+	if !strings.Contains(hint, "d hide done") {
+		t.Fatalf("hint when showDoneTasks=true should say 'd hide done': %q", hint)
+	}
+	if strings.Contains(hint, "d show done") {
+		t.Fatalf("hint when showDoneTasks=true should not say 'd show done': %q", hint)
+	}
+}
+
+// EX-122: inboxItemsLoadedMsg handler should set RequiresHumanReview=true on
+// any task that has a corresponding inbox item.
+func TestInboxItemsLoadedSetsRequiresHumanReview(t *testing.T) {
+	model := NewModel(DefaultState())
+	if model.workspace.tasks == nil {
+		model.workspace.tasks = make(map[string]*taskRecord)
+	}
+	model.workspace.tasks["task-review"] = &taskRecord{
+		ID:                  "task-review",
+		RequiresHumanReview: false,
+	}
+
+	updated, _ := model.Update(inboxItemsLoadedMsg{
+		Items: []InboxSummaryItem{
+			{ID: "inbox-1", TaskID: "task-review", Summary: "needs review"},
+		},
+	})
+	m := updated.(Model)
+	if rec := m.workspace.tasks["task-review"]; rec == nil || !rec.RequiresHumanReview {
+		t.Fatal("RequiresHumanReview should be true after loading inbox item for task")
+	}
+}
+
+// EX-123: removeInboxItem should clear RequiresHumanReview when no inbox items
+// remain for the affected task.
+func TestRemoveInboxItemClearsRequiresHumanReviewWhenLastItemRemoved(t *testing.T) {
+	w := &workspaceState{
+		tasks: map[string]*taskRecord{
+			"task-abc": {ID: "task-abc", RequiresHumanReview: true},
+		},
+		inbox: []inboxItem{
+			{ID: "inbox-1", TaskID: "task-abc", Summary: "review needed"},
+		},
+	}
+
+	w.removeInboxItem("inbox-1")
+
+	if rec := w.tasks["task-abc"]; rec == nil || rec.RequiresHumanReview {
+		t.Fatal("RequiresHumanReview should be false after last inbox item for task is removed")
+	}
+}
+
+func TestRemoveInboxItemKeepsRequiresHumanReviewWhenOtherItemsRemain(t *testing.T) {
+	w := &workspaceState{
+		tasks: map[string]*taskRecord{
+			"task-abc": {ID: "task-abc", RequiresHumanReview: true},
+		},
+		inbox: []inboxItem{
+			{ID: "inbox-1", TaskID: "task-abc", Summary: "first review"},
+			{ID: "inbox-2", TaskID: "task-abc", Summary: "second review"},
+		},
+	}
+
+	w.removeInboxItem("inbox-1")
+
+	if rec := w.tasks["task-abc"]; rec == nil || !rec.RequiresHumanReview {
+		t.Fatal("RequiresHumanReview should remain true when another inbox item for the task remains")
+	}
+}

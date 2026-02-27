@@ -786,6 +786,14 @@ func (w *workspaceState) applyInboxAction(action string) bool {
 }
 
 func (w *workspaceState) removeInboxItem(id string) {
+	// Capture the task ID of the removed item before filtering.
+	removedTaskID := ""
+	for _, item := range w.inbox {
+		if item.ID == id {
+			removedTaskID = item.TaskID
+			break
+		}
+	}
 	filtered := make([]inboxItem, 0, len(w.inbox))
 	for _, item := range w.inbox {
 		if item.ID == id {
@@ -799,6 +807,38 @@ func (w *workspaceState) removeInboxItem(id string) {
 	}
 	if len(w.inbox) == 0 {
 		w.inboxCursor = 0
+	}
+	// EX-123: clear RequiresHumanReview on the task when no inbox items remain
+	// for it, so the ⚠ badge in the task detail view disappears immediately
+	// after the user acts on the last review request.
+	if removedTaskID != "" {
+		hasRemaining := false
+		for _, item := range w.inbox {
+			if item.TaskID == removedTaskID {
+				hasRemaining = true
+				break
+			}
+		}
+		if !hasRemaining {
+			if rec := w.tasks[removedTaskID]; rec != nil {
+				rec.RequiresHumanReview = false
+			}
+		}
+	}
+}
+
+// syncTaskHumanReviewFromInbox sets RequiresHumanReview=true for any task
+// that currently has inbox items. Called after inbox items are loaded or
+// reloaded so the task detail view reflects the latest review state without
+// requiring a full task detail API call.
+func (w *workspaceState) syncTaskHumanReviewFromInbox() {
+	for _, item := range w.inbox {
+		if item.TaskID == "" {
+			continue
+		}
+		if rec := w.tasks[item.TaskID]; rec != nil {
+			rec.RequiresHumanReview = true
+		}
 	}
 }
 

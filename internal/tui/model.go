@@ -430,6 +430,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(newInbox) > 0 {
 			m.workspace.inboxCount = len(newInbox)
 		}
+		// EX-122: sync RequiresHumanReview from the loaded inbox items so the
+		// task detail view shows the ⚠ badge immediately when a new review item
+		// arrives — without waiting for a full task detail reload.
+		m.workspace.syncTaskHumanReviewFromInbox()
 		return m, nil
 	case WorkspaceEnvelopeMsg:
 		if cmd := m.applyWorkspaceCommand(typed.Envelope); cmd != nil {
@@ -2318,7 +2322,12 @@ func (m Model) commandFallbackHelp() string {
 			}
 			return "Enter open session · Esc dashboard · n next unread · : commands · ? help"
 		case ViewProject:
-			return "j/k navigate tasks · Enter open task · d toggle done · Esc dashboard · n next unread · : commands · ? help"
+			// EX-121: reflect current showDoneTasks state so the hint is actionable.
+			doneHint := "d show done"
+			if m.workspace.showDoneTasks {
+				doneHint = "d hide done"
+			}
+			return "j/k navigate tasks · Enter open task · " + doneHint + " · Esc dashboard · n next unread · : commands · ? help"
 		case ViewDashboard:
 			if len(m.workspace.dashboardActiveTasks()) > 0 {
 				// EX-116: include "t·task" hint when a task is selected so users know
