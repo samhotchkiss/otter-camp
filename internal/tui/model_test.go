@@ -1751,3 +1751,51 @@ func TestRKeyInViewProjectTriggersProjectDetailReload(t *testing.T) {
 		t.Fatalf("r in ViewProject should set 'Refreshing project detail…' status, got: %q", updated.statusMessage)
 	}
 }
+
+// EX-135: pressing g in ViewDashboard should jump to the first task.
+func TestGKeyInDashboardJumpsToFirstTask(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.focus = MainPanel
+	model.workspace.setMainView(ViewDashboard)
+	model.workspace.tasks = map[string]*taskRecord{
+		"task-a": {ID: "task-a", TaskNumber: 1, Title: "Alpha", Status: "todo"},
+		"task-b": {ID: "task-b", TaskNumber: 2, Title: "Beta", Status: "in_progress"},
+		"task-c": {ID: "task-c", TaskNumber: 3, Title: "Gamma", Status: "todo"},
+	}
+	model.workspace.taskOrder = []string{"task-a", "task-b", "task-c"}
+	model.workspace.dashboardCursor = 2
+	model.workspace.selectedTaskID = "task-c"
+
+	updated := pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if updated.workspace.selectedTaskID != "task-a" {
+		t.Fatalf("g should select first task 'task-a', got: %q", updated.workspace.selectedTaskID)
+	}
+	if updated.workspace.dashboardCursor != 0 {
+		t.Fatalf("g should reset dashboardCursor to 0, got: %d", updated.workspace.dashboardCursor)
+	}
+}
+
+// EX-135: pressing G in ViewDashboard should jump to the last task.
+func TestGUpperKeyInDashboardJumpsToLastTask(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.focus = MainPanel
+	model.workspace.setMainView(ViewDashboard)
+	model.workspace.tasks = map[string]*taskRecord{
+		"task-a": {ID: "task-a", TaskNumber: 1, Title: "Alpha", Status: "todo"},
+		"task-b": {ID: "task-b", TaskNumber: 2, Title: "Beta", Status: "in_progress"},
+		"task-c": {ID: "task-c", TaskNumber: 3, Title: "Gamma", Status: "todo"},
+	}
+	model.workspace.taskOrder = []string{"task-a", "task-b", "task-c"}
+	model.workspace.dashboardCursor = 0
+	model.workspace.selectedTaskID = "task-a"
+
+	updated := pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if updated.workspace.selectedTaskID != "task-c" {
+		t.Fatalf("G should select last task 'task-c', got: %q", updated.workspace.selectedTaskID)
+	}
+	if updated.workspace.dashboardCursor != 2 {
+		t.Fatalf("G should set dashboardCursor to 2, got: %d", updated.workspace.dashboardCursor)
+	}
+}

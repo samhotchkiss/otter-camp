@@ -2016,3 +2016,33 @@ Additionally, the `task.status_changed` activity entry code was duplicating the 
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-134: Help screen r key description was stale after EX-133
+
+**Observation:** After EX-133 made `r` context-aware (refreshing task/project detail in those views), the help screen still showed `"r   refresh sidebar data"` — which is inaccurate for `ViewTask` and `ViewProject` contexts.
+
+**Improvement:** Updated the help screen `r` key description to `"refresh task / project detail (in detail views), or sidebar"`.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-135: g/G keys did not work in dashboard board view
+
+**Observation:** `g` (jump to top) and `G` (jump to bottom) worked in the sidebar, inbox, and project views, but in `ViewDashboard` they did nothing — neither key was handled for that view. Users familiar with vim-style navigation would naturally expect `g`/`G` to work on the dashboard board.
+
+**Improvement:** Added `g`/`G` handlers for `ViewDashboard` (when `MainPanel` is focused):
+- `g`: jumps cursor to the first task in `dashboardActiveTasks()`, updates `dashboardCursor=0` and `selectedTaskID`, sets status bar to `"▸ OC-N: title"`.
+- `G`: jumps cursor to the last task, updates `dashboardCursor=len-1` and `selectedTaskID`.
+
+Also added `g/G first/last` to the dashboard help hint when tasks are present.
+
+**Why it matters:** Keyboard power users expect consistent navigation primitives across views. When `g`/`G` work everywhere else but silently do nothing on the dashboard, it breaks the muscle memory contract. The fix aligns dashboard navigation with the rest of the TUI.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

@@ -1669,7 +1669,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("p", "return to selected project (if any)"),
 		key("t", "return to selected task (if any)"),
 		key("n", "jump to next unread session"),
-		key("r", "refresh sidebar data"),
+		key("r", "refresh task / project detail (in detail views), or sidebar"),
 		key("?", "toggle this help screen"),
 		key(":command", "open command palette"),
 		"",

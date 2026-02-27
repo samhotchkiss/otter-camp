@@ -997,6 +997,20 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.workspace.inboxHome()
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			m.workspace.projectTaskCursor = 0
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
+			// EX-135: jump to first task on dashboard board (g = vim home)
+			active := m.workspace.dashboardActiveTasks()
+			if len(active) > 0 {
+				m.workspace.dashboardCursor = 0
+				m.workspace.selectedTaskID = active[0]
+				if task := m.workspace.tasks[active[0]]; task != nil {
+					label := task.Title
+					if task.TaskNumber > 0 {
+						label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
+					}
+					m.statusMessage = "▸ " + truncate(label, 40)
+				}
+			}
 		}
 		return true, nil
 	case 'G':
@@ -1007,6 +1021,20 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			if proj := m.workspace.selectedProject; proj != nil {
 				m.workspace.projectTaskCursor = maxInt(0, len(proj.Tasks)-1)
+			}
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
+			// EX-135: jump to last task on dashboard board (G = vim end)
+			active := m.workspace.dashboardActiveTasks()
+			if len(active) > 0 {
+				m.workspace.dashboardCursor = len(active) - 1
+				m.workspace.selectedTaskID = active[len(active)-1]
+				if task := m.workspace.tasks[active[len(active)-1]]; task != nil {
+					label := task.Title
+					if task.TaskNumber > 0 {
+						label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
+					}
+					m.statusMessage = "▸ " + truncate(label, 40)
+				}
 			}
 		}
 		return true, nil
@@ -2366,7 +2394,7 @@ func (m Model) commandFallbackHelp() string {
 				if m.workspace.selectedTaskID != "" {
 					taskHint += " · t task detail"
 				}
-				return taskHint + " · i inbox · n next unread · / filter · : commands · ? help"
+				return taskHint + " · g/G first/last · i inbox · n next unread · / filter · : commands · ? help"
 			}
 			return "i inbox · n next unread · r refresh · : commands · ? help"
 		default:
