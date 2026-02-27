@@ -128,24 +128,26 @@ func runTUICommand(args []string) int {
 					if s.Title != nil {
 						name = strings.TrimSpace(*s.Title)
 					}
-					// Resolve a descriptive name from the scope object
+					// For project_task sessions, always fetch task to get OC-N prefix
+					if strings.EqualFold(s.ScopeType, "project_task") && s.ScopeID != uuid.Nil {
+						var taskResp struct {
+							Data struct {
+								Title      string `json:"title"`
+								TaskNumber int    `json:"task_number"`
+							} `json:"data"`
+						}
+						if apiClient.request(ctx, "GET", "/v1/tasks/"+s.ScopeID.String(), nil, &taskResp) == nil {
+							taskTitle := strings.TrimSpace(taskResp.Data.Title)
+							if taskResp.Data.TaskNumber > 0 {
+								name = fmt.Sprintf("OC-%d: %s", taskResp.Data.TaskNumber, taskTitle)
+							} else if taskTitle != "" {
+								name = taskTitle
+							}
+						}
+					}
+					// Resolve a descriptive name from the scope object (for other scope types)
 					if name == "" && s.ScopeID != uuid.Nil {
 						switch strings.ToLower(s.ScopeType) {
-						case "project_task":
-							var taskResp struct {
-								Data struct {
-									Title      string `json:"title"`
-									TaskNumber int    `json:"task_number"`
-								} `json:"data"`
-							}
-							if apiClient.request(ctx, "GET", "/v1/tasks/"+s.ScopeID.String(), nil, &taskResp) == nil {
-								title := strings.TrimSpace(taskResp.Data.Title)
-								if taskResp.Data.TaskNumber > 0 {
-									name = fmt.Sprintf("OC-%d: %s", taskResp.Data.TaskNumber, title)
-								} else {
-									name = title
-								}
-							}
 						case "project":
 							var projResp struct {
 								Data struct {
