@@ -1062,9 +1062,50 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		}
 		lines = append(lines, styleLabel.Render(taskHeader))
 		lines = append(lines, taskLines...)
+		// Done tasks section (toggle with 'd').
+		if m.workspace.showDoneTasks && proj != nil && len(proj.DoneTasks) > 0 {
+			if len(lines) < maxLines {
+				lines = append(lines, "")
+			}
+			if len(lines) < maxLines {
+				doneHeader := fmt.Sprintf("DONE (%d)", len(proj.DoneTasks))
+				lines = append(lines, styleLabel.Render(doneHeader))
+			}
+			for _, t := range proj.DoneTasks {
+				if len(lines) >= maxLines {
+					break
+				}
+				taskLabel := t.Title
+				if t.TaskNumber > 0 {
+					taskLabel = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+				}
+				statusText := formatTaskStatus(t.WorkStatus)
+				statW := len([]rune(statusText))
+				maxTitleW := width - 8 - statW
+				if maxTitleW < 4 {
+					maxTitleW = 4
+				}
+				truncTitle := truncate(taskLabel, maxTitleW)
+				leftPart := "  ✓ " + truncTitle
+				padW := width - lipgloss.Width(leftPart) - statW - 1
+				if padW < 1 {
+					padW = 1
+				}
+				spacer := strings.Repeat(" ", padW)
+				lines = append(lines, styleMuted.Render(leftPart+spacer+statusText))
+			}
+		}
 		// Navigation hint row.
+		hintParts := "Enter·open  ·  j/k·navigate  ·  Esc·back"
+		if proj != nil && proj.DoneCount > 0 {
+			if m.workspace.showDoneTasks {
+				hintParts += "  ·  d·hide done"
+			} else {
+				hintParts += fmt.Sprintf("  ·  d·show %d done", proj.DoneCount)
+			}
+		}
 		if len(lines) < maxLines {
-			lines = append(lines, styleMuted.Render("  Enter·open  ·  j/k·navigate  ·  Esc·back"))
+			lines = append(lines, styleMuted.Render("  "+hintParts))
 		}
 	}
 

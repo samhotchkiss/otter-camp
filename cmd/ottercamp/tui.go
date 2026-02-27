@@ -285,18 +285,19 @@ func runTUICommand(args []string) int {
 				path := "/v1/projects/" + url.PathEscape(projectID) + "/tasks?limit=20"
 				_ = apiClient.request(ctx, "GET", path, nil, &tasksResp)
 				tasks := make([]tuiapp.SidebarTaskItem, 0, len(tasksResp.Data))
-				doneCount := 0
+				doneTasks := make([]tuiapp.SidebarTaskItem, 0)
 				for _, t := range tasksResp.Data {
-					if t.WorkStatus == "done" || t.WorkStatus == "approved" || t.WorkStatus == "cancelled" {
-						doneCount++
-						continue
-					}
-					tasks = append(tasks, tuiapp.SidebarTaskItem{
+					item := tuiapp.SidebarTaskItem{
 						ID:         t.ID,
 						Title:      t.Title,
 						WorkStatus: t.WorkStatus,
 						TaskNumber: t.TaskNumber,
-					})
+					}
+					if t.WorkStatus == "done" || t.WorkStatus == "approved" || t.WorkStatus == "cancelled" {
+						doneTasks = append(doneTasks, item)
+					} else {
+						tasks = append(tasks, item)
+					}
 				}
 				return &tuiapp.ProjectDetail{
 					ID:           proj.ID,
@@ -304,7 +305,8 @@ func runTUICommand(args []string) int {
 					Description:  proj.Description,
 					DeliveryMode: proj.DeliveryMode,
 					Tasks:        tasks,
-					DoneCount:    doneCount,
+					DoneTasks:    doneTasks,
+					DoneCount:    len(doneTasks),
 				}, nil
 			}
 			runtimeHints.LoadAgents = func(ctx context.Context) ([]string, error) {

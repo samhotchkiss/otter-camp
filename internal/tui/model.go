@@ -976,7 +976,16 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			return true, loadInboxItemsCmd(m.runtimeHints)
 		}
 	case 'd':
-		if m.focus != ChatPanel {
+		if m.focus == MainPanel && m.workspace.mainView == ViewProject {
+			// Toggle done tasks visibility in project view
+			m.workspace.showDoneTasks = !m.workspace.showDoneTasks
+			if m.workspace.showDoneTasks {
+				m.statusMessage = "Showing done tasks"
+			} else {
+				m.statusMessage = "Done tasks hidden"
+			}
+			return true, nil
+		} else if m.focus != ChatPanel {
 			m.workspace.setMainView(ViewDashboard)
 			m.setFocus(MainPanel)
 			m.statusMessage = "Dashboard"
@@ -2247,7 +2256,7 @@ func (m Model) commandFallbackHelp() string {
 			taskHelp += " · n next unread · : commands · ? help"
 			return taskHelp
 		case ViewProject:
-			return "j/k navigate tasks · Enter open task · Esc back · n next unread · : commands · ? help"
+			return "j/k navigate tasks · Enter open task · d toggle done · Esc back · n next unread · : commands · ? help"
 		default:
 			return "i inbox · d dashboard · n next unread · r refresh · / filter · : commands · ? help"
 		}

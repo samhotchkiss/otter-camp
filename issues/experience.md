@@ -1101,6 +1101,20 @@ No extra state is required — the scroll position is derived purely from the cu
 
 ---
 
+## EX-077: Show done tasks in project view with 'd' toggle
+
+**Observation:** The project view showed "OPEN TASKS (5) · 1 done" but there was no way to see which tasks were done. The "1 done" count was purely informational — clicking it or pressing any key didn't reveal the done task.
+
+**Improvement:** Added a `d` key toggle (context-sensitive: only active in `ViewProject` with main panel focus) that reveals or hides a "DONE (N)" section below the open task list. Done tasks show with a `✓` icon and muted styling. The hint row adapts: `d·show 1 done` when hidden, `d·hide done` when shown. The help line at the bottom also shows `d toggle done`. `LoadProjectDetail` was updated to populate a `DoneTasks []SidebarTaskItem` field alongside `DoneCount`. Elsewhere `d` still navigates to the dashboard.
+
+**Why it matters:** Users often want to confirm that a task actually reached "done" state, or review what was completed recently. Without this toggle, the "1 done" badge was teasing information that was impossible to access from the project view.
+
+**Effort:** Medium
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
 ## EX-076: Task detail hint — remove "(no session)" marker
 
 **Observation:** When viewing a task that had no associated chat session (e.g., a Draft task), the task detail hint showed `Esc·back to project  p·project view  j/k·next/prev task  (no session)`. The `(no session)` label was added as a parenthetical that communicated why there was no `Enter·open session` hint, but it's awkward and adds no actionable information.

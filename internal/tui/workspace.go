@@ -105,6 +105,7 @@ type ProjectDetail struct {
 	Description  string
 	DeliveryMode string
 	Tasks        []SidebarTaskItem // open tasks only
+	DoneTasks    []SidebarTaskItem // completed/approved/cancelled tasks
 	DoneCount    int               // count of completed tasks
 }
 
@@ -126,6 +127,7 @@ type workspaceState struct {
 	selectedTaskID    string
 	projectTaskCursor int    // cursor within the project view open-task list
 	pendingProjectCursorTaskID string // set when task is opened before project detail loads
+	showDoneTasks     bool   // whether to show done tasks in project view
 	dashboardCursor   int // cursor within the dashboard task board (index into taskOrder excluding done/cancelled)
 
 	inbox       []inboxItem
