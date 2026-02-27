@@ -1315,11 +1315,18 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 	}
 
 	if len(filteredInbox) == 0 {
+		// EX-111: distinguish between a genuinely empty inbox and a filter with no matches.
+		var emptyMsg string
+		if query != "" && len(m.workspace.inbox) > 0 {
+			emptyMsg = fmt.Sprintf("no inbox items matching %q", query)
+		} else {
+			emptyMsg = "✓ Inbox clear"
+		}
 		return []string{
 			"",
 			lipgloss.JoinHorizontal(lipgloss.Center,
 				lipgloss.NewStyle().Width(width).Align(lipgloss.Center).
-					Foreground(colMuted).Render("✓ Inbox clear"),
+					Foreground(colMuted).Render(emptyMsg),
 			),
 		}
 	}
@@ -1418,12 +1425,19 @@ func (m Model) renderAgentsView(width, maxLines int) []string {
 			Foreground(colSubtle).Render("no agents loaded"))
 		return lines
 	}
+	// EX-110: apply search filter so agents view responds to mainFilter like all other views.
+	query := normalizedFilterQuery(m.mainFilter)
+	matched := 0
 	for _, agent := range m.workspace.agents {
 		parts := strings.SplitN(agent, "=", 2)
 		name, status := agent, ""
 		if len(parts) == 2 {
 			name, status = parts[0], parts[1]
 		}
+		if !matchesFilter(name, query) && !matchesFilter(status, query) {
+			continue
+		}
+		matched++
 		var dot string
 		switch strings.ToLower(status) {
 		case "active", "online":
@@ -1438,6 +1452,9 @@ func (m Model) renderAgentsView(width, maxLines int) []string {
 			agentLine += styleMuted.Render("  " + status)
 		}
 		lines = append(lines, agentLine)
+	}
+	if matched == 0 && query != "" {
+		lines = append(lines, styleMuted.Render(fmt.Sprintf("  no agents matching %q", query)))
 	}
 	return lines
 }

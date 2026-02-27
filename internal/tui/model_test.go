@@ -907,6 +907,66 @@ func TestNewModelWithRuntimeDefaultsToDashboardWhenLastMainViewUnknown(t *testin
 	}
 }
 
+func TestAgentsViewFiltersWithMainFilter(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.agents = []string{"Frank=active", "Ellie=paused", "Bob=active"}
+
+	// No filter — all agents visible
+	view := strings.Join(model.renderAgentsView(80, 20), "\n")
+	for _, name := range []string{"Frank", "Ellie", "Bob"} {
+		if !strings.Contains(view, name) {
+			t.Fatalf("unfiltered agents view missing %q: %q", name, view)
+		}
+	}
+
+	// Filter to "frank" — only Frank should appear
+	model.mainFilter = "frank"
+	filteredView := strings.Join(model.renderAgentsView(80, 20), "\n")
+	if !strings.Contains(filteredView, "Frank") {
+		t.Fatalf("filtered agents view missing Frank: %q", filteredView)
+	}
+	if strings.Contains(filteredView, "Ellie") {
+		t.Fatalf("filtered agents view should not contain Ellie: %q", filteredView)
+	}
+	if strings.Contains(filteredView, "Bob") {
+		t.Fatalf("filtered agents view should not contain Bob: %q", filteredView)
+	}
+}
+
+func TestAgentsViewShowsNoMatchesMessageWhenFilterExcludesAll(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.agents = []string{"Frank=active", "Ellie=paused"}
+	model.mainFilter = "zzznomatch"
+
+	view := strings.Join(model.renderAgentsView(80, 20), "\n")
+	if !strings.Contains(view, "no agents matching") {
+		t.Fatalf("agents view should show no-match message when filter excludes all: %q", view)
+	}
+}
+
+func TestInboxEmptyStateDistinguishesFilteredVsGenuinelyEmpty(t *testing.T) {
+	model := NewModel(DefaultState())
+
+	// Genuinely empty inbox — should show "✓ Inbox clear"
+	view := strings.Join(model.renderInboxView(80, 20), "\n")
+	if !strings.Contains(view, "Inbox clear") {
+		t.Fatalf("empty inbox should show 'Inbox clear': %q", view)
+	}
+
+	// Inbox with items but filter excludes all — should show "no inbox items matching"
+	model.workspace.inbox = []inboxItem{
+		{ID: "i1", TaskID: "task-1", Summary: "Review PR #42"},
+	}
+	model.mainFilter = "zzznomatch"
+	filteredView := strings.Join(model.renderInboxView(80, 20), "\n")
+	if strings.Contains(filteredView, "Inbox clear") {
+		t.Fatalf("filtered inbox should not show 'Inbox clear' when items exist but don't match: %q", filteredView)
+	}
+	if !strings.Contains(filteredView, "no inbox items matching") {
+		t.Fatalf("filtered inbox should show 'no inbox items matching': %q", filteredView)
+	}
+}
+
 func TestFormatTaskStatus(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"todo", "Todo"},
