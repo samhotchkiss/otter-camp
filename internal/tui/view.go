@@ -1096,7 +1096,7 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			}
 		}
 		// Navigation hint row.
-		hintParts := "Enter·open  ·  j/k·navigate  ·  Esc·back"
+		hintParts := "Enter·open  ·  j/k·navigate  ·  Esc·dashboard"
 		if proj != nil && proj.DoneCount > 0 {
 			if m.workspace.showDoneTasks {
 				hintParts += "  ·  d·hide done"
@@ -1215,7 +1215,12 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 			hintParts = append(hintParts, "Enter·open session")
 		}
 	}
-	hintParts = append(hintParts, "Esc·back")
+	// Esc destination depends on whether there is a project context.
+	if m.workspace.selectedProjectID != "" {
+		hintParts = append(hintParts, "Esc·project")
+	} else {
+		hintParts = append(hintParts, "Esc·dashboard")
+	}
 	if m.workspace.selectedProjectID != "" {
 		hintParts = append(hintParts, "p·project view")
 		openTasks := m.workspace.openTasksForProject()

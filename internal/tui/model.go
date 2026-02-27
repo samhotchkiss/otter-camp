@@ -2272,14 +2272,17 @@ func (m Model) commandFallbackHelp() string {
 		case ViewInbox:
 			return "a approve · x reject · f defer · o open · j/k navigate · n next unread · s toggle sidebar · Esc back · : commands"
 		case ViewTask:
-			taskHelp := "Enter open session · Esc back"
-			if m.workspace.selectedProjectID != "" && len(m.workspace.openTasksForProject()) >= 2 {
-				taskHelp += " · j/k next/prev · p project view"
+			if m.workspace.selectedProjectID != "" {
+				taskHelp := "Enter open session · Esc project"
+				if len(m.workspace.openTasksForProject()) >= 2 {
+					taskHelp += " · j/k next/prev"
+				}
+				taskHelp += " · p project view · n next unread · : commands · ? help"
+				return taskHelp
 			}
-			taskHelp += " · n next unread · : commands · ? help"
-			return taskHelp
+			return "Enter open session · Esc dashboard · n next unread · : commands · ? help"
 		case ViewProject:
-			return "j/k navigate tasks · Enter open task · d toggle done · Esc back · n next unread · : commands · ? help"
+			return "j/k navigate tasks · Enter open task · d toggle done · Esc dashboard · n next unread · : commands · ? help"
 		default:
 			return "i inbox · d dashboard · n next unread · r refresh · / filter · : commands · ? help"
 		}
