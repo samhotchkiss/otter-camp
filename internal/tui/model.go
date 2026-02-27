@@ -2738,15 +2738,9 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		}
 		// EX-092: surface task status transitions in the dashboard activity log
 		// so the Activity section reflects real-time progress, not just startup.
+		// EX-131: use taskLabel helper to DRY up OC-N / title / ID fallback.
 		if payload.ToStatus != "" {
-			label := payload.TaskID
-			if rec := m.workspace.tasks[payload.TaskID]; rec != nil {
-				if rec.TaskNumber > 0 {
-					label = fmt.Sprintf("OC-%d", rec.TaskNumber)
-				} else if rec.Title != "" {
-					label = truncate(rec.Title, 24)
-				}
-			}
+			label := taskLabel(m.workspace.tasks[payload.TaskID], payload.TaskID)
 			statusLabel := formatTaskStatus(payload.ToStatus)
 			m.workspace.activity = append(m.workspace.activity,
 				label+": "+statusLabel)
@@ -2921,6 +2915,43 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 				msg += " (" + payload.Capability + ")"
 			}
 			m.statusMessage = msg
+		}
+		return nil
+	}
+	// EX-131: memory.extracted — record in the activity log so the user can see
+	// when the background memory extractor has processed a conversation turn.
+	if event.EventType == "memory.extracted" {
+		var payload struct {
+			Count int `json:"count"`
+		}
+		if decodePayload(event.Payload, &payload) && payload.Count > 0 {
+			entry := fmt.Sprintf("memory: %d item extracted", payload.Count)
+			if payload.Count != 1 {
+				entry = fmt.Sprintf("memory: %d items extracted", payload.Count)
+			}
+			m.workspace.activity = append(m.workspace.activity, entry)
+		}
+		return nil
+	}
+	// EX-131: mcp.catalog.changed — show a brief status bar message so the user
+	// knows the available MCP tools have changed without needing to open settings.
+	if event.EventType == "mcp.catalog.changed" {
+		var payload struct {
+			AddedCount   int `json:"added_count"`
+			UpdatedCount int `json:"updated_count"`
+			RemovedCount int `json:"removed_count"`
+		}
+		if decodePayload(event.Payload, &payload) {
+			switch {
+			case payload.AddedCount > 0 && payload.RemovedCount > 0:
+				m.statusMessage = fmt.Sprintf("MCP catalog updated: +%d added, -%d removed.", payload.AddedCount, payload.RemovedCount)
+			case payload.AddedCount > 0:
+				m.statusMessage = fmt.Sprintf("MCP catalog updated: +%d tools added.", payload.AddedCount)
+			case payload.RemovedCount > 0:
+				m.statusMessage = fmt.Sprintf("MCP catalog updated: -%d tools removed.", payload.RemovedCount)
+			default:
+				m.statusMessage = "MCP catalog refreshed."
+			}
 		}
 		return nil
 	}

@@ -1619,3 +1619,76 @@ func TestToolCapabilityDeniedShowsStatusWarning(t *testing.T) {
 		t.Fatalf("statusMessage should include tool name, got: %q", m.statusMessage)
 	}
 }
+
+// EX-131: memory.extracted should add an activity entry with the item count.
+func TestMemoryExtractedAddsActivityEntry(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"count":        3,
+		"batch_source": "turn",
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "memory.extracted",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "memory") && strings.Contains(entry, "3") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("memory.extracted should add activity entry with count: %v", m.workspace.activity)
+	}
+}
+
+// EX-131: memory.extracted with count=0 should NOT add a "memory" activity entry.
+func TestMemoryExtractedZeroCountIgnored(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+
+	rawPayload, _ := json.Marshal(map[string]any{"count": 0})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "memory.extracted",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "memory") {
+			t.Fatalf("memory.extracted count=0 should not add memory activity entry: %v", m.workspace.activity)
+		}
+	}
+}
+
+// EX-131: mcp.catalog.changed should set statusMessage describing the catalog delta.
+func TestMCPCatalogChangedShowsStatusMessage(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"added_count":   5,
+		"updated_count": 2,
+		"removed_count": 1,
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "mcp.catalog.changed",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	if !strings.Contains(m.statusMessage, "MCP catalog") {
+		t.Fatalf("mcp.catalog.changed should set statusMessage with MCP catalog notice, got: %q", m.statusMessage)
+	}
+	if !strings.Contains(m.statusMessage, "+5") {
+		t.Fatalf("statusMessage should mention added count, got: %q", m.statusMessage)
+	}
+	if !strings.Contains(m.statusMessage, "-1") {
+		t.Fatalf("statusMessage should mention removed count, got: %q", m.statusMessage)
+	}
+}

@@ -1967,3 +1967,24 @@ Commit SHAs are truncated to 8 characters for readability. The `statusMessage` f
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-131: memory.extracted and mcp.catalog.changed events silently dropped + taskLabel refactor
+
+**Observation:** Two more server events were not handled by the TUI:
+- `memory.extracted` — fires after each background memory extraction pass (per conversation turn). Users had no visibility into when memories were being created.
+- `mcp.catalog.changed` — fires when the MCP tool catalog is refreshed (tools added/updated/removed from a connection). Users couldn't tell when their available tools changed.
+
+Additionally, the `task.status_changed` activity entry code was duplicating the OC-N / title / ID label resolution logic that had since been extracted into `taskLabel()` in EX-129.
+
+**Improvements:**
+1. **`memory.extracted`**: Appends `"memory: N items extracted"` (or "item" for singular) to the activity log when `count > 0`. Events with `count=0` are silently ignored.
+2. **`mcp.catalog.changed`**: Sets `statusMessage` with a delta summary, e.g. `"MCP catalog updated: +5 added, -1 removed."` Uses cases for added-only, removed-only, both, or a generic refresh message.
+3. **Refactor**: `task.status_changed` activity label computation now calls `taskLabel(m.workspace.tasks[taskID], taskID)` instead of duplicating the three-way fallback inline.
+
+**Why it matters:** Memory extraction is a key background process — seeing it happen in the activity log gives the user confidence the system is learning. MCP catalog changes affect what tools agents can use; a status bar notice lets the user know without navigating to settings. The refactor ensures all activity label code goes through one place.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
