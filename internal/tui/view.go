@@ -41,6 +41,7 @@ var (
 	styleUser      = lipgloss.NewStyle().Foreground(colUser).Bold(true)
 	styleAssistant = lipgloss.NewStyle().Foreground(colAssistant).Bold(true)
 	styleTool      = lipgloss.NewStyle().Foreground(colTool)
+	styleInterject = lipgloss.NewStyle().Foreground(colWarning).Bold(true).Italic(true)
 	styleUnread    = lipgloss.NewStyle().Foreground(colUnread).Bold(true)
 
 	styleConnected    = lipgloss.NewStyle().Foreground(colConnected).Bold(true)
@@ -279,9 +280,9 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 	lines = append(lines, styleDivider.Render(strings.Repeat("─", cw)))
 
 	// Sidebar nodes
+	iconOnly := m.sidebarIconOnlyMode()
 	visible := m.workspace.visibleSidebarIDs()
 	visible = m.filteredSidebarIDs(visible, m.sidebarFilter)
-	currentSidebarID := m.workspace.currentSidebarID()
 	inboxFooter := ""
 	if n := len(m.workspace.inbox); n > 0 {
 		inboxFooter = styleMuted.Render(fmt.Sprintf("▼ %d inbox", n))
@@ -316,7 +317,7 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 		if node == nil {
 			continue
 		}
-		lines = append(lines, m.renderSidebarNode(node, id == currentSidebarID, cw))
+		lines = append(lines, m.renderSidebarNode(node, i == m.workspace.sidebarCursor, cw, iconOnly))
 	}
 	if remaining := len(visible) - maxNodeLines; remaining > 0 && rowsForNodesAndMore > 0 {
 		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more", remaining)))
@@ -336,7 +337,7 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 	return panelStyle(innerW, innerH, focused).Render(content)
 }
 
-func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int) string {
+func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, iconOnly bool) string {
 	isActive := node.Kind == sidebarKindSession &&
 		node.SessionID == m.workspace.activeSessionID
 
@@ -356,6 +357,9 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int) stri
 			prefix = "  "
 		}
 		label = node.Label
+	}
+	if iconOnly {
+		label = compactSidebarLabel(node)
 	}
 
 	// EX-018: task status icon for task-linked sessions
@@ -440,6 +444,28 @@ func (m Model) renderSearchBar(panel Panel, width int) string {
 		prompt += "▌"
 	}
 	return styleMuted.Render(truncate("Search "+prompt, width))
+}
+
+func (m Model) sidebarIconOnlyMode() bool {
+	width, _ := normalizeDimensions(m.width, m.height)
+	return width >= 100 && width < 120
+}
+
+func compactSidebarLabel(node *sidebarNode) string {
+	if node == nil {
+		return ""
+	}
+	if node.Kind == sidebarKindProject {
+		return "PRJ"
+	}
+	if node.TaskID != "" {
+		suffix := strings.TrimPrefix(strings.ToLower(node.TaskID), "task-")
+		if suffix == "" {
+			suffix = "?"
+		}
+		return "T" + suffix
+	}
+	return "GEN"
 }
 
 // ── Main panel ──────────────────────────────────────────────────────────────
@@ -925,6 +951,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		header("Navigation"),
 		key("j / k", "move up/down in lists"),
 		key("h / l", "collapse/expand sidebar"),
+		key("s", "toggle sidebar (below 100 cols)"),
 		key("g / G", "jump to top/bottom"),
 		key("Tab/Shift-Tab", "cycle panel focus"),
 		key("1 / 2 / 3", "jump to sidebar/main/chat"),
@@ -1115,6 +1142,9 @@ func (m Model) renderChatMessages(width int) []string {
 		case "assistant":
 			roleStr = styleAssistant
 			roleLabel = "Frank"
+		case "interjection":
+			roleStr = styleInterject
+			roleLabel = "Interjection (interjected)"
 		case "system":
 			roleStr = styleMuted
 			roleLabel = "System"

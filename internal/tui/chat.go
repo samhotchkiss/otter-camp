@@ -90,7 +90,7 @@ func sessionForScope(scope ChatScope) string {
 
 func normalizeRole(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "user", "assistant", "system", "tool":
+	case "user", "assistant", "system", "tool", "interjection":
 		return strings.ToLower(strings.TrimSpace(raw))
 	default:
 		return "assistant"
