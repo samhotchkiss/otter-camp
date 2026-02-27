@@ -101,7 +101,7 @@ func TestInterjectionMessagesRenderWithInterjectedLabel(t *testing.T) {
 	}
 }
 
-func TestMarkdownRenderedInChatMessages(t *testing.T) {
+func TestMarkdownRenderedForAssistantMessages(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.chatMessages = []ChatMessage{
 		{
@@ -127,7 +127,25 @@ func TestMarkdownRenderedInChatMessages(t *testing.T) {
 	}
 }
 
-func TestStreamingMessageKeepsLiteralMarkdown(t *testing.T) {
+func TestPlainTextForUserMessages(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.chatMessages = []ChatMessage{
+		{
+			ID:        "msg-user-markdown",
+			Role:      "user",
+			Content:   "**bold**",
+			Finalized: true,
+			Timestamp: time.Date(2026, time.January, 2, 15, 5, 0, 0, time.Local),
+		},
+	}
+
+	rendered := strings.Join(model.renderChatMessages(80), "\n")
+	if !strings.Contains(rendered, "**bold**") {
+		t.Fatalf("user messages should preserve literal markdown markers: %q", rendered)
+	}
+}
+
+func TestStreamingAssistantMessageRendersMarkdown(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.chatMessages = []ChatMessage{
 		{
@@ -141,8 +159,11 @@ func TestStreamingMessageKeepsLiteralMarkdown(t *testing.T) {
 
 	lines := model.renderChatMessages(80)
 	rendered := strings.Join(lines, "\n")
-	if !strings.Contains(rendered, "**streaming**") {
-		t.Fatalf("streaming markdown should remain literal until finalized: %q", rendered)
+	if strings.Contains(rendered, "**streaming**") {
+		t.Fatalf("streaming assistant markdown should be rendered without literal markers: %q", rendered)
+	}
+	if !strings.Contains(rendered, "streaming") {
+		t.Fatalf("streaming assistant markdown text missing from rendered output: %q", rendered)
 	}
 	if !strings.Contains(rendered, "▌") {
 		t.Fatalf("streaming cursor missing: %q", rendered)

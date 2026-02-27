@@ -1174,16 +1174,18 @@ func (m Model) renderChatMessages(width int) []string {
 		// Message content — word-wrapped
 		content := strings.TrimSpace(msg.Content)
 		if content != "" {
-			if msg.Finalized {
-				rendered := strings.TrimSpace(markdownToPlain(content, width))
-				if rendered != "" {
-					lines = append(lines, strings.Split(rendered, "\n")...)
-				}
+			role := strings.ToLower(strings.TrimSpace(msg.Role))
+			var rendered string
+			if role == "assistant" || role == "interjection" {
+				rendered = strings.TrimSpace(markdownToPlain(content, width))
 			} else {
-				wrapped := wrapText(content, width)
-				for _, wl := range wrapped {
-					lines = append(lines, styleText.Render(wl))
-				}
+				rendered = strings.Join(wrapText(content, width), "\n")
+			}
+			if rendered == "" {
+				continue
+			}
+			for _, line := range strings.Split(rendered, "\n") {
+				lines = append(lines, styleText.Render(line))
 			}
 		}
 
