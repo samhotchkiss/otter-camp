@@ -1605,11 +1605,19 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 		connStyle = styleDisconnected
 	}
 
-	// EX-006: show human-readable session label instead of raw session ID
-	rawSession := strings.TrimSpace(m.State().LastActiveChatSession)
+	// EX-006: show human-readable session label for the currently active session
+	rawSession := strings.TrimSpace(m.activeSession)
 	session := m.workspace.sessionLabel(rawSession)
 	if session == "" {
-		session = "Frank"
+		// Scope-aware fallback
+		switch m.activeScope {
+		case ScopeTask:
+			session = "Task Session"
+		case ScopeProject:
+			session = "Project Session"
+		default:
+			session = "Frank"
+		}
 	}
 	sizeStr := string(layout.sizeClass)
 	focusStr := panelLabel(focus)
