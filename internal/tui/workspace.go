@@ -635,6 +635,21 @@ func (w *workspaceState) currentInboxItem() *inboxItem {
 	return &w.inbox[w.inboxCursor]
 }
 
+// openTasksForProject returns the list of non-done tasks from selectedProject.
+// Returns nil when selectedProject is not loaded.
+func (w *workspaceState) openTasksForProject() []SidebarTaskItem {
+	if w.selectedProject == nil {
+		return nil
+	}
+	var result []SidebarTaskItem
+	for _, t := range w.selectedProject.Tasks {
+		if t.WorkStatus != "done" && t.WorkStatus != "approved" && t.WorkStatus != "cancelled" {
+			result = append(result, t)
+		}
+	}
+	return result
+}
+
 func (w *workspaceState) moveProjectTaskCursor(delta int) {
 	if w.selectedProject == nil {
 		return

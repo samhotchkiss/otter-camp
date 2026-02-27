@@ -1139,6 +1139,14 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	if task.RequiresHumanReview {
 		lines = append(lines, lipgloss.NewStyle().Foreground(colWarning).Render("  a·approve  x·reject  f·defer  o·open task session"))
 	}
+	// j/k navigation hint when project context is loaded with multiple tasks.
+	var stepHint string
+	if m.workspace.selectedProjectID != "" {
+		openTasks := m.workspace.openTasksForProject()
+		if len(openTasks) >= 2 {
+			stepHint = "  j/k·next/prev task"
+		}
+	}
 	if sessionID != "" {
 		var enterHint string
 		switch task.Status {
@@ -1149,9 +1157,9 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 		default:
 			enterHint = "Enter·open session"
 		}
-		lines = append(lines, styleMuted.Render("  "+enterHint+"  "+backHint))
+		lines = append(lines, styleMuted.Render("  "+enterHint+"  "+backHint+stepHint))
 	} else {
-		lines = append(lines, styleMuted.Render("  "+backHint+"  (no session)"))
+		lines = append(lines, styleMuted.Render("  "+backHint+stepHint+"  (no session)"))
 	}
 
 	return lines
@@ -1321,7 +1329,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("< / >", "resize sidebar width"),
 		"",
 		header("Main Panel  (press 2 to focus)"),
-		key("j/k  ↑/↓", "navigate tasks in project view"),
+		key("j/k  ↑/↓", "navigate tasks in project view / next·prev task in task detail"),
 		key("g / G", "jump to top/bottom of view"),
 		key("Enter", "open task detail or inbox item"),
 		key("Esc", "back to project (from task) / dashboard"),

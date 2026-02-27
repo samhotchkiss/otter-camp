@@ -841,6 +841,31 @@ func (m *Model) handleEscapeKey() {
 	}
 }
 
+// stepTaskInProject moves projectTaskCursor by delta (±1) and opens the task
+// at the new position. A no-op (returns nil) when there is no project context
+// or the project has fewer than 2 tasks.
+func (m *Model) stepTaskInProject(delta int) tea.Cmd {
+	openTasks := m.workspace.openTasksForProject()
+	if len(openTasks) < 2 {
+		return nil
+	}
+	cursor := m.workspace.projectTaskCursor + delta
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor >= len(openTasks) {
+		cursor = len(openTasks) - 1
+	}
+	if cursor == m.workspace.projectTaskCursor {
+		return nil // already at boundary
+	}
+	m.workspace.projectTaskCursor = cursor
+	taskID := openTasks[cursor].ID
+	m.workspace.selectedTaskID = taskID
+	m.workspace.syncSidebarToTask(taskID)
+	return loadTaskDetailCmd(taskID, m.runtimeHints)
+}
+
 func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 	switch r {
 	case 'j':
@@ -859,6 +884,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				}
 				m.statusMessage = "▸ " + truncate(label, 40)
 			}
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewTask {
+			return true, m.stepTaskInProject(1)
 		}
 		return true, nil
 	case 'k':
@@ -877,6 +904,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				}
 				m.statusMessage = "▸ " + truncate(label, 40)
 			}
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewTask {
+			return true, m.stepTaskInProject(-1)
 		}
 		return true, nil
 	case 'h':
