@@ -79,3 +79,24 @@ func TestChatHeaderShowsAllScopeLevel(t *testing.T) {
 		t.Fatalf("org scope header regressed, missing General / Frank: %q", panel)
 	}
 }
+
+func TestInterjectionMessagesRenderWithInterjectedLabel(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.chatMessages = []ChatMessage{
+		{
+			ID:        "msg-interjection",
+			Role:      "interjection",
+			Content:   "Paused execution for policy review.",
+			Finalized: true,
+			Timestamp: time.Date(2026, time.January, 2, 15, 6, 0, 0, time.Local),
+		},
+	}
+
+	rendered := strings.Join(model.renderChatMessages(80), "\n")
+	if !strings.Contains(rendered, "(interjected)") {
+		t.Fatalf("interjection label missing from rendered output: %q", rendered)
+	}
+	if !strings.Contains(rendered, "Paused execution for policy review.") {
+		t.Fatalf("interjection content missing from rendered output: %q", rendered)
+	}
+}

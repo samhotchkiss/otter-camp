@@ -41,6 +41,7 @@ var (
 	styleUser      = lipgloss.NewStyle().Foreground(colUser).Bold(true)
 	styleAssistant = lipgloss.NewStyle().Foreground(colAssistant).Bold(true)
 	styleTool      = lipgloss.NewStyle().Foreground(colTool)
+	styleInterject = lipgloss.NewStyle().Foreground(colWarning).Bold(true).Italic(true)
 	styleUnread    = lipgloss.NewStyle().Foreground(colUnread).Bold(true)
 
 	styleConnected    = lipgloss.NewStyle().Foreground(colConnected).Bold(true)
@@ -1115,6 +1116,9 @@ func (m Model) renderChatMessages(width int) []string {
 		case "assistant":
 			roleStr = styleAssistant
 			roleLabel = "Frank"
+		case "interjection":
+			roleStr = styleInterject
+			roleLabel = "Interjection (interjected)"
 		case "system":
 			roleStr = styleMuted
 			roleLabel = "System"

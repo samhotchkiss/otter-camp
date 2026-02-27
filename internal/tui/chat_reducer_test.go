@@ -160,6 +160,39 @@ func TestChatReducerIgnoresUnsolicitedChunkWhenNoActiveTurn(t *testing.T) {
 	}
 }
 
+func TestChatReducerHandlesInterjectionRole(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+	model.activeTurn = true
+
+	model.applyChatEnvelope(EventEnvelope{
+		Seq:        1,
+		EventID:    "evt-interjection",
+		EventType:  "chat.message.finalized",
+		OccurredAt: time.Now().UTC(),
+		OrgID:      "org-1",
+		Payload: mustJSON(t, map[string]any{
+			"message_id": "msg-interjection",
+			"role":       "interjection",
+			"content":    "Side-channel update from supervisor.",
+		}),
+	})
+
+	messages := model.ChatMessages()
+	if len(messages) != 1 {
+		t.Fatalf("message count = %d, want 1", len(messages))
+	}
+	if got := messages[0].Role; got != "interjection" {
+		t.Fatalf("message role = %q, want interjection", got)
+	}
+	if got := messages[0].Content; got != "Side-channel update from supervisor." {
+		t.Fatalf("message content = %q, want interjection content", got)
+	}
+	if !messages[0].Finalized {
+		t.Fatal("interjection message should be finalized")
+	}
+}
+
 func mustJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)
