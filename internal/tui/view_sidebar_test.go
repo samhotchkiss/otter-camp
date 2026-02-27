@@ -59,6 +59,28 @@ func TestSidebarPanelTrimsNodesBeforeInboxFooter(t *testing.T) {
 	}
 }
 
+func TestSidebarPanelShowsChatSessionCount(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.rebuildSidebar(
+		"",
+		[]SidebarChatItem{
+			{SessionID: "s1", DisplayName: "Blog Site"},
+			{SessionID: "s2", DisplayName: "API Work"},
+			{SessionID: "s3", DisplayName: "Design"},
+		},
+		nil,
+	)
+
+	panel := model.renderSidebarPanel(56, 20, false)
+	// CHATS header should show the count of non-Frank sessions.
+	if !strings.Contains(panel, "CHATS") {
+		t.Fatalf("sidebar CHATS header missing: %q", panel)
+	}
+	if !strings.Contains(panel, "(3)") {
+		t.Fatalf("sidebar CHATS count badge missing, want (3): %q", panel)
+	}
+}
+
 func TestSidebarPanelUsesIconOnlyModeAtMediumNarrowWidths(t *testing.T) {
 	model := NewModel(DefaultState())
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 30})

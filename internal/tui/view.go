@@ -367,8 +367,15 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 		}
 		label = node.Label
 		if sectionID == sectionChats {
-			if count := m.workspace.chatSessionCount(); count > 0 {
-				label += fmt.Sprintf(" (%d)", count)
+			chatCount := 0
+			for _, id := range m.workspace.topLevel {
+				n := m.workspace.nodes[id]
+				if n != nil && n.Kind == sidebarKindSession && n.ID != generalSidebarNodeID {
+					chatCount++
+				}
+			}
+			if chatCount > 0 {
+				label += fmt.Sprintf(" (%d)", chatCount)
 			}
 			if unread := m.workspace.totalUnreadSessions(); unread > 0 {
 				label += fmt.Sprintf("  +%d unread", unread)
@@ -430,8 +437,10 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 
 	// Right-align relative time for top-level session nodes
 	var timeSuffix string
+	timeSuffixW := 0
 	if node.Kind == sidebarKindSession && node.ParentID == "" && !node.UpdatedAt.IsZero() {
 		timeSuffix = " " + styleSubtle.Render(relativeTime(node.UpdatedAt))
+		timeSuffixW = lipgloss.Width(timeSuffix)
 	}
 
 	line := prefix + label
@@ -445,19 +454,24 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 			rendered = styleBold.Render(truncate(line, width-2))
 		}
 	default:
+		// Reserve space for time suffix so it doesn't overflow to the next line
+		maxW := width - 2 - timeSuffixW
+		if maxW < 4 {
+			maxW = 4
+		}
 		switch {
 		case cursor && isActive:
 			// show ✓ check to distinguish active+cursor from cursor-only
 			check := " " + styleConnected.Render("✓")
-			rendered = styleSelected.Render(truncate(line, width-4)) + check
+			rendered = styleSelected.Render(truncate(line, maxW-2)) + check
 		case cursor:
-			rendered = styleSelected.Render(truncate(line, width-2))
+			rendered = styleSelected.Render(truncate(line, maxW))
 		case isActive:
 			// Always show ✓ for the active session so it's visible at a glance
 			check := " " + styleConnected.Render("✓")
-			rendered = styleActive.Render(truncate(line, width-4)) + check
+			rendered = styleActive.Render(truncate(line, maxW-2)) + check
 		default:
-			rendered = styleText.Render(truncate(line, width-2))
+			rendered = styleText.Render(truncate(line, maxW))
 		}
 	}
 
