@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -24,6 +25,12 @@ type layoutState struct {
 	focusOrder  []Panel
 	hiddenHints string
 }
+
+const (
+	minPanelProportion      = 0.10
+	maxPanelProportion      = 0.70
+	panelProportionTolerance = 0.02
+)
 
 func resolveSizeClass(width, height int) SizeClass {
 	w, h := normalizeDimensions(width, height)
@@ -67,7 +74,9 @@ func computeLayout(width, height int, focus Panel, sidebarVisible bool, proporti
 	}
 
 	visible := [3]bool{}
-	weights := proportions
+	weights := [3]float64{}
+	defaults := DefaultState().PanelProportions
+	useCustom := validPanelProportions(proportions)
 	switch class {
 	case SizeXS:
 		visible[focus] = true
@@ -76,17 +85,27 @@ func computeLayout(width, height int, focus Panel, sidebarVisible bool, proporti
 		if focus == SidebarPanel || sidebarVisible {
 			visible[SidebarPanel] = true
 			visible[ChatPanel] = true
-			weights = [3]float64{0.40, 0, 0.60}
+			if useCustom {
+				weights = [3]float64{proportions[0], 0, proportions[2]}
+			} else {
+				weights = [3]float64{0.40, 0, 0.60}
+			}
 		} else {
 			visible[MainPanel] = true
 			visible[ChatPanel] = true
-			weights = [3]float64{0, 0.58, 0.42}
+			if useCustom {
+				weights = [3]float64{0, proportions[1], proportions[2]}
+			} else {
+				weights = [3]float64{0, 0.58, 0.42}
+			}
 		}
 	case SizeM:
 		visible[SidebarPanel] = true
 		visible[MainPanel] = true
 		visible[ChatPanel] = true
-		if w < 120 {
+		if useCustom {
+			weights = proportions
+		} else if w < 120 {
 			weights = [3]float64{0.12, 0.50, 0.38}
 		} else {
 			weights = [3]float64{0.18, 0.46, 0.36}
@@ -95,11 +114,20 @@ func computeLayout(width, height int, focus Panel, sidebarVisible bool, proporti
 		visible[SidebarPanel] = true
 		visible[MainPanel] = true
 		visible[ChatPanel] = true
-		weights = [3]float64{0.2, 0.4, 0.4}
+		if useCustom {
+			weights = proportions
+		} else {
+			weights = [3]float64{0.2, 0.4, 0.4}
+		}
 	default:
 		visible[MainPanel] = true
 		visible[ChatPanel] = true
 		weights = [3]float64{0, 0.6, 0.4}
+	}
+	if !useCustom && class != SizeXS {
+		if weights == [3]float64{} {
+			weights = defaults
+		}
 	}
 
 	layout := layoutState{
@@ -112,6 +140,41 @@ func computeLayout(width, height int, focus Panel, sidebarVisible bool, proporti
 	}
 	layout.focusOrder = focusOrderForLayout(layout, sidebarVisible)
 	return layout
+}
+
+func validPanelProportions(proportions [3]float64) bool {
+	sum := 0.0
+	for _, proportion := range proportions {
+		if proportion < minPanelProportion || proportion > maxPanelProportion {
+			return false
+		}
+		sum += proportion
+	}
+	return math.Abs(sum-1.0) <= panelProportionTolerance
+}
+
+func clampProportion(value float64) float64 {
+	if value < minPanelProportion {
+		return minPanelProportion
+	}
+	if value > maxPanelProportion {
+		return maxPanelProportion
+	}
+	return value
+}
+
+func minFloat(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func focusOrderForLayout(layout layoutState, sidebarVisible bool) []Panel {

@@ -57,6 +57,7 @@ const (
 	keypressLatencyBudget  = 100 * time.Millisecond
 	sseRenderLatencyBudget = 250 * time.Millisecond
 	chatScrollStepLines    = 8
+	panelResizeStep        = 0.02
 )
 
 type TUIPerformanceMetrics struct {
@@ -350,22 +351,31 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.switchScope(cycleScope(m.activeScope, true))
 				return m, nil
 			}
-				if r == '/' && (m.focus == SidebarPanel || m.focus == MainPanel) {
-					m.enterSearchMode(m.focus)
+			if (r == '<' || r == '>') && (m.focus != ChatPanel || strings.TrimSpace(m.chatInput) == "") {
+				delta := panelResizeStep
+				if r == '<' {
+					delta = -panelResizeStep
+				}
+				if m.resizeFocusedPanel(delta) {
 					return m, nil
 				}
-				if m.focus == ChatPanel && strings.TrimSpace(m.chatInput) == "" {
-					if r == 'g' {
-						m.scrollChatBy(1 << 20)
-						m.statusMessage = "Chat scrolled to oldest."
-						return m, nil
-					}
-					if r == 'G' {
-						m.chatScrollOffset = 0
-						m.statusMessage = "Chat scrolled to latest."
-						return m, nil
-					}
+			}
+			if r == '/' && (m.focus == SidebarPanel || m.focus == MainPanel) {
+				m.enterSearchMode(m.focus)
+				return m, nil
+			}
+			if m.focus == ChatPanel && strings.TrimSpace(m.chatInput) == "" {
+				if r == 'g' {
+					m.scrollChatBy(1 << 20)
+					m.statusMessage = "Chat scrolled to oldest."
+					return m, nil
 				}
+				if r == 'G' {
+					m.chatScrollOffset = 0
+					m.statusMessage = "Chat scrolled to latest."
+					return m, nil
+				}
+			}
 			if m.focus == ChatPanel {
 				m.handleChatRunes(key)
 				return m, nil
@@ -1451,6 +1461,57 @@ func (m *Model) toggleSidebar() {
 	m.focus = SidebarPanel
 	m.applyResponsiveLayout()
 	m.statusMessage = "Sidebar shown."
+}
+
+func (m *Model) resizeFocusedPanel(delta float64) bool {
+	index := -1
+	label := ""
+	switch m.focus {
+	case SidebarPanel:
+		index = 0
+		label = "Sidebar"
+	case ChatPanel:
+		index = 2
+		label = "Chat"
+	default:
+		return false
+	}
+
+	proportions := m.state.PanelProportions
+	if !validPanelProportions(proportions) {
+		proportions = DefaultState().PanelProportions
+	}
+
+	otherIndex := 2
+	if index == 2 {
+		otherIndex = 0
+	}
+	other := proportions[otherIndex]
+
+	minTarget := maxFloat(minPanelProportion, 1-other-maxPanelProportion)
+	maxTarget := minFloat(maxPanelProportion, 1-other-minPanelProportion)
+	if minTarget > maxTarget {
+		return false
+	}
+
+	target := proportions[index] + delta
+	if target < minTarget {
+		target = minTarget
+	}
+	if target > maxTarget {
+		target = maxTarget
+	}
+	target = clampProportion(target)
+	main := clampProportion(1 - other - target)
+
+	updated := proportions
+	updated[index] = target
+	updated[1] = main
+	updated[otherIndex] = other
+	m.state.PanelProportions = updated
+	m.applyResponsiveLayout()
+	m.statusMessage = fmt.Sprintf("%s width %.0f%%", label, target*100)
+	return true
 }
 
 func (m *Model) enterCommandMode() {

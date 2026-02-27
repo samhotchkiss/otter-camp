@@ -175,3 +175,39 @@ func TestLayoutSsizeSidebarFocusShowsChatPane(t *testing.T) {
 		})
 	}
 }
+
+func TestComputeLayoutUsesCustomProportionsWhenValid(t *testing.T) {
+	proportions := [3]float64{0.30, 0.50, 0.20}
+	layout := computeLayout(160, 34, MainPanel, false, proportions)
+
+	if layout.sizeClass != SizeL {
+		t.Fatalf("size class = %s, want %s", layout.sizeClass, SizeL)
+	}
+	if got := layout.widths[SidebarPanel]; got != 48 {
+		t.Fatalf("sidebar width = %d, want 48", got)
+	}
+	if got := layout.widths[MainPanel]; got != 80 {
+		t.Fatalf("main width = %d, want 80", got)
+	}
+	if got := layout.widths[ChatPanel]; got != 32 {
+		t.Fatalf("chat width = %d, want 32", got)
+	}
+}
+
+func TestComputeLayoutFallsBackToDefaultsWhenProportionsInvalid(t *testing.T) {
+	invalid := [3]float64{0.05, 0.80, 0.15}
+	layout := computeLayout(160, 34, MainPanel, false, invalid)
+
+	if layout.sizeClass != SizeL {
+		t.Fatalf("size class = %s, want %s", layout.sizeClass, SizeL)
+	}
+	if got := layout.widths[SidebarPanel]; got != 32 {
+		t.Fatalf("sidebar width = %d, want 32", got)
+	}
+	if got := layout.widths[MainPanel]; got != 64 {
+		t.Fatalf("main width = %d, want 64", got)
+	}
+	if got := layout.widths[ChatPanel]; got != 64 {
+		t.Fatalf("chat width = %d, want 64", got)
+	}
+}
