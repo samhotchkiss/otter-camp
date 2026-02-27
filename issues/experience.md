@@ -2612,6 +2612,51 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-168---
+
+## EX-168: `:sidebar select` command didn't reload chat history
+
+**Observation:** `executeSidebarCommand` handled `:sidebar select` by calling `m.workspace.selectSidebarNode()` and updating `m.activeSession`, but never called `loadChatHistoryCmd`. Using the command palette to jump to a session left the chat panel showing the previous session's messages under the new session's header. The keyboard shortcut (Enter) correctly reloaded history, but the command equivalent did not.
+
+**Improvement:** Changed `executeSidebarCommand` return type from `void` to `tea.Cmd`. The `"select"/"open"` case now mirrors the `handleEnterKey` `sidebarKindSession` path: clears `chatMessages`, sets `chatHistoryLoading = true`, and returns `loadChatHistoryCmd`. Updated `executeCommand` to use `return m.executeSidebarCommand(...)`.
+
+**Why it matters:** The command palette is the preferred input path in tmux environments where modifier keys are unreliable. If `:sidebar select` shows stale messages, tmux users see a broken experience every time they navigate sessions.
+
+**Effort:** Low (function signature change + history reload block)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-169---
+
+## EX-169: Inbox open via 'o' key and Enter key didn't reload chat history
+
+**Observation:** In `handleWorkspaceRune` case `'o'` and in `handleEnterKey` for `ViewInbox`, `applyInboxAction("open")` sets `w.activeSessionID` to the task's session UUID, which is then copied to `m.activeSession`. But neither path cleared `chatMessages` or called `loadChatHistoryCmd`. After pressing 'o' or Enter to open an inbox item, the chat panel header would already show the task name (from the updated `activeSession`) while the message list still showed the previous session's conversation. Users reviewing a task with pending approval would see the wrong chat history.
+
+**Improvement:** After `m.activeSession = m.workspace.activeSessionID`, if the session ID looks like a UUID and `LoadChatHistory` is configured, clear `chatMessages`, set `chatHistoryLoading = true`, and return `loadChatHistoryCmd`. Applied in both `handleWorkspaceRune` (`'o'` key) and `handleEnterKey` (`ViewInbox`).
+
+**Why it matters:** The inbox is the primary review interface — approving or rejecting a task should naturally show that task's conversation. Showing stale messages from a previous session while reviewing is confusing and could lead to incorrect approval/rejection.
+
+**Effort:** Trivial (two locations, identical pattern)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-170---
+
+## EX-170: `:inbox` and `:agents` commands didn't load fresh data
+
+**Observation:** In `executeCommand`, the catch-all case for view commands (`dashboard`, `project`, `task`, `inbox`, `activity`, `agents`, `merges`, `schedules`) called `m.workspace.setMainView(view)` without triggering any data fetch. This was inconsistent with the keyboard shortcuts: `'i'` switches to the inbox view AND calls `loadInboxItemsCmd`, but `:inbox` just switched the view. If the inbox hadn't been loaded yet (e.g. fresh session, no sidebar click), `:inbox` would show an empty list with no indication that data was missing.
+
+**Improvement:** Added a `switch view` block after `setMainView`: `ViewInbox` triggers `loadInboxItemsCmd`, `ViewAgents` triggers `loadAgentsCmd`. Other views (project/task/dashboard) don't need this because they are populated by sidebar selection + task detail loads.
+
+**Why it matters:** In tmux environments, `:inbox` is the safest way to navigate to the inbox. If it shows an empty list when data hasn't been loaded, users may think there are no items and miss reviews waiting for them.
+
+**Effort:** Trivial (four lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
 ---EX-167---
 
 ## EX-167: `chat.session.closed` for the active session set no feedback

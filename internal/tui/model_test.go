@@ -3400,3 +3400,171 @@ func TestSessionClosedSetsStatusMessage(t *testing.T) {
 		t.Fatal("chat.session.closed should add 'session closed' entry to activity log")
 	}
 }
+
+// EX-168: :sidebar select command should reload chat history after switching session.
+func TestSidebarSelectCommandReloadsChatHistory(t *testing.T) {
+	t.Parallel()
+	sessionID := "00000000-0000-0000-0000-000000000168"
+	loaded := false
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, id string) ([]ChatMessage, error) {
+			if id == sessionID {
+				loaded = true
+			}
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	if model.workspace.nodes == nil {
+		model.workspace.nodes = make(map[string]*sidebarNode)
+	}
+	nodeID := "session-" + sessionID
+	model.workspace.nodes[nodeID] = &sidebarNode{
+		ID:        nodeID,
+		Kind:      sidebarKindSession,
+		SessionID: sessionID,
+		Label:     "Test Session",
+	}
+	model.workspace.topLevel = append([]string{nodeID}, model.workspace.topLevel...)
+	model.workspace.sidebarCursor = 0
+
+	cmd := model.executeCommand(":sidebar select")
+	if cmd == nil {
+		t.Fatal(":sidebar select should return a non-nil cmd (history reload)")
+	}
+	if model.activeSession != sessionID {
+		t.Fatalf(":sidebar select should set activeSession to %q, got %q", sessionID, model.activeSession)
+	}
+	runNonTimerCmds(cmd)
+	if !loaded {
+		t.Fatal(":sidebar select did not call LoadChatHistory (EX-168 regression)")
+	}
+}
+
+// EX-169: inbox open via 'o' key should reload chat history for the task session.
+func TestInboxOpenKeyReloadsChatHistory(t *testing.T) {
+	t.Parallel()
+	sessionID := "00000000-0000-0000-0000-000000000169"
+	loaded := false
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.runtimeHints.LoadChatHistory = func(_ context.Context, id string) ([]ChatMessage, error) {
+		if id == sessionID {
+			loaded = true
+		}
+		return nil, nil
+	}
+	// Seed a task with a session
+	if model.workspace.tasks == nil {
+		model.workspace.tasks = make(map[string]*taskRecord)
+	}
+	taskID := "task-inbox-169"
+	model.workspace.tasks[taskID] = &taskRecord{
+		ID:        taskID,
+		Title:     "Inbox task",
+		SessionID: sessionID,
+	}
+	model.workspace.taskSessionIDs = map[string]string{taskID: sessionID}
+	// Seed an inbox item
+	model.workspace.inbox = []inboxItem{{ID: "inbox-169", TaskID: taskID, Summary: "Review needed"}}
+	model.workspace.inboxCursor = 0
+	model.workspace.mainView = ViewInbox
+	model.focus = MainPanel
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	m := updated.(Model)
+	if cmd == nil {
+		t.Fatal("'o' inbox open should return a non-nil cmd (history reload)")
+	}
+	if m.activeSession != sessionID {
+		t.Fatalf("'o' inbox open should set activeSession to %q, got %q", sessionID, m.activeSession)
+	}
+	runNonTimerCmds(cmd)
+	if !loaded {
+		t.Fatal("'o' inbox open did not call LoadChatHistory (EX-169 regression)")
+	}
+}
+
+// EX-169: inbox open via Enter key should reload chat history for the task session.
+func TestInboxEnterKeyReloadsChatHistory(t *testing.T) {
+	t.Parallel()
+	sessionID := "00000000-0000-0000-0000-00000000169e"
+	loaded := false
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.runtimeHints.LoadChatHistory = func(_ context.Context, id string) ([]ChatMessage, error) {
+		if id == sessionID {
+			loaded = true
+		}
+		return nil, nil
+	}
+	if model.workspace.tasks == nil {
+		model.workspace.tasks = make(map[string]*taskRecord)
+	}
+	taskID := "task-inbox-169e"
+	model.workspace.tasks[taskID] = &taskRecord{
+		ID:        taskID,
+		Title:     "Inbox task enter",
+		SessionID: sessionID,
+	}
+	model.workspace.taskSessionIDs = map[string]string{taskID: sessionID}
+	model.workspace.inbox = []inboxItem{{ID: "inbox-169e", TaskID: taskID, Summary: "Review needed"}}
+	model.workspace.inboxCursor = 0
+	model.workspace.mainView = ViewInbox
+	model.focus = MainPanel
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m := updated.(Model)
+	if cmd == nil {
+		t.Fatal("Enter inbox open should return a non-nil cmd (history reload)")
+	}
+	if m.activeSession != sessionID {
+		t.Fatalf("Enter inbox open should set activeSession to %q, got %q", sessionID, m.activeSession)
+	}
+	runNonTimerCmds(cmd)
+	if !loaded {
+		t.Fatal("Enter inbox open did not call LoadChatHistory (EX-169 regression)")
+	}
+}
+
+// EX-170: :inbox command should trigger data load (consistent with 'i' key).
+func TestInboxCommandLoadsData(t *testing.T) {
+	t.Parallel()
+	loaded := false
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadInboxItems: func(_ context.Context) ([]InboxSummaryItem, error) {
+			loaded = true
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	cmd := model.executeCommand(":inbox")
+	if cmd == nil {
+		t.Fatal(":inbox command should return a non-nil cmd (inbox data load)")
+	}
+	runNonTimerCmds(cmd)
+	if !loaded {
+		t.Fatal(":inbox command did not call LoadInboxItems (EX-170 regression)")
+	}
+}
+
+// EX-170: :agents command should trigger data load (consistent with ViewAgents refresh).
+func TestAgentsCommandLoadsData(t *testing.T) {
+	t.Parallel()
+	loaded := false
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadAgents: func(_ context.Context) ([]string, error) {
+			loaded = true
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	cmd := model.executeCommand(":agents")
+	if cmd == nil {
+		t.Fatal(":agents command should return a non-nil cmd (agents data load)")
+	}
+	runNonTimerCmds(cmd)
+	if !loaded {
+		t.Fatal(":agents command did not call LoadAgents (EX-170 regression)")
+	}
+}

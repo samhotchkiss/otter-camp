@@ -827,6 +827,16 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				m.state.LastActiveChatSession = m.workspace.activeSessionID
 				m.activeSession = m.workspace.activeSessionID
 				m.statusMessage = "Opened inbox item in context."
+				// EX-169: reload chat history for the task session being opened so the
+				// chat panel shows the task's conversation, not the previous session's.
+				sessionID := m.workspace.activeSessionID
+				if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
+					m.chatMessages = nil
+					m.chatHistoryLoading = true
+					m.chatMessageIndex = make(map[string]int)
+					m.chatScrollOffset = 0
+					return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+				}
 				return nil
 			}
 		}
@@ -1226,6 +1236,16 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.state.LastActiveChatSession = m.workspace.activeSessionID
 			m.activeSession = m.workspace.activeSessionID
 			m.statusMessage = "Opened inbox item in context."
+			// EX-169: reload chat history for the task session being opened so the
+			// chat panel shows the task's conversation, not the previous session's.
+			sessionID := m.workspace.activeSessionID
+			if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
+				m.chatMessages = nil
+				m.chatHistoryLoading = true
+				m.chatMessageIndex = make(map[string]int)
+				m.chatScrollOffset = 0
+				return true, loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+			}
 			return true, nil
 		}
 	}
@@ -1557,7 +1577,8 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 			m.statusMessage = "Unknown queue action. Use edit, steer, or delete."
 		}
 	case "sidebar":
-		m.executeSidebarCommand(fields[1:])
+		// EX-168: executeSidebarCommand now returns a cmd (e.g. history reload on select).
+		return m.executeSidebarCommand(fields[1:])
 	case "dashboard", "project", "task", "inbox", "activity", "agents", "merges", "schedules":
 		view, ok := resolveMainViewCommand(fields[0])
 		if !ok {
@@ -1566,6 +1587,14 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		}
 		m.workspace.setMainView(view)
 		m.statusMessage = "Main view: " + string(view)
+		// EX-170: load data for views that need a fresh fetch (consistent with
+		// keyboard shortcut behaviour: 'i' loads inbox, ViewAgents loads agents).
+		switch view {
+		case ViewInbox:
+			return loadInboxItemsCmd(m.runtimeHints)
+		case ViewAgents:
+			return loadAgentsCmd(m.runtimeHints)
+		}
 	default:
 		m.statusMessage = "Unknown command: " + fields[0]
 	}
@@ -2345,10 +2374,10 @@ func (m *Model) enterCommandMode() {
 	m.statusMessage = "Command mode"
 }
 
-func (m *Model) executeSidebarCommand(args []string) {
+func (m *Model) executeSidebarCommand(args []string) tea.Cmd {
 	if len(args) != 1 {
 		m.statusMessage = "Usage: :sidebar up|down|home|end|expand|collapse|select"
-		return
+		return nil
 	}
 	m.setFocus(SidebarPanel)
 	switch strings.ToLower(args[0]) {
@@ -2375,9 +2404,20 @@ func (m *Model) executeSidebarCommand(args []string) {
 		m.state.LastActiveChatSession = m.workspace.activeSessionID
 		m.activeSession = m.workspace.activeSessionID
 		m.statusMessage = "Sidebar selection applied."
+		// EX-168: reload history so the chat panel shows the newly-selected session,
+		// not the previous session (mirrors the Enter-key path in handleEnterKey).
+		sessionID := m.workspace.activeSessionID
+		if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
+			m.chatMessages = nil
+			m.chatHistoryLoading = true
+			m.chatMessageIndex = make(map[string]int)
+			m.chatScrollOffset = 0
+			return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+		}
 	default:
 		m.statusMessage = "Unknown sidebar action. Use up, down, home, end, expand, collapse, or select."
 	}
+	return nil
 }
 
 // executeInboxCommand handles :inbox <action> commands. Returns a tea.Cmd
