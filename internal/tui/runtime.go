@@ -18,6 +18,7 @@ type SidebarChatItem struct {
 	SessionID   string
 	DisplayName string
 	UpdatedAt   time.Time
+	ScopeType   string // "organization", "project", "project_task"
 }
 
 // SidebarProjectItem represents a project for the sidebar.

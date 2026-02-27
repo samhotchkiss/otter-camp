@@ -60,6 +60,7 @@ type sidebarNode struct {
 	Expanded   bool
 	Unread     int
 	SessionID  string
+	SessionScope string // "organization", "project", "project_task" for session nodes
 	TaskID     string
 	TaskNumber int
 	ProjectID  string
@@ -707,10 +708,11 @@ func (w *workspaceState) rebuildSidebar(orgSessionID string, chats []SidebarChat
 		}
 		id := "chat-" + chat.SessionID
 		newNodes[id] = &sidebarNode{
-			ID:        id,
-			Label:     chat.DisplayName,
-			Kind:      sidebarKindSession,
-			SessionID: chat.SessionID,
+			ID:           id,
+			Label:        chat.DisplayName,
+			Kind:         sidebarKindSession,
+			SessionID:    chat.SessionID,
+			SessionScope: chat.ScopeType,
 		}
 		newTopLevel = append(newTopLevel, id)
 	}

@@ -176,6 +176,7 @@ func runTUICommand(args []string) int {
 						SessionID:   s.ID.String(),
 						DisplayName: name,
 						UpdatedAt:   updatedAt,
+						ScopeType:   strings.ToLower(s.ScopeType),
 					})
 					if len(out) >= 4 {
 						break

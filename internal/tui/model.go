@@ -605,8 +605,15 @@ func (m *Model) handleEnterKey() tea.Cmd {
 		if node != nil {
 			switch node.Kind {
 			case sidebarKindSession:
-				// Sidebar CHATS sessions are org-scope; update scope indicator accordingly
-				m.activeScope = ScopeOrg
+				// Set scope based on the session's scope type
+				switch node.SessionScope {
+				case "project_task":
+					m.activeScope = ScopeTask
+				case "project":
+					m.activeScope = ScopeProject
+				default:
+					m.activeScope = ScopeOrg
+				}
 				// Reload chat history for the newly selected session
 				if m.runtimeHints.LoadChatHistory != nil {
 					m.chatMessages = nil
