@@ -58,3 +58,24 @@ func TestChatPanelKeepsInputVisibleWithLongHistory(t *testing.T) {
 		t.Fatalf("chat input cursor missing from panel: %q", panel)
 	}
 }
+
+func TestChatHeaderShowsAllScopeLevel(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.switchScope(ScopeTask)
+
+	panel := model.renderChatPanel(80, 20, true)
+	for _, token := range []string{"[task]", "[project]", "[org]"} {
+		if !strings.Contains(panel, token) {
+			t.Fatalf("chat header missing scope token %q: %q", token, panel)
+		}
+	}
+	if strings.Contains(panel, "session-task-current") {
+		t.Fatalf("chat header should not show raw task scope session id: %q", panel)
+	}
+
+	model.switchScope(ScopeOrg)
+	panel = model.renderChatPanel(80, 20, true)
+	if !strings.Contains(panel, "General / Frank") {
+		t.Fatalf("org scope header regressed, missing General / Frank: %q", panel)
+	}
+}

@@ -216,12 +216,33 @@ func (w *workspaceState) currentSidebarNode() *sidebarNode {
 // sessionLabel returns the human-readable label for a session ID by looking
 // up the matching sidebar node. Falls back to the raw session ID.
 func (w *workspaceState) sessionLabel(sessionID string) string {
+	trimmed := strings.TrimSpace(sessionID)
+	if trimmed == "" {
+		return ""
+	}
 	for _, node := range w.nodes {
-		if node.Kind == sidebarKindSession && node.SessionID == sessionID {
+		if node.Kind == sidebarKindSession && node.SessionID == trimmed {
 			return node.Label
 		}
 	}
-	return sessionID
+	if taskTitle := w.taskTitleForScopeSession(trimmed); taskTitle != "" {
+		return taskTitle
+	}
+	return trimmed
+}
+
+func (w *workspaceState) taskTitleForScopeSession(sessionID string) string {
+	if !strings.HasPrefix(sessionID, "session-task-") {
+		return ""
+	}
+	taskID := strings.TrimPrefix(sessionID, "session-task-")
+	if taskID == "current" {
+		taskID = w.selectedTaskID
+	}
+	if task, ok := w.tasks[taskID]; ok {
+		return strings.TrimSpace(task.Title)
+	}
+	return ""
 }
 
 func (w *workspaceState) moveSidebar(delta int) {

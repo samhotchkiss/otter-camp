@@ -1,7 +1,7 @@
 ### M board
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
 ╭──────────────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────╮
-│ DASHBOARD                                                            ││ General / Frank  ·  org                      │
+│ DASHBOARD                                                            ││ General / Frank  ·  [task] [project] [org]   │
 │ ──────────────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────── │
 │                                                                      ││                                              │
 │ Task Board                                                           ││               no messages yet                │
@@ -33,7 +33,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 ### M chat
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
 ╭──────────────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────╮
-│ DASHBOARD                                                            ││ General / Frank  ·  org                      │
+│ DASHBOARD                                                            ││ General / Frank  ·  [task] [project] [org]   │
 │ ──────────────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────── │
 │                                                                      ││                                              │
 │ Task Board                                                           ││               no messages yet                │
@@ -65,7 +65,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 ### M inbox
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
 ╭──────────────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────╮
-│ DASHBOARD                                                            ││ General / Frank  ·  org                      │
+│ DASHBOARD                                                            ││ General / Frank  ·  [task] [project] [org]   │
 │ ──────────────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────── │
 │                                                                      ││                                              │
 │ Task Board                                                           ││               no messages yet                │
