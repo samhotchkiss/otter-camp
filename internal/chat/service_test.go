@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
@@ -182,6 +183,123 @@ func TestUpdateMessageStatusFailedPersistsErrorMessage(t *testing.T) {
 	}
 	if gotErrorMessage != failureMessage {
 		t.Fatalf("update error message = %q, want %q", gotErrorMessage, failureMessage)
+	}
+}
+
+func TestRedactMessageAllowsSessionOwner(t *testing.T) {
+	messageID := uuid.New()
+	sessionID := uuid.New()
+	orgID := uuid.New()
+	ownerID := uuid.New()
+	authorID := uuid.New()
+	authorType := "human_user"
+	redactCalls := 0
+
+	svc := newUnitService(t, unitDeps{
+		sessions: &fakeSessionRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+				if id != sessionID {
+					t.Fatalf("unexpected session id %s", id)
+				}
+				return repo.ChatSession{
+					ID:             sessionID,
+					OrganizationID: orgID,
+					CreatedByType:  "human_user",
+					CreatedByID:    ownerID,
+				}, nil
+			},
+		},
+		messages: &fakeMessageRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.ChatMessage, error) {
+				if id != messageID {
+					t.Fatalf("unexpected message id %s", id)
+				}
+				return repo.ChatMessage{
+					ID:         messageID,
+					SessionID:  sessionID,
+					Status:     "final",
+					AuthorType: &authorType,
+					AuthorID:   &authorID,
+				}, nil
+			},
+			redactFn: func(_ context.Context, id uuid.UUID) (repo.ChatMessage, error) {
+				redactCalls++
+				if id != messageID {
+					t.Fatalf("unexpected redaction message id %s", id)
+				}
+				return repo.ChatMessage{ID: id, SessionID: sessionID, Status: "redacted", IsRedacted: true}, nil
+			},
+		},
+	})
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{
+		UserID:         ownerID,
+		OrganizationID: orgID,
+		Role:           "member",
+	})
+	if err := svc.RedactMessage(ctx, messageID); err != nil {
+		t.Fatalf("RedactMessage error = %v, want nil", err)
+	}
+	if redactCalls != 1 {
+		t.Fatalf("redact calls = %d, want 1", redactCalls)
+	}
+}
+
+func TestRedactMessageRejectsNonOwnerNonAuthor(t *testing.T) {
+	messageID := uuid.New()
+	sessionID := uuid.New()
+	orgID := uuid.New()
+	ownerID := uuid.New()
+	authorID := uuid.New()
+	callerID := uuid.New()
+	authorType := "human_user"
+	redactCalls := 0
+
+	svc := newUnitService(t, unitDeps{
+		sessions: &fakeSessionRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+				if id != sessionID {
+					t.Fatalf("unexpected session id %s", id)
+				}
+				return repo.ChatSession{
+					ID:             sessionID,
+					OrganizationID: orgID,
+					CreatedByType:  "human_user",
+					CreatedByID:    ownerID,
+				}, nil
+			},
+		},
+		messages: &fakeMessageRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.ChatMessage, error) {
+				if id != messageID {
+					t.Fatalf("unexpected message id %s", id)
+				}
+				return repo.ChatMessage{
+					ID:         messageID,
+					SessionID:  sessionID,
+					Status:     "final",
+					AuthorType: &authorType,
+					AuthorID:   &authorID,
+				}, nil
+			},
+			redactFn: func(_ context.Context, id uuid.UUID) (repo.ChatMessage, error) {
+				redactCalls++
+				return repo.ChatMessage{ID: id}, nil
+			},
+		},
+	})
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{
+		UserID:         callerID,
+		OrganizationID: orgID,
+		Role:           "member",
+	})
+	err := svc.RedactMessage(ctx, messageID)
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("RedactMessage error = %v, want ErrForbidden", err)
+	}
+	if redactCalls != 0 {
+		t.Fatalf("redact calls = %d, want 0", redactCalls)
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 const (
 	chatDefaultListLimit = 50
 	chatMaxListLimit     = 200
+	chatRedactedContent  = "[redacted]"
 )
 
 type chatSessionRepository interface {
@@ -73,6 +74,7 @@ func (r *ChatRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/messages/{mid}", r.handlers.getMessage)
 	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions/{id}/messages", r.handlers.appendMessage)
 	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Patch("/chat-sessions/{id}/messages/{mid}", r.handlers.editQueuedMessage)
+	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Delete("/chat-sessions/{id}/messages/{mid}", r.handlers.redactMessage)
 	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/turns", r.handlers.listTurns)
 
 	router.With(middleware.RequireAnyScope(requireWriteScope("chat")...)).Post("/chat-sessions/{id}/cancel-turn", r.handlers.cancelTurn)
@@ -743,6 +745,49 @@ func (h chatHandlers) editQueuedMessage(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := h.service.EditQueuedMessage(r.Context(), messageID, strings.TrimSpace(req.Content)); err != nil {
+		h.respondChatError(responder, w, err)
+		return
+	}
+
+	updated, err := h.service.GetMessage(r.Context(), messageID)
+	if err != nil {
+		h.respondChatError(responder, w, err)
+		return
+	}
+
+	responder.JSON(w, http.StatusOK, toChatMessageResponse(updated))
+}
+
+func (h chatHandlers) redactMessage(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if _, ok := h.requirePrincipal(w, r); !ok {
+		return
+	}
+	if h.service == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "chat service unavailable")
+		return
+	}
+
+	sessionID, ok := parseChatPathUUID(responder, w, r, "id", "invalid session id")
+	if !ok {
+		return
+	}
+	messageID, ok := parseChatPathUUID(responder, w, r, "mid", "invalid message id")
+	if !ok {
+		return
+	}
+
+	message, err := h.service.GetMessage(r.Context(), messageID)
+	if err != nil {
+		h.respondChatError(responder, w, err)
+		return
+	}
+	if message.SessionID != sessionID {
+		responder.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+		return
+	}
+
+	if err := h.service.RedactMessage(r.Context(), messageID); err != nil {
 		h.respondChatError(responder, w, err)
 		return
 	}
@@ -1658,6 +1703,10 @@ func toChatMessageResponse(model *chat.ChatMessage) chatMessageRecord {
 	if model == nil {
 		return chatMessageRecord{}
 	}
+	content := model.Content
+	if model.IsRedacted && strings.TrimSpace(content) == "" {
+		content = chatRedactedContent
+	}
 	return chatMessageRecord{
 		ID:             model.ID,
 		SessionID:      model.SessionID,
@@ -1666,7 +1715,7 @@ func toChatMessageResponse(model *chat.ChatMessage) chatMessageRecord {
 		AuthorType:     model.AuthorType,
 		AuthorID:       model.AuthorID,
 		Role:           model.Role,
-		Content:        model.Content,
+		Content:        content,
 		ContentFormat:  model.ContentFormat,
 		Status:         model.Status,
 		IsRedacted:     model.IsRedacted,

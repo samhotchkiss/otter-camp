@@ -106,6 +106,91 @@ func TestChatHTTPMessageSendAndList(t *testing.T) {
 	}
 }
 
+func TestChatHTTPMessageRedactionAndPermissions(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, memberUser := newChatTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	memberToken := loginToken(t, testServer.URL, memberUser.Email, "member-password")
+	sessionID := createChatSessionForTest(t, testServer.URL, adminToken)
+
+	memberMessage := mustJSON(t, http.MethodPost, testServer.URL+"/v1/chat-sessions/"+sessionID+"/messages", map[string]any{
+		"content": "member-authored content",
+		"role":    "assistant",
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if memberMessage.StatusCode != http.StatusAccepted {
+		t.Fatalf("append member message status = %d, want %d body=%s", memberMessage.StatusCode, http.StatusAccepted, string(memberMessage.Body))
+	}
+	memberMessageID := jsonPathString(t, memberMessage.Body, "data", "id")
+
+	adminMessage := mustJSON(t, http.MethodPost, testServer.URL+"/v1/chat-sessions/"+sessionID+"/messages", map[string]any{
+		"content": "admin-authored content",
+		"role":    "assistant",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if adminMessage.StatusCode != http.StatusAccepted {
+		t.Fatalf("append admin message status = %d, want %d body=%s", adminMessage.StatusCode, http.StatusAccepted, string(adminMessage.Body))
+	}
+	adminMessageID := jsonPathString(t, adminMessage.Body, "data", "id")
+
+	ownerRedact := mustJSON(t, http.MethodDelete, testServer.URL+"/v1/chat-sessions/"+sessionID+"/messages/"+memberMessageID, nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if ownerRedact.StatusCode != http.StatusOK {
+		t.Fatalf("owner redact status = %d, want %d body=%s", ownerRedact.StatusCode, http.StatusOK, string(ownerRedact.Body))
+	}
+	if got := jsonPathValue(t, ownerRedact.Body, "data", "is_redacted"); got != true {
+		t.Fatalf("owner redact is_redacted = %v, want true body=%s", got, string(ownerRedact.Body))
+	}
+	if got := jsonPathString(t, ownerRedact.Body, "data", "content"); got != "[redacted]" {
+		t.Fatalf("owner redact content = %q, want %q body=%s", got, "[redacted]", string(ownerRedact.Body))
+	}
+
+	getRedacted := mustJSON(t, http.MethodGet, testServer.URL+"/v1/chat-sessions/"+sessionID+"/messages/"+memberMessageID, nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if getRedacted.StatusCode != http.StatusOK {
+		t.Fatalf("get redacted message status = %d, want %d body=%s", getRedacted.StatusCode, http.StatusOK, string(getRedacted.Body))
+	}
+	if got := jsonPathValue(t, getRedacted.Body, "data", "is_redacted"); got != true {
+		t.Fatalf("get redacted is_redacted = %v, want true body=%s", got, string(getRedacted.Body))
+	}
+	if got := jsonPathString(t, getRedacted.Body, "data", "content"); got != "[redacted]" {
+		t.Fatalf("get redacted content = %q, want %q body=%s", got, "[redacted]", string(getRedacted.Body))
+	}
+
+	listed := mustJSON(t, http.MethodGet, testServer.URL+"/v1/chat-sessions/"+sessionID+"/messages", nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if listed.StatusCode != http.StatusOK {
+		t.Fatalf("list messages status = %d, want %d body=%s", listed.StatusCode, http.StatusOK, string(listed.Body))
+	}
+	items, ok := jsonPathValue(t, listed.Body, "data").([]any)
+	if !ok {
+		t.Fatalf("list messages data shape = %T, want []any body=%s", jsonPathValue(t, listed.Body, "data"), string(listed.Body))
+	}
+	foundRedacted := false
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if item["id"] != memberMessageID {
+			continue
+		}
+		foundRedacted = true
+		if item["is_redacted"] != true {
+			t.Fatalf("listed is_redacted = %v, want true body=%s", item["is_redacted"], string(listed.Body))
+		}
+		if item["content"] != "[redacted]" {
+			t.Fatalf("listed content = %v, want %q body=%s", item["content"], "[redacted]", string(listed.Body))
+		}
+	}
+	if !foundRedacted {
+		t.Fatalf("redacted message %s missing from list body=%s", memberMessageID, string(listed.Body))
+	}
+
+	forbidden := mustJSON(t, http.MethodDelete, testServer.URL+"/v1/chat-sessions/"+sessionID+"/messages/"+adminMessageID, nil, map[string]string{"Authorization": "Bearer " + memberToken})
+	if forbidden.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-owner/non-author redact status = %d, want %d body=%s", forbidden.StatusCode, http.StatusForbidden, string(forbidden.Body))
+	}
+}
+
 func TestChatHTTPReactionLifecycle(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 
