@@ -111,6 +111,29 @@ func runTUICommand(args []string) int {
 					if s.Title != nil {
 						name = strings.TrimSpace(*s.Title)
 					}
+					// Resolve a descriptive name from the scope object
+					if name == "" && s.ScopeID != uuid.Nil {
+						switch strings.ToLower(s.ScopeType) {
+						case "project_task":
+							var taskResp struct {
+								Data struct {
+									Title string `json:"title"`
+								} `json:"data"`
+							}
+							if apiClient.request(ctx, "GET", "/v1/tasks/"+s.ScopeID.String(), nil, &taskResp) == nil {
+								name = strings.TrimSpace(taskResp.Data.Title)
+							}
+						case "project":
+							var projResp struct {
+								Data struct {
+									DisplayName string `json:"display_name"`
+								} `json:"data"`
+							}
+							if apiClient.request(ctx, "GET", "/v1/projects/"+s.ScopeID.String(), nil, &projResp) == nil {
+								name = strings.TrimSpace(projResp.Data.DisplayName)
+							}
+						}
+					}
 					if name == "" {
 						name = s.ScopeType + " session"
 					}
