@@ -689,6 +689,35 @@ func TestEnterOnTaskDetailOpensAsyncSession(t *testing.T) {
 	}
 }
 
+func TestModelStateReturnsLastMainView(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.setMainView(ViewInbox)
+
+	if got := model.State().LastMainView; got != "inbox" {
+		t.Fatalf("state last_main_view = %q, want %q", got, "inbox")
+	}
+}
+
+func TestNewModelWithRuntimeRestoresLastMainView(t *testing.T) {
+	state := DefaultState()
+	state.LastMainView = "agents"
+
+	model := NewModelWithRuntime(state, RuntimeHints{})
+	if got := model.MainView(); got != ViewAgents {
+		t.Fatalf("main view on restore = %s, want %s", got, ViewAgents)
+	}
+}
+
+func TestNewModelWithRuntimeDefaultsToDashboardWhenLastMainViewUnknown(t *testing.T) {
+	state := DefaultState()
+	state.LastMainView = "unknown-view"
+
+	model := NewModelWithRuntime(state, RuntimeHints{})
+	if got := model.MainView(); got != ViewDashboard {
+		t.Fatalf("main view for unknown persisted value = %s, want %s", got, ViewDashboard)
+	}
+}
+
 func TestFormatTaskStatus(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"todo", "Todo"},

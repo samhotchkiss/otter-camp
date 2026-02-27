@@ -44,6 +44,7 @@ func TestStateRoundTrip(t *testing.T) {
 	path := filepath.Join(dir, "state.json")
 	original := UIState{
 		LastActiveView:        "chat",
+		LastMainView:          "inbox",
 		LastActiveChatSession: "session-123",
 		PanelProportions:      [3]float64{0.2, 0.5, 0.3},
 		SidebarVisible:        false,
@@ -59,6 +60,9 @@ func TestStateRoundTrip(t *testing.T) {
 	}
 	if loaded.LastActiveView != original.LastActiveView {
 		t.Fatalf("LastActiveView = %q, want %q", loaded.LastActiveView, original.LastActiveView)
+	}
+	if loaded.LastMainView != original.LastMainView {
+		t.Fatalf("LastMainView = %q, want %q", loaded.LastMainView, original.LastMainView)
 	}
 	if loaded.LastActiveChatSession != original.LastActiveChatSession {
 		t.Fatalf("LastActiveChatSession = %q, want %q", loaded.LastActiveChatSession, original.LastActiveChatSession)
