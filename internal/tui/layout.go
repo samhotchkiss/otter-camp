@@ -58,13 +58,6 @@ func computeLayout(width, height int, focus Panel, sidebarVisible bool, proporti
 	class := resolveSizeClass(w, h)
 	contentWidth := w
 	gutter := 0
-	if class == SizeXL {
-		maxContentWidth := 180
-		if contentWidth > maxContentWidth {
-			contentWidth = maxContentWidth
-			gutter = (w - maxContentWidth) / 2
-		}
-	}
 
 	visible := [3]bool{}
 	weights := proportions
@@ -95,7 +88,7 @@ func computeLayout(width, height int, focus Panel, sidebarVisible bool, proporti
 		visible[SidebarPanel] = true
 		visible[MainPanel] = true
 		visible[ChatPanel] = true
-		weights = [3]float64{0.2, 0.4, 0.4}
+		weights = [3]float64{0.18, 0.50, 0.32}
 	default:
 		visible[MainPanel] = true
 		visible[ChatPanel] = true

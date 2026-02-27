@@ -819,9 +819,51 @@ func (s *service) AppendMessage(ctx context.Context, input AppendMessageInput) (
 		}); err != nil {
 			return nil, err
 		}
+		if err := s.publishEvent(ctx, session.OrganizationID, "chat.message.finalized", actorType, actorID, map[string]any{
+			"session_id": session.ID,
+			"message_id": message.ID,
+			"role":       "user",
+			"content":    message.Content,
+		}); err != nil {
+			return nil, err
+		}
+		go s.monitorTurnResponse(session.OrganizationID, session.ID, message.CreatedAt)
 	}
 
 	return message, nil
+}
+
+func (s *service) monitorTurnResponse(orgID, sessionID uuid.UUID, msgAt time.Time) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	time.Sleep(20 * time.Second)
+
+	var hasResponse bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM chat_message
+		  WHERE session_id=$1 AND role='assistant' AND created_at>$2)`,
+		sessionID, msgAt,
+	).Scan(&hasResponse); err != nil || hasResponse {
+		return
+	}
+
+	var jobPending bool
+	_ = s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM job_queue
+		  WHERE job_type='agent_turn' AND status='pending'
+		    AND payload->>'session_id'=$1)`,
+		sessionID.String(),
+	).Scan(&jobPending)
+
+	msg := "Worker appears offline — check that `ottercamp worker` is running."
+	if jobPending {
+		msg = "Worker appears offline — job queued but not processing. Run: ottercamp worker"
+	}
+
+	_ = s.publishEvent(ctx, orgID, "worker.unresponsive", "system", nil, map[string]any{
+		"session_id": sessionID,
+		"message":    msg,
+	})
 }
 
 func (s *service) UpdateMessageStatus(ctx context.Context, messageID uuid.UUID, newStatus, errorMsg string) error {

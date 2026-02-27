@@ -31,7 +31,7 @@ const (
 	defaultSkillsDir             = "./skills"
 	defaultMemoryBudgetTokens    = 8000
 	defaultLayer6BudgetTokens    = 12000
-	defaultLayer7BudgetTokens    = 5000
+	defaultLayer7BudgetTokens    = 12000
 	defaultLayer4BudgetTokens    = 2000
 	defaultLayer3BudgetTokens    = 500
 	defaultContextWindowTokens   = 16384
@@ -564,7 +564,11 @@ func (a *PromptAssembler) buildLayer2(ctx context.Context, session repo.ChatSess
 	if v := readTrustTier(session.Metadata); strings.TrimSpace(v) != "" {
 		trustTier = v
 	}
-	lines := []string{"## Policies and Constraints", "Trust tier: " + trustTier + "."}
+	lines := []string{
+		"## Policies and Constraints",
+		"Trust tier: " + trustTier + ".",
+		"You have access to OtterCamp native tools. When the user asks you to perform an action — create a project, assign a task, manage workflows, send a message, etc. — USE your available tools to do it. Do not tell the user to do it themselves or say you cannot do it through this interface.",
+	}
 
 	if a.policies == nil {
 		return strings.Join(lines, "\n")

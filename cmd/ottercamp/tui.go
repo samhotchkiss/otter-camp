@@ -175,6 +175,44 @@ func runTUICommand(args []string) int {
 				}
 				return out, nil
 			}
+			runtimeHints.LoadProjectDetail = func(ctx context.Context, projectID string) (*tuiapp.ProjectDetail, error) {
+				var proj struct {
+					ID           string `json:"id"`
+					DisplayName  string `json:"display_name"`
+					Description  string `json:"description"`
+					DeliveryMode string `json:"delivery_mode"`
+				}
+				if err := apiClient.request(ctx, "GET", "/v1/projects/"+url.PathEscape(projectID), nil, &proj); err != nil {
+					return nil, err
+				}
+				var tasksResp struct {
+					Data []struct {
+						ID         string `json:"id"`
+						Title      string `json:"title"`
+						WorkStatus string `json:"work_status"`
+					} `json:"data"`
+				}
+				path := "/v1/projects/" + url.PathEscape(projectID) + "/tasks?limit=20"
+				_ = apiClient.request(ctx, "GET", path, nil, &tasksResp)
+				tasks := make([]tuiapp.SidebarTaskItem, 0, len(tasksResp.Data))
+				for _, t := range tasksResp.Data {
+					if t.WorkStatus == "done" || t.WorkStatus == "approved" || t.WorkStatus == "cancelled" {
+						continue
+					}
+					tasks = append(tasks, tuiapp.SidebarTaskItem{
+						ID:         t.ID,
+						Title:      t.Title,
+						WorkStatus: t.WorkStatus,
+					})
+				}
+				return &tuiapp.ProjectDetail{
+					ID:           proj.ID,
+					DisplayName:  proj.DisplayName,
+					Description:  proj.Description,
+					DeliveryMode: proj.DeliveryMode,
+					Tasks:        tasks,
+				}, nil
+			}
 			runtimeHints.SendChatMessage = func(ctx context.Context, sessionID, content string) error {
 				resolvedID, resolveErr := resolveTUIChatSessionID(ctx, apiClient, sessionID)
 				if resolveErr != nil {

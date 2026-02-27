@@ -30,6 +30,9 @@ const (
 	realtimeTypingTTL         = 15 * time.Second
 	realtimeHeartbeatInterval = 15 * time.Second
 	realtimeReplayBatchSize   = 500
+	// freshReplayWindow caps how many events are replayed on a fresh connect
+	// (last-event-id=0) to avoid flooding the TUI with full event history.
+	freshReplayWindow = 150
 )
 
 type RealtimeRouteOptions struct {
@@ -391,6 +394,18 @@ func (h *realtimeHub) loadReplayEvents(ctx context.Context, orgID uuid.UUID, las
 	}
 	events := make([]eventbus.DomainEvent, 0)
 	cursor := lastEventID
+	// For fresh TUI connects, only replay the most recent events to avoid
+	// flooding the chat pane with full event history.
+	if lastEventID == 0 {
+		var maxSeq int64
+		_ = h.pool.QueryRow(ctx,
+			`SELECT COALESCE(MAX(seq), 0) FROM domain_event WHERE organization_id = $1`,
+			orgID,
+		).Scan(&maxSeq)
+		if start := maxSeq - freshReplayWindow; start > 0 {
+			cursor = start
+		}
+	}
 	for {
 		rows, err := h.pool.Query(ctx, `
 			SELECT id, organization_id, seq, event_type, actor_type, actor_id, payload, created_at

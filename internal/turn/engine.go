@@ -1183,6 +1183,12 @@ func (e *TurnEngine) callMainModel(
 		if _, err := e.messages.UpdateContent(ctx, assistant.ID, content); err != nil {
 			return ModelResponse{}, err
 		}
+		_ = e.publishEvent(ctx, rt.session.OrganizationID, "chat.message.finalized", "agent", &rt.agent.ID, map[string]any{
+			"session_id": rt.session.ID,
+			"message_id": assistant.ID,
+			"role":       "assistant",
+			"content":    content,
+		})
 
 		usage := response.Usage
 		if usage == nil {

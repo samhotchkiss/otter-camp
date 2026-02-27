@@ -2,6 +2,60 @@
 
 Use this file to track blockers, follow-ups, and handoff notes.
 
+## [2026-02-27] Issue 182 — APPROVED and COMPLETED
+
+**Task:** 182-usage-rollup-404
+**Reviewed by:** Claude Sonnet 4.5 (reviewer agent)
+**PR:** #1561 (`task/182-usage-rollup-404-r2`) merged into v2 at 2026-02-27T02:05:41Z (commit 32c8fe92)
+**Result:** ACCEPTED
+
+### Summary
+Implements the missing `GET /v1/model/usage-rollup` endpoint. All 3 acceptance criteria met:
+- Route registered at `GET /model/usage-rollup` ✓
+- `group_by` validated to: `agent`, `project`, `model_provider`, `period`; `period` param required ✓
+- Non-period group_bys reuse `queryUsageRows` (queries `model_usage_rollup` by rollup_type); `period` uses new `queryUsagePeriodRows` (groups by `rollup_date`) ✓
+- `total_cost_microcents` field present in all responses ✓
+- Unit test updated (route check); integration tests cover `group_by=agent` and `group_by=period` happy paths ✓
+- Lint failures are pre-existing on v2 (not introduced by this PR); branch is unprotected, PR was MERGEABLE ✓
+
+---
+
+## [2026-02-27] Issue 174 — CHANGES REQUIRED → moved to 01-ready
+
+**Task:** 174-audit-missing-events-and-fields
+**Reviewed by:** Claude Sonnet 4.5 (reviewer agent)
+**PR:** #1554 (`task/174-audit-events-fields`) — NOT merged
+**Result:** CHANGES REQUIRED (P0: TUI regressions from tasks 172 and 173)
+
+### Summary
+The audit implementation itself is solid and meets all 7 acceptance criteria:
+- `auth.login` / `auth.logout` events emitted from login/logout handlers with ip+outcome ✓
+- `api_key.created` / `api_key.deleted` events emitted from issue/revoke handlers ✓
+- `agent.created` / `agent.updated` / `agent.deleted` emitted from create/update/transition handlers ✓
+- `user.role_changed` emitted from new `PATCH /v1/admin/users/{id}/role` endpoint ✓
+- `ip` and `outcome` fields added to `audit.Event` and `repo.AuditEvent` structs; stored in metadata JSON ✓
+- Existing audit response types (`auditEventResponse`, `auditEventListResponse`) updated to expose ip/outcome ✓
+- Comprehensive unit tests (`TestLoginRecordsAuditEventWithIPAndOutcome`, `TestAPIKeyIssueAndRevokeRecordAuditEvents`, etc.) and integration tests added ✓
+
+### Blockers (P0)
+The branch contains 9 files of out-of-scope TUI changes that revert completed tasks:
+
+**Task 173 regressions** — interjection role support removed:
+- `internal/tui/chat.go`: `normalizeRole` drops `"interjection"` case
+- `internal/tui/view.go`: removes `styleInterject` + `case "interjection"` from `renderChatMessages`
+- `internal/tui/chat_reducer_test.go`: deletes `TestChatReducerHandlesInterjectionRole`
+- `internal/tui/view_chat_test.go`: deletes `TestInterjectionMessagesRenderWithInterjectedLabel`
+
+**Task 172 regressions** — layout thresholds/sidebar features removed:
+- `internal/tui/layout.go`: reverts XS threshold from `w < 80` back to `w <= 69`; changes SizeM from always-3-pane to sidebar-conditional
+- `internal/tui/model.go`: removes `toggleSidebar()` and `s` keybinding
+- `internal/tui/view.go`: removes `sidebarIconOnlyMode()`, `compactSidebarLabel()`, sidebar toggle help entry
+- `internal/tui/model_test.go` + `layout_test.go` + `view_sidebar_test.go`: deletes sidebar/layout tests
+
+**Required action:** Strip all TUI changes from the branch (revert the 9 TUI files to v2 tip), keeping only the audit-related changes. CI lint failures (46 errors) are all pre-existing on v2 and not introduced by this PR.
+
+---
+
 ## [2026-02-27] Issue 167 — APPROVED and COMPLETED
 
 **Task:** 167-tool-call-expand-collapse-and-results
@@ -9193,3 +9247,492 @@ No merge conflicts. Interface compliance assert (`var _ taskQueueRunStarter = (*
   - `go test ./internal/tui -run 'TestMarkdownRenderedInChatMessages|TestNormalizeRenderedMarkdownRemovesInlineCodeBackticks|TestStreamingMessageKeepsLiteralMarkdown'` (pass)
   - `go vet ./internal/tui/...` (pass)
   - `go test ./internal/tui` (fails on pre-existing `TestLayoutGoldenSnapshots/S` golden mismatch unrelated to markdown fallback changes)
+
+## 2026-02-27 - 171-g-G-top-bottom-not-implemented.md (review rework)
+- Fixes applied:
+  - Resolved reviewer-required gosimple S1029 lint issue in `internal/tui/view.go` `fuzzyMatch` by changing rune iteration from `for _, r := range []rune(candidate)` to `for _, r := range candidate`.
+  - No behavior change to fuzzy matching logic; subsequence matching remains intact.
+- Tests run:
+  - `go test ./internal/tui -run TestCommandPaletteShowsFuzzySuggestions` (pass)
+  - `go vet ./internal/tui/...` (pass)
+
+## 2026-02-27 - 174-audit-missing-events-and-fields.md (review rework)
+- Fixes applied:
+  - Resolved reviewer-required P0 regressions by restoring these files to `origin/v2` exactly:
+    - `internal/tui/chat.go`
+    - `internal/tui/view.go`
+    - `internal/tui/chat_reducer_test.go`
+    - `internal/tui/view_chat_test.go`
+    - `internal/tui/layout.go`
+    - `internal/tui/layout_test.go`
+    - `internal/tui/model.go`
+    - `internal/tui/model_test.go`
+    - `internal/tui/view_sidebar_test.go`
+  - Confirmed required tests are present again:
+    - `TestChatReducerHandlesInterjectionRole`
+    - `TestInterjectionMessagesRenderWithInterjectedLabel`
+    - `TestResolveSizeClassBoundaries`
+    - `TestSidebarToggleKeybindingAtSSize`
+    - `TestHelpViewDocumentsSidebarToggleKeybinding`
+    - `TestSidebarPanelUsesIconOnlyModeAtMediumNarrowWidths`
+  - Removed top-level `## Reviewer Required Changes` block from task file.
+- Tests run:
+  - `go test ./internal/tui -run 'Test(ChatReducerHandlesInterjectionRole|InterjectionMessagesRenderWithInterjectedLabel|ResolveSizeClassBoundaries|SidebarToggleKeybindingAtSSize|HelpViewDocumentsSidebarToggleKeybinding|SidebarPanelUsesIconOnlyModeAtMediumNarrowWidths)$'` (pass)
+  - `go test ./internal/audit ./internal/repo ./internal/server` (pass)
+  - `go test -tags integration ./internal/audit -run TestServiceRecordInsertsAndReturnsFKViolation` (pass)
+  - `go test -tags integration ./internal/repo -run TestAuditEventRepoInsertConstraintsAndFilters` (pass)
+  - `go test -tags integration ./internal/server -run 'TestAuthHTTPLoginMeLogoutAndExpiredSession|TestAuthHTTPAPIKeyLifecycleAndAdminRevoke|TestAuthHTTPAdminRoleChangeRecordsAudit|TestAgentHTTPAuditEventsCreateUpdateRetire'` (pass)
+
+## 2026-02-27 - Reviewer session (Claude Sonnet 4.5) — batch review
+
+### Task 174 — APPROVED and MERGED (PR #1554 → v2)
+- Audit events for auth.login, auth.logout, api_key.created, api_key.deleted, agent.created, agent.updated, agent.deleted, user.role_changed are now emitted.
+- IP and Outcome fields added to AuditEvent struct and stored in metadata JSON column.
+- New PATCH /v1/admin/users/{id}/role endpoint registered.
+- All acceptance criteria met. Unit + integration tests present.
+- Lint CI failure is pre-existing in v2 (fmt.Fscan unchecked, unused funcs) — not introduced by this PR.
+- Merged at 2026-02-27T01:13:20Z.
+
+### Task 166 — BLOCKED: merge conflict — moved to 01-ready
+- PR #1546 (task/166-markdown-rendered-chat) cannot merge cleanly into v2.
+- Implementation is correct: Glamour rendering wired into finalized messages, tests pass locally.
+- Branch was forked before tasks 172/173 were merged to v2. Conflicting TUI files: chat.go, view.go, model.go, layout.go, workspace.go.
+- Required action: Rebase branch onto current v2, resolve conflicts, re-open PR.
+- Required changes block added to task file.
+
+### Task 171 — BLOCKED: merge conflict — moved to 01-ready
+- PR #1551 (task/171-g-G-navigation-command-search) cannot merge cleanly into v2.
+- Implementation is correct: chat-panel g/G works, fuzzy command palette works.
+- Branch was forked before tasks 172/173 merged. Same file conflicts as task 166.
+- Required action: Rebase onto current v2, resolve conflicts, re-open PR.
+- Required changes block added to task file.
+
+### Tasks 175, 176, 177, 178, 180, 181, 182 — BLOCKED: no PR found — moved to 01-ready
+- All seven tasks were stuck in 04-in-review with no open PR on the samhotchkiss/otter-camp repo.
+- Tasks: message-redaction-405, cancel-turn-and-archive-session, chat-session-export-404, project-agents-endpoint-404, auth-logout-empty-body-change-password-404, trace-spans-endpoint-404, usage-rollup-404.
+- These tasks need to be implemented and a PR opened targeting v2 before review can proceed.
+
+## 2026-02-27 - 166-markdown-not-rendered-glamour-dead-code.md (review rework pass 2)
+- Fixes applied:
+  - Rebasing: rebased `task/166-markdown-rendered-chat` onto `origin/v2` and resolved the `internal/tui/view_chat_test.go` conflict while preserving markdown-rendering behavior and current `v2` TUI behavior.
+  - Markdown rendering: preserved finalized-message Glamour rendering path in `internal/tui/view.go` and fallback normalization/helpers in `internal/tui/chat.go`.
+  - Tests: preserved/merged markdown coverage in `internal/tui/view_chat_test.go` (`TestMarkdownRenderedInChatMessages`, `TestStreamingMessageKeepsLiteralMarkdown`, `TestNormalizeRenderedMarkdownRemovesInlineCodeBackticks`) and current interjection coverage.
+  - Golden snapshots: regenerated `internal/tui/testdata/layout_{xs,s,m,l,xl}.golden` to match current `v2` sidebar-toggle help text behavior so `internal/tui` package tests pass.
+  - Queue hygiene: removed top-level `## Reviewer Required Changes` block from task file after completing all required items.
+- Tests run:
+  - `go test ./internal/tui -run 'TestMarkdownRenderedInChatMessages|TestStreamingMessageKeepsLiteralMarkdown|TestNormalizeRenderedMarkdownRemovesInlineCodeBackticks|TestInterjectionMessagesRenderWithInterjectedLabel'` (pass)
+  - `UPDATE_GOLDEN=1 go test ./internal/tui -run TestLayoutGoldenSnapshots` (pass; updates golden files)
+  - `go test ./internal/tui/...` (pass)
+  - `go test ./...` (pass)
+  - `go build ./cmd/ottercamp` (pass)
+
+## 2026-02-27 - 171-g-G-top-bottom-not-implemented.md (review rework pass 2)
+- Fixes applied:
+  - Rebasing: rebased `task/171-g-G-navigation-command-search` onto `origin/v2` and resolved merge conflict in `internal/tui/model.go` while preserving both current `v2` search-mode handling and task logic.
+  - Preserved reviewer-required behavior:
+    - g/G chat jump handling in `internal/tui/model.go` for top/bottom navigation.
+    - command palette fuzzy suggestions in `internal/tui/view.go` (`commandPaletteSuggestions`/`fuzzyMatch`).
+    - coverage in `internal/tui/model_test.go` including `TestGGJumpTopBottomAcrossPanels` and `TestCommandPaletteShowsFuzzySuggestions`.
+  - Golden snapshots: regenerated `internal/tui/testdata/layout_{xs,s,m,l,xl}.golden` to match current `v2` sidebar-toggle help text behavior so `internal/tui` package tests pass.
+  - Queue hygiene: removed top-level `## Reviewer Required Changes` block from the task file.
+- Tests run:
+  - `go test ./internal/tui -run 'TestGGJumpTopBottomAcrossPanels|TestCommandPaletteShowsFuzzySuggestions'` (pass)
+  - `UPDATE_GOLDEN=1 go test ./internal/tui -run TestLayoutGoldenSnapshots` (pass; updates golden files)
+  - `go test ./internal/tui/...` (pass)
+  - `go test ./...` (pass)
+  - `go build ./cmd/ottercamp` (pass)
+
+## [2026-02-27] Task 166 — APPROVED → merged to v2 → 05-completed
+
+**Task:** 166-markdown-not-rendered-glamour-dead-code
+**Reviewed by:** Claude Sonnet 4.7 (reviewer agent)
+**PR:** #1546 (`task/166-markdown-rendered-chat`) — MERGED to v2 at 2026-02-27T01:22:07Z
+**Result:** APPROVED
+
+### Summary
+Implementation fully resolves the dead-code issue. `markdownToPlain()` is now called from `renderChatMessages()` for finalized messages; streaming messages continue to use plain `wrapText()` to avoid partial-markdown jitter. New helpers `containsLiteralMarkdownMarkers()` and `normalizeRenderedMarkdown()` post-process Glamour output to strip residual markers. Style changed from `"notty"` to `"auto"` for better terminal compatibility.
+
+All acceptance criteria met:
+- Bold, headings, bullet lists, inline code render via Glamour on finalized messages ✓
+- Streaming path unchanged (no regression) ✓
+- `markdownToPlain()` is no longer dead code ✓
+- `TestMarkdownRenderedInChatMessages`, `TestStreamingMessageKeepsLiteralMarkdown`, `TestNormalizeRenderedMarkdownRemovesInlineCodeBackticks` added ✓
+
+CI lint failure is pre-existing (repo-wide `revive` stutter warnings and `errcheck` on `fmt.Fscan`); no new issues introduced by this PR. PR state was MERGEABLE/UNSTABLE (non-blocking), merge succeeded.
+
+## [2026-02-27] Task 171 — APPROVED → merged to v2 → 05-completed
+
+**Task:** 171-g-G-top-bottom-not-implemented
+**Reviewed by:** Claude Sonnet 4.7 (reviewer agent)
+**PR:** #1551 (`task/171-g-G-navigation-command-search`) — MERGED to v2 at 2026-02-27T01:24:51Z
+**Result:** APPROVED
+
+### Summary
+All three acceptance criteria met:
+
+- **g/G sidebar:** `sidebarHome()`/`sidebarEnd()` in `workspace.go` set cursor to 0/last ✓
+- **g/G main panel (inbox):** `inboxHome()`/`inboxEnd()` set cursor to 0/last ✓
+- **g/G chat viewport:** `scrollChatBy(1<<20)` / `chatScrollOffset=0` for top/bottom ✓; guarded by `TrimSpace(chatInput)==""` so it doesn't fire during typing ✓
+- **Fuzzy command palette:** `fuzzyMatch()` (substring + char-by-char) + `commandPaletteSuggestions()` aggregates commands, sessions, projects, tasks; rendered below command input while in command mode ✓
+
+Tests: `TestGGJumpTopBottomAcrossPanels` covers all three panels; `TestCommandPaletteShowsFuzzySuggestions` covers task fuzzy matching. Task file has no explicit Required Tests section.
+
+CI lint failure is the same pre-existing repo-wide issue (revive stutter + errcheck); PR was MERGEABLE/UNSTABLE, merge succeeded.
+
+## 2026-02-27 - 175-message-redaction-405.md
+- Fixes applied:
+  - Added `DELETE /v1/chat-sessions/{id}/messages/{mid}` route registration in `internal/server/chat_handlers.go`.
+  - Implemented `chatHandlers.redactMessage` to:
+    - validate session/message path IDs,
+    - enforce same-session membership check,
+    - call `chat.Service.RedactMessage`,
+    - return the updated message payload.
+  - Added redacted content placeholder mapping in API responses: redacted messages with empty stored content now serialize as `"[redacted]"`.
+  - Tightened redaction authorization in `internal/chat/service.go` to match task scope: allow only session owner or message author.
+  - Added/updated tests:
+    - Unit route/handler tests in `internal/server/chat_handlers_test.go`.
+    - Unit redaction authorization tests in `internal/chat/service_test.go`.
+    - Integration endpoint/permission coverage in `internal/server/chat_integration_test.go`.
+- Tests run:
+  - `go test ./internal/server -run 'TestChatRoutesRegistered|TestRedactMessage'` (pass)
+  - `go test ./internal/chat -run 'TestRedactMessage'` (pass)
+  - `go test -tags integration ./internal/server -run TestChatHTTPMessageRedactionAndPermissions` (pass)
+  - `go test ./internal/server ./internal/chat` (pass)
+
+## [2026-02-27] Task 175 — APPROVED → merged to v2 → 05-completed
+
+**Task:** 175-message-redaction-405
+**Reviewed by:** Claude Sonnet 4.7 (reviewer agent)
+**PR:** #1555 (`task/175-message-redaction-405-r2`) — MERGED to v2 at 2026-02-27T01:29:06Z
+**Result:** APPROVED
+
+### Summary
+All four acceptance criteria met:
+
+- **Route registered:** `DELETE /v1/chat-sessions/{id}/messages/{mid}` added in `internal/server/chat_handlers.go` (line 77) ✓
+- **Returns 200 on success:** Handler returns 200 with updated message payload ✓
+- **Redacted message shows `is_redacted: true` in subsequent GET:** Integration test verifies GET and list both show `is_redacted: true` ✓
+- **Content replaced with redaction placeholder:** `"[redacted]"` returned in `toChatMessageResponse` when `IsRedacted && content == ""` ✓
+- **Non-owners/non-authors get 403:** Service enforces `isSessionOwner || isAuthor`; returns `ErrForbidden` mapped to 403 ✓
+
+Tests:
+- Unit (handler): `TestRedactMessageRedactsAndReturnsUpdatedMessage`, `TestRedactMessageForbidden` in `chat_handlers_test.go` ✓
+- Unit (service auth): `TestRedactMessageAllowsSessionOwner`, `TestRedactMessageRejectsNonOwnerNonAuthor` in `chat/service_test.go` ✓
+- Integration: `TestChatHTTPMessageRedactionAndPermissions` in `chat_integration_test.go` ✓
+
+Lint failure is pre-existing repo-wide issue (same as all recent PRs); no new violations introduced.
+
+## 2026-02-27 - 176-cancel-turn-and-archive-session.md
+- Fixes applied:
+  - Added cancel alias route registration: `POST /v1/chat-sessions/{id}/cancel` mapped to existing cancel handler (`cancel-turn` remains supported).
+  - Extended session patch payload in `internal/server/chat_handlers.go` to accept `status`.
+  - Implemented PATCH status handling for archive flow:
+    - accepts `{"status":"archived"}`,
+    - allows `active -> archived` transition (idempotent when already archived),
+    - rejects unsupported status values and invalid transitions with validation errors.
+  - Added server route/handler tests and integration coverage for:
+    - cancel alias success path,
+    - session archive via PATCH,
+    - cancel alias canceling an active in-progress turn.
+- Tests run:
+  - `go test ./internal/server -run 'TestChatRoutesRegistered|TestCancelTurnAcceptsReasonBody|TestCancelAliasAcceptsReasonBody'` (pass)
+  - `go test -tags integration ./internal/server -run 'TestChatHTTPSessionPatchSupportsArchivedStatus|TestChatHTTPCancelAliasCancelsInProgressTurn'` (pass)
+
+## 2026-02-27 - 177-chat-session-export-404.md
+- Fixes applied:
+  - Added `GET /v1/chat-sessions/{id}/export` route in `internal/server/chat_handlers.go`.
+  - Implemented `exportSession` handler with format support:
+    - default `jsonl` output (`Content-Type: application/x-ndjson`), one JSON object per line,
+    - optional `?format=json` for array output.
+  - Export includes full chat message response objects (id, role, content, metadata, timestamps, etc.) and pages through all session messages using cursor-based `ListMessages` calls.
+  - Added unit tests for route registration and both export formats, plus integration test covering end-to-end JSONL export.
+- Tests run:
+  - `go test ./internal/server -run 'TestChatRoutesRegistered|TestExportSessionJSONL|TestExportSessionJSONArray'` (pass)
+  - `go test -tags integration ./internal/server -run TestChatHTTPSessionExportJSONL` (pass)
+
+## [2026-02-27] Task 176 — APPROVED → merged to v2, moved to 05-completed
+
+**Task:** 176-cancel-turn-and-archive-session
+**Reviewed by:** Claude Sonnet 4.6 (reviewer agent)
+**PR:** #1556 (`task/176-cancel-turn-and-archive-session-r2`) — MERGED into v2
+**Result:** APPROVED
+
+**Summary:**
+- `POST /v1/chat-sessions/{id}/cancel` alias registered, routes to existing `cancelTurn` handler — AC1 met
+- `PATCH /v1/chat-sessions/{id}` with `{"status":"archived"}` supported with idempotent active→archived transition — AC2 met
+- `UpdateStatus(ctx, id, status)` method added to `chatSessionRepository` interface and `ChatSessionRepo` implementation in `internal/repo/chat.go`
+- Unit tests: `TestChatRoutesRegistered` updated, `TestCancelAliasAcceptsReasonBody` added
+- Integration tests: `TestChatHTTPSessionPatchSupportsArchivedStatus`, `TestChatHTTPCancelAliasCancelsInProgressTurn` added
+- Lint failures in CI are pre-existing on v2 (every recent v2 push fails lint); not introduced by this PR
+- Merged via `gh pr merge --merge --auto` at 2026-02-27T01:35:10Z
+
+## 2026-02-27 - 178-project-agents-endpoint-404.md
+- Fixes applied:
+  - Added project-centric agent assignment routes:
+    - `GET /v1/projects/{id}/agents`
+    - `POST /v1/projects/{id}/agents`
+    - `DELETE /v1/projects/{id}/agents/{agent_id}`
+  - Implemented handlers in `internal/server/agent_handlers.go` backed by existing assignment service and repositories.
+  - Added `ListByProject` support to the project-assignment repository interface wiring used by handlers.
+  - Added integration lifecycle coverage for assign/list/unassign via project routes and updated route-registration unit coverage.
+- Tests run:
+  - `go test ./internal/server -run TestAgentAssignmentRoutesRegistered` (pass)
+  - `go test -tags integration ./internal/server -run 'TestProjectAgentsHTTPAssignmentLifecycle|TestAgentAssignmentHTTPPMFlow'` (pass)
+
+## [2026-02-26] Task 177 — BLOCKED → returned to 01-ready
+
+**Task:** 177-chat-session-export-404
+**Reviewed by:** Claude Sonnet 4.5 (reviewer agent)
+**PR:** #1557 (`task/177-chat-session-export-404-r2`) — CONFLICTING, not merged
+**Result:** SEND BACK — merge conflict only; implementation approved
+
+### Summary
+All three acceptance criteria verified as met by the implementation:
+- `GET /v1/chat-sessions/{id}/export` registered under `requireReadScope("chat")` middleware ✓
+- Returns 200 with `Content-Type: application/x-ndjson`; each line is a valid JSON object via `toChatMessageResponse` ✓
+- Works for all session types via `GetSession` (which performs org-scoped visibility check) + `ListMessages` cursor-based pagination ✓
+- `?format=json` returns array output via `responder.JSON` ✓
+
+Tests all pass:
+- Unit: `TestChatRoutesRegistered`, `TestExportSessionJSONL`, `TestExportSessionJSONArray` — PASS
+- Integration: `TestChatHTTPSessionExportJSONL` — PASS
+
+### Blocker
+PR #1557 has merge conflicts with v2 (`mergeStateStatus: DIRTY, mergeable: CONFLICTING`). The branch was cut before PR #1556 (task 176) landed in v2. Task 176 modified the same regions of `internal/server/chat_handlers.go` (added `UpdateStatus` to interface, added `/cancel` alias route, added `Status` to patch request struct). The export feature code does not overlap with those changes, but git cannot auto-merge the file. **Action required: rebase `task/177-chat-session-export-404-r2` onto current v2 and force-push, then re-merge PR #1557.**
+
+## [2026-02-27] Task 178 — APPROVED → merged to v2 → 05-completed
+
+**Task:** 178-project-agents-endpoint-404
+**Reviewed by:** Claude Sonnet 4.6 (reviewer agent)
+**PR:** #1558 (`task/178-project-agents-endpoint-404-r2`) — MERGED to v2 at 2026-02-27T01:44:07Z
+**Result:** APPROVED
+
+### Summary
+All three acceptance criteria met:
+
+- **GET /v1/projects/{id}/agents** registered via `AgentRouteRegistrar.RegisterRoutes`; `listProjectAgents` handler backed by `AgentProjectAssignmentRepo.ListByProject` (SQL with `WHERE project_id=$1 AND is_active=true`) ✓
+- **POST /v1/projects/{id}/agents** with `agent_id` + `role`; validates active lifecycle status, delegates to existing `assignments.AssignToProject` ✓
+- **DELETE /v1/projects/{id}/agents/{agent_id}** delegates to existing `assignments.RemoveFromProject` ✓
+
+Tests:
+- Unit: `TestAgentAssignmentRoutesRegistered` updated to include all 3 new routes; `fakeProjectAssignmentRepo` extended with `ListByProject` ✓
+- Integration: `TestProjectAgentsHTTPAssignmentLifecycle` covers full assign→list→verify→delete→verify-empty lifecycle ✓
+
+Lint failure in CI is pre-existing repo-wide issue; no new violations introduced.
+
+## 2026-02-27 - 180-auth-logout-empty-body-change-password-404.md
+- Fixes applied:
+  - Updated `POST /v1/auth/logout` handler to return JSON envelope with `200 OK` (`data: null`) instead of an empty response body.
+  - Added `POST /v1/auth/change-password` route under authenticated `/v1` routes.
+  - Implemented `changePassword` handler to:
+    - validate `{current_password,new_password}` payload,
+    - verify current password against bcrypt hash,
+    - write a new bcrypt hash,
+    - revoke all active sessions for that user.
+  - Added/updated integration coverage for logout envelope expectations and change-password success/failure/login invalidation flow.
+- Tests run:
+  - `go test ./internal/server ./internal/auth` (pass)
+  - `go test -tags integration ./internal/server -run 'TestAuthHTTPLoginMeLogoutAndExpiredSession|TestAuthHTTPChangePassword'` (pass)
+  - `go test -tags integration ./internal/auth -run TestSession_Revocation` (pass)
+
+## 2026-02-27 - 177-chat-session-export-404.md (reviewer rework)
+- Fixes applied:
+  - Rebases/replays task 177 export implementation onto latest `v2` after task 176 landed changes in `internal/server/chat_handlers.go`.
+  - Resolved merge conflict in `internal/server/chat_integration_test.go` by preserving task 176 tests (`archive` + `cancel` alias) and retaining export integration coverage.
+  - Verified `chat_handlers.go` retains all required task 176 elements (`UpdateStatus`, `/cancel` alias, patch `status`) while including export endpoint implementation.
+  - Removed resolved top-level `## Reviewer Required Changes` block from the task file.
+- Tests run:
+  - `go test ./internal/server -run 'TestChatRoutesRegistered|TestExportSessionJSONL|TestExportSessionJSONArray'` (pass)
+  - `go test -tags integration ./internal/server -run TestChatHTTPSessionExportJSONL` (pass)
+
+## 2026-02-27 - Task 180: auth logout empty body + change-password 404 — APPROVED & MERGED
+
+**Task:** 180-auth-logout-empty-body-change-password-404
+**Reviewed by:** Claude Sonnet 4.7 (reviewer agent)
+**PR:** #1559 (`task/180-auth-logout-change-password-r2`) — MERGED to v2 (commit 17ea1d07)
+**Result:** APPROVED
+
+### Summary
+Both acceptance criteria met:
+- `POST /v1/auth/logout` now returns `{"data": null, "meta": {...}}` with HTTP 200 (was HTTP 204 with empty body). Change: `w.WriteHeader(http.StatusNoContent)` → `api.JSON(w, http.StatusOK, nil)`.
+- `POST /v1/auth/change-password` implemented at the expected route; verifies current password via bcrypt, updates hash, revokes all active sessions. Returns 200 on success, 400 on wrong current password.
+
+### Tests
+- Integration test `TestAuthHTTPChangePassword` covers: wrong password → 400, correct change → 200, old session invalidated, old password rejected, new password accepted.
+- Integration test `TestAuthHTTPLoginMeLogoutAndExpiredSession` updated to expect 200+JSON envelope from logout.
+- Auth integration test `TestSession_Revocation` updated to expect 200 from logout.
+
+### Notes
+- Lint CI failing on both PR branch and v2 (pre-existing unused symbols and errcheck issues unrelated to task 180). PR was merged despite failing lint as errors are not introduced by this change.
+
+## 2026-02-27 - Task 177: chat session export 404 — APPROVED & MERGED
+
+**Task:** 177-chat-session-export-404
+**Reviewed by:** Claude Sonnet 4.7 (reviewer agent)
+**PR:** #1557 (`task/177-chat-session-export-404-r2`) — MERGED to v2 (commit 923f4c49)
+**Result:** APPROVED
+
+### Summary
+All acceptance criteria met:
+- `GET /v1/chat-sessions/{id}/export` registered under read-scoped chat routes, returns `Content-Type: application/x-ndjson` with one JSON object per line.
+- Each line is a valid JSON message object (id, role, content, metadata, created_at).
+- Paginated message fetch loop handles sessions of any size; session-type-agnostic (all types supported).
+- Bonus: `?format=json` returns wrapped JSON array.
+
+### Tests
+- Unit `TestExportSessionJSONL`: verifies JSONL lines, content-type, message id/role.
+- Unit `TestExportSessionJSONArray`: verifies JSON array envelope format.
+- Unit `TestChatRoutesRegistered`: confirms route registration.
+- Integration `TestChatHTTPSessionExportJSONL`: full roundtrip — creates session, appends message, exports, verifies JSONL content.
+
+### Notes
+- Lint CI failing on PR branch and v2 — same pre-existing unused symbol and errcheck issues, not introduced by this change.
+
+## 2026-02-27 - 181-trace-spans-endpoint-404.md
+- Fixes applied:
+  - Added `GET /v1/trace/spans` via new `TraceRouteRegistrar` and `traceHandlers.listSpans`.
+  - Added org-scoped trace span query support in `repo.TraceSpanRepo.ListByOrganization` with filters:
+    - `run_id`, `task_id`, `agent_id` (from span metadata attributes)
+    - `from` and `to` RFC3339 timestamps for created-at range.
+  - Response payload includes required span context fields: `span_id`, `parent_span_id`, `operation`, `duration_ms`, `metadata`, `created_at`.
+  - Registered the trace route registrar in runtime server wiring (`cmd/ottercamp/main.go`).
+- Tests run:
+  - `go test ./internal/server -run 'TestTraceRoutesRegistered|TestListTraceSpansAppliesFiltersAndReturnsShape|TestListTraceSpansRejectsInvalidRunID'` (pass)
+  - `go test ./internal/repo` (pass)
+  - `go test ./cmd/ottercamp` (pass)
+  - `go test -tags integration ./internal/server -run TestTraceSpansHTTPListAndFilters` (pass)
+  - `go test ./internal/server` (pass)
+
+## 2026-02-27 - 182-usage-rollup-404.md
+- Fixes applied:
+  - Added `GET /v1/model/usage-rollup` route in `internal/server/model_handlers.go`.
+  - Implemented `getUsageRollup` with required period + group dimension validation.
+  - Supported `group_by` dimensions: `agent`, `project`, `model_provider`, `period`.
+  - Reused existing usage aggregation query for non-period groups; added period aggregation query that groups by `rollup_date`.
+  - Response includes token totals and `total_cost_microcents` per group.
+  - Updated model route registration unit test and model usage integration test coverage.
+- Tests run:
+  - `go test ./internal/server -run 'TestModelRoutesRegistered|TestPatchProfileVersioningCreatesSequentialCurrentVersion'` (pass)
+  - `go test -tags integration ./internal/server -run TestModelAPIUsageQueryAndOrgIsolation` (pass)
+  - `go test ./internal/server` (pass)
+
+## 2026-02-26 - Reviewer: Task 181 (181-trace-spans-endpoint-404.md) — ACCEPTED
+- PR #1560 (`task/181-trace-spans-endpoint-404-r2`) merged into v2 at 2026-02-27T01:57:49Z.
+- Implementation accepted: `GET /v1/trace/spans` endpoint implemented with run_id, task_id, agent_id, and time-range filters. All four acceptance criteria met.
+- New files: `internal/server/trace_handlers.go`, `internal/server/trace_handlers_test.go`, `internal/server/trace_integration_test.go`; extended `internal/repo/trace_span.go`.
+- JSONB attribute lookup used correctly for run_id/task_id/agent_id filters (stored in `attributes` column per OTel schema).
+- Minor P3 gaps (no blocking): agent_id, created_at, parent_span_id, and time-range filters not exercised in integration test (unit tests cover them); not blocking acceptance.
+- NOTE: Lint CI failure is pre-existing across all v2 branch commits (errcheck on `fmt.Fscan`, revive stutter warnings, unused symbols) — not introduced by this PR. v2 CI has been failing on every recent merge. Systemic issue requires separate remediation.
+
+## 2026-02-27 - 183-markdown-rendering-not-wired.md
+- Fixes applied:
+  - Updated `internal/tui/view.go` `renderChatMessages()` to apply `markdownToPlain` only for `assistant` and `interjection` roles.
+  - Kept user/system/tool message rendering as plain wrapped text (no Glamour markdown transformation).
+  - Enabled the same markdown rendering path for streaming assistant/interjection messages; preserved streaming cursor behavior.
+- Tests run:
+  - `go test ./internal/tui` (pass)
+
+## 2026-02-27 - 184-audit-events-not-emitted.md
+- Fixes applied:
+  - Added failed-login audit emission in `authHandlers.login` for invalid credentials/locked-account outcomes (`auth.login_failed`) with `ip` and `outcome=failure`.
+  - Scoped failed-login audit attribution to known users via `GetByEmailAnyOrg` lookup, recording organization and principal for existing accounts.
+  - Expanded integration coverage to assert login success principal attribution and wrong-password audit creation (`auth.login_failed`).
+  - Expanded org audit handler unit coverage to verify `ip` and `outcome` fields are present in `/v1/audit` JSON responses.
+- Tests run:
+  - `go test ./internal/server -run 'TestLoginFailureRecordsAuditEvent|TestLoginRecordsAuditEventWithIPAndOutcome|TestListAuditMapsBootstrapAction|TestAPIKeyIssueAndRevokeRecordAuditEvents'` (pass)
+  - `go test -tags integration ./internal/server -run 'TestAuthHTTPLoginMeLogoutAndExpiredSession|TestAuthHTTPWrongPasswordRecordsFailedLoginAudit|TestAuthHTTPAPIKeyLifecycleAndAdminRevoke'` (pass)
+
+## 2026-02-26 - Task 183: Markdown rendering not wired — APPROVED & MERGED
+
+**Task:** 183-markdown-rendering-not-wired
+**Reviewed by:** Claude Sonnet 4.7 (reviewer agent)
+**PR:** #1562 (`task/183-markdown-rendering-not-wired`) — MERGED to v2 (commit 08002c96)
+**Result:** APPROVED
+
+### Summary
+All acceptance criteria met:
+- `renderChatMessages()` in `internal/tui/view.go` now calls `markdownToPlain` (Glamour) for `assistant` and `interjection` role messages, fixing dead-code issue originally filed as task 166.
+- User/system/tool messages remain plain-text (`wrapText`); no Glamour applied.
+- Streaming (non-finalized) assistant/interjection messages also go through Glamour path — previous code incorrectly applied Glamour only to `msg.Finalized` messages.
+
+### Tests
+- `TestMarkdownRenderedForAssistantMessages`: verifies `**bold**`, `### Heading`, `` `code` `` not present as raw markers; text content present.
+- `TestPlainTextForUserMessages`: verifies `**bold**` preserved literally for user role.
+- `TestStreamingAssistantMessageRendersMarkdown`: verifies streaming assistant messages use Glamour (no `**` markers) and `▌` cursor retained.
+- Golden workspace snapshot tests unaffected (they use `WorkspaceRender`, not chat message rendering).
+
+### Notes
+- Lint CI failure is pre-existing across all v2 branch commits (confirmed from 5 consecutive CI runs pre-dating this PR). Not introduced by this change.
+
+## 2026-02-27 - 185-tui-subview-state-not-persisted.md
+- Fixes applied:
+  - Added `last_main_view` to `internal/tui/state.go` `UIState`, defaulting to `dashboard` and persisted in `tui-state.json`.
+  - Updated state normalization to validate persisted main views and fall back to dashboard for empty/unknown values.
+  - Updated `Model.State()` to persist the current main panel sub-view (`workspace.mainView`) into `LastMainView`.
+  - Updated `NewModelWithRuntime()` to restore `workspace.mainView` from `LastMainView` at startup.
+- Tests run:
+  - `go test ./internal/tui` (pass)
+
+## 2026-02-26 - Task 184: Audit trail missing auth/API key/agent events — APPROVED & MERGED
+
+**Task:** 184-audit-events-not-emitted
+**Reviewed by:** Claude Sonnet 4.7 (reviewer agent)
+**PR:** #1563 (`task/184-audit-events-not-emitted`) — MERGED to v2 (commit ae71b7c4)
+**Result:** APPROVED
+
+### Summary
+All acceptance criteria met:
+- `auth.login_failed` audit event added for `ErrInvalidCredentials` and `ErrAccountLocked` failures via new `recordFailedLoginAuditEvent` helper. Attributes known user org/ID via email lookup; includes IP and `outcome: failure`.
+- All other required events (`auth.login`, `auth.logout`, `api_key.created`, `api_key.deleted`, `agent.created`) were already emitted in v2 from task 174.
+- `ip` and `outcome` fields already in `audit.Event` struct; tests verify they appear in JSON responses.
+
+### Tests
+- Unit `TestLoginFailureRecordsAuditEvent`: wrong-password → `auth.login_failed` event with correct org, user, IP, outcome.
+- Integration `TestAuthHTTPWrongPasswordRecordsFailedLoginAudit`: full-stack wrong password → DB record verified for ip and outcome.
+- `TestAuthHTTPLoginMeLogoutAndExpiredSession` extended: adds `assertLatestAuditPrincipalID` check for `auth.login`.
+- `TestListAuditMapsBootstrapAction` extended: adds ip and outcome JSON response assertions.
+
+### Notes
+- Lint CI failure is pre-existing across all v2 branch commits. Not introduced by this change.
+
+## 2026-02-26 - Task 185: TUI active sub-view not restored on relaunch — APPROVED & MERGED
+
+**Task:** 185-tui-subview-state-not-persisted
+**Reviewed by:** Claude Sonnet 4.7 (reviewer agent)
+**PR:** #1564 (`task/185-tui-subview-state-not-persisted`) — MERGED to v2 (commit fdfe36cf)
+**Result:** APPROVED
+
+### Summary
+All acceptance criteria met:
+- `UIState.LastMainView string` field added with `json:"last_main_view"` tag in `internal/tui/state.go`.
+- `Model.State()` captures `normalizeMainViewState(string(m.workspace.mainView))` into `LastMainView`.
+- `NewModelWithRuntime()` calls `model.workspace.setMainView(...)` from persisted `LastMainView` before checking `FirstRun`.
+- `normalizeMainViewState` handles all known `MainView` enum values; unknown/empty defaults to `ViewDashboard`.
+
+### Tests
+- `TestModelStateReturnsLastMainView`: sets ViewInbox → State().LastMainView == "inbox".
+- `TestNewModelWithRuntimeRestoresLastMainView`: state.LastMainView = "agents" → model.MainView() == ViewAgents.
+- `TestNewModelWithRuntimeDefaultsToDashboardWhenLastMainViewUnknown`: state.LastMainView = "unknown-view" → model.MainView() == ViewDashboard.
+- `TestStateRoundTrip` extended with `LastMainView` round-trip assertion.
+
+### Notes
+- Lint CI failure pre-existing across all v2 branch commits. Not introduced by this change.
+
+## 2026-02-27 - 186-tui-panel-resize-not-implemented.md
+- Fixes applied:
+  - Updated `computeLayout()` to honor persisted `panel_proportions` when valid (`0.10..0.70` each and total ~1.0), with fallback to class defaults when invalid.
+  - Added `<` / `>` runtime resizing for focused sidebar/chat panels (step `0.02`), clamped to valid ranges, and persisted in model state.
+  - Added resize hint to help screen keybindings.
+  - Added/updated tests for custom layout proportions, invalid fallback behavior, and sidebar resize key behavior.
+  - Refreshed impacted TUI layout golden snapshots (`layout_s/m/l/xl.golden`).
+- Tests run:
+  - `go test ./internal/tui` (pass)
+  - `UPDATE_GOLDEN=1 go test ./internal/tui` (pass; snapshot refresh)
+  - `go test ./internal/tui` (pass, post-refresh)
+
+## 2026-02-27 - Task 186 review: APPROVED and merged
+- Reviewer: Claude Sonnet 4.5
+- PR #1565 merged to v2 (commit 2503af88)
+- All 5 acceptance criteria met: resize keys, in-memory state update, layout restoration, clamping, help screen hint
+- All 3 required unit tests present: computeLayout with custom proportions, fallback-to-defaults, '<' key reduces sidebar by 0.02
+- Lint failures pre-existing across v2 baseline; no new issues introduced by this PR

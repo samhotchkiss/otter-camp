@@ -271,8 +271,9 @@ type RealtimeClient struct {
 	OnEvent        func(event EventEnvelope, applied bool)
 	OnReplaySynced func()
 
-	degraded     bool
-	replaySynced bool
+	degraded        bool
+	replaySynced    bool
+	replayUntilSeq  int64 // high_watermark from connected frame; 0 means fire OnReplaySynced immediately
 }
 
 func (c *RealtimeClient) Run(ctx context.Context) error {
@@ -417,10 +418,17 @@ func (c *RealtimeClient) consumeStream(ctx context.Context, stream io.ReadCloser
 			c.degraded = false
 		}
 		if !*replayComplete {
-			*replayComplete = true
-			if c.OnReplaySynced != nil && !c.replaySynced {
-				c.replaySynced = true
-				c.OnReplaySynced()
+			// Fire OnReplaySynced when we've processed up to the high_watermark
+			// reported in the connected frame (all replay events delivered).
+			// Fall back to firing on first event for connections where the
+			// connected frame did not include a high_watermark.
+			if c.replayUntilSeq == 0 || envelope.Seq >= c.replayUntilSeq {
+				c.replayUntilSeq = 0
+				*replayComplete = true
+				if c.OnReplaySynced != nil && !c.replaySynced {
+					c.replaySynced = true
+					c.OnReplaySynced()
+				}
 			}
 		}
 		c.emitState(ConnectionConnected)
@@ -432,7 +440,8 @@ func (c *RealtimeClient) consumeStream(ctx context.Context, stream io.ReadCloser
 
 func (c *RealtimeClient) handleConnectedFrame(ctx context.Context, data string, replayComplete *bool) error {
 	var meta struct {
-		Gap bool `json:"gap"`
+		Gap           bool  `json:"gap"`
+		HighWatermark int64 `json:"high_watermark"`
 	}
 	if err := json.Unmarshal([]byte(data), &meta); err != nil {
 		if degradeErr := c.markDegradedAndRefresh(ctx, "invalid_connected_meta", err); degradeErr != nil {
@@ -449,12 +458,22 @@ func (c *RealtimeClient) handleConnectedFrame(ctx context.Context, data string, 
 
 	c.degraded = false
 	c.emitState(ConnectionConnected)
-	if !*replayComplete {
-		*replayComplete = true
-		if c.OnReplaySynced != nil && !c.replaySynced {
-			c.replaySynced = true
-			c.OnReplaySynced()
+
+	// If we are already up-to-date (reconnect with no missed events), fire
+	// OnReplaySynced immediately so the TUI enters live mode right away.
+	// Otherwise, defer until we process the event at high_watermark so that
+	// replayed chat.message.finalized events are handled by the history-loading
+	// path (turnsSynced=false) rather than being silently dropped.
+	if c.Reducer.LastSeq() >= meta.HighWatermark {
+		if !*replayComplete {
+			*replayComplete = true
+			if c.OnReplaySynced != nil && !c.replaySynced {
+				c.replaySynced = true
+				c.OnReplaySynced()
+			}
 		}
+	} else {
+		c.replayUntilSeq = meta.HighWatermark
 	}
 	return nil
 }

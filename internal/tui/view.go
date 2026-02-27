@@ -712,24 +712,61 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 
 	// Show selected project detail with tasks
 	titleStyle := lipgloss.NewStyle().Foreground(colFocus).Bold(true)
-	lines = append(lines, titleStyle.Render(node.Label))
+	proj := m.workspace.selectedProject
+
+	// Title row: project name left, delivery mode right
+	titleText := node.Label
+	if proj != nil && strings.TrimSpace(proj.DeliveryMode) != "" {
+		pad := width - len(titleText) - len(proj.DeliveryMode)
+		if pad > 1 {
+			titleText = titleText + strings.Repeat(" ", pad) + proj.DeliveryMode
+		}
+	}
+	lines = append(lines, titleStyle.Render(titleText))
 	lines = append(lines, styleDivider.Render(strings.Repeat("─", maxInt(1, width))))
 
-	// Open tasks
-	children := m.workspace.projectChildren(projectNodeID)
-	openTasks := make([]*sidebarNode, 0, len(children))
-	for _, cid := range children {
-		child := m.workspace.nodes[cid]
-		if child == nil || child.Kind != sidebarKindTask {
-			continue
+	// Description
+	if proj != nil && strings.TrimSpace(proj.Description) != "" {
+		wrapped := wrapText(proj.Description, maxInt(10, width))
+		for _, wl := range wrapped {
+			lines = append(lines, styleMuted.Render(wl))
 		}
-		if child.WorkStatus == "done" || child.WorkStatus == "approved" {
-			continue
-		}
-		openTasks = append(openTasks, child)
+		lines = append(lines, "")
 	}
 
-	lines = append(lines, "")
+	if proj == nil {
+		// Still loading
+		lines = append(lines, styleMuted.Render("  Loading…"))
+		return lines
+	}
+
+	// Open tasks from selectedProject.Tasks (loaded from API)
+	var openTasks []SidebarTaskItem
+	if len(proj.Tasks) > 0 {
+		for _, t := range proj.Tasks {
+			if t.WorkStatus != "done" && t.WorkStatus != "approved" && t.WorkStatus != "cancelled" {
+				openTasks = append(openTasks, t)
+			}
+		}
+	} else {
+		// Fall back to sidebar task nodes if API detail not yet available
+		children := m.workspace.projectChildren(projectNodeID)
+		for _, cid := range children {
+			child := m.workspace.nodes[cid]
+			if child == nil || child.Kind != sidebarKindTask {
+				continue
+			}
+			if child.WorkStatus == "done" || child.WorkStatus == "approved" {
+				continue
+			}
+			openTasks = append(openTasks, SidebarTaskItem{
+				ID:         child.ID,
+				Title:      child.Label,
+				WorkStatus: child.WorkStatus,
+			})
+		}
+	}
+
 	if len(openTasks) == 0 {
 		lines = append(lines, styleMuted.Render("  No open tasks."))
 	} else {
@@ -743,7 +780,7 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 				icon = "○ "
 			}
 			statusLabel := styleMuted.Render(task.WorkStatus)
-			taskLine := "  " + icon + truncate(task.Label, width-20)
+			taskLine := "  " + icon + truncate(task.Title, width-20)
 			lines = append(lines, styleText.Render(taskLine)+"  "+statusLabel)
 		}
 	}

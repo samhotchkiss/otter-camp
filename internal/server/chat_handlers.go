@@ -61,6 +61,7 @@ func NewChatRouteRegistrar(service chat.ChatService, pool *pgxpool.Pool) *ChatRo
 		h.readCursors = repo.NewChatReadCursorRepo(pool)
 		h.artifacts = repo.NewChatArtifactRepo(pool)
 		h.messages = repo.NewChatMessageRepo(pool)
+		h.agents = repo.NewAgentRepo(pool)
 	}
 	return &ChatRouteRegistrar{handlers: h}
 }
@@ -98,6 +99,10 @@ func (r *ChatRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.With(middleware.RequireAnyScope(requireReadScope("chat")...)).Get("/chat-sessions/{id}/artifacts", r.handlers.listArtifacts)
 }
 
+type orgAgentLister interface {
+	GetStarterTrio(ctx context.Context, organizationID uuid.UUID) ([]repo.Agent, error)
+}
+
 type chatHandlers struct {
 	service chat.ChatService
 
@@ -105,6 +110,7 @@ type chatHandlers struct {
 	readCursors chatReadCursorRepository
 	artifacts   chatArtifactRepository
 	messages    chatMessageRepository
+	agents      orgAgentLister
 	testMode    bool
 }
 
@@ -297,6 +303,16 @@ func (h chatHandlers) createSession(w http.ResponseWriter, r *http.Request) {
 		participantType = "agent"
 	}
 	_, _ = h.service.AddParticipant(r.Context(), session.ID, participantType, principal.UserID, "owner")
+
+	// For org-scope sessions, automatically add starter-trio staff agents as
+	// participants so they are immediately available for conversations.
+	if strings.EqualFold(scopeType, "organization") && h.agents != nil {
+		if starterAgents, err := h.agents.GetStarterTrio(r.Context(), principal.OrganizationID); err == nil {
+			for _, agent := range starterAgents {
+				_, _ = h.service.AddParticipant(r.Context(), session.ID, "agent", agent.ID, "member")
+			}
+		}
+	}
 
 	responder.JSON(w, http.StatusCreated, toChatSessionResponse(session, nil))
 }

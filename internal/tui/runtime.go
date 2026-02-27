@@ -49,6 +49,7 @@ type RuntimeHints struct {
 	LoadRecentChats              func(ctx context.Context) ([]SidebarChatItem, error)
 	LoadProjects                 func(ctx context.Context) ([]SidebarProjectItem, error)
 	LoadProjectTasks             func(ctx context.Context, projectID string) ([]SidebarTaskItem, error)
+	LoadProjectDetail            func(ctx context.Context, projectID string) (*ProjectDetail, error)
 }
 
 func (h RuntimeHints) now() time.Time {

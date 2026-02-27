@@ -22,6 +22,7 @@ type Project struct {
 	DisplayName          string
 	Description          string
 	DeliveryMode         string
+	Status               string
 	DeployFlowTemplateID *uuid.UUID
 	Settings             json.RawMessage
 	CreatedByType        string
@@ -87,7 +88,7 @@ func (r *ProjectRepo) Create(ctx context.Context, project Project) (Project, err
 			created_by_id
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
-		RETURNING id, organization_id, slug, display_name, description, delivery_mode, deploy_flow_template_id, settings, created_by_type, created_by_id, created_at, updated_at
+		RETURNING id, organization_id, slug, display_name, description, delivery_mode, status, deploy_flow_template_id, settings, created_by_type, created_by_id, created_at, updated_at
 	`,
 		project.OrganizationID,
 		project.Slug,
@@ -109,7 +110,7 @@ func (r *ProjectRepo) Create(ctx context.Context, project Project) (Project, err
 
 func (r *ProjectRepo) GetByID(ctx context.Context, id uuid.UUID) (Project, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, organization_id, slug, display_name, description, delivery_mode, deploy_flow_template_id, settings, created_by_type, created_by_id, created_at, updated_at
+		SELECT id, organization_id, slug, display_name, description, delivery_mode, status, deploy_flow_template_id, settings, created_by_type, created_by_id, created_at, updated_at
 		FROM project
 		WHERE id = $1
 	`, id)
@@ -130,7 +131,7 @@ func (r *ProjectRepo) Get(ctx context.Context, id uuid.UUID) (Project, error) {
 
 func (r *ProjectRepo) GetBySlug(ctx context.Context, organizationID uuid.UUID, slug string) (Project, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, organization_id, slug, display_name, description, delivery_mode, deploy_flow_template_id, settings, created_by_type, created_by_id, created_at, updated_at
+		SELECT id, organization_id, slug, display_name, description, delivery_mode, status, deploy_flow_template_id, settings, created_by_type, created_by_id, created_at, updated_at
 		FROM project
 		WHERE organization_id = $1
 		  AND slug = $2
@@ -148,9 +149,9 @@ func (r *ProjectRepo) GetBySlug(ctx context.Context, organizationID uuid.UUID, s
 
 func (r *ProjectRepo) List(ctx context.Context, organizationID uuid.UUID) ([]Project, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, organization_id, slug, display_name, description, delivery_mode, deploy_flow_template_id, settings, created_by_type, created_by_id, created_at, updated_at
+		SELECT id, organization_id, slug, display_name, description, delivery_mode, status, deploy_flow_template_id, settings, created_by_type, created_by_id, created_at, updated_at
 		FROM project
-		WHERE organization_id = $1
+		WHERE organization_id = $1 AND status = 'active'
 		ORDER BY created_at DESC, id DESC
 	`, organizationID)
 	if err != nil {
@@ -220,7 +221,7 @@ func (r *ProjectRepo) Update(ctx context.Context, project Project) (Project, err
 			deploy_flow_template_id = $6,
 			settings = $7::jsonb
 		WHERE id = $1
-		RETURNING id, organization_id, slug, display_name, description, delivery_mode, deploy_flow_template_id, settings, created_by_type, created_by_id, created_at, updated_at
+		RETURNING id, organization_id, slug, display_name, description, delivery_mode, status, deploy_flow_template_id, settings, created_by_type, created_by_id, created_at, updated_at
 	`,
 		project.ID,
 		project.Slug,
@@ -908,6 +909,19 @@ func defaultOverlapPolicy(policy string) string {
 	return trimmed
 }
 
+func (r *ProjectRepo) Archive(ctx context.Context, id uuid.UUID) error {
+	ct, err := r.pool.Exec(ctx, `
+		UPDATE project SET status = 'archived' WHERE id = $1
+	`, id)
+	if err != nil {
+		return mapDBError(err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func scanProject(row pgx.Row) (Project, error) {
 	var project Project
 	if err := row.Scan(
@@ -917,6 +931,7 @@ func scanProject(row pgx.Row) (Project, error) {
 		&project.DisplayName,
 		&project.Description,
 		&project.DeliveryMode,
+		&project.Status,
 		&project.DeployFlowTemplateID,
 		&project.Settings,
 		&project.CreatedByType,

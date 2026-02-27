@@ -155,6 +155,7 @@ type ProjectService interface {
 	GetBySlug(ctx context.Context, orgID uuid.UUID, slug string) (*Project, error)
 	List(ctx context.Context, orgID uuid.UUID, filter ProjectFilter) ([]*Project, error)
 	Update(ctx context.Context, orgID, projectID uuid.UUID, req UpdateProjectRequest) (*Project, error)
+	Archive(ctx context.Context, orgID, projectID uuid.UUID) (*Project, error)
 	Delete(ctx context.Context, orgID, projectID uuid.UUID) error
 
 	CreateFlowTemplate(ctx context.Context, req CreateFlowTemplateRequest) (*FlowTemplate, error)
@@ -182,6 +183,7 @@ type projectRepository interface {
 	GetBySlug(ctx context.Context, organizationID uuid.UUID, slug string) (repo.Project, error)
 	List(ctx context.Context, organizationID uuid.UUID) ([]repo.Project, error)
 	Update(ctx context.Context, project repo.Project) (repo.Project, error)
+	Archive(ctx context.Context, id uuid.UUID) error
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
@@ -493,6 +495,26 @@ func (s *service) Delete(ctx context.Context, orgID, projectID uuid.UUID) error 
 	})
 
 	return nil
+}
+
+func (s *service) Archive(ctx context.Context, orgID, projectID uuid.UUID) (*Project, error) {
+	project, err := s.Get(ctx, orgID, projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.projects.Archive(ctx, project.ID); err != nil {
+		return nil, err
+	}
+
+	project.Status = "archived"
+
+	_ = s.publishEvent(ctx, orgID, "project.archived", actorSystem, nil, map[string]any{
+		"project_id": project.ID,
+		"slug":       project.Slug,
+	})
+
+	return project, nil
 }
 
 func (s *service) CreateFlowTemplate(ctx context.Context, req CreateFlowTemplateRequest) (*FlowTemplate, error) {

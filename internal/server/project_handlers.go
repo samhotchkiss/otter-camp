@@ -47,6 +47,10 @@ func (r *ProjectRouteRegistrar) RegisterRoutes(router chi.Router) {
 		middleware.RequireRole("admin"),
 		middleware.RequireAnyScope(requireWriteScope("projects")...),
 	).Delete("/projects/{id}", r.handlers.deleteProject)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("projects")...),
+	).Post("/projects/{id}/archive", r.handlers.archiveProject)
 
 	router.With(middleware.RequireAnyScope(requireReadScope("projects")...)).Get("/projects/{id}/flow-templates", r.handlers.listProjectFlowTemplates)
 	router.With(
@@ -198,6 +202,7 @@ type projectResponse struct {
 	DisplayName          string          `json:"display_name"`
 	Description          string          `json:"description"`
 	DeliveryMode         string          `json:"delivery_mode"`
+	Status               string          `json:"status"`
 	DeployFlowTemplateID *uuid.UUID      `json:"deploy_flow_template_id"`
 	Settings             json.RawMessage `json:"settings"`
 	CreatedByType        string          `json:"created_by_type"`
@@ -441,6 +446,27 @@ func (h projectHandlers) deleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h projectHandlers) archiveProject(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+
+	projectID, err := parseUUIDParam(r, "id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+
+	archived, archiveErr := h.service.Archive(r.Context(), principal.OrganizationID, projectID)
+	if archiveErr != nil {
+		h.respondProjectError(responder, w, archiveErr)
+		return
+	}
+	responder.JSON(w, http.StatusOK, toProjectResponse(archived))
 }
 
 func (h projectHandlers) listProjectFlowTemplates(w http.ResponseWriter, r *http.Request) {
@@ -1355,6 +1381,7 @@ func toProjectResponse(model *projectsvc.Project) projectResponse {
 		DisplayName:          model.DisplayName,
 		Description:          model.Description,
 		DeliveryMode:         model.DeliveryMode,
+		Status:               model.Status,
 		DeployFlowTemplateID: model.DeployFlowTemplateID,
 		Settings:             settings,
 		CreatedByType:        model.CreatedByType,

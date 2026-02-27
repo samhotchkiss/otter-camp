@@ -90,6 +90,15 @@ type boardCounts struct {
 	Blocked    int
 }
 
+// ProjectDetail holds metadata for a project loaded from the API.
+type ProjectDetail struct {
+	ID           string
+	DisplayName  string
+	Description  string
+	DeliveryMode string
+	Tasks        []SidebarTaskItem
+}
+
 type workspaceState struct {
 	mainView      MainView
 	nodes         map[string]*sidebarNode
@@ -99,6 +108,7 @@ type workspaceState struct {
 	sectionCollapsed  map[sidebarSectionID]bool
 	inboxCount        int
 	selectedProjectID string
+	selectedProject   *ProjectDetail
 
 	tasks          map[string]*taskRecord
 	taskOrder      []string

@@ -169,8 +169,10 @@ func TestRealtimeConnectedMetaFrameNoGap(t *testing.T) {
 	snapshotRefreshCount := 0
 	replayComplete := false
 
+	reducer := NewEventReducer(nil)
+	reducer.SetLastSeq(5) // already up-to-date: reconnect where lastSeq == high_watermark
 	client := &RealtimeClient{
-		Reducer: NewEventReducer(nil),
+		Reducer: reducer,
 		Snapshots: SnapshotFetcherFunc(func(context.Context, []string) error {
 			snapshotRefreshCount++
 			return nil

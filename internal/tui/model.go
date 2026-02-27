@@ -68,6 +68,10 @@ type projectTasksLoadedMsg struct {
 	Tasks     []SidebarTaskItem
 }
 
+type projectDetailLoadedMsg struct {
+	Detail ProjectDetail
+}
+
 const (
 	memorySampleInterval   = 5 * time.Second
 	keypressLatencyBudget  = 100 * time.Millisecond
@@ -260,7 +264,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case projectTasksLoadedMsg:
 		m.workspace.setProjectTasks(typed.ProjectID, typed.Tasks)
 		return m, nil
+	case projectDetailLoadedMsg:
+		m.workspace.selectedProject = &typed.Detail
+		return m, nil
 	case WorkspaceEnvelopeMsg:
+		if cmd := m.applyWorkspaceCommand(typed.Envelope); cmd != nil {
+			m.recordStreamRenderLatency(typed.Envelope)
+			m.markReplaySynced()
+			return m, cmd
+		}
 		m.workspace.applyRealtimeEnvelope(typed.Envelope)
 		m.recordStreamRenderLatency(typed.Envelope)
 		m.markReplaySynced()
@@ -489,8 +501,13 @@ func (m *Model) handleEnterKey() tea.Cmd {
 					return loadChatHistoryCmd(m.workspace.activeSessionID, m.runtimeHints.LoadChatHistory)
 				}
 			case sidebarKindProject:
-				// Load tasks for expanded project
-				return loadProjectTasksCmd(node.ProjectID, m.runtimeHints)
+				// Load project detail + tasks
+				m.workspace.selectedProject = nil // clear stale detail
+				cmds := []tea.Cmd{loadProjectTasksCmd(node.ProjectID, m.runtimeHints)}
+				if m.runtimeHints.LoadProjectDetail != nil {
+					cmds = append(cmds, loadProjectDetailCmd(node.ProjectID, m.runtimeHints))
+				}
+				return tea.Batch(cmds...)
 			}
 		}
 	case MainPanel:
@@ -1970,4 +1987,60 @@ func loadProjectTasksCmd(projectID string, hints RuntimeHints) tea.Cmd {
 		tasks, _ := hints.LoadProjectTasks(ctx, projectID)
 		return projectTasksLoadedMsg{ProjectID: projectID, Tasks: tasks}
 	}
+}
+
+func loadProjectDetailCmd(projectID string, hints RuntimeHints) tea.Cmd {
+	if strings.TrimSpace(projectID) == "" || hints.LoadProjectDetail == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		detail, err := hints.LoadProjectDetail(ctx, projectID)
+		if err != nil || detail == nil {
+			return projectDetailLoadedMsg{Detail: ProjectDetail{ID: projectID}}
+		}
+		return projectDetailLoadedMsg{Detail: *detail}
+	}
+}
+
+// applyWorkspaceCommand handles model-level workspace SSE events that need to
+// fire tea.Cmds (e.g. tui.command navigation requests). Returns nil if the
+// event is not a model-level command and should fall through to the workspace.
+func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
+	if event.EventType != "tui.command" {
+		return nil
+	}
+	var payload struct {
+		Action   string `json:"action"`
+		Target   string `json:"target"`
+		TargetID string `json:"target_id"`
+	}
+	if !decodePayload(event.Payload, &payload) || payload.Action != "navigate" {
+		return nil
+	}
+	switch payload.Target {
+	case "project":
+		for _, node := range m.workspace.nodes {
+			if node.Kind == sidebarKindProject && node.ProjectID == payload.TargetID {
+				m.workspace.mainView = ViewProject
+				m.workspace.selectedProjectID = payload.TargetID
+				m.workspace.selectedProject = nil
+				m.workspace.sidebarCursor = m.workspace.indexOfNode(node.ID)
+				m.statusMessage = "Navigated to project."
+				cmds := []tea.Cmd{loadProjectTasksCmd(payload.TargetID, m.runtimeHints)}
+				if m.runtimeHints.LoadProjectDetail != nil {
+					cmds = append(cmds, loadProjectDetailCmd(payload.TargetID, m.runtimeHints))
+				}
+				return tea.Batch(cmds...)
+			}
+		}
+	case "inbox":
+		m.workspace.mainView = ViewInbox
+		m.statusMessage = "Navigated to inbox."
+	case "dashboard":
+		m.workspace.mainView = ViewDashboard
+		m.statusMessage = "Navigated to dashboard."
+	}
+	return nil
 }

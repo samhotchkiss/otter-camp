@@ -587,6 +587,26 @@ func (e *NativeToolExecutor) handleProjectUpdate(ctx context.Context, input map[
 	}, nil
 }
 
+func (e *NativeToolExecutor) handleProjectArchive(ctx context.Context, input map[string]any) (map[string]any, error) {
+	if e.projects == nil {
+		return map[string]any{"error": "project_repository_unavailable"}, nil
+	}
+	projectID, ok := readUUID(input, "project_id")
+	if !ok || projectID == uuid.Nil {
+		return map[string]any{"error": "project_id_required"}, nil
+	}
+	if err := e.projects.Archive(ctx, projectID); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return map[string]any{"error": "not_found"}, nil
+		}
+		return nil, err
+	}
+	return map[string]any{
+		"project_id": projectID,
+		"status":     "archived",
+	}, nil
+}
+
 func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[string]any) (map[string]any, error) {
 	if e.tasks == nil {
 		return map[string]any{"error": "task_repository_unavailable"}, nil
@@ -1549,4 +1569,44 @@ func (e *NativeToolExecutor) handleEmailCompose(ctx context.Context, input map[s
 
 func (e *NativeToolExecutor) handleSlackPost(ctx context.Context, input map[string]any) (map[string]any, error) {
 	return e.createDraftActionReview(ctx, "slack.post", input)
+}
+
+func (e *NativeToolExecutor) handleTUINavigate(ctx context.Context, input map[string]any) (map[string]any, error) {
+	if e.projects == nil || e.events == nil {
+		return map[string]any{"error": "service_unavailable"}, nil
+	}
+	target, _ := readString(input, "target")
+	targetID, _ := readString(input, "target_id")
+	targetSlug, _ := readString(input, "target_slug")
+
+	// Resolve slug to ID if needed
+	if target == "project" && strings.TrimSpace(targetID) == "" && strings.TrimSpace(targetSlug) != "" {
+		scope, err := e.resolveScope(ctx)
+		if err == nil {
+			if proj, err := e.projects.GetBySlug(ctx, scope.organizationID, strings.TrimSpace(targetSlug)); err == nil {
+				targetID = proj.ID.String()
+			}
+		}
+	}
+
+	scope, err := e.resolveScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"action":    "navigate",
+		"target":    target,
+		"target_id": targetID,
+	})
+	_ = e.events.Publish(ctx, nil, eventbus.DomainEvent{
+		OrganizationID: scope.organizationID,
+		EventType:      "tui.command",
+		ActorType:      "agent",
+		Payload:        payload,
+	})
+	return map[string]any{
+		"status":    "navigation_requested",
+		"target":    target,
+		"target_id": targetID,
+	}, nil
 }

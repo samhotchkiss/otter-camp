@@ -49,7 +49,9 @@ type projectReader interface {
 	Create(ctx context.Context, project repo.Project) (repo.Project, error)
 	List(ctx context.Context, organizationID uuid.UUID) ([]repo.Project, error)
 	GetByID(ctx context.Context, id uuid.UUID) (repo.Project, error)
+	GetBySlug(ctx context.Context, organizationID uuid.UUID, slug string) (repo.Project, error)
 	Update(ctx context.Context, project repo.Project) (repo.Project, error)
+	Archive(ctx context.Context, id uuid.UUID) error
 }
 
 type taskReader interface {
@@ -266,6 +268,8 @@ func (e *NativeToolExecutor) Execute(ctx context.Context, toolName string, input
 		return e.handleProjectCreate(ctx, input)
 	case "project.update":
 		return e.handleProjectUpdate(ctx, input)
+	case "project.archive":
+		return e.handleProjectArchive(ctx, input)
 	case "task.list":
 		return e.handleTaskList(ctx, input)
 	case "task.get":
@@ -328,6 +332,8 @@ func (e *NativeToolExecutor) Execute(ctx context.Context, toolName string, input
 		return e.handleScheduleList(ctx, input)
 	case "merge_queue.status":
 		return e.handleMergeQueueStatus(ctx, input)
+	case "tui.navigate":
+		return e.handleTUINavigate(ctx, input)
 	default:
 		return nil, ErrUnknownTool
 	}
