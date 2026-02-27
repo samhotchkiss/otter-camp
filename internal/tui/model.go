@@ -827,6 +827,20 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.statusMessage = "Dashboard"
 			return true, nil
 		}
+	case 'p':
+		if m.focus != ChatPanel && m.workspace.selectedProjectID != "" {
+			m.workspace.setMainView(ViewProject)
+			m.setFocus(MainPanel)
+			m.statusMessage = "Project view"
+			return true, nil
+		}
+	case 't':
+		if m.focus != ChatPanel && m.workspace.selectedTaskID != "" {
+			m.workspace.setMainView(ViewTask)
+			m.setFocus(MainPanel)
+			m.statusMessage = "Task detail"
+			return true, nil
+		}
 	case 'n':
 		if m.focus != ChatPanel {
 			if nextID := m.workspace.nextUnreadSession(); nextID != "" {

@@ -740,7 +740,11 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 				break
 			}
 			bullet := lipgloss.NewStyle().Foreground(colAccent).Render("▸ ")
-			lines = append(lines, bullet+styleText.Render(truncate(item.Summary, width-4)))
+			taskBadge := ""
+			if task := m.workspace.tasks[item.TaskID]; task != nil && task.TaskNumber > 0 {
+				taskBadge = styleMuted.Render(fmt.Sprintf("  OC-%d", task.TaskNumber))
+			}
+			lines = append(lines, bullet+styleText.Render(truncate(item.Summary, width-12))+taskBadge)
 		}
 	}
 
@@ -1176,6 +1180,8 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("1 / 2 / 3", "jump to sidebar/main/chat"),
 		key("i", "jump to Inbox"),
 		key("d", "jump to Dashboard"),
+		key("p", "return to selected project (if any)"),
+		key("t", "return to selected task (if any)"),
 		key("n", "jump to next unread session"),
 		key("r", "refresh sidebar data"),
 		key("?", "toggle this help screen"),
