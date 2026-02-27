@@ -627,7 +627,11 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		if !matchesFilter(task.Title, query) && !matchesFilter(task.Status, query) {
 			continue
 		}
-		entry := truncate("  "+task.Title, colW)
+		taskLabel := task.Title
+		if task.TaskNumber > 0 {
+			taskLabel = fmt.Sprintf("OC-%d: %s", task.TaskNumber, task.Title)
+		}
+		entry := truncate("  "+taskLabel, colW)
 		switch task.Status {
 		case "draft", "todo":
 			todoTasks = append(todoTasks, styleText.Render(entry))

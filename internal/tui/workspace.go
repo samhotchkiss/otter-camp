@@ -713,9 +713,10 @@ func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskIt
 		// Seed basic task record so the TASK DETAIL center pane renders immediately.
 		if _, exists := w.tasks[task.ID]; !exists {
 			w.tasks[task.ID] = &taskRecord{
-				ID:     task.ID,
-				Title:  task.Title,
-				Status: task.WorkStatus,
+				ID:         task.ID,
+				Title:      task.Title,
+				Status:     task.WorkStatus,
+				TaskNumber: task.TaskNumber,
 			}
 			// Add to taskOrder for the dashboard board (deduplicated).
 			w.taskOrder = append(w.taskOrder, task.ID)

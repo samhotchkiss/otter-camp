@@ -32,6 +32,7 @@ type SidebarTaskItem struct {
 	ID         string
 	Title      string
 	WorkStatus string
+	TaskNumber int
 }
 
 // TaskDetailItem is the full task record fetched on demand when the user selects a task.

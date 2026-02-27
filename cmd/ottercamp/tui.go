@@ -196,6 +196,7 @@ func runTUICommand(args []string) int {
 						ID         string `json:"id"`
 						Title      string `json:"title"`
 						WorkStatus string `json:"work_status"`
+						TaskNumber int    `json:"task_number"`
 					} `json:"data"`
 				}
 				path := "/v1/projects/" + url.PathEscape(projectID) + "/tasks?limit=10"
@@ -211,6 +212,7 @@ func runTUICommand(args []string) int {
 						ID:         t.ID,
 						Title:      t.Title,
 						WorkStatus: t.WorkStatus,
+						TaskNumber: t.TaskNumber,
 					})
 				}
 				return out, nil

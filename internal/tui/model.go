@@ -1942,7 +1942,7 @@ func (m Model) commandFallbackHelp() string {
 		case ViewTask:
 			return "Enter open session · Esc back · s toggle sidebar · : commands · ? help"
 		case ViewProject:
-			return "Enter open project · Esc back · s toggle sidebar · : commands · ? help"
+			return "Esc back to dashboard · s toggle sidebar · : commands · ? help"
 		default:
 			return "j/k navigate · Enter open task · s toggle sidebar · : commands · ? help"
 		}
