@@ -1028,45 +1028,12 @@ func (w *workspaceState) indexOfNode(nodeID string) int {
 	return 0
 }
 
-func (w *workspaceState) applyRealtimeEnvelope(event EventEnvelope) {
-	switch event.EventType {
-	case "task.status.changed":
-		var payload struct {
-			TaskID    string `json:"task_id"`
-			Status    string `json:"status"`
-			SessionID string `json:"session_id"`
-		}
-		if !workspaceDecode(event.Payload, &payload) {
-			return
-		}
-		taskID := strings.TrimSpace(payload.TaskID)
-		status := strings.TrimSpace(payload.Status)
-		w.setTaskStatus(taskID, status)
-		taskLabel := taskID
-		if t := w.tasks[taskID]; t != nil && t.TaskNumber > 0 {
-			taskLabel = fmt.Sprintf("OC-%d", t.TaskNumber)
-		}
-		w.activity = appendActivity(w.activity, fmt.Sprintf("%s: status → %s", taskLabel, status))
-		w.markSessionUnread(payload.SessionID)
-	case "task.flow.advanced":
-		var payload struct {
-			TaskID    string `json:"task_id"`
-			FlowStep  int    `json:"flow_step"`
-			SessionID string `json:"session_id"`
-		}
-		if !workspaceDecode(event.Payload, &payload) {
-			return
-		}
-		taskID := strings.TrimSpace(payload.TaskID)
-		w.advanceTaskFlow(taskID, payload.FlowStep)
-		taskLabel := taskID
-		if t := w.tasks[taskID]; t != nil && t.TaskNumber > 0 {
-			taskLabel = fmt.Sprintf("OC-%d", t.TaskNumber)
-		}
-		w.activity = appendActivity(w.activity, fmt.Sprintf("%s: flow step → %d", taskLabel, payload.FlowStep))
-		w.markSessionUnread(payload.SessionID)
-	}
-}
+// applyRealtimeEnvelope is a workspace-level SSE hook called from model.go when
+// applyWorkspaceCommand returns nil (no cmd needed). All current workspace event
+// handling has been consolidated into applyWorkspaceCommand (model.go) which can
+// return tea.Cmd values. The two cases that were here ("task.status.changed" and
+// "task.flow.advanced") used wrong event names and were dead code — removed by EX-139.
+func (w *workspaceState) applyRealtimeEnvelope(_ EventEnvelope) {}
 
 func workspaceDecode(raw json.RawMessage, out any) bool {
 	if len(raw) == 0 {

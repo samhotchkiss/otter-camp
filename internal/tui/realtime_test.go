@@ -265,6 +265,78 @@ func TestRealtimeConnectedMetaFrameWithGapDegrades(t *testing.T) {
 	}
 }
 
+// TestEventReducerWorkspaceEventNames verifies that the reducer accepts the
+// event types actually emitted by the server (EX-139: previously wrong names
+// like "task.status.changed" caused all workspace events to be silently dropped).
+func TestEventReducerWorkspaceEventNames(t *testing.T) {
+	t.Parallel()
+
+	// These are the correct server-side names that must be accepted.
+	mustBeKnown := []string{
+		"task.status_changed",
+		"task.completed",
+		"task.created",
+		"flow.advanced",
+		"flow.started",
+		"flow.rejected",
+		"inbox.item_created",
+		"budget.anomaly_detected",
+		"task.merged",
+		"project.deployed",
+		"project.rollback_initiated",
+		"deploy.approval_requested",
+		"tool.capability_denied",
+		"agent.pm_removed",
+		"memory.extracted",
+		"mcp.catalog.changed",
+		"tui.command",
+		"worker.unresponsive",
+	}
+	// These were the old wrong names — must NOT be accepted.
+	mustBeUnknown := []string{
+		"task.status.changed",
+		"task.flow.advanced",
+	}
+
+	for i, eventType := range mustBeKnown {
+		reducer := NewEventReducer(nil)
+		env := EventEnvelope{
+			Seq:        int64(i + 1),
+			EventID:    fmt.Sprintf("evt-known-%d", i),
+			EventType:  eventType,
+			OccurredAt: time.Now().UTC(),
+			OrgID:      "org-1",
+			Payload:    json.RawMessage(`{}`),
+		}
+		applied, err := reducer.Apply(env)
+		if err != nil {
+			t.Fatalf("Apply(%q) error: %v", eventType, err)
+		}
+		if !applied {
+			t.Errorf("Apply(%q) applied=false, want true (event would be silently dropped)", eventType)
+		}
+	}
+
+	for i, eventType := range mustBeUnknown {
+		reducer := NewEventReducer(nil)
+		env := EventEnvelope{
+			Seq:        int64(i + 1),
+			EventID:    fmt.Sprintf("evt-unknown-%d", i),
+			EventType:  eventType,
+			OccurredAt: time.Now().UTC(),
+			OrgID:      "org-1",
+			Payload:    json.RawMessage(`{}`),
+		}
+		applied, err := reducer.Apply(env)
+		if err != nil {
+			t.Fatalf("Apply(%q) error: %v", eventType, err)
+		}
+		if applied {
+			t.Errorf("Apply(%q) applied=true, want false (old wrong name should not be accepted)", eventType)
+		}
+	}
+}
+
 func mustEncodeEnvelopeFrameForTest(t *testing.T, seq int64, eventID, eventType string) string {
 	t.Helper()
 	envelope := map[string]any{

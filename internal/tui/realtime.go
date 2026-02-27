@@ -122,6 +122,7 @@ func NewEventReducer(logger *slog.Logger) *EventReducer {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	known := map[string]struct{}{
+		// Chat events (routed to applyChatEnvelope via ChatEnvelopeMsg)
 		"chat.message.created":   {},
 		"chat.message.chunk":     {},
 		"chat.message.delta":     {},
@@ -130,10 +131,27 @@ func NewEventReducer(logger *slog.Logger) *EventReducer {
 		"chat.turn.started":      {},
 		"chat.turn.completed":    {},
 		"chat.turn.cancelled":    {},
-		"task.status.changed":    {},
-		"task.flow.advanced":     {},
-		"tui.command":            {},
-		"worker.unresponsive":    {},
+		// Workspace events (routed to applyWorkspaceCommand via WorkspaceEnvelopeMsg)
+		// EX-139: fixed wrong names (task.status.changed→task.status_changed,
+		// task.flow.advanced→flow.advanced) and added all missing event types.
+		"task.status_changed":       {},
+		"task.completed":            {},
+		"task.created":              {},
+		"flow.advanced":             {},
+		"flow.started":              {},
+		"flow.rejected":             {},
+		"inbox.item_created":        {},
+		"budget.anomaly_detected":   {},
+		"task.merged":               {},
+		"project.deployed":          {},
+		"project.rollback_initiated": {},
+		"deploy.approval_requested": {},
+		"tool.capability_denied":    {},
+		"agent.pm_removed":          {},
+		"memory.extracted":          {},
+		"mcp.catalog.changed":       {},
+		"tui.command":               {},
+		"worker.unresponsive":       {},
 	}
 	return &EventReducer{
 		seenEventIDs:    map[string]struct{}{},

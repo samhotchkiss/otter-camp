@@ -2086,3 +2086,34 @@ Also added `g/G first/last` to the dashboard help hint when tasks are present.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-139: EventReducer silently dropped 15 event types — wrong names + missing registrations
+
+**Observation:** The `EventReducer.knownEventTypes` map in `realtime.go` is the accept list for SSE events: events whose type is NOT in the map return `wasApplied=false`, and the `OnEvent` callback in `cmd/ottercamp/tui.go` skips forwarding them (`if !applied { return }`). The map contained two wrong event names and was missing 13 others:
+
+Wrong names (server never matches):
+- `"task.status.changed"` → server sends `"task.status_changed"` (underscore)
+- `"task.flow.advanced"` → server sends `"flow.advanced"` (different prefix entirely)
+
+Missing (handled in `model.go` but never received):
+- `task.completed`, `task.created`, `flow.started`, `flow.rejected`
+- `inbox.item_created`, `budget.anomaly_detected`, `task.merged`
+- `project.deployed`, `project.rollback_initiated`, `deploy.approval_requested`
+- `tool.capability_denied`, `agent.pm_removed`, `memory.extracted`, `mcp.catalog.changed`
+
+This meant **every task status update, flow advance, inbox notification, budget alert, and project deployment event was silently dropped by the reducer before it could reach the model.** All the EX-129–EX-138 handlers were unreachable in production.
+
+Additionally, `workspace.go`'s `applyRealtimeEnvelope` had two matching dead-code cases (`"task.status.changed"` and `"task.flow.advanced"`) that also used wrong event names and incorrect payload field names (`status` instead of `to_status`, non-existent `session_id` field).
+
+**Improvement:**
+1. Fixed `NewEventReducer` in `realtime.go`: replaced the two wrong names with the correct server-side names, and added all 13 missing workspace event types.
+2. Removed the two dead cases from `workspace.go`'s `applyRealtimeEnvelope` (the model-level `applyWorkspaceCommand` already handles these correctly with the right names).
+3. Added `TestEventReducerWorkspaceEventNames` in `realtime_test.go` to assert that each correct event name is accepted (`applied=true`) and the old wrong names are rejected.
+
+**Why it matters:** Without this fix, every workspace SSE event — task completions, flow advances, inbox items, budget alerts, deployments — was silently discarded at the reducer boundary, making the entire real-time workspace update system non-functional. The TUI appeared connected and streaming but showed no live data changes beyond chat messages.
+
+**Effort:** Low (bug in config map, not logic)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
