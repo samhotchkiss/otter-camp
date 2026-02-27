@@ -463,9 +463,9 @@ func (w *workspaceState) boardCounts() boardCounts {
 			continue
 		}
 		switch task.Status {
-		case "todo":
+		case "draft", "todo":
 			counts.Todo++
-		case "done", "approved":
+		case "done", "approved", "cancelled":
 			counts.Done++
 		case "blocked", "rejected", "deferred":
 			counts.Blocked++

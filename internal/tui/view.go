@@ -623,12 +623,14 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		}
 		entry := truncate("  "+task.Title, colW)
 		switch task.Status {
-		case "todo":
+		case "draft", "todo":
 			todoTasks = append(todoTasks, styleText.Render(entry))
-		case "in_progress":
-			inProgTasks = append(inProgTasks, lipgloss.NewStyle().Foreground(colWarning).Render(entry))
-		case "done", "approved":
+		case "done", "approved", "cancelled":
 			doneTasks = append(doneTasks, styleMuted.Render(entry))
+		case "blocked", "rejected", "deferred":
+			// omit from column view; reflected in blocked count only
+		default: // in_progress and unknown active statuses
+			inProgTasks = append(inProgTasks, lipgloss.NewStyle().Foreground(colWarning).Render(entry))
 		}
 	}
 	taskRowCount := maxInt(len(todoTasks), maxInt(len(inProgTasks), len(doneTasks)))
