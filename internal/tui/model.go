@@ -518,12 +518,10 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 
 			if r == '[' {
-				m.switchScope(cycleScope(m.activeScope, false))
-				return m, nil
+				return m, m.switchScope(cycleScope(m.activeScope, false))
 			}
 			if r == ']' {
-				m.switchScope(cycleScope(m.activeScope, true))
-				return m, nil
+				return m, m.switchScope(cycleScope(m.activeScope, true))
 			}
 			if (r == '<' || r == '>') && (m.focus != ChatPanel || strings.TrimSpace(m.chatInput) == "") {
 				delta := panelResizeStep
@@ -1117,7 +1115,7 @@ func (m Model) ChatMessages() []ChatMessage {
 }
 
 func (m Model) MainView() MainView       { return m.workspace.mainView }
-func (m Model) WorkspaceSession() string { return m.workspace.activeSessionID }
+func (m Model) WorkspaceSession() string { return m.activeSession }
 func (m Model) StatusMessage() string    { return m.statusMessage }
 func (m Model) WorkspaceRender(class SizeClass) string {
 	return m.workspace.render(m.workspace.mainView, class)
@@ -1643,11 +1641,30 @@ func decodePayload(raw json.RawMessage, out any) bool {
 	return true
 }
 
-func (m *Model) switchScope(next ChatScope) {
+func (m *Model) switchScope(next ChatScope) tea.Cmd {
 	m.activeScope = next
-	m.activeSession = sessionForScope(next)
+	var sessionID string
+	switch next {
+	case ScopeOrg:
+		sessionID = m.workspace.activeSessionID
+		if sessionID == "" {
+			sessionID = sessionForScope(next)
+		}
+	case ScopeTask:
+		sessionID = m.workspace.selectedTaskSessionID()
+		if sessionID == "" {
+			sessionID = sessionForScope(next)
+		}
+	default:
+		sessionID = sessionForScope(next)
+	}
+	m.activeSession = sessionID
 	m.chatScrollOffset = 0
 	m.statusMessage = fmt.Sprintf("Scope switched to %s.", next)
+	if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
+		return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+	}
+	return nil
 }
 
 func (m *Model) jumpToFrankSession(trigger string) {
@@ -2095,6 +2112,16 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// looksLikeUUID returns true when s resembles a UUID (36 chars with dashes at
+// positions 8, 13, 18, 23). Placeholder IDs like "session-org-general" return false.
+func looksLikeUUID(s string) bool {
+	s = strings.TrimSpace(s)
+	if len(s) != 36 {
+		return false
+	}
+	return s[8] == '-' && s[13] == '-' && s[18] == '-' && s[23] == '-'
 }
 
 func loadSidebarDataCmd(hints RuntimeHints) tea.Cmd {

@@ -305,7 +305,8 @@ func (w *workspaceState) openSelectedTaskSession() (string, bool) {
 	if sessionID == "" {
 		return "", false
 	}
-	w.activeSessionID = sessionID
+	// Do NOT overwrite activeSessionID — that holds the org/general session.
+	// m.activeSession (Model field) is updated by the caller.
 	return sessionID, true
 }
 
