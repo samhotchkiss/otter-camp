@@ -137,11 +137,17 @@ func runTUICommand(args []string) int {
 							} `json:"data"`
 						}
 						if apiClient.request(ctx, "GET", "/v1/tasks/"+s.ScopeID.String(), nil, &taskResp) == nil {
-							taskTitle := strings.TrimSpace(taskResp.Data.Title)
-							if taskResp.Data.TaskNumber > 0 {
-								name = fmt.Sprintf("OC-%d: %s", taskResp.Data.TaskNumber, taskTitle)
-							} else if taskTitle != "" {
-								name = taskTitle
+							// Prefer session title (user-named); fall back to task title
+							displayTitle := name
+							if displayTitle == "" {
+								displayTitle = strings.TrimSpace(taskResp.Data.Title)
+							}
+							if taskResp.Data.TaskNumber > 0 && displayTitle != "" {
+								name = fmt.Sprintf("OC-%d: %s", taskResp.Data.TaskNumber, displayTitle)
+							} else if taskResp.Data.TaskNumber > 0 {
+								name = fmt.Sprintf("OC-%d", taskResp.Data.TaskNumber)
+							} else {
+								name = displayTitle
 							}
 						}
 					}
