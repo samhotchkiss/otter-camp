@@ -2899,3 +2899,18 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-186---
+
+## EX-186: Switching sessions with an active turn shows a stale spinner in the new session
+
+**Observation:** When a user sends a message to session A (triggering the "Waiting for assistant response…" spinner via `activeTurn = true`) and then switches to session B (via `[ / ]` scope cycle, selecting a project in the sidebar, opening a task session from ViewTask, or pressing Ctrl-G to jump to the org session), the spinner persists in session B even though no turn is active there. When session A's turn eventually completes, it fires `completeTurnAndPromoteQueue`, which clears `activeTurn`, stops the spinner, AND would promote any queued messages into session B — cross-session message leakage.
+
+**Improvement:** Added a helper `clearTurnIfSwitchingSession(newSessionID)` that clears `activeTurn` and `activeTurnSessionID` if the new session differs from the current `activeSession`. Called it in the five session-switch paths: `switchScope`, `jumpToFrankSession`, the `sidebarKindProject` Enter handler, the `ViewTask` Enter handler, and `executeSidebarCommand("select")`.
+
+**Why it matters:** The spinner is the primary visual indicator of whether the assistant is thinking. A stale spinner in the wrong session makes the TUI look broken and could mislead users into thinking their new session is busy. Worse, queued messages written for session A could be incorrectly sent to session B if `completeTurnAndPromoteQueue` fires after a scope switch.
+
+**Effort:** Small (helper method + 5 call sites)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

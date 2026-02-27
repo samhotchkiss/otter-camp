@@ -4336,3 +4336,44 @@ func TestEscapeCancelClearsActiveTurnSessionID(t *testing.T) {
 		t.Error("Escape should have dispatched a non-nil cancel cmd (EX-185)")
 	}
 }
+
+// EX-186: switching sessions while a turn is active should clear activeTurn and
+// activeTurnSessionID so the spinner does not persist in the new session's chat panel.
+func TestSwitchScopeClearsTurnStateForNewSession(t *testing.T) {
+	t.Parallel()
+	sessionA := "aaaaaaaa-0000-0000-0000-000000000001"
+	sessionB := "bbbbbbbb-0000-0000-0000-000000000001"
+
+	historyLoaded := false
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, sid string) ([]ChatMessage, error) {
+			if sid == sessionB {
+				historyLoaded = true
+			}
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// Simulate active turn in session A.
+	model.activeTurn = true
+	model.activeTurnSessionID = sessionA
+	model.activeSession = sessionA
+
+	// Set up the org session on the workspace (ScopeOrg resolves via workspace.activeSessionID).
+	model.workspace.activeSessionID = sessionB
+
+	// Switch scope — should clear the stale turn and reload session B.
+	cmd := model.switchScope(ScopeOrg)
+
+	if model.activeTurn {
+		t.Error("activeTurn should be cleared after scope switch to a different session (EX-186)")
+	}
+	if model.activeTurnSessionID != "" {
+		t.Errorf("activeTurnSessionID should be cleared after scope switch, got %q (EX-186)", model.activeTurnSessionID)
+	}
+	runNonTimerCmds(cmd)
+	if !historyLoaded {
+		t.Error("switchScope should have reloaded chat history for the new session (EX-186)")
+	}
+}

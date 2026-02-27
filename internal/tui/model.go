@@ -759,6 +759,8 @@ func (m *Model) handleEnterKey() tea.Cmd {
 		node := m.workspace.currentSidebarNode()
 		m.workspace.selectSidebarNode()
 		m.state.LastActiveChatSession = m.workspace.activeSessionID
+		// EX-186: clear stale turn state before switching sessions.
+		m.clearTurnIfSwitchingSession(m.workspace.activeSessionID)
 		m.activeSession = m.workspace.activeSessionID
 		m.statusMessage = "Sidebar selection applied."
 		if node != nil {
@@ -801,6 +803,8 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				// so the session title matches the context (not a stale task session)
 				if frankNode := m.workspace.nodes[generalSidebarNodeID]; frankNode != nil && frankNode.SessionID != "" {
 					if m.activeSession != frankNode.SessionID {
+						// EX-186: clear stale turn state before switching sessions.
+						m.clearTurnIfSwitchingSession(frankNode.SessionID)
 						m.activeSession = frankNode.SessionID
 						m.workspace.activeSessionID = frankNode.SessionID
 						m.chatMessages = nil
@@ -877,6 +881,8 @@ func (m *Model) handleEnterKey() tea.Cmd {
 		if m.workspace.mainView == ViewTask {
 			if sessionID, ok := m.workspace.openSelectedTaskSession(); ok {
 				m.state.LastActiveChatSession = sessionID
+				// EX-186: clear stale turn state before switching sessions.
+				m.clearTurnIfSwitchingSession(sessionID)
 				m.activeSession = sessionID
 				m.activeScope = ScopeTask
 				m.chatScrollOffset = 0
@@ -2322,6 +2328,8 @@ func (m *Model) switchScope(next ChatScope) tea.Cmd {
 	default:
 		sessionID = sessionForScope(next)
 	}
+	// EX-186: clear stale turn state before switching sessions.
+	m.clearTurnIfSwitchingSession(sessionID)
 	m.activeSession = sessionID
 	m.chatScrollOffset = 0
 	m.statusMessage = fmt.Sprintf("Scope switched to %s.", next)
@@ -2345,6 +2353,8 @@ func (m *Model) jumpToFrankSession(trigger string) tea.Cmd {
 	}
 	sessionID := m.workspace.activeSessionID
 	m.activeScope = ScopeOrg
+	// EX-186: clear stale turn state before switching sessions.
+	m.clearTurnIfSwitchingSession(sessionID)
 	m.activeSession = sessionID
 	m.state.LastActiveChatSession = sessionID
 	m.chatScrollOffset = 0
@@ -2365,6 +2375,21 @@ func (m *Model) jumpToFrankSession(trigger string) tea.Cmd {
 
 func (m Model) chatTextInputActive() bool {
 	return m.focus == ChatPanel
+}
+
+// clearTurnIfSwitchingSession must be called just before changing m.activeSession.
+// If the incoming session differs from the current one and a turn is active, it
+// clears activeTurn + activeTurnSessionID so the spinner does not persist in the
+// new session's chat panel. (EX-186)
+func (m *Model) clearTurnIfSwitchingSession(newSessionID string) {
+	if !m.activeTurn {
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(m.activeSession), strings.TrimSpace(newSessionID)) {
+		return // same session — keep turn state
+	}
+	m.activeTurn = false
+	m.activeTurnSessionID = ""
 }
 
 func inferScopeFromSession(session string) ChatScope {
