@@ -54,11 +54,15 @@ type sidebarNode struct {
 }
 
 type taskRecord struct {
-	ID      string
-	Title   string
-	Status  string
-	Flow    int
-	History []string
+	ID                 string
+	Title              string
+	Description        string
+	AcceptanceCriteria string
+	Subtasks           []string
+	SessionID          string
+	Status             string
+	Flow               int
+	History            []string
 }
 
 type inboxItem struct {
@@ -128,8 +132,28 @@ func newWorkspaceState() workspaceState {
 	}
 
 	tasks := map[string]*taskRecord{
-		"task-1": {ID: "task-1", Title: "Launch docs", Status: "todo", Flow: 1, History: []string{"created"}},
-		"task-2": {ID: "task-2", Title: "CI hardening", Status: "in_progress", Flow: 2, History: []string{"created"}},
+		"task-1": {
+			ID:                 "task-1",
+			Title:              "Launch docs",
+			Description:        "Document launch requirements, rollout checklist, and operator handoff notes.",
+			AcceptanceCriteria: "Checklist approved and linked from release runbook.",
+			Subtasks:           []string{"Draft launch checklist", "Add rollback section", "Request reviewer sign-off"},
+			SessionID:          "session-task-1",
+			Status:             "todo",
+			Flow:               1,
+			History:            []string{"created"},
+		},
+		"task-2": {
+			ID:                 "task-2",
+			Title:              "CI hardening",
+			Description:        "Stabilize flaky tests and enforce deterministic retry limits in CI.",
+			AcceptanceCriteria: "Flaky quarantine documented and nightly pipeline green for 3 consecutive runs.",
+			Subtasks:           []string{"Identify flaky suites", "Tune retry/backoff", "Publish CI runbook update"},
+			SessionID:          "session-task-2",
+			Status:             "in_progress",
+			Flow:               2,
+			History:            []string{"created"},
+		},
 	}
 
 	return workspaceState{
@@ -243,6 +267,27 @@ func (w *workspaceState) taskTitleForScopeSession(sessionID string) string {
 		return strings.TrimSpace(task.Title)
 	}
 	return ""
+}
+
+func (w *workspaceState) taskSessionID(taskID string) string {
+	task := w.tasks[taskID]
+	if task != nil && strings.TrimSpace(task.SessionID) != "" {
+		return strings.TrimSpace(task.SessionID)
+	}
+	return strings.TrimSpace(w.taskSessionIDs[taskID])
+}
+
+func (w *workspaceState) selectedTaskSessionID() string {
+	return w.taskSessionID(w.selectedTaskID)
+}
+
+func (w *workspaceState) openSelectedTaskSession() (string, bool) {
+	sessionID := w.selectedTaskSessionID()
+	if sessionID == "" {
+		return "", false
+	}
+	w.activeSessionID = sessionID
+	return sessionID, true
 }
 
 func (w *workspaceState) moveSidebar(delta int) {
@@ -475,7 +520,7 @@ func (w *workspaceState) applyInboxAction(action string) bool {
 	case "open":
 		w.selectedTaskID = item.TaskID
 		w.mainView = ViewTask
-		if sessionID := w.taskSessionIDs[item.TaskID]; sessionID != "" {
+		if sessionID := w.taskSessionID(item.TaskID); sessionID != "" {
 			w.activeSessionID = sessionID
 		}
 		w.activity = append(w.activity, fmt.Sprintf("open in context %s", item.TaskID))

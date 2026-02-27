@@ -390,6 +390,15 @@ func (m *Model) handleEnterKey() {
 				return
 			}
 		}
+		if m.workspace.mainView == ViewTask {
+			if sessionID, ok := m.workspace.openSelectedTaskSession(); ok {
+				m.state.LastActiveChatSession = sessionID
+				m.activeSession = sessionID
+				m.setFocus(ChatPanel)
+				m.statusMessage = "Opened async session."
+				return
+			}
+		}
 		if m.workspace.mainView == ViewProject || m.workspace.mainView == ViewDashboard {
 			m.workspace.setMainView(ViewTask)
 			m.statusMessage = "Opened task detail."

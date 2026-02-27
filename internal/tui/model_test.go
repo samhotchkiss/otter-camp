@@ -442,6 +442,59 @@ func TestMainViewTitleIsHumanReadable(t *testing.T) {
 	}
 }
 
+func TestTaskDetailViewShowsExtendedFieldsAndFullEventLog(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-1"
+	model.workspace.tasks["task-1"].History = []string{
+		"created",
+		"owner=frank",
+		"priority=high",
+		"scope=project-alpha",
+		"queued review",
+		"awaiting operator approval",
+	}
+
+	view := strings.Join(model.renderTaskView(120, 40), "\n")
+	for _, want := range []string{
+		"Description",
+		"Acceptance Criteria",
+		"Subtasks",
+		"Async Session",
+		"session-task-1",
+		"created",
+		"awaiting operator approval",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("task detail missing %q: %q", want, view)
+		}
+	}
+}
+
+func TestEnterOnTaskDetailOpensAsyncSession(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = MainPanel
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-2"
+	model.workspace.activeSessionID = generalSessionID
+	model.activeSession = generalSessionID
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if got := model.WorkspaceSession(); got != "session-task-2" {
+		t.Fatalf("workspace session after Enter on task detail = %q, want %q", got, "session-task-2")
+	}
+	if got := model.ActiveChatSession(); got != "session-task-2" {
+		t.Fatalf("active chat session after Enter on task detail = %q, want %q", got, "session-task-2")
+	}
+	if got := model.State().LastActiveChatSession; got != "session-task-2" {
+		t.Fatalf("persisted chat session after Enter on task detail = %q, want %q", got, "session-task-2")
+	}
+	if got := model.FocusedPanel(); got != ChatPanel {
+		t.Fatalf("focus after Enter on task detail = %s, want chat", panelLabel(got))
+	}
+}
+
 func TestFormatTaskStatus(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"todo", "Todo"},
