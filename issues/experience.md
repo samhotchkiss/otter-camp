@@ -815,3 +815,17 @@
 
 ---
 
+## EX-059: Chat panel shows "loading messages..." while history is in-flight
+
+**Observation:** When selecting a different chat session from the sidebar, the chat panel cleared immediately and showed "no messages yet" while the history fetch was still in progress. This was confusing — users couldn't tell if the session was empty or still loading.
+
+**Improvement:** Added `chatHistoryLoading bool` flag to the Model. It's set to `true` when chat history is cleared and a new `loadChatHistoryCmd` is dispatched (session node selection), and cleared to `false` when `chatHistoryLoadedMsg` is received. The chat panel shows "◌ loading messages..." when `chatHistoryLoading` is true and there are no messages yet.
+
+**Why it matters:** Visual feedback during data loading is a fundamental UX principle. "Loading..." is unambiguous and reassures the user that content is coming. "No messages yet" only appears after the load completes and the session is genuinely empty.
+
+**Effort:** Low
+**Issue:** N/A (implemented directly in ralph-loop)
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+

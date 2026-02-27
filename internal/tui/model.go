@@ -136,6 +136,7 @@ type Model struct {
 	toolCallExpanded     map[string]map[string]bool
 	toolCallMessageIndex map[string]int
 	chatScrollOffset     int
+	chatHistoryLoading   bool // true while a history fetch is in-flight after session switch
 	queuedMessages       []QueuedMessage
 	editingQueued        bool
 	activeTurn           bool
@@ -262,6 +263,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, histCmd
 	case chatHistoryLoadedMsg:
+		m.chatHistoryLoading = false
 		if len(typed.Messages) == 0 {
 			return m, nil
 		}
@@ -653,6 +655,7 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				var cmds []tea.Cmd
 				if m.runtimeHints.LoadChatHistory != nil {
 					m.chatMessages = nil
+					m.chatHistoryLoading = true
 					m.chatMessageIndex = make(map[string]int)
 					m.chatScrollOffset = 0
 					cmds = append(cmds, loadChatHistoryCmd(m.workspace.activeSessionID, m.runtimeHints.LoadChatHistory))

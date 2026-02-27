@@ -1479,6 +1479,16 @@ func renderScopeIndicator(active ChatScope, compact bool) string {
 
 func (m Model) renderChatMessages(width int) []string {
 	if len(m.chatMessages) == 0 {
+		center := func(s string) string {
+			return lipgloss.NewStyle().Width(width).Align(lipgloss.Center).Foreground(colSubtle).Render(s)
+		}
+		if m.chatHistoryLoading {
+			return []string{
+				"",
+				lipgloss.NewStyle().Width(width).Align(lipgloss.Center).
+					Foreground(colMuted).Render("◌  loading messages..."),
+			}
+		}
 		if m.activeTurn {
 			spinner := styleReconnecting.Render("◌")
 			return []string{
@@ -1489,10 +1499,8 @@ func (m Model) renderChatMessages(width int) []string {
 		}
 		return []string{
 			"",
-			lipgloss.NewStyle().Width(width).Align(lipgloss.Center).
-				Foreground(colSubtle).Render("no messages yet"),
-			lipgloss.NewStyle().Width(width).Align(lipgloss.Center).
-				Foreground(colSubtle).Render("Tab·focus chat  Enter·send"),
+			center("no messages yet"),
+			center("Tab·focus chat  Enter·send"),
 		}
 	}
 
