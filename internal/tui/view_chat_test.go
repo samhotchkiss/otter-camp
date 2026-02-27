@@ -365,3 +365,41 @@ func TestQueueHintHiddenWhenInputIsNonEmpty(t *testing.T) {
 		t.Fatalf("queue action hint should be hidden when input is non-empty: %q", panel)
 	}
 }
+
+func TestTaskScopedChatEmptyStateShowsTaskName(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.activeScope = ScopeTask
+	model.workspace.selectedTaskID = "task-xyz"
+	if model.workspace.tasks == nil {
+		model.workspace.tasks = make(map[string]*taskRecord)
+	}
+	model.workspace.tasks["task-xyz"] = &taskRecord{
+		ID:         "task-xyz",
+		TaskNumber: 7,
+		Title:      "Build login flow",
+	}
+	// chatMessages is empty — should render empty state
+
+	rendered := strings.Join(model.renderChatMessages(80), "\n")
+	if !strings.Contains(rendered, "no messages yet") {
+		t.Fatalf("empty state header missing: %q", rendered)
+	}
+	if !strings.Contains(rendered, "OC-7: Build login flow") {
+		t.Fatalf("task name missing from task-scoped empty state: %q", rendered)
+	}
+}
+
+func TestOrgScopedChatEmptyStateDoesNotShowTaskName(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.activeScope = ScopeOrg
+	// chatMessages is empty
+
+	rendered := strings.Join(model.renderChatMessages(80), "\n")
+	if !strings.Contains(rendered, "no messages yet") {
+		t.Fatalf("empty state header missing: %q", rendered)
+	}
+	// Should not show any "OC-" style task label
+	if strings.Contains(rendered, "OC-") {
+		t.Fatalf("org-scoped empty state should not show a task label: %q", rendered)
+	}
+}

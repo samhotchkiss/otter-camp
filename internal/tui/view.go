@@ -842,7 +842,10 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 			start = len(filteredActivity) - 3
 		}
 		for _, entry := range filteredActivity[start:] {
-			lines = append(lines, styleMuted.Render("  ✓ "+truncate(entry, width-6)))
+			// EX-103: use the same context-aware icon as renderActivityView (EX-093).
+			// Keep the 2-space indent so the icon lines up with other dashboard sections.
+			icon := activityIcon(entry)
+			lines = append(lines, "  "+icon+styleMuted.Render(truncate(entry, width-6)))
 		}
 	}
 
@@ -1688,11 +1691,24 @@ func (m Model) renderChatMessages(width int) []string {
 		// EX-096: context-aware empty state — show who you're chatting with
 		// so the first message feels intentional rather than anonymous.
 		agentName := m.assistantLabel()
-		return []string{
+		lines := []string{
 			"",
 			center("no messages yet"),
 			center("Enter·send a message to " + agentName),
 		}
+		// EX-104: for task-scoped sessions also show the task name so users
+		// immediately know which task this conversation is scoped to.
+		if m.activeScope == ScopeTask && m.workspace.selectedTaskID != "" {
+			if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil && task.Title != "" {
+				taskLabel := task.Title
+				if task.TaskNumber > 0 {
+					taskLabel = fmt.Sprintf("OC-%d: %s", task.TaskNumber, task.Title)
+				}
+				lines = append(lines, "")
+				lines = append(lines, center(styleMuted.Render(truncate(taskLabel, width-4))))
+			}
+		}
+		return lines
 	}
 
 	var lines []string
