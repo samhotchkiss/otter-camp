@@ -60,6 +60,21 @@ var (
 	styleActive = lipgloss.NewStyle().Foreground(colFocus).Bold(true)
 )
 
+// taskStatusColor returns a colour for the given work_status string.
+// Used to colour the right-aligned status labels in project and task views.
+func taskStatusColor(s string) lipgloss.Color {
+	switch strings.ToLower(s) {
+	case "in_progress":
+		return colWarning
+	case "blocked", "rejected", "deferred":
+		return colError
+	case "done", "approved", "cancelled":
+		return colConnected
+	default: // draft, todo, unknown
+		return colMuted
+	}
+}
+
 // formatTaskStatus converts raw status strings to human-readable Title Case labels.
 func formatTaskStatus(s string) string {
 	switch strings.ToLower(s) {
@@ -987,10 +1002,11 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 				padW = 1
 			}
 			spacer := strings.Repeat(" ", padW)
-			statusLabel := styleMuted.Render(statusText)
+			statusColor := taskStatusColor(task.WorkStatus)
+			statusLabel := lipgloss.NewStyle().Foreground(statusColor).Render(statusText)
 			var taskLine string
 			if isCursor {
-				taskLine = styleBold.Foreground(colFocus).Render(leftPart) + styleMuted.Render(spacer+statusText)
+				taskLine = styleBold.Foreground(colFocus).Render(leftPart) + lipgloss.NewStyle().Foreground(statusColor).Render(spacer+statusText)
 			} else {
 				taskLine = styleText.Render(leftPart+spacer) + statusLabel
 			}
@@ -1037,17 +1053,7 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	var lines []string
 	lines = append(lines, "")
 
-	statusColor := colMuted
-	switch task.Status {
-	case "draft", "todo":
-		statusColor = colConnected
-	case "in_progress":
-		statusColor = colWarning
-	case "done", "approved", "cancelled":
-		statusColor = colMuted
-	case "blocked", "rejected", "deferred":
-		statusColor = colError
-	}
+	statusColor := taskStatusColor(task.Status)
 
 	taskTitle := task.Title
 	if task.TaskNumber > 0 {

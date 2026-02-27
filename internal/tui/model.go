@@ -2511,13 +2511,25 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		if node := m.workspace.nodes[taskNodeID]; node != nil {
 			node.WorkStatus = payload.ToStatus
 		}
-		// If the project detail is loaded and contains this task, update it there too
+		// If the project detail is loaded, update task status and DoneCount
 		if m.workspace.selectedProject != nil {
+			isNowDone := payload.ToStatus == "done" || payload.ToStatus == "approved" || payload.ToStatus == "cancelled"
 			for i := range m.workspace.selectedProject.Tasks {
-				if m.workspace.selectedProject.Tasks[i].ID == payload.TaskID {
-					m.workspace.selectedProject.Tasks[i].WorkStatus = payload.ToStatus
-					break
+				t := &m.workspace.selectedProject.Tasks[i]
+				if t.ID != payload.TaskID {
+					continue
 				}
+				wasDone := t.WorkStatus == "done" || t.WorkStatus == "approved" || t.WorkStatus == "cancelled"
+				t.WorkStatus = payload.ToStatus
+				// Adjust done count when a task crosses the done boundary
+				if !wasDone && isNowDone {
+					m.workspace.selectedProject.DoneCount++
+				} else if wasDone && !isNowDone {
+					if m.workspace.selectedProject.DoneCount > 0 {
+						m.workspace.selectedProject.DoneCount--
+					}
+				}
+				break
 			}
 		}
 		return nil
