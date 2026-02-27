@@ -102,6 +102,11 @@ type adminResetPasswordRequest struct {
 	NewPassword string `json:"new_password"`
 }
 
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
 type adminUpdateRoleRequest struct {
 	Role string `json:"role"`
 }
@@ -256,7 +261,76 @@ func (h authHandlers) logout(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	api.JSON(w, http.StatusOK, nil)
+}
+
+func (h authHandlers) changePassword(w http.ResponseWriter, r *http.Request) {
+	updater, ok := h.users.(authUserUpdater)
+	if h.users == nil || !ok || updater == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "user repository unavailable")
+		return
+	}
+	if h.sessions == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "session repository unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		api.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	var req changePasswordRequest
+	if err := decodeJSON(r, &req); err != nil {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+	currentPassword := strings.TrimSpace(req.CurrentPassword)
+	newPassword := strings.TrimSpace(req.NewPassword)
+	if currentPassword == "" || newPassword == "" {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "current_password and new_password are required")
+		return
+	}
+
+	user, err := h.users.GetByID(r.Context(), principal.UserID)
+	if err != nil {
+		api.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+		return
+	}
+	if user.OrganizationID != principal.OrganizationID {
+		api.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+		return
+	}
+	if user.PasswordHash == nil || bcrypt.CompareHashAndPassword([]byte(*user.PasswordHash), []byte(currentPassword)) != nil {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "current_password is incorrect")
+		return
+	}
+
+	hashed, err := hashPasswordForMode(newPassword)
+	if err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to update password")
+		return
+	}
+	user.PasswordHash = &hashed
+	if _, err := updater.Update(r.Context(), user); err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to update password")
+		return
+	}
+
+	sessions, err := h.sessions.ListActive(r.Context(), principal.UserID)
+	if err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to revoke sessions")
+		return
+	}
+	for _, session := range sessions {
+		if err := h.sessions.Revoke(r.Context(), session.ID); err != nil {
+			api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to revoke sessions")
+			return
+		}
+	}
+
+	api.JSON(w, http.StatusOK, nil)
 }
 
 func (h authHandlers) refresh(w http.ResponseWriter, r *http.Request) {

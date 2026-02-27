@@ -64,8 +64,11 @@ func TestAuthHTTPLoginMeLogoutAndExpiredSession(t *testing.T) {
 		"Authorization":   "Bearer " + token,
 		"X-Forwarded-For": "203.0.113.120",
 	})
-	if logoutResp.StatusCode != http.StatusNoContent {
-		t.Fatalf("logout status = %d, want %d body=%s", logoutResp.StatusCode, http.StatusNoContent, string(logoutResp.Body))
+	if logoutResp.StatusCode != http.StatusOK {
+		t.Fatalf("logout status = %d, want %d body=%s", logoutResp.StatusCode, http.StatusOK, string(logoutResp.Body))
+	}
+	if !hasJSONPath(logoutResp.Body, "meta", "request_id") {
+		t.Fatalf("logout response missing envelope meta body=%s", string(logoutResp.Body))
 	}
 
 	meAfterLogout := mustJSON(t, http.MethodGet, testServer.URL+"/v1/auth/me", nil, map[string]string{
@@ -97,6 +100,58 @@ func TestAuthHTTPLoginMeLogoutAndExpiredSession(t *testing.T) {
 	}
 	if got := jsonPathString(t, expiredResp.Body, "error", "code"); got != "session_expired" {
 		t.Fatalf("error.code = %q, want %q", got, "session_expired")
+	}
+}
+
+func TestAuthHTTPChangePassword(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, _ := newAuthTestServer(t, "standard")
+	defer testServer.Close()
+
+	token := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	wrongCurrent := mustJSON(t, http.MethodPost, testServer.URL+"/v1/auth/change-password", map[string]any{
+		"current_password": "wrong-password",
+		"new_password":     "new-admin-password",
+	}, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if wrongCurrent.StatusCode != http.StatusBadRequest {
+		t.Fatalf("wrong current password status = %d, want %d body=%s", wrongCurrent.StatusCode, http.StatusBadRequest, string(wrongCurrent.Body))
+	}
+
+	changed := mustJSON(t, http.MethodPost, testServer.URL+"/v1/auth/change-password", map[string]any{
+		"current_password": "admin-password",
+		"new_password":     "new-admin-password",
+	}, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if changed.StatusCode != http.StatusOK {
+		t.Fatalf("change password status = %d, want %d body=%s", changed.StatusCode, http.StatusOK, string(changed.Body))
+	}
+
+	meAfterChange := mustJSON(t, http.MethodGet, testServer.URL+"/v1/auth/me", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if meAfterChange.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("me after password change status = %d, want %d body=%s", meAfterChange.StatusCode, http.StatusUnauthorized, string(meAfterChange.Body))
+	}
+
+	oldLogin := mustJSON(t, http.MethodPost, testServer.URL+"/v1/auth/login", map[string]any{
+		"email":    adminUser.Email,
+		"password": "admin-password",
+	}, nil)
+	if oldLogin.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("old password login status = %d, want %d body=%s", oldLogin.StatusCode, http.StatusUnauthorized, string(oldLogin.Body))
+	}
+
+	newLogin := mustJSON(t, http.MethodPost, testServer.URL+"/v1/auth/login", map[string]any{
+		"email":    adminUser.Email,
+		"password": "new-admin-password",
+	}, nil)
+	if newLogin.StatusCode != http.StatusOK {
+		t.Fatalf("new password login status = %d, want %d body=%s", newLogin.StatusCode, http.StatusOK, string(newLogin.Body))
 	}
 }
 

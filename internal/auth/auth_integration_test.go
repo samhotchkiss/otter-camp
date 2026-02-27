@@ -206,8 +206,11 @@ func TestSession_Revocation(t *testing.T) {
 	logout := doJSON(t, http.MethodPost, srv.URL+"/v1/auth/logout", map[string]any{}, map[string]string{
 		"Authorization": "Bearer " + token,
 	})
-	if logout.StatusCode != http.StatusNoContent {
-		t.Fatalf("logout status=%d want=%d body=%s", logout.StatusCode, http.StatusNoContent, string(logout.Body))
+	if logout.StatusCode != http.StatusOK {
+		t.Fatalf("logout status=%d want=%d body=%s", logout.StatusCode, http.StatusOK, string(logout.Body))
+	}
+	if got := jsonPathString(t, logout.Body, "meta", "request_id"); strings.TrimSpace(got) == "" {
+		t.Fatalf("logout response missing envelope meta body=%s", string(logout.Body))
 	}
 
 	me := doJSON(t, http.MethodGet, srv.URL+"/v1/auth/me", nil, map[string]string{
