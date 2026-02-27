@@ -425,6 +425,12 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 		unreadSuffix = " " + styleUnread.Render(fmt.Sprintf("(%d)", node.Unread))
 	}
 
+	// Right-align relative time for top-level session nodes
+	var timeSuffix string
+	if node.Kind == sidebarKindSession && node.ParentID == "" && !node.UpdatedAt.IsZero() {
+		timeSuffix = " " + styleSubtle.Render(relativeTime(node.UpdatedAt))
+	}
+
 	line := prefix + label
 
 	var rendered string
@@ -452,7 +458,7 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 		}
 	}
 
-	return rendered + unreadSuffix
+	return rendered + timeSuffix + unreadSuffix
 }
 
 func (m Model) filteredSidebarIDs(visible []string, rawQuery string) []string {
@@ -1780,6 +1786,23 @@ func buildPanelContent(lines []string, targetH, width int) string {
 		return strings.Join(actual, "\n")
 	}
 	return result
+}
+
+func relativeTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	diff := time.Since(t)
+	switch {
+	case diff < time.Minute:
+		return "now"
+	case diff < time.Hour:
+		return fmt.Sprintf("%dm", int(diff.Minutes()))
+	case diff < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(diff.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(diff.Hours()/24))
+	}
 }
 
 func truncate(s string, maxLen int) string {

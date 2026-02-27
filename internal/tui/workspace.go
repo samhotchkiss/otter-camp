@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 type MainView string
@@ -53,18 +54,19 @@ const (
 )
 
 type sidebarNode struct {
-	ID         string
-	Label      string
-	Kind       sidebarKind
-	ParentID   string
-	Expanded   bool
-	Unread     int
-	SessionID  string
-	SessionScope string // "organization", "project", "project_task" for session nodes
-	TaskID     string
-	TaskNumber int
-	ProjectID  string
-	WorkStatus string
+	ID           string
+	Label        string
+	Kind         sidebarKind
+	ParentID     string
+	Expanded     bool
+	Unread       int
+	SessionID    string
+	SessionScope string    // "organization", "project", "project_task" for session nodes
+	TaskID       string
+	TaskNumber   int
+	ProjectID    string
+	WorkStatus   string
+	UpdatedAt    time.Time // for session nodes: last activity time
 }
 
 type taskRecord struct {
@@ -730,6 +732,7 @@ func (w *workspaceState) rebuildSidebar(orgSessionID string, chats []SidebarChat
 			SessionScope: chat.ScopeType,
 			TaskID:       taskID,
 			WorkStatus:   chat.WorkStatus,
+			UpdatedAt:    chat.UpdatedAt,
 		}
 		newTopLevel = append(newTopLevel, id)
 	}
