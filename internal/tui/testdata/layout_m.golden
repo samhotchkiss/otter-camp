@@ -2,11 +2,11 @@
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
 ╭───────────────────╮╭─────────────────────────────────────────────────────╮╭──────────────────────────────────────────╮
 │ INBOX             ││ DASHBOARD                                           ││ General / Fr…  ·  [task] [project] [org] │
-│ ▾ CHATS           ││ ─────────────────────────────────────────────────── ││ ──────────────────────────────────────── │
-│   Frank / Gene…   ││                                                     ││                                          │
-│ ▾ PROJECTS        ││ Task Board                                          ││             no messages yet              │
-│                   ││ TODO (0)        IN PROGRESS (0) DONE (0)            ││        Tab·focus chat  Enter·send        │
-│                   ││ ──────────────  ──────────────  ──────────────      ││                                          │
+│ ───────────────   ││ ─────────────────────────────────────────────────── ││ ──────────────────────────────────────── │
+│ ▾ CHATS           ││                                                     ││                                          │
+│   Frank / Gene…   ││ Task Board                                          ││             no messages yet              │
+│ ───────────────   ││ TODO (0)        IN PROGRESS (0) DONE (0)            ││        Tab·focus chat  Enter·send        │
+│ ▾ PROJECTS        ││ ──────────────  ──────────────  ──────────────      ││                                          │
 │                   ││                                                     ││ ╭────────────────────────────────────╮   │
 │                   ││ ──────────────────── Activity ───────────────────── ││ │ type a message...                  │   │
 │                   ││   ✓ workspace booted                                ││ ╰────────────────────────────────────╯   │
@@ -34,11 +34,11 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
 ╭───────────────────╮╭─────────────────────────────────────────────────────╮╭──────────────────────────────────────────╮
 │ INBOX             ││ DASHBOARD                                           ││ General / Fr…  ·  [task] [project] [org] │
-│ ▾ CHATS           ││ ─────────────────────────────────────────────────── ││ ──────────────────────────────────────── │
-│   Frank / Gene…   ││                                                     ││                                          │
-│ ▾ PROJECTS        ││ Task Board                                          ││             no messages yet              │
-│                   ││ TODO (0)        IN PROGRESS (0) DONE (0)            ││        Tab·focus chat  Enter·send        │
-│                   ││ ──────────────  ──────────────  ──────────────      ││                                          │
+│ ───────────────   ││ ─────────────────────────────────────────────────── ││ ──────────────────────────────────────── │
+│ ▾ CHATS           ││                                                     ││                                          │
+│   Frank / Gene…   ││ Task Board                                          ││             no messages yet              │
+│ ───────────────   ││ TODO (0)        IN PROGRESS (0) DONE (0)            ││        Tab·focus chat  Enter·send        │
+│ ▾ PROJECTS        ││ ──────────────  ──────────────  ──────────────      ││                                          │
 │                   ││                                                     ││ ╭────────────────────────────────────╮   │
 │                   ││ ──────────────────── Activity ───────────────────── ││ │ type a message...                  │   │
 │                   ││   ✓ workspace booted                                ││ ╰────────────────────────────────────╯   │
@@ -66,11 +66,11 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
 ╭───────────────────╮╭─────────────────────────────────────────────────────╮╭──────────────────────────────────────────╮
 │ INBOX             ││ DASHBOARD                                           ││ General / Fr…  ·  [task] [project] [org] │
-│ ▾ CHATS           ││ ─────────────────────────────────────────────────── ││ ──────────────────────────────────────── │
-│   Frank / Gene…   ││                                                     ││                                          │
-│ ▾ PROJECTS        ││ Task Board                                          ││             no messages yet              │
-│                   ││ TODO (0)        IN PROGRESS (0) DONE (0)            ││        Tab·focus chat  Enter·send        │
-│                   ││ ──────────────  ──────────────  ──────────────      ││                                          │
+│ ───────────────   ││ ─────────────────────────────────────────────────── ││ ──────────────────────────────────────── │
+│ ▾ CHATS           ││                                                     ││                                          │
+│   Frank / Gene…   ││ Task Board                                          ││             no messages yet              │
+│ ───────────────   ││ TODO (0)        IN PROGRESS (0) DONE (0)            ││        Tab·focus chat  Enter·send        │
+│ ▾ PROJECTS        ││ ──────────────  ──────────────  ──────────────      ││                                          │
 │                   ││                                                     ││ ╭────────────────────────────────────╮   │
 │                   ││ ──────────────────── Activity ───────────────────── ││ │ type a message...                  │   │
 │                   ││   ✓ workspace booted                                ││ ╰────────────────────────────────────╯   │

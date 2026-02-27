@@ -285,17 +285,33 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 		maxNodeLines = 0
 	}
 
+	displayLines := 0
+	lastRendered := 0
 	for i, id := range visible {
-		if i >= maxNodeLines {
+		if displayLines >= maxNodeLines {
 			break
 		}
 		node := m.workspace.nodes[id]
 		if node == nil {
+			lastRendered = i + 1
 			continue
 		}
+		// Add section divider above each header (except the very first node)
+		if node.Kind == sidebarKindHeader && len(lines) > 0 {
+			if displayLines >= maxNodeLines {
+				break
+			}
+			lines = append(lines, styleMuted.Render(strings.Repeat("─", maxInt(1, cw-2))))
+			displayLines++
+			if displayLines >= maxNodeLines {
+				break
+			}
+		}
 		lines = append(lines, m.renderSidebarNode(node, i == m.workspace.sidebarCursor, cw, iconOnly))
+		displayLines++
+		lastRendered = i + 1
 	}
-	if remaining := len(visible) - maxNodeLines; remaining > 0 && rowsForBody > 0 {
+	if remaining := len(visible) - lastRendered; remaining > 0 && rowsForBody > 0 {
 		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more", remaining)))
 	}
 

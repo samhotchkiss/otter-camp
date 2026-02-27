@@ -101,11 +101,11 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivit…
 ╭──────────────────────────────────╮╭────────────────────────────────────────────────────╮
 │ INBOX                            ││ General / Frank  ·  [task] [project] [org]         │
-│ ▾ CHATS                          ││ ────────────────────────────────────────────────── │
-│   Frank / General                ││                                                    │
-│ ▾ PROJECTS                       ││                  no messages yet                   │
-│                                  ││             Tab·focus chat  Enter·send             │
-│                                  ││                                                    │
+│ ──────────────────────────────   ││ ────────────────────────────────────────────────── │
+│ ▾ CHATS                          ││                                                    │
+│   Frank / General                ││                  no messages yet                   │
+│ ──────────────────────────────   ││             Tab·focus chat  Enter·send             │
+│ ▾ PROJECTS                       ││                                                    │
 │                                  ││ ╭──────────────────────────────────────────────╮   │
 │                                  ││ │ type a message...                            │   │
 │                                  ││ ╰──────────────────────────────────────────────╯   │
