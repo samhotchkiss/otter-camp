@@ -2573,3 +2573,99 @@ func TestTaskViewApproveNoOpWhenNoInboxItem(t *testing.T) {
 		t.Fatal("statusMessage = 'Task approved.' but no inbox item existed")
 	}
 }
+
+// EX-150: project view task list should show ⚠ badge for tasks requiring human review,
+// consistent with the dashboard board view (EX-094).
+
+func TestProjectViewShowsHumanReviewBadge(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	taskID := "task-needs-review"
+	model.workspace.tasks[taskID] = &taskRecord{
+		ID:                  taskID,
+		TaskNumber:          5,
+		Title:               "Needs Review",
+		Status:              "in_progress",
+		RequiresHumanReview: true,
+	}
+	// renderProjectView requires a project node in workspace.nodes to render tasks.
+	model.workspace.nodes["project-proj-1"] = &sidebarNode{
+		ID:        "project-proj-1",
+		Kind:      sidebarKindProject,
+		Label:     "Test Project",
+		ProjectID: "proj-1",
+	}
+	// Set up project detail with a task
+	model.workspace.selectedProjectID = "proj-1"
+	model.workspace.selectedProject = &ProjectDetail{
+		ID:          "proj-1",
+		DisplayName: "Test Project",
+		Tasks: []SidebarTaskItem{
+			{ID: taskID, Title: "Needs Review", WorkStatus: "in_progress", TaskNumber: 5},
+		},
+	}
+	model.workspace.setMainView(ViewProject)
+	model.focus = MainPanel
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	rendered := model.renderProjectView(80, 30)
+	found := false
+	for _, line := range rendered {
+		if strings.Contains(line, "⚠") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("project view task list missing ⚠ badge for RequiresHumanReview task:\n%s",
+			strings.Join(rendered, "\n"))
+	}
+}
+
+func TestProjectViewNoReviewBadgeWhenNotRequired(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	taskID := "task-no-review"
+	model.workspace.tasks[taskID] = &taskRecord{
+		ID:                  taskID,
+		TaskNumber:          6,
+		Title:               "Normal Task",
+		Status:              "in_progress",
+		RequiresHumanReview: false,
+	}
+	model.workspace.nodes["project-proj-2"] = &sidebarNode{
+		ID:        "project-proj-2",
+		Kind:      sidebarKindProject,
+		Label:     "Test Project 2",
+		ProjectID: "proj-2",
+	}
+	model.workspace.selectedProjectID = "proj-2"
+	model.workspace.selectedProject = &ProjectDetail{
+		ID:          "proj-2",
+		DisplayName: "Test Project 2",
+		Tasks: []SidebarTaskItem{
+			{ID: taskID, Title: "Normal Task", WorkStatus: "in_progress", TaskNumber: 6},
+		},
+	}
+	model.workspace.setMainView(ViewProject)
+	model.focus = MainPanel
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	rendered := model.renderProjectView(80, 30)
+	// The ⚠ should NOT appear in the task list (only in the separate human review line below)
+	taskLineBadge := false
+	for _, line := range rendered {
+		// The title line contains the task title — check if it has ⚠
+		if strings.Contains(line, "Normal Task") && strings.Contains(line, "⚠") {
+			taskLineBadge = true
+			break
+		}
+	}
+	if taskLineBadge {
+		t.Fatalf("project view task line shows ⚠ badge when RequiresHumanReview=false")
+	}
+}

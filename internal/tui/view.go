@@ -1174,7 +1174,14 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			if maxTitleW < 4 {
 				maxTitleW = 4
 			}
-			truncTitle := truncate(taskTitle, maxTitleW)
+			// EX-150: append ⚠ when the task requires human review, consistent with
+			// the dashboard board view (EX-094) so the badge is visible in both views.
+			if rec := m.workspace.tasks[task.ID]; rec != nil && rec.RequiresHumanReview {
+				taskTitle = truncate(taskTitle, maxTitleW-2) + " ⚠"
+			} else {
+				taskTitle = truncate(taskTitle, maxTitleW)
+			}
+			truncTitle := taskTitle
 			leftPart := "  " + icon + truncTitle
 			padW := width - lipgloss.Width(leftPart) - statW - 1
 			if padW < 1 {
