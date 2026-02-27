@@ -40,12 +40,15 @@ type SidebarTaskItem struct {
 
 // TaskDetailItem is the full task record fetched on demand when the user selects a task.
 type TaskDetailItem struct {
-	ID          string
-	TaskNumber  int
-	Title       string
-	Description string
-	WorkStatus  string
-	SessionID   string
+	ID                  string
+	TaskNumber          int
+	Title               string
+	Description         string
+	WorkStatus          string
+	SessionID           string
+	AgentName           string // display_name of the assigned agent, if any
+	FlowNodeName        string // current flow node display_name, if any
+	RequiresHumanReview bool   // whether this task requires human review
 }
 
 type RuntimeHints struct {

@@ -307,11 +307,16 @@ func runTUICommand(args []string) int {
 			runtimeHints.LoadTaskDetail = func(ctx context.Context, taskID string) (*tuiapp.TaskDetailItem, error) {
 				var resp struct {
 					Data struct {
-						ID          string  `json:"id"`
-						TaskNumber  int     `json:"task_number"`
-						Title       string  `json:"title"`
-						Description *string `json:"description"`
-						WorkStatus  string  `json:"work_status"`
+						ID                  string  `json:"id"`
+						TaskNumber          int     `json:"task_number"`
+						Title               string  `json:"title"`
+						Description         *string `json:"description"`
+						WorkStatus          string  `json:"work_status"`
+						AssignedAgentID     string  `json:"assigned_agent_id"`
+						RequiresHumanReview bool    `json:"requires_human_review"`
+						CurrentFlowNode     *struct {
+							DisplayName string `json:"display_name"`
+						} `json:"current_flow_node"`
 					} `json:"data"`
 				}
 				if err := apiClient.request(ctx, "GET", "/v1/tasks/"+url.PathEscape(taskID), nil, &resp); err != nil {
@@ -323,11 +328,26 @@ func runTUICommand(args []string) int {
 					desc = *d.Description
 				}
 				item := &tuiapp.TaskDetailItem{
-					ID:          d.ID,
-					TaskNumber:  d.TaskNumber,
-					Title:       d.Title,
-					Description: desc,
-					WorkStatus:  d.WorkStatus,
+					ID:                  d.ID,
+					TaskNumber:          d.TaskNumber,
+					Title:               d.Title,
+					Description:         desc,
+					WorkStatus:          d.WorkStatus,
+					RequiresHumanReview: d.RequiresHumanReview,
+				}
+				if d.CurrentFlowNode != nil {
+					item.FlowNodeName = d.CurrentFlowNode.DisplayName
+				}
+				// Fetch assigned agent display name if present
+				if d.AssignedAgentID != "" {
+					var agentResp struct {
+						Data struct {
+							DisplayName string `json:"display_name"`
+						} `json:"data"`
+					}
+					if apiClient.request(ctx, "GET", "/v1/agents/"+url.PathEscape(d.AssignedAgentID), nil, &agentResp) == nil {
+						item.AgentName = agentResp.Data.DisplayName
+					}
 				}
 				// Find the task's async chat session (scope_type=project_task)
 				var sessResp struct {

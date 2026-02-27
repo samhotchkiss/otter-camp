@@ -901,7 +901,6 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		if proj.DoneCount > 0 {
 			taskHeader += fmt.Sprintf("  ·  %d done", proj.DoneCount)
 		}
-		lines = append(lines, styleLabel.Render(taskHeader))
 		cursor := m.workspace.projectTaskCursor
 		if cursor < 0 {
 			cursor = 0
@@ -1001,8 +1000,23 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 
 	lines = append(lines, titleLine)
 	lines = append(lines, statusLine)
-	if task.Flow > 0 {
-		lines = append(lines, styleMuted.Render(fmt.Sprintf("  Flow:   step %d", task.Flow)))
+	if task.AgentName != "" {
+		lines = append(lines, styleMuted.Render("  Agent:  "+task.AgentName))
+	}
+	if task.Flow > 0 || task.FlowNodeName != "" {
+		flowLine := "  Flow:   "
+		if task.FlowNodeName != "" {
+			flowLine += task.FlowNodeName
+			if task.Flow > 0 {
+				flowLine += fmt.Sprintf(" (step %d)", task.Flow)
+			}
+		} else {
+			flowLine += fmt.Sprintf("step %d", task.Flow)
+		}
+		lines = append(lines, styleMuted.Render(flowLine))
+	}
+	if task.RequiresHumanReview {
+		lines = append(lines, lipgloss.NewStyle().Foreground(colWarning).Render("  ⚠  Human review required"))
 	}
 
 	if desc := strings.TrimSpace(task.Description); desc != "" {

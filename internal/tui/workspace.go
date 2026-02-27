@@ -70,16 +70,19 @@ type sidebarNode struct {
 }
 
 type taskRecord struct {
-	ID                 string
-	TaskNumber         int
-	Title              string
-	Description        string
-	AcceptanceCriteria string
-	Subtasks           []string
-	SessionID          string
-	Status             string
-	Flow               int
-	History            []string
+	ID                  string
+	TaskNumber          int
+	Title               string
+	Description         string
+	AcceptanceCriteria  string
+	Subtasks            []string
+	SessionID           string
+	Status              string
+	Flow                int
+	FlowNodeName        string // human-readable current flow step name
+	AgentName           string // display_name of assigned agent
+	RequiresHumanReview bool
+	History             []string
 }
 
 type inboxItem struct {
