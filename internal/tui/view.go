@@ -1656,7 +1656,9 @@ func (m Model) renderChatMessages(width int) []string {
 			roleLabel = "You"
 		case "assistant":
 			roleStr = styleAssistant
-			roleLabel = "Frank"
+			// EX-087: resolve agent name from the task record when in a task-scoped
+			// session, so multi-agent deployments show the correct agent name.
+			roleLabel = m.assistantLabel()
 		case "interjection":
 			roleStr = styleInterject
 			roleLabel = "Interjection (interjected)"

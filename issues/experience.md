@@ -1291,3 +1291,21 @@ Golden layout snapshots regenerated.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-087: Chat message header shows actual agent name in task sessions
+
+**Observation:** Every assistant-role chat message showed "Frank" as the author label, regardless of which session was open or which agent was actually assigned to the task. In a multi-agent deployment (e.g., a project where separate PM, worker, and reviewer agents exist), every response would be incorrectly attributed to "Frank". The label was a hardcoded string in `renderChatMessages`.
+
+**Improvement:** Replaced the hardcoded `"Frank"` with a new `assistantLabel()` helper on the model. The helper:
+- When `activeScope == ScopeTask` and a task is loaded with a non-empty `AgentName`: returns the agent's display name (e.g., `"Ellie"`, `"Project Manager"`).
+- In all other cases (org/project scope, or task not yet loaded, or task has no assigned agent): returns `"Frank"` as the default fallback.
+
+Four unit tests added to `view_chat_test.go` covering: org scope fallback, task scope with agent, task scope without agent, and the full message render path confirming the agent name appears in rendered output.
+
+**Why it matters:** Message attribution matters — users should know which agent is responding. In single-agent setups the change is invisible (still shows "Frank"). In multi-agent setups (the target production scenario), messages are correctly attributed to the responsible agent. The fallback is safe and the change is backward-compatible.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

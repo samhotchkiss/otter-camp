@@ -2260,6 +2260,19 @@ func initialStatusMessage(state UIState, runtime RuntimeHints) string {
 	return base
 }
 
+// assistantLabel returns the display name for assistant-role messages.
+// In task-scoped sessions it resolves the assigned agent's name from the
+// task record so multi-agent deployments show the correct agent (e.g.
+// "Ellie" instead of always "Frank"). Falls back to "Frank".
+func (m Model) assistantLabel() string {
+	if m.activeScope == ScopeTask && m.workspace.selectedTaskID != "" {
+		if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil && task.AgentName != "" {
+			return task.AgentName
+		}
+	}
+	return "Frank"
+}
+
 func (m Model) commandFallbackHelp() string {
 	if m.commandMode {
 		return ":frank · :dashboard · :project · :task · :inbox · :focus sidebar|main|chat · :send · :cancel-turn · :quit  ·  Esc cancel"

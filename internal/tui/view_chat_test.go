@@ -261,3 +261,70 @@ func TestNormalizeRenderedMarkdownRemovesInlineCodeBackticks(t *testing.T) {
 		}
 	}
 }
+
+func TestAssistantLabelFallsBackToFrankForOrgSession(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.activeScope = ScopeOrg
+
+	if got := model.assistantLabel(); got != "Frank" {
+		t.Fatalf("assistantLabel() = %q, want %q in org scope", got, "Frank")
+	}
+}
+
+func TestAssistantLabelUsesAgentNameForTaskSession(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.activeScope = ScopeTask
+	model.workspace.selectedTaskID = "task-abc"
+	if model.workspace.tasks == nil {
+		model.workspace.tasks = make(map[string]*taskRecord)
+	}
+	model.workspace.tasks["task-abc"] = &taskRecord{
+		ID:        "task-abc",
+		AgentName: "Ellie",
+	}
+
+	if got := model.assistantLabel(); got != "Ellie" {
+		t.Fatalf("assistantLabel() = %q, want %q in task scope with agent", got, "Ellie")
+	}
+}
+
+func TestAssistantLabelFallsBackToFrankWhenTaskHasNoAgent(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.activeScope = ScopeTask
+	model.workspace.selectedTaskID = "task-no-agent"
+	if model.workspace.tasks == nil {
+		model.workspace.tasks = make(map[string]*taskRecord)
+	}
+	model.workspace.tasks["task-no-agent"] = &taskRecord{ID: "task-no-agent"}
+
+	if got := model.assistantLabel(); got != "Frank" {
+		t.Fatalf("assistantLabel() = %q, want %q when task has no agent name", got, "Frank")
+	}
+}
+
+func TestAssistantMessagesShowAgentNameFromTask(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.activeScope = ScopeTask
+	model.workspace.selectedTaskID = "task-pm"
+	if model.workspace.tasks == nil {
+		model.workspace.tasks = make(map[string]*taskRecord)
+	}
+	model.workspace.tasks["task-pm"] = &taskRecord{ID: "task-pm", AgentName: "Project Manager"}
+	model.chatMessages = []ChatMessage{
+		{
+			ID:        "msg-agent",
+			Role:      "assistant",
+			Content:   "I am working on this task.",
+			Finalized: true,
+			Timestamp: time.Date(2026, time.January, 2, 15, 10, 0, 0, time.Local),
+		},
+	}
+
+	rendered := strings.Join(model.renderChatMessages(80), "\n")
+	if !strings.Contains(rendered, "Project Manager") {
+		t.Fatalf("agent name missing from chat message label: %q", rendered)
+	}
+	if strings.Contains(rendered, "\nFrank\n") || strings.HasPrefix(rendered, "Frank") {
+		t.Fatalf("hardcoded Frank label should not appear when task has agent name: %q", rendered)
+	}
+}
