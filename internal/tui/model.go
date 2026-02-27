@@ -1284,6 +1284,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.statusMessage = "Inbox item approved."
 				return true, actOnInboxItemCmd(item.ID, "approve", m.runtimeHints.ActOnInboxItem)
 			}
+			// EX-196: no item to approve — give feedback instead of silent no-op.
+			m.statusMessage = "No inbox item to approve."
+			return true, nil
 		}
 		// EX-148: allow approve from task view when RequiresHumanReview is set.
 		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
@@ -1294,6 +1297,10 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					m.statusMessage = "Task approved."
 					return true, actOnInboxItemCmd(itemID, "approve", m.runtimeHints.ActOnInboxItem)
 				}
+			} else if task != nil {
+				// EX-196: task doesn't require review — let user know.
+				m.statusMessage = "This task doesn't require review."
+				return true, nil
 			}
 		}
 	case 'x':
@@ -1304,6 +1311,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.statusMessage = "Inbox item rejected."
 				return true, actOnInboxItemCmd(item.ID, "reject", m.runtimeHints.ActOnInboxItem)
 			}
+			// EX-196: no item to reject — give feedback.
+			m.statusMessage = "No inbox item to reject."
+			return true, nil
 		}
 		// EX-148: allow reject from task view.
 		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
@@ -1314,6 +1324,10 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					m.statusMessage = "Task rejected."
 					return true, actOnInboxItemCmd(itemID, "reject", m.runtimeHints.ActOnInboxItem)
 				}
+			} else if task != nil {
+				// EX-196: task doesn't require review.
+				m.statusMessage = "This task doesn't require review."
+				return true, nil
 			}
 		}
 	case 'f':
@@ -1324,6 +1338,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.statusMessage = "Inbox item deferred."
 				return true, actOnInboxItemCmd(item.ID, "defer", m.runtimeHints.ActOnInboxItem)
 			}
+			// EX-196: no item to defer — give feedback.
+			m.statusMessage = "No inbox item to defer."
+			return true, nil
 		}
 		// EX-148: allow defer from task view.
 		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
@@ -1334,6 +1351,10 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					m.statusMessage = "Task deferred."
 					return true, actOnInboxItemCmd(itemID, "defer", m.runtimeHints.ActOnInboxItem)
 				}
+			} else if task != nil {
+				// EX-196: task doesn't require review.
+				m.statusMessage = "This task doesn't require review."
+				return true, nil
 			}
 		}
 	case 'o':

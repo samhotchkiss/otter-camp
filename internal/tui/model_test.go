@@ -4543,3 +4543,62 @@ func TestInboxEnterWhenEmptyShowsFeedback(t *testing.T) {
 	// cmd may be the statusAutoClearCmd timer (batched by Update when statusMessage != "")
 	_ = cmd
 }
+
+// TestApproveRejectDeferEmptyInboxShowsFeedback verifies EX-196: pressing
+// a/x/f (approve/reject/defer) in ViewInbox when the inbox is empty sets a
+// status message instead of silently doing nothing.
+func TestApproveRejectDeferEmptyInboxShowsFeedback(t *testing.T) {
+	t.Parallel()
+	type testCase struct {
+		key  rune
+		want string
+	}
+	cases := []testCase{
+		{'a', "No inbox item to approve."},
+		{'x', "No inbox item to reject."},
+		{'f', "No inbox item to defer."},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(string(tc.key), func(t *testing.T) {
+			t.Parallel()
+			model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+				ActOnInboxItem: func(_ context.Context, _, _ string) error { return nil },
+			})
+			model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+			model.focus = MainPanel
+			model.workspace.mainView = ViewInbox
+			model.workspace.inbox = nil // empty inbox
+
+			updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tc.key}})
+			m2 := updated.(Model)
+			if m2.statusMessage != tc.want {
+				t.Errorf("pressing %q on empty inbox: statusMessage = %q, want %q (EX-196)", tc.key, m2.statusMessage, tc.want)
+			}
+		})
+	}
+}
+
+// TestApproveTaskWithoutReviewShowsFeedback verifies EX-196: pressing 'a' in
+// ViewTask when the task doesn't require human review shows a status message.
+func TestApproveTaskWithoutReviewShowsFeedback(t *testing.T) {
+	t.Parallel()
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		ActOnInboxItem: func(_ context.Context, _, _ string) error { return nil },
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.focus = MainPanel
+	model.workspace.mainView = ViewTask
+	model.workspace.selectedTaskID = "t1"
+	model.workspace.tasks["t1"] = &taskRecord{
+		ID:                  "t1",
+		Title:               "Some task",
+		RequiresHumanReview: false,
+	}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m2 := updated.(Model)
+	if m2.statusMessage != "This task doesn't require review." {
+		t.Errorf("pressing 'a' on non-review task: statusMessage = %q, want %q (EX-196)", m2.statusMessage, "This task doesn't require review.")
+	}
+}

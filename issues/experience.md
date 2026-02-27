@@ -3042,3 +3042,21 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-196: Approve/reject/defer keys give no feedback when conditions aren't met
+
+**Observation:** Pressing `a` (approve), `x` (reject), or `f` (defer) when the inbox was empty — or when the current task did not require human review — was a silent no-op. No status message was shown, no action was taken, and the user had no way to tell whether they'd successfully acted or whether the key binding was simply not available in this context.
+
+**Improvement:** Added fallback status messages for all three action keys:
+- In ViewInbox with no current item: "No inbox item to approve/reject/defer."
+- In ViewTask with a task that doesn't have `RequiresHumanReview`: "This task doesn't require review."
+
+These messages are returned immediately (`return true, nil`) so the auto-clear timer fires and the message disappears after 5s.
+
+**Why it matters:** Approval/rejection are high-stakes actions. If a user isn't sure their keypress was registered, they might double-press (causing unexpected behavior) or assume the app is broken. A clear status message disambiguates.
+
+**Effort:** Low (12 lines of fallback cases across 3 action handlers)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
