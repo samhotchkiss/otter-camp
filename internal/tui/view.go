@@ -63,6 +63,8 @@ var (
 // formatTaskStatus converts raw status strings to human-readable Title Case labels.
 func formatTaskStatus(s string) string {
 	switch strings.ToLower(s) {
+	case "draft":
+		return "Draft"
 	case "todo":
 		return "Todo"
 	case "in_progress":
@@ -71,10 +73,14 @@ func formatTaskStatus(s string) string {
 		return "Done"
 	case "approved":
 		return "Approved"
+	case "cancelled":
+		return "Cancelled"
 	case "blocked":
 		return "Blocked"
 	case "rejected":
 		return "Rejected"
+	case "deferred":
+		return "Deferred"
 	default:
 		parts := strings.Split(s, "_")
 		for i, p := range parts {
@@ -833,13 +839,13 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 
 	statusColor := colMuted
 	switch task.Status {
-	case "todo":
+	case "draft", "todo":
 		statusColor = colConnected
 	case "in_progress":
 		statusColor = colWarning
-	case "done", "approved":
+	case "done", "approved", "cancelled":
 		statusColor = colMuted
-	case "blocked", "rejected":
+	case "blocked", "rejected", "deferred":
 		statusColor = colError
 	}
 

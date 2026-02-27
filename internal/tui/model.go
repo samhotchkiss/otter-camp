@@ -311,6 +311,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			rec.Description = typed.Detail.Description
 			rec.SessionID = typed.Detail.SessionID
 			rec.TaskNumber = typed.Detail.TaskNumber
+			if typed.Detail.WorkStatus != "" {
+				rec.Status = typed.Detail.WorkStatus
+			}
 		}
 		return m, nil
 	case WorkspaceEnvelopeMsg:
