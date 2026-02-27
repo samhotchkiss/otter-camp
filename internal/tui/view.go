@@ -427,10 +427,12 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 		if node.ParentID != "" {
 			prefix = "    › "
 		} else if node.SessionScope == "project_task" && node.WorkStatus != "" {
-			// Show task work status icon for task-scoped chat sessions
+			// Show task work status icon for task-scoped chat sessions.
+			// Use ✓ for done/approved (consistent with project view done section),
+			// not ● which looks active/connected but means complete.
 			switch node.WorkStatus {
 			case "done", "approved":
-				prefix = "  ● "
+				prefix = "  ✓ "
 			case "in_progress":
 				prefix = "  ◌ "
 			case "blocked", "rejected":
