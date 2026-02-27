@@ -78,6 +78,9 @@ type RuntimeHints struct {
 	LoadTaskDetail               func(ctx context.Context, taskID string) (*TaskDetailItem, error)
 	LoadAgents                   func(ctx context.Context) ([]string, error) // returns "name=lifecycle_status" strings
 	LoadInboxItems               func(ctx context.Context) ([]InboxSummaryItem, error)
+	// ActOnInboxItem sends approve/reject/defer/dismiss for a specific inbox item ID.
+	// EX-160: required so that keyboard shortcuts in the inbox view reach the server.
+	ActOnInboxItem func(ctx context.Context, itemID, action string) error
 }
 
 func (h RuntimeHints) now() time.Time {

@@ -51,6 +51,14 @@ type chatCancelCompletedMsg struct {
 	Err error
 }
 
+// inboxActionCompletedMsg is dispatched when the async API call for an inbox
+// action (approve/reject/defer) completes. EX-160.
+type inboxActionCompletedMsg struct {
+	ItemID string
+	Action string
+	Err    error
+}
+
 // SessionResolvedMsg carries the resolved UUID of the session when a message is sent.
 // Used to filter SSE events by session, preventing cross-session leakage.
 type chatHistoryLoadedMsg struct {
@@ -507,6 +515,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chatCancelCompletedMsg:
 		if typed.Err != nil {
 			m.statusMessage = "Cancel request failed: " + strings.TrimSpace(typed.Err.Error())
+		}
+		return m, nil
+	case inboxActionCompletedMsg:
+		// EX-160: server-side error for approve/reject/defer surfaces in the status bar.
+		// On success there is nothing to do — local state is already updated optimistically.
+		if typed.Err != nil {
+			m.statusMessage = fmt.Sprintf("Inbox %s failed: %s", typed.Action, strings.TrimSpace(typed.Err.Error()))
 		}
 		return m, nil
 	case statusClearMsg:
@@ -1124,42 +1139,63 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		m.statusMessage = "Refreshing sidebar data…"
 		return true, loadSidebarDataCmd(m.runtimeHints)
 	case 'a':
-		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("approve") {
-			m.statusMessage = "Inbox item approved."
-			return true, nil
+		// EX-160: capture item ID before applyInboxAction removes it, then issue API call.
+		if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
+			item := m.workspace.currentInboxItem()
+			if item != nil && m.workspace.applyInboxAction("approve") {
+				m.statusMessage = "Inbox item approved."
+				return true, actOnInboxItemCmd(item.ID, "approve", m.runtimeHints.ActOnInboxItem)
+			}
 		}
 		// EX-148: allow approve from task view when RequiresHumanReview is set.
 		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
 			task := m.workspace.tasks[m.workspace.selectedTaskID]
-			if task != nil && task.RequiresHumanReview && m.workspace.applyInboxActionForTask(task.ID, "approve") {
-				m.statusMessage = "Task approved."
-				return true, nil
+			if task != nil && task.RequiresHumanReview {
+				itemID := m.workspace.inboxItemIDForTask(task.ID)
+				if m.workspace.applyInboxActionForTask(task.ID, "approve") {
+					m.statusMessage = "Task approved."
+					return true, actOnInboxItemCmd(itemID, "approve", m.runtimeHints.ActOnInboxItem)
+				}
 			}
 		}
 	case 'x':
-		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("reject") {
-			m.statusMessage = "Inbox item rejected."
-			return true, nil
+		// EX-160: capture item ID before applyInboxAction removes it.
+		if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
+			item := m.workspace.currentInboxItem()
+			if item != nil && m.workspace.applyInboxAction("reject") {
+				m.statusMessage = "Inbox item rejected."
+				return true, actOnInboxItemCmd(item.ID, "reject", m.runtimeHints.ActOnInboxItem)
+			}
 		}
 		// EX-148: allow reject from task view.
 		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
 			task := m.workspace.tasks[m.workspace.selectedTaskID]
-			if task != nil && task.RequiresHumanReview && m.workspace.applyInboxActionForTask(task.ID, "reject") {
-				m.statusMessage = "Task rejected."
-				return true, nil
+			if task != nil && task.RequiresHumanReview {
+				itemID := m.workspace.inboxItemIDForTask(task.ID)
+				if m.workspace.applyInboxActionForTask(task.ID, "reject") {
+					m.statusMessage = "Task rejected."
+					return true, actOnInboxItemCmd(itemID, "reject", m.runtimeHints.ActOnInboxItem)
+				}
 			}
 		}
 	case 'f':
-		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("defer") {
-			m.statusMessage = "Inbox item deferred."
-			return true, nil
+		// EX-160: capture item ID before applyInboxAction removes it.
+		if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
+			item := m.workspace.currentInboxItem()
+			if item != nil && m.workspace.applyInboxAction("defer") {
+				m.statusMessage = "Inbox item deferred."
+				return true, actOnInboxItemCmd(item.ID, "defer", m.runtimeHints.ActOnInboxItem)
+			}
 		}
 		// EX-148: allow defer from task view.
 		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
 			task := m.workspace.tasks[m.workspace.selectedTaskID]
-			if task != nil && task.RequiresHumanReview && m.workspace.applyInboxActionForTask(task.ID, "defer") {
-				m.statusMessage = "Task deferred."
-				return true, nil
+			if task != nil && task.RequiresHumanReview {
+				itemID := m.workspace.inboxItemIDForTask(task.ID)
+				if m.workspace.applyInboxActionForTask(task.ID, "defer") {
+					m.statusMessage = "Task deferred."
+					return true, actOnInboxItemCmd(itemID, "defer", m.runtimeHints.ActOnInboxItem)
+				}
 			}
 		}
 	case 'o':
@@ -1420,8 +1456,8 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 
 	fields := strings.Fields(trimmed)
 	if strings.EqualFold(fields[0], "inbox") && len(fields) > 1 {
-		m.executeInboxCommand(fields[1:])
-		return nil
+		// EX-160: executeInboxCommand now returns a cmd for server-side API calls.
+		return m.executeInboxCommand(fields[1:])
 	}
 
 	switch strings.ToLower(fields[0]) {
@@ -2297,10 +2333,12 @@ func (m *Model) executeSidebarCommand(args []string) {
 	}
 }
 
-func (m *Model) executeInboxCommand(args []string) {
+// executeInboxCommand handles :inbox <action> commands. Returns a tea.Cmd
+// for approve/reject/defer so the action is also sent to the server (EX-160).
+func (m *Model) executeInboxCommand(args []string) tea.Cmd {
 	if len(args) != 1 {
 		m.statusMessage = "Usage: :inbox up|down|home|end|open|approve|reject|defer"
-		return
+		return nil
 	}
 	m.workspace.setMainView(ViewInbox)
 	m.setFocus(MainPanel)
@@ -2320,16 +2358,18 @@ func (m *Model) executeInboxCommand(args []string) {
 	case "open":
 		if !m.workspace.applyInboxAction("open") {
 			m.statusMessage = "No inbox item available."
-			return
+			return nil
 		}
 		m.state.LastActiveChatSession = m.workspace.activeSessionID
 		m.activeSession = m.workspace.activeSessionID
 		m.statusMessage = "Opened inbox item in context."
 	case "approve", "reject", "defer":
 		action := strings.ToLower(args[0])
+		// EX-160: capture item ID before applyInboxAction removes it from the list.
+		item := m.workspace.currentInboxItem()
 		if !m.workspace.applyInboxAction(action) {
 			m.statusMessage = "No inbox item available."
-			return
+			return nil
 		}
 		switch action {
 		case "approve":
@@ -2339,9 +2379,13 @@ func (m *Model) executeInboxCommand(args []string) {
 		default:
 			m.statusMessage = "Inbox item deferred."
 		}
+		if item != nil {
+			return actOnInboxItemCmd(item.ID, action, m.runtimeHints.ActOnInboxItem)
+		}
 	default:
 		m.statusMessage = "Unknown inbox action. Use up, down, home, end, open, approve, reject, or defer."
 	}
+	return nil
 }
 
 func (m *Model) applyResponsiveLayout() {
@@ -2601,6 +2645,19 @@ func cancelChatTurnCmd(
 		}
 		err := cancelFn(context.Background(), strings.TrimSpace(request.SessionID))
 		return chatCancelCompletedMsg{Err: err}
+	}
+}
+
+// actOnInboxItemCmd fires an async API call for an inbox action (approve/reject/defer/dismiss).
+// EX-160: previously inbox key bindings only updated local state; now they also reach the server.
+// On completion a statusMessage update is triggered via inboxActionCompletedMsg.
+func actOnInboxItemCmd(itemID, action string, actFn func(ctx context.Context, itemID, action string) error) tea.Cmd {
+	if strings.TrimSpace(itemID) == "" || actFn == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		err := actFn(context.Background(), strings.TrimSpace(itemID), action)
+		return inboxActionCompletedMsg{ItemID: itemID, Action: action, Err: err}
 	}
 }
 

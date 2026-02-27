@@ -789,6 +789,18 @@ func (w *workspaceState) applyInboxAction(action string) bool {
 // action to it. Used by ViewTask keybindings (a/x/f) so that the
 // approve/reject/defer hints shown in the task detail view actually work.
 // EX-148: task view showed approval hints but they only worked in ViewInbox.
+// inboxItemIDForTask returns the inbox item ID for the first item that matches
+// taskID. Used by EX-160 key handlers to capture the item ID before
+// applyInboxActionForTask removes the item from the list.
+func (w *workspaceState) inboxItemIDForTask(taskID string) string {
+	for _, item := range w.inbox {
+		if item.TaskID == taskID {
+			return item.ID
+		}
+	}
+	return ""
+}
+
 func (w *workspaceState) applyInboxActionForTask(taskID, action string) bool {
 	if taskID == "" {
 		return false

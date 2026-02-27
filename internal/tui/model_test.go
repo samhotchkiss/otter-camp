@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -3025,5 +3026,66 @@ func TestWorkerUnresponsiveAddsActivityEntry(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("activity log missing 'worker unresponsive' entry: %v", m.workspace.activity)
+	}
+}
+
+// EX-160: Inbox approve/reject/defer were local-only; pressing 'a', 'x', 'f'
+// must also return a tea.Cmd that calls ActOnInboxItem with the correct item ID.
+func TestInboxApproveIssuesServerAPICall(t *testing.T) {
+	var calledItemID, calledAction string
+	model := NewModel(DefaultState())
+	model.runtimeHints.ActOnInboxItem = func(_ context.Context, itemID, action string) error {
+		calledItemID = itemID
+		calledAction = action
+		return nil
+	}
+	model.focus = MainPanel
+	model.workspace.mainView = ViewInbox
+	model.workspace.inbox = []inboxItem{
+		{ID: "item-abc", TaskID: "task-xyz", Summary: "Fix the bug"},
+	}
+	model.workspace.tasks = map[string]*taskRecord{
+		"task-xyz": {ID: "task-xyz", TaskNumber: 3, Title: "Fix the bug"},
+	}
+
+	// Press 'a' to approve
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m := updated.(Model)
+
+	if len(m.workspace.inbox) != 0 {
+		t.Fatalf("inbox still has %d items after approve, want 0", len(m.workspace.inbox))
+	}
+	if cmd == nil {
+		t.Fatal("approve returned nil cmd, want actOnInboxItemCmd")
+	}
+	// The cmd is wrapped in a tea.Batch with the status auto-clear timer.
+	// runNonTimerCmds skips the 5s timer and only runs the API call cmd.
+	runNonTimerCmds(cmd)
+	if calledItemID != "item-abc" {
+		t.Fatalf("ActOnInboxItem called with itemID=%q, want %q", calledItemID, "item-abc")
+	}
+	if calledAction != "approve" {
+		t.Fatalf("ActOnInboxItem called with action=%q, want %q", calledAction, "approve")
+	}
+}
+
+// runNonTimerCmds executes cmds in a batch that complete quickly (within 50ms).
+// Timer-based cmds like statusAutoClearCmd sleep for seconds and are skipped.
+func runNonTimerCmds(cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	// Run cmd with timeout: skip if it doesn't complete in 50ms (i.e. it's a timer cmd).
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	select {
+	case msg := <-done:
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, c := range batch {
+				runNonTimerCmds(c)
+			}
+		}
+	case <-time.After(50 * time.Millisecond):
+		// timer cmd — skip
 	}
 }
