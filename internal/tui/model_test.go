@@ -3369,3 +3369,34 @@ func TestNKeyNextUnreadReloadsChatHistory(t *testing.T) {
 		t.Fatal("'n' next-unread did not call LoadChatHistory (EX-166 regression)")
 	}
 }
+
+// EX-167: chat.session.closed for the active session should set a status bar message.
+func TestSessionClosedSetsStatusMessage(t *testing.T) {
+	t.Parallel()
+	sessionID := "00000000-0000-0000-0000-000000000167"
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.activeSession = sessionID
+	model.activeTurnSessionID = sessionID
+	model.turnsSynced = true
+
+	raw, _ := json.Marshal(map[string]string{"session_id": sessionID})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "chat.session.closed",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+	if !strings.Contains(m.statusMessage, "closed") {
+		t.Fatalf("chat.session.closed for active session should set status containing 'closed', got: %q", m.statusMessage)
+	}
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "session closed") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("chat.session.closed should add 'session closed' entry to activity log")
+	}
+}

@@ -2612,3 +2612,18 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-167---
+
+## EX-167: `chat.session.closed` for the active session set no feedback
+
+**Observation:** When the server sent a `chat.session.closed` SSE event for the currently active session, the TUI updated `m.workspace.activity` (the invisible internal activity log) but never changed `m.statusMessage`. The user had no indication that their session had ended. They would continue to see the old messages in the chat panel and could try to send a new message, which would silently fail or behave unexpectedly.
+
+**Improvement:** In the `applyChatEnvelope` case for `"chat.session.closed"`, after the existing `appendActivity` call, added `m.statusMessage = "Active session closed — select another session to continue."` when `sessionMatchesActive` returns true.
+
+**Why it matters:** Session closure is a significant state change. Without a visible notification, users are left in a zombie state — the chat looks active but is not. A status bar message prompts them to take action.
+
+**Effort:** Trivial (one line)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

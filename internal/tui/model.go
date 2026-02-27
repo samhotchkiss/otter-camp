@@ -3328,6 +3328,9 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		}
 		if decodePayload(event.Payload, &payload) && m.sessionMatchesActive(payload.SessionID) {
 			m.workspace.activity = appendActivity(m.workspace.activity, "active session closed")
+			// EX-167: also set status bar so users notice the session ended,
+			// not just the activity log which they might not be watching.
+			m.statusMessage = "Active session closed — select another session to continue."
 		}
 		return loadSidebarDataCmd(m.runtimeHints)
 	}
