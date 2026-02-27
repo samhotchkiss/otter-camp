@@ -176,15 +176,18 @@ func runTUICommand(args []string) int {
 				return out, nil
 			}
 			runtimeHints.LoadProjectDetail = func(ctx context.Context, projectID string) (*tuiapp.ProjectDetail, error) {
-				var proj struct {
-					ID           string `json:"id"`
-					DisplayName  string `json:"display_name"`
-					Description  string `json:"description"`
-					DeliveryMode string `json:"delivery_mode"`
+				var projResp struct {
+					Data struct {
+						ID           string `json:"id"`
+						DisplayName  string `json:"display_name"`
+						Description  string `json:"description"`
+						DeliveryMode string `json:"delivery_mode"`
+					} `json:"data"`
 				}
-				if err := apiClient.request(ctx, "GET", "/v1/projects/"+url.PathEscape(projectID), nil, &proj); err != nil {
+				if err := apiClient.request(ctx, "GET", "/v1/projects/"+url.PathEscape(projectID), nil, &projResp); err != nil {
 					return nil, err
 				}
+				proj := projResp.Data
 				var tasksResp struct {
 					Data []struct {
 						ID         string `json:"id"`
