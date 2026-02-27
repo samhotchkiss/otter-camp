@@ -332,22 +332,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case taskDetailLoadedMsg:
-		if rec := m.workspace.tasks[typed.Detail.ID]; rec != nil {
-			rec.Description = typed.Detail.Description
-			rec.SessionID = typed.Detail.SessionID
-			rec.TaskNumber = typed.Detail.TaskNumber
-			if typed.Detail.WorkStatus != "" {
-				rec.Status = typed.Detail.WorkStatus
+		rec := m.workspace.tasks[typed.Detail.ID]
+		if rec == nil {
+			// Task not yet in the map (e.g. from a CHATS session outside the loaded project)
+			// — create a minimal record so ViewTask can render it.
+			rec = &taskRecord{
+				ID:    typed.Detail.ID,
+				Title: typed.Detail.Title,
 			}
-			// Cache reverse session→label mapping so the chat header resolves
-			// the task session UUID to a human-readable label immediately.
-			if sid := strings.TrimSpace(typed.Detail.SessionID); sid != "" {
-				label := strings.TrimSpace(rec.Title)
-				if rec.TaskNumber > 0 {
-					label = fmt.Sprintf("OC-%d: %s", rec.TaskNumber, label)
-				}
-				m.workspace.sessionToTaskLabel[sid] = label
+			if m.workspace.tasks == nil {
+				m.workspace.tasks = make(map[string]*taskRecord)
 			}
+			m.workspace.tasks[typed.Detail.ID] = rec
+		}
+		rec.Description = typed.Detail.Description
+		rec.SessionID = typed.Detail.SessionID
+		rec.TaskNumber = typed.Detail.TaskNumber
+		if typed.Detail.Title != "" {
+			rec.Title = typed.Detail.Title
+		}
+		if typed.Detail.WorkStatus != "" {
+			rec.Status = typed.Detail.WorkStatus
+		}
+		// Cache reverse session→label mapping so the chat header resolves
+		// the task session UUID to a human-readable label immediately.
+		if sid := strings.TrimSpace(typed.Detail.SessionID); sid != "" {
+			label := strings.TrimSpace(rec.Title)
+			if rec.TaskNumber > 0 {
+				label = fmt.Sprintf("OC-%d: %s", rec.TaskNumber, label)
+			}
+			m.workspace.sessionToTaskLabel[sid] = label
 		}
 		return m, nil
 	case WorkspaceEnvelopeMsg:
