@@ -294,13 +294,24 @@ func runTUICommand(args []string) int {
 				if d.Description != nil {
 					desc = *d.Description
 				}
-				return &tuiapp.TaskDetailItem{
+				item := &tuiapp.TaskDetailItem{
 					ID:          d.ID,
 					TaskNumber:  d.TaskNumber,
 					Title:       d.Title,
 					Description: desc,
 					WorkStatus:  d.WorkStatus,
-				}, nil
+				}
+				// Find the task's async chat session (scope_type=project_task)
+				var sessResp struct {
+					Data []struct {
+						ID string `json:"id"`
+					} `json:"data"`
+				}
+				sessPath := "/v1/chat-sessions?scope_type=project_task&scope_id=" + url.QueryEscape(taskID)
+				if apiClient.request(ctx, "GET", sessPath, nil, &sessResp) == nil && len(sessResp.Data) > 0 {
+					item.SessionID = sessResp.Data[0].ID
+				}
+				return item, nil
 			}
 			runtimeHints.SendChatMessage = func(ctx context.Context, sessionID, content string) error {
 				resolvedID, resolveErr := resolveTUIChatSessionID(ctx, apiClient, sessionID)

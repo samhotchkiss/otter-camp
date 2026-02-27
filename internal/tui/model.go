@@ -327,6 +327,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if typed.Detail.WorkStatus != "" {
 				rec.Status = typed.Detail.WorkStatus
 			}
+			// Cache reverse session→label mapping so the chat header resolves
+			// the task session UUID to a human-readable label immediately.
+			if sid := strings.TrimSpace(typed.Detail.SessionID); sid != "" {
+				label := strings.TrimSpace(rec.Title)
+				if rec.TaskNumber > 0 {
+					label = fmt.Sprintf("OC-%d: %s", rec.TaskNumber, label)
+				}
+				m.workspace.sessionToTaskLabel[sid] = label
+			}
 		}
 		return m, nil
 	case WorkspaceEnvelopeMsg:

@@ -111,10 +111,11 @@ type workspaceState struct {
 	selectedProjectID string
 	selectedProject   *ProjectDetail
 
-	tasks          map[string]*taskRecord
-	taskOrder      []string
-	taskSessionIDs map[string]string
-	selectedTaskID string
+	tasks             map[string]*taskRecord
+	taskOrder         []string
+	taskSessionIDs    map[string]string
+	sessionToTaskLabel map[string]string // session UUID → human-readable task label
+	selectedTaskID    string
 
 	inbox       []inboxItem
 	inboxCursor int
@@ -157,10 +158,11 @@ func newWorkspaceState() workspaceState {
 		topLevel:         []string{"inbox", "header-chats", generalSidebarNodeID, "header-projects"},
 		sidebarCursor:    0,
 		sectionCollapsed: map[sidebarSectionID]bool{},
-		tasks:            map[string]*taskRecord{},
-		taskOrder:        []string{},
-		taskSessionIDs:   map[string]string{},
-		selectedTaskID:   "",
+		tasks:              map[string]*taskRecord{},
+		taskOrder:          []string{},
+		taskSessionIDs:     map[string]string{},
+		sessionToTaskLabel: map[string]string{},
+		selectedTaskID:     "",
 		inbox:            []inboxItem{},
 		activity:         []string{"workspace booted"},
 		agents:           []string{},
@@ -239,7 +241,8 @@ func (w *workspaceState) currentSidebarNode() *sidebarNode {
 }
 
 // sessionLabel returns the human-readable label for a session ID by looking
-// up the matching sidebar node. Falls back to the raw session ID.
+// up the matching sidebar node. Returns "" when label cannot be resolved
+// (caller should fall back to the org session label).
 func (w *workspaceState) sessionLabel(sessionID string) string {
 	trimmed := strings.TrimSpace(sessionID)
 	if trimmed == "" {
@@ -253,19 +256,34 @@ func (w *workspaceState) sessionLabel(sessionID string) string {
 	if taskTitle := w.taskTitleForScopeSession(trimmed); taskTitle != "" {
 		return taskTitle
 	}
-	return trimmed
+	// Don't expose raw UUIDs — return empty so caller shows a fallback label.
+	return ""
 }
 
 func (w *workspaceState) taskTitleForScopeSession(sessionID string) string {
-	if !strings.HasPrefix(sessionID, "session-task-") {
-		return ""
+	// Fast lookup from cached reverse map (populated when task detail is loaded)
+	if label, ok := w.sessionToTaskLabel[sessionID]; ok && label != "" {
+		return label
 	}
-	taskID := strings.TrimPrefix(sessionID, "session-task-")
-	if taskID == "current" {
-		taskID = w.selectedTaskID
+	// Handle placeholder IDs like "session-task-{taskID}"
+	if strings.HasPrefix(sessionID, "session-task-") {
+		taskID := strings.TrimPrefix(sessionID, "session-task-")
+		if taskID == "current" {
+			taskID = w.selectedTaskID
+		}
+		if task, ok := w.tasks[taskID]; ok {
+			return strings.TrimSpace(task.Title)
+		}
 	}
-	if task, ok := w.tasks[taskID]; ok {
-		return strings.TrimSpace(task.Title)
+	// For real UUIDs: scan tasks map for a matching SessionID
+	for _, task := range w.tasks {
+		if task != nil && strings.TrimSpace(task.SessionID) == sessionID {
+			title := strings.TrimSpace(task.Title)
+			if task.TaskNumber > 0 {
+				return fmt.Sprintf("OC-%d: %s", task.TaskNumber, title)
+			}
+			return title
+		}
 	}
 	return ""
 }
