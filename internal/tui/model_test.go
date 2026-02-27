@@ -1799,3 +1799,32 @@ func TestGUpperKeyInDashboardJumpsToLastTask(t *testing.T) {
 		t.Fatalf("G should set dashboardCursor to 2, got: %d", updated.workspace.dashboardCursor)
 	}
 }
+
+// EX-136: chat header in ScopeTask should include task number and title as breadcrumb.
+func TestChatHeaderShowsTaskContextForScopeTask(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.workspace.tasks["task-ctx-1"] = &taskRecord{
+		ID:         "task-ctx-1",
+		TaskNumber: 42,
+		Title:      "My Important Task",
+		Status:     "in_progress",
+	}
+	model.workspace.selectedTaskID = "task-ctx-1"
+	model.activeScope = ScopeTask
+
+	view := model.View()
+	if !strings.Contains(view, "OC-42") {
+		t.Fatalf("chat header should contain task number 'OC-42' in ScopeTask, view: %q", view[:min(200, len(view))])
+	}
+	if !strings.Contains(view, "My Important Task") {
+		t.Fatalf("chat header should contain task title 'My Important Task', view: %q", view[:min(200, len(view))])
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

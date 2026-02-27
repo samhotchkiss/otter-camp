@@ -1725,6 +1725,20 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 			sessionLabel = sessionLabel + " › " + projectName
 		}
 	}
+	// EX-136: When viewing a task session, append the task number/title to the
+	// chat header so the user sees "Task Session › OC-42: title" rather than
+	// just "Task Session". Mirrors the ScopeProject context breadcrumb above.
+	if m.activeScope == ScopeTask && m.workspace.selectedTaskID != "" {
+		if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
+			taskContext := task.Title
+			if task.TaskNumber > 0 {
+				taskContext = fmt.Sprintf("OC-%d: %s", task.TaskNumber, task.Title)
+			}
+			if taskContext != "" {
+				sessionLabel = sessionLabel + " › " + truncate(taskContext, 30)
+			}
+		}
+	}
 	isThinking := m.activeTurn && (m.activeTurnSessionID == "" ||
 		strings.EqualFold(strings.TrimSpace(m.activeSession), m.activeTurnSessionID))
 	headerText := renderChatHeader(sessionLabel, m.activeScope, cw, isThinking)

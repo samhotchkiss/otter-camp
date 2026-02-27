@@ -2046,3 +2046,17 @@ Also added `g/G first/last` to the dashboard help hint when tasks are present.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-136: Chat header showed "Task Session" but not which task — missing context breadcrumb
+
+**Observation:** When the chat scope was `ScopeTask`, the chat panel header showed just "Task Session" (or a session UUID if unresolved). The `ScopeProject` context already appended `" › Project Name"` to the header. The `ScopeTask` context did not, so users couldn't tell at a glance which task's session they were talking to — they had to look at the main panel.
+
+**Improvement:** When `m.activeScope == ScopeTask` and `m.workspace.selectedTaskID` resolves to a cached `taskRecord`, the chat header now appends `" › OC-N: title"` (truncated to 30 chars). If the task number is absent, just the title is shown. This mirrors the exact same pattern as the project breadcrumb above it.
+
+**Why it matters:** In a multi-task workflow, the user may switch between task sessions rapidly. The chat header is the only always-visible indicator of which conversation is active. "Task Session › OC-42: Integrate payments" is immediately recognizable; "Task Session" alone is ambiguous.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
