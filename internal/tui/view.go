@@ -382,6 +382,10 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 			prefix = "  ▸ "
 		}
 		label = node.Label
+		// Show open task count when project has loaded task nodes
+		if openCount := len(m.workspace.projectChildren(node.ID)); openCount > 0 {
+			label += fmt.Sprintf(" (%d)", openCount)
+		}
 	case sidebarKindTask:
 		switch node.WorkStatus {
 		case "done", "approved":
