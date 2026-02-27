@@ -344,6 +344,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case projectDetailLoadedMsg:
 		m.workspace.selectedProject = &typed.Detail
+		// Apply any pending cursor request (task opened before project loaded).
+		if m.workspace.pendingProjectCursorTaskID != "" {
+			m.workspace.syncProjectCursorToTask(m.workspace.pendingProjectCursorTaskID)
+		}
 		return m, nil
 	case agentsLoadedMsg:
 		if len(typed.Agents) > 0 {
@@ -725,13 +729,22 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				return loadInboxItemsCmd(m.runtimeHints)
 			case sidebarKindTask:
 				// Set the project context so "p" and "Esc·back to project" work correctly
+				var projectIDForTask string
 				if node.ParentID != "" {
 					if projNode := m.workspace.nodes[node.ParentID]; projNode != nil && projNode.Kind == sidebarKindProject {
 						m.workspace.selectedProjectID = projNode.ProjectID
+						projectIDForTask = projNode.ProjectID
 					}
 				}
-				// Load full task detail (description, task number) on demand
-				return loadTaskDetailCmd(node.TaskID, m.runtimeHints)
+				// Sync the project task cursor so "p" returns to the right row.
+				m.workspace.syncProjectCursorToTask(node.TaskID)
+				// Load full task detail (description, task number) on demand.
+				// Also load project detail if not already loaded, so "p" works immediately.
+				cmds := []tea.Cmd{loadTaskDetailCmd(node.TaskID, m.runtimeHints)}
+				if projectIDForTask != "" && m.workspace.selectedProject == nil && m.runtimeHints.LoadProjectDetail != nil {
+					cmds = append(cmds, loadProjectDetailCmd(projectIDForTask, m.runtimeHints))
+				}
+				return tea.Batch(cmds...)
 			}
 		}
 	case MainPanel:

@@ -124,7 +124,8 @@ type workspaceState struct {
 	taskSessionIDs    map[string]string
 	sessionToTaskLabel map[string]string // session UUID → human-readable task label
 	selectedTaskID    string
-	projectTaskCursor int // cursor within the project view open-task list
+	projectTaskCursor int    // cursor within the project view open-task list
+	pendingProjectCursorTaskID string // set when task is opened before project detail loads
 	dashboardCursor   int // cursor within the dashboard task board (index into taskOrder excluding done/cancelled)
 
 	inbox       []inboxItem
@@ -357,6 +358,32 @@ func (w *workspaceState) syncSidebarToTask(taskID string) {
 			w.sidebarCursor = i
 			return
 		}
+	}
+}
+
+// syncProjectCursorToTask sets projectTaskCursor to the position of taskID in
+// the current selectedProject's open task list. If selectedProject is nil (not
+// yet loaded), the ID is stored in pendingProjectCursorTaskID and applied once
+// the project detail arrives.
+func (w *workspaceState) syncProjectCursorToTask(taskID string) {
+	if taskID == "" {
+		return
+	}
+	w.pendingProjectCursorTaskID = taskID // always store so it can be applied on load
+	if w.selectedProject == nil {
+		return
+	}
+	idx := 0
+	for _, t := range w.selectedProject.Tasks {
+		if t.WorkStatus == "done" || t.WorkStatus == "approved" || t.WorkStatus == "cancelled" {
+			continue
+		}
+		if t.ID == taskID {
+			w.projectTaskCursor = idx
+			w.pendingProjectCursorTaskID = "" // consumed
+			return
+		}
+		idx++
 	}
 }
 
