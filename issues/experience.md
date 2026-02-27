@@ -2172,3 +2172,151 @@ Additionally, `workspace.go`'s `applyRealtimeEnvelope` had two matching dead-cod
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-142---
+
+## EX-142: task.review_rejected and chat.session.mode_changed unhandled
+
+**Observation:** Two more event types were silently dropped:
+
+1. `task.review_rejected` — emitted when a reviewer rejects a task. Users had no way to know a task was rejected without manually polling.
+2. `chat.session.mode_changed` — emitted when session mode transitions (sync↔async). Users couldn't track these transitions in the activity log.
+
+**Improvement:**
+- `task.review_rejected`: appends activity entry `"<task-label>: review rejected — <reason[:40]>"` with task label from workspace cache
+- `chat.session.mode_changed`: appends activity entry `"session mode: <old> → <new>"`
+- Both added to `knownEventTypes` so the reducer no longer drops them
+
+**Why it matters:** Task review rejections require immediate attention from the assignee. Mode changes affect agent behavior and should be auditable in the activity feed.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-143---
+
+## EX-143: Run failure events disappeared from view after 5s (status bar only)
+
+**Observation:** `run.failed` and `run.dead_lettered` only set `statusMessage`, which auto-clears in 5 seconds. After that, there was no persistent record of the failure — users had no way to see that a run had failed without checking external logs.
+
+**Improvement:** Both events now also append to the activity log (Activity view). The log entry persists for the entire session and is visible via the `activity` command or Alt-8 shortcut.
+
+**Why it matters:** Run failures are critical operational signals. The 5-second status bar is insufficient for failures that require investigation. The activity log provides a durable audit trail.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-144---
+
+## EX-144: task.review_rejected didn't reload task detail
+
+**Observation:** When `task.review_rejected` fired, the activity log was updated but `loadTaskDetailCmd` was never called. If the server clears the `RequiresHumanReview` flag when a task is sent back for rework, the ⚠ badge in the task view would remain stale until a manual refresh.
+
+**Improvement:** `task.review_rejected` now calls `loadTaskDetailCmd(payload.TaskID, ...)` to pick up the updated flag and task status from the server.
+
+**Why it matters:** Stale human review badges confuse the operator — a "fix needed" badge on a task already back in progress is misleading.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-145---
+
+## EX-145: deploy.approval_requested was transient (status bar only)
+
+**Observation:** `deploy.approval_requested` set a status bar message (5s then gone). Operators who missed the notification had no way to discover the pending approval from within the TUI.
+
+**Improvement:** Also appends to the activity log so the approval request is visible in the Activity view until explicitly dismissed.
+
+**Why it matters:** A pending deploy approval can block production. It should not be a silently disappearing notification.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-146---
+
+## EX-146: chat.session.created silently reloaded sidebar without logging
+
+**Observation:** `chat.session.created` called `loadSidebarDataCmd` but added nothing to the activity log. Users couldn't tell from the Activity view when a new session was created.
+
+**Improvement:** Now prepends a "session created: <scope_type>" entry to the activity log, falling back to "session created" if the scope isn't in the payload.
+
+**Why it matters:** Session creation is an important event in async workflows (project agents creating task sessions). Logging it makes the workflow more observable.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-147---
+
+## EX-147: Activity log icons wrong for failures and pending actions
+
+**Observation:** `activityIcon` checked for `: blocked`, `: rejected`, `: deferred`, `: failed` markers. All new entry formats added in EX-143 through EX-146 used different text:
+- `"run failed: ..."` — doesn't contain `": failed"` (the pattern was `": failed"`, not `"failed"`)
+- `"run dead-lettered (...): ..."` — no match
+- `"OC-7: review rejected"` — has `"rejected"` but not `": rejected"` before it
+- `"Deploy pending approval: ..."` — should be warning (◌), was getting ✓
+- `"rollback to ..."` — should be warning (◌), was getting ✓
+
+All these entries were incorrectly displayed with the ✓ success icon.
+
+**Improvement:** Extended `activityIcon` with explicit string markers for:
+- Error (✗): `"run failed"`, `"dead-lettered"`, `"review rejected"`, `"agent expired"`
+- Warning (◌): `"rollback"`, `"deploy pending approval"`, `"supervisor escalation"`
+
+**Why it matters:** Icon color is the fastest signal in a busy activity log. Failures showing ✓ green look like successes — a serious readability hazard in a production ops context.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-148---
+
+## EX-148: Task view approve/reject/defer hints not functional (dead keybindings)
+
+**Observation:** When a task had `RequiresHumanReview=true`, the task detail view showed:
+```
+a·approve  ·  x·reject  ·  f·defer  ·  o·open task session
+```
+But pressing `a`, `x`, or `f` from ViewTask did nothing — the handlers only checked `mainView == ViewInbox`. The hint existed but the shortcuts were dead.
+
+**Improvement:**
+- Added `applyInboxActionForTask(taskID, action)` method to `workspaceState` that finds the inbox item for the selected task and delegates to the existing `applyInboxAction` logic.
+- Extended `handleWorkspaceRune` `a`/`x`/`f` cases to also act when `mainView == ViewTask` and the task `RequiresHumanReview` is true.
+- No-op when no inbox item exists for the task (avoids acting on wrong item).
+
+**Why it matters:** The hint was a lie. Users would follow the on-screen instructions and nothing would happen, creating confusion and forcing them to navigate to the Inbox view to perform the same action. This is a core workflow for human-in-the-loop agent review.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-149---
+
+## EX-149: Task view help bar didn't show approve/reject/defer hints; :help missing commands
+
+**Observation:** Two related gaps after EX-148:
+
+1. The contextual help bar for ViewTask showed `"Enter open session · Esc project · ..."` but didn't mention `a/x/f` even when `RequiresHumanReview=true` and the keys were now functional.
+2. The `:help` command listed only `":focus :frank :dashboard :inbox :send :cancel-turn :sidebar :tour dismiss :quit"` — missing `:scope`, `:queue`, `:agents`, `:activity`, `:merges`, `:schedules`, `:project`, `:task`.
+
+**Improvement:**
+- `commandFallbackHelp` for ViewTask now conditionally appends `"· a approve · x reject · f defer"` when the selected task has `RequiresHumanReview=true`.
+- `:help` command output updated to include all supported commands.
+- Help view "a/x/f/o" key description updated to mention both inbox and task view contexts.
+
+**Why it matters:** After EX-148, the keys worked but users couldn't discover them from the contextual help bar. Discoverability is as important as functionality.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
