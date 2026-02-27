@@ -473,6 +473,18 @@ func (w *workspaceState) markSessionUnread(sessionID string) {
 	w.propagateUnread()
 }
 
+// totalUnreadSessions returns the sum of unread counts across all session nodes.
+// Used to show an unread badge on the CHATS section header.
+func (w *workspaceState) totalUnreadSessions() int {
+	total := 0
+	for _, node := range w.nodes {
+		if node.Kind == sidebarKindSession {
+			total += node.Unread
+		}
+	}
+	return total
+}
+
 func (w *workspaceState) propagateUnread() {
 	for _, node := range w.nodes {
 		if node.Kind == sidebarKindProject {

@@ -366,6 +366,11 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 			prefix = "▾ "
 		}
 		label = node.Label
+		if sectionID == sectionChats {
+			if unread := m.workspace.totalUnreadSessions(); unread > 0 {
+				label += fmt.Sprintf(" (%d)", unread)
+			}
+		}
 	case sidebarKindProject:
 		if node.Expanded {
 			prefix = "  ▾ "
