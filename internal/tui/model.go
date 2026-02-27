@@ -853,6 +853,8 @@ func (m *Model) handleEnterKey() tea.Cmd {
 		if m.workspace.mainView == ViewInbox {
 			if m.workspace.applyInboxAction("open") {
 				m.state.LastActiveChatSession = m.workspace.activeSessionID
+				// EX-186: clear stale turn state before switching sessions.
+				m.clearTurnIfSwitchingSession(m.workspace.activeSessionID)
 				m.activeSession = m.workspace.activeSessionID
 				// EX-172: inbox items are task-scoped; set scope so assistantLabel()
 				// and chat header indicators are accurate.
@@ -1203,6 +1205,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				}
 				m.workspace.selectSidebarNode()
 				sessionID := m.workspace.activeSessionID
+				// EX-186: clear stale turn state before switching sessions.
+				m.clearTurnIfSwitchingSession(sessionID)
 				m.activeSession = sessionID
 				m.chatScrollOffset = 0
 				m.statusMessage = "Jumped to next unread session."
@@ -1312,6 +1316,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 	case 'o':
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("open") {
 			m.state.LastActiveChatSession = m.workspace.activeSessionID
+			// EX-186: clear stale turn state before switching sessions.
+			m.clearTurnIfSwitchingSession(m.workspace.activeSessionID)
 			m.activeSession = m.workspace.activeSessionID
 			// EX-172: inbox items are task-scoped; set scope so assistantLabel()
 			// resolves the correct agent name and [task]/[project]/[org] indicators
@@ -2522,6 +2528,8 @@ func (m *Model) executeSidebarCommand(args []string) tea.Cmd {
 		node := m.workspace.currentSidebarNode()
 		m.workspace.selectSidebarNode()
 		m.state.LastActiveChatSession = m.workspace.activeSessionID
+		// EX-186: clear stale turn state before switching sessions.
+		m.clearTurnIfSwitchingSession(m.workspace.activeSessionID)
 		m.activeSession = m.workspace.activeSessionID
 		m.statusMessage = "Sidebar selection applied."
 		// EX-177: dispatch data loads appropriate for the selected node kind,
@@ -2588,6 +2596,8 @@ func (m *Model) executeInboxCommand(args []string) tea.Cmd {
 			return nil
 		}
 		m.state.LastActiveChatSession = m.workspace.activeSessionID
+		// EX-186: clear stale turn state before switching sessions.
+		m.clearTurnIfSwitchingSession(m.workspace.activeSessionID)
 		m.activeSession = m.workspace.activeSessionID
 		// EX-172: inbox items are task-scoped; set scope so assistantLabel()
 		// and chat header indicators are accurate.
