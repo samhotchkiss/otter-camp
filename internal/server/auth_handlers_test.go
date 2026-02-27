@@ -157,6 +157,64 @@ func TestLoginRecordsAuditEventWithIPAndOutcome(t *testing.T) {
 	}
 }
 
+func TestLoginFailureRecordsAuditEvent(t *testing.T) {
+	orgID := uuid.New()
+	userID := uuid.New()
+	recorder := &capturedAuditRecorder{}
+	handler := authHandlers{
+		service: &fakeAuthService{
+			loginErr: authsvc.ErrInvalidCredentials,
+		},
+		users: fallbackUserRepo{
+			user: repo.HumanUser{
+				ID:             userID,
+				OrganizationID: orgID,
+				Email:          "member@example.com",
+				DisplayName:    "Member",
+				Role:           "member",
+			},
+		},
+		auditRecorder: recorder,
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"email":    "member@example.com",
+		"password": "wrong-password",
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-For", "203.0.113.77")
+	rr := httptest.NewRecorder()
+
+	handler.login(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want=%d body=%s", rr.Code, http.StatusUnauthorized, rr.Body.String())
+	}
+
+	events := recorder.Events()
+	if len(events) != 1 {
+		t.Fatalf("audit event count=%d want=1", len(events))
+	}
+	event := events[0]
+	if event.EventType != audit.EventAuthLoginFailed {
+		t.Fatalf("event type=%q want=%q", event.EventType, audit.EventAuthLoginFailed)
+	}
+	if event.OrgID != orgID || event.PrincipalID != userID {
+		t.Fatalf("event principal/org mismatch: org=%s user=%s", event.OrgID, event.PrincipalID)
+	}
+	if event.IP != "203.0.113.77" {
+		t.Fatalf("event ip=%q want=%q", event.IP, "203.0.113.77")
+	}
+	if event.Outcome != "failure" {
+		t.Fatalf("event outcome=%q want=%q", event.Outcome, "failure")
+	}
+}
+
 func TestAPIKeyIssueAndRevokeRecordAuditEvents(t *testing.T) {
 	orgID := uuid.New()
 	userID := uuid.New()

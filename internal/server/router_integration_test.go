@@ -79,6 +79,7 @@ func TestAuthHTTPLoginMeLogoutAndExpiredSession(t *testing.T) {
 	}
 	assertLatestAuditMetadataField(t, testServer.Pool, "auth.login", "ip", "203.0.113.120")
 	assertLatestAuditMetadataField(t, testServer.Pool, "auth.login", "outcome", "success")
+	assertLatestAuditPrincipalID(t, testServer.Pool, "auth.login", adminUser.ID.String())
 	assertLatestAuditMetadataField(t, testServer.Pool, "auth.logout", "ip", "203.0.113.120")
 	assertLatestAuditMetadataField(t, testServer.Pool, "auth.logout", "outcome", "success")
 
@@ -279,6 +280,27 @@ func TestAuthHTTPLoginRateLimit(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestAuthHTTPWrongPasswordRecordsFailedLoginAudit(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, _ := newAuthTestServer(t, "standard")
+	defer testServer.Close()
+
+	resp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/auth/login", map[string]any{
+		"email":    adminUser.Email,
+		"password": "wrong-password",
+	}, map[string]string{
+		"X-Forwarded-For": "203.0.113.124",
+	})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong password status = %d, want %d body=%s", resp.StatusCode, http.StatusUnauthorized, string(resp.Body))
+	}
+
+	assertLatestAuditMetadataField(t, testServer.Pool, "auth.login_failed", "ip", "203.0.113.124")
+	assertLatestAuditMetadataField(t, testServer.Pool, "auth.login_failed", "outcome", "failure")
+	assertLatestAuditPrincipalID(t, testServer.Pool, "auth.login_failed", adminUser.ID.String())
 }
 
 func TestAuthHTTPLocalModeAutoLogin(t *testing.T) {
@@ -889,5 +911,24 @@ func assertLatestAuditMetadataField(t *testing.T, pool *pgxpool.Pool, eventType,
 	}
 	if value != want {
 		t.Fatalf("audit metadata event=%s field=%s got=%q want=%q", eventType, field, value, want)
+	}
+}
+
+func assertLatestAuditPrincipalID(t *testing.T, pool *pgxpool.Pool, eventType, want string) {
+	t.Helper()
+
+	var principalID string
+	err := pool.QueryRow(context.Background(), `
+		SELECT principal_id::text
+		FROM audit_event
+		WHERE event_type = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, eventType).Scan(&principalID)
+	if err != nil {
+		t.Fatalf("query audit principal event=%s: %v", eventType, err)
+	}
+	if principalID != want {
+		t.Fatalf("audit principal event=%s got=%q want=%q", eventType, principalID, want)
 	}
 }

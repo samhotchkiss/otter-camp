@@ -176,6 +176,7 @@ func (h authHandlers) login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil {
+		h.recordFailedLoginAuditEvent(r.Context(), r, email, err)
 		if errors.Is(err, auth.ErrRateLimited) {
 			w.Header().Set("Retry-After", "900")
 		}
@@ -1061,6 +1062,44 @@ func (h authHandlers) recordAuditEvent(ctx context.Context, event audit.Event) {
 		return
 	}
 	h.auditRecorder.RecordAsync(ctx, event)
+}
+
+func (h authHandlers) recordFailedLoginAuditEvent(ctx context.Context, r *http.Request, email string, loginErr error) {
+	if h.auditRecorder == nil {
+		return
+	}
+	if !errors.Is(loginErr, auth.ErrInvalidCredentials) && !errors.Is(loginErr, auth.ErrAccountLocked) {
+		return
+	}
+
+	lookup, ok := h.users.(orgLookupByEmailRepository)
+	if !ok || lookup == nil {
+		return
+	}
+
+	user, err := lookup.GetByEmailAnyOrg(ctx, email)
+	if err != nil {
+		return
+	}
+
+	reason := "invalid_credentials"
+	if errors.Is(loginErr, auth.ErrAccountLocked) {
+		reason = "account_locked"
+	}
+
+	h.auditRecorder.RecordAsync(ctx, audit.Event{
+		OrgID:         user.OrganizationID,
+		EventType:     audit.EventAuthLoginFailed,
+		PrincipalType: "human",
+		PrincipalID:   user.ID,
+		IP:            requestClientIP(r),
+		Outcome:       "failure",
+		Metadata: map[string]any{
+			"email":      strings.TrimSpace(email),
+			"user_agent": strings.TrimSpace(r.UserAgent()),
+			"reason":     reason,
+		},
+	})
 }
 
 func decodeJSON(r *http.Request, out any) error {

@@ -106,6 +106,8 @@ func TestListAuditMapsBootstrapAction(t *testing.T) {
 				EventType:      bootstrapAuditEventType,
 				PrincipalType:  "system",
 				PrincipalID:    uuid.Nil,
+				IP:             "203.0.113.200",
+				Outcome:        "success",
 				CreatedAt:      now,
 			},
 		},
@@ -129,6 +131,12 @@ func TestListAuditMapsBootstrapAction(t *testing.T) {
 	}
 	if got := stringJSONPath(t, rr.Body.Bytes(), "data", "0", "action"); got != bootstrapAuditAction {
 		t.Fatalf("data[0].action=%q want=%q body=%s", got, bootstrapAuditAction, rr.Body.String())
+	}
+	if got := stringJSONPath(t, rr.Body.Bytes(), "data", "0", "ip"); got != "203.0.113.200" {
+		t.Fatalf("data[0].ip=%q want=%q body=%s", got, "203.0.113.200", rr.Body.String())
+	}
+	if got := stringJSONPath(t, rr.Body.Bytes(), "data", "0", "outcome"); got != "success" {
+		t.Fatalf("data[0].outcome=%q want=%q body=%s", got, "success", rr.Body.String())
 	}
 }
 
