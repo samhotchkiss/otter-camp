@@ -1186,7 +1186,7 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 		var prefix string
 		var rowStyle lipgloss.Style
 		if isCursor {
-			prefix = "▸ "
+			prefix = "► "
 			rowStyle = lipgloss.NewStyle().Foreground(colFocus).Bold(true)
 		} else {
 			prefix = "  "

@@ -2493,6 +2493,35 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		m.workspace.inboxCount++
 		return nil
 	}
+	if event.EventType == "task.status_changed" || event.EventType == "task.completed" {
+		var payload struct {
+			TaskID    string `json:"task_id"`
+			ToStatus  string `json:"to_status"`
+			ProjectID string `json:"project_id"`
+		}
+		if !decodePayload(event.Payload, &payload) || payload.TaskID == "" {
+			return nil
+		}
+		// Update the task record if loaded
+		if rec := m.workspace.tasks[payload.TaskID]; rec != nil {
+			rec.Status = payload.ToStatus
+		}
+		// Update the sidebar task node WorkStatus so its icon refreshes
+		taskNodeID := "task-" + payload.TaskID
+		if node := m.workspace.nodes[taskNodeID]; node != nil {
+			node.WorkStatus = payload.ToStatus
+		}
+		// If the project detail is loaded and contains this task, update it there too
+		if m.workspace.selectedProject != nil {
+			for i := range m.workspace.selectedProject.Tasks {
+				if m.workspace.selectedProject.Tasks[i].ID == payload.TaskID {
+					m.workspace.selectedProject.Tasks[i].WorkStatus = payload.ToStatus
+					break
+				}
+			}
+		}
+		return nil
+	}
 	if event.EventType == "worker.unresponsive" {
 		if !m.turnsSynced {
 			return nil
