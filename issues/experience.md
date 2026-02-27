@@ -1988,3 +1988,17 @@ Additionally, the `task.status_changed` activity entry code was duplicating the 
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-132: Activity log grew unbounded — memory leak for long-running sessions
+
+**Observation:** The activity log (`workspace.activity []string`) had no size cap. Every SSE event that triggered an `append` to the activity log permanently grew the slice. After EX-129–131 added 10 new event types that append to the log, a long-running session with active agents and frequent memory extraction could accumulate thousands of entries, consuming growing amounts of heap memory with no way to reclaim it.
+
+**Improvement:** Added `appendActivity(entries []string, entry string) []string` helper with a `const activityMaxEntries = 200` cap. When the slice exceeds the cap, the oldest entries are dropped from the front (`entries[len-200:]`). All 20 append sites in `model.go` and `workspace.go` were updated to call `appendActivity` instead of bare `append`.
+
+**Why it matters:** TUI processes are long-lived — users may leave them running for hours or days. An unbounded activity log would slowly grow without bound. The 200-entry cap preserves enough history to be useful (the last 200 events) while keeping the slice O(1) in steady state for high-event-rate systems.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

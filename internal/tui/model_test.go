@@ -1692,3 +1692,25 @@ func TestMCPCatalogChangedShowsStatusMessage(t *testing.T) {
 		t.Fatalf("statusMessage should mention removed count, got: %q", m.statusMessage)
 	}
 }
+
+// EX-132: appendActivity should cap the activity log at activityMaxEntries,
+// dropping the oldest entries when the slice grows beyond the limit.
+func TestAppendActivityCapsBeyondMaxEntries(t *testing.T) {
+	entries := make([]string, 0, activityMaxEntries+10)
+	for i := 0; i < activityMaxEntries+5; i++ {
+		entries = appendActivity(entries, fmt.Sprintf("entry-%d", i))
+	}
+	if len(entries) != activityMaxEntries {
+		t.Fatalf("appendActivity should cap at %d, got %d", activityMaxEntries, len(entries))
+	}
+	// Most-recent entry should be the last one appended.
+	last := fmt.Sprintf("entry-%d", activityMaxEntries+4)
+	if entries[len(entries)-1] != last {
+		t.Fatalf("last entry = %q, want %q", entries[len(entries)-1], last)
+	}
+	// Oldest surviving entry should be "entry-5" (the first 5 were trimmed).
+	oldest := fmt.Sprintf("entry-%d", 5)
+	if entries[0] != oldest {
+		t.Fatalf("oldest surviving entry = %q, want %q", entries[0], oldest)
+	}
+}

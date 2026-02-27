@@ -261,7 +261,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamDegraded = typed.Degraded
 		if typed.State == ConnectionConnected && !m.proofRealtime {
 			m.proofRealtime = true
-			m.workspace.activity = append(m.workspace.activity, "realtime events connected")
+			m.workspace.activity = appendActivity(m.workspace.activity, "realtime events connected")
 			// Load sidebar data on first successful connection.
 			if m.runtimeHints.LoadOrgSession != nil || m.runtimeHints.LoadInboxCount != nil || m.runtimeHints.LoadRecentChats != nil || m.runtimeHints.LoadProjects != nil {
 				return m, loadSidebarDataCmd(m.runtimeHints)
@@ -272,7 +272,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.turnsSynced = true
 		if !m.proofReplay {
 			m.proofReplay = true
-			m.workspace.activity = append(m.workspace.activity, "event replay complete")
+			m.workspace.activity = appendActivity(m.workspace.activity, "event replay complete")
 		}
 		var histCmd tea.Cmd
 		if m.runtimeHints.LoadChatHistory != nil {
@@ -329,7 +329,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			activityParts = append(activityParts, fmt.Sprintf("%d inbox item(s)", typed.InboxCount))
 		}
 		if len(activityParts) > 0 {
-			m.workspace.activity = append(m.workspace.activity, "sidebar loaded: "+strings.Join(activityParts, ", "))
+			m.workspace.activity = appendActivity(m.workspace.activity, "sidebar loaded: "+strings.Join(activityParts, ", "))
 		}
 		// Pre-load tasks for all projects so the dashboard task board is populated on startup.
 		// Also load agents for the AGENTS view.
@@ -1076,7 +1076,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			return true, nil
 		}
 	case 'r':
-		m.workspace.activity = append(m.workspace.activity,
+		m.workspace.activity = appendActivity(m.workspace.activity,
 			"sidebar refreshed at "+m.now().Format("15:04:05"))
 		m.statusMessage = "Refreshing sidebar data…"
 		return true, loadSidebarDataCmd(m.runtimeHints)
@@ -2006,6 +2006,20 @@ func (m *Model) toggleLatestToolCallExpansion() bool {
 	return false
 }
 
+// activityMaxEntries is the maximum number of entries kept in the activity log.
+// Older entries are dropped from the front to keep memory usage bounded.
+const activityMaxEntries = 200
+
+// appendActivity appends entry to the activity log, trimming the front of the
+// slice when it exceeds activityMaxEntries so the slice does not grow unbounded.
+func appendActivity(entries []string, entry string) []string {
+	entries = append(entries, entry)
+	if len(entries) > activityMaxEntries {
+		entries = entries[len(entries)-activityMaxEntries:]
+	}
+	return entries
+}
+
 func decodePayload(raw json.RawMessage, out any) bool {
 	if len(raw) == 0 {
 		return false
@@ -2422,7 +2436,7 @@ func (m *Model) markReplaySynced() {
 		return
 	}
 	m.proofReplay = true
-	m.workspace.activity = append(m.workspace.activity, "event replay complete")
+	m.workspace.activity = appendActivity(m.workspace.activity, "event replay complete")
 }
 
 func (m *Model) scrollChatBy(delta int) {
@@ -2742,7 +2756,7 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		if payload.ToStatus != "" {
 			label := taskLabel(m.workspace.tasks[payload.TaskID], payload.TaskID)
 			statusLabel := formatTaskStatus(payload.ToStatus)
-			m.workspace.activity = append(m.workspace.activity,
+			m.workspace.activity = appendActivity(m.workspace.activity,
 				label+": "+statusLabel)
 		}
 		return nil
@@ -2762,7 +2776,7 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		if payload.TaskNumber > 0 {
 			label = fmt.Sprintf("OC-%d", payload.TaskNumber)
 		}
-		m.workspace.activity = append(m.workspace.activity, label+": created")
+		m.workspace.activity = appendActivity(m.workspace.activity, label+": created")
 		// Reload project detail when the new task belongs to the currently
 		// viewed project so the task list reflects the addition immediately.
 		if m.workspace.selectedProjectID != "" && payload.ProjectID != "" &&
@@ -2783,7 +2797,7 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			return nil
 		}
 		label := taskLabel(m.workspace.tasks[payload.TaskID], payload.TaskID)
-		m.workspace.activity = append(m.workspace.activity, label+": flow advanced")
+		m.workspace.activity = appendActivity(m.workspace.activity, label+": flow advanced")
 		return loadTaskDetailCmd(payload.TaskID, m.runtimeHints)
 	}
 	// EX-129: budget.anomaly_detected — surface a status-bar warning so the user
@@ -2815,7 +2829,7 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			ProjectID  string `json:"project_id"`
 		}
 		if decodePayload(event.Payload, &payload) && payload.BranchName != "" {
-			m.workspace.activity = append(m.workspace.activity, payload.BranchName+": merged")
+			m.workspace.activity = appendActivity(m.workspace.activity, payload.BranchName+": merged")
 		}
 		return nil
 	}
@@ -2829,7 +2843,7 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			return nil
 		}
 		label := taskLabel(m.workspace.tasks[payload.TaskID], payload.TaskID)
-		m.workspace.activity = append(m.workspace.activity, label+": flow started")
+		m.workspace.activity = appendActivity(m.workspace.activity, label+": flow started")
 		return loadTaskDetailCmd(payload.TaskID, m.runtimeHints)
 	}
 	// EX-129: flow.rejected — record in the activity log and reload the task
@@ -2842,7 +2856,7 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			return nil
 		}
 		label := taskLabel(m.workspace.tasks[payload.TaskID], payload.TaskID)
-		m.workspace.activity = append(m.workspace.activity, label+": flow rejected")
+		m.workspace.activity = appendActivity(m.workspace.activity, label+": flow rejected")
 		return loadTaskDetailCmd(payload.TaskID, m.runtimeHints)
 	}
 	// EX-130: project.deployed — record in the activity log with a short commit
@@ -2860,7 +2874,7 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			if sha != "" {
 				suffix = "deployed " + sha
 			}
-			m.workspace.activity = append(m.workspace.activity, suffix)
+			m.workspace.activity = appendActivity(m.workspace.activity, suffix)
 		}
 		return nil
 	}
@@ -2879,7 +2893,7 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			if sha != "" {
 				entry = "rollback to " + sha
 			}
-			m.workspace.activity = append(m.workspace.activity, entry)
+			m.workspace.activity = appendActivity(m.workspace.activity, entry)
 		}
 		return nil
 	}
@@ -2929,7 +2943,7 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			if payload.Count != 1 {
 				entry = fmt.Sprintf("memory: %d items extracted", payload.Count)
 			}
-			m.workspace.activity = append(m.workspace.activity, entry)
+			m.workspace.activity = appendActivity(m.workspace.activity, entry)
 		}
 		return nil
 	}

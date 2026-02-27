@@ -759,17 +759,17 @@ func (w *workspaceState) applyInboxAction(action string) bool {
 	switch action {
 	case "approve":
 		w.setTaskStatus(item.TaskID, "approved")
-		w.activity = append(w.activity, fmt.Sprintf("approved: %s", taskLabel))
+		w.activity = appendActivity(w.activity, fmt.Sprintf("approved: %s", taskLabel))
 		w.removeInboxItem(item.ID)
 		return true
 	case "reject":
 		w.setTaskStatus(item.TaskID, "rejected")
-		w.activity = append(w.activity, fmt.Sprintf("rejected: %s", taskLabel))
+		w.activity = appendActivity(w.activity, fmt.Sprintf("rejected: %s", taskLabel))
 		w.removeInboxItem(item.ID)
 		return true
 	case "defer":
 		w.setTaskStatus(item.TaskID, "deferred")
-		w.activity = append(w.activity, fmt.Sprintf("deferred: %s", taskLabel))
+		w.activity = appendActivity(w.activity, fmt.Sprintf("deferred: %s", taskLabel))
 		w.removeInboxItem(item.ID)
 		return true
 	case "open":
@@ -778,7 +778,7 @@ func (w *workspaceState) applyInboxAction(action string) bool {
 		if sessionID := w.taskSessionID(item.TaskID); sessionID != "" {
 			w.activeSessionID = sessionID
 		}
-		w.activity = append(w.activity, fmt.Sprintf("opened: %s", taskLabel))
+		w.activity = appendActivity(w.activity, fmt.Sprintf("opened: %s", taskLabel))
 		return true
 	default:
 		return false
@@ -1046,7 +1046,7 @@ func (w *workspaceState) applyRealtimeEnvelope(event EventEnvelope) {
 		if t := w.tasks[taskID]; t != nil && t.TaskNumber > 0 {
 			taskLabel = fmt.Sprintf("OC-%d", t.TaskNumber)
 		}
-		w.activity = append(w.activity, fmt.Sprintf("%s: status → %s", taskLabel, status))
+		w.activity = appendActivity(w.activity, fmt.Sprintf("%s: status → %s", taskLabel, status))
 		w.markSessionUnread(payload.SessionID)
 	case "task.flow.advanced":
 		var payload struct {
@@ -1063,7 +1063,7 @@ func (w *workspaceState) applyRealtimeEnvelope(event EventEnvelope) {
 		if t := w.tasks[taskID]; t != nil && t.TaskNumber > 0 {
 			taskLabel = fmt.Sprintf("OC-%d", t.TaskNumber)
 		}
-		w.activity = append(w.activity, fmt.Sprintf("%s: flow step → %d", taskLabel, payload.FlowStep))
+		w.activity = appendActivity(w.activity, fmt.Sprintf("%s: flow step → %d", taskLabel, payload.FlowStep))
 		w.markSessionUnread(payload.SessionID)
 	}
 }
