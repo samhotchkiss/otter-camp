@@ -501,6 +501,9 @@ func (m *Model) handleEnterKey() tea.Cmd {
 					return loadChatHistoryCmd(m.workspace.activeSessionID, m.runtimeHints.LoadChatHistory)
 				}
 			case sidebarKindProject:
+				// Update scope indicator + status bar to show project context
+				m.activeScope = ScopeProject
+				m.statusMessage = node.Label
 				// Load project detail + tasks
 				m.workspace.selectedProject = nil // clear stale detail
 				cmds := []tea.Cmd{loadProjectTasksCmd(node.ProjectID, m.runtimeHints)}
@@ -2027,7 +2030,8 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 				m.workspace.selectedProjectID = payload.TargetID
 				m.workspace.selectedProject = nil
 				m.workspace.sidebarCursor = m.workspace.indexOfNode(node.ID)
-				m.statusMessage = "Navigated to project."
+				m.activeScope = ScopeProject
+				m.statusMessage = "Navigated to " + node.Label + "."
 				cmds := []tea.Cmd{loadProjectTasksCmd(payload.TargetID, m.runtimeHints)}
 				if m.runtimeHints.LoadProjectDetail != nil {
 					cmds = append(cmds, loadProjectDetailCmd(payload.TargetID, m.runtimeHints))
