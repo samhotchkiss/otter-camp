@@ -2512,3 +2512,58 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-161---
+
+## EX-161: `chat.session.*` events silently dropped (wrong SSE routing)
+
+**Observation:** `chat.session.created`, `chat.session.closed`, and `chat.session.mode_changed` all have their handlers in `applyWorkspaceCommand` (handling sidebar reloads, activity entries, etc.). However in `tui.go`, all events with a `chat.` prefix were routed to `ChatEnvelopeMsg` → `applyChatEnvelope`. The `applyChatEnvelope` switch had no cases for `chat.session.*` — so these events were silently dropped every time, never reaching their handlers.
+
+**Root cause:** The routing predicate in `tui.go` was `strings.HasPrefix(event.EventType, "chat.")`, which matched all three session events even though their handlers lived on the workspace side.
+
+**Improvement:** Changed the routing condition to `strings.HasPrefix(event.EventType, "chat.") && !strings.HasPrefix(event.EventType, "chat.session.")`. Now `chat.session.*` events route to `WorkspaceEnvelopeMsg` → `applyWorkspaceCommand` where their handlers exist.
+
+**Why it matters:** Every time a chat session was created (e.g. when a task starts), the sidebar should have refreshed to show the new session node. Every time a session closed, the sidebar should have updated. These were silently failing, leaving the sidebar stale until the user manually pressed 'r'.
+
+**Effort:** Trivial (one-line routing condition change)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-162---
+
+## EX-162: 'r' refresh not context-aware for ViewInbox and ViewAgents
+
+**Observation:** In `handleWorkspaceRune`, the `case 'r':` handler refreshed ViewTask (→ task detail) and ViewProject (→ project detail) correctly, but had no special cases for ViewInbox or ViewAgents. Both fell through to the generic `loadSidebarDataCmd` fallback. `loadSidebarDataCmd` only loads sidebar metadata (inbox count, chats, projects) — it does NOT reload the inbox items list or agents list. So pressing 'r' while viewing the inbox or agents panel was effectively a no-op for the content the user was actually looking at.
+
+**Improvement:** Added two new checks in `case 'r':`:
+- `m.workspace.mainView == ViewInbox` → returns `loadInboxItemsCmd`
+- `m.workspace.mainView == ViewAgents` → returns `loadAgentsCmd`
+
+**Why it matters:** Users pressing 'r' to refresh the inbox expect to see the current list of pending review items. With the bug, they'd get the sidebar count refreshed but the items list would remain stale, potentially showing already-handled items or missing new ones.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+---EX-163---
+
+## EX-163: Queued messages promoted locally but never sent to the server
+
+**Observation:** When the user types a message while an agent turn is active, `sendOrQueueInput` stores the message in a local `queuedMessages` list (correctly deferring the send). When the turn ends, `completeTurnAndPromoteQueue` was called — it showed the message in the local chat, set `activeTurn=true`, but **never called `requestChatSendCmd`**. The server never received the queued message. The user would see their message in the chat, the "waiting for response" spinner would be active, and the agent would never respond because it had no message to process.
+
+**Root cause:** `completeTurnAndPromoteQueue` had `void` return type; it only mutated local state. `applyChatEnvelope` also returned `void`, so even if `completeTurnAndPromoteQueue` returned a cmd, it would have been discarded.
+
+**Improvement:**
+- Changed `completeTurnAndPromoteQueue` to return `tea.Cmd` (the `requestChatSendCmd` for the promoted message)
+- Changed `applyChatEnvelope` from `void` to `tea.Cmd` return type so the send cmd propagates up
+- Updated the `ChatEnvelopeMsg` case in `Update` to use the returned cmd
+- Updated all bare `return` statements inside `applyChatEnvelope` to `return nil`
+
+**Why it matters:** Message queuing is the UX for uninterrupted conversation (type while the agent responds, messages are sent in order). If queued messages are silently dropped, users lose messages without any indication — the conversation stalls and there's no way to know why.
+
+**Effort:** Medium (signature changes to two functions + 10+ bare return statements updated)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

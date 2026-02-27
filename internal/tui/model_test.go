@@ -1753,6 +1753,64 @@ func TestRKeyInViewProjectTriggersProjectDetailReload(t *testing.T) {
 	}
 }
 
+// EX-162: pressing r in ViewInbox should reload inbox items (not just sidebar).
+func TestRKeyInViewInboxReloadsInboxItems(t *testing.T) {
+	t.Parallel()
+	reloaded := false
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadInboxItems: func(_ context.Context) ([]InboxSummaryItem, error) {
+			reloaded = true
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.workspace.setMainView(ViewInbox)
+	model.focus = MainPanel
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m := updated.(Model)
+	if m.statusMessage != "Refreshing inbox…" {
+		t.Fatalf("r in ViewInbox should set 'Refreshing inbox…' status, got: %q", m.statusMessage)
+	}
+	if cmd == nil {
+		t.Fatal("r in ViewInbox should return a non-nil cmd")
+	}
+	// cmd is a tea.Batch (inner cmd + status auto-clear timer); use runNonTimerCmds to execute it.
+	runNonTimerCmds(cmd)
+	if !reloaded {
+		t.Fatal("r in ViewInbox should call LoadInboxItems, but it was not called")
+	}
+}
+
+// EX-162: pressing r in ViewAgents should reload agents list (not just sidebar).
+func TestRKeyInViewAgentsReloadsAgents(t *testing.T) {
+	t.Parallel()
+	reloaded := false
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadAgents: func(_ context.Context) ([]string, error) {
+			reloaded = true
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.workspace.setMainView(ViewAgents)
+	model.focus = MainPanel
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m := updated.(Model)
+	if m.statusMessage != "Refreshing agents…" {
+		t.Fatalf("r in ViewAgents should set 'Refreshing agents…' status, got: %q", m.statusMessage)
+	}
+	if cmd == nil {
+		t.Fatal("r in ViewAgents should return a non-nil cmd")
+	}
+	// cmd is a tea.Batch (inner cmd + status auto-clear timer); use runNonTimerCmds to execute it.
+	runNonTimerCmds(cmd)
+	if !reloaded {
+		t.Fatal("r in ViewAgents should call LoadAgents, but it was not called")
+	}
+}
+
 // EX-135: pressing g in ViewDashboard should jump to the first task.
 func TestGKeyInDashboardJumpsToFirstTask(t *testing.T) {
 	model := NewModel(DefaultState())
@@ -3134,5 +3192,58 @@ func TestChatSessionCreatedRoutedAsWorkspaceEventReloadsAndLogs(t *testing.T) {
 		if strings.Contains(entry, "session created") {
 			t.Fatalf("ChatEnvelopeMsg for chat.session.created should be silently dropped (wrong route), but got activity entry: %q", entry)
 		}
+	}
+}
+
+// EX-163: when a queued message is promoted on turn completion, it must be
+// sent to the server (requestChatSendCmd must fire). Previously completeTurnAndPromoteQueue
+// only showed the message locally, so the server never received it.
+func TestQueuedMessageIsDispatchedToServerOnTurnCompletion(t *testing.T) {
+	t.Parallel()
+
+	sent := false
+	sessionID := "session-uuid-ex163"
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		SendChatMessage: func(_ context.Context, sid, content string) error {
+			if sid == sessionID && content == "queued content" {
+				sent = true
+			}
+			return nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.activeSession = sessionID
+	model.activeTurnSessionID = sessionID
+	model.turnsSynced = true
+	model.activeTurn = true
+	// Simulate a queued message
+	model.queuedMessages = []QueuedMessage{{Text: "queued content"}}
+
+	// Simulate turn completion event
+	raw, _ := json.Marshal(map[string]string{"session_id": sessionID})
+	updated, cmd := model.Update(ChatEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "chat.turn.completed",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	if len(m.queuedMessages) != 0 {
+		t.Fatal("queued message should have been removed from queue after promotion")
+	}
+	if cmd == nil {
+		t.Fatal("turn completion with queued message should return a non-nil send cmd")
+	}
+	// cmd is requestChatSendCmd → dispatches chatSendRequestedMsg.
+	// Feed it through Update so the full pipeline runs (chatSendRequestedMsg → sendChatMessageCmd → SendChatMessage).
+	msg := cmd()
+	updated2, cmd2 := m.Update(msg)
+	_ = updated2
+	if cmd2 == nil {
+		t.Fatal("chatSendRequestedMsg should produce a sendChatMessageCmd")
+	}
+	// cmd2 is sendChatMessageCmd — calling it invokes SendChatMessage.
+	cmd2()
+	if !sent {
+		t.Fatal("queued message was promoted but SendChatMessage was never called (EX-163 regression)")
 	}
 }

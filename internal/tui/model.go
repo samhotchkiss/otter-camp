@@ -459,7 +459,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.markReplaySynced()
 		return m, nil
 	case ChatEnvelopeMsg:
-		m.applyChatEnvelope(typed.Envelope)
+		// EX-163: applyChatEnvelope now returns a cmd so queue-promotion sends can propagate.
+		if cmd := m.applyChatEnvelope(typed.Envelope); cmd != nil {
+			m.recordStreamRenderLatency(typed.Envelope)
+			m.markReplaySynced()
+			return m, cmd
+		}
 		m.recordStreamRenderLatency(typed.Envelope)
 		m.markReplaySynced()
 		return m, nil
@@ -1134,6 +1139,15 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.statusMessage = "Refreshing project detail…"
 			return true, loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints)
 		}
+		// EX-162: refresh the content the user is actually viewing, not just sidebar metadata.
+		if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
+			m.statusMessage = "Refreshing inbox…"
+			return true, loadInboxItemsCmd(m.runtimeHints)
+		}
+		if m.focus == MainPanel && m.workspace.mainView == ViewAgents {
+			m.statusMessage = "Refreshing agents…"
+			return true, loadAgentsCmd(m.runtimeHints)
+		}
 		m.workspace.activity = appendActivity(m.workspace.activity,
 			"sidebar refreshed at "+m.now().Format("15:04:05"))
 		m.statusMessage = "Refreshing sidebar data…"
@@ -1784,12 +1798,14 @@ func (m *Model) sessionMatchesActive(sessionID string) bool {
 	return strings.EqualFold(strings.TrimSpace(sessionID), m.activeTurnSessionID)
 }
 
-func (m *Model) applyChatEnvelope(event EventEnvelope) {
+// applyChatEnvelope processes a chat SSE event and returns a tea.Cmd when one
+// is needed (e.g. to send a promoted queued message to the server — EX-163).
+func (m *Model) applyChatEnvelope(event EventEnvelope) tea.Cmd {
 	switch event.EventType {
 	case "chat.message.delta", "chat.message.chunk":
 		// Skip streaming delta events during replay — we only show finalized snapshots
 		if !m.turnsSynced {
-			return
+			return nil
 		}
 		var payload struct {
 			MessageID string `json:"message_id"`
@@ -1798,13 +1814,13 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 			Delta     string `json:"delta"`
 		}
 		if !decodePayload(event.Payload, &payload) {
-			return
+			return nil
 		}
 		if !m.activeTurn {
-			return
+			return nil
 		}
 		if !m.sessionMatchesActive(payload.SessionID) {
-			return
+			return nil
 		}
 		index := m.ensureMessage(payload.MessageID, payload.Role, event.OccurredAt)
 		m.chatMessages[index].Content += payload.Delta
@@ -1819,18 +1835,18 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 			ToolCallID string `json:"tool_call_id"`
 		}
 		if !decodePayload(event.Payload, &payload) {
-			return
+			return nil
 		}
 		if strings.EqualFold(strings.TrimSpace(payload.Role), "tool_result") {
 			m.attachToolResult(strings.TrimSpace(payload.ToolCallID), payload.Content)
-			return
+			return nil
 		}
 		// During SSE replay, skip finalized events entirely. History is loaded
 		// from the REST API via LoadChatHistory (triggered by ReplaySyncedMsg).
 		// SSE replay covers all org-level events and would otherwise inject
 		// messages from archived/other sessions into the active chat panel.
 		if !m.turnsSynced {
-			return
+			return nil
 		}
 		// In live mode: skip user messages entirely — they are already shown
 		// optimistically via appendMessage("local-user") when the user sends.
@@ -1838,14 +1854,14 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 		// completeTurnAndPromoteQueue prematurely, resetting activeTurn=false
 		// before the agent turn even begins — which drops streaming chunks.
 		if strings.EqualFold(strings.TrimSpace(payload.Role), "user") {
-			return
+			return nil
 		}
 		if !m.sessionMatchesActive(payload.SessionID) {
 			// Non-active assistant message → mark the sidebar session as unread
 			if strings.EqualFold(strings.TrimSpace(payload.Role), "assistant") {
 				m.workspace.markSessionUnread(payload.SessionID)
 			}
-			return
+			return nil
 		}
 		// Always set content — do NOT gate on activeTurn. chat.turn.completed
 		// can arrive before chat.message.finalized and clears activeTurn first,
@@ -1860,19 +1876,20 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 		// chat.turn.completed already fired and cleared activeTurn, the queue
 		// was already promoted there — calling again would double-promote.
 		if m.activeTurn {
-			m.completeTurnAndPromoteQueue("Promoted queued message after finalize.")
+			// EX-163: return the send cmd so the promoted message reaches the server.
+			return m.completeTurnAndPromoteQueue("Promoted queued message after finalize.")
 		}
 	case "chat.turn.started":
 		// Ignore historical turn lifecycle events during replay — they would
 		// set activeTurn=true and cause all replayed delta events to stream in.
 		if !m.turnsSynced {
-			return
+			return nil
 		}
 		var payload struct {
 			SessionID string `json:"session_id"`
 		}
 		if decodePayload(event.Payload, &payload) && !m.sessionMatchesActive(payload.SessionID) {
-			return
+			return nil
 		}
 		m.activeTurn = true
 		// EX-127: capture activeTurnSessionID from the event payload immediately
@@ -1884,32 +1901,33 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 		m.chatScrollOffset = 0 // snap to bottom when turn begins
 	case "chat.turn.completed":
 		if !m.turnsSynced {
-			return
+			return nil
 		}
 		var payload struct {
 			SessionID string `json:"session_id"`
 		}
 		_ = decodePayload(event.Payload, &payload)
 		if !m.sessionMatchesActive(payload.SessionID) {
-			return
+			return nil
 		}
 		if !m.activeTurn && len(m.queuedMessages) == 0 {
-			return
+			return nil
 		}
-		m.completeTurnAndPromoteQueue("Promoted queued message after turn completion.")
+		// EX-163: return the send cmd so the promoted message reaches the server.
+		return m.completeTurnAndPromoteQueue("Promoted queued message after turn completion.")
 	case "chat.turn.cancelled":
 		if !m.turnsSynced {
-			return
+			return nil
 		}
 		var payload struct {
 			SessionID string `json:"session_id"`
 		}
 		_ = decodePayload(event.Payload, &payload)
 		if !m.sessionMatchesActive(payload.SessionID) {
-			return
+			return nil
 		}
 		if !m.activeTurn {
-			return
+			return nil
 		}
 		m.activeTurn = false
 		m.activeTurnSessionID = ""
@@ -1922,10 +1940,10 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 			Status     string `json:"status"`
 		}
 		if !decodePayload(event.Payload, &payload) {
-			return
+			return nil
 		}
 		if !m.activeTurn {
-			return
+			return nil
 		}
 		index := m.ensureMessage(payload.MessageID, "assistant", event.OccurredAt)
 		m.upsertToolCall(index, strings.TrimSpace(payload.ToolCallID), strings.TrimSpace(payload.Name), strings.TrimSpace(payload.Status))
@@ -1937,10 +1955,10 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 			MessageID string `json:"message_id"`
 		}
 		if !decodePayload(event.Payload, &payload) {
-			return
+			return nil
 		}
 		if !m.sessionMatchesActive(payload.SessionID) {
-			return
+			return nil
 		}
 		msgID := strings.TrimSpace(payload.MessageID)
 		if idx, ok := m.chatMessageIndex[msgID]; ok {
@@ -1948,16 +1966,20 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 			m.chatMessages[idx].Finalized = true
 		}
 	}
+	return nil
 }
 
-func (m *Model) completeTurnAndPromoteQueue(promoteStatus string) {
+// completeTurnAndPromoteQueue clears the active turn and, if there are
+// queued messages, promotes the first one to the active position.
+// Returns a tea.Cmd to send the promoted message to the server (EX-163).
+func (m *Model) completeTurnAndPromoteQueue(promoteStatus string) tea.Cmd {
 	m.activeTurn = false
 	m.activeTurnSessionID = ""
 	m.chatScrollOffset = 0 // snap to bottom so the completed response is visible
 	m.finalizePendingAssistantMessages()
 	if len(m.queuedMessages) == 0 {
 		m.statusMessage = ""
-		return
+		return nil
 	}
 	next := m.queuedMessages[0]
 	m.queuedMessages = append([]QueuedMessage{}, m.queuedMessages[1:]...)
@@ -1967,6 +1989,9 @@ func (m *Model) completeTurnAndPromoteQueue(promoteStatus string) {
 	if strings.TrimSpace(promoteStatus) != "" {
 		m.statusMessage = promoteStatus
 	}
+	// EX-163: the queued message was stored locally but never sent to the server.
+	// Now that the previous turn is done, dispatch the send to the backend.
+	return requestChatSendCmd(m.ActiveChatSession(), next.Text)
 }
 
 func (m *Model) finalizePendingAssistantMessages() {
