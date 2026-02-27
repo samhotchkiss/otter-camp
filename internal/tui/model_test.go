@@ -857,6 +857,36 @@ func TestModelStateReturnsLastMainView(t *testing.T) {
 	}
 }
 
+func TestDashboardFilteredCountsReflectVisibleTasks(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.tasks = map[string]*taskRecord{
+		"task-a": {ID: "task-a", Title: "API refactor", Status: "todo"},
+		"task-b": {ID: "task-b", Title: "API tests", Status: "in_progress"},
+		"task-c": {ID: "task-c", Title: "Billing feature", Status: "todo"},
+		"task-d": {ID: "task-d", Title: "Billing done", Status: "done"},
+	}
+	model.workspace.taskOrder = []string{"task-a", "task-b", "task-c", "task-d"}
+
+	// No filter: headers should show total counts (2 todo, 1 in_progress, 1 done)
+	view := strings.Join(model.renderDashboardView(120, 20), "\n")
+	if !strings.Contains(view, "TODO") || !strings.Contains(view, "2") {
+		t.Fatalf("unfiltered TODO count missing: %q", view)
+	}
+
+	// Filter to "api": only task-a (todo) and task-b (in_progress) match
+	model.mainFilter = "api"
+	filteredView := strings.Join(model.renderDashboardView(120, 20), "\n")
+
+	// Should show 1 in TODO column header and 1 in IN PROGRESS column header
+	// The "DONE" column header should show 0 (no matching done tasks)
+	if !strings.Contains(filteredView, "API refactor") {
+		t.Fatalf("filtered view missing API refactor: %q", filteredView)
+	}
+	if strings.Contains(filteredView, "Billing") {
+		t.Fatalf("filtered view should not contain Billing tasks: %q", filteredView)
+	}
+}
+
 func TestNewModelWithRuntimeRestoresLastMainView(t *testing.T) {
 	state := DefaultState()
 	state.LastMainView = "agents"

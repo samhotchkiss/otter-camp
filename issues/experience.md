@@ -1328,3 +1328,313 @@ Additionally, the queued message preview lines (`q1: …`) that were added in EX
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-089: Queue-management keys missing from help screen
+
+**Observation:** The `e` (edit), `s` (steer), and `d` (delete) queue-management keys were added in EX-088 as action hints in the chat panel, but were never added to the `?` help screen's Chat section. A user who found the help screen would not know these keys exist.
+
+**Improvement:** Added `e edit queued  ·  s steer  ·  d delete queued` to the Chat section of the help screen. Also reordered the Chat section so Alt-Enter appears before the scroll keys, and clarified `[ / ]` scope hint wording.
+
+**Why it matters:** The help screen is the canonical reference. Any key that exists should appear there; gaps create distrust ("is this feature real?").
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-090: Chat scroll indicators don't mention jump shortcuts
+
+**Observation:** When users scroll up in a long chat history, the indicator lines showed `↓ N more  ·  PgDn scroll` and `↑ N older  ·  PgUp scroll`. The `G` (jump to latest) and `g` (jump to oldest) shortcuts were only in the help screen — there was no hint in the panel itself that these shortcuts existed.
+
+**Improvement:** Extended both scroll indicator lines to include the jump shortcut: `↓ N more  ·  PgDn scroll  ·  G jump to latest` and `↑ N older  ·  PgUp scroll  ·  g jump to oldest`.
+
+**Why it matters:** Users who scroll up looking at history will benefit most from knowing they can jump back to the bottom. Surfacing G/g at the moment it's useful prevents the frustrating "repeated PgDn" experience.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-091: Chat help hints don't adapt when a tool-call message is focused
+
+**Observation:** The chat panel help line always showed `Enter·send` regardless of context. But when the input box is empty and the most recent message contains tool calls, `Enter` toggles the tool-call expansion/collapse — not send. The hint was misleading and the toggle was undiscoverable.
+
+**Improvement:** When the input is empty and the last message has tool calls, the help line now reads `Enter expand/collapse tool  ·  PgUp/PgDn scroll  ·  g/G jump  ·  …` instead of `Enter send …`. Also updated the `?` help screen Chat section to document the dual Enter behaviour.
+
+**Why it matters:** Tool-call output is important context for debugging agentic runs. If users don't know they can expand/collapse it, they either get overwhelmed by verbose output or miss it entirely.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-092: Task status changes not reflected in dashboard Activity log
+
+**Observation:** The dashboard Activity section only showed startup events. Live task status transitions (e.g. a task moving from `todo` → `in_progress`) were silently ignored — the activity log didn't update even when the SSE stream delivered `task.status_changed` and `task.completed` events.
+
+**Improvement:** In `applyTaskEvent`, when a `task.status_changed` or `task.completed` event arrives, append a human-readable entry to `workspace.activityLog` (e.g. `"OC-3: In Progress"` or `"OC-5: Done"`). The Activity section now shows real-time task progress without requiring a manual refresh.
+
+**Why it matters:** One of the core selling points of the platform is live visibility into what agents are doing. An activity log that never changes during an active run is worse than useless — it creates a false sense that nothing is happening.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-093: Activity view always shows ✓ regardless of task outcome
+
+**Observation:** EX-092 added task status transitions to the activity log, but the dashboard Activity widget rendered every entry with `✓` (green success check). That meant a task transitioning to `Blocked` or `Rejected` would show a misleading ✓ icon.
+
+**Improvement:** Added `activityIcon(entry string) string` helper that inspects the entry text for status keywords:
+- `✗` (red) for blocked / rejected / deferred / failed
+- `◌` (amber) for in_progress
+- `✓` (green) for everything else (done, approved, startup events)
+
+Applied to both the full Activity view and the dashboard Activity widget (EX-103 later made the dashboard consistent too).
+
+**Why it matters:** A green ✓ next to "OC-3: Blocked" is actively wrong. Correct icons make the activity feed scannable at a glance.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-094: Review-required tasks not visually distinguishable in dashboard
+
+**Observation:** Tasks with `RequiresHumanReview: true` looked identical to normal tasks in the dashboard board columns. Users had to open each task to discover it was waiting on them.
+
+**Improvement:** Tasks awaiting human review now display a `⚠` suffix in the board column (e.g. `◌ OC-4: Deploy pipeline ⚠`). In the in-progress column they also receive accent color + bold weight so they stand out visually.
+
+**Why it matters:** Human review tasks are the most time-sensitive items in a run — every minute the operator doesn't notice them, the agent is blocked. The `⚠` badge makes them immediately scannable.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-095: Status bar truncates long worker-offline message
+
+**Observation:** The worker-offline status message (`"Worker appears offline — check that ottercamp worker is running."`) was being truncated at 40 characters, cutting it off before the actionable command name.
+
+**Improvement:** Increased status bar message truncation limit from 40 → 60 characters so the full worker warning is visible.
+
+**Why it matters:** Truncating the message at the most actionable part defeats its purpose. The operator needs to see the command name to act on the warning.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-096: Chat empty state is anonymous; sidebar missing refresh hint
+
+**Observation:** Two discoverability gaps:
+1. The chat panel empty state showed `Tab·focus chat  Enter·send` — no indication of who you're talking to or that the session has context.
+2. The sidebar help line had no `r refresh` hint, so users who saw stale data had no way to know they could reload without searching the help screen.
+
+**Improvement:**
+- Chat empty state now reads `Enter·send a message to Frank` (or the agent's name in task scope), making the first interaction intentional and named.
+- Sidebar help line now includes `r refresh`.
+
+**Why it matters:** The first message a user sends to Frank is a moment of trust. Generic placeholder text undermines that. The refresh hint solves a common "why is my data stale?" frustration.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-097: Tool call result [show more] looks clickable but does nothing
+
+**Observation:** When a tool call result exceeded 280 characters, the chat panel showed `[show more]` at the truncation point. That label looked like a clickable link or a key hint, but pressing any key had no effect. Users wasted time trying to interact with it.
+
+**Improvement:** Replaced `[show more]` with `… (result truncated)`, which is clearly informational. Also raised the display limit from 280 → 400 runes to reduce how often truncation occurs.
+
+**Why it matters:** False affordances erode trust. A label that looks interactive but isn't is worse than no label at all.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-098: Panel resize hint `< / >` only listed under Sidebar in help screen
+
+**Observation:** The `<` and `>` keys resize the focused panel (sidebar OR chat panel), but the help screen only listed them under the Sidebar section. Users focused on the chat panel who wanted to resize it had no way to discover this shortcut.
+
+**Improvement:** Moved the resize hint to the Global section with the description: `resize focused panel (sidebar or chat) narrower / wider`.
+
+**Why it matters:** The sidebar-specific listing was actively misleading. A user who looked up `<` in the chat context wouldn't find it.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-099: Input box cleared after send failure, forcing re-type
+
+**Observation:** When a chat message failed to send (API error, network issue), the input box was already cleared. Users had to retype their entire message to retry — even if the failure was transient and completely outside their control.
+
+**Improvement:** On `chatSendCompletedMsg` with a non-nil error, restore the last sent message from `chatHistory` back into the input box. Update the status message to `"Send failed (input restored) — <error>"` so users know they can edit and re-send immediately.
+
+**Why it matters:** Losing composed text on a transient error is a highly punishing UX failure. The fix costs nothing and eliminates a moment of frustration that would otherwise happen on every network blip.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-100: Degraded mode banner shows generic developer jargon
+
+**Observation:** The `DEGRADED MODE` banner displayed a single static message regardless of connection state. The message used internal terms (`EventReducer`, `replay`) that meant nothing to an operator, and gave no actionable guidance.
+
+**Improvement:** `degradedModeBanner()` now picks a context-appropriate message based on the actual connection state:
+- `ConnectionDisconnected` → `"Connection lost — data may be stale. Reconnecting automatically."`
+- `ConnectionReconnecting` → `"Reconnecting to server…"`
+- Connected but stream stale → `"Event stream stale — some data may be delayed. Press r to refresh."`
+
+**Why it matters:** A banner that says "DEGRADED MODE — EventReducer stale" tells an operator nothing. A banner that says "Connection lost — Reconnecting automatically" tells them exactly what is happening and what (if anything) they need to do.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-101: Inbox badge hidden when sidebar is collapsed on narrow screens
+
+**Observation:** The inbox item count badge was only visible in the sidebar node list. On narrow screens where users collapse the sidebar to reclaim space, pending inbox items were invisible — the operator had no signal that their attention was needed.
+
+**Improvement:** Added a `✉ N` badge to the status bar that appears whenever `workspace.inboxCount > 0` and the user is not already viewing the Inbox. The badge is always visible regardless of sidebar state.
+
+**Why it matters:** Inbox items often require human decisions that block agentic runs. Missing an inbox notification means a run stays blocked indefinitely.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-102: Merges and Schedules views missing item count badges
+
+**Observation:** The Inbox, Activity, and Agents panel titles showed `(N)` count badges. Merges and Schedules did not, creating an inconsistency — users had to open those views to see if anything was pending.
+
+**Improvement:** Merges and Schedules panel titles now show `(N)` count badges when items exist, matching the established pattern for other list views.
+
+**Why it matters:** Consistency. Once users learn that `(N)` means "items waiting", they expect it everywhere. A missing badge on Merges implies the feature is different or broken.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-103: Dashboard Activity widget always shows ✓ icon
+
+**Observation:** EX-093 added `activityIcon()` to the full Activity view, but the dashboard's inline Activity section was still using the old hardcoded `"  ✓ "` prefix for every entry. Task-blocked and in-progress status transitions were showing green success checks in the dashboard widget.
+
+**Improvement:** Updated the dashboard Activity section to call `activityIcon(entry)` with a 2-space indent prefix, consistent with the full Activity view.
+
+**Why it matters:** A separate code path for the dashboard widget was a silent inconsistency that would have required two separate fixes every time icon logic changed. Now both views use the same helper.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-104: Task-scoped chat empty state doesn't show which task it belongs to
+
+**Observation:** When opening a task-scoped chat session with no messages yet, the empty state only showed `"no messages yet"` and the send prompt. Users had no way to confirm which task the session was scoped to without switching to the task detail view.
+
+**Improvement:** When `activeScope == ScopeTask` and a task record exists with a title, the empty state now shows the task name below the prompt: `"OC-7: Build login flow"`. For tasks without a number, just the title is shown. Two unit tests added.
+
+**Why it matters:** Starting a conversation in the wrong task scope is a real risk in multi-task projects. Showing the task name in the empty state is a low-cost confirmation that prevents wasted exchanges.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-105: Status bar messages persist indefinitely
+
+**Observation:** Status messages set by navigation actions (`"Inbox"`, `"Scrolled up"`, `"Jumped to next unread"`) remained in the status bar until the next action replaced them. Old messages from minutes ago cluttered the bar and could confuse users about the current state.
+
+**Improvement:** Status messages now auto-clear after 5 seconds. A `statusGeneration int` counter prevents stale timers from clearing newer messages: each `statusAutoClearCmd(gen)` only clears the bar if `gen == m.statusGeneration`. Three unit tests added.
+
+**Why it matters:** A status bar that shows yesterday's "Scrolled up" while the user is doing something completely unrelated is worse than no status bar. Transient messages should be transient.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-106: Task detail navigation hint doesn't show position within project
+
+**Observation:** The `j/k` navigation hint in the task detail view read `"j/k·next/prev task"` with no indication of how many tasks were in the project or where the current task fell. Users navigating a 10-task project had no way to tell if they were at the beginning, middle, or end.
+
+**Improvement:** Hint now reads `"j/k·next/prev task  (2 of 5)"` — position (N of M) appended inline.
+
+**Why it matters:** Positional context reduces disorientation when navigating a task list with j/k. It's the same information a table of contents provides.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-107: Dashboard inbox widget has no action hint
+
+**Observation:** The dashboard showed inline inbox items but gave no hint that pressing `i` would open the full inbox view. Users could see items needed attention but had no in-panel signal about how to respond.
+
+**Improvement:** Added `"  i·open inbox"` below the item list (≤3 items) and `"+N more  ·  i·view all"` on the overflow line (>3 items).
+
+**Why it matters:** The dashboard is designed to surface actionable items. Without a call-to-action, it's read-only noise. The `i` hint transforms it into an action starting point.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-108: First-run tour and cold-open banner use jargon
+
+**Observation:**
+- The tour line used `/` separators and `:frank` / `:inbox` command syntax that was unfamiliar to first-time users. The `?·help` shortcut was not mentioned at all, so new users had no obvious way to discover the full keybinding reference.
+- The cold-open banner said `"FIRST RUN  Booting operator console..."` — internal/developer language that would feel alien to a non-technical operator.
+
+**Improvement:**
+- Tour line changed from `"1/sidebar  2/main  3/chat  ·  :frank  :inbox  :tour dismiss"` to `"1·sidebar  2·main  3·chat  ·  i·inbox  ?·help  :tour dismiss"`. Consistent `·` separators, natural key hints instead of colon-commands.
+- Cold-open banner changed from `"// FIRST RUN  Booting operator console..."` to `"// WELCOME  Setting up your workspace…"`.
+
+**Why it matters:** First impressions matter. Jargon in a welcome screen signals that the tool is built for developers, not operators. Plain language is inclusive without being condescending.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-109: Dashboard column headers show total counts even when filter is active
+
+**Observation:** When a search filter was active in the dashboard (e.g. typing `api` to find API-related tasks), the task rows correctly filtered to matching tasks. However, the column headers (TODO `2`, IN PROGRESS `1`, DONE `1`) continued to show the total unfiltered counts. The mismatch was confusing — a column header showing `2` but only `1` task row visible implied hidden tasks or a bug.
+
+**Improvement:** When `query != ""`, `renderDashboardView` now computes per-column counts from the filtered task set (using the same `matchesFilter` predicate applied to task rows) before building the column headers. Unfiltered counts are only used when no filter is active. Unit test added.
+
+**Why it matters:** Column counts are a summary of what's visible. Showing totals while rows are filtered breaks the user's mental model and makes the filter feel broken.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

@@ -685,6 +685,35 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 	counts := m.workspace.boardCounts()
 	query := normalizedFilterQuery(m.mainFilter)
 
+	// EX-109: when a filter is active, compute per-column counts from the
+	// filtered task set so the column headers reflect what's actually visible.
+	if query != "" {
+		counts = boardCounts{}
+		for _, id := range m.workspace.taskOrder {
+			task := m.workspace.tasks[id]
+			if task == nil {
+				continue
+			}
+			taskLabel := task.Title
+			if task.TaskNumber > 0 {
+				taskLabel = fmt.Sprintf("OC-%d: %s", task.TaskNumber, task.Title)
+			}
+			if !matchesFilter(taskLabel, query) && !matchesFilter(task.Status, query) {
+				continue
+			}
+			switch task.Status {
+			case "draft", "todo":
+				counts.Todo++
+			case "done", "approved", "cancelled":
+				counts.Done++
+			case "blocked", "rejected", "deferred":
+				counts.Blocked++
+			default:
+				counts.InProgress++
+			}
+		}
+	}
+
 	// Board columns
 	lines = append(lines, "")
 	boardTitle := "Task Board"
