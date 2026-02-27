@@ -134,6 +134,12 @@ func runTUICommand(args []string) int {
 				}
 				return out, nil
 			}
+			// EX-160: wire ActOnInboxItem so approve/reject/defer reach the server.
+			runtimeHints.ActOnInboxItem = func(ctx context.Context, itemID, action string) error {
+				body := map[string]string{"action": action}
+				var resp struct{}
+				return apiClient.request(ctx, "POST", "/v1/inbox/"+url.PathEscape(itemID)+"/act", body, &resp)
+			}
 			runtimeHints.LoadRecentChats = func(ctx context.Context) ([]tuiapp.SidebarChatItem, error) {
 				sessions, err := apiClient.ListChatSessions(ctx, chatListSessionsFilter{
 					Status: "active",
