@@ -2065,17 +2065,17 @@ func (m Model) commandFallbackHelp() string {
 	}
 	switch m.focus {
 	case SidebarPanel:
-		return "j/k/↑/↓ navigate · Space expand · Enter select · h/l/←/→ collapse/expand · / search · s sidebar · : commands · ? help"
+		return "j/k navigate · Space expand · Enter select · n next unread · i inbox · d dashboard · / search · : commands · ? help"
 	case MainPanel:
 		switch m.workspace.mainView {
 		case ViewInbox:
-			return "a approve · x reject · f defer · o open · j/k navigate · s toggle sidebar · Esc back · : commands"
+			return "a approve · x reject · f defer · o open · j/k navigate · n next unread · s toggle sidebar · Esc back · : commands"
 		case ViewTask:
-			return "Enter open session · Esc back · s toggle sidebar · : commands · ? help"
+			return "Enter open session · Esc back · n next unread · s toggle sidebar · : commands · ? help"
 		case ViewProject:
-			return "j/k navigate tasks · Enter open task · Esc back · s toggle sidebar · : commands · ? help"
+			return "j/k navigate tasks · Enter open task · Esc back · n next unread · : commands · ? help"
 		default:
-			return "r refresh · s toggle sidebar · / filter · : commands · ? help"
+			return "i inbox · d dashboard · n next unread · r refresh · / filter · : commands · ? help"
 		}
 	case ChatPanel:
 		return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · ↑/↓ scroll · [/] scope · Esc cancel turn · : commands · ? help"

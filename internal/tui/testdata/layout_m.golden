@@ -28,7 +28,7 @@
 │                   ││                                                          ││                                     │
 ╰───────────────────╯╰──────────────────────────────────────────────────────────╯╰─────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  M/dashboard  ·  snapshot                                                                 
-Help: r refresh · s toggle sidebar · / filter · : commands · ? help
+Help: i inbox · d dashboard · n next unread · r refresh · / filter · : commands · ? help
 
 ### M chat
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
@@ -60,7 +60,7 @@ Help: r refresh · s toggle sidebar · / filter · : commands · ? help
 │                   ││                                                          ││                                     │
 ╰───────────────────╯╰──────────────────────────────────────────────────────────╯╰─────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  M/dashboard  ·  snapshot                                                                 
-Help: r refresh · s toggle sidebar · / filter · : commands · ? help
+Help: i inbox · d dashboard · n next unread · r refresh · / filter · : commands · ? help
 
 ### M inbox
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
@@ -92,4 +92,4 @@ Help: r refresh · s toggle sidebar · / filter · : commands · ? help
 │                   ││                                                          ││                                     │
 ╰───────────────────╯╰──────────────────────────────────────────────────────────╯╰─────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  M/dashboard  ·  snapshot                                                                 
-Help: r refresh · s toggle sidebar · / filter · : commands · ? help
+Help: i inbox · d dashboard · n next unread · r refresh · / filter · : commands · ? help

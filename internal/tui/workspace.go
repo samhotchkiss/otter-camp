@@ -101,7 +101,8 @@ type ProjectDetail struct {
 	DisplayName  string
 	Description  string
 	DeliveryMode string
-	Tasks        []SidebarTaskItem
+	Tasks        []SidebarTaskItem // open tasks only
+	DoneCount    int               // count of completed tasks
 }
 
 type workspaceState struct {

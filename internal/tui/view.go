@@ -868,9 +868,17 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 	}
 
 	if len(openTasks) == 0 {
-		lines = append(lines, styleMuted.Render("  No open tasks."))
+		if proj.DoneCount > 0 {
+			lines = append(lines, styleMuted.Render(fmt.Sprintf("  All tasks complete (%d done).", proj.DoneCount)))
+		} else {
+			lines = append(lines, styleMuted.Render("  No open tasks."))
+		}
 	} else {
-		lines = append(lines, styleLabel.Render(fmt.Sprintf("OPEN TASKS (%d)", len(openTasks))))
+		taskHeader := fmt.Sprintf("OPEN TASKS (%d)", len(openTasks))
+		if proj.DoneCount > 0 {
+			taskHeader += fmt.Sprintf("  ·  %d done", proj.DoneCount)
+		}
+		lines = append(lines, styleLabel.Render(taskHeader))
 		cursor := m.workspace.projectTaskCursor
 		if cursor < 0 {
 			cursor = 0

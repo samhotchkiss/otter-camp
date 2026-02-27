@@ -22,7 +22,7 @@
  ○  disconnected  ·  Frank  ·  XS/dashboard  ·  snapshot  ·  Hidden  
  panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or      
  :focus chat)                                                        
-Help: r refresh · s toggle sidebar · / filter · : commands · ? help
+Help: i inbox · d dashboard · n next unread · r refresh · / filter · : commands · ? help
 
 ### XS chat
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recover…
@@ -48,7 +48,7 @@ Help: r refresh · s toggle sidebar · / filter · : commands · ? help
  ○  disconnected  ·  Frank  ·  XS/dashboard  ·  snapshot  ·  Hidden  
  panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or      
  :focus chat)                                                        
-Help: r refresh · s toggle sidebar · / filter · : commands · ? help
+Help: i inbox · d dashboard · n next unread · r refresh · / filter · : commands · ? help
 
 ### XS inbox
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recover…
@@ -74,4 +74,4 @@ Help: r refresh · s toggle sidebar · / filter · : commands · ? help
  ○  disconnected  ·  Frank  ·  XS/dashboard  ·  snapshot  ·  Hidden  
  panes: sidebar hidden (1 or :focus sidebar); chat hidden (3 or      
  :focus chat)                                                        
-Help: r refresh · s toggle sidebar · / filter · : commands · ? help
+Help: i inbox · d dashboard · n next unread · r refresh · / filter · : commands · ? help
