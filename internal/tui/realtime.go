@@ -164,6 +164,9 @@ func NewEventReducer(logger *slog.Logger) *EventReducer {
 		"agent.expired":                 {},
 		"agent.promoted":                {},
 		"supervisor.escalation_created": {},
+		// Task review lifecycle (EX-142)
+		"task.review_rejected":        {},
+		"chat.session.mode_changed":   {},
 		// Chat events also include redaction (handled in applyChatEnvelope)
 		"chat.message.redacted": {},
 	}

@@ -3189,6 +3189,36 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		}
 		return nil
 	}
+	// EX-142: task.review_rejected — append reason to activity so users can see
+	// why a task was sent back without navigating to the task event log.
+	if event.EventType == "task.review_rejected" {
+		var payload struct {
+			TaskID string `json:"task_id"`
+			Reason string `json:"reason"`
+		}
+		if decodePayload(event.Payload, &payload) {
+			label := taskLabel(m.workspace.tasks[payload.TaskID], payload.TaskID)
+			entry := label + ": review rejected"
+			if payload.Reason != "" {
+				entry += " — " + truncate(payload.Reason, 40)
+			}
+			m.workspace.activity = appendActivity(m.workspace.activity, entry)
+		}
+		return nil
+	}
+	// EX-142: chat.session.mode_changed — note mode transitions in the activity
+	// log so users know when a session switches between sync and async.
+	if event.EventType == "chat.session.mode_changed" {
+		var payload struct {
+			OldMode string `json:"old_mode"`
+			NewMode string `json:"new_mode"`
+		}
+		if decodePayload(event.Payload, &payload) && payload.NewMode != "" {
+			entry := "session mode: " + payload.OldMode + " → " + payload.NewMode
+			m.workspace.activity = appendActivity(m.workspace.activity, entry)
+		}
+		return nil
+	}
 	if event.EventType != "tui.command" {
 		return nil
 	}

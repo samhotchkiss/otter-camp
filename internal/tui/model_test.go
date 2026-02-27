@@ -2227,6 +2227,61 @@ func TestSupervisorEscalationCreatedSetsStatusMessage(t *testing.T) {
 	}
 }
 
+// --- EX-142: task.review_rejected, chat.session.mode_changed ---
+
+func TestTaskReviewRejectedAddsActivityEntry(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.workspace.tasks = map[string]*taskRecord{
+		"task-review-1": {ID: "task-review-1", TaskNumber: 7, Title: "Fix login"},
+	}
+
+	raw, _ := json.Marshal(map[string]any{"task_id": "task-review-1", "reason": "tests not passing"})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "task.review_rejected",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "OC-7") && strings.Contains(entry, "review rejected") && strings.Contains(entry, "tests not passing") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing review rejected entry: %v", m.workspace.activity)
+	}
+}
+
+func TestChatSessionModeChangedAddsActivityEntry(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	raw, _ := json.Marshal(map[string]any{"session_id": "sess-1", "old_mode": "sync", "new_mode": "async"})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "chat.session.mode_changed",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "session mode") && strings.Contains(entry, "sync") && strings.Contains(entry, "async") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing session mode change entry: %v", m.workspace.activity)
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
