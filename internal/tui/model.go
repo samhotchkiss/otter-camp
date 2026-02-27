@@ -2279,7 +2279,7 @@ func (m Model) commandFallbackHelp() string {
 	}
 	switch m.focus {
 	case SidebarPanel:
-		return "j/k navigate · Space expand · Enter select · n next unread · i inbox · d dashboard · / search · : commands · ? help"
+		return "j/k navigate · Space expand · Enter select · n next unread · i inbox · d dashboard · r refresh · / search · ? help"
 	case MainPanel:
 		switch m.workspace.mainView {
 		case ViewInbox:

@@ -1676,10 +1676,13 @@ func (m Model) renderChatMessages(width int) []string {
 					Foreground(colMuted).Render(spinner + " waiting for response..."),
 			}
 		}
+		// EX-096: context-aware empty state — show who you're chatting with
+		// so the first message feels intentional rather than anonymous.
+		agentName := m.assistantLabel()
 		return []string{
 			"",
 			center("no messages yet"),
-			center("Tab·focus chat  Enter·send"),
+			center("Enter·send a message to " + agentName),
 		}
 	}
 
@@ -2083,7 +2086,9 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 
 	status := ""
 	if m.statusMessage != "" {
-		status = styleMuted.Render("  ·  ") + styleSubtle.Render(truncate(m.statusMessage, 40))
+		// EX-095: 60 chars fits the worker-offline message without cutting the
+		// command name; still safe on terminals as narrow as ~90 columns.
+		status = styleMuted.Render("  ·  ") + styleSubtle.Render(truncate(m.statusMessage, 60))
 	}
 
 	// EX-043: show ◌ in status bar when agent turn is active
