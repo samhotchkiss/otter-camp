@@ -2914,3 +2914,18 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-187---
+
+## EX-187: Queued messages for the old session sent to the new session after a switch
+
+**Observation:** When a user queues multiple messages while an active turn is in progress (session A), then switches to session B, EX-186 clears `activeTurn` and `activeTurnSessionID`. However, `queuedMessages` was NOT cleared. When session A's `chat.turn.completed` SSE event subsequently arrived, `completeTurnAndPromoteQueue` would fire (because `len(queuedMessages) > 0`), dequeue the next message, and call `requestChatSendCmd(m.ActiveChatSession(), text)` — which now resolves to session B's ID. The queued messages intended for session A were sent to session B.
+
+**Improvement:** Extended `clearTurnIfSwitchingSession` to also clear `queuedMessages` and `editingQueued` when the session changes. The check was also generalized from `activeTurn`-only to `activeTurn || len(queuedMessages) > 0` so queued messages are discarded even if the turn was already false when the switch occurs.
+
+**Why it matters:** Cross-session message leakage is one of the worst possible chat bugs — the user's private message to one AI agent is silently delivered to a different agent in a different context. Queued messages are especially dangerous because they're intended for a specific session's ongoing conversation thread.
+
+**Effort:** Trivial (3 lines added to clearTurnIfSwitchingSession)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

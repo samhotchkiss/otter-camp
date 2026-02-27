@@ -2384,18 +2384,21 @@ func (m Model) chatTextInputActive() bool {
 }
 
 // clearTurnIfSwitchingSession must be called just before changing m.activeSession.
-// If the incoming session differs from the current one and a turn is active, it
-// clears activeTurn + activeTurnSessionID so the spinner does not persist in the
-// new session's chat panel. (EX-186)
+// If the incoming session differs from the current one it:
+//   - clears activeTurn + activeTurnSessionID (EX-186) so the spinner doesn't show
+//     in the new session's chat panel, and
+//   - discards queuedMessages + editingQueued (EX-187) so a stale turn-completed
+//     event for the old session cannot send those messages to the new session.
 func (m *Model) clearTurnIfSwitchingSession(newSessionID string) {
-	if !m.activeTurn {
-		return
-	}
 	if strings.EqualFold(strings.TrimSpace(m.activeSession), strings.TrimSpace(newSessionID)) {
-		return // same session — keep turn state
+		return // same session — keep all state
 	}
-	m.activeTurn = false
-	m.activeTurnSessionID = ""
+	if m.activeTurn || len(m.queuedMessages) > 0 {
+		m.activeTurn = false
+		m.activeTurnSessionID = ""
+		m.queuedMessages = nil
+		m.editingQueued = false
+	}
 }
 
 func inferScopeFromSession(session string) ChatScope {

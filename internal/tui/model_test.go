@@ -4377,3 +4377,42 @@ func TestSwitchScopeClearsTurnStateForNewSession(t *testing.T) {
 		t.Error("switchScope should have reloaded chat history for the new session (EX-186)")
 	}
 }
+
+// EX-187: switching sessions should discard queued messages for the old session.
+// If not cleared, a stale chat.turn.completed event for session A could send the
+// queued messages to session B (now the active session).
+func TestSwitchScopeClearsQueuedMessages(t *testing.T) {
+	t.Parallel()
+	sessionA := "aaaaaaaa-0000-0000-0000-000000000002"
+	sessionB := "bbbbbbbb-0000-0000-0000-000000000002"
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, _ string) ([]ChatMessage, error) {
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// Simulate active turn with queued messages in session A.
+	model.activeTurn = true
+	model.activeTurnSessionID = sessionA
+	model.activeSession = sessionA
+	model.queuedMessages = []QueuedMessage{
+		{Text: "msg1"},
+		{Text: "msg2"},
+	}
+
+	// Switch to session B via the 'n' next-unread path.
+	model.workspace.activeSessionID = sessionB
+	model.switchScope(ScopeOrg)
+
+	if len(model.queuedMessages) != 0 {
+		t.Errorf("queuedMessages should be cleared after session switch, got %d (EX-187)", len(model.queuedMessages))
+	}
+	if model.activeTurn {
+		t.Error("activeTurn should be cleared after session switch (EX-187)")
+	}
+	if model.activeTurnSessionID != "" {
+		t.Errorf("activeTurnSessionID should be cleared after session switch, got %q (EX-187)", model.activeTurnSessionID)
+	}
+}
