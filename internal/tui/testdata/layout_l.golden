@@ -1,7 +1,7 @@
 ### L board
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
 ╭──────────────────────────────╮╭──────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────────────────────╮
-│ SESSIONS                     ││ DASHBOARD                                                    ││ General / Frank  ·  org                                      │
+│ SESSIONS                     ││ DASHBOARD                                                    ││ General / Frank  ·  [task] [project] [org]                   │
 │ ──────────────────────────── ││ ──────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────────────────────── │
 │   General / Frank ✓          ││                                                              ││                                                              │
 │ ▾ Project Alpha              ││ Task Board                                                   ││                       no messages yet                        │
@@ -37,7 +37,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 ### L chat
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
 ╭──────────────────────────────╮╭──────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────────────────────╮
-│ SESSIONS                     ││ DASHBOARD                                                    ││ General / Frank  ·  org                                      │
+│ SESSIONS                     ││ DASHBOARD                                                    ││ General / Frank  ·  [task] [project] [org]                   │
 │ ──────────────────────────── ││ ──────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────────────────────── │
 │   General / Frank ✓          ││                                                              ││                                                              │
 │ ▾ Project Alpha              ││ Task Board                                                   ││                       no messages yet                        │
@@ -73,7 +73,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 ### L inbox
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivity and allow replay resync.
 ╭──────────────────────────────╮╭──────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────────────────────╮
-│ SESSIONS                     ││ DASHBOARD                                                    ││ General / Frank  ·  org                                      │
+│ SESSIONS                     ││ DASHBOARD                                                    ││ General / Frank  ·  [task] [project] [org]                   │
 │ ──────────────────────────── ││ ──────────────────────────────────────────────────────────── ││ ──────────────────────────────────────────────────────────── │
 │   General / Frank ✓          ││                                                              ││                                                              │
 │ ▾ Project Alpha              ││ Task Board                                                   ││                       no messages yet                        │

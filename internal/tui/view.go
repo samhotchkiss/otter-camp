@@ -789,10 +789,7 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	if sessionLabel == "" {
 		sessionLabel = "General / Frank"
 	}
-	scopeLabel := string(m.activeScope)
-	headerText := styleActive.Render(sessionLabel) +
-		styleMuted.Render("  ·  ") +
-		styleSubtle.Render(scopeLabel)
+	headerText := renderChatHeader(sessionLabel, m.activeScope, cw)
 	headerLines := []string{
 		headerText,
 		styleDivider.Render(strings.Repeat("─", cw)),
@@ -868,6 +865,38 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	content := buildPanelContent(lines, targetH, cw)
 
 	return panelStyle(innerW, innerH, focused).Render(content)
+}
+
+func renderChatHeader(sessionLabel string, active ChatScope, width int) string {
+	separator := styleMuted.Render("  ·  ")
+	indicator := renderScopeIndicator(active, false)
+	sessionWidth := width - lipgloss.Width(separator) - lipgloss.Width(indicator)
+	if sessionWidth < 8 {
+		indicator = renderScopeIndicator(active, true)
+		sessionWidth = width - lipgloss.Width(separator) - lipgloss.Width(indicator)
+	}
+	if sessionWidth < 1 {
+		sessionWidth = 1
+	}
+	return styleActive.Render(truncate(sessionLabel, sessionWidth)) + separator + indicator
+}
+
+func renderScopeIndicator(active ChatScope, compact bool) string {
+	order := []ChatScope{ScopeTask, ScopeProject, ScopeOrg}
+	parts := make([]string, 0, len(order))
+	for _, scope := range order {
+		label := string(scope)
+		if compact {
+			label = string(label[0])
+		}
+		token := "[" + label + "]"
+		if scope == active {
+			parts = append(parts, styleActive.Render(token))
+			continue
+		}
+		parts = append(parts, styleMuted.Render(token))
+	}
+	return strings.Join(parts, " ")
 }
 
 func (m Model) renderChatMessages(width int) []string {

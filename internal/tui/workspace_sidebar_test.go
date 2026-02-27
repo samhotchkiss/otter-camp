@@ -67,3 +67,12 @@ func TestSidebarTreeNavigationExpandCollapseAndSelect(t *testing.T) {
 		t.Fatalf("main view after selecting task session = %s, want %s", got, ViewTask)
 	}
 }
+
+func TestSessionLabelResolvesTaskScopeId(t *testing.T) {
+	workspace := newWorkspaceState()
+
+	got := workspace.sessionLabel("session-task-current")
+	if got != "Launch docs" {
+		t.Fatalf("task scope label = %q, want %q", got, "Launch docs")
+	}
+}

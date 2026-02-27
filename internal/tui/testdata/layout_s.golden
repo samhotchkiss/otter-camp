@@ -1,7 +1,7 @@
 ### S board
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivit…
 ╭──────────────────────────────────────────────────╮╭────────────────────────────────────╮
-│ DASHBOARD                                        ││ General / Frank  ·  org            │
+│ DASHBOARD                                        ││ General / Frank  ·  [t] [p] [o]    │
 │ ──────────────────────────────────────────────── ││ ────────────────────────────────── │
 │                                                  ││                                    │
 │ Task Board                                       ││          no messages yet           │
@@ -33,7 +33,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 ### S chat
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivit…
 ╭──────────────────────────────────────────────────╮╭────────────────────────────────────╮
-│ DASHBOARD                                        ││ General / Frank  ·  org            │
+│ DASHBOARD                                        ││ General / Frank  ·  [t] [p] [o]    │
 │ ──────────────────────────────────────────────── ││ ────────────────────────────────── │
 │                                                  ││                                    │
 │ Task Board                                       ││          no messages yet           │
@@ -65,7 +65,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 ### S inbox
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivit…
 ╭──────────────────────────────────────────────────╮╭────────────────────────────────────╮
-│ DASHBOARD                                        ││ General / Frank  ·  org            │
+│ DASHBOARD                                        ││ General / Frank  ·  [t] [p] [o]    │
 │ ──────────────────────────────────────────────── ││ ────────────────────────────────── │
 │                                                  ││                                    │
 │ Task Board                                       ││          no messages yet           │
@@ -97,7 +97,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 ### S board-sidebar-focus
 ⚠ DEGRADED MODE: upstream dependency unavailable or stale. Recovery: verify connectivit…
 ╭──────────────────────────────────╮╭────────────────────────────────────────────────────╮
-│ SESSIONS                         ││ General / Frank  ·  org                            │
+│ SESSIONS                         ││ General / Frank  ·  [task] [project] [org]         │
 │ ──────────────────────────────── ││ ────────────────────────────────────────────────── │
 │   General / Frank ✓              ││                                                    │
 │ ▾ Project Alpha                  ││                  no messages yet                   │

@@ -357,6 +357,39 @@ func TestForwardHistoryNavigation(t *testing.T) {
 	}
 }
 
+func TestScopeCycleShortcutsTraverseAllScopeLevels(t *testing.T) {
+	model := NewModel(DefaultState())
+	if got := model.ChatScope(); got != ScopeOrg {
+		t.Fatalf("initial scope = %s, want %s", got, ScopeOrg)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	if got := model.ChatScope(); got != ScopeProject {
+		t.Fatalf("scope after ] = %s, want %s", got, ScopeProject)
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	if got := model.ChatScope(); got != ScopeTask {
+		t.Fatalf("scope after second ] = %s, want %s", got, ScopeTask)
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	if got := model.ChatScope(); got != ScopeOrg {
+		t.Fatalf("scope after third ] = %s, want %s", got, ScopeOrg)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+	if got := model.ChatScope(); got != ScopeTask {
+		t.Fatalf("scope after [ from org = %s, want %s", got, ScopeTask)
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+	if got := model.ChatScope(); got != ScopeProject {
+		t.Fatalf("scope after second [ = %s, want %s", got, ScopeProject)
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+	if got := model.ChatScope(); got != ScopeOrg {
+		t.Fatalf("scope after third [ = %s, want %s", got, ScopeOrg)
+	}
+}
+
 func TestQuitKeyClosesHelpView(t *testing.T) {
 	model := NewModel(DefaultState())
 	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
