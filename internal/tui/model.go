@@ -2450,19 +2450,41 @@ func (m *Model) executeSidebarCommand(args []string) tea.Cmd {
 		m.workspace.collapseSidebarNode()
 		m.statusMessage = "Sidebar node collapsed."
 	case "select", "open":
+		// Capture node before selectSidebarNode modifies state.
+		node := m.workspace.currentSidebarNode()
 		m.workspace.selectSidebarNode()
 		m.state.LastActiveChatSession = m.workspace.activeSessionID
 		m.activeSession = m.workspace.activeSessionID
 		m.statusMessage = "Sidebar selection applied."
-		// EX-168: reload history so the chat panel shows the newly-selected session,
-		// not the previous session (mirrors the Enter-key path in handleEnterKey).
+		// EX-177: dispatch data loads appropriate for the selected node kind,
+		// mirroring the handleEnterKey path so :sidebar select and Enter are equivalent.
+		var cmds []tea.Cmd
+		if node != nil {
+			switch node.Kind {
+			case sidebarKindProject:
+				cmds = append(cmds, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true))
+				if m.runtimeHints.LoadProjectDetail != nil {
+					cmds = append(cmds, loadProjectDetailCmd(node.ProjectID, m.runtimeHints))
+				}
+			case sidebarKindTask:
+				if node.TaskID != "" {
+					cmds = append(cmds, loadTaskDetailCmd(node.TaskID, m.runtimeHints))
+				}
+			case sidebarKindInbox:
+				cmds = append(cmds, loadInboxItemsCmd(m.runtimeHints))
+			}
+		}
+		// EX-168: reload history so the chat panel shows the newly-selected session.
 		sessionID := m.workspace.activeSessionID
 		if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
 			m.chatMessages = nil
 			m.chatHistoryLoading = true
 			m.chatMessageIndex = make(map[string]int)
 			m.chatScrollOffset = 0
-			return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+			cmds = append(cmds, loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory))
+		}
+		if len(cmds) > 0 {
+			return tea.Batch(cmds...)
 		}
 	default:
 		m.statusMessage = "Unknown sidebar action. Use up, down, home, end, expand, collapse, or select."

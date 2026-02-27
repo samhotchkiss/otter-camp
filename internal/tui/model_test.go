@@ -3879,3 +3879,122 @@ func TestPKeyLoadsProjectDataWhenMissing(t *testing.T) {
 		t.Fatal("'p' key did not call LoadProjectTasks (EX-176)")
 	}
 }
+
+// EX-177: :sidebar select should dispatch appropriate data loads per node kind,
+// matching the Enter key behavior. Previously it only reloaded chat history.
+func TestSidebarSelectCommandLoadsDataPerNodeKind(t *testing.T) {
+	t.Parallel()
+
+	t.Run("task-node-loads-detail", func(t *testing.T) {
+		taskID := "task-ex-177"
+		sessionID := "00000000-0000-0000-0000-000000000177"
+		detailLoaded := false
+		model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+			LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+				if id == taskID {
+					detailLoaded = true
+				}
+				return &TaskDetailItem{ID: id, TaskNumber: 177}, nil
+			},
+		})
+		model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+		// Seed a task node in the sidebar
+		if model.workspace.nodes == nil {
+			model.workspace.nodes = make(map[string]*sidebarNode)
+		}
+		nodeID := "task-" + taskID
+		model.workspace.nodes[nodeID] = &sidebarNode{
+			ID:        nodeID,
+			Kind:      sidebarKindTask,
+			TaskID:    taskID,
+			Label:     "EX-177 Task",
+			SessionID: sessionID,
+		}
+		model.workspace.topLevel = []string{nodeID}
+		model.workspace.sidebarCursor = 0
+
+		cmd := model.executeCommand(":sidebar select")
+		if cmd == nil {
+			t.Fatal(":sidebar select on task node should return a non-nil cmd")
+		}
+		runNonTimerCmds(cmd)
+		if !detailLoaded {
+			t.Fatal(":sidebar select on task node did not call LoadTaskDetail (EX-177)")
+		}
+	})
+
+	t.Run("project-node-loads-detail-and-tasks", func(t *testing.T) {
+		projectID := "proj-ex-177"
+		detailLoaded := false
+		tasksLoaded := false
+		model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+			LoadProjectDetail: func(_ context.Context, id string) (*ProjectDetail, error) {
+				if id == projectID {
+					detailLoaded = true
+				}
+				return &ProjectDetail{ID: id, DisplayName: "EX-177 Project"}, nil
+			},
+			LoadProjectTasks: func(_ context.Context, id string) ([]SidebarTaskItem, error) {
+				if id == projectID {
+					tasksLoaded = true
+				}
+				return nil, nil
+			},
+		})
+		model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+		if model.workspace.nodes == nil {
+			model.workspace.nodes = make(map[string]*sidebarNode)
+		}
+		nodeID := "proj-" + projectID
+		model.workspace.nodes[nodeID] = &sidebarNode{
+			ID:        nodeID,
+			Kind:      sidebarKindProject,
+			ProjectID: projectID,
+			Label:     "EX-177 Project",
+		}
+		model.workspace.topLevel = []string{nodeID}
+		model.workspace.sidebarCursor = 0
+
+		cmd := model.executeCommand(":sidebar select")
+		if cmd == nil {
+			t.Fatal(":sidebar select on project node should return a non-nil cmd")
+		}
+		runNonTimerCmds(cmd)
+		if !detailLoaded {
+			t.Fatal(":sidebar select on project node did not call LoadProjectDetail (EX-177)")
+		}
+		if !tasksLoaded {
+			t.Fatal(":sidebar select on project node did not call LoadProjectTasks (EX-177)")
+		}
+	})
+
+	t.Run("inbox-node-loads-inbox-items", func(t *testing.T) {
+		inboxLoaded := false
+		model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+			LoadInboxItems: func(_ context.Context) ([]InboxSummaryItem, error) {
+				inboxLoaded = true
+				return nil, nil
+			},
+		})
+		model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+		if model.workspace.nodes == nil {
+			model.workspace.nodes = make(map[string]*sidebarNode)
+		}
+		model.workspace.nodes["inbox"] = &sidebarNode{
+			ID:    "inbox",
+			Kind:  sidebarKindInbox,
+			Label: "Inbox",
+		}
+		model.workspace.topLevel = []string{"inbox"}
+		model.workspace.sidebarCursor = 0
+
+		cmd := model.executeCommand(":sidebar select")
+		if cmd == nil {
+			t.Fatal(":sidebar select on inbox node should return a non-nil cmd")
+		}
+		runNonTimerCmds(cmd)
+		if !inboxLoaded {
+			t.Fatal(":sidebar select on inbox node did not call LoadInboxItems (EX-177)")
+		}
+	})
+}

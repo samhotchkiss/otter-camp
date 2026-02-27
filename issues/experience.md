@@ -2612,6 +2612,21 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-177---
+
+## EX-177: `:sidebar select` didn't dispatch data loads for project/task/inbox nodes
+
+**Observation:** The `:sidebar select` command (EX-168) only reloaded chat history after calling `selectSidebarNode()`. It had no awareness of the selected node's kind. The keyboard Enter path in `handleEnterKey` dispatches `loadProjectDetailCmd + loadProjectTasksCmd` for project nodes, `loadTaskDetailCmd` for task nodes, and `loadInboxItemsCmd` for the inbox node. `:sidebar select` skipped all of these, so the corresponding view would be blank.
+
+**Improvement:** Captured the current node before `selectSidebarNode()` and added a `switch node.Kind` block to dispatch the appropriate data loads, building a `tea.Batch` that includes them alongside the existing history reload. The logic mirrors the `handleEnterKey` path so that `:sidebar select` and Enter are now functionally equivalent.
+
+**Why it matters:** `:sidebar select` is the primary way tmux users navigate the sidebar (many avoid mouse clicks and use command mode). Without data loads, selecting a project in tmux mode produced a blank project view.
+
+**Effort:** Low (add node capture + switch block, convert return to tea.Batch)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
 ---EX-176---
 
 ## EX-176: 'p' key showed empty project view when detail hadn't loaded yet
