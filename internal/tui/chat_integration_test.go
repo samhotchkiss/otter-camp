@@ -56,7 +56,7 @@ func TestChatStreamSimulationWithToolCallEvents(t *testing.T) {
 	if !strings.Contains(view, "[ASSISTANT]") {
 		t.Fatalf("view missing assistant role styling: %q", view)
 	}
-	if !strings.Contains(view, "tool search_docs (running)") {
+	if !strings.Contains(view, "▶ ⚙ search_docs (running)") {
 		t.Fatalf("view missing inline tool-call status: %q", view)
 	}
 	if !strings.Contains(view, "Hello world") {
