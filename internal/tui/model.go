@@ -116,6 +116,7 @@ type Model struct {
 	tourActive     bool
 	proofRealtime  bool
 	proofReplay    bool
+	sidebarLoaded  bool
 	perfMetrics    TUIPerformanceMetrics
 
 	chatInput            string
@@ -188,9 +189,9 @@ func (m Model) Init() tea.Cmd {
 	if !m.runtimeHints.DisableMemorySampler {
 		commands = append(commands, memorySamplerCmd(memorySampleInterval))
 	}
-	if m.runtimeHints.LoadOrgSession != nil || m.runtimeHints.LoadInboxCount != nil || m.runtimeHints.LoadRecentChats != nil || m.runtimeHints.LoadProjects != nil {
-		commands = append(commands, loadSidebarDataCmd(m.runtimeHints))
-	}
+	// Sidebar data is loaded from ConnectionConnected (on first SSE connect) so
+	// we do not fire it here too — doing both causes a burst of API requests
+	// that trips the per-IP rate limiter.
 	if len(commands) == 0 {
 		return nil
 	}
@@ -216,8 +217,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.State == ConnectionConnected && !m.proofRealtime {
 			m.proofRealtime = true
 			m.workspace.activity = append(m.workspace.activity, "proof-of-life realtime connected")
-			// Reload sidebar data on first successful connection. The initial load
-			// from Init() may have failed if the server was not yet available.
+			// Load sidebar data on first successful connection.
 			if m.runtimeHints.LoadOrgSession != nil || m.runtimeHints.LoadInboxCount != nil || m.runtimeHints.LoadRecentChats != nil || m.runtimeHints.LoadProjects != nil {
 				return m, loadSidebarDataCmd(m.runtimeHints)
 			}
@@ -232,7 +232,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var histCmd tea.Cmd
 		if m.runtimeHints.LoadChatHistory != nil {
 			sessionID := strings.TrimSpace(m.ActiveChatSession())
-				// Skip if still using placeholder — sidebar data will trigger load when it arrives.
+			// Skip if still using placeholder — sidebar data will trigger load when it arrives.
 			if sessionID != generalSessionID && sessionID != "" {
 				histCmd = loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
 			}
@@ -269,6 +269,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case sidebarDataLoadedMsg:
+		m.sidebarLoaded = true
 		m.workspace.inboxCount = typed.InboxCount
 		m.workspace.rebuildSidebar(typed.OrgSessionID, typed.Chats, typed.Projects)
 		// If the active session was empty or the placeholder, replace with the real
