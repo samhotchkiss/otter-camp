@@ -941,6 +941,9 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 
 	lines = append(lines, titleLine)
 	lines = append(lines, statusLine)
+	if task.Flow > 0 {
+		lines = append(lines, styleMuted.Render(fmt.Sprintf("  Flow:   step %d", task.Flow)))
+	}
 
 	if desc := strings.TrimSpace(task.Description); desc != "" {
 		lines = append(lines, "")
@@ -1724,8 +1727,13 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 		status = styleMuted.Render("  ·  ") + styleSubtle.Render(truncate(m.statusMessage, 40))
 	}
 
+	// EX-043: show ◌ in status bar when agent turn is active
+	sessionDisplay := session
+	if m.activeTurn {
+		sessionDisplay += " " + styleReconnecting.Render("◌")
+	}
 	bar := dot + "  " + connStyle.Render(connText) +
-		styleMuted.Render("  ·  ") + styleMuted.Render(session) +
+		styleMuted.Render("  ·  ") + styleMuted.Render(sessionDisplay) +
 		styleMuted.Render("  ·  ") + styleSubtle.Render(sizeStr+"/"+focusStr) +
 		status
 
