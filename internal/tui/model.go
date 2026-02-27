@@ -368,6 +368,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	case projectTasksLoadedMsg:
 		m.workspace.setProjectTasks(typed.ProjectID, typed.Tasks, typed.ExpandNode)
+		// EX-152: sync RequiresHumanReview from loaded inbox items to newly-seeded
+		// task records. If inbox was loaded before this project's tasks existed in
+		// w.tasks, syncTaskHumanReviewFromInbox silently skipped them. Re-applying
+		// here ensures the ⚠ badge is correct after project tasks are seeded.
+		m.workspace.syncTaskHumanReviewFromInbox()
 		return m, nil
 	case projectDetailLoadedMsg:
 		m.workspace.selectedProject = &typed.Detail
@@ -1424,7 +1429,8 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		m.quitting = true
 		m.statusMessage = "Exiting TUI."
 	case "help", "palette":
-		m.statusMessage = "Commands: :frank :dashboard :inbox :project :task :agents :activity :scope org|project|task :focus sidebar|main|chat :send :cancel-turn :queue edit|steer|delete :sidebar :tour dismiss :quit"
+		// EX-154: include :merges and :schedules which were missing from the listing.
+		m.statusMessage = "Commands: :frank :dashboard :inbox :project :task :agents :activity :merges :schedules :scope org|project|task :focus sidebar|main|chat :send :cancel-turn :queue edit|steer|delete :sidebar :tour dismiss :quit"
 	case "focus":
 		if len(fields) != 2 {
 			m.statusMessage = "Usage: :focus sidebar|main|chat"
@@ -2897,6 +2903,7 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 	}
 	// EX-129: budget.anomaly_detected — surface a status-bar warning so the user
 	// knows the org is burning tokens at an unusual rate without leaving the TUI.
+	// EX-153: also persist in activity log so the warning survives the 5s auto-clear.
 	if event.EventType == "budget.anomaly_detected" {
 		var payload struct {
 			Period               string  `json:"period"`
@@ -2909,10 +2916,14 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			if multiplier < 2 {
 				multiplier = 2
 			}
-			m.statusMessage = fmt.Sprintf(
+			msg := fmt.Sprintf(
 				"⚠ Budget anomaly: %s usage is ~%dx above average (%d tokens vs avg %d).",
 				payload.Period, multiplier, payload.CurrentTokens, payload.RollingAverageTokens,
 			)
+			m.statusMessage = msg
+			// EX-153: persist so the anomaly isn't lost after the 5s auto-clear.
+			m.workspace.activity = appendActivity(m.workspace.activity,
+				fmt.Sprintf("budget anomaly: %s usage ~%dx above avg", payload.Period, multiplier))
 		}
 		return nil
 	}
@@ -3016,6 +3027,7 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 	}
 	// EX-130: tool.capability_denied — show a brief status bar warning so the
 	// user knows an agent was blocked by a policy without having to check logs.
+	// EX-153: also persist in activity log so the policy denial survives the 5s auto-clear.
 	if event.EventType == "tool.capability_denied" {
 		var payload struct {
 			ToolName   string `json:"tool_name"`
@@ -3027,6 +3039,9 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 				msg += " (" + payload.Capability + ")"
 			}
 			m.statusMessage = msg
+			// EX-153: persist in activity log.
+			m.workspace.activity = appendActivity(m.workspace.activity,
+				"policy denied: "+truncate(payload.ToolName, 40))
 		}
 		return nil
 	}
@@ -3075,16 +3090,24 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			RemovedCount int `json:"removed_count"`
 		}
 		if decodePayload(event.Payload, &payload) {
+			var statusMsg, activityEntry string
 			switch {
 			case payload.AddedCount > 0 && payload.RemovedCount > 0:
-				m.statusMessage = fmt.Sprintf("MCP catalog updated: +%d added, -%d removed.", payload.AddedCount, payload.RemovedCount)
+				statusMsg = fmt.Sprintf("MCP catalog updated: +%d added, -%d removed.", payload.AddedCount, payload.RemovedCount)
+				activityEntry = fmt.Sprintf("mcp catalog: +%d added, -%d removed", payload.AddedCount, payload.RemovedCount)
 			case payload.AddedCount > 0:
-				m.statusMessage = fmt.Sprintf("MCP catalog updated: +%d tools added.", payload.AddedCount)
+				statusMsg = fmt.Sprintf("MCP catalog updated: +%d tools added.", payload.AddedCount)
+				activityEntry = fmt.Sprintf("mcp catalog: +%d tools added", payload.AddedCount)
 			case payload.RemovedCount > 0:
-				m.statusMessage = fmt.Sprintf("MCP catalog updated: -%d tools removed.", payload.RemovedCount)
+				statusMsg = fmt.Sprintf("MCP catalog updated: -%d tools removed.", payload.RemovedCount)
+				activityEntry = fmt.Sprintf("mcp catalog: -%d tools removed", payload.RemovedCount)
 			default:
-				m.statusMessage = "MCP catalog refreshed."
+				statusMsg = "MCP catalog refreshed."
+				activityEntry = "mcp catalog refreshed"
 			}
+			m.statusMessage = statusMsg
+			// EX-153: persist in activity log so the change is traceable after auto-clear.
+			m.workspace.activity = appendActivity(m.workspace.activity, activityEntry)
 		}
 		return nil
 	}
@@ -3123,6 +3146,7 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 	}
 	// EX-141: supervisor escalation — surface immediately so the user knows an
 	// agent is stuck and a supervisor recovery has been triggered.
+	// EX-153: also persist in activity log so the escalation survives the 5s auto-clear.
 	if event.EventType == "supervisor.escalation_created" {
 		var payload struct {
 			RunID string `json:"run_id"`
@@ -3130,6 +3154,9 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		if decodePayload(event.Payload, &payload) {
 			runLabel := truncate(payload.RunID, 8)
 			m.statusMessage = "⚠ Supervisor escalation: run " + runLabel + " appears stuck. Recovery initiated."
+			// EX-153: persist in activity log.
+			m.workspace.activity = appendActivity(m.workspace.activity,
+				"supervisor escalation: run "+runLabel)
 		}
 		return nil
 	}

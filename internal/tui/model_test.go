@@ -2703,3 +2703,158 @@ func TestSidebarTaskNodeShowsHumanReviewBadge(t *testing.T) {
 		t.Fatalf("sidebar task node missing ⚠ badge for RequiresHumanReview task: %q", rendered)
 	}
 }
+
+func TestProjectTasksLoadedSyncsHumanReviewFromInbox(t *testing.T) {
+	// EX-152: If inbox is loaded BEFORE the project tasks exist in w.tasks,
+	// syncTaskHumanReviewFromInbox skips them (task records don't exist yet).
+	// After projectTasksLoadedMsg, we re-apply syncTaskHumanReviewFromInbox so
+	// the ⚠ badge is correct.
+	model := NewModel(DefaultState())
+
+	taskID := "task-ex152"
+	// Load inbox first (task record doesn't exist yet)
+	model = pressMsg(model, inboxItemsLoadedMsg{
+		Items: []InboxSummaryItem{
+			{ID: "inbox-1", TaskID: taskID, Summary: "review needed"},
+		},
+	})
+	// task record doesn't exist yet — RequiresHumanReview cannot be set
+	if rec := model.workspace.tasks[taskID]; rec != nil {
+		t.Fatalf("task record should not exist before project tasks load")
+	}
+
+	// Now project tasks load (creates the task record)
+	model = pressMsg(model, projectTasksLoadedMsg{
+		ProjectID: "proj-ex152",
+		Tasks: []SidebarTaskItem{
+			{ID: taskID, Title: "Ex152 Task", WorkStatus: "in_progress", TaskNumber: 99},
+		},
+		ExpandNode: false,
+	})
+
+	rec := model.workspace.tasks[taskID]
+	if rec == nil {
+		t.Fatalf("task record missing after projectTasksLoadedMsg")
+	}
+	if !rec.RequiresHumanReview {
+		t.Fatalf("RequiresHumanReview = false after projectTasksLoadedMsg with inbox item, want true (EX-152 regression)")
+	}
+}
+
+func TestBudgetAnomalyAddsActivityEntry(t *testing.T) {
+	// EX-153: budget.anomaly_detected now persists in activity log.
+	model := NewModel(DefaultState())
+	rawPayload, _ := json.Marshal(map[string]any{
+		"period":                 "hourly",
+		"current_tokens":         int64(5000),
+		"rolling_average_tokens": int64(1000),
+		"rolling_average_ratio":  5.0,
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "budget.anomaly_detected",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "budget anomaly") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing budget anomaly entry (EX-153): %v", m.workspace.activity)
+	}
+}
+
+func TestToolCapabilityDeniedAddsActivityEntry(t *testing.T) {
+	// EX-153: tool.capability_denied now persists in activity log.
+	model := NewModel(DefaultState())
+	rawPayload, _ := json.Marshal(map[string]any{
+		"tool_name":  "file_write",
+		"capability": "write_production_db",
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "tool.capability_denied",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "policy denied") && strings.Contains(entry, "file_write") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing tool capability denied entry (EX-153): %v", m.workspace.activity)
+	}
+}
+
+func TestMCPCatalogChangedAddsActivityEntry(t *testing.T) {
+	// EX-153: mcp.catalog.changed now persists in activity log.
+	model := NewModel(DefaultState())
+	rawPayload, _ := json.Marshal(map[string]any{
+		"added_count":   3,
+		"removed_count": 1,
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "mcp.catalog.changed",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "mcp catalog") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing mcp catalog entry (EX-153): %v", m.workspace.activity)
+	}
+}
+
+func TestSupervisorEscalationAddsActivityEntry(t *testing.T) {
+	// EX-153: supervisor.escalation_created now persists in activity log.
+	model := NewModel(DefaultState())
+	rawPayload, _ := json.Marshal(map[string]any{
+		"run_id": "run-abc12345",
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "supervisor.escalation_created",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "supervisor escalation") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing supervisor escalation entry (EX-153): %v", m.workspace.activity)
+	}
+}
+
+func TestHelpCommandIncludesMergesAndSchedules(t *testing.T) {
+	// EX-154: :help was missing :merges and :schedules.
+	model := NewModel(DefaultState())
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	for _, r := range []rune("help") {
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+
+	status := model.StatusMessage()
+	for _, cmd := range []string{":merges", ":schedules"} {
+		if !strings.Contains(status, cmd) {
+			t.Fatalf(":help output missing %q: %q", cmd, status)
+		}
+	}
+}
