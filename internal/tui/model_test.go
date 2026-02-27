@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -1222,5 +1223,70 @@ func TestRemoveInboxItemKeepsRequiresHumanReviewWhenOtherItemsRemain(t *testing.
 
 	if rec := w.tasks["task-abc"]; rec == nil || !rec.RequiresHumanReview {
 		t.Fatal("RequiresHumanReview should remain true when another inbox item for the task remains")
+	}
+}
+
+// EX-124: inbox view shows "N of M" position indicator in action hint.
+func TestInboxViewShowsPositionIndicator(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.inbox = []inboxItem{
+		{ID: "item-1", TaskID: "task-a", Summary: "First review needed"},
+		{ID: "item-2", TaskID: "task-b", Summary: "Second review needed"},
+		{ID: "item-3", TaskID: "task-c", Summary: "Third review needed"},
+	}
+	model.workspace.inboxCursor = 0
+	model.workspace.setMainView(ViewInbox)
+
+	rendered := strings.Join(model.renderInboxView(80, 20), "\n")
+	if !strings.Contains(rendered, "1 of 3") {
+		t.Fatalf("inbox view missing position indicator '1 of 3': %q", rendered)
+	}
+}
+
+func TestInboxViewOmitsPositionIndicatorForSingleItem(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.inbox = []inboxItem{
+		{ID: "item-1", TaskID: "task-a", Summary: "Only one review"},
+	}
+	model.workspace.inboxCursor = 0
+	model.workspace.setMainView(ViewInbox)
+
+	rendered := strings.Join(model.renderInboxView(80, 20), "\n")
+	if strings.Contains(rendered, " of ") {
+		t.Fatalf("inbox view should not show position indicator for a single item: %q", rendered)
+	}
+}
+
+// EX-125: flow.advanced event triggers task detail reload and adds activity entry.
+func TestFlowAdvancedEventAddsActivityAndLoadsTaskDetail(t *testing.T) {
+	model := NewModel(DefaultState())
+	if model.workspace.tasks == nil {
+		model.workspace.tasks = make(map[string]*taskRecord)
+	}
+	model.workspace.tasks["task-flow"] = &taskRecord{
+		ID:           "task-flow",
+		TaskNumber:   5,
+		Title:        "Build flow",
+		Flow:         1,
+		FlowNodeName: "Review",
+	}
+
+	rawPayload, _ := json.Marshal(map[string]string{"task_id": "task-flow"})
+	envelope := EventEnvelope{
+		EventType: "flow.advanced",
+		Payload:   rawPayload,
+	}
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: envelope})
+	m := updated.(Model)
+
+	activityFound := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "OC-5") && strings.Contains(entry, "flow advanced") {
+			activityFound = true
+			break
+		}
+	}
+	if !activityFound {
+		t.Fatalf("flow.advanced event should add activity entry with task label: %v", m.workspace.activity)
 	}
 }

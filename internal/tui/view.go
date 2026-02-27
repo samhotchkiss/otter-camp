@@ -1444,7 +1444,13 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 		lines = append(lines, rowStyle.Render(prefix+summary)+taskBadge)
 
 		if isCursor {
-			actions := styleMuted.Render("  a·approve  ·  x·reject  ·  f·defer  ·  o·open  ·  j/k·navigate")
+			// EX-124: show "N of M" position so users know where they are in
+			// the inbox list, consistent with EX-106 for the project view.
+			posHint := ""
+			if len(filteredInbox) > 1 {
+				posHint = fmt.Sprintf("  ·  %d of %d", i+1, len(filteredInbox))
+			}
+			actions := styleMuted.Render("  a·approve  ·  x·reject  ·  f·defer  ·  o·open  ·  j/k·navigate" + posHint)
 			lines = append(lines, actions)
 		}
 	}

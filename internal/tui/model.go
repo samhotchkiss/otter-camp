@@ -2732,6 +2732,28 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		}
 		return nil
 	}
+	// EX-125: handle the server's flow.advanced event so the task detail view
+	// reflects the latest flow step without requiring a manual refresh.
+	// The server payload contains task_id but not a numeric step; we reload
+	// the full task detail to pick up the new FlowNodeName and Flow fields.
+	if event.EventType == "flow.advanced" {
+		var payload struct {
+			TaskID string `json:"task_id"`
+		}
+		if !decodePayload(event.Payload, &payload) || payload.TaskID == "" {
+			return nil
+		}
+		label := payload.TaskID
+		if rec := m.workspace.tasks[payload.TaskID]; rec != nil {
+			if rec.TaskNumber > 0 {
+				label = fmt.Sprintf("OC-%d", rec.TaskNumber)
+			} else if rec.Title != "" {
+				label = truncate(rec.Title, 24)
+			}
+		}
+		m.workspace.activity = append(m.workspace.activity, label+": flow advanced")
+		return loadTaskDetailCmd(payload.TaskID, m.runtimeHints)
+	}
 	if event.EventType == "worker.unresponsive" {
 		if !m.turnsSynced {
 			return nil
