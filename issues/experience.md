@@ -879,3 +879,31 @@ When no sessionID exists: "(no session)" instead of "(no active session)". When 
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-063: Arrow key support for dashboard task cursor
+
+**Observation:** The dashboard task board supported `j`/`k` for cursor navigation but not `↑`/`↓` arrow keys. Arrow key support was already present for the project view task list (ViewProject) but was missing for ViewDashboard.
+
+**Improvement:** Added `↑`/`↓` arrow key handling for `MainPanel + ViewDashboard` in the `tea.KeyEnter, tea.KeyEsc, ..., tea.KeyUp, tea.KeyDown, ...` case block (model.go). The same `moveDashboardCursor` function is used by both j/k and arrow keys, so the behaviour is identical. Test added: `TestDashboardArrowKeysMoveCursor`.
+
+**Why it matters:** Users who default to arrow keys (coming from GUI apps) will expect ↑/↓ to work. Forcing vim-style keys only is unnecessarily restrictive for navigation.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-064: Dynamic selected-task info row in dashboard nav hint
+
+**Observation:** The dashboard navigation hint always showed the static `j/k·select task  ·  Enter·open` line regardless of whether a task was selected. There was no way to see which task you'd open before pressing Enter.
+
+**Improvement:** When `m.workspace.selectedTaskID` is set and the task is found in the tasks map, the hint line changes to `► OC-N: Task Title  Enter·open  ·  j/k·navigate` (rendered with focus colour), giving immediate context for the keyboard action. When no task is selected, the static fallback remains.
+
+**Why it matters:** Keyboard navigation without visual confirmation of the target is a UX antipattern. The dynamic hint closes the feedback loop: the user sees exactly which task they'll open before committing to Enter, reducing mistakes.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

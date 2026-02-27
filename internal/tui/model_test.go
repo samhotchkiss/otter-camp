@@ -815,6 +815,37 @@ func TestDashboardCursorJKMoveSelection(t *testing.T) {
 	if strings.Contains(view, "► CI hardening") {
 		t.Fatalf("dashboard should not have cursor on non-selected task: %q", view)
 	}
+	// Dynamic nav hint should show selected task name
+	if !strings.Contains(view, "Launch docs") || !strings.Contains(view, "Enter·open") {
+		t.Fatalf("dashboard nav hint missing selected task info: %q", view)
+	}
+}
+
+func TestDashboardArrowKeysMoveCursor(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.tasks["task-a"] = &taskRecord{ID: "task-a", Title: "Alpha", Status: "todo", TaskNumber: 1}
+	model.workspace.tasks["task-b"] = &taskRecord{ID: "task-b", Title: "Beta", Status: "in_progress", TaskNumber: 2}
+	model.workspace.taskOrder = []string{"task-b", "task-a"} // descending
+
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.focus = MainPanel
+	model.workspace.setMainView(ViewDashboard)
+
+	// Down arrow → first task (task-b, task_number=2, comes first)
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyDown})
+	if got := model.workspace.selectedTaskID; got != "task-b" {
+		t.Fatalf("selectedTaskID after Down = %q, want task-b", got)
+	}
+	// Down arrow again → second task
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyDown})
+	if got := model.workspace.selectedTaskID; got != "task-a" {
+		t.Fatalf("selectedTaskID after second Down = %q, want task-a", got)
+	}
+	// Up arrow → back to first
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyUp})
+	if got := model.workspace.selectedTaskID; got != "task-b" {
+		t.Fatalf("selectedTaskID after Up = %q, want task-b", got)
+	}
 }
 
 func TestModelStateReturnsLastMainView(t *testing.T) {

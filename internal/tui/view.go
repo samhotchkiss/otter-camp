@@ -803,12 +803,21 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		}
 	}
 
-	// Navigation hint when focused on main panel
+	// Navigation hint — show selected task name when cursor is active, else static hint
 	activeTasks := m.workspace.dashboardActiveTasks()
 	if len(activeTasks) > 0 {
 		lines = append(lines, "")
-		hintParts := "j/k·select task  ·  Enter·open"
-		lines = append(lines, styleMuted.Render("  "+hintParts))
+		if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
+			var nameLabel string
+			if task.TaskNumber > 0 {
+				nameLabel = fmt.Sprintf("OC-%d: %s", task.TaskNumber, truncate(task.Title, 32))
+			} else {
+				nameLabel = truncate(task.Title, 40)
+			}
+			lines = append(lines, styleBold.Foreground(colFocus).Render("  ► "+nameLabel)+"  "+styleMuted.Render("Enter·open  ·  j/k·navigate"))
+		} else {
+			lines = append(lines, styleMuted.Render("  j/k·select task  ·  Enter·open"))
+		}
 	}
 
 	return lines

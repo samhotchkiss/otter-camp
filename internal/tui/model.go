@@ -530,6 +530,16 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
+			switch key.Type {
+			case tea.KeyUp:
+				m.workspace.moveDashboardCursor(-1)
+				return m, nil
+			case tea.KeyDown:
+				m.workspace.moveDashboardCursor(1)
+				return m, nil
+			}
+		}
 		if key.Type == tea.KeyEnter {
 			cmd := m.handleEnterKey()
 			return m, cmd
