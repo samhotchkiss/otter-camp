@@ -621,8 +621,12 @@ func (m *Model) handleEnterKey() tea.Cmd {
 			if sessionID, ok := m.workspace.openSelectedTaskSession(); ok {
 				m.state.LastActiveChatSession = sessionID
 				m.activeSession = sessionID
+				m.chatScrollOffset = 0
 				m.setFocus(ChatPanel)
 				m.statusMessage = "Opened async session."
+				if m.runtimeHints.LoadChatHistory != nil {
+					return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+				}
 				return nil
 			}
 			m.statusMessage = "No active session for this task."
