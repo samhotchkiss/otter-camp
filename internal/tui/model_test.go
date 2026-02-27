@@ -3323,3 +3323,49 @@ func TestJumpToFrankSessionReloadsChatHistory(t *testing.T) {
 		t.Fatal("Ctrl-G did not call LoadChatHistory for Frank session (EX-165 regression)")
 	}
 }
+
+// EX-166: pressing 'n' (next unread) should reload chat history for the newly
+// selected session. Previously selectSidebarNode only set the session ID, so
+// the chat panel showed the previous session's messages.
+func TestNKeyNextUnreadReloadsChatHistory(t *testing.T) {
+	t.Parallel()
+	unreadSessionID := "00000000-0000-0000-0000-000000000166"
+	loaded := false
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, sid string) ([]ChatMessage, error) {
+			if sid == unreadSessionID {
+				loaded = true
+			}
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	// Seed the sidebar with a session node that has unread messages.
+	if model.workspace.nodes == nil {
+		model.workspace.nodes = make(map[string]*sidebarNode)
+	}
+	unreadNodeID := "session-" + unreadSessionID
+	model.workspace.nodes[unreadNodeID] = &sidebarNode{
+		ID:        unreadNodeID,
+		Kind:      sidebarKindSession,
+		SessionID: unreadSessionID,
+		Label:     "Unread Session",
+		Unread:    3,
+	}
+	model.workspace.topLevel = append([]string{unreadNodeID}, model.workspace.topLevel...)
+
+	model.focus = MainPanel // not ChatPanel so 'n' is handled
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m := updated.(Model)
+	if m.activeSession != unreadSessionID {
+		t.Fatalf("'n' should switch to unread session %q, got %q", unreadSessionID, m.activeSession)
+	}
+	if cmd == nil {
+		t.Fatal("'n' key with unread session should return a non-nil cmd (history reload)")
+	}
+	runNonTimerCmds(cmd)
+	if !loaded {
+		t.Fatal("'n' next-unread did not call LoadChatHistory (EX-166 regression)")
+	}
+}

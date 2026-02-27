@@ -2597,3 +2597,18 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-166---
+
+## EX-166: `'n'` (next unread) didn't reload chat history after jumping to session
+
+**Observation:** Pressing `'n'` to jump to the next unread session called `m.workspace.selectSidebarNode()` which sets the session ID, then set `m.activeSession`. But it never cleared `chatMessages` or called `loadChatHistoryCmd`. If the user had been reading a different session, the chat panel would show that session's conversation while the header displayed the new unread session. The "3 unread messages" badge would disappear from the sidebar (cleared by selectSidebarNode), but the messages themselves would never appear in the chat.
+
+**Improvement:** After `selectSidebarNode()`, if the new session ID looks like a UUID and `LoadChatHistory` is configured, clear `chatMessages`, set `chatHistoryLoading = true`, and return `loadChatHistoryCmd` (mirrors the behavior of sidebar Enter selection).
+
+**Why it matters:** `'n'` is the keyboard shortcut for checking your "inbox" of unread conversations. If pressing it shows the wrong session's content, users will miss messages from agents waiting for their input.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

@@ -1119,10 +1119,19 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					}
 				}
 				m.workspace.selectSidebarNode()
-				m.activeSession = m.workspace.activeSessionID
+				sessionID := m.workspace.activeSessionID
+				m.activeSession = sessionID
 				m.chatScrollOffset = 0
 				m.statusMessage = "Jumped to next unread session."
 				m.setFocus(SidebarPanel)
+				// EX-166: reload chat history so the chat panel shows the unread session's
+				// messages, not the previous session's (selectSidebarNode only sets the ID).
+				if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
+					m.chatMessages = nil
+					m.chatHistoryLoading = true
+					m.chatMessageIndex = make(map[string]int)
+					return true, loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+				}
 				return true, nil
 			}
 			m.statusMessage = "No unread sessions."
