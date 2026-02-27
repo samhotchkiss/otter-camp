@@ -128,4 +128,4 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 ╰──────────────────────────────╯╰────────────────────────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  S/sidebar  ·  snapshot  ·  Hidden panes: main hidden (2 or 
  :focus main)                                                                             
-Help: j/k navigate · Enter select session · h/l collapse/expand · </> resize · s toggle sidebar · 1/2/3 focus panel · : commands · ? help
+Help: j/k/↑/↓ navigate · Space expand · Enter select · h/l/←/→ collapse/expand · / search · s sidebar · : commands · ? help

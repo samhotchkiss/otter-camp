@@ -1870,20 +1870,20 @@ func (m Model) commandFallbackHelp() string {
 	}
 	switch m.focus {
 	case SidebarPanel:
-		return "j/k navigate · Enter select session · h/l collapse/expand · </> resize · s toggle sidebar · 1/2/3 focus panel · : commands · ? help"
+		return "j/k/↑/↓ navigate · Space expand · Enter select · h/l/←/→ collapse/expand · / search · s sidebar · : commands · ? help"
 	case MainPanel:
 		switch m.workspace.mainView {
 		case ViewInbox:
 			return "a approve · x reject · f defer · o open · j/k navigate · s toggle sidebar · Esc back · : commands"
 		case ViewTask:
-			return "Esc back to dashboard · s toggle sidebar · : commands · ? help"
+			return "Enter open session · Esc back · s toggle sidebar · : commands · ? help"
 		case ViewProject:
-			return "j/k navigate · Enter open task · s toggle sidebar · Esc back · : commands · ? help"
+			return "Enter open project · Esc back · s toggle sidebar · : commands · ? help"
 		default:
 			return "j/k navigate · Enter open task · s toggle sidebar · : commands · ? help"
 		}
 	case ChatPanel:
-		return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · [/] scope · Esc cancel turn · : commands · ? help"
+		return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · ↑/↓ scroll · [/] scope · Esc cancel turn · : commands · ? help"
 	}
 	if m.runtimeHints.ModifierReliabilityUncertain {
 		return "tmux-safe: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit"
