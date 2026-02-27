@@ -1251,7 +1251,15 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 		hintParts = append(hintParts, "p·project view")
 		openTasks := m.workspace.openTasksForProject()
 		if len(openTasks) >= 2 {
-			hintParts = append(hintParts, "j/k·next/prev task")
+			// EX-106: show "N of M" position so users know where they are in the list.
+			cursor := m.workspace.projectTaskCursor
+			if cursor < 0 {
+				cursor = 0
+			}
+			if cursor >= len(openTasks) {
+				cursor = len(openTasks) - 1
+			}
+			hintParts = append(hintParts, fmt.Sprintf("j/k·next/prev task  (%d of %d)", cursor+1, len(openTasks)))
 		}
 	}
 	lines = append(lines, styleMuted.Render("  "+strings.Join(hintParts, "  ·  ")))
