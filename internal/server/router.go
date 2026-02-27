@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/api"
+	"github.com/samhotchkiss/otter-camp/internal/audit"
 	"github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/health"
 	"github.com/samhotchkiss/otter-camp/internal/metrics"
@@ -61,6 +62,9 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 		orgRepo = repo.NewOrgRepo(opts.Pool)
 	}
 	authHandlers := newAuthHandlers(opts.AuthService, userRepo, authSessionRepo, orgRepo)
+	if opts.Pool != nil {
+		authHandlers.auditRecorder = audit.NewService(repo.NewAuditEventRepo(opts.Pool), logger)
+	}
 	mobileHandlers := newMobileHandlers(opts.Pool)
 	versionHandler := api.NewVersionHandler(api.BuildInfo{
 		Version: opts.Version,
@@ -169,6 +173,10 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 				middleware.RequireRole("admin"),
 				middleware.RequireAnyScope(requireAdminScope("auth")...),
 			).Post("/admin/users/{id}/unlock", authHandlers.adminUnlockAccount)
+			protected.With(
+				middleware.RequireRole("admin"),
+				middleware.RequireAnyScope(requireAdminScope("auth")...),
+			).Patch("/admin/users/{id}/role", authHandlers.adminUpdateUserRole)
 			// GET /v1/search is the Cmd-K global search endpoint.
 			// It is registered explicitly here (before the SPA fallback) to prevent interception.
 			protected.Get("/search", searchHandler.Search)

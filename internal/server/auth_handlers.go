@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/api"
+	"github.com/samhotchkiss/otter-camp/internal/audit"
 	"github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -23,10 +24,11 @@ import (
 )
 
 type authHandlers struct {
-	service  auth.Service
-	users    authUserRepository
-	sessions authSessionRepository
-	orgs     authOrganizationRepository
+	service       auth.Service
+	users         authUserRepository
+	sessions      authSessionRepository
+	orgs          authOrganizationRepository
+	auditRecorder audit.AuditRecorder
 }
 
 type authUserRepository interface {
@@ -36,6 +38,10 @@ type authUserRepository interface {
 
 type authUserCreator interface {
 	Create(ctx context.Context, user repo.HumanUser) (repo.HumanUser, error)
+}
+
+type authUserUpdater interface {
+	Update(ctx context.Context, user repo.HumanUser) (repo.HumanUser, error)
 }
 
 type authSessionRepository interface {
@@ -56,7 +62,13 @@ type rotatingSessionService interface {
 }
 
 func newAuthHandlers(service auth.Service, users authUserRepository, sessions authSessionRepository, orgs authOrganizationRepository) authHandlers {
-	return authHandlers{service: service, users: users, sessions: sessions, orgs: orgs}
+	return authHandlers{
+		service:       service,
+		users:         users,
+		sessions:      sessions,
+		orgs:          orgs,
+		auditRecorder: audit.NewNoopRecorder(),
+	}
 }
 
 type loginRequest struct {
@@ -88,6 +100,10 @@ type createOrganizationRequest struct {
 
 type adminResetPasswordRequest struct {
 	NewPassword string `json:"new_password"`
+}
+
+type adminUpdateRoleRequest struct {
+	Role string `json:"role"`
 }
 
 type userResponse struct {
@@ -167,6 +183,23 @@ func (h authHandlers) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	targetType := "auth_session"
+	targetID := result.Session.ID
+	h.recordAuditEvent(r.Context(), audit.Event{
+		OrgID:         result.Session.OrganizationID,
+		EventType:     audit.EventAuthLogin,
+		PrincipalType: "human",
+		PrincipalID:   result.Session.UserID,
+		TargetType:    &targetType,
+		TargetID:      &targetID,
+		IP:            requestClientIP(r),
+		Outcome:       "success",
+		Metadata: map[string]any{
+			"email":      strings.TrimSpace(result.Session.Email),
+			"user_agent": strings.TrimSpace(r.UserAgent()),
+		},
+	})
+
 	api.JSON(w, http.StatusOK, map[string]any{
 		"token":         result.SessionToken,
 		"session_token": result.SessionToken,
@@ -193,10 +226,34 @@ func (h authHandlers) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	principal, hasPrincipal := middleware.PrincipalFromContext(r.Context())
 	if err := h.service.Logout(r.Context(), sessionToken); err != nil {
+		if hasPrincipal {
+			h.recordAuditEvent(r.Context(), audit.Event{
+				OrgID:         principal.OrganizationID,
+				EventType:     audit.EventAuthLogout,
+				PrincipalType: "human",
+				PrincipalID:   principal.UserID,
+				IP:            requestClientIP(r),
+				Outcome:       "failure",
+				Metadata: map[string]any{
+					"error": strings.TrimSpace(err.Error()),
+				},
+			})
+		}
 		status, code, message := mapAuthError(err)
 		api.Error(w, status, code, message)
 		return
+	}
+	if hasPrincipal {
+		h.recordAuditEvent(r.Context(), audit.Event{
+			OrgID:         principal.OrganizationID,
+			EventType:     audit.EventAuthLogout,
+			PrincipalType: "human",
+			PrincipalID:   principal.UserID,
+			IP:            requestClientIP(r),
+			Outcome:       "success",
+		})
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -431,6 +488,24 @@ func (h authHandlers) issueAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	targetType := "api_key"
+	targetID := issued.KeyID
+	h.recordAuditEvent(r.Context(), audit.Event{
+		OrgID:         principal.OrganizationID,
+		EventType:     audit.EventAPIKeyCreated,
+		PrincipalType: "human",
+		PrincipalID:   principal.UserID,
+		TargetType:    &targetType,
+		TargetID:      &targetID,
+		IP:            requestClientIP(r),
+		Outcome:       "success",
+		Metadata: map[string]any{
+			"display_name": strings.TrimSpace(issued.DisplayName),
+			"key_prefix":   strings.TrimSpace(issued.KeyPrefix),
+			"scopes":       append([]string{}, scopes...),
+		},
+	})
+
 	api.JSON(w, http.StatusCreated, apiKeyResponse{
 		ID:          issued.KeyID,
 		Key:         issued.RawKey,
@@ -462,6 +537,18 @@ func (h authHandlers) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 
 	err = h.service.RevokeAPIKey(r.Context(), keyID, principal.UserID, principal.Role, principal.OrganizationID)
 	if err != nil {
+		h.recordAuditEvent(r.Context(), audit.Event{
+			OrgID:         principal.OrganizationID,
+			EventType:     audit.EventAPIKeyDeleted,
+			PrincipalType: "human",
+			PrincipalID:   principal.UserID,
+			IP:            requestClientIP(r),
+			Outcome:       "failure",
+			Metadata: map[string]any{
+				"api_key_id": keyID.String(),
+				"error":      strings.TrimSpace(err.Error()),
+			},
+		})
 		switch {
 		case errors.Is(err, auth.ErrForbidden):
 			api.Error(w, http.StatusForbidden, api.ErrCodeForbidden, "forbidden")
@@ -472,6 +559,18 @@ func (h authHandlers) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+
+	targetType := "api_key"
+	h.recordAuditEvent(r.Context(), audit.Event{
+		OrgID:         principal.OrganizationID,
+		EventType:     audit.EventAPIKeyDeleted,
+		PrincipalType: "human",
+		PrincipalID:   principal.UserID,
+		TargetType:    &targetType,
+		TargetID:      &keyID,
+		IP:            requestClientIP(r),
+		Outcome:       "success",
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -737,6 +836,81 @@ func (h authHandlers) adminUnlockAccount(w http.ResponseWriter, r *http.Request)
 	api.JSON(w, http.StatusOK, map[string]bool{"unlocked": true})
 }
 
+func (h authHandlers) adminUpdateUserRole(w http.ResponseWriter, r *http.Request) {
+	target, ok := h.loadAdminTargetUser(w, r)
+	if !ok {
+		return
+	}
+
+	updater, ok := h.users.(authUserUpdater)
+	if !ok || updater == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "user repository unavailable")
+		return
+	}
+
+	var req adminUpdateRoleRequest
+	if err := decodeJSON(r, &req); err != nil {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+
+	role, err := normalizeUserRole(req.Role, "")
+	if err != nil {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, err.Error())
+		return
+	}
+
+	updated, err := updater.Update(r.Context(), repo.HumanUser{
+		ID:                  target.ID,
+		OrganizationID:      target.OrganizationID,
+		Email:               target.Email,
+		DisplayName:         target.DisplayName,
+		PasswordHash:        target.PasswordHash,
+		Role:                role,
+		IsActive:            target.IsActive,
+		FailedLoginAttempts: target.FailedLoginAttempts,
+		LockedUntil:         target.LockedUntil,
+		LastLoginAt:         target.LastLoginAt,
+		Settings:            target.Settings,
+	})
+	if errors.Is(err, repo.ErrNotFound) {
+		api.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "user not found")
+		return
+	}
+	if err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to update user role")
+		return
+	}
+
+	principal, hasPrincipal := middleware.PrincipalFromContext(r.Context())
+	if hasPrincipal {
+		targetType := "human_user"
+		targetID := updated.ID
+		h.recordAuditEvent(r.Context(), audit.Event{
+			OrgID:         principal.OrganizationID,
+			EventType:     audit.EventUserRoleChanged,
+			PrincipalType: "human",
+			PrincipalID:   principal.UserID,
+			TargetType:    &targetType,
+			TargetID:      &targetID,
+			IP:            requestClientIP(r),
+			Outcome:       "success",
+			Metadata: map[string]any{
+				"old_role": strings.ToLower(strings.TrimSpace(target.Role)),
+				"new_role": strings.ToLower(strings.TrimSpace(updated.Role)),
+			},
+		})
+	}
+
+	api.JSON(w, http.StatusOK, userResponse{
+		ID:             updated.ID,
+		OrganizationID: updated.OrganizationID,
+		Email:          updated.Email,
+		DisplayName:    updated.DisplayName,
+		Role:           updated.Role,
+	})
+}
+
 func (h authHandlers) consumeMagicLink(w http.ResponseWriter, r *http.Request) {
 	consumer, ok := h.service.(interface {
 		ConsumeMagicLink(ctx context.Context, token, ipAddr, userAgent string) (*auth.LoginResult, error)
@@ -806,6 +980,13 @@ func (h authHandlers) loadAdminTargetUser(w http.ResponseWriter, r *http.Request
 		return repo.HumanUser{}, false
 	}
 	return target, true
+}
+
+func (h authHandlers) recordAuditEvent(ctx context.Context, event audit.Event) {
+	if h.auditRecorder == nil {
+		return
+	}
+	h.auditRecorder.RecordAsync(ctx, event)
 }
 
 func decodeJSON(r *http.Request, out any) error {
