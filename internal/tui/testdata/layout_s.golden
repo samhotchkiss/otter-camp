@@ -5,12 +5,12 @@
 │ ────────────────────────────────────────────────── ││ ──────────────────────────────── │
 │                                                    ││                                  │
 │ Task Board                                         ││         no messages yet          │
-│ TODO (1)       IN PROGRE… (1) DONE (0)             ││    Tab·focus chat  Enter·send    │
+│ TODO (0)       IN PROGRE… (0) DONE (0)             ││    Tab·focus chat  Enter·send    │
 │ ─────────────  ─────────────  ─────────────        ││                                  │
-│   Launch docs   CI hardening                       ││ ╭────────────────────────────╮   │
-│                                                    ││ │ type a message...          │   │
-│ ──────────────────── Activity ──────────────────── ││ ╰────────────────────────────╯   │
-│   ✓ workspace booted                               ││                                  │
+│                                                    ││ ╭────────────────────────────╮   │
+│ ──────────────────── Activity ──────────────────── ││ │ type a message...          │   │
+│   ✓ workspace booted                               ││ ╰────────────────────────────╯   │
+│                                                    ││                                  │
 │                                                    ││                                  │
 │                                                    ││                                  │
 │                                                    ││                                  │
@@ -38,12 +38,12 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │ ────────────────────────────────────────────────── ││ ──────────────────────────────── │
 │                                                    ││                                  │
 │ Task Board                                         ││         no messages yet          │
-│ TODO (1)       IN PROGRE… (1) DONE (0)             ││    Tab·focus chat  Enter·send    │
+│ TODO (0)       IN PROGRE… (0) DONE (0)             ││    Tab·focus chat  Enter·send    │
 │ ─────────────  ─────────────  ─────────────        ││                                  │
-│   Launch docs   CI hardening                       ││ ╭────────────────────────────╮   │
-│                                                    ││ │ type a message...          │   │
-│ ──────────────────── Activity ──────────────────── ││ ╰────────────────────────────╯   │
-│   ✓ workspace booted                               ││                                  │
+│                                                    ││ ╭────────────────────────────╮   │
+│ ──────────────────── Activity ──────────────────── ││ │ type a message...          │   │
+│   ✓ workspace booted                               ││ ╰────────────────────────────╯   │
+│                                                    ││                                  │
 │                                                    ││                                  │
 │                                                    ││                                  │
 │                                                    ││                                  │
@@ -71,12 +71,12 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │ ────────────────────────────────────────────────── ││ ──────────────────────────────── │
 │                                                    ││                                  │
 │ Task Board                                         ││         no messages yet          │
-│ TODO (1)       IN PROGRE… (1) DONE (0)             ││    Tab·focus chat  Enter·send    │
+│ TODO (0)       IN PROGRE… (0) DONE (0)             ││    Tab·focus chat  Enter·send    │
 │ ─────────────  ─────────────  ─────────────        ││                                  │
-│   Launch docs   CI hardening                       ││ ╭────────────────────────────╮   │
-│                                                    ││ │ type a message...          │   │
-│ ──────────────────── Activity ──────────────────── ││ ╰────────────────────────────╯   │
-│   ✓ workspace booted                               ││                                  │
+│                                                    ││ ╭────────────────────────────╮   │
+│ ──────────────────── Activity ──────────────────── ││ │ type a message...          │   │
+│   ✓ workspace booted                               ││ ╰────────────────────────────╯   │
+│                                                    ││                                  │
 │                                                    ││                                  │
 │                                                    ││                                  │
 │                                                    ││                                  │

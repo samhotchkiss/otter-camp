@@ -278,6 +278,8 @@ func TestGGJumpTopBottomAcrossPanels(t *testing.T) {
 func TestCommandPaletteShowsFuzzySuggestions(t *testing.T) {
 	model := NewModel(DefaultState())
 	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.workspace.tasks["task-1"] = &taskRecord{ID: "task-1", Title: "Launch docs", Status: "todo"}
+	model.workspace.taskOrder = []string{"task-1"}
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
 	for _, r := range []rune("tsk") {
 		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})

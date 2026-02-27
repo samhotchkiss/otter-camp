@@ -150,50 +150,22 @@ func newWorkspaceState() workspaceState {
 		},
 	}
 
-	tasks := map[string]*taskRecord{
-		"task-1": {
-			ID:                 "task-1",
-			Title:              "Launch docs",
-			Description:        "Document launch requirements, rollout checklist, and operator handoff notes.",
-			AcceptanceCriteria: "Checklist approved and linked from release runbook.",
-			Subtasks:           []string{"Draft launch checklist", "Add rollback section", "Request reviewer sign-off"},
-			SessionID:          "session-task-1",
-			Status:             "todo",
-			Flow:               1,
-			History:            []string{"created"},
-		},
-		"task-2": {
-			ID:                 "task-2",
-			Title:              "CI hardening",
-			Description:        "Stabilize flaky tests and enforce deterministic retry limits in CI.",
-			AcceptanceCriteria: "Flaky quarantine documented and nightly pipeline green for 3 consecutive runs.",
-			Subtasks:           []string{"Identify flaky suites", "Tune retry/backoff", "Publish CI runbook update"},
-			SessionID:          "session-task-2",
-			Status:             "in_progress",
-			Flow:               2,
-			History:            []string{"created"},
-		},
-	}
-
 	return workspaceState{
 		mainView:         ViewDashboard,
 		nodes:            nodes,
 		topLevel:         []string{"inbox", "header-chats", generalSidebarNodeID, "header-projects"},
 		sidebarCursor:    0,
 		sectionCollapsed: map[sidebarSectionID]bool{},
-		tasks:            tasks,
-		taskOrder:        []string{"task-1", "task-2"},
-		taskSessionIDs: map[string]string{
-			"task-1": "session-task-1",
-			"task-2": "session-task-2",
-		},
-		selectedTaskID:  "task-1",
-		inbox:           []inboxItem{},
-		activity:        []string{"workspace booted"},
-		agents:          []string{},
-		mergeQueue:      []string{},
-		schedules:       []string{},
-		activeSessionID: generalSessionID,
+		tasks:            map[string]*taskRecord{},
+		taskOrder:        []string{},
+		taskSessionIDs:   map[string]string{},
+		selectedTaskID:   "",
+		inbox:            []inboxItem{},
+		activity:         []string{"workspace booted"},
+		agents:           []string{},
+		mergeQueue:       []string{},
+		schedules:        []string{},
+		activeSessionID:  generalSessionID,
 	}
 }
 
