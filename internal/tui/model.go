@@ -150,6 +150,7 @@ func NewModelWithRuntime(state UIState, runtime RuntimeHints) Model {
 			MemoryBoundBytes: runtime.memoryBoundBytes(),
 		},
 	}
+	model.workspace.setMainView(MainView(normalizeMainViewState(normalized.LastMainView)))
 	if runtime.FirstRun {
 		model.workspace.setMainView(ViewDashboard)
 	}
@@ -961,6 +962,7 @@ func (m Model) State() UIState {
 	focus := normalizeFocus(layout, m.focus)
 	next := m.state
 	next.LastActiveView = viewFromPanel(focus)
+	next.LastMainView = normalizeMainViewState(string(m.workspace.mainView))
 	next.SidebarVisible = m.sidebarVisible
 	if strings.TrimSpace(m.activeSession) != "" {
 		next.LastActiveChatSession = m.activeSession
