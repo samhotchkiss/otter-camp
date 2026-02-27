@@ -72,6 +72,7 @@ type skillAssignmentLookupRepository interface {
 
 type agentProjectAssignmentListRepository interface {
 	ListByAgent(ctx context.Context, agentID uuid.UUID) ([]repo.AgentProjectAssignment, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.AgentProjectAssignment, error)
 }
 
 type agentSkillAttachmentListRepository interface {
@@ -156,6 +157,16 @@ func (r *AgentRouteRegistrar) RegisterRoutes(router chi.Router) {
 		middleware.RequireRole("admin"),
 		middleware.RequireAnyScope(requireWriteScope("agents")...),
 	).Delete("/agents/{id}/project-assignments/{pid}", r.handlers.deleteAgentProjectAssignment)
+
+	router.With(middleware.RequireAnyScope(requireReadScope("projects")...)).Get("/projects/{id}/agents", r.handlers.listProjectAgents)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("projects")...),
+	).Post("/projects/{id}/agents", r.handlers.createProjectAgent)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("projects")...),
+	).Delete("/projects/{id}/agents/{agent_id}", r.handlers.deleteProjectAgent)
 
 	router.With(middleware.RequireAnyScope(requireReadScope("agents")...)).Get("/agents/{id}/skills", r.handlers.listAgentSkills)
 	router.With(
@@ -272,6 +283,11 @@ type createProjectAssignmentRequest struct {
 	Role      string    `json:"role"`
 }
 
+type createProjectAgentRequest struct {
+	AgentID uuid.UUID `json:"agent_id"`
+	Role    string    `json:"role"`
+}
+
 type createAgentSkillRequest struct {
 	SkillID  uuid.UUID `json:"skill_id"`
 	Priority *int      `json:"priority"`
@@ -343,6 +359,15 @@ type projectAssignmentListItemResponse struct {
 	Role        string    `json:"role"`
 	IsActive    bool      `json:"is_active"`
 	AssignedAt  time.Time `json:"assigned_at"`
+}
+
+type projectAgentListItemResponse struct {
+	ID               uuid.UUID `json:"id"`
+	AgentID          uuid.UUID `json:"agent_id"`
+	AgentDisplayName string    `json:"agent_display_name"`
+	Role             string    `json:"role"`
+	IsActive         bool      `json:"is_active"`
+	AssignedAt       time.Time `json:"assigned_at"`
 }
 
 type agentSkillAttachmentResponse struct {
@@ -1326,6 +1351,205 @@ func (h agentHandlers) listAgentProjectAssignments(w http.ResponseWriter, r *htt
 	})
 }
 
+func (h agentHandlers) createProjectAgent(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.assignments == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "assignment service unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	projectID, err := parseProjectPathIDParam(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+
+	var req createProjectAgentRequest
+	if err := decodeJSON(r, &req); err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+	if req.AgentID == uuid.Nil {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "agent_id is required")
+		return
+	}
+	role := strings.ToLower(strings.TrimSpace(req.Role))
+	if role == "" {
+		role = "worker"
+	}
+	if role != "pm" && role != "worker" && role != "reviewer" && role != "observer" {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "role must be one of pm, worker, reviewer, observer")
+		return
+	}
+
+	if _, err := h.getScopedProject(r.Context(), principal.OrganizationID, projectID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+	agentRecord, err := h.getScopedAgent(r.Context(), principal.OrganizationID, req.AgentID)
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(agentRecord.LifecycleStatus), "active") {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "agent lifecycle_status must be active")
+		return
+	}
+
+	var assigned *repo.AgentProjectAssignment
+	for attempt := 0; attempt < 3; attempt++ {
+		assigned, err = h.assignments.AssignToProject(r.Context(), req.AgentID, projectID, role, agent.AssignmentActor{
+			Type: "human_user",
+			ID:   principal.UserID,
+		})
+		if !errors.Is(err, agent.ErrPMConflict) {
+			break
+		}
+	}
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	responder.JSON(w, http.StatusOK, toProjectAssignmentResponse(assigned))
+}
+
+func (h agentHandlers) deleteProjectAgent(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.assignments == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "assignment service unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	projectID, err := parseProjectPathIDParam(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+	agentID, err := parseRouteUUIDParam(r, "agent_id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid agent id")
+		return
+	}
+
+	if _, err := h.getScopedProject(r.Context(), principal.OrganizationID, projectID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+	if _, err := h.getScopedAgent(r.Context(), principal.OrganizationID, agentID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	removed, err := h.assignments.RemoveFromProject(r.Context(), agentID, projectID)
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+	responder.JSON(w, http.StatusOK, toProjectAssignmentResponse(removed))
+}
+
+func (h agentHandlers) listProjectAgents(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.projectAssignments == nil || h.projects == nil || h.agents == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "assignment repositories unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	projectID, err := parseProjectPathIDParam(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+	if _, err := h.getScopedProject(r.Context(), principal.OrganizationID, projectID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	items, err := h.projectAssignments.ListByProject(r.Context(), projectID)
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	params := api.ParsePaginationParams(r.URL.Query())
+	var cursorAt time.Time
+	var cursorID uuid.UUID
+	if params.Cursor != "" {
+		decodedAt, decodedID, decodeErr := (api.PaginationDecoder{}).Decode(params.Cursor)
+		if decodeErr != nil {
+			responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "invalid cursor")
+			return
+		}
+		cursorAt = decodedAt
+		cursorID = decodedID
+	}
+
+	startIdx := 0
+	if params.Cursor != "" {
+		startIdx = len(items)
+		for i, item := range items {
+			if item.AssignedAt.Before(cursorAt) || (item.AssignedAt.Equal(cursorAt) && item.ID.String() < cursorID.String()) {
+				startIdx = i
+				break
+			}
+		}
+	}
+
+	remaining := items[startIdx:]
+	page := remaining
+	var nextCursor *string
+	if len(page) > params.Limit {
+		page = page[:params.Limit]
+		encoded := (api.PaginationEncoder{}).Encode(page[len(page)-1].AssignedAt, page[len(page)-1].ID)
+		nextCursor = &encoded
+	}
+
+	payload := make([]projectAgentListItemResponse, 0, len(page))
+	for _, item := range page {
+		agentRecord, getErr := h.getScopedAgent(r.Context(), principal.OrganizationID, item.AgentID)
+		if getErr != nil {
+			status, code, message := mapAssignmentError(getErr)
+			responder.Error(w, status, code, message)
+			return
+		}
+		payload = append(payload, toProjectAgentListItemResponse(item, agentRecord.DisplayName))
+	}
+
+	total := len(items)
+	responder.JSONList(w, http.StatusOK, payload, api.PaginationMeta{
+		NextCursor: nextCursor,
+		Limit:      params.Limit,
+		Total:      &total,
+	})
+}
+
 func (h agentHandlers) listAgentSkills(w http.ResponseWriter, r *http.Request) {
 	responder := api.NewResponder(r.Context())
 	if h.skillAttachments == nil || h.skills == nil || h.agents == nil {
@@ -1638,12 +1862,20 @@ func parseAgentIDParam(r *http.Request) (uuid.UUID, error) {
 	return uuid.Parse(strings.TrimSpace(chi.URLParam(r, "id")))
 }
 
+func parseProjectPathIDParam(r *http.Request) (uuid.UUID, error) {
+	return uuid.Parse(strings.TrimSpace(chi.URLParam(r, "id")))
+}
+
 func parseProjectIDParam(r *http.Request) (uuid.UUID, error) {
 	return uuid.Parse(strings.TrimSpace(chi.URLParam(r, "pid")))
 }
 
 func parseSkillIDParam(r *http.Request) (uuid.UUID, error) {
 	return uuid.Parse(strings.TrimSpace(chi.URLParam(r, "sid")))
+}
+
+func parseRouteUUIDParam(r *http.Request, key string) (uuid.UUID, error) {
+	return uuid.Parse(strings.TrimSpace(chi.URLParam(r, key)))
 }
 
 func mapAgentError(err error) (status int, code, message string) {
@@ -1724,6 +1956,17 @@ func toProjectAssignmentListItemResponse(item repo.AgentProjectAssignment, proje
 		Role:        item.Role,
 		IsActive:    item.IsActive,
 		AssignedAt:  item.AssignedAt,
+	}
+}
+
+func toProjectAgentListItemResponse(item repo.AgentProjectAssignment, agentDisplayName string) projectAgentListItemResponse {
+	return projectAgentListItemResponse{
+		ID:               item.ID,
+		AgentID:          item.AgentID,
+		AgentDisplayName: agentDisplayName,
+		Role:             item.Role,
+		IsActive:         item.IsActive,
+		AssignedAt:       item.AssignedAt,
 	}
 }
 

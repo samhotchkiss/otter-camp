@@ -68,6 +68,61 @@ func TestAgentAssignmentHTTPPMFlow(t *testing.T) {
 	}
 }
 
+func TestProjectAgentsHTTPAssignmentLifecycle(t *testing.T) {
+	testServer, org, adminUser, _ := newAgentTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	project := seedAssignmentProject(t, testServer.Pool, org.ID)
+	agentRecord := seedActiveAssignmentAgent(t, testServer.Pool, org.ID, "project-route-agent")
+
+	assignResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+project.ID.String()+"/agents", map[string]any{
+		"agent_id": agentRecord.ID.String(),
+		"role":     "worker",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if assignResp.StatusCode != http.StatusOK {
+		t.Fatalf("assign status = %d, want %d body=%s", assignResp.StatusCode, http.StatusOK, string(assignResp.Body))
+	}
+
+	listResp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/projects/"+project.ID.String()+"/agents", nil, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("list status = %d, want %d body=%s", listResp.StatusCode, http.StatusOK, string(listResp.Body))
+	}
+	items, ok := jsonPathValue(t, listResp.Body, "data").([]any)
+	if !ok {
+		t.Fatalf("list data not array body=%s", string(listResp.Body))
+	}
+	if len(items) != 1 {
+		t.Fatalf("list item count = %d, want 1 body=%s", len(items), string(listResp.Body))
+	}
+	if got := jsonPathString(t, listResp.Body, "data", "0", "agent_id"); got != agentRecord.ID.String() {
+		t.Fatalf("agent_id = %q, want %q body=%s", got, agentRecord.ID.String(), string(listResp.Body))
+	}
+
+	deleteResp := mustJSON(t, http.MethodDelete, testServer.URL+"/v1/projects/"+project.ID.String()+"/agents/"+agentRecord.ID.String(), nil, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if deleteResp.StatusCode != http.StatusOK {
+		t.Fatalf("delete status = %d, want %d body=%s", deleteResp.StatusCode, http.StatusOK, string(deleteResp.Body))
+	}
+
+	listAfterDelete := mustJSON(t, http.MethodGet, testServer.URL+"/v1/projects/"+project.ID.String()+"/agents", nil, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if listAfterDelete.StatusCode != http.StatusOK {
+		t.Fatalf("list after delete status = %d, want %d body=%s", listAfterDelete.StatusCode, http.StatusOK, string(listAfterDelete.Body))
+	}
+	itemsAfter, ok := jsonPathValue(t, listAfterDelete.Body, "data").([]any)
+	if !ok {
+		t.Fatalf("list after delete data not array body=%s", string(listAfterDelete.Body))
+	}
+	if len(itemsAfter) != 0 {
+		t.Fatalf("list after delete item count = %d, want 0 body=%s", len(itemsAfter), string(listAfterDelete.Body))
+	}
+}
+
 func TestAgentSkillsHTTPAttachmentLifecycle(t *testing.T) {
 	testServer, org, adminUser, _ := newAgentTestServer(t)
 	defer testServer.Close()
