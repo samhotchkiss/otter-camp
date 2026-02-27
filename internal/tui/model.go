@@ -1424,7 +1424,7 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		m.quitting = true
 		m.statusMessage = "Exiting TUI."
 	case "help", "palette":
-		m.statusMessage = "Commands: :focus :frank :dashboard :inbox :send :cancel-turn :sidebar :tour dismiss :quit"
+		m.statusMessage = "Commands: :frank :dashboard :inbox :project :task :agents :activity :scope org|project|task :focus sidebar|main|chat :send :cancel-turn :queue edit|steer|delete :sidebar :tour dismiss :quit"
 	case "focus":
 		if len(fields) != 2 {
 			m.statusMessage = "Usage: :focus sidebar|main|chat"
@@ -2412,15 +2412,20 @@ func (m Model) commandFallbackHelp() string {
 		case ViewInbox:
 			return "a approve · x reject · f defer · o open · j/k navigate · n next unread · s toggle sidebar · Esc back · : commands"
 		case ViewTask:
+			// EX-149: surface approve/reject/defer hints when RequiresHumanReview is set.
+			var reviewHints string
+			if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil && task.RequiresHumanReview {
+				reviewHints = " · a approve · x reject · f defer"
+			}
 			if m.workspace.selectedProjectID != "" {
 				taskHelp := "Enter open session · Esc project"
 				if len(m.workspace.openTasksForProject()) >= 2 {
 					taskHelp += " · j/k next/prev"
 				}
-				taskHelp += " · p project view · r refresh · n next unread · : commands · ? help"
+				taskHelp += reviewHints + " · p project view · r refresh · n next unread · : commands · ? help"
 				return taskHelp
 			}
-			return "Enter open session · Esc dashboard · r refresh · n next unread · : commands · ? help"
+			return "Enter open session · Esc dashboard" + reviewHints + " · r refresh · n next unread · : commands · ? help"
 		case ViewProject:
 			// EX-121: reflect current showDoneTasks state so the hint is actionable.
 			doneHint := "d show done"

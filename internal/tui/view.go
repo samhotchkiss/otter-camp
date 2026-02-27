@@ -1658,7 +1658,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("Enter", "open task detail or inbox item"),
 		key("Esc", "back to project (from task) / dashboard"),
 		key("d", "toggle done tasks section (project view only)"),
-		key("a / x / f / o", "inbox: approve/reject/defer/open"),
+		key("a / x / f / o", "approve/reject/defer/open  (inbox view, or task view when ⚠ shown)"),
 		"",
 		header("Chat  (press 3 to focus)"),
 		key("Enter", "send message  (or expand/collapse tool call when input is empty)"),
