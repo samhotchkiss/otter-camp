@@ -7,7 +7,7 @@
 │ ▾ Project Alpha              ││ Task Board                                                   ││                       no messages yet                        │
 │   › Task 1 / Launch docs ○   ││ TODO (1)           IN PROGRESS (1)    DONE (0)               ││                  Tab·focus chat  Enter·send                  │
 │   › Task 2 / CI hardening ◌  ││ ─────────────────  ─────────────────  ─────────────────      ││                                                              │
-│                              ││   Launch docs       CI hardening                             ││ ╭────────────────────────────────────────────────────────╮   │
+│ ▼ 2 inbox                    ││   Launch docs       CI hardening                             ││ ╭────────────────────────────────────────────────────────╮   │
 │                              ││                                                              ││ │ type a message...                                      │   │
 │                              ││ ───────────────────────── Inbox  2 ───────────────────────── ││ ╰────────────────────────────────────────────────────────╯   │
 │                              ││ ▸ Approve launch checklist                                   ││                                                              │
@@ -43,7 +43,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │ ▾ Project Alpha              ││ Task Board                                                   ││                       no messages yet                        │
 │   › Task 1 / Launch docs ○   ││ TODO (1)           IN PROGRESS (1)    DONE (0)               ││                  Tab·focus chat  Enter·send                  │
 │   › Task 2 / CI hardening ◌  ││ ─────────────────  ─────────────────  ─────────────────      ││                                                              │
-│                              ││   Launch docs       CI hardening                             ││ ╭────────────────────────────────────────────────────────╮   │
+│ ▼ 2 inbox                    ││   Launch docs       CI hardening                             ││ ╭────────────────────────────────────────────────────────╮   │
 │                              ││                                                              ││ │ type a message...                                      │   │
 │                              ││ ───────────────────────── Inbox  2 ───────────────────────── ││ ╰────────────────────────────────────────────────────────╯   │
 │                              ││ ▸ Approve launch checklist                                   ││                                                              │
@@ -79,7 +79,7 @@ Help: j/k navigate · Enter open task · : commands · ? help
 │ ▾ Project Alpha              ││ Task Board                                                   ││                       no messages yet                        │
 │   › Task 1 / Launch docs ○   ││ TODO (1)           IN PROGRESS (1)    DONE (0)               ││                  Tab·focus chat  Enter·send                  │
 │   › Task 2 / CI hardening ◌  ││ ─────────────────  ─────────────────  ─────────────────      ││                                                              │
-│                              ││   Launch docs       CI hardening                             ││ ╭────────────────────────────────────────────────────────╮   │
+│ ▼ 2 inbox                    ││   Launch docs       CI hardening                             ││ ╭────────────────────────────────────────────────────────╮   │
 │                              ││                                                              ││ │ type a message...                                      │   │
 │                              ││ ───────────────────────── Inbox  2 ───────────────────────── ││ ╰────────────────────────────────────────────────────────╯   │
 │                              ││ ▸ Approve launch checklist                                   ││                                                              │
