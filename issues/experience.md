@@ -773,3 +773,45 @@
 
 ---
 
+## EX-056: Dashboard Enter key auto-selects first open task
+
+**Observation:** Pressing Enter on the dashboard with no previously selected task navigated to ViewTask but showed "No task selected" — a dead-end that required the user to go back and navigate to a task explicitly.
+
+**Improvement:** When Enter is pressed on the dashboard and `selectedTaskID` is empty, the handler now auto-selects the first non-completed task from `taskOrder` before switching to ViewTask. The task detail is immediately loaded via `loadTaskDetailCmd`.
+
+**Why it matters:** The primary user action from the dashboard is "open a task". Pressing Enter should do something useful. Auto-selecting the first open/in-progress task is the most sensible default — it means a single keypress opens the most recently active work item.
+
+**Effort:** Low
+**Issue:** N/A (implemented directly in ralph-loop)
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-057: Agents view shows empty state message
+
+**Observation:** When the agents list was empty (not yet loaded or no agents configured), `renderAgentsView` returned a blank panel with just an empty line.
+
+**Improvement:** Added a centered "no agents loaded" empty state message, consistent with other empty states in the TUI.
+
+**Why it matters:** Blank panels are confusing — users don't know if the view is loading, empty, or broken. A message makes the state explicit.
+
+**Effort:** Trivial
+**Issue:** N/A (implemented directly in ralph-loop)
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-058: Dashboard task board header shows active project name
+
+**Observation:** The dashboard Task Board header always said "Task Board" regardless of project context, even when a project was selected via sidebar navigation.
+
+**Improvement:** When `selectedProjectID` is set, the header becomes "OtterCamp Sales Site — Task Board" (or whichever project is selected). The project name is resolved from the sidebar node graph via `nodes["project-"+selectedProjectID].Label`.
+
+**Why it matters:** Users who navigated to a project (which sets `selectedProjectID`) then switched back to the dashboard expected to see project-scoped task data. The project name in the header confirms they're seeing tasks for the right project.
+
+**Effort:** Low
+**Issue:** N/A (implemented directly in ralph-loop)
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+

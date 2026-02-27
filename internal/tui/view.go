@@ -652,7 +652,13 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 
 	// Board columns
 	lines = append(lines, "")
-	lines = append(lines, styleLabel.Render("Task Board"))
+	boardTitle := "Task Board"
+	if m.workspace.selectedProjectID != "" {
+		if projNode := m.workspace.nodes["project-"+m.workspace.selectedProjectID]; projNode != nil {
+			boardTitle = projNode.Label + " — Task Board"
+		}
+	}
+	lines = append(lines, styleLabel.Render(boardTitle))
 
 	// Build three columns
 	colW := (width - 6) / 3
@@ -1178,6 +1184,11 @@ func (m Model) renderActivityView(width, maxLines int) []string {
 func (m Model) renderAgentsView(width, maxLines int) []string {
 	var lines []string
 	lines = append(lines, "")
+	if len(m.workspace.agents) == 0 {
+		lines = append(lines, lipgloss.NewStyle().Width(width).Align(lipgloss.Center).
+			Foreground(colSubtle).Render("no agents loaded"))
+		return lines
+	}
 	for _, agent := range m.workspace.agents {
 		parts := strings.SplitN(agent, "=", 2)
 		name, status := agent, ""

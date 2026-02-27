@@ -748,8 +748,21 @@ func (m *Model) handleEnterKey() tea.Cmd {
 			return nil
 		}
 		if m.workspace.mainView == ViewDashboard {
+			// Auto-select the first open task if none is currently selected
+			if m.workspace.selectedTaskID == "" {
+				for _, id := range m.workspace.taskOrder {
+					task := m.workspace.tasks[id]
+					if task != nil && task.Status != "done" && task.Status != "approved" && task.Status != "cancelled" {
+						m.workspace.selectedTaskID = id
+						break
+					}
+				}
+			}
 			m.workspace.setMainView(ViewTask)
 			m.statusMessage = "Opened task detail."
+			if m.workspace.selectedTaskID != "" {
+				return loadTaskDetailCmd(m.workspace.selectedTaskID, m.runtimeHints)
+			}
 			return nil
 		}
 	}
