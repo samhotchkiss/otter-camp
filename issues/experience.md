@@ -1915,3 +1915,29 @@ Since `applyWorkspaceCommand` can return `tea.Cmd`, this approach naturally pick
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-129: Four server SSE events silently dropped — budget anomaly, task.merged, flow.started, flow.rejected
+
+**Observation:** The server publishes four events that the TUI had no handlers for:
+- `budget.anomaly_detected` — fires when token usage is 3× above the rolling average
+- `task.merged` — fires when a merge queue entry is processed and pushed
+- `flow.started` — fires when a task's flow execution is first created
+- `flow.rejected` — fires when a reviewer rejects a task and it moves to the reject node
+
+All four were silently dropped. Budget anomalies went unnoticed until the user checked the usage summary manually. Merge completions were invisible (no activity entry, no indication). Flow start and rejection events meant the task detail view's flow step indicator stayed stale.
+
+**Improvement:** Added four handlers in `applyWorkspaceCommand`:
+1. **`budget.anomaly_detected`**: Sets `statusMessage` with a formatted warning: `"⚠ Budget anomaly: daily usage is ~6x above average (90000 tokens vs avg 15000)."`. Multiplier is derived from `rolling_average_ratio`, clamped to ≥ 2.
+2. **`task.merged`**: Appends `"<branch_name>: merged"` to the activity log.
+3. **`flow.started`**: Appends `"OC-N: flow started"` to the activity log and triggers `loadTaskDetailCmd` to refresh the task detail view.
+4. **`flow.rejected`**: Appends `"OC-N: flow rejected"` to the activity log and triggers `loadTaskDetailCmd` to refresh the task detail view.
+
+Also extracted a `taskLabel(rec *taskRecord, taskID string) string` helper (used by flow.started, flow.rejected, and the existing flow.advanced handler) to avoid duplicating the OC-N / title / ID fallback logic three times.
+
+**Why it matters:** Budget anomalies are high-urgency signals — the user needs to know immediately, not after opening a separate view. Merge and flow lifecycle events belong in the activity log so the user can see the pipeline progressing without leaving the TUI. Stale flow step indicators in task detail break the real-time feel of the system.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

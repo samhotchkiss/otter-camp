@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -1375,5 +1376,145 @@ func TestTaskCreatedEventAddsActivityEntry(t *testing.T) {
 	}
 	if !activityFound {
 		t.Fatalf("task.created event should add 'OC-9: created' activity entry: %v", m.workspace.activity)
+	}
+}
+
+// EX-129: budget.anomaly_detected should surface a status-bar warning with
+// the period, multiplier, and token counts so the user is immediately aware.
+func TestBudgetAnomalyDetectedShowsStatusWarning(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"period":                 "daily",
+		"current_tokens":         int64(90000),
+		"rolling_average_tokens": int64(15000),
+		"rolling_average_ratio":  6.0,
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "budget.anomaly_detected",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	if !strings.Contains(m.statusMessage, "Budget anomaly") {
+		t.Fatalf("budget.anomaly_detected should set statusMessage with 'Budget anomaly', got: %q", m.statusMessage)
+	}
+	if !strings.Contains(m.statusMessage, "daily") {
+		t.Fatalf("statusMessage should mention period 'daily', got: %q", m.statusMessage)
+	}
+	if !strings.Contains(m.statusMessage, "6x") {
+		t.Fatalf("statusMessage should mention multiplier '6x', got: %q", m.statusMessage)
+	}
+}
+
+// EX-129: task.merged should add an activity entry with the branch name.
+func TestTaskMergedAddsActivityEntry(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"branch_name": "feature/oc-42-new-widget",
+		"project_id":  "proj-xyz",
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "task.merged",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "feature/oc-42-new-widget") && strings.Contains(entry, "merged") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("task.merged should add '<branch>: merged' activity entry: %v", m.workspace.activity)
+	}
+}
+
+// EX-129: flow.started should add an activity entry and trigger a task detail reload.
+func TestFlowStartedEventAddsActivityAndLoadsTaskDetail(t *testing.T) {
+	loadCalled := ""
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			loadCalled = id
+			return &TaskDetailItem{ID: id}, nil
+		},
+	})
+	model.turnsSynced = true
+
+	rawPayload, _ := json.Marshal(map[string]any{"task_id": "task-flow-start-1"})
+	updated, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "flow.started",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "flow started") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("flow.started should add '…: flow started' activity entry: %v", m.workspace.activity)
+	}
+	if cmd == nil {
+		t.Fatal("flow.started should return a loadTaskDetail cmd")
+	}
+	// Execute the cmd to verify it triggers the right loader.
+	msg := cmd()
+	if _, ok := msg.(taskDetailLoadedMsg); !ok {
+		t.Fatalf("cmd returned unexpected message type: %T", msg)
+	}
+	if loadCalled != "task-flow-start-1" {
+		t.Fatalf("loadTaskDetail called with %q, want 'task-flow-start-1'", loadCalled)
+	}
+}
+
+// EX-129: flow.rejected should add an activity entry and trigger a task detail reload.
+func TestFlowRejectedEventAddsActivityAndLoadsTaskDetail(t *testing.T) {
+	loadCalled := ""
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			loadCalled = id
+			return &TaskDetailItem{ID: id}, nil
+		},
+	})
+	model.turnsSynced = true
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"task_id":    "task-rej-99",
+		"project_id": "proj-abc",
+	})
+	updated, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "flow.rejected",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "flow rejected") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("flow.rejected should add '…: flow rejected' activity entry: %v", m.workspace.activity)
+	}
+	if cmd == nil {
+		t.Fatal("flow.rejected should return a loadTaskDetail cmd")
+	}
+	msg := cmd()
+	if _, ok := msg.(taskDetailLoadedMsg); !ok {
+		t.Fatalf("cmd returned unexpected message type: %T", msg)
+	}
+	if loadCalled != "task-rej-99" {
+		t.Fatalf("loadTaskDetail called with %q, want 'task-rej-99'", loadCalled)
 	}
 }

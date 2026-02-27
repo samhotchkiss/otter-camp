@@ -2671,6 +2671,21 @@ func loadInboxItemsCmd(hints RuntimeHints) tea.Cmd {
 	}
 }
 
+// taskLabel returns a short human-readable label for a task record, falling
+// back to the raw taskID when no record is cached. Used by SSE handlers that
+// append to the activity log.
+func taskLabel(rec *taskRecord, taskID string) string {
+	if rec != nil {
+		if rec.TaskNumber > 0 {
+			return fmt.Sprintf("OC-%d", rec.TaskNumber)
+		}
+		if rec.Title != "" {
+			return truncate(rec.Title, 24)
+		}
+	}
+	return taskID
+}
+
 // applyWorkspaceCommand handles model-level workspace SSE events that need to
 // fire tea.Cmds (e.g. tui.command navigation requests). Returns nil if the
 // event is not a model-level command and should fall through to the workspace.
@@ -2773,15 +2788,67 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		if !decodePayload(event.Payload, &payload) || payload.TaskID == "" {
 			return nil
 		}
-		label := payload.TaskID
-		if rec := m.workspace.tasks[payload.TaskID]; rec != nil {
-			if rec.TaskNumber > 0 {
-				label = fmt.Sprintf("OC-%d", rec.TaskNumber)
-			} else if rec.Title != "" {
-				label = truncate(rec.Title, 24)
-			}
-		}
+		label := taskLabel(m.workspace.tasks[payload.TaskID], payload.TaskID)
 		m.workspace.activity = append(m.workspace.activity, label+": flow advanced")
+		return loadTaskDetailCmd(payload.TaskID, m.runtimeHints)
+	}
+	// EX-129: budget.anomaly_detected — surface a status-bar warning so the user
+	// knows the org is burning tokens at an unusual rate without leaving the TUI.
+	if event.EventType == "budget.anomaly_detected" {
+		var payload struct {
+			Period               string  `json:"period"`
+			CurrentTokens        int64   `json:"current_tokens"`
+			RollingAverageTokens int64   `json:"rolling_average_tokens"`
+			RollingAverageRatio  float64 `json:"rolling_average_ratio"`
+		}
+		if decodePayload(event.Payload, &payload) {
+			multiplier := int(payload.RollingAverageRatio)
+			if multiplier < 2 {
+				multiplier = 2
+			}
+			m.statusMessage = fmt.Sprintf(
+				"⚠ Budget anomaly: %s usage is ~%dx above average (%d tokens vs avg %d).",
+				payload.Period, multiplier, payload.CurrentTokens, payload.RollingAverageTokens,
+			)
+		}
+		return nil
+	}
+	// EX-129: task.merged — record in the activity log so the user can see
+	// when a branch lands without navigating to the merges view.
+	if event.EventType == "task.merged" {
+		var payload struct {
+			BranchName string `json:"branch_name"`
+			ProjectID  string `json:"project_id"`
+		}
+		if decodePayload(event.Payload, &payload) && payload.BranchName != "" {
+			m.workspace.activity = append(m.workspace.activity, payload.BranchName+": merged")
+		}
+		return nil
+	}
+	// EX-129: flow.started — record in the activity log and reload the task
+	// detail so the flow step indicator updates immediately.
+	if event.EventType == "flow.started" {
+		var payload struct {
+			TaskID string `json:"task_id"`
+		}
+		if !decodePayload(event.Payload, &payload) || payload.TaskID == "" {
+			return nil
+		}
+		label := taskLabel(m.workspace.tasks[payload.TaskID], payload.TaskID)
+		m.workspace.activity = append(m.workspace.activity, label+": flow started")
+		return loadTaskDetailCmd(payload.TaskID, m.runtimeHints)
+	}
+	// EX-129: flow.rejected — record in the activity log and reload the task
+	// detail so the rejected badge and flow step indicator are up-to-date.
+	if event.EventType == "flow.rejected" {
+		var payload struct {
+			TaskID string `json:"task_id"`
+		}
+		if !decodePayload(event.Payload, &payload) || payload.TaskID == "" {
+			return nil
+		}
+		label := taskLabel(m.workspace.tasks[payload.TaskID], payload.TaskID)
+		m.workspace.activity = append(m.workspace.activity, label+": flow rejected")
 		return loadTaskDetailCmd(payload.TaskID, m.runtimeHints)
 	}
 	if event.EventType == "worker.unresponsive" {
