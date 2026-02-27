@@ -677,15 +677,17 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		if !matchesFilter(taskLabel, query) && !matchesFilter(task.Status, query) {
 			continue
 		}
-		entry := truncate("  "+taskLabel, colW)
 		switch task.Status {
 		case "draft", "todo":
+			entry := truncate("○ "+taskLabel, colW)
 			todoTasks = append(todoTasks, styleText.Render(entry))
 		case "done", "approved", "cancelled":
+			entry := truncate("✓ "+taskLabel, colW)
 			doneTasks = append(doneTasks, styleMuted.Render(entry))
 		case "blocked", "rejected", "deferred":
 			// omit from column view; reflected in blocked count only
 		default: // in_progress and unknown active statuses
+			entry := truncate("◌ "+taskLabel, colW)
 			inProgTasks = append(inProgTasks, lipgloss.NewStyle().Foreground(colWarning).Render(entry))
 		}
 	}
