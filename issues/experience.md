@@ -1798,3 +1798,45 @@ Also updated `INBOX` treatment: now only included when `inbox` or the node's lab
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-121: Project view "d toggle done" hint didn't reflect current state
+
+**Observation:** In the project view, the help line always showed `"d toggle done"` regardless of whether done tasks were currently visible or hidden. This generic hint doesn't tell you what pressing `d` will actually *do* — it reads the same before and after.
+
+**Improvement:** `commandFallbackHelp()` for `ViewProject` now returns `"d show done"` or `"d hide done"` based on `m.workspace.showDoneTasks`. The hint is now a direct instruction, not a toggle description.
+
+**Why it matters:** `"d toggle done"` is programmer-speak. `"d show done"` is what the user actually wants to know: pressing `d` will make done tasks appear. Once they're visible, `"d hide done"` tells them pressing again will hide them.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-122: Task detail ⚠ badge didn't appear when inbox item arrived
+
+**Observation:** When a new inbox review item was created for a task (e.g., the agent flagged a draft action for human review), the TUI received the `inbox.item_created` SSE event and reloaded the inbox list (EX-120). However, it didn't update the task record's `RequiresHumanReview` field. If the user was viewing the task detail, the `⚠ Human review required` line and the `a·approve · x·reject · f·defer` action row would not appear until they navigated away and back to trigger a full task detail reload.
+
+**Improvement:** After `inboxItemsLoadedMsg` stores the inbox items, it calls `syncTaskHumanReviewFromInbox()` which sets `RequiresHumanReview = true` on any task record that has a corresponding pending inbox item.
+
+**Why it matters:** The ⚠ badge and action row are critical UI — they tell the user that their input is needed. A badge that doesn't appear until navigation is unreliable and erodes trust in real-time notifications.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-123: Task detail ⚠ badge persisted after user acted on review request
+
+**Observation:** When the user approved, rejected, or deferred an inbox review item from the inbox view, `removeInboxItem` removed the item from the local list. But `RequiresHumanReview` on the task record was never cleared. If the user then navigated to the task detail, the `⚠ Human review required` line would still appear — even though they had just acted on the review.
+
+**Improvement:** `removeInboxItem` now records the `TaskID` of the removed item and, after filtering, checks if any other inbox items remain for that task. If none remain, it sets `RequiresHumanReview = false` on the task record. The ⚠ badge disappears immediately when the last review item is actioned.
+
+**Why it matters:** Stale state in both directions is confusing. EX-122 makes the badge appear immediately; EX-123 makes it disappear immediately. Together they make the review workflow feel coherent and instantaneous.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
