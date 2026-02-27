@@ -475,7 +475,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.Err != nil {
 			m.activeTurn = false
 			m.activeTurnSessionID = ""
-			m.statusMessage = "Message send failed: " + strings.TrimSpace(typed.Err.Error())
+			// EX-099: restore the failed message to the input box so the user
+			// can retry without retyping.  The message is also still in chat
+			// history so recallHistory() would find it too.
+			if len(m.chatHistory) > 0 {
+				m.chatInput = m.chatHistory[len(m.chatHistory)-1]
+			}
+			m.statusMessage = "Send failed (input restored) — " + strings.TrimSpace(typed.Err.Error())
 		}
 		return m, nil
 	case chatCancelRequestedMsg:
