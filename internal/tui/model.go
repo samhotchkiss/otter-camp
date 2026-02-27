@@ -2283,6 +2283,11 @@ func (m Model) commandFallbackHelp() string {
 			return "Enter open session · Esc dashboard · n next unread · : commands · ? help"
 		case ViewProject:
 			return "j/k navigate tasks · Enter open task · d toggle done · Esc dashboard · n next unread · : commands · ? help"
+		case ViewDashboard:
+			if len(m.workspace.dashboardActiveTasks()) > 0 {
+				return "j/k select task · Enter open · i inbox · n next unread · / filter · : commands · ? help"
+			}
+			return "i inbox · n next unread · r refresh · : commands · ? help"
 		default:
 			return "i inbox · d dashboard · n next unread · r refresh · / filter · : commands · ? help"
 		}

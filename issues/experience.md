@@ -1271,3 +1271,23 @@ Three unit tests were added: one confirming the indicator appears correctly, one
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-086: Dashboard help line shows task navigation hints
+
+**Observation:** When the main panel was focused on the dashboard, the bottom help line showed a generic fallback: `"i inbox · d dashboard · n next unread · r refresh · / filter · : commands · ? help"`. This was the same line used by the Agents, Activity, Merges, and Schedules views — views with no interactive navigation. But the dashboard supports `j/k` task cursor navigation and `Enter` to open a task (since EX-062/EX-063), making those the most important actions on that view. They were completely absent from the help line.
+
+The `commandFallbackHelp()` switch handled ViewInbox, ViewTask, and ViewProject with specific lines but had no `case ViewDashboard:`, so it fell through to `default`.
+
+**Improvement:** Added `case ViewDashboard:` to `commandFallbackHelp()` with a context-sensitive return:
+- When active tasks exist (the board has tasks to navigate): `j/k select task · Enter open · i inbox · n next unread · / filter · : commands · ? help`
+- When no active tasks: `i inbox · n next unread · r refresh · : commands · ? help`
+
+Golden layout snapshots regenerated.
+
+**Why it matters:** The bottom help line is the first place a new user looks when they don't know what to press. If `j/k` and `Enter` — the primary dashboard interactions — don't appear there, users discover them by accident (or not at all). The specific hint is consistent with how ViewTask and ViewProject each have their own tailored help lines.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
