@@ -1601,7 +1601,7 @@ func (e *NativeToolExecutor) handleTUINavigate(ctx context.Context, input map[st
 	_ = e.events.Publish(ctx, nil, eventbus.DomainEvent{
 		OrganizationID: scope.organizationID,
 		EventType:      "tui.command",
-		ActorType:      "agent",
+		ActorType:      "system",
 		Payload:        payload,
 	})
 	return map[string]any{

@@ -216,6 +216,20 @@ func (m Model) viewForShell(shell string) string {
 		}
 	}
 
+	// Clamp each panel view to exactly panelH lines. lipgloss may expand content
+	// beyond panelH (e.g. due to styled line width recalculation). Clamping
+	// preserves the top and bottom border rows and trims excess content lines.
+	for i, pv := range panelViews {
+		pvLines := strings.Split(pv, "\n")
+		if len(pvLines) > panelH {
+			clamped := make([]string, panelH)
+			clamped[0] = pvLines[0]                          // top border
+			copy(clamped[1:panelH-1], pvLines[1:panelH-1])  // content
+			clamped[panelH-1] = pvLines[len(pvLines)-1]     // bottom border
+			panelViews[i] = strings.Join(clamped, "\n")
+		}
+	}
+
 	panelRow := lipgloss.JoinHorizontal(lipgloss.Top, panelViews...)
 
 	prefix := ""
@@ -1534,6 +1548,8 @@ func prefixLines(s, prefix string) string {
 }
 
 // buildPanelContent joins lines and pads/trims to exactly targetH lines of content.
+// It handles embedded newlines in individual items by splitting the joined result
+// and trimming to exactly targetH actual lines.
 func buildPanelContent(lines []string, targetH, width int) string {
 	// Trim to fit
 	if len(lines) > targetH {
@@ -1543,7 +1559,15 @@ func buildPanelContent(lines []string, targetH, width int) string {
 	for len(lines) < targetH {
 		lines = append(lines, "")
 	}
-	return strings.Join(lines, "\n")
+	result := strings.Join(lines, "\n")
+	// Post-process: if any items contained embedded newlines, the joined result
+	// may have more than targetH actual lines. Trim the excess.
+	actual := strings.Split(result, "\n")
+	if len(actual) > targetH {
+		actual = actual[:targetH]
+		return strings.Join(actual, "\n")
+	}
+	return result
 }
 
 func truncate(s string, maxLen int) string {

@@ -213,6 +213,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.State == ConnectionConnected && !m.proofRealtime {
 			m.proofRealtime = true
 			m.workspace.activity = append(m.workspace.activity, "proof-of-life realtime connected")
+			// Reload sidebar data on first successful connection. The initial load
+			// from Init() may have failed if the server was not yet available.
+			if m.runtimeHints.LoadInboxCount != nil || m.runtimeHints.LoadRecentChats != nil || m.runtimeHints.LoadProjects != nil {
+				return m, loadSidebarDataCmd(m.runtimeHints)
+			}
 		}
 		return m, nil
 	case ReplaySyncedMsg:
@@ -1341,21 +1346,6 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) {
 		}
 		index := m.ensureMessage(payload.MessageID, "assistant", event.OccurredAt)
 		m.upsertToolCall(index, strings.TrimSpace(payload.ToolCallID), strings.TrimSpace(payload.Name), strings.TrimSpace(payload.Status))
-	case "worker.unresponsive":
-		if !m.turnsSynced {
-			return
-		}
-		var payload struct {
-			SessionID string `json:"session_id"`
-			Message   string `json:"message"`
-		}
-		if !decodePayload(event.Payload, &payload) {
-			return
-		}
-		if !m.sessionMatchesActive(payload.SessionID) {
-			return
-		}
-		m.statusMessage = payload.Message
 	}
 }
 
@@ -2011,6 +2001,19 @@ func loadProjectDetailCmd(projectID string, hints RuntimeHints) tea.Cmd {
 // fire tea.Cmds (e.g. tui.command navigation requests). Returns nil if the
 // event is not a model-level command and should fall through to the workspace.
 func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
+	if event.EventType == "worker.unresponsive" {
+		if !m.turnsSynced {
+			return nil
+		}
+		var payload struct {
+			SessionID string `json:"session_id"`
+			Message   string `json:"message"`
+		}
+		if decodePayload(event.Payload, &payload) && m.sessionMatchesActive(payload.SessionID) {
+			m.statusMessage = payload.Message
+		}
+		return nil
+	}
 	if event.EventType != "tui.command" {
 		return nil
 	}
@@ -2024,21 +2027,26 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 	}
 	switch payload.Target {
 	case "project":
+		// Navigate to project view regardless of whether the sidebar node is loaded yet.
+		// The node search is best-effort for cursor positioning; the view/detail load works
+		// without it.
+		m.workspace.mainView = ViewProject
+		m.workspace.selectedProjectID = payload.TargetID
+		m.workspace.selectedProject = nil
+		m.activeScope = ScopeProject
+		m.statusMessage = "Navigated to project."
 		for _, node := range m.workspace.nodes {
 			if node.Kind == sidebarKindProject && node.ProjectID == payload.TargetID {
-				m.workspace.mainView = ViewProject
-				m.workspace.selectedProjectID = payload.TargetID
-				m.workspace.selectedProject = nil
 				m.workspace.sidebarCursor = m.workspace.indexOfNode(node.ID)
-				m.activeScope = ScopeProject
 				m.statusMessage = "Navigated to " + node.Label + "."
-				cmds := []tea.Cmd{loadProjectTasksCmd(payload.TargetID, m.runtimeHints)}
-				if m.runtimeHints.LoadProjectDetail != nil {
-					cmds = append(cmds, loadProjectDetailCmd(payload.TargetID, m.runtimeHints))
-				}
-				return tea.Batch(cmds...)
+				break
 			}
 		}
+		cmds := []tea.Cmd{loadProjectTasksCmd(payload.TargetID, m.runtimeHints)}
+		if m.runtimeHints.LoadProjectDetail != nil {
+			cmds = append(cmds, loadProjectDetailCmd(payload.TargetID, m.runtimeHints))
+		}
+		return tea.Batch(cmds...)
 	case "inbox":
 		m.workspace.mainView = ViewInbox
 		m.statusMessage = "Navigated to inbox."

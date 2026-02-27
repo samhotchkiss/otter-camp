@@ -132,6 +132,8 @@ func NewEventReducer(logger *slog.Logger) *EventReducer {
 		"chat.turn.cancelled":    {},
 		"task.status.changed":    {},
 		"task.flow.advanced":     {},
+		"tui.command":            {},
+		"worker.unresponsive":    {},
 	}
 	return &EventReducer{
 		seenEventIDs:    map[string]struct{}{},
