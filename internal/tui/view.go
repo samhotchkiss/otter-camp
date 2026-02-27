@@ -625,20 +625,58 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	lines = append(lines, statusLine)
 	lines = append(lines, flowLine)
 
+	if desc := strings.TrimSpace(task.Description); desc != "" {
+		lines = append(lines, "")
+		lines = append(lines, divider(width, "Description"))
+		for _, wrapped := range wrapText(desc, maxInt(10, width-4)) {
+			lines = append(lines, styleText.Render("  "+wrapped))
+		}
+	}
+
+	if acceptance := strings.TrimSpace(task.AcceptanceCriteria); acceptance != "" {
+		lines = append(lines, "")
+		lines = append(lines, divider(width, "Acceptance Criteria"))
+		for _, wrapped := range wrapText(acceptance, maxInt(10, width-6)) {
+			lines = append(lines, styleMuted.Render("  ✓ "+wrapped))
+		}
+	}
+
+	if len(task.Subtasks) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, divider(width, "Subtasks"))
+		for _, subtask := range task.Subtasks {
+			st := strings.TrimSpace(subtask)
+			if st == "" {
+				continue
+			}
+			lines = append(lines, styleMuted.Render("  • "+truncate(st, width-6)))
+		}
+	}
+
+	sessionID := strings.TrimSpace(task.SessionID)
+	if sessionID == "" {
+		sessionID = m.workspace.taskSessionID(task.ID)
+	}
+	if sessionID != "" {
+		lines = append(lines, "")
+		lines = append(lines, divider(width, "Async Session"))
+		lines = append(lines, stylePrimary.Render("  "+truncate(sessionID, width-4)))
+	}
+
 	if len(task.History) > 0 {
 		lines = append(lines, "")
-		lines = append(lines, divider(width, "History"))
-		start := 0
-		if len(task.History) > 5 {
-			start = len(task.History) - 5
-		}
-		for _, h := range task.History[start:] {
+		lines = append(lines, divider(width, "Event Log"))
+		for _, h := range task.History {
 			lines = append(lines, styleMuted.Render("  · "+h))
 		}
 	}
 
 	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("  Enter·open  Esc·back"))
+	if sessionID != "" {
+		lines = append(lines, styleMuted.Render("  Enter·open async session  Esc·back"))
+	} else {
+		lines = append(lines, styleMuted.Render("  Enter·open  Esc·back"))
+	}
 
 	return lines
 }
