@@ -1657,7 +1657,11 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 		}
 	}
 	sizeStr := string(layout.sizeClass)
+	// Show view name when main panel is focused (more informative than "main")
 	focusStr := panelLabel(focus)
+	if focus == MainPanel {
+		focusStr = strings.ToLower(string(m.workspace.mainView))
+	}
 
 	status := ""
 	if m.statusMessage != "" {

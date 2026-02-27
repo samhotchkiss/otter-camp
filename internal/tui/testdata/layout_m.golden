@@ -27,7 +27,7 @@
 │                   ││                                                          ││                                     │
 │                   ││                                                          ││                                     │
 ╰───────────────────╯╰──────────────────────────────────────────────────────────╯╰─────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  M/main  ·  snapshot                                                                      
+ ○  disconnected  ·  Frank  ·  M/dashboard  ·  snapshot                                                                 
 Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### M chat
@@ -59,7 +59,7 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │                   ││                                                          ││                                     │
 │                   ││                                                          ││                                     │
 ╰───────────────────╯╰──────────────────────────────────────────────────────────╯╰─────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  M/main  ·  snapshot                                                                      
+ ○  disconnected  ·  Frank  ·  M/dashboard  ·  snapshot                                                                 
 Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### M inbox
@@ -91,5 +91,5 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │                   ││                                                          ││                                     │
 │                   ││                                                          ││                                     │
 ╰───────────────────╯╰──────────────────────────────────────────────────────────╯╰─────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  M/main  ·  snapshot                                                                      
+ ○  disconnected  ·  Frank  ·  M/dashboard  ·  snapshot                                                                 
 Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help

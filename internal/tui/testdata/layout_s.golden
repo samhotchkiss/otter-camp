@@ -27,8 +27,8 @@
 │                                                    ││                                  │
 │                                                    ││                                  │
 ╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or 
- :focus sidebar)                                                                          
+ ○  disconnected  ·  Frank  ·  S/dashboard  ·  snapshot  ·  Hidden panes: sidebar hidden  
+ (1 or :focus sidebar)                                                                    
 Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### S chat
@@ -60,8 +60,8 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │                                                    ││                                  │
 │                                                    ││                                  │
 ╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or 
- :focus sidebar)                                                                          
+ ○  disconnected  ·  Frank  ·  S/dashboard  ·  snapshot  ·  Hidden panes: sidebar hidden  
+ (1 or :focus sidebar)                                                                    
 Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### S inbox
@@ -93,8 +93,8 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │                                                    ││                                  │
 │                                                    ││                                  │
 ╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  S/main  ·  snapshot  ·  Hidden panes: sidebar hidden (1 or 
- :focus sidebar)                                                                          
+ ○  disconnected  ·  Frank  ·  S/dashboard  ·  snapshot  ·  Hidden panes: sidebar hidden  
+ (1 or :focus sidebar)                                                                    
 Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? help
 
 ### S board-sidebar-focus
