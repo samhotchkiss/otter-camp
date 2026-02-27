@@ -3028,3 +3028,17 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-195: Sidebar overflow +N hides cursor when navigating past visible window
+
+**Observation:** The sidebar renders nodes starting from index 0. When the cursor is moved (via j/k, 'G', or `syncSidebarToTask`) to a node beyond the visible area, that node was invisible and only a "+N more" counter was shown. The user could navigate j/k and see the cursor indicator disappear without any indication of why. The "+N more" counter was the only signal, but did not tell the user which item was selected or where to find it.
+
+**Improvement:** Implemented viewport scrolling in `renderSidebarPanel`: compute a `sidebarScrollStart` by scanning display-line counts (accounting for section-divider lines between header groups) until the cursor row is within the window. When scrolling occurs, replace the first rendered line with an "↑ N above" indicator. The existing "+N more" below-fold indicator is preserved for items beyond the bottom of the window.
+
+**Why it matters:** Any time a selected/cursor item is off-screen, the TUI feels broken. Navigation should always keep the current selection visible — this is a fundamental scroll-follows-cursor expectation in any list-based UI.
+
+**Effort:** Medium (60 lines: two-phase scroll calculation + scroll indicator)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

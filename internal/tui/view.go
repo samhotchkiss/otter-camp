@@ -324,19 +324,73 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 		maxNodeLines = 0
 	}
 
+	// EX-195: scroll the sidebar so the cursor is always within the visible window.
+	// Each node occupies 1 display line; section-header dividers (except the very first
+	// header) add 1 extra line. We compute the display line index of the cursor and
+	// derive a scroll start that centres the cursor inside the window.
+	sidebarScrollStart := 0
+	if cursor := m.workspace.sidebarCursor; cursor > 0 && maxNodeLines > 0 {
+		// Count display lines up to and including the cursor row.
+		displayAtCursor := 0
+		prevWasContent := false
+		for i, id := range visible {
+			node := m.workspace.nodes[id]
+			if node == nil {
+				if i == cursor {
+					break
+				}
+				prevWasContent = true
+				continue
+			}
+			if node.Kind == sidebarKindHeader && prevWasContent {
+				displayAtCursor++ // divider line
+			}
+			displayAtCursor++ // the node itself
+			if i == cursor {
+				break
+			}
+			prevWasContent = node.Kind != sidebarKindHeader
+		}
+		// If cursor display-line exceeds the window, scroll forward.
+		if displayAtCursor > maxNodeLines {
+			excess := displayAtCursor - maxNodeLines
+			// Walk forward from index 0 consuming 'excess' display lines to find startIdx.
+			consumed := 0
+			prevWasContent2 := false
+			for i, id := range visible {
+				node := m.workspace.nodes[id]
+				if node == nil {
+					prevWasContent2 = true
+					continue
+				}
+				if node.Kind == sidebarKindHeader && prevWasContent2 {
+					consumed++
+				}
+				consumed++
+				prevWasContent2 = node.Kind != sidebarKindHeader
+				if consumed >= excess {
+					sidebarScrollStart = i + 1
+					break
+				}
+			}
+		}
+	}
+
 	displayLines := 0
 	lastRendered := 0
-	for i, id := range visible {
+	firstRendered := sidebarScrollStart
+	for i, id := range visible[sidebarScrollStart:] {
+		idx := i + sidebarScrollStart
 		if displayLines >= maxNodeLines {
 			break
 		}
 		node := m.workspace.nodes[id]
 		if node == nil {
-			lastRendered = i + 1
+			lastRendered = idx + 1
 			continue
 		}
-		// Add section divider above each header (except the very first node)
-		if node.Kind == sidebarKindHeader && len(lines) > 0 {
+		// Add section divider above each header (except when it's the first rendered node)
+		if node.Kind == sidebarKindHeader && idx > firstRendered {
 			if displayLines >= maxNodeLines {
 				break
 			}
@@ -346,9 +400,18 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 				break
 			}
 		}
-		lines = append(lines, m.renderSidebarNode(node, i == m.workspace.sidebarCursor, cw, iconOnly))
+		lines = append(lines, m.renderSidebarNode(node, idx == m.workspace.sidebarCursor, cw, iconOnly))
 		displayLines++
-		lastRendered = i + 1
+		lastRendered = idx + 1
+	}
+	// Show above/below overflow indicators (EX-195).
+	if sidebarScrollStart > 0 {
+		// Replace the first line with an "↑ N above" prefix if possible, else prepend
+		aboveCount := sidebarScrollStart
+		indicator := styleMuted.Render(fmt.Sprintf("  ↑ %d above", aboveCount))
+		if len(lines) > 0 {
+			lines[0] = indicator
+		}
 	}
 	if remaining := len(visible) - lastRendered; remaining > 0 && rowsForBody > 0 {
 		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more", remaining)))
