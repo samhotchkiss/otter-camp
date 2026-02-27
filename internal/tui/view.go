@@ -1086,10 +1086,22 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	if m.workspace.selectedProjectID != "" {
 		backHint = "Esc·back to project  p·project view"
 	}
+	if task.RequiresHumanReview {
+		lines = append(lines, lipgloss.NewStyle().Foreground(colWarning).Render("  a·approve  x·reject  f·defer  o·open task session"))
+	}
 	if sessionID != "" {
-		lines = append(lines, styleMuted.Render("  Enter·open async session  "+backHint))
+		var enterHint string
+		switch task.Status {
+		case "in_progress":
+			enterHint = "Enter·resume session"
+		case "done", "approved":
+			enterHint = "Enter·view session log"
+		default:
+			enterHint = "Enter·open session"
+		}
+		lines = append(lines, styleMuted.Render("  "+enterHint+"  "+backHint))
 	} else {
-		lines = append(lines, styleMuted.Render("  "+backHint+"  (no active session)"))
+		lines = append(lines, styleMuted.Render("  "+backHint+"  (no session)"))
 	}
 
 	return lines

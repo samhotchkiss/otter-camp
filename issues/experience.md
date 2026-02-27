@@ -829,3 +829,35 @@
 
 ---
 
+## EX-060: Inbox items loaded from API when navigating to inbox view
+
+**Observation:** The inbox view always showed "✓ Inbox clear" even when the server had unacted inbox items. Only the count (in the sidebar INBOX row) was fetched from the API; the actual item list was never requested. Items were populated only via SSE `inbox.item_created` events (i.e., only items arriving after TUI start were visible).
+
+**Improvement:** Added `InboxSummaryItem` struct to `runtime.go` and `LoadInboxItems func(ctx context.Context) ([]InboxSummaryItem, error)` to `RuntimeHints`. Wired in `cmd/ottercamp/tui.go` via `GET /v1/inbox?is_acted=false&limit=50`. Added `loadInboxItemsCmd` and `inboxItemsLoadedMsg`. The command fires when navigating to inbox: on sidebar `sidebarKindInbox` Enter, on the `i` global hotkey, and the handler populates `workspace.inbox` from the API response.
+
+**Why it matters:** The inbox is a critical action queue (approvals, rejections, deferrals). Without loading items from the API, a freshly-started TUI would always show an empty inbox even if there were pending items, causing users to miss required actions.
+
+**Effort:** Medium
+**Issue:** N/A (implemented directly in ralph-loop)
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-061: Task detail action hint adapts to work_status and review state
+
+**Observation:** The task detail panel always showed "Enter·open async session" regardless of whether the task was in_progress, done, or had no session. The language was confusing — "open async session" doesn't convey that you're resuming an active conversation.
+
+**Improvement:** The action hint in `renderTaskView` now changes based on `task.Status`:
+- `in_progress` → "Enter·resume session"
+- `done`/`approved` → "Enter·view session log"
+- other → "Enter·open session"
+When no sessionID exists: "(no session)" instead of "(no active session)". When `RequiresHumanReview` is true, an additional action row appears: "a·approve  x·reject  f·defer  o·open task session" in warning color. The `handleEnterKey` status message was similarly updated: "Resumed task session." / "Viewing completed task session." / "Opened task session." based on work_status.
+
+**Why it matters:** Action hint language should match the actual action. "Resume" is natural for an active task; "view log" communicates a read-only completed session. The inline review actions reduce friction — users no longer need to navigate to the inbox to approve or reject a task.
+
+**Effort:** Low
+**Issue:** N/A (implemented directly in ralph-loop)
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+

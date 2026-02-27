@@ -82,6 +82,10 @@ type taskDetailLoadedMsg struct {
 	Detail TaskDetailItem
 }
 
+type inboxItemsLoadedMsg struct {
+	Items []InboxSummaryItem
+}
+
 const (
 	memorySampleInterval   = 5 * time.Second
 	keypressLatencyBudget  = 100 * time.Millisecond
@@ -380,6 +384,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				label = fmt.Sprintf("OC-%d: %s", rec.TaskNumber, label)
 			}
 			m.workspace.sessionToTaskLabel[sid] = label
+		}
+		return m, nil
+	case inboxItemsLoadedMsg:
+		newInbox := make([]inboxItem, 0, len(typed.Items))
+		for _, item := range typed.Items {
+			newInbox = append(newInbox, inboxItem{
+				ID:      item.ID,
+				TaskID:  item.TaskID,
+				Summary: item.Summary,
+			})
+		}
+		m.workspace.inbox = newInbox
+		if len(newInbox) > 0 {
+			m.workspace.inboxCount = len(newInbox)
 		}
 		return m, nil
 	case WorkspaceEnvelopeMsg:
@@ -692,6 +710,9 @@ func (m *Model) handleEnterKey() tea.Cmd {
 					cmds = append(cmds, loadChatHistoryCmd(m.workspace.activeSessionID, m.runtimeHints.LoadChatHistory))
 				}
 				return tea.Batch(cmds...)
+			case sidebarKindInbox:
+				m.statusMessage = "Inbox"
+				return loadInboxItemsCmd(m.runtimeHints)
 			case sidebarKindTask:
 				// Set the project context so "p" and "Esc·back to project" work correctly
 				if node.ParentID != "" {
@@ -719,7 +740,18 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				m.activeScope = ScopeTask
 				m.chatScrollOffset = 0
 				m.setFocus(ChatPanel)
-				m.statusMessage = "Opened async session."
+				taskStatus := ""
+				if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
+					taskStatus = task.Status
+				}
+				switch taskStatus {
+				case "in_progress":
+					m.statusMessage = "Resumed task session."
+				case "done", "approved":
+					m.statusMessage = "Viewing completed task session."
+				default:
+					m.statusMessage = "Opened task session."
+				}
 				if m.runtimeHints.LoadChatHistory != nil {
 					return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
 				}
@@ -856,7 +888,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.workspace.setMainView(ViewInbox)
 			m.setFocus(MainPanel)
 			m.statusMessage = "Inbox"
-			return true, nil
+			return true, loadInboxItemsCmd(m.runtimeHints)
 		}
 	case 'd':
 		if m.focus != ChatPanel {
@@ -2407,6 +2439,21 @@ func loadTaskDetailCmd(taskID string, hints RuntimeHints) tea.Cmd {
 			return taskDetailLoadedMsg{Detail: TaskDetailItem{ID: taskID}}
 		}
 		return taskDetailLoadedMsg{Detail: *detail}
+	}
+}
+
+func loadInboxItemsCmd(hints RuntimeHints) tea.Cmd {
+	if hints.LoadInboxItems == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		items, err := hints.LoadInboxItems(ctx)
+		if err != nil {
+			return inboxItemsLoadedMsg{}
+		}
+		return inboxItemsLoadedMsg{Items: items}
 	}
 }
 

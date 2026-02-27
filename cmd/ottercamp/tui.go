@@ -111,6 +111,29 @@ func runTUICommand(args []string) int {
 				}
 				return resp.Meta.Pagination.Total, nil
 			}
+			runtimeHints.LoadInboxItems = func(ctx context.Context) ([]tuiapp.InboxSummaryItem, error) {
+				var resp struct {
+					Data []struct {
+						ID         string `json:"id"`
+						Title      string `json:"title"`
+						SourceTask struct {
+							TaskID string `json:"task_id"`
+						} `json:"source_task"`
+					} `json:"data"`
+				}
+				if err := apiClient.request(ctx, "GET", "/v1/inbox?is_acted=false&limit=50", nil, &resp); err != nil {
+					return nil, err
+				}
+				out := make([]tuiapp.InboxSummaryItem, 0, len(resp.Data))
+				for _, item := range resp.Data {
+					out = append(out, tuiapp.InboxSummaryItem{
+						ID:      item.ID,
+						TaskID:  item.SourceTask.TaskID,
+						Summary: strings.TrimSpace(item.Title),
+					})
+				}
+				return out, nil
+			}
 			runtimeHints.LoadRecentChats = func(ctx context.Context) ([]tuiapp.SidebarChatItem, error) {
 				sessions, err := apiClient.ListChatSessions(ctx, chatListSessionsFilter{
 					Status: "active",

@@ -13,6 +13,13 @@ const (
 	defaultMemorySteadyStateBoundMB = 128
 )
 
+// InboxSummaryItem is a single unacted inbox item for display in the inbox view.
+type InboxSummaryItem struct {
+	ID      string
+	TaskID  string
+	Summary string
+}
+
 // SidebarChatItem represents a recent chat session for the sidebar.
 type SidebarChatItem struct {
 	SessionID   string
@@ -70,6 +77,7 @@ type RuntimeHints struct {
 	LoadProjectDetail            func(ctx context.Context, projectID string) (*ProjectDetail, error)
 	LoadTaskDetail               func(ctx context.Context, taskID string) (*TaskDetailItem, error)
 	LoadAgents                   func(ctx context.Context) ([]string, error) // returns "name=lifecycle_status" strings
+	LoadInboxItems               func(ctx context.Context) ([]InboxSummaryItem, error)
 }
 
 func (h RuntimeHints) now() time.Time {
