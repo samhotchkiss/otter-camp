@@ -3717,3 +3717,49 @@ func TestCurrentSessionHistoryIsAccepted(t *testing.T) {
 		t.Fatal("chatHistoryLoading should be cleared after successful merge")
 	}
 }
+
+// EX-174: stale project detail load should be discarded when the user has
+// navigated to a different project since the load was issued.
+func TestStaleProjectDetailLoadIsDiscarded(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	// User is currently viewing project B
+	model.workspace.selectedProjectID = "proj-B"
+	model.workspace.selectedProject = nil
+
+	// A stale detail for project A arrives
+	staleDetail := projectDetailLoadedMsg{Detail: ProjectDetail{
+		ID:          "proj-A",
+		DisplayName: "Project A",
+	}}
+	updated, _ := model.Update(staleDetail)
+	m := updated.(Model)
+
+	if m.workspace.selectedProject != nil {
+		t.Fatalf("stale project detail for proj-A should be discarded when proj-B is selected; got %+v", m.workspace.selectedProject)
+	}
+}
+
+// EX-174: project detail matching the current project should be accepted.
+func TestCurrentProjectDetailIsAccepted(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.workspace.selectedProjectID = "proj-C"
+	model.workspace.selectedProject = nil
+
+	matching := projectDetailLoadedMsg{Detail: ProjectDetail{
+		ID:          "proj-C",
+		DisplayName: "Project C",
+	}}
+	updated, _ := model.Update(matching)
+	m := updated.(Model)
+
+	if m.workspace.selectedProject == nil {
+		t.Fatal("project detail matching current project should be accepted")
+	}
+	if m.workspace.selectedProject.ID != "proj-C" {
+		t.Fatalf("project detail ID = %q, want proj-C", m.workspace.selectedProject.ID)
+	}
+}

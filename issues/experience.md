@@ -2612,6 +2612,21 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+---EX-174---
+
+## EX-174: Stale project detail overwrote current project after rapid navigation
+
+**Observation:** `projectDetailLoadedMsg` had no guard to check whether the loaded project still matched the currently selected project. If a user clicked project A, then immediately clicked project B before A's detail response arrived, A's detail would be stored in `m.workspace.selectedProject` — overwriting the correct project B detail or replacing a nil with stale data.
+
+**Improvement:** Added a stale-load guard in the `projectDetailLoadedMsg` handler: if `typed.Detail.ID != ""` and it doesn't match `m.workspace.selectedProjectID`, the result is discarded. This mirrors the EX-173 pattern used for chat history.
+
+**Why it matters:** Project detail panels show title, description, task counts. Showing stale data from a previously selected project is confusing, especially since project detail loads can take several hundred milliseconds on slow connections.
+
+**Effort:** Trivial (two lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
 ---EX-173---
 
 ## EX-173: Stale chat history merged into wrong session when switching rapidly

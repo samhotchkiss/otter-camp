@@ -393,6 +393,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workspace.syncTaskHumanReviewFromInbox()
 		return m, nil
 	case projectDetailLoadedMsg:
+		// EX-174: discard stale project detail loads. If the user navigated to a
+		// different project while the previous project's detail was in-flight, the
+		// stale result would briefly overwrite the current project's detail.
+		if typed.Detail.ID != "" && typed.Detail.ID != m.workspace.selectedProjectID {
+			return m, nil
+		}
 		m.workspace.selectedProject = &typed.Detail
 		// Apply any pending cursor request (task opened before project loaded).
 		if m.workspace.pendingProjectCursorTaskID != "" {
