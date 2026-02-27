@@ -723,6 +723,11 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 			continue
 		}
 		isCursor := id == cursorID
+		// EX-094: append ⚠ suffix when a task is awaiting human review so it
+		// stands out in the dashboard board without requiring task detail drill-in.
+		if task.RequiresHumanReview {
+			taskLabel = truncate(taskLabel, colW-2) + " ⚠"
+		}
 		switch task.Status {
 		case "draft", "todo":
 			if isCursor {
@@ -742,8 +747,15 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 				entry := truncate("► "+taskLabel, colW)
 				inProgTasks = append(inProgTasks, styleBold.Foreground(colFocus).Render(entry))
 			} else {
-				entry := truncate("◌ "+taskLabel, colW)
-				inProgTasks = append(inProgTasks, lipgloss.NewStyle().Foreground(colWarning).Render(entry))
+				// Use amber for normal in-progress, use warning/amber with ⚠ badge
+				// for review-required so it visually pops.
+				icon := "◌ "
+				taskStyle := lipgloss.NewStyle().Foreground(colWarning)
+				if task.RequiresHumanReview {
+					taskStyle = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
+				}
+				entry := truncate(icon+taskLabel, colW)
+				inProgTasks = append(inProgTasks, taskStyle.Render(entry))
 			}
 		}
 	}
