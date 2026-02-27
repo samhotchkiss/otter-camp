@@ -1042,7 +1042,14 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 		}
 
 		summary := truncate(item.Summary, width-6)
-		taskBadge := lipgloss.NewStyle().Foreground(colMuted).Render("  " + item.TaskID)
+		// Show OC-N label for task badge instead of raw UUID
+		taskBadgeLabel := item.TaskID
+		if task := m.workspace.tasks[item.TaskID]; task != nil && task.TaskNumber > 0 {
+			taskBadgeLabel = fmt.Sprintf("OC-%d", task.TaskNumber)
+		} else if len(item.TaskID) > 8 {
+			taskBadgeLabel = item.TaskID[:8] + "…"
+		}
+		taskBadge := lipgloss.NewStyle().Foreground(colMuted).Render("  " + taskBadgeLabel)
 		lines = append(lines, rowStyle.Render(prefix+summary)+taskBadge)
 
 		if isCursor {
