@@ -83,6 +83,21 @@ func runTUICommand(args []string) int {
 	if serverURL != "" && apiKey != "" {
 		apiClient, err := newCLIAPIClient(serverURL, apiKey)
 		if err == nil {
+			runtimeHints.LoadOrgSession = func(ctx context.Context) (string, error) {
+				sessions, err := apiClient.ListChatSessions(ctx, chatListSessionsFilter{
+					Status: "active",
+					Limit:  5,
+				})
+				if err != nil {
+					return "", err
+				}
+				for _, s := range sessions.Data {
+					if strings.EqualFold(s.ScopeType, "organization") {
+						return s.ID.String(), nil
+					}
+				}
+				return "", nil
+			}
 			runtimeHints.LoadInboxCount = func(ctx context.Context) (int, error) {
 				var resp struct {
 					Meta struct {

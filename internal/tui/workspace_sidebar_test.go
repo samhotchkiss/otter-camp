@@ -13,6 +13,7 @@ func TestSidebarUnreadPropagationFromRealtimeEvents(t *testing.T) {
 	model := NewModel(DefaultState())
 	// Seed a chat session so markSessionUnread can find a node to mark.
 	model.workspace.rebuildSidebar(
+		"",
 		[]SidebarChatItem{{SessionID: "session-chat-1", DisplayName: "Blog Site"}},
 		nil,
 	)
@@ -43,6 +44,7 @@ func TestSidebarTreeNavigationExpandCollapseAndSelect(t *testing.T) {
 	model := NewModel(DefaultState())
 	// Seed one project with two task nodes so we can test expand/collapse.
 	model.workspace.rebuildSidebar(
+		"",
 		nil,
 		[]SidebarProjectItem{{ID: "alpha", DisplayName: "Project Alpha"}},
 	)

@@ -1,11 +1,11 @@
 ### L dashboard
-view=dashboard size=L tasks(todo=0,in_progress=0,done=0,blocked=0) inbox=0
+view=dashboard size=L tasks(todo=1,in_progress=1,done=0,blocked=0) inbox=0
 
 ### L project
 view=project size=L projects=0 selected_session=session-org-general
 
 ### L task
-view=task size=L task=none
+view=task size=L id=task-1 status=todo flow=1 history=1
 
 ### L inbox
 view=inbox size=L empty

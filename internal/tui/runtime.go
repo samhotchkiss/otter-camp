@@ -45,6 +45,7 @@ type RuntimeHints struct {
 	SendChatMessage              func(ctx context.Context, sessionID, content string) error
 	CancelChatTurn               func(ctx context.Context, sessionID string) error
 	LoadChatHistory              func(ctx context.Context, sessionID string) ([]ChatMessage, error)
+	LoadOrgSession               func(ctx context.Context) (string, error)
 	LoadInboxCount               func(ctx context.Context) (int, error)
 	LoadRecentChats              func(ctx context.Context) ([]SidebarChatItem, error)
 	LoadProjects                 func(ctx context.Context) ([]SidebarProjectItem, error)

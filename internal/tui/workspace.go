@@ -609,8 +609,9 @@ func (w *workspaceState) advanceTaskFlow(taskID string, step int) {
 
 // rebuildSidebar replaces the sidebar nodes/topLevel with real API data.
 // It preserves expanded state for existing project nodes and keeps any task
-// nodes that were already loaded.
-func (w *workspaceState) rebuildSidebar(chats []SidebarChatItem, projects []SidebarProjectItem) {
+// nodes that were already loaded. orgSessionID, if non-empty, is the real UUID
+// of the org-scope chat session (Frank / General).
+func (w *workspaceState) rebuildSidebar(orgSessionID string, chats []SidebarChatItem, projects []SidebarProjectItem) {
 	// Preserve expanded state for existing projects
 	expandedProjects := make(map[string]bool)
 	for id, node := range w.nodes {
@@ -626,14 +627,22 @@ func (w *workspaceState) rebuildSidebar(chats []SidebarChatItem, projects []Side
 		}
 	}
 
+	frankSessionID := generalSessionID
+	if orgSessionID != "" {
+		frankSessionID = orgSessionID
+		w.activeSessionID = orgSessionID
+	}
+
 	frankNode := w.nodes[generalSidebarNodeID]
 	if frankNode == nil {
 		frankNode = &sidebarNode{
 			ID:        generalSidebarNodeID,
 			Label:     "Frank / General",
 			Kind:      sidebarKindSession,
-			SessionID: generalSessionID,
+			SessionID: frankSessionID,
 		}
+	} else {
+		frankNode.SessionID = frankSessionID
 	}
 
 	newNodes := map[string]*sidebarNode{

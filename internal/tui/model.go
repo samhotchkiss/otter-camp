@@ -58,9 +58,10 @@ type SessionResolvedMsg struct {
 }
 
 type sidebarDataLoadedMsg struct {
-	InboxCount int
-	Chats      []SidebarChatItem
-	Projects   []SidebarProjectItem
+	InboxCount   int
+	OrgSessionID string
+	Chats        []SidebarChatItem
+	Projects     []SidebarProjectItem
 }
 
 type projectTasksLoadedMsg struct {
@@ -187,7 +188,7 @@ func (m Model) Init() tea.Cmd {
 	if !m.runtimeHints.DisableMemorySampler {
 		commands = append(commands, memorySamplerCmd(memorySampleInterval))
 	}
-	if m.runtimeHints.LoadInboxCount != nil || m.runtimeHints.LoadRecentChats != nil || m.runtimeHints.LoadProjects != nil {
+	if m.runtimeHints.LoadOrgSession != nil || m.runtimeHints.LoadInboxCount != nil || m.runtimeHints.LoadRecentChats != nil || m.runtimeHints.LoadProjects != nil {
 		commands = append(commands, loadSidebarDataCmd(m.runtimeHints))
 	}
 	if len(commands) == 0 {
@@ -217,7 +218,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.workspace.activity = append(m.workspace.activity, "proof-of-life realtime connected")
 			// Reload sidebar data on first successful connection. The initial load
 			// from Init() may have failed if the server was not yet available.
-			if m.runtimeHints.LoadInboxCount != nil || m.runtimeHints.LoadRecentChats != nil || m.runtimeHints.LoadProjects != nil {
+			if m.runtimeHints.LoadOrgSession != nil || m.runtimeHints.LoadInboxCount != nil || m.runtimeHints.LoadRecentChats != nil || m.runtimeHints.LoadProjects != nil {
 				return m, loadSidebarDataCmd(m.runtimeHints)
 			}
 		}
@@ -231,7 +232,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var histCmd tea.Cmd
 		if m.runtimeHints.LoadChatHistory != nil {
 			sessionID := strings.TrimSpace(m.ActiveChatSession())
-			histCmd = loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+				// Skip if still using placeholder — sidebar data will trigger load when it arrives.
+			if sessionID != generalSessionID && sessionID != "" {
+				histCmd = loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+			}
 		}
 		return m, histCmd
 	case chatHistoryLoadedMsg:
@@ -266,7 +270,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case sidebarDataLoadedMsg:
 		m.workspace.inboxCount = typed.InboxCount
-		m.workspace.rebuildSidebar(typed.Chats, typed.Projects)
+		m.workspace.rebuildSidebar(typed.OrgSessionID, typed.Chats, typed.Projects)
+		// If the active session was empty or the placeholder, replace with the real
+		// org session UUID and trigger history load unconditionally (sidebar data
+		// arrives before or after ReplaySyncedMsg; always load when we first get the UUID).
+		if typed.OrgSessionID != "" && (m.activeSession == "" || m.activeSession == generalSessionID) {
+			m.activeSession = typed.OrgSessionID
+			m.workspace.activeSessionID = typed.OrgSessionID
+			m.state.LastActiveChatSession = typed.OrgSessionID
+			if m.runtimeHints.LoadChatHistory != nil {
+				return m, loadChatHistoryCmd(typed.OrgSessionID, m.runtimeHints.LoadChatHistory)
+			}
+		}
 		return m, nil
 	case projectTasksLoadedMsg:
 		m.workspace.setProjectTasks(typed.ProjectID, typed.Tasks)
@@ -2021,9 +2036,14 @@ func loadSidebarDataCmd(hints RuntimeHints) tea.Cmd {
 		defer cancel()
 
 		var inboxCount int
+		var orgSessionID string
 		var chats []SidebarChatItem
 		var projects []SidebarProjectItem
 
+		if hints.LoadOrgSession != nil {
+			id, _ := hints.LoadOrgSession(ctx)
+			orgSessionID = strings.TrimSpace(id)
+		}
 		if hints.LoadInboxCount != nil {
 			n, _ := hints.LoadInboxCount(ctx)
 			inboxCount = n
@@ -2038,9 +2058,10 @@ func loadSidebarDataCmd(hints RuntimeHints) tea.Cmd {
 		}
 
 		return sidebarDataLoadedMsg{
-			InboxCount: inboxCount,
-			Chats:      chats,
-			Projects:   projects,
+			InboxCount:   inboxCount,
+			OrgSessionID: orgSessionID,
+			Chats:        chats,
+			Projects:     projects,
 		}
 	}
 }

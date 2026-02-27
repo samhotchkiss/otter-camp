@@ -40,6 +40,7 @@ func TestSidebarPanelTrimsNodesBeforeInboxFooter(t *testing.T) {
 	model := NewModel(DefaultState())
 	// Seed several nodes so that some are trimmed at small height.
 	model.workspace.rebuildSidebar(
+		"",
 		[]SidebarChatItem{
 			{SessionID: "s1", DisplayName: "Chat 1"},
 			{SessionID: "s2", DisplayName: "Chat 2"},

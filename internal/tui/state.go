@@ -103,6 +103,10 @@ func normalizeState(state UIState) UIState {
 	}
 	normalized.LastMainView = normalizeMainViewState(state.LastMainView)
 	normalized.PanelProportions = normalizeProportions(state.PanelProportions, defaults.PanelProportions)
+	// Clear out the placeholder session ID so it doesn't get loaded as-is.
+	if normalized.LastActiveChatSession == "session-org-general" {
+		normalized.LastActiveChatSession = ""
+	}
 	return normalized
 }
 
