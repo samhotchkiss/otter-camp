@@ -490,6 +490,17 @@ func (w *workspaceState) totalUnreadSessions() int {
 	return total
 }
 
+// chatSessionCount returns the number of non-Frank (non-org) session nodes.
+func (w *workspaceState) chatSessionCount() int {
+	count := 0
+	for _, node := range w.nodes {
+		if node.Kind == sidebarKindSession && node.ID != generalSidebarNodeID {
+			count++
+		}
+	}
+	return count
+}
+
 // nextUnreadSession returns the sidebar node ID of the next session node with
 // Unread > 0, cycling through visible nodes starting after the current cursor.
 // Returns "" if there are no unread sessions.

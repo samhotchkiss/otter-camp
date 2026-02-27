@@ -367,8 +367,11 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 		}
 		label = node.Label
 		if sectionID == sectionChats {
+			if count := m.workspace.chatSessionCount(); count > 0 {
+				label += fmt.Sprintf(" (%d)", count)
+			}
 			if unread := m.workspace.totalUnreadSessions(); unread > 0 {
-				label += fmt.Sprintf(" (%d)", unread)
+				label += fmt.Sprintf("  +%d unread", unread)
 			}
 		} else if sectionID == sectionProjects {
 			if count := m.workspace.projectCount(); count > 0 {
