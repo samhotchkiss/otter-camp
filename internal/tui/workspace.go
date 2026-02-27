@@ -702,9 +702,13 @@ func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskIt
 	// Add new task nodes and populate w.tasks with basic records.
 	for _, task := range tasks {
 		id := "task-" + task.ID
+		label := task.Title
+		if task.TaskNumber > 0 {
+			label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, task.Title)
+		}
 		w.nodes[id] = &sidebarNode{
 			ID:         id,
-			Label:      task.Title,
+			Label:      label,
 			Kind:       sidebarKindTask,
 			ParentID:   nodeID,
 			TaskID:     task.ID,
