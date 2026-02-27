@@ -354,9 +354,23 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more", remaining)))
 	}
 
+	// EX-193: empty sidebar placeholder so the user knows data is loading vs. absent.
+	if len(lines) == 0 {
+		if m.sidebarFilter != "" {
+			lines = append(lines, styleMuted.Render(truncate("  No matches for /"+m.sidebarFilter, cw)))
+		} else {
+			lines = append(lines, styleMuted.Render(truncate("  No projects or chats", cw)))
+		}
+	}
+
+	// EX-194: search bar hint — show "Esc to clear" suffix when search is active.
 	if searchLine != "" {
+		hint := searchLine
+		if m.searchMode && m.searchPanel == SidebarPanel {
+			hint = styleMuted.Render(truncate("Search /"+m.sidebarFilter+"▌  (Esc to cancel)", cw))
+		}
 		lines = append(lines, "")
-		lines = append(lines, searchLine)
+		lines = append(lines, hint)
 	}
 
 	// Fill remaining space

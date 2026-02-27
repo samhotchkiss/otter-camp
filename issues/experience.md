@@ -3000,3 +3000,31 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-193: Empty sidebar shows blank space with no placeholder text
+
+**Observation:** On first launch (or when all sessions/projects are filtered out by search), the sidebar content area was completely blank. There was no message indicating whether data was still loading or genuinely absent — visually indistinguishable from a rendering bug.
+
+**Improvement:** Added an empty-state placeholder in `renderSidebarPanel`: when `len(lines) == 0` after rendering all nodes, display "No projects or chats" (muted style). If a search filter is active but produced no matches, display "No matches for /<query>" instead, giving immediate feedback that the filter is the cause.
+
+**Why it matters:** A blank sidebar panel looks broken. A one-line placeholder communicates state clearly — new users understand data hasn't arrived yet or the search has no results, rather than assuming the app is malfunctioning.
+
+**Effort:** Low (5 lines in renderSidebarPanel)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-194: Sidebar search bar lacks Escape hint
+
+**Observation:** When the sidebar search was active (typing `/<query>`), the search bar showed `"Search /query▌"` with no indication of how to exit. Users unfamiliar with the vim-style `/` search had to guess that Esc exits the mode.
+
+**Improvement:** When the search panel is actively receiving input (`m.searchMode && m.searchPanel == SidebarPanel`), the search bar now renders `"Search /query▌  (Esc to cancel)"` instead of the bare prompt. When the filter is applied but editing is not active, the bar reverts to the minimal display.
+
+**Why it matters:** Discoverability of exit paths is critical for modes. Without an Esc hint, users either get stuck in search mode or accidentally open items when pressing Enter expecting to exit.
+
+**Effort:** Trivial (3 lines replacing the hint string)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
