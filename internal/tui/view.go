@@ -834,7 +834,7 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 			} else {
 				nameLabel = truncate(task.Title, 42)
 			}
-			lines = append(lines, styleBold.Foreground(colFocus).Render("  "+nameLabel)+"  "+styleMuted.Render("Enter·open  ·  j/k·navigate"))
+			lines = append(lines, styleBold.Foreground(colFocus).Render("  "+nameLabel)+styleMuted.Render("  ·  Enter·open  ·  j/k·navigate"))
 		} else {
 			lines = append(lines, styleMuted.Render("  j/k·select task  ·  Enter·open"))
 		}
@@ -1140,10 +1140,10 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 		}
 	}
 	if task.AgentName != "" {
-		lines = append(lines, styleMuted.Render("  Agent:  "+task.AgentName))
+		lines = append(lines, styleMuted.Render("  Agent: "+task.AgentName))
 	}
 	if task.Flow > 0 || task.FlowNodeName != "" {
-		flowLine := "  Flow:   "
+		flowLine := "  Flow: "
 		if task.FlowNodeName != "" {
 			flowLine += task.FlowNodeName
 			if task.Flow > 0 {
