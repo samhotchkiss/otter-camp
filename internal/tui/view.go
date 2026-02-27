@@ -1297,6 +1297,25 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 	return lines
 }
 
+// activityIcon returns a coloured icon appropriate for an activity log entry.
+// Task status entries (added by EX-092) get icons that reflect the new status.
+func activityIcon(entry string) string {
+	lower := strings.ToLower(entry)
+	// Task status transitions: "OC-N: <status>" or "<title>: <status>"
+	for _, marker := range []string{": blocked", ": rejected", ": deferred", ": failed"} {
+		if strings.Contains(lower, marker) {
+			return lipgloss.NewStyle().Foreground(colError).Render("✗ ")
+		}
+	}
+	for _, marker := range []string{": in progress", ": in_progress", ": started"} {
+		if strings.Contains(lower, marker) {
+			return lipgloss.NewStyle().Foreground(colWarning).Render("◌ ")
+		}
+	}
+	// Everything else (done, connected, loaded, etc.) uses the success check.
+	return lipgloss.NewStyle().Foreground(colConnected).Render("✓ ")
+}
+
 func (m Model) renderActivityView(width, maxLines int) []string {
 	var lines []string
 	lines = append(lines, "")
@@ -1312,8 +1331,8 @@ func (m Model) renderActivityView(width, maxLines int) []string {
 		start = len(filteredActivity) - maxLines
 	}
 	for _, entry := range filteredActivity[start:] {
-		dot := lipgloss.NewStyle().Foreground(colConnected).Render("✓ ")
-		lines = append(lines, dot+styleText.Render(truncate(entry, width-4)))
+		icon := activityIcon(entry)
+		lines = append(lines, icon+styleText.Render(truncate(entry, width-4)))
 	}
 	if len(lines) == 1 {
 		lines = append(lines, styleMuted.Render("  No activity yet"))
