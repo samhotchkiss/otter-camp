@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -1288,5 +1289,36 @@ func TestFlowAdvancedEventAddsActivityAndLoadsTaskDetail(t *testing.T) {
 	}
 	if !activityFound {
 		t.Fatalf("flow.advanced event should add activity entry with task label: %v", m.workspace.activity)
+	}
+}
+
+// EX-126: dashboard board scrolls to keep the cursor visible when a column
+// has more than 4 tasks.
+func TestDashboardBoardScrollsToCursorWhenColumnOverflows(t *testing.T) {
+	model := NewModel(DefaultState())
+	if model.workspace.tasks == nil {
+		model.workspace.tasks = make(map[string]*taskRecord)
+	}
+	// Add 6 todo tasks. The cursor will be on task-6 (index 5 in the column).
+	for i := 1; i <= 6; i++ {
+		id := fmt.Sprintf("task-%d", i)
+		model.workspace.tasks[id] = &taskRecord{
+			ID:         id,
+			TaskNumber: i,
+			Title:      fmt.Sprintf("Task %d", i),
+			Status:     "todo",
+		}
+		model.workspace.taskOrder = append(model.workspace.taskOrder, id)
+	}
+	model.workspace.selectedTaskID = "task-6" // cursor on last task (index 5)
+
+	rendered := strings.Join(model.renderDashboardView(120, 20), "\n")
+	// The cursor task should be visible (rendered as "► OC-6: Task 6")
+	if !strings.Contains(rendered, "OC-6") {
+		t.Fatalf("cursor task OC-6 should be visible even when column overflows 4 rows: %q", rendered)
+	}
+	// And there should be a scroll indicator showing tasks above
+	if !strings.Contains(rendered, "↑") {
+		t.Fatalf("scroll indicator (↑) should appear when cursor is scrolled into view: %q", rendered)
 	}
 }

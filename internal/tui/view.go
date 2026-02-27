@@ -800,6 +800,8 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 	// Task rows under each column
 	cursorID := m.workspace.selectedTaskID
 	todoTasks, inProgTasks, doneTasks, blockedTasks := []string{}, []string{}, []string{}, []string{}
+	// EX-126: track cursor index within each column so we can scroll to keep it visible.
+	todoIdx, inProgIdx, doneIdx, blockedIdx := -1, -1, -1, -1
 	for _, id := range m.workspace.taskOrder {
 		task := m.workspace.tasks[id]
 		if task == nil {
@@ -821,6 +823,7 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		switch task.Status {
 		case "draft", "todo":
 			if isCursor {
+				todoIdx = len(todoTasks)
 				entry := truncate("► "+taskLabel, colW)
 				todoTasks = append(todoTasks, styleBold.Foreground(colFocus).Render(entry))
 			} else {
@@ -828,14 +831,21 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 				todoTasks = append(todoTasks, styleText.Render(entry))
 			}
 		case "done", "approved", "cancelled":
+			if isCursor {
+				doneIdx = len(doneTasks)
+			}
 			entry := truncate("✓ "+taskLabel, colW)
 			doneTasks = append(doneTasks, styleMuted.Render(entry))
 		case "blocked", "rejected", "deferred":
 			// EX-114: render in blocked column when the column is visible.
+			if isCursor {
+				blockedIdx = len(blockedTasks)
+			}
 			entry := truncate("✗ "+taskLabel, colW)
 			blockedTasks = append(blockedTasks, lipgloss.NewStyle().Foreground(colError).Render(entry))
 		default: // in_progress and unknown active statuses
 			if isCursor {
+				inProgIdx = len(inProgTasks)
 				entry := truncate("► "+taskLabel, colW)
 				inProgTasks = append(inProgTasks, styleBold.Foreground(colFocus).Render(entry))
 			} else {
@@ -851,38 +861,60 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 			}
 		}
 	}
+	// EX-126: compute per-column scroll start so the cursor row is always
+	// visible. For columns without a cursor the start is 0 (top-aligned).
+	boardColStart := func(n, cursorAt int) int {
+		if cursorAt < 0 || cursorAt < 4 {
+			return 0
+		}
+		// Scroll so cursor appears at the last visible row.
+		return cursorAt - 3
+	}
+	const boardRows = 4
+	todoStart := boardColStart(len(todoTasks), todoIdx)
+	inProgStart := boardColStart(len(inProgTasks), inProgIdx)
+	doneStart := boardColStart(len(doneTasks), doneIdx)
+	blockedStart := boardColStart(len(blockedTasks), blockedIdx)
 	taskRowCount := maxInt(len(todoTasks), maxInt(len(inProgTasks), maxInt(len(doneTasks), len(blockedTasks))))
-	for i := 0; i < taskRowCount && i < 4; i++ {
-		r0 := lipgloss.NewStyle().Width(colW).Render(safeIndex(todoTasks, i))
-		r1 := lipgloss.NewStyle().Width(colW).Render(safeIndex(inProgTasks, i))
-		r2 := lipgloss.NewStyle().Width(colW).Render(safeIndex(doneTasks, i))
+	// Render only as many rows as there are tasks (up to boardRows), so the board
+	// does not pad with blank rows when columns are short.
+	visibleRows := minInt(taskRowCount, boardRows)
+	for row := 0; row < visibleRows; row++ {
+		r0 := lipgloss.NewStyle().Width(colW).Render(safeIndex(todoTasks, todoStart+row))
+		r1 := lipgloss.NewStyle().Width(colW).Render(safeIndex(inProgTasks, inProgStart+row))
+		r2 := lipgloss.NewStyle().Width(colW).Render(safeIndex(doneTasks, doneStart+row))
 		if showBlockedCol {
-			r3 := lipgloss.NewStyle().Width(colW).Render(safeIndex(blockedTasks, i))
+			r3 := lipgloss.NewStyle().Width(colW).Render(safeIndex(blockedTasks, blockedStart+row))
 			lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, r0, r1, r2, r3))
 		} else {
 			lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, r0, r1, r2))
 		}
 	}
-	// EX-008: show per-column overflow indicator when more than 4 tasks in any column
-	if taskRowCount > 4 {
-		todoOver, inProgOver, doneOver, blockedOver := "", "", "", ""
-		if len(todoTasks) > 4 {
-			todoOver = styleMuted.Render(fmt.Sprintf("  +%d more", len(todoTasks)-4))
+	// EX-008/EX-126: show per-column overflow indicator accounting for scroll.
+	// "↑ N above" when scroll start > 0; "+N more" when items extend below visible window.
+	if taskRowCount > boardRows || todoStart > 0 || inProgStart > 0 || doneStart > 0 || blockedStart > 0 {
+		overflowFor := func(col []string, start int) string {
+			above := start
+			below := len(col) - (start + boardRows)
+			if below < 0 {
+				below = 0
+			}
+			switch {
+			case above > 0 && below > 0:
+				return styleMuted.Render(fmt.Sprintf("  ↑%d ·+%d", above, below))
+			case above > 0:
+				return styleMuted.Render(fmt.Sprintf("  ↑ %d above", above))
+			case below > 0:
+				return styleMuted.Render(fmt.Sprintf("  +%d more", below))
+			default:
+				return ""
+			}
 		}
-		if len(inProgTasks) > 4 {
-			inProgOver = styleMuted.Render(fmt.Sprintf("  +%d more", len(inProgTasks)-4))
-		}
-		if len(doneTasks) > 4 {
-			doneOver = styleMuted.Render(fmt.Sprintf("  +%d more", len(doneTasks)-4))
-		}
-		if len(blockedTasks) > 4 {
-			blockedOver = styleMuted.Render(fmt.Sprintf("  +%d more", len(blockedTasks)-4))
-		}
-		r0 := lipgloss.NewStyle().Width(colW).Render(todoOver)
-		r1 := lipgloss.NewStyle().Width(colW).Render(inProgOver)
-		r2 := lipgloss.NewStyle().Width(colW).Render(doneOver)
+		r0 := lipgloss.NewStyle().Width(colW).Render(overflowFor(todoTasks, todoStart))
+		r1 := lipgloss.NewStyle().Width(colW).Render(overflowFor(inProgTasks, inProgStart))
+		r2 := lipgloss.NewStyle().Width(colW).Render(overflowFor(doneTasks, doneStart))
 		if showBlockedCol {
-			r3 := lipgloss.NewStyle().Width(colW).Render(blockedOver)
+			r3 := lipgloss.NewStyle().Width(colW).Render(overflowFor(blockedTasks, blockedStart))
 			lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, r0, r1, r2, r3))
 		} else {
 			lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, r0, r1, r2))
