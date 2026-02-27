@@ -1873,3 +1873,17 @@ Since `applyWorkspaceCommand` can return `tea.Cmd`, this approach naturally pick
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-126: Dashboard board hid the cursor row when a column had 5+ tasks
+
+**Observation:** The dashboard board rendered at most 4 rows per column. When the cursor moved (via `j`/`k`) to a task that was the 5th or later item in its column, the cursor row was invisible — hidden behind the `"+N more"` indicator. The user could navigate to a task they could not see, creating a disorienting experience where pressing `Enter` would open a task that never appeared highlighted.
+
+**Improvement:** Each column now computes its own scroll start via `boardColStart()`. When the cursor is at index ≥ 4 in a column, the window shifts so the cursor appears at the last visible row (index 3 of 4). The overflow indicator is updated to show `"↑N above"` (for items scrolled off the top) and/or `"+N more"` (for items below the visible window).
+
+**Why it matters:** A cursor the user cannot see destroys the mental model of keyboard navigation. The user would press `j` and not see any visual change, then press `Enter` and be surprised by which task opened. Keeping the cursor visible is table-stakes for any interactive list.
+
+**Effort:** Medium
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
