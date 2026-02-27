@@ -689,6 +689,12 @@ func (m *Model) handleEnterKey() tea.Cmd {
 
 func (m *Model) handleEscapeKey() {
 	if m.focus == MainPanel {
+		// From task detail: go back to project view if we came from one, else dashboard
+		if m.workspace.mainView == ViewTask && m.workspace.selectedProjectID != "" {
+			m.workspace.setMainView(ViewProject)
+			m.statusMessage = "Back to project."
+			return
+		}
 		m.workspace.setMainView(ViewDashboard)
 		m.statusMessage = "Returned to dashboard."
 	}
