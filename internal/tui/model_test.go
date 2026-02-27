@@ -701,14 +701,17 @@ func TestTaskDetailViewShowsExtendedFieldsAndFullEventLog(t *testing.T) {
 		"Description",
 		"Acceptance Criteria",
 		"Subtasks",
-		"Async Session",
-		"session-task-1",
 		"created",
 		"awaiting operator approval",
+		"Enter·open async session", // session exists → open action hint shown
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("task detail missing %q: %q", want, view)
 		}
+	}
+	// Raw session UUID should NOT be shown (replaced with action hint)
+	if strings.Contains(view, "session-task-1") {
+		t.Fatalf("task detail should not expose raw session ID in body")
 	}
 }
 

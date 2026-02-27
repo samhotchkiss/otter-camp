@@ -616,6 +616,8 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				m.statusMessage = "Opened async session."
 				return nil
 			}
+			m.statusMessage = "No active session for this task."
+			return nil
 		}
 		if m.workspace.mainView == ViewProject || m.workspace.mainView == ViewDashboard {
 			m.workspace.setMainView(ViewTask)

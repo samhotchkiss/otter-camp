@@ -891,11 +891,6 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	if sessionID == "" {
 		sessionID = m.workspace.taskSessionID(task.ID)
 	}
-	if sessionID != "" {
-		lines = append(lines, "")
-		lines = append(lines, divider(width, "Async Session"))
-		lines = append(lines, stylePrimary.Render("  "+truncate(sessionID, width-4)))
-	}
 
 	if len(task.History) > 0 {
 		lines = append(lines, "")
@@ -909,7 +904,7 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	if sessionID != "" {
 		lines = append(lines, styleMuted.Render("  Enter·open async session  Esc·back"))
 	} else {
-		lines = append(lines, styleMuted.Render("  Enter·open  Esc·back"))
+		lines = append(lines, styleMuted.Render("  Esc·back  (no active session)"))
 	}
 
 	return lines
