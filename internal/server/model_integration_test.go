@@ -332,6 +332,58 @@ func TestModelAPIUsageQueryAndOrgIsolation(t *testing.T) {
 		t.Fatalf("usage total invocations=%d want=8 body=%s", totalInvocations, string(usage.Body))
 	}
 
+	rollupByAgent := mustJSON(t, http.MethodGet, testServer.URL+"/v1/model/usage-rollup?group_by=agent&period=today", nil, map[string]string{
+		"Authorization": "Bearer " + tokenA,
+	})
+	if rollupByAgent.StatusCode != http.StatusOK {
+		t.Fatalf("usage-rollup agent status=%d want=%d body=%s", rollupByAgent.StatusCode, http.StatusOK, string(rollupByAgent.Body))
+	}
+	rollupAgentRows, ok := jsonPathValue(t, rollupByAgent.Body, "data", "data").([]any)
+	if !ok {
+		t.Fatalf("usage-rollup agent rows type=%T want=[]any body=%s", jsonPathValue(t, rollupByAgent.Body, "data", "data"), string(rollupByAgent.Body))
+	}
+	if len(rollupAgentRows) != 2 {
+		t.Fatalf("usage-rollup agent rows len=%d want=2 body=%s", len(rollupAgentRows), string(rollupByAgent.Body))
+	}
+	totalRollupCost := int64(0)
+	for _, row := range rollupAgentRows {
+		item, ok := row.(map[string]any)
+		if !ok {
+			continue
+		}
+		value, ok := item["total_cost_microcents"].(float64)
+		if !ok {
+			continue
+		}
+		totalRollupCost += int64(value)
+	}
+	if totalRollupCost != 3500 {
+		t.Fatalf("usage-rollup agent total_cost_microcents=%d want=3500 body=%s", totalRollupCost, string(rollupByAgent.Body))
+	}
+
+	rollupByPeriod := mustJSON(t, http.MethodGet, testServer.URL+"/v1/model/usage-rollup?group_by=period&period=today", nil, map[string]string{
+		"Authorization": "Bearer " + tokenA,
+	})
+	if rollupByPeriod.StatusCode != http.StatusOK {
+		t.Fatalf("usage-rollup period status=%d want=%d body=%s", rollupByPeriod.StatusCode, http.StatusOK, string(rollupByPeriod.Body))
+	}
+	rollupPeriodRows, ok := jsonPathValue(t, rollupByPeriod.Body, "data", "data").([]any)
+	if !ok {
+		t.Fatalf("usage-rollup period rows type=%T want=[]any body=%s", jsonPathValue(t, rollupByPeriod.Body, "data", "data"), string(rollupByPeriod.Body))
+	}
+	if len(rollupPeriodRows) != 1 {
+		t.Fatalf("usage-rollup period rows len=%d want=1 body=%s", len(rollupPeriodRows), string(rollupByPeriod.Body))
+	}
+	if got := jsonPathString(t, rollupByPeriod.Body, "data", "data", "0", "rollup_type"); got != "period" {
+		t.Fatalf("usage-rollup period rollup_type=%q want=period body=%s", got, string(rollupByPeriod.Body))
+	}
+	if got := jsonPathString(t, rollupByPeriod.Body, "data", "data", "0", "rollup_date"); got != today.Format("2006-01-02") {
+		t.Fatalf("usage-rollup period rollup_date=%q want=%q body=%s", got, today.Format("2006-01-02"), string(rollupByPeriod.Body))
+	}
+	if got := int(jsonPathFloatValue(t, rollupByPeriod.Body, "data", "data", "0", "total_cost_microcents")); got != 3500 {
+		t.Fatalf("usage-rollup period total_cost_microcents=%d want=3500 body=%s", got, string(rollupByPeriod.Body))
+	}
+
 	authServiceB, err := authsvc.NewService(authsvc.Options{
 		Users:        repo.NewHumanUserRepo(testServer.Pool),
 		Sessions:     repo.NewAuthSessionRepo(testServer.Pool),

@@ -45,6 +45,7 @@ func TestModelRoutesRegistered(t *testing.T) {
 		"GET /model/assignments",
 		"PUT /model/assignments/{scope_type}/{scope_id}",
 		"DELETE /model/assignments/{scope_type}/{scope_id}",
+		"GET /model/usage-rollup",
 		"GET /usage",
 		"GET /usage/summary",
 	}
