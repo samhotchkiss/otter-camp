@@ -2282,7 +2282,6 @@ func truncate(s string, maxLen int) string {
 	return string(runes[:maxLen-1]) + "…"
 }
 
-
 func wrapText(text string, width int) []string {
 	if width <= 0 {
 		return []string{text}

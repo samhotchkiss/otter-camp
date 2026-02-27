@@ -24,8 +24,9 @@ func TestDegradedModeBannerShowsRecoveryGuidance(t *testing.T) {
 	if !strings.Contains(view, "DEGRADED MODE") {
 		t.Fatalf("view missing degraded banner: %q", view)
 	}
-	if !strings.Contains(view, "Recovery:") {
-		t.Fatalf("view missing degraded recovery guidance: %q", view)
+	// EX-100: message changed to be context-aware; disconnected shows "Reconnecting".
+	if !strings.Contains(view, "Reconnecting") && !strings.Contains(view, "stale") {
+		t.Fatalf("view missing degraded actionable message: %q", view)
 	}
 	for _, marker := range []string{"Main state:", "Chat state:", "Sidebar state:"} {
 		if strings.Contains(view, marker) {
