@@ -1100,7 +1100,10 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			openTasks = append(openTasks, t)
 		}
 	} else {
-		// Fall back to sidebar task nodes if API detail not yet available
+		// Fall back to sidebar task nodes if API detail not yet available.
+		// EX-156: use child.TaskID (raw UUID) not child.ID (sidebar node ID "task-<uuid>")
+		// so that RequiresHumanReview lookup and loadTaskDetailCmd receive the correct ID.
+		// Also include TaskNumber so the "OC-N:" prefix renders correctly in the list.
 		children := m.workspace.projectChildren(projectNodeID)
 		for _, cid := range children {
 			child := m.workspace.nodes[cid]
@@ -1116,9 +1119,10 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 				continue
 			}
 			openTasks = append(openTasks, SidebarTaskItem{
-				ID:         child.ID,
+				ID:         child.TaskID,   // raw UUID, not sidebar node ID
 				Title:      child.Label,
 				WorkStatus: child.WorkStatus,
+				TaskNumber: child.TaskNumber,
 			})
 		}
 	}

@@ -2889,3 +2889,53 @@ func TestCommandModeHelpIncludesAllViews(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectViewFallbackUsesTaskUUIDNotNodeID(t *testing.T) {
+	// EX-156: When the project view falls back to sidebar node children
+	// (before proj.Tasks is loaded from the API), SidebarTaskItem.ID was set
+	// to child.ID ("task-<uuid>") instead of child.TaskID ("<uuid>").
+	// This caused RequiresHumanReview lookup and loadTaskDetailCmd to use the
+	// wrong key, so ⚠ badges never showed in the fallback path.
+	model := NewModel(DefaultState())
+	projectID := "proj-fallback"
+	taskID := "uuid-fallback-task"
+
+	// Set up project node (no selectedProject — triggers fallback path)
+	model.workspace.nodes["project-"+projectID] = &sidebarNode{
+		ID:        "project-" + projectID,
+		Kind:      sidebarKindProject,
+		Label:     "Fallback Project",
+		ProjectID: projectID,
+		Expanded:  true,
+	}
+	// Add the task node as a child of the project
+	model.workspace.nodes["task-"+taskID] = &sidebarNode{
+		ID:         "task-" + taskID,
+		Kind:       sidebarKindTask,
+		Label:      "OC-5: Fallback Task",
+		ParentID:   "project-" + projectID,
+		TaskID:     taskID, // raw UUID
+		TaskNumber: 5,
+		WorkStatus: "in_progress",
+	}
+	// Seed the task record with RequiresHumanReview=true
+	model.workspace.tasks[taskID] = &taskRecord{
+		ID:                  taskID,
+		TaskNumber:          5,
+		Title:               "Fallback Task",
+		Status:              "in_progress",
+		RequiresHumanReview: true,
+	}
+	model.workspace.selectedProjectID = projectID
+	// selectedProject is non-nil but has no Tasks → triggers sidebar-child fallback.
+	// (nil selectedProject gives "Loading…" early return; we need the else branch.)
+	model.workspace.selectedProject = &ProjectDetail{ID: projectID, DisplayName: "Fallback Project"}
+
+	rendered := strings.Join(model.renderProjectView(80, 30), "\n")
+	if !strings.Contains(rendered, "⚠") {
+		t.Fatalf("project view fallback path should show ⚠ badge for RequiresHumanReview task (EX-156 regression): %q", rendered)
+	}
+	if !strings.Contains(rendered, "OC-5") {
+		t.Fatalf("project view fallback path should show OC-N prefix (EX-156 regression): %q", rendered)
+	}
+}
