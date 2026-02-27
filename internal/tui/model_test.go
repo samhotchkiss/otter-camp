@@ -73,6 +73,87 @@ func TestChatInputAcceptsMultiRuneEvents(t *testing.T) {
 	}
 }
 
+func TestSlashSearchMainPanelEnterKeepsFilter(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}}) // main
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+
+	for _, r := range []rune("launch") {
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	filtered := model.View()
+	if !strings.Contains(filtered, "Launch docs") {
+		t.Fatalf("filtered dashboard missing Launch docs: %q", filtered)
+	}
+	if strings.Contains(filtered, "CI hardening") {
+		t.Fatalf("filtered dashboard should hide CI hardening: %q", filtered)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.searchMode {
+		t.Fatalf("search mode should exit on Enter")
+	}
+	if got := model.mainFilter; got != "launch" {
+		t.Fatalf("main filter after Enter = %q, want %q", got, "launch")
+	}
+
+	filtered = model.View()
+	if strings.Contains(filtered, "CI hardening") {
+		t.Fatalf("accepted filter should remain active: %q", filtered)
+	}
+}
+
+func TestSlashSearchMainPanelEscClearsFilter(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}}) // main
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	for _, r := range []rune("launch") {
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEsc})
+	if model.searchMode {
+		t.Fatalf("search mode should exit on Esc")
+	}
+	if got := model.mainFilter; got != "" {
+		t.Fatalf("main filter after Esc = %q, want empty", got)
+	}
+
+	view := model.View()
+	if !containsAll(view, []string{"Launch docs", "CI hardening"}) {
+		t.Fatalf("cleared filter should restore task list: %q", view)
+	}
+}
+
+func TestSlashSearchSidebarFiltersSessions(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}}) // sidebar
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	for _, r := range []rune("Task 2") {
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	sidebar := model.renderSidebarPanel(56, 14, true)
+	if !strings.Contains(sidebar, "Task 2 / CI hardening") {
+		t.Fatalf("filtered sidebar missing Task 2 session: %q", sidebar)
+	}
+	if strings.Contains(sidebar, "Task 1 / Launch docs") {
+		t.Fatalf("filtered sidebar should hide Task 1 session: %q", sidebar)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.searchMode {
+		t.Fatalf("search mode should exit on Enter")
+	}
+	if got := model.sidebarFilter; got != "Task 2" {
+		t.Fatalf("sidebar filter after Enter = %q, want %q", got, "Task 2")
+	}
+}
+
 func TestChatScrollHotkeys(t *testing.T) {
 	model := NewModel(DefaultState())
 	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
