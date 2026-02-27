@@ -2288,3 +2288,153 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// EX-143 tests: run failures should persist in the activity log (not just status bar).
+
+func TestRunFailedAddsActivityEntry(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	raw, _ := json.Marshal(map[string]any{"run_id": "run-1", "reason": "context deadline exceeded"})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "run.failed",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	if !strings.Contains(m.statusMessage, "Run failed") {
+		t.Fatalf("statusMessage = %q, want to contain 'Run failed'", m.statusMessage)
+	}
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "run failed") && strings.Contains(entry, "context deadline exceeded") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing run failed entry: %v", m.workspace.activity)
+	}
+}
+
+func TestRunDeadLetteredAddsActivityEntry(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	raw, _ := json.Marshal(map[string]any{"run_id": "run-2", "last_error": "ENOMEM", "attempt_count": 3})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "run.dead_lettered",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	if !strings.Contains(m.statusMessage, "dead-lettered") {
+		t.Fatalf("statusMessage = %q, want to contain 'dead-lettered'", m.statusMessage)
+	}
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "dead-lettered") && strings.Contains(entry, "ENOMEM") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing dead-lettered entry: %v", m.workspace.activity)
+	}
+}
+
+// EX-144: task.review_rejected should also trigger task detail reload.
+
+func TestTaskReviewRejectedTriggersDetailReload(t *testing.T) {
+	t.Parallel()
+	loaded := false
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			if id == "task-rej-1" {
+				loaded = true
+			}
+			return &TaskDetailItem{ID: id}, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	raw, _ := json.Marshal(map[string]any{"task_id": "task-rej-1", "reason": "incomplete"})
+	_, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "task.review_rejected",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	if cmd == nil {
+		t.Fatal("task.review_rejected returned nil cmd, want loadTaskDetailCmd")
+	}
+	// Execute the command to trigger the callback
+	_ = cmd()
+	if !loaded {
+		t.Fatal("LoadTaskDetail was not called after task.review_rejected")
+	}
+}
+
+// EX-145: deploy.approval_requested should also add to activity log.
+
+func TestDeployApprovalRequestedAddsActivityEntry(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	raw, _ := json.Marshal(map[string]any{"commit_sha": "abc123def456"})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "deploy.approval_requested",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	if !strings.Contains(m.statusMessage, "Deploy pending approval") {
+		t.Fatalf("statusMessage = %q, want to contain 'Deploy pending approval'", m.statusMessage)
+	}
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "Deploy pending approval") && strings.Contains(entry, "abc123de") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing deploy approval entry: %v", m.workspace.activity)
+	}
+}
+
+// EX-146: chat.session.created should add an activity entry.
+
+func TestChatSessionCreatedAddsActivityEntry(t *testing.T) {
+	t.Parallel()
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadOrgSession: func(_ context.Context) (string, error) { return "sess-org", nil },
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	raw, _ := json.Marshal(map[string]any{"scope_type": "project_task"})
+	updated, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "chat.session.created",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+	if cmd == nil {
+		t.Fatal("chat.session.created returned nil cmd, want sidebar reload")
+	}
+	found := false
+	for _, entry := range m.workspace.activity {
+		if strings.Contains(entry, "session created") && strings.Contains(entry, "project_task") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("activity log missing session created entry: %v", m.workspace.activity)
+	}
+}

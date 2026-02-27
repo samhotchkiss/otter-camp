@@ -2965,6 +2965,7 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 	}
 	// EX-130: deploy.approval_requested — set status bar so the user knows a
 	// deploy is waiting for their approval before it can proceed.
+	// EX-145: also add to activity log so the action item persists past the 5s auto-clear.
 	if event.EventType == "deploy.approval_requested" {
 		var payload struct {
 			CommitSHA string `json:"commit_sha"`
@@ -2979,6 +2980,8 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 				msg = "Deploy pending approval: " + sha
 			}
 			m.statusMessage = msg
+			// EX-145: persist in activity log so this action item isn't missed.
+			m.workspace.activity = appendActivity(m.workspace.activity, msg)
 		}
 		return nil
 	}
@@ -3143,7 +3146,16 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 	}
 	// EX-140: chat session lifecycle — reload sidebar when sessions are created
 	// (new session node appears) or closed (session archived from sidebar).
+	// EX-146: also add an activity entry so session creation is visible in Activity view.
 	if event.EventType == "chat.session.created" {
+		var payload struct {
+			Scope string `json:"scope_type"`
+		}
+		if decodePayload(event.Payload, &payload) && payload.Scope != "" {
+			m.workspace.activity = appendActivity(m.workspace.activity, "session created: "+payload.Scope)
+		} else {
+			m.workspace.activity = appendActivity(m.workspace.activity, "session created")
+		}
 		return loadSidebarDataCmd(m.runtimeHints)
 	}
 	if event.EventType == "chat.session.closed" {
@@ -3155,8 +3167,8 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		}
 		return loadSidebarDataCmd(m.runtimeHints)
 	}
-	// EX-140: run failure events — surface failures in the status bar so the
-	// user is immediately aware when an agent run fails or is dead-lettered.
+	// EX-140/EX-143: run failure events — surface failures in the status bar AND
+	// add to the activity log so failures remain visible after the 5s auto-clear.
 	if event.EventType == "run.failed" {
 		var payload struct {
 			RunID        string `json:"run_id"`
@@ -3172,6 +3184,8 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 				reason = "unknown reason"
 			}
 			m.statusMessage = "⚠ Run failed: " + truncate(reason, 60)
+			// EX-143: also persist in activity log so the failure survives the 5s auto-clear.
+			m.workspace.activity = appendActivity(m.workspace.activity, "run failed: "+truncate(reason, 50))
 		}
 		return nil
 	}
@@ -3186,11 +3200,17 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			msg := fmt.Sprintf("⚠ Run dead-lettered after %d attempt(s): %s",
 				payload.AttemptCount, truncate(payload.LastError, 50))
 			m.statusMessage = msg
+			// EX-143: also persist in activity log.
+			entry := fmt.Sprintf("run dead-lettered (%d attempts): %s",
+				payload.AttemptCount, truncate(payload.LastError, 40))
+			m.workspace.activity = appendActivity(m.workspace.activity, entry)
 		}
 		return nil
 	}
 	// EX-142: task.review_rejected — append reason to activity so users can see
 	// why a task was sent back without navigating to the task event log.
+	// EX-144: also reload task detail so RequiresHumanReview badge updates
+	// if the server clears the flag when the task is sent back for rework.
 	if event.EventType == "task.review_rejected" {
 		var payload struct {
 			TaskID string `json:"task_id"`
@@ -3203,6 +3223,10 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 				entry += " — " + truncate(payload.Reason, 40)
 			}
 			m.workspace.activity = appendActivity(m.workspace.activity, entry)
+			// EX-144: reload task detail so the ⚠ badge reflects the updated state.
+			if payload.TaskID != "" {
+				return loadTaskDetailCmd(payload.TaskID, m.runtimeHints)
+			}
 		}
 		return nil
 	}
