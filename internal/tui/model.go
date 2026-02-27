@@ -195,6 +195,12 @@ func NewModelWithRuntime(state UIState, runtime RuntimeHints) Model {
 	if model.workspace.mainView == ViewTask && model.workspace.selectedTaskID == "" {
 		model.workspace.setMainView(ViewDashboard)
 	}
+	// Restore persisted project selection.
+	model.workspace.selectedProjectID = normalized.LastSelectedProjectID
+	// Project view requires a selected project; fall back to dashboard if none is persisted.
+	if model.workspace.mainView == ViewProject && model.workspace.selectedProjectID == "" {
+		model.workspace.setMainView(ViewDashboard)
+	}
 	// If the saved session is a placeholder (session-project-current, session-task-current, etc.)
 	// or a raw UUID that can't be resolved, reset to org session on startup.
 	if sess := strings.TrimSpace(model.activeSession); sess != "" && sess != generalSessionID {
@@ -322,6 +328,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if cmd := loadAgentsCmd(m.runtimeHints); cmd != nil {
 			cmds = append(cmds, cmd)
+		}
+		// If restoring to a project view with a persisted project ID, eagerly load project detail
+		// so the project board is ready without requiring an extra sidebar click.
+		if m.workspace.selectedProjectID != "" && m.workspace.selectedProject == nil {
+			if cmd := loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 		}
 		// If the active session was empty or the placeholder, replace with the real
 		// org session UUID and trigger history load unconditionally (sidebar data
@@ -1521,6 +1534,7 @@ func (m Model) State() UIState {
 	next := m.state
 	next.LastActiveView = viewFromPanel(focus)
 	next.LastMainView = normalizeMainViewState(string(m.workspace.mainView))
+	next.LastSelectedProjectID = m.workspace.selectedProjectID
 	next.SidebarVisible = m.sidebarVisible
 	if strings.TrimSpace(m.activeSession) != "" {
 		next.LastActiveChatSession = m.activeSession

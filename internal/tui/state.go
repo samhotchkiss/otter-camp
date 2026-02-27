@@ -15,6 +15,7 @@ type UIState struct {
 	LastActiveView        string     `json:"last_active_view"`
 	LastMainView          string     `json:"last_main_view"`
 	LastActiveChatSession string     `json:"last_active_chat_session"`
+	LastSelectedProjectID string     `json:"last_selected_project_id,omitempty"`
 	PanelProportions      [3]float64 `json:"panel_proportions"`
 	SidebarVisible        bool       `json:"sidebar_visible"`
 }

@@ -1147,3 +1147,21 @@ Additionally, the `?` help screen listed `d` only under "Global" as "jump to Das
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-079: Persist selected project across TUI restarts
+
+**Observation:** After navigating into a project's task board (`ViewProject`), quitting, and reopening the TUI, the project context was completely lost. The TUI showed the generic Dashboard even though the user had been working in a specific project. The `selectedProjectID` field was written into `workspaceState` when a project node was selected, but it was never saved to `UIState` and therefore not written to `~/.config/ottercamp/tui-state.json`.
+
+**Improvement:**
+1. Added `LastSelectedProjectID string` field to `UIState` (persisted as `last_selected_project_id` in JSON).
+2. `State()` saves `m.workspace.selectedProjectID` into that field on every quit/save cycle.
+3. `NewModelWithRuntime` restores `selectedProjectID` from the persisted field on startup. Added a guard: if the saved `last_main_view` is `"project"` but `last_selected_project_id` is empty (e.g., old state file), it falls back to Dashboard rather than showing a blank project board.
+4. In the `sidebarDataLoadedMsg` handler, if `selectedProjectID` is non-empty and the project detail hasn't been loaded yet, `loadProjectDetailCmd` is dispatched so the project board populates immediately without requiring a sidebar click.
+
+**Why it matters:** Users who were in the middle of a project sprint shouldn't have to re-navigate every time they restart the TUI. Persistent context is a baseline UX expectation for any tool people use repeatedly throughout the day.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
