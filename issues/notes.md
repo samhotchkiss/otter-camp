@@ -2,6 +2,77 @@
 
 Use this file to track blockers, follow-ups, and handoff notes.
 
+## [2026-02-27] Issue 167 — APPROVED and COMPLETED
+
+**Task:** 167-tool-call-expand-collapse-and-results
+**Reviewed by:** Claude Sonnet (reviewer agent)
+**PR:** #1547 (`task/167-tool-call-expand-results`) merged into v2 at 2026-02-27T00:16:00Z (commit 7ddab054)
+**Result:** ACCEPTED
+
+### Summary
+Implements collapsible tool calls with inline result display. Key changes:
+- `ToolCallStatus` gains `ID` and `Result` fields; `toolCallIdentity()` for fallback lookup
+- `toolCallExpanded map[string]map[string]bool` tracks per-message expand state (default collapsed)
+- `attachToolResult()` routes `chat.message.finalized` (role=tool_result) to correct tool call by ID
+- Enter key (with empty input) toggles expansion of the most recent tool call
+- Render: `▶ ⚙ name (status)` collapsed; `▼ ⚙ name (status)` + indented result when expanded
+- Results truncated at 280 runes with `[show more]` hint
+- Status matching extended: "completed"/"done" → green; "running"/"in_progress" → amber; else red
+
+All 5 acceptance criteria met. Two unit tests verified: `TestToolCallCollapseStateToggling`, `TestToolResultTextStoredAndDisplayedOnExpand`. Integration test updated for new render format.
+
+---
+
+## [2026-02-27] Issue 166 — MERGE CONFLICT BLOCKER → moved to 01-ready
+
+**Task:** 166-markdown-not-rendered-glamour-dead-code
+**Reviewed by:** Claude Sonnet (reviewer agent)
+**PR:** #1546 (`task/166-markdown-rendered-chat`) — CONFLICTING, NOT merged
+**Result:** CHANGES REQUIRED (P1: merge conflict; P3: Glamour style deviation)
+
+### Summary
+Implementation is code-correct and meets all acceptance criteria:
+- Glamour rendering correctly wired into `renderChatMessages()` for finalized messages only ✓
+- Streaming/delta path remains on plain `wrapText` to avoid partial-markdown jitter ✓
+- `TestMarkdownRenderedInChatMessages` verifies raw markdown markers are not literal ✓
+
+### Blocker
+PR #1546 is CONFLICTING against v2 after PR #1545 (task 165) was merged (both modified `internal/tui/view.go` and `internal/tui/view_chat_test.go`). Branch must be rebased onto current v2 tip (commit 54fe99b9).
+
+### P3 Note
+`glamour.WithStandardStyle` was changed from `"notty"` (spec-described) to `"pink"` (themed, not universally terminal-compatible). Recommend reverting to `"notty"` or using `"auto"` for multi-terminal compatibility.
+
+---
+
+## [2026-02-27] Issue 165 — APPROVED and COMPLETED
+
+**Task:** 165-scope-indicator-raw-ids-and-missing-level-display
+**Reviewed by:** Claude Sonnet (reviewer agent)
+**PR:** #1545 (`task/165-scope-indicator-display`) merged into v2 at 2026-02-27T00:11:46Z (commit 54fe99b9)
+**Result:** ACCEPTED
+
+### Summary
+Adds full scope level display to chat header and resolves task scope session label:
+- `renderChatHeader()`: renders session label + `[task] [project] [org]` indicators; active scope highlighted
+- Compact fallback `[t] [p] [o]` on narrow terminals
+- `taskTitleForScopeSession()`: resolves `session-task-current` → task title (e.g. "Launch docs")
+- Three new tests: `TestChatHeaderShowsAllScopeLevel`, `TestSessionLabelResolvesTaskScopeId`, `TestScopeCycleShortcutsTraverseAllScopeLevels`
+- Golden files updated for L, M, S, XL layouts (XS doesn't show chat panel)
+
+---
+
+## [2026-02-27] Issue 164 — APPROVED and COMPLETED
+
+**Task:** 164-sidebar-missing-notification-inbox-count
+**Reviewed by:** Claude Sonnet (reviewer agent)
+**PR:** #1544 (`task/164-sidebar-missing-notification-inbox-count`) merged into v2 at 2026-02-27T00:06:28Z (commit 1954234)
+**Result:** ACCEPTED
+
+### Summary
+Adds muted sidebar inbox footer line (`▼ N inbox`) when inbox items exist. Correct row budgeting ensures footer never pushes session nodes off-screen. 3 unit tests added in new `view_sidebar_test.go`. Golden snapshots for `layout_l.golden` and `layout_xl.golden` regenerated. Lint failures are all pre-existing on v2.
+
+---
+
 ## [2026-02-26] Issue 123 — APPROVED and COMPLETED
 
 **Task:** 123-api-key-scopes-not-enforced
@@ -8908,3 +8979,158 @@ No merge conflicts. Interface compliance assert (`var _ taskQueueRunStarter = (*
 - Result: Accepted and merged to v2
 - Summary: Two-part fix for TUI always showing DEGRADED MODE. Fix 1 (`cmd/ottercamp/tui.go`): wires `HTTPSSEConnector` targeting `serverURL+"/v1/events/stream"` with `scopes=org`, creates `RealtimeClient` with correct callbacks (`ConnectionStateMsg`, `ReplaySyncedMsg`, `ChatEnvelopeMsg`, `WorkspaceEnvelopeMsg`), starts `client.Run(ctx)` in goroutine cancelled on program exit, loads credentials from flags/env/credstore. Fix 2 (`internal/tui/realtime.go`): `consumeStream` detects `event: connected` meta-frames before `DecodeEventEnvelope`; routes to `handleConnectedFrame` which: sets `degraded=false` and emits `ConnectionConnected` when no gap, or calls `markDegradedAndRefresh` when `gap:true`. Tests `TestRealtimeConnectedMetaFrameNoGap` and `TestRealtimeConnectedMetaFrameWithGapDegrades` both correct and present on PR branch. Lint failures are all pre-existing on v2; PR introduced no new lint errors.
 - Moved: 04-in-review → 05-completed
+
+## 2026-02-26 - 167-tool-call-expand-collapse-and-results.md
+- Fixes applied:
+  - Extended tool-call model in `internal/tui/chat.go` (`ToolCallStatus`) with `ID` and `Result` fields.
+  - Added tool-call expansion state in `internal/tui/model.go` (`toolCallExpanded`) and tool-call-to-message indexing (`toolCallMessageIndex`).
+  - Wired `chat.tool_call.status` to track `tool_call_id`, update/create tool calls by ID, and maintain status color coding semantics.
+  - Wired `chat.message.finalized` with `role=tool_result` to attach result text onto the matching tool call by `tool_call_id` (with fallback to most-recent unresolved tool call).
+  - Added Enter-key toggle behavior in chat panel: when chat input is empty, Enter toggles the latest tool call expand/collapse instead of attempting an empty send.
+  - Updated `renderChatMessages` in `internal/tui/view.go`:
+    - Collapsed default: `▶ ⚙ name (status)`
+    - Expanded: `▼ ⚙ name (status)` + indented result text
+    - Large results truncate with `[show more]`
+  - Added unit tests in `internal/tui/tool_calls_test.go`:
+    - `TestToolCallCollapseStateToggling`
+    - `TestToolResultTextStoredAndDisplayedOnExpand`
+  - Updated integration assertion in `internal/tui/chat_integration_test.go` for collapsed indicator rendering.
+- Tests run:
+  - `go test ./internal/tui -run 'TestToolCallCollapseStateToggling|TestToolResultTextStoredAndDisplayedOnExpand'` (pass)
+  - `go test ./internal/tui` (fails on pre-existing `TestLayoutGoldenSnapshots/S` mismatch in base `v2`: sidebar inbox footer present in S sidebar-focus snapshot output but absent in committed `layout_s.golden`; unrelated to task 167 changes)
+
+## 2026-02-27 - 166-markdown-not-rendered-glamour-dead-code.md (reviewer rework pass)
+- Fixes applied:
+  - Rebased `task/166-markdown-rendered-chat` onto `v2` at commit `54fe99b9` and resolved the conflict in `internal/tui/view_chat_test.go`.
+  - Kept both required test paths after conflict resolution: `TestMarkdownRenderedInChatMessages` and `TestChatHeaderShowsAllScopeLevel`.
+  - Updated chat rendering in `internal/tui/view.go` to render finalized assistant message content through `markdownToPlain(...)` while preserving literal wrapping for streaming (non-finalized) content.
+  - Updated `internal/tui/chat.go` to use Glamour style `"auto"` (removed `"pink"`), and added a small fallback normalization pass for leaked literal heading/bold markers in plain-style output.
+  - Added streaming regression test `TestStreamingMessageKeepsLiteralMarkdown` to verify markdown rendering is not applied before finalize.
+  - Removed the top-level `## Reviewer Required Changes` block from the task file.
+- Tests run:
+  - `go test ./internal/tui -run 'TestMarkdownRenderedInChatMessages|TestChatHeaderShowsAllScopeLevel|TestStreamingMessageKeepsLiteralMarkdown'` (pass)
+  - `go test ./internal/tui -run TestLayoutGoldenSnapshots` (fails on pre-existing `v2` golden mismatch in `S` snapshot)
+  - `go test ./internal/tui -run TestLayoutGoldenSnapshots` on clean detached `v2` commit `54fe99b9` (same failure; confirmed pre-existing baseline issue)
+
+## 2026-02-27 - 168-help-screen-shift-enter-vs-alt-enter.md
+- Fixes applied:
+  - Updated chat help row in `internal/tui/view.go` from `Shift-Enter` to `Alt-Enter`.
+  - Updated chat-focused help hint in `internal/tui/model.go` to include `Alt-Enter newline`.
+  - Added unit tests in `internal/tui/model_test.go`:
+    - `TestChatHelpHintUsesAltEnterNewline`
+    - `TestHelpViewUsesAltEnterNewline`
+- Tests run:
+  - `go test ./internal/tui -run 'TestChatHelpHintUsesAltEnterNewline|TestHelpViewUsesAltEnterNewline|TestTmuxHelpLineUsesFallbackCommandHints'` (pass)
+
+## 2026-02-27 - 169-task-detail-missing-fields.md
+- Fixes applied:
+  - Extended `taskRecord` in `internal/tui/workspace.go` with `Description`, `AcceptanceCriteria`, `Subtasks`, and `SessionID`.
+  - Added task-session helpers (`taskSessionID`, `selectedTaskSessionID`, `openSelectedTaskSession`) and used them for inbox open-in-context + task-detail open behavior.
+  - Updated `renderTaskView()` in `internal/tui/view.go` to render description, acceptance criteria, subtasks, async session link, and full event log (no last-5 truncation).
+  - Updated `handleEnterKey()` in `internal/tui/model.go` so Enter on task detail opens the task async session (when set), persists active chat session, and focuses chat.
+  - Added unit tests:
+    - `TestTaskDetailViewShowsExtendedFieldsAndFullEventLog`
+    - `TestEnterOnTaskDetailOpensAsyncSession`
+- Tests run:
+  - `go test ./internal/tui -run 'TestTaskDetailViewShowsExtendedFieldsAndFullEventLog|TestEnterOnTaskDetailOpensAsyncSession|TestMainViewTitleIsHumanReadable'` (pass)
+  - `go test ./internal/tui -run TestWorkspaceGoldenSnapshots` (pass)
+  - `go test -tags integration ./internal/tui -run 'TestKeyboardOnlyNavigationOpenInContextFlow|TestInboxActionUpdatesBoardDetailAndActivity'` (fails on pre-existing duplicate test names in `realtime_test.go` and `realtime_integration_test.go`)
+
+## 2026-02-27 - 170-slash-search-not-implemented.md
+- Fixes applied:
+  - Added in-pane search state to `internal/tui/model.go` (`searchMode`, `searchPanel`, `searchQuery`, `sidebarFilter`, `mainFilter`).
+  - Wired `/` trigger for sidebar and main panel (chat unchanged), with search input handling:
+    - type/backspace updates live filter
+    - `Enter` exits search mode and keeps filter active
+    - `Esc` clears filter and exits search mode
+  - Added panel search bar rendering in `internal/tui/view.go` and sidebar/main filtering logic for sessions, task lists, inbox, project tree, and activity rows.
+  - Added unit tests in `internal/tui/model_test.go`:
+    - `TestSlashSearchMainPanelEnterKeepsFilter`
+    - `TestSlashSearchMainPanelEscClearsFilter`
+    - `TestSlashSearchSidebarFiltersSessions`
+- Tests run:
+  - `go test ./internal/tui -run 'TestSlashSearchMainPanelEnterKeepsFilter|TestSlashSearchMainPanelEscClearsFilter|TestSlashSearchSidebarFiltersSessions|TestGlobalFocusControls|TestFocusCommandFallback'` (pass)
+
+## 2026-02-27 - 171-g-G-top-bottom-not-implemented.md
+- Fixes applied:
+  - Added chat-panel `g/G` behavior in `internal/tui/model.go` (when chat input is empty):
+    - `g` scrolls chat viewport to oldest
+    - `G` scrolls chat viewport to latest
+  - Sidebar/main `g/G` behavior remains wired through existing list handlers (`sidebarHome/sidebarEnd`, `inboxHome/inboxEnd`).
+  - Implemented command palette fuzzy suggestions in `internal/tui/view.go`:
+    - Suggestions are generated while in `:` command mode from commands + sessions + projects + tasks
+    - Fuzzy matching supports substring and subsequence matching
+    - Suggestions render under the command input in chat panel
+  - Added unit tests in `internal/tui/model_test.go`:
+    - `TestGGJumpTopBottomAcrossPanels`
+    - `TestCommandPaletteShowsFuzzySuggestions`
+- Tests run:
+  - `go test ./internal/tui -run 'TestGGJumpTopBottomAcrossPanels|TestCommandPaletteShowsFuzzySuggestions|TestChatScrollHotkeys|TestFocusCommandFallback'` (pass)
+
+## 2026-02-26 - Task 166 review (r2) — moved back to 01-ready
+- PR: #1546 `feat: render finalized chat markdown with Glamour` (branch `task/166-markdown-rendered-chat` → `v2`)
+- CI status: Lint FAIL (Build/Unit/Integration Tests skipped). The Lint job failed due to pre-existing issues PLUS one new P1 violation introduced by the PR.
+- Local unit tests: all TUI tests pass except `TestLayoutGoldenSnapshots/S` which is pre-existing (confirmed failing on clean upstream v2 HEAD).
+- Required changes:
+  - **P1** `internal/tui/view.go:981` — gosimple S1011: `for _, line := range strings.Split(rendered, "\n") { lines = append(lines, line) }` must be `lines = append(lines, strings.Split(rendered, "\n")...)`. This is the only new lint error introduced by the PR.
+  - **P2** `internal/tui/chat.go` — `normalizeRenderedMarkdown` fallback handles bold/headings but not inline-code backticks. `containsLiteralMarkdownMarkers` needs a backtick check and `normalizeRenderedMarkdown` needs backtick stripping so the fallback path fully satisfies AC4. Add a test that exercises the fallback path with `` `code` `` input.
+- Core fix (calling `markdownToPlain` for finalized messages in `renderChatMessages`) is correct and tests pass.
+
+## 2026-02-27 - 172-responsive-layout-threshold-mismatch.md
+- Fixes applied:
+  - Updated responsive thresholds in `internal/tui/layout.go`:
+    - `SizeXS` now triggers below 80 columns
+    - `SizeS` covers 80-99 columns
+    - `SizeM` remains 100-139 columns
+  - Updated `SizeM` layout behavior to keep sidebar visible and use narrow sidebar weights for 100-119 widths (icon-only range).
+  - Added icon-only sidebar rendering mode in `internal/tui/view.go` for 100-119 widths using compact labels (`PRJ`, `T<n>`, `GEN`).
+  - Added explicit sidebar toggle keybinding (`s`) in non-chat sidebar/main flows (`internal/tui/model.go`) for S-size layouts.
+  - Documented sidebar toggle keybinding in help strings (`renderHelpView`, command fallback help text).
+  - Added/updated tests:
+    - `TestResolveSizeClassBoundaries`
+    - `TestLayoutVisibilityAndHintsBySizeClass`
+    - `TestSidebarPanelUsesIconOnlyModeAtMediumNarrowWidths`
+    - `TestSidebarToggleKeybindingAtSSize`
+    - `TestHelpViewDocumentsSidebarToggleKeybinding`
+- Tests run:
+  - `go test ./internal/tui -run 'TestResolveSizeClassBoundaries|TestLayoutVisibilityAndHintsBySizeClass|TestSidebarToggleKeybindingAtSSize|TestHelpViewDocumentsSidebarToggleKeybinding|TestSidebarPanelUsesIconOnlyModeAtMediumNarrowWidths|TestLayoutSsizeSidebarFocusShowsChatPane'` (pass)
+  - `go test ./internal/tui -run 'TestMainAndChatReachableInTwoActions|TestResizeKeepsFocusValid|TestSidebarPanelTrimsNodesBeforeInboxFooter|TestGlobalFocusControls'` (pass)
+
+## 2026-02-27 - 173-interjection-messages-not-implemented.md
+- Fixes applied:
+  - Added `interjection` as a normalized chat role in `internal/tui/chat.go`.
+  - Updated chat rendering role switch in `internal/tui/view.go` to handle interjection messages explicitly with a distinct style and header label `Interjection (interjected)`.
+  - SSE/chat reducer path now preserves `role=interjection` through existing `ensureMessage(..., role, ...)` flow.
+  - Added tests:
+    - `TestChatReducerHandlesInterjectionRole` (`internal/tui/chat_reducer_test.go`)
+    - `TestInterjectionMessagesRenderWithInterjectedLabel` (`internal/tui/view_chat_test.go`)
+- Tests run:
+  - `go test ./internal/tui -run 'TestChatReducerHandlesInterjectionRole|TestInterjectionMessagesRenderWithInterjectedLabel|TestChatReducerDeltaFinalizeSequencing|TestChatHeaderShowsAllScopeLevel'` (pass)
+
+## 2026-02-26 - Task 168 review — ACCEPTED, merged to v2
+- PR: #1548 `fix: align chat newline key labels with Alt-Enter` (branch `task/168-help-screen-alt-enter` → `v2`)
+- Changes: 2-line label fix in `view.go` renderHelpView (Shift-Enter→Alt-Enter) and `model.go` commandFallbackHelp (chat hint); 2 new unit tests added.
+- All AC met. Tests pass. No new lint violations. No dependencies.
+- Merged via `gh pr merge 1548 --squash` at 2026-02-27T00:37:08Z.
+- Moved to 05-completed.
+
+## 2026-02-26 - Task 169 review — ACCEPTED, merged to v2
+- PR: #1549 `feat: expand task detail view fields and async session open` (branch `task/169-task-detail-fields` → `v2`)
+- Changes: Added Description, AcceptanceCriteria, Subtasks, SessionID to taskRecord; new workspace helpers (taskSessionID, selectedTaskSessionID, openSelectedTaskSession); updated renderTaskView to show all fields + full event log; Enter on task detail opens async session.
+- All AC met. Tests pass (TestTaskDetailViewShowsExtendedFieldsAndFullEventLog, TestEnterOnTaskDetailOpensAsyncSession). No new lint violations; notably adds a usage of previously-unused stylePrimary. No dependencies.
+- Merged via `gh pr merge 1549 --squash` at 2026-02-27T00:37:11Z.
+- Moved to 05-completed.
+
+## 2026-02-26 - Task 170 review — ACCEPTED, merged to v2
+- PR: #1550 `feat: implement slash search mode for sidebar and main pane` (branch `task/170-slash-search` → `v2`)
+- Changes: Added searchMode/searchPanel/searchQuery/sidebarFilter/mainFilter state; '/' trigger in sidebar and main panel; updateSearchInput handler; filteredSidebarIDs, renderSearchBar, matchesFilter helpers; all list renderers (dashboard, project, inbox, activity) filter by mainFilter.
+- All AC met. Tests pass (TestSlashSearchMainPanelEnterKeepsFilter, TestSlashSearchMainPanelEscClearsFilter, TestSlashSearchSidebarFiltersSessions). No new lint violations. No dependencies.
+- Merged via `gh pr merge 1550 --squash` at 2026-02-27T00:37:21Z.
+- Moved to 05-completed.
+
+## 2026-02-26 - Task 171 review — moved back to 01-ready
+- PR: #1551 `feat: add g/G chat jumps and command palette fuzzy suggestions` (branch `task/171-g-G-navigation-command-search` → `v2`)
+- All tests pass locally. AC met (g/G for chat newly added; sidebar/main g/G pre-existing in v2; fuzzy suggestions working).
+- Required change:
+  - **P1** `internal/tui/view.go` fuzzyMatch function — S1029: `for _, r := range []rune(candidate)` must be `for _, r := range candidate` (ranging over string directly in Go yields runes; no conversion needed in a range clause).
+- Unmerged; moved to 01-ready pending fix.

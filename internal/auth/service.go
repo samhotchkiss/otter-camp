@@ -68,6 +68,7 @@ type Service interface {
 	MagicLink(ctx context.Context, email string) (*MagicLinkResult, error)
 	ResetPassword(ctx context.Context, token, newPassword string) error
 	UnlockAccount(ctx context.Context, userID uuid.UUID) error
+	ChangePassword(ctx context.Context, userID uuid.UUID, orgID uuid.UUID, currentPassword, newPassword string) error
 }
 
 type AuditRecorder = audit.AuditRecorder
@@ -663,6 +664,44 @@ func (s *service) ResetPassword(ctx context.Context, token, newPassword string) 
 
 func (s *service) UnlockAccount(ctx context.Context, userID uuid.UUID) error {
 	_, err := s.users.ResetFailedAttempts(ctx, userID)
+	return err
+}
+
+func (s *service) ChangePassword(ctx context.Context, userID uuid.UUID, orgID uuid.UUID, currentPassword, newPassword string) error {
+	currentPassword = strings.TrimSpace(currentPassword)
+	newPassword = strings.TrimSpace(newPassword)
+	if currentPassword == "" || newPassword == "" {
+		return ErrInvalidCredentials
+	}
+
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if user.PasswordHash == nil || *user.PasswordHash == "" {
+		return ErrInvalidCredentials
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(*user.PasswordHash), []byte(currentPassword)); err != nil {
+		return ErrInvalidCredentials
+	}
+
+	hashed, err := bcrypt.GenerateFromPassword([]byte(newPassword), s.bcryptCost)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	passwordHash := string(hashed)
+	_, err = s.users.Update(ctx, repo.HumanUser{
+		ID:                  user.ID,
+		Email:               user.Email,
+		DisplayName:         user.DisplayName,
+		PasswordHash:        &passwordHash,
+		Role:                user.Role,
+		IsActive:            user.IsActive,
+		Settings:            user.Settings,
+		LastLoginAt:         user.LastLoginAt,
+		LockedUntil:         user.LockedUntil,
+		FailedLoginAttempts: user.FailedLoginAttempts,
+	})
 	return err
 }
 

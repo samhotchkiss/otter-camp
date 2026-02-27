@@ -75,7 +75,8 @@ func computeLayout(width, height int, focus Panel, sidebarVisible bool, proporti
 	case SizeS:
 		if focus == SidebarPanel || sidebarVisible {
 			visible[SidebarPanel] = true
-			weights = [3]float64{1, 0, 0}
+			visible[ChatPanel] = true
+			weights = [3]float64{0.40, 0, 0.60}
 		} else {
 			visible[MainPanel] = true
 			visible[ChatPanel] = true

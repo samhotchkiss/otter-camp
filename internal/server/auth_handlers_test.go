@@ -135,6 +135,10 @@ func (f *fakeAuthService) ResetPassword(context.Context, string, string) error {
 
 func (f *fakeAuthService) UnlockAccount(context.Context, uuid.UUID) error { return nil }
 
+func (f *fakeAuthService) ChangePassword(context.Context, uuid.UUID, uuid.UUID, string, string) error {
+	return nil
+}
+
 type fakeAuthSessionRepo struct {
 	active  []repo.AuthSession
 	revoked map[uuid.UUID]bool
@@ -204,6 +208,10 @@ func (f *fallbackAuthService) MagicLink(context.Context, string) (*authsvc.Magic
 func (f *fallbackAuthService) ResetPassword(context.Context, string, string) error { return nil }
 
 func (f *fallbackAuthService) UnlockAccount(context.Context, uuid.UUID) error { return nil }
+
+func (f *fallbackAuthService) ChangePassword(context.Context, uuid.UUID, uuid.UUID, string, string) error {
+	return nil
+}
 
 type fallbackUserRepo struct {
 	user repo.HumanUser

@@ -163,6 +163,76 @@ func (r *TraceSpanRepo) GetByID(ctx context.Context, id uuid.UUID) (TraceSpan, e
 	return item, nil
 }
 
+type TraceSpanFilter struct {
+	OrganizationID uuid.UUID
+	RunID          *uuid.UUID
+	TaskID         *uuid.UUID
+	AgentID        *uuid.UUID
+	From           *time.Time
+	To             *time.Time
+	Limit          int
+}
+
+func (r *TraceSpanRepo) List(ctx context.Context, filter TraceSpanFilter) ([]TraceSpan, error) {
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+
+	args := []any{filter.OrganizationID}
+	where := []string{"organization_id = $1"}
+
+	if filter.RunID != nil {
+		args = append(args, filter.RunID.String())
+		where = append(where, fmt.Sprintf("attributes->>'run_id' = $%d", len(args)))
+	}
+	if filter.TaskID != nil {
+		args = append(args, filter.TaskID.String())
+		where = append(where, fmt.Sprintf("attributes->>'task_id' = $%d", len(args)))
+	}
+	if filter.AgentID != nil {
+		args = append(args, filter.AgentID.String())
+		where = append(where, fmt.Sprintf("attributes->>'agent_id' = $%d", len(args)))
+	}
+	if filter.From != nil {
+		args = append(args, *filter.From)
+		where = append(where, fmt.Sprintf("created_at >= $%d", len(args)))
+	}
+	if filter.To != nil {
+		args = append(args, *filter.To)
+		where = append(where, fmt.Sprintf("created_at <= $%d", len(args)))
+	}
+	args = append(args, limit)
+
+	query := fmt.Sprintf(`
+		SELECT id, trace_id, parent_id, organization_id, span_name, service, kind, status,
+		       attributes, events, started_at, ended_at, duration_ms, created_at
+		FROM trace_span
+		WHERE %s
+		ORDER BY created_at DESC
+		LIMIT $%d
+	`, strings.Join(where, " AND "), len(args))
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	var spans []TraceSpan
+	for rows.Next() {
+		span, err := scanTraceSpan(rows)
+		if err != nil {
+			return nil, mapDBError(err)
+		}
+		spans = append(spans, span)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return spans, nil
+}
+
 func scanTraceSpan(row interface{ Scan(dest ...any) error }) (TraceSpan, error) {
 	var item TraceSpan
 	if err := row.Scan(

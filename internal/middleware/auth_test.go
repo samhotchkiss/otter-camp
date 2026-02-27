@@ -231,3 +231,7 @@ func (f *fakeAuthService) ResetPassword(context.Context, string, string) error {
 func (f *fakeAuthService) UnlockAccount(context.Context, uuid.UUID) error {
 	return errors.New("not implemented")
 }
+
+func (f *fakeAuthService) ChangePassword(context.Context, uuid.UUID, uuid.UUID, string, string) error {
+	return errors.New("not implemented")
+}

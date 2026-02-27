@@ -136,6 +136,7 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 			protected.Use(security.PerAPIKeyRateLimitMiddleware(perAPIKeyLimiter, time.Minute))
 			protected.Post("/auth/logout", authHandlers.logout)
 			protected.Post("/auth/refresh", authHandlers.refresh)
+			protected.Post("/auth/change-password", authHandlers.changePassword)
 			protected.Get("/auth/me", authHandlers.me)
 			protected.Get("/users/me", authHandlers.me) // alias for spec compatibility
 			protected.Get("/auth/sessions", authHandlers.listSessions)

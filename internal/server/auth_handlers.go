@@ -199,7 +199,7 @@ func (h authHandlers) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	api.JSON(w, http.StatusOK, nil)
 }
 
 func (h authHandlers) refresh(w http.ResponseWriter, r *http.Request) {
@@ -876,6 +876,46 @@ func hashPasswordForMode(password string) (string, error) {
 		return "", err
 	}
 	return string(hashBytes), nil
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+func (h authHandlers) changePassword(w http.ResponseWriter, r *http.Request) {
+	if h.service == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "auth service unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		api.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	var req changePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+
+	if strings.TrimSpace(req.CurrentPassword) == "" || strings.TrimSpace(req.NewPassword) == "" {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "current_password and new_password are required")
+		return
+	}
+
+	if err := h.service.ChangePassword(r.Context(), principal.UserID, principal.OrganizationID, req.CurrentPassword, req.NewPassword); err != nil {
+		if errors.Is(err, auth.ErrInvalidCredentials) {
+			api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "current password is incorrect")
+			return
+		}
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "change password failed")
+		return
+	}
+
+	api.JSON(w, http.StatusOK, nil)
 }
 
 func mapLoginError(err error) (status int, code, message string) {
