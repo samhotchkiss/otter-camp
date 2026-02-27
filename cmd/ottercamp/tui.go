@@ -134,11 +134,17 @@ func runTUICommand(args []string) int {
 						case "project_task":
 							var taskResp struct {
 								Data struct {
-									Title string `json:"title"`
+									Title      string `json:"title"`
+									TaskNumber int    `json:"task_number"`
 								} `json:"data"`
 							}
 							if apiClient.request(ctx, "GET", "/v1/tasks/"+s.ScopeID.String(), nil, &taskResp) == nil {
-								name = strings.TrimSpace(taskResp.Data.Title)
+								title := strings.TrimSpace(taskResp.Data.Title)
+								if taskResp.Data.TaskNumber > 0 {
+									name = fmt.Sprintf("OC-%d: %s", taskResp.Data.TaskNumber, title)
+								} else {
+									name = title
+								}
 							}
 						case "project":
 							var projResp struct {
