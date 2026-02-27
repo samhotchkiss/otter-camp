@@ -13,6 +13,7 @@ const stateFileName = "tui-state.json"
 
 type UIState struct {
 	LastActiveView        string     `json:"last_active_view"`
+	LastMainView          string     `json:"last_main_view"`
 	LastActiveChatSession string     `json:"last_active_chat_session"`
 	PanelProportions      [3]float64 `json:"panel_proportions"`
 	SidebarVisible        bool       `json:"sidebar_visible"`
@@ -21,6 +22,7 @@ type UIState struct {
 func DefaultState() UIState {
 	return UIState{
 		LastActiveView:        "main",
+		LastMainView:          string(ViewDashboard),
 		LastActiveChatSession: "",
 		PanelProportions:      [3]float64{0.18, 0.50, 0.32},
 		SidebarVisible:        false,
@@ -99,8 +101,34 @@ func normalizeState(state UIState) UIState {
 	if _, ok := panelFromView(state.LastActiveView); !ok {
 		normalized.LastActiveView = defaults.LastActiveView
 	}
+	normalized.LastMainView = normalizeMainViewState(state.LastMainView)
 	normalized.PanelProportions = normalizeProportions(state.PanelProportions, defaults.PanelProportions)
 	return normalized
+}
+
+func normalizeMainViewState(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case string(ViewDashboard):
+		return string(ViewDashboard)
+	case string(ViewProject):
+		return string(ViewProject)
+	case string(ViewTask):
+		return string(ViewTask)
+	case string(ViewInbox):
+		return string(ViewInbox)
+	case string(ViewActivity):
+		return string(ViewActivity)
+	case string(ViewAgents):
+		return string(ViewAgents)
+	case string(ViewMerges):
+		return string(ViewMerges)
+	case string(ViewSchedules):
+		return string(ViewSchedules)
+	case string(ViewHelp):
+		return string(ViewHelp)
+	default:
+		return string(ViewDashboard)
+	}
 }
 
 func normalizeProportions(value [3]float64, fallback [3]float64) [3]float64 {

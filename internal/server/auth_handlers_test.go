@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/samhotchkiss/otter-camp/internal/audit"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -92,16 +93,280 @@ func TestRevokeOtherSessionsKeepsCurrentSession(t *testing.T) {
 	}
 }
 
+func TestLoginRecordsAuditEventWithIPAndOutcome(t *testing.T) {
+	orgID := uuid.New()
+	userID := uuid.New()
+	sessionID := uuid.New()
+	recorder := &capturedAuditRecorder{}
+	handler := authHandlers{
+		service: &fakeAuthService{
+			loginResult: &authsvc.LoginResult{
+				SessionToken: "session-token",
+				Session: &authsvc.SessionInfo{
+					ID:             sessionID,
+					UserID:         userID,
+					OrganizationID: orgID,
+					Email:          "audit@example.com",
+					DisplayName:    "Audit User",
+					Role:           "admin",
+					ExpiresAt:      time.Now().Add(time.Hour),
+				},
+			},
+		},
+		auditRecorder: recorder,
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"email":    "audit@example.com",
+		"password": "pw",
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-For", "203.0.113.5")
+	rr := httptest.NewRecorder()
+
+	handler.login(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	events := recorder.Events()
+	if len(events) != 1 {
+		t.Fatalf("audit event count=%d want=1", len(events))
+	}
+	event := events[0]
+	if event.EventType != audit.EventAuthLogin {
+		t.Fatalf("event type=%q want=%q", event.EventType, audit.EventAuthLogin)
+	}
+	if event.OrgID != orgID || event.PrincipalID != userID {
+		t.Fatalf("event principal/org mismatch: org=%s user=%s", event.OrgID, event.PrincipalID)
+	}
+	if event.IP != "203.0.113.5" {
+		t.Fatalf("event ip=%q want=%q", event.IP, "203.0.113.5")
+	}
+	if event.Outcome != "success" {
+		t.Fatalf("event outcome=%q want=%q", event.Outcome, "success")
+	}
+	if event.TargetID == nil || *event.TargetID != sessionID {
+		t.Fatalf("target id=%v want=%s", event.TargetID, sessionID)
+	}
+}
+
+func TestLoginFailureRecordsAuditEvent(t *testing.T) {
+	orgID := uuid.New()
+	userID := uuid.New()
+	recorder := &capturedAuditRecorder{}
+	handler := authHandlers{
+		service: &fakeAuthService{
+			loginErr: authsvc.ErrInvalidCredentials,
+		},
+		users: fallbackUserRepo{
+			user: repo.HumanUser{
+				ID:             userID,
+				OrganizationID: orgID,
+				Email:          "member@example.com",
+				DisplayName:    "Member",
+				Role:           "member",
+			},
+		},
+		auditRecorder: recorder,
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"email":    "member@example.com",
+		"password": "wrong-password",
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-For", "203.0.113.77")
+	rr := httptest.NewRecorder()
+
+	handler.login(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want=%d body=%s", rr.Code, http.StatusUnauthorized, rr.Body.String())
+	}
+
+	events := recorder.Events()
+	if len(events) != 1 {
+		t.Fatalf("audit event count=%d want=1", len(events))
+	}
+	event := events[0]
+	if event.EventType != audit.EventAuthLoginFailed {
+		t.Fatalf("event type=%q want=%q", event.EventType, audit.EventAuthLoginFailed)
+	}
+	if event.OrgID != orgID || event.PrincipalID != userID {
+		t.Fatalf("event principal/org mismatch: org=%s user=%s", event.OrgID, event.PrincipalID)
+	}
+	if event.IP != "203.0.113.77" {
+		t.Fatalf("event ip=%q want=%q", event.IP, "203.0.113.77")
+	}
+	if event.Outcome != "failure" {
+		t.Fatalf("event outcome=%q want=%q", event.Outcome, "failure")
+	}
+}
+
+func TestAPIKeyIssueAndRevokeRecordAuditEvents(t *testing.T) {
+	orgID := uuid.New()
+	userID := uuid.New()
+	keyID := uuid.New()
+	recorder := &capturedAuditRecorder{}
+	handler := authHandlers{
+		service: &fakeAuthService{
+			issueAPIKeyResult: &authsvc.IssueResult{
+				KeyID:       keyID,
+				RawKey:      "otk_123",
+				KeyPrefix:   "otk_123",
+				DisplayName: "CI",
+				CreatedAt:   time.Now().UTC(),
+			},
+		},
+		auditRecorder: recorder,
+	}
+
+	issueBody, err := json.Marshal(map[string]any{
+		"display_name": "CI",
+		"scopes":       []string{"read:audit"},
+	})
+	if err != nil {
+		t.Fatalf("marshal issue body: %v", err)
+	}
+	issueReq := httptest.NewRequest(http.MethodPost, "/v1/api-keys", bytes.NewReader(issueBody))
+	issueReq.Header.Set("Content-Type", "application/json")
+	issueReq.Header.Set("X-Forwarded-For", "198.51.100.10")
+	issueReq = issueReq.WithContext(middleware.WithPrincipal(issueReq.Context(), middleware.Principal{
+		UserID:         userID,
+		OrganizationID: orgID,
+		Role:           "admin",
+	}))
+	issueRR := httptest.NewRecorder()
+	handler.issueAPIKey(issueRR, issueReq)
+	if issueRR.Code != http.StatusCreated {
+		t.Fatalf("issue status=%d want=%d body=%s", issueRR.Code, http.StatusCreated, issueRR.Body.String())
+	}
+
+	revokeReq := httptest.NewRequest(http.MethodDelete, "/v1/api-keys/"+keyID.String(), nil)
+	revokeReq.Header.Set("X-Forwarded-For", "198.51.100.10")
+	revokeReq = revokeReq.WithContext(middleware.WithPrincipal(revokeReq.Context(), middleware.Principal{
+		UserID:         userID,
+		OrganizationID: orgID,
+		Role:           "admin",
+	}))
+	revokeReq = withRouteParams(revokeReq, map[string]string{"id": keyID.String()})
+	revokeRR := httptest.NewRecorder()
+	handler.revokeAPIKey(revokeRR, revokeReq)
+	if revokeRR.Code != http.StatusNoContent {
+		t.Fatalf("revoke status=%d want=%d body=%s", revokeRR.Code, http.StatusNoContent, revokeRR.Body.String())
+	}
+
+	events := recorder.Events()
+	if len(events) != 2 {
+		t.Fatalf("audit event count=%d want=2", len(events))
+	}
+	if events[0].EventType != audit.EventAPIKeyCreated {
+		t.Fatalf("event[0] type=%q want=%q", events[0].EventType, audit.EventAPIKeyCreated)
+	}
+	if events[1].EventType != audit.EventAPIKeyDeleted {
+		t.Fatalf("event[1] type=%q want=%q", events[1].EventType, audit.EventAPIKeyDeleted)
+	}
+	if events[1].Outcome != "success" {
+		t.Fatalf("event[1] outcome=%q want=%q", events[1].Outcome, "success")
+	}
+	if events[1].TargetID == nil || *events[1].TargetID != keyID {
+		t.Fatalf("event[1] target id=%v want=%s", events[1].TargetID, keyID)
+	}
+}
+
+func TestAdminUpdateUserRoleRecordsRoleChangedAuditEvent(t *testing.T) {
+	orgID := uuid.New()
+	adminID := uuid.New()
+	userID := uuid.New()
+	recorder := &capturedAuditRecorder{}
+	users := &fakeRoleUpdateUserRepo{
+		getByIDFn: func(_ context.Context, id uuid.UUID) (repo.HumanUser, error) {
+			if id != userID {
+				return repo.HumanUser{}, repo.ErrNotFound
+			}
+			return repo.HumanUser{
+				ID:             userID,
+				OrganizationID: orgID,
+				Email:          "member@example.com",
+				DisplayName:    "Member",
+				Role:           "member",
+				Settings:       []byte(`{}`),
+			}, nil
+		},
+		updateFn: func(_ context.Context, user repo.HumanUser) (repo.HumanUser, error) {
+			user.Role = "viewer"
+			return user, nil
+		},
+	}
+	handler := authHandlers{
+		service:       &fakeAuthService{},
+		users:         users,
+		auditRecorder: recorder,
+	}
+
+	body, err := json.Marshal(map[string]any{"role": "viewer"})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPatch, "/v1/admin/users/"+userID.String()+"/role", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-For", "203.0.113.90")
+	req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{
+		UserID:         adminID,
+		OrganizationID: orgID,
+		Role:           "admin",
+	}))
+	req = withRouteParams(req, map[string]string{"id": userID.String()})
+	rr := httptest.NewRecorder()
+
+	handler.adminUpdateUserRole(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	events := recorder.Events()
+	if len(events) != 1 {
+		t.Fatalf("audit event count=%d want=1", len(events))
+	}
+	if events[0].EventType != audit.EventUserRoleChanged {
+		t.Fatalf("event type=%q want=%q", events[0].EventType, audit.EventUserRoleChanged)
+	}
+	if events[0].Metadata["old_role"] != "member" || events[0].Metadata["new_role"] != "viewer" {
+		t.Fatalf("role metadata=%v", events[0].Metadata)
+	}
+	if events[0].IP != "203.0.113.90" || events[0].Outcome != "success" {
+		t.Fatalf("ip/outcome=(%q,%q) want=(%q,%q)", events[0].IP, events[0].Outcome, "203.0.113.90", "success")
+	}
+}
+
 type fakeAuthService struct {
+	loginResult           *authsvc.LoginResult
+	loginErr              error
+	logoutErr             error
+	issueAPIKeyResult     *authsvc.IssueResult
+	issueAPIKeyErr        error
+	revokeAPIKeyErr       error
 	validateSessionResult *authsvc.SessionInfo
 	validateSessionErr    error
 }
 
 func (f *fakeAuthService) Login(context.Context, string, string, string, string) (*authsvc.LoginResult, error) {
-	return nil, nil
+	return f.loginResult, f.loginErr
 }
 
-func (f *fakeAuthService) Logout(context.Context, string) error { return nil }
+func (f *fakeAuthService) Logout(context.Context, string) error { return f.logoutErr }
 
 func (f *fakeAuthService) RefreshSession(context.Context, string) (*authsvc.SessionInfo, error) {
 	return nil, nil
@@ -116,11 +381,11 @@ func (f *fakeAuthService) ValidateAPIKey(context.Context, string) (*authsvc.APIK
 }
 
 func (f *fakeAuthService) IssueAPIKey(context.Context, uuid.UUID, string, []string, *time.Time) (*authsvc.IssueResult, error) {
-	return nil, nil
+	return f.issueAPIKeyResult, f.issueAPIKeyErr
 }
 
 func (f *fakeAuthService) RevokeAPIKey(context.Context, uuid.UUID, uuid.UUID, string, uuid.UUID) error {
-	return nil
+	return f.revokeAPIKeyErr
 }
 
 func (f *fakeAuthService) ListAPIKeys(context.Context, uuid.UUID) ([]*authsvc.APIKeyInfo, error) {
@@ -227,4 +492,27 @@ func (f fallbackUserRepo) GetByEmail(context.Context, uuid.UUID, string) (repo.H
 
 func (f fallbackUserRepo) GetByEmailAnyOrg(context.Context, string) (repo.HumanUser, error) {
 	return f.user, nil
+}
+
+type fakeRoleUpdateUserRepo struct {
+	getByIDFn func(ctx context.Context, id uuid.UUID) (repo.HumanUser, error)
+	updateFn  func(ctx context.Context, user repo.HumanUser) (repo.HumanUser, error)
+}
+
+func (f *fakeRoleUpdateUserRepo) GetByID(ctx context.Context, id uuid.UUID) (repo.HumanUser, error) {
+	if f.getByIDFn != nil {
+		return f.getByIDFn(ctx, id)
+	}
+	return repo.HumanUser{}, repo.ErrNotFound
+}
+
+func (f *fakeRoleUpdateUserRepo) GetByEmail(context.Context, uuid.UUID, string) (repo.HumanUser, error) {
+	return repo.HumanUser{}, repo.ErrNotFound
+}
+
+func (f *fakeRoleUpdateUserRepo) Update(ctx context.Context, user repo.HumanUser) (repo.HumanUser, error) {
+	if f.updateFn != nil {
+		return f.updateFn(ctx, user)
+	}
+	return user, nil
 }

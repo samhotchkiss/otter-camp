@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/api"
+	"github.com/samhotchkiss/otter-camp/internal/audit"
 	"github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -23,10 +24,11 @@ import (
 )
 
 type authHandlers struct {
-	service  auth.Service
-	users    authUserRepository
-	sessions authSessionRepository
-	orgs     authOrganizationRepository
+	service       auth.Service
+	users         authUserRepository
+	sessions      authSessionRepository
+	orgs          authOrganizationRepository
+	auditRecorder audit.AuditRecorder
 }
 
 type authUserRepository interface {
@@ -36,6 +38,10 @@ type authUserRepository interface {
 
 type authUserCreator interface {
 	Create(ctx context.Context, user repo.HumanUser) (repo.HumanUser, error)
+}
+
+type authUserUpdater interface {
+	Update(ctx context.Context, user repo.HumanUser) (repo.HumanUser, error)
 }
 
 type authSessionRepository interface {
@@ -56,7 +62,13 @@ type rotatingSessionService interface {
 }
 
 func newAuthHandlers(service auth.Service, users authUserRepository, sessions authSessionRepository, orgs authOrganizationRepository) authHandlers {
-	return authHandlers{service: service, users: users, sessions: sessions, orgs: orgs}
+	return authHandlers{
+		service:       service,
+		users:         users,
+		sessions:      sessions,
+		orgs:          orgs,
+		auditRecorder: audit.NewNoopRecorder(),
+	}
 }
 
 type loginRequest struct {
@@ -88,6 +100,15 @@ type createOrganizationRequest struct {
 
 type adminResetPasswordRequest struct {
 	NewPassword string `json:"new_password"`
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+type adminUpdateRoleRequest struct {
+	Role string `json:"role"`
 }
 
 type userResponse struct {
@@ -155,6 +176,7 @@ func (h authHandlers) login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil {
+		h.recordFailedLoginAuditEvent(r.Context(), r, email, err)
 		if errors.Is(err, auth.ErrRateLimited) {
 			w.Header().Set("Retry-After", "900")
 		}
@@ -166,6 +188,23 @@ func (h authHandlers) login(w http.ResponseWriter, r *http.Request) {
 		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "login failed")
 		return
 	}
+
+	targetType := "auth_session"
+	targetID := result.Session.ID
+	h.recordAuditEvent(r.Context(), audit.Event{
+		OrgID:         result.Session.OrganizationID,
+		EventType:     audit.EventAuthLogin,
+		PrincipalType: "human",
+		PrincipalID:   result.Session.UserID,
+		TargetType:    &targetType,
+		TargetID:      &targetID,
+		IP:            requestClientIP(r),
+		Outcome:       "success",
+		Metadata: map[string]any{
+			"email":      strings.TrimSpace(result.Session.Email),
+			"user_agent": strings.TrimSpace(r.UserAgent()),
+		},
+	})
 
 	api.JSON(w, http.StatusOK, map[string]any{
 		"token":         result.SessionToken,
@@ -193,10 +232,103 @@ func (h authHandlers) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	principal, hasPrincipal := middleware.PrincipalFromContext(r.Context())
 	if err := h.service.Logout(r.Context(), sessionToken); err != nil {
+		if hasPrincipal {
+			h.recordAuditEvent(r.Context(), audit.Event{
+				OrgID:         principal.OrganizationID,
+				EventType:     audit.EventAuthLogout,
+				PrincipalType: "human",
+				PrincipalID:   principal.UserID,
+				IP:            requestClientIP(r),
+				Outcome:       "failure",
+				Metadata: map[string]any{
+					"error": strings.TrimSpace(err.Error()),
+				},
+			})
+		}
 		status, code, message := mapAuthError(err)
 		api.Error(w, status, code, message)
 		return
+	}
+	if hasPrincipal {
+		h.recordAuditEvent(r.Context(), audit.Event{
+			OrgID:         principal.OrganizationID,
+			EventType:     audit.EventAuthLogout,
+			PrincipalType: "human",
+			PrincipalID:   principal.UserID,
+			IP:            requestClientIP(r),
+			Outcome:       "success",
+		})
+	}
+
+	api.JSON(w, http.StatusOK, nil)
+}
+
+func (h authHandlers) changePassword(w http.ResponseWriter, r *http.Request) {
+	updater, ok := h.users.(authUserUpdater)
+	if h.users == nil || !ok || updater == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "user repository unavailable")
+		return
+	}
+	if h.sessions == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "session repository unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		api.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	var req changePasswordRequest
+	if err := decodeJSON(r, &req); err != nil {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+	currentPassword := strings.TrimSpace(req.CurrentPassword)
+	newPassword := strings.TrimSpace(req.NewPassword)
+	if currentPassword == "" || newPassword == "" {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "current_password and new_password are required")
+		return
+	}
+
+	user, err := h.users.GetByID(r.Context(), principal.UserID)
+	if err != nil {
+		api.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+		return
+	}
+	if user.OrganizationID != principal.OrganizationID {
+		api.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+		return
+	}
+	if user.PasswordHash == nil || bcrypt.CompareHashAndPassword([]byte(*user.PasswordHash), []byte(currentPassword)) != nil {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "current_password is incorrect")
+		return
+	}
+
+	hashed, err := hashPasswordForMode(newPassword)
+	if err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to update password")
+		return
+	}
+	user.PasswordHash = &hashed
+	if _, err := updater.Update(r.Context(), user); err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to update password")
+		return
+	}
+
+	sessions, err := h.sessions.ListActive(r.Context(), principal.UserID)
+	if err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to revoke sessions")
+		return
+	}
+	for _, session := range sessions {
+		if err := h.sessions.Revoke(r.Context(), session.ID); err != nil {
+			api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to revoke sessions")
+			return
+		}
 	}
 
 	api.JSON(w, http.StatusOK, nil)
@@ -431,6 +563,24 @@ func (h authHandlers) issueAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	targetType := "api_key"
+	targetID := issued.KeyID
+	h.recordAuditEvent(r.Context(), audit.Event{
+		OrgID:         principal.OrganizationID,
+		EventType:     audit.EventAPIKeyCreated,
+		PrincipalType: "human",
+		PrincipalID:   principal.UserID,
+		TargetType:    &targetType,
+		TargetID:      &targetID,
+		IP:            requestClientIP(r),
+		Outcome:       "success",
+		Metadata: map[string]any{
+			"display_name": strings.TrimSpace(issued.DisplayName),
+			"key_prefix":   strings.TrimSpace(issued.KeyPrefix),
+			"scopes":       append([]string{}, scopes...),
+		},
+	})
+
 	api.JSON(w, http.StatusCreated, apiKeyResponse{
 		ID:          issued.KeyID,
 		Key:         issued.RawKey,
@@ -462,6 +612,18 @@ func (h authHandlers) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 
 	err = h.service.RevokeAPIKey(r.Context(), keyID, principal.UserID, principal.Role, principal.OrganizationID)
 	if err != nil {
+		h.recordAuditEvent(r.Context(), audit.Event{
+			OrgID:         principal.OrganizationID,
+			EventType:     audit.EventAPIKeyDeleted,
+			PrincipalType: "human",
+			PrincipalID:   principal.UserID,
+			IP:            requestClientIP(r),
+			Outcome:       "failure",
+			Metadata: map[string]any{
+				"api_key_id": keyID.String(),
+				"error":      strings.TrimSpace(err.Error()),
+			},
+		})
 		switch {
 		case errors.Is(err, auth.ErrForbidden):
 			api.Error(w, http.StatusForbidden, api.ErrCodeForbidden, "forbidden")
@@ -472,6 +634,18 @@ func (h authHandlers) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+
+	targetType := "api_key"
+	h.recordAuditEvent(r.Context(), audit.Event{
+		OrgID:         principal.OrganizationID,
+		EventType:     audit.EventAPIKeyDeleted,
+		PrincipalType: "human",
+		PrincipalID:   principal.UserID,
+		TargetType:    &targetType,
+		TargetID:      &keyID,
+		IP:            requestClientIP(r),
+		Outcome:       "success",
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -737,6 +911,81 @@ func (h authHandlers) adminUnlockAccount(w http.ResponseWriter, r *http.Request)
 	api.JSON(w, http.StatusOK, map[string]bool{"unlocked": true})
 }
 
+func (h authHandlers) adminUpdateUserRole(w http.ResponseWriter, r *http.Request) {
+	target, ok := h.loadAdminTargetUser(w, r)
+	if !ok {
+		return
+	}
+
+	updater, ok := h.users.(authUserUpdater)
+	if !ok || updater == nil {
+		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "user repository unavailable")
+		return
+	}
+
+	var req adminUpdateRoleRequest
+	if err := decodeJSON(r, &req); err != nil {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+
+	role, err := normalizeUserRole(req.Role, "")
+	if err != nil {
+		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, err.Error())
+		return
+	}
+
+	updated, err := updater.Update(r.Context(), repo.HumanUser{
+		ID:                  target.ID,
+		OrganizationID:      target.OrganizationID,
+		Email:               target.Email,
+		DisplayName:         target.DisplayName,
+		PasswordHash:        target.PasswordHash,
+		Role:                role,
+		IsActive:            target.IsActive,
+		FailedLoginAttempts: target.FailedLoginAttempts,
+		LockedUntil:         target.LockedUntil,
+		LastLoginAt:         target.LastLoginAt,
+		Settings:            target.Settings,
+	})
+	if errors.Is(err, repo.ErrNotFound) {
+		api.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "user not found")
+		return
+	}
+	if err != nil {
+		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to update user role")
+		return
+	}
+
+	principal, hasPrincipal := middleware.PrincipalFromContext(r.Context())
+	if hasPrincipal {
+		targetType := "human_user"
+		targetID := updated.ID
+		h.recordAuditEvent(r.Context(), audit.Event{
+			OrgID:         principal.OrganizationID,
+			EventType:     audit.EventUserRoleChanged,
+			PrincipalType: "human",
+			PrincipalID:   principal.UserID,
+			TargetType:    &targetType,
+			TargetID:      &targetID,
+			IP:            requestClientIP(r),
+			Outcome:       "success",
+			Metadata: map[string]any{
+				"old_role": strings.ToLower(strings.TrimSpace(target.Role)),
+				"new_role": strings.ToLower(strings.TrimSpace(updated.Role)),
+			},
+		})
+	}
+
+	api.JSON(w, http.StatusOK, userResponse{
+		ID:             updated.ID,
+		OrganizationID: updated.OrganizationID,
+		Email:          updated.Email,
+		DisplayName:    updated.DisplayName,
+		Role:           updated.Role,
+	})
+}
+
 func (h authHandlers) consumeMagicLink(w http.ResponseWriter, r *http.Request) {
 	consumer, ok := h.service.(interface {
 		ConsumeMagicLink(ctx context.Context, token, ipAddr, userAgent string) (*auth.LoginResult, error)
@@ -808,6 +1057,51 @@ func (h authHandlers) loadAdminTargetUser(w http.ResponseWriter, r *http.Request
 	return target, true
 }
 
+func (h authHandlers) recordAuditEvent(ctx context.Context, event audit.Event) {
+	if h.auditRecorder == nil {
+		return
+	}
+	h.auditRecorder.RecordAsync(ctx, event)
+}
+
+func (h authHandlers) recordFailedLoginAuditEvent(ctx context.Context, r *http.Request, email string, loginErr error) {
+	if h.auditRecorder == nil {
+		return
+	}
+	if !errors.Is(loginErr, auth.ErrInvalidCredentials) && !errors.Is(loginErr, auth.ErrAccountLocked) {
+		return
+	}
+
+	lookup, ok := h.users.(orgLookupByEmailRepository)
+	if !ok || lookup == nil {
+		return
+	}
+
+	user, err := lookup.GetByEmailAnyOrg(ctx, email)
+	if err != nil {
+		return
+	}
+
+	reason := "invalid_credentials"
+	if errors.Is(loginErr, auth.ErrAccountLocked) {
+		reason = "account_locked"
+	}
+
+	h.auditRecorder.RecordAsync(ctx, audit.Event{
+		OrgID:         user.OrganizationID,
+		EventType:     audit.EventAuthLoginFailed,
+		PrincipalType: "human",
+		PrincipalID:   user.ID,
+		IP:            requestClientIP(r),
+		Outcome:       "failure",
+		Metadata: map[string]any{
+			"email":      strings.TrimSpace(email),
+			"user_agent": strings.TrimSpace(r.UserAgent()),
+			"reason":     reason,
+		},
+	})
+}
+
 func decodeJSON(r *http.Request, out any) error {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -876,46 +1170,6 @@ func hashPasswordForMode(password string) (string, error) {
 		return "", err
 	}
 	return string(hashBytes), nil
-}
-
-type changePasswordRequest struct {
-	CurrentPassword string `json:"current_password"`
-	NewPassword     string `json:"new_password"`
-}
-
-func (h authHandlers) changePassword(w http.ResponseWriter, r *http.Request) {
-	if h.service == nil {
-		api.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "auth service unavailable")
-		return
-	}
-
-	principal, ok := middleware.PrincipalFromContext(r.Context())
-	if !ok {
-		api.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
-		return
-	}
-
-	var req changePasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
-		return
-	}
-
-	if strings.TrimSpace(req.CurrentPassword) == "" || strings.TrimSpace(req.NewPassword) == "" {
-		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "current_password and new_password are required")
-		return
-	}
-
-	if err := h.service.ChangePassword(r.Context(), principal.UserID, principal.OrganizationID, req.CurrentPassword, req.NewPassword); err != nil {
-		if errors.Is(err, auth.ErrInvalidCredentials) {
-			api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "current password is incorrect")
-			return
-		}
-		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "change password failed")
-		return
-	}
-
-	api.JSON(w, http.StatusOK, nil)
 }
 
 func mapLoginError(err error) (status int, code, message string) {

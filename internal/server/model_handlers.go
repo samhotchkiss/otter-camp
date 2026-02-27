@@ -95,6 +95,7 @@ func (r *ModelRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.With(middleware.RequireRole("admin")).Put("/model/assignments/{scope_type}/{scope_id}", r.handlers.putAssignment)
 	router.With(middleware.RequireRole("admin")).Delete("/model/assignments/{scope_type}/{scope_id}", r.handlers.deleteAssignment)
 	router.Get("/model/invocations", r.handlers.listInvocations)
+	router.Get("/model/usage-rollup", r.handlers.getUsageRollup)
 
 	router.Get("/usage", r.handlers.getUsage)
 	router.Get("/usage/summary", r.handlers.getUsageSummary)
@@ -1194,6 +1195,77 @@ func (h modelHandlers) getUsage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h modelHandlers) getUsageRollup(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if h.pool == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "usage repository unavailable")
+		return
+	}
+
+	groupBy := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("group_by")))
+	if groupBy == "" {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "group_by is required")
+		return
+	}
+	if !isUsageRollupGroupBy(groupBy) {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "group_by must be one of model_provider, agent, project, period")
+		return
+	}
+	if groupBy == "period" {
+		if !strings.EqualFold(strings.TrimSpace(principal.Role), "admin") {
+			responder.Error(w, http.StatusForbidden, api.ErrCodeForbidden, "forbidden")
+			return
+		}
+	} else if !canReadUsage(principal, groupBy) {
+		responder.Error(w, http.StatusForbidden, api.ErrCodeForbidden, "forbidden")
+		return
+	}
+
+	periodRaw := strings.TrimSpace(r.URL.Query().Get("period"))
+	if periodRaw == "" {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "period is required")
+		return
+	}
+	periodStart, periodEnd, err := parseUsagePeriod(time.Now().UTC(), periodRaw)
+	if err != nil {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, err.Error())
+		return
+	}
+
+	query := usageQuery{
+		OrganizationID:    principal.OrganizationID,
+		GroupBy:           groupBy,
+		PeriodStart:       periodStart,
+		PeriodEnd:         periodEnd,
+		ModelName:         normalizeOptionalStringValue(r.URL.Query().Get("model_name")),
+		InvocationPurpose: normalizeOptionalStringValue(r.URL.Query().Get("invocation_purpose")),
+	}
+
+	var rows []usageRow
+	if groupBy == "period" {
+		rows, err = h.queryUsagePeriodRows(r.Context(), query)
+	} else {
+		rows, err = h.queryUsageRows(r.Context(), query)
+	}
+	if err != nil {
+		h.respondModelError(responder, w, err)
+		return
+	}
+
+	responder.JSON(w, http.StatusOK, usageResponse{
+		Data: rows,
+		Meta: usageMeta{
+			PeriodStart: periodStart.Format("2006-01-02"),
+			PeriodEnd:   periodEnd.Format("2006-01-02"),
+			TotalRows:   len(rows),
+		},
+	})
+}
+
 func (h modelHandlers) getUsageSummary(w http.ResponseWriter, r *http.Request) {
 	responder := api.NewResponder(r.Context())
 	principal, ok := h.requirePrincipal(w, r)
@@ -1302,6 +1374,77 @@ func (h modelHandlers) queryUsageRows(ctx context.Context, query usageQuery) ([]
 			return nil, scanErr
 		}
 		response = append(response, row)
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+
+	return response, nil
+}
+
+func (h modelHandlers) queryUsagePeriodRows(ctx context.Context, query usageQuery) ([]usageRow, error) {
+	args := []any{query.OrganizationID, query.PeriodStart, query.PeriodEnd}
+	where := []string{
+		"mur.organization_id = $1",
+		"mur.rollup_date BETWEEN $2 AND $3",
+	}
+
+	nextArg := 4
+	if query.ModelName != nil {
+		where = append(where, fmt.Sprintf("mur.model_name = $%d", nextArg))
+		args = append(args, *query.ModelName)
+		nextArg++
+	}
+	if query.InvocationPurpose != nil {
+		where = append(where, fmt.Sprintf("mur.invocation_purpose = $%d", nextArg))
+		args = append(args, *query.InvocationPurpose)
+	}
+
+	sql := fmt.Sprintf(`
+		SELECT
+			mur.rollup_date,
+			COALESCE(SUM(mur.total_invocations), 0),
+			COALESCE(SUM(mur.total_input_tokens), 0),
+			COALESCE(SUM(mur.total_output_tokens), 0),
+			COALESCE(SUM(mur.total_cost_microcents), 0)
+		FROM model_usage_rollup mur
+		WHERE %s
+		GROUP BY mur.rollup_date
+		ORDER BY mur.rollup_date ASC
+	`, strings.Join(where, " AND "))
+
+	rows, err := h.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	response := make([]usageRow, 0)
+	for rows.Next() {
+		var (
+			rollupDate          time.Time
+			totalInvocations    int64
+			totalInputTokens    int64
+			totalOutputTokens   int64
+			totalCostMicrocents int64
+		)
+		if scanErr := rows.Scan(
+			&rollupDate,
+			&totalInvocations,
+			&totalInputTokens,
+			&totalOutputTokens,
+			&totalCostMicrocents,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		response = append(response, usageRow{
+			RollupType:          "period",
+			RollupDate:          rollupDate.UTC().Format("2006-01-02"),
+			TotalInvocations:    totalInvocations,
+			TotalInputTokens:    totalInputTokens,
+			TotalOutputTokens:   totalOutputTokens,
+			TotalCostMicrocents: totalCostMicrocents,
+		})
 	}
 	if rows.Err() != nil {
 		return nil, rows.Err()
@@ -1504,6 +1647,15 @@ func normalizeOptionalStringValue(raw string) *string {
 func isUsageGroupBy(value string) bool {
 	switch value {
 	case "provider_connection", "model_provider", "agent", "project":
+		return true
+	default:
+		return false
+	}
+}
+
+func isUsageRollupGroupBy(value string) bool {
+	switch value {
+	case "model_provider", "agent", "project", "period":
 		return true
 	default:
 		return false

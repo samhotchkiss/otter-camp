@@ -34,7 +34,9 @@ func TestAuthHTTPLoginMeLogoutAndExpiredSession(t *testing.T) {
 	loginResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/auth/login", map[string]any{
 		"email":    adminUser.Email,
 		"password": "admin-password",
-	}, nil)
+	}, map[string]string{
+		"X-Forwarded-For": "203.0.113.120",
+	})
 	if loginResp.StatusCode != http.StatusOK {
 		t.Fatalf("login status = %d, want %d body=%s", loginResp.StatusCode, http.StatusOK, string(loginResp.Body))
 	}
@@ -59,10 +61,14 @@ func TestAuthHTTPLoginMeLogoutAndExpiredSession(t *testing.T) {
 	}
 
 	logoutResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/auth/logout", map[string]any{}, map[string]string{
-		"Authorization": "Bearer " + token,
+		"Authorization":   "Bearer " + token,
+		"X-Forwarded-For": "203.0.113.120",
 	})
-	if logoutResp.StatusCode != http.StatusNoContent {
-		t.Fatalf("logout status = %d, want %d body=%s", logoutResp.StatusCode, http.StatusNoContent, string(logoutResp.Body))
+	if logoutResp.StatusCode != http.StatusOK {
+		t.Fatalf("logout status = %d, want %d body=%s", logoutResp.StatusCode, http.StatusOK, string(logoutResp.Body))
+	}
+	if !hasJSONPath(logoutResp.Body, "meta", "request_id") {
+		t.Fatalf("logout response missing envelope meta body=%s", string(logoutResp.Body))
 	}
 
 	meAfterLogout := mustJSON(t, http.MethodGet, testServer.URL+"/v1/auth/me", nil, map[string]string{
@@ -71,6 +77,11 @@ func TestAuthHTTPLoginMeLogoutAndExpiredSession(t *testing.T) {
 	if meAfterLogout.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("me after logout status = %d, want %d body=%s", meAfterLogout.StatusCode, http.StatusUnauthorized, string(meAfterLogout.Body))
 	}
+	assertLatestAuditMetadataField(t, testServer.Pool, "auth.login", "ip", "203.0.113.120")
+	assertLatestAuditMetadataField(t, testServer.Pool, "auth.login", "outcome", "success")
+	assertLatestAuditPrincipalID(t, testServer.Pool, "auth.login", adminUser.ID.String())
+	assertLatestAuditMetadataField(t, testServer.Pool, "auth.logout", "ip", "203.0.113.120")
+	assertLatestAuditMetadataField(t, testServer.Pool, "auth.logout", "outcome", "success")
 
 	expiredToken := "expired-session-token"
 	sessionRepo := repo.NewAuthSessionRepo(testServer.Pool)
@@ -93,6 +104,58 @@ func TestAuthHTTPLoginMeLogoutAndExpiredSession(t *testing.T) {
 	}
 }
 
+func TestAuthHTTPChangePassword(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, _ := newAuthTestServer(t, "standard")
+	defer testServer.Close()
+
+	token := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	wrongCurrent := mustJSON(t, http.MethodPost, testServer.URL+"/v1/auth/change-password", map[string]any{
+		"current_password": "wrong-password",
+		"new_password":     "new-admin-password",
+	}, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if wrongCurrent.StatusCode != http.StatusBadRequest {
+		t.Fatalf("wrong current password status = %d, want %d body=%s", wrongCurrent.StatusCode, http.StatusBadRequest, string(wrongCurrent.Body))
+	}
+
+	changed := mustJSON(t, http.MethodPost, testServer.URL+"/v1/auth/change-password", map[string]any{
+		"current_password": "admin-password",
+		"new_password":     "new-admin-password",
+	}, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if changed.StatusCode != http.StatusOK {
+		t.Fatalf("change password status = %d, want %d body=%s", changed.StatusCode, http.StatusOK, string(changed.Body))
+	}
+
+	meAfterChange := mustJSON(t, http.MethodGet, testServer.URL+"/v1/auth/me", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if meAfterChange.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("me after password change status = %d, want %d body=%s", meAfterChange.StatusCode, http.StatusUnauthorized, string(meAfterChange.Body))
+	}
+
+	oldLogin := mustJSON(t, http.MethodPost, testServer.URL+"/v1/auth/login", map[string]any{
+		"email":    adminUser.Email,
+		"password": "admin-password",
+	}, nil)
+	if oldLogin.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("old password login status = %d, want %d body=%s", oldLogin.StatusCode, http.StatusUnauthorized, string(oldLogin.Body))
+	}
+
+	newLogin := mustJSON(t, http.MethodPost, testServer.URL+"/v1/auth/login", map[string]any{
+		"email":    adminUser.Email,
+		"password": "new-admin-password",
+	}, nil)
+	if newLogin.StatusCode != http.StatusOK {
+		t.Fatalf("new password login status = %d, want %d body=%s", newLogin.StatusCode, http.StatusOK, string(newLogin.Body))
+	}
+}
+
 func TestAuthHTTPAPIKeyLifecycleAndAdminRevoke(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 
@@ -103,7 +166,10 @@ func TestAuthHTTPAPIKeyLifecycleAndAdminRevoke(t *testing.T) {
 	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/api-keys", map[string]any{
 		"display_name": "member-cli",
 		"scopes":       []string{"chat:read"},
-	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	}, map[string]string{
+		"Authorization":   "Bearer " + memberToken,
+		"X-Forwarded-For": "203.0.113.121",
+	})
 	if created.StatusCode != http.StatusCreated {
 		t.Fatalf("create key status = %d, want %d body=%s", created.StatusCode, http.StatusCreated, string(created.Body))
 	}
@@ -134,7 +200,8 @@ func TestAuthHTTPAPIKeyLifecycleAndAdminRevoke(t *testing.T) {
 
 	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
 	revoked := mustJSON(t, http.MethodDelete, testServer.URL+"/v1/api-keys/"+apiKeyID, nil, map[string]string{
-		"Authorization": "Bearer " + adminToken,
+		"Authorization":   "Bearer " + adminToken,
+		"X-Forwarded-For": "203.0.113.122",
 	})
 	if revoked.StatusCode != http.StatusNoContent {
 		t.Fatalf("revoke status = %d, want %d body=%s", revoked.StatusCode, http.StatusNoContent, string(revoked.Body))
@@ -146,6 +213,47 @@ func TestAuthHTTPAPIKeyLifecycleAndAdminRevoke(t *testing.T) {
 	if afterRevoke.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("me after revoke status = %d, want %d body=%s", afterRevoke.StatusCode, http.StatusUnauthorized, string(afterRevoke.Body))
 	}
+	assertLatestAuditMetadataField(t, testServer.Pool, "api_key.created", "ip", "203.0.113.121")
+	assertLatestAuditMetadataField(t, testServer.Pool, "api_key.created", "outcome", "success")
+	assertLatestAuditMetadataField(t, testServer.Pool, "api_key.deleted", "ip", "203.0.113.122")
+	assertLatestAuditMetadataField(t, testServer.Pool, "api_key.deleted", "outcome", "success")
+}
+
+func TestAuthHTTPAdminRoleChangeRecordsAudit(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, memberUser := newAuthTestServer(t, "standard")
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	listed := mustJSON(t, http.MethodGet, testServer.URL+"/v1/admin/users?email="+memberUser.Email, nil, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if listed.StatusCode != http.StatusOK {
+		t.Fatalf("list users status = %d, want %d body=%s", listed.StatusCode, http.StatusOK, string(listed.Body))
+	}
+	memberID := jsonPathString(t, listed.Body, "data", "0", "id")
+	if strings.TrimSpace(memberID) == "" {
+		t.Fatalf("expected member id in response: %s", string(listed.Body))
+	}
+
+	updated := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/admin/users/"+memberID+"/role", map[string]any{
+		"role": "admin",
+	}, map[string]string{
+		"Authorization":   "Bearer " + adminToken,
+		"X-Forwarded-For": "203.0.113.123",
+	})
+	if updated.StatusCode != http.StatusOK {
+		t.Fatalf("role change status = %d, want %d body=%s", updated.StatusCode, http.StatusOK, string(updated.Body))
+	}
+	if got := jsonPathString(t, updated.Body, "data", "role"); got != "admin" {
+		t.Fatalf("updated role = %q, want %q", got, "admin")
+	}
+
+	assertLatestAuditMetadataField(t, testServer.Pool, "user.role_changed", "ip", "203.0.113.123")
+	assertLatestAuditMetadataField(t, testServer.Pool, "user.role_changed", "outcome", "success")
+	assertLatestAuditMetadataField(t, testServer.Pool, "user.role_changed", "old_role", "member")
+	assertLatestAuditMetadataField(t, testServer.Pool, "user.role_changed", "new_role", "admin")
 }
 
 func TestAuthHTTPLoginRateLimit(t *testing.T) {
@@ -172,6 +280,27 @@ func TestAuthHTTPLoginRateLimit(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestAuthHTTPWrongPasswordRecordsFailedLoginAudit(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, _ := newAuthTestServer(t, "standard")
+	defer testServer.Close()
+
+	resp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/auth/login", map[string]any{
+		"email":    adminUser.Email,
+		"password": "wrong-password",
+	}, map[string]string{
+		"X-Forwarded-For": "203.0.113.124",
+	})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong password status = %d, want %d body=%s", resp.StatusCode, http.StatusUnauthorized, string(resp.Body))
+	}
+
+	assertLatestAuditMetadataField(t, testServer.Pool, "auth.login_failed", "ip", "203.0.113.124")
+	assertLatestAuditMetadataField(t, testServer.Pool, "auth.login_failed", "outcome", "failure")
+	assertLatestAuditPrincipalID(t, testServer.Pool, "auth.login_failed", adminUser.ID.String())
 }
 
 func TestAuthHTTPLocalModeAutoLogin(t *testing.T) {
@@ -764,4 +893,42 @@ func stringValue(value any) string {
 func sha256Hex(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
+}
+
+func assertLatestAuditMetadataField(t *testing.T, pool *pgxpool.Pool, eventType, field, want string) {
+	t.Helper()
+
+	var value string
+	err := pool.QueryRow(context.Background(), `
+		SELECT COALESCE(metadata ->> $2, '')
+		FROM audit_event
+		WHERE event_type = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, eventType, field).Scan(&value)
+	if err != nil {
+		t.Fatalf("query audit metadata event=%s field=%s: %v", eventType, field, err)
+	}
+	if value != want {
+		t.Fatalf("audit metadata event=%s field=%s got=%q want=%q", eventType, field, value, want)
+	}
+}
+
+func assertLatestAuditPrincipalID(t *testing.T, pool *pgxpool.Pool, eventType, want string) {
+	t.Helper()
+
+	var principalID string
+	err := pool.QueryRow(context.Background(), `
+		SELECT principal_id::text
+		FROM audit_event
+		WHERE event_type = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, eventType).Scan(&principalID)
+	if err != nil {
+		t.Fatalf("query audit principal event=%s: %v", eventType, err)
+	}
+	if principalID != want {
+		t.Fatalf("audit principal event=%s got=%q want=%q", eventType, principalID, want)
+	}
 }

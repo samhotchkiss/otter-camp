@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/agent"
+	"github.com/samhotchkiss/otter-camp/internal/audit"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
@@ -59,6 +60,164 @@ func TestCreateAgentValidationHappensBeforeServiceCall(t *testing.T) {
 			t.Fatalf("Create called %d times, want 0", svc.createCalls)
 		}
 	})
+}
+
+func TestCreateAgentRecordsAuditEvent(t *testing.T) {
+	orgID := uuid.New()
+	userID := uuid.New()
+	agentID := uuid.New()
+	recorder := &capturedAuditRecorder{}
+	svc := &fakeAgentService{
+		createFn: func(_ context.Context, req agent.CreateAgentRequest) (*agent.Agent, error) {
+			return &agent.Agent{
+				ID:              agentID,
+				OrganizationID:  req.OrganizationID,
+				DisplayName:     req.DisplayName,
+				AgentClass:      "staff",
+				AgentType:       req.AgentType,
+				LifecycleStatus: "active",
+			}, nil
+		},
+	}
+	h := newAgentHandlers(svc, nil)
+	h.auditRecorder = recorder
+
+	payload, err := json.Marshal(map[string]any{
+		"display_name": "Builder",
+		"agent_class":  "staff",
+		"agent_type":   "worker",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/agents", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-For", "203.0.113.15")
+	req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{
+		UserID:         userID,
+		OrganizationID: orgID,
+		Role:           "admin",
+	}))
+	rr := httptest.NewRecorder()
+
+	h.createAgent(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status=%d want=%d body=%s", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+	events := recorder.Events()
+	if len(events) != 1 {
+		t.Fatalf("audit event count=%d want=1", len(events))
+	}
+	if events[0].EventType != audit.EventAgentCreated {
+		t.Fatalf("event type=%q want=%q", events[0].EventType, audit.EventAgentCreated)
+	}
+	if events[0].TargetID == nil || *events[0].TargetID != agentID {
+		t.Fatalf("target id=%v want=%s", events[0].TargetID, agentID)
+	}
+	if events[0].IP != "203.0.113.15" || events[0].Outcome != "success" {
+		t.Fatalf("ip/outcome=(%q,%q) want=(%q,%q)", events[0].IP, events[0].Outcome, "203.0.113.15", "success")
+	}
+}
+
+func TestUpdateAgentRecordsAuditEvent(t *testing.T) {
+	orgID := uuid.New()
+	userID := uuid.New()
+	agentID := uuid.New()
+	recorder := &capturedAuditRecorder{}
+	svc := &fakeAgentService{
+		updateFn: func(_ context.Context, _, id uuid.UUID, req agent.UpdateAgentRequest) (*agent.Agent, error) {
+			displayName := "Updated Agent"
+			if req.DisplayName != nil {
+				displayName = strings.TrimSpace(*req.DisplayName)
+			}
+			return &agent.Agent{
+				ID:              id,
+				OrganizationID:  orgID,
+				DisplayName:     displayName,
+				AgentClass:      "staff",
+				AgentType:       "worker",
+				LifecycleStatus: "active",
+			}, nil
+		},
+	}
+	h := newAgentHandlers(svc, nil)
+	h.auditRecorder = recorder
+
+	body := map[string]any{"display_name": "Updated Agent"}
+	req := newAssignmentRequest(t, http.MethodPatch, "/v1/agents/"+agentID.String(), body, orgID, "admin")
+	req.Header.Set("X-Forwarded-For", "198.51.100.31")
+	req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{
+		UserID:         userID,
+		OrganizationID: orgID,
+		Role:           "admin",
+	}))
+	req = withRouteParams(req, map[string]string{"id": agentID.String()})
+	rr := httptest.NewRecorder()
+
+	h.updateAgent(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	events := recorder.Events()
+	if len(events) != 1 {
+		t.Fatalf("audit event count=%d want=1", len(events))
+	}
+	if events[0].EventType != audit.EventAgentUpdated {
+		t.Fatalf("event type=%q want=%q", events[0].EventType, audit.EventAgentUpdated)
+	}
+	if events[0].TargetID == nil || *events[0].TargetID != agentID {
+		t.Fatalf("target id=%v want=%s", events[0].TargetID, agentID)
+	}
+}
+
+func TestRetireAgentRecordsDeletedAuditEvent(t *testing.T) {
+	orgID := uuid.New()
+	userID := uuid.New()
+	agentID := uuid.New()
+	recorder := &capturedAuditRecorder{}
+	svc := &fakeAgentService{
+		getFn: func(_ context.Context, _, id uuid.UUID) (*agent.Agent, error) {
+			return &agent.Agent{
+				ID:              id,
+				OrganizationID:  orgID,
+				DisplayName:     "Builder",
+				AgentClass:      "staff",
+				AgentType:       "worker",
+				LifecycleStatus: "retired",
+			}, nil
+		},
+		retireFn: func(context.Context, uuid.UUID, uuid.UUID) error { return nil },
+	}
+	h := newAgentHandlers(svc, nil)
+	h.auditRecorder = recorder
+
+	req := newAssignmentRequest(t, http.MethodPost, "/v1/agents/"+agentID.String()+"/retire", map[string]any{}, orgID, "admin")
+	req.Header.Set("X-Forwarded-For", "198.51.100.88")
+	req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{
+		UserID:         userID,
+		OrganizationID: orgID,
+		Role:           "admin",
+	}))
+	req = withRouteParams(req, map[string]string{"id": agentID.String()})
+	rr := httptest.NewRecorder()
+
+	h.retireAgent(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	events := recorder.Events()
+	if len(events) != 1 {
+		t.Fatalf("audit event count=%d want=1", len(events))
+	}
+	if events[0].EventType != audit.EventAgentDeleted {
+		t.Fatalf("event type=%q want=%q", events[0].EventType, audit.EventAgentDeleted)
+	}
+	if events[0].TargetID == nil || *events[0].TargetID != agentID {
+		t.Fatalf("target id=%v want=%s", events[0].TargetID, agentID)
+	}
 }
 
 func TestMapAgentErrorMappings(t *testing.T) {
@@ -132,6 +291,9 @@ func TestAgentAssignmentRoutesRegistered(t *testing.T) {
 		"POST /agents/{id}/project-assignments",
 		"DELETE /agents/{id}/project-assignments/{pid}",
 		"GET /agents/{id}/project-assignments",
+		"GET /projects/{id}/agents",
+		"POST /projects/{id}/agents",
+		"DELETE /projects/{id}/agents/{agent_id}",
 		"GET /agents/{id}/skills",
 		"POST /agents/{id}/skills",
 		"DELETE /agents/{id}/skills/{sid}",
@@ -351,6 +513,12 @@ func TestCreateAgentProjectAssignmentCrossOrgRejectedBeforeServiceCall(t *testin
 type fakeAgentService struct {
 	createCalls int
 	createFn    func(ctx context.Context, req agent.CreateAgentRequest) (*agent.Agent, error)
+	getFn       func(ctx context.Context, orgID, agentID uuid.UUID) (*agent.Agent, error)
+	updateFn    func(ctx context.Context, orgID, agentID uuid.UUID, req agent.UpdateAgentRequest) (*agent.Agent, error)
+	pauseFn     func(ctx context.Context, orgID, agentID uuid.UUID) error
+	unpauseFn   func(ctx context.Context, orgID, agentID uuid.UUID) error
+	retireFn    func(ctx context.Context, orgID, agentID uuid.UUID) error
+	cancelFn    func(ctx context.Context, orgID, agentID uuid.UUID) error
 }
 
 func (f *fakeAgentService) Create(ctx context.Context, req agent.CreateAgentRequest) (*agent.Agent, error) {
@@ -367,7 +535,10 @@ func (f *fakeAgentService) Create(ctx context.Context, req agent.CreateAgentRequ
 	}, nil
 }
 
-func (*fakeAgentService) Get(context.Context, uuid.UUID, uuid.UUID) (*agent.Agent, error) {
+func (f *fakeAgentService) Get(ctx context.Context, orgID, agentID uuid.UUID) (*agent.Agent, error) {
+	if f.getFn != nil {
+		return f.getFn(ctx, orgID, agentID)
+	}
 	return nil, errors.New("not implemented")
 }
 
@@ -375,23 +546,38 @@ func (*fakeAgentService) List(context.Context, uuid.UUID, agent.AgentFilter) ([]
 	return nil, errors.New("not implemented")
 }
 
-func (*fakeAgentService) Update(context.Context, uuid.UUID, uuid.UUID, agent.UpdateAgentRequest) (*agent.Agent, error) {
+func (f *fakeAgentService) Update(ctx context.Context, orgID, agentID uuid.UUID, req agent.UpdateAgentRequest) (*agent.Agent, error) {
+	if f.updateFn != nil {
+		return f.updateFn(ctx, orgID, agentID, req)
+	}
 	return nil, errors.New("not implemented")
 }
 
-func (*fakeAgentService) Pause(context.Context, uuid.UUID, uuid.UUID) error {
+func (f *fakeAgentService) Pause(ctx context.Context, orgID, agentID uuid.UUID) error {
+	if f.pauseFn != nil {
+		return f.pauseFn(ctx, orgID, agentID)
+	}
 	return errors.New("not implemented")
 }
 
-func (*fakeAgentService) Unpause(context.Context, uuid.UUID, uuid.UUID) error {
+func (f *fakeAgentService) Unpause(ctx context.Context, orgID, agentID uuid.UUID) error {
+	if f.unpauseFn != nil {
+		return f.unpauseFn(ctx, orgID, agentID)
+	}
 	return errors.New("not implemented")
 }
 
-func (*fakeAgentService) Retire(context.Context, uuid.UUID, uuid.UUID) error {
+func (f *fakeAgentService) Retire(ctx context.Context, orgID, agentID uuid.UUID) error {
+	if f.retireFn != nil {
+		return f.retireFn(ctx, orgID, agentID)
+	}
 	return errors.New("not implemented")
 }
 
-func (*fakeAgentService) Cancel(context.Context, uuid.UUID, uuid.UUID) error {
+func (f *fakeAgentService) Cancel(ctx context.Context, orgID, agentID uuid.UUID) error {
+	if f.cancelFn != nil {
+		return f.cancelFn(ctx, orgID, agentID)
+	}
 	return errors.New("not implemented")
 }
 
@@ -532,12 +718,20 @@ func (f *fakeSkillLookupRepo) GetByID(ctx context.Context, id uuid.UUID) (repo.S
 }
 
 type fakeProjectAssignmentRepo struct {
-	listByAgentFn func(ctx context.Context, agentID uuid.UUID) ([]repo.AgentProjectAssignment, error)
+	listByAgentFn   func(ctx context.Context, agentID uuid.UUID) ([]repo.AgentProjectAssignment, error)
+	listByProjectFn func(ctx context.Context, projectID uuid.UUID) ([]repo.AgentProjectAssignment, error)
 }
 
 func (f *fakeProjectAssignmentRepo) ListByAgent(ctx context.Context, agentID uuid.UUID) ([]repo.AgentProjectAssignment, error) {
 	if f.listByAgentFn != nil {
 		return f.listByAgentFn(ctx, agentID)
+	}
+	return nil, nil
+}
+
+func (f *fakeProjectAssignmentRepo) ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.AgentProjectAssignment, error) {
+	if f.listByProjectFn != nil {
+		return f.listByProjectFn(ctx, projectID)
 	}
 	return nil, nil
 }

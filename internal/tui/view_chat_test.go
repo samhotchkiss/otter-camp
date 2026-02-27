@@ -103,3 +103,85 @@ func TestInterjectionMessagesRenderWithInterjectedLabel(t *testing.T) {
 		t.Fatalf("interjection content missing from rendered output: %q", rendered)
 	}
 }
+
+func TestMarkdownRenderedForAssistantMessages(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.chatMessages = []ChatMessage{
+		{
+			ID:        "msg-markdown",
+			Role:      "assistant",
+			Content:   "### Heading\n\n**bold** with `code`\n- item",
+			Finalized: true,
+			Timestamp: time.Date(2026, time.January, 2, 15, 4, 0, 0, time.Local),
+		},
+	}
+
+	lines := model.renderChatMessages(80)
+	rendered := strings.Join(lines, "\n")
+	for _, raw := range []string{"### Heading", "**bold**", "`code`"} {
+		if strings.Contains(rendered, raw) {
+			t.Fatalf("raw markdown marker %q should not be present after rendering: %q", raw, rendered)
+		}
+	}
+	for _, want := range []string{"Heading", "bold", "code", "item"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered markdown missing expected text %q: %q", want, rendered)
+		}
+	}
+}
+
+func TestPlainTextForUserMessages(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.chatMessages = []ChatMessage{
+		{
+			ID:        "msg-user-markdown",
+			Role:      "user",
+			Content:   "**bold**",
+			Finalized: true,
+			Timestamp: time.Date(2026, time.January, 2, 15, 5, 0, 0, time.Local),
+		},
+	}
+
+	rendered := strings.Join(model.renderChatMessages(80), "\n")
+	if !strings.Contains(rendered, "**bold**") {
+		t.Fatalf("user messages should preserve literal markdown markers: %q", rendered)
+	}
+}
+
+func TestStreamingAssistantMessageRendersMarkdown(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.chatMessages = []ChatMessage{
+		{
+			ID:        "msg-streaming",
+			Role:      "assistant",
+			Content:   "**streaming**",
+			Finalized: false,
+			Timestamp: time.Date(2026, time.January, 2, 15, 5, 0, 0, time.Local),
+		},
+	}
+
+	lines := model.renderChatMessages(80)
+	rendered := strings.Join(lines, "\n")
+	if strings.Contains(rendered, "**streaming**") {
+		t.Fatalf("streaming assistant markdown should be rendered without literal markers: %q", rendered)
+	}
+	if !strings.Contains(rendered, "streaming") {
+		t.Fatalf("streaming assistant markdown text missing from rendered output: %q", rendered)
+	}
+	if !strings.Contains(rendered, "▌") {
+		t.Fatalf("streaming cursor missing: %q", rendered)
+	}
+}
+
+func TestNormalizeRenderedMarkdownRemovesInlineCodeBackticks(t *testing.T) {
+	raw := "### Heading\n\n**bold** and `code`"
+	normalized := normalizeRenderedMarkdown(raw)
+	if strings.Contains(normalized, "`code`") {
+		t.Fatalf("inline code backticks were not removed: %q", normalized)
+	}
+	for _, want := range []string{"Heading", "bold", "code"} {
+		if !strings.Contains(normalized, want) {
+			t.Fatalf("normalized output missing %q: %q", want, normalized)
+		}
+	}
+}

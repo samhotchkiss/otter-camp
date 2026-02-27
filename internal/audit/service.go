@@ -59,6 +59,7 @@ func (s *Service) Record(ctx context.Context, event Event) error {
 	if (normalizedDelegatedByType == nil) != (event.DelegatedByID == nil) {
 		return fmt.Errorf("delegated_by_type and delegated_by_id must both be set or both be nil")
 	}
+	outcome := normalizeOutcome(event.Outcome)
 
 	return s.repo.Insert(ctx, repo.AuditEvent{
 		OrganizationID:  event.OrgID,
@@ -69,6 +70,8 @@ func (s *Service) Record(ctx context.Context, event Event) error {
 		DelegatedByID:   event.DelegatedByID,
 		TargetType:      normalizedTargetType,
 		TargetID:        event.TargetID,
+		IP:              strings.TrimSpace(event.IP),
+		Outcome:         outcome,
 		Metadata:        cloneMetadata(event.Metadata),
 	})
 }
@@ -119,6 +122,15 @@ func normalizeOptionalType(value *string) (*string, error) {
 		return nil, fmt.Errorf("type value must not be blank when provided")
 	}
 	return &normalized, nil
+}
+
+func normalizeOutcome(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "failure", "error":
+		return "failure"
+	default:
+		return "success"
+	}
 }
 
 func withoutCancel(ctx context.Context) context.Context {

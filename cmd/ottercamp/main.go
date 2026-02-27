@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"golang.org/x/term"
 	"github.com/jackc/pgx/v5/pgxpool"
 	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/audit"
@@ -61,6 +60,7 @@ import (
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 	"github.com/samhotchkiss/otter-camp/internal/worker"
+	"golang.org/x/term"
 )
 
 var (
@@ -428,6 +428,7 @@ func runServe() int {
 				repo.NewAgentProjectAssignmentRepo(pool.Raw()),
 				repo.NewAgentSkillAttachmentRepo(pool.Raw()),
 				repo.NewToolDefinitionRepo(pool.Raw()),
+				auditRecorder,
 			),
 			server.NewMCPRouteRegistrar(mcpService, repo.NewMCPToolCatalogRepo(pool.Raw())),
 			server.NewModelRouteRegistrar(pool.Raw()),
@@ -455,6 +456,7 @@ func runServe() int {
 				Pool:       pool.Raw(),
 				RunService: controlRunService,
 			}),
+			server.NewTraceRouteRegistrar(pool.Raw()),
 		},
 		TestMode:     cfg.Mode == config.ModeTest,
 		TestResetter: resetter,

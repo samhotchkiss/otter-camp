@@ -899,9 +899,9 @@ func (s *service) RedactMessage(ctx context.Context, messageID uuid.UUID) error 
 	if !ok {
 		return ErrForbidden
 	}
-	isAdmin := isAdminRole(principal.Role)
 	isAuthor := message.AuthorType != nil && *message.AuthorType == "human_user" && message.AuthorID != nil && *message.AuthorID == principal.UserID
-	if !isAdmin && !isAuthor {
+	isSessionOwner := strings.EqualFold(session.CreatedByType, "human_user") && session.CreatedByID == principal.UserID
+	if !isSessionOwner && !isAuthor {
 		return ErrForbidden
 	}
 

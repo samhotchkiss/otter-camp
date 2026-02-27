@@ -78,10 +78,6 @@ type controlToolExecutionRepository interface {
 	ListByOrganization(ctx context.Context, filter controlplane.ToolExecutionListFilter) ([]controlplane.ToolExecution, error)
 }
 
-type controlTraceSpanRepository interface {
-	List(ctx context.Context, filter repo.TraceSpanFilter) ([]repo.TraceSpan, error)
-}
-
 type controlArtifactURLSigner interface {
 	PresignGetURL(ctx context.Context, storageKey string, ttl time.Duration) (string, error)
 }
@@ -106,7 +102,6 @@ type ControlPlaneRouteOptions struct {
 	RunEvents      controlRunEventRepository
 	RunArtifacts   controlRunArtifactRepository
 	ToolExecutions controlToolExecutionRepository
-	TraceSpans     controlTraceSpanRepository
 	URLSigner      controlArtifactURLSigner
 	Clock          clock.Clock
 }
@@ -124,7 +119,6 @@ type controlPlaneHandlers struct {
 	runEvents      controlRunEventRepository
 	runArtifacts   controlRunArtifactRepository
 	toolExecutions controlToolExecutionRepository
-	traceSpans     controlTraceSpanRepository
 	urlSigner      controlArtifactURLSigner
 	clock          clock.Clock
 }
@@ -173,12 +167,6 @@ func NewControlPlaneRouteRegistrar(opts ControlPlaneRouteOptions) *ControlPlaneR
 	} else if opts.Pool != nil {
 		h.toolExecutions = controlplane.NewToolExecutionRepository(opts.Pool)
 	}
-	if opts.TraceSpans != nil {
-		h.traceSpans = opts.TraceSpans
-	} else if opts.Pool != nil {
-		h.traceSpans = repo.NewTraceSpanRepo(opts.Pool)
-	}
-
 	return &ControlPlaneRouteRegistrar{handlers: h}
 }
 
@@ -200,8 +188,6 @@ func (r *ControlPlaneRouteRegistrar) RegisterRoutes(router chi.Router) {
 
 	router.Get("/control/cost/summary", r.handlers.getCostSummary)
 	router.Get("/control/health", r.handlers.getControlHealth)
-
-	router.Get("/trace/spans", r.handlers.listTraceSpans)
 }
 
 type createRunRequest struct {
@@ -1562,97 +1548,6 @@ func parseCostSummaryPeriod(now time.Time, period string) (time.Time, time.Time,
 func isTerminalRunStatus(status string) bool {
 	_, ok := controlTerminalRunStatuses[strings.ToLower(strings.TrimSpace(status))]
 	return ok
-}
-
-type traceSpanResponse struct {
-	ID             uuid.UUID        `json:"span_id"`
-	TraceID        uuid.UUID        `json:"trace_id"`
-	ParentID       *uuid.UUID       `json:"parent_span_id,omitempty"`
-	OrganizationID *uuid.UUID       `json:"organization_id,omitempty"`
-	Operation      string           `json:"operation"`
-	Service        string           `json:"service"`
-	Kind           string           `json:"kind"`
-	Status         string           `json:"status"`
-	Attributes     json.RawMessage  `json:"metadata"`
-	StartedAt      time.Time        `json:"started_at"`
-	EndedAt        *time.Time       `json:"ended_at,omitempty"`
-	DurationMS     *int             `json:"duration_ms,omitempty"`
-	CreatedAt      time.Time        `json:"created_at"`
-}
-
-func (h controlPlaneHandlers) listTraceSpans(w http.ResponseWriter, r *http.Request) {
-	if h.traceSpans == nil {
-		writeControlResponse(w, r.Context(), http.StatusServiceUnavailable, nil, nil)
-		return
-	}
-
-	orgID, ok := api.OrganizationIDFromContext(r.Context())
-	if !ok {
-		writeControlResponse(w, r.Context(), http.StatusUnauthorized, nil, nil)
-		return
-	}
-
-	filter := repo.TraceSpanFilter{
-		OrganizationID: orgID,
-		Limit:          controlDefaultLimit,
-	}
-
-	if v := strings.TrimSpace(r.URL.Query().Get("run_id")); v != "" {
-		if id, err := uuid.Parse(v); err == nil {
-			filter.RunID = &id
-		}
-	}
-	if v := strings.TrimSpace(r.URL.Query().Get("task_id")); v != "" {
-		if id, err := uuid.Parse(v); err == nil {
-			filter.TaskID = &id
-		}
-	}
-	if v := strings.TrimSpace(r.URL.Query().Get("agent_id")); v != "" {
-		if id, err := uuid.Parse(v); err == nil {
-			filter.AgentID = &id
-		}
-	}
-	if v := strings.TrimSpace(r.URL.Query().Get("from")); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			filter.From = &t
-		}
-	}
-	if v := strings.TrimSpace(r.URL.Query().Get("to")); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			filter.To = &t
-		}
-	}
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			filter.Limit = n
-		}
-	}
-
-	spans, err := h.traceSpans.List(r.Context(), filter)
-	if err != nil {
-		writeControlResponse(w, r.Context(), http.StatusInternalServerError, nil, nil)
-		return
-	}
-
-	result := make([]traceSpanResponse, 0, len(spans))
-	for _, s := range spans {
-		result = append(result, traceSpanResponse{
-			ID:             s.ID,
-			TraceID:        s.TraceID,
-			ParentID:       s.ParentID,
-			OrganizationID: s.OrganizationID,
-			Operation:      s.SpanName,
-			Service:        s.Service,
-			Kind:           s.Kind,
-			Status:         s.Status,
-			Attributes:     s.Attributes,
-			StartedAt:      s.StartedAt,
-			EndedAt:        s.EndedAt,
-			DurationMS:     s.DurationMS,
-			CreatedAt:      s.CreatedAt,
-		})
-	}
-	writeControlResponse(w, r.Context(), http.StatusOK, result, nil)
 }
 
 func writeControlResponse(w http.ResponseWriter, ctx context.Context, status int, data any, extraMeta map[string]any) {

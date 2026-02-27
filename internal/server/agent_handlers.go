@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/api"
+	"github.com/samhotchkiss/otter-camp/internal/audit"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
@@ -97,9 +98,17 @@ func NewAgentRouteRegistrar(
 	projectAssignments agentProjectAssignmentListRepository,
 	skillAttachments agentSkillAttachmentListRepository,
 	toolDefs toolDefinitionLister,
+	auditRecorders ...audit.AuditRecorder,
 ) *AgentRouteRegistrar {
+	recorder := audit.NewNoopRecorder()
+	if len(auditRecorders) > 0 && auditRecorders[0] != nil {
+		recorder = auditRecorders[0]
+	}
+	handlers := newAgentHandlersWithAssignments(service, templates, assignments, agents, projects, skills, projectAssignments, skillAttachments, toolDefs)
+	handlers.auditRecorder = recorder
+
 	return &AgentRouteRegistrar{
-		handlers: newAgentHandlersWithAssignments(service, templates, assignments, agents, projects, skills, projectAssignments, skillAttachments, toolDefs),
+		handlers: handlers,
 	}
 }
 
@@ -150,6 +159,16 @@ func (r *AgentRouteRegistrar) RegisterRoutes(router chi.Router) {
 		middleware.RequireAnyScope(requireWriteScope("agents")...),
 	).Delete("/agents/{id}/project-assignments/{pid}", r.handlers.deleteAgentProjectAssignment)
 
+	router.With(middleware.RequireAnyScope(requireReadScope("projects")...)).Get("/projects/{id}/agents", r.handlers.listProjectAgents)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("projects")...),
+	).Post("/projects/{id}/agents", r.handlers.createProjectAgent)
+	router.With(
+		middleware.RequireRole("admin"),
+		middleware.RequireAnyScope(requireWriteScope("projects")...),
+	).Delete("/projects/{id}/agents/{agent_id}", r.handlers.deleteProjectAgent)
+
 	router.With(middleware.RequireAnyScope(requireReadScope("agents")...)).Get("/agents/{id}/skills", r.handlers.listAgentSkills)
 	router.With(
 		middleware.RequireRole("admin"),
@@ -175,14 +194,16 @@ type agentHandlers struct {
 	projectAssignments agentProjectAssignmentListRepository
 	skillAttachments   agentSkillAttachmentListRepository
 	toolDefs           toolDefinitionLister
+	auditRecorder      audit.AuditRecorder
 	totals             *agentTotalCache
 }
 
 func newAgentHandlers(service agent.AgentService, templates agentTemplateRepository) agentHandlers {
 	return agentHandlers{
-		service:   service,
-		templates: templates,
-		totals:    newAgentTotalCache(60 * time.Second),
+		service:       service,
+		templates:     templates,
+		auditRecorder: audit.NewNoopRecorder(),
+		totals:        newAgentTotalCache(60 * time.Second),
 	}
 }
 
@@ -207,6 +228,7 @@ func newAgentHandlersWithAssignments(
 		projectAssignments: projectAssignments,
 		skillAttachments:   skillAttachments,
 		toolDefs:           toolDefs,
+		auditRecorder:      audit.NewNoopRecorder(),
 		totals:             newAgentTotalCache(60 * time.Second),
 	}
 }
@@ -260,6 +282,11 @@ type createAgentTemplateRequest struct {
 type createProjectAssignmentRequest struct {
 	ProjectID uuid.UUID `json:"project_id"`
 	Role      string    `json:"role"`
+}
+
+type createProjectAgentRequest struct {
+	AgentID uuid.UUID `json:"agent_id"`
+	Role    string    `json:"role"`
 }
 
 type createAgentSkillRequest struct {
@@ -333,6 +360,15 @@ type projectAssignmentListItemResponse struct {
 	Role        string    `json:"role"`
 	IsActive    bool      `json:"is_active"`
 	AssignedAt  time.Time `json:"assigned_at"`
+}
+
+type projectAgentListItemResponse struct {
+	ID               uuid.UUID `json:"id"`
+	AgentID          uuid.UUID `json:"agent_id"`
+	AgentDisplayName string    `json:"agent_display_name"`
+	Role             string    `json:"role"`
+	IsActive         bool      `json:"is_active"`
+	AssignedAt       time.Time `json:"assigned_at"`
 }
 
 type agentSkillAttachmentResponse struct {
@@ -573,6 +609,25 @@ func (h agentHandlers) createAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		h.recordAuditEvent(r.Context(), audit.Event{
+			OrgID:         principal.OrganizationID,
+			EventType:     audit.EventAgentCreated,
+			PrincipalType: "human",
+			PrincipalID:   principal.UserID,
+			TargetType:    pointerToStringValue("agent"),
+			TargetID:      &created.ID,
+			IP:            requestClientIP(r),
+			Outcome:       "success",
+			Metadata: map[string]any{
+				"agent_class":       strings.TrimSpace(created.AgentClass),
+				"agent_type":        strings.TrimSpace(created.AgentType),
+				"lifecycle_status":  strings.TrimSpace(created.LifecycleStatus),
+				"default_model_id":  normalizeOptionalString(created.DefaultModelProfileID),
+				"display_name":      strings.TrimSpace(created.DisplayName),
+				"private_memory_on": created.PrivateMemory,
+			},
+		})
+
 		responder.JSON(w, http.StatusCreated, toAgentResponse(created))
 		return
 	}
@@ -598,6 +653,25 @@ func (h agentHandlers) createAgent(w http.ResponseWriter, r *http.Request) {
 		responder.Error(w, status, code, message)
 		return
 	}
+
+	h.recordAuditEvent(r.Context(), audit.Event{
+		OrgID:         principal.OrganizationID,
+		EventType:     audit.EventAgentCreated,
+		PrincipalType: "human",
+		PrincipalID:   principal.UserID,
+		TargetType:    pointerToStringValue("agent"),
+		TargetID:      &created.ID,
+		IP:            requestClientIP(r),
+		Outcome:       "success",
+		Metadata: map[string]any{
+			"agent_class":       strings.TrimSpace(created.AgentClass),
+			"agent_type":        strings.TrimSpace(created.AgentType),
+			"lifecycle_status":  strings.TrimSpace(created.LifecycleStatus),
+			"default_model_id":  normalizeOptionalString(created.DefaultModelProfileID),
+			"display_name":      strings.TrimSpace(created.DisplayName),
+			"private_memory_on": created.PrivateMemory,
+		},
+	})
 
 	responder.JSON(w, http.StatusCreated, toAgentResponse(created))
 }
@@ -863,34 +937,50 @@ func (h agentHandlers) updateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.recordAuditEvent(r.Context(), audit.Event{
+		OrgID:         principal.OrganizationID,
+		EventType:     audit.EventAgentUpdated,
+		PrincipalType: "human",
+		PrincipalID:   principal.UserID,
+		TargetType:    pointerToStringValue("agent"),
+		TargetID:      &updated.ID,
+		IP:            requestClientIP(r),
+		Outcome:       "success",
+		Metadata: map[string]any{
+			"agent_type":       strings.TrimSpace(updated.AgentType),
+			"display_name":     strings.TrimSpace(updated.DisplayName),
+			"lifecycle_status": strings.TrimSpace(updated.LifecycleStatus),
+		},
+	})
+
 	responder.JSON(w, http.StatusOK, toAgentResponse(updated))
 }
 
 func (h agentHandlers) pauseAgent(w http.ResponseWriter, r *http.Request) {
-	h.transitionAgent(w, r, func(ctx context.Context, orgID, agentID uuid.UUID) error {
+	h.transitionAgent(w, r, audit.EventAgentUpdated, func(ctx context.Context, orgID, agentID uuid.UUID) error {
 		return h.service.Pause(ctx, orgID, agentID)
 	})
 }
 
 func (h agentHandlers) unpauseAgent(w http.ResponseWriter, r *http.Request) {
-	h.transitionAgent(w, r, func(ctx context.Context, orgID, agentID uuid.UUID) error {
+	h.transitionAgent(w, r, audit.EventAgentUpdated, func(ctx context.Context, orgID, agentID uuid.UUID) error {
 		return h.service.Unpause(ctx, orgID, agentID)
 	})
 }
 
 func (h agentHandlers) retireAgent(w http.ResponseWriter, r *http.Request) {
-	h.transitionAgent(w, r, func(ctx context.Context, orgID, agentID uuid.UUID) error {
+	h.transitionAgent(w, r, audit.EventAgentDeleted, func(ctx context.Context, orgID, agentID uuid.UUID) error {
 		return h.service.Retire(ctx, orgID, agentID)
 	})
 }
 
 func (h agentHandlers) cancelAgent(w http.ResponseWriter, r *http.Request) {
-	h.transitionAgent(w, r, func(ctx context.Context, orgID, agentID uuid.UUID) error {
+	h.transitionAgent(w, r, audit.EventAgentDeleted, func(ctx context.Context, orgID, agentID uuid.UUID) error {
 		return h.service.Cancel(ctx, orgID, agentID)
 	})
 }
 
-func (h agentHandlers) transitionAgent(w http.ResponseWriter, r *http.Request, transition func(ctx context.Context, orgID, agentID uuid.UUID) error) {
+func (h agentHandlers) transitionAgent(w http.ResponseWriter, r *http.Request, eventType string, transition func(ctx context.Context, orgID, agentID uuid.UUID) error) {
 	responder := api.NewResponder(r.Context())
 	if h.service == nil {
 		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "agent service unavailable")
@@ -921,6 +1011,20 @@ func (h agentHandlers) transitionAgent(w http.ResponseWriter, r *http.Request, t
 		responder.Error(w, status, code, message)
 		return
 	}
+
+	h.recordAuditEvent(r.Context(), audit.Event{
+		OrgID:         principal.OrganizationID,
+		EventType:     strings.TrimSpace(eventType),
+		PrincipalType: "human",
+		PrincipalID:   principal.UserID,
+		TargetType:    pointerToStringValue("agent"),
+		TargetID:      &updated.ID,
+		IP:            requestClientIP(r),
+		Outcome:       "success",
+		Metadata: map[string]any{
+			"lifecycle_status": strings.TrimSpace(updated.LifecycleStatus),
+		},
+	})
 
 	responder.JSON(w, http.StatusOK, toAgentResponse(updated))
 }
@@ -1248,19 +1352,10 @@ func (h agentHandlers) listAgentProjectAssignments(w http.ResponseWriter, r *htt
 	})
 }
 
-type projectAgentListItemResponse struct {
-	ID         uuid.UUID `json:"id"`
-	AgentID    uuid.UUID `json:"agent_id"`
-	ProjectID  uuid.UUID `json:"project_id"`
-	Role       string    `json:"role"`
-	IsActive   bool      `json:"is_active"`
-	AssignedAt time.Time `json:"assigned_at"`
-}
-
-func (h agentHandlers) listProjectAgents(w http.ResponseWriter, r *http.Request) {
+func (h agentHandlers) createProjectAgent(w http.ResponseWriter, r *http.Request) {
 	responder := api.NewResponder(r.Context())
-	if h.projectAssignments == nil {
-		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "assignment repository unavailable")
+	if h.assignments == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "assignment service unavailable")
 		return
 	}
 
@@ -1269,11 +1364,131 @@ func (h agentHandlers) listProjectAgents(w http.ResponseWriter, r *http.Request)
 		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
 		return
 	}
-	_ = principal
 
-	projectID, err := parseAgentIDParam(r) // reuse UUID param parser — uses chi.URLParam("id")
+	projectID, err := parseProjectPathIDParam(r)
 	if err != nil {
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+
+	var req createProjectAgentRequest
+	if err := decodeJSON(r, &req); err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+	if req.AgentID == uuid.Nil {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "agent_id is required")
+		return
+	}
+	role := strings.ToLower(strings.TrimSpace(req.Role))
+	if role == "" {
+		role = "worker"
+	}
+	if role != "pm" && role != "worker" && role != "reviewer" && role != "observer" {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "role must be one of pm, worker, reviewer, observer")
+		return
+	}
+
+	if _, err := h.getScopedProject(r.Context(), principal.OrganizationID, projectID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+	agentRecord, err := h.getScopedAgent(r.Context(), principal.OrganizationID, req.AgentID)
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(agentRecord.LifecycleStatus), "active") {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "agent lifecycle_status must be active")
+		return
+	}
+
+	var assigned *repo.AgentProjectAssignment
+	for attempt := 0; attempt < 3; attempt++ {
+		assigned, err = h.assignments.AssignToProject(r.Context(), req.AgentID, projectID, role, agent.AssignmentActor{
+			Type: "human_user",
+			ID:   principal.UserID,
+		})
+		if !errors.Is(err, agent.ErrPMConflict) {
+			break
+		}
+	}
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	responder.JSON(w, http.StatusOK, toProjectAssignmentResponse(assigned))
+}
+
+func (h agentHandlers) deleteProjectAgent(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.assignments == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "assignment service unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	projectID, err := parseProjectPathIDParam(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+	agentID, err := parseRouteUUIDParam(r, "agent_id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid agent id")
+		return
+	}
+
+	if _, err := h.getScopedProject(r.Context(), principal.OrganizationID, projectID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+	if _, err := h.getScopedAgent(r.Context(), principal.OrganizationID, agentID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+
+	removed, err := h.assignments.RemoveFromProject(r.Context(), agentID, projectID)
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
+	responder.JSON(w, http.StatusOK, toProjectAssignmentResponse(removed))
+}
+
+func (h agentHandlers) listProjectAgents(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	if h.projectAssignments == nil || h.projects == nil || h.agents == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "assignment repositories unavailable")
+		return
+	}
+
+	principal, ok := middleware.PrincipalFromContext(r.Context())
+	if !ok {
+		responder.Error(w, http.StatusUnauthorized, api.ErrCodeUnauthorized, "authentication required")
+		return
+	}
+
+	projectID, err := parseProjectPathIDParam(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+	if _, err := h.getScopedProject(r.Context(), principal.OrganizationID, projectID); err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
 		return
 	}
 
@@ -1284,22 +1499,55 @@ func (h agentHandlers) listProjectAgents(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	payload := make([]projectAgentListItemResponse, 0, len(items))
-	for _, item := range items {
-		payload = append(payload, projectAgentListItemResponse{
-			ID:         item.ID,
-			AgentID:    item.AgentID,
-			ProjectID:  item.ProjectID,
-			Role:       item.Role,
-			IsActive:   item.IsActive,
-			AssignedAt: item.AssignedAt,
-		})
+	params := api.ParsePaginationParams(r.URL.Query())
+	var cursorAt time.Time
+	var cursorID uuid.UUID
+	if params.Cursor != "" {
+		decodedAt, decodedID, decodeErr := (api.PaginationDecoder{}).Decode(params.Cursor)
+		if decodeErr != nil {
+			responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "invalid cursor")
+			return
+		}
+		cursorAt = decodedAt
+		cursorID = decodedID
 	}
 
-	total := len(payload)
+	startIdx := 0
+	if params.Cursor != "" {
+		startIdx = len(items)
+		for i, item := range items {
+			if item.AssignedAt.Before(cursorAt) || (item.AssignedAt.Equal(cursorAt) && item.ID.String() < cursorID.String()) {
+				startIdx = i
+				break
+			}
+		}
+	}
+
+	remaining := items[startIdx:]
+	page := remaining
+	var nextCursor *string
+	if len(page) > params.Limit {
+		page = page[:params.Limit]
+		encoded := (api.PaginationEncoder{}).Encode(page[len(page)-1].AssignedAt, page[len(page)-1].ID)
+		nextCursor = &encoded
+	}
+
+	payload := make([]projectAgentListItemResponse, 0, len(page))
+	for _, item := range page {
+		agentRecord, getErr := h.getScopedAgent(r.Context(), principal.OrganizationID, item.AgentID)
+		if getErr != nil {
+			status, code, message := mapAssignmentError(getErr)
+			responder.Error(w, status, code, message)
+			return
+		}
+		payload = append(payload, toProjectAgentListItemResponse(item, agentRecord.DisplayName))
+	}
+
+	total := len(items)
 	responder.JSONList(w, http.StatusOK, payload, api.PaginationMeta{
-		Limit: 100,
-		Total: &total,
+		NextCursor: nextCursor,
+		Limit:      params.Limit,
+		Total:      &total,
 	})
 }
 
@@ -1615,12 +1863,20 @@ func parseAgentIDParam(r *http.Request) (uuid.UUID, error) {
 	return uuid.Parse(strings.TrimSpace(chi.URLParam(r, "id")))
 }
 
+func parseProjectPathIDParam(r *http.Request) (uuid.UUID, error) {
+	return uuid.Parse(strings.TrimSpace(chi.URLParam(r, "id")))
+}
+
 func parseProjectIDParam(r *http.Request) (uuid.UUID, error) {
 	return uuid.Parse(strings.TrimSpace(chi.URLParam(r, "pid")))
 }
 
 func parseSkillIDParam(r *http.Request) (uuid.UUID, error) {
 	return uuid.Parse(strings.TrimSpace(chi.URLParam(r, "sid")))
+}
+
+func parseRouteUUIDParam(r *http.Request, key string) (uuid.UUID, error) {
+	return uuid.Parse(strings.TrimSpace(chi.URLParam(r, key)))
 }
 
 func mapAgentError(err error) (status int, code, message string) {
@@ -1701,6 +1957,17 @@ func toProjectAssignmentListItemResponse(item repo.AgentProjectAssignment, proje
 		Role:        item.Role,
 		IsActive:    item.IsActive,
 		AssignedAt:  item.AssignedAt,
+	}
+}
+
+func toProjectAgentListItemResponse(item repo.AgentProjectAssignment, agentDisplayName string) projectAgentListItemResponse {
+	return projectAgentListItemResponse{
+		ID:               item.ID,
+		AgentID:          item.AgentID,
+		AgentDisplayName: agentDisplayName,
+		Role:             item.Role,
+		IsActive:         item.IsActive,
+		AssignedAt:       item.AssignedAt,
 	}
 }
 
@@ -1844,6 +2111,18 @@ func isAdminRole(role string) bool {
 func isAdminOrMemberRole(role string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(role))
 	return normalized == "admin" || normalized == "member"
+}
+
+func (h agentHandlers) recordAuditEvent(ctx context.Context, event audit.Event) {
+	if h.auditRecorder == nil {
+		return
+	}
+	h.auditRecorder.RecordAsync(ctx, event)
+}
+
+func pointerToStringValue(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	return &trimmed
 }
 
 func toAgentResponse(model *agent.Agent) agentResponse {

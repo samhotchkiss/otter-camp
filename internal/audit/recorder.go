@@ -23,5 +23,7 @@ type Event struct {
 	DelegatedByID   *uuid.UUID
 	TargetType      *string
 	TargetID        *uuid.UUID
+	IP              string
+	Outcome         string
 	Metadata        map[string]any
 }

@@ -77,6 +77,7 @@ const (
 	keypressLatencyBudget  = 100 * time.Millisecond
 	sseRenderLatencyBudget = 250 * time.Millisecond
 	chatScrollStepLines    = 8
+	panelResizeStep        = 0.02
 )
 
 type TUIPerformanceMetrics struct {
@@ -170,6 +171,7 @@ func NewModelWithRuntime(state UIState, runtime RuntimeHints) Model {
 			MemoryBoundBytes: runtime.memoryBoundBytes(),
 		},
 	}
+	model.workspace.setMainView(MainView(normalizeMainViewState(normalized.LastMainView)))
 	if runtime.FirstRun {
 		model.workspace.setMainView(ViewDashboard)
 	}
@@ -451,9 +453,30 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.switchScope(cycleScope(m.activeScope, true))
 				return m, nil
 			}
+			if (r == '<' || r == '>') && (m.focus != ChatPanel || strings.TrimSpace(m.chatInput) == "") {
+				delta := panelResizeStep
+				if r == '<' {
+					delta = -panelResizeStep
+				}
+				if m.resizeFocusedPanel(delta) {
+					return m, nil
+				}
+			}
 			if r == '/' && (m.focus == SidebarPanel || m.focus == MainPanel) {
 				m.enterSearchMode(m.focus)
 				return m, nil
+			}
+			if m.focus == ChatPanel && strings.TrimSpace(m.chatInput) == "" {
+				if r == 'g' {
+					m.scrollChatBy(1 << 20)
+					m.statusMessage = "Chat scrolled to oldest."
+					return m, nil
+				}
+				if r == 'G' {
+					m.chatScrollOffset = 0
+					m.statusMessage = "Chat scrolled to latest."
+					return m, nil
+				}
 			}
 			if m.focus == ChatPanel {
 				m.handleChatRunes(key)
@@ -580,16 +603,6 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			if node != nil && node.Kind == sidebarKindProject {
 				return true, loadProjectTasksCmd(node.ProjectID, m.runtimeHints)
 			}
-			return true, nil
-		}
-	case '<':
-		if m.focus == SidebarPanel || m.focus == MainPanel {
-			m.shiftSidebarWidth(-0.02)
-			return true, nil
-		}
-	case '>':
-		if m.focus == SidebarPanel || m.focus == MainPanel {
-			m.shiftSidebarWidth(0.02)
 			return true, nil
 		}
 	case 's':
@@ -1112,6 +1125,7 @@ func (m Model) State() UIState {
 	focus := normalizeFocus(layout, m.focus)
 	next := m.state
 	next.LastActiveView = viewFromPanel(focus)
+	next.LastMainView = normalizeMainViewState(string(m.workspace.mainView))
 	next.SidebarVisible = m.sidebarVisible
 	if strings.TrimSpace(m.activeSession) != "" {
 		next.LastActiveChatSession = m.activeSession
@@ -1617,27 +1631,55 @@ func (m *Model) toggleSidebar() {
 	m.statusMessage = "Sidebar shown."
 }
 
-// shiftSidebarWidth adjusts the sidebar panel proportion by delta, clamped to
-// [0.10, 0.35]. The difference is taken from / given to the main panel so the
-// total stays at 1.0. Only effective at SizeL/XL where proportions are used.
-func (m *Model) shiftSidebarWidth(delta float64) {
-	p := m.state.PanelProportions
-	newS := p[0] + delta
-	if newS < 0.10 {
-		newS = 0.10
+func (m *Model) resizeFocusedPanel(delta float64) bool {
+	index := -1
+	label := ""
+	switch m.focus {
+	case SidebarPanel:
+		index = 0
+		label = "Sidebar"
+	case ChatPanel:
+		index = 2
+		label = "Chat"
+	default:
+		return false
 	}
-	if newS > 0.35 {
-		newS = 0.35
+
+	proportions := m.state.PanelProportions
+	if !validPanelProportions(proportions) {
+		proportions = DefaultState().PanelProportions
 	}
-	diff := newS - p[0]
-	newM := p[1] - diff
-	if newM < 0.25 {
-		m.statusMessage = "Sidebar at maximum width."
-		return
+
+	otherIndex := 2
+	if index == 2 {
+		otherIndex = 0
 	}
-	m.state.PanelProportions = [3]float64{newS, newM, p[2]}
+	other := proportions[otherIndex]
+
+	minTarget := maxFloat(minPanelProportion, 1-other-maxPanelProportion)
+	maxTarget := minFloat(maxPanelProportion, 1-other-minPanelProportion)
+	if minTarget > maxTarget {
+		return false
+	}
+
+	target := proportions[index] + delta
+	if target < minTarget {
+		target = minTarget
+	}
+	if target > maxTarget {
+		target = maxTarget
+	}
+	target = clampProportion(target)
+	main := clampProportion(1 - other - target)
+
+	updated := proportions
+	updated[index] = target
+	updated[1] = main
+	updated[otherIndex] = other
+	m.state.PanelProportions = updated
 	m.applyResponsiveLayout()
-	m.statusMessage = fmt.Sprintf("Sidebar: %d%%", int(newS*100))
+	m.statusMessage = fmt.Sprintf("%s width %.0f%%", label, target*100)
+	return true
 }
 
 func (m *Model) enterCommandMode() {

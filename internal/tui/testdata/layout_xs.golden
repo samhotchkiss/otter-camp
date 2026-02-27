@@ -5,12 +5,12 @@
 │ ───────────────────────────────────────────────────────────────── │
 │                                                                   │
 │ Task Board                                                        │
-│ TODO (0)            IN PROGRESS (0)     DONE (0)                  │
+│ TODO (1)            IN PROGRESS (1)     DONE (0)                  │
 │ ──────────────────  ──────────────────  ──────────────────        │
+│   Launch docs        CI hardening                                 │
 │                                                                   │
 │ ─────────────────────────── Activity ──────────────────────────── │
 │   ✓ workspace booted                                              │
-│                                                                   │
 │                                                                   │
 │                                                                   │
 │                                                                   │
@@ -31,12 +31,12 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │ ───────────────────────────────────────────────────────────────── │
 │                                                                   │
 │ Task Board                                                        │
-│ TODO (0)            IN PROGRESS (0)     DONE (0)                  │
+│ TODO (1)            IN PROGRESS (1)     DONE (0)                  │
 │ ──────────────────  ──────────────────  ──────────────────        │
+│   Launch docs        CI hardening                                 │
 │                                                                   │
 │ ─────────────────────────── Activity ──────────────────────────── │
 │   ✓ workspace booted                                              │
-│                                                                   │
 │                                                                   │
 │                                                                   │
 │                                                                   │
@@ -57,12 +57,12 @@ Help: j/k navigate · Enter open task · s toggle sidebar · : commands · ? hel
 │ ───────────────────────────────────────────────────────────────── │
 │                                                                   │
 │ Task Board                                                        │
-│ TODO (0)            IN PROGRESS (0)     DONE (0)                  │
+│ TODO (1)            IN PROGRESS (1)     DONE (0)                  │
 │ ──────────────────  ──────────────────  ──────────────────        │
+│   Launch docs        CI hardening                                 │
 │                                                                   │
 │ ─────────────────────────── Activity ──────────────────────────── │
 │   ✓ workspace booted                                              │
-│                                                                   │
 │                                                                   │
 │                                                                   │
 │                                                                   │

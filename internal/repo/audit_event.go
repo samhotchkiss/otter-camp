@@ -22,6 +22,8 @@ type AuditEvent struct {
 	DelegatedByID   *uuid.UUID
 	TargetType      *string
 	TargetID        *uuid.UUID
+	IP              string
+	Outcome         string
 	Metadata        map[string]any
 	CreatedAt       time.Time
 }
@@ -57,10 +59,12 @@ func NewAuditEventRepo(pool *pgxpool.Pool) *AuditEventRepo {
 }
 
 func (r *AuditEventRepo) Insert(ctx context.Context, event AuditEvent) error {
-	metadata, err := normalizeMetadata(event.Metadata)
+	metadata, normalizedIP, normalizedOutcome, err := normalizeMetadata(event.Metadata, event.IP, event.Outcome)
 	if err != nil {
 		return fmt.Errorf("normalize metadata: %w", err)
 	}
+	event.IP = normalizedIP
+	event.Outcome = normalizedOutcome
 
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO audit_event (
@@ -205,6 +209,11 @@ func scanAuditEvent(row scanner) (AuditEvent, error) {
 	if err := json.Unmarshal(metadataJSON, &event.Metadata); err != nil {
 		return AuditEvent{}, fmt.Errorf("decode metadata: %w", err)
 	}
+	event.IP = strings.TrimSpace(toMetadataString(event.Metadata["ip"]))
+	if event.IP == "" {
+		event.IP = strings.TrimSpace(toMetadataString(event.Metadata["ip_address"]))
+	}
+	event.Outcome = normalizeAuditOutcome(toMetadataString(event.Metadata["outcome"]))
 
 	return event, nil
 }
@@ -213,12 +222,32 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
-func normalizeMetadata(metadata map[string]any) ([]byte, error) {
+func normalizeMetadata(metadata map[string]any, ip, outcome string) ([]byte, string, string, error) {
 	if len(metadata) == 0 {
-		return []byte(`{}`), nil
+		metadata = map[string]any{}
 	}
 	metadata = scrubMetadata(metadata)
-	return json.Marshal(metadata)
+
+	normalizedIP := strings.TrimSpace(ip)
+	if normalizedIP == "" {
+		normalizedIP = strings.TrimSpace(toMetadataString(metadata["ip"]))
+	}
+	if normalizedIP == "" {
+		normalizedIP = strings.TrimSpace(toMetadataString(metadata["ip_address"]))
+	}
+	normalizedOutcome := normalizeAuditOutcome(outcome)
+	if strings.TrimSpace(outcome) == "" {
+		normalizedOutcome = normalizeAuditOutcome(toMetadataString(metadata["outcome"]))
+	}
+
+	metadata["ip"] = normalizedIP
+	metadata["outcome"] = normalizedOutcome
+
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return encoded, normalizedIP, normalizedOutcome, nil
 }
 
 func scrubMetadata(metadata map[string]any) map[string]any {
@@ -252,6 +281,20 @@ func scrubAuditString(input string) string {
 	out = auditJWTPattern.ReplaceAllString(out, "[JWT_REDACTED]")
 	out = auditKnownEnvSecretPattern.ReplaceAllString(out, "${1}=[REDACTED]")
 	return out
+}
+
+func toMetadataString(value any) string {
+	typed, _ := value.(string)
+	return typed
+}
+
+func normalizeAuditOutcome(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "failure", "error":
+		return "failure"
+	default:
+		return "success"
+	}
 }
 
 func validateTargetFilter(targetType *string, targetID *uuid.UUID) error {

@@ -29,6 +29,15 @@ type TraceSpan struct {
 	CreatedAt      time.Time
 }
 
+type TraceSpanFilters struct {
+	RunID         *uuid.UUID
+	TaskID        *uuid.UUID
+	AgentID       *uuid.UUID
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
+	Limit         int
+}
+
 type TraceSpanRepo struct {
 	pool *pgxpool.Pool
 }
@@ -163,55 +172,49 @@ func (r *TraceSpanRepo) GetByID(ctx context.Context, id uuid.UUID) (TraceSpan, e
 	return item, nil
 }
 
-type TraceSpanFilter struct {
-	OrganizationID uuid.UUID
-	RunID          *uuid.UUID
-	TaskID         *uuid.UUID
-	AgentID        *uuid.UUID
-	From           *time.Time
-	To             *time.Time
-	Limit          int
-}
-
-func (r *TraceSpanRepo) List(ctx context.Context, filter TraceSpanFilter) ([]TraceSpan, error) {
-	limit := filter.Limit
+func (r *TraceSpanRepo) ListByOrganization(ctx context.Context, organizationID uuid.UUID, filters TraceSpanFilters) ([]TraceSpan, error) {
+	limit := filters.Limit
 	if limit <= 0 || limit > 500 {
-		limit = 100
+		limit = 200
 	}
 
-	args := []any{filter.OrganizationID}
-	where := []string{"organization_id = $1"}
-
-	if filter.RunID != nil {
-		args = append(args, filter.RunID.String())
-		where = append(where, fmt.Sprintf("attributes->>'run_id' = $%d", len(args)))
-	}
-	if filter.TaskID != nil {
-		args = append(args, filter.TaskID.String())
-		where = append(where, fmt.Sprintf("attributes->>'task_id' = $%d", len(args)))
-	}
-	if filter.AgentID != nil {
-		args = append(args, filter.AgentID.String())
-		where = append(where, fmt.Sprintf("attributes->>'agent_id' = $%d", len(args)))
-	}
-	if filter.From != nil {
-		args = append(args, *filter.From)
-		where = append(where, fmt.Sprintf("created_at >= $%d", len(args)))
-	}
-	if filter.To != nil {
-		args = append(args, *filter.To)
-		where = append(where, fmt.Sprintf("created_at <= $%d", len(args)))
-	}
-	args = append(args, limit)
-
-	query := fmt.Sprintf(`
+	query := `
 		SELECT id, trace_id, parent_id, organization_id, span_name, service, kind, status,
 		       attributes, events, started_at, ended_at, duration_ms, created_at
 		FROM trace_span
-		WHERE %s
-		ORDER BY created_at DESC
-		LIMIT $%d
-	`, strings.Join(where, " AND "), len(args))
+		WHERE organization_id = $1
+	`
+	args := []any{organizationID}
+	nextArg := 2
+
+	if filters.RunID != nil {
+		query += fmt.Sprintf(" AND attributes->>'run_id' = $%d", nextArg)
+		args = append(args, filters.RunID.String())
+		nextArg++
+	}
+	if filters.TaskID != nil {
+		query += fmt.Sprintf(" AND attributes->>'task_id' = $%d", nextArg)
+		args = append(args, filters.TaskID.String())
+		nextArg++
+	}
+	if filters.AgentID != nil {
+		query += fmt.Sprintf(" AND attributes->>'agent_id' = $%d", nextArg)
+		args = append(args, filters.AgentID.String())
+		nextArg++
+	}
+	if filters.CreatedAfter != nil {
+		query += fmt.Sprintf(" AND created_at >= $%d", nextArg)
+		args = append(args, filters.CreatedAfter.UTC())
+		nextArg++
+	}
+	if filters.CreatedBefore != nil {
+		query += fmt.Sprintf(" AND created_at <= $%d", nextArg)
+		args = append(args, filters.CreatedBefore.UTC())
+		nextArg++
+	}
+
+	query += fmt.Sprintf(" ORDER BY created_at DESC, id DESC LIMIT $%d", nextArg)
+	args = append(args, limit)
 
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -219,18 +222,19 @@ func (r *TraceSpanRepo) List(ctx context.Context, filter TraceSpanFilter) ([]Tra
 	}
 	defer rows.Close()
 
-	var spans []TraceSpan
+	items := make([]TraceSpan, 0, limit)
 	for rows.Next() {
-		span, err := scanTraceSpan(rows)
-		if err != nil {
-			return nil, mapDBError(err)
+		item, scanErr := scanTraceSpan(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
 		}
-		spans = append(spans, span)
+		items = append(items, item)
 	}
-	if rows.Err() != nil {
-		return nil, mapDBError(rows.Err())
+	if err := rows.Err(); err != nil {
+		return nil, mapDBError(err)
 	}
-	return spans, nil
+
+	return items, nil
 }
 
 func scanTraceSpan(row interface{ Scan(dest ...any) error }) (TraceSpan, error) {
