@@ -1492,20 +1492,30 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 
 // activityIcon returns a coloured icon appropriate for an activity log entry.
 // Task status entries (added by EX-092) get icons that reflect the new status.
+// EX-147: extended to handle run failures, rollbacks, review rejections, and
+// deploy approvals added in EX-143 through EX-146.
 func activityIcon(entry string) string {
 	lower := strings.ToLower(entry)
-	// Task status transitions: "OC-N: <status>" or "<title>: <status>"
-	for _, marker := range []string{": blocked", ": rejected", ": deferred", ": failed"} {
+	// Explicit error indicators (run failures, dead-letter, review rejections, task errors).
+	for _, marker := range []string{
+		": blocked", ": rejected", ": deferred", ": failed",
+		"run failed", "dead-lettered", "review rejected",
+		"agent expired",
+	} {
 		if strings.Contains(lower, marker) {
 			return lipgloss.NewStyle().Foreground(colError).Render("✗ ")
 		}
 	}
-	for _, marker := range []string{": in progress", ": in_progress", ": started"} {
+	// Warning/pending indicators (in-progress tasks, rollbacks, pending approvals).
+	for _, marker := range []string{
+		": in progress", ": in_progress", ": started",
+		"rollback", "deploy pending approval", "supervisor escalation",
+	} {
 		if strings.Contains(lower, marker) {
 			return lipgloss.NewStyle().Foreground(colWarning).Render("◌ ")
 		}
 	}
-	// Everything else (done, connected, loaded, etc.) uses the success check.
+	// Everything else (done, connected, loaded, merged, session created, etc.) uses success check.
 	return lipgloss.NewStyle().Foreground(colConnected).Render("✓ ")
 }
 

@@ -2438,3 +2438,45 @@ func TestChatSessionCreatedAddsActivityEntry(t *testing.T) {
 		t.Fatalf("activity log missing session created entry: %v", m.workspace.activity)
 	}
 }
+
+// EX-147: activityIcon should use error icon for failures/rejections and
+// warning icon for pending/rollback entries — not always the success check.
+
+func TestActivityIconEX147(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		entry    string
+		wantRune rune // first non-space rune of the rendered icon
+	}{
+		// Error icon (✗)
+		{entry: "run failed: context deadline exceeded", wantRune: '✗'},
+		{entry: "run dead-lettered (3 attempts): ENOMEM", wantRune: '✗'},
+		{entry: "OC-7: review rejected — tests not passing", wantRune: '✗'},
+		{entry: "agent expired: budget exceeded", wantRune: '✗'},
+		{entry: "OC-3: blocked", wantRune: '✗'},
+		// Warning icon (◌)
+		{entry: "rollback to abc12345", wantRune: '◌'},
+		{entry: "Deploy pending approval: abc12345", wantRune: '◌'},
+		{entry: "OC-5: in progress", wantRune: '◌'},
+		// Success icon (✓)
+		{entry: "task merged: feat/login", wantRune: '✓'},
+		{entry: "session created: project_task", wantRune: '✓'},
+		{entry: "realtime events connected", wantRune: '✓'},
+		{entry: "OC-1: done", wantRune: '✓'},
+	}
+
+	for _, tc := range cases {
+		rendered := activityIcon(tc.entry)
+		// Strip ANSI codes: find the rune that is ✓, ✗, or ◌
+		var got rune
+		for _, r := range rendered {
+			if r == '✓' || r == '✗' || r == '◌' {
+				got = r
+				break
+			}
+		}
+		if got != tc.wantRune {
+			t.Errorf("activityIcon(%q) icon rune = %q, want %q", tc.entry, got, tc.wantRune)
+		}
+	}
+}
