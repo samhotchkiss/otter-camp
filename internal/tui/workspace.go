@@ -334,6 +334,32 @@ func (w *workspaceState) openSelectedTaskSession() (string, bool) {
 	return sessionID, true
 }
 
+// syncSidebarToTask moves the sidebar cursor to the visible node for the given
+// task ID (e.g. "task-<uuid>"). Expands the parent project section if needed.
+func (w *workspaceState) syncSidebarToTask(taskID string) {
+	if taskID == "" {
+		return
+	}
+	nodeID := "task-" + taskID
+	taskNode := w.nodes[nodeID]
+	if taskNode == nil {
+		return
+	}
+	// If the parent project is collapsed, expand it first.
+	if taskNode.ParentID != "" {
+		if parent := w.nodes[taskNode.ParentID]; parent != nil && !parent.Expanded {
+			parent.Expanded = true
+		}
+	}
+	visible := w.visibleSidebarIDs()
+	for i, id := range visible {
+		if id == nodeID {
+			w.sidebarCursor = i
+			return
+		}
+	}
+}
+
 func (w *workspaceState) moveSidebar(delta int) {
 	visible := w.visibleSidebarIDs()
 	if len(visible) == 0 {

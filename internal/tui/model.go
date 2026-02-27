@@ -784,6 +784,7 @@ func (m *Model) handleEnterKey() tea.Cmd {
 					taskID := openTasks[cursor].ID
 					m.workspace.selectedTaskID = taskID
 					m.workspace.setMainView(ViewTask)
+					m.workspace.syncSidebarToTask(taskID)
 					m.statusMessage = "Opened task detail."
 					return loadTaskDetailCmd(taskID, m.runtimeHints)
 				}

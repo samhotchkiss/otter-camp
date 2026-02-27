@@ -921,3 +921,60 @@ When no sessionID exists: "(no session)" instead of "(no active session)". When 
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-066: Inbox cursor ► consistency + live task status sync
+
+**Observation:** Two separate but related consistency gaps:
+1. The inbox view used `▸` as its cursor indicator prefix, while the dashboard and project views both use `►`. The difference was invisible in the sidebar (which uses background-highlight for the cursor, not a prefix icon), but the inbox view's own cursor prefix was inconsistent.
+2. When a task changes `work_status` (via SSE `task.status_changed` or `task.completed` events), the sidebar task node icon and the project view task list did not update automatically. The old status persisted until the user manually refreshed, causing stale icons.
+
+**Improvement:**
+1. Changed the inbox view cursor prefix from `▸ ` to `► ` in `renderInboxView`, matching the dashboard and project view cursor pattern.
+2. Added a `task.status_changed` / `task.completed` handler in `applyWorkspaceCommand` that updates (a) the in-memory `taskRecord.Status`, (b) the sidebar task node's `WorkStatus` so the icon refreshes immediately, and (c) the `selectedProject.Tasks` slice so the project view task list stays current.
+
+**Why it matters:** Cursor inconsistency breaks the visual pattern — users learn `►` means "selected item" from the dashboard, then are confused by `▸` in the inbox. Live task status sync means agents working on tasks are visible in real time: a task flipping from `in_progress` to `done` immediately shows `✓` in the sidebar and project view without a manual refresh.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-067: Color-coded task status labels in project and task views
+
+**Observation:** All task status labels in the project view ("In Progress", "Draft", "Blocked") were rendered in the same muted gray regardless of urgency. The task detail view used an ad-hoc local color switch that differed from what the project view used. The old mapping also made "draft" and "todo" green (implying completion) which was misleading.
+
+**Improvement:**
+1. Extracted a `taskStatusColor(s string) lipgloss.Color` helper in `view.go` with a consistent semantic mapping:
+   - `in_progress` → amber (warning: active work in progress)
+   - `blocked` / `rejected` / `deferred` → red (error: needs attention)
+   - `done` / `approved` / `cancelled` → green (success: completed)
+   - `draft` / `todo` / unknown → muted gray (neutral: queued)
+2. Applied `taskStatusColor` to the right-aligned status labels in `renderProjectView` (both cursor and non-cursor rows).
+3. Replaced the bespoke local switch in `renderTaskView` with `taskStatusColor`, giving both views the same colours.
+
+**Why it matters:** Status labels convey urgency. A blocked task should scream red; an in-progress task should glow amber. When everything is the same muted gray, the user must read every label to understand the state of the board. With colour, the eye jumps instantly to blocked/urgent rows and de-emphasises queued work.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-068: Sidebar cursor syncs to task when opening from project view
+
+**Observation:** When navigating from the project view (j/k to select a task, Enter to open), the sidebar remained visually unchanged — the cursor stayed on the project node (or wherever it was), not the specific task just opened. The user had no spatial feedback in the sidebar to confirm which task detail they were viewing, and pressing Enter in the sidebar would re-navigate to the wrong task.
+
+**Improvement:**
+1. Added `syncSidebarToTask(taskID string)` method to `workspaceState` in `workspace.go`. It looks up the task's sidebar node, expands the parent project section if collapsed, recomputes the visible sidebar list, and positions `sidebarCursor` at the task's index.
+2. Called `syncSidebarToTask(taskID)` in `model.go` immediately after `setMainView(ViewTask)` in the Enter-key handler for the project task list.
+
+The sidebar cursor now automatically jumps to the corresponding task node when a task is opened from the project view, even if the project was previously collapsed (it expands automatically).
+
+**Why it matters:** The sidebar is the user's navigation tree. When the main panel transitions to a task detail, the sidebar should reflect that selection. Without sync, the cursor and content are visually disconnected — the user looking at OC-3 detail while the sidebar cursor sits on the project header is confusing. With sync, the highlighted sidebar row always matches the main content.
+
+**Effort:** Low
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
