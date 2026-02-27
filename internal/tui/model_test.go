@@ -2858,3 +2858,34 @@ func TestHelpCommandIncludesMergesAndSchedules(t *testing.T) {
 		}
 	}
 }
+
+func TestHelpViewCommandsSectionIncludesAllCommands(t *testing.T) {
+	// EX-155: :? help view Commands section was missing :agents, :activity,
+	// :merges, :schedules, :scope, :queue, :sidebar, :inbox commands.
+	// Use a large maxLines (100) so the Commands section (which follows ~41 lines
+	// of earlier sections) is not truncated.
+	model := NewModel(DefaultState())
+	model.workspace.setMainView(ViewHelp)
+
+	viewLines := model.renderMainViewContent(ViewHelp, 80, 100)
+	rendered := strings.Join(viewLines, "\n")
+
+	for _, cmd := range []string{":agents", ":merges", ":schedules", ":scope", ":queue", ":sidebar"} {
+		if !strings.Contains(rendered, cmd) {
+			t.Fatalf("help view Commands section missing %q (EX-155): %q", cmd, rendered)
+		}
+	}
+}
+
+func TestCommandModeHelpIncludesAllViews(t *testing.T) {
+	// EX-155: commandMode help bar now includes :agents :activity :merges :schedules.
+	model := NewModel(DefaultState())
+	model.commandMode = true
+
+	help := model.commandFallbackHelp()
+	for _, cmd := range []string{":agents", ":merges", ":schedules", ":scope"} {
+		if !strings.Contains(help, cmd) {
+			t.Fatalf("commandMode help missing %q (EX-155): %q", cmd, help)
+		}
+	}
+}

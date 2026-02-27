@@ -2408,7 +2408,8 @@ func (m Model) assistantLabel() string {
 
 func (m Model) commandFallbackHelp() string {
 	if m.commandMode {
-		return ":frank · :dashboard · :project · :task · :inbox · :focus sidebar|main|chat · :send · :cancel-turn · :quit  ·  Esc cancel"
+		// EX-155: include full command set; use ? to open the complete help screen
+		return ":frank · :dashboard · :project · :task · :inbox · :agents · :activity · :merges · :schedules · :scope org|project|task · :focus sidebar|main|chat · :send · :cancel-turn · :quit  ·  ? help  ·  Esc cancel"
 	}
 	switch m.focus {
 	case SidebarPanel:
