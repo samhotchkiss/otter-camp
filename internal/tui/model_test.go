@@ -198,6 +198,62 @@ func TestChatScrollHotkeys(t *testing.T) {
 	}
 }
 
+func TestGGJumpTopBottomAcrossPanels(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}}) // sidebar
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if got := model.workspace.sidebarCursor; got != len(model.workspace.visibleSidebarIDs())-1 {
+		t.Fatalf("sidebar cursor after G = %d, want %d", got, len(model.workspace.visibleSidebarIDs())-1)
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if got := model.workspace.sidebarCursor; got != 0 {
+		t.Fatalf("sidebar cursor after g = %d, want 0", got)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}}) // main
+	model.workspace.setMainView(ViewInbox)
+	model.workspace.inboxCursor = 1
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if got := model.workspace.inboxCursor; got != 0 {
+		t.Fatalf("inbox cursor after g = %d, want 0", got)
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if got := model.workspace.inboxCursor; got != len(model.workspace.inbox)-1 {
+		t.Fatalf("inbox cursor after G = %d, want %d", got, len(model.workspace.inbox)-1)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}}) // chat
+	for i := 0; i < 40; i++ {
+		model.appendMessage("seed", "assistant", "line line line line line", true)
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if model.chatScrollOffset <= 0 {
+		t.Fatalf("chat scroll offset after g = %d, want > 0", model.chatScrollOffset)
+	}
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if model.chatScrollOffset != 0 {
+		t.Fatalf("chat scroll offset after G = %d, want 0", model.chatScrollOffset)
+	}
+}
+
+func TestCommandPaletteShowsFuzzySuggestions(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	for _, r := range []rune("tsk") {
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	panel := model.renderChatPanel(90, 20, true)
+	if !strings.Contains(panel, "task: Launch docs") {
+		t.Fatalf("command palette suggestions missing task fuzzy match: %q", panel)
+	}
+}
+
 func TestSendResetsChatScrollOffset(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.focus = ChatPanel

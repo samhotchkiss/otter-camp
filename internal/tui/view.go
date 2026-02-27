@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -1016,6 +1017,14 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	bottomLines := make([]string, 0, len(inputLines)+2)
 	bottomLines = append(bottomLines, "")
 	bottomLines = append(bottomLines, inputLines...)
+	if m.commandMode {
+		if suggestions := m.commandPaletteSuggestions(4); len(suggestions) > 0 {
+			bottomLines = append(bottomLines, styleMuted.Render("  suggestions"))
+			for _, suggestion := range suggestions {
+				bottomLines = append(bottomLines, styleSubtle.Render("  "+truncate(suggestion, cw-2)))
+			}
+		}
+	}
 	// EX-017: show all queued messages (up to 3), with overflow indicator
 	const maxQueueVisible = 3
 	for i, q := range m.queuedMessages {
@@ -1336,6 +1345,118 @@ func (m Model) renderChatInputBox(width int, focused bool) string {
 	}
 
 	return boxStyle.Render(prefix + displayText)
+}
+
+type commandSuggestion struct {
+	label string
+	match string
+}
+
+func (m Model) commandPaletteSuggestions(limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	query := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(m.commandBuffer, ":")))
+	if query == "" {
+		return nil
+	}
+
+	seen := map[string]struct{}{}
+	add := func(items *[]commandSuggestion, label string) {
+		key := strings.ToLower(strings.TrimSpace(label))
+		if key == "" {
+			return
+		}
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		*items = append(*items, commandSuggestion{label: label, match: strings.ToLower(label)})
+	}
+
+	candidates := make([]commandSuggestion, 0, 32)
+	for _, command := range []string{
+		"cmd: frank", "cmd: dashboard", "cmd: project", "cmd: task", "cmd: inbox",
+		"cmd: focus sidebar", "cmd: focus main", "cmd: focus chat",
+		"cmd: send", "cmd: cancel-turn", "cmd: quit",
+	} {
+		add(&candidates, command)
+	}
+	for _, id := range m.workspace.visibleSidebarIDs() {
+		node := m.workspace.nodes[id]
+		if node == nil {
+			continue
+		}
+		switch node.Kind {
+		case sidebarKindSession:
+			add(&candidates, "session: "+node.Label)
+		case sidebarKindProject:
+			add(&candidates, "project: "+node.Label)
+		}
+	}
+	for _, taskID := range m.workspace.taskOrder {
+		task := m.workspace.tasks[taskID]
+		if task == nil {
+			continue
+		}
+		add(&candidates, "task: "+task.Title)
+	}
+
+	filtered := make([]commandSuggestion, 0, len(candidates))
+	for _, candidate := range candidates {
+		if fuzzyMatch(query, candidate.match) {
+			filtered = append(filtered, candidate)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		ai := strings.Index(filtered[i].match, query)
+		aj := strings.Index(filtered[j].match, query)
+		if ai == -1 {
+			ai = 1 << 20
+		}
+		if aj == -1 {
+			aj = 1 << 20
+		}
+		if ai != aj {
+			return ai < aj
+		}
+		if len(filtered[i].label) != len(filtered[j].label) {
+			return len(filtered[i].label) < len(filtered[j].label)
+		}
+		return filtered[i].label < filtered[j].label
+	})
+
+	if len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	out := make([]string, 0, len(filtered))
+	for _, candidate := range filtered {
+		out = append(out, candidate.label)
+	}
+	return out
+}
+
+func fuzzyMatch(query, candidate string) bool {
+	query = strings.TrimSpace(strings.ToLower(query))
+	candidate = strings.TrimSpace(strings.ToLower(candidate))
+	if query == "" {
+		return true
+	}
+	if strings.Contains(candidate, query) {
+		return true
+	}
+
+	qr := []rune(query)
+	i := 0
+	for _, r := range []rune(candidate) {
+		if i < len(qr) && r == qr[i] {
+			i++
+		}
+		if i == len(qr) {
+			return true
+		}
+	}
+	return false
 }
 
 // ── Status bar ──────────────────────────────────────────────────────────────
