@@ -2305,7 +2305,17 @@ func (m Model) commandFallbackHelp() string {
 			return "i inbox · d dashboard · n next unread · r refresh · / filter · : commands · ? help"
 		}
 	case ChatPanel:
-		return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · ↑/↓ scroll · [/] scope · Esc cancel turn · : commands · ? help"
+		// EX-091: when input is empty and the latest assistant message has tool
+		// calls, hint that Enter will expand/collapse them rather than send.
+		if strings.TrimSpace(m.chatInput) == "" {
+			for i := len(m.chatMessages) - 1; i >= 0; i-- {
+				if len(m.chatMessages[i].ToolCalls) > 0 {
+					return "Enter expand/collapse tool · PgUp/PgDn scroll · g/G jump · [/] scope · : commands · ? help"
+				}
+				break
+			}
+		}
+		return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · [/] scope · Esc cancel turn · : commands · ? help"
 	}
 	if m.runtimeHints.ModifierReliabilityUncertain {
 		return "tmux-safe: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit"

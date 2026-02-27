@@ -1407,7 +1407,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("a / x / f / o", "inbox: approve/reject/defer/open"),
 		"",
 		header("Chat  (press 3 to focus)"),
-		key("Enter", "send message"),
+		key("Enter", "send message  (or expand/collapse tool call when input is empty)"),
 		key("Alt-Enter", "insert newline"),
 		key("PgUp / PgDn", "scroll messages"),
 		key("↑ / ↓", "scroll one line"),
