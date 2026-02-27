@@ -4420,3 +4420,51 @@ func TestSwitchScopeClearsQueuedMessages(t *testing.T) {
 		t.Errorf("activeTurnSessionID should be set to sessionB after switch, got %q (EX-188)", model.activeTurnSessionID)
 	}
 }
+
+// TestSessionResolvedMsgIgnoredAfterSessionSwitch verifies EX-189: a stale
+// SessionResolvedMsg from session A's in-flight send must not overwrite
+// activeTurnSessionID after the user has already switched to session B.
+func TestSessionResolvedMsgIgnoredAfterSessionSwitch(t *testing.T) {
+	t.Parallel()
+	sessionA := "aaaaaaaa-0000-0000-0000-000000000001"
+	sessionB := "bbbbbbbb-0000-0000-0000-000000000002"
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// Simulate: session B is now active, activeTurn is false (turn cleared by switch)
+	model.activeSession = sessionB
+	model.activeTurnSessionID = sessionB
+	model.activeTurn = false
+
+	// Stale SessionResolvedMsg arrives from session A's in-flight send
+	updated, _ := model.Update(SessionResolvedMsg{SessionID: sessionA})
+	m2 := updated.(Model)
+
+	// EX-189: should NOT overwrite activeTurnSessionID with session A's UUID
+	if m2.activeTurnSessionID != sessionB {
+		t.Errorf("stale SessionResolvedMsg overwrote activeTurnSessionID: got %q, want %q (EX-189)", m2.activeTurnSessionID, sessionB)
+	}
+}
+
+// TestSessionResolvedMsgAppliedWhenTurnActive verifies EX-189 happy path:
+// when a turn IS active, SessionResolvedMsg correctly updates activeTurnSessionID.
+func TestSessionResolvedMsgAppliedWhenTurnActive(t *testing.T) {
+	t.Parallel()
+	sessionID := "cccccccc-0000-0000-0000-000000000003"
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// Turn is active (placeholder session ID before UUID resolution)
+	model.activeTurn = true
+	model.activeTurnSessionID = ""
+
+	// SessionResolvedMsg arrives with the real UUID
+	updated, _ := model.Update(SessionResolvedMsg{SessionID: sessionID})
+	m2 := updated.(Model)
+
+	if m2.activeTurnSessionID != sessionID {
+		t.Errorf("SessionResolvedMsg not applied during active turn: got %q, want %q (EX-189)", m2.activeTurnSessionID, sessionID)
+	}
+}

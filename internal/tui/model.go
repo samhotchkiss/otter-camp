@@ -512,7 +512,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, sendChatMessageCmd(typed, m.runtimeHints.SendChatMessage)
 	case SessionResolvedMsg:
-		m.activeTurnSessionID = strings.TrimSpace(typed.SessionID)
+		// EX-189: only apply the resolved session ID while a turn is still active.
+		// If the user switched sessions after sending (EX-188 set activeTurnSessionID
+		// to the new session's UUID), a stale SessionResolvedMsg from the previous
+		// session's in-flight send must not overwrite the new session's filter.
+		if m.activeTurn {
+			m.activeTurnSessionID = strings.TrimSpace(typed.SessionID)
+		}
 		return m, nil
 	case chatSendCompletedMsg:
 		if typed.Err != nil {

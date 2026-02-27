@@ -2944,3 +2944,17 @@ A user who missed the 5-second window had no way to know these events occurred.
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-189: Stale SessionResolvedMsg from in-flight send overwrites new session's filter
+
+**Observation:** `SendChatMessage` is async — it dispatches `sendChatMessageCmd`, which calls the API and then returns `SessionResolvedMsg{SessionID: resolvedUUID}` to set `activeTurnSessionID`. If the user switches sessions between the send and the resolution (e.g., the API call takes a second), a stale `SessionResolvedMsg` from session A arrives after `clearTurnIfSwitchingSession` has already set `activeTurnSessionID` to session B's UUID. The unconditional assignment would overwrite session B's UUID with session A's UUID, re-introducing cross-session SSE filter confusion.
+
+**Improvement:** Added a guard: `SessionResolvedMsg` only applies when `m.activeTurn == true`. After a session switch, `activeTurn` is always false (cleared by `clearTurnIfSwitchingSession`), so the stale message is silently dropped. When a turn is genuinely in-flight and the UUID arrives, `activeTurn` is true, so the assignment proceeds normally.
+
+**Why it matters:** This closes the last known race in the EX-144 / EX-186 / EX-187 / EX-188 cascade. Without this guard, a slow API call + quick session switch would leave `activeTurnSessionID` pointing at the wrong session, causing the TUI to accept SSE events from session A and reject legitimate events from session B.
+
+**Effort:** Trivial (if guard wrapping one assignment)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
