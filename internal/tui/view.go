@@ -660,9 +660,22 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		r2 := lipgloss.NewStyle().Width(colW).Render(row[2])
 		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, r0, r1, r2))
 	}
-	// EX-008: show overflow indicator when more than 4 task rows are hidden
+	// EX-008: show per-column overflow indicator when more than 4 tasks in any column
 	if taskRowCount > 4 {
-		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more tasks", taskRowCount-4)))
+		todoOver, inProgOver, doneOver := "", "", ""
+		if len(todoTasks) > 4 {
+			todoOver = styleMuted.Render(fmt.Sprintf("  +%d more", len(todoTasks)-4))
+		}
+		if len(inProgTasks) > 4 {
+			inProgOver = styleMuted.Render(fmt.Sprintf("  +%d more", len(inProgTasks)-4))
+		}
+		if len(doneTasks) > 4 {
+			doneOver = styleMuted.Render(fmt.Sprintf("  +%d more", len(doneTasks)-4))
+		}
+		r0 := lipgloss.NewStyle().Width(colW).Render(todoOver)
+		r1 := lipgloss.NewStyle().Width(colW).Render(inProgOver)
+		r2 := lipgloss.NewStyle().Width(colW).Render(doneOver)
+		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, r0, r1, r2))
 	}
 
 	// Inbox section
