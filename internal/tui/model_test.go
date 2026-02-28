@@ -3225,6 +3225,54 @@ func TestSidebarEmptyHLArrowsEX416(t *testing.T) {
 	}
 }
 
+// EX-417: scope cycling to ScopeProject via '['/']' fell to the default case in
+// switchScope and called sessionForScope(ScopeProject) = "session-project-current"
+// (a non-UUID placeholder). Any subsequent send then showed "Session loading —
+// please wait..." which is misleading. Now ScopeProject uses the org session (same
+// as ScopeOrg) and gives "no project selected" feedback when none is selected.
+func TestScopeCycleProjectEX417(t *testing.T) {
+	t.Run("no-project-gives-hint", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.activeSessionID = "11111111-2222-3333-4444-555555555555"
+		m.activeSession = m.workspace.activeSessionID
+		// No project selected: workspace.selectedProjectID == ""
+
+		// Cycle to project scope via ']'
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+
+		if m.ChatScope() != ScopeProject {
+			t.Fatalf("scope = %q, want project", m.ChatScope())
+		}
+		if !strings.Contains(m.statusMessage, "no project selected") {
+			t.Fatalf("statusMessage = %q, want 'no project selected' hint", m.statusMessage)
+		}
+		// Session must remain a real UUID (org session), not the placeholder
+		if !looksLikeUUID(m.ActiveChatSession()) {
+			t.Fatalf("session = %q, want real UUID (org session)", m.ActiveChatSession())
+		}
+	})
+
+	t.Run("with-project-uses-org-session", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.activeSessionID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		m.activeSession = m.workspace.activeSessionID
+		m.workspace.selectedProjectID = "proj-123"
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+
+		if m.ChatScope() != ScopeProject {
+			t.Fatalf("scope = %q, want project", m.ChatScope())
+		}
+		if !looksLikeUUID(m.ActiveChatSession()) {
+			t.Fatalf("session = %q, want real UUID (org session)", m.ActiveChatSession())
+		}
+		// Should say "Scope switched to project." when project is selected
+		if strings.Contains(m.statusMessage, "no project selected") {
+			t.Fatalf("statusMessage = %q, should not mention 'no project selected' when project IS selected", m.statusMessage)
+		}
+	})
+}
+
 // EX-160: Inbox approve/reject/defer were local-only; pressing 'a', 'x', 'f'
 // must also return a tea.Cmd that calls ActOnInboxItem with the correct item ID.
 func TestInboxApproveIssuesServerAPICall(t *testing.T) {

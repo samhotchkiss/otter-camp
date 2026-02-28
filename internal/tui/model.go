@@ -5046,6 +5046,20 @@ func (m *Model) switchScope(next ChatScope) tea.Cmd {
 			m.statusMessage = "Scope: task (no task selected — select a task first)"
 			sessionID = sessionForScope(next)
 		}
+	case ScopeProject:
+		// EX-417: project scope uses the org/Frank session (same as ScopeOrg),
+		// because project-scoped chats route through the general org session.
+		// Previously the default case called sessionForScope(ScopeProject) which
+		// returns the non-UUID placeholder "session-project-current", causing
+		// sendOrQueueInput to show "Session loading — please wait..." instead of
+		// a helpful "no project selected" hint.
+		sessionID = m.workspace.activeSessionID
+		if sessionID == "" {
+			sessionID = sessionForScope(next)
+		}
+		if m.workspace.selectedProjectID == "" {
+			m.statusMessage = "Scope: project (no project selected — select a project from the sidebar first)"
+		}
 	default:
 		sessionID = sessionForScope(next)
 	}
