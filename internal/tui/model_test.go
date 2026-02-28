@@ -4804,3 +4804,27 @@ func TestMainPanelResizeHint(t *testing.T) {
 		t.Errorf("EX-204: expected resize hint mentioning sidebar or chat, got %q", model.statusMessage)
 	}
 }
+
+// TestEscClosesHelpFromAnyFocus verifies EX-205: pressing Esc with ViewHelp
+// active closes the help screen regardless of which panel has focus
+// (sidebar, main, or chat).
+func TestEscClosesHelpFromAnyFocus(t *testing.T) {
+	for _, focus := range []Panel{SidebarPanel, MainPanel, ChatPanel} {
+		t.Run(panelLabel(focus), func(t *testing.T) {
+			model := NewModel(DefaultState())
+			model.workspace.setMainView(ViewHelp)
+			model.setFocus(focus)
+			model.activeTurn = false // ensure chat Esc doesn't intercept for cancel
+
+			updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+			model = updated.(Model)
+
+			if model.workspace.mainView == ViewHelp {
+				t.Errorf("EX-205: Esc from %s focus should close ViewHelp, but mainView is still ViewHelp", panelLabel(focus))
+			}
+			if model.workspace.mainView != ViewDashboard {
+				t.Errorf("EX-205: expected ViewDashboard after Esc, got %v", model.workspace.mainView)
+			}
+		})
+	}
+}

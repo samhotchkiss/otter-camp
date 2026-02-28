@@ -1019,6 +1019,13 @@ func (m *Model) handleEnterKey() tea.Cmd {
 }
 
 func (m *Model) handleEscapeKey() tea.Cmd {
+	// EX-205: Esc closes ViewHelp from any focus context, not just MainPanel.
+	// The help screen renders in the main panel but focus may be elsewhere.
+	if m.workspace.mainView == ViewHelp {
+		m.workspace.setMainView(ViewDashboard)
+		m.statusMessage = "Returned to dashboard."
+		return nil
+	}
 	if m.focus == MainPanel {
 		// From task detail: go back to project view if we came from one, else dashboard
 		if m.workspace.mainView == ViewTask && m.workspace.selectedProjectID != "" {
@@ -1314,9 +1321,21 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.statusMessage = "Refreshing agents…"
 			return true, loadAgentsCmd(m.runtimeHints)
 		}
+		// EX-206: use a more descriptive status message that matches the current view.
+		switch {
+		case m.focus == MainPanel && m.workspace.mainView == ViewDashboard:
+			m.statusMessage = "Refreshing task board…"
+		case m.focus == MainPanel && m.workspace.mainView == ViewActivity:
+			m.statusMessage = "Refreshing activity…"
+		case m.focus == MainPanel && m.workspace.mainView == ViewMerges:
+			m.statusMessage = "Refreshing merges…"
+		case m.focus == MainPanel && m.workspace.mainView == ViewSchedules:
+			m.statusMessage = "Refreshing schedules…"
+		default:
+			m.statusMessage = "Refreshing sidebar data…"
+		}
 		m.workspace.activity = appendActivity(m.workspace.activity,
 			"sidebar refreshed at "+m.now().Format("15:04:05"))
-		m.statusMessage = "Refreshing sidebar data…"
 		return true, loadSidebarDataCmd(m.runtimeHints)
 	case 'a':
 		// EX-160: capture item ID before applyInboxAction removes it, then issue API call.
