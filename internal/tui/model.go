@@ -1399,8 +1399,13 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// the input (mirrors '0' guard and the '<'/'>' guard pattern).
 			if panel, ok := panelFromShortcut(key.Alt, r); ok {
 				if !(m.focus == ChatPanel && strings.TrimSpace(m.chatInput) != "") {
-					m.setFocus(panel)
-					m.statusMessage = "Focus: " + panelLabel(m.focus)
+					// EX-463: idempotency — mirrors :focus EX-460.
+					if m.focus == panel {
+						m.statusMessage = "Already focused on " + panelLabel(panel) + "."
+					} else {
+						m.setFocus(panel)
+						m.statusMessage = "Focus: " + panelLabel(m.focus)
+					}
 					return m, nil
 				}
 			}

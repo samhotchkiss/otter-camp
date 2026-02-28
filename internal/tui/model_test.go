@@ -98,6 +98,58 @@ func TestFocusCommandIdempotencyEX460(t *testing.T) {
 	})
 }
 
+// TestPanelShortcutIdempotencyEX463 verifies EX-463: number keys 1/2/3 give
+// "Already focused on X." when the panel is already focused, consistent with
+// :focus EX-460. Before this fix they always said "Focus: X." on repeat press.
+func TestPanelShortcutIdempotencyEX463(t *testing.T) {
+	cases := []struct {
+		key       rune
+		panel     Panel
+		wantAlready string
+		wantSwitch  string
+	}{
+		{'1', SidebarPanel, "Already focused on sidebar.", "Focus: sidebar"},
+		{'2', MainPanel, "Already focused on main.", "Focus: main"},
+		{'3', ChatPanel, "Already focused on chat.", "Focus: chat"},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.key)+"-already-focused", func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = tc.panel
+			m.statusMessage = ""
+
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tc.key}})
+
+			if got := m.statusMessage; got != tc.wantAlready {
+				t.Fatalf("EX-463: %c when already focused = %q, want %q", tc.key, got, tc.wantAlready)
+			}
+			if m.focus != tc.panel {
+				t.Fatalf("EX-463: focus should stay on %v; got %v", tc.panel, m.focus)
+			}
+		})
+		t.Run(string(tc.key)+"-switches-panel", func(t *testing.T) {
+			m := NewModel(DefaultState())
+			// Start on a different panel.
+			switch tc.panel {
+			case SidebarPanel:
+				m.focus = MainPanel
+			default:
+				m.focus = SidebarPanel
+			}
+			m.statusMessage = ""
+
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tc.key}})
+
+			if got := m.statusMessage; got != tc.wantSwitch {
+				t.Fatalf("EX-463: %c switching panel = %q, want %q", tc.key, got, tc.wantSwitch)
+			}
+			if m.focus != tc.panel {
+				t.Fatalf("EX-463: focus should be %v; got %v", tc.panel, m.focus)
+			}
+		})
+	}
+}
+
 func TestSidebarToggleKeybindingAtSSize(t *testing.T) {
 	model := NewModel(DefaultState())
 	model = pressMsg(model, tea.WindowSizeMsg{Width: 90, Height: 30})
