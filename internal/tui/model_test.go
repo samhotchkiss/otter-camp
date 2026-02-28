@@ -11292,3 +11292,40 @@ func TestReconnectCommandEX406(t *testing.T) {
 		}
 	})
 }
+
+// TestStatusCommandEX407 verifies that :status/:info/:debug display a diagnostic
+// summary including connection state, scope, session, and turn state (EX-407).
+func TestStatusCommandEX407(t *testing.T) {
+	for _, cmd := range []string{":status", ":info", ":debug"} {
+		cmd := cmd
+		t.Run(cmd, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.activeSession = "11111111-2222-3333-4444-555555555555"
+			_ = m.executeCommand(cmd)
+			// Status message should contain key diagnostic fields.
+			for _, want := range []string{"conn:", "scope:", "turn:"} {
+				if !strings.Contains(m.statusMessage, want) {
+					t.Errorf("EX-407: %s should contain %q in statusMessage, got %q", cmd, want, m.statusMessage)
+				}
+			}
+		})
+	}
+
+	// :status should appear in command palette.
+	t.Run("in-palette", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":stat"
+		suggestions := m.commandPaletteSuggestions(5)
+		found := false
+		for _, s := range suggestions {
+			if strings.Contains(strings.ToLower(s), "status") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("EX-407: ':stat' should suggest :status, got %v", suggestions)
+		}
+	})
+}

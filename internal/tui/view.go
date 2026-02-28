@@ -2597,6 +2597,8 @@ func (m Model) commandPaletteSuggestions(limit int) []string {
 		"cmd: clear", "cmd: sort", "cmd: ls",
 		// EX-406: :reconnect/:connect for manual SSE reconnect when degraded.
 		"cmd: reconnect", "cmd: connect",
+		// EX-407: :status/:info/:debug for diagnostic connection/session summary.
+		"cmd: status", "cmd: info", "cmd: debug",
 	} {
 		add(&candidates, command)
 	}

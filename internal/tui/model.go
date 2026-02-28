@@ -4005,6 +4005,36 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		m.workspace.activity = appendActivity(m.workspace.activity,
 			"manual reconnect at "+m.now().Format("15:04:05"))
 		return loadSidebarDataCmd(m.runtimeHints)
+	case "status", "info", "debug":
+		// EX-407: :status/:info/:debug — show a diagnostic summary of the current
+		// connection, session, scope, and turn state. Useful for troubleshooting.
+		connLabel := "connected"
+		switch m.connection {
+		case ConnectionDisconnected:
+			connLabel = "disconnected"
+		case ConnectionReconnecting:
+			connLabel = "reconnecting"
+		}
+		if m.streamDegraded {
+			connLabel += " (degraded)"
+		}
+		scopeLabel := "org"
+		switch m.activeScope {
+		case ScopeProject:
+			scopeLabel = "project"
+		case ScopeTask:
+			scopeLabel = "task"
+		}
+		turnLabel := "idle"
+		if m.activeTurn {
+			turnLabel = fmt.Sprintf("active (queued: %d)", len(m.queuedMessages))
+		}
+		sessionLabel := truncate(m.workspace.sessionLabel(m.ActiveChatSession()), 30)
+		if sessionLabel == "" {
+			sessionLabel = truncate(m.ActiveChatSession(), 30)
+		}
+		m.statusMessage = fmt.Sprintf("conn:%s  scope:%s  session:%s  turn:%s",
+			connLabel, scopeLabel, sessionLabel, turnLabel)
 	case "clear", "cls":
 		// EX-391: :clear/:cls (shell clear screen) — screen is managed by the TUI.
 		m.statusMessage = "Screen is managed automatically. Use r to refresh data."
