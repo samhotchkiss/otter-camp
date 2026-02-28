@@ -4575,11 +4575,32 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 				m.statusMessage = "Jumped to next unread session."
 			}
 			m.setFocus(SidebarPanel)
+			// EX-487: set scope and task detail for task-scoped sessions —
+			// mirrors the 'n' key fix (EX-485). :n/:next was using the same
+			// selectSidebarNode path but silently skipping scope, ViewTask
+			// navigation, selectedTaskID, and loadTaskDetailCmd.
+			var cmds487 []tea.Cmd
+			if unreadNode487 := m.workspace.nodes[nextID]; unreadNode487 != nil {
+				switch unreadNode487.SessionScope {
+				case "project_task":
+					m.activeScope = ScopeTask
+					if unreadNode487.TaskID != "" {
+						cmds487 = append(cmds487, loadTaskDetailCmd(unreadNode487.TaskID, m.runtimeHints))
+					}
+				case "project":
+					m.activeScope = ScopeProject
+				default:
+					m.activeScope = ScopeOrg
+				}
+			}
 			if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
 				m.chatMessages = nil
 				m.chatHistoryLoading = true
 				m.chatMessageIndex = make(map[string]int)
-				return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+				cmds487 = append(cmds487, loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory))
+			}
+			if len(cmds487) > 0 {
+				return tea.Batch(cmds487...)
 			}
 		} else {
 			m.statusMessage = "No unread sessions."
