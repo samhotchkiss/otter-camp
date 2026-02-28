@@ -8674,3 +8674,44 @@ func TestSpaceOnNonExpandableSidebarEX324(t *testing.T) {
 		t.Errorf("EX-324: Space on project should say 'Expanded...'; got %q", m2.statusMessage)
 	}
 }
+
+// TestCtrlUWEmptyChatEX325326 verifies that Ctrl-U and Ctrl-W in the chat
+// panel when the input is already empty give honest feedback instead of
+// silently doing nothing (EX-325/326).
+func TestCtrlUWEmptyChatEX325326(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	m.chatInput = ""
+
+	// Ctrl-U with empty input
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlU})
+	if m1.statusMessage != "Nothing to clear." {
+		t.Errorf("EX-325: Ctrl-U with empty input should say 'Nothing to clear.'; got %q", m1.statusMessage)
+	}
+
+	// Ctrl-W with empty input
+	m2 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlW})
+	if m2.statusMessage != "Nothing to delete." {
+		t.Errorf("EX-326: Ctrl-W with empty input should say 'Nothing to delete.'; got %q", m2.statusMessage)
+	}
+
+	// Ctrl-U with non-empty input should still clear
+	m3 := m
+	m3.chatInput = "hello world"
+	m3 = pressKey(m3, tea.KeyMsg{Type: tea.KeyCtrlU})
+	if m3.statusMessage != "Input cleared." {
+		t.Errorf("EX-325: Ctrl-U with non-empty input should say 'Input cleared.'; got %q", m3.statusMessage)
+	}
+	if m3.chatInput != "" {
+		t.Errorf("EX-325: Ctrl-U should clear chatInput; got %q", m3.chatInput)
+	}
+
+	// Ctrl-W with non-empty input should delete last word
+	m4 := m
+	m4.chatInput = "hello world"
+	m4 = pressKey(m4, tea.KeyMsg{Type: tea.KeyCtrlW})
+	if m4.statusMessage != "Last word deleted." {
+		t.Errorf("EX-326: Ctrl-W with non-empty input should say 'Last word deleted.'; got %q", m4.statusMessage)
+	}
+}

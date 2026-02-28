@@ -614,24 +614,34 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlU:
 		// EX-300: Ctrl-U (Unix kill-line) clears the chat input when focused on the chat panel.
 		// Complements EX-289 (Esc clears input) with a more keyboard-conventional shortcut.
-		if m.focus == ChatPanel && strings.TrimSpace(m.chatInput) != "" {
-			m.chatInput = ""
-			m.chatHistoryIndex = -1
-			m.statusMessage = "Input cleared."
+		if m.focus == ChatPanel {
+			if strings.TrimSpace(m.chatInput) != "" {
+				m.chatInput = ""
+				m.chatHistoryIndex = -1
+				m.statusMessage = "Input cleared."
+			} else {
+				// EX-325: give honest feedback when there is nothing to clear.
+				m.statusMessage = "Nothing to clear."
+			}
 		}
 		return m, nil
 	case tea.KeyCtrlW:
 		// EX-303: Ctrl-W (Unix kill-word-backward) deletes the last word from the chat input.
-		if m.focus == ChatPanel && len(m.chatInput) > 0 {
-			trimmed := strings.TrimRight(m.chatInput, " \t\n")
-			lastSpace := strings.LastIndexAny(trimmed, " \t\n")
-			if lastSpace >= 0 {
-				m.chatInput = trimmed[:lastSpace+1]
+		if m.focus == ChatPanel {
+			if len(m.chatInput) > 0 {
+				trimmed := strings.TrimRight(m.chatInput, " \t\n")
+				lastSpace := strings.LastIndexAny(trimmed, " \t\n")
+				if lastSpace >= 0 {
+					m.chatInput = trimmed[:lastSpace+1]
+				} else {
+					m.chatInput = ""
+				}
+				m.chatHistoryIndex = -1
+				m.statusMessage = "Last word deleted."
 			} else {
-				m.chatInput = ""
+				// EX-326: give honest feedback when there is nothing to delete.
+				m.statusMessage = "Nothing to delete."
 			}
-			m.chatHistoryIndex = -1
-			m.statusMessage = "Last word deleted."
 		}
 		return m, nil
 	case tea.KeyTab:
