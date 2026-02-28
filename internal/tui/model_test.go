@@ -6524,6 +6524,42 @@ func TestHelpViewJKScrollFeedbackEX440(t *testing.T) {
 	}
 }
 
+// TestHelpViewArrowScrollFeedbackEX441 verifies EX-441: ↑/↓ in ViewHelp give
+// "Help scrolled up." / "Help scrolled down." on successful scroll, consistent with
+// PgUp/PgDn and the j/k fix in EX-440. Previously only boundary states gave feedback.
+func TestHelpViewArrowScrollFeedbackEX441(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewHelp)
+	m.helpScrollOffset = 5
+
+	// ↑ should scroll up and say "Help scrolled up."
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.StatusMessage(); got != "Help scrolled up." {
+		t.Errorf("EX-441: ↑ mid-scroll status = %q, want 'Help scrolled up.'", got)
+	}
+	if m.helpScrollOffset != 4 {
+		t.Errorf("EX-441: helpScrollOffset after ↑ = %d, want 4", m.helpScrollOffset)
+	}
+
+	// ↓ should scroll down and say "Help scrolled down."
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+	if got := m.StatusMessage(); got != "Help scrolled down." {
+		t.Errorf("EX-441: ↓ mid-scroll status = %q, want 'Help scrolled down.'", got)
+	}
+	if m.helpScrollOffset != 5 {
+		t.Errorf("EX-441: helpScrollOffset after ↓ = %d, want 5", m.helpScrollOffset)
+	}
+
+	// ↑ at offset 0 should still give "Already at top." boundary message.
+	m.helpScrollOffset = 0
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.StatusMessage(); got != "Already at top of help." {
+		t.Errorf("EX-441: ↑ at top status = %q, want 'Already at top of help.'", got)
+	}
+}
+
 // TestSidebarFilterHintEX251 verifies EX-251: the sidebar help line says
 // "/ filter" when no filter is active and "/ clear filter" when a filter is active.
 func TestSidebarFilterHintEX251(t *testing.T) {

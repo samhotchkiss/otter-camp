@@ -1118,19 +1118,23 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch key.Type {
 			case tea.KeyUp:
 				// EX-312: ↑ scrolls up one line (mirrors 'k').
+				// EX-441: give scroll feedback consistent with PgUp and j/k (EX-440).
 				if m.helpScrollOffset > 0 {
 					m.helpScrollOffset--
+					m.statusMessage = "Help scrolled up."
 				} else {
 					m.statusMessage = "Already at top of help."
 				}
 				return m, nil
 			case tea.KeyDown:
 				// EX-312: ↓ scrolls down one line (mirrors 'j').
+				// EX-441: give scroll feedback consistent with PgDn and j/k (EX-440).
 				maxOff := helpMaxOffset()
 				if m.helpScrollOffset >= maxOff {
 					m.statusMessage = "Already at bottom of help."
 				} else {
 					m.helpScrollOffset++
+					m.statusMessage = "Help scrolled down."
 				}
 				return m, nil
 			case tea.KeyPgUp:
