@@ -1899,8 +1899,13 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.statusMessage = "No active tasks on dashboard."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
-			// EX-209: g jumps to top of help view
-			m.helpScrollOffset = 0
+			// EX-209/322: g jumps to top of help view; give feedback.
+			if m.helpScrollOffset == 0 {
+				m.statusMessage = "Already at top of help."
+			} else {
+				m.helpScrollOffset = 0
+				m.statusMessage = "Help jumped to top."
+			}
 		}
 		return true, nil
 	case 'G':
@@ -1959,8 +1964,13 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.statusMessage = "No active tasks on dashboard."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
-			// EX-209: G jumps to bottom of help view (clamped in renderHelpView)
-			m.helpScrollOffset = 9999
+			// EX-209/322: G jumps to bottom of help view; give feedback.
+			if m.helpScrollOffset >= 9999 {
+				m.statusMessage = "Already at bottom of help."
+			} else {
+				m.helpScrollOffset = 9999
+				m.statusMessage = "Help jumped to bottom."
+			}
 		}
 		return true, nil
 	case 'q':

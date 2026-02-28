@@ -8539,3 +8539,43 @@ func TestSidebarLArrowNonExpandableEX321(t *testing.T) {
 		t.Errorf("EX-321: 'l' on project node should say 'Expanded...'; got %q", m3.statusMessage)
 	}
 }
+
+// TestGGInHelpViewEX322 verifies that 'g' and 'G' in the help view give
+// contextual status messages instead of silently jumping scroll (EX-322).
+func TestGGInHelpViewEX322(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewHelp)
+
+	// 'g' when already at top
+	m.helpScrollOffset = 0
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if m1.statusMessage != "Already at top of help." {
+		t.Errorf("EX-322: 'g' at top of help should say 'Already at top of help.'; got %q", m1.statusMessage)
+	}
+
+	// 'g' when scrolled down
+	m.helpScrollOffset = 5
+	m2 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if m2.statusMessage != "Help jumped to top." {
+		t.Errorf("EX-322: 'g' from scrolled help should say 'Help jumped to top.'; got %q", m2.statusMessage)
+	}
+	if m2.helpScrollOffset != 0 {
+		t.Errorf("EX-322: 'g' should reset helpScrollOffset to 0; got %d", m2.helpScrollOffset)
+	}
+
+	// 'G' when already at bottom (offset >= 9999)
+	m.helpScrollOffset = 9999
+	m3 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if m3.statusMessage != "Already at bottom of help." {
+		t.Errorf("EX-322: 'G' at bottom of help should say 'Already at bottom of help.'; got %q", m3.statusMessage)
+	}
+
+	// 'G' when at top
+	m.helpScrollOffset = 0
+	m4 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if m4.statusMessage != "Help jumped to bottom." {
+		t.Errorf("EX-322: 'G' from top of help should say 'Help jumped to bottom.'; got %q", m4.statusMessage)
+	}
+}
