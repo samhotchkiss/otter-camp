@@ -2904,6 +2904,7 @@ func TestSupervisorEscalationAddsActivityEntry(t *testing.T) {
 
 func TestHelpCommandIncludesMergesAndSchedules(t *testing.T) {
 	// EX-154: :help was missing :merges and :schedules.
+	// EX-239: :help now opens the help view (not just a status message).
 	model := NewModel(DefaultState())
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
 	for _, r := range []rune("help") {
@@ -2911,10 +2912,16 @@ func TestHelpCommandIncludesMergesAndSchedules(t *testing.T) {
 	}
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
 
-	status := model.StatusMessage()
+	// EX-239: :help should now open the ViewHelp screen directly
+	if model.workspace.mainView != ViewHelp {
+		t.Fatalf(":help should open ViewHelp; got %v", model.workspace.mainView)
+	}
+	// Verify the help content includes :merges and :schedules
+	lines := model.renderHelpView(80, 60)
+	rendered := strings.Join(lines, "\n")
 	for _, cmd := range []string{":merges", ":schedules"} {
-		if !strings.Contains(status, cmd) {
-			t.Fatalf(":help output missing %q: %q", cmd, status)
+		if !strings.Contains(rendered, cmd) {
+			t.Fatalf("help view missing %q", cmd)
 		}
 	}
 }

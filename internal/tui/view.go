@@ -1974,7 +1974,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key(":sidebar <action>", "sidebar: up|down|home|end|expand|collapse|select"),
 		key(":inbox <action>", "inbox: approve|reject|defer|open"),
 		key(":tour dismiss", "dismiss the tour overlay"),
-		key(":help", "show all commands in status bar"),
+		key(":help", "open keybinding reference (same as ?)"),
 		key(":quit", "quit OtterCamp"),
 		"",
 		styleMuted.Render("  Press ? or Esc to close"),

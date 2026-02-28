@@ -1778,8 +1778,13 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		m.quitting = true
 		m.statusMessage = "Exiting TUI."
 	case "help", "palette":
-		// EX-154: include :merges and :schedules which were missing from the listing.
-		m.statusMessage = "Commands: :frank :dashboard :inbox :project :task :agents :activity :merges :schedules :scope org|project|task :focus sidebar|main|chat :send :cancel-turn :queue edit|steer|delete :sidebar :tour dismiss :quit"
+		// EX-239: open the help screen directly (same as ?) rather than showing a
+		// truncated status message. The old statusMessage approach was cut off at 80
+		// chars (~5 commands visible) which defeated the purpose of a quick reference.
+		m.workspace.setMainView(ViewHelp)
+		m.setFocus(MainPanel)
+		m.helpScrollOffset = 0
+		m.statusMessage = "Keybinding reference. Press ? or Esc to close."
 	case "focus":
 		if len(fields) != 2 {
 			m.statusMessage = "Usage: :focus sidebar|main|chat"
