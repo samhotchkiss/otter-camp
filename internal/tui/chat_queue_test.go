@@ -9,6 +9,8 @@ import (
 func TestQueuedMessageStateMachineSendEditSteerDeleteCancel(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.focus = ChatPanel
+	// EX-400: seed a real UUID session so the placeholder guard does not block sends.
+	model.activeSession = "11111111-2222-3333-4444-555555555555"
 
 	model.chatInput = "first"
 	model.sendOrQueueInput()
@@ -66,6 +68,8 @@ func TestQueuedMessageStateMachineSendEditSteerDeleteCancel(t *testing.T) {
 func TestChatInputBehaviorsNewlineHistoryAndMentionAutocomplete(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.focus = ChatPanel
+	// EX-400: seed a real UUID session so the placeholder guard does not block sends.
+	model.activeSession = "11111111-2222-3333-4444-555555555555"
 
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})

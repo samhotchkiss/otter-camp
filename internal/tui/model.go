@@ -4342,6 +4342,17 @@ func (m *Model) sendOrQueueInput() tea.Cmd {
 		m.statusMessage = "Cannot send empty message."
 		return nil
 	}
+	// EX-400: if the session ID is still a placeholder (e.g. "session-org-general"),
+	// the real UUID hasn't arrived from the server yet. Sending now would produce
+	// "Message sent." → API error → "Send failed (input restored)." which is
+	// misleading. Block early with an honest message so the user waits or refreshes.
+	if !m.activeTurn {
+		sessionID := m.ActiveChatSession()
+		if !looksLikeUUID(sessionID) {
+			m.statusMessage = "Session loading — please wait a moment, then try again (r to refresh)."
+			return nil
+		}
+	}
 
 	m.chatHistory = append(m.chatHistory, text)
 	m.chatHistoryIndex = len(m.chatHistory)

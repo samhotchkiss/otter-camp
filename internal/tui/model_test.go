@@ -342,6 +342,8 @@ func TestSendResetsChatScrollOffset(t *testing.T) {
 	model.focus = ChatPanel
 	model.chatScrollOffset = 12
 	model.chatInput = "hello"
+	// EX-400: seed a real UUID session so the placeholder guard does not block.
+	model.activeSession = "11111111-2222-3333-4444-555555555555"
 
 	model.sendOrQueueInput()
 
@@ -602,6 +604,8 @@ func TestHelpViewDocumentsSidebarToggleKeybinding(t *testing.T) {
 func TestForwardHistoryNavigation(t *testing.T) {
 	model := NewModel(DefaultState())
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}}) // chat focus
+	// EX-400: seed a real UUID session so the placeholder guard does not block sends.
+	model.activeSession = "11111111-2222-3333-4444-555555555555"
 
 	// Type and send two messages to populate history (direct pointer call since ChatPanel
 	// suppresses actual send without a SendChatMessage hook)
@@ -5746,6 +5750,8 @@ func TestTaskViewOKeyEX237(t *testing.T) {
 func TestSendCommandUsesProvidedTextEX238(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.chatInput = "existing input"
+	// EX-400: seed a real UUID session so the placeholder guard does not block.
+	model.activeSession = "11111111-2222-3333-4444-555555555555"
 	// Install a no-op send hook so sendOrQueueInput doesn't panic.
 	model.runtimeHints.SendChatMessage = func(_ context.Context, _, content string) error {
 		return nil
@@ -11040,5 +11046,44 @@ func TestRareCtrlKeyHintsEX398(t *testing.T) {
 				t.Errorf("EX-398: %s in ChatPanel: got %q, want to contain %q", tt.name, m1.statusMessage, tt.want)
 			}
 		})
+	}
+}
+
+// TestSendOrQueueInputPlaceholderSessionEX400 verifies that attempting to send a
+// message before the real session UUID has been received from the server gives an
+// honest "loading" hint instead of the misleading "Message sent." → "Send failed."
+// two-step (EX-400).
+func TestSendOrQueueInputPlaceholderSessionEX400(t *testing.T) {
+	// DefaultState seeds activeSession = generalSessionID ("session-org-general"),
+	// which is not a UUID. Pressing Enter in chat should block with a loading hint.
+	m := NewModel(DefaultState())
+	m.focus = ChatPanel
+	m.chatInput = "hello"
+
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(m1.statusMessage, "Session loading") {
+		t.Errorf("EX-400: expected 'Session loading' hint, got %q", m1.statusMessage)
+	}
+	// Input should NOT be cleared (message was blocked, not sent).
+	if m1.chatInput != "hello" {
+		t.Errorf("EX-400: chatInput should remain 'hello' when blocked, got %q", m1.chatInput)
+	}
+	// activeTurn should NOT be set.
+	if m1.activeTurn {
+		t.Errorf("EX-400: activeTurn should remain false when blocked by placeholder session")
+	}
+
+	// With a real UUID as the session, Enter should proceed normally.
+	m2 := NewModel(DefaultState())
+	m2.focus = ChatPanel
+	m2.chatInput = "hello"
+	m2.activeSession = "11111111-2222-3333-4444-555555555555"
+	m3 := pressKey(m2, tea.KeyMsg{Type: tea.KeyEnter})
+	// Should say "Message sent." and clear the input.
+	if !strings.Contains(m3.statusMessage, "Message sent") {
+		t.Errorf("EX-400: with real UUID should say 'Message sent.', got %q", m3.statusMessage)
+	}
+	if m3.chatInput != "" {
+		t.Errorf("EX-400: chatInput should be cleared after send, got %q", m3.chatInput)
 	}
 }

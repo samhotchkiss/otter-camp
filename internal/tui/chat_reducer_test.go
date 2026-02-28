@@ -93,6 +93,8 @@ func TestChatReducerChunkEventCompatibility(t *testing.T) {
 func TestChatReducerTurnCompletedClearsAndPromotesQueue(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.turnsSynced = true
+	// EX-400: seed a real UUID session so the placeholder guard does not block sends.
+	model.activeSession = "11111111-2222-3333-4444-555555555555"
 
 	model.chatInput = "first"
 	model.sendOrQueueInput()
