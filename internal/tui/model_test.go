@@ -5138,3 +5138,44 @@ func TestActivityHintFooterVisibleWhenFull(t *testing.T) {
 		t.Errorf("EX-215: renderActivityView returned %d lines, want ≤ %d", len(lines), maxLines)
 	}
 }
+
+// TestCommandPaletteSuggestionsComplete verifies EX-216: all valid commands are
+// present in the command palette suggestion candidates, so fuzzy-match finds them.
+func TestCommandPaletteSuggestionsComplete(t *testing.T) {
+	model := NewModel(DefaultState())
+
+	queries := map[string]string{
+		"act":      "cmd: activity",
+		"agent":    "cmd: agents",
+		"merg":     "cmd: merges",
+		"sched":    "cmd: schedules",
+		"scope o":  "cmd: scope org",
+		"scope p":  "cmd: scope project",
+		"scope t":  "cmd: scope task",
+		"queue e":  "cmd: queue edit",
+		"queue s":  "cmd: queue steer",
+		"queue d":  "cmd: queue delete",
+		"inb ap":   "cmd: inbox approve",
+		"inb re":   "cmd: inbox reject",
+		"tour":     "cmd: tour dismiss",
+		"sideb ex": "cmd: sidebar expand",
+		"cancel":   "cmd: cancel-turn",
+		"gen":      "cmd: general",
+	}
+
+	for query, wantContains := range queries {
+		model.commandBuffer = ":" + query
+		model.commandMode = true
+		got := model.commandPaletteSuggestions(20)
+		found := false
+		for _, s := range got {
+			if strings.Contains(strings.ToLower(s), strings.TrimPrefix(wantContains, "cmd: ")) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("EX-216: query %q: expected suggestion containing %q, got: %v", query, wantContains, got)
+		}
+	}
+}

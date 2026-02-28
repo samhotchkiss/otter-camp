@@ -2427,11 +2427,19 @@ func (m Model) commandPaletteSuggestions(limit int) []string {
 		*items = append(*items, commandSuggestion{label: label, match: strings.ToLower(label)})
 	}
 
-	candidates := make([]commandSuggestion, 0, 32)
+	candidates := make([]commandSuggestion, 0, 48)
+	// EX-216: include all valid commands so the suggestion list is complete.
 	for _, command := range []string{
-		"cmd: frank", "cmd: dashboard", "cmd: project", "cmd: task", "cmd: inbox",
+		"cmd: frank", "cmd: general", "cmd: dashboard", "cmd: project", "cmd: task",
+		"cmd: inbox", "cmd: agents", "cmd: activity", "cmd: merges", "cmd: schedules",
 		"cmd: focus sidebar", "cmd: focus main", "cmd: focus chat",
-		"cmd: send", "cmd: cancel-turn", "cmd: quit",
+		"cmd: scope org", "cmd: scope project", "cmd: scope task",
+		"cmd: send", "cmd: cancel-turn",
+		"cmd: queue edit", "cmd: queue steer", "cmd: queue delete",
+		"cmd: sidebar up", "cmd: sidebar down", "cmd: sidebar home", "cmd: sidebar end",
+		"cmd: sidebar expand", "cmd: sidebar collapse", "cmd: sidebar select",
+		"cmd: inbox approve", "cmd: inbox reject", "cmd: inbox defer", "cmd: inbox open",
+		"cmd: tour dismiss", "cmd: quit",
 	} {
 		add(&candidates, command)
 	}

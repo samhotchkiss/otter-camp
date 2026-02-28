@@ -3258,3 +3258,105 @@ These messages are returned immediately (`return true, nil`) so the auto-clear t
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-210: Activity/Agents/Merges/Schedules views have no hint footer — users don't know which keys work
+
+**Observation:** The Activity, Agents, Merges, and Schedules views rendered content (or empty-state text) with no hint line at the bottom. A user who navigated to one of these views had no in-context guidance about what keys do anything. Pressing j/k silently did nothing; there was no visible cue to try `r` (refresh), `/` (filter), or `Esc` (go back). This contrasts sharply with the Inbox and Project views, both of which display a persistent hint row at their bottom ("Enter·open · j/k·navigate · Esc·dashboard").
+
+The Agents view was especially problematic: when agents were empty it hit an early `return` after printing "no agents loaded", so the hint could never be added even if the code tried.
+
+**Improvement:** Added a two-line footer (`""` + hint) to the end of all four render functions:
+- Activity: `"  r·refresh  ·  /·filter  ·  Esc·dashboard"`
+- Agents (empty): `"  r·refresh  ·  Esc·dashboard"` (before the early return)
+- Agents (populated): `"  r·refresh  ·  /·filter  ·  Esc·dashboard"` (after item list)
+- Merges: `"  r·refresh  ·  /·filter  ·  Esc·dashboard"`
+- Schedules: `"  r·refresh  ·  /·filter  ·  Esc·dashboard"`
+
+**Why it matters:** Discoverability. If the user doesn't already know that `r` refreshes, `/` filters, and `Esc` goes back, they're stuck. Showing a two-line hint (as every other list view does) closes the discoverability gap at zero interaction cost.
+
+**Effort:** Trivial (8 lines across view.go + test covering all 4 views × empty/populated states)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-211: Empty Inbox shows no navigation hint — users see "✓ Inbox clear" with no next step
+
+**Observation:** When the inbox was empty (or all items matched no filter), the view displayed a centred "✓ Inbox clear" message and nothing else. There was no indication of how to leave the view, refresh for new items, or search. Contrast: every other list view (Inbox populated, Project, Task) shows a hint row at the bottom.
+
+**Improvement:** Added `""` + `"  r·refresh  ·  /·filter  ·  Esc·dashboard"` hint lines to the `len(filteredInbox) == 0` branch of `renderInboxView`.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-212: ViewTask "No task selected" is a dead end — no hint on what to do next
+
+**Observation:** When `renderTaskView` was called with no selected task (e.g., the user typed `:task` before selecting one), it returned a single line `"  No task selected"`. The user had no guidance about how to select a task or return to the dashboard. The bare message with no action hints felt like a dead end.
+
+**Improvement:** Expanded the nil-task path to return five lines including `"  Select a task from the dashboard or sidebar, then press t"` and `"  Esc·dashboard"`.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-213: Project view "Loading…" state has no recovery hint — user stranded if load stalls
+
+**Observation:** While `selectedProject` was nil (project detail not yet fetched), `renderProjectView` showed only `"  Loading…"`. If the network request stalled or silently failed, the user had no in-context guidance — they didn't know to press `r` to retry or `Esc` to bail out. Given the pattern of other views showing hint rows, this felt inconsistent.
+
+**Improvement:** Added `""` + `"  r·retry  ·  Esc·dashboard"` after the `"  Loading…"` line in the `proj == nil` branch.
+
+**Effort:** Trivial
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-214: Pressing `/` in ViewHelp entered search mode but didn't filter help content — filter leaked to other views
+
+**Observation:** In ViewHelp, pressing `/` entered search mode for MainPanel. The user would type a query and see the search bar appear, but `renderHelpView` ignores `mainFilter` entirely — so nothing in the help view changed. When the user pressed Enter to "keep" the search, `mainFilter` was set to their typed query. When they then navigated to the Dashboard, Activity, or Merges view, that filter was silently active, hiding items and confusing the user.
+
+**Improvement:** Added a guard in the `/` key handler: if `m.focus == MainPanel && m.workspace.mainView == ViewHelp`, skip `enterSearchMode` and instead show `"Search not available in help view. Press j/k to scroll."`.
+
+**Effort:** Trivial (3 lines of code)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-215: EX-210 hint footers silently dropped when item list fills panel; Activity truncation invisible
+
+**Observation:** The hint footers added in EX-210 were built at the END of each view's line slice. When the item list consumed the full `maxLines` budget, `buildPanelContent` trimmed the slice to `innerH`, dropping the footer. On a typical 24-row terminal the activity view could silently hide the "r·refresh · /·filter · Esc·dashboard" footer entirely.
+
+Additionally, the Activity view showed only the last N entries with no indication that older entries existed — there was no "↑ N above" indicator as seen in other scrollable views (sidebar, help, project task list).
+
+**Improvement:**
+- Reserve `maxLines-3` (or `maxLines-4` when the truncation indicator also needs a line) for actual content, ensuring footer always fits.
+- When Activity truncates old entries, prepend `"  ↑ N older entries hidden  (/ to filter)"` as a visual indicator.
+- Apply `maxLines-3` item caps to Agents, Merges, and Schedules views as well.
+
+**Effort:** Low (20 lines, two-pass fix: item cap + dynamic cap for the truncation indicator)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-216: Command palette suggestions incomplete
+
+**Observation:** `commandPaletteSuggestions` only listed ~10 of the ~30+ valid commands. Many frequently-used commands were absent from the fuzzy-match autocomplete: `:agents`, `:activity`, `:merges`, `:schedules`, `:scope org/project/task`, `:queue edit/steer/delete`, `:sidebar expand/collapse/select/up/down/home/end`, `:inbox approve/reject/defer/open`, `:tour dismiss`, `:general`, `:cancel-turn`.
+
+A user typing `:act` would get no suggestions, even though `:activity` is a valid command.
+
+**Improvement:**
+- Expanded the static candidate list in `commandPaletteSuggestions` from ~10 entries to 33 entries covering all supported commands.
+- The fuzzy-match and sort logic is unchanged; only the seed candidates were extended.
+
+**Effort:** Trivial (one list expansion, ~15 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
