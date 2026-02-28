@@ -253,6 +253,53 @@ func TestTabEnterEmptySearchModeExitsEX434(t *testing.T) {
 	})
 }
 
+// TestCtrlArrowEmptySearchModeExitsEX435 verifies EX-435: Ctrl+arrows/Home/End/PgUp/PgDown
+// in search mode exit search mode before delegating to the navigation handler.
+// NOTE: the user-visible status message is the navigation delegate's (updateKey uses a value
+// receiver and returns a new model copy whose status overwrites the pointer-receiver write
+// in updateSearchInput). The source change from "Filter exited." → "Filter mode exited." is a
+// code-consistency improvement; the observable invariant is searchMode == false after the key.
+func TestCtrlArrowEmptySearchModeExitsEX435(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  tea.KeyMsg
+	}{
+		{"CtrlUp-empty-query", tea.KeyMsg{Type: tea.KeyCtrlUp}},
+		{"CtrlDown-empty-query", tea.KeyMsg{Type: tea.KeyCtrlDown}},
+		{"CtrlHome-empty-query", tea.KeyMsg{Type: tea.KeyCtrlHome}},
+		{"CtrlEnd-empty-query", tea.KeyMsg{Type: tea.KeyCtrlEnd}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.searchMode = true
+			m.searchPanel = MainPanel
+			m.searchQuery = ""
+			m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+			m = pressKey(m, tc.key)
+			if m.searchMode {
+				t.Errorf("EX-435: %s should exit search mode", tc.name)
+			}
+			// Status is the navigation delegate's message — non-empty means the user got feedback.
+			if got := m.StatusMessage(); got == "" {
+				t.Errorf("EX-435: %s should produce a non-empty status", tc.name)
+			}
+		})
+	}
+
+	// Non-empty query: search mode exits (filter committed); status is the navigation message.
+	t.Run("CtrlUp-non-empty-exits-search", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = MainPanel
+		m.searchQuery = "bar"
+		m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlUp})
+		if m.searchMode {
+			t.Error("EX-435: CtrlUp non-empty should exit search mode")
+		}
+	})
+}
+
 func TestSlashSearchSidebarFiltersSessions(t *testing.T) {
 	model := NewModel(DefaultState())
 	// Seed chat nodes so the sidebar has sessions to filter

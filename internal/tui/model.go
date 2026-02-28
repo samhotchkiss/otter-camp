@@ -3894,25 +3894,27 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyCtrlUp, tea.KeyCtrlDown, tea.KeyCtrlLeft, tea.KeyCtrlRight:
 		// EX-394: Ctrl+arrows in search mode — commit filter, then navigate.
+		// EX-435: align empty-query message with EX-433/434 ("Filter mode exited.").
 		m.setFilterForPanel(m.searchPanel, m.searchQuery)
 		m.searchMode = false
 		q := strings.TrimSpace(m.searchQuery)
 		if q != "" {
 			m.statusMessage = fmt.Sprintf("Filter %q applied.", q)
 		} else {
-			m.statusMessage = "Filter exited."
+			m.statusMessage = "Filter mode exited."
 		}
 		result, cmd := m.updateKey(key)
 		return result, cmd
 	case tea.KeyCtrlHome, tea.KeyCtrlEnd, tea.KeyCtrlPgUp, tea.KeyCtrlPgDown:
 		// EX-394: Ctrl+Home/End/PgUp/PgDown in search mode — commit filter, then navigate.
+		// EX-435: align empty-query message with EX-433/434 ("Filter mode exited.").
 		m.setFilterForPanel(m.searchPanel, m.searchQuery)
 		m.searchMode = false
 		q := strings.TrimSpace(m.searchQuery)
 		if q != "" {
 			m.statusMessage = fmt.Sprintf("Filter %q applied.", q)
 		} else {
-			m.statusMessage = "Filter exited."
+			m.statusMessage = "Filter mode exited."
 		}
 		result, cmd := m.updateKey(key)
 		return result, cmd
