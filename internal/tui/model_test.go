@@ -4865,9 +4865,10 @@ func TestScopeCycleToTaskWithNoTaskShowsHint(t *testing.T) {
 	}
 }
 
-// TestAppliedFilterShowsEditClearHint verifies EX-208: when a search filter is
-// applied (not currently being edited), the search bar shows a
-// "(/ to edit · Esc to clear)" hint so users know how to modify or remove it.
+// TestAppliedFilterShowsEditClearHint verifies EX-208 (updated by EX-258/259):
+// when a search filter is applied (not currently being edited), the search bar
+// shows "Filter /query  (/ to re-filter or clear)" — "re-filter or clear" because
+// Esc outside edit mode does not clear the filter (only inside edit mode it does).
 func TestAppliedFilterShowsEditClearHint(t *testing.T) {
 	model := NewModel(DefaultState())
 	// Apply a filter to the main panel (simulates user pressing / and Enter).
@@ -4876,11 +4877,13 @@ func TestAppliedFilterShowsEditClearHint(t *testing.T) {
 
 	layout := computeLayout(80, 20, MainPanel, false, DefaultState().PanelProportions)
 	panel := model.renderMainPanel(80, 20, false, layout)
-	if !strings.Contains(panel, "/ to edit") {
-		t.Errorf("EX-208: expected '/ to edit' hint when filter is applied, got %q", panel)
+	// EX-259: "Search" renamed to "Filter"
+	if !strings.Contains(panel, "Filter") {
+		t.Errorf("EX-208/259: expected 'Filter' in search bar when filter is applied, got %q", panel)
 	}
-	if !strings.Contains(panel, "Esc to clear") {
-		t.Errorf("EX-208: expected 'Esc to clear' hint when filter is applied, got %q", panel)
+	// EX-258: hint changed from "Esc to clear" to "re-filter or clear"
+	if !strings.Contains(panel, "re-filter or clear") {
+		t.Errorf("EX-208/258: expected 're-filter or clear' hint when filter is applied, got %q", panel)
 	}
 }
 
@@ -6219,5 +6222,58 @@ func TestEnterSearchModeMsgEX257(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(m.statusMessage), "apply") {
 		t.Errorf("EX-257: expected 'apply' in search entry message; got %q", m.statusMessage)
+	}
+}
+
+// TestSearchBarTerminologyEX259 verifies EX-259: the search bar renders "Filter /query"
+// not "Search /query" — consistent with EX-254/257 filter terminology.
+func TestSearchBarTerminologyEX259(t *testing.T) {
+	m := NewModel(DefaultState())
+	m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.focus = SidebarPanel
+
+	// Apply a sidebar filter.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	for _, ch := range "frank" {
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Render the sidebar panel and verify the search bar says "Filter".
+	bar := m.renderSearchBar(SidebarPanel, 60)
+	if !strings.Contains(bar, "Filter") {
+		t.Errorf("EX-259: search bar should say 'Filter'; got %q", bar)
+	}
+	if strings.Contains(bar, "Search") {
+		t.Errorf("EX-259: search bar must not say 'Search'; got %q", bar)
+	}
+}
+
+// TestSearchBarPersistentHintEX258 verifies EX-258: when a filter is applied but
+// not being edited, the search bar shows "(/ to re-filter or clear)" instead of
+// "(/ to edit  ·  Esc to clear)" — the old hint was wrong because Esc outside
+// edit mode does not clear the filter; it navigates.
+func TestSearchBarPersistentHintEX258(t *testing.T) {
+	m := NewModel(DefaultState())
+	m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.focus = SidebarPanel
+
+	// Apply a sidebar filter and exit edit mode.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	for _, ch := range "frank" {
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Not in search mode — persistent bar should show the re-filter/clear hint.
+	if m.searchMode {
+		t.Fatalf("EX-258: expected search mode to be off after Enter; still on")
+	}
+	bar := m.renderSearchBar(SidebarPanel, 80)
+	if strings.Contains(bar, "Esc to clear") {
+		t.Errorf("EX-258: persistent search bar must not show 'Esc to clear' (misleading); got %q", bar)
+	}
+	if !strings.Contains(bar, "re-filter or clear") {
+		t.Errorf("EX-258: persistent search bar should say 're-filter or clear'; got %q", bar)
 	}
 }

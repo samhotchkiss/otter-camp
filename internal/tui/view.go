@@ -672,9 +672,13 @@ func (m Model) renderSearchBar(panel Panel, width int) string {
 	} else {
 		// EX-208: when a filter is applied but not actively being edited,
 		// show a hint so the user knows how to change or clear it.
-		prompt += "  (/ to edit  ·  Esc to clear)"
+		// EX-258: "Esc to clear" was wrong — Esc only clears while in edit mode
+		// (updateSearchInput). Outside edit mode Esc navigates, not clears.
+		// "/ to re-filter or clear" is accurate: / opens edit mode → Esc clears.
+		prompt += "  (/ to re-filter or clear)"
 	}
-	return styleMuted.Render(truncate("Search "+prompt, width))
+	// EX-259: "Search /frank" → "Filter /frank" — aligns with EX-254/257 filter terminology.
+	return styleMuted.Render(truncate("Filter "+prompt, width))
 }
 
 func (m Model) sidebarIconOnlyMode() bool {
@@ -776,8 +780,9 @@ func (m Model) renderMainPanel(innerW, innerH int, focused bool, layout layoutSt
 	if searchLine := m.renderSearchBar(MainPanel, cw); searchLine != "" {
 		hint := searchLine
 		// EX-200: match EX-194 — show Esc hint in main panel search bar while editing.
+		// EX-259: "Search" → "Filter" for consistent terminology.
 		if m.searchMode && m.searchPanel == MainPanel {
-			hint = styleMuted.Render(truncate("Search /"+m.mainFilter+"▌  (Esc to cancel)", cw))
+			hint = styleMuted.Render(truncate("Filter /"+m.mainFilter+"▌  (Esc to cancel)", cw))
 		}
 		lines = append(lines, "")
 		lines = append(lines, hint)
