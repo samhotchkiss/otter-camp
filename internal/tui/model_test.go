@@ -7066,3 +7066,34 @@ func TestHistoryIndexResetOnTypingEX279(t *testing.T) {
 		t.Errorf("EX-279: Backspace should reset chatHistoryIndex to -1; got %d", m.chatHistoryIndex)
 	}
 }
+
+// TestChatDownAtBottomEX280 verifies that ↓ in the chat panel gives feedback
+// instead of silently doing nothing when already at the latest message or
+// already at the newest history entry.
+func TestChatDownAtBottomEX280(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	m.chatHistory = []string{"msg1", "msg2"}
+	m.chatHistoryIndex = -1
+	m.chatScrollOffset = 0
+	m.chatInput = ""
+
+	// ↓ at bottom with no history scrolling → "Already at latest message."
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.statusMessage != "Already at latest message." {
+		t.Errorf("EX-280: ↓ at bottom should show 'Already at latest message.'; got %q", m.statusMessage)
+	}
+
+	// ↑ ↑ to go into history mode and reach end, then ↓ twice to get back to "Back to new message."
+	m.chatInput = ""
+	m.chatHistoryIndex = -1
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp}) // → historyIndex=1 (newest)
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown}) // → "Back to new message." historyIndex=2
+	// Now chatHistoryIndex == len(chatHistory) == 2
+	// ↓ again: should say "Already at newest message."
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.statusMessage != "Already at newest message." {
+		t.Errorf("EX-280: ↓ past history end should say 'Already at newest message.'; got %q", m.statusMessage)
+	}
+}

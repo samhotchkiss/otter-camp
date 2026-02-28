@@ -1913,6 +1913,19 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			m.forwardHistory()
 			return true, nil
 		}
+		// EX-280: ↓ when past end of history (chatHistoryIndex >= len) or
+		// already at the bottom (scrollOffset==0, not scrolling) gives feedback
+		// instead of silently doing nothing — mirrors PgDown's "Already at latest."
+		// Check history-end before the empty-input guard because forwardHistory
+		// sets chatInput="" when going past the end, so the order matters.
+		if m.chatHistoryIndex >= len(m.chatHistory) && len(m.chatHistory) > 0 {
+			m.statusMessage = "Already at newest message."
+			return true, nil
+		}
+		if strings.TrimSpace(m.chatInput) == "" && m.chatScrollOffset == 0 {
+			m.statusMessage = "Already at latest message."
+			return true, nil
+		}
 	case tea.KeyEsc:
 		if m.activeTurn {
 			m.activeTurn = false
