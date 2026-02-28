@@ -8398,3 +8398,34 @@ func TestEscInChatEmptyInputFocusesMainEX309(t *testing.T) {
 		t.Errorf("EX-309: Esc with non-empty input should clear it; got %q", m2.chatInput)
 	}
 }
+
+// TestChatGKeyNoMessagesEX318 verifies that pressing 'g' or 'G' in the chat
+// panel when there are no messages shows "No messages yet." rather than
+// silently "scrolling" an empty history (EX-318).
+func TestChatGKeyNoMessagesEX318(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	m.chatInput = ""
+	m.chatMessages = nil
+
+	// 'g' — scroll-to-oldest with no messages
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if m1.statusMessage != "No messages yet." {
+		t.Errorf("EX-318: 'g' with no messages should say 'No messages yet.'; got %q", m1.statusMessage)
+	}
+
+	// 'G' — scroll-to-latest with no messages
+	m2 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if m2.statusMessage != "No messages yet." {
+		t.Errorf("EX-318: 'G' with no messages should say 'No messages yet.'; got %q", m2.statusMessage)
+	}
+
+	// With messages present, 'g' scrolls normally.
+	m3 := m
+	m3.chatMessages = []ChatMessage{{Role: "user", Content: "hello"}}
+	m3 = pressKey(m3, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if m3.statusMessage != "Chat scrolled to oldest." {
+		t.Errorf("EX-318: 'g' with messages should say 'Chat scrolled to oldest.'; got %q", m3.statusMessage)
+	}
+}

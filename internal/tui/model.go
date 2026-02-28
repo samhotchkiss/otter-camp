@@ -1190,11 +1190,20 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			if m.focus == ChatPanel && strings.TrimSpace(m.chatInput) == "" {
 				if r == 'g' {
+					// EX-318: if there are no messages, don't pretend to scroll.
+					if len(m.chatMessages) == 0 {
+						m.statusMessage = "No messages yet."
+						return m, nil
+					}
 					m.scrollChatBy(1 << 20)
 					m.statusMessage = "Chat scrolled to oldest."
 					return m, nil
 				}
 				if r == 'G' {
+					if len(m.chatMessages) == 0 {
+						m.statusMessage = "No messages yet."
+						return m, nil
+					}
 					m.chatScrollOffset = 0
 					m.statusMessage = "Chat scrolled to latest."
 					return m, nil
