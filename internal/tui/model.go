@@ -1403,6 +1403,15 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.statusMessage = "No messages yet."
 						return m, nil
 					}
+					// EX-427: EX-264 added "Already at latest message." for KeyEnd but
+					// the rune 'G' (keyboard equivalent of End) was not updated to match.
+					// When chatScrollOffset is already 0, 'G' said "Chat scrolled to latest."
+					// even though nothing changed — the same misleading pattern that
+					// EX-264 fixed for KeyEnd and PgDown.
+					if m.chatScrollOffset == 0 {
+						m.statusMessage = "Already at latest message."
+						return m, nil
+					}
 					m.chatScrollOffset = 0
 					m.statusMessage = "Chat scrolled to latest."
 					return m, nil

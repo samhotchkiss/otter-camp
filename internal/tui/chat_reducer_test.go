@@ -735,6 +735,44 @@ func TestTurnCompletionWithNoQueueSetsResponseReceivedEX426(t *testing.T) {
 	})
 }
 
+func TestGRuneChatScrolledToLatestAlreadyAtLatestEX427(t *testing.T) {
+	// EX-427: 'G' in chat panel should say "Already at latest message." when
+	// chatScrollOffset is already 0 — the same guard that KeyEnd gained in
+	// EX-264 but that the 'G' rune handler was missing.
+
+	model := NewModel(DefaultState())
+	model.focus = ChatPanel
+	model.chatInput = "" // must be empty for the 'G' rune to trigger scroll, not typing
+	// Seed a message so len(chatMessages) > 0 (otherwise 'G' returns "No messages yet.")
+	model.appendMessage("local-user", "user", "hello", true)
+
+	t.Run("scrolled-up-then-G", func(t *testing.T) {
+		m := model
+		m.chatScrollOffset = 50 // simulate having scrolled up
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+		if m.chatScrollOffset != 0 {
+			t.Fatalf("EX-427: chatScrollOffset = %d, want 0 after G", m.chatScrollOffset)
+		}
+		if got := m.StatusMessage(); got != "Chat scrolled to latest." {
+			t.Fatalf("EX-427: statusMessage = %q, want \"Chat scrolled to latest.\"", got)
+		}
+	})
+
+	t.Run("already-at-latest-G-says-so", func(t *testing.T) {
+		m := model
+		m.chatScrollOffset = 0 // already at latest
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+		if m.chatScrollOffset != 0 {
+			t.Fatalf("EX-427: chatScrollOffset = %d, want 0 after G (no-op)", m.chatScrollOffset)
+		}
+		if got := m.StatusMessage(); got != "Already at latest message." {
+			t.Fatalf("EX-427: statusMessage = %q, want \"Already at latest message.\"", got)
+		}
+	})
+}
+
 func mustJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)
