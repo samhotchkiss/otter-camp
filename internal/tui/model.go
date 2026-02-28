@@ -1124,7 +1124,16 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		if m.focus == SidebarPanel {
 			m.workspace.moveSidebar(1)
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
+			// EX-268: show item summary on navigation (mirrors EX-266 dashboard pattern).
+			prevCursor := m.workspace.inboxCursor
 			m.workspace.moveInbox(1)
+			if item := m.workspace.currentInboxItem(); item != nil {
+				if m.workspace.inboxCursor == prevCursor {
+					m.statusMessage = "At last inbox item."
+				} else if item.Summary != "" {
+					m.statusMessage = "▸ " + truncate(item.Summary, 40)
+				}
+			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			m.workspace.moveProjectTaskCursor(1)
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
@@ -1177,7 +1186,16 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		if m.focus == SidebarPanel {
 			m.workspace.moveSidebar(-1)
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
+			// EX-268: show item summary on navigation (mirrors EX-266 dashboard pattern).
+			prevCursor := m.workspace.inboxCursor
 			m.workspace.moveInbox(-1)
+			if item := m.workspace.currentInboxItem(); item != nil {
+				if m.workspace.inboxCursor == prevCursor {
+					m.statusMessage = "At first inbox item."
+				} else if item.Summary != "" {
+					m.statusMessage = "▸ " + truncate(item.Summary, 40)
+				}
+			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			m.workspace.moveProjectTaskCursor(-1)
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {

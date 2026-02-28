@@ -6517,3 +6517,43 @@ func TestHelpViewArrowKeyDescEX267(t *testing.T) {
 		t.Errorf("EX-267: help ↑/↓ entry should NOT say 'scroll one line'; got view:\n%s", out)
 	}
 }
+
+// TestInboxJKNavigationFeedbackEX268 verifies EX-268: j/k in the inbox view
+// shows the item summary in the status bar (like dashboard j/k shows task title),
+// and gives directional boundary feedback when already at first/last item.
+func TestInboxJKNavigationFeedbackEX268(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewInbox)
+	// Seed two inbox items with summaries.
+	m.workspace.inbox = []inboxItem{
+		{ID: "inbox-1", Summary: "Review deployment plan"},
+		{ID: "inbox-2", Summary: "Approve feature branch"},
+	}
+	m.workspace.inboxCursor = 0
+
+	// j from cursor=0 → cursor=1 (second item)
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if !strings.Contains(m.statusMessage, "Approve feature branch") && !strings.Contains(m.statusMessage, "▸") {
+		t.Errorf("EX-268: j in inbox should show item summary; got %q", m.statusMessage)
+	}
+
+	// j again — already at last item (cursor stays at 1)
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if !strings.Contains(m.statusMessage, "last") {
+		t.Errorf("EX-268: j at last inbox item should say 'last'; got %q", m.statusMessage)
+	}
+
+	// k — back to first item
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if !strings.Contains(m.statusMessage, "Review deployment plan") && !strings.Contains(m.statusMessage, "▸") {
+		t.Errorf("EX-268: k in inbox should show item summary; got %q", m.statusMessage)
+	}
+
+	// k again — already at first item
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if !strings.Contains(m.statusMessage, "first") {
+		t.Errorf("EX-268: k at first inbox item should say 'first'; got %q", m.statusMessage)
+	}
+}
