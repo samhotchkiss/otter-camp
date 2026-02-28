@@ -1651,6 +1651,9 @@ func (m Model) renderActivityView(width, maxLines int) []string {
 			lines = append(lines, styleMuted.Render("  No activity yet"))
 		}
 	}
+	// EX-210: hint footer so users know which keys work in this view.
+	lines = append(lines, "")
+	lines = append(lines, styleMuted.Render("  r·refresh  ·  /·filter  ·  Esc·dashboard"))
 	return lines
 }
 
@@ -1660,6 +1663,9 @@ func (m Model) renderAgentsView(width, maxLines int) []string {
 	if len(m.workspace.agents) == 0 {
 		lines = append(lines, lipgloss.NewStyle().Width(width).Align(lipgloss.Center).
 			Foreground(colSubtle).Render("no agents loaded"))
+		// EX-210: hint footer even on empty state.
+		lines = append(lines, "")
+		lines = append(lines, styleMuted.Render("  r·refresh  ·  Esc·dashboard"))
 		return lines
 	}
 	// EX-110: apply search filter so agents view responds to mainFilter like all other views.
@@ -1693,6 +1699,9 @@ func (m Model) renderAgentsView(width, maxLines int) []string {
 	if matched == 0 && query != "" {
 		lines = append(lines, styleMuted.Render(fmt.Sprintf("  no agents matching %q", query)))
 	}
+	// EX-210: hint footer so users know which keys work in this view.
+	lines = append(lines, "")
+	lines = append(lines, styleMuted.Render("  r·refresh  ·  /·filter  ·  Esc·dashboard"))
 	return lines
 }
 
@@ -1714,6 +1723,9 @@ func (m Model) renderMergesView(width, maxLines int) []string {
 			lines = append(lines, styleMuted.Render("  No pending merges"))
 		}
 	}
+	// EX-210: hint footer so users know which keys work in this view.
+	lines = append(lines, "")
+	lines = append(lines, styleMuted.Render("  r·refresh  ·  /·filter  ·  Esc·dashboard"))
 	return lines
 }
 
@@ -1735,6 +1747,9 @@ func (m Model) renderSchedulesView(width, maxLines int) []string {
 			lines = append(lines, styleMuted.Render("  No schedules"))
 		}
 	}
+	// EX-210: hint footer so users know which keys work in this view.
+	lines = append(lines, "")
+	lines = append(lines, styleMuted.Render("  r·refresh  ·  /·filter  ·  Esc·dashboard"))
 	return lines
 }
 

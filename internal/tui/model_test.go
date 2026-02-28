@@ -4946,3 +4946,69 @@ func TestHelpViewScrollsWithJK(t *testing.T) {
 		t.Fatalf("EX-209: helpScrollOffset after g = %d, want 0", model.helpScrollOffset)
 	}
 }
+
+// TestActivityAgentsMergesSchedulesHaveHintFooter verifies EX-210: the Activity,
+// Agents, Merges, and Schedules views always render a navigation hint footer so
+// users know which keys are available (r·refresh, /·filter, Esc·dashboard).
+func TestActivityAgentsMergesSchedulesHaveHintFooter(t *testing.T) {
+	model := NewModel(DefaultState())
+
+	for _, tc := range []struct {
+		view  MainView
+		setup func(m *Model)
+		want  string
+	}{
+		{
+			view:  ViewActivity,
+			setup: func(m *Model) { m.workspace.activity = nil },
+			want:  "r·refresh",
+		},
+		{
+			view:  ViewActivity,
+			setup: func(m *Model) { m.workspace.activity = []string{"event one", "event two"} },
+			want:  "r·refresh",
+		},
+		{
+			view:  ViewAgents,
+			setup: func(m *Model) { m.workspace.agents = nil },
+			want:  "r·refresh",
+		},
+		{
+			view:  ViewAgents,
+			setup: func(m *Model) { m.workspace.agents = []string{"Ellie=active"} },
+			want:  "r·refresh",
+		},
+		{
+			view:  ViewMerges,
+			setup: func(m *Model) { m.workspace.mergeQueue = nil },
+			want:  "r·refresh",
+		},
+		{
+			view:  ViewMerges,
+			setup: func(m *Model) { m.workspace.mergeQueue = []string{"PR #42"} },
+			want:  "r·refresh",
+		},
+		{
+			view:  ViewSchedules,
+			setup: func(m *Model) { m.workspace.schedules = nil },
+			want:  "r·refresh",
+		},
+		{
+			view:  ViewSchedules,
+			setup: func(m *Model) { m.workspace.schedules = []string{"nightly build"} },
+			want:  "r·refresh",
+		},
+	} {
+		m := model
+		tc.setup(&m)
+		m.workspace.setMainView(tc.view)
+		lines := m.renderMainViewContent(tc.view, 80, 100)
+		rendered := strings.Join(lines, "\n")
+		if !strings.Contains(rendered, tc.want) {
+			t.Errorf("EX-210: %s view missing hint %q in:\n%s", tc.view, tc.want, rendered)
+		}
+		if !strings.Contains(rendered, "Esc") {
+			t.Errorf("EX-210: %s view missing 'Esc' in hint footer:\n%s", tc.view, rendered)
+		}
+	}
+}
