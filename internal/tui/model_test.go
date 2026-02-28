@@ -11582,6 +11582,115 @@ func TestSidebarSelectTaskNodeSetsStateEX490(t *testing.T) {
 	}
 }
 
+// TestHandleEnterKeyViewProjectNoDetailSetsActiveScopeEX506 verifies EX-506:
+// pressing Enter in ViewProject when selectedProject==nil transitions to ViewTask
+// and sets m.activeScope=ScopeTask so the scope indicator is correct. Previously
+// the EX-489 fix (loadTaskDetailCmd) was added but activeScope was still not set.
+func TestHandleEnterKeyViewProjectNoDetailSetsActiveScopeEX506(t *testing.T) {
+	taskID := "task-506"
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			return &TaskDetailItem{ID: id, Title: "EX-506 task"}, nil
+		},
+	})
+	m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.workspace.selectedProjectID = "proj-506"
+	m.workspace.selectedProject = nil // detail not yet loaded
+	m.workspace.selectedTaskID = taskID
+	m.focus = MainPanel
+	m.workspace.mainView = ViewProject
+	m.activeScope = ScopeOrg // stale
+
+	_ = m.handleEnterKey()
+
+	if m.workspace.mainView != ViewTask {
+		t.Fatalf("EX-506: mainView = %v, want ViewTask", m.workspace.mainView)
+	}
+	if m.activeScope != ScopeTask {
+		t.Fatalf("EX-506: activeScope = %v, want ScopeTask", m.activeScope)
+	}
+}
+
+// TestEscFromViewTaskSetsProjectScopeEX507 verifies EX-507: pressing Esc from
+// ViewTask navigates to ViewProject and sets m.activeScope=ScopeProject so the
+// scope indicator follows the "Back to project" navigation. Previously the view
+// transitioned correctly but scope was left at ScopeTask.
+func TestEscFromViewTaskSetsProjectScopeEX507(t *testing.T) {
+	m := NewModel(DefaultState())
+	m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.workspace.selectedProjectID = "proj-507"
+	m.workspace.selectedProject = &ProjectDetail{ID: "proj-507", DisplayName: "EX-507 proj"}
+	m.workspace.selectedTaskID = "task-507"
+	m.focus = MainPanel
+	m.workspace.mainView = ViewTask
+	m.activeScope = ScopeTask
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+
+	if m.workspace.mainView != ViewProject {
+		t.Fatalf("EX-507: mainView = %v, want ViewProject", m.workspace.mainView)
+	}
+	if m.activeScope != ScopeProject {
+		t.Fatalf("EX-507: activeScope = %v, want ScopeProject", m.activeScope)
+	}
+}
+
+// TestPKeyNavigationSetsProjectScopeEX508 verifies EX-508: pressing 'p' to navigate
+// to the project view sets m.activeScope=ScopeProject. Previously the 'p' key set
+// ViewProject but silently left activeScope unchanged — the only keyboard shortcut
+// that navigates to a project view without updating scope.
+func TestPKeyNavigationSetsProjectScopeEX508(t *testing.T) {
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjectDetail: func(_ context.Context, id string) (*ProjectDetail, error) {
+			return &ProjectDetail{ID: id}, nil
+		},
+		LoadProjectTasks: func(_ context.Context, id string) ([]SidebarTaskItem, error) {
+			return nil, nil
+		},
+	})
+	m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.workspace.selectedProjectID = "proj-508"
+	m.workspace.selectedProject = &ProjectDetail{ID: "proj-508"}
+	m.focus = SidebarPanel
+	m.workspace.mainView = ViewDashboard
+	m.activeScope = ScopeOrg
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+
+	if m.workspace.mainView != ViewProject {
+		t.Fatalf("EX-508: mainView = %v, want ViewProject", m.workspace.mainView)
+	}
+	if m.activeScope != ScopeProject {
+		t.Fatalf("EX-508: activeScope = %v, want ScopeProject", m.activeScope)
+	}
+}
+
+// TestTKeyNavigationSetsTaskScopeEX509 verifies EX-509: pressing 't' to navigate
+// to the task view sets m.activeScope=ScopeTask. Previously the 't' key set
+// ViewTask (EX-488 added loadTaskDetailCmd) but silently left activeScope unchanged.
+func TestTKeyNavigationSetsTaskScopeEX509(t *testing.T) {
+	taskID := "task-509"
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			return &TaskDetailItem{ID: id, Title: "EX-509 task"}, nil
+		},
+	})
+	m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.workspace.selectedTaskID = taskID
+	m.focus = SidebarPanel
+	m.workspace.mainView = ViewDashboard
+	m.activeScope = ScopeOrg
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+
+	if m.workspace.mainView != ViewTask {
+		t.Fatalf("EX-509: mainView = %v, want ViewTask", m.workspace.mainView)
+	}
+	if m.activeScope != ScopeTask {
+		t.Fatalf("EX-509: activeScope = %v, want ScopeTask", m.activeScope)
+	}
+}
+
 // TestQInNonHelpViewEX335 verifies that pressing 'q' in a non-help view gives
 // helpful redirect feedback instead of silently doing nothing (EX-335).
 func TestQInNonHelpViewEX335(t *testing.T) {

@@ -2060,6 +2060,8 @@ func (m *Model) handleEnterKey() tea.Cmd {
 			}
 			// No project loaded yet — transition to task view anyway (data may still be loading).
 			m.workspace.setMainView(ViewTask)
+			// EX-506: set scope to match the task view transition.
+			m.activeScope = ScopeTask
 			m.statusMessage = "Opened task detail."
 			// EX-489: if a task was already selected (e.g. from a previous selection),
 			// fire loadTaskDetailCmd so the ViewTask panel shows content instead of a
@@ -2146,6 +2148,8 @@ func (m *Model) handleEscapeKey() tea.Cmd {
 		// From task detail: go back to project view if we came from one, else dashboard
 		if m.workspace.mainView == ViewTask && m.workspace.selectedProjectID != "" {
 			m.workspace.setMainView(ViewProject)
+			// EX-507: restore scope to project when navigating back from task detail.
+			m.activeScope = ScopeProject
 			m.statusMessage = "Back to project."
 			// EX-180: load project data if it hasn't been fetched yet (e.g. user
 			// opened task from dashboard before the initial project detail arrived).
@@ -2827,6 +2831,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 			m.workspace.setMainView(ViewProject)
 			m.setFocus(MainPanel)
+			// EX-508: set scope so the scope indicator reflects the project context.
+			m.activeScope = ScopeProject
 			m.statusMessage = "Project view"
 			// EX-176: if project detail hasn't loaded yet (e.g. user pressed 'p'
 			// while the detail load from selecting the project was still in-flight),
@@ -2855,6 +2861,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 			m.workspace.setMainView(ViewTask)
 			m.setFocus(MainPanel)
+			// EX-509: set scope so the scope indicator reflects the task context.
+			m.activeScope = ScopeTask
 			m.statusMessage = "Task detail"
 			// EX-488: fire loadTaskDetailCmd so tasks that were selected via
 			// dashboard j/k cursor movement (detail never fetched) show correct
