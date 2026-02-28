@@ -2894,6 +2894,29 @@ func TestChatSessionModeChangedAddsActivityEntry(t *testing.T) {
 	}
 }
 
+// TestSessionModeChangedSetsStatusMessageEX494 verifies EX-494: chat.session.mode_changed
+// sets m.statusMessage in addition to appending to the activity log, giving immediate
+// feedback in the status bar (mirrors budget.anomaly_detected which sets both).
+func TestSessionModeChangedSetsStatusMessageEX494(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	raw, _ := json.Marshal(map[string]any{"session_id": "sess-494", "old_mode": "sync", "new_mode": "async"})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "chat.session.mode_changed",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	m := updated.(Model)
+
+	if !strings.Contains(m.statusMessage, "session mode") {
+		t.Fatalf("EX-494: statusMessage should contain 'session mode', got: %q", m.statusMessage)
+	}
+	if !strings.Contains(m.statusMessage, "sync") || !strings.Contains(m.statusMessage, "async") {
+		t.Fatalf("EX-494: statusMessage should contain old/new mode, got: %q", m.statusMessage)
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -4906,6 +4929,41 @@ func TestSidebarSelectTaskScopedSessionEX483(t *testing.T) {
 	runNonTimerCmds(cmd)
 	if detailCalledWith != taskID {
 		t.Fatalf("EX-483: LoadTaskDetail called with %q, want %q", detailCalledWith, taskID)
+	}
+}
+
+// TestHandleEnterKeySidebarTaskSetsActiveScope491 verifies EX-491: pressing Enter
+// on a task node in the sidebar sets activeScope=ScopeTask so the scope indicator
+// reflects the task context. Previously every other task navigation path set
+// activeScope but handleEnterKey sidebarKindTask silently skipped it.
+func TestHandleEnterKeySidebarTaskSetsActiveScope491(t *testing.T) {
+	taskID := "task-491"
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			return &TaskDetailItem{ID: id, Title: "EX-491 task"}, nil
+		},
+	})
+	m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	if m.workspace.nodes == nil {
+		m.workspace.nodes = make(map[string]*sidebarNode)
+	}
+	taskNodeID := "task-" + taskID
+	m.workspace.nodes[taskNodeID] = &sidebarNode{
+		ID:     taskNodeID,
+		Kind:   sidebarKindTask,
+		TaskID: taskID,
+		Label:  "My Task 491",
+	}
+	m.workspace.topLevel = []string{taskNodeID}
+	m.workspace.sidebarCursor = 0
+	m.focus = SidebarPanel
+	// Pre-set stale scope
+	m.activeScope = ScopeOrg
+
+	_ = m.handleEnterKey()
+
+	if m.activeScope != ScopeTask {
+		t.Fatalf("EX-491: activeScope = %v, want ScopeTask", m.activeScope)
 	}
 }
 

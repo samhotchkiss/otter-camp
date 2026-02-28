@@ -1938,6 +1938,10 @@ func (m *Model) handleEnterKey() tea.Cmd {
 			case sidebarKindTask:
 				// EX-298: override generic "Sidebar selection applied." with task name.
 				m.statusMessage = "▸ " + truncate(node.Label, 40)
+				// EX-491: set scope so the scope indicator reflects the task context.
+				// Previously scope was not set here even though sidebarKindSession (~1876)
+				// and all other task navigation paths do set it.
+				m.activeScope = ScopeTask
 				// Set the project context so "p" and "Esc·back to project" work correctly
 				var projectIDForTask string
 				if node.ParentID != "" {
@@ -7417,6 +7421,9 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 	}
 	// EX-142: chat.session.mode_changed — note mode transitions in the activity
 	// log so users know when a session switches between sync and async.
+	// EX-494: also set statusMessage so the user sees immediate feedback in the
+	// status bar, not just the activity log (mirrors budget.anomaly_detected which
+	// sets both activity and statusMessage).
 	if event.EventType == "chat.session.mode_changed" {
 		var payload struct {
 			OldMode string `json:"old_mode"`
@@ -7425,6 +7432,7 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		if decodePayload(event.Payload, &payload) && payload.NewMode != "" {
 			entry := "session mode: " + payload.OldMode + " → " + payload.NewMode
 			m.workspace.activity = appendActivity(m.workspace.activity, entry)
+			m.statusMessage = entry
 		}
 		return nil
 	}
