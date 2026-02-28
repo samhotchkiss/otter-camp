@@ -2212,6 +2212,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				return true, nil
 			}
 		}
+		// EX-340: a in other MainPanel views — give redirect hint.
+		if m.focus == MainPanel {
+			m.statusMessage = "a·approve works in Inbox or Task view (when ⚠ shown). Press i for Inbox."
+			return true, nil
+		}
 	case 'x':
 		// EX-160: capture item ID before applyInboxAction removes it.
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
@@ -2243,6 +2248,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				return true, nil
 			}
 		}
+		// EX-341: x in other MainPanel views — give redirect hint.
+		if m.focus == MainPanel {
+			m.statusMessage = "x·reject works in Inbox or Task view (when ⚠ shown). Press i for Inbox."
+			return true, nil
+		}
 	case 'f':
 		// EX-160: capture item ID before applyInboxAction removes it.
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
@@ -2273,6 +2283,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.statusMessage = "No task loaded. Use Enter on a task first."
 				return true, nil
 			}
+		}
+		// EX-342: f in other MainPanel views — give redirect hint.
+		if m.focus == MainPanel {
+			m.statusMessage = "f·defer works in Inbox or Task view (when ⚠ shown). Press i for Inbox."
+			return true, nil
 		}
 	case 'o':
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
@@ -2316,6 +2331,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		// so 'o' must actually work here, not silently fall through.
 		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
 			return true, m.handleEnterKey()
+		}
+		// EX-343: o in other MainPanel views — give redirect hint.
+		if m.focus == MainPanel {
+			m.statusMessage = "o·open works in Inbox (opens item) or Task view (opens session). Press i for Inbox."
+			return true, nil
 		}
 	}
 	return false, nil

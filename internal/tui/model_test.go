@@ -8947,3 +8947,35 @@ func TestGGInStaticViewsEX339(t *testing.T) {
 		}
 	}
 }
+
+// TestActionKeysInWrongViewEX340343 verifies that 'a', 'x', 'f', 'o' in
+// non-inbox/non-task MainPanel views give a redirect hint instead of silently
+// doing nothing (EX-340/341/342/343).
+func TestActionKeysInWrongViewEX340343(t *testing.T) {
+	type want struct {
+		r    rune
+		hint string
+	}
+	cases := []want{
+		{'a', "a·approve works in Inbox or Task view (when ⚠ shown). Press i for Inbox."},
+		{'x', "x·reject works in Inbox or Task view (when ⚠ shown). Press i for Inbox."},
+		{'f', "f·defer works in Inbox or Task view (when ⚠ shown). Press i for Inbox."},
+		{'o', "o·open works in Inbox (opens item) or Task view (opens session). Press i for Inbox."},
+	}
+
+	wrongViews := []MainView{ViewDashboard, ViewProject, ViewAgents, ViewMerges, ViewSchedules, ViewActivity}
+
+	for _, c := range cases {
+		for _, view := range wrongViews {
+			m := NewModel(DefaultState())
+			m.width, m.height = 220, 40
+			m.focus = MainPanel
+			m.workspace.setMainView(view)
+
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{c.r}})
+			if m1.statusMessage != c.hint {
+				t.Errorf("EX-340-343: %q in %v should give redirect; got %q", string(c.r), view, m1.statusMessage)
+			}
+		}
+	}
+}
