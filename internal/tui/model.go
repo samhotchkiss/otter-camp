@@ -1394,7 +1394,15 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.statusMessage = "No messages yet."
 						return m, nil
 					}
-					m.scrollChatBy(1 << 20)
+					// EX-430: symmetric with EX-427 (already-at-latest for 'G') —
+					// when chatScrollOffset is already at the sentinel (1<<20), the
+					// user is at the oldest message; say so instead of "Chat scrolled
+					// to oldest." which implies movement when there was none.
+					if m.chatScrollOffset >= 1<<20 {
+						m.statusMessage = "Already at oldest message."
+						return m, nil
+					}
+					m.chatScrollOffset = 1 << 20
 					m.statusMessage = "Chat scrolled to oldest."
 					return m, nil
 				}
@@ -1591,8 +1599,11 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// before EX-317.
 			if len(m.chatMessages) == 0 {
 				m.statusMessage = "No messages yet."
+			} else if m.chatScrollOffset >= 1<<20 {
+				// EX-430: mirror the EX-430 already-at-oldest guard from KeyHome.
+				m.statusMessage = "Already at oldest message."
 			} else {
-				m.scrollChatBy(1 << 20)
+				m.chatScrollOffset = 1 << 20
 				m.statusMessage = "Chat scrolled to oldest."
 			}
 		} else {
@@ -3444,7 +3455,13 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			m.statusMessage = "No messages yet."
 			return true, nil
 		}
-		m.scrollChatBy(1 << 20)
+		// EX-430: symmetric with EX-264/EX-427/EX-428 — "Already at oldest message."
+		// when the user is already scrolled as far up as possible (sentinel 1<<20).
+		if m.chatScrollOffset >= 1<<20 {
+			m.statusMessage = "Already at oldest message."
+			return true, nil
+		}
+		m.chatScrollOffset = 1 << 20
 		m.statusMessage = "Chat scrolled to oldest."
 		return true, nil
 	case tea.KeyEnd:

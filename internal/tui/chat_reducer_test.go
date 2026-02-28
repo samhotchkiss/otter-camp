@@ -837,6 +837,86 @@ func TestCtrlHomeCtrlEndChatScrollGuardsEX428(t *testing.T) {
 	})
 }
 
+// TestGKeyAndKeyHomeAlreadyAtOldestEX430 verifies EX-430: pressing 'g' or
+// Home when chatScrollOffset is already at the sentinel (1<<20) — i.e. the
+// user is already at the oldest message — says "Already at oldest message."
+// instead of "Chat scrolled to oldest." (which implies movement when none
+// occurred).  This is the symmetric counterpart of EX-427 for 'G'/End.
+func TestGKeyAndKeyHomeAlreadyAtOldestEX430(t *testing.T) {
+	seedMessages := func(m Model) Model {
+		m.chatMessages = []ChatMessage{{ID: "1", Role: "user", Content: "hi"}}
+		m.chatMessageIndex = map[string]int{"1": 0}
+		return m
+	}
+
+	t.Run("g-when-already-at-oldest", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m.activeSession = "11111111-2222-3333-4444-555555555555"
+		m = seedMessages(m)
+		// First 'g': should jump to oldest.
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+		if got := m.StatusMessage(); got != "Chat scrolled to oldest." {
+			t.Fatalf("EX-430: first 'g' should say \"Chat scrolled to oldest.\", got %q", got)
+		}
+		// Second 'g': already at oldest — say so.
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+		if got := m.StatusMessage(); got != "Already at oldest message." {
+			t.Fatalf("EX-430: second 'g' should say \"Already at oldest message.\", got %q", got)
+		}
+	})
+
+	t.Run("KeyHome-when-already-at-oldest", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m.activeSession = "11111111-2222-3333-4444-555555555555"
+		m = seedMessages(m)
+		// First Home: jump to oldest.
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+		if got := m.StatusMessage(); got != "Chat scrolled to oldest." {
+			t.Fatalf("EX-430: first Home should say \"Chat scrolled to oldest.\", got %q", got)
+		}
+		// Second Home: already at oldest.
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+		if got := m.StatusMessage(); got != "Already at oldest message." {
+			t.Fatalf("EX-430: second Home should say \"Already at oldest message.\", got %q", got)
+		}
+	})
+
+	t.Run("KeyCtrlHome-when-already-at-oldest", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m.activeSession = "11111111-2222-3333-4444-555555555555"
+		m = seedMessages(m)
+		// First Ctrl+Home: jump to oldest.
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlHome})
+		if got := m.StatusMessage(); got != "Chat scrolled to oldest." {
+			t.Fatalf("EX-430: first Ctrl+Home should say \"Chat scrolled to oldest.\", got %q", got)
+		}
+		// Second Ctrl+Home: already at oldest.
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlHome})
+		if got := m.StatusMessage(); got != "Already at oldest message." {
+			t.Fatalf("EX-430: second Ctrl+Home should say \"Already at oldest message.\", got %q", got)
+		}
+	})
+
+	t.Run("g-from-offset-zero", func(t *testing.T) {
+		// 'g' from offset 0 should jump (not say "already at oldest").
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m.activeSession = "11111111-2222-3333-4444-555555555555"
+		m = seedMessages(m)
+		m.chatScrollOffset = 0
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+		if got := m.StatusMessage(); got != "Chat scrolled to oldest." {
+			t.Fatalf("EX-430: 'g' from offset 0 should say \"Chat scrolled to oldest.\", got %q", got)
+		}
+		if m.chatScrollOffset < 1<<20 {
+			t.Fatalf("EX-430: chatScrollOffset should be 1<<20 after 'g', got %d", m.chatScrollOffset)
+		}
+	})
+}
+
 func mustJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)
