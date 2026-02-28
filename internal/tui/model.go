@@ -3621,6 +3621,54 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 	case "w", "wa", "write":
 		// EX-390: :w (vim write) — no save needed; all changes persist automatically.
 		m.statusMessage = "No save needed — changes are persisted automatically."
+	case "e", "edit":
+		// EX-391: :e/:edit (vim: open file for editing) — request edits via chat instead.
+		m.statusMessage = ":edit not supported. Use chat (3 or Tab) to ask the agent to make edits."
+	case "n", "next":
+		// EX-391: :n/:next (vim: next file/buffer) — jump to next unread session.
+		if nextID := m.workspace.nextUnreadSession(); nextID != "" {
+			visible := m.workspace.visibleSidebarIDs()
+			for i, id := range visible {
+				if id == nextID {
+					m.workspace.sidebarCursor = i
+					break
+				}
+			}
+			m.workspace.selectSidebarNode()
+			sessionID := m.workspace.activeSessionID
+			m.clearTurnIfSwitchingSession(sessionID)
+			m.activeSession = sessionID
+			m.chatScrollOffset = 0
+			m.statusMessage = "Jumped to next unread session."
+			m.setFocus(SidebarPanel)
+			if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
+				m.chatMessages = nil
+				m.chatHistoryLoading = true
+				m.chatMessageIndex = make(map[string]int)
+				return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+			}
+		} else {
+			m.statusMessage = "No unread sessions."
+		}
+	case "clear", "cls":
+		// EX-391: :clear/:cls (shell clear screen) — screen is managed by the TUI.
+		m.statusMessage = "Screen is managed automatically. Use r to refresh data."
+	case "ls", "list":
+		// EX-391: :ls (vim list buffers / shell list) — point to sidebar.
+		m.statusMessage = "Use the sidebar (1 to focus) to browse sessions and projects."
+	case "reload", "refresh":
+		// EX-391: :reload/:refresh — mirror the 'r' key behaviour.
+		if m.workspace.mainView == ViewHelp {
+			m.statusMessage = "r·refresh not available in help view. Press Esc to close."
+			return nil
+		}
+		m.statusMessage = "Refreshing…"
+		m.workspace.activity = appendActivity(m.workspace.activity,
+			"sidebar refreshed at "+m.now().Format("15:04:05"))
+		return loadSidebarDataCmd(m.runtimeHints)
+	case "sp", "split", "vs", "vsplit", "new", "tabnew":
+		// EX-391: split/window commands — not supported in this single-pane TUI.
+		m.statusMessage = "Split windows not supported. Use 1/2/3 or Tab to cycle panels."
 	case "help", "palette":
 		// EX-239: open the help screen directly (same as ?) rather than showing a
 		// truncated status message. The old statusMessage approach was cut off at 80

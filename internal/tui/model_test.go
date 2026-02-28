@@ -10584,3 +10584,53 @@ func TestVimQuitAliasesEX390(t *testing.T) {
 		}
 	})
 }
+
+// TestAdditionalCommandAliasesEX391 verifies that common vim/shell commands like
+// :e, :n, :clear, :ls, :reload, :sp etc. give helpful responses instead of
+// "Unknown command" (EX-391).
+func TestAdditionalCommandAliasesEX391(t *testing.T) {
+	tests := []struct {
+		cmd     string
+		want    string
+		quits   bool
+	}{
+		{":e", ":edit not supported", false},
+		{":edit", ":edit not supported", false},
+		{":clear", "managed automatically", false},
+		{":cls", "managed automatically", false},
+		{":ls", "sidebar", false},
+		{":list", "sidebar", false},
+		{":reload", "Refreshing", false},
+		{":refresh", "Refreshing", false},
+		{":sp", "Split windows not supported", false},
+		{":split", "Split windows not supported", false},
+		{":vs", "Split windows not supported", false},
+		{":vsplit", "Split windows not supported", false},
+		{":tabnew", "Split windows not supported", false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run("cmd-"+tt.cmd, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.commandMode = true
+			m.commandBuffer = tt.cmd
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+			if m1.quitting != tt.quits {
+				t.Errorf("EX-391: %s quitting=%v, want %v", tt.cmd, m1.quitting, tt.quits)
+			}
+			if !strings.Contains(m1.statusMessage, tt.want) {
+				t.Errorf("EX-391: %s status: got %q, want to contain %q", tt.cmd, m1.statusMessage, tt.want)
+			}
+		})
+	}
+	// :n with no unread sessions should say "No unread sessions."
+	t.Run("cmd-:n-no-unread", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":n"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if !strings.Contains(m1.statusMessage, "unread") {
+			t.Errorf("EX-391: :n with no unread: got %q, want unread message", m1.statusMessage)
+		}
+	})
+}
