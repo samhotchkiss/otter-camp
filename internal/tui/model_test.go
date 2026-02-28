@@ -9571,3 +9571,86 @@ func TestReadlineShortcutsInChatEX364365366(t *testing.T) {
 		})
 	}
 }
+
+// TestCtrlBFDAndDeleteKeyEX367368369 verifies that Ctrl-B, Ctrl-F, Ctrl-D, and
+// Delete give honest feedback instead of silent no-ops (EX-367/368/369).
+func TestCtrlBFDAndDeleteKeyEX367368369(t *testing.T) {
+	// Ctrl-B in chat panel
+	t.Run("Ctrl-B in chat", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlB})
+		want := "Cursor movement backward (Ctrl-B/F) not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+		if m1.statusMessage != want {
+			t.Errorf("EX-367: got %q, want %q", m1.statusMessage, want)
+		}
+	})
+
+	// Ctrl-F in chat panel
+	t.Run("Ctrl-F in chat", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlF})
+		want := "Cursor movement forward (Ctrl-B/F) not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+		if m1.statusMessage != want {
+			t.Errorf("EX-367: got %q, want %q", m1.statusMessage, want)
+		}
+	})
+
+	// Ctrl-B/F outside chat
+	t.Run("Ctrl-B outside chat", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlB})
+		want := "Ctrl-B/F moves cursor in chat. Press 3 or Tab to focus chat."
+		if m1.statusMessage != want {
+			t.Errorf("EX-367: got %q, want %q", m1.statusMessage, want)
+		}
+	})
+
+	// Ctrl-D in chat with non-empty input
+	t.Run("Ctrl-D in chat non-empty", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m.chatInput = "hello"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlD})
+		want := "Forward-delete (Ctrl-D) not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+		if m1.statusMessage != want {
+			t.Errorf("EX-368: got %q, want %q", m1.statusMessage, want)
+		}
+	})
+
+	// Ctrl-D in chat with empty input → quit hint
+	t.Run("Ctrl-D in chat empty", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m.chatInput = ""
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlD})
+		want := "Ctrl-D: press Ctrl-C or type 'q' to quit."
+		if m1.statusMessage != want {
+			t.Errorf("EX-368: got %q, want %q", m1.statusMessage, want)
+		}
+	})
+
+	// Delete in chat panel
+	t.Run("Delete in chat", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyDelete})
+		want := "Forward-delete not supported. Use Backspace, Ctrl-W to delete word, or Ctrl-U to clear."
+		if m1.statusMessage != want {
+			t.Errorf("EX-369: got %q, want %q", m1.statusMessage, want)
+		}
+	})
+
+	// Delete outside chat
+	t.Run("Delete outside chat", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyDelete})
+		want := "Delete key: forward-delete works in chat input. Press 3 or Tab to focus chat."
+		if m1.statusMessage != want {
+			t.Errorf("EX-369: got %q, want %q", m1.statusMessage, want)
+		}
+	})
+}

@@ -674,6 +674,40 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Ctrl-K kill-to-end is a chat shortcut. Press 3 or Tab to focus chat."
 		}
 		return m, nil
+	case tea.KeyCtrlB, tea.KeyCtrlF:
+		// EX-367: Ctrl-B/F (move char backward/forward) — cursor movement not supported.
+		direction := "backward"
+		if key.Type == tea.KeyCtrlF {
+			direction = "forward"
+		}
+		if m.focus == ChatPanel {
+			m.statusMessage = "Cursor movement " + direction + " (Ctrl-B/F) not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+		} else {
+			m.statusMessage = "Ctrl-B/F moves cursor in chat. Press 3 or Tab to focus chat."
+		}
+		return m, nil
+	case tea.KeyCtrlD:
+		// EX-368: Ctrl-D (delete-char-forward or EOF) — not supported in chat input.
+		// When chat is focused and non-empty, hint about delete alternatives.
+		// When chat is focused and empty, give quit hint (Ctrl-D EOF behaviour).
+		if m.focus == ChatPanel {
+			if strings.TrimSpace(m.chatInput) == "" {
+				m.statusMessage = "Ctrl-D: press Ctrl-C or type 'q' to quit."
+			} else {
+				m.statusMessage = "Forward-delete (Ctrl-D) not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+			}
+		} else {
+			m.statusMessage = "Ctrl-D: press Ctrl-C to quit or 3/Tab to focus chat."
+		}
+		return m, nil
+	case tea.KeyDelete:
+		// EX-369: Delete (forward delete) — no cursor concept in chat input.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Forward-delete not supported. Use Backspace, Ctrl-W to delete word, or Ctrl-U to clear."
+		} else {
+			m.statusMessage = "Delete key: forward-delete works in chat input. Press 3 or Tab to focus chat."
+		}
+		return m, nil
 	case tea.KeyTab:
 		m.focus = nextPanelInOrder(order, m.focus)
 		m.applyResponsiveLayout()
