@@ -1913,7 +1913,7 @@ func (m Model) renderSchedulesView(width, maxLines int) []string {
 // helpViewLineCount is the total number of content lines in renderHelpView before
 // scroll clamping. Must stay in sync with the lines slice built inside that function.
 // Verified by TestHelpViewLineCountMatchesEX255; update when adding/removing entries.
-const helpViewLineCount = 62
+const helpViewLineCount = 66
 
 func (m Model) renderHelpView(width, maxLines int) []string {
 	header := func(s string) string {
@@ -1929,19 +1929,22 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		"",
 		header("Sidebar  (press 1 to focus)"),
 		key("j/k  ↑/↓", "move cursor up/down"),
+		key("PgUp / PgDn", "page up/down (8 items at a time)"),
+		key("g/G  Home/End", "jump to first/last item"),
 		key("h/l  ←/→", "collapse/expand section or project"),
 		key("Space", "toggle expand project / section"),
 		key("Enter", "select: open session or project"),
-		key("/ or Esc", "search filter / clear"),
+		key("/ or Esc", "search filter / focus main panel"),
 		key("s", "toggle sidebar (below 100 cols)"),
 		"",
 		header("Main Panel  (press 2 to focus)"),
-		key("j/k  ↑/↓", "navigate tasks in project view / next·prev task in task detail"),
-		key("g / G", "jump to top/bottom of view"),
+		key("j/k  ↑/↓", "navigate tasks / next·prev task in task detail"),
+		key("PgUp / PgDn", "page up/down (8 items)  — navigate tasks in task detail"),
+		key("g/G  Home/End", "jump to first/last in view"),
 		key("Enter", "open task detail or inbox item"),
 		key("Esc", "back to project (from task) / dashboard"),
 		key("d", "toggle done tasks section (project view only)"),
-		key("a / x / f / o", "approve/reject/defer/open  (inbox view, or task view when ⚠ shown)"),
+		key("a / x / f / o", "approve/reject/defer/open  (inbox or task view when ⚠ shown)"),
 		"",
 		header("Chat  (press 3 to focus)"),
 		key("Enter", "send message  (or expand/collapse tool call when input is empty)"),
@@ -1950,7 +1953,8 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		// EX-267: ↑/↓ navigate sent message history (when input is empty), not scroll.
 		key("↑ / ↓", "↑ recall / ↓ advance sent message history  (when input is empty)"),
 		key("g / G", "jump to oldest / latest message"),
-		key("Esc", "cancel active agent turn"),
+		key("Esc", "cancel turn / clear input / focus main (3 states)"),
+		key("Ctrl-U / Ctrl-W", "clear all input / delete last word"),
 		key("e / s / d", "queued msg: edit / steer / delete  (when turn active)"),
 		"",
 		header("Global"),
