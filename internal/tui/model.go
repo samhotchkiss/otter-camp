@@ -2905,6 +2905,67 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.statusMessage = "Z is not bound. Use :quit or Ctrl-C to exit."
 			return true, nil
 		}
+	case ';':
+		// EX-393: ';' (vim: repeat last find-character) — not bound.
+		// Users with vim muscle memory may press ';' after navigation.
+		if m.focus != ChatPanel {
+			m.statusMessage = "; is not bound. Use j/k or ↑/↓ to navigate, Enter to open."
+			return true, nil
+		}
+	case '\'':
+		// EX-393: ''' (vim: jump to mark) — marks not supported.
+		if m.focus != ChatPanel {
+			m.statusMessage = "' (mark jump) not supported. Use g/G for top/bottom, n for unread."
+			return true, nil
+		}
+	case '`':
+		// EX-393: '`' (vim: jump to mark exactly) — marks not supported.
+		if m.focus != ChatPanel {
+			m.statusMessage = "` (mark jump) not supported. Use g/G for top/bottom, n for unread."
+			return true, nil
+		}
+	case '"':
+		// EX-393: '"' (vim: register access) — registers not supported.
+		if m.focus != ChatPanel {
+			m.statusMessage = "\" (register) not supported. Use : for commands or ? for key reference."
+			return true, nil
+		}
+	case '-':
+		// EX-393: '-' (vim: move cursor up one line to first non-blank) — not bound.
+		if m.focus != ChatPanel {
+			m.statusMessage = "- is not bound. Use k/↑ to navigate up, or j/↓ to navigate down."
+			return true, nil
+		}
+	case '+':
+		// EX-393: '+' (vim: next line, first non-blank) — not bound.
+		if m.focus != ChatPanel {
+			m.statusMessage = "+ is not bound. Use j/↓ to navigate down."
+			return true, nil
+		}
+	case '!':
+		// EX-393: '!' (vim: filter through external command) — not supported.
+		if m.focus != ChatPanel {
+			m.statusMessage = "! not bound. Use : for commands or chat (3/Tab) to run commands via agent."
+			return true, nil
+		}
+	case '@':
+		// EX-393: '@' (vim: execute macro) — macros not supported.
+		if m.focus != ChatPanel {
+			m.statusMessage = "@ (macro) not supported. Use : for commands or ? for key reference."
+			return true, nil
+		}
+	case '^':
+		// EX-393: '^' (vim: first non-blank of line) — not applicable.
+		if m.focus != ChatPanel {
+			m.statusMessage = "^ is not bound. Use g/G for top/bottom navigation."
+			return true, nil
+		}
+	case '~':
+		// EX-393: '~' (vim: toggle case) — not supported.
+		if m.focus != ChatPanel {
+			m.statusMessage = "~ not bound. Use : for commands or ? for key reference."
+			return true, nil
+		}
 	}
 	return false, nil
 }
@@ -3418,6 +3479,82 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// EX-387: Ctrl-Z (suspend) in search mode — not safe inside a TUI.
 		m.statusMessage = "Ctrl-Z: suspend not recommended. Press Esc to exit search mode."
 		return m, nil
+	case tea.KeyCtrlL:
+		// EX-394: Ctrl-L (redraw) in search mode — screen is auto-managed.
+		m.statusMessage = "Ctrl-L: screen redraw is automatic. Press Esc to exit filter mode."
+		return m, nil
+	case tea.KeyCtrlN:
+		// EX-394: Ctrl-N (next) in search mode — use ↓ to navigate.
+		m.statusMessage = "Ctrl-N: use ↓ (commits filter + navigates) to go to next result."
+		return m, nil
+	case tea.KeyCtrlO:
+		// EX-394: Ctrl-O in search mode — not bound.
+		m.statusMessage = "Ctrl-O: not bound. Press Enter to apply filter, Esc to cancel."
+		return m, nil
+	case tea.KeyCtrlQ:
+		// EX-394: Ctrl-Q in search mode — not bound.
+		m.statusMessage = "Ctrl-Q: not bound. Press Esc to cancel filter mode."
+		return m, nil
+	case tea.KeyCtrlR:
+		// EX-394: Ctrl-R (reverse search) in search mode — not supported.
+		m.statusMessage = "Ctrl-R: reverse search not supported. Type to filter, ↑/↓ to navigate."
+		return m, nil
+	case tea.KeyCtrlS:
+		// EX-394: Ctrl-S (save) in search mode — no save needed.
+		m.statusMessage = "Ctrl-S: no save needed. Press Enter to apply filter."
+		return m, nil
+	case tea.KeyCtrlT:
+		// EX-394: Ctrl-T (transpose) in search mode — not supported.
+		m.statusMessage = "Ctrl-T: not bound in filter mode. Type to search, Esc to cancel."
+		return m, nil
+	case tea.KeyCtrlV:
+		// EX-394: Ctrl-V in search mode — use terminal paste.
+		m.statusMessage = "Ctrl-V: use terminal paste (right-click or Ctrl-Shift-V) to paste text."
+		return m, nil
+	case tea.KeyCtrlX:
+		// EX-394: Ctrl-X in search mode — not bound.
+		m.statusMessage = "Ctrl-X: not bound. Use Ctrl-U to clear filter, Esc to cancel."
+		return m, nil
+	case tea.KeyF1:
+		// EX-394: F1 in search mode — Esc first, then ? for help.
+		m.statusMessage = "Press Esc to exit filter, then ? for help."
+		return m, nil
+	case tea.KeyF2, tea.KeyF3, tea.KeyF4, tea.KeyF5, tea.KeyF6, tea.KeyF7, tea.KeyF8, tea.KeyF9, tea.KeyF10, tea.KeyF11, tea.KeyF12:
+		// EX-394: F2-F12 in search mode — not bound.
+		m.statusMessage = "F-key not bound in filter mode. Type to search, Enter to apply, Esc to cancel."
+		return m, nil
+	case tea.KeyInsert:
+		// EX-394: Insert in search mode — no insert/overwrite mode.
+		m.statusMessage = "Insert: no overwrite mode. Type normally to add characters."
+		return m, nil
+	case tea.KeyCtrlUp, tea.KeyCtrlDown, tea.KeyCtrlLeft, tea.KeyCtrlRight:
+		// EX-394: Ctrl+arrows in search mode — commit filter, then navigate.
+		m.setFilterForPanel(m.searchPanel, m.searchQuery)
+		m.searchMode = false
+		q := strings.TrimSpace(m.searchQuery)
+		if q != "" {
+			m.statusMessage = fmt.Sprintf("Filter %q applied.", q)
+		} else {
+			m.statusMessage = "Filter exited."
+		}
+		result, cmd := m.updateKey(key)
+		return result, cmd
+	case tea.KeyCtrlHome, tea.KeyCtrlEnd, tea.KeyCtrlPgUp, tea.KeyCtrlPgDown:
+		// EX-394: Ctrl+Home/End/PgUp/PgDown in search mode — commit filter, then navigate.
+		m.setFilterForPanel(m.searchPanel, m.searchQuery)
+		m.searchMode = false
+		q := strings.TrimSpace(m.searchQuery)
+		if q != "" {
+			m.statusMessage = fmt.Sprintf("Filter %q applied.", q)
+		} else {
+			m.statusMessage = "Filter exited."
+		}
+		result, cmd := m.updateKey(key)
+		return result, cmd
+	case tea.KeyShiftUp, tea.KeyShiftDown, tea.KeyShiftLeft, tea.KeyShiftRight, tea.KeyShiftHome, tea.KeyShiftEnd:
+		// EX-394: Shift+navigation in search mode — text selection not supported.
+		m.statusMessage = "Text selection not supported in filter mode. Use Ctrl-U to clear."
+		return m, nil
 	case tea.KeySpace:
 		m.searchQuery += " "
 		m.setFilterForPanel(m.searchPanel, m.searchQuery)
@@ -3563,6 +3700,74 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlZ:
 		// EX-387: Ctrl-Z in command mode — not safe. Exit command mode gracefully instead.
 		m.statusMessage = "Ctrl-Z: suspend not recommended. Press Esc to cancel command mode."
+		return m, nil
+	case tea.KeyCtrlL:
+		// EX-394: Ctrl-L (redraw) in command mode — screen is auto-managed.
+		m.statusMessage = "Ctrl-L: screen redraw is automatic. Press Esc to cancel command mode."
+		return m, nil
+	case tea.KeyCtrlN:
+		// EX-394: Ctrl-N in command mode — use ↓ for command history (not supported yet).
+		m.statusMessage = "Ctrl-N: command history not supported. Use Tab to autocomplete."
+		return m, nil
+	case tea.KeyCtrlO:
+		// EX-394: Ctrl-O in command mode — not bound.
+		m.statusMessage = "Ctrl-O: not bound. Type a command or press Esc to cancel."
+		return m, nil
+	case tea.KeyCtrlQ:
+		// EX-394: Ctrl-Q in command mode — not bound.
+		m.statusMessage = "Ctrl-Q: not bound. Press Esc to cancel command mode."
+		return m, nil
+	case tea.KeyCtrlR:
+		// EX-394: Ctrl-R (reverse search) in command mode — not supported.
+		m.statusMessage = "Ctrl-R: reverse search not supported. Use Tab to autocomplete commands."
+		return m, nil
+	case tea.KeyCtrlS:
+		// EX-394: Ctrl-S (save) in command mode — no save needed.
+		m.statusMessage = "Ctrl-S: no save needed. Use :w or Esc to exit command mode."
+		return m, nil
+	case tea.KeyCtrlT:
+		// EX-394: Ctrl-T (transpose) in command mode — not supported.
+		m.statusMessage = "Ctrl-T: not bound in command mode. Type a command or press Esc."
+		return m, nil
+	case tea.KeyCtrlV:
+		// EX-394: Ctrl-V in command mode — use terminal paste.
+		m.statusMessage = "Ctrl-V: use terminal paste (right-click or Ctrl-Shift-V) to paste."
+		return m, nil
+	case tea.KeyCtrlX:
+		// EX-394: Ctrl-X in command mode — not bound.
+		m.statusMessage = "Ctrl-X: not bound. Use Ctrl-U to clear command, Esc to cancel."
+		return m, nil
+	case tea.KeyF1:
+		// EX-394: F1 in command mode — Esc first, then ? for help.
+		m.statusMessage = "Press Esc to exit command mode, then ? for help."
+		return m, nil
+	case tea.KeyF2, tea.KeyF3, tea.KeyF4, tea.KeyF5, tea.KeyF6, tea.KeyF7, tea.KeyF8, tea.KeyF9, tea.KeyF10, tea.KeyF11, tea.KeyF12:
+		// EX-394: F2-F12 in command mode — not bound.
+		m.statusMessage = "F-key not bound in command mode. Type a command or press Esc to cancel."
+		return m, nil
+	case tea.KeyInsert:
+		// EX-394: Insert in command mode — no overwrite mode.
+		m.statusMessage = "Insert: no overwrite mode in command mode. Type normally."
+		return m, nil
+	case tea.KeyCtrlUp, tea.KeyCtrlDown, tea.KeyCtrlLeft, tea.KeyCtrlRight:
+		// EX-394: Ctrl+arrows in command mode — cursor movement not supported.
+		m.statusMessage = "Ctrl+arrows not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+		return m, nil
+	case tea.KeyCtrlHome, tea.KeyCtrlEnd:
+		// EX-394: Ctrl+Home/End in command mode — cursor movement not supported.
+		m.statusMessage = "Cursor movement not supported. Use Ctrl-U to clear, Esc to cancel."
+		return m, nil
+	case tea.KeyCtrlPgUp, tea.KeyCtrlPgDown:
+		// EX-394: Ctrl+PgUp/PgDn in command mode — not bound.
+		m.statusMessage = "Ctrl+PgUp/PgDn not bound in command mode. Press Esc to cancel."
+		return m, nil
+	case tea.KeyShiftUp, tea.KeyShiftDown, tea.KeyShiftLeft, tea.KeyShiftRight, tea.KeyShiftHome, tea.KeyShiftEnd:
+		// EX-394: Shift+navigation in command mode — text selection not supported.
+		m.statusMessage = "Text selection not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+		return m, nil
+	case tea.KeyPgUp, tea.KeyPgDown:
+		// EX-394: PgUp/PgDn in command mode — not meaningful for command buffer navigation.
+		m.statusMessage = "PgUp/PgDn not supported in command mode. Press Esc to exit and navigate."
 		return m, nil
 	case tea.KeyRunes:
 		if len(key.Runes) > 0 {
@@ -3833,6 +4038,48 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		case ViewAgents:
 			return loadAgentsCmd(m.runtimeHints)
 		}
+	case "agent":
+		// EX-395: :agent (singular) → same as :agents (plural).
+		m.workspace.setMainView(ViewAgents)
+		m.setFocus(MainPanel)
+		m.statusMessage = viewNavLabel(ViewAgents)
+		return loadAgentsCmd(m.runtimeHints)
+	case "chat":
+		// EX-395: :chat — focus the chat panel (same as pressing 3 or Tab).
+		m.setFocus(ChatPanel)
+		m.statusMessage = "Chat panel focused. Type your message and press Enter to send."
+	case "settings", "config", "preferences", "prefs":
+		// EX-395: :settings/:config — no settings UI yet; redirect to CLAUDE.md or env.
+		m.statusMessage = ":settings not available in TUI. Edit .env to configure model profiles."
+	case "version", "ver":
+		// EX-395: :version — display build info hint.
+		m.statusMessage = "Run `ottercamp version` in a terminal to see version info."
+	case "undo", "redo":
+		// EX-395: :undo/:redo — no undo/redo in this TUI; redirect to chat.
+		m.statusMessage = "Undo/redo not supported. Ask the agent via chat (3 or Tab) to revert changes."
+	case "copy", "yank":
+		// EX-395: :copy/:yank — use terminal clipboard.
+		m.statusMessage = "Copy not supported. Use your terminal to select and copy text."
+	case "paste":
+		// EX-395: :paste — use terminal paste.
+		m.statusMessage = "Paste not supported as a command. Use terminal paste (right-click or Ctrl-Shift-V)."
+	case "open":
+		// EX-395: :open — open the selected item (same as Enter or 'o').
+		return m.handleEnterKey()
+	case "close":
+		// EX-395: :close — no tabs/windows to close; navigate back or dismiss help.
+		if m.workspace.mainView == ViewHelp {
+			m.workspace.setMainView(ViewDashboard)
+			m.statusMessage = "Returned to dashboard."
+		} else {
+			m.statusMessage = ":close not applicable. Use Esc to go back or :quit to exit."
+		}
+	case "man", "manual":
+		// EX-395: :man/:manual — redirect to built-in help.
+		m.workspace.setMainView(ViewHelp)
+		m.setFocus(MainPanel)
+		m.helpScrollOffset = 0
+		m.statusMessage = "Keybinding reference. Press ? or Esc to close."
 	default:
 		m.statusMessage = "Unknown command: " + fields[0]
 	}

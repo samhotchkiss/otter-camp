@@ -10681,3 +10681,236 @@ func TestMoreCommandAliasesEX392(t *testing.T) {
 		}
 	})
 }
+
+// TestPunctuationHintsEX393 verifies that common punctuation keys pressed in non-chat
+// panels produce helpful status messages instead of silent no-ops (EX-393).
+func TestPunctuationHintsEX393(t *testing.T) {
+	tests := []struct {
+		rune rune
+		want string
+	}{
+		{';', "not bound"},
+		{'\'', "mark jump"},
+		{'`', "mark jump"},
+		{'"', "not supported"},
+		{'-', "not bound"},
+		{'+', "not bound"},
+		{'!', "not bound"},
+		{'@', "not supported"},
+		{'^', "not bound"},
+		{'~', "not bound"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(fmt.Sprintf("rune-%c", tt.rune), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.rune}})
+			if !strings.Contains(m1.statusMessage, tt.want) {
+				t.Errorf("EX-393: rune %c: got %q, want to contain %q", tt.rune, m1.statusMessage, tt.want)
+			}
+		})
+	}
+	// In chat panel, these runes should be passed to chat input (not captured as workspace keys)
+	t.Run("semicolon-in-ChatPanel-not-captured", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{';'}})
+		// Should not get the workspace hint message (chat input gets the char instead)
+		if strings.Contains(m1.statusMessage, "not bound") {
+			t.Errorf("EX-393: ';' in ChatPanel should not produce workspace hint, got %q", m1.statusMessage)
+		}
+	})
+}
+
+// TestModalModeKeyHintsEX394 verifies that F-keys, modifier keys, and various Ctrl
+// combos in search and command modal modes give helpful hints instead of silent no-ops (EX-394).
+func TestModalModeKeyHintsEX394(t *testing.T) {
+	// -- updateSearchInput --
+	t.Run("searchMode-F1-exits-to-help", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = MainPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyF1})
+		if !strings.Contains(m1.statusMessage, "Esc") {
+			t.Errorf("EX-394: F1 in searchMode: got %q, want Esc hint", m1.statusMessage)
+		}
+	})
+	t.Run("searchMode-F5-not-bound", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = MainPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyF5})
+		if !strings.Contains(m1.statusMessage, "F-key not bound") {
+			t.Errorf("EX-394: F5 in searchMode: got %q, want F-key hint", m1.statusMessage)
+		}
+		// Must still be in search mode (key did not commit filter)
+		if !m1.searchMode {
+			t.Errorf("EX-394: F5 in searchMode: should stay in search mode")
+		}
+	})
+	t.Run("searchMode-Insert-hint", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = MainPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyInsert})
+		if !strings.Contains(m1.statusMessage, "Insert") {
+			t.Errorf("EX-394: Insert in searchMode: got %q, want Insert hint", m1.statusMessage)
+		}
+	})
+	t.Run("searchMode-ShiftUp-hint", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = SidebarPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyShiftUp})
+		if !strings.Contains(m1.statusMessage, "selection not supported") {
+			t.Errorf("EX-394: ShiftUp in searchMode: got %q, want selection hint", m1.statusMessage)
+		}
+	})
+	t.Run("searchMode-CtrlL-hint", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = MainPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlL})
+		if !strings.Contains(m1.statusMessage, "Ctrl-L") {
+			t.Errorf("EX-394: CtrlL in searchMode: got %q, want Ctrl-L hint", m1.statusMessage)
+		}
+	})
+	t.Run("searchMode-CtrlN-hint", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = MainPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+		if !strings.Contains(m1.statusMessage, "Ctrl-N") {
+			t.Errorf("EX-394: CtrlN in searchMode: got %q, want Ctrl-N hint", m1.statusMessage)
+		}
+	})
+
+	// -- updateCommandInput --
+	t.Run("commandMode-F1-hint", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyF1})
+		if !strings.Contains(m1.statusMessage, "Esc") {
+			t.Errorf("EX-394: F1 in commandMode: got %q, want Esc hint", m1.statusMessage)
+		}
+	})
+	t.Run("commandMode-F7-not-bound", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyF7})
+		if !strings.Contains(m1.statusMessage, "F-key not bound") {
+			t.Errorf("EX-394: F7 in commandMode: got %q, want F-key hint", m1.statusMessage)
+		}
+	})
+	t.Run("commandMode-Insert-hint", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyInsert})
+		if !strings.Contains(m1.statusMessage, "Insert") {
+			t.Errorf("EX-394: Insert in commandMode: got %q, want Insert hint", m1.statusMessage)
+		}
+	})
+	t.Run("commandMode-PgUp-hint", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+		if !strings.Contains(m1.statusMessage, "PgUp") {
+			t.Errorf("EX-394: PgUp in commandMode: got %q, want PgUp hint", m1.statusMessage)
+		}
+	})
+	t.Run("commandMode-ShiftDown-hint", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyShiftDown})
+		if !strings.Contains(m1.statusMessage, "selection not supported") {
+			t.Errorf("EX-394: ShiftDown in commandMode: got %q, want selection hint", m1.statusMessage)
+		}
+	})
+	t.Run("commandMode-CtrlR-hint", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlR})
+		if !strings.Contains(m1.statusMessage, "Ctrl-R") {
+			t.Errorf("EX-394: CtrlR in commandMode: got %q, want Ctrl-R hint", m1.statusMessage)
+		}
+	})
+}
+
+// TestExtendedCommandAliasesEX395 verifies that :chat, :settings, :config, :version,
+// :agent, :undo, :redo, :copy, :paste, :open, :close, and :man give helpful responses (EX-395).
+func TestExtendedCommandAliasesEX395(t *testing.T) {
+	tests := []struct {
+		cmd     string
+		want    string
+		noError bool // should not say "Unknown command"
+	}{
+		{":chat", "Chat panel", true},
+		{":settings", "not available", true},
+		{":config", "not available", true},
+		{":preferences", "not available", true},
+		{":version", "ottercamp version", true},
+		{":ver", "ottercamp version", true},
+		{":agent", "Agents", true},
+		{":undo", "not supported", true},
+		{":redo", "not supported", true},
+		{":copy", "not supported", true},
+		{":yank", "not supported", true},
+		{":paste", "not supported", true},
+		{":man", "Keybinding", true},
+		{":manual", "Keybinding", true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run("cmd-"+tt.cmd, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m.commandMode = true
+			m.commandBuffer = tt.cmd
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+			if tt.want != "" && !strings.Contains(m1.statusMessage, tt.want) {
+				t.Errorf("EX-395: %s: got %q, want to contain %q", tt.cmd, m1.statusMessage, tt.want)
+			}
+			if tt.noError && strings.Contains(m1.statusMessage, "Unknown command") {
+				t.Errorf("EX-395: %s: should not produce 'Unknown command', got %q", tt.cmd, m1.statusMessage)
+			}
+		})
+	}
+	// :chat should move focus to ChatPanel
+	t.Run("cmd-:chat-focuses-chat", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.commandMode = true
+		m.commandBuffer = ":chat"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if m1.focus != ChatPanel {
+			t.Errorf("EX-395: :chat should focus ChatPanel, got %v", m1.focus)
+		}
+	})
+	// :open should call handleEnterKey (which returns model with no crash)
+	t.Run("cmd-:open-no-crash", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.commandMode = true
+		m.commandBuffer = ":open"
+		_ = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter}) // should not panic
+	})
+	// :close on help view should return to dashboard
+	t.Run("cmd-:close-help-returns-dashboard", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.setMainView(ViewHelp)
+		m.focus = MainPanel
+		m.commandMode = true
+		m.commandBuffer = ":close"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if m1.workspace.mainView != ViewDashboard {
+			t.Errorf("EX-395: :close on help: got view %v, want Dashboard", m1.workspace.mainView)
+		}
+	})
+}
