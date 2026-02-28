@@ -2551,9 +2551,18 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		return true, nil
 	case 'i':
 		if m.focus != ChatPanel {
+			// EX-436: if already on inbox, the view hasn't changed — say "Inbox refreshed."
+			// so the user knows the refresh happened rather than receiving the same "Inbox"
+			// message as when navigating to inbox fresh. Mirrors EX-332/333/334 pattern for
+			// d/p/t but here a reload always fires (inbox may be stale), so we don't no-op.
+			alreadyOnInbox := m.focus == MainPanel && m.workspace.mainView == ViewInbox
 			m.workspace.setMainView(ViewInbox)
 			m.setFocus(MainPanel)
-			m.statusMessage = "Inbox"
+			if alreadyOnInbox {
+				m.statusMessage = "Inbox refreshed."
+			} else {
+				m.statusMessage = "Inbox"
+			}
 			return true, loadInboxItemsCmd(m.runtimeHints)
 		}
 	case 'd':

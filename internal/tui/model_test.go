@@ -300,6 +300,35 @@ func TestCtrlArrowEmptySearchModeExitsEX435(t *testing.T) {
 	})
 }
 
+// TestInboxAlreadyOnViewRefreshedEX436 verifies EX-436: pressing 'i' when already
+// on ViewInbox says "Inbox refreshed." (not "Inbox") to distinguish a refresh from a
+// navigation. Mirrors EX-332/333/334 (already-on-dashboard/project/task patterns).
+func TestInboxAlreadyOnViewRefreshedEX436(t *testing.T) {
+	t.Run("navigate-to-inbox-says-Inbox", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel // not on inbox
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+		if m.MainView() != ViewInbox {
+			t.Error("EX-436: 'i' should navigate to ViewInbox")
+		}
+		if got := m.StatusMessage(); got != "Inbox" {
+			t.Errorf("EX-436: navigate-to-inbox status = %q, want 'Inbox'", got)
+		}
+	})
+	t.Run("already-on-inbox-says-refreshed", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.setMainView(ViewInbox)
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+		if m.MainView() != ViewInbox {
+			t.Error("EX-436: 'i' should stay on ViewInbox")
+		}
+		if got := m.StatusMessage(); got != "Inbox refreshed." {
+			t.Errorf("EX-436: already-on-inbox status = %q, want 'Inbox refreshed.'", got)
+		}
+	})
+}
+
 func TestSlashSearchSidebarFiltersSessions(t *testing.T) {
 	model := NewModel(DefaultState())
 	// Seed chat nodes so the sidebar has sessions to filter
