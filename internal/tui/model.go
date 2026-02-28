@@ -2374,6 +2374,11 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		m.statusMessage = "Chat scrolled up."
 		return true, nil
 	case tea.KeyPgDown:
+		// EX-319: if there are no messages yet, say so first.
+		if len(m.chatMessages) == 0 {
+			m.statusMessage = "No messages yet."
+			return true, nil
+		}
 		// EX-264: when already at the newest message (offset==0), scrolling
 		// down is a no-op — say so instead of showing "Chat scrolled down."
 		if m.chatScrollOffset == 0 {
@@ -2393,6 +2398,11 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		m.statusMessage = "Chat scrolled to oldest."
 		return true, nil
 	case tea.KeyEnd:
+		// EX-319: if there are no messages yet, say so first.
+		if len(m.chatMessages) == 0 {
+			m.statusMessage = "No messages yet."
+			return true, nil
+		}
 		// EX-264: symmetric — End when already at newest is a no-op.
 		if m.chatScrollOffset == 0 {
 			m.statusMessage = "Already at latest message."
@@ -2436,7 +2446,12 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		if strings.TrimSpace(m.chatInput) == "" && m.chatScrollOffset == 0 {
-			m.statusMessage = "Already at latest message."
+			// EX-320: distinguish "no messages" from "at newest message".
+			if len(m.chatMessages) == 0 {
+				m.statusMessage = "No messages yet."
+			} else {
+				m.statusMessage = "Already at latest message."
+			}
 			return true, nil
 		}
 	case tea.KeyEsc:

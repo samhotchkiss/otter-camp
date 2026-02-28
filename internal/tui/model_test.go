@@ -6404,6 +6404,8 @@ func TestChatPgDownAtLatestEX264(t *testing.T) {
 	m := NewModel(DefaultState())
 	m.width, m.height = 220, 40
 	m.focus = ChatPanel
+	// EX-319: must have messages so we reach "Already at latest" (not "No messages yet.").
+	m.chatMessages = []ChatMessage{{Role: "user", Content: "hello"}}
 
 	// Offset is 0 by default (newest messages visible).
 	// PgDown at offset==0 should report "already at latest".
@@ -7075,6 +7077,8 @@ func TestChatDownAtBottomEX280(t *testing.T) {
 	m.width, m.height = 220, 40
 	m.focus = ChatPanel
 	m.chatHistory = []string{"msg1", "msg2"}
+	// EX-320: must have messages so we reach "Already at latest" (not "No messages yet.").
+	m.chatMessages = []ChatMessage{{Role: "user", Content: "msg1"}}
 	m.chatHistoryIndex = -1
 	m.chatScrollOffset = 0
 	m.chatInput = ""
@@ -8427,5 +8431,64 @@ func TestChatGKeyNoMessagesEX318(t *testing.T) {
 	m3 = pressKey(m3, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 	if m3.statusMessage != "Chat scrolled to oldest." {
 		t.Errorf("EX-318: 'g' with messages should say 'Chat scrolled to oldest.'; got %q", m3.statusMessage)
+	}
+}
+
+// TestChatPgDownEndNoMessagesEX319 verifies that PgDown and End in the chat
+// panel when there are no messages shows "No messages yet." instead of
+// "Already at latest message." (EX-319).
+func TestChatPgDownEndNoMessagesEX319(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	m.chatInput = ""
+	m.chatMessages = nil
+
+	// PgDown with no messages
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyPgDown})
+	if m1.statusMessage != "No messages yet." {
+		t.Errorf("EX-319: PgDown with no messages should say 'No messages yet.'; got %q", m1.statusMessage)
+	}
+
+	// End with no messages
+	m2 := pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+	if m2.statusMessage != "No messages yet." {
+		t.Errorf("EX-319: End with no messages should say 'No messages yet.'; got %q", m2.statusMessage)
+	}
+
+	// With messages and at bottom, PgDown shows "Already at latest message."
+	m3 := m
+	m3.chatMessages = []ChatMessage{{Role: "user", Content: "hello"}}
+	m3.chatScrollOffset = 0
+	m3 = pressKey(m3, tea.KeyMsg{Type: tea.KeyPgDown})
+	if m3.statusMessage != "Already at latest message." {
+		t.Errorf("EX-319: PgDown at bottom with messages should say 'Already at latest message.'; got %q", m3.statusMessage)
+	}
+}
+
+// TestChatDownArrowNoMessagesEX320 verifies that ↓ in the chat panel when
+// there are no messages shows "No messages yet." instead of
+// "Already at latest message." (EX-320).
+func TestChatDownArrowNoMessagesEX320(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	m.chatInput = ""
+	m.chatMessages = nil
+	m.chatScrollOffset = 0
+	m.chatHistoryIndex = -1
+
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+	if m1.statusMessage != "No messages yet." {
+		t.Errorf("EX-320: ↓ with no messages should say 'No messages yet.'; got %q", m1.statusMessage)
+	}
+
+	// With messages and at bottom, ↓ shows "Already at latest message."
+	m2 := m
+	m2.chatMessages = []ChatMessage{{Role: "user", Content: "hello"}}
+	m2.chatScrollOffset = 0
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyDown})
+	if m2.statusMessage != "Already at latest message." {
+		t.Errorf("EX-320: ↓ at bottom with messages should say 'Already at latest message.'; got %q", m2.statusMessage)
 	}
 }
