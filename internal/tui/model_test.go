@@ -9945,3 +9945,57 @@ func TestUnboundRuneHintsEX377(t *testing.T) {
 		})
 	}
 }
+
+// TestVimWordKeysAndCtrlSEX378 verifies that w/b/y/z (vim movement/copy) and
+// Ctrl-S give honest hints instead of silent no-ops in non-chat panels (EX-378).
+func TestVimWordKeysAndCtrlSEX378(t *testing.T) {
+	runeTests := []struct {
+		r    rune
+		want string
+	}{
+		{'w', "w is not bound. Use j/k or ↑/↓ to navigate, or ? for key reference."},
+		{'b', "b is not bound. Use j/k or ↑/↓ to navigate, or ? for key reference."},
+		{'y', "y is not bound. Use your terminal to copy text."},
+		{'z', "z is not bound. Use j/k or ↑/↓ to scroll, or ? for key reference."},
+	}
+	for _, tt := range runeTests {
+		t.Run(fmt.Sprintf("key-%c in MainPanel", tt.r), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.r}})
+			if m1.statusMessage != tt.want {
+				t.Errorf("EX-378: key %c: got %q, want %q", tt.r, m1.statusMessage, tt.want)
+			}
+		})
+		t.Run(fmt.Sprintf("key-%c types in ChatPanel", tt.r), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = ChatPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.r}})
+			if m1.chatInput != string(tt.r) {
+				t.Errorf("EX-378: key %c in chat should type; got chatInput=%q", tt.r, m1.chatInput)
+			}
+		})
+	}
+
+	// Ctrl-S in chat panel
+	t.Run("Ctrl-S in chat", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlS})
+		want := "Ctrl-S: no save needed — chat messages sync automatically."
+		if m1.statusMessage != want {
+			t.Errorf("EX-378: Ctrl-S in chat: got %q, want %q", m1.statusMessage, want)
+		}
+	})
+
+	// Ctrl-S outside chat panel
+	t.Run("Ctrl-S in MainPanel", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlS})
+		want := "Ctrl-S: no save needed — all changes are persisted automatically."
+		if m1.statusMessage != want {
+			t.Errorf("EX-378: Ctrl-S in main: got %q, want %q", m1.statusMessage, want)
+		}
+	})
+}

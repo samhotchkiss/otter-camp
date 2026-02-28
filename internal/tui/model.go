@@ -1402,6 +1402,14 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, nil
+	case tea.KeyCtrlS:
+		// EX-378: Ctrl-S (save) — no explicit save needed; changes sync automatically.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Ctrl-S: no save needed — chat messages sync automatically."
+		} else {
+			m.statusMessage = "Ctrl-S: no save needed — all changes are persisted automatically."
+		}
+		return m, nil
 	case tea.KeyCtrlN:
 		// EX-376: Ctrl-N (emacs/readline "next line") — no handler. Give a redirect hint.
 		// Ctrl-P is captured for command mode, so Ctrl-N can't be symmetric ↓ here.
@@ -2541,6 +2549,30 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		// EX-377: 'm' (mark/menu/move) — not bound. Redirect to inbox actions.
 		if m.focus != ChatPanel {
 			m.statusMessage = "m is not bound. Press a·approve, x·reject, or f·defer in Inbox view."
+			return true, nil
+		}
+	case 'w':
+		// EX-378: 'w' (vim: next word) — not bound. Redirect to j/k for navigation.
+		if m.focus != ChatPanel {
+			m.statusMessage = "w is not bound. Use j/k or ↑/↓ to navigate, or ? for key reference."
+			return true, nil
+		}
+	case 'b':
+		// EX-378: 'b' (vim: previous word) — not bound. Redirect to j/k for navigation.
+		if m.focus != ChatPanel {
+			m.statusMessage = "b is not bound. Use j/k or ↑/↓ to navigate, or ? for key reference."
+			return true, nil
+		}
+	case 'y':
+		// EX-378: 'y' (vim: yank/copy) — not bound. Redirect to terminal clipboard.
+		if m.focus != ChatPanel {
+			m.statusMessage = "y is not bound. Use your terminal to copy text."
+			return true, nil
+		}
+	case 'z':
+		// EX-378: 'z' (vim: recenter/fold) — not bound.
+		if m.focus != ChatPanel {
+			m.statusMessage = "z is not bound. Use j/k or ↑/↓ to scroll, or ? for key reference."
 			return true, nil
 		}
 	case '4', '5', '6', '7', '8', '9':
