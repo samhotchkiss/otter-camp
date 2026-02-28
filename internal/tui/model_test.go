@@ -4505,6 +4505,44 @@ func TestSidebarSelectCommandLoadsDataPerNodeKind(t *testing.T) {
 	})
 }
 
+// TestSidebarSelectOnHeaderGivesExpandCollapseMessageEX456 verifies EX-456:
+// :sidebar select on a section header gives "X section expanded/collapsed."
+// rather than the generic "Sidebar selection applied." — mirrors the Enter key
+// (handleEnterKey) which already had this specific feedback since EX-261.
+func TestSidebarSelectOnHeaderGivesExpandCollapseMessageEX456(t *testing.T) {
+	t.Run("select-collapsed-header-says-expanded", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.workspace.nodes["header-chats"] = &sidebarNode{ID: "header-chats", Label: "CHATS", Kind: sidebarKindHeader}
+		m.workspace.topLevel = []string{"header-chats"}
+		m.workspace.sectionCollapsed["chats"] = true // start collapsed
+		m.workspace.sidebarCursor = 0
+
+		_ = m.executeCommand(":sidebar select")
+
+		want := "CHATS section expanded."
+		if got := m.statusMessage; got != want {
+			t.Fatalf("EX-456: select on collapsed header = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("select-expanded-header-says-collapsed", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.workspace.nodes["header-chats"] = &sidebarNode{ID: "header-chats", Label: "CHATS", Kind: sidebarKindHeader}
+		m.workspace.topLevel = []string{"header-chats"}
+		// sectionCollapsed["chats"] is unset (false = expanded by default)
+		m.workspace.sidebarCursor = 0
+
+		_ = m.executeCommand(":sidebar select")
+
+		want := "CHATS section collapsed."
+		if got := m.statusMessage; got != want {
+			t.Fatalf("EX-456: select on expanded header = %q, want %q", got, want)
+		}
+	})
+}
+
 // EX-178: opening a task from the project view or dashboard should set activeScope=ScopeTask,
 // consistent with the sidebar and inbox open paths.
 func TestOpenTaskFromProjectAndDashboardSetsScopeTask(t *testing.T) {

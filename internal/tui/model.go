@@ -5818,6 +5818,16 @@ func (m *Model) executeSidebarCommand(args []string) tea.Cmd {
 		var cmds []tea.Cmd
 		if node != nil {
 			switch node.Kind {
+			case sidebarKindHeader:
+				// EX-456: section headers toggle on :sidebar select; mirror the
+				// handleEnterKey feedback ("X section expanded/collapsed.").
+				// sectionCollapsed now holds the NEW (post-toggle) state.
+				sectionID := sidebarSectionID(strings.TrimPrefix(node.ID, "header-"))
+				if m.workspace.sectionCollapsed[sectionID] {
+					m.statusMessage = node.Label + " section collapsed."
+				} else {
+					m.statusMessage = node.Label + " section expanded."
+				}
 			case sidebarKindProject:
 				cmds = append(cmds, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true))
 				if m.runtimeHints.LoadProjectDetail != nil {
