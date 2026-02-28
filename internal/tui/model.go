@@ -6024,8 +6024,11 @@ func (m *Model) executeSidebarCommand(args []string) tea.Cmd {
 			}
 		}
 	case "select", "open":
-		// Capture node before selectSidebarNode modifies state.
+		// Capture node and pre-selection session before selectSidebarNode modifies state.
 		node := m.workspace.currentSidebarNode()
+		// EX-475: capture prevSession to detect "refreshed" vs "switched" for session
+		// nodes — mirrors EX-474 fix in handleEnterKey.
+		prevSessionForSelect := strings.TrimSpace(m.activeSession)
 		m.workspace.selectSidebarNode()
 		m.state.LastActiveChatSession = m.workspace.activeSessionID
 		// EX-186: clear stale turn state before switching sessions.
@@ -6046,6 +6049,15 @@ func (m *Model) executeSidebarCommand(args []string) tea.Cmd {
 					m.statusMessage = node.Label + " section collapsed."
 				} else {
 					m.statusMessage = node.Label + " section expanded."
+				}
+			case sidebarKindSession:
+				// EX-475: mirrors EX-299 (handleEnterKey) — override generic message.
+				// EX-474: distinguish "refreshed" (same session) from "switched" (new session).
+				alreadyOnSess := looksLikeUUID(prevSessionForSelect) && strings.EqualFold(prevSessionForSelect, strings.TrimSpace(node.SessionID))
+				if alreadyOnSess {
+					m.statusMessage = truncate(node.Label, 36) + " refreshed."
+				} else {
+					m.statusMessage = "Switched to " + truncate(node.Label, 36) + "."
 				}
 			case sidebarKindProject:
 				cmds = append(cmds, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true))

@@ -7788,6 +7788,64 @@ func TestSidebarSessionEnterRefreshesVsSwitchesEX474(t *testing.T) {
 	})
 }
 
+// TestSidebarSelectCommandSessionFeedbackEX475 verifies EX-475: :sidebar select on a
+// session node says "Switched to X." (or "X refreshed." when already active) instead of
+// the generic "Sidebar selection applied." — mirrors the EX-299/EX-474 fix in handleEnterKey.
+func TestSidebarSelectCommandSessionFeedbackEX475(t *testing.T) {
+	sessionID := "11111111-2222-3333-4444-555555555555"
+
+	execSidebarSelect := func(m Model) Model {
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+		for _, r := range "sidebar select" {
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+		return pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	}
+
+	t.Run("select-already-active-session", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.activeSession = sessionID
+		m.workspace.activeSessionID = sessionID
+		m.workspace.nodes = map[string]*sidebarNode{
+			"sess-" + sessionID: {
+				ID:        "sess-" + sessionID,
+				Label:     "Test session",
+				Kind:      sidebarKindSession,
+				SessionID: sessionID,
+			},
+		}
+		m.workspace.topLevel = []string{"sess-" + sessionID}
+		m.workspace.sidebarCursor = 0
+		m = execSidebarSelect(m)
+		if got := m.statusMessage; got != "Test session refreshed." {
+			t.Fatalf("EX-475: :sidebar select on active session = %q, want %q", got, "Test session refreshed.")
+		}
+	})
+
+	t.Run("select-different-session-switches", func(t *testing.T) {
+		otherID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.activeSession = otherID
+		m.workspace.activeSessionID = otherID
+		m.workspace.nodes = map[string]*sidebarNode{
+			"sess-" + sessionID: {
+				ID:        "sess-" + sessionID,
+				Label:     "Test session",
+				Kind:      sidebarKindSession,
+				SessionID: sessionID,
+			},
+		}
+		m.workspace.topLevel = []string{"sess-" + sessionID}
+		m.workspace.sidebarCursor = 0
+		m = execSidebarSelect(m)
+		if got := m.statusMessage; got != "Switched to Test session." {
+			t.Fatalf("EX-475: :sidebar select on different session = %q, want %q", got, "Switched to Test session.")
+		}
+	})
+}
+
 // TestHelpCommandIdempotencyEX468 verifies EX-468: :help/:palette when already
 // in ViewHelp says "Help: scrolled to top." (and resets scroll) rather than
 // re-announcing "Keybinding reference." as if opening fresh — mirrors EX-467 for :man.
