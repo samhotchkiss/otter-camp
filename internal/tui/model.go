@@ -1128,6 +1128,15 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		// EX-347: ← in MainPanel mirrors Esc (go back / navigate up the view hierarchy).
+		if m.focus == MainPanel && key.Type == tea.KeyLeft {
+			return m, m.handleEscapeKey()
+		}
+		// EX-348: → in MainPanel mirrors Enter (open selected item / navigate down).
+		if m.focus == MainPanel && key.Type == tea.KeyRight {
+			cmd := m.handleEnterKey()
+			return m, cmd
+		}
 		return m, nil
 	case tea.KeySpace:
 		if m.focus == ChatPanel {
