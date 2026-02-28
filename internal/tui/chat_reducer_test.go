@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -193,6 +194,85 @@ func TestChatReducerHandlesInterjectionRole(t *testing.T) {
 	if !messages[0].Finalized {
 		t.Fatal("interjection message should be finalized")
 	}
+}
+
+// EX-410: worker.unresponsive in the chat SSE envelope sets statusMessage on
+// the active session and is a no-op when turnsSynced is false or the session
+// does not match.
+func TestWorkerUnresponsiveChatEnvelopeEX410(t *testing.T) {
+	t.Run("sets-status-message", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.turnsSynced = true
+		model.activeSession = "session-org-abc"
+		// activeTurnSessionID="" → sessionMatchesActive always returns true.
+
+		model.applyChatEnvelope(EventEnvelope{
+			Seq:       1,
+			EventID:   "evt-wu",
+			EventType: "worker.unresponsive",
+			OrgID:     "org-1",
+			Payload:   mustJSON(t, map[string]any{"session_id": "session-org-abc", "message": "Worker offline."}),
+		})
+
+		if got := model.statusMessage; got != "Worker offline." {
+			t.Fatalf("statusMessage = %q, want %q", got, "Worker offline.")
+		}
+	})
+
+	t.Run("uses-default-message-when-blank", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.turnsSynced = true
+		model.activeSession = "session-org-abc"
+
+		model.applyChatEnvelope(EventEnvelope{
+			Seq:       1,
+			EventID:   "evt-wu2",
+			EventType: "worker.unresponsive",
+			OrgID:     "org-1",
+			Payload:   mustJSON(t, map[string]any{"session_id": "session-org-abc", "message": "   "}),
+		})
+
+		if got := model.statusMessage; !strings.Contains(got, "ottercamp worker") {
+			t.Fatalf("statusMessage = %q, want default worker warning", got)
+		}
+	})
+
+	t.Run("ignored-when-not-synced", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.turnsSynced = false
+		before := model.statusMessage
+
+		model.applyChatEnvelope(EventEnvelope{
+			Seq:       1,
+			EventID:   "evt-wu3",
+			EventType: "worker.unresponsive",
+			OrgID:     "org-1",
+			Payload:   mustJSON(t, map[string]any{"session_id": "session-org-abc", "message": "Worker offline."}),
+		})
+
+		if got := model.statusMessage; got != before {
+			t.Fatalf("statusMessage changed when not synced: %q → %q", before, got)
+		}
+	})
+
+	t.Run("ignored-for-other-session", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.turnsSynced = true
+		model.activeTurnSessionID = "session-org-mine"
+		before := model.statusMessage
+
+		model.applyChatEnvelope(EventEnvelope{
+			Seq:       1,
+			EventID:   "evt-wu4",
+			EventType: "worker.unresponsive",
+			OrgID:     "org-1",
+			Payload:   mustJSON(t, map[string]any{"session_id": "session-org-OTHER", "message": "Worker offline."}),
+		})
+
+		if got := model.statusMessage; got != before {
+			t.Fatalf("statusMessage changed for wrong session: %q → %q", before, got)
+		}
+	})
 }
 
 func mustJSON(t *testing.T, value any) json.RawMessage {

@@ -4715,6 +4715,28 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) tea.Cmd {
 			m.chatMessages[idx].Content = "[Redacted]"
 			m.chatMessages[idx].Finalized = true
 		}
+	case "worker.unresponsive":
+		// EX-410: surface a warning when the backend detects no worker response.
+		// The warning clears naturally: completeTurnAndPromoteQueue and
+		// chat.turn.cancelled both overwrite statusMessage on resolution.
+		if !m.turnsSynced {
+			return nil
+		}
+		var payload struct {
+			SessionID string `json:"session_id"`
+			Message   string `json:"message"`
+		}
+		if !decodePayload(event.Payload, &payload) {
+			return nil
+		}
+		if !m.sessionMatchesActive(payload.SessionID) {
+			return nil
+		}
+		if strings.TrimSpace(payload.Message) != "" {
+			m.statusMessage = payload.Message
+		} else {
+			m.statusMessage = "Worker appears offline — check that `ottercamp worker` is running."
+		}
 	}
 	return nil
 }
