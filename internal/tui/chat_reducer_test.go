@@ -773,6 +773,70 @@ func TestGRuneChatScrolledToLatestAlreadyAtLatestEX427(t *testing.T) {
 	})
 }
 
+func TestCtrlHomeCtrlEndChatScrollGuardsEX428(t *testing.T) {
+	// EX-428: Ctrl+Home and Ctrl+End in chat panel were missing the empty-message
+	// and boundary guards that KeyHome/KeyEnd already had (EX-317/EX-264/EX-427).
+
+	t.Run("ctrl-end-no-messages", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		// No messages, scroll offset already 0.
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlEnd})
+		if got := m.StatusMessage(); got != "No messages yet." {
+			t.Fatalf("EX-428: statusMessage = %q, want \"No messages yet.\"", got)
+		}
+	})
+
+	t.Run("ctrl-end-already-at-latest", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m.appendMessage("local-user", "user", "hello", true)
+		m.chatScrollOffset = 0 // already at latest
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlEnd})
+		if got := m.StatusMessage(); got != "Already at latest message." {
+			t.Fatalf("EX-428: statusMessage = %q, want \"Already at latest message.\"", got)
+		}
+	})
+
+	t.Run("ctrl-end-scrolled-up", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m.appendMessage("local-user", "user", "hello", true)
+		m.chatScrollOffset = 30
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlEnd})
+		if m.chatScrollOffset != 0 {
+			t.Fatalf("EX-428: chatScrollOffset = %d, want 0", m.chatScrollOffset)
+		}
+		if got := m.StatusMessage(); got != "Chat scrolled to latest." {
+			t.Fatalf("EX-428: statusMessage = %q, want \"Chat scrolled to latest.\"", got)
+		}
+	})
+
+	t.Run("ctrl-home-no-messages", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		// No messages.
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlHome})
+		if got := m.StatusMessage(); got != "No messages yet." {
+			t.Fatalf("EX-428: statusMessage = %q, want \"No messages yet.\"", got)
+		}
+	})
+
+	t.Run("ctrl-home-scrolls-to-oldest", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m.appendMessage("local-user", "user", "hello", true)
+		m.chatScrollOffset = 0
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlHome})
+		if got := m.StatusMessage(); got != "Chat scrolled to oldest." {
+			t.Fatalf("EX-428: statusMessage = %q, want \"Chat scrolled to oldest.\"", got)
+		}
+	})
+}
+
 func mustJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)

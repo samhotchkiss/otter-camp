@@ -1585,8 +1585,16 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		if m.focus == ChatPanel {
-			m.scrollChatBy(1 << 20)
-			m.statusMessage = "Chat scrolled to oldest."
+			// EX-428: mirror the EX-317 empty-messages guard from KeyHome.
+			// Ctrl+Home previously said "Chat scrolled to oldest." even when there
+			// were no messages to scroll through — same misleading pattern as KeyHome
+			// before EX-317.
+			if len(m.chatMessages) == 0 {
+				m.statusMessage = "No messages yet."
+			} else {
+				m.scrollChatBy(1 << 20)
+				m.statusMessage = "Chat scrolled to oldest."
+			}
 		} else {
 			// For main panel, delegate to Home key handling via the normal dispatch path.
 			return m.updateKey(tea.KeyMsg{Type: tea.KeyHome})
@@ -1598,8 +1606,17 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		if m.focus == ChatPanel {
-			m.chatScrollOffset = 0
-			m.statusMessage = "Chat scrolled to latest."
+			// EX-428: mirror the EX-319 / EX-264 / EX-427 guards from KeyEnd and 'G'.
+			// Ctrl+End previously said "Chat scrolled to latest." even when there were
+			// no messages (EX-319 pattern) or when already at offset 0 (EX-264 pattern).
+			if len(m.chatMessages) == 0 {
+				m.statusMessage = "No messages yet."
+			} else if m.chatScrollOffset == 0 {
+				m.statusMessage = "Already at latest message."
+			} else {
+				m.chatScrollOffset = 0
+				m.statusMessage = "Chat scrolled to latest."
+			}
 		} else {
 			return m.updateKey(tea.KeyMsg{Type: tea.KeyEnd})
 		}
