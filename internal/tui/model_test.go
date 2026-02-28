@@ -11006,3 +11006,39 @@ func TestCommaAndPipeHintsEX397(t *testing.T) {
 		}
 	})
 }
+
+// TestRareCtrlKeyHintsEX398 verifies that Ctrl+@, Ctrl+\, Ctrl+], Ctrl+^, Ctrl+_
+// produce helpful hints instead of silent no-ops (EX-398).
+func TestRareCtrlKeyHintsEX398(t *testing.T) {
+	type ctrlTest struct {
+		keyType tea.KeyType
+		name    string
+		want    string
+	}
+	tests := []ctrlTest{
+		{tea.KeyCtrlAt, "Ctrl-At", "Ctrl-@"},
+		{tea.KeyCtrlBackslash, "Ctrl-Backslash", `Ctrl-\`},
+		{tea.KeyCtrlCloseBracket, "Ctrl-CloseBracket", "Ctrl-]"},
+		{tea.KeyCtrlCaret, "Ctrl-Caret", "Ctrl-^"},
+		{tea.KeyCtrlUnderscore, "Ctrl-Underscore", "Ctrl-_"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name+"-MainPanel", func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tt.keyType})
+			if !strings.Contains(m1.statusMessage, tt.want) {
+				t.Errorf("EX-398: %s in MainPanel: got %q, want to contain %q", tt.name, m1.statusMessage, tt.want)
+			}
+		})
+		t.Run(tt.name+"-ChatPanel", func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = ChatPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tt.keyType})
+			if !strings.Contains(m1.statusMessage, tt.want) {
+				t.Errorf("EX-398: %s in ChatPanel: got %q, want to contain %q", tt.name, m1.statusMessage, tt.want)
+			}
+		})
+	}
+}

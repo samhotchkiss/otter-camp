@@ -1595,6 +1595,38 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Ctrl-Q: not bound. Use : for commands or Ctrl-C to quit."
 		}
 		return m, nil
+	case tea.KeyCtrlAt:
+		// EX-398: Ctrl-@ (null / Ctrl+Space on some terminals) — not bound.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Ctrl-@: not bound. Use Ctrl-C to quit or Tab to cycle panels."
+		} else {
+			m.statusMessage = "Ctrl-@: not bound. Use : for commands or Ctrl-C to quit."
+		}
+		return m, nil
+	case tea.KeyCtrlBackslash:
+		// EX-398: Ctrl-\ (SIGQUIT on some terminals) — give a safe redirect.
+		m.statusMessage = "Ctrl-\\: not bound safely. Use Ctrl-C to quit or Esc to cancel."
+		return m, nil
+	case tea.KeyCtrlCloseBracket:
+		// EX-398: Ctrl-] (telnet escape / vim: jump to tag) — not bound.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Ctrl-]: not bound. Use Esc to cancel, Tab to cycle panels."
+		} else {
+			m.statusMessage = "Ctrl-]: not bound. Use Enter to open, Esc to go back."
+		}
+		return m, nil
+	case tea.KeyCtrlCaret:
+		// EX-398: Ctrl-^ (vim: alternate file / readline) — not bound.
+		m.statusMessage = "Ctrl-^: not bound. Use 0 for Frank/org session, n for next unread."
+		return m, nil
+	case tea.KeyCtrlUnderscore:
+		// EX-398: Ctrl-_ (undo in readline/nano) — no undo in TUI.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Ctrl-_: undo not supported. Ask the agent via chat to revert changes."
+		} else {
+			m.statusMessage = "Ctrl-_: undo not supported. Use : for commands or ? for key reference."
+		}
+		return m, nil
 	default:
 		return m, nil
 	}
