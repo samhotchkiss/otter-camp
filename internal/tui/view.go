@@ -1904,6 +1904,11 @@ func (m Model) renderSchedulesView(width, maxLines int) []string {
 	return lines
 }
 
+// helpViewLineCount is the total number of content lines in renderHelpView before
+// scroll clamping. Must stay in sync with the lines slice built inside that function.
+// Verified by TestHelpViewLineCountMatchesEX255; update when adding/removing entries.
+const helpViewLineCount = 62
+
 func (m Model) renderHelpView(width, maxLines int) []string {
 	header := func(s string) string {
 		return lipgloss.NewStyle().Foreground(colFocus).Bold(true).Render(s)
@@ -1984,6 +1989,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		// EX-249: include 'q' which also closes help (same as ? and Esc).
 		styleMuted.Render("  Press ?, q, or Esc to close"),
 	}
+	// EX-255: helpViewLineCount must equal len(lines). Verified by TestHelpViewLineCountMatchesEX255.
 	total := len(lines)
 	if total <= maxLines {
 		return lines

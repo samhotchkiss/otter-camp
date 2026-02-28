@@ -6137,3 +6137,87 @@ func TestFilterApplyAndClearMessagesEX254(t *testing.T) {
 		t.Errorf("EX-254: filter clear message should contain 'clear'; got %q", m.statusMessage)
 	}
 }
+
+// TestHelpViewJAtBottomEX255 verifies EX-255: pressing j when the help view is
+// already scrolled to the bottom gives "Already at bottom" feedback instead of
+// silently no-oping (symmetric with EX-250 for k at top).
+func TestHelpViewJAtBottomEX255(t *testing.T) {
+	m := NewModel(DefaultState())
+	m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.focus = MainPanel
+	m.workspace.mainView = ViewHelp
+
+	// Scroll to bottom by pressing G (sets offset to 9999, clamped by renderHelpView).
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+
+	// Now pressing j should give "Already at bottom" feedback.
+	before := m.helpScrollOffset
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if !strings.Contains(strings.ToLower(m.statusMessage), "bottom") {
+		t.Errorf("EX-255: j at bottom of help should say 'bottom'; got %q", m.statusMessage)
+	}
+	// Offset should not have grown above the clamped value.
+	if m.helpScrollOffset > before+1 {
+		t.Errorf("EX-255: helpScrollOffset grew unexpectedly: before=%d after=%d", before, m.helpScrollOffset)
+	}
+}
+
+// TestHelpViewLineCountMatchesEX255 verifies that helpViewLineCount constant matches
+// the actual number of lines produced by renderHelpView before scroll clamping.
+// This test will fail when entries are added to or removed from renderHelpView,
+// prompting the constant to be updated.
+func TestHelpViewLineCountMatchesEX255(t *testing.T) {
+	m := NewModel(DefaultState())
+	// Use a very large maxLines so all lines are returned without clamping.
+	rendered := m.renderHelpView(80, 9999)
+	if got := helpViewLineCount; got != len(rendered) {
+		t.Errorf("helpViewLineCount constant = %d, but renderHelpView returns %d lines; update the constant", got, len(rendered))
+	}
+}
+
+// TestForwardHistoryAtNewestEX256 verifies EX-256: pressing ↓ past the newest
+// history entry clears the input with "Back to new message." instead of the
+// misleading "Cleared chat input." which made it sound like an error.
+func TestForwardHistoryAtNewestEX256(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.focus = ChatPanel
+	m.chatHistory = []string{"first message", "second message"}
+	m.chatHistoryIndex = -1
+
+	// Press ↑ from empty input to start history navigation. The ↑ guard only
+	// fires recallHistory when chatInput is empty, so we get one step per empty
+	// input. This lands us at the most-recent entry (index=1).
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+	if m.chatHistoryIndex != 1 {
+		t.Fatalf("EX-256: expected historyIndex=1 after one ↑; got %d", m.chatHistoryIndex)
+	}
+
+	// Press ↓ — forwardHistory fires because chatHistoryIndex (1) >= 0 and < len(2).
+	// This increments past the last entry, clears chatInput, and shows the status.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.chatInput != "" {
+		t.Errorf("EX-256: expected empty chatInput after pressing ↓ past newest; got %q", m.chatInput)
+	}
+	if !strings.Contains(m.statusMessage, "new message") {
+		t.Errorf("EX-256: expected 'new message' in status; got %q", m.statusMessage)
+	}
+}
+
+// TestEnterSearchModeMsgEX257 verifies EX-257: enterSearchMode uses the updated
+// "Filter mode:" message that aligns with EX-254 filter terminology.
+func TestEnterSearchModeMsgEX257(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.focus = MainPanel
+	m.workspace.mainView = ViewDashboard
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	if !m.searchMode {
+		t.Fatalf("EX-257: expected search mode after /")
+	}
+	if !strings.Contains(strings.ToLower(m.statusMessage), "filter mode") {
+		t.Errorf("EX-257: expected 'Filter mode' in search entry message; got %q", m.statusMessage)
+	}
+	if !strings.Contains(strings.ToLower(m.statusMessage), "apply") {
+		t.Errorf("EX-257: expected 'apply' in search entry message; got %q", m.statusMessage)
+	}
+}

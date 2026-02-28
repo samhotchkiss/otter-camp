@@ -1114,7 +1114,33 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewTask {
 			return true, m.stepTaskInProject(1)
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
-			m.helpScrollOffset++
+			// EX-255: detect "already at bottom" symmetrically with EX-250 (k at top).
+			// Replicate the maxLines calculation from View() + renderMainViewContent:
+			//   maxLines = (termH - extraLines - 2) - 4
+			extra := 2 // status bar + help bar
+			if m.degradedModeBanner() != "" {
+				extra++
+			}
+			if m.coldOpenActive {
+				extra++
+			}
+			if m.tourActive {
+				extra++
+			}
+			_, termH := normalizeDimensions(m.width, m.height)
+			maxLines := termH - extra - 2 - 4
+			if maxLines < 1 {
+				maxLines = 1
+			}
+			maxOffset := helpViewLineCount - maxLines
+			if maxOffset < 0 {
+				maxOffset = 0
+			}
+			if m.helpScrollOffset >= maxOffset {
+				m.statusMessage = "Already at bottom of help."
+			} else {
+				m.helpScrollOffset++
+			}
 		}
 		return true, nil
 	case 'k':
@@ -1638,7 +1664,8 @@ func (m *Model) enterSearchMode(panel Panel) {
 	m.searchMode = true
 	m.searchPanel = panel
 	m.searchQuery = m.filterForPanel(panel)
-	m.statusMessage = "Search active. Type to filter; Enter keep, Esc clear."
+	// EX-257: align with filter terminology from EX-254; clarify Enter/Esc actions.
+	m.statusMessage = "Filter mode: type to narrow · Enter apply · Esc clear"
 }
 
 func (m *Model) setFilterForPanel(panel Panel, query string) {
@@ -2144,7 +2171,9 @@ func (m *Model) forwardHistory() {
 	if m.chatHistoryIndex >= len(m.chatHistory) {
 		m.chatInput = ""
 		m.chatHistoryIndex = len(m.chatHistory)
-		m.statusMessage = "Cleared chat input."
+		// EX-256: "Cleared chat input." was confusing — the user pressed ↓ past the
+		// newest history entry; they're back to composing a new message, not "clearing".
+		m.statusMessage = "Back to new message."
 	} else {
 		m.chatInput = m.chatHistory[m.chatHistoryIndex]
 		m.statusMessage = "Recalled next message."
