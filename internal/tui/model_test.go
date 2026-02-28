@@ -11308,6 +11308,38 @@ func TestTAlreadyOnTaskDetailEX334(t *testing.T) {
 	}
 }
 
+// TestTKeyFiresTaskDetailLoadEX488 verifies EX-488: pressing 't' from a non-task
+// view fires loadTaskDetailCmd so tasks selected via j/k on the dashboard
+// (cursor moved but detail never fetched) display correct content. Mirrors
+// handleEnterKey (ViewDashboard→Enter) which always fires loadTaskDetailCmd.
+func TestTKeyFiresTaskDetailLoadEX488(t *testing.T) {
+	taskID := "task-488"
+	loadCalledWith := ""
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			loadCalledWith = id
+			return &TaskDetailItem{ID: id, Title: "EX-488 task"}, nil
+		},
+	})
+	m.focus = MainPanel
+	m.workspace.mainView = ViewDashboard
+	m.workspace.selectedTaskID = taskID
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	m2 := updated.(Model)
+
+	if m2.workspace.mainView != ViewTask {
+		t.Fatalf("EX-488: mainView = %v, want ViewTask", m2.workspace.mainView)
+	}
+	if cmd == nil {
+		t.Fatal("EX-488: 't' from dashboard returned nil cmd — expected loadTaskDetailCmd")
+	}
+	runNonTimerCmds(cmd)
+	if loadCalledWith != taskID {
+		t.Fatalf("EX-488: LoadTaskDetail called with %q, want %q", loadCalledWith, taskID)
+	}
+}
+
 // TestQInNonHelpViewEX335 verifies that pressing 'q' in a non-help view gives
 // helpful redirect feedback instead of silently doing nothing (EX-335).
 func TestQInNonHelpViewEX335(t *testing.T) {

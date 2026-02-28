@@ -2845,7 +2845,12 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.workspace.setMainView(ViewTask)
 			m.setFocus(MainPanel)
 			m.statusMessage = "Task detail"
-			return true, nil
+			// EX-488: fire loadTaskDetailCmd so tasks that were selected via
+			// dashboard j/k cursor movement (detail never fetched) show correct
+			// content. Mirrors handleEnterKey (ViewDashboard→Enter) which always
+			// fires loadTaskDetailCmd. loadTaskDetailCmd is nil-safe when the
+			// hint is not configured.
+			return true, loadTaskDetailCmd(m.workspace.selectedTaskID, m.runtimeHints)
 		}
 	case 'n':
 		if m.focus != ChatPanel {
