@@ -4668,6 +4668,11 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		if len(fields) > 1 {
 			return m.jumpToProjectByName(strings.Join(fields[1:], " "))
 		}
+		// EX-462: idempotency — mirrors 'p' key (EX-333 "Already in project view.").
+		if m.focus == MainPanel && m.workspace.mainView == ViewProject {
+			m.statusMessage = "Already in project view."
+			return nil
+		}
 		m.workspace.setMainView(ViewProject)
 		m.setFocus(MainPanel)
 		// EX-260: match keyboard shortcut 'p' → "Project view" for consistency.
@@ -4677,6 +4682,11 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		// Without a title, just switch to the task view (existing behaviour).
 		if len(fields) > 1 {
 			return m.jumpToTaskByTitle(strings.Join(fields[1:], " "))
+		}
+		// EX-462: idempotency — mirrors 't' key (EX-334 "Already viewing task detail.").
+		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
+			m.statusMessage = "Already viewing task detail."
+			return nil
 		}
 		m.workspace.setMainView(ViewTask)
 		m.setFocus(MainPanel)

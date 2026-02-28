@@ -7077,6 +7077,73 @@ func TestViewCommandIdempotencyEX461(t *testing.T) {
 	}
 }
 
+// TestProjectTaskCommandIdempotencyEX462 verifies EX-462: :project and :task (no-arg)
+// say "Already in project view." / "Already viewing task detail." when the user is
+// already on that view — mirroring the 'p' (EX-333) and 't' (EX-334) key behaviour.
+func TestProjectTaskCommandIdempotencyEX462(t *testing.T) {
+	executeCmd := func(m Model, cmd string) Model {
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+		for _, r := range cmd {
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+		return pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	}
+
+	t.Run("project-already-in-project-view", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewProject
+		m.workspace.selectedProjectID = "p1"
+		m.statusMessage = ""
+
+		m = executeCmd(m, "project")
+
+		if got := m.statusMessage; got != "Already in project view." {
+			t.Fatalf("EX-462: :project when already in project view = %q, want %q", got, "Already in project view.")
+		}
+	})
+
+	t.Run("project-from-different-view-navigates", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewDashboard
+		m.workspace.selectedProjectID = "p1"
+
+		m = executeCmd(m, "project")
+
+		if got := m.workspace.mainView; got != ViewProject {
+			t.Fatalf("EX-462: :project from dashboard should navigate to project view; got %v", got)
+		}
+	})
+
+	t.Run("task-already-in-task-view", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewTask
+		m.workspace.selectedTaskID = "t1"
+		m.statusMessage = ""
+
+		m = executeCmd(m, "task")
+
+		if got := m.statusMessage; got != "Already viewing task detail." {
+			t.Fatalf("EX-462: :task when already in task view = %q, want %q", got, "Already viewing task detail.")
+		}
+	})
+
+	t.Run("task-from-different-view-navigates", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewDashboard
+		m.workspace.selectedTaskID = "t1"
+
+		m = executeCmd(m, "task")
+
+		if got := m.workspace.mainView; got != ViewTask {
+			t.Fatalf("EX-462: :task from dashboard should navigate to task view; got %v", got)
+		}
+	})
+}
+
 // TestSidebarEnterOnEmptyEX261 verifies EX-261: pressing Enter in the sidebar
 // when there are no nodes (empty sidebar) says "No items in sidebar." instead
 // of the misleading "Sidebar selection applied." (nothing was selected).
