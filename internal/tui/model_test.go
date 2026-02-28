@@ -56,6 +56,48 @@ func TestFocusCommandFallback(t *testing.T) {
 	}
 }
 
+// TestFocusCommandIdempotencyEX460 verifies EX-460: `:focus <panel>` when
+// already on that panel says "Already focused on X." instead of "Focus: X."
+func TestFocusCommandIdempotencyEX460(t *testing.T) {
+	executeCmd := func(m Model, cmd string) Model {
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+		for _, r := range []rune(cmd) {
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+		return pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	}
+
+	t.Run("already-on-sidebar-says-already", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.statusMessage = ""
+
+		m = executeCmd(m, "focus sidebar")
+
+		if got := m.statusMessage; got != "Already focused on sidebar." {
+			t.Fatalf("EX-460: :focus sidebar when already on sidebar = %q, want %q", got, "Already focused on sidebar.")
+		}
+		if m.focus != SidebarPanel {
+			t.Fatalf("EX-460: focus should still be sidebar; got %v", m.focus)
+		}
+	})
+
+	t.Run("switching-panel-says-focus", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.statusMessage = ""
+
+		m = executeCmd(m, "focus chat")
+
+		if got := m.statusMessage; got != "Focus: chat" {
+			t.Fatalf("EX-460: :focus chat from main = %q, want %q", got, "Focus: chat")
+		}
+		if m.focus != ChatPanel {
+			t.Fatalf("EX-460: focus should be chat; got %v", m.focus)
+		}
+	})
+}
+
 func TestSidebarToggleKeybindingAtSSize(t *testing.T) {
 	model := NewModel(DefaultState())
 	model = pressMsg(model, tea.WindowSizeMsg{Width: 90, Height: 30})

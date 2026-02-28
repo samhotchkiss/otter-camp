@@ -4563,6 +4563,11 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 			m.statusMessage = "Unknown panel. Use sidebar, main, or chat."
 			return nil
 		}
+		// EX-460: idempotency — if already on this panel, say so instead of "Focus: X."
+		if m.focus == panel {
+			m.statusMessage = "Already focused on " + panelLabel(panel) + "."
+			return nil
+		}
 		m.setFocus(panel)
 		m.statusMessage = "Focus: " + panelLabel(m.focus)
 	case "frank", "general":
