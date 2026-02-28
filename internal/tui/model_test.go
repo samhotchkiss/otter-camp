@@ -10439,3 +10439,52 @@ func TestModifierArrowKeyHintsEX386(t *testing.T) {
 		}
 	})
 }
+
+// TestCtrlYZInModalModesEX387 verifies that Ctrl-Y and Ctrl-Z in search and
+// command modes show informative hints instead of silent no-ops (EX-387).
+func TestCtrlYZInModalModesEX387(t *testing.T) {
+	t.Run("CtrlY-in-searchMode", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = SidebarPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlY})
+		if !strings.Contains(m1.statusMessage, "Ctrl-Y") {
+			t.Errorf("EX-387: Ctrl-Y in searchMode: got %q, want Ctrl-Y hint", m1.statusMessage)
+		}
+		// search mode should stay active (we just showed a hint)
+		if !m1.searchMode {
+			t.Errorf("EX-387: Ctrl-Y in searchMode should stay in search mode")
+		}
+	})
+	t.Run("CtrlZ-in-searchMode", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = SidebarPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlZ})
+		if !strings.Contains(m1.statusMessage, "Ctrl-Z") {
+			t.Errorf("EX-387: Ctrl-Z in searchMode: got %q, want Ctrl-Z hint", m1.statusMessage)
+		}
+	})
+	t.Run("CtrlY-in-commandMode", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlY})
+		if !strings.Contains(m1.statusMessage, "Ctrl-Y") {
+			t.Errorf("EX-387: Ctrl-Y in commandMode: got %q, want Ctrl-Y hint", m1.statusMessage)
+		}
+		// command mode should stay active
+		if !m1.commandMode {
+			t.Errorf("EX-387: Ctrl-Y in commandMode should stay in command mode")
+		}
+	})
+	t.Run("CtrlZ-in-commandMode", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlZ})
+		if !strings.Contains(m1.statusMessage, "Ctrl-Z") {
+			t.Errorf("EX-387: Ctrl-Z in commandMode: got %q, want Ctrl-Z hint", m1.statusMessage)
+		}
+	})
+}

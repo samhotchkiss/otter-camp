@@ -3385,6 +3385,14 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// EX-370: Delete (forward delete) in filter mode — no cursor concept.
 		m.statusMessage = "Forward-delete not supported in filter mode. Use Backspace or Ctrl-W."
 		return m, nil
+	case tea.KeyCtrlY:
+		// EX-387: Ctrl-Y (emacs yank/paste) in search mode — use terminal paste instead.
+		m.statusMessage = "Ctrl-Y: use terminal paste (right-click or Ctrl-Shift-V) to paste text."
+		return m, nil
+	case tea.KeyCtrlZ:
+		// EX-387: Ctrl-Z (suspend) in search mode — not safe inside a TUI.
+		m.statusMessage = "Ctrl-Z: suspend not recommended. Press Esc to exit search mode."
+		return m, nil
 	case tea.KeySpace:
 		m.searchQuery += " "
 		m.setFilterForPanel(m.searchPanel, m.searchQuery)
@@ -3522,6 +3530,14 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyDelete:
 		// EX-371: Delete (forward delete) in command mode — no cursor concept.
 		m.statusMessage = "Forward-delete not supported. Use Backspace or Ctrl-W to delete word."
+		return m, nil
+	case tea.KeyCtrlY:
+		// EX-387: Ctrl-Y (emacs yank/paste) in command mode — use terminal paste instead.
+		m.statusMessage = "Ctrl-Y: use terminal paste (right-click or Ctrl-Shift-V) to paste."
+		return m, nil
+	case tea.KeyCtrlZ:
+		// EX-387: Ctrl-Z in command mode — not safe. Exit command mode gracefully instead.
+		m.statusMessage = "Ctrl-Z: suspend not recommended. Press Esc to cancel command mode."
 		return m, nil
 	case tea.KeyRunes:
 		if len(key.Runes) > 0 {
