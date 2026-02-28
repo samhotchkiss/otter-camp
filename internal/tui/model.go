@@ -1146,6 +1146,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.workspace.collapseSidebarNode()
 			return true, nil
 		}
+		// EX-217: give feedback instead of silent no-op when sidebar not focused.
+		m.statusMessage = "h/l collapse/expand sidebar sections — press 1 to focus sidebar"
+		return true, nil
 	case 'l':
 		if m.focus == SidebarPanel {
 			node := m.workspace.currentSidebarNode()
@@ -1155,6 +1158,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 			return true, nil
 		}
+		// EX-217: give feedback instead of silent no-op when sidebar not focused.
+		m.statusMessage = "h/l collapse/expand sidebar sections — press 1 to focus sidebar"
+		return true, nil
 	case 's':
 		if m.focus == MainPanel || m.focus == SidebarPanel {
 			m.toggleSidebar()

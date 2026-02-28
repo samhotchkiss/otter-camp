@@ -3360,3 +3360,50 @@ A user typing `:act` would get no suggestions, even though `:activity` is a vali
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-217: h/l keys silently do nothing when sidebar is not focused
+
+**Observation:** Pressing `h` (collapse) or `l` (expand) only works when focus is on the SidebarPanel. When focus is on Main or Chat, the keypresses are silently swallowed with no feedback. A user from a vim background will press `h`/`l` expecting visual feedback about why it did nothing.
+
+**Improvement:** When `h`/`l` are pressed outside the sidebar, set a status message: "h/l collapse/expand sidebar sections — press 1 to focus sidebar". The key handler now returns `(true, nil)` so the event is consumed and the message is shown.
+
+**Effort:** Trivial (4 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-218-skip (deferred)
+
+_(EX-218 — empty chat message headers — requires more investigation; deferred.)_
+
+---
+
+## EX-224: Help view missing dynamic jump commands
+
+**Observation:** The `:session NAME`, `:project NAME`, and `:task TITLE` jump commands were visible in the command palette (autocomplete) but completely absent from the `?` help screen. Users who read the help screen would never discover that they can jump directly to any session/project/task by name.
+
+**Improvement:** Added three new entries to the Commands section of `renderHelpView`:
+- `:session <name>` — jump to a session by name (tab-autocomplete)
+- `:project <name>` — jump to a project by name (tab-autocomplete)
+- `:task <title>` — jump to a task by title (tab-autocomplete)
+
+Also renamed `:frank` entry to `:frank / :general` to surface the `:general` command alongside it.
+
+**Effort:** Trivial (4 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-226: Merges and Schedules views silently truncate when list is long
+
+**Observation:** When `renderMergesView` or `renderSchedulesView` had more items than the display cap, the excess was silently dropped. Unlike the Activity view (which shows "↑ N older entries hidden"), the user had no indication that they were seeing an incomplete list.
+
+**Improvement:** Both views now pre-count matching items. When truncation occurs, the item cap is tightened to `maxLines-4` and a `"+N more  (/ to filter)"` indicator is appended after the visible items. Total line count never exceeds `maxLines`. The hint footer remains visible in all cases.
+
+**Effort:** Low (two-pass count pattern, same approach as EX-215 for Activity)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

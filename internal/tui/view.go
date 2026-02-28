@@ -1748,19 +1748,38 @@ func (m Model) renderMergesView(width, maxLines int) []string {
 	lines = append(lines, "")
 	// EX-113: apply filter to merges and schedules views.
 	query := normalizedFilterQuery(m.mainFilter)
-	// EX-215: reserve 3 lines for hint footer so it's always visible when list is full.
+
+	// Collect matching items first so we know if truncation will occur.
+	var matching []string
+	for _, pr := range m.workspace.mergeQueue {
+		if matchesFilter(pr, query) {
+			matching = append(matching, pr)
+		}
+	}
+
+	// EX-215: reserve 3 lines for hint footer (blank + hint); EX-226: one more
+	// when a truncation indicator is needed.
 	itemCap := maxLines - 3
 	if itemCap < 1 {
 		itemCap = 1
 	}
-	for _, pr := range m.workspace.mergeQueue {
-		if len(lines)-1 >= itemCap {
+	hidden := 0
+	if len(matching) > itemCap {
+		// Tighten cap to make room for the "+N more" indicator line.
+		itemCap = maxLines - 4
+		if itemCap < 1 {
+			itemCap = 1
+		}
+		hidden = len(matching) - itemCap
+	}
+	for i, pr := range matching {
+		if i >= itemCap {
 			break
 		}
-		if !matchesFilter(pr, query) {
-			continue
-		}
 		lines = append(lines, lipgloss.NewStyle().Foreground(colAccent).Render("⎇ ")+styleText.Render(pr))
+	}
+	if hidden > 0 {
+		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more  (/ to filter)", hidden)))
 	}
 	if len(lines) == 1 {
 		if query != "" && len(m.workspace.mergeQueue) > 0 {
@@ -1780,19 +1799,36 @@ func (m Model) renderSchedulesView(width, maxLines int) []string {
 	lines = append(lines, "")
 	// EX-113: apply filter to schedules view.
 	query := normalizedFilterQuery(m.mainFilter)
-	// EX-215: reserve 3 lines for hint footer so it's always visible when list is full.
+
+	// Collect matching items first so we know if truncation will occur.
+	var matching []string
+	for _, s := range m.workspace.schedules {
+		if matchesFilter(s, query) {
+			matching = append(matching, s)
+		}
+	}
+
+	// EX-215: reserve 3 lines for hint footer; EX-226: one more when truncating.
 	itemCap := maxLines - 3
 	if itemCap < 1 {
 		itemCap = 1
 	}
-	for _, s := range m.workspace.schedules {
-		if len(lines)-1 >= itemCap {
+	hidden := 0
+	if len(matching) > itemCap {
+		itemCap = maxLines - 4
+		if itemCap < 1 {
+			itemCap = 1
+		}
+		hidden = len(matching) - itemCap
+	}
+	for i, s := range matching {
+		if i >= itemCap {
 			break
 		}
-		if !matchesFilter(s, query) {
-			continue
-		}
 		lines = append(lines, lipgloss.NewStyle().Foreground(colPrimary).Render("⏰ ")+styleText.Render(s))
+	}
+	if hidden > 0 {
+		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more  (/ to filter)", hidden)))
 	}
 	if len(lines) == 1 {
 		if query != "" && len(m.workspace.schedules) > 0 {
@@ -1859,12 +1895,16 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key(":command", "open command palette"),
 		"",
 		header("Commands  (press : to open)"),
-		key(":frank", "switch to Frank session"),
+		key(":frank / :general", "switch to Frank or General session"),
 		key(":dashboard / :inbox", "navigate to view"),
 		key(":project / :task", "navigate to view"),
 		// EX-155: previously missing from help view
 		key(":agents / :activity", "navigate to agents or activity view"),
 		key(":merges / :schedules", "navigate to merges or schedules view"),
+		// EX-224: dynamic jump commands (autocomplete fills in names)
+		key(":session <name>", "jump to a session by name  (tab-autocomplete)"),
+		key(":project <name>", "jump to a project by name  (tab-autocomplete)"),
+		key(":task <title>", "jump to a task by title  (tab-autocomplete)"),
 		key(":scope <level>", "switch chat scope: org | project | task"),
 		key(":focus <panel>", "focus sidebar|main|chat"),
 		key(":send <message>", "send message to Frank"),

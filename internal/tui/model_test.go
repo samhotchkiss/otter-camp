@@ -5179,3 +5179,86 @@ func TestCommandPaletteSuggestionsComplete(t *testing.T) {
 		}
 	}
 }
+
+// TestHLKeysOutsideSidebarShowFeedback verifies EX-217: pressing h or l when
+// focus is not on the sidebar panel shows a status message instead of silently
+// doing nothing.
+func TestHLKeysOutsideSidebarShowFeedback(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = MainPanel
+
+	for _, r := range []rune{'h', 'l'} {
+		model.statusMessage = ""
+		handled, _ := model.handleWorkspaceRune(r)
+		if !handled {
+			t.Errorf("EX-217: rune %q not handled when focus=MainPanel", r)
+		}
+		if model.statusMessage == "" {
+			t.Errorf("EX-217: rune %q produced no status message when focus=MainPanel", r)
+		}
+		if !strings.Contains(model.statusMessage, "sidebar") {
+			t.Errorf("EX-217: status message %q doesn't mention sidebar", model.statusMessage)
+		}
+	}
+}
+
+// TestMergesSchedulesTruncationIndicator verifies EX-226: when items overflow
+// the display cap, a "+N more" indicator is shown rather than silently cutting.
+func TestMergesSchedulesTruncationIndicator(t *testing.T) {
+	const maxLines = 8
+
+	t.Run("merges", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		for i := 0; i < 20; i++ {
+			model.workspace.mergeQueue = append(model.workspace.mergeQueue,
+				fmt.Sprintf("feature/branch-%d", i+1))
+		}
+		lines := model.renderMergesView(80, maxLines)
+		rendered := strings.Join(lines, "\n")
+
+		if !strings.Contains(rendered, "more") {
+			t.Errorf("EX-226: merges truncation indicator missing:\n%s", rendered)
+		}
+		if !strings.Contains(rendered, "r·refresh") {
+			t.Errorf("EX-226: merges hint footer missing when full:\n%s", rendered)
+		}
+		if len(lines) > maxLines {
+			t.Errorf("EX-226: renderMergesView returned %d lines, want ≤ %d", len(lines), maxLines)
+		}
+	})
+
+	t.Run("schedules", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		for i := 0; i < 20; i++ {
+			model.workspace.schedules = append(model.workspace.schedules,
+				fmt.Sprintf("daily-sync-%d at 09:00", i+1))
+		}
+		lines := model.renderSchedulesView(80, maxLines)
+		rendered := strings.Join(lines, "\n")
+
+		if !strings.Contains(rendered, "more") {
+			t.Errorf("EX-226: schedules truncation indicator missing:\n%s", rendered)
+		}
+		if !strings.Contains(rendered, "r·refresh") {
+			t.Errorf("EX-226: schedules hint footer missing when full:\n%s", rendered)
+		}
+		if len(lines) > maxLines {
+			t.Errorf("EX-226: renderSchedulesView returned %d lines, want ≤ %d", len(lines), maxLines)
+		}
+	})
+}
+
+// TestHelpViewShowsDynamicCommandsEX224 verifies EX-224: the help view mentions
+// the :session, :project, :task dynamic jump commands.
+func TestHelpViewShowsDynamicCommandsEX224(t *testing.T) {
+	model := NewModel(DefaultState())
+	// Use a large maxLines so scrolling doesn't hide any content.
+	lines := model.renderHelpView(120, 200)
+	rendered := strings.Join(lines, "\n")
+
+	for _, want := range []string{":session", ":project <name>", ":task <title>"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("EX-224: help view missing %q; rendered:\n%s", want, rendered)
+		}
+	}
+}
