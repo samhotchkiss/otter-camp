@@ -3670,3 +3670,72 @@ Now `:send deploy the feature` sends "deploy the feature" regardless of what was
 **Status:** [x] Discovered | [x] Fixed | [x] Tested
 
 ---
+
+## EX-239: `:help`/`:palette` opens truncated status message instead of help view
+
+**Observation:** The `:help` and `:palette` commands set a ~200-char status message listing all commands. The status bar truncates at 80 chars, showing only ~5 of the ~25 available commands — completely defeating the purpose of the command.
+
+**Root cause:** The implementation set `m.statusMessage` to a long command list string, not realising the status bar applies a hard 80-char truncation.
+
+**Improvement:** `:help` and `:palette` now open the help view directly (same as pressing `?`), setting `mainView = ViewHelp`, focusing `MainPanel`, and resetting `helpScrollOffset`. The status message is now a short confirmation: "Keybinding reference. Press ? or Esc to close."
+
+**Effort:** Trivial (4 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-240: `:project <name>`, `:task <title>`, `:session <name>` typed directly don't use the name
+
+**Observation:** The help view documents `:project <name>` as "jump to a project by name" and `:session <name>` as "jump to a session by name". But:
+- `:project FooProject` → `executeCommand` hits the combined `case "dashboard", "project", "task", ...` which just switches to ViewProject, ignoring "FooProject".
+- `:session Frank` → "session" is not in that combined case, falls to `default: "Unknown command: session"`.
+- `:task OC-42` → same as project — switches view, ignores name.
+
+Only the Tab-autocomplete `project: <name>` format (with colon-space) worked.
+
+**Root cause:** The prefix checks (`strings.HasPrefix(lower, "project: ")`) require a colon-space separator. Manually typed commands use a plain space. The combined `switch` case handled the command name but never checked for additional fields.
+
+**Improvement:** Extracted `"session"`, `"project"`, `"task"` from the combined case and gave each its own handler:
+- With a name arg → calls `jumpToProjectByName/jumpToSessionByName/jumpToTaskByTitle`
+- Without a name → existing view-switch behaviour (`:project` alone still navigates to ViewProject)
+
+**Effort:** Small (20 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-241: `commandFallbackHelp` shows irrelevant hints when ViewHelp is active
+
+**Observation:** When focused on the help view (`ViewHelp`), the help line at the bottom showed the generic default hint: "i inbox · d dashboard · n next unread · r refresh · / filter · : commands · ? help". The `r refresh` and `/ filter` hints are irrelevant — there's nothing to refresh or filter in the help view.
+
+**Root cause:** The `switch m.workspace.mainView` in `commandFallbackHelp` had no `case ViewHelp:` branch, so it fell to the generic `default` case.
+
+**Improvement:** Added `case ViewHelp:` returning "j/k scroll · g/G top/bottom · ? or Esc close help" — focused, actionable, no irrelevant hints.
+
+**Effort:** Trivial (2 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-242: `:queue edit|steer|delete` silently no-ops when queue is empty
+
+**Observation:** Typing `:queue edit` when no messages are queued resulted in zero visible feedback — the status bar remained unchanged. The user had no way to know whether the command was recognised or silently failed.
+
+**Root cause:** `applyQueueActionEdit/Steer/Delete` each have `if len(m.queuedMessages) == 0 { return }` with no status message, and `executeCommand` didn't guard against this case before delegating.
+
+**Improvement:** Added an early-return guard in `executeCommand` for the `"queue"` case:
+```go
+if len(m.queuedMessages) == 0 {
+    m.statusMessage = "No messages queued."
+    return nil
+}
+```
+
+**Effort:** Trivial (3 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---

@@ -5760,3 +5760,119 @@ func TestSendCommandUsesProvidedTextEX238(t *testing.T) {
 		t.Errorf("EX-238: :send hello world should have triggered a message send; statusMessage=%q", model.statusMessage)
 	}
 }
+
+// TestJumpCommandsWithNameEX240 verifies EX-240: `:project <name>`, `:task <title>`,
+// and `:session <name>` typed directly (without the autocomplete colon-space separator)
+// use the name argument for navigation instead of silently ignoring it.
+func TestJumpCommandsWithNameEX240(t *testing.T) {
+	t.Run("project jumps by name", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.workspace.nodes["project-proj-abc"] = &sidebarNode{
+			ID: "project-proj-abc", Kind: sidebarKindProject, Label: "Acme Backend", ProjectID: "proj-abc",
+		}
+		model.workspace.topLevel = []string{"project-proj-abc"}
+
+		_ = model.executeCommand(":project Acme")
+
+		if model.workspace.mainView != ViewProject {
+			t.Fatalf("EX-240: expected ViewProject, got %v", model.workspace.mainView)
+		}
+		if model.workspace.selectedProjectID != "proj-abc" {
+			t.Fatalf("EX-240: selectedProjectID want %q got %q", "proj-abc", model.workspace.selectedProjectID)
+		}
+	})
+
+	t.Run("project without name just switches view", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		_ = model.executeCommand(":project")
+		if model.workspace.mainView != ViewProject {
+			t.Fatalf("EX-240: :project alone should switch to ViewProject, got %v", model.workspace.mainView)
+		}
+	})
+
+	t.Run("task jumps by title", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		taskID := "task-xyz"
+		model.workspace.tasks[taskID] = &taskRecord{ID: taskID, Title: "Deploy frontend service", Status: "todo"}
+		model.workspace.taskOrder = []string{taskID}
+
+		_ = model.executeCommand(":task Deploy frontend")
+
+		if model.workspace.mainView != ViewTask {
+			t.Fatalf("EX-240: expected ViewTask, got %v", model.workspace.mainView)
+		}
+		if model.workspace.selectedTaskID != taskID {
+			t.Fatalf("EX-240: selectedTaskID want %q got %q", taskID, model.workspace.selectedTaskID)
+		}
+	})
+
+	t.Run("task without title just switches view", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		_ = model.executeCommand(":task")
+		if model.workspace.mainView != ViewTask {
+			t.Fatalf("EX-240: :task alone should switch to ViewTask, got %v", model.workspace.mainView)
+		}
+	})
+
+	t.Run("session unknown name shows error not unknown command", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		_ = model.executeCommand(":session nonexistent-session")
+		// Should say "not found" not "Unknown command"
+		if strings.Contains(model.statusMessage, "Unknown command") {
+			t.Errorf("EX-240: :session <name> should not say 'Unknown command'; got %q", model.statusMessage)
+		}
+		if !strings.Contains(strings.ToLower(model.statusMessage), "not found") {
+			t.Errorf("EX-240: :session <name> not found should say 'not found'; got %q", model.statusMessage)
+		}
+	})
+
+	t.Run("session without name shows usage", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		_ = model.executeCommand(":session")
+		if !strings.Contains(strings.ToLower(model.statusMessage), "usage") {
+			t.Errorf("EX-240: :session alone should show usage; got %q", model.statusMessage)
+		}
+	})
+}
+
+// TestCommandFallbackHelpForHelpViewEX241 verifies EX-241: commandFallbackHelp when
+// ViewHelp is active shows scroll/close hints rather than the generic dashboard hints.
+func TestCommandFallbackHelpForHelpViewEX241(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = MainPanel
+	model.workspace.mainView = ViewHelp
+
+	hint := model.commandFallbackHelp()
+
+	// Should mention scroll keys
+	if !strings.Contains(hint, "j/k") {
+		t.Errorf("EX-241: help view hint should mention j/k scroll; got %q", hint)
+	}
+	// Should mention Esc to close
+	if !strings.Contains(hint, "Esc") {
+		t.Errorf("EX-241: help view hint should mention Esc; got %q", hint)
+	}
+	// Should NOT show r·refresh (irrelevant in help view)
+	if strings.Contains(hint, "r refresh") || strings.Contains(hint, "r·refresh") {
+		t.Errorf("EX-241: help view hint should not show r refresh; got %q", hint)
+	}
+}
+
+// TestQueueCommandEmptyFeedbackEX242 verifies EX-242: `:queue edit|steer|delete`
+// gives a status message when the queue is empty rather than silently no-oping.
+func TestQueueCommandEmptyFeedbackEX242(t *testing.T) {
+	for _, action := range []string{"edit", "steer", "delete"} {
+		t.Run(action, func(t *testing.T) {
+			model := NewModel(DefaultState())
+			// Ensure queue is empty
+			model.queuedMessages = nil
+
+			_ = model.executeCommand(":queue " + action)
+
+			if !strings.Contains(strings.ToLower(model.statusMessage), "no messages queued") &&
+				!strings.Contains(strings.ToLower(model.statusMessage), "queue") {
+				t.Errorf("EX-242: :queue %s with empty queue should give feedback; got %q", action, model.statusMessage)
+			}
+		})
+	}
+}

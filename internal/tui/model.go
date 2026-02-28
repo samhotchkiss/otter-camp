@@ -1846,6 +1846,12 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 			m.statusMessage = "Usage: :queue edit|steer|delete"
 			return nil
 		}
+		// EX-242: give explicit feedback when the queue is empty instead of
+		// silently no-oping — the user typed the command expecting something to happen.
+		if len(m.queuedMessages) == 0 {
+			m.statusMessage = "No messages queued."
+			return nil
+		}
 		switch strings.ToLower(fields[1]) {
 		case "edit":
 			m.applyQueueActionEdit()
@@ -1859,7 +1865,32 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 	case "sidebar":
 		// EX-168: executeSidebarCommand now returns a cmd (e.g. history reload on select).
 		return m.executeSidebarCommand(fields[1:])
-	case "dashboard", "project", "task", "inbox", "activity", "agents", "merges", "schedules":
+	case "session":
+		// EX-240: `:session <name>` should jump to a session by name (same as the
+		// autocomplete `session: <name>` format). Without a name, show usage.
+		if len(fields) > 1 {
+			return m.jumpToSessionByName(strings.Join(fields[1:], " "))
+		}
+		m.statusMessage = "Usage: :session <name>  (Tab to autocomplete)"
+	case "project":
+		// EX-240: `:project <name>` with a name should jump to that project.
+		// Without a name, just switch to the project view (existing behaviour).
+		if len(fields) > 1 {
+			return m.jumpToProjectByName(strings.Join(fields[1:], " "))
+		}
+		m.workspace.setMainView(ViewProject)
+		m.setFocus(MainPanel)
+		m.statusMessage = "Main view: project"
+	case "task":
+		// EX-240: `:task <title>` with a title should jump to that task.
+		// Without a title, just switch to the task view (existing behaviour).
+		if len(fields) > 1 {
+			return m.jumpToTaskByTitle(strings.Join(fields[1:], " "))
+		}
+		m.workspace.setMainView(ViewTask)
+		m.setFocus(MainPanel)
+		m.statusMessage = "Main view: task"
+	case "dashboard", "inbox", "activity", "agents", "merges", "schedules":
 		view, ok := resolveMainViewCommand(fields[0])
 		if !ok {
 			m.statusMessage = "Unknown workspace command: " + fields[0]
@@ -3023,6 +3054,10 @@ func (m Model) commandFallbackHelp() string {
 				doneHint = "d hide done"
 			}
 			return "j/k navigate tasks · Enter open task · " + doneHint + " · r refresh · Esc dashboard · n next unread · : commands · ? help"
+		case ViewHelp:
+			// EX-241: help view hint shows scroll/close keys; r·refresh and / filter
+			// are irrelevant here so replace the default with a focused hint set.
+			return "j/k scroll · g/G top/bottom · ? or Esc close help"
 		case ViewDashboard:
 			if len(m.workspace.dashboardActiveTasks()) > 0 {
 				// EX-116: include "t·task" hint when a task is selected so users know
