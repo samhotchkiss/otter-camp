@@ -1504,6 +1504,79 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// EX-384: F2-F4 and F6-F12 — not bound. Point to the key reference.
 		m.statusMessage = "F-key not bound. Press ? for key reference, : for commands, r to refresh."
 		return m, nil
+	case tea.KeyCtrlUp, tea.KeyCtrlDown:
+		// EX-386: Ctrl+↑/↓ (jump by paragraph/block) — no block-level cursor here.
+		// In chat, point to Ctrl-W (word delete) or PgUp/PgDn; outside chat, redirect to j/k.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Ctrl+↑/↓ not supported. Use PgUp/PgDn to scroll messages."
+		} else {
+			m.statusMessage = "Ctrl+↑/↓ not supported. Use j/k or ↑/↓ to navigate."
+		}
+		return m, nil
+	case tea.KeyCtrlLeft, tea.KeyCtrlRight:
+		// EX-386: Ctrl+←/→ (jump by word) — no cursor in chat input.
+		// Point to Ctrl-W (kill last word) as the nearest available analogue.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Word-jump (Ctrl+←/→) not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+		} else {
+			m.statusMessage = "Ctrl+←/→ not supported. Use ←/→ arrows or j/k to navigate."
+		}
+		return m, nil
+	case tea.KeyCtrlHome:
+		// EX-386: Ctrl+Home — jump to document start. Mirror Home behaviour.
+		if handled, cmd := m.handleSidebarControlKey(tea.KeyMsg{Type: tea.KeyHome}); m.focus == SidebarPanel && handled {
+			return m, cmd
+		}
+		if m.focus == ChatPanel {
+			m.scrollChatBy(1 << 20)
+			m.statusMessage = "Chat scrolled to oldest."
+		} else {
+			// For main panel, delegate to Home key handling via the normal dispatch path.
+			return m.updateKey(tea.KeyMsg{Type: tea.KeyHome})
+		}
+		return m, nil
+	case tea.KeyCtrlEnd:
+		// EX-386: Ctrl+End — jump to document end. Mirror End behaviour.
+		if handled, cmd := m.handleSidebarControlKey(tea.KeyMsg{Type: tea.KeyEnd}); m.focus == SidebarPanel && handled {
+			return m, cmd
+		}
+		if m.focus == ChatPanel {
+			m.chatScrollOffset = 0
+			m.statusMessage = "Chat scrolled to latest."
+		} else {
+			return m.updateKey(tea.KeyMsg{Type: tea.KeyEnd})
+		}
+		return m, nil
+	case tea.KeyCtrlPgUp:
+		// EX-386: Ctrl+PgUp — mirror PgUp behaviour.
+		return m.updateKey(tea.KeyMsg{Type: tea.KeyPgUp})
+	case tea.KeyCtrlPgDown:
+		// EX-386: Ctrl+PgDown — mirror PgDown behaviour.
+		return m.updateKey(tea.KeyMsg{Type: tea.KeyPgDown})
+	case tea.KeyShiftUp, tea.KeyShiftDown:
+		// EX-386: Shift+↑/↓ (text selection) — no selection model in this TUI.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Text selection not supported. Use ↑/↓ to scroll messages."
+		} else {
+			m.statusMessage = "Text selection not supported. Use j/k or ↑/↓ to navigate."
+		}
+		return m, nil
+	case tea.KeyShiftLeft, tea.KeyShiftRight:
+		// EX-386: Shift+←/→ (extend selection) — no selection model.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Text selection not supported. Use Ctrl-W to delete word."
+		} else {
+			m.statusMessage = "Text selection not supported. Use ←/→ to navigate."
+		}
+		return m, nil
+	case tea.KeyShiftHome, tea.KeyShiftEnd:
+		// EX-386: Shift+Home/End (select to line boundary) — no selection model.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Text selection not supported. Use Ctrl-U to clear, Ctrl-W to delete word."
+		} else {
+			m.statusMessage = "Text selection not supported. Use Home/End to jump to boundary."
+		}
+		return m, nil
 	case tea.KeyInsert:
 		// EX-385: Insert key — no insert/overwrite mode in this TUI.
 		// Users may press it expecting vim-style insert mode or terminal paste.

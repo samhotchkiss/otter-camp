@@ -10377,3 +10377,65 @@ func TestInsertKeyAndCtrlQHintsEX385(t *testing.T) {
 		}
 	})
 }
+
+// TestModifierArrowKeyHintsEX386 verifies that Ctrl+arrow and Shift+arrow keys
+// show informative hints or delegate correctly instead of silent no-ops (EX-386).
+func TestModifierArrowKeyHintsEX386(t *testing.T) {
+	hintsInChat := []struct {
+		keyType tea.KeyType
+		name    string
+		want    string
+	}{
+		{tea.KeyCtrlUp, "Ctrl+Up", "Ctrl+↑/↓ not supported"},
+		{tea.KeyCtrlDown, "Ctrl+Down", "Ctrl+↑/↓ not supported"},
+		{tea.KeyCtrlLeft, "Ctrl+Left", "Word-jump (Ctrl+←/→) not supported"},
+		{tea.KeyCtrlRight, "Ctrl+Right", "Word-jump (Ctrl+←/→) not supported"},
+		{tea.KeyShiftUp, "Shift+Up", "Text selection not supported"},
+		{tea.KeyShiftDown, "Shift+Down", "Text selection not supported"},
+		{tea.KeyShiftLeft, "Shift+Left", "Text selection not supported"},
+		{tea.KeyShiftRight, "Shift+Right", "Text selection not supported"},
+		{tea.KeyShiftHome, "Shift+Home", "Text selection not supported"},
+		{tea.KeyShiftEnd, "Shift+End", "Text selection not supported"},
+	}
+	for _, tt := range hintsInChat {
+		tt := tt
+		t.Run(tt.name+"-chat-hint", func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = ChatPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tt.keyType})
+			if !strings.Contains(m1.statusMessage, tt.want) {
+				t.Errorf("EX-386: %s in ChatPanel: got %q, want to contain %q", tt.name, m1.statusMessage, tt.want)
+			}
+		})
+		t.Run(tt.name+"-main-hint", func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tt.keyType})
+			if m1.statusMessage == "" {
+				t.Errorf("EX-386: %s in MainPanel: got empty status, want non-empty hint", tt.name)
+			}
+		})
+	}
+	// Ctrl+Home in ChatPanel should scroll to oldest
+	t.Run("CtrlHome-in-ChatPanel-scrolls-oldest", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		// Add a fake message so scroll makes sense
+		m.chatMessages = []ChatMessage{{Role: "user", Content: "hello"}}
+		m.chatScrollOffset = 0
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlHome})
+		if !strings.Contains(m1.statusMessage, "oldest") {
+			t.Errorf("EX-386: Ctrl+Home in ChatPanel: got %q, want 'oldest'", m1.statusMessage)
+		}
+	})
+	// Ctrl+PgUp/PgDn should delegate (not silent no-op)
+	t.Run("CtrlPgUp-delegates", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		// In ViewDashboard with no tasks, PgUp produces "Task board is empty."
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlPgUp})
+		if m1.statusMessage == "" {
+			t.Errorf("EX-386: Ctrl+PgUp in MainPanel: expected non-empty status")
+		}
+	})
+}
