@@ -10966,3 +10966,43 @@ func TestMorePunctuationHintsEX396(t *testing.T) {
 		}
 	})
 }
+
+// TestCommaAndPipeHintsEX397 verifies that ',' and '|' in non-chat panels
+// produce helpful hints instead of silent no-ops (EX-397).
+func TestCommaAndPipeHintsEX397(t *testing.T) {
+	tests := []struct {
+		rune rune
+		want string
+	}{
+		{',', "not bound"},
+		{'|', "not bound"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(fmt.Sprintf("rune-%c-MainPanel", tt.rune), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.rune}})
+			if !strings.Contains(m1.statusMessage, tt.want) {
+				t.Errorf("EX-397: rune %c in MainPanel: got %q, want to contain %q", tt.rune, m1.statusMessage, tt.want)
+			}
+		})
+		t.Run(fmt.Sprintf("rune-%c-SidebarPanel", tt.rune), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = SidebarPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.rune}})
+			if !strings.Contains(m1.statusMessage, tt.want) {
+				t.Errorf("EX-397: rune %c in SidebarPanel: got %q, want to contain %q", tt.rune, m1.statusMessage, tt.want)
+			}
+		})
+	}
+	// In chat panel these runes type into the input
+	t.Run("comma-in-ChatPanel-types", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{','}})
+		if !strings.Contains(m1.chatInput, ",") {
+			t.Errorf("EX-397: ',' in ChatPanel should type into input, got chatInput=%q", m1.chatInput)
+		}
+	})
+}

@@ -3032,6 +3032,18 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.statusMessage = "= is not bound. Use : for commands or ? for key reference."
 			return true, nil
 		}
+	case ',':
+		// EX-397: ',' (vim: repeat find-char backward; also used in many CLIs) — not bound.
+		if m.focus != ChatPanel {
+			m.statusMessage = ", is not bound. Use j/k or ↑/↓ to navigate."
+			return true, nil
+		}
+	case '|':
+		// EX-397: '|' (vim: goto column; shell pipe) — not applicable here.
+		if m.focus != ChatPanel {
+			m.statusMessage = "| is not bound. Use : for commands or ? for key reference."
+			return true, nil
+		}
 	}
 	return false, nil
 }
