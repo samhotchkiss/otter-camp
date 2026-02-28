@@ -2144,6 +2144,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.statusMessage = "At last item in sidebar."
 			} else if node := m.workspace.currentSidebarNode(); node != nil {
 				m.statusMessage = "▸ " + truncate(node.Label, 40)
+			} else {
+				// EX-445: cursor moved but node data is missing — still confirm navigation.
+				m.statusMessage = "▸ (sidebar item)"
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			// EX-268: show item summary on navigation (mirrors EX-266 dashboard pattern).
@@ -2253,6 +2256,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.statusMessage = "At first item in sidebar."
 			} else if node := m.workspace.currentSidebarNode(); node != nil {
 				m.statusMessage = "▸ " + truncate(node.Label, 40)
+			} else {
+				// EX-445: cursor moved but node data is missing — still confirm navigation.
+				m.statusMessage = "▸ (sidebar item)"
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			// EX-268: show item summary on navigation (mirrors EX-266 dashboard pattern).
@@ -2418,6 +2424,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.statusMessage = "At first item in sidebar."
 			} else if node := m.workspace.currentSidebarNode(); node != nil {
 				m.statusMessage = "▸ " + truncate(node.Label, 40)
+			} else {
+				// EX-445: cursor moved but node data is missing — still confirm navigation.
+				m.statusMessage = "▸ (sidebar item)"
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			m.workspace.inboxHome()
@@ -2499,6 +2508,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.statusMessage = "At last item in sidebar."
 			} else if node := m.workspace.currentSidebarNode(); node != nil {
 				m.statusMessage = "▸ " + truncate(node.Label, 40)
+			} else {
+				// EX-445: cursor moved but node data is missing — still confirm navigation.
+				m.statusMessage = "▸ (sidebar item)"
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			m.workspace.inboxEnd()
@@ -3331,6 +3343,9 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			m.statusMessage = "At first item in sidebar."
 		} else if node := m.workspace.currentSidebarNode(); node != nil {
 			m.statusMessage = "▸ " + truncate(node.Label, 40)
+		} else {
+			// EX-445: cursor moved but node data is missing — still confirm navigation.
+			m.statusMessage = "▸ (sidebar item)"
 		}
 		return true, nil
 	case tea.KeyDown:
@@ -3345,6 +3360,9 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			m.statusMessage = "At last item in sidebar."
 		} else if node := m.workspace.currentSidebarNode(); node != nil {
 			m.statusMessage = "▸ " + truncate(node.Label, 40)
+		} else {
+			// EX-445: cursor moved but node data is missing — still confirm navigation.
+			m.statusMessage = "▸ (sidebar item)"
 		}
 		return true, nil
 	case tea.KeyLeft:
@@ -3429,6 +3447,9 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			m.statusMessage = "At first item in sidebar."
 		} else if node := m.workspace.currentSidebarNode(); node != nil {
 			m.statusMessage = "▸ " + truncate(node.Label, 40)
+		} else {
+			// EX-445: cursor moved but node data is missing — still confirm navigation.
+			m.statusMessage = "▸ (sidebar item)"
 		}
 		return true, nil
 	case tea.KeyEnd:
@@ -3444,6 +3465,9 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			m.statusMessage = "At last item in sidebar."
 		} else if node := m.workspace.currentSidebarNode(); node != nil {
 			m.statusMessage = "▸ " + truncate(node.Label, 40)
+		} else {
+			// EX-445: cursor moved but node data is missing — still confirm navigation.
+			m.statusMessage = "▸ (sidebar item)"
 		}
 		return true, nil
 	case tea.KeyPgUp:
@@ -3462,6 +3486,9 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			m.statusMessage = "At first item in sidebar."
 		} else if node := m.workspace.currentSidebarNode(); node != nil {
 			m.statusMessage = "▸ " + truncate(node.Label, 40)
+		} else {
+			// EX-445: cursor moved but node data is missing — still confirm navigation.
+			m.statusMessage = "▸ (sidebar item)"
 		}
 		return true, nil
 	case tea.KeyPgDown:
@@ -3479,6 +3506,9 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			m.statusMessage = "At last item in sidebar."
 		} else if node := m.workspace.currentSidebarNode(); node != nil {
 			m.statusMessage = "▸ " + truncate(node.Label, 40)
+		} else {
+			// EX-445: cursor moved but node data is missing — still confirm navigation.
+			m.statusMessage = "▸ (sidebar item)"
 		}
 		return true, nil
 	case tea.KeyBackspace:

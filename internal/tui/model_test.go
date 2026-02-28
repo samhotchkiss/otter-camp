@@ -12268,3 +12268,47 @@ func TestSidebarHKeyTopLevelNodeFeedbackEX444(t *testing.T) {
 		t.Fatalf("EX-444: ← on top-level inbox node = %q, want %q", got, want)
 	}
 }
+
+// TestSidebarNavNodeLabelFeedbackEX445 verifies that all 10 sidebar navigation
+// keys (j/k/↑/↓/g/G/Home/End/PgUp/PgDn) show the current node label as a
+// status message after moving. The nil-node else branch (EX-445) is present
+// as a defensive fallback but is unreachable because visibleSidebarIDs()
+// already filters nil nodes before the cursor can land on one — so every
+// navigation event should reach the "node != nil" branch and display the label.
+//
+// Default workspace visible sidebar IDs:
+//
+//	cursor 0 → "inbox"          Label: "INBOX"
+//	cursor 1 → "header-chats"   Label: "CHATS"
+//	cursor 2 → generalSidebarNodeID  Label: "Frank / General"
+//	cursor 3 → "header-projects" Label: "PROJECTS"
+func TestSidebarNavNodeLabelFeedbackEX445(t *testing.T) {
+	tests := []struct {
+		name        string
+		startCursor int
+		key         tea.KeyMsg
+		wantStatus  string
+	}{
+		{"j-moves-forward", 0, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, "▸ CHATS"},
+		{"k-moves-backward", 1, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}, "▸ INBOX"},
+		{"down-moves-forward", 0, tea.KeyMsg{Type: tea.KeyDown}, "▸ CHATS"},
+		{"up-moves-backward", 1, tea.KeyMsg{Type: tea.KeyUp}, "▸ INBOX"},
+		{"g-jumps-to-first", 2, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}}, "▸ INBOX"},
+		{"G-jumps-to-last", 0, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}}, "▸ PROJECTS"},
+		{"Home-jumps-to-first", 2, tea.KeyMsg{Type: tea.KeyHome}, "▸ INBOX"},
+		{"End-jumps-to-last", 0, tea.KeyMsg{Type: tea.KeyEnd}, "▸ PROJECTS"},
+		{"PgDn-scrolls-to-last", 0, tea.KeyMsg{Type: tea.KeyPgDown}, "▸ PROJECTS"},
+		{"PgUp-scrolls-to-first", 3, tea.KeyMsg{Type: tea.KeyPgUp}, "▸ INBOX"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = SidebarPanel
+			m.workspace.sidebarCursor = tc.startCursor
+			m = pressKey(m, tc.key)
+			if got := m.StatusMessage(); got != tc.wantStatus {
+				t.Fatalf("EX-445: %s: status = %q, want %q", tc.name, got, tc.wantStatus)
+			}
+		})
+	}
+}
