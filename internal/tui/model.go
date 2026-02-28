@@ -649,7 +649,16 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.chatInput = ""
 				}
 				m.chatHistoryIndex = -1
-				m.statusMessage = "Last word deleted."
+				// EX-425: if Ctrl-W erased the last word of a dequeued message being edited,
+				// clear editingQueued so the next message the user types and sends is not
+				// incorrectly marked Edited=true. Give a distinct message so the user knows
+				// the original queued text (which was dequeued for editing) is now gone.
+				if m.editingQueued && strings.TrimSpace(m.chatInput) == "" {
+					m.editingQueued = false
+					m.statusMessage = "Queued message erased. Type a new message or press Esc to cancel."
+				} else {
+					m.statusMessage = "Last word deleted."
+				}
 			} else {
 				// EX-326: give honest feedback when there is nothing to delete.
 				m.statusMessage = "Nothing to delete."
@@ -3407,6 +3416,13 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		// EX-279: editing (backspace) also exits history navigation mode.
 		if m.chatHistoryIndex >= 0 {
 			m.chatHistoryIndex = -1
+		}
+		// EX-425: if the user has backspaced through the entire dequeued message,
+		// clear editingQueued so the next sent message is not incorrectly marked
+		// Edited=true. No separate status message here — backspace is a character-
+		// level edit gesture (unlike Esc/Ctrl-U which are explicit cancel gestures).
+		if m.editingQueued && strings.TrimSpace(m.chatInput) == "" {
+			m.editingQueued = false
 		}
 		return true, nil
 	case tea.KeyUp:

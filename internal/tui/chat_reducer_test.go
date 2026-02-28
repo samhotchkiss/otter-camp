@@ -544,6 +544,116 @@ func TestEditQueuedThenCancelClearsEditingQueuedEX424(t *testing.T) {
 	})
 }
 
+func TestEditQueuedThenEraseEmptiesClearsEditingQueuedEX425(t *testing.T) {
+	t.Run("backspace-to-empty-clears-editingQueued", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.focus = ChatPanel
+		model.activeSession = "11111111-2222-3333-4444-555555555555"
+		model.activeTurn = false
+		model.queuedMessages = []QueuedMessage{{Text: "x"}}
+
+		// 'e' pops "x" into chatInput.
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+		if model.ChatInput() != "x" {
+			t.Fatalf("chatInput = %q, want %q", model.ChatInput(), "x")
+		}
+		if !model.editingQueued {
+			t.Fatal("editingQueued should be true after 'e'")
+		}
+
+		// One backspace erases the single char — input is now empty.
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyBackspace})
+		if model.ChatInput() != "" {
+			t.Fatalf("chatInput = %q, want empty after backspace", model.ChatInput())
+		}
+		if model.editingQueued {
+			t.Fatal("EX-425: editingQueued should be false after backspace empties input")
+		}
+	})
+
+	t.Run("backspace-partial-keeps-editingQueued", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.focus = ChatPanel
+		model.activeSession = "11111111-2222-3333-4444-555555555555"
+		model.activeTurn = false
+		model.queuedMessages = []QueuedMessage{{Text: "hi"}}
+
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+		// One backspace: "hi" → "h". editingQueued must stay true (input not empty yet).
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyBackspace})
+		if model.ChatInput() != "h" {
+			t.Fatalf("chatInput = %q, want %q after one backspace", model.ChatInput(), "h")
+		}
+		if !model.editingQueued {
+			t.Fatal("EX-425: editingQueued should still be true after partial backspace (non-empty input)")
+		}
+
+		// Second backspace: "h" → "". editingQueued must now be cleared.
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyBackspace})
+		if model.ChatInput() != "" {
+			t.Fatalf("chatInput = %q, want empty after second backspace", model.ChatInput())
+		}
+		if model.editingQueued {
+			t.Fatal("EX-425: editingQueued should be false after backspace empties input")
+		}
+	})
+
+	t.Run("ctrl-w-to-empty-clears-editingQueued", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.focus = ChatPanel
+		model.activeSession = "11111111-2222-3333-4444-555555555555"
+		model.activeTurn = false
+		model.queuedMessages = []QueuedMessage{{Text: "some message"}}
+
+		// 'e' pops "some message" into chatInput.
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+		if !model.editingQueued {
+			t.Fatal("editingQueued should be true after 'e'")
+		}
+
+		// Ctrl-W repeatedly until input is empty.
+		for model.ChatInput() != "" {
+			model = pressKey(model, tea.KeyMsg{Type: tea.KeyCtrlW})
+		}
+		if model.editingQueued {
+			t.Fatal("EX-425: editingQueued should be false after Ctrl-W empties input")
+		}
+		if !strings.Contains(model.statusMessage, "erased") {
+			t.Fatalf("statusMessage = %q, want 'erased' mention when Ctrl-W clears queued edit", model.statusMessage)
+		}
+	})
+
+	t.Run("backspace-to-empty-fresh-send-not-marked-edited", func(t *testing.T) {
+		// After backspacing through a dequeued message, a freshly-typed message
+		// must NOT carry Edited=true.
+		model := NewModel(DefaultState())
+		model.focus = ChatPanel
+		model.activeSession = "11111111-2222-3333-4444-555555555555"
+		model.activeTurn = true
+		model.queuedMessages = []QueuedMessage{{Text: "ok"}}
+
+		// 'e' pops the message.
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+		// Backspace twice to erase "ok".
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyBackspace})
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyBackspace})
+		if model.editingQueued {
+			t.Fatal("EX-425: editingQueued should be false after backspace-to-empty")
+		}
+
+		// Type fresh content and re-queue.
+		model.chatInput = "fresh-content"
+		model.sendOrQueueInput()
+		queue := model.QueueSnapshot()
+		if len(queue) == 0 {
+			t.Fatal("expected 1 queued message after re-send")
+		}
+		if queue[0].Edited {
+			t.Fatal("EX-425: fresh message must NOT be marked Edited after backspace-to-empty cancelled edit")
+		}
+	})
+}
+
 func mustJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)
