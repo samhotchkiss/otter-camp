@@ -7315,3 +7315,38 @@ func TestSidebarSpaceToggleFeedbackEX285(t *testing.T) {
 		t.Errorf("EX-285: Space on collapsed project should say 'Expanded Acme Project — loading tasks…'; got %q", m.statusMessage)
 	}
 }
+
+// TestStepTaskNoContextFeedbackEX286 verifies that j/k in ViewTask when there
+// are 0 open tasks (no project context or all done) gives feedback rather than
+// silently doing nothing (extends EX-202 which covered 1-task case).
+func TestStepTaskNoContextFeedbackEX286(t *testing.T) {
+	// Case 1: ViewTask with no project context (selectedProjectID == "").
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.mainView = ViewTask
+	m.workspace.selectedProjectID = ""
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if m.statusMessage != "No project context. Open a task from a project to use j/k navigation." {
+		t.Errorf("EX-286: j with no project should give context hint; got %q", m.statusMessage)
+	}
+
+	// Case 2: ViewTask with project context but 0 open tasks (all done).
+	m = NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.mainView = ViewTask
+	m.workspace.selectedProjectID = "proj-1"
+	m.workspace.selectedProject = &ProjectDetail{
+		ID:          "proj-1",
+		DisplayName: "Alpha",
+		Tasks:       []SidebarTaskItem{}, // no open tasks (all done)
+		DoneTasks:   []SidebarTaskItem{{ID: "t1", Title: "Task 1", WorkStatus: "done"}},
+	}
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if m.statusMessage != "No open tasks in this project." {
+		t.Errorf("EX-286: k with all-done project should say 'No open tasks in this project.'; got %q", m.statusMessage)
+	}
+}

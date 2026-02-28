@@ -1272,7 +1272,16 @@ func (m *Model) stepTaskInProject(delta int) tea.Cmd {
 	openTasks := m.workspace.openTasksForProject()
 	if len(openTasks) < 2 {
 		// EX-202: give feedback when there's nothing to navigate through.
-		if len(openTasks) == 1 {
+		// EX-286: also give feedback when there are 0 open tasks (no project context
+		// or all tasks done) instead of silently doing nothing.
+		switch len(openTasks) {
+		case 0:
+			if m.workspace.selectedProjectID == "" {
+				m.statusMessage = "No project context. Open a task from a project to use j/k navigation."
+			} else {
+				m.statusMessage = "No open tasks in this project."
+			}
+		case 1:
 			m.statusMessage = "Only one task in this project."
 		}
 		return nil
