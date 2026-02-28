@@ -2130,8 +2130,17 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	}
 	// EX-088: show queue management hint when messages are pending and input is empty.
 	// Placed above the input box so it remains visible even on short panels.
+	// EX-422: omit s·steer from the hint when activeTurn=false (e.g. after
+	// external cancellation) — steer requires an active turn and will show a
+	// "Steer requires an active turn." message if pressed in that state.
 	if len(m.queuedMessages) > 0 && strings.TrimSpace(m.chatInput) == "" {
-		bottomLines = append(bottomLines, styleMuted.Render("  e·edit  ·  s·steer  ·  d·delete queued"))
+		var queueHint string
+		if m.activeTurn {
+			queueHint = "  e·edit  ·  s·steer  ·  d·delete queued"
+		} else {
+			queueHint = "  e·edit  ·  d·delete queued"
+		}
+		bottomLines = append(bottomLines, styleMuted.Render(queueHint))
 	}
 	bottomLines = append(bottomLines, inputLines...)
 	if m.commandMode {

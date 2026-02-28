@@ -416,6 +416,40 @@ func TestTurnCancelledSKeyExplainsSteerEX421(t *testing.T) {
 	}
 }
 
+// EX-422: the queue management hint rendered in the chat panel should show
+// "e·edit · s·steer · d·delete" when activeTurn=true but only
+// "e·edit · d·delete" when activeTurn=false (e.g. after external cancellation).
+// Previously, "s·steer" was always shown even when steer would give an error.
+func TestQueueHintDropsSteerWhenNoActiveTurnEX422(t *testing.T) {
+	t.Run("active-turn-shows-steer", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.focus = ChatPanel
+		model.activeTurn = true
+		model.queuedMessages = []QueuedMessage{{Text: "queued-1"}}
+		panel := model.renderChatPanel(90, 20, true)
+		if !strings.Contains(panel, "s·steer") {
+			t.Fatalf("queue hint missing s·steer when activeTurn=true: %q", panel)
+		}
+	})
+
+	t.Run("inactive-turn-omits-steer", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.focus = ChatPanel
+		model.activeTurn = false
+		model.queuedMessages = []QueuedMessage{{Text: "queued-1"}}
+		panel := model.renderChatPanel(90, 20, true)
+		if strings.Contains(panel, "s·steer") {
+			t.Fatalf("queue hint should not show s·steer when activeTurn=false, got: %q", panel)
+		}
+		if !strings.Contains(panel, "e·edit") {
+			t.Fatalf("queue hint missing e·edit when activeTurn=false: %q", panel)
+		}
+		if !strings.Contains(panel, "d·delete") {
+			t.Fatalf("queue hint missing d·delete when activeTurn=false: %q", panel)
+		}
+	})
+}
+
 func mustJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)
