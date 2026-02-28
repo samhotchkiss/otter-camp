@@ -2115,6 +2115,15 @@ func (m *Model) stepTaskInProject(delta int) tea.Cmd {
 	taskID := openTasks[cursor].ID
 	m.workspace.selectedTaskID = taskID
 	m.workspace.syncSidebarToTask(taskID)
+	// EX-443: show the task you just stepped to, mirroring j/k label feedback in
+	// ViewProject and ViewDashboard. Boundary cases already set statusMessage above;
+	// the happy-path (cursor actually moved) was the only silent branch.
+	t := openTasks[cursor]
+	label := t.Title
+	if t.TaskNumber > 0 {
+		label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+	}
+	m.statusMessage = "▸ " + truncate(label, 40)
 	return loadTaskDetailCmd(taskID, m.runtimeHints)
 }
 

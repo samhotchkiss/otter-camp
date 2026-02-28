@@ -12167,3 +12167,77 @@ func TestInboxNavEmptySummaryFeedbackEX442(t *testing.T) {
 		}
 	})
 }
+
+// TestStepTaskInProjectFeedbackEX443 verifies that stepTaskInProject gives a
+// "▸ <title>" status message when the cursor actually moves to a new task.
+// Previously the happy-path (cursor moved) was the only silent branch —
+// boundary cases ("At first task." / "At last task.") already had feedback.
+func TestStepTaskInProjectFeedbackEX443(t *testing.T) {
+	newModel := func() Model {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewTask
+		m.workspace.selectedProjectID = "p1"
+		m.workspace.selectedTaskID = "t1"
+		m.workspace.projectTaskCursor = 0
+		m.workspace.selectedProject = &ProjectDetail{
+			ID:          "p1",
+			DisplayName: "Project One",
+			Tasks: []SidebarTaskItem{
+				{ID: "t1", Title: "First Task", TaskNumber: 1, WorkStatus: "in_progress"},
+				{ID: "t2", Title: "Second Task", TaskNumber: 2, WorkStatus: "todo"},
+				{ID: "t3", Title: "Third Task", TaskNumber: 3, WorkStatus: "todo"},
+			},
+		}
+		return m
+	}
+
+	t.Run("j-moves-forward-shows-title", func(t *testing.T) {
+		m := newModel()
+		m.workspace.projectTaskCursor = 0
+		m.stepTaskInProject(1) // cursor 0 → 1
+		if got := m.StatusMessage(); got != "▸ OC-2: Second Task" {
+			t.Fatalf("EX-443: j step forward = %q, want %q", got, "▸ OC-2: Second Task")
+		}
+	})
+
+	t.Run("k-moves-backward-shows-title", func(t *testing.T) {
+		m := newModel()
+		m.workspace.projectTaskCursor = 2
+		m.workspace.selectedTaskID = "t3"
+		m.stepTaskInProject(-1) // cursor 2 → 1
+		if got := m.StatusMessage(); got != "▸ OC-2: Second Task" {
+			t.Fatalf("EX-443: k step backward = %q, want %q", got, "▸ OC-2: Second Task")
+		}
+	})
+
+	t.Run("boundary-at-first-still-gives-boundary-msg", func(t *testing.T) {
+		m := newModel()
+		m.workspace.projectTaskCursor = 0
+		m.stepTaskInProject(-1) // already at first
+		if got := m.StatusMessage(); got != "At first task." {
+			t.Fatalf("EX-443: at-first boundary = %q, want %q", got, "At first task.")
+		}
+	})
+
+	t.Run("boundary-at-last-still-gives-boundary-msg", func(t *testing.T) {
+		m := newModel()
+		m.workspace.projectTaskCursor = 2
+		m.workspace.selectedTaskID = "t3"
+		m.stepTaskInProject(1) // already at last
+		if got := m.StatusMessage(); got != "At last task." {
+			t.Fatalf("EX-443: at-last boundary = %q, want %q", got, "At last task.")
+		}
+	})
+
+	t.Run("task-without-number-shows-plain-title", func(t *testing.T) {
+		m := newModel()
+		// Seed a task with TaskNumber = 0 (no number assigned)
+		m.workspace.selectedProject.Tasks[1].TaskNumber = 0
+		m.workspace.projectTaskCursor = 0
+		m.stepTaskInProject(1)
+		if got := m.StatusMessage(); got != "▸ Second Task" {
+			t.Fatalf("EX-443: step to unnumbered task = %q, want %q", got, "▸ Second Task")
+		}
+	})
+}
