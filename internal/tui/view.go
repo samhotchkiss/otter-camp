@@ -1070,9 +1070,10 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 	visibleTaskCount := len(todoTasks) + len(inProgTasks) + len(doneTasks) + len(blockedTasks)
 	if query != "" && visibleTaskCount == 0 && len(activeTasks) > 0 {
 		lines = append(lines, "")
-		lines = append(lines, styleMuted.Render(fmt.Sprintf("  no tasks matching %q", query)))
+		lines = append(lines, styleMuted.Render(fmt.Sprintf("  no tasks matching %q  ·  /·clear filter", query)))
 	} else if len(activeTasks) > 0 {
 		lines = append(lines, "")
+		filterHint := "  ·  " + filterActionHint(query)
 		if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
 			var nameLabel string
 			if task.TaskNumber > 0 {
@@ -1080,9 +1081,9 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 			} else {
 				nameLabel = truncate(task.Title, 42)
 			}
-			lines = append(lines, styleBold.Foreground(colFocus).Render("  "+nameLabel)+styleMuted.Render("  ·  Enter·open  ·  j/k·navigate"))
+			lines = append(lines, styleBold.Foreground(colFocus).Render("  "+nameLabel)+styleMuted.Render("  ·  Enter·open  ·  j/k·navigate"+filterHint))
 		} else {
-			lines = append(lines, styleMuted.Render("  j/k·select task  ·  Enter·open"))
+			lines = append(lines, styleMuted.Render("  j/k·select task  ·  Enter·open"+filterHint))
 		}
 	} else {
 		// EX-219: when no active tasks exist, show a navigation hint so the user
@@ -1138,6 +1139,9 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			}
 			lines = append(lines, lipgloss.NewStyle().Foreground(colFocus).Bold(true).Render(icon+n.Label))
 		}
+		// EX-232: add a footer hint so users know how to select a project and filter.
+		lines = append(lines, "")
+		lines = append(lines, styleMuted.Render("  Enter·select project  ·  "+filterActionHint(query)+"  ·  Esc·dashboard"))
 		return lines
 	}
 
@@ -1396,7 +1400,8 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			}
 		}
 		// Navigation hint row.
-		hintParts := "Enter·open  ·  j/k·navigate  ·  Esc·dashboard"
+		// EX-233: include filterActionHint so users know / clears an active filter.
+		hintParts := "Enter·open  ·  j/k·navigate  ·  " + filterActionHint(query) + "  ·  Esc·dashboard"
 		if proj != nil && proj.DoneCount > 0 {
 			if m.workspace.showDoneTasks {
 				hintParts += "  ·  d·hide done"
@@ -1622,6 +1627,9 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 			lines = append(lines, actions)
 		}
 	}
+	// EX-230: footer hint so users know about refresh and filter even when the inbox has items.
+	lines = append(lines, "")
+	lines = append(lines, styleMuted.Render("  r·refresh  ·  "+filterActionHint(query)+"  ·  Esc·dashboard"))
 
 	return lines
 }

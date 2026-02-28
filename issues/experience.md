@@ -3530,3 +3530,61 @@ The "↑ N older entries hidden" and "no X matching 'Q'" messages already showed
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-230: Inbox view with items has no footer hint
+
+**Observation:** When `renderInboxView` has matching items, the only navigation feedback was the inline action hints shown next to the cursor row (`a·approve  ·  x·reject  ·  f·defer  ·  o·open  ·  j/k·navigate`). There was no global footer hint showing `r·refresh`, `/·filter`, or `Esc·dashboard`. The empty-state branch already had these hints, so the non-empty path was inconsistent.
+
+**Improvement:** Added a footer after the item loop:
+```
+r·refresh  ·  /·filter (or /·clear filter)  ·  Esc·dashboard
+```
+Uses the existing `filterActionHint(query)` helper for consistency with all other views.
+
+**Effort:** Trivial (2 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-231: Dashboard navigation footer missing /·filter hint
+
+**Observation:** The task board footer showed task navigation hints (`Enter·open  ·  j/k·navigate`) but never mentioned the `/` filter key. Users who applied a filter (`/` in the main panel) had no visible hint to clear it, and users who hadn't discovered filtering got no affordance for it.
+
+**Improvement:** Added `filterActionHint(query)` to each branch of the dashboard navigation footer:
+- When a task is selected: `"  ·  Enter·open  ·  j/k·navigate  ·  /·filter"`
+- When no task selected: `"  j/k·select task  ·  Enter·open  ·  /·filter"`
+- When no tasks match a query: `"  no tasks matching 'X'  ·  /·clear filter"` (was missing the clear hint entirely)
+
+**Effort:** Trivial (3 lines touched)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-232: Project list view (no project selected) missing footer hint
+
+**Observation:** When `renderProjectView` is called but no project is selected (`node == nil`), it falls back to listing all project nodes with expand/collapse arrows. This early-return path had no footer hint — users had no indication that Enter selects a project or that Esc returns to the dashboard.
+
+**Improvement:** Added footer before the early return:
+```
+Enter·select project  ·  /·filter (or /·clear filter)  ·  Esc·dashboard
+```
+
+**Effort:** Trivial (2 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-233: Project view footer doesn't mention /·filter
+
+**Observation:** The project view hint row (shown below the open task list) was hardcoded as `"Enter·open  ·  j/k·navigate  ·  Esc·dashboard"` with no filter affordance — inconsistent with Activity, Agents, Merges, and Schedules views which all gained dynamic filter hints in EX-229.
+
+**Improvement:** Replaced the static footer with `filterActionHint(query)` in the hint string. Now shows `/·filter` when no filter is active and `/·clear filter` when a filter narrows the task list.
+
+**Effort:** Trivial (1 line)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

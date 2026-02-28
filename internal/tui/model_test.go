@@ -5524,3 +5524,111 @@ func TestFilterActionHintEX229(t *testing.T) {
 		}
 	})
 }
+
+// TestInboxViewFooterHintEX230 verifies EX-230: the inbox view with items shows
+// a footer hint (r·refresh, /·filter, Esc·dashboard) below the item list.
+func TestInboxViewFooterHintEX230(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.inbox = []inboxItem{
+		{ID: "item-1", TaskID: "task-1", Summary: "Review this PR"},
+	}
+
+	lines := model.renderInboxView(80, 20)
+	rendered := strings.Join(lines, "\n")
+
+	if !strings.Contains(rendered, "r·refresh") {
+		t.Errorf("EX-230: inbox view with items should show 'r·refresh' footer; got:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Esc·dashboard") {
+		t.Errorf("EX-230: inbox view with items should show 'Esc·dashboard' footer; got:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "/·filter") {
+		t.Errorf("EX-230: inbox view with items should show '/·filter' footer; got:\n%s", rendered)
+	}
+}
+
+// TestDashboardFilterHintEX231 verifies EX-231: the dashboard navigation footer
+// includes a filter hint (/·filter or /·clear filter) alongside task navigation.
+func TestDashboardFilterHintEX231(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.tasks["task-1"] = &taskRecord{ID: "task-1", Title: "Implement login", Status: "todo"}
+	model.workspace.taskOrder = []string{"task-1"}
+
+	t.Run("no filter", func(t *testing.T) {
+		model.mainFilter = ""
+		lines := model.renderDashboardView(120, 40)
+		rendered := strings.Join(lines, "\n")
+		if !strings.Contains(rendered, "/·filter") {
+			t.Errorf("EX-231: dashboard footer should show '/·filter' when no filter; got:\n%s", rendered)
+		}
+	})
+
+	t.Run("filter active no match", func(t *testing.T) {
+		model.mainFilter = "zzz"
+		lines := model.renderDashboardView(120, 40)
+		rendered := strings.Join(lines, "\n")
+		if !strings.Contains(rendered, "clear filter") {
+			t.Errorf("EX-231: dashboard 'no tasks matching' should show clear filter hint; got:\n%s", rendered)
+		}
+	})
+}
+
+// TestProjectListFooterHintEX232 verifies EX-232: the project list view (no project
+// selected) shows "Enter·select project · /·filter · Esc·dashboard" footer.
+func TestProjectListFooterHintEX232(t *testing.T) {
+	model := NewModel(DefaultState())
+	// Add a project node to top-level but leave selectedProjectID empty.
+	model.workspace.nodes["project-proj-1"] = &sidebarNode{
+		ID:    "project-proj-1",
+		Kind:  sidebarKindProject,
+		Label: "Alpha Project",
+	}
+	model.workspace.topLevel = []string{"project-proj-1"}
+	model.workspace.selectedProjectID = ""
+
+	lines := model.renderProjectView(80, 20)
+	rendered := strings.Join(lines, "\n")
+
+	if !strings.Contains(rendered, "Enter·select project") {
+		t.Errorf("EX-232: project list should show 'Enter·select project' hint; got:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Esc·dashboard") {
+		t.Errorf("EX-232: project list should show 'Esc·dashboard' hint; got:\n%s", rendered)
+	}
+}
+
+// TestProjectViewFilterHintEX233 verifies EX-233: the project view footer uses
+// filterActionHint to show "/·filter" or "/·clear filter" based on active filter.
+func TestProjectViewFilterHintEX233(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.selectedProjectID = "proj-1"
+	model.workspace.nodes["project-proj-1"] = &sidebarNode{
+		ID:    "project-proj-1",
+		Kind:  sidebarKindProject,
+		Label: "Alpha Project",
+	}
+	model.workspace.selectedProject = &ProjectDetail{
+		DisplayName: "Alpha Project",
+		Tasks: []SidebarTaskItem{
+			{ID: "task-1", Title: "Build something", WorkStatus: "todo"},
+		},
+	}
+
+	t.Run("no filter", func(t *testing.T) {
+		model.mainFilter = ""
+		lines := model.renderProjectView(80, 30)
+		rendered := strings.Join(lines, "\n")
+		if !strings.Contains(rendered, "/·filter") {
+			t.Errorf("EX-233: project view footer should show '/·filter' when no filter; got:\n%s", rendered)
+		}
+	})
+
+	t.Run("filter active", func(t *testing.T) {
+		model.mainFilter = "Build"
+		lines := model.renderProjectView(80, 30)
+		rendered := strings.Join(lines, "\n")
+		if !strings.Contains(rendered, "clear filter") {
+			t.Errorf("EX-233: project view footer should show 'clear filter' when filter active; got:\n%s", rendered)
+		}
+	})
+}
