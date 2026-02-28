@@ -1437,7 +1437,35 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		return true, nil
 	case 'h':
 		if m.focus == SidebarPanel {
+			node := m.workspace.currentSidebarNode()
+			// EX-282: capture state before collapseSidebarNode mutates the node.
+			var nodeLabel string
+			var nodeExpanded bool
+			var nodeKind sidebarKind
+			var nodeParentID string
+			if node != nil {
+				nodeLabel = node.Label
+				nodeExpanded = node.Expanded
+				nodeKind = node.Kind
+				nodeParentID = node.ParentID
+			}
 			m.workspace.collapseSidebarNode()
+			if node != nil {
+				switch nodeKind {
+				case sidebarKindProject:
+					if nodeExpanded {
+						m.statusMessage = "Collapsed " + truncate(nodeLabel, 30) + "."
+					} else if nodeParentID != "" {
+						m.statusMessage = "Moved to parent."
+					}
+				case sidebarKindHeader:
+					m.statusMessage = "Collapsed " + truncate(nodeLabel, 30) + "."
+				default:
+					if nodeParentID != "" {
+						m.statusMessage = "Moved to parent."
+					}
+				}
+			}
 			return true, nil
 		}
 		// EX-217: give feedback instead of silent no-op when sidebar not focused.
@@ -1447,8 +1475,15 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		if m.focus == SidebarPanel {
 			node := m.workspace.currentSidebarNode()
 			m.workspace.expandSidebarNode()
-			if node != nil && node.Kind == sidebarKindProject {
-				return true, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true)
+			// EX-282: give feedback about what was expanded.
+			if node != nil {
+				if node.Kind == sidebarKindProject {
+					m.statusMessage = "Expanded " + truncate(node.Label, 30) + " — loading tasks…"
+					return true, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true)
+				}
+				if node.Kind == sidebarKindHeader {
+					m.statusMessage = "Expanded " + truncate(node.Label, 30) + "."
+				}
 			}
 			return true, nil
 		}
@@ -1845,13 +1880,51 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		return true, nil
 	case tea.KeyLeft:
+		// EX-282: ← mirrors h — give same collapse feedback.
+		// Capture state before collapseSidebarNode mutates the node pointer.
+		node := m.workspace.currentSidebarNode()
+		var nodeLabel string
+		var nodeExpanded bool
+		var nodeKind sidebarKind
+		var nodeParentID string
+		if node != nil {
+			nodeLabel = node.Label
+			nodeExpanded = node.Expanded
+			nodeKind = node.Kind
+			nodeParentID = node.ParentID
+		}
 		m.workspace.collapseSidebarNode()
+		if node != nil {
+			switch nodeKind {
+			case sidebarKindProject:
+				if nodeExpanded {
+					m.statusMessage = "Collapsed " + truncate(nodeLabel, 30) + "."
+				} else if nodeParentID != "" {
+					m.statusMessage = "Moved to parent."
+				}
+			case sidebarKindHeader:
+				m.statusMessage = "Collapsed " + truncate(nodeLabel, 30) + "."
+			default:
+				if nodeParentID != "" {
+					m.statusMessage = "Moved to parent."
+				}
+			}
+		}
 		return true, nil
 	case tea.KeyRight:
+		// EX-282: → mirrors l — give same expand feedback.
 		node := m.workspace.currentSidebarNode()
-		if node != nil && node.Kind == sidebarKindProject {
-			m.workspace.expandSidebarNode()
-			return true, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true)
+		if node != nil {
+			if node.Kind == sidebarKindProject {
+				m.workspace.expandSidebarNode()
+				m.statusMessage = "Expanded " + truncate(node.Label, 30) + " — loading tasks…"
+				return true, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true)
+			}
+			if node.Kind == sidebarKindHeader {
+				m.workspace.expandSidebarNode()
+				m.statusMessage = "Expanded " + truncate(node.Label, 30) + "."
+				return true, nil
+			}
 		}
 		m.workspace.expandSidebarNode()
 		return true, nil

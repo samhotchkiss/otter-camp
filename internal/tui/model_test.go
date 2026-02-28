@@ -7165,3 +7165,59 @@ func TestSidebarJKBoundaryFeedbackEX281(t *testing.T) {
 		t.Errorf("EX-281: ↑ at first should give boundary; got %q", m.statusMessage)
 	}
 }
+
+// TestSidebarHLCollapseFeedbackEX282 verifies that h/l and ←/→ in the sidebar
+// show status feedback on collapse/expand, rather than silently acting.
+func TestSidebarHLCollapseFeedbackEX282(t *testing.T) {
+	setup := func() Model {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = SidebarPanel
+		m.workspace.topLevel = []string{"header-projects", "proj-a"}
+		m.workspace.nodes = map[string]*sidebarNode{
+			"header-projects": {ID: "header-projects", Label: "PROJECTS", Kind: sidebarKindHeader},
+			"proj-a":          {ID: "proj-a", Label: "Acme Project", Kind: sidebarKindProject, ProjectID: "pa", Expanded: true},
+		}
+		m.workspace.sectionCollapsed = map[sidebarSectionID]bool{}
+		return m
+	}
+
+	// h/l on header node (cursor=0).
+	m := setup()
+	m.workspace.sidebarCursor = 0
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if m.statusMessage != "Expanded PROJECTS." {
+		t.Errorf("EX-282: l on header should say 'Expanded PROJECTS.'; got %q", m.statusMessage)
+	}
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if m.statusMessage != "Collapsed PROJECTS." {
+		t.Errorf("EX-282: h on header should say 'Collapsed PROJECTS.'; got %q", m.statusMessage)
+	}
+
+	// h/l on project node — start fresh so header section is NOT collapsed (proj-a visible).
+	m = setup()
+	m.workspace.sidebarCursor = 1 // proj-a is visible at index 1
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if m.statusMessage != "Expanded Acme Project — loading tasks…" {
+		t.Errorf("EX-282: l on project should say 'Expanded Acme Project — loading tasks…'; got %q", m.statusMessage)
+	}
+	m.workspace.nodes["proj-a"].Expanded = true // re-expand for h test
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if m.statusMessage != "Collapsed Acme Project." {
+		t.Errorf("EX-282: h on expanded project should say 'Collapsed Acme Project.'; got %q", m.statusMessage)
+	}
+
+	// Arrow keys get same feedback — use a fresh model so section is visible.
+	m = setup()
+	m.workspace.sidebarCursor = 0 // header
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRight})
+	if m.statusMessage != "Expanded PROJECTS." {
+		t.Errorf("EX-282: → on header should say 'Expanded PROJECTS.'; got %q", m.statusMessage)
+	}
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyLeft})
+	if m.statusMessage != "Collapsed PROJECTS." {
+		t.Errorf("EX-282: ← on header should say 'Collapsed PROJECTS.'; got %q", m.statusMessage)
+	}
+}
