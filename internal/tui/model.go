@@ -6331,7 +6331,17 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			m.workspace.activity = appendActivity(m.workspace.activity, "active session closed")
 			// EX-167: also set status bar so users notice the session ended,
 			// not just the activity log which they might not be watching.
-			m.statusMessage = "Active session closed — select another session to continue."
+			// EX-411: if a turn was in-progress when the session closed, clear
+			// the turn state so the user isn't stuck in "waiting for response"
+			// with a dead session — the response will never arrive.
+			if m.activeTurn {
+				m.activeTurn = false
+				m.activeTurnSessionID = ""
+				m.queuedMessages = nil
+				m.statusMessage = "Session closed while turn active — select another session to continue."
+			} else {
+				m.statusMessage = "Active session closed — select another session to continue."
+			}
 		}
 		return loadSidebarDataCmd(m.runtimeHints)
 	}

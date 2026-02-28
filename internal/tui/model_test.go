@@ -3099,6 +3099,36 @@ func TestWorkerUnresponsiveAddsActivityEntry(t *testing.T) {
 	}
 }
 
+// EX-411: when the active session is closed by the server while a turn is in
+// progress, activeTurn should be cleared so the user isn't stuck in "waiting
+// for response" state with a dead session.
+func TestSessionClosedClearsActiveTurnEX411(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.activeSession = "session-org-test"
+	model.activeTurnSessionID = "" // sessionMatchesActive always true
+	model.activeTurn = true
+	model.queuedMessages = []QueuedMessage{{Text: "pending"}}
+
+	rawPayload, _ := json.Marshal(map[string]any{
+		"session_id": "session-org-test",
+	})
+	updated, _ := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "chat.session.closed",
+		Payload:   rawPayload,
+	}})
+	m := updated.(Model)
+
+	if m.ActiveTurn() {
+		t.Fatal("activeTurn should be false after session closed while turn active")
+	}
+	if m.QueueDepth() != 0 {
+		t.Fatalf("queue depth = %d, want 0 after session closed", m.QueueDepth())
+	}
+	if !strings.Contains(m.statusMessage, "closed while turn active") {
+		t.Fatalf("statusMessage = %q, want turn-cleared message", m.statusMessage)
+	}
+}
+
 // EX-160: Inbox approve/reject/defer were local-only; pressing 'a', 'x', 'f'
 // must also return a tea.Cmd that calls ActOnInboxItem with the correct item ID.
 func TestInboxApproveIssuesServerAPICall(t *testing.T) {
