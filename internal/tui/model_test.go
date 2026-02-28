@@ -8758,3 +8758,21 @@ func TestCtrlUWEmptyCommandAndSearchEX327330(t *testing.T) {
 		t.Errorf("EX-330: Ctrl-W with empty filter should give feedback; got %q", m4.statusMessage)
 	}
 }
+
+// TestInboxActionsNoTaskEX331 verifies that pressing 'a', 'x', or 'f' in the
+// task view when no task is loaded gives honest feedback instead of silently
+// doing nothing (EX-331).
+func TestInboxActionsNoTaskEX331(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewTask)
+	m.workspace.selectedTaskID = "" // no task selected
+
+	for _, r := range []rune{'a', 'x', 'f'} {
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		if m1.statusMessage != "No task loaded. Use Enter on a task first." {
+			t.Errorf("EX-331: %q in ViewTask with no task should say feedback; got %q", string(r), m1.statusMessage)
+		}
+	}
+}

@@ -2161,6 +2161,10 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				// EX-196: task doesn't require review — let user know.
 				m.statusMessage = "This task doesn't require review."
 				return true, nil
+			} else {
+				// EX-331: no task loaded yet in task view — give honest feedback.
+				m.statusMessage = "No task loaded. Use Enter on a task first."
+				return true, nil
 			}
 		}
 	case 'x':
@@ -2188,6 +2192,10 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				// EX-196: task doesn't require review.
 				m.statusMessage = "This task doesn't require review."
 				return true, nil
+			} else {
+				// EX-331: no task loaded yet.
+				m.statusMessage = "No task loaded. Use Enter on a task first."
+				return true, nil
 			}
 		}
 	case 'f':
@@ -2214,6 +2222,10 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			} else if task != nil {
 				// EX-196: task doesn't require review.
 				m.statusMessage = "This task doesn't require review."
+				return true, nil
+			} else {
+				// EX-331: no task loaded yet.
+				m.statusMessage = "No task loaded. Use Enter on a task first."
 				return true, nil
 			}
 		}
