@@ -5107,3 +5107,34 @@ func TestSearchNotAllowedInHelpView(t *testing.T) {
 		t.Errorf("EX-214: expected 'not available' in status message, got %q", model.statusMessage)
 	}
 }
+
+// TestActivityHintFooterVisibleWhenFull verifies EX-215: the hint footer
+// (r·refresh · /·filter · Esc·dashboard) must be visible even when the
+// activity list fills the maxLines budget, and older entries should show a
+// "↑ N older entries hidden" indicator.
+func TestActivityHintFooterVisibleWhenFull(t *testing.T) {
+	const maxLines = 8 // small window to force truncation
+
+	model := NewModel(DefaultState())
+	// Seed enough entries to overflow the cap (maxLines-3 = 5 entries max).
+	for i := 0; i < 20; i++ {
+		model.workspace.activity = append(model.workspace.activity,
+			fmt.Sprintf("event number %d happened", i+1))
+	}
+
+	lines := model.renderActivityView(80, maxLines)
+	rendered := strings.Join(lines, "\n")
+
+	// Hint footer must be present.
+	if !strings.Contains(rendered, "r·refresh") {
+		t.Errorf("EX-215: hint footer missing from full activity view:\n%s", rendered)
+	}
+	// Older-entries indicator must appear.
+	if !strings.Contains(rendered, "older entries hidden") {
+		t.Errorf("EX-215: 'older entries hidden' indicator missing when activity truncated:\n%s", rendered)
+	}
+	// Total line count must not exceed maxLines.
+	if len(lines) > maxLines {
+		t.Errorf("EX-215: renderActivityView returned %d lines, want ≤ %d", len(lines), maxLines)
+	}
+}

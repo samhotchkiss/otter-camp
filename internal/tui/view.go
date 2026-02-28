@@ -1647,9 +1647,27 @@ func (m Model) renderActivityView(width, maxLines int) []string {
 			filteredActivity = append(filteredActivity, entry)
 		}
 	}
+	// EX-215: reserve lines for the hint footer so it's always visible.
+	// Without indicator: 1(blank) + entries + 1(sep) + 1(hint) = entries+3 → cap at maxLines-3
+	// With indicator:    1(blank) + 1(indicator) + entries + 1(sep) + 1(hint) = entries+4 → cap at maxLines-4
+	entryCap := maxLines - 3
+	if entryCap < 1 {
+		entryCap = 1
+	}
+	// If truncation will be needed, tighten cap to also fit the "↑ N above" indicator.
+	if len(filteredActivity) > entryCap {
+		entryCap = maxLines - 4
+		if entryCap < 1 {
+			entryCap = 1
+		}
+	}
 	start := 0
-	if len(filteredActivity) > maxLines {
-		start = len(filteredActivity) - maxLines
+	if len(filteredActivity) > entryCap {
+		start = len(filteredActivity) - entryCap
+	}
+	// Show "↑ N older entries hidden" indicator when activity is truncated.
+	if start > 0 {
+		lines = append(lines, styleMuted.Render(fmt.Sprintf("  ↑ %d older entries hidden  (/ to filter)", start)))
 	}
 	for _, entry := range filteredActivity[start:] {
 		icon := activityIcon(entry)
@@ -1682,8 +1700,16 @@ func (m Model) renderAgentsView(width, maxLines int) []string {
 	}
 	// EX-110: apply search filter so agents view responds to mainFilter like all other views.
 	query := normalizedFilterQuery(m.mainFilter)
+	// EX-215: reserve 3 lines for hint footer so it's always visible when list is full.
+	itemCap := maxLines - 3
+	if itemCap < 1 {
+		itemCap = 1
+	}
 	matched := 0
 	for _, agent := range m.workspace.agents {
+		if len(lines)-1 >= itemCap { // lines[0] is blank, so content starts at index 1
+			break
+		}
 		parts := strings.SplitN(agent, "=", 2)
 		name, status := agent, ""
 		if len(parts) == 2 {
@@ -1722,7 +1748,15 @@ func (m Model) renderMergesView(width, maxLines int) []string {
 	lines = append(lines, "")
 	// EX-113: apply filter to merges and schedules views.
 	query := normalizedFilterQuery(m.mainFilter)
+	// EX-215: reserve 3 lines for hint footer so it's always visible when list is full.
+	itemCap := maxLines - 3
+	if itemCap < 1 {
+		itemCap = 1
+	}
 	for _, pr := range m.workspace.mergeQueue {
+		if len(lines)-1 >= itemCap {
+			break
+		}
 		if !matchesFilter(pr, query) {
 			continue
 		}
@@ -1746,7 +1780,15 @@ func (m Model) renderSchedulesView(width, maxLines int) []string {
 	lines = append(lines, "")
 	// EX-113: apply filter to schedules view.
 	query := normalizedFilterQuery(m.mainFilter)
+	// EX-215: reserve 3 lines for hint footer so it's always visible when list is full.
+	itemCap := maxLines - 3
+	if itemCap < 1 {
+		itemCap = 1
+	}
 	for _, s := range m.workspace.schedules {
+		if len(lines)-1 >= itemCap {
+			break
+		}
 		if !matchesFilter(s, query) {
 			continue
 		}
