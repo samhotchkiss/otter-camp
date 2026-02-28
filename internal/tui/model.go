@@ -2057,6 +2057,13 @@ func (m *Model) handleEnterKey() tea.Cmd {
 			// No project loaded yet — transition to task view anyway (data may still be loading).
 			m.workspace.setMainView(ViewTask)
 			m.statusMessage = "Opened task detail."
+			// EX-489: if a task was already selected (e.g. from a previous selection),
+			// fire loadTaskDetailCmd so the ViewTask panel shows content instead of a
+			// blank panel. Without this, Enter in ViewProject while detail is still
+			// loading (selectedProject==nil) silently navigated to an empty task view.
+			if m.workspace.selectedTaskID != "" {
+				return loadTaskDetailCmd(m.workspace.selectedTaskID, m.runtimeHints)
+			}
 			return nil
 		}
 		if m.workspace.mainView == ViewDashboard {

@@ -5518,6 +5518,39 @@ func TestProjectEnterWithNoOpenTasksShowsFeedback(t *testing.T) {
 	}
 }
 
+// TestEnterInViewProjectNoDetailLoadsTaskDetailEX489 verifies EX-489: pressing
+// Enter in ViewProject while selectedProject==nil (detail still loading) but
+// selectedTaskID is set fires loadTaskDetailCmd so the ViewTask panel shows
+// content instead of a blank panel.
+func TestEnterInViewProjectNoDetailLoadsTaskDetailEX489(t *testing.T) {
+	taskID := "task-489"
+	detailCalledWith := ""
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			detailCalledWith = id
+			return &TaskDetailItem{ID: id, Title: "EX-489 task"}, nil
+		},
+	})
+	m.focus = MainPanel
+	m.workspace.mainView = ViewProject
+	m.workspace.selectedProject = nil // detail not loaded yet
+	m.workspace.selectedTaskID = taskID
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m2 := updated.(Model)
+
+	if m2.workspace.mainView != ViewTask {
+		t.Fatalf("EX-489: mainView = %v, want ViewTask", m2.workspace.mainView)
+	}
+	if cmd == nil {
+		t.Fatal("EX-489: Enter in ViewProject with selectedTaskID but no selectedProject returned nil cmd")
+	}
+	runNonTimerCmds(cmd)
+	if detailCalledWith != taskID {
+		t.Fatalf("EX-489: LoadTaskDetail called with %q, want %q", detailCalledWith, taskID)
+	}
+}
+
 // TestInboxEnterWhenEmptyShowsFeedback verifies EX-192: pressing Enter on an
 // empty inbox sets a status message and returns nil (no silent no-op).
 func TestInboxEnterWhenEmptyShowsFeedback(t *testing.T) {
