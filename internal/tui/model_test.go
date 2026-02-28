@@ -8156,6 +8156,45 @@ func TestJumpToTaskByTitleLoadsDetailEX481(t *testing.T) {
 	}
 }
 
+// TestJumpToProjectByNameLoadsDetailEX482 verifies EX-482: jumpToProjectByName
+// fires loadProjectDetailCmd in addition to loadProjectTasksCmd so description,
+// DoneCount, and DoneTasks are populated immediately (not just on the next r-key
+// press). Mirrors sidebar project selection which batches both commands.
+func TestJumpToProjectByNameLoadsDetailEX482(t *testing.T) {
+	projID := "proj-482"
+	detailCalledWith := ""
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjectDetail: func(_ context.Context, id string) (*ProjectDetail, error) {
+			detailCalledWith = id
+			return &ProjectDetail{ID: id, DisplayName: "Beta Project"}, nil
+		},
+	})
+	m.workspace.rebuildSidebar("", nil,
+		[]SidebarProjectItem{{ID: projID, DisplayName: "Beta Project"}})
+	m.focus = MainPanel
+	m.workspace.mainView = ViewDashboard
+
+	cmd := m.jumpToProjectByName("Beta")
+
+	if m.workspace.mainView != ViewProject {
+		t.Fatalf("EX-482: mainView = %v, want ViewProject", m.workspace.mainView)
+	}
+	if m.workspace.selectedProjectID != projID {
+		t.Fatalf("EX-482: selectedProjectID = %q, want %q", m.workspace.selectedProjectID, projID)
+	}
+	if cmd == nil {
+		t.Fatal("EX-482: jumpToProjectByName returned nil cmd — expected batched cmds")
+	}
+	// Execute the batch; tea.Batch returns a func() []tea.Msg (the returned cmd
+	// is a func that returns a []tea.Msg when called in a Batch). Execute the
+	// inner cmds by driving a pressMsg so LoadProjectDetail is actually invoked.
+	m2, _ := m.Update(cmd())
+	_ = m2
+	if detailCalledWith != projID {
+		t.Fatalf("EX-482: LoadProjectDetail called with %q, want %q", detailCalledWith, projID)
+	}
+}
+
 // TestHelpCommandIdempotencyEX468 verifies EX-468: :help/:palette when already
 // in ViewHelp says "Help: scrolled to top." (and resets scroll) rather than
 // re-announcing "Keybinding reference." as if opening fresh — mirrors EX-467 for :man.

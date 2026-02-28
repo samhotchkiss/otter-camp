@@ -5748,7 +5748,17 @@ func (m *Model) jumpToProjectByName(name string) tea.Cmd {
 			} else {
 				m.statusMessage = "Project: " + node.Label
 			}
-			return loadProjectTasksCmd(node.ProjectID, m.runtimeHints, false)
+			// EX-482: load project detail in addition to tasks so description,
+			// DoneCount, and DoneTasks are populated immediately. Without this,
+			// `:project <name>` showed an incomplete project view whenever the
+			// project had not been previously detail-fetched. Mirrors sidebar
+			// project selection and the tui.command navigate project handler,
+			// both of which batch tasks + detail.
+			cmds := []tea.Cmd{loadProjectTasksCmd(node.ProjectID, m.runtimeHints, false)}
+			if m.runtimeHints.LoadProjectDetail != nil {
+				cmds = append(cmds, loadProjectDetailCmd(node.ProjectID, m.runtimeHints))
+			}
+			return tea.Batch(cmds...)
 		}
 	}
 	m.statusMessage = fmt.Sprintf("Project %q not found.", name)
