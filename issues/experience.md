@@ -3407,3 +3407,42 @@ Also renamed `:frank` entry to `:frank / :general` to surface the `:general` com
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-218: Empty messages render a floating header with no body
+
+**Observation:** In `renderChatMessages`, every message had its role header (name + divider line) appended unconditionally, and content/tool calls were rendered in a separate block below. When a message had an empty `Content` string AND no `ToolCalls`, the header and divider were appended but no body followed — creating an orphaned header floating between two other messages.
+
+This can happen with certain internal system messages or race conditions where a message is stored before its content arrives.
+
+**Improvement:** Added a guard at the top of the message rendering loop:
+```go
+if strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0 {
+    continue
+}
+```
+Messages with nothing to display are skipped entirely, preserving clean rendering.
+
+**Effort:** Trivial (3 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-221: Tool calls with empty Name field render as "⚙  (pending)"
+
+**Observation:** In `renderChatMessages`, tool call lines were built as `"  ▶ ⚙ " + tc.Name + " (status)"`. When `tc.Name` is empty (e.g., due to a parsing race or API quirk), the line became `"  ▶ ⚙  (pending)"` — visually broken with a double space and no identifier.
+
+**Improvement:** Added a fallback before building the tool call line:
+```go
+toolName := tc.Name
+if strings.TrimSpace(toolName) == "" {
+    toolName = fmt.Sprintf("tool[%d]", i+1)
+}
+```
+Unnamed calls now render as `"⚙ tool[1] (pending)"` rather than `"⚙  (pending)"`.
+
+**Effort:** Trivial (4 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

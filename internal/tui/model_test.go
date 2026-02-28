@@ -5262,3 +5262,54 @@ func TestHelpViewShowsDynamicCommandsEX224(t *testing.T) {
 		}
 	}
 }
+
+// TestEmptyMessagesSkippedEX218 verifies EX-218: messages with no content and
+// no tool calls are silently skipped to avoid rendering a floating header with
+// no body text beneath it.
+func TestEmptyMessagesSkippedEX218(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.chatMessages = []ChatMessage{
+		{ID: "m1", Role: "user", Content: "hello"},
+		{ID: "m2", Role: "assistant", Content: ""}, // no content, no tool calls — should be skipped
+		{ID: "m3", Role: "user", Content: "world"},
+	}
+	lines := model.renderChatMessages(80)
+	rendered := strings.Join(lines, "\n")
+
+	// The empty assistant message should not produce a header/divider.
+	// We expect exactly two message headers (user "You" × 2, no assistant header).
+	count := strings.Count(rendered, "You")
+	if count < 2 {
+		t.Errorf("EX-218: expected 2 user headers, got %d; rendered:\n%s", count, rendered)
+	}
+	// No assistant header since that message had no content.
+	if strings.Contains(rendered, model.assistantLabel()) {
+		t.Errorf("EX-218: empty assistant message produced a header; rendered:\n%s", rendered)
+	}
+}
+
+// TestToolCallMissingNameFallbackEX221 verifies EX-221: when a tool call has
+// an empty Name field, the TUI substitutes "tool[N]" instead of showing a bare
+// "⚙  (pending)" line.
+func TestToolCallMissingNameFallbackEX221(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.chatMessages = []ChatMessage{
+		{
+			ID:   "m1",
+			Role: "assistant",
+			ToolCalls: []ToolCallStatus{
+				{Name: "", Status: "pending"},
+				{Name: "file_read", Status: "success"},
+			},
+		},
+	}
+	lines := model.renderChatMessages(80)
+	rendered := strings.Join(lines, "\n")
+
+	if !strings.Contains(rendered, "tool[1]") {
+		t.Errorf("EX-221: missing fallback 'tool[1]' for empty tool name; rendered:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "file_read") {
+		t.Errorf("EX-221: 'file_read' tool call not rendered; rendered:\n%s", rendered)
+	}
+}

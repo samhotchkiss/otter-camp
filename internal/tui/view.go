@@ -2194,6 +2194,12 @@ func (m Model) renderChatMessages(width int) []string {
 
 	var lines []string
 	for _, msg := range m.chatMessages {
+		// EX-218: skip messages that have no displayable content — empty content
+		// and no tool calls — to avoid rendering a floating header with no body.
+		if strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0 {
+			continue
+		}
+
 		// Role label
 		var roleStr lipgloss.Style
 		var roleLabel string
@@ -2265,7 +2271,12 @@ func (m Model) renderChatMessages(width int) []string {
 			if expanded {
 				indicator = "▼"
 			}
-			tcLine := "  " + indicator + " ⚙ " + tc.Name + " (" + statusStyle.Render(statusLabel) + ")"
+			// EX-221: fall back to positional label when tool name is missing.
+		toolName := tc.Name
+		if strings.TrimSpace(toolName) == "" {
+			toolName = fmt.Sprintf("tool[%d]", i+1)
+		}
+		tcLine := "  " + indicator + " ⚙ " + toolName + " (" + statusStyle.Render(statusLabel) + ")"
 			lines = append(lines, styleMuted.Render(tcLine))
 			if expanded {
 				result := strings.TrimSpace(tc.Result)
