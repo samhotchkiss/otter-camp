@@ -1137,6 +1137,11 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			cmd := m.handleEnterKey()
 			return m, cmd
 		}
+		// EX-353: Backspace in MainPanel mirrors Esc (common "go back" gesture in TUIs).
+		// This makes navigation consistent with file managers and web browsers.
+		if m.focus == MainPanel && key.Type == tea.KeyBackspace {
+			return m, m.handleEscapeKey()
+		}
 		return m, nil
 	case tea.KeySpace:
 		if m.focus == ChatPanel {

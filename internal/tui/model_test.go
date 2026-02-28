@@ -9238,3 +9238,31 @@ func TestBracketsAndNumbersInChatCompositionEX351352(t *testing.T) {
 		t.Errorf("EX-352: '1' with empty chat input should focus sidebar; got %v", ms1.focus)
 	}
 }
+
+// TestBackspaceInMainPanelEX353 verifies that Backspace in the main panel
+// mirrors Esc (go back), providing a natural navigation gesture (EX-353).
+func TestBackspaceInMainPanelEX353(t *testing.T) {
+	// Backspace in ViewTask with a project context goes back to ViewProject.
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewTask)
+	m.workspace.selectedProjectID = "proj-1"
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyBackspace})
+	if m1.workspace.mainView != ViewProject {
+		t.Errorf("EX-353: Backspace in ViewTask should go to ViewProject; got %v", m1.workspace.mainView)
+	}
+	if m1.statusMessage != "Back to project." {
+		t.Errorf("EX-353: Backspace in ViewTask should say 'Back to project.'; got %q", m1.statusMessage)
+	}
+
+	// Backspace when already on dashboard gives "Already on dashboard." feedback.
+	md := NewModel(DefaultState())
+	md.width, md.height = 220, 40
+	md.focus = MainPanel
+	md.workspace.setMainView(ViewDashboard)
+	md1 := pressKey(md, tea.KeyMsg{Type: tea.KeyBackspace})
+	if md1.statusMessage != "Already on dashboard." {
+		t.Errorf("EX-353: Backspace when already on dashboard should say 'Already on dashboard.'; got %q", md1.statusMessage)
+	}
+}
