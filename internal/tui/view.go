@@ -1915,7 +1915,7 @@ func (m Model) renderSchedulesView(width, maxLines int) []string {
 // helpViewLineCount is the total number of content lines in renderHelpView before
 // scroll clamping. Must stay in sync with the lines slice built inside that function.
 // Verified by TestHelpViewLineCountMatchesEX255; update when adding/removing entries.
-const helpViewLineCount = 66
+const helpViewLineCount = 68
 
 func (m Model) renderHelpView(width, maxLines int) []string {
 	header := func(s string) string {
@@ -1997,6 +1997,8 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key(":sidebar <action>", "sidebar: up|down|home|end|expand|collapse|select"),
 		key(":inbox <action>", "inbox: approve|reject|defer|open"),
 		key(":tour dismiss", "dismiss the tour overlay"),
+		key(":reconnect", "manually trigger SSE reconnect and sidebar refresh"),
+		key(":status / :debug", "show conn/scope/session/turn diagnostic in status bar"),
 		key(":help", "open keybinding reference (same as ?)"),
 		key(":quit", "quit OtterCamp"),
 		"",
