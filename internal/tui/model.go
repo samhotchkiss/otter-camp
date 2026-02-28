@@ -1435,6 +1435,45 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Ctrl-Y: paste works in chat input (3 or Tab to focus chat)."
 		}
 		return m, nil
+	case tea.KeyCtrlL:
+		// EX-383: Ctrl-L (readline: clear screen) — screen is managed by the TUI, not the shell.
+		// Pressing it in a terminal TUI does nothing useful; data refreshes via r.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Ctrl-L: screen redraw is automatic. Use r to refresh data."
+		} else {
+			m.statusMessage = "Ctrl-L: screen redraw is automatic. Use r to refresh, Ctrl-C to quit."
+		}
+		return m, nil
+	case tea.KeyCtrlT:
+		// EX-383: Ctrl-T (readline: transpose chars) — no cursor concept in chat input.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Ctrl-T: transpose not supported. Use Backspace + retype to fix."
+		} else {
+			m.statusMessage = "Ctrl-T: transpose not supported. Type in chat (3 or Tab) to edit."
+		}
+		return m, nil
+	case tea.KeyCtrlV:
+		// EX-383: Ctrl-V (Windows paste / readline: verbatim insert) — not supported.
+		// Terminal paste (Ctrl-Shift-V or right-click) works directly in the chat input.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Ctrl-V: use terminal paste (right-click or Ctrl-Shift-V) to paste."
+		} else {
+			m.statusMessage = "Ctrl-V: paste works in chat input. Press 3 or Tab to focus chat."
+		}
+		return m, nil
+	case tea.KeyCtrlX:
+		// EX-383: Ctrl-X (Emacs prefix key / cut in some editors) — not bound here.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Ctrl-X: not bound. Use Ctrl-W to delete word, Ctrl-U to clear."
+		} else {
+			m.statusMessage = "Ctrl-X: not bound. Use : for commands or Ctrl-C to quit."
+		}
+		return m, nil
+	case tea.KeyCtrlZ:
+		// EX-383: Ctrl-Z (Unix: suspend to background) — not recommended inside a TUI.
+		// Suspending the process leaves the terminal in a broken state; Ctrl-C is safer.
+		m.statusMessage = "Ctrl-Z: suspend not recommended in TUI. Use Ctrl-C to quit or Esc to cancel."
+		return m, nil
 	default:
 		return m, nil
 	}
@@ -2616,6 +2655,120 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		// Give a hint pointing to the actual panel shortcuts instead of silently doing nothing.
 		if m.focus != ChatPanel {
 			m.statusMessage = "Panels: 1 sidebar · 2 main · 3 chat. Press ? for full key reference."
+			return true, nil
+		}
+	case 'A':
+		// EX-382: capital A — not bound. Users may mean lowercase 'a' (approve).
+		if m.focus != ChatPanel {
+			m.statusMessage = "A is not bound. Press a (lowercase) to approve in Inbox or Task view."
+			return true, nil
+		}
+	case 'B':
+		// EX-382: capital B — not bound. Users may mean lowercase 'b' (vim: prev word).
+		if m.focus != ChatPanel {
+			m.statusMessage = "B is not bound. Use j/k or ↑/↓ to navigate, or ? for key reference."
+			return true, nil
+		}
+	case 'C':
+		// EX-382: capital C — not bound. Users may mean lowercase 'c' (cancel-turn hint).
+		if m.focus != ChatPanel {
+			m.statusMessage = "C is not bound. Press c (lowercase) or use :cancel-turn for active-turn hints."
+			return true, nil
+		}
+	case 'E':
+		// EX-382: capital E — not bound. Users may mean lowercase 'e' (edit hint).
+		if m.focus != ChatPanel {
+			m.statusMessage = "E is not bound. Press e (lowercase) or chat (3 or Tab) to request edits."
+			return true, nil
+		}
+	case 'F':
+		// EX-382: capital F — not bound. Users may mean lowercase 'f' (defer in inbox).
+		if m.focus != ChatPanel {
+			m.statusMessage = "F is not bound. Press f (lowercase) to defer in Inbox view. Press i for Inbox."
+			return true, nil
+		}
+	case 'H':
+		// EX-382: capital H — not bound. Users may mean lowercase 'h' (collapse sidebar).
+		if m.focus != ChatPanel {
+			m.statusMessage = "H is not bound. Press h (lowercase) to collapse sidebar sections (1 to focus sidebar)."
+			return true, nil
+		}
+	case 'J':
+		// EX-382: capital J — not bound. Users may mean lowercase 'j' (navigate down).
+		if m.focus != ChatPanel {
+			m.statusMessage = "J is not bound. Press j (lowercase) to navigate down."
+			return true, nil
+		}
+	case 'K':
+		// EX-382: capital K — not bound. Users may mean lowercase 'k' (navigate up).
+		if m.focus != ChatPanel {
+			m.statusMessage = "K is not bound. Press k (lowercase) to navigate up."
+			return true, nil
+		}
+	case 'L':
+		// EX-382: capital L — not bound. Users may mean lowercase 'l' (expand sidebar).
+		if m.focus != ChatPanel {
+			m.statusMessage = "L is not bound. Press l (lowercase) to expand sidebar sections (1 to focus sidebar)."
+			return true, nil
+		}
+	case 'M':
+		// EX-382: capital M — not bound. Users may mean lowercase 'm' (mark/menu hint).
+		if m.focus != ChatPanel {
+			m.statusMessage = "M is not bound. Press a·approve, x·reject, or f·defer in Inbox view."
+			return true, nil
+		}
+	case 'O':
+		// EX-382: capital O — not bound. Users may mean lowercase 'o' (open inbox/session).
+		if m.focus != ChatPanel {
+			m.statusMessage = "O is not bound. Press o (lowercase) to open an inbox item or task session."
+			return true, nil
+		}
+	case 'Q':
+		// EX-382: capital Q — not bound. Users may mean lowercase 'q' (close help / quit hint).
+		if m.focus != ChatPanel {
+			m.statusMessage = "Q is not bound. Press q (lowercase) to close help, or use :quit to exit."
+			return true, nil
+		}
+	case 'S':
+		// EX-382: capital S — not bound. Users may mean lowercase 's' (sidebar toggle).
+		if m.focus != ChatPanel {
+			m.statusMessage = "S is not bound. Press s (lowercase) to toggle the sidebar."
+			return true, nil
+		}
+	case 'U':
+		// EX-382: capital U — not bound. Users may mean Ctrl-U (clear chat) or lowercase 'u' (undo hint).
+		if m.focus != ChatPanel {
+			m.statusMessage = "U is not bound. Use Ctrl-U to clear chat input (3 or Tab to focus chat)."
+			return true, nil
+		}
+	case 'V':
+		// EX-382: capital V — not bound. Users may mean lowercase 'v' (view/visual hint).
+		if m.focus != ChatPanel {
+			m.statusMessage = "V is not bound. Use Enter or → to open the selected item."
+			return true, nil
+		}
+	case 'W':
+		// EX-382: capital W — not bound. Users may mean lowercase 'w' (vim: next WORD).
+		if m.focus != ChatPanel {
+			m.statusMessage = "W is not bound. Use j/k or ↑/↓ to navigate, or ? for key reference."
+			return true, nil
+		}
+	case 'X':
+		// EX-382: capital X — not bound. Users may mean lowercase 'x' (reject in inbox).
+		if m.focus != ChatPanel {
+			m.statusMessage = "X is not bound. Press x (lowercase) to reject in Inbox or Task view."
+			return true, nil
+		}
+	case 'Y':
+		// EX-382: capital Y — not bound. Users may mean lowercase 'y' (yank hint).
+		if m.focus != ChatPanel {
+			m.statusMessage = "Y is not bound. Use your terminal to copy text."
+			return true, nil
+		}
+	case 'Z':
+		// EX-382: capital Z — not bound. Users may try shift-ZZ (vim quit) or ZQ.
+		if m.focus != ChatPanel {
+			m.statusMessage = "Z is not bound. Use :quit or Ctrl-C to exit."
 			return true, nil
 		}
 	}

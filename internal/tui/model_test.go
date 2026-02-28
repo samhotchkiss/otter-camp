@@ -10160,3 +10160,116 @@ func TestInboxActionKeysInSidebarPanelEX381(t *testing.T) {
 		})
 	}
 }
+
+// TestRemainingUppercaseHintsEX382 verifies that capital letters not previously handled
+// now show redirect hints instead of silent no-ops in non-chat panels (EX-382).
+func TestRemainingUppercaseHintsEX382(t *testing.T) {
+	tests := []struct {
+		r    rune
+		want string
+	}{
+		{'A', "A is not bound. Press a (lowercase) to approve in Inbox or Task view."},
+		{'B', "B is not bound. Use j/k or ↑/↓ to navigate, or ? for key reference."},
+		{'C', "C is not bound. Press c (lowercase) or use :cancel-turn for active-turn hints."},
+		{'E', "E is not bound. Press e (lowercase) or chat (3 or Tab) to request edits."},
+		{'F', "F is not bound. Press f (lowercase) to defer in Inbox view. Press i for Inbox."},
+		{'H', "H is not bound. Press h (lowercase) to collapse sidebar sections (1 to focus sidebar)."},
+		{'J', "J is not bound. Press j (lowercase) to navigate down."},
+		{'K', "K is not bound. Press k (lowercase) to navigate up."},
+		{'L', "L is not bound. Press l (lowercase) to expand sidebar sections (1 to focus sidebar)."},
+		{'M', "M is not bound. Press a·approve, x·reject, or f·defer in Inbox view."},
+		{'O', "O is not bound. Press o (lowercase) to open an inbox item or task session."},
+		{'Q', "Q is not bound. Press q (lowercase) to close help, or use :quit to exit."},
+		{'S', "S is not bound. Press s (lowercase) to toggle the sidebar."},
+		{'U', "U is not bound. Use Ctrl-U to clear chat input (3 or Tab to focus chat)."},
+		{'V', "V is not bound. Use Enter or → to open the selected item."},
+		{'W', "W is not bound. Use j/k or ↑/↓ to navigate, or ? for key reference."},
+		{'X', "X is not bound. Press x (lowercase) to reject in Inbox or Task view."},
+		{'Y', "Y is not bound. Use your terminal to copy text."},
+		{'Z', "Z is not bound. Use :quit or Ctrl-C to exit."},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("capital-%c in MainPanel", tt.r), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.r}})
+			if m1.statusMessage != tt.want {
+				t.Errorf("EX-382: %c in MainPanel: got %q, want %q", tt.r, m1.statusMessage, tt.want)
+			}
+		})
+		t.Run(fmt.Sprintf("capital-%c in ChatPanel should type", tt.r), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = ChatPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.r}})
+			if m1.statusMessage == tt.want {
+				t.Errorf("EX-382: %c in ChatPanel should type, not show hint; got %q", tt.r, m1.statusMessage)
+			}
+		})
+	}
+}
+
+// TestRemainingCtrlKeyHintsEX383 verifies that common Ctrl keys not previously handled
+// now show informative hints instead of silent no-ops (EX-383).
+func TestRemainingCtrlKeyHintsEX383(t *testing.T) {
+	tests := []struct {
+		keyType  tea.KeyType
+		name     string
+		chatWant string
+		mainWant string
+	}{
+		{
+			tea.KeyCtrlL,
+			"Ctrl-L",
+			"Ctrl-L: screen redraw is automatic. Use r to refresh data.",
+			"Ctrl-L: screen redraw is automatic. Use r to refresh, Ctrl-C to quit.",
+		},
+		{
+			tea.KeyCtrlT,
+			"Ctrl-T",
+			"Ctrl-T: transpose not supported. Use Backspace + retype to fix.",
+			"Ctrl-T: transpose not supported. Type in chat (3 or Tab) to edit.",
+		},
+		{
+			tea.KeyCtrlV,
+			"Ctrl-V",
+			"Ctrl-V: use terminal paste (right-click or Ctrl-Shift-V) to paste.",
+			"Ctrl-V: paste works in chat input. Press 3 or Tab to focus chat.",
+		},
+		{
+			tea.KeyCtrlX,
+			"Ctrl-X",
+			"Ctrl-X: not bound. Use Ctrl-W to delete word, Ctrl-U to clear.",
+			"Ctrl-X: not bound. Use : for commands or Ctrl-C to quit.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+"-in-ChatPanel", func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = ChatPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tt.keyType})
+			if m1.statusMessage != tt.chatWant {
+				t.Errorf("EX-383: %s in ChatPanel: got %q, want %q", tt.name, m1.statusMessage, tt.chatWant)
+			}
+		})
+		t.Run(tt.name+"-in-MainPanel", func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tt.keyType})
+			if m1.statusMessage != tt.mainWant {
+				t.Errorf("EX-383: %s in MainPanel: got %q, want %q", tt.name, m1.statusMessage, tt.mainWant)
+			}
+		})
+	}
+	// Ctrl-Z is panel-agnostic (same message everywhere)
+	t.Run("Ctrl-Z-panel-agnostic", func(t *testing.T) {
+		want := "Ctrl-Z: suspend not recommended in TUI. Use Ctrl-C to quit or Esc to cancel."
+		for _, panel := range []Panel{ChatPanel, MainPanel, SidebarPanel} {
+			m := NewModel(DefaultState())
+			m.focus = panel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlZ})
+			if m1.statusMessage != want {
+				t.Errorf("EX-383: Ctrl-Z in panel %d: got %q, want %q", panel, m1.statusMessage, want)
+			}
+		}
+	})
+}
