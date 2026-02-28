@@ -8094,6 +8094,59 @@ func TestNextUnreadAlreadyActiveSessionEX476(t *testing.T) {
 	})
 }
 
+// TestNKeyTaskScopedSessionSetsStateEX485 verifies EX-485: pressing 'n' (next
+// unread) on a task-scoped session node sets activeScope=ScopeTask and fires
+// loadTaskDetailCmd — mirroring handleEnterKey and the fixed :sidebar select
+// (EX-483). Previously scope was not set and task detail was not loaded.
+func TestNKeyTaskScopedSessionSetsStateEX485(t *testing.T) {
+	taskID := "task-485"
+	sessionID := "00000000-0000-0000-0000-000000000485"
+	prevSessionID := "aaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	detailCalledWith := ""
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			detailCalledWith = id
+			return &TaskDetailItem{ID: id, Title: "EX-485 task"}, nil
+		},
+	})
+	m.focus = MainPanel
+	m.activeScope = ScopeOrg // stale scope, should become ScopeTask after 'n'
+	m.activeSession = prevSessionID
+	m.workspace.activeSessionID = prevSessionID
+	if m.workspace.nodes == nil {
+		m.workspace.nodes = make(map[string]*sidebarNode)
+	}
+	nodeID := "session-" + sessionID
+	m.workspace.nodes[nodeID] = &sidebarNode{
+		ID:           nodeID,
+		Kind:         sidebarKindSession,
+		SessionID:    sessionID,
+		SessionScope: "project_task",
+		TaskID:       taskID,
+		Label:        "Task 485 session",
+		Unread:       3,
+	}
+	m.workspace.topLevel = []string{nodeID}
+	m.workspace.sidebarCursor = 0 // cursor will wrap to find the unread session
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m2 := updated.(Model)
+
+	if m2.activeScope != ScopeTask {
+		t.Fatalf("EX-485: activeScope = %v, want ScopeTask", m2.activeScope)
+	}
+	if m2.workspace.selectedTaskID != taskID {
+		t.Fatalf("EX-485: selectedTaskID = %q, want %q", m2.workspace.selectedTaskID, taskID)
+	}
+	if cmd == nil {
+		t.Fatal("EX-485: 'n' on task-scoped unread session returned nil cmd")
+	}
+	runNonTimerCmds(cmd)
+	if detailCalledWith != taskID {
+		t.Fatalf("EX-485: LoadTaskDetail called with %q, want %q", detailCalledWith, taskID)
+	}
+}
+
 // TestJumpToSessionByNameIdempotencyEX477 verifies EX-477: :session <name> when
 // the named session is already active says "<name> refreshed." rather than
 // "Switched to <name>." — mirrors the EX-474/475 refresh-vs-switch pattern.

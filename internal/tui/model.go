@@ -2877,13 +2877,34 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					m.statusMessage = "Jumped to next unread session."
 				}
 				m.setFocus(SidebarPanel)
+				// EX-485: set scope and load task detail for task-scoped sessions,
+				// mirroring handleEnterKey and the fixed :sidebar select (EX-483).
+				// selectSidebarNode already set mainView=ViewTask/selectedTaskID for
+				// task sessions, but scope and task detail were silently skipped.
+				var cmdsN []tea.Cmd
+				if unreadNode := m.workspace.nodes[nextID]; unreadNode != nil {
+					switch unreadNode.SessionScope {
+					case "project_task":
+						m.activeScope = ScopeTask
+						if unreadNode.TaskID != "" {
+							cmdsN = append(cmdsN, loadTaskDetailCmd(unreadNode.TaskID, m.runtimeHints))
+						}
+					case "project":
+						m.activeScope = ScopeProject
+					default:
+						m.activeScope = ScopeOrg
+					}
+				}
 				// EX-166: reload chat history so the chat panel shows the unread session's
 				// messages, not the previous session's (selectSidebarNode only sets the ID).
 				if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
 					m.chatMessages = nil
 					m.chatHistoryLoading = true
 					m.chatMessageIndex = make(map[string]int)
-					return true, loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+					cmdsN = append(cmdsN, loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory))
+				}
+				if len(cmdsN) > 0 {
+					return true, tea.Batch(cmdsN...)
 				}
 				return true, nil
 			}
