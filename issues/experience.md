@@ -3118,3 +3118,17 @@ These messages are returned immediately (`return true, nil`) so the auto-clear t
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-201: Session switch with queued messages discards them silently
+
+**Observation:** When the user had messages queued for the current session (active turn in progress) and switched to a different session, `clearTurnIfSwitchingSession` discarded all queued messages and cleared `editingQueued` silently. The user had no indication that their pending work was lost.
+
+**Improvement:** When `clearTurnIfSwitchingSession` discards non-empty `queuedMessages`, it now sets a status message: "Queued message discarded (switched session)." or "N queued messages discarded (switched session)." so the user knows the switch cost them their queued work.
+
+**Why it matters:** Users can invest significant effort typing queued messages that they expect to be sent once the current turn completes. Silent discard on a navigation action is data loss without acknowledgment. A status message lets them know immediately so they can re-enter the content.
+
+**Effort:** Trivial (5 lines in clearTurnIfSwitchingSession)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

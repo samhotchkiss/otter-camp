@@ -4678,3 +4678,31 @@ func TestPPressWithNoProjectShowsFeedback(t *testing.T) {
 		t.Error("pressing 'p' with no project should NOT switch to ViewProject (EX-199)")
 	}
 }
+
+// TestSwitchSessionWithQueuedMessagesShowsDiscardFeedback verifies EX-201:
+// switching sessions while messages are queued shows a status message
+// informing the user that the queued messages were discarded.
+func TestSwitchSessionWithQueuedMessagesShowsDiscardFeedback(t *testing.T) {
+	t.Parallel()
+	sessionA := "session-a"
+	sessionB := "session-b"
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.activeSession = sessionA
+	model.activeTurn = true
+	model.queuedMessages = []QueuedMessage{{Text: "pending msg 1"}, {Text: "pending msg 2"}}
+
+	// Simulate switching to session B by calling clearTurnIfSwitchingSession directly.
+	model.clearTurnIfSwitchingSession(sessionB)
+
+	if len(model.queuedMessages) != 0 {
+		t.Error("queued messages should be cleared after session switch (EX-201)")
+	}
+	if model.statusMessage == "" {
+		t.Error("statusMessage should be set when queued messages are discarded (EX-201)")
+	}
+	if !strings.Contains(model.statusMessage, "2") {
+		t.Errorf("statusMessage should mention count 2, got %q (EX-201)", model.statusMessage)
+	}
+}

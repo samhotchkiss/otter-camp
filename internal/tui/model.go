@@ -2462,6 +2462,16 @@ func (m *Model) clearTurnIfSwitchingSession(newSessionID string) {
 		return // same session — keep all state
 	}
 	if m.activeTurn || len(m.queuedMessages) > 0 || m.activeTurnSessionID != "" {
+		// EX-201: inform the user when queued messages are discarded so they
+		// know their pending work was lost (and can re-enter it if needed).
+		if len(m.queuedMessages) > 0 {
+			n := len(m.queuedMessages)
+			if n == 1 {
+				m.statusMessage = "Queued message discarded (switched session)."
+			} else {
+				m.statusMessage = fmt.Sprintf("%d queued messages discarded (switched session).", n)
+			}
+		}
 		m.activeTurn = false
 		m.queuedMessages = nil
 		m.editingQueued = false
