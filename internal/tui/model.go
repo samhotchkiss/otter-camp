@@ -897,6 +897,21 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
+			// EX-306/307: PgUp/PgDn/Home/End in ViewTask navigate through project tasks,
+			// mirroring j/k (stepTaskInProject ±1) with larger jumps.
+			// stepTaskInProject handles clamping and boundary messages automatically.
+			switch key.Type {
+			case tea.KeyPgUp:
+				return m, m.stepTaskInProject(-chatScrollStepLines)
+			case tea.KeyPgDown:
+				return m, m.stepTaskInProject(chatScrollStepLines)
+			case tea.KeyHome:
+				return m, m.stepTaskInProject(-99999)
+			case tea.KeyEnd:
+				return m, m.stepTaskInProject(99999)
+			}
+		}
 		if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
 			// EX-274: PgUp/PgDn scroll the help view by a page — currently j/k
 			// scroll one line at a time but PgUp/PgDn were silent no-ops.

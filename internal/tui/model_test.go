@@ -7933,3 +7933,75 @@ func TestEscInSidebarFocusesMainEX305(t *testing.T) {
 		t.Errorf("EX-305: Esc in sidebar should say 'Focus: main'; got %q", m.statusMessage)
 	}
 }
+
+// TestViewTaskPgUpPgDnHomeEndEX306EX307 verifies that PgUp/PgDn/Home/End in
+// ViewTask navigate through project tasks (same logic as j/k but larger steps).
+func TestViewTaskPgUpPgDnHomeEndEX306EX307(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewTask)
+	m.workspace.selectedProjectID = "proj-1"
+
+	// Set up a project with 12 tasks.
+	tasks := make([]SidebarTaskItem, 12)
+	for i := 0; i < 12; i++ {
+		id := fmt.Sprintf("task-%d", i)
+		tasks[i] = SidebarTaskItem{ID: id, Title: fmt.Sprintf("Task %d", i)}
+		m.workspace.tasks[id] = &taskRecord{ID: id, Title: fmt.Sprintf("Task %d", i), Status: "todo"}
+	}
+	m.workspace.selectedProject = &ProjectDetail{ID: "proj-1", Tasks: tasks}
+	m.workspace.projectTaskCursor = 5
+	m.workspace.selectedTaskID = "task-5"
+
+	// PgUp from cursor 5 — should move to 0 (8 steps back, clamped).
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.workspace.projectTaskCursor != 0 {
+		t.Errorf("EX-306: PgUp from 5 should land at cursor 0; got %d", m.workspace.projectTaskCursor)
+	}
+
+	// Home from cursor 0 — boundary, stays at 0.
+	m.workspace.projectTaskCursor = 2
+	m.workspace.selectedTaskID = "task-2"
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+	if m.workspace.projectTaskCursor != 0 {
+		t.Errorf("EX-307: Home should jump to cursor 0; got %d", m.workspace.projectTaskCursor)
+	}
+
+	// End — should jump to 11 (last task).
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+	if m.workspace.projectTaskCursor != 11 {
+		t.Errorf("EX-307: End should jump to cursor 11; got %d", m.workspace.projectTaskCursor)
+	}
+	// No status message on successful move — stepTaskInProject only sets boundary messages.
+
+	// PgDown from last — boundary, stays at 11.
+	m.workspace.projectTaskCursor = 11
+	m.workspace.selectedTaskID = "task-11"
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.workspace.projectTaskCursor != 11 {
+		t.Errorf("EX-306: PgDown at last should stay at 11; got %d", m.workspace.projectTaskCursor)
+	}
+	if m.statusMessage != "At last task." {
+		t.Errorf("EX-306: PgDown at last should say 'At last task.'; got %q", m.statusMessage)
+	}
+
+	// Single task — all keys give "Only one task in this project."
+	m2 := NewModel(DefaultState())
+	m2.width, m2.height = 220, 40
+	m2.focus = MainPanel
+	m2.workspace.setMainView(ViewTask)
+	m2.workspace.selectedProjectID = "proj-2"
+	m2.workspace.selectedProject = &ProjectDetail{ID: "proj-2", Tasks: []SidebarTaskItem{
+		{ID: "task-x", Title: "Only task"},
+	}}
+	m2.workspace.tasks["task-x"] = &taskRecord{ID: "task-x", Title: "Only task", Status: "todo"}
+	m2.workspace.projectTaskCursor = 0
+	m2.workspace.selectedTaskID = "task-x"
+	for _, keyType := range []tea.KeyType{tea.KeyPgUp, tea.KeyPgDown, tea.KeyHome, tea.KeyEnd} {
+		m2 = pressKey(m2, tea.KeyMsg{Type: keyType})
+		if m2.statusMessage != "Only one task in this project." {
+			t.Errorf("EX-306/307: %v with single task should say 'Only one task in this project.'; got %q", keyType, m2.statusMessage)
+		}
+	}
+}
