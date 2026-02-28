@@ -2518,6 +2518,31 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 			return true, nil
 		}
+	case 'e':
+		// EX-377: 'e' (edit) — not bound, but commonly tried in task-management TUIs.
+		// Redirect to the chat panel where users can message the agent about edits.
+		if m.focus != ChatPanel {
+			m.statusMessage = "e is not bound. Chat with the agent (3 or Tab) to request edits."
+			return true, nil
+		}
+	case 'u':
+		// EX-377: 'u' (undo) — vim muscle memory. No undo in this TUI; redirect to chat.
+		if m.focus != ChatPanel {
+			m.statusMessage = "u is not bound. Ask the agent to revert changes via chat (3 or Tab)."
+			return true, nil
+		}
+	case 'v':
+		// EX-377: 'v' (view/visual) — not bound. Redirect to Enter/→ for opening items.
+		if m.focus != ChatPanel {
+			m.statusMessage = "v is not bound. Use Enter or → to open the selected item."
+			return true, nil
+		}
+	case 'm':
+		// EX-377: 'm' (mark/menu/move) — not bound. Redirect to inbox actions.
+		if m.focus != ChatPanel {
+			m.statusMessage = "m is not bound. Press a·approve, x·reject, or f·defer in Inbox view."
+			return true, nil
+		}
 	case '4', '5', '6', '7', '8', '9':
 		// EX-372: Users may guess that 4-9 switch panels (1=sidebar, 2=main, 3=chat).
 		// Give a hint pointing to the actual panel shortcuts instead of silently doing nothing.

@@ -9899,3 +9899,49 @@ func TestCtrlNRYNoOpsEX376(t *testing.T) {
 		})
 	}
 }
+
+// TestUnboundRuneHintsEX377 verifies that commonly-tried rune keys 'e', 'u',
+// 'v', 'm' give honest hints in non-chat panels instead of silent no-ops
+// (EX-377). In chat panel they still type into the input.
+func TestUnboundRuneHintsEX377(t *testing.T) {
+	type kv struct {
+		r    rune
+		want string
+	}
+	tests := []kv{
+		{'e', "e is not bound. Chat with the agent (3 or Tab) to request edits."},
+		{'u', "u is not bound. Ask the agent to revert changes via chat (3 or Tab)."},
+		{'v', "v is not bound. Use Enter or → to open the selected item."},
+		{'m', "m is not bound. Press a·approve, x·reject, or f·defer in Inbox view."},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("key-%c in MainPanel", tt.r), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.r}})
+			if m1.statusMessage != tt.want {
+				t.Errorf("EX-377: key %c: got %q, want %q", tt.r, m1.statusMessage, tt.want)
+			}
+		})
+
+		t.Run(fmt.Sprintf("key-%c in SidebarPanel", tt.r), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = SidebarPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.r}})
+			if m1.statusMessage != tt.want {
+				t.Errorf("EX-377: key %c in sidebar: got %q, want %q", tt.r, m1.statusMessage, tt.want)
+			}
+		})
+
+		// In chat panel, the key must type into the input.
+		t.Run(fmt.Sprintf("key-%c types in ChatPanel", tt.r), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = ChatPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.r}})
+			if m1.chatInput != string(tt.r) {
+				t.Errorf("EX-377: key %c in chat should type; got chatInput=%q", tt.r, m1.chatInput)
+			}
+		})
+	}
+}
