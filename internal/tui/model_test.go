@@ -7221,3 +7221,27 @@ func TestSidebarHLCollapseFeedbackEX282(t *testing.T) {
 		t.Errorf("EX-282: ← on header should say 'Collapsed PROJECTS.'; got %q", m.statusMessage)
 	}
 }
+
+// TestStaticViewJKFeedbackEX283 verifies that j/k in views without cursor
+// navigation (Agents, Merges, Schedules, Activity) give a helpful hint
+// rather than silently doing nothing.
+func TestStaticViewJKFeedbackEX283(t *testing.T) {
+	staticViews := []MainView{ViewAgents, ViewMerges, ViewSchedules, ViewActivity}
+	for _, view := range staticViews {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.mainView = view
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		if m.statusMessage != "j/k navigation not available here. Use r to refresh." {
+			t.Errorf("EX-283: j in %v should give hint; got %q", view, m.statusMessage)
+		}
+
+		m.statusMessage = ""
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+		if m.statusMessage != "j/k navigation not available here. Use r to refresh." {
+			t.Errorf("EX-283: k in %v should give hint; got %q", view, m.statusMessage)
+		}
+	}
+}

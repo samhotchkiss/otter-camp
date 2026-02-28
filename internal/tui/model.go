@@ -1371,6 +1371,10 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			} else {
 				m.helpScrollOffset++
 			}
+		} else if m.focus == MainPanel {
+			// EX-283: j/k in static views (Agents, Merges, Schedules, Activity)
+			// have no cursor to move — give a hint instead of silently doing nothing.
+			m.statusMessage = "j/k navigation not available here. Use r to refresh."
 		}
 		return true, nil
 	case 'k':
@@ -1433,6 +1437,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				// EX-250: give feedback instead of silent no-op when already at the top.
 				m.statusMessage = "Already at top of help."
 			}
+		} else if m.focus == MainPanel {
+			// EX-283: k in static views has no cursor — give a hint.
+			m.statusMessage = "j/k navigation not available here. Use r to refresh."
 		}
 		return true, nil
 	case 'h':
