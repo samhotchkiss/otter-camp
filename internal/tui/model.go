@@ -1198,6 +1198,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			return true, nil
 		}
 	case 'p':
+		if m.focus != ChatPanel && m.workspace.selectedProjectID == "" {
+			// EX-199: no project selected — give feedback instead of silent no-op.
+			m.statusMessage = "No project selected. Select a project from the sidebar."
+			return true, nil
+		}
 		if m.focus != ChatPanel && m.workspace.selectedProjectID != "" {
 			m.workspace.setMainView(ViewProject)
 			m.setFocus(MainPanel)
@@ -1216,6 +1221,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			return true, nil
 		}
 	case 't':
+		if m.focus != ChatPanel && m.workspace.selectedTaskID == "" {
+			// EX-199: no task selected — give feedback instead of silent no-op.
+			m.statusMessage = "No task selected. Select a task from the dashboard or project view."
+			return true, nil
+		}
 		if m.focus != ChatPanel && m.workspace.selectedTaskID != "" {
 			m.workspace.setMainView(ViewTask)
 			m.setFocus(MainPanel)

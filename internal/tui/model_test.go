@@ -4636,3 +4636,45 @@ func TestChatHistoryLoadErrorShowsStatusMessage(t *testing.T) {
 		t.Errorf("statusMessage should contain error text, got %q (EX-198)", m2.statusMessage)
 	}
 }
+
+// TestTPressWithNoTaskShowsFeedback verifies EX-199: pressing 't' with no
+// task selected shows a status message instead of silently doing nothing.
+func TestTPressWithNoTaskShowsFeedback(t *testing.T) {
+	t.Parallel()
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.focus = MainPanel
+	model.workspace.mainView = ViewDashboard
+	model.workspace.selectedTaskID = "" // no task selected
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	m2 := updated.(Model)
+
+	if m2.statusMessage == "" {
+		t.Error("pressing 't' with no task should set statusMessage (EX-199)")
+	}
+	if m2.workspace.mainView == ViewTask {
+		t.Error("pressing 't' with no task should NOT switch to ViewTask (EX-199)")
+	}
+}
+
+// TestPPressWithNoProjectShowsFeedback verifies EX-199: pressing 'p' with no
+// project selected shows a status message instead of silently doing nothing.
+func TestPPressWithNoProjectShowsFeedback(t *testing.T) {
+	t.Parallel()
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.focus = MainPanel
+	model.workspace.mainView = ViewDashboard
+	model.workspace.selectedProjectID = "" // no project selected
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	m2 := updated.(Model)
+
+	if m2.statusMessage == "" {
+		t.Error("pressing 'p' with no project should set statusMessage (EX-199)")
+	}
+	if m2.workspace.mainView == ViewProject {
+		t.Error("pressing 'p' with no project should NOT switch to ViewProject (EX-199)")
+	}
+}

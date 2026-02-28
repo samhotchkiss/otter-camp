@@ -3088,3 +3088,19 @@ These messages are returned immediately (`return true, nil`) so the auto-clear t
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-199: 't' and 'p' shortcut keys silently fail when nothing is selected
+
+**Observation:** Pressing `t` (jump to task detail) with no task selected, or `p` (jump to project view) with no project selected, was a silent no-op. The condition `selectedTaskID != ""` / `selectedProjectID != ""` just evaluated false and fell through with no feedback.
+
+**Improvement:** Added early-return `if ... == ""` checks with status messages before the main condition blocks:
+- `t` with no task: "No task selected. Select a task from the dashboard or project view."
+- `p` with no project: "No project selected. Select a project from the sidebar."
+
+**Why it matters:** Users expecting `t` and `p` to work like vim motions may repeatedly press the key thinking the bind is broken. A status message confirms the key was received and explains the missing prerequisite.
+
+**Effort:** Trivial (4 lines total for both keys)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
