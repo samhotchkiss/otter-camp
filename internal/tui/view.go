@@ -426,11 +426,12 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 		}
 	}
 
-	// EX-194: search bar hint — show "Esc to clear" suffix when search is active.
+	// EX-194: search bar hint — show "Esc to cancel" suffix when search is active.
+	// EX-259: "Search" → "Filter" for consistent terminology.
 	if searchLine != "" {
 		hint := searchLine
 		if m.searchMode && m.searchPanel == SidebarPanel {
-			hint = styleMuted.Render(truncate("Search /"+m.sidebarFilter+"▌  (Esc to cancel)", cw))
+			hint = styleMuted.Render(truncate("Filter /"+m.sidebarFilter+"▌  (Esc to cancel)", cw))
 		}
 		lines = append(lines, "")
 		lines = append(lines, hint)
