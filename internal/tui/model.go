@@ -2593,6 +2593,13 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.commandBuffer = ":"
 		}
 		return m, nil
+	case tea.KeyCtrlU:
+		// EX-311: Ctrl-U in command mode clears the buffer back to just ":" (the prompt).
+		if m.commandBuffer != ":" {
+			m.commandBuffer = ":"
+			m.statusMessage = "Command cleared."
+		}
+		return m, nil
 	case tea.KeySpace:
 		m.commandBuffer += " "
 		return m, nil

@@ -8116,6 +8116,37 @@ func TestCtrlUInSearchModeClearsQueryEX310(t *testing.T) {
 	}
 }
 
+// TestCtrlUInCommandModeClearsBufferEX311 verifies that Ctrl-U in command mode
+// clears the buffer back to just ":" without exiting command mode.
+func TestCtrlUInCommandModeClearsBufferEX311(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.commandMode = true
+	m.commandBuffer = ":deploy all"
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlU})
+
+	if !m.commandMode {
+		t.Errorf("EX-311: Ctrl-U should keep commandMode active; got false")
+	}
+	if m.commandBuffer != ":" {
+		t.Errorf("EX-311: Ctrl-U should reset buffer to ':'; got %q", m.commandBuffer)
+	}
+	if m.statusMessage != "Command cleared." {
+		t.Errorf("EX-311: unexpected status %q", m.statusMessage)
+	}
+
+	// Ctrl-U when already at prompt (only ":"): no-op.
+	prev := m.statusMessage
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlU})
+	if m.statusMessage != prev {
+		t.Errorf("EX-311: Ctrl-U at empty prompt should be a no-op; status changed to %q", m.statusMessage)
+	}
+	if m.commandBuffer != ":" {
+		t.Errorf("EX-311: buffer should still be ':'; got %q", m.commandBuffer)
+	}
+}
+
 // TestEscInChatEmptyInputFocusesMainEX309 verifies that Esc in the chat panel
 // with no active turn and empty input moves focus to the main panel.
 func TestEscInChatEmptyInputFocusesMainEX309(t *testing.T) {
