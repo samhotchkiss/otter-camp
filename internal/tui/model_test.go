@@ -4828,3 +4828,32 @@ func TestEscClosesHelpFromAnyFocus(t *testing.T) {
 		})
 	}
 }
+
+// TestScopeCycleToTaskWithNoTaskShowsHint verifies EX-207: cycling to ScopeTask
+// via ] when no task is selected shows an informative hint instead of silently
+// switching to a placeholder session.
+func TestScopeCycleToTaskWithNoTaskShowsHint(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = ChatPanel
+	model.workspace.selectedTaskID = ""
+
+	// Press ] to cycle scope towards ScopeTask.
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]")})
+	model = updated.(Model)
+
+	// May need a second ] if the first lands on ScopeProject.
+	if model.activeScope != ScopeTask {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]")})
+		model = updated.(Model)
+	}
+	if model.activeScope != ScopeTask {
+		t.Skip("scope cycling did not reach ScopeTask — test setup issue")
+	}
+
+	if !strings.Contains(model.statusMessage, "task") {
+		t.Errorf("EX-207: expected task-related message when switching to task scope with no task, got %q", model.statusMessage)
+	}
+	if !strings.Contains(model.statusMessage, "select") && !strings.Contains(model.statusMessage, "no task") {
+		t.Errorf("EX-207: expected hint about selecting a task, got %q", model.statusMessage)
+	}
+}

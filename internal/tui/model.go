@@ -2438,7 +2438,10 @@ func (m *Model) switchScope(next ChatScope) tea.Cmd {
 		}
 	case ScopeTask:
 		sessionID = m.workspace.selectedTaskSessionID()
+		// EX-207: if no task session is available, let the user know so they
+		// understand why the chat panel shows a placeholder instead of messages.
 		if sessionID == "" {
+			m.statusMessage = "Scope: task (no task selected — select a task first)"
 			sessionID = sessionForScope(next)
 		}
 	default:
@@ -2448,7 +2451,9 @@ func (m *Model) switchScope(next ChatScope) tea.Cmd {
 	m.clearTurnIfSwitchingSession(sessionID)
 	m.activeSession = sessionID
 	m.chatScrollOffset = 0
-	m.statusMessage = fmt.Sprintf("Scope switched to %s.", next)
+	if m.statusMessage == "" {
+		m.statusMessage = fmt.Sprintf("Scope switched to %s.", next)
+	}
 	if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
 		// EX-181: clear stale messages before loading so the chat panel shows
 		// the loading indicator instead of the previous session's content.
