@@ -3091,6 +3091,15 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.statusMessage = "| is not bound. Use : for commands or ? for key reference."
 			return true, nil
 		}
+	default:
+		// EX-405: catch-all for runes not explicitly handled above (e.g. unicode
+		// characters, emoji, accented letters) pressed in a non-chat panel.
+		// All printable ASCII characters have explicit cases; this branch covers
+		// non-ASCII input that shouldn't silently disappear.
+		if m.focus != ChatPanel {
+			m.statusMessage = "Key not bound. Press ? for key reference or : for commands."
+			return true, nil
+		}
 	}
 	return false, nil
 }

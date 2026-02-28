@@ -11222,3 +11222,36 @@ func TestGlobalDefaultCaseHintEX404(t *testing.T) {
 		}
 	})
 }
+
+// TestNonASCIIRuneInNonChatPanelEX405 verifies that unicode characters pressed
+// in non-chat panels produce a "not bound" hint instead of silently doing nothing.
+// All printable ASCII chars have explicit cases; this covers the unicode fallback
+// added in EX-405.
+func TestNonASCIIRuneInNonChatPanelEX405(t *testing.T) {
+	unicodeRunes := []rune{'é', '中', '🚀', 'ñ', 'ü'}
+
+	for _, r := range unicodeRunes {
+		r := r
+		t.Run(string(r), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			if m1.statusMessage == "" {
+				t.Errorf("EX-405: unicode rune %q in MainPanel should give feedback, got empty statusMessage", r)
+			}
+			if !strings.Contains(m1.statusMessage, "not bound") {
+				t.Errorf("EX-405: expected 'not bound' hint for %q, got %q", r, m1.statusMessage)
+			}
+		})
+	}
+
+	// In ChatPanel, non-ASCII runes should be typed (not blocked).
+	t.Run("ChatPanel-types-unicode", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'é'}})
+		if !strings.Contains(m1.chatInput, "é") {
+			t.Errorf("EX-405: unicode rune 'é' in ChatPanel should be appended to input, got %q", m1.chatInput)
+		}
+	})
+}
