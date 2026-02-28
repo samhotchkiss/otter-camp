@@ -4876,3 +4876,73 @@ func TestAppliedFilterShowsEditClearHint(t *testing.T) {
 		t.Errorf("EX-208: expected 'Esc to clear' hint when filter is applied, got %q", panel)
 	}
 }
+
+// TestHelpViewScrollsWithJK verifies EX-209: the help view supports j/k scrolling
+// when it overflows the available vertical space.
+func TestHelpViewScrollsWithJK(t *testing.T) {
+	// Use a small maxLines so the help content (50+ lines) definitely overflows.
+	const maxLines = 10
+
+	model := NewModel(DefaultState())
+	model.workspace.setMainView(ViewHelp)
+	model.setFocus(MainPanel)
+	model.helpScrollOffset = 0
+
+	// At offset 0: no "above" indicator, but "below" indicator must be present.
+	top := model.renderHelpView(80, maxLines)
+	if len(top) != maxLines {
+		t.Fatalf("EX-209: renderHelpView returned %d lines, want %d", len(top), maxLines)
+	}
+	rendered := strings.Join(top, "\n")
+	if strings.Contains(rendered, "above") {
+		t.Errorf("EX-209: unexpected 'above' indicator at offset 0: %q", rendered)
+	}
+	if !strings.Contains(rendered, "more below") {
+		t.Errorf("EX-209: expected 'more below' indicator at offset 0: %q", rendered)
+	}
+
+	// Press j — offset increments, "above" indicator should now appear.
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if model.helpScrollOffset != 1 {
+		t.Fatalf("EX-209: helpScrollOffset after j = %d, want 1", model.helpScrollOffset)
+	}
+	scrolled := model.renderHelpView(80, maxLines)
+	renderedScrolled := strings.Join(scrolled, "\n")
+	if !strings.Contains(renderedScrolled, "above") {
+		t.Errorf("EX-209: expected 'above' indicator after scrolling down: %q", renderedScrolled)
+	}
+
+	// Press k — offset decrements back to 0, "above" indicator gone.
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if model.helpScrollOffset != 0 {
+		t.Fatalf("EX-209: helpScrollOffset after k = %d, want 0", model.helpScrollOffset)
+	}
+	back := model.renderHelpView(80, maxLines)
+	renderedBack := strings.Join(back, "\n")
+	if strings.Contains(renderedBack, "above") {
+		t.Errorf("EX-209: unexpected 'above' indicator after scrolling back to top: %q", renderedBack)
+	}
+
+	// Press k at offset 0 — offset must not go negative.
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if model.helpScrollOffset != 0 {
+		t.Fatalf("EX-209: helpScrollOffset should not go below 0, got %d", model.helpScrollOffset)
+	}
+
+	// G jumps to bottom (offset clamped to maxOffset in renderHelpView).
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	bottom := model.renderHelpView(80, maxLines)
+	renderedBottom := strings.Join(bottom, "\n")
+	if strings.Contains(renderedBottom, "more below") {
+		t.Errorf("EX-209: unexpected 'more below' after G (jump to bottom): %q", renderedBottom)
+	}
+	if !strings.Contains(renderedBottom, "above") {
+		t.Errorf("EX-209: expected 'above' indicator after G: %q", renderedBottom)
+	}
+
+	// g resets to top.
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if model.helpScrollOffset != 0 {
+		t.Fatalf("EX-209: helpScrollOffset after g = %d, want 0", model.helpScrollOffset)
+	}
+}

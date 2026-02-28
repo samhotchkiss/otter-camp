@@ -3179,3 +3179,82 @@ These messages are returned immediately (`return true, nil`) so the auto-clear t
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-205: Esc doesn't close ViewHelp when focus is on sidebar or chat panel
+
+**Observation:** The help screen (opened with `?`) displays in the main panel and says "Press ? or Esc to close". However, `handleEscapeKey` had a guard `if m.focus == MainPanel` — so pressing Esc with sidebar or chat focus while the help screen was open had no effect. The help could only be closed via `?`, `q`, or focusing the main panel first.
+
+**Improvement:** Added an early-return check at the top of `handleEscapeKey`: if `mainView == ViewHelp`, immediately close it regardless of which panel has focus. The help-close action runs before the main-panel-specific navigation logic, so pressing Esc from any focus closes the help screen.
+
+**Why it matters:** The help screen says "Press Esc to close" but it only worked from one of three focus contexts. Users who happened to be focused on the sidebar or chat panel when opening help would press Esc repeatedly with no result, likely concluding the shortcut was broken.
+
+**Effort:** Trivial (3 lines at top of handleEscapeKey)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-206: 'r' refresh from dashboard/activity/merges/schedules shows generic "Refreshing sidebar data…"
+
+**Observation:** Pressing `r` to refresh data while viewing the dashboard, activity log, merges, or schedules view fell through to the generic "Refreshing sidebar data…" status message. The message didn't reflect what view the user was actually refreshing, making it seem like an unrelated operation ran.
+
+**Improvement:** Added a `switch` before the generic sidebar refresh path to emit view-appropriate status messages:
+- ViewDashboard → "Refreshing task board…"
+- ViewActivity → "Refreshing activity…"
+- ViewMerges → "Refreshing merges…"
+- ViewSchedules → "Refreshing schedules…"
+- Other/sidebar focus → "Refreshing sidebar data…" (unchanged)
+
+**Why it matters:** Confirmatory feedback should describe what actually happened. "Refreshing task board…" when looking at the board is self-evident; "Refreshing sidebar data…" is confusing and suggests the refresh missed the current view.
+
+**Effort:** Trivial (10 lines, switch statement)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-207: [ / ] scope cycling to ScopeTask with no task selected shows misleading confirmation
+
+**Observation:** Pressing `]` to cycle the chat scope from org → project → task when no task was selected showed "Scope switched to task." as if everything worked. But there was no real task session — the chat panel silently used a placeholder session ID ("session-task-current") and showed an empty history with "no messages yet". The confirmation message implied the scope switch succeeded when it actually had no meaningful effect.
+
+**Improvement:** When `switchScope` resolves `ScopeTask` but `selectedTaskSessionID()` returns empty, the status message now explicitly says "Scope: task (no task selected — select a task first)" instead of the generic "Scope switched to task." The user immediately knows the switch is provisional and what they need to do.
+
+**Why it matters:** A confirmation message that says "switched" implies the action completed successfully. When the action has a prerequisite that wasn't met (no task selected), the message should explain what's missing — not congratulate the user on an incomplete action.
+
+**Effort:** Trivial (5 lines in switchScope)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-208: Applied filter shows no hint about how to edit or clear it
+
+**Observation:** When a search filter was applied (user pressed `/`, typed a query, then pressed Enter to confirm it), the search bar showed "Search /query" in muted text. There was no indication of how to modify the query or clear the filter. A user who forgot how search works had no in-context guidance.
+
+**Improvement:** Modified `renderSearchBar` to append "  (/ to edit  ·  Esc to clear)" when the filter is applied but not actively being edited. The "(Esc to cancel)" hint (from EX-194/200) still shows during active editing — the new hint shows in the inactive/applied state.
+
+**Why it matters:** Filters have a non-obvious two-step lifecycle: enter editing mode with `/`, then apply with Enter. The applied state looks like dead text without the hint. Adding "(/ to edit  ·  Esc to clear)" transforms the filter bar from a passive display into an active reminder of the available controls.
+
+**Effort:** Trivial (3 lines in renderSearchBar)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-209: Help screen is not scrollable — bottom commands are silently truncated
+
+**Observation:** The `?` help screen generates approximately 51 lines of keybinding reference content. On a medium-sized terminal (e.g. 80×24), the inner main panel height is only ~20 content rows. The old `renderHelpView` simply sliced `lines[:maxLines]`, silently dropping everything from the "Commands" section downward — including `:quit`, `:tour dismiss`, `:scope`, and all command-palette entries. The user pressing `?` on a typical screen was seeing fewer than half the documented keys.
+
+**Improvement:** Added `helpScrollOffset int` to the Model and updated `renderHelpView` to apply a windowed view:
+- At offset 0: shows the first `maxLines` lines with a `"+N more below  (j to scroll down)"` indicator replacing the last line.
+- While scrolled: replaces the first line with `"↑ N above  (k to scroll up)"`.
+- `j` increments the offset; `k` decrements (clamped at 0); `G` jumps to the bottom; `g` resets to top.
+- The offset is reset to 0 whenever `?` opens the view, so each open starts from the top.
+
+**Why it matters:** Half the documented keybindings were invisible to most users. The help screen exists precisely so people can discover commands — silently truncating half of it defeats the purpose. The j/k scroll model is already familiar from every other list view in the TUI.
+
+**Effort:** Low (~40 lines: Model field + renderHelpView refactor + j/k/g/G handlers + test)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

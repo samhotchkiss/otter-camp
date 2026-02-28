@@ -1808,10 +1808,42 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		"",
 		styleMuted.Render("  Press ? or Esc to close"),
 	}
-	if len(lines) > maxLines {
-		lines = lines[:maxLines]
+	total := len(lines)
+	if total <= maxLines {
+		return lines
 	}
-	return lines
+
+	// EX-209: apply scroll offset with above/below indicators.
+	offset := m.helpScrollOffset
+	if offset < 0 {
+		offset = 0
+	}
+	maxOffset := total - maxLines
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+
+	end := offset + maxLines
+	if end > total {
+		end = total
+	}
+	visible := make([]string, 0, maxLines)
+	visible = append(visible, lines[offset:end]...)
+
+	// Replace first line with "above" scroll indicator when scrolled down.
+	if offset > 0 {
+		visible[0] = styleMuted.Render(fmt.Sprintf("  ↑ %d above  (k to scroll up)", offset))
+	}
+	// Replace last line with "below" scroll indicator when more content follows.
+	if end < total {
+		below := total - end
+		visible[len(visible)-1] = styleMuted.Render(fmt.Sprintf("  +%d more below  (j to scroll down)", below))
+	}
+
+	return visible
 }
 
 // ── Chat panel ──────────────────────────────────────────────────────────────

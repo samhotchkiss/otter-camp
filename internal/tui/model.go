@@ -129,6 +129,7 @@ type Model struct {
 	searchQuery    string
 	sidebarFilter     string
 	mainFilter        string
+	helpScrollOffset  int // EX-209: scroll position within the help view
 	statusMessage     string
 	statusGeneration  int // incremented each time statusMessage is set; used to avoid stale auto-clears
 	runtimeHints      RuntimeHints
@@ -752,6 +753,7 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				} else {
 					m.workspace.setMainView(ViewHelp)
 					m.setFocus(MainPanel)
+					m.helpScrollOffset = 0 // EX-209: reset scroll on open
 					m.statusMessage = "Keybinding reference. Press ? or Esc to close."
 				}
 				return m, nil
@@ -1104,6 +1106,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewTask {
 			return true, m.stepTaskInProject(1)
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
+			m.helpScrollOffset++
 		}
 		return true, nil
 	case 'k':
@@ -1124,6 +1128,10 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewTask {
 			return true, m.stepTaskInProject(-1)
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
+			if m.helpScrollOffset > 0 {
+				m.helpScrollOffset--
+			}
 		}
 		return true, nil
 	case 'h':
@@ -1169,6 +1177,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				// EX-190: no active tasks — give feedback instead of silent no-op.
 				m.statusMessage = "No active tasks on dashboard."
 			}
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
+			// EX-209: g jumps to top of help view
+			m.helpScrollOffset = 0
 		}
 		return true, nil
 	case 'G':
@@ -1197,6 +1208,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				// EX-190: no active tasks — give feedback instead of silent no-op.
 				m.statusMessage = "No active tasks on dashboard."
 			}
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
+			// EX-209: G jumps to bottom of help view (clamped in renderHelpView)
+			m.helpScrollOffset = 9999
 		}
 		return true, nil
 	case 'q':
