@@ -1114,6 +1114,14 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		// EX-336: PgUp/PgDown/Home/End in static views mirror the ↑/↓ hint (EX-312).
+		if m.focus == MainPanel && (key.Type == tea.KeyPgUp || key.Type == tea.KeyPgDown || key.Type == tea.KeyHome || key.Type == tea.KeyEnd) {
+			switch m.workspace.mainView {
+			case ViewAgents, ViewMerges, ViewSchedules, ViewActivity:
+				m.statusMessage = "Navigation not available here. Use r to refresh."
+				return m, nil
+			}
+		}
 		return m, nil
 	case tea.KeySpace:
 		if m.focus == ChatPanel {

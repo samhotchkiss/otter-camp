@@ -8873,3 +8873,25 @@ func TestQInNonHelpViewEX335(t *testing.T) {
 		t.Errorf("EX-335: 'q' in help view should return to dashboard; got %v", m2.workspace.mainView)
 	}
 }
+
+// TestPgUpDownHomeEndInStaticViewsEX336 verifies that PgUp/PgDown/Home/End in
+// static views (Agents, Merges, Schedules, Activity) give a navigation hint
+// instead of silently doing nothing (EX-336).
+func TestPgUpDownHomeEndInStaticViewsEX336(t *testing.T) {
+	staticViews := []MainView{ViewAgents, ViewMerges, ViewSchedules, ViewActivity}
+	keys := []tea.KeyType{tea.KeyPgUp, tea.KeyPgDown, tea.KeyHome, tea.KeyEnd}
+
+	for _, view := range staticViews {
+		for _, k := range keys {
+			m := NewModel(DefaultState())
+			m.width, m.height = 220, 40
+			m.focus = MainPanel
+			m.workspace.setMainView(view)
+
+			m1 := pressKey(m, tea.KeyMsg{Type: k})
+			if m1.statusMessage != "Navigation not available here. Use r to refresh." {
+				t.Errorf("EX-336: %v in %v should give navigation hint; got %q", k, view, m1.statusMessage)
+			}
+		}
+	}
+}
