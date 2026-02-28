@@ -7264,3 +7264,54 @@ func TestStaticViewEnterFeedbackEX284(t *testing.T) {
 		}
 	}
 }
+
+// TestSidebarSpaceToggleFeedbackEX285 verifies that Space in the sidebar gives
+// status feedback when toggling project expansion or header section visibility.
+func TestSidebarSpaceToggleFeedbackEX285(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = SidebarPanel
+	m.workspace.topLevel = []string{"header-projects", "proj-a"}
+	m.workspace.nodes = map[string]*sidebarNode{
+		"header-projects": {ID: "header-projects", Label: "PROJECTS", Kind: sidebarKindHeader},
+		"proj-a":          {ID: "proj-a", Label: "Acme Project", Kind: sidebarKindProject, ProjectID: "pa", Expanded: true},
+	}
+	m.workspace.sectionCollapsed = map[sidebarSectionID]bool{}
+	m.workspace.sidebarCursor = 0 // on header
+
+	// Space on header (currently expanded) → collapses, gives feedback.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeySpace})
+	if m.statusMessage != "PROJECTS section collapsed." {
+		t.Errorf("EX-285: Space on expanded header should say 'PROJECTS section collapsed.'; got %q", m.statusMessage)
+	}
+
+	// Space on header again (now collapsed) → expands.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeySpace})
+	if m.statusMessage != "PROJECTS section expanded." {
+		t.Errorf("EX-285: Space on collapsed header should say 'PROJECTS section expanded.'; got %q", m.statusMessage)
+	}
+
+	// Move to project node (fresh model so section is visible).
+	m = NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = SidebarPanel
+	m.workspace.topLevel = []string{"header-projects", "proj-a"}
+	m.workspace.nodes = map[string]*sidebarNode{
+		"header-projects": {ID: "header-projects", Label: "PROJECTS", Kind: sidebarKindHeader},
+		"proj-a":          {ID: "proj-a", Label: "Acme Project", Kind: sidebarKindProject, ProjectID: "pa", Expanded: true},
+	}
+	m.workspace.sectionCollapsed = map[sidebarSectionID]bool{}
+	m.workspace.sidebarCursor = 1 // on proj-a (expanded)
+
+	// Space on expanded project → collapses, gives feedback.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeySpace})
+	if m.statusMessage != "Collapsed Acme Project." {
+		t.Errorf("EX-285: Space on expanded project should say 'Collapsed Acme Project.'; got %q", m.statusMessage)
+	}
+
+	// Space on collapsed project → expands with loading message.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeySpace})
+	if m.statusMessage != "Expanded Acme Project — loading tasks…" {
+		t.Errorf("EX-285: Space on collapsed project should say 'Expanded Acme Project — loading tasks…'; got %q", m.statusMessage)
+	}
+}

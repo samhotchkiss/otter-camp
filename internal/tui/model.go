@@ -841,15 +841,25 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if node != nil {
 				switch node.Kind {
 				case sidebarKindProject:
+					// EX-285: give feedback when toggling — matches h/l (EX-282).
 					if node.Expanded {
 						node.Expanded = false
+						m.statusMessage = "Collapsed " + truncate(node.Label, 30) + "."
 					} else {
 						node.Expanded = true
+						m.statusMessage = "Expanded " + truncate(node.Label, 30) + " — loading tasks…"
 						return m, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true)
 					}
 				case sidebarKindHeader:
 					sectionID := sidebarSectionID(strings.TrimPrefix(node.ID, "header-"))
-					m.workspace.sectionCollapsed[sectionID] = !m.workspace.sectionCollapsed[sectionID]
+					wasCollapsed := m.workspace.sectionCollapsed[sectionID]
+					m.workspace.sectionCollapsed[sectionID] = !wasCollapsed
+					// EX-285: give feedback — matches Enter on header (EX-261).
+					if wasCollapsed {
+						m.statusMessage = node.Label + " section expanded."
+					} else {
+						m.statusMessage = node.Label + " section collapsed."
+					}
 				}
 			}
 			return m, nil
