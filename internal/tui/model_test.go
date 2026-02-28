@@ -8804,3 +8804,47 @@ func TestDAlreadyOnDashboardEX332(t *testing.T) {
 		t.Errorf("EX-332: 'd' in project view should toggle done tasks, not navigate away; got view %v", m3.workspace.mainView)
 	}
 }
+
+// TestPAlreadyInProjectViewEX333 verifies that pressing 'p' when already in
+// the project view says "Already in project view." instead of re-navigating (EX-333).
+func TestPAlreadyInProjectViewEX333(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewProject)
+	m.workspace.selectedProjectID = "proj-1"
+
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	if m1.statusMessage != "Already in project view." {
+		t.Errorf("EX-333: 'p' when already in project view should say feedback; got %q", m1.statusMessage)
+	}
+
+	// From another view, 'p' should navigate to project view.
+	m.workspace.setMainView(ViewDashboard)
+	m2 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	if m2.statusMessage != "Project view" {
+		t.Errorf("EX-333: 'p' from dashboard should say 'Project view'; got %q", m2.statusMessage)
+	}
+}
+
+// TestTAlreadyOnTaskDetailEX334 verifies that pressing 't' when already in
+// the task detail view says "Already viewing task detail." (EX-334).
+func TestTAlreadyOnTaskDetailEX334(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewTask)
+	m.workspace.selectedTaskID = "task-1"
+
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	if m1.statusMessage != "Already viewing task detail." {
+		t.Errorf("EX-334: 't' when already in task detail should say feedback; got %q", m1.statusMessage)
+	}
+
+	// From another view, 't' should navigate to task detail.
+	m.workspace.setMainView(ViewDashboard)
+	m2 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	if m2.statusMessage != "Task detail" {
+		t.Errorf("EX-334: 't' from dashboard should say 'Task detail'; got %q", m2.statusMessage)
+	}
+}

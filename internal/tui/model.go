@@ -2034,6 +2034,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			return true, nil
 		}
 		if m.focus != ChatPanel && m.workspace.selectedProjectID != "" {
+			// EX-333: if already on project view for this project, say so.
+			if m.focus == MainPanel && m.workspace.mainView == ViewProject {
+				m.statusMessage = "Already in project view."
+				return true, nil
+			}
 			m.workspace.setMainView(ViewProject)
 			m.setFocus(MainPanel)
 			m.statusMessage = "Project view"
@@ -2057,6 +2062,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			return true, nil
 		}
 		if m.focus != ChatPanel && m.workspace.selectedTaskID != "" {
+			// EX-334: if already on task detail view for this task, say so.
+			if m.focus == MainPanel && m.workspace.mainView == ViewTask {
+				m.statusMessage = "Already viewing task detail."
+				return true, nil
+			}
 			m.workspace.setMainView(ViewTask)
 			m.setFocus(MainPanel)
 			m.statusMessage = "Task detail"
