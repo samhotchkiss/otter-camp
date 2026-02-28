@@ -8579,3 +8579,58 @@ func TestGGInHelpViewEX322(t *testing.T) {
 		t.Errorf("EX-322: 'G' from top of help should say 'Help jumped to bottom.'; got %q", m4.statusMessage)
 	}
 }
+
+// TestSidebarHLeftAlreadyCollapsedEX323 verifies that pressing 'h' or ← on a
+// sidebar node that has no parent and is already collapsed gives honest feedback
+// instead of silently doing nothing (EX-323).
+func TestSidebarHLeftAlreadyCollapsedEX323(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = SidebarPanel
+
+	// Set up a collapsed project node (top-level, no parent).
+	projID := "proj-123"
+	projNodeID := "project-" + projID
+	m.workspace.nodes[projNodeID] = &sidebarNode{
+		ID:        projNodeID,
+		Label:     "Alpha Project",
+		Kind:      sidebarKindProject,
+		ProjectID: projID,
+		Expanded:  false, // already collapsed
+	}
+	m.workspace.topLevel = []string{projNodeID}
+	m.workspace.sidebarCursor = 0
+
+	// 'h' on already-collapsed project with no parent
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if m1.statusMessage != "Already collapsed." {
+		t.Errorf("EX-323: 'h' on collapsed project should say 'Already collapsed.'; got %q", m1.statusMessage)
+	}
+
+	// ← on already-collapsed project with no parent
+	m2 := pressKey(m, tea.KeyMsg{Type: tea.KeyLeft})
+	if m2.statusMessage != "Already collapsed." {
+		t.Errorf("EX-323: ← on collapsed project should say 'Already collapsed.'; got %q", m2.statusMessage)
+	}
+
+	// 'h' on expanded project should say "Collapsed …"
+	m.workspace.nodes[projNodeID].Expanded = true
+	m3 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if !strings.Contains(m3.statusMessage, "Collapsed") {
+		t.Errorf("EX-323: 'h' on expanded project should say 'Collapsed...'; got %q", m3.statusMessage)
+	}
+
+	// ← on a task node (no parent) should say "At top level…"
+	taskNodeID := "task-t1"
+	m.workspace.nodes[taskNodeID] = &sidebarNode{
+		ID:    taskNodeID,
+		Label: "Fix bug",
+		Kind:  sidebarKindTask,
+	}
+	m.workspace.topLevel = []string{taskNodeID}
+	m.workspace.sidebarCursor = 0
+	m4 := pressKey(m, tea.KeyMsg{Type: tea.KeyLeft})
+	if !strings.Contains(m4.statusMessage, "top level") {
+		t.Errorf("EX-323: ← on top-level task should say 'At top level…'; got %q", m4.statusMessage)
+	}
+}
