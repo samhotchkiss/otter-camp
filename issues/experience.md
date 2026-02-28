@@ -3132,3 +3132,50 @@ These messages are returned immediately (`return true, nil`) so the auto-clear t
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-202: j/k at task list boundary in ViewTask gives no feedback
+
+**Observation:** In ViewTask view with a multi-task project loaded, pressing `j` at the last task or `k` at the first task was a silent no-op — `stepTaskInProject` returned nil without setting any status message. Users couldn't tell whether the key was received or whether they were already at the boundary.
+
+**Improvement:** `stepTaskInProject` now sets `m.statusMessage` at boundary conditions:
+- `k` at the first task → "At first task."
+- `j` at the last task → "At last task."
+- Project has only one open task → "Only one task in this project."
+
+**Why it matters:** In vim-style navigation, boundary feedback is the expected signal that you've reached the end of a list. Without it, users repeat keypresses or assume the binding is broken.
+
+**Effort:** Trivial (6 lines in stepTaskInProject)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-203: Enter on empty/all-done dashboard navigates to blank task detail view
+
+**Observation:** Pressing Enter on the dashboard when all tasks were done (or when the task list was empty) auto-selected the first open task — but found none — then still navigated to ViewTask with "Opened task detail." status. The task view then rendered "No task selected" in muted grey with no explanation of why it happened.
+
+**Improvement:** Added a guard after the auto-select loop in `handleEnterKey` for `ViewDashboard`: if `selectedTaskID` is still empty after the loop, set a context-aware status message and return early without navigating:
+- Empty task list: "No tasks yet. Create a task to get started."
+- All tasks done: "All tasks are complete. No open tasks to open."
+
+**Why it matters:** Navigating to a blank view is confusing — users don't know if the app is broken or if they did something wrong. A clear message explains the state and preserves the current view.
+
+**Effort:** Low (6 lines in handleEnterKey)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-204: < > panel resize keys silently ignored when main panel is focused
+
+**Observation:** The `<` and `>` keys resize the focused panel. When the sidebar or chat panel is focused they work correctly and show a "Sidebar width N%" status. When the main panel is focused, `resizeFocusedPanel` returns false (main panel width is derived from the other two), but the key handler fell through silently with no feedback.
+
+**Improvement:** After `resizeFocusedPanel` returns false for a main-panel focus, the handler now sets: "Focus sidebar or chat panel to resize with < >". This explains both why the resize didn't work and what the user needs to do instead.
+
+**Why it matters:** Silent no-ops make users wonder if the keybinding is broken. A brief hint immediately answers the question and teaches the correct workflow.
+
+**Effort:** Trivial (3 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

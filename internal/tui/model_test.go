@@ -4706,3 +4706,101 @@ func TestSwitchSessionWithQueuedMessagesShowsDiscardFeedback(t *testing.T) {
 		t.Errorf("statusMessage should mention count 2, got %q (EX-201)", model.statusMessage)
 	}
 }
+
+// TestTaskBoundaryFeedbackOnJK verifies EX-202: j/k in ViewTask at list
+// boundaries shows "At first task." / "At last task." instead of silently
+// doing nothing.
+func TestTaskBoundaryFeedbackOnJK(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = MainPanel
+	model.workspace.mainView = ViewTask
+
+	// Seed two open tasks under a project. openTasksForProject reads from
+	// selectedProject.Tasks (the loaded ProjectDetail), so we need that set.
+	model.workspace.selectedProjectID = "p1"
+	model.workspace.selectedTaskID = "t1"
+	model.workspace.projectTaskCursor = 0
+	model.workspace.selectedProject = &ProjectDetail{
+		ID:          "p1",
+		DisplayName: "Project One",
+		Tasks: []SidebarTaskItem{
+			{ID: "t1", Title: "Task One", WorkStatus: "in_progress"},
+			{ID: "t2", Title: "Task Two", WorkStatus: "todo"},
+		},
+	}
+
+	// k at first task → "At first task."
+	model.workspace.projectTaskCursor = 0
+	model.stepTaskInProject(-1)
+	if !strings.Contains(model.statusMessage, "first") {
+		t.Errorf("EX-202: expected 'At first task.' at boundary, got %q", model.statusMessage)
+	}
+
+	// Move to end; j at last task → "At last task."
+	model.workspace.projectTaskCursor = 1
+	model.stepTaskInProject(1)
+	if !strings.Contains(model.statusMessage, "last") {
+		t.Errorf("EX-202: expected 'At last task.' at boundary, got %q", model.statusMessage)
+	}
+}
+
+// TestEmptyDashboardEnterShowsFeedback verifies EX-203: pressing Enter on the
+// dashboard when there are no open tasks shows a status message instead of
+// navigating to a blank task detail view.
+func TestEmptyDashboardEnterShowsFeedback(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = MainPanel
+	model.workspace.mainView = ViewDashboard
+	model.workspace.tasks = map[string]*taskRecord{}
+	model.workspace.taskOrder = []string{}
+	model.workspace.selectedTaskID = ""
+
+	_ = model.handleEnterKey()
+
+	if model.workspace.mainView == ViewTask {
+		t.Error("EX-203: should not navigate to ViewTask when no tasks exist")
+	}
+	if model.statusMessage == "" {
+		t.Error("EX-203: expected status message when no tasks to open")
+	}
+}
+
+// TestEmptyDashboardEnterAllDoneShowsFeedback verifies EX-203: when all tasks
+// are done, Enter shows "All tasks are complete." instead of navigating to
+// a blank task detail view.
+func TestEmptyDashboardEnterAllDoneShowsFeedback(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = MainPanel
+	model.workspace.mainView = ViewDashboard
+	task := &taskRecord{ID: "t1", Title: "Done Task", Status: "done"}
+	model.workspace.tasks = map[string]*taskRecord{"t1": task}
+	model.workspace.taskOrder = []string{"t1"}
+	model.workspace.selectedTaskID = ""
+
+	_ = model.handleEnterKey()
+
+	if model.workspace.mainView == ViewTask {
+		t.Error("EX-203: should not navigate to ViewTask when all tasks are done")
+	}
+	if !strings.Contains(model.statusMessage, "complete") {
+		t.Errorf("EX-203: expected 'complete' in status message, got %q", model.statusMessage)
+	}
+}
+
+// TestMainPanelResizeHint verifies EX-204: pressing < or > while the main
+// panel is focused shows a hint instead of silently ignoring the keypress.
+func TestMainPanelResizeHint(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 160, Height: 34})
+	model.focus = MainPanel
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("<")})
+	model = updated.(Model)
+
+	if model.statusMessage == "" {
+		t.Error("EX-204: expected hint when pressing < with main panel focused")
+	}
+	if !strings.Contains(model.statusMessage, "sidebar") && !strings.Contains(model.statusMessage, "chat") {
+		t.Errorf("EX-204: expected resize hint mentioning sidebar or chat, got %q", model.statusMessage)
+	}
+}

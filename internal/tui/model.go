@@ -717,6 +717,11 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if m.resizeFocusedPanel(delta) {
 					return m, nil
 				}
+				// EX-204: main panel width is set by the other two panels; give hint.
+				if m.focus == MainPanel {
+					m.statusMessage = "Focus sidebar or chat panel to resize with < >"
+					return m, nil
+				}
 			}
 			if r == '/' && (m.focus == SidebarPanel || m.focus == MainPanel) {
 				m.enterSearchMode(m.focus)
@@ -975,6 +980,16 @@ func (m *Model) handleEnterKey() tea.Cmd {
 					}
 				}
 			}
+			// EX-203: if there are still no tasks after the auto-select attempt,
+			// give feedback instead of navigating to a blank task detail view.
+			if m.workspace.selectedTaskID == "" {
+				if len(m.workspace.taskOrder) > 0 {
+					m.statusMessage = "All tasks are complete. No open tasks to open."
+				} else {
+					m.statusMessage = "No tasks yet. Create a task to get started."
+				}
+				return nil
+			}
 			m.workspace.setMainView(ViewTask)
 			// EX-178: task-scoped view; set scope so assistantLabel() and
 			// chat header scope indicators are accurate.
@@ -1033,6 +1048,10 @@ func (m *Model) handleEscapeKey() tea.Cmd {
 func (m *Model) stepTaskInProject(delta int) tea.Cmd {
 	openTasks := m.workspace.openTasksForProject()
 	if len(openTasks) < 2 {
+		// EX-202: give feedback when there's nothing to navigate through.
+		if len(openTasks) == 1 {
+			m.statusMessage = "Only one task in this project."
+		}
 		return nil
 	}
 	cursor := m.workspace.projectTaskCursor + delta
@@ -1043,7 +1062,13 @@ func (m *Model) stepTaskInProject(delta int) tea.Cmd {
 		cursor = len(openTasks) - 1
 	}
 	if cursor == m.workspace.projectTaskCursor {
-		return nil // already at boundary
+		// EX-202: give directional feedback at list boundaries.
+		if delta < 0 {
+			m.statusMessage = "At first task."
+		} else {
+			m.statusMessage = "At last task."
+		}
+		return nil
 	}
 	m.workspace.projectTaskCursor = cursor
 	taskID := openTasks[cursor].ID
