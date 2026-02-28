@@ -7700,6 +7700,41 @@ func TestF5KeyContextAwarenessEX472(t *testing.T) {
 	})
 }
 
+// TestF1KeyIdempotencyEX473 verifies EX-473: F1 ("help") mirrors :help (EX-468) and
+// :man (EX-467) idempotency — pressing F1 when already in ViewHelp says "Help: scrolled
+// to top." (and resets scroll) rather than re-announcing "Keybinding reference."
+func TestF1KeyIdempotencyEX473(t *testing.T) {
+	pressF1 := func(m Model) Model {
+		return pressKey(m, tea.KeyMsg{Type: tea.KeyF1})
+	}
+
+	t.Run("f1-already-in-help", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewHelp
+		m.helpScrollOffset = 12
+		m = pressF1(m)
+		if got := m.statusMessage; got != "Help: scrolled to top." {
+			t.Fatalf("EX-473: F1 when already in help = %q, want %q", got, "Help: scrolled to top.")
+		}
+		if m.helpScrollOffset != 0 {
+			t.Fatalf("EX-473: F1 when already in help should reset scroll; got %d", m.helpScrollOffset)
+		}
+	})
+
+	t.Run("f1-from-dashboard-opens-help", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.mainView = ViewDashboard
+		m = pressF1(m)
+		if got := m.workspace.mainView; got != ViewHelp {
+			t.Fatalf("EX-473: F1 from dashboard should open ViewHelp; got %v", got)
+		}
+		if got := m.statusMessage; got != "Keybinding reference. Press ? or Esc to close." {
+			t.Fatalf("EX-473: F1 from dashboard status = %q, want %q", got, "Keybinding reference. Press ? or Esc to close.")
+		}
+	})
+}
+
 // TestHelpCommandIdempotencyEX468 verifies EX-468: :help/:palette when already
 // in ViewHelp says "Help: scrolled to top." (and resets scroll) rather than
 // re-announcing "Keybinding reference." as if opening fresh — mirrors EX-467 for :man.

@@ -1612,10 +1612,18 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyF1:
 		// EX-384: F1 — universally "help". Open the help view.
+		// EX-473: idempotency — mirrors :help (EX-468) and :man (EX-467): when
+		// already in ViewHelp, scroll to top and say so instead of re-announcing
+		// "Keybinding reference." as if opening fresh.
+		alreadyInHelp := m.focus == MainPanel && m.workspace.mainView == ViewHelp
 		m.workspace.setMainView(ViewHelp)
 		m.setFocus(MainPanel)
 		m.helpScrollOffset = 0
-		m.statusMessage = "Keybinding reference. Press ? or Esc to close."
+		if alreadyInHelp {
+			m.statusMessage = "Help: scrolled to top."
+		} else {
+			m.statusMessage = "Keybinding reference. Press ? or Esc to close."
+		}
 		return m, nil
 	case tea.KeyF5:
 		// EX-384: F5 — universally "refresh". Mirror the 'r' key.
