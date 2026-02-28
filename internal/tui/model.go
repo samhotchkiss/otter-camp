@@ -623,6 +623,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// EX-325: give honest feedback when there is nothing to clear.
 				m.statusMessage = "Nothing to clear."
 			}
+		} else {
+			// EX-344: Ctrl-U outside chat panel — redirect hint.
+			m.statusMessage = "Ctrl-U clears chat input. Press 3 or Tab to focus chat."
 		}
 		return m, nil
 	case tea.KeyCtrlW:
@@ -642,6 +645,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// EX-326: give honest feedback when there is nothing to delete.
 				m.statusMessage = "Nothing to delete."
 			}
+		} else {
+			// EX-345: Ctrl-W outside chat panel — redirect hint.
+			m.statusMessage = "Ctrl-W deletes last word from chat input. Press 3 or Tab to focus chat."
 		}
 		return m, nil
 	case tea.KeyTab:
@@ -1153,11 +1159,51 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.statusMessage = node.Label + " section collapsed."
 					}
 				default:
-					// EX-324: Space on non-expandable nodes (task, session, inbox) â suggest Enter.
+					// EX-324: Space on non-expandable nodes (task, session, inbox) — suggest Enter.
 					m.statusMessage = "Use Enter to open this item."
 				}
 			}
 			return m, nil
+		}
+		// EX-346: Space in MainPanel — give a contextual hint (Space is only documented for sidebar).
+		if m.focus == MainPanel {
+			switch m.workspace.mainView {
+			case ViewAgents, ViewMerges, ViewSchedules, ViewActivity:
+				m.statusMessage = "Space not available here. Use r to refresh."
+			case ViewHelp:
+				// Space in help view pages down (natural scroll gesture).
+				helpMaxOff := func() int {
+					extra := 2
+					if m.degradedModeBanner() != "" {
+						extra++
+					}
+					if m.coldOpenActive {
+						extra++
+					}
+					if m.tourActive {
+						extra++
+					}
+					_, termH := normalizeDimensions(m.width, m.height)
+					maxLines := termH - extra - 2 - 4
+					if maxLines < 1 {
+						maxLines = 1
+					}
+					mo := helpViewLineCount - maxLines
+					if mo < 0 {
+						mo = 0
+					}
+					return mo
+				}()
+				if m.helpScrollOffset >= helpMaxOff {
+					m.statusMessage = "Already at bottom of help."
+				} else {
+					m.helpScrollOffset += chatScrollStepLines
+					if m.helpScrollOffset > helpMaxOff {
+						m.helpScrollOffset = helpMaxOff
+					}
+					m.statusMessage = "Help scrolled down."
+				}
+			}
 		}
 		return m, nil
 	case tea.KeyRunes:

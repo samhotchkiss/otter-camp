@@ -8979,3 +8979,68 @@ func TestActionKeysInWrongViewEX340343(t *testing.T) {
 		}
 	}
 }
+
+// TestCtrlUWOutsideChatEX344345 verifies that Ctrl-U and Ctrl-W pressed when
+// focus is not on the chat panel give a redirect hint instead of silently
+// doing nothing (EX-344/345).
+func TestCtrlUWOutsideChatEX344345(t *testing.T) {
+	for _, focus := range []Panel{SidebarPanel, MainPanel} {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = focus
+
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlU})
+		want1 := "Ctrl-U clears chat input. Press 3 or Tab to focus chat."
+		if m1.statusMessage != want1 {
+			t.Errorf("EX-344: Ctrl-U from %v should give redirect; got %q", focus, m1.statusMessage)
+		}
+
+		m2 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlW})
+		want2 := "Ctrl-W deletes last word from chat input. Press 3 or Tab to focus chat."
+		if m2.statusMessage != want2 {
+			t.Errorf("EX-345: Ctrl-W from %v should give redirect; got %q", focus, m2.statusMessage)
+		}
+	}
+
+	// Chat panel should still work as before (existing behaviour must not regress).
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	m.chatInput = "hello world"
+	mc := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlU})
+	if mc.chatInput != "" || mc.statusMessage != "Input cleared." {
+		t.Errorf("EX-344: Ctrl-U in chat should clear input; got input=%q status=%q", mc.chatInput, mc.statusMessage)
+	}
+}
+
+// TestSpaceInMainPanelStaticViewsEX346 verifies that Space in static MainPanel
+// views (Agents, Merges, Schedules, Activity) gives a hint instead of silently
+// doing nothing, and that Space in help view pages down (EX-346).
+func TestSpaceInMainPanelStaticViewsEX346(t *testing.T) {
+	staticViews := []MainView{ViewAgents, ViewMerges, ViewSchedules, ViewActivity}
+	for _, view := range staticViews {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.setMainView(view)
+
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeySpace})
+		if m1.statusMessage != "Space not available here. Use r to refresh." {
+			t.Errorf("EX-346: Space in %v should give hint; got %q", view, m1.statusMessage)
+		}
+	}
+
+	// Space in help view pages down.
+	mh := NewModel(DefaultState())
+	mh.width, mh.height = 220, 40
+	mh.focus = MainPanel
+	mh.workspace.setMainView(ViewHelp)
+	mh.helpScrollOffset = 0
+	mh1 := pressKey(mh, tea.KeyMsg{Type: tea.KeySpace})
+	if mh1.helpScrollOffset <= 0 {
+		t.Errorf("EX-346: Space in help view should page down; helpScrollOffset=%d", mh1.helpScrollOffset)
+	}
+	if mh1.statusMessage != "Help scrolled down." {
+		t.Errorf("EX-346: Space in help should say 'Help scrolled down.'; got %q", mh1.statusMessage)
+	}
+}
