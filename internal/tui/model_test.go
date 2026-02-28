@@ -6800,3 +6800,156 @@ func TestGGJumpFeedbackEX273(t *testing.T) {
 		t.Errorf("EX-273: G in ViewProject should show last task title; got %q", m2.statusMessage)
 	}
 }
+
+// TestHelpViewPgUpPgDnEX274 verifies that PgUp/PgDn scroll the help view
+// instead of being silent no-ops. PgDn scrolls down (increases offset),
+// PgUp scrolls up (decreases offset), with boundary feedback.
+func TestHelpViewPgUpPgDnEX274(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.mainView = ViewHelp
+	m.helpScrollOffset = 0
+
+	// PgUp at top → "Already at top of help."
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if !strings.Contains(m.statusMessage, "top") {
+		t.Errorf("EX-274: PgUp at top of help should say 'top'; got %q", m.statusMessage)
+	}
+	if m.helpScrollOffset != 0 {
+		t.Errorf("EX-274: helpScrollOffset should remain 0 at top; got %d", m.helpScrollOffset)
+	}
+
+	// PgDn from top → scrolls down.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgDown})
+	if !strings.Contains(m.statusMessage, "down") && !strings.Contains(m.statusMessage, "bottom") {
+		t.Errorf("EX-274: PgDn from top of help should say 'down' or 'bottom'; got %q", m.statusMessage)
+	}
+	scrollAfterPgDn := m.helpScrollOffset
+
+	// Scroll back up to 0 using PgUp.
+	for i := 0; i < 10; i++ { // plenty of steps to reach top
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+		if m.helpScrollOffset == 0 {
+			break
+		}
+	}
+	if m.helpScrollOffset != 0 {
+		t.Errorf("EX-274: repeated PgUp should reach top (offset=0); got %d", m.helpScrollOffset)
+	}
+	_ = scrollAfterPgDn // used indirectly above
+
+	// Scroll to bottom by repeating PgDn.
+	for i := 0; i < 20; i++ {
+		prev := m.helpScrollOffset
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgDown})
+		if m.helpScrollOffset == prev {
+			// Reached bottom.
+			break
+		}
+	}
+	// At bottom, PgDn should say "Already at bottom of help."
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgDown})
+	if !strings.Contains(m.statusMessage, "bottom") {
+		t.Errorf("EX-274: PgDn at bottom of help should say 'bottom'; got %q", m.statusMessage)
+	}
+}
+
+// TestCommandModeTabNoMatchEX275 verifies that Tab in command mode with no
+// matching suggestion shows "No matching commands." instead of being silent.
+func TestCommandModeTabNoMatchEX275(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+
+	// Enter command mode with a nonsense prefix that matches nothing.
+	m.commandMode = true
+	m.commandBuffer = ":zzz_no_match"
+
+	// Tab → no suggestions → should show "No matching commands."
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyTab})
+	if !strings.Contains(m.statusMessage, "No matching") {
+		t.Errorf("EX-275: Tab with no match should say 'No matching commands.'; got %q", m.statusMessage)
+	}
+	// Buffer should remain unchanged.
+	if m.commandBuffer != ":zzz_no_match" {
+		t.Errorf("EX-275: buffer should be unchanged when no match; got %q", m.commandBuffer)
+	}
+
+	// Now try with a valid prefix that has a match — Tab should fill it.
+	m.commandMode = true
+	m.commandBuffer = ":fra"
+	m.statusMessage = ""
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyTab})
+	if strings.Contains(m.statusMessage, "No matching") {
+		t.Errorf("EX-275: Tab with match should NOT say 'No matching'; got %q", m.statusMessage)
+	}
+	if m.commandBuffer == ":fra" {
+		t.Errorf("EX-275: buffer should be expanded when a match exists; got %q", m.commandBuffer)
+	}
+}
+
+// TestHomeEndKeysEX276 verifies that Home/End in ViewInbox and ViewProject
+// jump to first/last with item/task title feedback (same as g/G with EX-273).
+func TestHomeEndKeysEX276(t *testing.T) {
+	// — ViewInbox —
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.mainView = ViewInbox
+	m.workspace.inbox = []inboxItem{
+		{ID: "i1", Summary: "Review deployment plan"},
+		{ID: "i2", Summary: "Approve feature branch"},
+	}
+	m.workspace.inboxCursor = 1
+
+	// Home → jump to first, show summary.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+	if m.workspace.inboxCursor != 0 {
+		t.Errorf("EX-276: Home in ViewInbox should set cursor=0; got %d", m.workspace.inboxCursor)
+	}
+	if !strings.Contains(m.statusMessage, "Review deployment plan") {
+		t.Errorf("EX-276: Home in ViewInbox should show first summary; got %q", m.statusMessage)
+	}
+
+	// End → jump to last, show summary.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+	if m.workspace.inboxCursor != 1 {
+		t.Errorf("EX-276: End in ViewInbox should set cursor=1; got %d", m.workspace.inboxCursor)
+	}
+	if !strings.Contains(m.statusMessage, "Approve feature branch") {
+		t.Errorf("EX-276: End in ViewInbox should show last summary; got %q", m.statusMessage)
+	}
+
+	// — ViewProject —
+	m2 := NewModel(DefaultState())
+	m2.width, m2.height = 220, 40
+	m2.focus = MainPanel
+	m2.workspace.mainView = ViewProject
+	m2.workspace.selectedProjectID = "p1"
+	m2.workspace.selectedProject = &ProjectDetail{
+		ID: "p1",
+		Tasks: []SidebarTaskItem{
+			{ID: "t1", Title: "Alpha", TaskNumber: 1, WorkStatus: "todo"},
+			{ID: "t2", Title: "Beta", TaskNumber: 2, WorkStatus: "in_progress"},
+		},
+	}
+	m2.workspace.projectTaskCursor = 1
+
+	// Home → jump to first task.
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyHome})
+	if m2.workspace.projectTaskCursor != 0 {
+		t.Errorf("EX-276: Home in ViewProject should set cursor=0; got %d", m2.workspace.projectTaskCursor)
+	}
+	if !strings.Contains(m2.statusMessage, "Alpha") {
+		t.Errorf("EX-276: Home in ViewProject should show first task; got %q", m2.statusMessage)
+	}
+
+	// End → jump to last task.
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyEnd})
+	if m2.workspace.projectTaskCursor != 1 {
+		t.Errorf("EX-276: End in ViewProject should set cursor=1; got %d", m2.workspace.projectTaskCursor)
+	}
+	if !strings.Contains(m2.statusMessage, "Beta") {
+		t.Errorf("EX-276: End in ViewProject should show last task; got %q", m2.statusMessage)
+	}
+}

@@ -634,6 +634,23 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			switch key.Type {
+			case tea.KeyHome:
+				// EX-276: Home/End in ViewInbox jump to first/last (same as g/G).
+				m.workspace.inboxHome()
+				if len(m.workspace.inbox) > 0 {
+					if item := m.workspace.currentInboxItem(); item != nil && item.Summary != "" {
+						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					}
+				}
+				return m, nil
+			case tea.KeyEnd:
+				m.workspace.inboxEnd()
+				if len(m.workspace.inbox) > 0 {
+					if item := m.workspace.currentInboxItem(); item != nil && item.Summary != "" {
+						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					}
+				}
+				return m, nil
 			case tea.KeyUp:
 				// EX-272: arrow keys mirror j/k EX-268 navigation with feedback.
 				prevCursor := m.workspace.inboxCursor
@@ -661,6 +678,29 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			switch key.Type {
+			case tea.KeyHome:
+				// EX-276: Home/End in ViewProject jump to first/last (same as g/G).
+				m.workspace.projectTaskCursor = 0
+				if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+					t := openTasks[0]
+					label := t.Title
+					if t.TaskNumber > 0 {
+						label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+					}
+					m.statusMessage = "▸ " + truncate(label, 40)
+				}
+				return m, nil
+			case tea.KeyEnd:
+				if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+					m.workspace.projectTaskCursor = len(openTasks) - 1
+					t := openTasks[len(openTasks)-1]
+					label := t.Title
+					if t.TaskNumber > 0 {
+						label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+					}
+					m.statusMessage = "▸ " + truncate(label, 40)
+				}
+				return m, nil
 			case tea.KeyUp:
 				// EX-271: match k/j EX-270 feedback for ↑/↓ arrow keys.
 				prevCursor := m.workspace.projectTaskCursor
@@ -724,6 +764,59 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
 					}
 					m.statusMessage = "▸ " + truncate(label, 40)
+				}
+				return m, nil
+			}
+		}
+		if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
+			// EX-274: PgUp/PgDn scroll the help view by a page — currently j/k
+			// scroll one line at a time but PgUp/PgDn were silent no-ops.
+			helpMaxOffset := func() int {
+				extra := 2
+				if m.degradedModeBanner() != "" {
+					extra++
+				}
+				if m.coldOpenActive {
+					extra++
+				}
+				if m.tourActive {
+					extra++
+				}
+				_, termH := normalizeDimensions(m.width, m.height)
+				maxLines := termH - extra - 2 - 4
+				if maxLines < 1 {
+					maxLines = 1
+				}
+				mo := helpViewLineCount - maxLines
+				if mo < 0 {
+					mo = 0
+				}
+				return mo
+			}
+			switch key.Type {
+			case tea.KeyPgUp:
+				// PgUp = scroll UP through the document (like pressing k×8).
+				if m.helpScrollOffset == 0 {
+					m.statusMessage = "Already at top of help."
+				} else {
+					m.helpScrollOffset -= chatScrollStepLines
+					if m.helpScrollOffset < 0 {
+						m.helpScrollOffset = 0
+					}
+					m.statusMessage = "Help scrolled up."
+				}
+				return m, nil
+			case tea.KeyPgDown:
+				// PgDn = scroll DOWN through the document (like pressing j×8).
+				maxOff := helpMaxOffset()
+				if m.helpScrollOffset >= maxOff {
+					m.statusMessage = "Already at bottom of help."
+				} else {
+					m.helpScrollOffset += chatScrollStepLines
+					if m.helpScrollOffset > maxOff {
+						m.helpScrollOffset = maxOff
+					}
+					m.statusMessage = "Help scrolled down."
 				}
 				return m, nil
 			}
@@ -1961,8 +2054,12 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case tea.KeyTab:
 		// EX-228: Tab fills the top command palette suggestion into the buffer.
+		// EX-275: when there are no matching suggestions, give feedback instead
+		// of silently doing nothing — the user pressed Tab expecting a completion.
 		if suggestions := m.commandPaletteSuggestions(1); len(suggestions) > 0 {
 			m.commandBuffer = ":" + suggestions[0]
+		} else {
+			m.statusMessage = "No matching commands."
 		}
 		return m, nil
 	case tea.KeyBackspace:
