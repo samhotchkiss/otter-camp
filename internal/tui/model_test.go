@@ -5478,3 +5478,49 @@ func TestCmdPrefixStrippedBeforeExecution(t *testing.T) {
 		t.Errorf("cmd: quit didn't set quitting=true")
 	}
 }
+
+// TestFilterActionHintEX229 verifies EX-229: the hint footers in Activity,
+// Agents, Merges, and Schedules views change from "/·filter" to "/·clear filter"
+// when a mainFilter is active.
+func TestFilterActionHintEX229(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.activity = []string{"task done", "agent expired"}
+	model.workspace.agents = []string{"Frank=active"}
+
+	t.Run("no filter", func(t *testing.T) {
+		model.mainFilter = ""
+		for _, view := range []string{"activity", "agents"} {
+			var lines []string
+			switch view {
+			case "activity":
+				lines = model.renderActivityView(80, 20)
+			case "agents":
+				lines = model.renderAgentsView(80, 20)
+			}
+			rendered := strings.Join(lines, "\n")
+			if !strings.Contains(rendered, "/·filter") {
+				t.Errorf("EX-229: %s view should show '/·filter' when no filter active;\n%s", view, rendered)
+			}
+			if strings.Contains(rendered, "clear filter") {
+				t.Errorf("EX-229: %s view should NOT show 'clear filter' when no filter active;\n%s", view, rendered)
+			}
+		}
+	})
+
+	t.Run("filter active", func(t *testing.T) {
+		model.mainFilter = "task"
+		for _, view := range []string{"activity", "agents"} {
+			var lines []string
+			switch view {
+			case "activity":
+				lines = model.renderActivityView(80, 20)
+			case "agents":
+				lines = model.renderAgentsView(80, 20)
+			}
+			rendered := strings.Join(lines, "\n")
+			if !strings.Contains(rendered, "clear filter") {
+				t.Errorf("EX-229: %s view should show 'clear filter' when filter active; rendered:\n%s", view, rendered)
+			}
+		}
+	})
+}

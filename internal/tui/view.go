@@ -1573,7 +1573,7 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 					Foreground(colMuted).Render(emptyMsg),
 			),
 			"",
-			styleMuted.Render("  r·refresh  ·  /·filter  ·  Esc·dashboard"),
+			styleMuted.Render("  r·refresh  ·  "+filterActionHint(query)+"  ·  Esc·dashboard"),
 		}
 	}
 
@@ -1705,7 +1705,7 @@ func (m Model) renderActivityView(width, maxLines int) []string {
 	}
 	// EX-210: hint footer so users know which keys work in this view.
 	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("  r·refresh  ·  /·filter  ·  Esc·dashboard"))
+	lines = append(lines, styleMuted.Render("  r·refresh  ·  "+filterActionHint(query)+"  ·  Esc·dashboard"))
 	return lines
 }
 
@@ -1777,7 +1777,7 @@ func (m Model) renderAgentsView(width, maxLines int) []string {
 	}
 	// EX-210: hint footer so users know which keys work in this view.
 	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("  r·refresh  ·  /·filter  ·  Esc·dashboard"))
+	lines = append(lines, styleMuted.Render("  r·refresh  ·  "+filterActionHint(query)+"  ·  Esc·dashboard"))
 	return lines
 }
 
@@ -1828,7 +1828,7 @@ func (m Model) renderMergesView(width, maxLines int) []string {
 	}
 	// EX-210: hint footer so users know which keys work in this view.
 	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("  r·refresh  ·  /·filter  ·  Esc·dashboard"))
+	lines = append(lines, styleMuted.Render("  r·refresh  ·  "+filterActionHint(query)+"  ·  Esc·dashboard"))
 	return lines
 }
 
@@ -1877,7 +1877,7 @@ func (m Model) renderSchedulesView(width, maxLines int) []string {
 	}
 	// EX-210: hint footer so users know which keys work in this view.
 	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("  r·refresh  ·  /·filter  ·  Esc·dashboard"))
+	lines = append(lines, styleMuted.Render("  r·refresh  ·  "+filterActionHint(query)+"  ·  Esc·dashboard"))
 	return lines
 }
 
@@ -1930,9 +1930,9 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("n", "jump to next unread session"),
 		key("r", "refresh task / project detail (in detail views), or sidebar"),
 		key("?", "toggle this help screen"),
-		key(":command", "open command palette"),
+		key(":command", "open command palette  (Tab fills top suggestion)"),
 		"",
-		header("Commands  (press : to open)"),
+		header("Commands  (press : then Tab to autocomplete)"),
 		key(":frank / :general", "switch to Frank or General session"),
 		key(":dashboard / :inbox", "navigate to view"),
 		key(":project / :task", "navigate to view"),
@@ -1951,6 +1951,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key(":sidebar <action>", "sidebar: up|down|home|end|expand|collapse|select"),
 		key(":inbox <action>", "inbox: approve|reject|defer|open"),
 		key(":tour dismiss", "dismiss the tour overlay"),
+		key(":help", "show all commands in status bar"),
 		key(":quit", "quit OtterCamp"),
 		"",
 		styleMuted.Render("  Press ? or Esc to close"),
@@ -2742,6 +2743,15 @@ func (m Model) degradedModeBanner() string {
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────────
+
+// filterActionHint returns "/ · clear filter" when a filter is active and
+// "/ · filter" otherwise, so the hint footer is always actionable. EX-229.
+func filterActionHint(activeFilter string) string {
+	if strings.TrimSpace(activeFilter) != "" {
+		return "/·clear filter"
+	}
+	return "/·filter"
+}
 
 // prefixLines prepends prefix to every line in a potentially multi-line string.
 // Used to apply gutter indent to the full panel row in XL layouts.

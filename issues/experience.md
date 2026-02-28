@@ -3516,3 +3516,17 @@ But it gave no indication of how many tasks were in-progress vs blocked vs todo,
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-229: Filter hint footers show "/·filter" even when a filter is already active
+
+**Observation:** In the Activity, Agents, Merges, Schedules, and Inbox views, the hint footer always showed `"/·filter"` regardless of whether a filter was active. Once a filter was applied (e.g., "task" showing only matching entries), the `/` hint still said "filter" rather than "clear filter" — users had no visible reminder that a filter was narrowing the results.
+
+**Improvement:** Added `filterActionHint(query string) string` helper to `view.go` that returns `"/·clear filter"` when a non-empty query is active and `"/·filter"` otherwise. Replaced all 5 static hint footer strings with the dynamic version using `replace_all`.
+
+The "↑ N older entries hidden" and "no X matching 'Q'" messages already showed the filter was active, but the action hint gives the user an explicit affordance to clear it.
+
+**Effort:** Low (helper function + search-replace across 5 sites)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
