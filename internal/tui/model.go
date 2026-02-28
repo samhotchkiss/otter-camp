@@ -1211,6 +1211,9 @@ func (m *Model) handleEnterKey() tea.Cmd {
 			}
 			return nil
 		}
+		// EX-284: Enter in static views (Agents, Merges, Schedules, Activity)
+		// has no selection model — give a hint rather than silently doing nothing.
+		m.statusMessage = "Enter not available in this view. Use r to refresh or Esc to go back."
 	}
 	return nil
 }

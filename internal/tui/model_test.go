@@ -7245,3 +7245,22 @@ func TestStaticViewJKFeedbackEX283(t *testing.T) {
 		}
 	}
 }
+
+// TestStaticViewEnterFeedbackEX284 verifies that Enter in static MainPanel
+// views (Agents, Merges, Schedules, Activity) gives a hint rather than silently
+// doing nothing — no selection model exists in those views.
+func TestStaticViewEnterFeedbackEX284(t *testing.T) {
+	staticViews := []MainView{ViewAgents, ViewMerges, ViewSchedules, ViewActivity}
+	for _, view := range staticViews {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.mainView = view
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+		want := "Enter not available in this view. Use r to refresh or Esc to go back."
+		if m.statusMessage != want {
+			t.Errorf("EX-284: Enter in %v should say %q; got %q", view, want, m.statusMessage)
+		}
+	}
+}
