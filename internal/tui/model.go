@@ -2502,11 +2502,15 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.statusMessage = "▸ (sidebar item)"
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
-			m.workspace.inboxHome()
-			// EX-273: mirror ViewDashboard g feedback — show item summary.
-			// EX-288: mirror EX-190 — give feedback when inbox is empty.
-			if len(m.workspace.inbox) > 0 {
-				if item := m.workspace.currentInboxItem(); item != nil {
+			// EX-464: add prevCursor check — mirrors ↑/↓/Home/End which already have boundary feedback.
+			if len(m.workspace.inbox) == 0 {
+				m.statusMessage = "Inbox is empty."
+			} else {
+				prevCursor := m.workspace.inboxCursor
+				m.workspace.inboxHome()
+				if m.workspace.inboxCursor == prevCursor {
+					m.statusMessage = "At first inbox item."
+				} else if item := m.workspace.currentInboxItem(); item != nil {
 					if item.Summary != "" {
 						m.statusMessage = "▸ " + truncate(item.Summary, 40)
 					} else {
@@ -2514,30 +2518,37 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 						m.statusMessage = "▸ (inbox item)"
 					}
 				}
-			} else {
-				m.statusMessage = "Inbox is empty."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
-			m.workspace.projectTaskCursor = 0
-			// EX-273: show first task title like ViewDashboard does.
+			// EX-464: add prevCursor check — mirrors ↑/↓/Home/End which already have boundary feedback.
 			if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
-				t := openTasks[0]
-				label := t.Title
-				if t.TaskNumber > 0 {
-					label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+				prevCursor := m.workspace.projectTaskCursor
+				m.workspace.projectTaskCursor = 0
+				if m.workspace.projectTaskCursor == prevCursor {
+					m.statusMessage = "At first task in project."
+				} else {
+					t := openTasks[0]
+					label := t.Title
+					if t.TaskNumber > 0 {
+						label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+					}
+					m.statusMessage = "▸ " + truncate(label, 40)
 				}
-				m.statusMessage = "▸ " + truncate(label, 40)
 			} else {
 				// EX-287: match EX-190 pattern — give feedback when no open tasks.
 				m.statusMessage = "No open tasks in this project."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
 			// EX-135: jump to first task on dashboard board (g = vim home)
+			// EX-464: add prevID check — mirrors PgUp/Home which already have boundary feedback.
 			active := m.workspace.dashboardActiveTasks()
 			if len(active) > 0 {
+				prevID := m.workspace.selectedTaskID
 				m.workspace.dashboardCursor = 0
 				m.workspace.selectedTaskID = active[0]
-				if task := m.workspace.tasks[active[0]]; task != nil {
+				if m.workspace.selectedTaskID == prevID {
+					m.statusMessage = "At first task on board."
+				} else if task := m.workspace.tasks[active[0]]; task != nil {
 					label := task.Title
 					if task.TaskNumber > 0 {
 						label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
@@ -2586,13 +2597,17 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.statusMessage = "▸ (sidebar item)"
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
-			m.workspace.inboxEnd()
 			// EX-273: mirror ViewDashboard G feedback — show item summary.
-			// Guard against empty inbox: currentInboxItem clamps cursor, which
-			// would mutate it away from -1 and break existing semantics.
 			// EX-288: also give feedback when inbox is empty.
-			if len(m.workspace.inbox) > 0 {
-				if item := m.workspace.currentInboxItem(); item != nil {
+			// EX-464: add prevCursor check — mirrors ↓/↑/End/Home.
+			if len(m.workspace.inbox) == 0 {
+				m.statusMessage = "Inbox is empty."
+			} else {
+				prevCursor := m.workspace.inboxCursor
+				m.workspace.inboxEnd()
+				if m.workspace.inboxCursor == prevCursor {
+					m.statusMessage = "At last inbox item."
+				} else if item := m.workspace.currentInboxItem(); item != nil {
 					if item.Summary != "" {
 						m.statusMessage = "▸ " + truncate(item.Summary, 40)
 					} else {
@@ -2600,31 +2615,39 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 						m.statusMessage = "▸ (inbox item)"
 					}
 				}
-			} else {
-				m.statusMessage = "Inbox is empty."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			// EX-273: use openTasksForProject so cursor lands within bounds and
 			// we can show the title — matches the g case feedback pattern.
+			// EX-464: add prevCursor check — mirrors ↑/↓/Home/End.
 			if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+				prevCursor := m.workspace.projectTaskCursor
 				m.workspace.projectTaskCursor = len(openTasks) - 1
-				t := openTasks[len(openTasks)-1]
-				label := t.Title
-				if t.TaskNumber > 0 {
-					label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+				if m.workspace.projectTaskCursor == prevCursor {
+					m.statusMessage = "At last task in project."
+				} else {
+					t := openTasks[len(openTasks)-1]
+					label := t.Title
+					if t.TaskNumber > 0 {
+						label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+					}
+					m.statusMessage = "▸ " + truncate(label, 40)
 				}
-				m.statusMessage = "▸ " + truncate(label, 40)
 			} else {
 				// EX-287: match EX-190 pattern — give feedback when no open tasks.
 				m.statusMessage = "No open tasks in this project."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
 			// EX-135: jump to last task on dashboard board (G = vim end)
+			// EX-464: add prevID check — mirrors PgDn/End which already have boundary feedback.
 			active := m.workspace.dashboardActiveTasks()
 			if len(active) > 0 {
+				prevID := m.workspace.selectedTaskID
 				m.workspace.dashboardCursor = len(active) - 1
 				m.workspace.selectedTaskID = active[len(active)-1]
-				if task := m.workspace.tasks[active[len(active)-1]]; task != nil {
+				if m.workspace.selectedTaskID == prevID {
+					m.statusMessage = "At last task on board."
+				} else if task := m.workspace.tasks[active[len(active)-1]]; task != nil {
 					label := task.Title
 					if task.TaskNumber > 0 {
 						label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)

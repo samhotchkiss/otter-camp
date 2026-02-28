@@ -638,6 +638,11 @@ func TestGGJumpTopBottomAcrossPanels(t *testing.T) {
 
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}}) // main
 	model.workspace.setMainView(ViewInbox)
+	// EX-464: add inbox items so g/G have items to navigate (empty guard now returns early).
+	model.workspace.inbox = []inboxItem{
+		{ID: "i1", Summary: "First item"},
+		{ID: "i2", Summary: "Second item"},
+	}
 	model.workspace.inboxCursor = 1
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 	if got := model.workspace.inboxCursor; got != 0 {
@@ -2203,6 +2208,128 @@ func TestGUpperKeyInDashboardJumpsToLastTask(t *testing.T) {
 	if updated.workspace.dashboardCursor != 2 {
 		t.Fatalf("G should set dashboardCursor to 2, got: %d", updated.workspace.dashboardCursor)
 	}
+}
+
+// TestGGBoundaryFeedbackEX464 verifies EX-464: g/G in ViewInbox/ViewProject/ViewDashboard
+// give "At first/last X." when already at boundary, consistent with ↑/↓/Home/End which
+// already have prevCursor checks. Before this fix, g/G showed the item label even when
+// the cursor didn't move.
+func TestGGBoundaryFeedbackEX464(t *testing.T) {
+	t.Run("g-already-at-first-inbox", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.mainView = ViewInbox
+		m.workspace.inbox = []inboxItem{
+			{ID: "i1", Summary: "Alpha"},
+			{ID: "i2", Summary: "Beta"},
+		}
+		m.workspace.inboxCursor = 0
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+
+		if got := m.statusMessage; got != "At first inbox item." {
+			t.Fatalf("EX-464: g at first inbox item = %q, want %q", got, "At first inbox item.")
+		}
+	})
+
+	t.Run("G-already-at-last-inbox", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.mainView = ViewInbox
+		m.workspace.inbox = []inboxItem{
+			{ID: "i1", Summary: "Alpha"},
+			{ID: "i2", Summary: "Beta"},
+		}
+		m.workspace.inboxCursor = 1
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+
+		if got := m.statusMessage; got != "At last inbox item." {
+			t.Fatalf("EX-464: G at last inbox item = %q, want %q", got, "At last inbox item.")
+		}
+	})
+
+	t.Run("g-already-at-first-project-task", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.mainView = ViewProject
+		m.workspace.selectedProjectID = "p1"
+		m.workspace.selectedProject = &ProjectDetail{
+			ID: "p1",
+			Tasks: []SidebarTaskItem{
+				{ID: "t1", Title: "Alpha", WorkStatus: "todo"},
+				{ID: "t2", Title: "Beta", WorkStatus: "todo"},
+			},
+		}
+		m.workspace.projectTaskCursor = 0
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+
+		if got := m.statusMessage; got != "At first task in project." {
+			t.Fatalf("EX-464: g at first project task = %q, want %q", got, "At first task in project.")
+		}
+	})
+
+	t.Run("G-already-at-last-project-task", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.mainView = ViewProject
+		m.workspace.selectedProjectID = "p1"
+		m.workspace.selectedProject = &ProjectDetail{
+			ID: "p1",
+			Tasks: []SidebarTaskItem{
+				{ID: "t1", Title: "Alpha", WorkStatus: "todo"},
+				{ID: "t2", Title: "Beta", WorkStatus: "todo"},
+			},
+		}
+		m.workspace.projectTaskCursor = 1
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+
+		if got := m.statusMessage; got != "At last task in project." {
+			t.Fatalf("EX-464: G at last project task = %q, want %q", got, "At last task in project.")
+		}
+	})
+
+	t.Run("g-already-at-first-dashboard-task", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.setMainView(ViewDashboard)
+		m.workspace.tasks["t1"] = &taskRecord{ID: "t1", Title: "Alpha", Status: "todo"}
+		m.workspace.tasks["t2"] = &taskRecord{ID: "t2", Title: "Beta", Status: "todo"}
+		m.workspace.taskOrder = []string{"t1", "t2"}
+		m.workspace.dashboardCursor = 0
+		m.workspace.selectedTaskID = "t1"
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+
+		if got := m.statusMessage; got != "At first task on board." {
+			t.Fatalf("EX-464: g at first dashboard task = %q, want %q", got, "At first task on board.")
+		}
+	})
+
+	t.Run("G-already-at-last-dashboard-task", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.setMainView(ViewDashboard)
+		m.workspace.tasks["t1"] = &taskRecord{ID: "t1", Title: "Alpha", Status: "todo"}
+		m.workspace.tasks["t2"] = &taskRecord{ID: "t2", Title: "Beta", Status: "todo"}
+		m.workspace.taskOrder = []string{"t1", "t2"}
+		m.workspace.dashboardCursor = 1
+		m.workspace.selectedTaskID = "t2"
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+
+		if got := m.statusMessage; got != "At last task on board." {
+			t.Fatalf("EX-464: G at last dashboard task = %q, want %q", got, "At last task on board.")
+		}
+	})
 }
 
 // EX-136: chat header in ScopeTask should include task number and title as breadcrumb.
