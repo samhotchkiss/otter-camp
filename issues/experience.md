@@ -3907,3 +3907,169 @@ The old `key(":command", ...)` entry was replaced by the more informative Ctrl-P
 **Status:** [x] Discovered | [x] Fixed | [x] Tested
 
 ---
+
+## EX-253: `recallHistory()` at oldest message misleadingly says "Recalled previous message."
+
+**Observation:** When the user presses ↑ in the chat panel to recall history and reaches the oldest message (index 0), pressing ↑ again would show the same message but still say "Recalled previous message." — implying movement that didn't occur. Users pressing ↑ repeatedly would get the same status message each time even after hitting the end of history.
+
+**Root cause:** `recallHistory()` only decremented when `chatHistoryIndex > 0`, but always set `m.chatInput = m.chatHistory[m.chatHistoryIndex]` and `m.statusMessage = "Recalled previous message."` unconditionally after the guard. The guard prevented decrement but not the message.
+
+**Improvement:** Moved `m.chatInput` and `m.statusMessage = "Recalled previous message."` inside the `if m.chatHistoryIndex > 0` branch. The `else` branch now says "Already at oldest message." (consistent with EX-250 "Already at top of help." and EX-202 "At first task.").
+
+**Effort:** Trivial (restructure of 3 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-254: Filter apply/clear status messages don't include the search term
+
+**Observation:** When the user committed a filter with Enter, the status bar showed "Search applied." When they cleared it with Esc, it showed "Search cleared." Neither message included what filter was being applied or cleared, so the user had to look at the search bar to verify.
+
+For example: filtering for "frank" and pressing Enter showed "Search applied." — a user who switches away from the search bar immediately doesn't know if their filter was properly recorded.
+
+**Root cause:** `updateSearchInput` used static status strings without including `m.searchQuery`.
+
+**Improvement:**
+- Enter now shows: `Filter "frank" applied.` (or `"Filter cleared."` when empty)
+- Esc now shows: `Filter "frank" cleared.` (or `"Filter cleared."` when already empty)
+
+Both use `fmt.Sprintf` with the query quoted, consistent with how validation errors include the invalid value (e.g. EX-244's `Unknown scope %q`).
+
+**Effort:** Trivial (8 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+---
+
+## EX-255: 'j' at bottom of help view is a silent no-op
+
+**Observation:** Pressing 'k' at the top of the help view shows "Already at top of help." (EX-250). However, pressing 'j' at the bottom of the help view was a silent no-op — `helpScrollOffset` stayed at max and nothing in the status bar indicated the boundary.
+
+**Root cause:** EX-250 added the top-boundary check but the symmetric bottom-boundary check was not added at the same time.
+
+**Improvement:** Added bottom-detection logic in the 'j' handler for `ViewHelp`. Added `const helpViewLineCount = 62` (self-verified by `TestHelpViewLineCountMatchesEX255`) to compute `maxOffset`. When `helpScrollOffset >= maxOffset`, status shows "Already at bottom of help."
+
+**Effort:** Small (12 lines + constant)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-256: ↓ past newest history entry said "Cleared chat input." instead of explaining navigation
+
+**Observation:** Pressing ↑ recalls previous sent messages into the chat input. Pressing ↓ navigates forward. When the user pressed ↓ past the newest history entry (returning to the blank compose state), the status said "Cleared chat input." — which sounds like a destructive action rather than normal history navigation.
+
+**Root cause:** The message was written from the perspective of "the field was cleared", not from the perspective of "you're back to composing a new message."
+
+**Improvement:** Changed message to "Back to new message." — consistent with the mental model that history navigation goes backward/forward, and reaching the "newest" end means you're composing fresh.
+
+**Effort:** Trivial (1 line)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-257: `enterSearchMode` message mixed "Search" and "Filter" terminology
+
+**Observation:** After EX-254 switched apply/clear messages to say "Filter", `enterSearchMode` still showed "Search active. Type to filter; Enter keep, Esc clear." — mixing "Search" and "filter" in the same message.
+
+**Root cause:** EX-254 updated apply/clear messages but missed the activation message.
+
+**Improvement:** Changed to "Filter mode: type to narrow · Enter apply · Esc clear" — consistent terminology (all "Filter"), clearer action hints with middle-dot separators matching other TUI hints.
+
+**Effort:** Trivial (1 line)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-258: Persistent filter bar showed "(Esc to clear)" but Esc doesn't clear outside edit mode
+
+**Observation:** When a filter was applied and the user was NOT in edit mode, the search bar showed "(/ to edit  ·  Esc to clear)". However, pressing Esc outside of edit mode does NOT clear the filter — it only clears when inside edit mode. This hint was therefore misleading.
+
+**Root cause:** The hint was copied from the in-edit-mode hint where Esc does cancel/clear. It was never updated when the persistent (non-editing) hint was added.
+
+**Improvement:** Changed to "(/ to re-filter or clear)" — accurate: pressing / enters edit mode where you can clear the filter or type a new one.
+
+**Effort:** Trivial (1 line)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-259: Search bar and active filter hint used "Search" not "Filter"
+
+**Observation:** `renderSearchBar` returned "Search /frank" (with capital S). The main panel and sidebar active search hints showed "Search /" prefix. EX-254/257/258 established "Filter" as the canonical term but three display sites were missed.
+
+**Root cause:** Three display sites in view.go were not updated when EX-254 introduced "Filter" terminology.
+
+**Improvement:** Updated all three locations to use "Filter": `renderSearchBar` ("Filter /frank"), main panel active hint ("Filter /frank▌"), sidebar active hint ("Filter /frank▌"). Updated `TestAppliedFilterShowsEditClearHint` (EX-208 test) to match.
+
+**Effort:** Trivial (3 lines + 1 test update)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-260: Command palette navigation messages used inconsistent "Main view:" prefix
+
+**Observation:** Using `:inbox` showed "Main view: inbox", `:dashboard` showed "Main view: dashboard", `:project` showed "Main view: project". The keyboard shortcut messages (e.g. pressing 'd' for dashboard) just said "Dashboard" without the "Main view:" prefix. This inconsistency made command-mode and keyboard-mode feel like different features.
+
+**Root cause:** The `:nav <view>` command handler used a hardcoded "Main view: " prefix inherited from an early prototype.
+
+**Improvement:** Added `viewNavLabel()` helper returning Title-Case view names. All nav messages now match keyboard shortcut format: "Inbox", "Dashboard", "Project view", "Task detail", "Merge Queue", etc.
+
+**Effort:** Small (helper function + switch cases)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-261: Sidebar Enter on empty sidebar or section header gave wrong message
+
+**Observation:** Two edge cases:
+1. When the sidebar had no items (empty state), pressing Enter showed "Sidebar selection applied." — which is wrong since nothing was selected.
+2. When Enter was pressed on a section header (e.g. "CHATS" or "PROJECTS"), it toggled the section but showed "Sidebar selection applied." — generic and unhelpful.
+
+**Root cause:** The Enter handler for `SidebarPanel` called `selectSidebarNode()` and showed the generic message without checking whether a node existed or whether it was a header.
+
+**Improvement:**
+- `node == nil` → "No items in sidebar."
+- `node.Kind == sidebarKindHeader` → reads current collapsed state, toggles, then shows "CHATS section collapsed." or "CHATS section expanded." as appropriate.
+
+**Effort:** Small (10 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-262: `[ / ]` scope cycle listed under Chat section in help view
+
+**Observation:** The help view listed `[ / ]  cycle chat scope: org | project | task` under the "Chat" section. However, `[` and `]` work from any panel — the scope cycle is a global action, not a chat-specific one.
+
+**Root cause:** When the help entry was first written, scope cycling was only meaningful in the chat panel context. Since then, the key became globally active.
+
+**Improvement:** Moved the `[ / ]` entry from the Chat section to the Global section. `helpViewLineCount` remains 62 (line moved, not added).
+
+**Effort:** Trivial (move 1 line between sections)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-263: `<` / `>` at panel size limit silently repeated the same percentage
+
+**Observation:** Pressing `<` to shrink the sidebar (or `>` to expand it) when it was already at its minimum or maximum width just showed "Sidebar width 15%" again — the same message with the same number the user had already seen. There was no indication that the boundary had been hit.
+
+**Root cause:** `resizeFocusedPanel` clamped `target` to `[minTarget, maxTarget]` but then always formatted the status as `"%s width %.0f%%"` without distinguishing the "already at limit" case.
+
+**Improvement:** Captured the unclamped raw value (`raw := proportions[index] + delta`). After clamping, if `raw < minTarget` the status says "Sidebar at minimum width (15%)", if `raw > maxTarget` it says "Sidebar at maximum width (70%)". When within bounds the existing format is used. The label is parameterized so the same logic covers Chat panel resizing too.
+
+**Effort:** Small (8 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---

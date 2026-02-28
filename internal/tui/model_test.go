@@ -6358,3 +6358,41 @@ func TestSidebarEnterOnHeaderEX261(t *testing.T) {
 		t.Errorf("EX-261: second Enter on collapsed header should say 'expanded'; got %q", m.statusMessage)
 	}
 }
+
+// TestResizePanelAtLimitEX263 verifies EX-263: pressing < or > when a panel is
+// already at its minimum or maximum width shows a directional limit message
+// instead of silently repeating the same percentage.
+func TestResizePanelAtLimitEX263(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+
+	// Focus the sidebar and shrink it all the way to the minimum.
+	m.focus = SidebarPanel
+	for i := 0; i < 30; i++ {
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'<'}})
+	}
+	// Now it should be reporting "at minimum width".
+	if !strings.Contains(m.statusMessage, "minimum") {
+		t.Errorf("EX-263: sidebar at min — want 'minimum' in status; got %q", m.statusMessage)
+	}
+	if strings.Contains(m.statusMessage, "maximum") {
+		t.Errorf("EX-263: sidebar at min — should not say 'maximum'; got %q", m.statusMessage)
+	}
+
+	// Expand it all the way to the maximum.
+	for i := 0; i < 30; i++ {
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'>'}})
+	}
+	if !strings.Contains(m.statusMessage, "maximum") {
+		t.Errorf("EX-263: sidebar at max — want 'maximum' in status; got %q", m.statusMessage)
+	}
+	if strings.Contains(m.statusMessage, "minimum") {
+		t.Errorf("EX-263: sidebar at max — should not say 'minimum'; got %q", m.statusMessage)
+	}
+
+	// A single step back from maximum should show a normal width message (no "limit").
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'<'}})
+	if strings.Contains(m.statusMessage, "minimum") || strings.Contains(m.statusMessage, "maximum") {
+		t.Errorf("EX-263: one step in from max should show plain width; got %q", m.statusMessage)
+	}
+}

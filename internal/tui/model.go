@@ -2876,7 +2876,8 @@ func (m *Model) resizeFocusedPanel(delta float64) bool {
 		return false
 	}
 
-	target := proportions[index] + delta
+	raw := proportions[index] + delta
+	target := raw
 	if target < minTarget {
 		target = minTarget
 	}
@@ -2892,7 +2893,17 @@ func (m *Model) resizeFocusedPanel(delta float64) bool {
 	updated[otherIndex] = other
 	m.state.PanelProportions = updated
 	m.applyResponsiveLayout()
-	m.statusMessage = fmt.Sprintf("%s width %.0f%%", label, target*100)
+
+	// EX-263: when the resize hits a boundary, say so instead of silently showing
+	// the same percentage the user was already at.
+	switch {
+	case raw < minTarget:
+		m.statusMessage = fmt.Sprintf("%s at minimum width (%.0f%%)", label, target*100)
+	case raw > maxTarget:
+		m.statusMessage = fmt.Sprintf("%s at maximum width (%.0f%%)", label, target*100)
+	default:
+		m.statusMessage = fmt.Sprintf("%s width %.0f%%", label, target*100)
+	}
 	return true
 }
 
