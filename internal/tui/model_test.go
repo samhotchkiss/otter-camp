@@ -12518,3 +12518,71 @@ func TestSidebarHLAlreadyCollapsedExpandedEX447(t *testing.T) {
 		}
 	})
 }
+
+// TestArrowKeyLeftRightAlreadyCollapsedExpandedEX448 verifies that ← / → arrow keys
+// give the same honest "Already collapsed/expanded." feedback as h/l (EX-447).
+// Previously ← on an already-collapsed header said "Collapsed X." and → on an
+// already-expanded header/project re-triggered task loading with "Expanded X." message.
+func TestArrowKeyLeftRightAlreadyCollapsedExpandedEX448(t *testing.T) {
+	t.Run("left-on-already-collapsed-header-gives-already-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.workspace.sidebarCursor = 1 // CHATS header
+		m.workspace.sectionCollapsed[sectionChats] = true
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyLeft})
+		if got := m.statusMessage; got != "Already collapsed." {
+			t.Fatalf("← on already-collapsed CHATS = %q, want %q", got, "Already collapsed.")
+		}
+	})
+
+	t.Run("left-on-expanded-header-gives-collapsed-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.workspace.sidebarCursor = 1 // CHATS header (expanded by default)
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyLeft})
+		if got := m.statusMessage; got != "Collapsed CHATS." {
+			t.Fatalf("← on expanded CHATS = %q, want %q", got, "Collapsed CHATS.")
+		}
+	})
+
+	t.Run("right-on-already-expanded-header-gives-already-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.workspace.sidebarCursor = 1 // CHATS header (expanded by default)
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRight})
+		if got := m.statusMessage; got != "Already expanded." {
+			t.Fatalf("→ on expanded CHATS = %q, want %q", got, "Already expanded.")
+		}
+	})
+
+	t.Run("right-on-collapsed-header-gives-expanded-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.workspace.sidebarCursor = 1 // CHATS header
+		m.workspace.sectionCollapsed[sectionChats] = true
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRight})
+		if got := m.statusMessage; got != "Expanded CHATS." {
+			t.Fatalf("→ on collapsed CHATS = %q, want %q", got, "Expanded CHATS.")
+		}
+	})
+
+	t.Run("right-on-already-expanded-project-gives-already-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		projID := "proj-ex448"
+		nodeID := "project-" + projID
+		m.workspace.nodes[nodeID] = &sidebarNode{
+			ID:        nodeID,
+			Label:     "Beta Project",
+			Kind:      sidebarKindProject,
+			ProjectID: projID,
+			Expanded:  true,
+		}
+		m.workspace.topLevel = append(m.workspace.topLevel, nodeID)
+		m.workspace.sidebarCursor = 4
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRight})
+		if got := m.statusMessage; got != "Already expanded." {
+			t.Fatalf("→ on already-expanded project = %q, want %q", got, "Already expanded.")
+		}
+	})
+}

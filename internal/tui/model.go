@@ -3415,11 +3415,19 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		var nodeExpanded bool
 		var nodeKind sidebarKind
 		var nodeParentID string
+		// EX-448: also capture whether a header section was already collapsed
+		// so we can give "Already collapsed." instead of misleading "Collapsed X."
+		// (mirrors the same EX-447 fix applied to the h key handler).
+		var nodeSectionWasCollapsed bool
 		if node != nil {
 			nodeLabel = node.Label
 			nodeExpanded = node.Expanded
 			nodeKind = node.Kind
 			nodeParentID = node.ParentID
+			if node.Kind == sidebarKindHeader {
+				sID := sidebarSectionID(strings.TrimPrefix(node.ID, "header-"))
+				nodeSectionWasCollapsed = m.workspace.sectionCollapsed[sID]
+			}
 		}
 		m.workspace.collapseSidebarNode()
 		if node != nil {
@@ -3434,7 +3442,13 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 					m.statusMessage = "Already collapsed."
 				}
 			case sidebarKindHeader:
-				m.statusMessage = "Collapsed " + truncate(nodeLabel, 30) + "."
+				// EX-448: give honest "Already collapsed." when section was already
+				// collapsed rather than misleading "Collapsed X." (no state change).
+				if nodeSectionWasCollapsed {
+					m.statusMessage = "Already collapsed."
+				} else {
+					m.statusMessage = "Collapsed " + truncate(nodeLabel, 30) + "."
+				}
 			default:
 				if nodeParentID != "" {
 					m.statusMessage = "Moved to parent."
@@ -3454,14 +3468,35 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		node := m.workspace.currentSidebarNode()
 		if node != nil {
+			// EX-448: capture pre-expansion state before expandSidebarNode mutates
+			// node.Expanded and sectionCollapsed (mirrors EX-447 fix for l key).
+			var nodeWasAlreadyExpanded bool
+			var nodeSectionWasCollapsed bool
 			if node.Kind == sidebarKindProject {
+				nodeWasAlreadyExpanded = node.Expanded
+			} else if node.Kind == sidebarKindHeader {
+				sID := sidebarSectionID(strings.TrimPrefix(node.ID, "header-"))
+				nodeSectionWasCollapsed = m.workspace.sectionCollapsed[sID]
+			}
+			if node.Kind == sidebarKindProject {
+				// EX-448: if already expanded, don't re-trigger task load.
+				if nodeWasAlreadyExpanded {
+					m.statusMessage = "Already expanded."
+					return true, nil
+				}
 				m.workspace.expandSidebarNode()
 				m.statusMessage = "Expanded " + truncate(node.Label, 30) + " — loading tasks…"
 				return true, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true)
 			}
 			if node.Kind == sidebarKindHeader {
 				m.workspace.expandSidebarNode()
-				m.statusMessage = "Expanded " + truncate(node.Label, 30) + "."
+				// EX-448: give honest "Already expanded." when section was already
+				// expanded rather than misleading "Expanded X." (no state change).
+				if !nodeSectionWasCollapsed {
+					m.statusMessage = "Already expanded."
+				} else {
+					m.statusMessage = "Expanded " + truncate(node.Label, 30) + "."
+				}
 				return true, nil
 			}
 			// EX-321: non-expandable nodes (task, session, inbox) — suggest Enter.
