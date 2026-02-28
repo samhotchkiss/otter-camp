@@ -6593,6 +6593,8 @@ func TestJumpCommandsWithNameEX240(t *testing.T) {
 
 	t.Run("project without name just switches view", func(t *testing.T) {
 		model := NewModel(DefaultState())
+		// EX-470: :project requires a selected project to navigate; seed one.
+		model.workspace.selectedProjectID = "p1"
 		_ = model.executeCommand(":project")
 		if model.workspace.mainView != ViewProject {
 			t.Fatalf("EX-240: :project alone should switch to ViewProject, got %v", model.workspace.mainView)
@@ -6617,6 +6619,8 @@ func TestJumpCommandsWithNameEX240(t *testing.T) {
 
 	t.Run("task without title just switches view", func(t *testing.T) {
 		model := NewModel(DefaultState())
+		// EX-470: :task requires a selected task to navigate; seed one.
+		model.workspace.selectedTaskID = "t1"
 		_ = model.executeCommand(":task")
 		if model.workspace.mainView != ViewTask {
 			t.Fatalf("EX-240: :task alone should switch to ViewTask, got %v", model.workspace.mainView)
@@ -7246,6 +7250,9 @@ func TestCommandNavLabelsEX260(t *testing.T) {
 		m.focus = MainPanel
 		// EX-461: start from a view not in the test cases so navigation always changes view.
 		m.workspace.mainView = ViewMerges
+		// EX-470: :project and :task require a selected project/task to navigate.
+		m.workspace.selectedProjectID = "p1"
+		m.workspace.selectedTaskID = "t1"
 
 		// Enter command mode and type the command.
 		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
@@ -7457,6 +7464,82 @@ func TestAgentChatManCommandIdempotencyEX465_466_467(t *testing.T) {
 		}
 		if got := m.statusMessage; got != "Keybinding reference. Press ? or Esc to close." {
 			t.Fatalf("EX-467: :man from dashboard status = %q, want %q", got, "Keybinding reference. Press ? or Esc to close.")
+		}
+	})
+}
+
+// TestProjectTaskNoSelectionGuardEX470 verifies EX-470: :project and :task
+// (no-arg) check for missing selectedProjectID / selectedTaskID and give
+// "No project/task selected." — mirrors the 'p' (EX-199) and 't' (EX-199)
+// key guards so the command path is consistent with keyboard shortcuts.
+func TestProjectTaskNoSelectionGuardEX470(t *testing.T) {
+	executeCmd := func(m Model, cmd string) Model {
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+		for _, r := range cmd {
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+		return pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	}
+
+	t.Run("project-no-selected-project", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewDashboard
+		m.workspace.selectedProjectID = "" // no project selected
+		m.statusMessage = ""
+
+		m = executeCmd(m, "project")
+
+		if got := m.statusMessage; got != "No project selected. Select a project from the sidebar." {
+			t.Fatalf("EX-470: :project with no selection = %q, want %q", got, "No project selected. Select a project from the sidebar.")
+		}
+		// Should NOT have navigated to ViewProject.
+		if m.workspace.mainView != ViewDashboard {
+			t.Fatalf("EX-470: :project with no selection should not navigate; mainView=%v", m.workspace.mainView)
+		}
+	})
+
+	t.Run("project-with-selection-navigates", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewDashboard
+		m.workspace.selectedProjectID = "p1"
+
+		m = executeCmd(m, "project")
+
+		if got := m.workspace.mainView; got != ViewProject {
+			t.Fatalf("EX-470: :project with selection should navigate to ViewProject; got %v", got)
+		}
+	})
+
+	t.Run("task-no-selected-task", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewDashboard
+		m.workspace.selectedTaskID = "" // no task selected
+		m.statusMessage = ""
+
+		m = executeCmd(m, "task")
+
+		if got := m.statusMessage; got != "No task selected. Select a task from the dashboard or project view." {
+			t.Fatalf("EX-470: :task with no selection = %q, want %q", got, "No task selected. Select a task from the dashboard or project view.")
+		}
+		// Should NOT have navigated to ViewTask.
+		if m.workspace.mainView != ViewDashboard {
+			t.Fatalf("EX-470: :task with no selection should not navigate; mainView=%v", m.workspace.mainView)
+		}
+	})
+
+	t.Run("task-with-selection-navigates", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewDashboard
+		m.workspace.selectedTaskID = "t1"
+
+		m = executeCmd(m, "task")
+
+		if got := m.workspace.mainView; got != ViewTask {
+			t.Fatalf("EX-470: :task with selection should navigate to ViewTask; got %v", got)
 		}
 	})
 }

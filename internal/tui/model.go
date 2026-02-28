@@ -4703,6 +4703,12 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		if len(fields) > 1 {
 			return m.jumpToProjectByName(strings.Join(fields[1:], " "))
 		}
+		// EX-470: mirrors 'p' key (EX-199) — no project selected → give feedback
+		// instead of navigating to an empty project view that confuses the user.
+		if m.workspace.selectedProjectID == "" {
+			m.statusMessage = "No project selected. Select a project from the sidebar."
+			return nil
+		}
 		// EX-462: idempotency — mirrors 'p' key (EX-333 "Already in project view.").
 		if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			m.statusMessage = "Already in project view."
@@ -4717,6 +4723,12 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		// Without a title, just switch to the task view (existing behaviour).
 		if len(fields) > 1 {
 			return m.jumpToTaskByTitle(strings.Join(fields[1:], " "))
+		}
+		// EX-470: mirrors 't' key (EX-199) — no task selected → give feedback
+		// instead of navigating to an empty task detail view that confuses the user.
+		if m.workspace.selectedTaskID == "" {
+			m.statusMessage = "No task selected. Select a task from the dashboard or project view."
+			return nil
 		}
 		// EX-462: idempotency — mirrors 't' key (EX-334 "Already viewing task detail.").
 		if m.focus == MainPanel && m.workspace.mainView == ViewTask {

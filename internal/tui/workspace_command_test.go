@@ -46,6 +46,10 @@ func TestCommandPaletteViewCommands(t *testing.T) {
 
 	for _, tc := range tests {
 		model := NewModel(DefaultState())
+		// EX-470: :project and :task require a selected project/task to navigate.
+		// Seed both so these commands don't early-return with "No X selected."
+		model.workspace.selectedProjectID = "p1"
+		model.workspace.selectedTaskID = "t1"
 		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
 		for _, r := range []rune(tc.command) {
 			model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
