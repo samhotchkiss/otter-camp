@@ -275,6 +275,62 @@ func TestWorkerUnresponsiveChatEnvelopeEX410(t *testing.T) {
 	})
 }
 
+// EX-412: when chat.turn.cancelled arrives with queued messages, the status
+// bar should mention the queue so the user knows they have messages waiting.
+func TestTurnCancelledWithQueueMentionsQueueEX412(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+	model.activeTurn = true
+	model.activeSession = "session-org-abc"
+	// Seed two queued messages.
+	model.queuedMessages = []QueuedMessage{
+		{Text: "follow-up 1"},
+		{Text: "follow-up 2"},
+	}
+
+	model.applyChatEnvelope(EventEnvelope{
+		Seq:       1,
+		EventID:   "evt-cancel",
+		EventType: "chat.turn.cancelled",
+		OrgID:     "org-1",
+		Payload:   mustJSON(t, map[string]any{"session_id": "session-org-abc"}),
+	})
+
+	if model.ActiveTurn() {
+		t.Fatal("activeTurn should be false after turn cancelled")
+	}
+	if got := model.QueueDepth(); got != 2 {
+		// Queue is intentionally NOT cleared — user must decide what to do.
+		t.Fatalf("queue depth = %d, want 2 (queue preserved after external cancel)", got)
+	}
+	if !strings.Contains(model.statusMessage, "2 queued") {
+		t.Fatalf("statusMessage = %q, want mention of queued count", model.statusMessage)
+	}
+}
+
+// EX-412: with no queued messages, turn cancellation keeps the original message.
+func TestTurnCancelledWithoutQueueEX412(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.turnsSynced = true
+	model.activeTurn = true
+	model.activeSession = "session-org-abc"
+
+	model.applyChatEnvelope(EventEnvelope{
+		Seq:       1,
+		EventID:   "evt-cancel2",
+		EventType: "chat.turn.cancelled",
+		OrgID:     "org-1",
+		Payload:   mustJSON(t, map[string]any{"session_id": "session-org-abc"}),
+	})
+
+	if model.ActiveTurn() {
+		t.Fatal("activeTurn should be false after turn cancelled")
+	}
+	if got := model.statusMessage; got != "Active turn cancelled." {
+		t.Fatalf("statusMessage = %q, want %q", got, "Active turn cancelled.")
+	}
+}
+
 func mustJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)

@@ -4681,7 +4681,16 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) tea.Cmd {
 		}
 		m.activeTurn = false
 		m.activeTurnSessionID = ""
-		m.statusMessage = "Active turn cancelled."
+		// EX-412: if there are queued messages when the turn is externally
+		// cancelled, they won't auto-promote (only completeTurnAndPromoteQueue
+		// does that). Surface a hint so the user knows they have queued messages
+		// to act on rather than seeing a generic "Active turn cancelled." with no
+		// mention of the orphaned queue.
+		if n := len(m.queuedMessages); n > 0 {
+			m.statusMessage = fmt.Sprintf("Active turn cancelled — %d queued message(s) remain. Press d to discard or Enter to resend.", n)
+		} else {
+			m.statusMessage = "Active turn cancelled."
+		}
 	case "chat.tool_call.status":
 		var payload struct {
 			MessageID  string `json:"message_id"`
