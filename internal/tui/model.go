@@ -2508,7 +2508,8 @@ func (m *Model) enterSearchMode(panel Panel) {
 	m.searchPanel = panel
 	m.searchQuery = m.filterForPanel(panel)
 	// EX-257: align with filter terminology from EX-254; clarify Enter/Esc actions.
-	m.statusMessage = "Filter mode: type to narrow · Enter apply · Esc clear"
+	// EX-316: also mention ↑/↓ (EX-313) and Ctrl-U/Ctrl-W (EX-310/EX-314).
+	m.statusMessage = "Filter mode: type · ↑/↓ nav · Ctrl-U clear · Ctrl-W del-word · Enter apply · Esc cancel"
 }
 
 func (m *Model) setFilterForPanel(panel Panel, query string) {

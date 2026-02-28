@@ -426,12 +426,13 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 		}
 	}
 
-	// EX-194: search bar hint — show "Esc to cancel" suffix when search is active.
+	// EX-194: search bar hint — show navigation hints when search is active.
 	// EX-259: "Search" → "Filter" for consistent terminology.
+	// EX-316: include ↑/↓ and Ctrl-U hints (added in EX-313/EX-310).
 	if searchLine != "" {
 		hint := searchLine
 		if m.searchMode && m.searchPanel == SidebarPanel {
-			hint = styleMuted.Render(truncate("Filter /"+m.sidebarFilter+"▌  (Esc to cancel)", cw))
+			hint = styleMuted.Render(truncate("Filter /"+m.sidebarFilter+"▌  (↑/↓ nav · Ctrl-U clear · Esc cancel)", cw))
 		}
 		lines = append(lines, "")
 		lines = append(lines, hint)
@@ -783,7 +784,8 @@ func (m Model) renderMainPanel(innerW, innerH int, focused bool, layout layoutSt
 		// EX-200: match EX-194 — show Esc hint in main panel search bar while editing.
 		// EX-259: "Search" → "Filter" for consistent terminology.
 		if m.searchMode && m.searchPanel == MainPanel {
-			hint = styleMuted.Render(truncate("Filter /"+m.mainFilter+"▌  (Esc to cancel)", cw))
+			// EX-316: include ↑/↓ and Ctrl-U hints (added in EX-313/EX-310).
+			hint = styleMuted.Render(truncate("Filter /"+m.mainFilter+"▌  (↑/↓ nav · Ctrl-U clear · Esc cancel)", cw))
 		}
 		lines = append(lines, "")
 		lines = append(lines, hint)
