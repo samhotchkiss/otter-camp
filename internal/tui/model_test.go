@@ -10099,3 +10099,39 @@ func TestCtrlBFDKInSearchAndCommandEX379(t *testing.T) {
 		}
 	})
 }
+
+// TestCapitalLetterHintsEX380 verifies that uppercase variants of common
+// keybindings (N/I/D/R/P/T) show "use lowercase" hints in non-chat panels
+// instead of silent no-ops (EX-380).
+func TestCapitalLetterHintsEX380(t *testing.T) {
+	tests := []struct {
+		r    rune
+		want string
+	}{
+		{'N', "N is not bound. Press n (lowercase) to jump to next unread session."},
+		{'I', "I is not bound. Press i (lowercase) to open the inbox."},
+		{'D', "D is not bound. Press d (lowercase) for dashboard or to show/hide done tasks."},
+		{'R', "R is not bound. Press r (lowercase) to refresh."},
+		{'P', "P is not bound. Press p (lowercase) to open the project view."},
+		{'T', "T is not bound. Press t (lowercase) to open task detail."},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("key-%c in MainPanel", tt.r), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.r}})
+			if m1.statusMessage != tt.want {
+				t.Errorf("EX-380: key %c: got %q, want %q", tt.r, m1.statusMessage, tt.want)
+			}
+		})
+		// Capital letters in chat panel should type into the input.
+		t.Run(fmt.Sprintf("key-%c types in ChatPanel", tt.r), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = ChatPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.r}})
+			if m1.chatInput != string(tt.r) {
+				t.Errorf("EX-380: key %c in chat should type; got chatInput=%q", tt.r, m1.chatInput)
+			}
+		})
+	}
+}

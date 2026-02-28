@@ -2575,6 +2575,42 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.statusMessage = "z is not bound. Use j/k or ↑/↓ to scroll, or ? for key reference."
 			return true, nil
 		}
+	case 'N':
+		// EX-380: capital 'N' — not bound. Users may mean lowercase 'n' (next unread).
+		if m.focus != ChatPanel {
+			m.statusMessage = "N is not bound. Press n (lowercase) to jump to next unread session."
+			return true, nil
+		}
+	case 'I':
+		// EX-380: capital 'I' — not bound. Users may mean lowercase 'i' (inbox).
+		if m.focus != ChatPanel {
+			m.statusMessage = "I is not bound. Press i (lowercase) to open the inbox."
+			return true, nil
+		}
+	case 'D':
+		// EX-380: capital 'D' — not bound. Users may mean lowercase 'd' (dashboard / done toggle).
+		if m.focus != ChatPanel {
+			m.statusMessage = "D is not bound. Press d (lowercase) for dashboard or to show/hide done tasks."
+			return true, nil
+		}
+	case 'R':
+		// EX-380: capital 'R' — not bound. Users may mean lowercase 'r' (refresh).
+		if m.focus != ChatPanel {
+			m.statusMessage = "R is not bound. Press r (lowercase) to refresh."
+			return true, nil
+		}
+	case 'P':
+		// EX-380: capital 'P' — not bound. Users may mean lowercase 'p' (project view).
+		if m.focus != ChatPanel {
+			m.statusMessage = "P is not bound. Press p (lowercase) to open the project view."
+			return true, nil
+		}
+	case 'T':
+		// EX-380: capital 'T' — not bound. Users may mean lowercase 't' (task view).
+		if m.focus != ChatPanel {
+			m.statusMessage = "T is not bound. Press t (lowercase) to open task detail."
+			return true, nil
+		}
 	case '4', '5', '6', '7', '8', '9':
 		// EX-372: Users may guess that 4-9 switch panels (1=sidebar, 2=main, 3=chat).
 		// Give a hint pointing to the actual panel shortcuts instead of silently doing nothing.
