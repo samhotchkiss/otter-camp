@@ -5575,6 +5575,9 @@ func (m *Model) switchScope(next ChatScope) tea.Cmd {
 // jumpToFrankSession switches the active session to the org-level (Frank) session
 // and returns a cmd to reload its chat history (EX-165).
 func (m *Model) jumpToFrankSession(trigger string) tea.Cmd {
+	// EX-469: capture current session before activateGeneralSession mutates it,
+	// so we can detect "already there" and say "refreshed" instead of "switched".
+	prevSession := strings.TrimSpace(m.activeSession)
 	if err := m.workspace.activateGeneralSession(); err != nil {
 		m.statusMessage = "Unable to load Frank session. Press Ctrl-G or :frank to retry."
 		return nil
@@ -5586,9 +5589,14 @@ func (m *Model) jumpToFrankSession(trigger string) tea.Cmd {
 	m.activeSession = sessionID
 	m.state.LastActiveChatSession = sessionID
 	m.chatScrollOffset = 0
-	if strings.TrimSpace(trigger) == "" {
+	alreadyOnFrank := looksLikeUUID(prevSession) && strings.EqualFold(prevSession, strings.TrimSpace(sessionID))
+	switch {
+	case alreadyOnFrank:
+		// EX-469: already on Frank session — say "refreshed" (history reload still fires).
+		m.statusMessage = "Frank session refreshed."
+	case strings.TrimSpace(trigger) == "":
 		m.statusMessage = "Switched to Frank session."
-	} else {
+	default:
 		m.statusMessage = fmt.Sprintf("Switched to Frank session (%s).", trigger)
 	}
 	// EX-165: reload history so chat shows Frank's messages, not the previous session's.

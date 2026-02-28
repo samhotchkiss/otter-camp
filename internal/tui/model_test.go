@@ -4051,6 +4051,53 @@ func TestJumpToFrankSessionReloadsChatHistory(t *testing.T) {
 	}
 }
 
+// TestJumpToFrankSessionIdempotencyEX469 verifies EX-469: Ctrl-G / 0 / :frank
+// says "Frank session refreshed." when already on the Frank session rather than
+// the misleading "Switched to Frank session." (nothing actually switched).
+func TestJumpToFrankSessionIdempotencyEX469(t *testing.T) {
+	frankSessionID := "00000000-0000-0000-0000-000000000469"
+	setupFrank := func(m Model) Model {
+		if m.workspace.nodes == nil {
+			m.workspace.nodes = make(map[string]*sidebarNode)
+		}
+		m.workspace.nodes[generalSidebarNodeID] = &sidebarNode{
+			ID:        generalSidebarNodeID,
+			Kind:      sidebarKindSession,
+			SessionID: frankSessionID,
+		}
+		return m
+	}
+
+	t.Run("ctrl-g-already-on-frank", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+		m = setupFrank(m)
+		// Pre-set activeSession to the Frank session UUID.
+		m.activeSession = frankSessionID
+		m.statusMessage = ""
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlG})
+		if got := m.statusMessage; got != "Frank session refreshed." {
+			t.Fatalf("EX-469: Ctrl-G when already on Frank = %q, want %q", got, "Frank session refreshed.")
+		}
+	})
+
+	t.Run("ctrl-g-from-other-session-switches", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+		m = setupFrank(m)
+		// Pre-set activeSession to a DIFFERENT session UUID.
+		m.activeSession = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		m.statusMessage = ""
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlG})
+		if got := m.statusMessage; got != "Switched to Frank session (Ctrl-G)." {
+			t.Fatalf("EX-469: Ctrl-G from other session = %q, want %q", got, "Switched to Frank session (Ctrl-G).")
+		}
+		if m.activeSession != frankSessionID {
+			t.Fatalf("EX-469: activeSession should be frank=%q; got %q", frankSessionID, m.activeSession)
+		}
+	})
+}
+
 // EX-166: pressing 'n' (next unread) should reload chat history for the newly
 // selected session. Previously selectSidebarNode only set the session ID, so
 // the chat panel showed the previous session's messages.
