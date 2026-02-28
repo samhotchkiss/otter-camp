@@ -7560,3 +7560,32 @@ func TestProjectHomeEndEmptyFeedbackEX293(t *testing.T) {
 		}
 	}
 }
+
+// TestDashboardEmptyBoardFeedbackEX294 verifies that j/k and ↑/↓ in ViewDashboard
+// when the task board is empty give "Task board is empty." instead of silently doing nothing.
+func TestDashboardEmptyBoardFeedbackEX294(t *testing.T) {
+	type keyInput struct {
+		name string
+		msg  tea.KeyMsg
+	}
+	keys := []keyInput{
+		{"j", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}},
+		{"k", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}},
+		{"↑", tea.KeyMsg{Type: tea.KeyUp}},
+		{"↓", tea.KeyMsg{Type: tea.KeyDown}},
+	}
+	for _, k := range keys {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.mainView = ViewDashboard
+		m.workspace.taskOrder = nil  // empty board
+		m.workspace.tasks = nil
+		m.workspace.selectedTaskID = ""
+
+		m = pressKey(m, k.msg)
+		if m.statusMessage != "Task board is empty." {
+			t.Errorf("EX-294: %s on empty board should say 'Task board is empty.'; got %q", k.name, m.statusMessage)
+		}
+	}
+}

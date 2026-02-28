@@ -752,6 +752,7 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch key.Type {
 			case tea.KeyUp:
 				// EX-271: match k EX-266 feedback for ↑ arrow key.
+				// EX-294: also give feedback when board is empty.
 				prevID := m.workspace.selectedTaskID
 				m.workspace.moveDashboardCursor(-1)
 				if m.workspace.selectedTaskID == prevID && prevID != "" {
@@ -762,10 +763,13 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
 					}
 					m.statusMessage = "▸ " + truncate(label, 40)
+				} else if prevID == "" {
+					m.statusMessage = "Task board is empty."
 				}
 				return m, nil
 			case tea.KeyDown:
 				// EX-271: match j EX-266 feedback for ↓ arrow key.
+				// EX-294: also give feedback when board is empty.
 				prevID := m.workspace.selectedTaskID
 				m.workspace.moveDashboardCursor(1)
 				if m.workspace.selectedTaskID == prevID && prevID != "" {
@@ -776,6 +780,8 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
 					}
 					m.statusMessage = "▸ " + truncate(label, 40)
+				} else if prevID == "" {
+					m.statusMessage = "Task board is empty."
 				}
 				return m, nil
 			}
@@ -1366,6 +1372,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.workspace.moveDashboardCursor(1)
 			// EX-266: when the cursor didn't advance (already at last task),
 			// give directional feedback like EX-202 does for the project view.
+			// EX-294: when board is empty (prevID and selectedTaskID both ""), say so.
 			if m.workspace.selectedTaskID == prevID && prevID != "" {
 				m.statusMessage = "At last task on board."
 			} else if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
@@ -1374,6 +1381,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
 				}
 				m.statusMessage = "▸ " + truncate(label, 40)
+			} else if prevID == "" {
+				// EX-294: board was empty before the move — give honest feedback.
+				m.statusMessage = "Task board is empty."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewTask {
 			return true, m.stepTaskInProject(1)
@@ -1453,6 +1463,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.workspace.moveDashboardCursor(-1)
 			// EX-266: when the cursor didn't retreat (already at first task),
 			// give directional feedback like EX-202 does for the project view.
+			// EX-294: when board is empty (prevID and selectedTaskID both ""), say so.
 			if m.workspace.selectedTaskID == prevID && prevID != "" {
 				m.statusMessage = "At first task on board."
 			} else if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
@@ -1461,6 +1472,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
 				}
 				m.statusMessage = "▸ " + truncate(label, 40)
+			} else if prevID == "" {
+				// EX-294: board was empty before the move — give honest feedback.
+				m.statusMessage = "Task board is empty."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewTask {
 			return true, m.stepTaskInProject(-1)
