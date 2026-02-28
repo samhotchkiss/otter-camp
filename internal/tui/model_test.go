@@ -7525,3 +7525,38 @@ func TestSidebarPgUpPgDnFeedbackEX291(t *testing.T) {
 		t.Errorf("EX-291: PgDn at last should say 'At last item in sidebar.'; got %q", m.statusMessage)
 	}
 }
+
+// TestInboxHomeEndEmptyFeedbackEX292 verifies that Home/End in ViewInbox when
+// the inbox is empty shows "Inbox is empty." matching g/G (EX-288).
+func TestInboxHomeEndEmptyFeedbackEX292(t *testing.T) {
+	for _, keyType := range []tea.KeyType{tea.KeyHome, tea.KeyEnd} {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.mainView = ViewInbox
+		m.workspace.inbox = nil // empty
+
+		m = pressKey(m, tea.KeyMsg{Type: keyType})
+		if m.statusMessage != "Inbox is empty." {
+			t.Errorf("EX-292: %v in empty inbox should say 'Inbox is empty.'; got %q", keyType, m.statusMessage)
+		}
+	}
+}
+
+// TestProjectHomeEndEmptyFeedbackEX293 verifies that Home/End in ViewProject
+// when there are no open tasks shows "No open tasks in this project." matching g/G (EX-287).
+func TestProjectHomeEndEmptyFeedbackEX293(t *testing.T) {
+	for _, keyType := range []tea.KeyType{tea.KeyHome, tea.KeyEnd} {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.mainView = ViewProject
+		m.workspace.selectedProjectID = "proj-1"
+		// No project detail → openTasksForProject returns nil.
+
+		m = pressKey(m, tea.KeyMsg{Type: keyType})
+		if m.statusMessage != "No open tasks in this project." {
+			t.Errorf("EX-293: %v in empty project should say 'No open tasks in this project.'; got %q", keyType, m.statusMessage)
+		}
+	}
+}

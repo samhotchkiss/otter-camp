@@ -636,19 +636,25 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch key.Type {
 			case tea.KeyHome:
 				// EX-276: Home/End in ViewInbox jump to first/last (same as g/G).
+				// EX-292: give "Inbox is empty." feedback matching g/G (EX-288).
 				m.workspace.inboxHome()
 				if len(m.workspace.inbox) > 0 {
 					if item := m.workspace.currentInboxItem(); item != nil && item.Summary != "" {
 						m.statusMessage = "▸ " + truncate(item.Summary, 40)
 					}
+				} else {
+					m.statusMessage = "Inbox is empty."
 				}
 				return m, nil
 			case tea.KeyEnd:
+				// EX-292: give "Inbox is empty." feedback matching g/G (EX-288).
 				m.workspace.inboxEnd()
 				if len(m.workspace.inbox) > 0 {
 					if item := m.workspace.currentInboxItem(); item != nil && item.Summary != "" {
 						m.statusMessage = "▸ " + truncate(item.Summary, 40)
 					}
+				} else {
+					m.statusMessage = "Inbox is empty."
 				}
 				return m, nil
 			case tea.KeyUp:
@@ -680,6 +686,7 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch key.Type {
 			case tea.KeyHome:
 				// EX-276: Home/End in ViewProject jump to first/last (same as g/G).
+				// EX-293: give "No open tasks." feedback matching g/G (EX-287).
 				m.workspace.projectTaskCursor = 0
 				if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
 					t := openTasks[0]
@@ -688,9 +695,12 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
 					}
 					m.statusMessage = "▸ " + truncate(label, 40)
+				} else {
+					m.statusMessage = "No open tasks in this project."
 				}
 				return m, nil
 			case tea.KeyEnd:
+				// EX-293: give "No open tasks." feedback matching g/G (EX-287).
 				if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
 					m.workspace.projectTaskCursor = len(openTasks) - 1
 					t := openTasks[len(openTasks)-1]
@@ -699,6 +709,8 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
 					}
 					m.statusMessage = "▸ " + truncate(label, 40)
+				} else {
+					m.statusMessage = "No open tasks in this project."
 				}
 				return m, nil
 			case tea.KeyUp:
