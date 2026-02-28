@@ -2190,6 +2190,10 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.statusMessage = "Already at bottom of help."
 			} else {
 				m.helpScrollOffset++
+				// EX-440: give feedback consistent with PgDn ("Help scrolled down.") and
+				// g/G ("Help jumped to top/bottom."). j/k at boundary give feedback; the
+				// mid-scroll case was silent, unlike every other j/k navigable view.
+				m.statusMessage = "Help scrolled down."
 			}
 		} else if m.focus == MainPanel {
 			// EX-283: j/k in static views (Agents, Merges, Schedules, Activity)
@@ -2268,6 +2272,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
 			if m.helpScrollOffset > 0 {
 				m.helpScrollOffset--
+				// EX-440: give feedback consistent with PgUp ("Help scrolled up.") and
+				// g/G ("Help jumped to top/bottom."). Mirrors the j fix for the same view.
+				m.statusMessage = "Help scrolled up."
 			} else {
 				// EX-250: give feedback instead of silent no-op when already at the top.
 				m.statusMessage = "Already at top of help."

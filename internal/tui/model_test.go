@@ -6486,6 +6486,44 @@ func TestHelpViewKAtTopFeedbackEX250(t *testing.T) {
 	}
 }
 
+// TestHelpViewJKScrollFeedbackEX440 verifies EX-440: pressing j/k in the help view
+// gives "Help scrolled down." / "Help scrolled up." during mid-scroll, consistent with
+// PgUp/PgDn ("Help scrolled up/down.") and g/G ("Help jumped to top/bottom.").
+// Previously only the boundary states gave feedback ("Already at top/bottom of help.").
+func TestHelpViewJKScrollFeedbackEX440(t *testing.T) {
+	// Start with helpScrollOffset > 0 so k can scroll up.
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewHelp)
+	m.helpScrollOffset = 5 // mid-scroll, not at top
+
+	// k should scroll up one line and say "Help scrolled up."
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if got := m.StatusMessage(); got != "Help scrolled up." {
+		t.Errorf("EX-440: k mid-scroll status = %q, want 'Help scrolled up.'", got)
+	}
+	if m.helpScrollOffset != 4 {
+		t.Errorf("EX-440: helpScrollOffset after k = %d, want 4", m.helpScrollOffset)
+	}
+
+	// j should scroll down one line and say "Help scrolled down."
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if got := m.StatusMessage(); got != "Help scrolled down." {
+		t.Errorf("EX-440: j mid-scroll status = %q, want 'Help scrolled down.'", got)
+	}
+	if m.helpScrollOffset != 5 {
+		t.Errorf("EX-440: helpScrollOffset after j = %d, want 5", m.helpScrollOffset)
+	}
+
+	// k at offset 0 should still give "Already at top." boundary message.
+	m.helpScrollOffset = 0
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if got := m.StatusMessage(); got != "Already at top of help." {
+		t.Errorf("EX-440: k at top status = %q, want 'Already at top of help.'", got)
+	}
+}
+
 // TestSidebarFilterHintEX251 verifies EX-251: the sidebar help line says
 // "/ filter" when no filter is active and "/ clear filter" when a filter is active.
 func TestSidebarFilterHintEX251(t *testing.T) {
