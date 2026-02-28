@@ -11191,3 +11191,34 @@ func TestDefaultCaseHintsInModalModesEX403(t *testing.T) {
 		}
 	})
 }
+
+// TestGlobalDefaultCaseHintEX404 verifies that the global default: branch in
+// updateKey produces a "not bound" hint for unknown key types rather than
+// silently discarding the keystroke (EX-404).
+func TestGlobalDefaultCaseHintEX404(t *testing.T) {
+	unknownKey := tea.KeyMsg{Type: tea.KeyType(255)}
+
+	t.Run("MainPanel", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m1 := pressKey(m, unknownKey)
+		if m1.statusMessage == "" {
+			t.Errorf("EX-404: unknown key in MainPanel should give feedback, got empty statusMessage")
+		}
+		if !strings.Contains(m1.statusMessage, "not bound") {
+			t.Errorf("EX-404: expected 'not bound' in statusMessage, got %q", m1.statusMessage)
+		}
+	})
+
+	t.Run("ChatPanel", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m1 := pressKey(m, unknownKey)
+		if m1.statusMessage == "" {
+			t.Errorf("EX-404: unknown key in ChatPanel should give feedback, got empty statusMessage")
+		}
+		if !strings.Contains(m1.statusMessage, "not bound") {
+			t.Errorf("EX-404: expected 'not bound' in statusMessage, got %q", m1.statusMessage)
+		}
+	})
+}

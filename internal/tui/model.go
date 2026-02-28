@@ -1634,6 +1634,15 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	default:
+		// EX-404: catch-all for any key type not explicitly listed above
+		// (e.g. tea.KeyNull, future bubbletea additions, terminal-specific sequences).
+		// Give an honest "not bound" hint so the user knows the key was received
+		// but has no action assigned, rather than silently discarding it.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Key not bound. Type your message or press ? for key reference."
+		} else {
+			m.statusMessage = "Key not bound. Press ? for key reference or : for commands."
+		}
 		return m, nil
 	}
 }
