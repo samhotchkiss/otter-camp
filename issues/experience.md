@@ -3482,3 +3482,37 @@ Unnamed calls now render as `"⚙ tool[1] (pending)"` rather than `"⚙  (pendin
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-223: Project view task header missing per-status breakdown
+
+**Observation:** The OPEN TASKS header in the project view showed only the total count and done count:
+`"OPEN TASKS (5)  ·  2 done"`
+But it gave no indication of how many tasks were in-progress vs blocked vs todo, unlike the dashboard which shows separate TODO / IN PROGRESS / DONE / BLOCKED columns.
+
+**Improvement:** The OPEN TASKS header now enumerates in-progress and blocked counts when non-zero:
+`"OPEN TASKS (5)  ·  2 in-progress  ·  1 blocked  ·  2 done"`
+
+**Effort:** Low (~15 lines, same loop as task rendering below)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-228: Command palette suggestions not executable; Tab didn't autocomplete
+
+**Observation:** The command palette showed dynamic jump suggestions like `"project: Alpha Project"`, `"session: General"`, `"task: Build feature X"` (populated from sidebar nodes). But two bugs made them unusable:
+
+1. **Tab didn't autocomplete**: In command mode, Tab was handled by the global key loop which cycled panel focus. `updateCommandInput` had no Tab case, so Tab silently did nothing.
+
+2. **Colon-space format unhandled**: When the user typed `:project: Alpha` and pressed Enter, `fields[0]` became `"project:"` (with trailing colon) which didn't match any case in `executeCommand`, producing `"Unknown command: project:"`.
+
+**Improvement:**
+- `updateCommandInput` now has a `case tea.KeyTab:` that fills the top palette suggestion into the command buffer.
+- `executeCommand` now checks for `"project: <name>"`, `"session: <name>"`, `"task: <title>"` prefixes BEFORE the field-split switch, routing them to three new helpers: `jumpToProjectByName`, `jumpToSessionByName`, `jumpToTaskByTitle`.
+- Each helper does a case-insensitive substring match against the workspace's sidebar/task data and navigates accordingly.
+
+**Effort:** Medium (Tab key handler + 3 helper functions + executeCommand routing, ~75 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

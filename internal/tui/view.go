@@ -1231,7 +1231,24 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			lines = append(lines, styleMuted.Render("  No open tasks."))
 		}
 	} else {
+		// EX-223: show per-status breakdown in the OPEN TASKS header so users
+		// see at a glance how many tasks are in each state without drilling in.
 		taskHeader := fmt.Sprintf("OPEN TASKS (%d)", len(openTasks))
+		inProgCount, blockedCount := 0, 0
+		for _, t := range openTasks {
+			switch t.WorkStatus {
+			case "in_progress":
+				inProgCount++
+			case "blocked", "rejected", "deferred":
+				blockedCount++
+			}
+		}
+		if inProgCount > 0 {
+			taskHeader += fmt.Sprintf("  ·  %d in-progress", inProgCount)
+		}
+		if blockedCount > 0 {
+			taskHeader += fmt.Sprintf("  ·  %d blocked", blockedCount)
+		}
 		if proj.DoneCount > 0 {
 			taskHeader += fmt.Sprintf("  ·  %d done", proj.DoneCount)
 		}

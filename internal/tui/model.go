@@ -1706,6 +1706,12 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m, cmd
+	case tea.KeyTab:
+		// EX-228: Tab fills the top command palette suggestion into the buffer.
+		if suggestions := m.commandPaletteSuggestions(1); len(suggestions) > 0 {
+			m.commandBuffer = ":" + suggestions[0]
+		}
+		return m, nil
 	case tea.KeyBackspace:
 		runes := []rune(m.commandBuffer)
 		if len(runes) > 1 {
@@ -1732,6 +1738,22 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 	if trimmed == "" {
 		m.statusMessage = "No command entered."
 		return nil
+	}
+
+	// EX-228: handle "project: <name>", "session: <name>", "task: <title>" patterns
+	// that the command palette produces when it autocompletes sidebar items.
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "project: ") {
+		name := strings.TrimSpace(trimmed[len("project: "):])
+		return m.jumpToProjectByName(name)
+	}
+	if strings.HasPrefix(lower, "session: ") {
+		name := strings.TrimSpace(trimmed[len("session: "):])
+		return m.jumpToSessionByName(name)
+	}
+	if strings.HasPrefix(lower, "task: ") {
+		title := strings.TrimSpace(trimmed[len("task: "):])
+		return m.jumpToTaskByTitle(title)
 	}
 
 	fields := strings.Fields(trimmed)
@@ -2518,6 +2540,79 @@ func (m *Model) jumpToFrankSession(trigger string) tea.Cmd {
 		m.chatMessageIndex = make(map[string]int)
 		return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
 	}
+	return nil
+}
+
+// jumpToProjectByName finds a project node by display name (case-insensitive
+// prefix or substring match) and navigates to the project view. EX-228.
+func (m *Model) jumpToProjectByName(name string) tea.Cmd {
+	nameLower := strings.ToLower(strings.TrimSpace(name))
+	for _, id := range m.workspace.topLevel {
+		node := m.workspace.nodes[id]
+		if node == nil || node.Kind != sidebarKindProject {
+			continue
+		}
+		if strings.Contains(strings.ToLower(node.Label), nameLower) {
+			m.workspace.selectedProjectID = node.ProjectID
+			m.workspace.setMainView(ViewProject)
+			m.statusMessage = "Project: " + node.Label
+			return loadProjectTasksCmd(node.ProjectID, m.runtimeHints, false)
+		}
+	}
+	m.statusMessage = fmt.Sprintf("Project %q not found.", name)
+	return nil
+}
+
+// jumpToSessionByName finds a session node by label and switches to it. EX-228.
+func (m *Model) jumpToSessionByName(name string) tea.Cmd {
+	nameLower := strings.ToLower(strings.TrimSpace(name))
+	for _, id := range m.workspace.visibleSidebarIDs() {
+		node := m.workspace.nodes[id]
+		if node == nil || node.Kind != sidebarKindSession {
+			continue
+		}
+		if strings.Contains(strings.ToLower(node.Label), nameLower) {
+			sessionID := node.SessionID
+			m.clearTurnIfSwitchingSession(sessionID)
+			m.activeSession = sessionID
+			m.state.LastActiveChatSession = sessionID
+			m.chatScrollOffset = 0
+			m.workspace.activeSessionID = sessionID
+			m.statusMessage = "Session: " + node.Label
+			if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
+				m.chatMessages = nil
+				m.chatHistoryLoading = true
+				m.chatMessageIndex = make(map[string]int)
+				return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+			}
+			return nil
+		}
+	}
+	m.statusMessage = fmt.Sprintf("Session %q not found.", name)
+	return nil
+}
+
+// jumpToTaskByTitle finds a task by title substring and navigates to its detail view. EX-228.
+func (m *Model) jumpToTaskByTitle(title string) tea.Cmd {
+	titleLower := strings.ToLower(strings.TrimSpace(title))
+	for _, taskID := range m.workspace.taskOrder {
+		task := m.workspace.tasks[taskID]
+		if task == nil {
+			continue
+		}
+		if strings.Contains(strings.ToLower(task.Title), titleLower) {
+			m.workspace.selectedTaskID = taskID
+			m.workspace.setMainView(ViewTask)
+			m.activeScope = ScopeTask
+			label := task.Title
+			if task.TaskNumber > 0 {
+				label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, task.Title)
+			}
+			m.statusMessage = "Task: " + truncate(label, 40)
+			return nil
+		}
+	}
+	m.statusMessage = fmt.Sprintf("Task %q not found.", title)
 	return nil
 }
 

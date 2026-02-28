@@ -5371,3 +5371,92 @@ func TestToolResultRoleDisplayEX227(t *testing.T) {
 		t.Errorf("EX-227: raw 'tool_result' role string still showing; rendered:\n%s", rendered)
 	}
 }
+
+// TestProjectTaskHeaderStatusBreakdownEX223 verifies EX-223: the project view
+// OPEN TASKS header shows in-progress and blocked counts when non-zero.
+func TestProjectTaskHeaderStatusBreakdownEX223(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.rebuildSidebar("", nil,
+		[]SidebarProjectItem{{ID: "proj-1", DisplayName: "Alpha"}})
+	model.workspace.selectedProjectID = "proj-1"
+	model.workspace.selectedProject = &ProjectDetail{
+		ID:          "proj-1",
+		DisplayName: "Alpha",
+		DoneCount:   1,
+		Tasks: []SidebarTaskItem{
+			{ID: "t1", Title: "First", WorkStatus: "in_progress"},
+			{ID: "t2", Title: "Second", WorkStatus: "in_progress"},
+			{ID: "t3", Title: "Third", WorkStatus: "blocked"},
+			{ID: "t4", Title: "Fourth", WorkStatus: "todo"},
+		},
+	}
+
+	lines := model.renderProjectView(80, 20)
+	rendered := strings.Join(lines, "\n")
+
+	if !strings.Contains(rendered, "2 in-progress") {
+		t.Errorf("EX-223: expected '2 in-progress' in project header; rendered:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "1 blocked") {
+		t.Errorf("EX-223: expected '1 blocked' in project header; rendered:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "1 done") {
+		t.Errorf("EX-223: expected '1 done' in project header; rendered:\n%s", rendered)
+	}
+}
+
+// TestCommandPaletteTabCompleteEX228 verifies EX-228: Tab in command mode fills
+// the top suggestion into the command buffer.
+func TestCommandPaletteTabCompleteEX228(t *testing.T) {
+	model := NewModel(DefaultState())
+	// Seed a project so "project: Alpha" appears as a suggestion.
+	model.workspace.rebuildSidebar("", nil,
+		[]SidebarProjectItem{{ID: "proj-1", DisplayName: "Alpha Project"}})
+
+	// Enter command mode and type enough to get "project: Alpha Project" as top suggestion.
+	model.commandMode = true
+	model.commandBuffer = ":proj"
+
+	// Press Tab.
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyTab})
+
+	if !strings.Contains(model.commandBuffer, "project") {
+		t.Errorf("EX-228: Tab didn't autocomplete; commandBuffer = %q", model.commandBuffer)
+	}
+}
+
+// TestJumpToProjectByNameEX228 verifies that ":project: <name>" executes and
+// navigates to the matching project view.
+func TestJumpToProjectByNameEX228(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.rebuildSidebar("", nil,
+		[]SidebarProjectItem{{ID: "proj-1", DisplayName: "Alpha Project"}})
+
+	// Execute the command the palette would produce after Tab.
+	cmd := model.executeCommand(":project: Alpha Project")
+	_ = cmd
+
+	if model.workspace.mainView != ViewProject {
+		t.Errorf("EX-228: :project: <name> didn't navigate to ViewProject; got %v", model.workspace.mainView)
+	}
+	if model.workspace.selectedProjectID != "proj-1" {
+		t.Errorf("EX-228: selectedProjectID = %q, want proj-1", model.workspace.selectedProjectID)
+	}
+}
+
+// TestJumpToTaskByTitleEX228 verifies that ":task: <title>" navigates to the task.
+func TestJumpToTaskByTitleEX228(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.tasks["task-1"] = &taskRecord{ID: "task-1", Title: "Build feature X"}
+	model.workspace.taskOrder = []string{"task-1"}
+
+	cmd := model.executeCommand(":task: Build feature X")
+	_ = cmd
+
+	if model.workspace.mainView != ViewTask {
+		t.Errorf("EX-228: :task: <title> didn't navigate to ViewTask; got %v", model.workspace.mainView)
+	}
+	if model.workspace.selectedTaskID != "task-1" {
+		t.Errorf("EX-228: selectedTaskID = %q, want task-1", model.workspace.selectedTaskID)
+	}
+}
