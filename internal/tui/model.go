@@ -1474,6 +1474,36 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Suspending the process leaves the terminal in a broken state; Ctrl-C is safer.
 		m.statusMessage = "Ctrl-Z: suspend not recommended in TUI. Use Ctrl-C to quit or Esc to cancel."
 		return m, nil
+	case tea.KeyCtrlO:
+		// EX-384: Ctrl-O (Emacs: open-line / shell: execute-and-remain) — not bound.
+		// Point to the actual navigation shortcuts.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Ctrl-O: not bound. Use ↑/↓ to browse history, Ctrl-G to jump to chat."
+		} else {
+			m.statusMessage = "Ctrl-O: not bound. Use ↑/↓ or j/k to navigate, ? for key reference."
+		}
+		return m, nil
+	case tea.KeyF1:
+		// EX-384: F1 — universally "help". Open the help view.
+		m.workspace.setMainView(ViewHelp)
+		m.setFocus(MainPanel)
+		m.helpScrollOffset = 0
+		m.statusMessage = "Keybinding reference. Press ? or Esc to close."
+		return m, nil
+	case tea.KeyF5:
+		// EX-384: F5 — universally "refresh". Mirror the 'r' key.
+		if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
+			m.statusMessage = "r·refresh not available in help view. Press j/k to scroll or Esc to close."
+			return m, nil
+		}
+		m.statusMessage = "Refreshing…"
+		m.workspace.activity = appendActivity(m.workspace.activity,
+			"sidebar refreshed at "+m.now().Format("15:04:05"))
+		return m, loadSidebarDataCmd(m.runtimeHints)
+	case tea.KeyF2, tea.KeyF3, tea.KeyF4, tea.KeyF6, tea.KeyF7, tea.KeyF8, tea.KeyF9, tea.KeyF10, tea.KeyF11, tea.KeyF12:
+		// EX-384: F2-F4 and F6-F12 — not bound. Point to the key reference.
+		m.statusMessage = "F-key not bound. Press ? for key reference, : for commands, r to refresh."
+		return m, nil
 	default:
 		return m, nil
 	}

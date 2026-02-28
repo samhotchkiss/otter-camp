@@ -10273,3 +10273,70 @@ func TestRemainingCtrlKeyHintsEX383(t *testing.T) {
 		}
 	})
 }
+
+// TestFunctionKeyAndCtrlOHintsEX384 verifies that F1, F5, F2-F4/F6-F12, and Ctrl-O
+// show informative feedback instead of silent no-ops (EX-384).
+func TestFunctionKeyAndCtrlOHintsEX384(t *testing.T) {
+	t.Run("F1-opens-help", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyF1})
+		if m1.workspace.mainView != ViewHelp {
+			t.Errorf("EX-384: F1 should open help view, got %v", m1.workspace.mainView)
+		}
+		if m1.focus != MainPanel {
+			t.Errorf("EX-384: F1 should focus MainPanel, got %v", m1.focus)
+		}
+		if !strings.Contains(m1.statusMessage, "Keybinding reference") {
+			t.Errorf("EX-384: F1 status: got %q, want to contain 'Keybinding reference'", m1.statusMessage)
+		}
+	})
+	t.Run("F5-refreshes", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyF5})
+		if !strings.Contains(m1.statusMessage, "Refreshing") {
+			t.Errorf("EX-384: F5 status: got %q, want to contain 'Refreshing'", m1.statusMessage)
+		}
+	})
+	t.Run("F5-in-help-gives-hint", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.setMainView(ViewHelp)
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyF5})
+		if !strings.Contains(m1.statusMessage, "not available in help view") {
+			t.Errorf("EX-384: F5 in help: got %q, want 'not available in help view'", m1.statusMessage)
+		}
+	})
+	otherFkeys := []tea.KeyType{
+		tea.KeyF2, tea.KeyF3, tea.KeyF4, tea.KeyF6,
+		tea.KeyF7, tea.KeyF8, tea.KeyF9, tea.KeyF10,
+	}
+	for _, kt := range otherFkeys {
+		kt := kt
+		t.Run(fmt.Sprintf("F-key-%d-shows-hint", kt), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: kt})
+			if !strings.Contains(m1.statusMessage, "F-key not bound") {
+				t.Errorf("EX-384: F-key %d: got %q, want 'F-key not bound'", kt, m1.statusMessage)
+			}
+		})
+	}
+	t.Run("Ctrl-O-in-ChatPanel", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlO})
+		if !strings.Contains(m1.statusMessage, "Ctrl-O") {
+			t.Errorf("EX-384: Ctrl-O in ChatPanel: got %q", m1.statusMessage)
+		}
+	})
+	t.Run("Ctrl-O-in-MainPanel", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlO})
+		if !strings.Contains(m1.statusMessage, "Ctrl-O") {
+			t.Errorf("EX-384: Ctrl-O in MainPanel: got %q", m1.statusMessage)
+		}
+	})
+}
