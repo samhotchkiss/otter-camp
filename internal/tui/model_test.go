@@ -12357,21 +12357,23 @@ func TestSidebarAndInboxCommandBoundaryFeedbackEX446(t *testing.T) {
 			t.Fatalf(":sidebar down at cursor=%d = %q, want %q", last, got, "At last item in sidebar.")
 		}
 	})
-	t.Run("sidebar-home-at-first-gives-already-msg", func(t *testing.T) {
+	t.Run("sidebar-home-at-first-gives-boundary-msg", func(t *testing.T) {
+		// EX-452: boundary phrasing unified with keyboard equivalents (no "Already").
 		m := NewModel(DefaultState())
 		m.workspace.sidebarCursor = 0
 		m.executeSidebarCommand([]string{"home"})
-		if got := m.statusMessage; got != "Already at first item in sidebar." {
-			t.Fatalf(":sidebar home at cursor=0 = %q, want %q", got, "Already at first item in sidebar.")
+		if got := m.statusMessage; got != "At first item in sidebar." {
+			t.Fatalf(":sidebar home at cursor=0 = %q, want %q", got, "At first item in sidebar.")
 		}
 	})
-	t.Run("sidebar-end-at-last-gives-already-msg", func(t *testing.T) {
+	t.Run("sidebar-end-at-last-gives-boundary-msg", func(t *testing.T) {
+		// EX-452: boundary phrasing unified with keyboard equivalents (no "Already").
 		m := NewModel(DefaultState())
 		last := len(m.workspace.visibleSidebarIDs()) - 1
 		m.workspace.sidebarCursor = last
 		m.executeSidebarCommand([]string{"end"})
-		if got := m.statusMessage; got != "Already at last item in sidebar." {
-			t.Fatalf(":sidebar end at cursor=%d = %q, want %q", last, got, "Already at last item in sidebar.")
+		if got := m.statusMessage; got != "At last item in sidebar." {
+			t.Fatalf(":sidebar end at cursor=%d = %q, want %q", last, got, "At last item in sidebar.")
 		}
 	})
 	// Happy path: cursor moves and "moved" message is shown.
@@ -12417,20 +12419,22 @@ func TestSidebarAndInboxCommandBoundaryFeedbackEX446(t *testing.T) {
 			t.Fatalf(":inbox down at cursor=1 = %q, want %q", got, "At last inbox item.")
 		}
 	})
-	t.Run("inbox-home-at-first-gives-already-msg", func(t *testing.T) {
+	t.Run("inbox-home-at-first-gives-boundary-msg", func(t *testing.T) {
+		// EX-452: boundary phrasing unified with keyboard equivalents (no "Already").
 		m := mkInboxModel()
 		m.workspace.inboxCursor = 0
 		m.executeInboxCommand([]string{"home"})
-		if got := m.statusMessage; got != "Already at first inbox item." {
-			t.Fatalf(":inbox home at cursor=0 = %q, want %q", got, "Already at first inbox item.")
+		if got := m.statusMessage; got != "At first inbox item." {
+			t.Fatalf(":inbox home at cursor=0 = %q, want %q", got, "At first inbox item.")
 		}
 	})
-	t.Run("inbox-end-at-last-gives-already-msg", func(t *testing.T) {
+	t.Run("inbox-end-at-last-gives-boundary-msg", func(t *testing.T) {
+		// EX-452: boundary phrasing unified with keyboard equivalents (no "Already").
 		m := mkInboxModel()
 		m.workspace.inboxCursor = 1
 		m.executeInboxCommand([]string{"end"})
-		if got := m.statusMessage; got != "Already at last inbox item." {
-			t.Fatalf(":inbox end at cursor=1 = %q, want %q", got, "Already at last inbox item.")
+		if got := m.statusMessage; got != "At last inbox item." {
+			t.Fatalf(":inbox end at cursor=1 = %q, want %q", got, "At last inbox item.")
 		}
 	})
 	// Happy path: cursor moves and "moved" message is shown.
@@ -12750,6 +12754,48 @@ func TestArrowLeftRightOnNonExpandableNodesEX451(t *testing.T) {
 		want := "Use Enter to open this item."
 		if got := m.statusMessage; got != want {
 			t.Fatalf("EX-451: → on inbox = %q, want %q", got, want)
+		}
+	})
+}
+
+// TestHomEndCommandsBoundaryPhraseEX452 verifies that :sidebar home/:sidebar end
+// and :inbox home/:inbox end at boundary give "At first/last" (no "Already" prefix)
+// — consistent with keyboard equivalents g/G/Home/End/↑/↓ which have always used
+// the shorter form. Previously the command handlers said "Already at first/last"
+// while all keyboard handlers said "At first/last", an inconsistency fixed by EX-452.
+func TestHomEndCommandsBoundaryPhraseEX452(t *testing.T) {
+	t.Run("sidebar-home-at-boundary-no-already-prefix", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.sidebarCursor = 0
+		m.executeSidebarCommand([]string{"home"})
+		if got := m.statusMessage; got != "At first item in sidebar." {
+			t.Fatalf("EX-452: :sidebar home boundary = %q, want %q", got, "At first item in sidebar.")
+		}
+	})
+	t.Run("sidebar-end-at-boundary-no-already-prefix", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.sidebarCursor = len(m.workspace.visibleSidebarIDs()) - 1
+		m.executeSidebarCommand([]string{"end"})
+		if got := m.statusMessage; got != "At last item in sidebar." {
+			t.Fatalf("EX-452: :sidebar end boundary = %q, want %q", got, "At last item in sidebar.")
+		}
+	})
+	t.Run("inbox-home-at-boundary-no-already-prefix", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.inbox = []inboxItem{{ID: "x", Summary: "Only item"}}
+		m.workspace.inboxCursor = 0
+		m.executeInboxCommand([]string{"home"})
+		if got := m.statusMessage; got != "At first inbox item." {
+			t.Fatalf("EX-452: :inbox home boundary = %q, want %q", got, "At first inbox item.")
+		}
+	})
+	t.Run("inbox-end-at-boundary-no-already-prefix", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.inbox = []inboxItem{{ID: "x", Summary: "Only item"}}
+		m.workspace.inboxCursor = 0
+		m.executeInboxCommand([]string{"end"})
+		if got := m.statusMessage; got != "At last inbox item." {
+			t.Fatalf("EX-452: :inbox end boundary = %q, want %q", got, "At last inbox item.")
 		}
 	})
 }

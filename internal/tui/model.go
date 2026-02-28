@@ -5729,19 +5729,21 @@ func (m *Model) executeSidebarCommand(args []string) tea.Cmd {
 		}
 	case "home":
 		// EX-446: give boundary feedback when already at first item.
+		// EX-452: use "At first item in sidebar." (no "Already") to match the
+		// keyboard equivalents g/G/Home/End/↑ which all use the same phrasing.
 		prev := m.workspace.sidebarCursor
 		m.workspace.sidebarHome()
 		if m.workspace.sidebarCursor == prev {
-			m.statusMessage = "Already at first item in sidebar."
+			m.statusMessage = "At first item in sidebar."
 		} else {
 			m.statusMessage = "Sidebar cursor moved home."
 		}
 	case "end":
-		// EX-446: give boundary feedback when already at last item.
+		// EX-452: unify boundary message with keyboard equivalents (no "Already").
 		prev := m.workspace.sidebarCursor
 		m.workspace.sidebarEnd()
 		if m.workspace.sidebarCursor == prev {
-			m.statusMessage = "Already at last item in sidebar."
+			m.statusMessage = "At last item in sidebar."
 		} else {
 			m.statusMessage = "Sidebar cursor moved end."
 		}
@@ -5876,10 +5878,12 @@ func (m *Model) executeInboxCommand(args []string) tea.Cmd {
 			return nil
 		}
 		// EX-446: give boundary feedback when already at first item.
+		// EX-452: use "At first inbox item." (no "Already") to match keyboard
+		// equivalents ↑/k/Home/PgUp which all use the same phrasing.
 		prev := m.workspace.inboxCursor
 		m.workspace.inboxHome()
 		if m.workspace.inboxCursor == prev {
-			m.statusMessage = "Already at first inbox item."
+			m.statusMessage = "At first inbox item."
 		} else {
 			m.statusMessage = "Inbox cursor moved home."
 		}
@@ -5889,11 +5893,11 @@ func (m *Model) executeInboxCommand(args []string) tea.Cmd {
 			m.statusMessage = "No inbox items."
 			return nil
 		}
-		// EX-446: give boundary feedback when already at last item.
+		// EX-452: unify boundary message with keyboard equivalents (no "Already").
 		prev := m.workspace.inboxCursor
 		m.workspace.inboxEnd()
 		if m.workspace.inboxCursor == prev {
-			m.statusMessage = "Already at last inbox item."
+			m.statusMessage = "At last inbox item."
 		} else {
 			m.statusMessage = "Inbox cursor moved end."
 		}
