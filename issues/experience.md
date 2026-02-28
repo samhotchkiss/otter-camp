@@ -3588,3 +3588,28 @@ Enter·select project  ·  /·filter (or /·clear filter)  ·  Esc·dashboard
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-234: Task view footer doesn't mention r·refresh
+
+**Observation:** The task detail view footer showed `Enter·resume session  ·  Esc·project  ·  p·project view  ·  j/k·next/prev task`. The `r` key DOES refresh the task detail (confirmed in `commandFallbackHelp`), but there was no in-view affordance for it, making the feature invisible to users who hadn't discovered it.
+
+**Improvement:** Added `r·refresh` to the `hintParts` slice in `renderTaskView`, placed after the Esc destination and before the project navigation hints.
+
+**Effort:** Trivial (1 line)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-235: Project view footer doesn't mention r·refresh
+
+**Observation:** The project view's open-tasks hint row showed `Enter·open  ·  j/k·navigate  ·  /·filter  ·  Esc·dashboard` (after EX-233) but omitted `r·refresh`, inconsistent with the `commandFallbackHelp` string which does include `r refresh`.
+
+**Improvement:** Added `r·refresh` to the project view footer hint string:
+`Enter·open  ·  j/k·navigate  ·  /·filter  ·  r·refresh  ·  Esc·dashboard`
+
+**Effort:** Trivial (1 line)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

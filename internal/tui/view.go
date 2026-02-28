@@ -1401,7 +1401,8 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		}
 		// Navigation hint row.
 		// EX-233: include filterActionHint so users know / clears an active filter.
-		hintParts := "Enter·open  ·  j/k·navigate  ·  " + filterActionHint(query) + "  ·  Esc·dashboard"
+		// EX-235: include r·refresh so users know they can reload the task list.
+		hintParts := "Enter·open  ·  j/k·navigate  ·  " + filterActionHint(query) + "  ·  r·refresh  ·  Esc·dashboard"
 		if proj != nil && proj.DoneCount > 0 {
 			if m.workspace.showDoneTasks {
 				hintParts += "  ·  d·hide done"
@@ -1533,6 +1534,8 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	} else {
 		hintParts = append(hintParts, "Esc·dashboard")
 	}
+	// EX-234: r·refresh is available in task detail view; include it in the hint.
+	hintParts = append(hintParts, "r·refresh")
 	if m.workspace.selectedProjectID != "" {
 		hintParts = append(hintParts, "p·project view")
 		openTasks := m.workspace.openTasksForProject()
@@ -2323,12 +2326,12 @@ func (m Model) renderChatMessages(width int) []string {
 			if expanded {
 				indicator = "▼"
 			}
-			// EX-221: fall back to positional label when tool name is missing.
-		toolName := tc.Name
-		if strings.TrimSpace(toolName) == "" {
-			toolName = fmt.Sprintf("tool[%d]", i+1)
-		}
-		tcLine := "  " + indicator + " ⚙ " + toolName + " (" + statusStyle.Render(statusLabel) + ")"
+				// EX-221: fall back to positional label when tool name is missing.
+			toolName := tc.Name
+			if strings.TrimSpace(toolName) == "" {
+				toolName = fmt.Sprintf("tool[%d]", i+1)
+			}
+			tcLine := "  " + indicator + " ⚙ " + toolName + " (" + statusStyle.Render(statusLabel) + ")"
 			lines = append(lines, styleMuted.Render(tcLine))
 			if expanded {
 				result := strings.TrimSpace(tc.Result)

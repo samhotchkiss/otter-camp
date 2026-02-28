@@ -5632,3 +5632,47 @@ func TestProjectViewFilterHintEX233(t *testing.T) {
 		}
 	})
 }
+
+// TestTaskViewRefreshHintEX234 verifies EX-234: the task view footer shows r·refresh.
+func TestTaskViewRefreshHintEX234(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.tasks["task-1"] = &taskRecord{
+		ID:          "task-1",
+		TaskNumber:  42,
+		Title:       "Build login",
+		Description: "Implement OAuth flow",
+		Status:      "in_progress",
+	}
+	model.workspace.selectedTaskID = "task-1"
+
+	lines := model.renderTaskView(80, 40)
+	rendered := strings.Join(lines, "\n")
+
+	if !strings.Contains(rendered, "r·refresh") {
+		t.Errorf("EX-234: task view footer should show 'r·refresh'; got:\n%s", rendered)
+	}
+}
+
+// TestProjectViewRefreshHintEX235 verifies EX-235: the project view task footer shows r·refresh.
+func TestProjectViewRefreshHintEX235(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.selectedProjectID = "proj-1"
+	model.workspace.nodes["project-proj-1"] = &sidebarNode{
+		ID:    "project-proj-1",
+		Kind:  sidebarKindProject,
+		Label: "Alpha Project",
+	}
+	model.workspace.selectedProject = &ProjectDetail{
+		DisplayName: "Alpha Project",
+		Tasks: []SidebarTaskItem{
+			{ID: "task-1", Title: "Build feature", WorkStatus: "todo"},
+		},
+	}
+
+	lines := model.renderProjectView(80, 30)
+	rendered := strings.Join(lines, "\n")
+
+	if !strings.Contains(rendered, "r·refresh") {
+		t.Errorf("EX-235: project view footer should show 'r·refresh'; got:\n%s", rendered)
+	}
+}
