@@ -2077,6 +2077,14 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			m.statusMessage = "Active turn cancelled."
 			return true, requestChatCancelCmd(m.ActiveChatSession())
 		}
+		// EX-289: Esc with no active turn but non-empty input — clear the draft
+		// so the user can dismiss a partially-typed message without sending it.
+		if strings.TrimSpace(m.chatInput) != "" {
+			m.chatInput = ""
+			m.chatHistoryIndex = -1
+			m.statusMessage = "Input cleared."
+			return true, nil
+		}
 	}
 	return false, nil
 }

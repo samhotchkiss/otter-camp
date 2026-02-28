@@ -7390,3 +7390,34 @@ func TestInboxGGEmptyFeedbackEX288(t *testing.T) {
 		}
 	}
 }
+
+// TestEscClearsChatInputEX289 verifies that Esc in the chat panel clears a
+// partially-typed message when there is no active turn, instead of silently
+// doing nothing.
+func TestEscClearsChatInputEX289(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	m.chatInput = "hello world"
+	m.chatHistoryIndex = -1
+	m.activeTurn = false
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.chatInput != "" {
+		t.Errorf("EX-289: Esc should clear chatInput; got %q", m.chatInput)
+	}
+	if m.statusMessage != "Input cleared." {
+		t.Errorf("EX-289: Esc should say 'Input cleared.'; got %q", m.statusMessage)
+	}
+
+	// Esc with already-empty input → falls through to handleEscapeKey, no crash.
+	m.chatInput = ""
+	before := m.statusMessage
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+	// Status should remain from the previous Esc (no new message set).
+	// The key test is that it doesn't panic and chatInput stays empty.
+	if m.chatInput != "" {
+		t.Errorf("EX-289: Esc on empty input should leave chatInput empty; got %q", m.chatInput)
+	}
+	_ = before // silence unused warning
+}
