@@ -6066,3 +6066,74 @@ func TestCtrlGAnd0InHelpViewEX252(t *testing.T) {
 		t.Errorf("EX-252: help view should document Ctrl-P; not found in:\n%s", content)
 	}
 }
+
+// TestRecallHistoryAtOldestEX253 verifies EX-253: pressing ↑ when already at
+// the oldest message gives "Already at oldest message." instead of the
+// misleading "Recalled previous message." that would repeat for every ↑ press.
+func TestRecallHistoryAtOldestEX253(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.focus = ChatPanel
+	m.chatHistory = []string{"first msg", "second msg"}
+	m.chatHistoryIndex = -1 // not in history mode yet
+
+	// First ↑: goes to second msg (index 1)
+	m.recallHistory()
+	if m.chatInput != "second msg" {
+		t.Fatalf("EX-253: expected 'second msg' on first recall; got %q", m.chatInput)
+	}
+	// Second ↑: goes to first msg (index 0)
+	m.recallHistory()
+	if m.chatInput != "first msg" {
+		t.Fatalf("EX-253: expected 'first msg' on second recall; got %q", m.chatInput)
+	}
+	if strings.Contains(m.statusMessage, "oldest") {
+		t.Logf("EX-253: not at oldest yet — status: %q (ok)", m.statusMessage)
+	}
+	// Third ↑: already at oldest — should say so
+	m.recallHistory()
+	if m.chatInput != "first msg" {
+		t.Errorf("EX-253: input should stay as 'first msg'; got %q", m.chatInput)
+	}
+	if !strings.Contains(strings.ToLower(m.statusMessage), "oldest") {
+		t.Errorf("EX-253: expected 'oldest' in status at bottom of history; got %q", m.statusMessage)
+	}
+}
+
+// TestFilterApplyAndClearMessagesEX254 verifies EX-254: entering and clearing
+// a filter includes the query in the status message for better feedback.
+func TestFilterApplyAndClearMessagesEX254(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.focus = MainPanel
+	m.workspace.mainView = ViewDashboard
+
+	// Enter search mode
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	if !m.searchMode {
+		t.Fatalf("EX-254: expected search mode after pressing /")
+	}
+
+	// Type "frank"
+	for _, ch := range "frank" {
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+
+	// Commit with Enter — should say 'Filter "frank" applied.'
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(m.statusMessage, "frank") {
+		t.Errorf("EX-254: filter apply message should mention the query; got %q", m.statusMessage)
+	}
+	if !strings.Contains(strings.ToLower(m.statusMessage), "applied") && !strings.Contains(strings.ToLower(m.statusMessage), "filter") {
+		t.Errorf("EX-254: filter apply message should contain 'applied' or 'filter'; got %q", m.statusMessage)
+	}
+
+	// Re-enter search mode to clear
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	// Esc to clear — should say 'Filter "frank" cleared.'
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if !strings.Contains(m.statusMessage, "frank") {
+		t.Errorf("EX-254: filter clear message should mention the query; got %q", m.statusMessage)
+	}
+	if !strings.Contains(strings.ToLower(m.statusMessage), "clear") {
+		t.Errorf("EX-254: filter clear message should contain 'clear'; got %q", m.statusMessage)
+	}
+}

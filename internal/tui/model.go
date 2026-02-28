@@ -1668,15 +1668,27 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.statusMessage = "Exiting TUI."
 		return m, tea.Quit
 	case tea.KeyEsc:
+		// EX-254: include the query in the message so the user sees what was cleared.
+		prev := strings.TrimSpace(m.searchQuery)
 		m.setFilterForPanel(m.searchPanel, "")
 		m.searchMode = false
 		m.searchQuery = ""
-		m.statusMessage = "Search cleared."
+		if prev != "" {
+			m.statusMessage = fmt.Sprintf("Filter %q cleared.", prev)
+		} else {
+			m.statusMessage = "Filter cleared."
+		}
 		return m, nil
 	case tea.KeyEnter:
 		m.setFilterForPanel(m.searchPanel, m.searchQuery)
 		m.searchMode = false
-		m.statusMessage = "Search applied."
+		// EX-254: include the query in the confirmation so the user sees what filter is active.
+		q := strings.TrimSpace(m.searchQuery)
+		if q != "" {
+			m.statusMessage = fmt.Sprintf("Filter %q applied.", q)
+		} else {
+			m.statusMessage = "Filter cleared."
+		}
 		return m, nil
 	case tea.KeyBackspace:
 		runes := []rune(m.searchQuery)
@@ -2112,9 +2124,14 @@ func (m *Model) recallHistory() {
 	}
 	if m.chatHistoryIndex > 0 {
 		m.chatHistoryIndex--
+		m.chatInput = m.chatHistory[m.chatHistoryIndex]
+		m.statusMessage = "Recalled previous message."
+	} else {
+		// EX-253: already at the oldest message — say so instead of silently
+		// setting the input to the same value again with the same status message.
+		m.chatInput = m.chatHistory[0]
+		m.statusMessage = "Already at oldest message."
 	}
-	m.chatInput = m.chatHistory[m.chatHistoryIndex]
-	m.statusMessage = "Recalled previous message."
 }
 
 // forwardHistory advances the chat history index toward the most recent entry.
