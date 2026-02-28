@@ -2965,6 +2965,16 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeySpace:
 		m.commandBuffer += " "
 		return m, nil
+	case tea.KeyLeft, tea.KeyRight:
+		// EX-361: ← / → in command mode — text cursor movement is not supported
+		// in the command buffer. Inform the user rather than silently doing nothing.
+		m.statusMessage = "Text cursor movement not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+		return m, nil
+	case tea.KeyUp:
+		// EX-362: ↑ in command mode — command history recall not yet supported.
+		// Give a helpful hint pointing to the available alternatives.
+		m.statusMessage = "Command history not supported. Use Tab to autocomplete."
+		return m, nil
 	case tea.KeyRunes:
 		if len(key.Runes) > 0 {
 			m.commandBuffer += string(key.Runes)

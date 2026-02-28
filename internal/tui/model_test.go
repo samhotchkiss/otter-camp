@@ -9457,3 +9457,40 @@ func TestPgUpDnInSearchModeEX360(t *testing.T) {
 		t.Errorf("EX-360: PgDn in search mode should commit filter; got %q", m3.sidebarFilter)
 	}
 }
+
+// TestArrowKeysInCommandModeEX361362 verifies that ← / → and ↑ in command mode
+// give informative hints rather than silently doing nothing (EX-361/362).
+func TestArrowKeysInCommandModeEX361362(t *testing.T) {
+	cursorMsg := "Text cursor movement not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+	historyMsg := "Command history not supported. Use Tab to autocomplete."
+
+	// ← in command mode → cursor movement hint.
+	m := NewModel(DefaultState())
+	m.commandMode = true
+	m.commandBuffer = ":frank"
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyLeft})
+	if m1.statusMessage != cursorMsg {
+		t.Errorf("EX-361: ← in command mode should give cursor hint; got %q", m1.statusMessage)
+	}
+	if m1.commandBuffer != ":frank" {
+		t.Errorf("EX-361: ← should not modify command buffer; got %q", m1.commandBuffer)
+	}
+
+	// → in command mode → cursor movement hint.
+	m2 := NewModel(DefaultState())
+	m2.commandMode = true
+	m2.commandBuffer = ":dashboard"
+	m3 := pressKey(m2, tea.KeyMsg{Type: tea.KeyRight})
+	if m3.statusMessage != cursorMsg {
+		t.Errorf("EX-361: → in command mode should give cursor hint; got %q", m3.statusMessage)
+	}
+
+	// ↑ in command mode → history not supported hint.
+	m4 := NewModel(DefaultState())
+	m4.commandMode = true
+	m4.commandBuffer = ":"
+	m5 := pressKey(m4, tea.KeyMsg{Type: tea.KeyUp})
+	if m5.statusMessage != historyMsg {
+		t.Errorf("EX-362: ↑ in command mode should hint about history; got %q", m5.statusMessage)
+	}
+}
