@@ -11329,3 +11329,54 @@ func TestStatusCommandEX407(t *testing.T) {
 		}
 	})
 }
+
+// TestSpaceInMainPanelEX408 verifies that Space in MainPanel views that previously
+// gave no feedback now surface a contextual hint (EX-408).
+func TestSpaceInMainPanelEX408(t *testing.T) {
+	spaceKey := tea.KeyMsg{Type: tea.KeySpace}
+
+	t.Run("ViewDashboard-empty", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.setMainView(ViewDashboard)
+		m = pressKey(m, spaceKey)
+		if m.statusMessage == "" {
+			t.Fatal("EX-408: Space in empty dashboard should set a status message")
+		}
+	})
+
+	t.Run("ViewInbox-empty", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.setMainView(ViewInbox)
+		m = pressKey(m, spaceKey)
+		if !strings.Contains(m.statusMessage, "empty") && !strings.Contains(m.statusMessage, "not bound") {
+			t.Fatalf("EX-408: Space in empty inbox should mention empty/not-bound, got %q", m.statusMessage)
+		}
+	})
+
+	t.Run("ViewTask", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.setMainView(ViewTask)
+		m = pressKey(m, spaceKey)
+		if m.statusMessage == "" {
+			t.Fatal("EX-408: Space in task view should set a status message")
+		}
+		if !strings.Contains(m.statusMessage, "not bound") {
+			t.Fatalf("EX-408: Space in task view should mention 'not bound', got %q", m.statusMessage)
+		}
+	})
+
+	t.Run("SidebarPanel-empty", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		// Empty sidebar — visibleSidebarIDs() returns empty, so currentSidebarNode() returns nil.
+		m.workspace.topLevel = nil
+		m.workspace.nodes = map[string]*sidebarNode{}
+		m = pressKey(m, spaceKey)
+		if !strings.Contains(m.statusMessage, "No items") {
+			t.Fatalf("EX-408: Space on empty sidebar should say 'No items', got %q", m.statusMessage)
+		}
+	})
+}

@@ -1234,6 +1234,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					// EX-324: Space on non-expandable nodes (task, session, inbox) — suggest Enter.
 					m.statusMessage = "Use Enter to open this item."
 				}
+			} else {
+				// EX-408: sidebar is empty — give honest feedback rather than silent no-op.
+				m.statusMessage = "No items in sidebar."
 			}
 			return m, nil
 		}
@@ -1242,6 +1245,27 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch m.workspace.mainView {
 			case ViewAgents, ViewMerges, ViewSchedules, ViewActivity:
 				m.statusMessage = "Space not available here. Use r to refresh."
+			// EX-408: Space in navigable views — redirect to Enter/o which opens the selected item.
+			case ViewDashboard:
+				if len(m.workspace.taskOrder) == 0 {
+					m.statusMessage = "No tasks yet. Space is not bound here."
+				} else {
+					m.statusMessage = "Space is not bound. Use Enter to open task detail, j/k to navigate."
+				}
+			case ViewInbox:
+				if len(m.workspace.inbox) == 0 {
+					m.statusMessage = "Inbox is empty. Space is not bound here."
+				} else {
+					m.statusMessage = "Space is not bound. Use Enter/o to open, a·approve x·reject f·defer."
+				}
+			case ViewProject:
+				if openTasks := m.workspace.openTasksForProject(); len(openTasks) == 0 {
+					m.statusMessage = "No open tasks. Space is not bound here."
+				} else {
+					m.statusMessage = "Space is not bound. Use Enter to open task detail, j/k to navigate."
+				}
+			case ViewTask:
+				m.statusMessage = "Space is not bound in task view. Use Enter to open session, Esc to go back."
 			case ViewHelp:
 				// Space in help view pages down (natural scroll gesture).
 				helpMaxOff := func() int {
