@@ -9363,3 +9363,32 @@ func TestLeftRightArrowInChatPanelEX356357(t *testing.T) {
 		t.Errorf("EX-356 regression: ← in MainPanel should not show chat hint; got %q", m5.statusMessage)
 	}
 }
+
+// TestBackspaceInSidebarPanelEX358 verifies that Backspace in the sidebar panel
+// mirrors ← (collapse/navigate to parent), giving the same feedback as the Left
+// key, rather than silently doing nothing (EX-358).
+func TestBackspaceInSidebarPanelEX358(t *testing.T) {
+	// Backspace on a header node should collapse it (mirrors ←).
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = SidebarPanel
+	// Put cursor on the CHATS header (always present).
+	visible := m.workspace.visibleSidebarIDs()
+	for i, id := range visible {
+		if id == "header-chats" {
+			m.workspace.sidebarCursor = i
+			break
+		}
+	}
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyBackspace})
+	// Backspace on a header should collapse it → "Collapsed CHATS."
+	if m1.statusMessage == "" {
+		t.Errorf("EX-358: Backspace in sidebar should give feedback; got empty status")
+	}
+	// Should produce the same result as pressing ←.
+	m2 := pressKey(m, tea.KeyMsg{Type: tea.KeyLeft})
+	if m1.statusMessage != m2.statusMessage {
+		t.Errorf("EX-358: Backspace and ← should produce same status; Backspace=%q Left=%q",
+			m1.statusMessage, m2.statusMessage)
+	}
+}

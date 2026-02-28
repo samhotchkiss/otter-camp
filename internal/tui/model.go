@@ -2551,6 +2551,10 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			m.statusMessage = "▸ " + truncate(node.Label, 40)
 		}
 		return true, nil
+	case tea.KeyBackspace:
+		// EX-358: Backspace in sidebar mirrors ← (collapse/navigate to parent),
+		// the natural "go back" gesture in tree views (mirrors EX-353 for MainPanel).
+		return m.handleSidebarControlKey(tea.KeyMsg{Type: tea.KeyLeft})
 	}
 	return false, nil
 }
