@@ -874,28 +874,40 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case tea.KeyHome:
 				// EX-276: Home/End in ViewProject jump to first/last (same as g/G).
 				// EX-293: give "No open tasks." feedback matching g/G (EX-287).
-				m.workspace.projectTaskCursor = 0
+				// EX-458: add prevCursor check — mirrors ↑/↓ which already have boundary feedback.
 				if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
-					t := openTasks[0]
-					label := t.Title
-					if t.TaskNumber > 0 {
-						label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+					prevCursor := m.workspace.projectTaskCursor
+					m.workspace.projectTaskCursor = 0
+					if m.workspace.projectTaskCursor == prevCursor {
+						m.statusMessage = "At first task in project."
+					} else {
+						t := openTasks[0]
+						label := t.Title
+						if t.TaskNumber > 0 {
+							label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+						}
+						m.statusMessage = "▸ " + truncate(label, 40)
 					}
-					m.statusMessage = "▸ " + truncate(label, 40)
 				} else {
 					m.statusMessage = "No open tasks in this project."
 				}
 				return m, nil
 			case tea.KeyEnd:
 				// EX-293: give "No open tasks." feedback matching g/G (EX-287).
+				// EX-458: add prevCursor check — mirrors ↑/↓ which already have boundary feedback.
 				if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+					prevCursor := m.workspace.projectTaskCursor
 					m.workspace.projectTaskCursor = len(openTasks) - 1
-					t := openTasks[len(openTasks)-1]
-					label := t.Title
-					if t.TaskNumber > 0 {
-						label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+					if m.workspace.projectTaskCursor == prevCursor {
+						m.statusMessage = "At last task in project."
+					} else {
+						t := openTasks[len(openTasks)-1]
+						label := t.Title
+						if t.TaskNumber > 0 {
+							label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+						}
+						m.statusMessage = "▸ " + truncate(label, 40)
 					}
-					m.statusMessage = "▸ " + truncate(label, 40)
 				} else {
 					m.statusMessage = "No open tasks in this project."
 				}
@@ -1023,11 +1035,15 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case tea.KeyHome:
 				// EX-301: Home in ViewDashboard jumps to first task (mirrors 'g' key, EX-135).
+				// EX-459: add prevID check — mirrors PgUp/PgDn which already have boundary feedback.
 				active := m.workspace.dashboardActiveTasks()
 				if len(active) > 0 {
+					prevID := m.workspace.selectedTaskID
 					m.workspace.dashboardCursor = 0
 					m.workspace.selectedTaskID = active[0]
-					if task := m.workspace.tasks[active[0]]; task != nil {
+					if m.workspace.selectedTaskID == prevID {
+						m.statusMessage = "At first task on board."
+					} else if task := m.workspace.tasks[active[0]]; task != nil {
 						label := task.Title
 						if task.TaskNumber > 0 {
 							label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
@@ -1040,11 +1056,15 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case tea.KeyEnd:
 				// EX-301: End in ViewDashboard jumps to last task (mirrors 'G' key, EX-135).
+				// EX-459: add prevID check — mirrors PgUp/PgDn which already have boundary feedback.
 				active := m.workspace.dashboardActiveTasks()
 				if len(active) > 0 {
+					prevID := m.workspace.selectedTaskID
 					m.workspace.dashboardCursor = len(active) - 1
 					m.workspace.selectedTaskID = active[len(active)-1]
-					if task := m.workspace.tasks[active[len(active)-1]]; task != nil {
+					if m.workspace.selectedTaskID == prevID {
+						m.statusMessage = "At last task on board."
+					} else if task := m.workspace.tasks[active[len(active)-1]]; task != nil {
 						label := task.Title
 						if task.TaskNumber > 0 {
 							label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)

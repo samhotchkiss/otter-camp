@@ -8347,6 +8347,135 @@ func TestProjectHomeEndEmptyFeedbackEX293(t *testing.T) {
 	}
 }
 
+// TestProjectHomeEndBoundaryFeedbackEX458 verifies EX-458: Home/End in ViewProject
+// give "At first/last task in project." when already at the boundary, consistent with
+// ↑/↓ which already have prevCursor checks (since EX-296).
+func TestProjectHomeEndBoundaryFeedbackEX458(t *testing.T) {
+	makeProjectModel := func() Model {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.mainView = ViewProject
+		m.workspace.selectedProjectID = "p1"
+		m.workspace.selectedProject = &ProjectDetail{
+			ID: "p1",
+			Tasks: []SidebarTaskItem{
+				{ID: "t1", Title: "Alpha", TaskNumber: 1, WorkStatus: "todo"},
+				{ID: "t2", Title: "Beta", TaskNumber: 2, WorkStatus: "todo"},
+			},
+		}
+		return m
+	}
+
+	t.Run("Home-already-at-first-says-at-first", func(t *testing.T) {
+		m := makeProjectModel()
+		m.workspace.projectTaskCursor = 0
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+
+		if got := m.statusMessage; got != "At first task in project." {
+			t.Fatalf("EX-458: Home at first task = %q, want %q", got, "At first task in project.")
+		}
+	})
+
+	t.Run("Home-moves-gives-label", func(t *testing.T) {
+		m := makeProjectModel()
+		m.workspace.projectTaskCursor = 1
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+
+		if got := m.statusMessage; !strings.Contains(got, "Alpha") {
+			t.Fatalf("EX-458: Home from second task = %q, want label containing 'Alpha'", got)
+		}
+	})
+
+	t.Run("End-already-at-last-says-at-last", func(t *testing.T) {
+		m := makeProjectModel()
+		m.workspace.projectTaskCursor = 1
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+
+		if got := m.statusMessage; got != "At last task in project." {
+			t.Fatalf("EX-458: End at last task = %q, want %q", got, "At last task in project.")
+		}
+	})
+
+	t.Run("End-moves-gives-label", func(t *testing.T) {
+		m := makeProjectModel()
+		m.workspace.projectTaskCursor = 0
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+
+		if got := m.statusMessage; !strings.Contains(got, "Beta") {
+			t.Fatalf("EX-458: End from first task = %q, want label containing 'Beta'", got)
+		}
+	})
+}
+
+// TestDashboardHomeEndBoundaryFeedbackEX459 verifies EX-459: Home/End in ViewDashboard
+// give "At first/last task on board." when already at the boundary, consistent with
+// PgUp/PgDn which already have prevID checks (since EX-302).
+func TestDashboardHomeEndBoundaryFeedbackEX459(t *testing.T) {
+	makeDashboardModel := func() Model {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.setMainView(ViewDashboard)
+		m.workspace.tasks["t1"] = &taskRecord{ID: "t1", Title: "Alpha", Status: "todo"}
+		m.workspace.tasks["t2"] = &taskRecord{ID: "t2", Title: "Beta", Status: "todo"}
+		m.workspace.taskOrder = []string{"t1", "t2"}
+		return m
+	}
+
+	t.Run("Home-already-at-first-says-at-first", func(t *testing.T) {
+		m := makeDashboardModel()
+		m.workspace.dashboardCursor = 0
+		m.workspace.selectedTaskID = "t1"
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+
+		if got := m.statusMessage; got != "At first task on board." {
+			t.Fatalf("EX-459: Home at first = %q, want %q", got, "At first task on board.")
+		}
+	})
+
+	t.Run("Home-moves-gives-label", func(t *testing.T) {
+		m := makeDashboardModel()
+		m.workspace.dashboardCursor = 1
+		m.workspace.selectedTaskID = "t2"
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+
+		if got := m.statusMessage; !strings.Contains(got, "Alpha") {
+			t.Fatalf("EX-459: Home from second = %q, want label containing 'Alpha'", got)
+		}
+	})
+
+	t.Run("End-already-at-last-says-at-last", func(t *testing.T) {
+		m := makeDashboardModel()
+		m.workspace.dashboardCursor = 1
+		m.workspace.selectedTaskID = "t2"
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+
+		if got := m.statusMessage; got != "At last task on board." {
+			t.Fatalf("EX-459: End at last = %q, want %q", got, "At last task on board.")
+		}
+	})
+
+	t.Run("End-moves-gives-label", func(t *testing.T) {
+		m := makeDashboardModel()
+		m.workspace.dashboardCursor = 0
+		m.workspace.selectedTaskID = "t1"
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+
+		if got := m.statusMessage; !strings.Contains(got, "Beta") {
+			t.Fatalf("EX-459: End from first = %q, want label containing 'Beta'", got)
+		}
+	})
+}
+
 // TestDashboardEmptyBoardFeedbackEX294 verifies that j/k and ↑/↓ in ViewDashboard
 // when the task board is empty give "Task board is empty." instead of silently doing nothing.
 func TestDashboardEmptyBoardFeedbackEX294(t *testing.T) {
@@ -8582,13 +8711,13 @@ func TestDashboardHomeEndPgUpPgDnEX301EX302(t *testing.T) {
 	m.workspace.selectedTaskID = "task-0"
 	m.workspace.dashboardCursor = 0
 
-	// Home when already at first — boundary message.
+	// Home when already at first — EX-459 boundary message (not label repeat).
 	m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
 	if m.workspace.selectedTaskID != "task-0" {
 		t.Errorf("EX-301: Home at first should stay at task-0; got %q", m.workspace.selectedTaskID)
 	}
-	if m.statusMessage != "▸ Task 0" {
-		t.Errorf("EX-301: Home at first should show '▸ Task 0'; got %q", m.statusMessage)
+	if m.statusMessage != "At first task on board." {
+		t.Errorf("EX-459: Home at first should show 'At first task on board.'; got %q", m.statusMessage)
 	}
 
 	// End — jumps to last.
