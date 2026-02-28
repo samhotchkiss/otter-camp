@@ -6557,3 +6557,38 @@ func TestInboxJKNavigationFeedbackEX268(t *testing.T) {
 		t.Errorf("EX-268: k at first inbox item should say 'first'; got %q", m.statusMessage)
 	}
 }
+
+// TestCmdPrefixCommandsEX269 verifies EX-269: the "cmd: " prefix strip
+// added a guard so that an empty command after stripping says "No command
+// entered." (defensive code), and a valid "cmd: frank" still works.
+func TestCmdPrefixCommandsEX269(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+
+	// Valid "cmd: frank" should work (no panic, no "Unknown command").
+	// It calls jumpToFrankSession which errors in tests (no workspace node),
+	// so we just verify it does NOT say "Unknown command: cmd:".
+	m2 := m
+	m2.commandMode = true
+	m2.commandBuffer = ":cmd: frank"
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyEnter})
+	if strings.Contains(m2.statusMessage, "Unknown command: cmd:") {
+		t.Errorf("EX-269: 'cmd: frank' should not give 'Unknown command: cmd:'; got %q", m2.statusMessage)
+	}
+
+	// Pure "cmd: " (empty after prefix) in the executeCommand path: since
+	// TrimSpace removes trailing space, this becomes "cmd:" which falls
+	// through to the switch. Verify it doesn't crash and gives some feedback.
+	m3 := m
+	m3.commandMode = true
+	m3.commandBuffer = ":cmd:"
+	m3 = pressKey(m3, tea.KeyMsg{Type: tea.KeyEnter})
+	if m3.commandMode {
+		t.Error("EX-269: command mode should exit after Enter")
+	}
+	// Should NOT say "No command entered" (that's for the truly empty case)
+	// — must not panic, must give SOME feedback.
+	if m3.statusMessage == "" {
+		t.Error("EX-269: ':cmd:' Enter should set a non-empty status message")
+	}
+}

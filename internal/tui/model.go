@@ -1878,9 +1878,14 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		trimmed = strings.TrimSpace(trimmed[len("cmd: "):])
 		lower = strings.ToLower(trimmed)
 	}
+	// EX-269: guard against empty command after "cmd: " prefix stripping (e.g. ":cmd: ").
+	if trimmed == "" {
+		m.statusMessage = "No command entered."
+		return nil
+	}
 
 	fields := strings.Fields(trimmed)
-	if strings.EqualFold(fields[0], "inbox") && len(fields) > 1 {
+	if len(fields) > 1 && strings.EqualFold(fields[0], "inbox") {
 		// EX-160: executeInboxCommand now returns a cmd for server-side API calls.
 		return m.executeInboxCommand(fields[1:])
 	}
