@@ -8191,6 +8191,55 @@ func TestJumpToSessionByNameIdempotencyEX477(t *testing.T) {
 	})
 }
 
+// TestJumpToSessionByNameTaskScopedSetsStateEX486 verifies EX-486:
+// :session <name> on a task-scoped session sets activeScope=ScopeTask,
+// navigates to ViewTask, sets selectedTaskID, and fires loadTaskDetailCmd —
+// mirroring handleEnterKey and the fixed :sidebar select (EX-483) and 'n'
+// key (EX-485). Previously only chat history was reloaded.
+func TestJumpToSessionByNameTaskScopedSetsStateEX486(t *testing.T) {
+	taskID := "task-486"
+	sessionID := "00000000-0000-0000-0000-000000000486"
+	nodeID := "session-" + sessionID
+	detailCalledWith := ""
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			detailCalledWith = id
+			return &TaskDetailItem{ID: id, Title: "EX-486 task"}, nil
+		},
+	})
+	m.activeScope = ScopeOrg // stale scope
+	m.workspace.nodes = map[string]*sidebarNode{
+		nodeID: {
+			ID:           nodeID,
+			Kind:         sidebarKindSession,
+			SessionID:    sessionID,
+			SessionScope: "project_task",
+			TaskID:       taskID,
+			Label:        "Task 486 session",
+		},
+	}
+	m.workspace.topLevel = []string{nodeID}
+
+	cmd := m.jumpToSessionByName("Task 486")
+
+	if m.activeScope != ScopeTask {
+		t.Fatalf("EX-486: activeScope = %v, want ScopeTask", m.activeScope)
+	}
+	if m.workspace.selectedTaskID != taskID {
+		t.Fatalf("EX-486: selectedTaskID = %q, want %q", m.workspace.selectedTaskID, taskID)
+	}
+	if m.workspace.mainView != ViewTask {
+		t.Fatalf("EX-486: mainView = %v, want ViewTask", m.workspace.mainView)
+	}
+	if cmd == nil {
+		t.Fatal("EX-486: jumpToSessionByName returned nil cmd for task-scoped session")
+	}
+	runNonTimerCmds(cmd)
+	if detailCalledWith != taskID {
+		t.Fatalf("EX-486: LoadTaskDetail called with %q, want %q", detailCalledWith, taskID)
+	}
+}
+
 // TestJumpToProjectByNameIdempotencyEX478 verifies EX-478: :project <name>
 // when already in ViewProject for that project says "Already in project: X.
 // Refreshing tasks…" rather than "Project: X" which implies new navigation.

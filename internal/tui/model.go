@@ -5812,11 +5812,32 @@ func (m *Model) jumpToSessionByName(name string) tea.Cmd {
 			} else {
 				m.statusMessage = "Switched to " + truncate(node.Label, 36) + "."
 			}
+			// EX-486: set scope and navigate to task view for task-scoped sessions,
+			// mirroring handleEnterKey, the fixed :sidebar select (EX-483), and
+			// the fixed 'n' key (EX-485). :session <name> was silently skipping
+			// scope, ViewTask navigation, selectedTaskID, and loadTaskDetailCmd.
+			var cmds486 []tea.Cmd
+			switch node.SessionScope {
+			case "project_task":
+				m.activeScope = ScopeTask
+				if node.TaskID != "" {
+					m.workspace.selectedTaskID = node.TaskID
+					m.workspace.setMainView(ViewTask)
+					cmds486 = append(cmds486, loadTaskDetailCmd(node.TaskID, m.runtimeHints))
+				}
+			case "project":
+				m.activeScope = ScopeProject
+			default:
+				m.activeScope = ScopeOrg
+			}
 			if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
 				m.chatMessages = nil
 				m.chatHistoryLoading = true
 				m.chatMessageIndex = make(map[string]int)
-				return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
+				cmds486 = append(cmds486, loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory))
+			}
+			if len(cmds486) > 0 {
+				return tea.Batch(cmds486...)
 			}
 			return nil
 		}
