@@ -709,6 +709,42 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.statusMessage = "Inbox is empty."
 				}
 				return m, nil
+			case tea.KeyPgUp:
+				// EX-308: PgUp/PgDn in ViewInbox page through items (8 at a time).
+				if len(m.workspace.inbox) == 0 {
+					m.statusMessage = "Inbox is empty."
+					return m, nil
+				}
+				prevCursor := m.workspace.inboxCursor
+				for i := 0; i < chatScrollStepLines; i++ {
+					m.workspace.moveInbox(-1)
+				}
+				if item := m.workspace.currentInboxItem(); item != nil {
+					if m.workspace.inboxCursor == prevCursor {
+						m.statusMessage = "At first inbox item."
+					} else if item.Summary != "" {
+						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					}
+				}
+				return m, nil
+			case tea.KeyPgDown:
+				// EX-308: PgDown in ViewInbox pages forward through items.
+				if len(m.workspace.inbox) == 0 {
+					m.statusMessage = "Inbox is empty."
+					return m, nil
+				}
+				prevCursor := m.workspace.inboxCursor
+				for i := 0; i < chatScrollStepLines; i++ {
+					m.workspace.moveInbox(1)
+				}
+				if item := m.workspace.currentInboxItem(); item != nil {
+					if m.workspace.inboxCursor == prevCursor {
+						m.statusMessage = "At last inbox item."
+					} else if item.Summary != "" {
+						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					}
+				}
+				return m, nil
 			}
 		}
 		if m.focus == MainPanel && m.workspace.mainView == ViewProject {
@@ -779,6 +815,50 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 				} else {
 					m.statusMessage = "No open tasks in this project."
+				}
+				return m, nil
+			case tea.KeyPgUp:
+				// EX-308: PgUp/PgDn in ViewProject page through tasks (8 at a time).
+				openTasks := m.workspace.openTasksForProject()
+				if len(openTasks) == 0 {
+					m.statusMessage = "No open tasks in this project."
+					return m, nil
+				}
+				prevCursor := m.workspace.projectTaskCursor
+				for i := 0; i < chatScrollStepLines; i++ {
+					m.workspace.moveProjectTaskCursor(-1)
+				}
+				if m.workspace.projectTaskCursor == prevCursor {
+					m.statusMessage = "At first task in project."
+				} else if cur := m.workspace.projectTaskCursor; cur >= 0 && cur < len(openTasks) {
+					t := openTasks[cur]
+					label := t.Title
+					if t.TaskNumber > 0 {
+						label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+					}
+					m.statusMessage = "▸ " + truncate(label, 40)
+				}
+				return m, nil
+			case tea.KeyPgDown:
+				// EX-308: PgDown in ViewProject pages forward through tasks.
+				openTasks := m.workspace.openTasksForProject()
+				if len(openTasks) == 0 {
+					m.statusMessage = "No open tasks in this project."
+					return m, nil
+				}
+				prevCursor := m.workspace.projectTaskCursor
+				for i := 0; i < chatScrollStepLines; i++ {
+					m.workspace.moveProjectTaskCursor(1)
+				}
+				if m.workspace.projectTaskCursor == prevCursor {
+					m.statusMessage = "At last task in project."
+				} else if cur := m.workspace.projectTaskCursor; cur >= 0 && cur < len(openTasks) {
+					t := openTasks[cur]
+					label := t.Title
+					if t.TaskNumber > 0 {
+						label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+					}
+					m.statusMessage = "▸ " + truncate(label, 40)
 				}
 				return m, nil
 			}

@@ -8005,3 +8005,82 @@ func TestViewTaskPgUpPgDnHomeEndEX306EX307(t *testing.T) {
 		}
 	}
 }
+
+// TestInboxProjectPgUpPgDnEX308 verifies that PgUp/PgDn in ViewInbox and
+// ViewProject page through items 8 at a time with boundary feedback.
+func TestInboxProjectPgUpPgDnEX308(t *testing.T) {
+	// --- ViewInbox ---
+	mi := NewModel(DefaultState())
+	mi.width, mi.height = 220, 40
+	mi.focus = MainPanel
+	mi.workspace.setMainView(ViewInbox)
+	// Populate 12 inbox items.
+	for i := 0; i < 12; i++ {
+		mi.workspace.inbox = append(mi.workspace.inbox, inboxItem{
+			ID:      fmt.Sprintf("item-%d", i),
+			Summary: fmt.Sprintf("Inbox item %d", i),
+		})
+	}
+	mi.workspace.inboxCursor = 11
+
+	// PgUp from 11 — should move to 3.
+	mi = pressKey(mi, tea.KeyMsg{Type: tea.KeyPgUp})
+	if mi.workspace.inboxCursor != 3 {
+		t.Errorf("EX-308: PgUp from 11 in ViewInbox should land at 3; got %d", mi.workspace.inboxCursor)
+	}
+	if mi.statusMessage != "▸ Inbox item 3" {
+		t.Errorf("EX-308: PgUp should show item label; got %q", mi.statusMessage)
+	}
+
+	// PgUp at first — boundary message.
+	mi.workspace.inboxCursor = 0
+	mi = pressKey(mi, tea.KeyMsg{Type: tea.KeyPgUp})
+	if mi.statusMessage != "At first inbox item." {
+		t.Errorf("EX-308: PgUp at first inbox item should say 'At first inbox item.'; got %q", mi.statusMessage)
+	}
+
+	// PgDown from 0 — should move to 8.
+	mi.workspace.inboxCursor = 0
+	mi = pressKey(mi, tea.KeyMsg{Type: tea.KeyPgDown})
+	if mi.workspace.inboxCursor != 8 {
+		t.Errorf("EX-308: PgDn from 0 in ViewInbox should land at 8; got %d", mi.workspace.inboxCursor)
+	}
+
+	// Empty inbox — PgUp/PgDn give "Inbox is empty."
+	mi2 := NewModel(DefaultState())
+	mi2.width, mi2.height = 220, 40
+	mi2.focus = MainPanel
+	mi2.workspace.setMainView(ViewInbox)
+	for _, keyType := range []tea.KeyType{tea.KeyPgUp, tea.KeyPgDown} {
+		mi2 = pressKey(mi2, tea.KeyMsg{Type: keyType})
+		if mi2.statusMessage != "Inbox is empty." {
+			t.Errorf("EX-308: %v in empty inbox should say 'Inbox is empty.'; got %q", keyType, mi2.statusMessage)
+		}
+	}
+
+	// --- ViewProject ---
+	mp := NewModel(DefaultState())
+	mp.width, mp.height = 220, 40
+	mp.focus = MainPanel
+	mp.workspace.setMainView(ViewProject)
+	mp.workspace.selectedProjectID = "proj-1"
+	tasks := make([]SidebarTaskItem, 12)
+	for i := 0; i < 12; i++ {
+		tasks[i] = SidebarTaskItem{ID: fmt.Sprintf("task-%d", i), Title: fmt.Sprintf("Task %d", i)}
+	}
+	mp.workspace.selectedProject = &ProjectDetail{ID: "proj-1", Tasks: tasks}
+	mp.workspace.projectTaskCursor = 0
+
+	// PgDown from 0 — should move to 8.
+	mp = pressKey(mp, tea.KeyMsg{Type: tea.KeyPgDown})
+	if mp.workspace.projectTaskCursor != 8 {
+		t.Errorf("EX-308: PgDn from 0 in ViewProject should land at 8; got %d", mp.workspace.projectTaskCursor)
+	}
+
+	// PgDown at last — boundary.
+	mp.workspace.projectTaskCursor = 11
+	mp = pressKey(mp, tea.KeyMsg{Type: tea.KeyPgDown})
+	if mp.statusMessage != "At last task in project." {
+		t.Errorf("EX-308: PgDn at last project task should say 'At last task in project.'; got %q", mp.statusMessage)
+	}
+}
