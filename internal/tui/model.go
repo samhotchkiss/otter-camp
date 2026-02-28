@@ -3431,6 +3431,14 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			m.statusMessage = "No messages yet."
 			return true, nil
 		}
+		// EX-431: symmetric with EX-430 ('g'/Home sentinel guard) — when
+		// chatScrollOffset is already at the sentinel (1<<20), PgUp would
+		// increment it further without changing the view; say "Already at
+		// oldest message." instead of the misleading "Chat scrolled up."
+		if m.chatScrollOffset >= 1<<20 {
+			m.statusMessage = "Already at oldest message."
+			return true, nil
+		}
 		m.scrollChatBy(chatScrollStepLines)
 		m.statusMessage = "Chat scrolled up."
 		return true, nil

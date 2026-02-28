@@ -917,6 +917,57 @@ func TestGKeyAndKeyHomeAlreadyAtOldestEX430(t *testing.T) {
 	})
 }
 
+func TestPgUpAlreadyAtOldestEX431(t *testing.T) {
+	seedMessages := func(m Model) Model {
+		m.chatMessages = []ChatMessage{{ID: "1", Role: "user", Content: "hi"}}
+		m.chatMessageIndex = map[string]int{"1": 0}
+		return m
+	}
+
+	t.Run("PgUp-when-already-at-oldest-via-g", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m = seedMessages(m)
+		// Jump to oldest with 'g'
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+		if m.chatScrollOffset < 1<<20 {
+			t.Fatalf("setup: expected sentinel after 'g', got %d", m.chatScrollOffset)
+		}
+		// PgUp should recognise sentinel and say "Already at oldest message."
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+		if got := m.StatusMessage(); got != "Already at oldest message." {
+			t.Fatalf("EX-431: PgUp at sentinel should say \"Already at oldest message.\", got %q", got)
+		}
+		if m.chatScrollOffset < 1<<20 {
+			t.Fatalf("EX-431: chatScrollOffset should remain at sentinel, got %d", m.chatScrollOffset)
+		}
+	})
+
+	t.Run("PgUp-when-already-at-oldest-via-KeyHome", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m = seedMessages(m)
+		// Jump to oldest with KeyHome
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+		// PgUp should recognise sentinel and say "Already at oldest message."
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+		if got := m.StatusMessage(); got != "Already at oldest message." {
+			t.Fatalf("EX-431: PgUp after KeyHome should say \"Already at oldest message.\", got %q", got)
+		}
+	})
+
+	t.Run("PgUp-from-offset-zero-scrolls-up", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m = seedMessages(m)
+		m.chatScrollOffset = 0
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+		if got := m.StatusMessage(); got != "Chat scrolled up." {
+			t.Fatalf("EX-431: PgUp from offset 0 should say \"Chat scrolled up.\", got %q", got)
+		}
+	})
+}
+
 func mustJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)
