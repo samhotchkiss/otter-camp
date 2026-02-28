@@ -9716,3 +9716,66 @@ func TestCommandModeExtraKeysEX371(t *testing.T) {
 		})
 	}
 }
+
+// TestNumberKeyGuessesEX372 verifies that pressing digit keys 4-9 outside
+// the chat panel gives a "Panels: 1/2/3" hint instead of silently doing
+// nothing (EX-372). Users guess 4+ might switch panels.
+func TestNumberKeyGuessesEX372(t *testing.T) {
+	for _, r := range []rune{'4', '5', '6', '7', '8', '9'} {
+		t.Run(fmt.Sprintf("key-%c", r), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			want := "Panels: 1 sidebar · 2 main · 3 chat. Press ? for full key reference."
+			if m1.statusMessage != want {
+				t.Errorf("EX-372: key %c: got %q, want %q", r, m1.statusMessage, want)
+			}
+		})
+	}
+	// Number keys 4-9 in chat panel should type into the input, not show the hint.
+	t.Run("4-in-chat-types", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+		if m1.chatInput != "4" {
+			t.Errorf("EX-372: '4' in chat should type '4', got chatInput=%q", m1.chatInput)
+		}
+	})
+}
+
+// TestCKeyHintEX373 verifies that pressing 'c' in a non-chat panel gives
+// an honest redirect hint instead of silently doing nothing (EX-373).
+// Users familiar with vim/tmux may press 'c' expecting cancel-turn.
+func TestCKeyHintEX373(t *testing.T) {
+	// 'c' without active turn in MainPanel → generic hint
+	t.Run("c in main no turn", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.activeTurn = false
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+		want := "c is not bound here. Press ? for help or : for commands."
+		if m1.statusMessage != want {
+			t.Errorf("EX-373: got %q, want %q", m1.statusMessage, want)
+		}
+	})
+	// 'c' with active turn → redirect to cancel turn
+	t.Run("c in main with active turn", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.activeTurn = true
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+		want := "c is not bound. Press Esc in chat (3 or Tab) or type :cancel-turn to cancel the turn."
+		if m1.statusMessage != want {
+			t.Errorf("EX-373: got %q, want %q", m1.statusMessage, want)
+		}
+	})
+	// 'c' in chat panel should type into input
+	t.Run("c in chat types", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+		if m1.chatInput != "c" {
+			t.Errorf("EX-373: 'c' in chat should type 'c', got chatInput=%q", m1.chatInput)
+		}
+	})
+}

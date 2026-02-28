@@ -2481,6 +2481,25 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.statusMessage = "o·open works in Inbox (opens item) or Task view (opens session). Press i for Inbox."
 			return true, nil
 		}
+	case 'c':
+		// EX-373: 'c' is not a documented shortcut, but users familiar with vim/tmux
+		// may press it expecting to cancel the current agent turn. Redirect to the
+		// actual cancel shortcut (Esc in chat panel) or :cancel-turn command.
+		if m.focus != ChatPanel {
+			if m.activeTurn {
+				m.statusMessage = "c is not bound. Press Esc in chat (3 or Tab) or type :cancel-turn to cancel the turn."
+			} else {
+				m.statusMessage = "c is not bound here. Press ? for help or : for commands."
+			}
+			return true, nil
+		}
+	case '4', '5', '6', '7', '8', '9':
+		// EX-372: Users may guess that 4-9 switch panels (1=sidebar, 2=main, 3=chat).
+		// Give a hint pointing to the actual panel shortcuts instead of silently doing nothing.
+		if m.focus != ChatPanel {
+			m.statusMessage = "Panels: 1 sidebar · 2 main · 3 chat. Press ? for full key reference."
+			return true, nil
+		}
 	}
 	return false, nil
 }
