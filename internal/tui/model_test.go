@@ -9099,3 +9099,41 @@ func TestLeftRightArrowInMainPanelEX347348(t *testing.T) {
 	// The key point is that → doesn't panic and doesn't silently do nothing.
 	// (Exact status message depends on task state, which is empty here.)
 }
+
+// TestQuestionMarkInChatWithEmptyInputEX349 verifies that pressing '?' with
+// empty chat input opens the help view (mirrors the global '?' handler),
+// while '?' with non-empty input still types into the chat box (EX-349).
+func TestQuestionMarkInChatWithEmptyInputEX349(t *testing.T) {
+	// Empty input → open help.
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	m.chatInput = ""
+
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	if m1.workspace.mainView != ViewHelp {
+		t.Errorf("EX-349: '?' with empty chat input should open help; got view=%v", m1.workspace.mainView)
+	}
+	if m1.statusMessage != "Keybinding reference. Press ? or Esc to close." {
+		t.Errorf("EX-349: '?' should show help message; got %q", m1.statusMessage)
+	}
+
+	// Second press (already in help) → return to dashboard.
+	m2 := pressKey(m1, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	if m2.workspace.mainView != ViewDashboard {
+		t.Errorf("EX-349: '?' again should close help; got view=%v", m2.workspace.mainView)
+	}
+
+	// Non-empty input → '?' types into input (existing behaviour must not regress).
+	m3 := NewModel(DefaultState())
+	m3.width, m3.height = 220, 40
+	m3.focus = ChatPanel
+	m3.chatInput = "what"
+	m4 := pressKey(m3, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	if m4.chatInput != "what?" {
+		t.Errorf("EX-349: '?' with non-empty input should type '?'; got %q", m4.chatInput)
+	}
+	if m4.workspace.mainView != ViewDashboard {
+		t.Errorf("EX-349: '?' with non-empty input should not open help; got %v", m4.workspace.mainView)
+	}
+}

@@ -1284,6 +1284,20 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.statusMessage = "Chat scrolled to latest."
 					return m, nil
 				}
+				if r == '?' {
+					// EX-349: '?' with empty chat input opens/closes help (mirrors global ? handler).
+					// When input is non-empty, '?' should type into the input as normal.
+					if m.workspace.mainView == ViewHelp {
+						m.workspace.setMainView(ViewDashboard)
+						m.statusMessage = "Returned to dashboard."
+					} else {
+						m.workspace.setMainView(ViewHelp)
+						m.setFocus(MainPanel)
+						m.helpScrollOffset = 0
+						m.statusMessage = "Keybinding reference. Press ? or Esc to close."
+					}
+					return m, nil
+				}
 			}
 			if m.focus == ChatPanel {
 				m.handleChatRunes(key)
