@@ -6396,3 +6396,65 @@ func TestResizePanelAtLimitEX263(t *testing.T) {
 		t.Errorf("EX-263: one step in from max should show plain width; got %q", m.statusMessage)
 	}
 }
+
+// TestChatPgDownAtLatestEX264 verifies EX-264: pressing PgDown (or End) when the
+// chat is already showing the latest message says "Already at latest message."
+// instead of the misleading "Chat scrolled down." (nothing actually moved).
+func TestChatPgDownAtLatestEX264(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+
+	// Offset is 0 by default (newest messages visible).
+	// PgDown at offset==0 should report "already at latest".
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgDown})
+	if !strings.Contains(m.statusMessage, "latest") {
+		t.Errorf("EX-264: PgDown at offset=0 should say 'latest'; got %q", m.statusMessage)
+	}
+	if strings.Contains(m.statusMessage, "scrolled down") {
+		t.Errorf("EX-264: should not say 'scrolled down' at offset=0; got %q", m.statusMessage)
+	}
+
+	// End key at offset==0 is also a no-op.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+	if !strings.Contains(m.statusMessage, "latest") {
+		t.Errorf("EX-264: End at offset=0 should say 'latest'; got %q", m.statusMessage)
+	}
+
+	// After scrolling up, PgDown should scroll back and say "Chat scrolled down."
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.chatScrollOffset == 0 {
+		t.Skip("EX-264: PgUp had no effect (no messages), skipping directional check")
+	}
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgDown})
+	if !strings.Contains(m.statusMessage, "scrolled down") && !strings.Contains(m.statusMessage, "latest") {
+		t.Errorf("EX-264: PgDown from scrolled position should say 'scrolled down' or 'latest'; got %q", m.statusMessage)
+	}
+}
+
+// TestEscFromDashboardEX265 verifies EX-265: pressing Esc from the main panel
+// when already viewing the dashboard says "Already on dashboard." instead of
+// the misleading "Returned to dashboard." (the user never left).
+func TestEscFromDashboardEX265(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	// Ensure we start on dashboard.
+	m.workspace.setMainView(ViewDashboard)
+
+	// Pressing Esc when already on dashboard should say "already".
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if !strings.Contains(m.statusMessage, "Already") {
+		t.Errorf("EX-265: Esc on dashboard should say 'Already on dashboard.'; got %q", m.statusMessage)
+	}
+	if strings.Contains(m.statusMessage, "Returned") {
+		t.Errorf("EX-265: Esc on dashboard should not say 'Returned'; got %q", m.statusMessage)
+	}
+
+	// From a non-dashboard view (inbox), Esc should still say "Returned to dashboard."
+	m.workspace.setMainView(ViewInbox)
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if !strings.Contains(m.statusMessage, "Returned") && !strings.Contains(m.statusMessage, "dashboard") {
+		t.Errorf("EX-265: Esc from inbox should say 'Returned to dashboard.'; got %q", m.statusMessage)
+	}
+}

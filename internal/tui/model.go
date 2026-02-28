@@ -1071,6 +1071,12 @@ func (m *Model) handleEscapeKey() tea.Cmd {
 			}
 			return nil
 		}
+		// EX-265: when already on the dashboard, "Returned to dashboard." is
+		// misleading — you never went anywhere. Give honest feedback instead.
+		if m.workspace.mainView == ViewDashboard {
+			m.statusMessage = "Already on dashboard."
+			return nil
+		}
 		m.workspace.setMainView(ViewDashboard)
 		m.statusMessage = "Returned to dashboard."
 	}
@@ -1586,16 +1592,27 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		m.statusMessage = "Chat scrolled up."
 		return true, nil
 	case tea.KeyPgDown:
-		m.scrollChatBy(-chatScrollStepLines)
-		m.statusMessage = "Chat scrolled down."
+		// EX-264: when already at the newest message (offset==0), scrolling
+		// down is a no-op — say so instead of showing "Chat scrolled down."
+		if m.chatScrollOffset == 0 {
+			m.statusMessage = "Already at latest message."
+		} else {
+			m.scrollChatBy(-chatScrollStepLines)
+			m.statusMessage = "Chat scrolled down."
+		}
 		return true, nil
 	case tea.KeyHome:
 		m.scrollChatBy(1 << 20)
 		m.statusMessage = "Chat scrolled to oldest."
 		return true, nil
 	case tea.KeyEnd:
-		m.chatScrollOffset = 0
-		m.statusMessage = "Chat scrolled to latest."
+		// EX-264: symmetric — End when already at newest is a no-op.
+		if m.chatScrollOffset == 0 {
+			m.statusMessage = "Already at latest message."
+		} else {
+			m.chatScrollOffset = 0
+			m.statusMessage = "Chat scrolled to latest."
+		}
 		return true, nil
 	case tea.KeyBackspace:
 		runes := []rune(m.chatInput)
