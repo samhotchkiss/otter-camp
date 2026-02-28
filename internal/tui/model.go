@@ -1938,7 +1938,8 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		}
 		m.workspace.setMainView(ViewProject)
 		m.setFocus(MainPanel)
-		m.statusMessage = "Main view: project"
+		// EX-260: match keyboard shortcut 'p' → "Project view" for consistency.
+		m.statusMessage = "Project view"
 	case "task":
 		// EX-240: `:task <title>` with a title should jump to that task.
 		// Without a title, just switch to the task view (existing behaviour).
@@ -1947,7 +1948,8 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		}
 		m.workspace.setMainView(ViewTask)
 		m.setFocus(MainPanel)
-		m.statusMessage = "Main view: task"
+		// EX-260: match keyboard shortcut 't' → "Task detail" for consistency.
+		m.statusMessage = "Task detail"
 	case "dashboard", "inbox", "activity", "agents", "merges", "schedules":
 		view, ok := resolveMainViewCommand(fields[0])
 		if !ok {
@@ -1955,7 +1957,9 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 			return nil
 		}
 		m.workspace.setMainView(view)
-		m.statusMessage = "Main view: " + string(view)
+		// EX-260: use Title-cased view name to match keyboard shortcut messages
+		// ('i' → "Inbox", 'd' → "Dashboard") rather than "Main view: inbox".
+		m.statusMessage = viewNavLabel(view)
 		// EX-170: load data for views that need a fresh fetch (consistent with
 		// keyboard shortcut behaviour: 'i' loads inbox, ViewAgents loads agents).
 		switch view {
@@ -3166,6 +3170,35 @@ func (m Model) commandFallbackHelp() string {
 		return "tmux-safe: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit"
 	}
 	return ":focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn scroll | :quit"
+}
+
+// viewNavLabel returns a human-readable status message label for main view navigation.
+// Matches the Title-Case format used by keyboard shortcut messages (e.g. 'i' → "Inbox").
+// EX-260: used by executeCommand so :inbox, :dashboard etc. produce the same format
+// as their keyboard shortcut equivalents.
+func viewNavLabel(view MainView) string {
+	switch view {
+	case ViewDashboard:
+		return "Dashboard"
+	case ViewInbox:
+		return "Inbox"
+	case ViewActivity:
+		return "Activity"
+	case ViewAgents:
+		return "Agents"
+	case ViewMerges:
+		return "Merge Queue"
+	case ViewSchedules:
+		return "Schedules"
+	case ViewProject:
+		return "Project view"
+	case ViewTask:
+		return "Task detail"
+	case ViewHelp:
+		return "Help"
+	default:
+		return string(view)
+	}
 }
 
 func panelFromView(view string) (Panel, bool) {

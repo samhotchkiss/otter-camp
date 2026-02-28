@@ -6277,3 +6277,39 @@ func TestSearchBarPersistentHintEX258(t *testing.T) {
 		t.Errorf("EX-258: persistent search bar should say 're-filter or clear'; got %q", bar)
 	}
 }
+
+// TestCommandNavLabelsEX260 verifies EX-260: :inbox, :dashboard, :project, :task
+// via the command palette produce the same Title-Case status messages as their
+// keyboard shortcut equivalents (e.g. 'i' → "Inbox", `:inbox` → "Inbox").
+func TestCommandNavLabelsEX260(t *testing.T) {
+	cases := []struct {
+		cmd     string
+		wantMsg string
+	}{
+		{":inbox", "Inbox"},
+		{":dashboard", "Dashboard"},
+		{":activity", "Activity"},
+		{":project", "Project view"},
+		{":task", "Task detail"},
+	}
+
+	for _, tc := range cases {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+
+		// Enter command mode and type the command.
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+		for _, ch := range strings.TrimPrefix(tc.cmd, ":") {
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		}
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+		if m.statusMessage != tc.wantMsg {
+			t.Errorf("EX-260: command %q → status %q, want %q", tc.cmd, m.statusMessage, tc.wantMsg)
+		}
+		// Must not contain the old "Main view:" prefix.
+		if strings.HasPrefix(m.statusMessage, "Main view:") {
+			t.Errorf("EX-260: command %q still uses old 'Main view:' prefix: %q", tc.cmd, m.statusMessage)
+		}
+	}
+}
