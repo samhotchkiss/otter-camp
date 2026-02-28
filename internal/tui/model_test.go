@@ -9840,3 +9840,62 @@ func TestCtrlAEInSearchAndCommandModeEX374375(t *testing.T) {
 		}
 	})
 }
+
+// TestCtrlNRYNoOpsEX376 verifies that Ctrl-N, Ctrl-R, and Ctrl-Y give
+// honest hints instead of silent no-ops (EX-376). These fall to the
+// updateKey default case and are commonly pressed by emacs/readline users.
+func TestCtrlNRYNoOpsEX376(t *testing.T) {
+	tests := []struct {
+		name    string
+		focus   Panel
+		keyType tea.KeyType
+		want    string
+	}{
+		{
+			name:    "Ctrl-N in chat",
+			focus:   ChatPanel,
+			keyType: tea.KeyCtrlN,
+			want:    "Ctrl-N: use ↓ arrow or PgDn to scroll down.",
+		},
+		{
+			name:    "Ctrl-N outside chat",
+			focus:   MainPanel,
+			keyType: tea.KeyCtrlN,
+			want:    "Ctrl-N: use ↓/j to navigate down, or 3/Tab to focus chat.",
+		},
+		{
+			name:    "Ctrl-R in chat",
+			focus:   ChatPanel,
+			keyType: tea.KeyCtrlR,
+			want:    "Ctrl-R: reverse search not supported. Use ↑ to browse message history.",
+		},
+		{
+			name:    "Ctrl-R outside chat",
+			focus:   SidebarPanel,
+			keyType: tea.KeyCtrlR,
+			want:    "Ctrl-R: reverse search not supported. Use / to filter sidebar or main view.",
+		},
+		{
+			name:    "Ctrl-Y in chat",
+			focus:   ChatPanel,
+			keyType: tea.KeyCtrlY,
+			want:    "Ctrl-Y: use terminal paste (right-click or Ctrl-Shift-V) to paste text.",
+		},
+		{
+			name:    "Ctrl-Y outside chat",
+			focus:   MainPanel,
+			keyType: tea.KeyCtrlY,
+			want:    "Ctrl-Y: paste works in chat input (3 or Tab to focus chat).",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = tt.focus
+			m1 := pressKey(m, tea.KeyMsg{Type: tt.keyType})
+			if m1.statusMessage != tt.want {
+				t.Errorf("EX-376: %s: got %q, want %q", tt.name, m1.statusMessage, tt.want)
+			}
+		})
+	}
+}

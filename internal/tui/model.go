@@ -1402,6 +1402,31 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, nil
+	case tea.KeyCtrlN:
+		// EX-376: Ctrl-N (emacs/readline "next line") — no handler. Give a redirect hint.
+		// Ctrl-P is captured for command mode, so Ctrl-N can't be symmetric ↓ here.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Ctrl-N: use ↓ arrow or PgDn to scroll down."
+		} else {
+			m.statusMessage = "Ctrl-N: use ↓/j to navigate down, or 3/Tab to focus chat."
+		}
+		return m, nil
+	case tea.KeyCtrlR:
+		// EX-376: Ctrl-R (readline reverse-search) — not supported. Point to /.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Ctrl-R: reverse search not supported. Use ↑ to browse message history."
+		} else {
+			m.statusMessage = "Ctrl-R: reverse search not supported. Use / to filter sidebar or main view."
+		}
+		return m, nil
+	case tea.KeyCtrlY:
+		// EX-376: Ctrl-Y (emacs yank/paste) — not supported. Terminal paste works directly.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Ctrl-Y: use terminal paste (right-click or Ctrl-Shift-V) to paste text."
+		} else {
+			m.statusMessage = "Ctrl-Y: paste works in chat input (3 or Tab to focus chat)."
+		}
+		return m, nil
 	default:
 		return m, nil
 	}
