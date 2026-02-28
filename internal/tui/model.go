@@ -1809,6 +1809,16 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 			m.statusMessage = "Usage: :scope org|project|task"
 			return nil
 		}
+		// EX-244: validate scope argument before switching so an unrecognised value
+		// (e.g. `:scope workspace`) does not silently map to project scope.
+		arg := strings.ToLower(strings.TrimSpace(fields[1]))
+		switch arg {
+		case string(ScopeOrg), string(ScopeProject), string(ScopeTask):
+			// valid
+		default:
+			m.statusMessage = fmt.Sprintf("Unknown scope %q. Use: org, project, or task.", fields[1])
+			return nil
+		}
 		// EX-164: switchScope returns a history-reload cmd; don't discard it.
 		return m.switchScope(normalizeScope(fields[1]))
 	case "send":
@@ -2083,6 +2093,9 @@ func (m *Model) sendOrQueueInput() tea.Cmd {
 
 func (m *Model) recallHistory() {
 	if len(m.chatHistory) == 0 {
+		// EX-243: give feedback instead of silently doing nothing so the user
+		// understands why ↑ didn't restore a previous message.
+		m.statusMessage = "No message history."
 		return
 	}
 	if m.chatHistoryIndex < 0 {

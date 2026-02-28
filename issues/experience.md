@@ -3739,3 +3739,43 @@ if len(m.queuedMessages) == 0 {
 **Status:** [x] Discovered | [x] Fixed | [x] Tested
 
 ---
+
+## EX-243: ↑ in chat panel with no history is a silent no-op
+
+**Observation:** Pressing `↑` in the chat panel with an empty input box triggers `recallHistory()`. When no messages have been sent in this session yet (history is empty), the function returned immediately with no feedback. The user gets no indication of why nothing happened.
+
+**Root cause:** `recallHistory()` had `if len(m.chatHistory) == 0 { return }` with no status message.
+
+**Improvement:** Added a status message in the early-return branch:
+```go
+m.statusMessage = "No message history."
+```
+
+**Effort:** Trivial (1 line)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-244: `:scope <invalid>` silently uses project scope
+
+**Observation:** Typing `:scope workspace` (or any invalid scope name) should show an error. Instead, `normalizeScope` maps any unrecognised string to `ScopeProject` (the default case), so the user ends up on project scope without knowing why.
+
+**Root cause:** No validation was performed before passing `fields[1]` to `normalizeScope`. The function's `default:` branch was designed as a fallback, not a permissive catch-all.
+
+**Improvement:** Added explicit validation in the `:scope` case of `executeCommand`:
+```go
+switch arg {
+case string(ScopeOrg), string(ScopeProject), string(ScopeTask):
+    // valid
+default:
+    m.statusMessage = fmt.Sprintf("Unknown scope %q. Use: org, project, or task.", fields[1])
+    return nil
+}
+```
+
+**Effort:** Trivial (6 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---

@@ -5876,3 +5876,54 @@ func TestQueueCommandEmptyFeedbackEX242(t *testing.T) {
 		})
 	}
 }
+
+// TestRecallHistoryEmptyFeedbackEX243 verifies EX-243: pressing ↑ in chat panel
+// when there is no message history gives a status message instead of silently no-oping.
+func TestRecallHistoryEmptyFeedbackEX243(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = ChatPanel
+	model.chatInput = ""
+	model.chatHistory = nil // explicitly empty
+
+	// Press ↑ — should give feedback
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyUp})
+
+	if !strings.Contains(strings.ToLower(model.statusMessage), "no message history") &&
+		!strings.Contains(strings.ToLower(model.statusMessage), "history") {
+		t.Errorf("EX-243: pressing ↑ with no chat history should show feedback; got %q", model.statusMessage)
+	}
+}
+
+// TestScopeCommandValidatesArgumentEX244 verifies EX-244: `:scope <invalid>` shows
+// an error instead of silently switching to project scope.
+func TestScopeCommandValidatesArgumentEX244(t *testing.T) {
+	t.Run("invalid scope shows error", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		_ = model.executeCommand(":scope workspace")
+
+		if !strings.Contains(strings.ToLower(model.statusMessage), "unknown") &&
+			!strings.Contains(strings.ToLower(model.statusMessage), "invalid") {
+			t.Errorf("EX-244: :scope workspace should show error; got %q", model.statusMessage)
+		}
+		// Should NOT have changed scope
+		if model.activeScope != ScopeOrg {
+			t.Errorf("EX-244: scope should not change on invalid arg; got %v", model.activeScope)
+		}
+	})
+
+	t.Run("valid scope org works", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		_ = model.executeCommand(":scope org")
+		if model.activeScope != ScopeOrg {
+			t.Errorf("EX-244: :scope org should set ScopeOrg; got %v", model.activeScope)
+		}
+	})
+
+	t.Run("valid scope task works", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		_ = model.executeCommand(":scope task")
+		if model.activeScope != ScopeTask {
+			t.Errorf("EX-244: :scope task should set ScopeTask; got %v", model.activeScope)
+		}
+	})
+}
