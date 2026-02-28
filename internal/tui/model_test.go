@@ -2661,6 +2661,86 @@ func TestChatMessageRedactedIgnoresNonActiveSession(t *testing.T) {
 	}
 }
 
+// EX-480: chat.message.redacted updated content silently but never set
+// statusMessage, so users would see [Redacted] with no explanation.
+func TestChatMessageRedactedSetsStatusMessageEX480(t *testing.T) {
+	t.Run("sets status when message found", func(t *testing.T) {
+		t.Parallel()
+		model := NewModel(DefaultState())
+		model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+		model.activeTurnSessionID = "session-redact-480"
+		model.turnsSynced = true
+		model.chatMessageIndex["msg-480"] = len(model.chatMessages)
+		model.chatMessages = append(model.chatMessages, ChatMessage{
+			ID:        "msg-480",
+			Role:      "assistant",
+			Content:   "sensitive",
+			Finalized: true,
+		})
+
+		raw, _ := json.Marshal(map[string]any{"session_id": "session-redact-480", "message_id": "msg-480"})
+		updated, _ := model.Update(ChatEnvelopeMsg{Envelope: EventEnvelope{
+			EventType: "chat.message.redacted",
+			OrgID:     "org-1",
+			Payload:   raw,
+		}})
+		m := updated.(Model)
+
+		if m.statusMessage == "" {
+			t.Fatal("statusMessage should be set after redaction, got empty")
+		}
+		if !strings.Contains(m.statusMessage, "redacted") {
+			t.Fatalf("statusMessage %q should mention 'redacted'", m.statusMessage)
+		}
+	})
+
+	t.Run("no status when session does not match", func(t *testing.T) {
+		t.Parallel()
+		model := NewModel(DefaultState())
+		model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+		model.activeTurnSessionID = "session-active-480"
+		model.turnsSynced = true
+		model.chatMessageIndex["msg-480b"] = len(model.chatMessages)
+		model.chatMessages = append(model.chatMessages, ChatMessage{
+			ID:      "msg-480b",
+			Role:    "assistant",
+			Content: "untouched",
+		})
+
+		raw, _ := json.Marshal(map[string]any{"session_id": "session-other-480", "message_id": "msg-480b"})
+		updated, _ := model.Update(ChatEnvelopeMsg{Envelope: EventEnvelope{
+			EventType: "chat.message.redacted",
+			OrgID:     "org-1",
+			Payload:   raw,
+		}})
+		m := updated.(Model)
+
+		if strings.Contains(m.statusMessage, "redacted") {
+			t.Fatalf("statusMessage should not mention 'redacted' for non-active session, got %q", m.statusMessage)
+		}
+	})
+
+	t.Run("no status when message id not in index", func(t *testing.T) {
+		t.Parallel()
+		model := NewModel(DefaultState())
+		model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+		model.activeTurnSessionID = "session-redact-480c"
+		model.turnsSynced = true
+
+		raw, _ := json.Marshal(map[string]any{"session_id": "session-redact-480c", "message_id": "msg-unknown-480c"})
+		updated, _ := model.Update(ChatEnvelopeMsg{Envelope: EventEnvelope{
+			EventType: "chat.message.redacted",
+			OrgID:     "org-1",
+			Payload:   raw,
+		}})
+		m := updated.(Model)
+
+		if strings.Contains(m.statusMessage, "redacted") {
+			t.Fatalf("statusMessage should not mention 'redacted' when message not in index, got %q", m.statusMessage)
+		}
+	})
+}
+
 // --- EX-141: agent lifecycle, supervisor escalation, status bar truncation ---
 
 func TestAgentExpiredAddsActivityAndReloadsAgents(t *testing.T) {

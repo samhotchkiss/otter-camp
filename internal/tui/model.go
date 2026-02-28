@@ -5386,6 +5386,11 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) tea.Cmd {
 		if idx, ok := m.chatMessageIndex[msgID]; ok {
 			m.chatMessages[idx].Content = "[Redacted]"
 			m.chatMessages[idx].Finalized = true
+			// EX-480: surface a status notification so the user knows a message was
+			// redacted. Without this, the [Redacted] label appears silently with no
+			// explanation — the user might miss it if the chat panel is scrolled up
+			// or not currently in view.
+			m.statusMessage = "A message was redacted."
 		}
 	case "worker.unresponsive":
 		// EX-410: surface a warning when the backend detects no worker response.
