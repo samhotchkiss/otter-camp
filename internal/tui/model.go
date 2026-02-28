@@ -1501,7 +1501,12 @@ func (m *Model) handleEnterKey() tea.Cmd {
 		}
 		// EX-284: Enter in static views (Agents, Merges, Schedules, Activity)
 		// has no selection model — give a hint rather than silently doing nothing.
-		m.statusMessage = "Enter not available in this view. Use r to refresh or Esc to go back."
+		// EX-313: ViewHelp has different semantics — give a help-specific hint.
+		if m.workspace.mainView == ViewHelp {
+			m.statusMessage = "Press ?, q, or Esc to close help."
+		} else {
+			m.statusMessage = "Enter not available in this view. Use r to refresh or Esc to go back."
+		}
 	}
 	return nil
 }
@@ -2570,6 +2575,18 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Filter cleared. Continue typing or Esc to exit."
 		}
 		return m, nil
+	case tea.KeyUp, tea.KeyDown:
+		// EX-313: ↑/↓ in filter mode commits the filter and then navigates the list,
+		// so the user can type a query and immediately scroll results without pressing Enter first.
+		m.setFilterForPanel(m.searchPanel, m.searchQuery)
+		m.searchMode = false
+		q := strings.TrimSpace(m.searchQuery)
+		if q != "" {
+			m.statusMessage = fmt.Sprintf("Filter %q applied.", q)
+		}
+		// Delegate to normal key handling to perform the navigation.
+		result, cmd := m.updateKey(key)
+		return result, cmd
 	case tea.KeySpace:
 		m.searchQuery += " "
 		m.setFilterForPanel(m.searchPanel, m.searchQuery)

@@ -8147,6 +8147,48 @@ func TestCtrlUInCommandModeClearsBufferEX311(t *testing.T) {
 	}
 }
 
+// TestEX313EnterInViewHelpAndUpDownInSearchMode tests two EX-313 fixes:
+// 1. Enter in ViewHelp shows a contextual hint (not the generic "not available" message).
+// 2. Up/Down in search mode commits the filter and navigates the list.
+func TestEX313EnterInViewHelpAndUpDownInSearchMode(t *testing.T) {
+	// --- Enter in ViewHelp gives help-specific hint ---
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewHelp)
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.workspace.mainView == ViewHelp && !strings.Contains(m.statusMessage, "Esc") {
+		t.Errorf("EX-313: Enter in ViewHelp should mention Esc; got %q", m.statusMessage)
+	}
+	if strings.Contains(m.statusMessage, "r to refresh") {
+		t.Errorf("EX-313: Enter in ViewHelp should not suggest 'r to refresh' (r is disabled in help); got %q", m.statusMessage)
+	}
+
+	// --- Up/Down in search mode commits filter and navigates ---
+	m2 := NewModel(DefaultState())
+	m2.width, m2.height = 220, 40
+	m2.focus = SidebarPanel
+	// Set up sidebar with two nodes.
+	nodeA := &sidebarNode{ID: "header-chats", Kind: sidebarKindHeader, Label: "CHATS"}
+	nodeB := &sidebarNode{ID: "header-projects", Kind: sidebarKindHeader, Label: "PROJECTS"}
+	m2.workspace.nodes["header-chats"] = nodeA
+	m2.workspace.nodes["header-projects"] = nodeB
+	m2.workspace.topLevel = []string{"header-chats", "header-projects"}
+	m2.workspace.sidebarCursor = 0
+	m2.searchMode = true
+	m2.searchPanel = SidebarPanel
+	m2.searchQuery = "CHATS"
+	m2.setFilterForPanel(SidebarPanel, "CHATS")
+
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyDown})
+	if m2.searchMode {
+		t.Errorf("EX-313: ↓ in search mode should exit search mode; still active")
+	}
+	if strings.TrimSpace(m2.sidebarFilter) == "" {
+		t.Errorf("EX-313: filter should persist after ↓ commits it; got empty filter")
+	}
+}
+
 // TestArrowKeysInViewTaskAndViewHelpEX312 verifies that ↑/↓ arrow keys in
 // ViewTask navigate tasks (mirrors k/j) and in ViewHelp scroll the content
 // (mirrors k/j). Also verifies the hint in non-navigable views.
