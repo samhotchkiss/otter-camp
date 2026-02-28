@@ -2731,6 +2731,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					m.statusMessage = "Task approved."
 					return true, actOnInboxItemCmd(itemID, "approve", m.runtimeHints.ActOnInboxItem)
 				}
+				// EX-437: review badge shown but no inbox item found — inbox may be stale.
+				m.statusMessage = "Review item not found. Press i to refresh Inbox."
+				return true, nil
 			} else if task != nil {
 				// EX-196: task doesn't require review — let user know.
 				m.statusMessage = "This task doesn't require review."
@@ -2767,6 +2770,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					m.statusMessage = "Task rejected."
 					return true, actOnInboxItemCmd(itemID, "reject", m.runtimeHints.ActOnInboxItem)
 				}
+				// EX-437: review badge shown but no inbox item found — inbox may be stale.
+				m.statusMessage = "Review item not found. Press i to refresh Inbox."
+				return true, nil
 			} else if task != nil {
 				// EX-196: task doesn't require review.
 				m.statusMessage = "This task doesn't require review."
@@ -2803,6 +2809,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					m.statusMessage = "Task deferred."
 					return true, actOnInboxItemCmd(itemID, "defer", m.runtimeHints.ActOnInboxItem)
 				}
+				// EX-437: review badge shown but no inbox item found — inbox may be stale.
+				m.statusMessage = "Review item not found. Press i to refresh Inbox."
+				return true, nil
 			} else if task != nil {
 				// EX-196: task doesn't require review.
 				m.statusMessage = "This task doesn't require review."

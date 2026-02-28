@@ -329,6 +329,42 @@ func TestInboxAlreadyOnViewRefreshedEX436(t *testing.T) {
 	})
 }
 
+// TestTaskViewApproveRejectDeferStaleInboxEX437 verifies EX-437: when a task has
+// RequiresHumanReview=true but no matching inbox item is found (inbox is stale or
+// not yet loaded), pressing a/x/f from ViewTask shows a helpful "Review item not
+// found. Press i to refresh Inbox." message rather than the generic redirect hint
+// "a·approve works in Inbox or Task view (when ⚠ shown). Press i for Inbox."
+func TestTaskViewApproveRejectDeferStaleInboxEX437(t *testing.T) {
+	want := "Review item not found. Press i to refresh Inbox."
+	for _, tc := range []struct {
+		name   string
+		key    rune
+		action string
+	}{
+		{"approve-stale", 'a', "approve"},
+		{"reject-stale", 'x', "reject"},
+		{"defer-stale", 'f', "defer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m.workspace.setMainView(ViewTask)
+			// Seed a task with RequiresHumanReview but NO inbox item.
+			m.workspace.selectedTaskID = "task-stale"
+			m.workspace.tasks["task-stale"] = &taskRecord{
+				ID:                 "task-stale",
+				Title:              "Stale Review Task",
+				RequiresHumanReview: true,
+			}
+			// inbox is empty — applyInboxActionForTask will return false.
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tc.key}})
+			if got := m.StatusMessage(); got != want {
+				t.Errorf("EX-437 %s: status = %q, want %q", tc.action, got, want)
+			}
+		})
+	}
+}
+
 func TestSlashSearchSidebarFiltersSessions(t *testing.T) {
 	model := NewModel(DefaultState())
 	// Seed chat nodes so the sidebar has sessions to filter
