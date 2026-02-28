@@ -1218,7 +1218,12 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyRunes:
 		if len(key.Runes) == 1 {
 			r := key.Runes[0]
-			if r == ':' {
+			// EX-350: ':' enters command mode only when not mid-composition in chat.
+			// When chat is focused with non-empty input, ':' should type (colon is
+			// common in English messages). When input is empty (or focus is elsewhere),
+			// ':' opens the command palette as documented. This mirrors the '?'→help
+			// guard (EX-349) and the '0'→Frank guard (!chatTextInputActive).
+			if r == ':' && !(m.focus == ChatPanel && strings.TrimSpace(m.chatInput) != "") {
 				m.enterCommandMode()
 				return m, nil
 			}

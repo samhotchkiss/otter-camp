@@ -9137,3 +9137,42 @@ func TestQuestionMarkInChatWithEmptyInputEX349(t *testing.T) {
 		t.Errorf("EX-349: '?' with non-empty input should not open help; got %v", m4.workspace.mainView)
 	}
 }
+
+// TestColonInChatInputEX350 verifies that ':' when chat is focused with non-empty
+// input types ':' into the chat (EX-350), while ':' with empty chat input or
+// from non-chat panels still opens command mode (existing behaviour).
+func TestColonInChatInputEX350(t *testing.T) {
+	// ':' with non-empty chat input should type ':'.
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	m.chatInput = "hello"
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	if m1.chatInput != "hello:" {
+		t.Errorf("EX-350: ':' with non-empty chat input should type ':'; got chatInput=%q", m1.chatInput)
+	}
+	if m1.commandMode {
+		t.Errorf("EX-350: ':' with non-empty chat input must NOT enter command mode")
+	}
+
+	// ':' with empty chat input should open command mode.
+	m2 := NewModel(DefaultState())
+	m2.width, m2.height = 220, 40
+	m2.focus = ChatPanel
+	m2.chatInput = ""
+	m3 := pressKey(m2, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	if !m3.commandMode {
+		t.Errorf("EX-350: ':' with empty chat input should enter command mode")
+	}
+
+	// ':' from non-chat panels should still open command mode.
+	for _, focus := range []Panel{SidebarPanel, MainPanel} {
+		m4 := NewModel(DefaultState())
+		m4.width, m4.height = 220, 40
+		m4.focus = focus
+		m5 := pressKey(m4, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+		if !m5.commandMode {
+			t.Errorf("EX-350: ':' from %v should enter command mode", focus)
+		}
+	}
+}
