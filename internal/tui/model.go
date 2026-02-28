@@ -5397,6 +5397,7 @@ func decodePayload(raw json.RawMessage, out any) bool {
 }
 
 func (m *Model) switchScope(next ChatScope) tea.Cmd {
+	prevScope := m.activeScope
 	m.activeScope = next
 	var sessionID string
 	switch next {
@@ -5435,7 +5436,13 @@ func (m *Model) switchScope(next ChatScope) tea.Cmd {
 	m.activeSession = sessionID
 	m.chatScrollOffset = 0
 	if m.statusMessage == "" {
-		m.statusMessage = fmt.Sprintf("Scope switched to %s.", next)
+		// EX-455: if the scope was already set to this value, say "already" rather
+		// than "switched" — mirrors the EX-447/448/453 idempotency pattern.
+		if prevScope == next {
+			m.statusMessage = fmt.Sprintf("Already using scope %s.", next)
+		} else {
+			m.statusMessage = fmt.Sprintf("Scope switched to %s.", next)
+		}
 	}
 	if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
 		// EX-181: clear stale messages before loading so the chat panel shows

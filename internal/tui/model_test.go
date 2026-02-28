@@ -3759,6 +3759,36 @@ func TestScopeCommandDispatchesChatHistoryReload(t *testing.T) {
 	}
 }
 
+// TestScopeIdempotencyEX455 verifies EX-455: :scope <value> when already on that
+// scope says "Already using scope X." rather than "Scope switched to X." (no-op).
+// Mirrors the EX-447/448/453 idempotency pattern for state-change operations.
+func TestScopeIdempotencyEX455(t *testing.T) {
+	t.Run("already-on-org-scope", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.activeScope = ScopeOrg
+		m.statusMessage = "" // clear startup hint so scope feedback is visible
+
+		_ = m.executeCommand(":scope org")
+
+		want := "Already using scope org."
+		if got := m.statusMessage; got != want {
+			t.Fatalf("EX-455: :scope org when already org = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("switching-to-different-scope-says-switched", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.activeScope = ScopeProject
+		m.statusMessage = "" // clear startup hint so scope feedback is visible
+
+		_ = m.executeCommand(":scope org")
+
+		if got := m.statusMessage; got != "Scope switched to org." {
+			t.Fatalf("EX-455: :scope org from project = %q, want %q", got, "Scope switched to org.")
+		}
+	})
+}
+
 // EX-165: Ctrl-G / :frank should reload chat history after switching from
 // another session. Previously jumpToFrankSession returned void, so chatMessages
 // was never cleared or refreshed.
