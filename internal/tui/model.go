@@ -4759,12 +4759,25 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		}
 	case "agent":
 		// EX-395: :agent (singular) → same as :agents (plural).
+		// EX-465: idempotency — mirrors :agents (EX-461) alreadyHere logic so that
+		// :agent when already on ViewAgents says "Agents refreshed." not "Agents".
+		alreadyOnAgents := m.focus == MainPanel && m.workspace.mainView == ViewAgents
 		m.workspace.setMainView(ViewAgents)
 		m.setFocus(MainPanel)
-		m.statusMessage = viewNavLabel(ViewAgents)
+		if alreadyOnAgents {
+			m.statusMessage = "Agents refreshed."
+		} else {
+			m.statusMessage = viewNavLabel(ViewAgents)
+		}
 		return loadAgentsCmd(m.runtimeHints)
 	case "chat":
 		// EX-395: :chat — focus the chat panel (same as pressing 3 or Tab).
+		// EX-466: idempotency — mirrors EX-460 :focus and EX-463 '3' key behaviour:
+		// already on chat panel → "Already focused on chat." instead of re-announcing.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Already focused on chat."
+			return nil
+		}
 		m.setFocus(ChatPanel)
 		m.statusMessage = "Chat panel focused. Type your message and press Enter to send."
 	case "settings", "config", "preferences", "prefs":
@@ -4795,10 +4808,17 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		}
 	case "man", "manual":
 		// EX-395: :man/:manual — redirect to built-in help.
+		// EX-467: idempotency — when already in help, say so and reset scroll to top
+		// (useful reset action) rather than re-announcing "Keybinding reference."
+		alreadyInHelp := m.focus == MainPanel && m.workspace.mainView == ViewHelp
 		m.workspace.setMainView(ViewHelp)
 		m.setFocus(MainPanel)
 		m.helpScrollOffset = 0
-		m.statusMessage = "Keybinding reference. Press ? or Esc to close."
+		if alreadyInHelp {
+			m.statusMessage = "Help: scrolled to top."
+		} else {
+			m.statusMessage = "Keybinding reference. Press ? or Esc to close."
+		}
 	default:
 		m.statusMessage = "Unknown command: " + fields[0]
 	}

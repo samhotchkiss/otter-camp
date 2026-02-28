@@ -7323,6 +7323,97 @@ func TestProjectTaskCommandIdempotencyEX462(t *testing.T) {
 	})
 }
 
+// TestAgentChatManCommandIdempotencyEX465_466_467 verifies:
+//   - EX-465: :agent (singular) says "Agents refreshed." when already on ViewAgents,
+//     mirroring the :agents (plural) EX-461 alreadyHere logic.
+//   - EX-466: :chat says "Already focused on chat." when ChatPanel already focused,
+//     mirroring EX-460 :focus and EX-463 '3' key idempotency.
+//   - EX-467: :man/:manual says "Help: scrolled to top." when already in help,
+//     rather than re-announcing "Keybinding reference." as if opening fresh.
+func TestAgentChatManCommandIdempotencyEX465_466_467(t *testing.T) {
+	executeCmd := func(m Model, cmd string) Model {
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+		for _, r := range cmd {
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+		return pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	}
+
+	t.Run("EX-465-agent-already-on-agents", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewAgents
+		m.statusMessage = ""
+		m = executeCmd(m, "agent")
+		if got := m.statusMessage; got != "Agents refreshed." {
+			t.Fatalf("EX-465: :agent when already on ViewAgents = %q, want %q", got, "Agents refreshed.")
+		}
+	})
+
+	t.Run("EX-465-agent-from-other-view-navigates", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewDashboard
+		m = executeCmd(m, "agent")
+		if got := m.workspace.mainView; got != ViewAgents {
+			t.Fatalf("EX-465: :agent from dashboard should navigate to ViewAgents; got %v", got)
+		}
+		if got := m.statusMessage; got != "Agents" {
+			t.Fatalf("EX-465: :agent from dashboard status = %q, want %q", got, "Agents")
+		}
+	})
+
+	t.Run("EX-466-chat-already-focused-on-chat", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m.statusMessage = ""
+		m = executeCmd(m, "chat")
+		if got := m.statusMessage; got != "Already focused on chat." {
+			t.Fatalf("EX-466: :chat when already on ChatPanel = %q, want %q", got, "Already focused on chat.")
+		}
+		if m.focus != ChatPanel {
+			t.Fatalf("EX-466: :chat when already on ChatPanel should stay on ChatPanel; got %v", m.focus)
+		}
+	})
+
+	t.Run("EX-466-chat-from-sidebar-switches", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m = executeCmd(m, "chat")
+		if m.focus != ChatPanel {
+			t.Fatalf("EX-466: :chat from SidebarPanel should switch to ChatPanel; got %v", m.focus)
+		}
+	})
+
+	t.Run("EX-467-man-already-in-help", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewHelp
+		m.helpScrollOffset = 42
+		m.statusMessage = ""
+		m = executeCmd(m, "man")
+		if got := m.statusMessage; got != "Help: scrolled to top." {
+			t.Fatalf("EX-467: :man when already in help = %q, want %q", got, "Help: scrolled to top.")
+		}
+		if m.helpScrollOffset != 0 {
+			t.Fatalf("EX-467: :man when already in help should reset scroll to 0; got %d", m.helpScrollOffset)
+		}
+	})
+
+	t.Run("EX-467-man-from-dashboard-opens-help", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewDashboard
+		m = executeCmd(m, "man")
+		if got := m.workspace.mainView; got != ViewHelp {
+			t.Fatalf("EX-467: :man from dashboard should switch to ViewHelp; got %v", got)
+		}
+		if got := m.statusMessage; got != "Keybinding reference. Press ? or Esc to close." {
+			t.Fatalf("EX-467: :man from dashboard status = %q, want %q", got, "Keybinding reference. Press ? or Esc to close.")
+		}
+	})
+}
+
 // TestSidebarEnterOnEmptyEX261 verifies EX-261: pressing Enter in the sidebar
 // when there are no nodes (empty sidebar) says "No items in sidebar." instead
 // of the misleading "Sidebar selection applied." (nothing was selected).
