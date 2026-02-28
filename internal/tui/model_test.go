@@ -7373,3 +7373,20 @@ func TestProjectGGNoTasksFeedbackEX287(t *testing.T) {
 		}
 	}
 }
+
+// TestInboxGGEmptyFeedbackEX288 verifies that g/G in ViewInbox when inbox
+// is empty shows "Inbox is empty." rather than silently doing nothing.
+func TestInboxGGEmptyFeedbackEX288(t *testing.T) {
+	for _, key := range []rune{'g', 'G'} {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.mainView = ViewInbox
+		m.workspace.inbox = nil // empty inbox
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		if m.statusMessage != "Inbox is empty." {
+			t.Errorf("EX-288: %c in empty inbox should say 'Inbox is empty.'; got %q", key, m.statusMessage)
+		}
+	}
+}

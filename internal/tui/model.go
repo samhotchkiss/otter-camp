@@ -1530,10 +1530,13 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			m.workspace.inboxHome()
 			// EX-273: mirror ViewDashboard g feedback — show item summary.
+			// EX-288: mirror EX-190 — give feedback when inbox is empty.
 			if len(m.workspace.inbox) > 0 {
 				if item := m.workspace.currentInboxItem(); item != nil && item.Summary != "" {
 					m.statusMessage = "▸ " + truncate(item.Summary, 40)
 				}
+			} else {
+				m.statusMessage = "Inbox is empty."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			m.workspace.projectTaskCursor = 0
@@ -1579,10 +1582,13 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			// EX-273: mirror ViewDashboard G feedback — show item summary.
 			// Guard against empty inbox: currentInboxItem clamps cursor, which
 			// would mutate it away from -1 and break existing semantics.
+			// EX-288: also give feedback when inbox is empty.
 			if len(m.workspace.inbox) > 0 {
 				if item := m.workspace.currentInboxItem(); item != nil && item.Summary != "" {
 					m.statusMessage = "▸ " + truncate(item.Summary, 40)
 				}
+			} else {
+				m.statusMessage = "Inbox is empty."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			// EX-273: use openTasksForProject so cursor lands within bounds and
