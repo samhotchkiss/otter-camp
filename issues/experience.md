@@ -3446,3 +3446,39 @@ Unnamed calls now render as `"⚙ tool[1] (pending)"` rather than `"⚙  (pendin
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-219: Dashboard missing navigation hint when no active tasks
+
+**Observation:** The dashboard navigation footer (task name + j/k hint) only appeared when `len(activeTasks) > 0`. When the project had no active (non-done/non-blocked) tasks, the footer was entirely absent — no hint about `r·refresh`, `i·inbox`, or how to start chatting.
+
+**Improvement:** Added an `else` branch after the active-tasks hint that shows `"r·refresh  ·  i·inbox  ·  :frank·chat"` whenever there are no active tasks to navigate. This covers the empty-project state and the all-done state.
+
+**Effort:** Trivial (3 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-226b: Agents view also silently truncates (same pattern as merges/schedules)
+
+**Observation:** The `renderAgentsView` used the same `len(lines)-1 >= itemCap` break-without-indicator pattern as the original merges/schedules views before EX-226. When more than `maxLines-3` agents were loaded, the excess were silently dropped.
+
+**Improvement:** Refactored agents view to use the same two-pass approach as EX-226: pre-collect matching agents, check if truncation occurs, tighten cap to `maxLines-4` when needed, and append `"+N more  (/ to filter)"` indicator.
+
+**Effort:** Low (same pattern as EX-226)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-227: Messages with role "tool_result" or "tool" show raw role string
+
+**Observation:** The `renderChatMessages` role switch had cases for user, assistant, interjection, and system, but the `default` case rendered `msg.Role` verbatim. A message with `role="tool_result"` would display as "tool_result" — underscore and all — instead of a friendly "Tool Result" label.
+
+**Improvement:** Added explicit `case "tool_result", "tool":` to the switch with `roleLabel = "Tool Result"`. The raw role string no longer appears in the rendered output.
+
+**Effort:** Trivial (3 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

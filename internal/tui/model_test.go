@@ -5313,3 +5313,61 @@ func TestToolCallMissingNameFallbackEX221(t *testing.T) {
 		t.Errorf("EX-221: 'file_read' tool call not rendered; rendered:\n%s", rendered)
 	}
 }
+
+// TestDashboardEmptyStateHintEX219 verifies EX-219: the dashboard shows a
+// navigation hint when there are no active tasks so the user knows what to do.
+func TestDashboardEmptyStateHintEX219(t *testing.T) {
+	model := NewModel(DefaultState())
+	// No tasks loaded — dashboard has empty active tasks.
+	lines := model.renderDashboardView(80, 20)
+	rendered := strings.Join(lines, "\n")
+
+	if !strings.Contains(rendered, "r·refresh") {
+		t.Errorf("EX-219: dashboard empty state missing r·refresh hint; rendered:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "i·inbox") {
+		t.Errorf("EX-219: dashboard empty state missing i·inbox hint; rendered:\n%s", rendered)
+	}
+}
+
+// TestAgentsTruncationIndicator verifies that agents view shows "+N more" when
+// the list exceeds the display cap, consistent with EX-226 for merges/schedules.
+func TestAgentsTruncationIndicator(t *testing.T) {
+	const maxLines = 8
+
+	model := NewModel(DefaultState())
+	for i := 0; i < 20; i++ {
+		model.workspace.agents = append(model.workspace.agents,
+			fmt.Sprintf("agent-%d=active", i+1))
+	}
+	lines := model.renderAgentsView(80, maxLines)
+	rendered := strings.Join(lines, "\n")
+
+	if !strings.Contains(rendered, "more") {
+		t.Errorf("agents truncation indicator missing:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "r·refresh") {
+		t.Errorf("agents hint footer missing when full:\n%s", rendered)
+	}
+	if len(lines) > maxLines {
+		t.Errorf("renderAgentsView returned %d lines, want ≤ %d", len(lines), maxLines)
+	}
+}
+
+// TestToolResultRoleDisplayEX227 verifies EX-227: messages with role "tool_result"
+// or "tool" render with a friendly "Tool Result" label, not the raw role string.
+func TestToolResultRoleDisplayEX227(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.chatMessages = []ChatMessage{
+		{ID: "m1", Role: "tool_result", Content: "the result was 42"},
+	}
+	lines := model.renderChatMessages(80)
+	rendered := strings.Join(lines, "\n")
+
+	if !strings.Contains(rendered, "Tool Result") {
+		t.Errorf("EX-227: 'Tool Result' label missing for tool_result role; rendered:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "tool_result") {
+		t.Errorf("EX-227: raw 'tool_result' role string still showing; rendered:\n%s", rendered)
+	}
+}

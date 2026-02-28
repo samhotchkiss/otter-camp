@@ -1084,6 +1084,11 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		} else {
 			lines = append(lines, styleMuted.Render("  j/k·select task  ·  Enter·open"))
 		}
+	} else {
+		// EX-219: when no active tasks exist, show a navigation hint so the user
+		// knows how to interact with the dashboard (r·refresh, :frank to chat, i·inbox).
+		lines = append(lines, "")
+		lines = append(lines, styleMuted.Render("  r·refresh  ·  i·inbox  ·  :frank·chat"))
 	}
 
 	return lines
@@ -1700,27 +1705,40 @@ func (m Model) renderAgentsView(width, maxLines int) []string {
 	}
 	// EX-110: apply search filter so agents view responds to mainFilter like all other views.
 	query := normalizedFilterQuery(m.mainFilter)
-	// EX-215: reserve 3 lines for hint footer so it's always visible when list is full.
-	itemCap := maxLines - 3
-	if itemCap < 1 {
-		itemCap = 1
-	}
-	matched := 0
+
+	// Collect matching agents first so we know if truncation will occur.
+	type agentEntry struct{ name, status string }
+	var matching []agentEntry
 	for _, agent := range m.workspace.agents {
-		if len(lines)-1 >= itemCap { // lines[0] is blank, so content starts at index 1
-			break
-		}
 		parts := strings.SplitN(agent, "=", 2)
 		name, status := agent, ""
 		if len(parts) == 2 {
 			name, status = parts[0], parts[1]
 		}
-		if !matchesFilter(name, query) && !matchesFilter(status, query) {
-			continue
+		if matchesFilter(name, query) || matchesFilter(status, query) {
+			matching = append(matching, agentEntry{name, status})
 		}
-		matched++
+	}
+
+	// EX-215: reserve 3 lines for hint footer; EX-226-agents: one more when truncating.
+	itemCap := maxLines - 3
+	if itemCap < 1 {
+		itemCap = 1
+	}
+	hidden := 0
+	if len(matching) > itemCap {
+		itemCap = maxLines - 4
+		if itemCap < 1 {
+			itemCap = 1
+		}
+		hidden = len(matching) - itemCap
+	}
+	for i, ag := range matching {
+		if i >= itemCap {
+			break
+		}
 		var dot string
-		switch strings.ToLower(status) {
+		switch strings.ToLower(ag.status) {
 		case "active", "online":
 			dot = styleConnected.Render("● ")
 		case "paused", "idle", "draft":
@@ -1728,13 +1746,16 @@ func (m Model) renderAgentsView(width, maxLines int) []string {
 		default: // retired, cancelled, unknown
 			dot = styleMuted.Render("○ ")
 		}
-		agentLine := dot + styleBold.Render(name)
-		if status != "" {
-			agentLine += styleMuted.Render("  " + status)
+		agentLine := dot + styleBold.Render(ag.name)
+		if ag.status != "" {
+			agentLine += styleMuted.Render("  " + ag.status)
 		}
 		lines = append(lines, agentLine)
 	}
-	if matched == 0 && query != "" {
+	if hidden > 0 {
+		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more  (/ to filter)", hidden)))
+	}
+	if len(matching) == 0 && query != "" {
 		lines = append(lines, styleMuted.Render(fmt.Sprintf("  no agents matching %q", query)))
 	}
 	// EX-210: hint footer so users know which keys work in this view.
@@ -2218,6 +2239,10 @@ func (m Model) renderChatMessages(width int) []string {
 		case "system":
 			roleStr = styleMuted
 			roleLabel = "System"
+		case "tool_result", "tool":
+			// EX-227: show a friendly label for tool result messages instead of the raw role.
+			roleStr = styleTool
+			roleLabel = "Tool Result"
 		default:
 			roleStr = styleTool
 			roleLabel = msg.Role
