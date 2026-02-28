@@ -6888,6 +6888,38 @@ func TestChatPgDownAtLatestEX264(t *testing.T) {
 	}
 }
 
+// TestDownArrowChatScrollFeedbackEX438 verifies EX-438: pressing ↓ in the chat
+// panel with empty input while scrolled up gives status feedback consistent with
+// PgDown ("Chat scrolled down." / "Chat scrolled to latest.") rather than a
+// silent no-op.
+func TestDownArrowChatScrollFeedbackEX438(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	// Need messages so scrolling has effect.
+	m.chatMessages = []ChatMessage{{Role: "user", Content: "hello"}}
+	// Scroll up so chatScrollOffset > 0.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.chatScrollOffset == 0 {
+		t.Skip("EX-438: PgUp had no effect, cannot test ↓ scroll")
+	}
+	// ↓ should scroll down and give status feedback.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+	if got := m.StatusMessage(); got == "" {
+		t.Error("EX-438: ↓ with empty input while scrolled up should set a status message")
+	}
+	if !strings.Contains(m.StatusMessage(), "scrolled") && !strings.Contains(m.StatusMessage(), "latest") {
+		t.Errorf("EX-438: ↓ scroll status = %q, want 'Chat scrolled down.' or 'Chat scrolled to latest.'", m.StatusMessage())
+	}
+
+	// Scroll back to top; then ↓ repeatedly until offset==0 — final ↓ should say "to latest".
+	m.chatScrollOffset = 1 // one line up
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+	if got := m.StatusMessage(); got != "Chat scrolled to latest." {
+		t.Errorf("EX-438: ↓ from offset=1 should say 'Chat scrolled to latest.'; got %q", got)
+	}
+}
+
 // TestEscFromDashboardEX265 verifies EX-265: pressing Esc from the main panel
 // when already viewing the dashboard says "Already on dashboard." instead of
 // the misleading "Returned to dashboard." (the user never left).

@@ -3533,6 +3533,14 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 	case tea.KeyDown:
 		if strings.TrimSpace(m.chatInput) == "" && m.chatScrollOffset > 0 {
 			m.scrollChatBy(-1)
+			// EX-438: give feedback consistent with PgDown ("Chat scrolled down.") and
+			// End ("Chat scrolled to latest.") — the ↓ single-line scroll was a silent
+			// no-op even though all other chat scroll directions set a status message.
+			if m.chatScrollOffset == 0 {
+				m.statusMessage = "Chat scrolled to latest."
+			} else {
+				m.statusMessage = "Chat scrolled down."
+			}
 			return true, nil
 		}
 		// EX-011: advance through history when in history navigation mode
