@@ -3824,3 +3824,17 @@ r·refresh not available in help view. Press j/k to scroll or Esc to close.
 **Status:** [x] Discovered | [x] Fixed | [x] Tested
 
 ---
+
+## EX-248: Help view says "(tab-autocomplete)" implying Tab is required for :session/:project/:task
+
+**Observation:** The help view entries for `:session <name>`, `:project <name>`, and `:task <title>` showed "(tab-autocomplete)" in their descriptions, suggesting that the Tab key was required to fill in the name. Since EX-240 made direct typing work (e.g. `:project Acme` works without autocomplete), this was misleading.
+
+**Root cause:** The original EX-224 comment was written when only the autocomplete path (`project: <name>` format) worked. The parenthetical implied a constraint rather than an enhancement.
+
+**Improvement:** Changed "(tab-autocomplete)" to "(Tab autocompletes)" which clarifies that Tab is a convenience shortcut, not a requirement. Also updated the `:project / :task` entry to mention the `<name>` form.
+
+**Effort:** Trivial (3 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---

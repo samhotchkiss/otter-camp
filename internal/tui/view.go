@@ -1958,14 +1958,15 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		header("Commands  (press : then Tab to autocomplete)"),
 		key(":frank / :general", "switch to Frank or General session"),
 		key(":dashboard / :inbox", "navigate to view"),
-		key(":project / :task", "navigate to view"),
+		key(":project / :task", "navigate to view  (or :project <name> / :task <title> to jump)"),
 		// EX-155: previously missing from help view
 		key(":agents / :activity", "navigate to agents or activity view"),
 		key(":merges / :schedules", "navigate to merges or schedules view"),
-		// EX-224: dynamic jump commands (autocomplete fills in names)
-		key(":session <name>", "jump to a session by name  (tab-autocomplete)"),
-		key(":project <name>", "jump to a project by name  (tab-autocomplete)"),
-		key(":task <title>", "jump to a task by title  (tab-autocomplete)"),
+		// EX-224/EX-240: dynamic jump commands work both via Tab-autocomplete and
+		// by typing the name directly (e.g. :project Acme or :task Deploy frontend).
+		key(":session <name>", "jump to a session by name  (Tab autocompletes)"),
+		key(":project <name>", "jump to a project by name  (Tab autocompletes)"),
+		key(":task <title>", "jump to a task by title  (Tab autocompletes)"),
 		key(":scope <level>", "switch chat scope: org | project | task"),
 		key(":focus <panel>", "focus sidebar|main|chat"),
 		key(":send <message>", "send message to Frank"),
