@@ -7694,3 +7694,36 @@ func TestSidebarGGFeedbackEX297(t *testing.T) {
 		t.Errorf("EX-297: g at first should say 'At first item in sidebar.'; got %q", m.statusMessage)
 	}
 }
+
+// TestSidebarTaskEnterFeedbackEX298 verifies that Enter on a sidebarKindTask node
+// shows the task label ("▸ [name]") instead of the generic "Sidebar selection applied."
+func TestSidebarTaskEnterFeedbackEX298(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = SidebarPanel
+	// Set up a project node with a task child.
+	m.workspace.topLevel = []string{"proj-1"}
+	m.workspace.nodes = map[string]*sidebarNode{
+		"proj-1": {
+			ID:        "proj-1",
+			Label:     "My Project",
+			Kind:      sidebarKindProject,
+			ProjectID: "proj-1",
+			Expanded:  true,
+		},
+		"task-abc": {
+			ID:       "task-abc",
+			Label:    "Fix the login bug",
+			Kind:     sidebarKindTask,
+			TaskID:   "abc",
+			ParentID: "proj-1",
+		},
+	}
+	// Position cursor on the task node (proj-1 is at 0, task-abc is at 1 when proj-1 is expanded).
+	m.workspace.sidebarCursor = 1 // proj-1=0, task-abc=1
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.statusMessage != "▸ Fix the login bug" {
+		t.Errorf("EX-298: Enter on task node should say '▸ Fix the login bug'; got %q", m.statusMessage)
+	}
+}

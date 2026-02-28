@@ -1085,6 +1085,8 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				m.statusMessage = "Inbox"
 				return loadInboxItemsCmd(m.runtimeHints)
 			case sidebarKindTask:
+				// EX-298: override generic "Sidebar selection applied." with task name.
+				m.statusMessage = "▸ " + truncate(node.Label, 40)
 				// Set the project context so "p" and "Esc·back to project" work correctly
 				var projectIDForTask string
 				if node.ParentID != "" {
