@@ -3060,3 +3060,17 @@ These messages are returned immediately (`return true, nil`) so the auto-clear t
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-197: Tool result truncation shows "(result truncated)" with no size context
+
+**Observation:** When an expanded tool call result exceeded 400 runes, it displayed `"… (result truncated)"` — a message that confirmed truncation happened but gave no indication of how much was cut. Users couldn't tell if 10 characters or 10,000 were missing.
+
+**Improvement:** Changed the truncation indicator to show exact counts: `"… (400 of N chars shown)"`. This tells the user both the display cap (400) and the actual full result size (N), giving them a meaningful sense of how much data was trimmed.
+
+**Why it matters:** Context about truncation severity affects user decisions. A user seeing "400 of 412 chars shown" knows the output is almost complete; "400 of 8000 chars shown" tells them the tool produced a large data set and they may need to examine it differently (e.g., via the API or a file).
+
+**Effort:** Trivial (2 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
