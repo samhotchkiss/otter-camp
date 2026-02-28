@@ -1358,7 +1358,12 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 		}
 	case 'o':
-		if m.focus == MainPanel && m.workspace.mainView == ViewInbox && m.workspace.applyInboxAction("open") {
+		if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
+			if !m.workspace.applyInboxAction("open") {
+				// EX-192 (also applies to 'o'): no item to open — give feedback.
+				m.statusMessage = "No inbox items to open."
+				return true, nil
+			}
 			m.state.LastActiveChatSession = m.workspace.activeSessionID
 			// EX-186: clear stale turn state before switching sessions.
 			m.clearTurnIfSwitchingSession(m.workspace.activeSessionID)
