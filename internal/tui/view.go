@@ -1947,7 +1947,8 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("Enter", "send message  (or expand/collapse tool call when input is empty)"),
 		key("Alt-Enter", "insert newline"),
 		key("PgUp / PgDn", "scroll messages"),
-		key("↑ / ↓", "scroll one line"),
+		// EX-267: ↑/↓ navigate sent message history (when input is empty), not scroll.
+		key("↑ / ↓", "↑ recall / ↓ advance sent message history  (when input is empty)"),
 		key("g / G", "jump to oldest / latest message"),
 		key("Esc", "cancel active agent turn"),
 		key("e / s / d", "queued msg: edit / steer / delete  (when turn active)"),

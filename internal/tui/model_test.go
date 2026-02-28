@@ -6498,3 +6498,22 @@ func TestDashboardJKAtBoundaryEX266(t *testing.T) {
 		t.Errorf("EX-266: k at first task should not say 'last'; got %q", m.statusMessage)
 	}
 }
+
+// TestHelpViewArrowKeyDescEX267 verifies EX-267: the help view ↑/↓ entry for the
+// Chat section accurately says "recall/advance sent message history", not "scroll one line"
+// (PgUp/PgDn are the scroll keys; ↑/↓ navigate history when input is empty).
+func TestHelpViewArrowKeyDescEX267(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 50
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewHelp)
+	m.helpScrollOffset = 0
+
+	out := m.View()
+	if !strings.Contains(out, "recall") {
+		t.Errorf("EX-267: help ↑/↓ entry should mention 'recall'; got view:\n%s", out)
+	}
+	if strings.Contains(out, "scroll one line") {
+		t.Errorf("EX-267: help ↑/↓ entry should NOT say 'scroll one line'; got view:\n%s", out)
+	}
+}
