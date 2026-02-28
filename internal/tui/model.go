@@ -620,6 +620,20 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Input cleared."
 		}
 		return m, nil
+	case tea.KeyCtrlW:
+		// EX-303: Ctrl-W (Unix kill-word-backward) deletes the last word from the chat input.
+		if m.focus == ChatPanel && len(m.chatInput) > 0 {
+			trimmed := strings.TrimRight(m.chatInput, " \t\n")
+			lastSpace := strings.LastIndexAny(trimmed, " \t\n")
+			if lastSpace >= 0 {
+				m.chatInput = trimmed[:lastSpace+1]
+			} else {
+				m.chatInput = ""
+			}
+			m.chatHistoryIndex = -1
+			m.statusMessage = "Last word deleted."
+		}
+		return m, nil
 	case tea.KeyTab:
 		m.focus = nextPanelInOrder(order, m.focus)
 		m.applyResponsiveLayout()

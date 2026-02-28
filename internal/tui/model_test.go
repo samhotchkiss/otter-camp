@@ -7841,3 +7841,42 @@ func TestDashboardHomeEndPgUpPgDnEX301EX302(t *testing.T) {
 		}
 	}
 }
+
+// TestCtrlWDeletesLastWordEX303 verifies that Ctrl-W in the chat panel deletes
+// the last word from the input (Unix kill-word-backward convention).
+func TestCtrlWDeletesLastWordEX303(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+
+	// Standard case: "hello world" → "hello "
+	m.chatInput = "hello world"
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlW})
+	if m.chatInput != "hello " {
+		t.Errorf("EX-303: Ctrl-W on 'hello world' should yield 'hello '; got %q", m.chatInput)
+	}
+	if m.statusMessage != "Last word deleted." {
+		t.Errorf("EX-303: Ctrl-W should say 'Last word deleted.'; got %q", m.statusMessage)
+	}
+
+	// Single word: "hello" → ""
+	m.chatInput = "hello"
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlW})
+	if m.chatInput != "" {
+		t.Errorf("EX-303: Ctrl-W on single word should clear input; got %q", m.chatInput)
+	}
+
+	// Empty input: no-op (no panic).
+	m.chatInput = ""
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlW})
+	if m.chatInput != "" {
+		t.Errorf("EX-303: Ctrl-W on empty input should keep it empty; got %q", m.chatInput)
+	}
+
+	// Trailing spaces: "hello   " → ""
+	m.chatInput = "hello   "
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlW})
+	if m.chatInput != "" {
+		t.Errorf("EX-303: Ctrl-W on 'hello   ' (trailing spaces) should clear; got %q", m.chatInput)
+	}
+}
