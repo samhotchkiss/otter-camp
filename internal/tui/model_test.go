@@ -12436,3 +12436,85 @@ func TestSidebarAndInboxCommandBoundaryFeedbackEX446(t *testing.T) {
 		}
 	})
 }
+
+// TestSidebarHLAlreadyCollapsedExpandedEX447 verifies that pressing h/l on sidebar sections
+// that are already in the target state gives an honest "Already collapsed/expanded." message
+// instead of the misleading "Collapsed X." / "Expanded X." that fires even when nothing changed.
+func TestSidebarHLAlreadyCollapsedExpandedEX447(t *testing.T) {
+	// Default workspace: cursor 0=inbox, 1=CHATS header, 2=Frank/General, 3=PROJECTS header.
+	// sectionCollapsed map starts empty (all sections open).
+
+	t.Run("h-on-already-collapsed-header-gives-already-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.workspace.sidebarCursor = 1 // CHATS header
+		m.workspace.sectionCollapsed[sectionChats] = true
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+		if got := m.statusMessage; got != "Already collapsed." {
+			t.Fatalf("h on already-collapsed CHATS = %q, want %q", got, "Already collapsed.")
+		}
+		// Section should still be collapsed — no mutation.
+		if !m.workspace.sectionCollapsed[sectionChats] {
+			t.Fatal("sectionCollapsed[chats] should still be true after no-op h")
+		}
+	})
+
+	t.Run("h-on-expanded-header-gives-collapsed-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.workspace.sidebarCursor = 1 // CHATS header (expanded by default)
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+		if got := m.statusMessage; got != "Collapsed CHATS." {
+			t.Fatalf("h on expanded CHATS = %q, want %q", got, "Collapsed CHATS.")
+		}
+		if !m.workspace.sectionCollapsed[sectionChats] {
+			t.Fatal("sectionCollapsed[chats] should be true after h collapses it")
+		}
+	})
+
+	t.Run("l-on-already-expanded-header-gives-already-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.workspace.sidebarCursor = 1 // CHATS header (expanded by default)
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+		if got := m.statusMessage; got != "Already expanded." {
+			t.Fatalf("l on expanded CHATS = %q, want %q", got, "Already expanded.")
+		}
+	})
+
+	t.Run("l-on-collapsed-header-gives-expanded-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.workspace.sidebarCursor = 1 // CHATS header
+		m.workspace.sectionCollapsed[sectionChats] = true
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+		if got := m.statusMessage; got != "Expanded CHATS." {
+			t.Fatalf("l on collapsed CHATS = %q, want %q", got, "Expanded CHATS.")
+		}
+		if m.workspace.sectionCollapsed[sectionChats] {
+			t.Fatal("sectionCollapsed[chats] should be false after l expands it")
+		}
+	})
+
+	t.Run("l-on-already-expanded-project-gives-already-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		// Inject an already-expanded project node at position 4 in the sidebar.
+		projID := "proj-ex447"
+		nodeID := "project-" + projID
+		m.workspace.nodes[nodeID] = &sidebarNode{
+			ID:        nodeID,
+			Label:     "Alpha Project",
+			Kind:      sidebarKindProject,
+			ProjectID: projID,
+			Expanded:  true,
+		}
+		m.workspace.topLevel = append(m.workspace.topLevel, nodeID)
+		// Cursor 4 = the newly added project (after inbox/CHATS header/general/PROJECTS header).
+		m.workspace.sidebarCursor = 4
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+		if got := m.statusMessage; got != "Already expanded." {
+			t.Fatalf("l on already-expanded project = %q, want %q", got, "Already expanded.")
+		}
+	})
+}

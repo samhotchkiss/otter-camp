@@ -2344,11 +2344,18 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			var nodeExpanded bool
 			var nodeKind sidebarKind
 			var nodeParentID string
+			// EX-447: also capture whether a header section was already collapsed
+			// so we can give "Already collapsed." instead of misleading "Collapsed X."
+			var nodeSectionWasCollapsed bool
 			if node != nil {
 				nodeLabel = node.Label
 				nodeExpanded = node.Expanded
 				nodeKind = node.Kind
 				nodeParentID = node.ParentID
+				if node.Kind == sidebarKindHeader {
+					sID := sidebarSectionID(strings.TrimPrefix(node.ID, "header-"))
+					nodeSectionWasCollapsed = m.workspace.sectionCollapsed[sID]
+				}
 			}
 			m.workspace.collapseSidebarNode()
 			if node != nil {
@@ -2363,7 +2370,13 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 						m.statusMessage = "Already collapsed."
 					}
 				case sidebarKindHeader:
-					m.statusMessage = "Collapsed " + truncate(nodeLabel, 30) + "."
+					// EX-447: give honest "Already collapsed." when section was already
+					// collapsed rather than misleading "Collapsed X." (no state change).
+					if nodeSectionWasCollapsed {
+						m.statusMessage = "Already collapsed."
+					} else {
+						m.statusMessage = "Collapsed " + truncate(nodeLabel, 30) + "."
+					}
 				default:
 					if nodeParentID != "" {
 						m.statusMessage = "Moved to parent."
@@ -2386,15 +2399,39 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				return true, nil
 			}
 			node := m.workspace.currentSidebarNode()
+			// EX-447: capture pre-expansion state before expandSidebarNode mutates
+			// node.Expanded and sectionCollapsed, so we can give honest "Already expanded."
+			var nodeWasAlreadyExpanded bool
+			var nodeSectionWasCollapsed bool
+			if node != nil {
+				if node.Kind == sidebarKindProject {
+					nodeWasAlreadyExpanded = node.Expanded
+				} else if node.Kind == sidebarKindHeader {
+					sID := sidebarSectionID(strings.TrimPrefix(node.ID, "header-"))
+					nodeSectionWasCollapsed = m.workspace.sectionCollapsed[sID]
+				}
+			}
 			m.workspace.expandSidebarNode()
 			// EX-282: give feedback about what was expanded.
 			if node != nil {
 				if node.Kind == sidebarKindProject {
+					// EX-447: if project was already expanded, don't re-trigger the
+					// task-load and give an "Already expanded." hint instead.
+					if nodeWasAlreadyExpanded {
+						m.statusMessage = "Already expanded."
+						return true, nil
+					}
 					m.statusMessage = "Expanded " + truncate(node.Label, 30) + " — loading tasks…"
 					return true, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true)
 				}
 				if node.Kind == sidebarKindHeader {
-					m.statusMessage = "Expanded " + truncate(node.Label, 30) + "."
+					// EX-447: give honest "Already expanded." when section was already
+					// expanded rather than misleading "Expanded X." (no state change).
+					if !nodeSectionWasCollapsed {
+						m.statusMessage = "Already expanded."
+					} else {
+						m.statusMessage = "Expanded " + truncate(node.Label, 30) + "."
+					}
 					return true, nil
 				}
 				// EX-321: non-expandable nodes (task, session, inbox) — suggest Enter.
