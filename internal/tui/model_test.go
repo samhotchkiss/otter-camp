@@ -4853,6 +4853,62 @@ func TestSidebarSelectCommandLoadsDataPerNodeKind(t *testing.T) {
 	})
 }
 
+// TestSidebarSelectTaskScopedSessionEX483 verifies EX-483: :sidebar select on a
+// task-scoped session node sets scope=task, navigates to ViewTask, sets
+// selectedTaskID, and fires loadTaskDetailCmd — mirroring the handleEnterKey path.
+// Previously only the status message was set; scope, view, and task detail were skipped.
+func TestSidebarSelectTaskScopedSessionEX483(t *testing.T) {
+	taskID := "task-483"
+	sessionID := "00000000-0000-0000-0000-000000000483"
+	detailCalledWith := ""
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			detailCalledWith = id
+			return &TaskDetailItem{ID: id, Title: "EX-483 task"}, nil
+		},
+	})
+	m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	if m.workspace.nodes == nil {
+		m.workspace.nodes = make(map[string]*sidebarNode)
+	}
+	nodeID := "session-" + sessionID
+	m.workspace.nodes[nodeID] = &sidebarNode{
+		ID:           nodeID,
+		Kind:         sidebarKindSession,
+		SessionID:    sessionID,
+		SessionScope: "project_task",
+		TaskID:       taskID,
+		Label:        "Task 483 session",
+	}
+	m.workspace.topLevel = []string{nodeID}
+	m.workspace.sidebarCursor = 0
+	m.focus = SidebarPanel
+
+	cmd := m.executeCommand(":sidebar select")
+
+	// Scope must be set to task
+	if m.activeScope != ScopeTask {
+		t.Fatalf("EX-483: activeScope = %v, want ScopeTask", m.activeScope)
+	}
+	// Main view must navigate to ViewTask
+	if m.workspace.mainView != ViewTask {
+		t.Fatalf("EX-483: mainView = %v, want ViewTask", m.workspace.mainView)
+	}
+	// selectedTaskID must be set
+	if m.workspace.selectedTaskID != taskID {
+		t.Fatalf("EX-483: selectedTaskID = %q, want %q", m.workspace.selectedTaskID, taskID)
+	}
+	// A cmd must be returned (history reload + task detail)
+	if cmd == nil {
+		t.Fatal("EX-483: :sidebar select on task-scoped session returned nil cmd")
+	}
+	// Execute the batch to confirm LoadTaskDetail is called
+	runNonTimerCmds(cmd)
+	if detailCalledWith != taskID {
+		t.Fatalf("EX-483: LoadTaskDetail called with %q, want %q", detailCalledWith, taskID)
+	}
+}
+
 // TestSidebarSelectOnHeaderGivesExpandCollapseMessageEX456 verifies EX-456:
 // :sidebar select on a section header gives "X section expanded/collapsed."
 // rather than the generic "Sidebar selection applied." — mirrors the Enter key

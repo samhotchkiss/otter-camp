@@ -6126,6 +6126,24 @@ func (m *Model) executeSidebarCommand(args []string) tea.Cmd {
 				} else {
 					m.statusMessage = "Switched to " + truncate(node.Label, 36) + "."
 				}
+				// EX-483: set scope and navigate to task view for task-scoped sessions,
+				// mirroring handleEnterKey sidebarKindSession (EX-876/handleEnterKey lines
+				// that set m.activeScope, selectedTaskID, ViewTask, and loadTaskDetailCmd).
+				// Previously :sidebar select only set the status message here; scope,
+				// view navigation, and task detail load were silently skipped.
+				switch node.SessionScope {
+				case "project_task":
+					m.activeScope = ScopeTask
+					if node.TaskID != "" {
+						m.workspace.selectedTaskID = node.TaskID
+						m.workspace.setMainView(ViewTask)
+						cmds = append(cmds, loadTaskDetailCmd(node.TaskID, m.runtimeHints))
+					}
+				case "project":
+					m.activeScope = ScopeProject
+				default:
+					m.activeScope = ScopeOrg
+				}
 			case sidebarKindProject:
 				cmds = append(cmds, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true))
 				if m.runtimeHints.LoadProjectDetail != nil {
