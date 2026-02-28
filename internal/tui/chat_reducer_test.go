@@ -654,6 +654,87 @@ func TestEditQueuedThenEraseEmptiesClearsEditingQueuedEX425(t *testing.T) {
 	})
 }
 
+// TestTurnCompletionWithNoQueueSetsResponseReceivedEX426 verifies that when a
+// chat turn completes with no queued messages, completeTurnAndPromoteQueue sets
+// statusMessage to "Response received." instead of silently clearing it to "".
+// Previously the blank status left users with no confirmation after a successful
+// assistant response (EX-426).
+func TestTurnCompletionWithNoQueueSetsResponseReceivedEX426(t *testing.T) {
+	t.Run("turn-completed-event", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.turnsSynced = true
+		model.activeTurn = true
+		model.activeSession = "11111111-2222-3333-4444-555555555555"
+		model.activeTurnSessionID = "11111111-2222-3333-4444-555555555555"
+
+		event := EventEnvelope{
+			EventType: "chat.turn.completed",
+			Payload:   mustJSON(t, map[string]any{"session_id": "11111111-2222-3333-4444-555555555555"}),
+		}
+		model.applyChatEnvelope(event)
+
+		if model.ActiveTurn() {
+			t.Fatal("EX-426: activeTurn should be false after turn.completed")
+		}
+		if model.StatusMessage() != "Response received." {
+			t.Fatalf("EX-426: statusMessage = %q, want \"Response received.\"", model.StatusMessage())
+		}
+	})
+
+	t.Run("message-finalized-event", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.turnsSynced = true
+		model.activeTurn = true
+		model.activeSession = "11111111-2222-3333-4444-555555555555"
+		model.activeTurnSessionID = "11111111-2222-3333-4444-555555555555"
+
+		event := EventEnvelope{
+			EventType: "chat.message.finalized",
+			Payload: mustJSON(t, map[string]any{
+				"message_id": "msg-1",
+				"session_id": "11111111-2222-3333-4444-555555555555",
+				"role":       "assistant",
+				"content":    "Hello from assistant",
+			}),
+		}
+		model.applyChatEnvelope(event)
+
+		if model.ActiveTurn() {
+			t.Fatal("EX-426: activeTurn should be false after message.finalized with no queue")
+		}
+		if model.StatusMessage() != "Response received." {
+			t.Fatalf("EX-426: statusMessage = %q, want \"Response received.\"", model.StatusMessage())
+		}
+	})
+
+	t.Run("queued-message-still-promotes", func(t *testing.T) {
+		// Regression guard: when there ARE queued messages, the promote-status
+		// message is used (not "Response received."), and activeTurn stays true.
+		model := NewModel(DefaultState())
+		model.turnsSynced = true
+		model.activeTurn = true
+		model.activeSession = "11111111-2222-3333-4444-555555555555"
+		model.activeTurnSessionID = "11111111-2222-3333-4444-555555555555"
+		model.queuedMessages = []QueuedMessage{{Text: "second message"}}
+
+		event := EventEnvelope{
+			EventType: "chat.turn.completed",
+			Payload:   mustJSON(t, map[string]any{"session_id": "11111111-2222-3333-4444-555555555555"}),
+		}
+		model.applyChatEnvelope(event)
+
+		if !model.ActiveTurn() {
+			t.Fatal("EX-426 regression: activeTurn should be true after promoting queued message")
+		}
+		if model.QueueDepth() != 0 {
+			t.Fatalf("EX-426 regression: queue depth = %d, want 0", model.QueueDepth())
+		}
+		if model.StatusMessage() == "Response received." {
+			t.Fatal("EX-426 regression: promote path should NOT show \"Response received.\"")
+		}
+	})
+}
+
 func mustJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)

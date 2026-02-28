@@ -4886,7 +4886,12 @@ func (m *Model) completeTurnAndPromoteQueue(promoteStatus string) tea.Cmd {
 	m.chatScrollOffset = 0 // snap to bottom so the completed response is visible
 	m.finalizePendingAssistantMessages()
 	if len(m.queuedMessages) == 0 {
-		m.statusMessage = ""
+		// EX-426: after a successful turn with no queued messages, the status bar
+		// was silently cleared to "" — leaving users watching the status bar with
+		// no confirmation that the turn finished. Show a brief confirmation instead
+		// so the transition from "Message sent. Waiting for assistant response."
+		// is acknowledged rather than silently disappearing.
+		m.statusMessage = "Response received."
 		return nil
 	}
 	next := m.queuedMessages[0]
