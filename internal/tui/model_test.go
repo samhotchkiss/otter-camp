@@ -8634,3 +8634,43 @@ func TestSidebarHLeftAlreadyCollapsedEX323(t *testing.T) {
 		t.Errorf("EX-323: ← on top-level task should say 'At top level…'; got %q", m4.statusMessage)
 	}
 }
+
+// TestSpaceOnNonExpandableSidebarEX324 verifies that pressing Space on a
+// task/session/inbox sidebar node shows "Use Enter to open this item." instead
+// of silently doing nothing (EX-324).
+func TestSpaceOnNonExpandableSidebarEX324(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = SidebarPanel
+
+	taskNodeID := "task-t2"
+	m.workspace.nodes[taskNodeID] = &sidebarNode{
+		ID:    taskNodeID,
+		Label: "Write tests",
+		Kind:  sidebarKindTask,
+	}
+	m.workspace.topLevel = []string{taskNodeID}
+	m.workspace.sidebarCursor = 0
+
+	// Space on a task node should say "Use Enter to open this item."
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeySpace})
+	if m1.statusMessage != "Use Enter to open this item." {
+		t.Errorf("EX-324: Space on task node should say 'Use Enter to open this item.'; got %q", m1.statusMessage)
+	}
+
+	// Space on a project node should still toggle expansion (EX-285).
+	projNodeID := "project-abc"
+	m.workspace.nodes[projNodeID] = &sidebarNode{
+		ID:        projNodeID,
+		Label:     "Alpha",
+		Kind:      sidebarKindProject,
+		ProjectID: "abc",
+		Expanded:  false,
+	}
+	m.workspace.topLevel = []string{projNodeID}
+	m.workspace.sidebarCursor = 0
+	m2 := pressKey(m, tea.KeyMsg{Type: tea.KeySpace})
+	if !strings.Contains(m2.statusMessage, "Expanded") {
+		t.Errorf("EX-324: Space on project should say 'Expanded...'; got %q", m2.statusMessage)
+	}
+}

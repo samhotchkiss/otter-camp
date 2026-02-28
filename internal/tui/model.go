@@ -1134,6 +1134,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					} else {
 						m.statusMessage = node.Label + " section collapsed."
 					}
+				default:
+					// EX-324: Space on non-expandable nodes (task, session, inbox) â suggest Enter.
+					m.statusMessage = "Use Enter to open this item."
 				}
 			}
 			return m, nil
