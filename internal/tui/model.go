@@ -4875,6 +4875,8 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		}
 		m.workspace.setMainView(ViewProject)
 		m.setFocus(MainPanel)
+		// EX-504: set scope so the scope indicator follows the navigation.
+		m.activeScope = ScopeProject
 		// EX-260: match keyboard shortcut 'p' → "Project view" for consistency.
 		m.statusMessage = "Project view"
 	case "task":
@@ -4896,6 +4898,8 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		}
 		m.workspace.setMainView(ViewTask)
 		m.setFocus(MainPanel)
+		// EX-505: set scope so the scope indicator follows the navigation.
+		m.activeScope = ScopeTask
 		// EX-260: match keyboard shortcut 't' → "Task detail" for consistency.
 		m.statusMessage = "Task detail"
 	case "dashboard", "inbox", "activity", "agents", "merges", "schedules":
@@ -5801,6 +5805,8 @@ func (m *Model) jumpToProjectByName(name string) tea.Cmd {
 				strings.EqualFold(m.workspace.selectedProjectID, node.ProjectID)
 			m.workspace.selectedProjectID = node.ProjectID
 			m.workspace.setMainView(ViewProject)
+			// EX-495: set scope so the scope indicator follows the navigation.
+			m.activeScope = ScopeProject
 			if alreadyHere {
 				m.statusMessage = "Already in project: " + node.Label + ". Refreshing tasks…"
 			} else {

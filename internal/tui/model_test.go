@@ -8494,6 +8494,82 @@ func TestJumpToProjectByNameLoadsDetailEX482(t *testing.T) {
 	}
 }
 
+// TestJumpToProjectByNameSetsActiveScopeEX495 verifies EX-495: jumpToProjectByName
+// sets m.activeScope=ScopeProject so the scope indicator follows the navigation.
+// Previously the scope was silently unchanged even though all other project
+// navigation paths (handleEnterKey, tui.command navigate, executeSidebarCommand) set it.
+func TestJumpToProjectByNameSetsActiveScopeEX495(t *testing.T) {
+	projID := "proj-495"
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjectDetail: func(_ context.Context, id string) (*ProjectDetail, error) {
+			return &ProjectDetail{ID: id, DisplayName: "EX-495 project"}, nil
+		},
+	})
+	m.workspace.rebuildSidebar("", nil,
+		[]SidebarProjectItem{{ID: projID, DisplayName: "EX-495 project"}})
+	m.focus = MainPanel
+	m.workspace.mainView = ViewDashboard
+	m.activeScope = ScopeOrg // stale scope
+
+	_ = m.jumpToProjectByName("EX-495")
+
+	if m.activeScope != ScopeProject {
+		t.Fatalf("EX-495: activeScope = %v, want ScopeProject", m.activeScope)
+	}
+}
+
+// TestProjectCommandNoNameSetsActiveScopeEX504 verifies EX-504: :project command
+// (without a name) sets m.activeScope=ScopeProject. Previously it set the view and
+// focus but left scope unchanged, so the scope indicator showed the wrong context.
+func TestProjectCommandNoNameSetsActiveScopeEX504(t *testing.T) {
+	m := NewModel(DefaultState())
+	m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.workspace.selectedProjectID = "proj-504"
+	m.focus = SidebarPanel
+	m.workspace.mainView = ViewDashboard
+	m.activeScope = ScopeOrg
+
+	// Use pressKey to invoke :project (no name)
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	for _, r := range "project" {
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.activeScope != ScopeProject {
+		t.Fatalf("EX-504: activeScope = %v, want ScopeProject", m.activeScope)
+	}
+	if m.workspace.mainView != ViewProject {
+		t.Fatalf("EX-504: mainView = %v, want ViewProject", m.workspace.mainView)
+	}
+}
+
+// TestTaskCommandNoNameSetsActiveScopeEX505 verifies EX-505: :task command
+// (without a name) sets m.activeScope=ScopeTask. Previously it set the view and
+// focus but left scope unchanged, mirroring the gap in EX-504.
+func TestTaskCommandNoNameSetsActiveScopeEX505(t *testing.T) {
+	m := NewModel(DefaultState())
+	m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.workspace.selectedTaskID = "task-505"
+	m.focus = SidebarPanel
+	m.workspace.mainView = ViewDashboard
+	m.activeScope = ScopeOrg
+
+	// Use pressKey to invoke :task (no name)
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	for _, r := range "task" {
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.activeScope != ScopeTask {
+		t.Fatalf("EX-505: activeScope = %v, want ScopeTask", m.activeScope)
+	}
+	if m.workspace.mainView != ViewTask {
+		t.Fatalf("EX-505: mainView = %v, want ViewTask", m.workspace.mainView)
+	}
+}
+
 // TestHelpCommandIdempotencyEX468 verifies EX-468: :help/:palette when already
 // in ViewHelp says "Help: scrolled to top." (and resets scroll) rather than
 // re-announcing "Keybinding reference." as if opening fresh — mirrors EX-467 for :man.
