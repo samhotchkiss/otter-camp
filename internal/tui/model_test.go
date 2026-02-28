@@ -5676,3 +5676,57 @@ func TestProjectViewRefreshHintEX235(t *testing.T) {
 		t.Errorf("EX-235: project view footer should show 'r·refresh'; got:\n%s", rendered)
 	}
 }
+
+// TestTaskViewLoadingStateEX236 verifies EX-236: when selectedTaskID is set but the
+// task data hasn't loaded yet, the view shows a "Loading…" state rather than "No task selected".
+func TestTaskViewLoadingStateEX236(t *testing.T) {
+	model := NewModel(DefaultState())
+
+	t.Run("no task ID shows not-selected", func(t *testing.T) {
+		model.workspace.selectedTaskID = ""
+		lines := model.renderTaskView(80, 20)
+		rendered := strings.Join(lines, "\n")
+		if !strings.Contains(rendered, "No task selected") {
+			t.Errorf("EX-236: with empty selectedTaskID should show 'No task selected'; got:\n%s", rendered)
+		}
+	})
+
+	t.Run("task ID set but not loaded shows loading", func(t *testing.T) {
+		model.workspace.selectedTaskID = "task-99"
+		// task-99 is NOT in m.workspace.tasks (loading state)
+		lines := model.renderTaskView(80, 20)
+		rendered := strings.Join(lines, "\n")
+		if strings.Contains(rendered, "No task selected") {
+			t.Errorf("EX-236: with pending selectedTaskID should NOT show 'No task selected'; got:\n%s", rendered)
+		}
+		if !strings.Contains(rendered, "Loading") {
+			t.Errorf("EX-236: with pending selectedTaskID should show loading indicator; got:\n%s", rendered)
+		}
+	})
+}
+
+// TestTaskViewOKeyEX237 verifies EX-237: pressing 'o' in task view opens the task
+// session (same as Enter), fixing the bug where the hint showed "o·open task session"
+// but the key had no handler.
+func TestTaskViewOKeyEX237(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.tasks["task-1"] = &taskRecord{
+		ID:                  "task-1",
+		Title:               "Do something",
+		Status:              "in_progress",
+		RequiresHumanReview: true,
+		SessionID:           "session-task-1",
+	}
+	model.workspace.selectedTaskID = "task-1"
+	model.workspace.setMainView(ViewTask)
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.focus = MainPanel
+
+	// 'o' should trigger session open — check that it doesn't silently no-op.
+	// We can't easily verify the session switch without runtime hooks, but we can
+	// verify that a status message is set (either success or "No active session").
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if model.statusMessage == "" {
+		t.Errorf("EX-237: pressing 'o' in task view produced no status feedback; expected a message (success or error)")
+	}
+}

@@ -1421,6 +1421,18 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 func (m Model) renderTaskView(width, maxLines int) []string {
 	task := m.workspace.tasks[m.workspace.selectedTaskID]
 	if task == nil {
+		// EX-236: distinguish "loading" from "not selected" so the window between
+		// pressing Enter on a task card and the API response arriving doesn't look
+		// like a dead end.
+		if m.workspace.selectedTaskID != "" {
+			return []string{
+				"",
+				lipgloss.NewStyle().Width(width).Align(lipgloss.Center).
+					Foreground(colMuted).Render("◌  Loading task detail…"),
+				"",
+				styleMuted.Render("  r·retry  ·  Esc·back"),
+			}
+		}
 		// EX-212: include a navigation hint so the user isn't left with a dead end.
 		return []string{
 			styleMuted.Render("  No task selected"),

@@ -3613,3 +3613,39 @@ Enter·select project  ·  /·filter (or /·clear filter)  ·  Esc·dashboard
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-236: Task view shows "No task selected" during data load
+
+**Observation:** When the user presses Enter on a task card (from the dashboard or project view), the TUI:
+1. Sets `selectedTaskID` to the task's UUID
+2. Navigates to `ViewTask`
+3. Dispatches `loadTaskDetailCmd` (async)
+
+During the brief window before the API response arrives, `renderTaskView` found `m.workspace.tasks[selectedTaskID] == nil` and showed "No task selected" — the same message shown when no task has been chosen at all. This is misleading; the user just selected a task.
+
+**Improvement:** Added a branch that checks `selectedTaskID != ""` before showing the "No task selected" message. When the ID is set but the record hasn't loaded, shows:
+```
+◌  Loading task detail…
+
+r·retry  ·  Esc·back
+```
+
+**Effort:** Low (5 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
+
+## EX-237: Task view 'o' key has no handler despite hint showing "o·open task session"
+
+**Observation:** `renderTaskView` shows the action hint `"a·approve  ·  x·reject  ·  f·defer  ·  o·open task session"` when `task.RequiresHumanReview` is true. But `handleWorkspaceRune` only handled `'o'` for `ViewInbox`, not `ViewTask`. Pressing `o` from the task view silently fell through to `return false, nil` — no action, no feedback, no session opened.
+
+**Root cause:** The `'o'` key case was added to `ViewInbox` but the parallel task-view path was never wired up. The hint was added (EX-148/EX-149) without a corresponding key handler.
+
+**Improvement:** Added `ViewTask` path to the `case 'o':` handler that calls `handleEnterKey()` (same as Enter) to open the task session.
+
+**Effort:** Trivial (3 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---

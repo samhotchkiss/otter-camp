@@ -1482,6 +1482,12 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 			return true, nil
 		}
+		// EX-237: 'o' in task view should open the task session (same as Enter).
+		// The task view hints show "o·open task session" when RequiresHumanReview,
+		// so 'o' must actually work here, not silently fall through.
+		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
+			return true, m.handleEnterKey()
+		}
 	}
 	return false, nil
 }
