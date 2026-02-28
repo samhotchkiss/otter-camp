@@ -1950,7 +1950,6 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("↑ / ↓", "scroll one line"),
 		key("g / G", "jump to oldest / latest message"),
 		key("Esc", "cancel active agent turn"),
-		key("[ / ]", "cycle chat scope (org / project / task)"),
 		key("e / s / d", "queued msg: edit / steer / delete  (when turn active)"),
 		"",
 		header("Global"),
@@ -1963,6 +1962,8 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("t", "return to selected task (if any)"),
 		key("n", "jump to next unread session"),
 		key("r", "refresh task / project detail (in detail views), or sidebar"),
+		// EX-262: [ / ] works from any panel, not just chat — moved to Global.
+		key("[ / ]", "cycle chat scope: org | project | task"),
 		key("?", "toggle this help screen"),
 		// EX-252: Ctrl-G and '0' jump to Frank session; Ctrl-P opens command mode.
 		// These are undocumented alternatives that power users find via source.
