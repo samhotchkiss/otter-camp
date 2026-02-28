@@ -214,6 +214,45 @@ func TestEscFromEmptySearchModeExitsEX433(t *testing.T) {
 	})
 }
 
+// TestTabEnterEmptySearchModeExitsEX434 verifies EX-434: Tab and Enter in search
+// mode with an empty query say "Filter mode exited." (not "Filter cleared.")
+// consistent with EX-433 (Esc) and the honest-feedback pattern.
+func TestTabEnterEmptySearchModeExitsEX434(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  tea.KeyMsg
+	}{
+		{"Tab-empty-query", tea.KeyMsg{Type: tea.KeyTab}},
+		{"Enter-empty-query", tea.KeyMsg{Type: tea.KeyEnter}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.searchMode = true
+			m.searchPanel = MainPanel
+			m.searchQuery = ""
+			m = pressKey(m, tc.key)
+			if m.searchMode {
+				t.Errorf("EX-434: %s should exit search mode", tc.name)
+			}
+			if got := m.StatusMessage(); got != "Filter mode exited." {
+				t.Errorf("EX-434: %s empty query: got %q, want 'Filter mode exited.'", tc.name, got)
+			}
+		})
+	}
+
+	// Non-empty query still says "Filter X applied."
+	t.Run("Enter-non-empty-still-applies", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = MainPanel
+		m.searchQuery = "foo"
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if got := m.StatusMessage(); got != `Filter "foo" applied.` {
+			t.Errorf("EX-434: Enter non-empty should say 'Filter \"foo\" applied.', got %q", got)
+		}
+	})
+}
+
 func TestSlashSearchSidebarFiltersSessions(t *testing.T) {
 	model := NewModel(DefaultState())
 	// Seed chat nodes so the sidebar has sessions to filter
@@ -10896,7 +10935,7 @@ func TestTabInSearchModeCommitsFilterEX389(t *testing.T) {
 			t.Errorf("EX-389: Tab: got status %q, want to contain filter name", m1.statusMessage)
 		}
 	})
-	t.Run("Tab-with-empty-filter-clears", func(t *testing.T) {
+	t.Run("Tab-with-empty-filter-exits", func(t *testing.T) {
 		m := NewModel(DefaultState())
 		m.searchMode = true
 		m.searchPanel = SidebarPanel
@@ -10905,8 +10944,9 @@ func TestTabInSearchModeCommitsFilterEX389(t *testing.T) {
 		if m1.searchMode {
 			t.Errorf("EX-389: Tab with empty filter should exit search mode")
 		}
-		if !strings.Contains(m1.statusMessage, "cleared") {
-			t.Errorf("EX-389: Tab empty: got status %q, want 'cleared'", m1.statusMessage)
+		// EX-434: empty query exits mode honestly rather than saying "Filter cleared."
+		if got := m1.StatusMessage(); got != "Filter mode exited." {
+			t.Errorf("EX-389/EX-434: Tab empty: got status %q, want 'Filter mode exited.'", got)
 		}
 	})
 }

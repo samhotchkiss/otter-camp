@@ -3730,18 +3730,21 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if q != "" {
 			m.statusMessage = fmt.Sprintf("Filter %q applied.", q)
 		} else {
-			m.statusMessage = "Filter cleared."
+			// EX-434: symmetric with EX-433 (Esc) — an empty query means no filter was
+			// applied; "Filter cleared." implies a filter existed. Say "Filter mode exited."
+			m.statusMessage = "Filter mode exited."
 		}
 		return m, nil
 	case tea.KeyEnter:
 		m.setFilterForPanel(m.searchPanel, m.searchQuery)
 		m.searchMode = false
 		// EX-254: include the query in the confirmation so the user sees what filter is active.
+		// EX-434: symmetric with EX-433 (Esc) — empty query → "Filter mode exited." not "Filter cleared."
 		q := strings.TrimSpace(m.searchQuery)
 		if q != "" {
 			m.statusMessage = fmt.Sprintf("Filter %q applied.", q)
 		} else {
-			m.statusMessage = "Filter cleared."
+			m.statusMessage = "Filter mode exited."
 		}
 		return m, nil
 	case tea.KeyBackspace:
