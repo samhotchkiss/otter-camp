@@ -3745,6 +3745,11 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		runes := []rune(m.searchQuery)
 		if len(runes) > 0 {
 			m.searchQuery = string(runes[:len(runes)-1])
+		} else {
+			// EX-432: symmetric with EX-330 (Ctrl-W) and EX-329 (Ctrl-U) — when the
+			// filter query is already empty, Backspace cannot delete further; give
+			// honest feedback rather than silently doing nothing.
+			m.statusMessage = "Nothing to delete. Press Esc to exit search mode."
 		}
 		m.setFilterForPanel(m.searchPanel, m.searchQuery)
 		return m, nil
@@ -3970,7 +3975,11 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(runes) > 1 {
 			m.commandBuffer = string(runes[:len(runes)-1])
 		} else {
+			// EX-432: symmetric with EX-328 (Ctrl-W) and EX-327 (Ctrl-U) — when the
+			// command buffer is already at the ":" prompt, Backspace cannot delete
+			// further; give honest feedback rather than silently doing nothing.
 			m.commandBuffer = ":"
+			m.statusMessage = "Nothing to delete."
 		}
 		return m, nil
 	case tea.KeyCtrlU:

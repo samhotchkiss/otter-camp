@@ -9015,6 +9015,61 @@ func TestCtrlUWEmptyCommandAndSearchEX327330(t *testing.T) {
 	}
 }
 
+// TestBackspaceEmptyCommandAndSearchEX432 verifies EX-432: Backspace in command
+// mode when the buffer is already ":" and in search mode when the query is already
+// empty should give honest feedback (matching the Ctrl-U/Ctrl-W pattern from
+// EX-327/328/329/330) instead of silently doing nothing.
+func TestBackspaceEmptyCommandAndSearchEX432(t *testing.T) {
+	// EX-432: Backspace in command mode at ":"
+	t.Run("command-mode-at-colon", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":"
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyBackspace})
+		if m.commandBuffer != ":" {
+			t.Errorf("EX-432: commandBuffer should stay ':' after Backspace at prompt, got %q", m.commandBuffer)
+		}
+		if got := m.StatusMessage(); got != "Nothing to delete." {
+			t.Errorf("EX-432: Backspace at ':' should say 'Nothing to delete.', got %q", got)
+		}
+	})
+
+	// EX-432: Backspace in command mode with content still deletes silently
+	t.Run("command-mode-with-content", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":foo"
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyBackspace})
+		if m.commandBuffer != ":fo" {
+			t.Errorf("EX-432: commandBuffer should be ':fo' after Backspace on ':foo', got %q", m.commandBuffer)
+		}
+	})
+
+	// EX-432: Backspace in search/filter mode when query is empty
+	t.Run("search-mode-empty-query", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = MainPanel
+		m.searchQuery = ""
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyBackspace})
+		if got := m.StatusMessage(); got != "Nothing to delete. Press Esc to exit search mode." {
+			t.Errorf("EX-432: Backspace on empty filter should say 'Nothing to delete.', got %q", got)
+		}
+	})
+
+	// EX-432: Backspace in search mode with content deletes a character silently
+	t.Run("search-mode-with-content", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = MainPanel
+		m.searchQuery = "foo"
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyBackspace})
+		if m.searchQuery != "fo" {
+			t.Errorf("EX-432: searchQuery should be 'fo' after Backspace on 'foo', got %q", m.searchQuery)
+		}
+	})
+}
+
 // TestInboxActionsNoTaskEX331 verifies that pressing 'a', 'x', or 'f' in the
 // task view when no task is loaded gives honest feedback instead of silently
 // doing nothing (EX-331).
