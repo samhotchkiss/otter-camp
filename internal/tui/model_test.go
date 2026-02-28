@@ -11156,3 +11156,38 @@ func TestCommandPaletteSuggestionsEX402(t *testing.T) {
 		})
 	}
 }
+
+// TestDefaultCaseHintsInModalModesEX403 verifies that the default: branches
+// in updateSearchInput and updateCommandInput produce helpful hints rather than
+// silent no-ops when an unhandled key type is pressed (EX-403).
+func TestDefaultCaseHintsInModalModesEX403(t *testing.T) {
+	// Use a key type value not present in either switch as a sentinel.
+	unknownKey := tea.KeyMsg{Type: tea.KeyType(255)}
+
+	t.Run("search-mode-default", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		// Enter search mode
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+		if !m.searchMode {
+			t.Skip("search mode not entered")
+		}
+		m1 := pressKey(m, unknownKey)
+		if m1.statusMessage == "" {
+			t.Errorf("EX-403: unknown key in search mode should give feedback, got empty statusMessage")
+		}
+	})
+
+	t.Run("command-mode-default", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		// Enter command mode
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+		if !m.commandMode {
+			t.Skip("command mode not entered")
+		}
+		m1 := pressKey(m, unknownKey)
+		if m1.statusMessage == "" {
+			t.Errorf("EX-403: unknown key in command mode should give feedback, got empty statusMessage")
+		}
+	})
+}

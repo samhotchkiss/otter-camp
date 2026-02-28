@@ -3682,6 +3682,9 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	default:
+		// EX-403: any key type not explicitly handled in search mode (e.g.
+		// rare Ctrl sequences) — give a redirect hint.
+		m.statusMessage = "Key not bound in filter mode. Type to search, Enter to apply, Esc to cancel."
 		return m, nil
 	}
 }
@@ -3891,6 +3894,10 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	default:
+		// EX-403: any key type not explicitly handled in command mode (e.g.
+		// rare Ctrl sequences like Ctrl-@, Ctrl-\, Ctrl-]) — give a redirect
+		// hint rather than silently dropping the keystroke.
+		m.statusMessage = "Key not bound in command mode. Type a command, Tab to autocomplete, or Esc to cancel."
 		return m, nil
 	}
 }
