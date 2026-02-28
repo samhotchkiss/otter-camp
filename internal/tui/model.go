@@ -3034,6 +3034,18 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// EX-374: Ctrl-E (line-end) — cursor movement not supported in filter field.
 		m.statusMessage = "Line-end (Ctrl-E) not supported. Type to append to query, Ctrl-W to delete word."
 		return m, nil
+	case tea.KeyCtrlB, tea.KeyCtrlF:
+		// EX-379: Ctrl-B/F (char backward/forward) — cursor movement not supported in filter.
+		m.statusMessage = "Cursor movement (Ctrl-B/F) not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+		return m, nil
+	case tea.KeyCtrlD:
+		// EX-379: Ctrl-D (delete char forward) — no cursor concept in filter field.
+		m.statusMessage = "Forward-delete (Ctrl-D) not supported. Use Backspace or Ctrl-W."
+		return m, nil
+	case tea.KeyCtrlK:
+		// EX-379: Ctrl-K (kill to end of line) — no cursor concept; use Ctrl-U to clear all.
+		m.statusMessage = "Kill-to-end (Ctrl-K) not supported. Use Ctrl-U to clear, Ctrl-W to delete word."
+		return m, nil
 	case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
 		// EX-313: ↑/↓ in filter mode commits the filter and then navigates the list,
 		// so the user can type a query and immediately scroll results without pressing Enter first.
@@ -3159,6 +3171,22 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlE:
 		// EX-375: Ctrl-E (line-end) — cursor movement not supported in command buffer.
 		m.statusMessage = "Line-end (Ctrl-E) not supported. Type to append, Ctrl-W to delete word."
+		return m, nil
+	case tea.KeyCtrlB, tea.KeyCtrlF:
+		// EX-379: Ctrl-B/F (char backward/forward) — cursor movement not supported in command buffer.
+		m.statusMessage = "Cursor movement (Ctrl-B/F) not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+		return m, nil
+	case tea.KeyCtrlD:
+		// EX-379: Ctrl-D (delete char forward) — no cursor in command buffer.
+		if m.commandBuffer == ":" {
+			m.statusMessage = "Ctrl-D: nothing to delete. Press Esc to cancel command mode."
+		} else {
+			m.statusMessage = "Forward-delete (Ctrl-D) not supported. Use Backspace or Ctrl-W."
+		}
+		return m, nil
+	case tea.KeyCtrlK:
+		// EX-379: Ctrl-K (kill to end of line) — no cursor; use Ctrl-U to clear all.
+		m.statusMessage = "Kill-to-end (Ctrl-K) not supported. Use Ctrl-U to clear, Ctrl-W to delete word."
 		return m, nil
 	case tea.KeySpace:
 		m.commandBuffer += " "

@@ -9999,3 +9999,103 @@ func TestVimWordKeysAndCtrlSEX378(t *testing.T) {
 		}
 	})
 }
+
+// TestCtrlBFDKInSearchAndCommandEX379 verifies that Ctrl-B, Ctrl-F, Ctrl-D,
+// Ctrl-K give honest hints in search mode and command mode (EX-379) instead of
+// falling to the silent default case.
+func TestCtrlBFDKInSearchAndCommandEX379(t *testing.T) {
+	searchCases := []struct {
+		name    string
+		keyType tea.KeyType
+		want    string
+	}{
+		{
+			"Ctrl-B in search",
+			tea.KeyCtrlB,
+			"Cursor movement (Ctrl-B/F) not supported. Use Ctrl-W to delete word, Ctrl-U to clear.",
+		},
+		{
+			"Ctrl-F in search",
+			tea.KeyCtrlF,
+			"Cursor movement (Ctrl-B/F) not supported. Use Ctrl-W to delete word, Ctrl-U to clear.",
+		},
+		{
+			"Ctrl-D in search",
+			tea.KeyCtrlD,
+			"Forward-delete (Ctrl-D) not supported. Use Backspace or Ctrl-W.",
+		},
+		{
+			"Ctrl-K in search",
+			tea.KeyCtrlK,
+			"Kill-to-end (Ctrl-K) not supported. Use Ctrl-U to clear, Ctrl-W to delete word.",
+		},
+	}
+	for _, tt := range searchCases {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.searchMode = true
+			m.searchPanel = SidebarPanel
+			m.searchQuery = "hello"
+			m1 := pressKey(m, tea.KeyMsg{Type: tt.keyType})
+			if m1.statusMessage != tt.want {
+				t.Errorf("EX-379: %s: got %q, want %q", tt.name, m1.statusMessage, tt.want)
+			}
+			if !m1.searchMode {
+				t.Errorf("EX-379: %s: searchMode should remain active", tt.name)
+			}
+		})
+	}
+
+	commandCases := []struct {
+		name    string
+		keyType tea.KeyType
+		want    string
+	}{
+		{
+			"Ctrl-B in command",
+			tea.KeyCtrlB,
+			"Cursor movement (Ctrl-B/F) not supported. Use Ctrl-W to delete word, Ctrl-U to clear.",
+		},
+		{
+			"Ctrl-F in command",
+			tea.KeyCtrlF,
+			"Cursor movement (Ctrl-B/F) not supported. Use Ctrl-W to delete word, Ctrl-U to clear.",
+		},
+		{
+			"Ctrl-D in command non-empty",
+			tea.KeyCtrlD,
+			"Forward-delete (Ctrl-D) not supported. Use Backspace or Ctrl-W.",
+		},
+		{
+			"Ctrl-K in command",
+			tea.KeyCtrlK,
+			"Kill-to-end (Ctrl-K) not supported. Use Ctrl-U to clear, Ctrl-W to delete word.",
+		},
+	}
+	for _, tt := range commandCases {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.commandMode = true
+			m.commandBuffer = ":frank"
+			m1 := pressKey(m, tea.KeyMsg{Type: tt.keyType})
+			if m1.statusMessage != tt.want {
+				t.Errorf("EX-379: %s: got %q, want %q", tt.name, m1.statusMessage, tt.want)
+			}
+			if !m1.commandMode {
+				t.Errorf("EX-379: %s: commandMode should remain active", tt.name)
+			}
+		})
+	}
+
+	// Ctrl-D in command mode with empty buffer → "nothing to delete" hint
+	t.Run("Ctrl-D in command empty", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlD})
+		want := "Ctrl-D: nothing to delete. Press Esc to cancel command mode."
+		if m1.statusMessage != want {
+			t.Errorf("EX-379: Ctrl-D empty command: got %q, want %q", m1.statusMessage, want)
+		}
+	})
+}
