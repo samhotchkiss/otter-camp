@@ -376,6 +376,46 @@ func TestTurnCancelledDKeyDeletesQueueEX420(t *testing.T) {
 	}
 }
 
+// EX-421: after chat.turn.cancelled with queued messages, pressing 's' (steer)
+// in the chat panel should say "Steer requires an active turn." rather than
+// typing 's' into the input. Previously, the 's' case in handleChatRunes
+// checked m.activeTurn before applying steer, and when activeTurn=false it
+// fell through without returning — causing 's' to type into chatInput silently.
+func TestTurnCancelledSKeyExplainsSteerEX421(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = ChatPanel
+	model.turnsSynced = true
+	model.activeTurn = true
+	model.activeSession = "session-org-abc"
+	model.queuedMessages = []QueuedMessage{
+		{Text: "queued-1"},
+	}
+
+	// External cancellation: activeTurn goes false, queue remains.
+	model.applyChatEnvelope(EventEnvelope{
+		Seq:       1,
+		EventID:   "evt-cancel",
+		EventType: "chat.turn.cancelled",
+		OrgID:     "org-1",
+		Payload:   mustJSON(t, map[string]any{"session_id": "session-org-abc"}),
+	})
+	if model.ActiveTurn() {
+		t.Fatal("activeTurn should be false after turn cancelled")
+	}
+
+	// Press 's' — should give feedback, NOT type 's' into the chat input.
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if got := model.ChatInput(); got != "" {
+		t.Fatalf("chatInput after s = %q, want empty (s should not type into input in queue-action context)", got)
+	}
+	if got := model.QueueDepth(); got != 1 {
+		t.Fatalf("queue depth after s = %d, want 1 (steer should not delete the queued message)", got)
+	}
+	if !strings.Contains(model.statusMessage, "active turn") {
+		t.Fatalf("statusMessage = %q, want mention of 'active turn' requirement", model.statusMessage)
+	}
+}
+
 func mustJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)

@@ -3504,6 +3504,12 @@ func (m *Model) handleChatRunes(key tea.KeyMsg) {
 					m.applyQueueActionSteer()
 					return
 				}
+				// EX-421: steer pressed in the queue-action context (queued messages,
+				// empty input) but no active turn — the turn was externally cancelled.
+				// Give explicit feedback instead of typing 's' into the chat input,
+				// which would be silent and contradicts the d/e feedback pattern.
+				m.statusMessage = "Steer requires an active turn. Use d·delete or e·edit queued messages."
+				return
 			case "d":
 				m.applyQueueActionDelete()
 				return
