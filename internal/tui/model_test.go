@@ -7752,3 +7752,92 @@ func TestSidebarTaskEnterFeedbackEX298(t *testing.T) {
 		t.Errorf("EX-298: Enter on task node should say '▸ Fix the login bug'; got %q", m.statusMessage)
 	}
 }
+
+// TestCtrlUClearsChatInputEX300 verifies that Ctrl-U in the chat panel clears
+// the input (Unix kill-line convention, complementing EX-289 Esc clear).
+func TestCtrlUClearsChatInputEX300(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	m.chatInput = "half-typed message"
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlU})
+	if m.chatInput != "" {
+		t.Errorf("EX-300: Ctrl-U should clear chatInput; got %q", m.chatInput)
+	}
+	if m.statusMessage != "Input cleared." {
+		t.Errorf("EX-300: Ctrl-U should say 'Input cleared.'; got %q", m.statusMessage)
+	}
+
+	// When input is already empty, Ctrl-U is a no-op (no panic, no bad state).
+	m.chatInput = ""
+	prev := m.statusMessage
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlU})
+	if m.chatInput != "" {
+		t.Errorf("EX-300: Ctrl-U on empty input should keep it empty; got %q", m.chatInput)
+	}
+	_ = prev // status message may or may not change — just don't panic
+}
+
+// TestDashboardHomeEndPgUpPgDnEX301EX302 verifies that Home/End/PgUp/PgDn in
+// ViewDashboard jump to first/last task and page through tasks.
+func TestDashboardHomeEndPgUpPgDnEX301EX302(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewDashboard)
+
+	// Populate 12 tasks.
+	for i := 0; i < 12; i++ {
+		id := fmt.Sprintf("task-%d", i)
+		m.workspace.tasks[id] = &taskRecord{ID: id, Title: fmt.Sprintf("Task %d", i), Status: "todo"}
+		m.workspace.taskOrder = append(m.workspace.taskOrder, id)
+	}
+	m.workspace.selectedTaskID = "task-0"
+	m.workspace.dashboardCursor = 0
+
+	// Home when already at first — boundary message.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+	if m.workspace.selectedTaskID != "task-0" {
+		t.Errorf("EX-301: Home at first should stay at task-0; got %q", m.workspace.selectedTaskID)
+	}
+	if m.statusMessage != "▸ Task 0" {
+		t.Errorf("EX-301: Home at first should show '▸ Task 0'; got %q", m.statusMessage)
+	}
+
+	// End — jumps to last.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+	if m.workspace.selectedTaskID != "task-11" {
+		t.Errorf("EX-301: End should jump to task-11; got %q", m.workspace.selectedTaskID)
+	}
+	if m.statusMessage != "▸ Task 11" {
+		t.Errorf("EX-301: End should show '▸ Task 11'; got %q", m.statusMessage)
+	}
+
+	// PgUp from last — should move backward by 8.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.workspace.selectedTaskID != "task-3" {
+		t.Errorf("EX-302: PgUp from 11 should land at task-3; got %q", m.workspace.selectedTaskID)
+	}
+	if m.statusMessage != "▸ Task 3" {
+		t.Errorf("EX-302: PgUp should show '▸ Task 3'; got %q", m.statusMessage)
+	}
+
+	// PgDown — should move forward by 8 (clamped to last).
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.workspace.selectedTaskID != "task-11" {
+		t.Errorf("EX-302: PgDn from 3 should land at task-11; got %q", m.workspace.selectedTaskID)
+	}
+
+	// Empty board — Home/End/PgUp/PgDn all give "Task board is empty."
+	m2 := NewModel(DefaultState())
+	m2.width, m2.height = 220, 40
+	m2.focus = MainPanel
+	m2.workspace.setMainView(ViewDashboard)
+	for _, keyType := range []tea.KeyType{tea.KeyHome, tea.KeyEnd, tea.KeyPgUp, tea.KeyPgDown} {
+		m2 = pressKey(m2, tea.KeyMsg{Type: keyType})
+		if m2.statusMessage != "Task board is empty." {
+			t.Errorf("EX-301/302: %v on empty board should say 'Task board is empty.'; got %q", keyType, m2.statusMessage)
+		}
+	}
+}

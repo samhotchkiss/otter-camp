@@ -611,6 +611,15 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlP:
 		m.enterCommandMode()
 		return m, nil
+	case tea.KeyCtrlU:
+		// EX-300: Ctrl-U (Unix kill-line) clears the chat input when focused on the chat panel.
+		// Complements EX-289 (Esc clears input) with a more keyboard-conventional shortcut.
+		if m.focus == ChatPanel && strings.TrimSpace(m.chatInput) != "" {
+			m.chatInput = ""
+			m.chatHistoryIndex = -1
+			m.statusMessage = "Input cleared."
+		}
+		return m, nil
 	case tea.KeyTab:
 		m.focus = nextPanelInOrder(order, m.focus)
 		m.applyResponsiveLayout()
@@ -794,6 +803,82 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.statusMessage = "▸ " + truncate(label, 40)
 				} else if prevID == "" {
 					m.statusMessage = "Task board is empty."
+				}
+				return m, nil
+			case tea.KeyHome:
+				// EX-301: Home in ViewDashboard jumps to first task (mirrors 'g' key, EX-135).
+				active := m.workspace.dashboardActiveTasks()
+				if len(active) > 0 {
+					m.workspace.dashboardCursor = 0
+					m.workspace.selectedTaskID = active[0]
+					if task := m.workspace.tasks[active[0]]; task != nil {
+						label := task.Title
+						if task.TaskNumber > 0 {
+							label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
+						}
+						m.statusMessage = "▸ " + truncate(label, 40)
+					}
+				} else {
+					m.statusMessage = "Task board is empty."
+				}
+				return m, nil
+			case tea.KeyEnd:
+				// EX-301: End in ViewDashboard jumps to last task (mirrors 'G' key, EX-135).
+				active := m.workspace.dashboardActiveTasks()
+				if len(active) > 0 {
+					m.workspace.dashboardCursor = len(active) - 1
+					m.workspace.selectedTaskID = active[len(active)-1]
+					if task := m.workspace.tasks[active[len(active)-1]]; task != nil {
+						label := task.Title
+						if task.TaskNumber > 0 {
+							label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
+						}
+						m.statusMessage = "▸ " + truncate(label, 40)
+					}
+				} else {
+					m.statusMessage = "Task board is empty."
+				}
+				return m, nil
+			case tea.KeyPgUp:
+				// EX-302: PgUp in ViewDashboard pages backward through tasks.
+				active := m.workspace.dashboardActiveTasks()
+				if len(active) == 0 {
+					m.statusMessage = "Task board is empty."
+					return m, nil
+				}
+				prevID := m.workspace.selectedTaskID
+				for i := 0; i < chatScrollStepLines; i++ {
+					m.workspace.moveDashboardCursor(-1)
+				}
+				if m.workspace.selectedTaskID == prevID {
+					m.statusMessage = "At first task on board."
+				} else if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
+					label := task.Title
+					if task.TaskNumber > 0 {
+						label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
+					}
+					m.statusMessage = "▸ " + truncate(label, 40)
+				}
+				return m, nil
+			case tea.KeyPgDown:
+				// EX-302: PgDn in ViewDashboard pages forward through tasks.
+				active := m.workspace.dashboardActiveTasks()
+				if len(active) == 0 {
+					m.statusMessage = "Task board is empty."
+					return m, nil
+				}
+				prevID := m.workspace.selectedTaskID
+				for i := 0; i < chatScrollStepLines; i++ {
+					m.workspace.moveDashboardCursor(1)
+				}
+				if m.workspace.selectedTaskID == prevID {
+					m.statusMessage = "At last task on board."
+				} else if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
+					label := task.Title
+					if task.TaskNumber > 0 {
+						label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
+					}
+					m.statusMessage = "▸ " + truncate(label, 40)
 				}
 				return m, nil
 			}
