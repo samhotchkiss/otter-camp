@@ -7733,6 +7733,10 @@ func TestSidebarJKBoundaryFeedbackEX281(t *testing.T) {
 // TestSidebarHLCollapseFeedbackEX282 verifies that h/l and ←/→ in the sidebar
 // show status feedback on collapse/expand, rather than silently acting.
 func TestSidebarHLCollapseFeedbackEX282(t *testing.T) {
+	// setup returns a model with the PROJECTS header already collapsed so that
+	// pressing l/→ actually has something to expand. EX-447 taught us that we
+	// must capture pre-mutation state, so the test must start in a meaningful
+	// initial state (collapsed = can be expanded; expanded = can be collapsed).
 	setup := func() Model {
 		m := NewModel(DefaultState())
 		m.width, m.height = 220, 40
@@ -7740,46 +7744,50 @@ func TestSidebarHLCollapseFeedbackEX282(t *testing.T) {
 		m.workspace.topLevel = []string{"header-projects", "proj-a"}
 		m.workspace.nodes = map[string]*sidebarNode{
 			"header-projects": {ID: "header-projects", Label: "PROJECTS", Kind: sidebarKindHeader},
-			"proj-a":          {ID: "proj-a", Label: "Acme Project", Kind: sidebarKindProject, ProjectID: "pa", Expanded: true},
+			"proj-a":          {ID: "proj-a", Label: "Acme Project", Kind: sidebarKindProject, ProjectID: "pa", Expanded: false},
 		}
-		m.workspace.sectionCollapsed = map[sidebarSectionID]bool{}
+		// Start with section collapsed so l/→ will actually expand it.
+		m.workspace.sectionCollapsed = map[sidebarSectionID]bool{"projects": true}
 		return m
 	}
 
-	// h/l on header node (cursor=0).
+	// l on collapsed header → "Expanded PROJECTS."
 	m := setup()
 	m.workspace.sidebarCursor = 0
-
 	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if m.statusMessage != "Expanded PROJECTS." {
 		t.Errorf("EX-282: l on header should say 'Expanded PROJECTS.'; got %q", m.statusMessage)
 	}
+	// h on the now-expanded header → "Collapsed PROJECTS."
 	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
 	if m.statusMessage != "Collapsed PROJECTS." {
 		t.Errorf("EX-282: h on header should say 'Collapsed PROJECTS.'; got %q", m.statusMessage)
 	}
 
-	// h/l on project node — start fresh so header section is NOT collapsed (proj-a visible).
+	// l on collapsed project node → "Expanded Acme Project — loading tasks…"
+	// Need header expanded so proj-a is visible; proj-a starts Expanded:false.
 	m = setup()
-	m.workspace.sidebarCursor = 1 // proj-a is visible at index 1
-
+	m.workspace.sectionCollapsed = map[sidebarSectionID]bool{} // header expanded
+	m.workspace.sidebarCursor = 1                               // proj-a at index 1
 	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if m.statusMessage != "Expanded Acme Project — loading tasks…" {
 		t.Errorf("EX-282: l on project should say 'Expanded Acme Project — loading tasks…'; got %q", m.statusMessage)
 	}
-	m.workspace.nodes["proj-a"].Expanded = true // re-expand for h test
+	// h on now-expanded project → "Collapsed Acme Project."
+	m.workspace.nodes["proj-a"].Expanded = true // ensure expanded for h test
 	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
 	if m.statusMessage != "Collapsed Acme Project." {
 		t.Errorf("EX-282: h on expanded project should say 'Collapsed Acme Project.'; got %q", m.statusMessage)
 	}
 
-	// Arrow keys get same feedback — use a fresh model so section is visible.
+	// Arrow keys: → on collapsed header → "Expanded PROJECTS."
 	m = setup()
-	m.workspace.sidebarCursor = 0 // header
+	m.workspace.sidebarCursor = 0
 	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRight})
 	if m.statusMessage != "Expanded PROJECTS." {
 		t.Errorf("EX-282: → on header should say 'Expanded PROJECTS.'; got %q", m.statusMessage)
 	}
+	// ← on the now-expanded header → "Collapsed PROJECTS."
 	m = pressKey(m, tea.KeyMsg{Type: tea.KeyLeft})
 	if m.statusMessage != "Collapsed PROJECTS." {
 		t.Errorf("EX-282: ← on header should say 'Collapsed PROJECTS.'; got %q", m.statusMessage)
@@ -8924,7 +8932,8 @@ func TestArrowKeysInViewTaskAndViewHelpEX312(t *testing.T) {
 	m3.focus = MainPanel
 	m3.workspace.setMainView(ViewAgents)
 	m3 = pressKey(m3, tea.KeyMsg{Type: tea.KeyDown})
-	if !strings.Contains(m3.statusMessage, "navigation not available") {
+	// EX-450: message unified to "Navigation not available here." (was "j/k navigation…").
+	if !strings.Contains(m3.statusMessage, "Navigation not available") {
 		t.Errorf("EX-312: ↓ in ViewAgents should show navigation hint; got %q", m3.statusMessage)
 	}
 }
@@ -10014,25 +10023,31 @@ func TestLeftRightArrowInChatPanelEX356357(t *testing.T) {
 // mirrors ← (collapse/navigate to parent), giving the same feedback as the Left
 // key, rather than silently doing nothing (EX-358).
 func TestBackspaceInSidebarPanelEX358(t *testing.T) {
-	// Backspace on a header node should collapse it (mirrors ←).
-	m := NewModel(DefaultState())
-	m.width, m.height = 220, 40
-	m.focus = SidebarPanel
-	// Put cursor on the CHATS header (always present).
-	visible := m.workspace.visibleSidebarIDs()
-	for i, id := range visible {
-		if id == "header-chats" {
-			m.workspace.sidebarCursor = i
-			break
+	// makeModel builds a fresh model with cursor on CHATS header each time.
+	// Two independent models are required because pressKey mutates the shared
+	// sectionCollapsed map (reference type), so reusing the same m would make
+	// the second pressKey see the already-collapsed state.
+	makeModel := func() Model {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = SidebarPanel
+		visible := m.workspace.visibleSidebarIDs()
+		for i, id := range visible {
+			if id == "header-chats" {
+				m.workspace.sidebarCursor = i
+				break
+			}
 		}
+		return m
 	}
-	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyBackspace})
+
+	m1 := pressKey(makeModel(), tea.KeyMsg{Type: tea.KeyBackspace})
 	// Backspace on a header should collapse it → "Collapsed CHATS."
 	if m1.statusMessage == "" {
 		t.Errorf("EX-358: Backspace in sidebar should give feedback; got empty status")
 	}
 	// Should produce the same result as pressing ←.
-	m2 := pressKey(m, tea.KeyMsg{Type: tea.KeyLeft})
+	m2 := pressKey(makeModel(), tea.KeyMsg{Type: tea.KeyLeft})
 	if m1.statusMessage != m2.statusMessage {
 		t.Errorf("EX-358: Backspace and ← should produce same status; Backspace=%q Left=%q",
 			m1.statusMessage, m2.statusMessage)
@@ -12666,4 +12681,41 @@ func TestSidebarCommandExpandCollapseHonestFeedbackEX449(t *testing.T) {
 			t.Fatalf(":sidebar collapse on already-collapsed project = %q, want %q", got, "Already collapsed.")
 		}
 	})
+}
+
+// TestArrowUpDownInStaticViewsEX450 verifies that ↑/↓ arrow keys in static main-panel
+// views (Agents, Merges, Schedules, Activity) give "Navigation not available here. Use r to
+// refresh." — consistent with PgUp/PgDown/Home/End (EX-336). Previously EX-312 gave the
+// misleading "j/k navigation not available here." text even when the user pressed ↑/↓.
+func TestArrowUpDownInStaticViewsEX450(t *testing.T) {
+	staticViews := []struct {
+		view MainView
+		name string
+	}{
+		{ViewAgents, "agents"},
+		{ViewMerges, "merges"},
+		{ViewSchedules, "schedules"},
+		{ViewActivity, "activity"},
+	}
+	for _, sv := range staticViews {
+		sv := sv
+		t.Run("up-in-"+sv.name+"-gives-nav-not-available", func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m.workspace.setMainView(sv.view)
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+			if got := m.statusMessage; got != "Navigation not available here. Use r to refresh." {
+				t.Fatalf("↑ in %s = %q, want nav-not-available msg", sv.name, got)
+			}
+		})
+		t.Run("down-in-"+sv.name+"-gives-nav-not-available", func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m.workspace.setMainView(sv.view)
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+			if got := m.statusMessage; got != "Navigation not available here. Use r to refresh." {
+				t.Fatalf("↓ in %s = %q, want nav-not-available msg", sv.name, got)
+			}
+		})
+	}
 }

@@ -1214,15 +1214,18 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// project data when navigating back from task to project view.
 			return m, m.handleEscapeKey()
 		}
-		// EX-312: ↑/↓ in non-navigable main views — give the same hint as j/k (EX-283).
+		// EX-312: ↑/↓ in non-navigable main views — give a hint.
+		// EX-450: Use the same "Navigation not available here." message as EX-336
+		// so arrow keys and page-nav keys are consistent; avoid the misleading
+		// "j/k" prefix when the user pressed an arrow key (not a vim key).
 		if m.focus == MainPanel && (key.Type == tea.KeyUp || key.Type == tea.KeyDown) {
 			switch m.workspace.mainView {
 			case ViewAgents, ViewMerges, ViewSchedules, ViewActivity:
-				m.statusMessage = "j/k navigation not available here. Use r to refresh."
+				m.statusMessage = "Navigation not available here. Use r to refresh."
 				return m, nil
 			}
 		}
-		// EX-336: PgUp/PgDown/Home/End in static views mirror the ↑/↓ hint (EX-312).
+		// EX-336: PgUp/PgDown/Home/End in static views — same message as ↑/↓ (EX-312/450).
 		if m.focus == MainPanel && (key.Type == tea.KeyPgUp || key.Type == tea.KeyPgDown || key.Type == tea.KeyHome || key.Type == tea.KeyEnd) {
 			switch m.workspace.mainView {
 			case ViewAgents, ViewMerges, ViewSchedules, ViewActivity:
