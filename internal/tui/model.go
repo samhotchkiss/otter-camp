@@ -1138,6 +1138,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
 			if m.helpScrollOffset > 0 {
 				m.helpScrollOffset--
+			} else {
+				// EX-250: give feedback instead of silent no-op when already at the top.
+				m.statusMessage = "Already at top of help."
 			}
 		}
 		return true, nil
@@ -3048,7 +3051,13 @@ func (m Model) commandFallbackHelp() string {
 	}
 	switch m.focus {
 	case SidebarPanel:
-		return "j/k navigate · Space expand · Enter select · n next unread · i inbox · d dashboard · r refresh · / search · ? help"
+		// EX-251: reflect active filter state so "/ clear filter" appears when a
+		// filter is narrowing the sidebar list (consistent with view footer hints).
+		sidebarSearchHint := "/ filter"
+		if strings.TrimSpace(m.sidebarFilter) != "" {
+			sidebarSearchHint = "/ clear filter"
+		}
+		return "j/k navigate · Space expand · Enter select · n next unread · i inbox · d dashboard · r refresh · " + sidebarSearchHint + " · ? help"
 	case MainPanel:
 		switch m.workspace.mainView {
 		case ViewInbox:
@@ -3078,7 +3087,8 @@ func (m Model) commandFallbackHelp() string {
 		case ViewHelp:
 			// EX-241: help view hint shows scroll/close keys; r·refresh and / filter
 			// are irrelevant here so replace the default with a focused hint set.
-			return "j/k scroll · g/G top/bottom · ? or Esc close help"
+			// EX-249: also surface 'q' which closes help (same as ? and Esc).
+			return "j/k scroll · g/G top/bottom · ? / q / Esc close help"
 		case ViewDashboard:
 			if len(m.workspace.dashboardActiveTasks()) > 0 {
 				// EX-116: include "t·task" hint when a task is selected so users know

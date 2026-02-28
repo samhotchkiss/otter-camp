@@ -128,4 +128,4 @@ Help: i inbox · n next unread · r refresh · : commands · ? help
 ╰──────────────────────────────╯╰────────────────────────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  S/sidebar  ·  snapshot  ·  Hidden panes: main hidden (2 or 
  :focus main)                                                                             
-Help: j/k navigate · Space expand · Enter select · n next unread · i inbox · d dashboard · r refresh · / search · ? help
+Help: j/k navigate · Space expand · Enter select · n next unread · i inbox · d dashboard · r refresh · / filter · ? help

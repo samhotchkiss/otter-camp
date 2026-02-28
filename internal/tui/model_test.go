@@ -5991,3 +5991,78 @@ func TestRefreshInHelpViewEX247(t *testing.T) {
 		t.Errorf("EX-247: expected contextual message for r in help view; got %q", model.statusMessage)
 	}
 }
+
+// TestHelpViewQKeyDocumentedEX249 verifies EX-249: 'q' closes the help view but
+// was undocumented. The commandFallbackHelp and the help footer now both mention 'q'.
+func TestHelpViewQKeyDocumentedEX249(t *testing.T) {
+	// commandFallbackHelp for ViewHelp should mention 'q'
+	model := NewModel(DefaultState())
+	model.focus = MainPanel
+	model.workspace.mainView = ViewHelp
+
+	hint := model.commandFallbackHelp()
+	if !strings.Contains(hint, "q") {
+		t.Errorf("EX-249: commandFallbackHelp for ViewHelp should mention 'q'; got %q", hint)
+	}
+
+	// The help view lines should contain "q" somewhere in the content.
+	// Use a large maxLines so all content is visible (no truncation).
+	helpLines := model.renderHelpView(80, 100)
+	content := strings.Join(helpLines, "\n")
+	if !strings.Contains(content, "q") || !strings.Contains(content, "Esc to close") {
+		t.Errorf("EX-249: help view should mention 'q' and 'Esc to close'; content:\n%s", content)
+	}
+}
+
+// TestHelpViewKAtTopFeedbackEX250 verifies EX-250: pressing 'k' when at the top
+// of the help view now gives "Already at top of help." instead of silently doing nothing.
+func TestHelpViewKAtTopFeedbackEX250(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = MainPanel
+	model.workspace.mainView = ViewHelp
+	model.helpScrollOffset = 0
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+
+	if !strings.Contains(strings.ToLower(model.statusMessage), "top") {
+		t.Errorf("EX-250: expected 'already at top' feedback when pressing k at offset 0; got %q", model.statusMessage)
+	}
+}
+
+// TestSidebarFilterHintEX251 verifies EX-251: the sidebar help line says
+// "/ filter" when no filter is active and "/ clear filter" when a filter is active.
+func TestSidebarFilterHintEX251(t *testing.T) {
+	// No filter: should say "/ filter"
+	m := NewModel(DefaultState())
+	m.focus = SidebarPanel
+	m.sidebarFilter = ""
+	hint := m.commandFallbackHelp()
+	if !strings.Contains(hint, "/ filter") || strings.Contains(hint, "/ clear filter") {
+		t.Errorf("EX-251: with no filter, sidebar hint should contain '/ filter' (not '/ clear filter'); got %q", hint)
+	}
+
+	// With filter: should say "/ clear filter"
+	m.sidebarFilter = "frank"
+	hint = m.commandFallbackHelp()
+	if !strings.Contains(hint, "/ clear filter") {
+		t.Errorf("EX-251: with active filter, sidebar hint should contain '/ clear filter'; got %q", hint)
+	}
+}
+
+// TestCtrlGAnd0InHelpViewEX252 verifies EX-252: Ctrl-G/0 jump-to-Frank and
+// Ctrl-P to open command palette are now documented in the help view.
+func TestCtrlGAnd0InHelpViewEX252(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.focus = MainPanel
+	m.workspace.mainView = ViewHelp
+
+	helpLines := m.renderHelpView(80, 60)
+	content := strings.Join(helpLines, "\n")
+
+	if !strings.Contains(content, "Ctrl-G") {
+		t.Errorf("EX-252: help view should document Ctrl-G; not found in:\n%s", content)
+	}
+	if !strings.Contains(content, "Ctrl-P") {
+		t.Errorf("EX-252: help view should document Ctrl-P; not found in:\n%s", content)
+	}
+}

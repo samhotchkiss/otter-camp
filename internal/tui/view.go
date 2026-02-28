@@ -1953,7 +1953,10 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key("n", "jump to next unread session"),
 		key("r", "refresh task / project detail (in detail views), or sidebar"),
 		key("?", "toggle this help screen"),
-		key(":command", "open command palette  (Tab fills top suggestion)"),
+		// EX-252: Ctrl-G and '0' jump to Frank session; Ctrl-P opens command mode.
+		// These are undocumented alternatives that power users find via source.
+		key("Ctrl-G / 0", "jump to Frank / General session"),
+		key("Ctrl-P / :", "open command palette  (Tab fills top suggestion)"),
 		"",
 		header("Commands  (press : then Tab to autocomplete)"),
 		key(":frank / :general", "switch to Frank or General session"),
@@ -1978,7 +1981,8 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key(":help", "open keybinding reference (same as ?)"),
 		key(":quit", "quit OtterCamp"),
 		"",
-		styleMuted.Render("  Press ? or Esc to close"),
+		// EX-249: include 'q' which also closes help (same as ? and Esc).
+		styleMuted.Render("  Press ?, q, or Esc to close"),
 	}
 	total := len(lines)
 	if total <= maxLines {

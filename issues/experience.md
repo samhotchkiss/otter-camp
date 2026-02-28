@@ -3838,3 +3838,72 @@ r·refresh not available in help view. Press j/k to scroll or Esc to close.
 **Status:** [x] Discovered | [x] Fixed | [x] Tested
 
 ---
+
+## EX-249: Help view 'q' close key undocumented
+
+**Observation:** `handleWorkspaceRune` has a `case 'q':` that checks `m.workspace.mainView == ViewHelp` and navigates back to the dashboard — so 'q' closes the help screen. But neither `commandFallbackHelp` (which said "? or Esc close help") nor the help view footer (which said "Press ? or Esc to close") mentioned 'q'. A user who muscle-memorized 'q' for closing panes would be unpleasantly surprised that it was invisible.
+
+**Root cause:** The EX-241 fix updated the commandFallbackHelp hint for ViewHelp with "? or Esc close help", but the 'q' handler predates EX-241 and was never cross-referenced.
+
+**Improvement:**
+- `commandFallbackHelp` for ViewHelp: changed "? or Esc close help" → "? / q / Esc close help"
+- `renderHelpView` footer line: changed "Press ? or Esc to close" → "Press ?, q, or Esc to close"
+
+**Effort:** Trivial (2 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-250: 'k' at top of help view is a silent no-op
+
+**Observation:** Pressing `k` in the help view when `helpScrollOffset == 0` does nothing — the code checks `if m.helpScrollOffset > 0 { m.helpScrollOffset-- }` and falls through without any feedback. Inconsistent with EX-202 (task navigation) and EX-190 (dashboard j/k at limits) which both give feedback at list boundaries.
+
+**Root cause:** The ViewHelp branch of the `case 'k':` handler only decrements when > 0 but has no `else` clause.
+
+**Improvement:** Added `else { m.statusMessage = "Already at top of help." }` so the user receives confirmation that scroll is at the limit.
+
+**Effort:** Trivial (2 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-251: Sidebar help line says "/ search" even when a filter is active
+
+**Observation:** The `commandFallbackHelp` for `SidebarPanel` had a hardcoded `"/ search"` regardless of whether a filter was narrowing the sidebar. All view footers (Activity, Inbox, Project, etc.) use `filterActionHint(query)` to dynamically say `"/·clear filter"` when a filter is active — but the sidebar help line was never updated to match.
+
+**Root cause:** The sidebar case in `commandFallbackHelp` predates EX-229 (which introduced `filterActionHint`). The view-content footers were all updated but the help-line case was missed.
+
+**Improvement:** Added inline `sidebarSearchHint` logic that returns `"/ filter"` when `m.sidebarFilter` is empty and `"/ clear filter"` when a filter is active. The hint is inserted into the sidebar help string in place of the old hardcoded `"/ search"`.
+
+Also updated `testdata/layout_s.golden` which had the old `/ search` string.
+
+**Effort:** Trivial (5 lines + 1 golden snapshot update)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-252: Ctrl-G / '0' jump to Frank and Ctrl-P command palette not in help view
+
+**Observation:** Three undiscoverable keyboard shortcuts were missing from the `?` help screen Global section:
+- `Ctrl-G` — jumps to Frank / General session (same as `:frank`)
+- `0` (zero) — jumps to Frank session (same as `Ctrl-G`)
+- `Ctrl-P` — opens the command palette (same as `:`)
+
+Power users stumble on these via source-reading or accident. They're useful alternatives (especially `Ctrl-P` in editors, `Ctrl-G` for Emacs users, `0` as a mnemonic for "home") but completely invisible.
+
+**Root cause:** These were added as convenience bindings but the help view wasn't updated simultaneously.
+
+**Improvement:** Added two new entries to the Global section in `renderHelpView`:
+- `key("Ctrl-G / 0", "jump to Frank / General session")`
+- `key("Ctrl-P / :", "open command palette  (Tab fills top suggestion)")`
+
+The old `key(":command", ...)` entry was replaced by the more informative Ctrl-P / : entry.
+
+**Effort:** Trivial (2 lines changed)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
