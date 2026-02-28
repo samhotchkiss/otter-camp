@@ -2629,6 +2629,10 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			m.recallHistory()
 			return true, nil
 		}
+		// EX-354: ↑ with non-empty input (not in history mode) is a silent no-op.
+		// Give a hint: history navigation only works when the input box is clear.
+		m.statusMessage = "Clear input first (Esc) to browse message history."
+		return true, nil
 	case tea.KeyDown:
 		if strings.TrimSpace(m.chatInput) == "" && m.chatScrollOffset > 0 {
 			m.scrollChatBy(-1)
@@ -2655,6 +2659,12 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			} else {
 				m.statusMessage = "Already at latest message."
 			}
+			return true, nil
+		}
+		// EX-355: ↓ with non-empty input and not in history mode is a silent no-op.
+		// Give a hint: scroll/history navigation only works when input is clear.
+		if strings.TrimSpace(m.chatInput) != "" {
+			m.statusMessage = "Press Esc to clear input, then ↓ to scroll messages."
 			return true, nil
 		}
 	case tea.KeyEsc:

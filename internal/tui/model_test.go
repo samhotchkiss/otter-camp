@@ -9266,3 +9266,59 @@ func TestBackspaceInMainPanelEX353(t *testing.T) {
 		t.Errorf("EX-353: Backspace when already on dashboard should say 'Already on dashboard.'; got %q", md1.statusMessage)
 	}
 }
+
+// TestUpDownArrowInChatWithNonEmptyInputEX354355 verifies that pressing ↑ or ↓
+// in the chat panel when the input box is non-empty gives a helpful hint rather
+// than silently doing nothing (EX-354/355). History navigation requires an empty
+// input; this feedback tells the user how to clear it first.
+func TestUpDownArrowInChatWithNonEmptyInputEX354355(t *testing.T) {
+	// ↑ with non-empty input → hint to clear first.
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	m.chatInput = "hello world"
+	m.chatHistoryIndex = -1
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+	if m1.statusMessage != "Clear input first (Esc) to browse message history." {
+		t.Errorf("EX-354: ↑ with non-empty input should hint; got %q", m1.statusMessage)
+	}
+	// Input must not be modified.
+	if m1.chatInput != "hello world" {
+		t.Errorf("EX-354: ↑ should not modify chat input; got %q", m1.chatInput)
+	}
+
+	// ↓ with non-empty input → hint to clear first.
+	m2 := NewModel(DefaultState())
+	m2.width, m2.height = 220, 40
+	m2.focus = ChatPanel
+	m2.chatInput = "hello world"
+	m2.chatHistoryIndex = -1
+	m2.chatScrollOffset = 0
+	m3 := pressKey(m2, tea.KeyMsg{Type: tea.KeyDown})
+	if m3.statusMessage != "Press Esc to clear input, then ↓ to scroll messages." {
+		t.Errorf("EX-355: ↓ with non-empty input should hint; got %q", m3.statusMessage)
+	}
+
+	// ↑ with empty input should still recall history (no regression).
+	m4 := NewModel(DefaultState())
+	m4.width, m4.height = 220, 40
+	m4.focus = ChatPanel
+	m4.chatInput = ""
+	m4.chatHistory = []string{"prev message"}
+	m5 := pressKey(m4, tea.KeyMsg{Type: tea.KeyUp})
+	if m5.chatInput != "prev message" {
+		t.Errorf("EX-354 regression: ↑ with empty input should recall history; got %q", m5.chatInput)
+	}
+
+	// ↑ in history mode (chatHistoryIndex = 1) should still advance to older entry (no regression).
+	m6 := NewModel(DefaultState())
+	m6.width, m6.height = 220, 40
+	m6.focus = ChatPanel
+	m6.chatInput = "newer message"
+	m6.chatHistory = []string{"oldest message", "newer message"}
+	m6.chatHistoryIndex = 1 // currently viewing index 1; ↑ goes to index 0
+	m7 := pressKey(m6, tea.KeyMsg{Type: tea.KeyUp})
+	if m7.chatInput != "oldest message" {
+		t.Errorf("EX-354 regression: ↑ in history mode should go to older entry; got %q", m7.chatInput)
+	}
+}
