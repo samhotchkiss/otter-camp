@@ -8085,6 +8085,37 @@ func TestInboxProjectPgUpPgDnEX308(t *testing.T) {
 	}
 }
 
+// TestCtrlUInSearchModeClearsQueryEX310 verifies that Ctrl-U while in search/filter
+// mode clears the query without exiting filter mode.
+func TestCtrlUInSearchModeClearsQueryEX310(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	// Enter search mode with a query already set.
+	m.searchMode = true
+	m.searchPanel = MainPanel
+	m.searchQuery = "build error"
+	m.setFilterForPanel(MainPanel, "build error")
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlU})
+
+	if m.searchMode != true {
+		t.Errorf("EX-310: Ctrl-U should keep searchMode active; got false")
+	}
+	if m.searchQuery != "" {
+		t.Errorf("EX-310: Ctrl-U should clear searchQuery; got %q", m.searchQuery)
+	}
+	if m.statusMessage != "Filter cleared. Continue typing or Esc to exit." {
+		t.Errorf("EX-310: unexpected status %q", m.statusMessage)
+	}
+
+	// Ctrl-U when query is already empty: no-op (no status change).
+	prev := m.statusMessage
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlU})
+	if m.statusMessage != prev {
+		t.Errorf("EX-310: Ctrl-U on empty query should be a no-op; status changed to %q", m.statusMessage)
+	}
+}
+
 // TestEscInChatEmptyInputFocusesMainEX309 verifies that Esc in the chat panel
 // with no active turn and empty input moves focus to the main panel.
 func TestEscInChatEmptyInputFocusesMainEX309(t *testing.T) {

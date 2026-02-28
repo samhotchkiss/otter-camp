@@ -2531,6 +2531,14 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.setFilterForPanel(m.searchPanel, m.searchQuery)
 		return m, nil
+	case tea.KeyCtrlU:
+		// EX-310: Ctrl-U in filter mode clears the query without exiting filter mode.
+		if strings.TrimSpace(m.searchQuery) != "" {
+			m.searchQuery = ""
+			m.setFilterForPanel(m.searchPanel, "")
+			m.statusMessage = "Filter cleared. Continue typing or Esc to exit."
+		}
+		return m, nil
 	case tea.KeySpace:
 		m.searchQuery += " "
 		m.setFilterForPanel(m.searchPanel, m.searchQuery)
