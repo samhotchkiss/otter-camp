@@ -1388,6 +1388,13 @@ func (m *Model) handleEscapeKey() tea.Cmd {
 		m.statusMessage = "Returned to dashboard."
 		return nil
 	}
+	// EX-305: Esc in sidebar moves focus to main panel (natural dismissal gesture,
+	// mirrors how Esc in chat would be handled by handleChatControlKey).
+	if m.focus == SidebarPanel {
+		m.setFocus(MainPanel)
+		m.statusMessage = "Focus: " + panelLabel(m.focus)
+		return nil
+	}
 	if m.focus == MainPanel {
 		// From task detail: go back to project view if we came from one, else dashboard
 		if m.workspace.mainView == ViewTask && m.workspace.selectedProjectID != "" {

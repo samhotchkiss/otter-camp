@@ -7917,3 +7917,19 @@ func TestHelpViewHomeEndEX304(t *testing.T) {
 		t.Errorf("EX-304: End in ViewHelp should give bottom feedback; got %q", m.statusMessage)
 	}
 }
+
+// TestEscInSidebarFocusesMainEX305 verifies that pressing Esc while the sidebar
+// is focused moves focus to the main panel (natural dismissal gesture).
+func TestEscInSidebarFocusesMainEX305(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = SidebarPanel
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.focus != MainPanel {
+		t.Errorf("EX-305: Esc in sidebar should move focus to MainPanel; got %v", m.focus)
+	}
+	if m.statusMessage != "Focus: main" {
+		t.Errorf("EX-305: Esc in sidebar should say 'Focus: main'; got %q", m.statusMessage)
+	}
+}
