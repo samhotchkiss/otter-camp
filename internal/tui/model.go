@@ -784,6 +784,25 @@ func (m *Model) handleEnterKey() tea.Cmd {
 	switch m.focus {
 	case SidebarPanel:
 		node := m.workspace.currentSidebarNode()
+		// EX-261: give honest feedback when sidebar is empty instead of the
+		// misleading "Sidebar selection applied." (nothing was actually selected).
+		if node == nil {
+			m.statusMessage = "No items in sidebar."
+			return nil
+		}
+		// EX-261: section header toggle is handled inside selectSidebarNode();
+		// give a contextual message rather than the generic "Sidebar selection applied."
+		if node.Kind == sidebarKindHeader {
+			sectionID := sidebarSectionID(strings.TrimPrefix(node.ID, "header-"))
+			currentlyCollapsed := m.workspace.sectionCollapsed[sectionID]
+			m.workspace.selectSidebarNode() // toggles the section
+			if currentlyCollapsed {
+				m.statusMessage = node.Label + " section expanded."
+			} else {
+				m.statusMessage = node.Label + " section collapsed."
+			}
+			return nil
+		}
 		m.workspace.selectSidebarNode()
 		m.state.LastActiveChatSession = m.workspace.activeSessionID
 		// EX-186: clear stale turn state before switching sessions.

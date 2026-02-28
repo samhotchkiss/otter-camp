@@ -6313,3 +6313,48 @@ func TestCommandNavLabelsEX260(t *testing.T) {
 		}
 	}
 }
+
+// TestSidebarEnterOnEmptyEX261 verifies EX-261: pressing Enter in the sidebar
+// when there are no nodes (empty sidebar) says "No items in sidebar." instead
+// of the misleading "Sidebar selection applied." (nothing was selected).
+func TestSidebarEnterOnEmptyEX261(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.focus = SidebarPanel
+	// Remove all sidebar nodes so currentSidebarNode() returns nil.
+	m.workspace.nodes = map[string]*sidebarNode{}
+	m.workspace.topLevel = nil
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.statusMessage != "No items in sidebar." {
+		t.Errorf("EX-261: Enter on empty sidebar should say 'No items in sidebar.'; got %q", m.statusMessage)
+	}
+}
+
+// TestSidebarEnterOnHeaderEX261 verifies EX-261: pressing Enter on a section
+// header (CHATS / PROJECTS) gives a "Section collapsed/expanded" message
+// instead of the generic "Sidebar selection applied."
+func TestSidebarEnterOnHeaderEX261(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.focus = SidebarPanel
+
+	// Build a minimal sidebar with a header node.
+	hdr := &sidebarNode{ID: "header-chats", Kind: sidebarKindHeader, Label: "CHATS"}
+	m.workspace.nodes = map[string]*sidebarNode{"header-chats": hdr}
+	m.workspace.topLevel = []string{"header-chats"}
+	m.workspace.sidebarCursor = 0
+
+	// First Enter: section should collapse (it starts expanded/not-in-map = false = expanded).
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(strings.ToLower(m.statusMessage), "section") {
+		t.Errorf("EX-261: Enter on header should mention 'section'; got %q", m.statusMessage)
+	}
+	if !strings.Contains(strings.ToLower(m.statusMessage), "collapsed") {
+		t.Errorf("EX-261: first Enter on expanded header should say 'collapsed'; got %q", m.statusMessage)
+	}
+
+	// Second Enter: section should expand again.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(strings.ToLower(m.statusMessage), "expanded") {
+		t.Errorf("EX-261: second Enter on collapsed header should say 'expanded'; got %q", m.statusMessage)
+	}
+}
