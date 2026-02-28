@@ -9322,3 +9322,44 @@ func TestUpDownArrowInChatWithNonEmptyInputEX354355(t *testing.T) {
 		t.Errorf("EX-354 regression: ↑ in history mode should go to older entry; got %q", m7.chatInput)
 	}
 }
+
+// TestLeftRightArrowInChatPanelEX356357 verifies that pressing ← or → in the
+// chat panel gives a helpful hint about text cursor movement not being supported
+// rather than silently doing nothing (EX-356/357).
+func TestLeftRightArrowInChatPanelEX356357(t *testing.T) {
+	wantMsg := "Text cursor movement not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+
+	// ← in ChatPanel with some input → hint.
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	m.chatInput = "hello world"
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyLeft})
+	if m1.statusMessage != wantMsg {
+		t.Errorf("EX-356: ← in ChatPanel should hint; got %q", m1.statusMessage)
+	}
+	if m1.chatInput != "hello world" {
+		t.Errorf("EX-356: ← should not modify chat input; got %q", m1.chatInput)
+	}
+
+	// → in ChatPanel → hint.
+	m2 := NewModel(DefaultState())
+	m2.width, m2.height = 220, 40
+	m2.focus = ChatPanel
+	m2.chatInput = "hello"
+	m3 := pressKey(m2, tea.KeyMsg{Type: tea.KeyRight})
+	if m3.statusMessage != wantMsg {
+		t.Errorf("EX-357: → in ChatPanel should hint; got %q", m3.statusMessage)
+	}
+
+	// ← / → in MainPanel must NOT show this hint (no regression: they mirror Esc/Enter).
+	m4 := NewModel(DefaultState())
+	m4.width, m4.height = 220, 40
+	m4.focus = MainPanel
+	m4.workspace.setMainView(ViewTask)
+	m4.workspace.selectedProjectID = "proj-1"
+	m5 := pressKey(m4, tea.KeyMsg{Type: tea.KeyLeft})
+	if m5.statusMessage == wantMsg {
+		t.Errorf("EX-356 regression: ← in MainPanel should not show chat hint; got %q", m5.statusMessage)
+	}
+}

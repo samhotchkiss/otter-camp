@@ -2692,6 +2692,13 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			m.statusMessage = "Focus: " + panelLabel(m.focus)
 			return true, nil
 		}
+	case tea.KeyLeft, tea.KeyRight:
+		// EX-356/357: ← / → in the chat panel normally move the text cursor,
+		// but this input does not track a cursor position. Give a hint so the
+		// user understands why the key appears to do nothing and learns the
+		// available text-editing shortcuts (Ctrl-W, Ctrl-U).
+		m.statusMessage = "Text cursor movement not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+		return true, nil
 	}
 	return false, nil
 }
