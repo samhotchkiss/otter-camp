@@ -10552,3 +10552,35 @@ func TestTabInSearchModeCommitsFilterEX389(t *testing.T) {
 		}
 	})
 }
+
+// TestVimQuitAliasesEX390 verifies that common vim quit aliases (:q, :q!, :wq, :x, etc.)
+// quit the TUI instead of showing "Unknown command" (EX-390). Also verifies :w gives a
+// friendly "no save needed" message.
+func TestVimQuitAliasesEX390(t *testing.T) {
+	quitAliases := []string{"q", "q!", "wq", "wqa", "qa", "qa!", "x", "exit"}
+	for _, alias := range quitAliases {
+		alias := alias
+		t.Run("quit-alias-:"+alias, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.commandMode = true
+			m.commandBuffer = ":" + alias
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+			if !m1.quitting {
+				t.Errorf("EX-390: :%s should set quitting=true, got quitting=%v status=%q",
+					alias, m1.quitting, m1.statusMessage)
+			}
+		})
+	}
+	t.Run("write-shows-no-save-hint", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":w"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if m1.quitting {
+			t.Errorf("EX-390: :w should NOT quit")
+		}
+		if !strings.Contains(m1.statusMessage, "No save needed") {
+			t.Errorf("EX-390: :w status: got %q, want 'No save needed'", m1.statusMessage)
+		}
+	})
+}

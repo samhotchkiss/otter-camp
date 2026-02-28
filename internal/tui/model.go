@@ -3614,9 +3614,13 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 	}
 
 	switch strings.ToLower(fields[0]) {
-	case "quit":
+	case "quit", "q", "q!", "wq", "wqa", "qa", "qa!", "x", "exit":
+		// EX-390: common vim/shell quit aliases: :q :q! :wq :wqa :qa :qa! :x :exit all quit.
 		m.quitting = true
 		m.statusMessage = "Exiting TUI."
+	case "w", "wa", "write":
+		// EX-390: :w (vim write) — no save needed; all changes persist automatically.
+		m.statusMessage = "No save needed — changes are persisted automatically."
 	case "help", "palette":
 		// EX-239: open the help screen directly (same as ?) rather than showing a
 		// truncated status message. The old statusMessage approach was cut off at 80
