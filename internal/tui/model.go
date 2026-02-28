@@ -4688,17 +4688,36 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 			m.statusMessage = "Unknown workspace command: " + fields[0]
 			return nil
 		}
+		// EX-461: idempotency — mirror 'd' (EX-332) / 'p' (EX-333) keyboard shortcuts.
+		// Inbox/Agents always reload even when already there (mirrors 'i' key behaviour).
+		alreadyHere := m.focus == MainPanel && m.workspace.mainView == view
 		m.workspace.setMainView(view)
+		m.setFocus(MainPanel)
 		// EX-260: use Title-cased view name to match keyboard shortcut messages
 		// ('i' → "Inbox", 'd' → "Dashboard") rather than "Main view: inbox".
-		m.statusMessage = viewNavLabel(view)
 		// EX-170: load data for views that need a fresh fetch (consistent with
 		// keyboard shortcut behaviour: 'i' loads inbox, ViewAgents loads agents).
 		switch view {
 		case ViewInbox:
+			if alreadyHere {
+				m.statusMessage = "Inbox refreshed."
+			} else {
+				m.statusMessage = viewNavLabel(view)
+			}
 			return loadInboxItemsCmd(m.runtimeHints)
 		case ViewAgents:
+			if alreadyHere {
+				m.statusMessage = "Agents refreshed."
+			} else {
+				m.statusMessage = viewNavLabel(view)
+			}
 			return loadAgentsCmd(m.runtimeHints)
+		default:
+			if alreadyHere {
+				m.statusMessage = "Already on " + viewNavLabel(view) + "."
+			} else {
+				m.statusMessage = viewNavLabel(view)
+			}
 		}
 	case "agent":
 		// EX-395: :agent (singular) → same as :agents (plural).

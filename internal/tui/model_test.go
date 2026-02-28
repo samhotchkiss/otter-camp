@@ -7018,6 +7018,8 @@ func TestCommandNavLabelsEX260(t *testing.T) {
 	for _, tc := range cases {
 		m := NewModel(DefaultState())
 		m.focus = MainPanel
+		// EX-461: start from a view not in the test cases so navigation always changes view.
+		m.workspace.mainView = ViewMerges
 
 		// Enter command mode and type the command.
 		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
@@ -7033,6 +7035,45 @@ func TestCommandNavLabelsEX260(t *testing.T) {
 		if strings.HasPrefix(m.statusMessage, "Main view:") {
 			t.Errorf("EX-260: command %q still uses old 'Main view:' prefix: %q", tc.cmd, m.statusMessage)
 		}
+	}
+}
+
+// TestViewCommandIdempotencyEX461 verifies EX-461: :dashboard/:activity/:merges/:schedules
+// say "Already on X." when already on that view, and :inbox/:agents say "X refreshed."
+// (mirroring EX-332/333/334 keyboard shortcut idempotency for d/p/t).
+func TestViewCommandIdempotencyEX461(t *testing.T) {
+	executeCmd := func(m Model, cmd string) Model {
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+		for _, r := range cmd {
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+		return pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	}
+
+	cases := []struct {
+		cmd        string
+		startView  MainView
+		wantStatus string
+	}{
+		{"dashboard", ViewDashboard, "Already on Dashboard."},
+		{"activity", ViewActivity, "Already on Activity."},
+		{"merges", ViewMerges, "Already on Merge Queue."},
+		{"schedules", ViewSchedules, "Already on Schedules."},
+		{"inbox", ViewInbox, "Inbox refreshed."},
+		{"agents", ViewAgents, "Agents refreshed."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.cmd+"-already-here", func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m.workspace.mainView = tc.startView
+
+			m = executeCmd(m, tc.cmd)
+
+			if got := m.statusMessage; got != tc.wantStatus {
+				t.Fatalf("EX-461: :%s when already on that view = %q, want %q", tc.cmd, got, tc.wantStatus)
+			}
+		})
 	}
 }
 
