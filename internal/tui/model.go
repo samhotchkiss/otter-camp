@@ -2483,10 +2483,37 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
 			// EX-209/322: G jumps to bottom of help view; give feedback.
-			if m.helpScrollOffset >= 9999 {
+			// EX-429: previously used hardcoded 9999 threshold so pressing 'G' after
+			// reaching the bottom via KeyEnd or j×N still said "Help jumped to bottom."
+			// (e.g. after KeyEnd set offset=50, 50>=9999 is false). Compute the actual
+			// maxOffset using the same formula as KeyEnd/PgDn so the boundary is
+			// correctly detected regardless of how the user got to the bottom.
+			// The jump itself still uses a large sentinel (1<<20) so that
+			// renderHelpView can clamp it correctly for any maxLines passed at
+			// render time — the test at TestHelpViewScrollsWithJK relies on this.
+			extra := 2
+			if m.degradedModeBanner() != "" {
+				extra++
+			}
+			if m.coldOpenActive {
+				extra++
+			}
+			if m.tourActive {
+				extra++
+			}
+			_, termH := normalizeDimensions(m.width, m.height)
+			maxLines := termH - extra - 2 - 4
+			if maxLines < 1 {
+				maxLines = 1
+			}
+			maxOff := helpViewLineCount - maxLines
+			if maxOff < 0 {
+				maxOff = 0
+			}
+			if m.helpScrollOffset >= maxOff {
 				m.statusMessage = "Already at bottom of help."
 			} else {
-				m.helpScrollOffset = 9999
+				m.helpScrollOffset = 1 << 20
 				m.statusMessage = "Help jumped to bottom."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewTask {

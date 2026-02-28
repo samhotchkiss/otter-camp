@@ -11630,3 +11630,45 @@ func TestSpaceInMainPanelEX408(t *testing.T) {
 		}
 	})
 }
+
+func TestGKeyHelpViewAlreadyAtBottomEX429(t *testing.T) {
+	// EX-429: 'G' in ViewHelp used a hardcoded 9999 threshold to detect
+	// "already at bottom." After reaching the bottom via KeyEnd (which set
+	// helpScrollOffset to the real maxOffset, e.g. 50), pressing 'G' checked
+	// 50 >= 9999 == false and said "Help jumped to bottom." even though the
+	// view was already showing the last line.
+
+	t.Run("G-when-already-at-bottom-via-KeyEnd", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+		m.focus = MainPanel
+		m.workspace.setMainView(ViewHelp)
+
+		// Press KeyEnd to jump to the real bottom (sets helpScrollOffset = helpMaxOffset()).
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+		if m.StatusMessage() != "Help jumped to bottom." {
+			t.Fatalf("EX-429: KeyEnd should say \"Help jumped to bottom.\", got %q", m.StatusMessage())
+		}
+		bottomOffset := m.helpScrollOffset
+
+		// Now press 'G' — should say "Already at bottom of help." not "Help jumped to bottom."
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+		if got := m.StatusMessage(); got != "Already at bottom of help." {
+			t.Fatalf("EX-429: 'G' after KeyEnd (offset=%d) should say \"Already at bottom of help.\", got %q",
+				bottomOffset, got)
+		}
+	})
+
+	t.Run("G-scrolls-to-bottom-from-top", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+		m.focus = MainPanel
+		m.workspace.setMainView(ViewHelp)
+		m.helpScrollOffset = 0 // at top
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+		if got := m.StatusMessage(); got != "Help jumped to bottom." {
+			t.Fatalf("EX-429: 'G' from top should say \"Help jumped to bottom.\", got %q", got)
+		}
+	})
+}
