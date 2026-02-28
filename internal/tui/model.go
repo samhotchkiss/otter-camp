@@ -1291,7 +1291,15 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 	switch r {
 	case 'j':
 		if m.focus == SidebarPanel {
+			// EX-281: boundary + label feedback for sidebar navigation (mirrors j/k
+			// feedback already added for ViewInbox/ViewProject/ViewDashboard).
+			prevCursor := m.workspace.sidebarCursor
 			m.workspace.moveSidebar(1)
+			if m.workspace.sidebarCursor == prevCursor {
+				m.statusMessage = "At last item in sidebar."
+			} else if node := m.workspace.currentSidebarNode(); node != nil {
+				m.statusMessage = "▸ " + truncate(node.Label, 40)
+			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			// EX-268: show item summary on navigation (mirrors EX-266 dashboard pattern).
 			prevCursor := m.workspace.inboxCursor
@@ -1367,7 +1375,14 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		return true, nil
 	case 'k':
 		if m.focus == SidebarPanel {
+			// EX-281: boundary + label feedback (mirrors j case above).
+			prevCursor := m.workspace.sidebarCursor
 			m.workspace.moveSidebar(-1)
+			if m.workspace.sidebarCursor == prevCursor {
+				m.statusMessage = "At first item in sidebar."
+			} else if node := m.workspace.currentSidebarNode(); node != nil {
+				m.statusMessage = "▸ " + truncate(node.Label, 40)
+			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			// EX-268: show item summary on navigation (mirrors EX-266 dashboard pattern).
 			prevCursor := m.workspace.inboxCursor
@@ -1811,10 +1826,23 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 	switch key.Type {
 	case tea.KeyUp:
+		// EX-281: boundary + label feedback for arrow keys (mirrors j/k feedback).
+		prevCursor := m.workspace.sidebarCursor
 		m.workspace.moveSidebar(-1)
+		if m.workspace.sidebarCursor == prevCursor {
+			m.statusMessage = "At first item in sidebar."
+		} else if node := m.workspace.currentSidebarNode(); node != nil {
+			m.statusMessage = "▸ " + truncate(node.Label, 40)
+		}
 		return true, nil
 	case tea.KeyDown:
+		prevCursor := m.workspace.sidebarCursor
 		m.workspace.moveSidebar(1)
+		if m.workspace.sidebarCursor == prevCursor {
+			m.statusMessage = "At last item in sidebar."
+		} else if node := m.workspace.currentSidebarNode(); node != nil {
+			m.statusMessage = "▸ " + truncate(node.Label, 40)
+		}
 		return true, nil
 	case tea.KeyLeft:
 		m.workspace.collapseSidebarNode()

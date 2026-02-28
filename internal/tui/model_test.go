@@ -7097,3 +7097,71 @@ func TestChatDownAtBottomEX280(t *testing.T) {
 		t.Errorf("EX-280: ↓ past history end should say 'Already at newest message.'; got %q", m.statusMessage)
 	}
 }
+
+// TestSidebarJKBoundaryFeedbackEX281 verifies that j/k and ↑/↓ in the sidebar
+// show boundary messages and node labels, matching the feedback pattern already
+// used by ViewInbox, ViewProject, and ViewDashboard (EX-266/268/270).
+func TestSidebarJKBoundaryFeedbackEX281(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = SidebarPanel
+	// Set up two sidebar items so we can test movement and boundaries.
+	m.workspace.topLevel = []string{"node-a", "node-b"}
+	m.workspace.nodes = map[string]*sidebarNode{
+		"node-a": {ID: "node-a", Label: "Alpha Project", Kind: sidebarKindProject, ProjectID: "p-a"},
+		"node-b": {ID: "node-b", Label: "Beta Project", Kind: sidebarKindProject, ProjectID: "p-b"},
+	}
+	m.workspace.sidebarCursor = 0
+
+	// j at item 0 → moves to item 1, shows label
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if m.workspace.sidebarCursor != 1 {
+		t.Errorf("EX-281: j should move cursor to 1; got %d", m.workspace.sidebarCursor)
+	}
+	if m.statusMessage != "▸ Beta Project" {
+		t.Errorf("EX-281: j should show 'Beta Project'; got %q", m.statusMessage)
+	}
+
+	// j at last item → boundary message
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if m.workspace.sidebarCursor != 1 {
+		t.Errorf("EX-281: j at last item should keep cursor at 1; got %d", m.workspace.sidebarCursor)
+	}
+	if m.statusMessage != "At last item in sidebar." {
+		t.Errorf("EX-281: j at last item should say 'At last item in sidebar.'; got %q", m.statusMessage)
+	}
+
+	// k → moves back to item 0, shows label
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if m.workspace.sidebarCursor != 0 {
+		t.Errorf("EX-281: k should move cursor to 0; got %d", m.workspace.sidebarCursor)
+	}
+	if m.statusMessage != "▸ Alpha Project" {
+		t.Errorf("EX-281: k should show 'Alpha Project'; got %q", m.statusMessage)
+	}
+
+	// k at first item → boundary message
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if m.statusMessage != "At first item in sidebar." {
+		t.Errorf("EX-281: k at first item should say 'At first item in sidebar.'; got %q", m.statusMessage)
+	}
+
+	// Arrow keys get same feedback.
+	m.workspace.sidebarCursor = 0
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.statusMessage != "▸ Beta Project" {
+		t.Errorf("EX-281: ↓ should show label; got %q", m.statusMessage)
+	}
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.statusMessage != "At last item in sidebar." {
+		t.Errorf("EX-281: ↓ at last should give boundary; got %q", m.statusMessage)
+	}
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+	if m.statusMessage != "▸ Alpha Project" {
+		t.Errorf("EX-281: ↑ should show label; got %q", m.statusMessage)
+	}
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+	if m.statusMessage != "At first item in sidebar." {
+		t.Errorf("EX-281: ↑ at first should give boundary; got %q", m.statusMessage)
+	}
+}
