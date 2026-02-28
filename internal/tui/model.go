@@ -3508,17 +3508,22 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		runes := []rune(m.chatInput)
 		if len(runes) > 0 {
 			m.chatInput = string(runes[:len(runes)-1])
-		}
-		// EX-279: editing (backspace) also exits history navigation mode.
-		if m.chatHistoryIndex >= 0 {
-			m.chatHistoryIndex = -1
-		}
-		// EX-425: if the user has backspaced through the entire dequeued message,
-		// clear editingQueued so the next sent message is not incorrectly marked
-		// Edited=true. No separate status message here — backspace is a character-
-		// level edit gesture (unlike Esc/Ctrl-U which are explicit cancel gestures).
-		if m.editingQueued && strings.TrimSpace(m.chatInput) == "" {
-			m.editingQueued = false
+			// EX-279: editing (backspace) also exits history navigation mode.
+			if m.chatHistoryIndex >= 0 {
+				m.chatHistoryIndex = -1
+			}
+			// EX-425: if the user has backspaced through the entire dequeued message,
+			// clear editingQueued so the next sent message is not incorrectly marked
+			// Edited=true. No separate status message here — backspace is a character-
+			// level edit gesture (unlike Esc/Ctrl-U which are explicit cancel gestures).
+			if m.editingQueued && strings.TrimSpace(m.chatInput) == "" {
+				m.editingQueued = false
+			}
+		} else {
+			// EX-439: Backspace on empty input is a silent no-op — inconsistent with
+			// Ctrl-W on empty (EX-326: "Nothing to delete.") and search/command Backspace
+			// on empty (EX-432). Give the same honest feedback.
+			m.statusMessage = "Nothing to delete."
 		}
 		return true, nil
 	case tea.KeyUp:

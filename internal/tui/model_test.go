@@ -9200,6 +9200,37 @@ func TestCtrlUWEmptyChatEX325326(t *testing.T) {
 	}
 }
 
+// TestBackspaceEmptyInputFeedbackEX439 verifies EX-439: pressing Backspace in the
+// chat panel when the input is already empty says "Nothing to delete." — consistent
+// with Ctrl-W on empty input (EX-326), search-mode Backspace on empty (EX-432), and
+// command-buffer Backspace on empty (EX-432). Previously it was a silent no-op.
+func TestBackspaceEmptyInputFeedbackEX439(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	// chatInput is already empty — Backspace should say "Nothing to delete."
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyBackspace})
+	if got := m.StatusMessage(); got != "Nothing to delete." {
+		t.Errorf("EX-439: Backspace on empty input = %q, want 'Nothing to delete.'", got)
+	}
+	// Non-empty input — Backspace deletes a char and sets no status message.
+	m.chatInput = "hi"
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyBackspace})
+	if got := m.ChatInput(); got != "h" {
+		t.Errorf("EX-439: Backspace on non-empty input should delete last char; got %q", got)
+	}
+	// Backspace deletes the last char; input becomes empty.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyBackspace})
+	if got := m.ChatInput(); got != "" {
+		t.Errorf("EX-439: Backspace should empty input; got %q", got)
+	}
+	// Now empty — next Backspace should say "Nothing to delete." again.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyBackspace})
+	if got := m.StatusMessage(); got != "Nothing to delete." {
+		t.Errorf("EX-439: Backspace on empty input after clearing = %q, want 'Nothing to delete.'", got)
+	}
+}
+
 // TestCtrlUWEmptyCommandAndSearchEX327330 verifies that Ctrl-U and Ctrl-W in
 // command and search modes give feedback when there is nothing to clear/delete
 // (EX-327/328/329/330).
