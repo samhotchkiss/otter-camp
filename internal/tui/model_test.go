@@ -9779,3 +9779,64 @@ func TestCKeyHintEX373(t *testing.T) {
 		}
 	})
 }
+
+// TestCtrlAEInSearchAndCommandModeEX374375 verifies that Ctrl-A and Ctrl-E
+// give honest hints in filter/search mode (EX-374) and command mode (EX-375)
+// instead of silently doing nothing (they previously fell to default no-op).
+func TestCtrlAEInSearchAndCommandModeEX374375(t *testing.T) {
+	// Search mode: Ctrl-A
+	t.Run("Ctrl-A in search", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = SidebarPanel
+		m.searchQuery = "test"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlA})
+		want := "Line-start (Ctrl-A) not supported. Use Ctrl-U to clear, Ctrl-W to delete word."
+		if m1.statusMessage != want {
+			t.Errorf("EX-374: got %q, want %q", m1.statusMessage, want)
+		}
+		if !m1.searchMode {
+			t.Errorf("EX-374: searchMode should remain active after Ctrl-A")
+		}
+	})
+
+	// Search mode: Ctrl-E
+	t.Run("Ctrl-E in search", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = SidebarPanel
+		m.searchQuery = "test"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlE})
+		want := "Line-end (Ctrl-E) not supported. Type to append to query, Ctrl-W to delete word."
+		if m1.statusMessage != want {
+			t.Errorf("EX-374: got %q, want %q", m1.statusMessage, want)
+		}
+	})
+
+	// Command mode: Ctrl-A
+	t.Run("Ctrl-A in command", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":frank"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlA})
+		want := "Line-start (Ctrl-A) not supported. Use Ctrl-U to clear, Ctrl-W to delete word."
+		if m1.statusMessage != want {
+			t.Errorf("EX-375: got %q, want %q", m1.statusMessage, want)
+		}
+		if !m1.commandMode {
+			t.Errorf("EX-375: commandMode should remain active after Ctrl-A")
+		}
+	})
+
+	// Command mode: Ctrl-E
+	t.Run("Ctrl-E in command", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":frank"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlE})
+		want := "Line-end (Ctrl-E) not supported. Type to append, Ctrl-W to delete word."
+		if m1.statusMessage != want {
+			t.Errorf("EX-375: got %q, want %q", m1.statusMessage, want)
+		}
+	})
+}

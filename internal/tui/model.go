@@ -2944,6 +2944,14 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Nothing to delete. Press Esc to exit search mode."
 		}
 		return m, nil
+	case tea.KeyCtrlA:
+		// EX-374: Ctrl-A (line-start) — cursor movement not supported in filter field.
+		m.statusMessage = "Line-start (Ctrl-A) not supported. Use Ctrl-U to clear, Ctrl-W to delete word."
+		return m, nil
+	case tea.KeyCtrlE:
+		// EX-374: Ctrl-E (line-end) — cursor movement not supported in filter field.
+		m.statusMessage = "Line-end (Ctrl-E) not supported. Type to append to query, Ctrl-W to delete word."
+		return m, nil
 	case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
 		// EX-313: ↑/↓ in filter mode commits the filter and then navigates the list,
 		// so the user can type a query and immediately scroll results without pressing Enter first.
@@ -3061,6 +3069,14 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// EX-328: nothing to delete — give honest feedback.
 			m.statusMessage = "Nothing to delete."
 		}
+		return m, nil
+	case tea.KeyCtrlA:
+		// EX-375: Ctrl-A (line-start) — cursor movement not supported in command buffer.
+		m.statusMessage = "Line-start (Ctrl-A) not supported. Use Ctrl-U to clear, Ctrl-W to delete word."
+		return m, nil
+	case tea.KeyCtrlE:
+		// EX-375: Ctrl-E (line-end) — cursor movement not supported in command buffer.
+		m.statusMessage = "Line-end (Ctrl-E) not supported. Type to append, Ctrl-W to delete word."
 		return m, nil
 	case tea.KeySpace:
 		m.commandBuffer += " "
