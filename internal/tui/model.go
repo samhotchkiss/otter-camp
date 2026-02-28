@@ -754,8 +754,13 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// EX-292: give "Inbox is empty." feedback matching g/G (EX-288).
 				m.workspace.inboxHome()
 				if len(m.workspace.inbox) > 0 {
-					if item := m.workspace.currentInboxItem(); item != nil && item.Summary != "" {
-						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					if item := m.workspace.currentInboxItem(); item != nil {
+						if item.Summary != "" {
+							m.statusMessage = "▸ " + truncate(item.Summary, 40)
+						} else {
+							// EX-442: item exists but has no summary — still confirm navigation.
+							m.statusMessage = "▸ (inbox item)"
+						}
 					}
 				} else {
 					m.statusMessage = "Inbox is empty."
@@ -765,8 +770,13 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// EX-292: give "Inbox is empty." feedback matching g/G (EX-288).
 				m.workspace.inboxEnd()
 				if len(m.workspace.inbox) > 0 {
-					if item := m.workspace.currentInboxItem(); item != nil && item.Summary != "" {
-						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					if item := m.workspace.currentInboxItem(); item != nil {
+						if item.Summary != "" {
+							m.statusMessage = "▸ " + truncate(item.Summary, 40)
+						} else {
+							// EX-442: item exists but has no summary — still confirm navigation.
+							m.statusMessage = "▸ (inbox item)"
+						}
 					}
 				} else {
 					m.statusMessage = "Inbox is empty."
@@ -782,6 +792,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.statusMessage = "At first inbox item."
 					} else if item.Summary != "" {
 						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					} else {
+						// EX-442: moved to item with empty summary — still confirm navigation.
+						m.statusMessage = "▸ (inbox item)"
 					}
 				} else if len(m.workspace.inbox) == 0 {
 					m.statusMessage = "Inbox is empty."
@@ -796,6 +809,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.statusMessage = "At last inbox item."
 					} else if item.Summary != "" {
 						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					} else {
+						// EX-442: moved to item with empty summary — still confirm navigation.
+						m.statusMessage = "▸ (inbox item)"
 					}
 				} else if len(m.workspace.inbox) == 0 {
 					m.statusMessage = "Inbox is empty."
@@ -816,6 +832,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.statusMessage = "At first inbox item."
 					} else if item.Summary != "" {
 						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					} else {
+						// EX-442: moved to item with empty summary — still confirm navigation.
+						m.statusMessage = "▸ (inbox item)"
 					}
 				}
 				return m, nil
@@ -834,6 +853,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.statusMessage = "At last inbox item."
 					} else if item.Summary != "" {
 						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					} else {
+						// EX-442: moved to item with empty summary — still confirm navigation.
+						m.statusMessage = "▸ (inbox item)"
 					}
 				}
 				return m, nil
@@ -2124,6 +2146,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					m.statusMessage = "At last inbox item."
 				} else if item.Summary != "" {
 					m.statusMessage = "▸ " + truncate(item.Summary, 40)
+				} else {
+					// EX-442: moved to item with empty summary — still confirm navigation.
+					m.statusMessage = "▸ (inbox item)"
 				}
 			} else if len(m.workspace.inbox) == 0 {
 				m.statusMessage = "Inbox is empty."
@@ -2230,6 +2255,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					m.statusMessage = "At first inbox item."
 				} else if item.Summary != "" {
 					m.statusMessage = "▸ " + truncate(item.Summary, 40)
+				} else {
+					// EX-442: moved to item with empty summary — still confirm navigation.
+					m.statusMessage = "▸ (inbox item)"
 				}
 			} else if len(m.workspace.inbox) == 0 {
 				m.statusMessage = "Inbox is empty."
@@ -2387,8 +2415,13 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			// EX-273: mirror ViewDashboard g feedback — show item summary.
 			// EX-288: mirror EX-190 — give feedback when inbox is empty.
 			if len(m.workspace.inbox) > 0 {
-				if item := m.workspace.currentInboxItem(); item != nil && item.Summary != "" {
-					m.statusMessage = "▸ " + truncate(item.Summary, 40)
+				if item := m.workspace.currentInboxItem(); item != nil {
+					if item.Summary != "" {
+						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					} else {
+						// EX-442: item exists but has no summary — still confirm navigation.
+						m.statusMessage = "▸ (inbox item)"
+					}
 				}
 			} else {
 				m.statusMessage = "Inbox is empty."
@@ -2465,8 +2498,13 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			// would mutate it away from -1 and break existing semantics.
 			// EX-288: also give feedback when inbox is empty.
 			if len(m.workspace.inbox) > 0 {
-				if item := m.workspace.currentInboxItem(); item != nil && item.Summary != "" {
-					m.statusMessage = "▸ " + truncate(item.Summary, 40)
+				if item := m.workspace.currentInboxItem(); item != nil {
+					if item.Summary != "" {
+						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					} else {
+						// EX-442: item exists but has no summary — still confirm navigation.
+						m.statusMessage = "▸ (inbox item)"
+					}
 				}
 			} else {
 				m.statusMessage = "Inbox is empty."

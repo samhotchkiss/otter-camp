@@ -12063,3 +12063,107 @@ func TestGKeyHelpViewAlreadyAtBottomEX429(t *testing.T) {
 		}
 	})
 }
+
+// TestInboxNavEmptySummaryFeedbackEX442 verifies that every inbox navigation key (j/k, ↑/↓,
+// g/G, Home/End, PgUp/PgDn) gives "▸ (inbox item)" when the cursor moves to an item whose
+// Summary field is empty, rather than staying silent.
+func TestInboxNavEmptySummaryFeedbackEX442(t *testing.T) {
+	setup := func() Model {
+		m := NewModel(DefaultState())
+		m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+		m.focus = MainPanel
+		m.workspace.setMainView(ViewInbox)
+		// Two items: both with empty Summary so every move triggers the EX-442 path.
+		m.workspace.inbox = []inboxItem{
+			{ID: "i1", TaskID: "t1", Summary: ""},
+			{ID: "i2", TaskID: "t2", Summary: ""},
+		}
+		m.workspace.inboxCursor = 0
+		return m
+	}
+
+	t.Run("j-empty-summary", func(t *testing.T) {
+		m := setup()
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		if got := m.StatusMessage(); got != "▸ (inbox item)" {
+			t.Fatalf("EX-442: j with empty summary = %q, want %q", got, "▸ (inbox item)")
+		}
+	})
+
+	t.Run("k-empty-summary", func(t *testing.T) {
+		m := setup()
+		m.workspace.inboxCursor = 1
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+		if got := m.StatusMessage(); got != "▸ (inbox item)" {
+			t.Fatalf("EX-442: k with empty summary = %q, want %q", got, "▸ (inbox item)")
+		}
+	})
+
+	t.Run("arrow-down-empty-summary", func(t *testing.T) {
+		m := setup()
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+		if got := m.StatusMessage(); got != "▸ (inbox item)" {
+			t.Fatalf("EX-442: ↓ with empty summary = %q, want %q", got, "▸ (inbox item)")
+		}
+	})
+
+	t.Run("arrow-up-empty-summary", func(t *testing.T) {
+		m := setup()
+		m.workspace.inboxCursor = 1
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+		if got := m.StatusMessage(); got != "▸ (inbox item)" {
+			t.Fatalf("EX-442: ↑ with empty summary = %q, want %q", got, "▸ (inbox item)")
+		}
+	})
+
+	t.Run("g-empty-summary", func(t *testing.T) {
+		m := setup()
+		m.workspace.inboxCursor = 1
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+		if got := m.StatusMessage(); got != "▸ (inbox item)" {
+			t.Fatalf("EX-442: g with empty summary = %q, want %q", got, "▸ (inbox item)")
+		}
+	})
+
+	t.Run("G-empty-summary", func(t *testing.T) {
+		m := setup()
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+		if got := m.StatusMessage(); got != "▸ (inbox item)" {
+			t.Fatalf("EX-442: G with empty summary = %q, want %q", got, "▸ (inbox item)")
+		}
+	})
+
+	t.Run("Home-empty-summary", func(t *testing.T) {
+		m := setup()
+		m.workspace.inboxCursor = 1
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+		if got := m.StatusMessage(); got != "▸ (inbox item)" {
+			t.Fatalf("EX-442: Home with empty summary = %q, want %q", got, "▸ (inbox item)")
+		}
+	})
+
+	t.Run("End-empty-summary", func(t *testing.T) {
+		m := setup()
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+		if got := m.StatusMessage(); got != "▸ (inbox item)" {
+			t.Fatalf("EX-442: End with empty summary = %q, want %q", got, "▸ (inbox item)")
+		}
+	})
+
+	t.Run("PgUp-empty-summary", func(t *testing.T) {
+		m := setup()
+		m.workspace.inboxCursor = 1
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+		if got := m.StatusMessage(); got != "▸ (inbox item)" {
+			t.Fatalf("EX-442: PgUp with empty summary = %q, want %q", got, "▸ (inbox item)")
+		}
+	})
+
+	t.Run("PgDown-empty-summary", func(t *testing.T) {
+		m := setup()
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgDown})
+		if got := m.StatusMessage(); got != "▸ (inbox item)" {
+			t.Fatalf("EX-442: PgDown with empty summary = %q, want %q", got, "▸ (inbox item)")
+		}
+	})
+}
