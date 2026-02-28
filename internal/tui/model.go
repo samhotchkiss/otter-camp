@@ -4577,10 +4577,17 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		// EX-239: open the help screen directly (same as ?) rather than showing a
 		// truncated status message. The old statusMessage approach was cut off at 80
 		// chars (~5 commands visible) which defeated the purpose of a quick reference.
+		// EX-468: idempotency — mirrors EX-467 (:man/:manual) so that :help when
+		// already in help resets scroll to top and says "Help: scrolled to top."
+		alreadyInHelp := m.focus == MainPanel && m.workspace.mainView == ViewHelp
 		m.workspace.setMainView(ViewHelp)
 		m.setFocus(MainPanel)
 		m.helpScrollOffset = 0
-		m.statusMessage = "Keybinding reference. Press ? or Esc to close."
+		if alreadyInHelp {
+			m.statusMessage = "Help: scrolled to top."
+		} else {
+			m.statusMessage = "Keybinding reference. Press ? or Esc to close."
+		}
 	case "focus":
 		if len(fields) != 2 {
 			m.statusMessage = "Usage: :focus sidebar|main|chat"

@@ -7414,6 +7414,58 @@ func TestAgentChatManCommandIdempotencyEX465_466_467(t *testing.T) {
 	})
 }
 
+// TestHelpCommandIdempotencyEX468 verifies EX-468: :help/:palette when already
+// in ViewHelp says "Help: scrolled to top." (and resets scroll) rather than
+// re-announcing "Keybinding reference." as if opening fresh — mirrors EX-467 for :man.
+func TestHelpCommandIdempotencyEX468(t *testing.T) {
+	executeCmd := func(m Model, cmd string) Model {
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+		for _, r := range cmd {
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+		return pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	}
+
+	t.Run("help-already-in-help", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewHelp
+		m.helpScrollOffset = 15
+		m.statusMessage = ""
+		m = executeCmd(m, "help")
+		if got := m.statusMessage; got != "Help: scrolled to top." {
+			t.Fatalf("EX-468: :help when already in help = %q, want %q", got, "Help: scrolled to top.")
+		}
+		if m.helpScrollOffset != 0 {
+			t.Fatalf("EX-468: :help when already in help should reset scroll; got %d", m.helpScrollOffset)
+		}
+	})
+
+	t.Run("help-from-dashboard-opens-help", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewDashboard
+		m = executeCmd(m, "help")
+		if got := m.workspace.mainView; got != ViewHelp {
+			t.Fatalf("EX-468: :help from dashboard should navigate to ViewHelp; got %v", got)
+		}
+		if got := m.statusMessage; got != "Keybinding reference. Press ? or Esc to close." {
+			t.Fatalf("EX-468: :help from dashboard status = %q, want %q", got, "Keybinding reference. Press ? or Esc to close.")
+		}
+	})
+
+	t.Run("palette-already-in-help", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewHelp
+		m.helpScrollOffset = 7
+		m = executeCmd(m, "palette")
+		if got := m.statusMessage; got != "Help: scrolled to top." {
+			t.Fatalf("EX-468: :palette when already in help = %q, want %q", got, "Help: scrolled to top.")
+		}
+	})
+}
+
 // TestSidebarEnterOnEmptyEX261 verifies EX-261: pressing Enter in the sidebar
 // when there are no nodes (empty sidebar) says "No items in sidebar." instead
 // of the misleading "Sidebar selection applied." (nothing was selected).
