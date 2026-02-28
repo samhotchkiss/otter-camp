@@ -6953,3 +6953,67 @@ func TestHomeEndKeysEX276(t *testing.T) {
 		t.Errorf("EX-276: End in ViewProject should show last task; got %q", m2.statusMessage)
 	}
 }
+
+// TestSidebarHomeEndKeysEX277 verifies that Home/End in the sidebar jump to
+// first/last item (same as g/G) instead of being silent no-ops.
+func TestSidebarHomeEndKeysEX277(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = SidebarPanel
+	// Seed some sidebar nodes.
+	m.workspace.nodes["header-chats"] = &sidebarNode{
+		ID: "header-chats", Label: "CHATS", Kind: sidebarKindHeader,
+	}
+	m.workspace.nodes["sess-frank"] = &sidebarNode{
+		ID: "sess-frank", Label: "Frank / General", Kind: sidebarKindSession,
+	}
+	m.workspace.topLevel = []string{"header-chats", "sess-frank"}
+	m.workspace.sidebarCursor = 1 // start at last
+
+	// Home → jump to first item (cursor=0).
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+	if m.workspace.sidebarCursor != 0 {
+		t.Errorf("EX-277: Home in sidebar should set cursor=0; got %d", m.workspace.sidebarCursor)
+	}
+
+	// End → jump to last item.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+	visible := m.workspace.visibleSidebarIDs()
+	want := len(visible) - 1
+	if m.workspace.sidebarCursor != want {
+		t.Errorf("EX-277: End in sidebar should set cursor=%d; got %d", want, m.workspace.sidebarCursor)
+	}
+}
+
+// TestSidebarPgUpPgDnEX278 verifies that PgUp/PgDn in the sidebar scroll by
+// multiple items (8 at a time) instead of being silent no-ops.
+func TestSidebarPgUpPgDnEX278(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = SidebarPanel
+	// Seed 15 sidebar items so we can verify multi-step scrolling.
+	ids := make([]string, 15)
+	for i := 0; i < 15; i++ {
+		id := fmt.Sprintf("sess-%02d", i)
+		ids[i] = id
+		m.workspace.nodes[id] = &sidebarNode{ID: id, Label: id, Kind: sidebarKindSession}
+	}
+	m.workspace.topLevel = ids
+	m.workspace.sidebarCursor = 0
+
+	// PgDn should advance by 8 items (or stop at last).
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.workspace.sidebarCursor == 0 {
+		t.Errorf("EX-278: PgDn in sidebar should advance the cursor; cursor stayed at 0")
+	}
+	if m.workspace.sidebarCursor > 14 {
+		t.Errorf("EX-278: PgDn cursor should not exceed last item; got %d", m.workspace.sidebarCursor)
+	}
+
+	// PgUp should retreat the cursor back toward 0.
+	prev := m.workspace.sidebarCursor
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.workspace.sidebarCursor >= prev {
+		t.Errorf("EX-278: PgUp in sidebar should decrease cursor; prev=%d got=%d", prev, m.workspace.sidebarCursor)
+	}
+}

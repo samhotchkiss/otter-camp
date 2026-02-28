@@ -1827,6 +1827,24 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		m.workspace.expandSidebarNode()
 		return true, nil
+	case tea.KeyHome:
+		// EX-277: Home/End in sidebar jump to first/last item (same as g/G).
+		m.workspace.sidebarHome()
+		return true, nil
+	case tea.KeyEnd:
+		m.workspace.sidebarEnd()
+		return true, nil
+	case tea.KeyPgUp:
+		// EX-278: PgUp/PgDn in sidebar scroll by a page (8 items at a time).
+		for i := 0; i < chatScrollStepLines; i++ {
+			m.workspace.moveSidebar(-1)
+		}
+		return true, nil
+	case tea.KeyPgDown:
+		for i := 0; i < chatScrollStepLines; i++ {
+			m.workspace.moveSidebar(1)
+		}
+		return true, nil
 	}
 	return false, nil
 }
