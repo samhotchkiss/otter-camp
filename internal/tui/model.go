@@ -4017,6 +4017,10 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		q := strings.TrimSpace(m.searchQuery)
 		if q != "" {
 			m.statusMessage = fmt.Sprintf("Filter %q applied.", q)
+		} else {
+			// EX-454: align with EX-435 (Ctrl+arrows) — empty query should say
+			// "Filter mode exited." rather than leaving the previous status unchanged.
+			m.statusMessage = "Filter mode exited."
 		}
 		// Delegate to normal key handling to perform the navigation.
 		result, cmd := m.updateKey(key)

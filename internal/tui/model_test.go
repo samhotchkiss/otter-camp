@@ -300,6 +300,55 @@ func TestCtrlArrowEmptySearchModeExitsEX435(t *testing.T) {
 	})
 }
 
+// TestArrowExitFilterModeEmptyQueryEX454 verifies EX-454: pressing ↑/↓/PgUp/PgDn
+// in search mode with an empty query exits the mode and produces a non-empty status
+// message — consistent with the EX-435 fix for Ctrl+arrows that added the
+// "Filter mode exited." else-branch. Before this fix, the else-branch was missing so
+// the previous status message could silently persist (or the navigation delegate's
+// message would be the only feedback, which may not mention the mode exit).
+func TestArrowExitFilterModeEmptyQueryEX454(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  tea.KeyMsg
+	}{
+		{"Up-empty-query", tea.KeyMsg{Type: tea.KeyUp}},
+		{"Down-empty-query", tea.KeyMsg{Type: tea.KeyDown}},
+		{"PgUp-empty-query", tea.KeyMsg{Type: tea.KeyPgUp}},
+		{"PgDn-empty-query", tea.KeyMsg{Type: tea.KeyPgDown}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.searchMode = true
+			m.searchPanel = MainPanel
+			m.searchQuery = ""
+			m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+			m = pressKey(m, tc.key)
+			if m.searchMode {
+				t.Errorf("EX-454: %s should exit search mode", tc.name)
+			}
+			if got := m.StatusMessage(); got == "" {
+				t.Errorf("EX-454: %s should produce a non-empty status (got empty)", tc.name)
+			}
+		})
+	}
+
+	// Non-empty query: filter is committed, status comes from the navigation delegate.
+	t.Run("Up-non-empty-exits-and-applies-filter", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = MainPanel
+		m.searchQuery = "foo"
+		m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+		if m.searchMode {
+			t.Error("EX-454: Up non-empty should exit search mode")
+		}
+		if got := m.mainFilter; got != "foo" {
+			t.Errorf("EX-454: Up non-empty: mainFilter = %q, want %q", got, "foo")
+		}
+	})
+}
+
 // TestInboxAlreadyOnViewRefreshedEX436 verifies EX-436: pressing 'i' when already
 // on ViewInbox says "Inbox refreshed." (not "Inbox") to distinguish a refresh from a
 // navigation. Mirrors EX-332/333/334 (already-on-dashboard/project/task patterns).
