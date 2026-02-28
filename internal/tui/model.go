@@ -4274,6 +4274,13 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		case "edit":
 			m.applyQueueActionEdit()
 		case "steer":
+			// EX-423: steer only makes sense when a turn is in progress (mirrors
+			// EX-421 fix in handleChatRunes). Warn the user instead of silently
+			// marking the message with a flag that will have no effect.
+			if !m.activeTurn {
+				m.statusMessage = "Steer requires an active turn. Use :queue edit or :queue delete."
+				return nil
+			}
 			m.applyQueueActionSteer()
 		case "delete", "drop":
 			m.applyQueueActionDelete()

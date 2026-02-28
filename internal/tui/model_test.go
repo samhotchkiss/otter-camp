@@ -6103,6 +6103,39 @@ func TestQueueCommandEmptyFeedbackEX242(t *testing.T) {
 	}
 }
 
+// TestQueueSteerRequiresActiveTurnEX423 verifies EX-423: `:queue steer` when
+// activeTurn=false gives a clear error instead of silently setting the steer flag
+// with a misleading "Queued message marked for steer/promote." — steer has no
+// effect without an active turn and should not pretend otherwise.
+func TestQueueSteerRequiresActiveTurnEX423(t *testing.T) {
+	t.Run("steer-blocked-when-inactive", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.activeTurn = false
+		model.queuedMessages = []QueuedMessage{{Text: "queued-1"}}
+
+		_ = model.executeCommand(":queue steer")
+
+		if model.queuedMessages[0].Steer {
+			t.Fatal(":queue steer should NOT set Steer=true when activeTurn=false")
+		}
+		if !strings.Contains(model.statusMessage, "active turn") {
+			t.Fatalf("statusMessage = %q, want mention of 'active turn' requirement", model.statusMessage)
+		}
+	})
+
+	t.Run("steer-works-when-active", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.activeTurn = true
+		model.queuedMessages = []QueuedMessage{{Text: "queued-1"}}
+
+		_ = model.executeCommand(":queue steer")
+
+		if !model.queuedMessages[0].Steer {
+			t.Fatal(":queue steer should set Steer=true when activeTurn=true")
+		}
+	})
+}
+
 // TestRecallHistoryEmptyFeedbackEX243 verifies EX-243: pressing ↑ in chat panel
 // when there is no message history gives a status message instead of silently no-oping.
 func TestRecallHistoryEmptyFeedbackEX243(t *testing.T) {
