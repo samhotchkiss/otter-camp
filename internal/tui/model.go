@@ -2356,6 +2356,11 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		return true, m.sendOrQueueInput()
 	case tea.KeyPgUp:
+		// EX-317: if there are no messages yet, don't pretend we scrolled.
+		if len(m.chatMessages) == 0 {
+			m.statusMessage = "No messages yet."
+			return true, nil
+		}
 		m.scrollChatBy(chatScrollStepLines)
 		m.statusMessage = "Chat scrolled up."
 		return true, nil
@@ -2370,6 +2375,11 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		return true, nil
 	case tea.KeyHome:
+		// EX-317: if there are no messages yet, don't pretend we scrolled.
+		if len(m.chatMessages) == 0 {
+			m.statusMessage = "No messages yet."
+			return true, nil
+		}
 		m.scrollChatBy(1 << 20)
 		m.statusMessage = "Chat scrolled to oldest."
 		return true, nil

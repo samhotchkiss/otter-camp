@@ -8147,6 +8147,35 @@ func TestCtrlUInCommandModeClearsBufferEX311(t *testing.T) {
 	}
 }
 
+// TestChatPgUpHomeNoMessagesEX317 verifies that PgUp and Home in the chat panel
+// when there are no messages shows "No messages yet." instead of pretending to scroll.
+func TestChatPgUpHomeNoMessagesEX317(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	// No messages — chatMessages is empty.
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.statusMessage != "No messages yet." {
+		t.Errorf("EX-317: PgUp with no messages should say 'No messages yet.'; got %q", m.statusMessage)
+	}
+	if m.chatScrollOffset != 0 {
+		t.Errorf("EX-317: chatScrollOffset should stay 0 when no messages; got %d", m.chatScrollOffset)
+	}
+
+	m2 := NewModel(DefaultState())
+	m2.width, m2.height = 220, 40
+	m2.focus = ChatPanel
+
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyHome})
+	if m2.statusMessage != "No messages yet." {
+		t.Errorf("EX-317: Home with no messages should say 'No messages yet.'; got %q", m2.statusMessage)
+	}
+	if m2.chatScrollOffset != 0 {
+		t.Errorf("EX-317: chatScrollOffset should stay 0 when no messages; got %d", m2.chatScrollOffset)
+	}
+}
+
 // TestCtrlGAndCtrlPInSearchModeEX315 verifies that Ctrl-G and Ctrl-P in filter
 // mode exit search mode and then act as their global counterparts (jump to
 // Frank and open command mode respectively).
