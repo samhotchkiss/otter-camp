@@ -8267,6 +8267,68 @@ func TestInboxHomeEndEmptyFeedbackEX292(t *testing.T) {
 	}
 }
 
+// TestInboxHomeEndBoundaryFeedbackEX457 verifies EX-457: Home/End in ViewInbox
+// gives "At first/last inbox item." when already at the boundary, consistent with
+// ↑/↓/PgUp/PgDn which already have prevCursor checks (since EX-272/308).
+// Before this fix, Home/End showed the item label even when already there.
+func TestInboxHomeEndBoundaryFeedbackEX457(t *testing.T) {
+	makeInboxModel := func() Model {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.mainView = ViewInbox
+		m.workspace.inbox = []inboxItem{
+			{ID: "i1", Summary: "Task A review"},
+			{ID: "i2", Summary: "Task B review"},
+		}
+		return m
+	}
+
+	t.Run("Home-already-at-first-says-at-first", func(t *testing.T) {
+		m := makeInboxModel()
+		m.workspace.inboxCursor = 0 // already at first
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+
+		if got := m.statusMessage; got != "At first inbox item." {
+			t.Fatalf("EX-457: Home at first inbox item = %q, want %q", got, "At first inbox item.")
+		}
+	})
+
+	t.Run("Home-moves-gives-label", func(t *testing.T) {
+		m := makeInboxModel()
+		m.workspace.inboxCursor = 1 // not at first
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+
+		if got := m.statusMessage; got != "▸ Task A review" {
+			t.Fatalf("EX-457: Home from second inbox item = %q, want %q", got, "▸ Task A review")
+		}
+	})
+
+	t.Run("End-already-at-last-says-at-last", func(t *testing.T) {
+		m := makeInboxModel()
+		m.workspace.inboxCursor = 1 // already at last (2-item list, 0-indexed)
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+
+		if got := m.statusMessage; got != "At last inbox item." {
+			t.Fatalf("EX-457: End at last inbox item = %q, want %q", got, "At last inbox item.")
+		}
+	})
+
+	t.Run("End-moves-gives-label", func(t *testing.T) {
+		m := makeInboxModel()
+		m.workspace.inboxCursor = 0 // not at last
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+
+		if got := m.statusMessage; got != "▸ Task B review" {
+			t.Fatalf("EX-457: End from first inbox item = %q, want %q", got, "▸ Task B review")
+		}
+	})
+}
+
 // TestProjectHomeEndEmptyFeedbackEX293 verifies that Home/End in ViewProject
 // when there are no open tasks shows "No open tasks in this project." matching g/G (EX-287).
 func TestProjectHomeEndEmptyFeedbackEX293(t *testing.T) {

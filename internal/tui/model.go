@@ -752,34 +752,42 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case tea.KeyHome:
 				// EX-276: Home/End in ViewInbox jump to first/last (same as g/G).
 				// EX-292: give "Inbox is empty." feedback matching g/G (EX-288).
-				m.workspace.inboxHome()
-				if len(m.workspace.inbox) > 0 {
-					if item := m.workspace.currentInboxItem(); item != nil {
-						if item.Summary != "" {
-							m.statusMessage = "▸ " + truncate(item.Summary, 40)
-						} else {
-							// EX-442: item exists but has no summary — still confirm navigation.
-							m.statusMessage = "▸ (inbox item)"
-						}
-					}
-				} else {
+				// EX-457: add boundary check — mirrors ↑/PgUp which already track prevCursor.
+				if len(m.workspace.inbox) == 0 {
 					m.statusMessage = "Inbox is empty."
+					return m, nil
+				}
+				prevCursor := m.workspace.inboxCursor
+				m.workspace.inboxHome()
+				if m.workspace.inboxCursor == prevCursor {
+					m.statusMessage = "At first inbox item."
+				} else if item := m.workspace.currentInboxItem(); item != nil {
+					if item.Summary != "" {
+						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					} else {
+						// EX-442: item exists but has no summary — still confirm navigation.
+						m.statusMessage = "▸ (inbox item)"
+					}
 				}
 				return m, nil
 			case tea.KeyEnd:
 				// EX-292: give "Inbox is empty." feedback matching g/G (EX-288).
-				m.workspace.inboxEnd()
-				if len(m.workspace.inbox) > 0 {
-					if item := m.workspace.currentInboxItem(); item != nil {
-						if item.Summary != "" {
-							m.statusMessage = "▸ " + truncate(item.Summary, 40)
-						} else {
-							// EX-442: item exists but has no summary — still confirm navigation.
-							m.statusMessage = "▸ (inbox item)"
-						}
-					}
-				} else {
+				// EX-457: add boundary check — mirrors ↓/PgDn which already track prevCursor.
+				if len(m.workspace.inbox) == 0 {
 					m.statusMessage = "Inbox is empty."
+					return m, nil
+				}
+				prevCursor := m.workspace.inboxCursor
+				m.workspace.inboxEnd()
+				if m.workspace.inboxCursor == prevCursor {
+					m.statusMessage = "At last inbox item."
+				} else if item := m.workspace.currentInboxItem(); item != nil {
+					if item.Summary != "" {
+						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					} else {
+						// EX-442: item exists but has no summary — still confirm navigation.
+						m.statusMessage = "▸ (inbox item)"
+					}
 				}
 				return m, nil
 			case tea.KeyUp:
