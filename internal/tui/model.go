@@ -5426,15 +5426,36 @@ func (m *Model) executeInboxCommand(args []string) tea.Cmd {
 	m.setFocus(MainPanel)
 	switch strings.ToLower(args[0]) {
 	case "up":
+		// EX-419: empty inbox guard — moving cursor in an empty inbox is a no-op;
+		// say so rather than "Inbox cursor moved up."
+		if len(m.workspace.inbox) == 0 {
+			m.statusMessage = "No inbox items."
+			return nil
+		}
 		m.workspace.moveInbox(-1)
 		m.statusMessage = "Inbox cursor moved up."
 	case "down":
+		// EX-419: symmetric empty inbox guard for down.
+		if len(m.workspace.inbox) == 0 {
+			m.statusMessage = "No inbox items."
+			return nil
+		}
 		m.workspace.moveInbox(1)
 		m.statusMessage = "Inbox cursor moved down."
 	case "home":
+		// EX-419: symmetric empty inbox guard for home.
+		if len(m.workspace.inbox) == 0 {
+			m.statusMessage = "No inbox items."
+			return nil
+		}
 		m.workspace.inboxHome()
 		m.statusMessage = "Inbox cursor moved home."
 	case "end":
+		// EX-419: symmetric empty inbox guard for end.
+		if len(m.workspace.inbox) == 0 {
+			m.statusMessage = "No inbox items."
+			return nil
+		}
 		m.workspace.inboxEnd()
 		m.statusMessage = "Inbox cursor moved end."
 	case "open":

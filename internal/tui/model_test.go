@@ -3300,6 +3300,22 @@ func TestSidebarCommandEmptySidebarEX418(t *testing.T) {
 	}
 }
 
+// EX-419: :inbox up/down/home/end in an empty inbox gave misleading
+// "Inbox cursor moved up." etc. messages when there is nothing to navigate.
+func TestInboxCommandEmptyInboxEX419(t *testing.T) {
+	navCmds := []string{"up", "down", "home", "end"}
+	for _, cmd := range navCmds {
+		t.Run(cmd, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			// Inbox is empty by default (workspace.inbox == nil).
+			m.executeInboxCommand([]string{cmd})
+			if !strings.Contains(m.statusMessage, "No inbox items") {
+				t.Fatalf(":inbox %s statusMessage = %q, want 'No inbox items.'", cmd, m.statusMessage)
+			}
+		})
+	}
+}
+
 // EX-160: Inbox approve/reject/defer were local-only; pressing 'a', 'x', 'f'
 // must also return a tea.Cmd that calls ActOnInboxItem with the correct item ID.
 func TestInboxApproveIssuesServerAPICall(t *testing.T) {
