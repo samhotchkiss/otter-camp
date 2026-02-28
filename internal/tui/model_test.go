@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -4600,5 +4601,38 @@ func TestApproveTaskWithoutReviewShowsFeedback(t *testing.T) {
 	m2 := updated.(Model)
 	if m2.statusMessage != "This task doesn't require review." {
 		t.Errorf("pressing 'a' on non-review task: statusMessage = %q, want %q (EX-196)", m2.statusMessage, "This task doesn't require review.")
+	}
+}
+
+// TestChatHistoryLoadErrorShowsStatusMessage verifies EX-198: when the
+// chat history API call fails, the error is surfaced as a status message
+// instead of silently showing an empty chat panel.
+func TestChatHistoryLoadErrorShowsStatusMessage(t *testing.T) {
+	t.Parallel()
+	loadErr := errors.New("connection refused")
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, _ string) ([]ChatMessage, error) {
+			return nil, loadErr
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.activeSession = "sess-ex-198"
+	model.chatHistoryLoading = true
+
+	// Simulate the load completing with an error.
+	updated, _ := model.Update(chatHistoryLoadedMsg{
+		SessionID: "sess-ex-198",
+		Err:       loadErr,
+	})
+	m2 := updated.(Model)
+
+	if m2.chatHistoryLoading {
+		t.Error("chatHistoryLoading should be cleared after error (EX-198)")
+	}
+	if m2.statusMessage == "" {
+		t.Error("statusMessage should be set after chat history load error (EX-198)")
+	}
+	if !strings.Contains(m2.statusMessage, "connection refused") {
+		t.Errorf("statusMessage should contain error text, got %q (EX-198)", m2.statusMessage)
 	}
 }

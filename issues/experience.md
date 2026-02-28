@@ -3074,3 +3074,17 @@ These messages are returned immediately (`return true, nil`) so the auto-clear t
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-198: Chat history load failure silently shows empty chat panel
+
+**Observation:** When the `LoadChatHistory` API call failed (network error, server error, etc.), `loadChatHistoryCmd` swallowed the error and returned an empty `chatHistoryLoadedMsg`. The handler then set `chatHistoryLoading = false` and returned silently, leaving the chat panel empty. The user had no indication that history was unavailable due to an error vs. the session genuinely having no messages.
+
+**Improvement:** Added `Err error` field to `chatHistoryLoadedMsg`. `loadChatHistoryCmd` now propagates errors (instead of silently converting them to empty results). The `chatHistoryLoadedMsg` handler checks `typed.Err != nil` and sets `m.statusMessage = "History load failed — <error>"` before returning.
+
+**Why it matters:** An empty chat panel is confusing. Without an error message the user might think the session has no history, dismiss the panel, or believe the AI has no context — all incorrect assumptions when the real cause is a transient network failure they could retry.
+
+**Effort:** Low (5 lines: struct field + propagation in cmd + handler check)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---

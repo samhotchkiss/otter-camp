@@ -67,6 +67,7 @@ type inboxActionCompletedMsg struct {
 type chatHistoryLoadedMsg struct {
 	SessionID string
 	Messages  []ChatMessage
+	Err       error // EX-198: non-nil when the API call failed
 }
 
 type SessionResolvedMsg struct {
@@ -301,6 +302,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Users may switch sessions rapidly (e.g. 'n' multiple times); without
 		// this guard the stale load would corrupt the current session's message list.
 		if sid := strings.TrimSpace(typed.SessionID); sid != "" && sid != strings.TrimSpace(m.activeSession) {
+			return m, nil
+		}
+		// EX-198: surface load errors so the user knows history is unavailable
+		// rather than silently showing an empty chat panel.
+		if typed.Err != nil {
+			m.statusMessage = "History load failed — " + strings.TrimSpace(typed.Err.Error())
 			return m, nil
 		}
 		if len(typed.Messages) == 0 {
@@ -2988,8 +2995,9 @@ func loadChatHistoryCmd(sessionID string, loadFn func(ctx context.Context, sessi
 			return chatHistoryLoadedMsg{SessionID: sid}
 		}
 		messages, err := loadFn(context.Background(), sid)
-		if err != nil || len(messages) == 0 {
-			return chatHistoryLoadedMsg{SessionID: sid}
+		if err != nil {
+			// EX-198: propagate error so the TUI can surface it to the user.
+			return chatHistoryLoadedMsg{SessionID: sid, Err: err}
 		}
 		return chatHistoryLoadedMsg{SessionID: sid, Messages: messages}
 	}
