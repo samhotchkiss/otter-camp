@@ -2284,6 +2284,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 	case 'g':
 		if m.focus == SidebarPanel {
 			// EX-297: give label/boundary feedback matching Home (EX-290).
+			// EX-414: empty sidebar — give honest "No items" instead of "At first item."
+			if len(m.workspace.visibleSidebarIDs()) == 0 {
+				m.statusMessage = "No items in sidebar."
+				return true, nil
+			}
 			prevCursor := m.workspace.sidebarCursor
 			m.workspace.sidebarHome()
 			if m.workspace.sidebarCursor == prevCursor {
@@ -2355,6 +2360,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 	case 'G':
 		if m.focus == SidebarPanel {
 			// EX-297: give label/boundary feedback matching End (EX-290).
+			// EX-414: empty sidebar — give honest "No items" instead of "At last item."
+			if len(m.workspace.visibleSidebarIDs()) == 0 {
+				m.statusMessage = "No items in sidebar."
+				return true, nil
+			}
 			prevCursor := m.workspace.sidebarCursor
 			m.workspace.sidebarEnd()
 			if m.workspace.sidebarCursor == prevCursor {

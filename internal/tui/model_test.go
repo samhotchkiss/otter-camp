@@ -3155,6 +3155,23 @@ func TestSidebarEmptyHomeEndPgUpPgDnEX413(t *testing.T) {
 	}
 }
 
+// EX-414: 'g' and 'G' in an empty sidebar said "At first/last item in sidebar."
+// when there were no items; they should say "No items in sidebar."
+func TestSidebarEmptyGGEX414(t *testing.T) {
+	for _, r := range []rune{'g', 'G'} {
+		t.Run(string(r), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = SidebarPanel
+			m.workspace.topLevel = nil
+			m.workspace.nodes = map[string]*sidebarNode{}
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			if !strings.Contains(m.statusMessage, "No items") {
+				t.Fatalf("statusMessage = %q, want 'No items in sidebar.'", m.statusMessage)
+			}
+		})
+	}
+}
+
 // EX-160: Inbox approve/reject/defer were local-only; pressing 'a', 'x', 'f'
 // must also return a tea.Cmd that calls ActOnInboxItem with the correct item ID.
 func TestInboxApproveIssuesServerAPICall(t *testing.T) {
