@@ -7616,3 +7616,31 @@ func TestInboxJKEmptyFeedbackEX295(t *testing.T) {
 		}
 	}
 }
+
+// TestProjectJKEmptyFeedbackEX296 verifies that j/k and ↑/↓ in ViewProject
+// when there are no open tasks show "No open tasks in this project." matching g/G/Home/End.
+func TestProjectJKEmptyFeedbackEX296(t *testing.T) {
+	type keyInput struct {
+		name string
+		msg  tea.KeyMsg
+	}
+	keys := []keyInput{
+		{"j", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}},
+		{"k", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}},
+		{"↑", tea.KeyMsg{Type: tea.KeyUp}},
+		{"↓", tea.KeyMsg{Type: tea.KeyDown}},
+	}
+	for _, k := range keys {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.mainView = ViewProject
+		m.workspace.selectedProjectID = "proj-1"
+		// No project detail → openTasksForProject returns nil.
+
+		m = pressKey(m, k.msg)
+		if m.statusMessage != "No open tasks in this project." {
+			t.Errorf("EX-296: %s in empty project should say 'No open tasks in this project.'; got %q", k.name, m.statusMessage)
+		}
+	}
+}

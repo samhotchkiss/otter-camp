@@ -721,6 +721,7 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case tea.KeyUp:
 				// EX-271: match k/j EX-270 feedback for ↑/↓ arrow keys.
+				// EX-296: give "No open tasks." feedback matching k (EX-270).
 				prevCursor := m.workspace.projectTaskCursor
 				m.workspace.moveProjectTaskCursor(-1)
 				if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
@@ -734,9 +735,12 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						}
 						m.statusMessage = "▸ " + truncate(label, 40)
 					}
+				} else {
+					m.statusMessage = "No open tasks in this project."
 				}
 				return m, nil
 			case tea.KeyDown:
+				// EX-296: give "No open tasks." feedback matching j (EX-270).
 				prevCursor := m.workspace.projectTaskCursor
 				m.workspace.moveProjectTaskCursor(1)
 				if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
@@ -750,6 +754,8 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						}
 						m.statusMessage = "▸ " + truncate(label, 40)
 					}
+				} else {
+					m.statusMessage = "No open tasks in this project."
 				}
 				return m, nil
 			}
@@ -1362,6 +1368,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			// EX-270: boundary feedback for project task list (mirrors EX-266 dashboard pattern).
+			// EX-296: give "No open tasks." feedback matching g/G/Home/End (EX-287/293).
 			prevCursor := m.workspace.projectTaskCursor
 			m.workspace.moveProjectTaskCursor(1)
 			if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
@@ -1375,6 +1382,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					}
 					m.statusMessage = "▸ " + truncate(label, 40)
 				}
+			} else {
+				m.statusMessage = "No open tasks in this project."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
 			prevID := m.workspace.selectedTaskID
@@ -1456,6 +1465,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			// EX-270: boundary feedback (mirrors EX-266 dashboard pattern).
+			// EX-296: give "No open tasks." feedback matching g/G/Home/End (EX-287/293).
 			prevCursor := m.workspace.projectTaskCursor
 			m.workspace.moveProjectTaskCursor(-1)
 			if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
@@ -1469,6 +1479,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					}
 					m.statusMessage = "▸ " + truncate(label, 40)
 				}
+			} else {
+				m.statusMessage = "No open tasks in this project."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
 			prevID := m.workspace.selectedTaskID
