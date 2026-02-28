@@ -1504,6 +1504,24 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// EX-384: F2-F4 and F6-F12 — not bound. Point to the key reference.
 		m.statusMessage = "F-key not bound. Press ? for key reference, : for commands, r to refresh."
 		return m, nil
+	case tea.KeyInsert:
+		// EX-385: Insert key — no insert/overwrite mode in this TUI.
+		// Users may press it expecting vim-style insert mode or terminal paste.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Insert: no insert/overwrite mode. Type normally; use terminal paste to paste."
+		} else {
+			m.statusMessage = "Insert key not bound. Type in chat (3 or Tab). Use terminal paste to paste text."
+		}
+		return m, nil
+	case tea.KeyCtrlQ:
+		// EX-385: Ctrl-Q (XON resume / Emacs secondary prefix) — not bound here.
+		// If Ctrl-S/Ctrl-Q flow control is disabled, Ctrl-Q reaches the app.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Ctrl-Q: not bound. Use Ctrl-W to delete word, Ctrl-U to clear."
+		} else {
+			m.statusMessage = "Ctrl-Q: not bound. Use : for commands or Ctrl-C to quit."
+		}
+		return m, nil
 	default:
 		return m, nil
 	}

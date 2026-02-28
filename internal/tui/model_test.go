@@ -10340,3 +10340,40 @@ func TestFunctionKeyAndCtrlOHintsEX384(t *testing.T) {
 		}
 	})
 }
+
+// TestInsertKeyAndCtrlQHintsEX385 verifies that Insert and Ctrl-Q keys show
+// informative hints instead of silent no-ops (EX-385).
+func TestInsertKeyAndCtrlQHintsEX385(t *testing.T) {
+	t.Run("Insert-in-ChatPanel", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyInsert})
+		if !strings.Contains(m1.statusMessage, "Insert") {
+			t.Errorf("EX-385: Insert in ChatPanel: got %q, want 'Insert'", m1.statusMessage)
+		}
+	})
+	t.Run("Insert-in-MainPanel", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyInsert})
+		if !strings.Contains(m1.statusMessage, "Insert") {
+			t.Errorf("EX-385: Insert in MainPanel: got %q, want 'Insert'", m1.statusMessage)
+		}
+	})
+	t.Run("CtrlQ-in-ChatPanel", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+		if !strings.Contains(m1.statusMessage, "Ctrl-Q") {
+			t.Errorf("EX-385: Ctrl-Q in ChatPanel: got %q, want 'Ctrl-Q'", m1.statusMessage)
+		}
+	})
+	t.Run("CtrlQ-in-MainPanel", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+		if !strings.Contains(m1.statusMessage, "Ctrl-Q") {
+			t.Errorf("EX-385: Ctrl-Q in MainPanel: got %q, want 'Ctrl-Q'", m1.statusMessage)
+		}
+	})
+}
