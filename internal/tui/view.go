@@ -2588,6 +2588,13 @@ func (m Model) commandPaletteSuggestions(limit int) []string {
 		"cmd: chat", "cmd: search", "cmd: filter", "cmd: back", "cmd: refresh",
 		"cmd: reload", "cmd: n", "cmd: next", "cmd: version", "cmd: open", "cmd: close",
 		"cmd: man", "cmd: history",
+		// EX-402: include EX-395 hint-only commands (settings, undo, etc.) and
+		// additional commonly-tried commands (clear, sort, ls) so typing their
+		// prefix in command mode surfaces a Tab-completable suggestion rather than
+		// leaving the user with no autocomplete hint.
+		"cmd: settings", "cmd: config", "cmd: undo", "cmd: redo",
+		"cmd: copy", "cmd: yank", "cmd: paste",
+		"cmd: clear", "cmd: sort", "cmd: ls",
 	} {
 		add(&candidates, command)
 	}

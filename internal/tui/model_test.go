@@ -11115,3 +11115,44 @@ func TestResizeFallthroughEX401(t *testing.T) {
 		t.Errorf("EX-401: > in SidebarPanel should give feedback (resize or boundary), got empty statusMessage")
 	}
 }
+
+// TestCommandPaletteSuggestionsEX402 verifies that EX-402 additions — commonly
+// tried commands like :settings, :undo, :clear, :sort, :ls — now appear in the
+// Tab-autocomplete suggestion list when their prefix is typed.
+func TestCommandPaletteSuggestionsEX402(t *testing.T) {
+	type pTest struct {
+		query string
+		want  string
+	}
+	tests := []pTest{
+		{"sett", "cmd: settings"},
+		{"conf", "cmd: config"},
+		{"undo", "cmd: undo"},
+		{"redo", "cmd: redo"},
+		{"copy", "cmd: copy"},
+		{"yank", "cmd: yank"},
+		{"past", "cmd: paste"},
+		{"clea", "cmd: clear"},
+		{"sort", "cmd: sort"},
+		{"ls",   "cmd: ls"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.query, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.commandMode = true
+			m.commandBuffer = ":" + tt.query
+			suggestions := m.commandPaletteSuggestions(10)
+			found := false
+			for _, s := range suggestions {
+				if strings.EqualFold(s, tt.want) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("EX-402: query %q: want %q in suggestions, got %v", tt.query, tt.want, suggestions)
+			}
+		})
+	}
+}
