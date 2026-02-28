@@ -5628,17 +5628,41 @@ func (m *Model) executeSidebarCommand(args []string) tea.Cmd {
 	}
 	switch strings.ToLower(args[0]) {
 	case "up":
+		// EX-446: give boundary feedback when already at first item (mirrors j/k feedback).
+		prev := m.workspace.sidebarCursor
 		m.workspace.moveSidebar(-1)
-		m.statusMessage = "Sidebar cursor moved up."
+		if m.workspace.sidebarCursor == prev {
+			m.statusMessage = "At first item in sidebar."
+		} else {
+			m.statusMessage = "Sidebar cursor moved up."
+		}
 	case "down":
+		// EX-446: give boundary feedback when already at last item (mirrors j/k feedback).
+		prev := m.workspace.sidebarCursor
 		m.workspace.moveSidebar(1)
-		m.statusMessage = "Sidebar cursor moved down."
+		if m.workspace.sidebarCursor == prev {
+			m.statusMessage = "At last item in sidebar."
+		} else {
+			m.statusMessage = "Sidebar cursor moved down."
+		}
 	case "home":
+		// EX-446: give boundary feedback when already at first item.
+		prev := m.workspace.sidebarCursor
 		m.workspace.sidebarHome()
-		m.statusMessage = "Sidebar cursor moved home."
+		if m.workspace.sidebarCursor == prev {
+			m.statusMessage = "Already at first item in sidebar."
+		} else {
+			m.statusMessage = "Sidebar cursor moved home."
+		}
 	case "end":
+		// EX-446: give boundary feedback when already at last item.
+		prev := m.workspace.sidebarCursor
 		m.workspace.sidebarEnd()
-		m.statusMessage = "Sidebar cursor moved end."
+		if m.workspace.sidebarCursor == prev {
+			m.statusMessage = "Already at last item in sidebar."
+		} else {
+			m.statusMessage = "Sidebar cursor moved end."
+		}
 	case "expand":
 		m.workspace.expandSidebarNode()
 		m.statusMessage = "Sidebar node expanded."
@@ -5707,32 +5731,56 @@ func (m *Model) executeInboxCommand(args []string) tea.Cmd {
 			m.statusMessage = "No inbox items."
 			return nil
 		}
+		// EX-446: give boundary feedback when already at first item.
+		prev := m.workspace.inboxCursor
 		m.workspace.moveInbox(-1)
-		m.statusMessage = "Inbox cursor moved up."
+		if m.workspace.inboxCursor == prev {
+			m.statusMessage = "At first inbox item."
+		} else {
+			m.statusMessage = "Inbox cursor moved up."
+		}
 	case "down":
 		// EX-419: symmetric empty inbox guard for down.
 		if len(m.workspace.inbox) == 0 {
 			m.statusMessage = "No inbox items."
 			return nil
 		}
+		// EX-446: give boundary feedback when already at last item.
+		prev := m.workspace.inboxCursor
 		m.workspace.moveInbox(1)
-		m.statusMessage = "Inbox cursor moved down."
+		if m.workspace.inboxCursor == prev {
+			m.statusMessage = "At last inbox item."
+		} else {
+			m.statusMessage = "Inbox cursor moved down."
+		}
 	case "home":
 		// EX-419: symmetric empty inbox guard for home.
 		if len(m.workspace.inbox) == 0 {
 			m.statusMessage = "No inbox items."
 			return nil
 		}
+		// EX-446: give boundary feedback when already at first item.
+		prev := m.workspace.inboxCursor
 		m.workspace.inboxHome()
-		m.statusMessage = "Inbox cursor moved home."
+		if m.workspace.inboxCursor == prev {
+			m.statusMessage = "Already at first inbox item."
+		} else {
+			m.statusMessage = "Inbox cursor moved home."
+		}
 	case "end":
 		// EX-419: symmetric empty inbox guard for end.
 		if len(m.workspace.inbox) == 0 {
 			m.statusMessage = "No inbox items."
 			return nil
 		}
+		// EX-446: give boundary feedback when already at last item.
+		prev := m.workspace.inboxCursor
 		m.workspace.inboxEnd()
-		m.statusMessage = "Inbox cursor moved end."
+		if m.workspace.inboxCursor == prev {
+			m.statusMessage = "Already at last inbox item."
+		} else {
+			m.statusMessage = "Inbox cursor moved end."
+		}
 	case "open":
 		if !m.workspace.applyInboxAction("open") {
 			m.statusMessage = "No inbox item available."

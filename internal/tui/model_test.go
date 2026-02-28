@@ -12312,3 +12312,127 @@ func TestSidebarNavNodeLabelFeedbackEX445(t *testing.T) {
 		})
 	}
 }
+
+// TestSidebarAndInboxCommandBoundaryFeedbackEX446 verifies that the :sidebar
+// and :inbox command-mode navigation sub-commands report accurate boundary
+// feedback when the cursor cannot move further (instead of the misleading
+// "Sidebar cursor moved up/down." that was emitted even at the boundary).
+//
+// Default workspace has 4 visible sidebar IDs (cursor 0–3):
+//
+//	0 → "inbox"          (Label: "INBOX")
+//	1 → "header-chats"   (Label: "CHATS")
+//	2 → generalSidebarNodeID (Label: "Frank / General")
+//	3 → "header-projects" (Label: "PROJECTS")
+func TestSidebarAndInboxCommandBoundaryFeedbackEX446(t *testing.T) {
+	t.Run("sidebar-up-at-first-gives-boundary-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.sidebarCursor = 0
+		m.executeSidebarCommand([]string{"up"})
+		if got := m.statusMessage; got != "At first item in sidebar." {
+			t.Fatalf(":sidebar up at cursor=0 = %q, want %q", got, "At first item in sidebar.")
+		}
+	})
+	t.Run("sidebar-down-at-last-gives-boundary-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		last := len(m.workspace.visibleSidebarIDs()) - 1
+		m.workspace.sidebarCursor = last
+		m.executeSidebarCommand([]string{"down"})
+		if got := m.statusMessage; got != "At last item in sidebar." {
+			t.Fatalf(":sidebar down at cursor=%d = %q, want %q", last, got, "At last item in sidebar.")
+		}
+	})
+	t.Run("sidebar-home-at-first-gives-already-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.sidebarCursor = 0
+		m.executeSidebarCommand([]string{"home"})
+		if got := m.statusMessage; got != "Already at first item in sidebar." {
+			t.Fatalf(":sidebar home at cursor=0 = %q, want %q", got, "Already at first item in sidebar.")
+		}
+	})
+	t.Run("sidebar-end-at-last-gives-already-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		last := len(m.workspace.visibleSidebarIDs()) - 1
+		m.workspace.sidebarCursor = last
+		m.executeSidebarCommand([]string{"end"})
+		if got := m.statusMessage; got != "Already at last item in sidebar." {
+			t.Fatalf(":sidebar end at cursor=%d = %q, want %q", last, got, "Already at last item in sidebar.")
+		}
+	})
+	// Happy path: cursor moves and "moved" message is shown.
+	t.Run("sidebar-up-moves-gives-moved-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.sidebarCursor = 2
+		m.executeSidebarCommand([]string{"up"})
+		if got := m.statusMessage; got != "Sidebar cursor moved up." {
+			t.Fatalf(":sidebar up from cursor=2 = %q, want %q", got, "Sidebar cursor moved up.")
+		}
+	})
+	t.Run("sidebar-down-moves-gives-moved-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.sidebarCursor = 0
+		m.executeSidebarCommand([]string{"down"})
+		if got := m.statusMessage; got != "Sidebar cursor moved down." {
+			t.Fatalf(":sidebar down from cursor=0 = %q, want %q", got, "Sidebar cursor moved down.")
+		}
+	})
+
+	// :inbox boundary tests — need at least 2 items.
+	mkInboxModel := func() Model {
+		m := NewModel(DefaultState())
+		m.workspace.inbox = []inboxItem{
+			{ID: "a", Summary: "First item"},
+			{ID: "b", Summary: "Second item"},
+		}
+		return m
+	}
+	t.Run("inbox-up-at-first-gives-boundary-msg", func(t *testing.T) {
+		m := mkInboxModel()
+		m.workspace.inboxCursor = 0
+		m.executeInboxCommand([]string{"up"})
+		if got := m.statusMessage; got != "At first inbox item." {
+			t.Fatalf(":inbox up at cursor=0 = %q, want %q", got, "At first inbox item.")
+		}
+	})
+	t.Run("inbox-down-at-last-gives-boundary-msg", func(t *testing.T) {
+		m := mkInboxModel()
+		m.workspace.inboxCursor = 1
+		m.executeInboxCommand([]string{"down"})
+		if got := m.statusMessage; got != "At last inbox item." {
+			t.Fatalf(":inbox down at cursor=1 = %q, want %q", got, "At last inbox item.")
+		}
+	})
+	t.Run("inbox-home-at-first-gives-already-msg", func(t *testing.T) {
+		m := mkInboxModel()
+		m.workspace.inboxCursor = 0
+		m.executeInboxCommand([]string{"home"})
+		if got := m.statusMessage; got != "Already at first inbox item." {
+			t.Fatalf(":inbox home at cursor=0 = %q, want %q", got, "Already at first inbox item.")
+		}
+	})
+	t.Run("inbox-end-at-last-gives-already-msg", func(t *testing.T) {
+		m := mkInboxModel()
+		m.workspace.inboxCursor = 1
+		m.executeInboxCommand([]string{"end"})
+		if got := m.statusMessage; got != "Already at last inbox item." {
+			t.Fatalf(":inbox end at cursor=1 = %q, want %q", got, "Already at last inbox item.")
+		}
+	})
+	// Happy path: cursor moves and "moved" message is shown.
+	t.Run("inbox-up-moves-gives-moved-msg", func(t *testing.T) {
+		m := mkInboxModel()
+		m.workspace.inboxCursor = 1
+		m.executeInboxCommand([]string{"up"})
+		if got := m.statusMessage; got != "Inbox cursor moved up." {
+			t.Fatalf(":inbox up from cursor=1 = %q, want %q", got, "Inbox cursor moved up.")
+		}
+	})
+	t.Run("inbox-down-moves-gives-moved-msg", func(t *testing.T) {
+		m := mkInboxModel()
+		m.workspace.inboxCursor = 0
+		m.executeInboxCommand([]string{"down"})
+		if got := m.statusMessage; got != "Inbox cursor moved down." {
+			t.Fatalf(":inbox down from cursor=0 = %q, want %q", got, "Inbox cursor moved down.")
+		}
+	})
+}
