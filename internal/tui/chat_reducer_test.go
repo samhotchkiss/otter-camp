@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestChatReducerDeltaFinalizeSequencing(t *testing.T) {
@@ -328,6 +330,49 @@ func TestTurnCancelledWithoutQueueEX412(t *testing.T) {
 	}
 	if got := model.statusMessage; got != "Active turn cancelled." {
 		t.Fatalf("statusMessage = %q, want %q", got, "Active turn cancelled.")
+	}
+}
+
+// EX-420: after chat.turn.cancelled with queued messages, pressing 'd' in the
+// chat panel should delete the first queued message (not navigate to dashboard).
+// Previously handleChatRunes required activeTurn=true for the queue actions,
+// so 'd' fell through to handleWorkspaceRune which did dashboard navigation.
+func TestTurnCancelledDKeyDeletesQueueEX420(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = ChatPanel
+	model.turnsSynced = true
+	model.activeTurn = true
+	model.activeSession = "session-org-abc"
+	model.queuedMessages = []QueuedMessage{
+		{Text: "queued-1"},
+		{Text: "queued-2"},
+	}
+
+	// External cancellation: activeTurn goes false, queue remains.
+	model.applyChatEnvelope(EventEnvelope{
+		Seq:       1,
+		EventID:   "evt-cancel",
+		EventType: "chat.turn.cancelled",
+		OrgID:     "org-1",
+		Payload:   mustJSON(t, map[string]any{"session_id": "session-org-abc"}),
+	})
+	if model.ActiveTurn() {
+		t.Fatal("activeTurn should be false after turn cancelled")
+	}
+	if got := model.QueueDepth(); got != 2 {
+		t.Fatalf("queue depth before d = %d, want 2", got)
+	}
+
+	// Press 'd' — should delete first queued message, NOT navigate to dashboard.
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if got := model.QueueDepth(); got != 1 {
+		t.Fatalf("queue depth after d = %d, want 1 (first item deleted)", got)
+	}
+	if model.workspace.mainView == ViewDashboard && !strings.Contains(model.statusMessage, "deleted") {
+		t.Fatalf("d navigated to dashboard instead of deleting: mainView=%v statusMessage=%q", model.workspace.mainView, model.statusMessage)
+	}
+	if !strings.Contains(model.statusMessage, "deleted") {
+		t.Fatalf("statusMessage = %q, want 'deleted' confirmation", model.statusMessage)
 	}
 }
 

@@ -3487,14 +3487,23 @@ func (m *Model) handleChatRunes(key tea.KeyMsg) {
 			m.statusMessage = "Inserted newline."
 			return
 		}
-		if m.activeTurn && len(m.queuedMessages) > 0 && strings.TrimSpace(m.chatInput) == "" {
+		// EX-420: queue actions (e/s/d) should work when activeTurn is true AND when
+		// activeTurn is just been set to false by an external chat.turn.cancelled while
+		// messages are still queued. Previously the guard required activeTurn=true which
+		// meant 'd' after external cancellation navigated to dashboard instead of
+		// deleting the queued message (the status message said "Press d to discard" but
+		// 'd' didn't actually work).
+		if len(m.queuedMessages) > 0 && strings.TrimSpace(m.chatInput) == "" {
 			switch strings.ToLower(string(r)) {
 			case "e":
 				m.applyQueueActionEdit()
 				return
 			case "s":
-				m.applyQueueActionSteer()
-				return
+				if m.activeTurn {
+					// Steer only makes sense when a turn is in progress.
+					m.applyQueueActionSteer()
+					return
+				}
 			case "d":
 				m.applyQueueActionDelete()
 				return
@@ -4757,8 +4766,10 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) tea.Cmd {
 		// does that). Surface a hint so the user knows they have queued messages
 		// to act on rather than seeing a generic "Active turn cancelled." with no
 		// mention of the orphaned queue.
+		// EX-420: use 'd·delete / e·edit' — both work when activeTurn is false
+		// (EX-420 extended the queue-action guard to cover this state).
 		if n := len(m.queuedMessages); n > 0 {
-			m.statusMessage = fmt.Sprintf("Active turn cancelled — %d queued message(s) remain. Press d to discard or Enter to resend.", n)
+			m.statusMessage = fmt.Sprintf("Active turn cancelled — %d queued message(s) remain. Press d·delete or e·edit.", n)
 		} else {
 			m.statusMessage = "Active turn cancelled."
 		}
