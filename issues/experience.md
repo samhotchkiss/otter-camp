@@ -4073,3 +4073,147 @@ Both use `fmt.Sprintf` with the query quoted, consistent with how validation err
 **Status:** [x] Discovered | [x] Fixed | [x] Tested
 
 ---
+
+## EX-264: PgDown / End at latest message said "Chat scrolled down."
+
+**Observation:** When the chat panel was already showing the latest message (scroll offset = 0), pressing PgDown still said "Chat scrolled down." — implying motion that hadn't happened. End said "Chat scrolled to latest." — equally misleading when you were already there.
+
+**Root cause:** The PgDown/End handlers always set a success message without first checking whether the scroll offset was already at 0.
+
+**Improvement:** When `chatScrollOffset == 0`, both PgDown and End now say "Already at latest message." — honest feedback that matches what the user sees.
+
+**Effort:** Trivial (2 guards)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-265: Esc from dashboard said "Returned to dashboard." when already there
+
+**Observation:** `handleEscapeKey` always set `m.workspace.setMainView(ViewDashboard)` and then said "Returned to dashboard." — even when the user was already on the dashboard. The word "returned" implies navigation that never occurred.
+
+**Root cause:** No check for the current view before emitting the navigation message.
+
+**Improvement:** Added `if m.workspace.mainView == ViewDashboard { m.statusMessage = "Already on dashboard." }` before the navigation line. Other views still get "Returned to dashboard." when Esc takes them there.
+
+**Effort:** Trivial (3 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-266: Dashboard j/k at boundary repeated same task title silently
+
+**Observation:** Pressing `j` when already at the last dashboard task (or `k` at the first) did nothing — the cursor stayed put and the status message showed the same task title again. There was no indication that the boundary had been reached.
+
+**Root cause:** EX-202 fixed this for the project task view, but the dashboard board used a different cursor mechanism and wasn't updated.
+
+**Improvement:** Saved `prevID` before `moveDashboardCursor`. If `selectedTaskID` is unchanged after the move and a task was selected, shows "At last task on board." / "At first task on board." Otherwise shows "▸ OC-N: Title" for the newly focused task.
+
+**Effort:** Small (8 lines per direction)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-267: Help view ↑/↓ entry said "scroll one line" (wrong)
+
+**Observation:** The help view listed `↑ / ↓  scroll one line` under the Chat section. But ↑/↓ in the chat panel do NOT scroll — PgUp/PgDn scroll. ↑/↓ navigate the sent-message history (recall previous inputs) when the input field is empty.
+
+**Root cause:** The description was copied from a generic "scroll" template and never corrected.
+
+**Improvement:** Changed to `↑ recall / ↓ advance sent message history  (when input is empty)` — accurate and clarifies the "when empty" condition.
+
+**Effort:** Trivial (1 line)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-268: Inbox j/k gave no navigation feedback
+
+**Observation:** Pressing `j`/`k` in the inbox view silently moved the cursor with no status message — no item summary, no boundary feedback. Contrast with the dashboard (EX-266) and project view (EX-202) which both show the focused item's title.
+
+**Root cause:** The inbox j/k handler called `moveInbox` but never set `m.statusMessage`.
+
+**Improvement:** Added boundary detection (same `prevCursor` pattern as EX-266): on cursor change, shows "▸ " + truncated item summary; at boundary shows "At first/last inbox item."
+
+**Effort:** Small (10 lines per direction)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-269: Defensive guard in executeCommand after "cmd: " prefix strip
+
+**Observation:** `executeCommand` stripped a "cmd: " prefix from the command buffer, but did not guard against an empty string after stripping. Additionally, `fields[0]` was accessed before checking `len(fields) > 1` in the inbox command check — a potential index-out-of-range if whitespace-only input reached that point.
+
+**Root cause:** Missing empty-check after prefix strip; field-count guard in wrong order.
+
+**Improvement:** Added `if trimmed == "" { m.statusMessage = "No command entered."; return nil }` immediately after the prefix strip. Reordered the inbox field check to `len(fields) > 1 && strings.EqualFold(fields[0], "inbox")`.
+
+**Effort:** Small (5 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-270: j/k in ViewProject gave no boundary or navigation feedback
+
+**Observation:** Pressing `j`/`k` in the project task list moved the cursor but showed no status message — no task title, no "At last/first task" boundary hint. This was the same gap that EX-266 fixed for `ViewDashboard` and EX-268 fixed for `ViewInbox`.
+
+**Root cause:** The ViewProject j/k case called `moveProjectTaskCursor` without any feedback logic.
+
+**Improvement:** Applied the same `prevCursor` pattern: on cursor advance/retreat shows "▸ OC-N: Title"; at boundary shows "At last/first task in project."
+
+**Effort:** Small (14 lines per direction)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-271: ↑/↓ arrow keys in ViewProject and ViewDashboard gave no feedback
+
+**Observation:** Arrow keys (↑/↓) worked in ViewProject and ViewDashboard (they called the same cursor functions as j/k), but showed zero status feedback — no task title, no boundary hint. After EX-266 and EX-270 fixed j/k, arrow keys were left inconsistent.
+
+**Root cause:** The arrow-key dispatch block for ViewProject/ViewDashboard called the cursor functions and returned immediately without any status message.
+
+**Improvement:** Expanded the arrow-key cases to use the same `prevCursor`/`prevID` boundary detection pattern: shows task title on movement, "At first/last..." on boundary. ViewInbox arrow keys were also completely unhandled — added that as EX-272.
+
+**Effort:** Small (30 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-272: ↑/↓ arrow keys in ViewInbox were unhandled (silent no-op)
+
+**Observation:** While `j`/`k` navigated the inbox with EX-268 feedback, pressing ↑/↓ arrows in ViewInbox did nothing — they weren't handled at all in the control-key switch.
+
+**Root cause:** ViewInbox was omitted from the arrow-key dispatch block that handled ViewProject and ViewDashboard.
+
+**Improvement:** Added a ViewInbox case in the arrow-key switch using the same `prevCursor` pattern: ↓ shows item summary or "At last inbox item."; ↑ shows item summary or "At first inbox item."
+
+**Effort:** Small (20 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
+
+## EX-273: g/G in ViewInbox and ViewProject showed no feedback
+
+**Observation:** `g` (jump to first) and `G` (jump to last) in ViewInbox and ViewProject silently moved the cursor with no status message. In ViewDashboard, `g`/`G` showed the task title (from EX-135/EX-190). The three views were inconsistent.
+
+**Root cause:** The g/G handlers for ViewInbox and ViewProject only moved the cursor — no status message was added.
+
+**Improvement:**
+- `g` in ViewInbox: after `inboxHome()`, shows "▸ " + first item summary (when inbox non-empty).
+- `G` in ViewInbox: after `inboxEnd()`, shows "▸ " + last item summary (when inbox non-empty).
+- `g` in ViewProject: after setting cursor to 0, shows "▸ OC-N: Title" for the first open task.
+- `G` in ViewProject: fixed cursor to use `openTasksForProject()` (previously used `len(proj.Tasks)-1` which could exceed the open-task count); shows title of last open task.
+
+**Effort:** Small (20 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---

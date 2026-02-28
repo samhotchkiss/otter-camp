@@ -632,23 +632,99 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 		}
+		if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
+			switch key.Type {
+			case tea.KeyUp:
+				// EX-272: arrow keys mirror j/k EX-268 navigation with feedback.
+				prevCursor := m.workspace.inboxCursor
+				m.workspace.moveInbox(-1)
+				if item := m.workspace.currentInboxItem(); item != nil {
+					if m.workspace.inboxCursor == prevCursor {
+						m.statusMessage = "At first inbox item."
+					} else if item.Summary != "" {
+						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					}
+				}
+				return m, nil
+			case tea.KeyDown:
+				prevCursor := m.workspace.inboxCursor
+				m.workspace.moveInbox(1)
+				if item := m.workspace.currentInboxItem(); item != nil {
+					if m.workspace.inboxCursor == prevCursor {
+						m.statusMessage = "At last inbox item."
+					} else if item.Summary != "" {
+						m.statusMessage = "▸ " + truncate(item.Summary, 40)
+					}
+				}
+				return m, nil
+			}
+		}
 		if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			switch key.Type {
 			case tea.KeyUp:
+				// EX-271: match k/j EX-270 feedback for ↑/↓ arrow keys.
+				prevCursor := m.workspace.projectTaskCursor
 				m.workspace.moveProjectTaskCursor(-1)
+				if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+					if m.workspace.projectTaskCursor == prevCursor {
+						m.statusMessage = "At first task in project."
+					} else if cur := m.workspace.projectTaskCursor; cur >= 0 && cur < len(openTasks) {
+						t := openTasks[cur]
+						label := t.Title
+						if t.TaskNumber > 0 {
+							label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+						}
+						m.statusMessage = "▸ " + truncate(label, 40)
+					}
+				}
 				return m, nil
 			case tea.KeyDown:
+				prevCursor := m.workspace.projectTaskCursor
 				m.workspace.moveProjectTaskCursor(1)
+				if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+					if m.workspace.projectTaskCursor == prevCursor {
+						m.statusMessage = "At last task in project."
+					} else if cur := m.workspace.projectTaskCursor; cur >= 0 && cur < len(openTasks) {
+						t := openTasks[cur]
+						label := t.Title
+						if t.TaskNumber > 0 {
+							label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+						}
+						m.statusMessage = "▸ " + truncate(label, 40)
+					}
+				}
 				return m, nil
 			}
 		}
 		if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
 			switch key.Type {
 			case tea.KeyUp:
+				// EX-271: match k EX-266 feedback for ↑ arrow key.
+				prevID := m.workspace.selectedTaskID
 				m.workspace.moveDashboardCursor(-1)
+				if m.workspace.selectedTaskID == prevID && prevID != "" {
+					m.statusMessage = "At first task on board."
+				} else if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
+					label := task.Title
+					if task.TaskNumber > 0 {
+						label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
+					}
+					m.statusMessage = "▸ " + truncate(label, 40)
+				}
 				return m, nil
 			case tea.KeyDown:
+				// EX-271: match j EX-266 feedback for ↓ arrow key.
+				prevID := m.workspace.selectedTaskID
 				m.workspace.moveDashboardCursor(1)
+				if m.workspace.selectedTaskID == prevID && prevID != "" {
+					m.statusMessage = "At last task on board."
+				} else if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
+					label := task.Title
+					if task.TaskNumber > 0 {
+						label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
+					}
+					m.statusMessage = "▸ " + truncate(label, 40)
+				}
 				return m, nil
 			}
 		}
@@ -1135,7 +1211,21 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				}
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
+			// EX-270: boundary feedback for project task list (mirrors EX-266 dashboard pattern).
+			prevCursor := m.workspace.projectTaskCursor
 			m.workspace.moveProjectTaskCursor(1)
+			if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+				if m.workspace.projectTaskCursor == prevCursor {
+					m.statusMessage = "At last task in project."
+				} else if cur := m.workspace.projectTaskCursor; cur >= 0 && cur < len(openTasks) {
+					t := openTasks[cur]
+					label := t.Title
+					if t.TaskNumber > 0 {
+						label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+					}
+					m.statusMessage = "▸ " + truncate(label, 40)
+				}
+			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
 			prevID := m.workspace.selectedTaskID
 			m.workspace.moveDashboardCursor(1)
@@ -1197,7 +1287,21 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				}
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
+			// EX-270: boundary feedback (mirrors EX-266 dashboard pattern).
+			prevCursor := m.workspace.projectTaskCursor
 			m.workspace.moveProjectTaskCursor(-1)
+			if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+				if m.workspace.projectTaskCursor == prevCursor {
+					m.statusMessage = "At first task in project."
+				} else if cur := m.workspace.projectTaskCursor; cur >= 0 && cur < len(openTasks) {
+					t := openTasks[cur]
+					label := t.Title
+					if t.TaskNumber > 0 {
+						label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+					}
+					m.statusMessage = "▸ " + truncate(label, 40)
+				}
+			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
 			prevID := m.workspace.selectedTaskID
 			m.workspace.moveDashboardCursor(-1)
@@ -1253,8 +1357,23 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.workspace.sidebarHome()
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			m.workspace.inboxHome()
+			// EX-273: mirror ViewDashboard g feedback — show item summary.
+			if len(m.workspace.inbox) > 0 {
+				if item := m.workspace.currentInboxItem(); item != nil && item.Summary != "" {
+					m.statusMessage = "▸ " + truncate(item.Summary, 40)
+				}
+			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			m.workspace.projectTaskCursor = 0
+			// EX-273: show first task title like ViewDashboard does.
+			if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+				t := openTasks[0]
+				label := t.Title
+				if t.TaskNumber > 0 {
+					label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+				}
+				m.statusMessage = "▸ " + truncate(label, 40)
+			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
 			// EX-135: jump to first task on dashboard board (g = vim home)
 			active := m.workspace.dashboardActiveTasks()
@@ -1282,9 +1401,25 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.workspace.sidebarEnd()
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			m.workspace.inboxEnd()
+			// EX-273: mirror ViewDashboard G feedback — show item summary.
+			// Guard against empty inbox: currentInboxItem clamps cursor, which
+			// would mutate it away from -1 and break existing semantics.
+			if len(m.workspace.inbox) > 0 {
+				if item := m.workspace.currentInboxItem(); item != nil && item.Summary != "" {
+					m.statusMessage = "▸ " + truncate(item.Summary, 40)
+				}
+			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
-			if proj := m.workspace.selectedProject; proj != nil {
-				m.workspace.projectTaskCursor = maxInt(0, len(proj.Tasks)-1)
+			// EX-273: use openTasksForProject so cursor lands within bounds and
+			// we can show the title — matches the g case feedback pattern.
+			if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+				m.workspace.projectTaskCursor = len(openTasks) - 1
+				t := openTasks[len(openTasks)-1]
+				label := t.Title
+				if t.TaskNumber > 0 {
+					label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+				}
+				m.statusMessage = "▸ " + truncate(label, 40)
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
 			// EX-135: jump to last task on dashboard board (G = vim end)

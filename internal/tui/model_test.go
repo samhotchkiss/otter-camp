@@ -6592,3 +6592,211 @@ func TestCmdPrefixCommandsEX269(t *testing.T) {
 		t.Error("EX-269: ':cmd:' Enter should set a non-empty status message")
 	}
 }
+
+// TestProjectJKBoundaryFeedbackEX270 verifies that j/k in ViewProject show
+// boundary messages and item summaries — mirrors EX-266/EX-268 patterns.
+func TestProjectJKBoundaryFeedbackEX270(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.mainView = ViewProject
+	m.workspace.selectedProjectID = "p1"
+	m.workspace.selectedProject = &ProjectDetail{
+		ID:          "p1",
+		DisplayName: "Velocity",
+		Tasks: []SidebarTaskItem{
+			{ID: "t1", Title: "Bootstrap infra", TaskNumber: 1, WorkStatus: "in_progress"},
+			{ID: "t2", Title: "Write tests", TaskNumber: 2, WorkStatus: "todo"},
+		},
+	}
+	m.workspace.projectTaskCursor = 0
+
+	// j: cursor moves from 0 → 1; status should show second task title.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if !strings.Contains(m.statusMessage, "Write tests") && !strings.Contains(m.statusMessage, "▸") {
+		t.Errorf("EX-270: j in ViewProject should show task title; got %q", m.statusMessage)
+	}
+
+	// j again: already at last task → "At last task in project."
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if !strings.Contains(m.statusMessage, "last") {
+		t.Errorf("EX-270: j at last project task should say 'last'; got %q", m.statusMessage)
+	}
+
+	// k: cursor retreats from 1 → 0; status should show first task title.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if !strings.Contains(m.statusMessage, "Bootstrap infra") && !strings.Contains(m.statusMessage, "▸") {
+		t.Errorf("EX-270: k in ViewProject should show task title; got %q", m.statusMessage)
+	}
+
+	// k again: already at first task → "At first task in project."
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if !strings.Contains(m.statusMessage, "first") {
+		t.Errorf("EX-270: k at first project task should say 'first'; got %q", m.statusMessage)
+	}
+}
+
+// TestArrowKeysFeedbackEX271 verifies that ↑/↓ arrow keys in ViewProject and
+// ViewDashboard show the same boundary/title feedback as j/k (EX-270/EX-266).
+func TestArrowKeysFeedbackEX271(t *testing.T) {
+	// — ViewProject —
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.mainView = ViewProject
+	m.workspace.selectedProjectID = "p1"
+	m.workspace.selectedProject = &ProjectDetail{
+		ID: "p1",
+		Tasks: []SidebarTaskItem{
+			{ID: "t1", Title: "Alpha task", TaskNumber: 1, WorkStatus: "todo"},
+			{ID: "t2", Title: "Beta task", TaskNumber: 2, WorkStatus: "todo"},
+		},
+	}
+	m.workspace.projectTaskCursor = 0
+
+	// ↓ moves cursor 0→1; should show second task title.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+	if !strings.Contains(m.statusMessage, "Beta task") && !strings.Contains(m.statusMessage, "▸") {
+		t.Errorf("EX-271: ↓ in ViewProject should show task title; got %q", m.statusMessage)
+	}
+	// ↓ again: at last task.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+	if !strings.Contains(m.statusMessage, "last") {
+		t.Errorf("EX-271: ↓ at last project task should say 'last'; got %q", m.statusMessage)
+	}
+	// ↑ moves cursor 1→0; should show first task title.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+	if !strings.Contains(m.statusMessage, "Alpha task") && !strings.Contains(m.statusMessage, "▸") {
+		t.Errorf("EX-271: ↑ in ViewProject should show task title; got %q", m.statusMessage)
+	}
+	// ↑ again: at first task.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+	if !strings.Contains(m.statusMessage, "first") {
+		t.Errorf("EX-271: ↑ at first project task should say 'first'; got %q", m.statusMessage)
+	}
+
+	// — ViewDashboard —
+	m2 := NewModel(DefaultState())
+	m2.width, m2.height = 220, 40
+	m2.focus = MainPanel
+	m2.workspace.mainView = ViewDashboard
+	m2.workspace.tasks["d1"] = &taskRecord{ID: "d1", Title: "Deploy service", TaskNumber: 10, Status: "todo"}
+	m2.workspace.tasks["d2"] = &taskRecord{ID: "d2", Title: "Write docs", TaskNumber: 11, Status: "in_progress"}
+	m2.workspace.taskOrder = []string{"d1", "d2"}
+	m2.workspace.selectedTaskID = "d1"
+
+	// ↓ moves to "d2"; should show task title.
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyDown})
+	if !strings.Contains(m2.statusMessage, "Write docs") && !strings.Contains(m2.statusMessage, "▸") {
+		t.Errorf("EX-271: ↓ in ViewDashboard should show task title; got %q", m2.statusMessage)
+	}
+	// ↓ again: at last task.
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyDown})
+	if !strings.Contains(m2.statusMessage, "last") {
+		t.Errorf("EX-271: ↓ at last dashboard task should say 'last'; got %q", m2.statusMessage)
+	}
+	// ↑ moves to "d1"; should show task title.
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyUp})
+	if !strings.Contains(m2.statusMessage, "Deploy service") && !strings.Contains(m2.statusMessage, "▸") {
+		t.Errorf("EX-271: ↑ in ViewDashboard should show task title; got %q", m2.statusMessage)
+	}
+	// ↑ again: at first task.
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyUp})
+	if !strings.Contains(m2.statusMessage, "first") {
+		t.Errorf("EX-271: ↑ at first dashboard task should say 'first'; got %q", m2.statusMessage)
+	}
+}
+
+// TestInboxArrowKeyNavigationEX272 verifies that ↑/↓ arrow keys in ViewInbox
+// navigate with the same feedback as j/k (EX-268). Previously arrows were silent no-ops.
+func TestInboxArrowKeyNavigationEX272(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.mainView = ViewInbox
+	m.workspace.inbox = []inboxItem{
+		{ID: "i1", Summary: "Review deployment plan"},
+		{ID: "i2", Summary: "Approve feature branch"},
+	}
+	m.workspace.inboxCursor = 0
+
+	// ↓ moves cursor 0→1; should show second item summary.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+	if !strings.Contains(m.statusMessage, "Approve feature branch") && !strings.Contains(m.statusMessage, "▸") {
+		t.Errorf("EX-272: ↓ in ViewInbox should show item summary; got %q", m.statusMessage)
+	}
+
+	// ↓ again: already at last item.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+	if !strings.Contains(m.statusMessage, "last") {
+		t.Errorf("EX-272: ↓ at last inbox item should say 'last'; got %q", m.statusMessage)
+	}
+
+	// ↑ moves cursor 1→0; should show first item summary.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+	if !strings.Contains(m.statusMessage, "Review deployment plan") && !strings.Contains(m.statusMessage, "▸") {
+		t.Errorf("EX-272: ↑ in ViewInbox should show item summary; got %q", m.statusMessage)
+	}
+
+	// ↑ again: already at first item.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+	if !strings.Contains(m.statusMessage, "first") {
+		t.Errorf("EX-272: ↑ at first inbox item should say 'first'; got %q", m.statusMessage)
+	}
+}
+
+// TestGGJumpFeedbackEX273 verifies that g/G in ViewInbox and ViewProject show
+// item/task title feedback — consistent with ViewDashboard (EX-135/EX-190).
+func TestGGJumpFeedbackEX273(t *testing.T) {
+	// — ViewInbox g/G —
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.mainView = ViewInbox
+	m.workspace.inbox = []inboxItem{
+		{ID: "i1", Summary: "Review deployment plan"},
+		{ID: "i2", Summary: "Approve feature branch"},
+	}
+	m.workspace.inboxCursor = 1 // start at last item
+
+	// g → jump to first item, show summary.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if !strings.Contains(m.statusMessage, "Review deployment plan") {
+		t.Errorf("EX-273: g in ViewInbox should show first item summary; got %q", m.statusMessage)
+	}
+
+	// G → jump to last item, show summary.
+	m.workspace.inboxCursor = 0
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if !strings.Contains(m.statusMessage, "Approve feature branch") {
+		t.Errorf("EX-273: G in ViewInbox should show last item summary; got %q", m.statusMessage)
+	}
+
+	// — ViewProject g/G —
+	m2 := NewModel(DefaultState())
+	m2.width, m2.height = 220, 40
+	m2.focus = MainPanel
+	m2.workspace.mainView = ViewProject
+	m2.workspace.selectedProjectID = "p1"
+	m2.workspace.selectedProject = &ProjectDetail{
+		ID: "p1",
+		Tasks: []SidebarTaskItem{
+			{ID: "t1", Title: "First task", TaskNumber: 1, WorkStatus: "todo"},
+			{ID: "t2", Title: "Last task", TaskNumber: 2, WorkStatus: "in_progress"},
+		},
+	}
+	m2.workspace.projectTaskCursor = 1
+
+	// g → jump to first task, show title.
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if !strings.Contains(m2.statusMessage, "First task") {
+		t.Errorf("EX-273: g in ViewProject should show first task title; got %q", m2.statusMessage)
+	}
+
+	// G → jump to last task, show title.
+	m2.workspace.projectTaskCursor = 0
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if !strings.Contains(m2.statusMessage, "Last task") {
+		t.Errorf("EX-273: G in ViewProject should show last task title; got %q", m2.statusMessage)
+	}
+}
