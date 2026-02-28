@@ -2575,7 +2575,7 @@ func (m Model) commandPaletteSuggestions(limit int) []string {
 	// EX-245: added "cmd: help" and "cmd: session" which were missing.
 	for _, command := range []string{
 		"cmd: frank", "cmd: general", "cmd: dashboard", "cmd: project", "cmd: task",
-		"cmd: inbox", "cmd: agents", "cmd: activity", "cmd: merges", "cmd: schedules",
+		"cmd: inbox", "cmd: agents", "cmd: agent", "cmd: activity", "cmd: merges", "cmd: schedules",
 		"cmd: focus sidebar", "cmd: focus main", "cmd: focus chat",
 		"cmd: scope org", "cmd: scope project", "cmd: scope task",
 		"cmd: send", "cmd: cancel-turn",
@@ -2584,6 +2584,10 @@ func (m Model) commandPaletteSuggestions(limit int) []string {
 		"cmd: sidebar expand", "cmd: sidebar collapse", "cmd: sidebar select",
 		"cmd: inbox approve", "cmd: inbox reject", "cmd: inbox defer", "cmd: inbox open",
 		"cmd: tour dismiss", "cmd: help", "cmd: quit",
+		// EX-399: include aliases added in EX-390/391/392/395 so Tab autocomplete works.
+		"cmd: chat", "cmd: search", "cmd: filter", "cmd: back", "cmd: refresh",
+		"cmd: reload", "cmd: n", "cmd: next", "cmd: version", "cmd: open", "cmd: close",
+		"cmd: man", "cmd: history",
 	} {
 		add(&candidates, command)
 	}
