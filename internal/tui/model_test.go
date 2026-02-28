@@ -8147,6 +8147,65 @@ func TestCtrlUInCommandModeClearsBufferEX311(t *testing.T) {
 	}
 }
 
+// TestArrowKeysInViewTaskAndViewHelpEX312 verifies that ↑/↓ arrow keys in
+// ViewTask navigate tasks (mirrors k/j) and in ViewHelp scroll the content
+// (mirrors k/j). Also verifies the hint in non-navigable views.
+func TestArrowKeysInViewTaskAndViewHelpEX312(t *testing.T) {
+	// --- ViewTask: Up/Down mirrors k/j (stepTaskInProject ±1) ---
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewTask)
+	// Populate selectedProject so openTasksForProject returns two tasks.
+	t1ID := "task-1"
+	t2ID := "task-2"
+	m.workspace.selectedProjectID = "proj-1"
+	m.workspace.selectedProject = &ProjectDetail{
+		ID: "proj-1",
+		Tasks: []SidebarTaskItem{
+			{ID: t1ID, Title: "First task", WorkStatus: "todo"},
+			{ID: t2ID, Title: "Second task", WorkStatus: "todo"},
+		},
+	}
+	m.workspace.selectedTaskID = t1ID
+	m.workspace.projectTaskCursor = 0
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.workspace.selectedTaskID != t2ID {
+		t.Errorf("EX-312: ↓ in ViewTask should advance to second task; got selectedTaskID=%q", m.workspace.selectedTaskID)
+	}
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+	if m.workspace.selectedTaskID != t1ID {
+		t.Errorf("EX-312: ↑ in ViewTask should move back to first task; got selectedTaskID=%q", m.workspace.selectedTaskID)
+	}
+
+	// --- ViewHelp: Up/Down scrolls one line ---
+	m2 := NewModel(DefaultState())
+	m2.width, m2.height = 220, 40
+	m2.focus = MainPanel
+	m2.workspace.setMainView(ViewHelp)
+	m2.helpScrollOffset = 5
+
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyUp})
+	if m2.helpScrollOffset != 4 {
+		t.Errorf("EX-312: ↑ in ViewHelp should decrement scrollOffset from 5 to 4; got %d", m2.helpScrollOffset)
+	}
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyDown})
+	if m2.helpScrollOffset != 5 {
+		t.Errorf("EX-312: ↓ in ViewHelp should increment scrollOffset from 4 to 5; got %d", m2.helpScrollOffset)
+	}
+
+	// --- Non-navigable views: show hint instead of silent no-op ---
+	m3 := NewModel(DefaultState())
+	m3.width, m3.height = 220, 40
+	m3.focus = MainPanel
+	m3.workspace.setMainView(ViewAgents)
+	m3 = pressKey(m3, tea.KeyMsg{Type: tea.KeyDown})
+	if !strings.Contains(m3.statusMessage, "navigation not available") {
+		t.Errorf("EX-312: ↓ in ViewAgents should show navigation hint; got %q", m3.statusMessage)
+	}
+}
+
 // TestEscInChatEmptyInputFocusesMainEX309 verifies that Esc in the chat panel
 // with no active turn and empty input moves focus to the main panel.
 func TestEscInChatEmptyInputFocusesMainEX309(t *testing.T) {

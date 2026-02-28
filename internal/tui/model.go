@@ -980,8 +980,13 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
 			// EX-306/307: PgUp/PgDn/Home/End in ViewTask navigate through project tasks,
 			// mirroring j/k (stepTaskInProject ±1) with larger jumps.
+			// EX-312: ↑/↓ arrow keys also navigate tasks (mirror k/j from handleWorkspaceRune).
 			// stepTaskInProject handles clamping and boundary messages automatically.
 			switch key.Type {
+			case tea.KeyUp:
+				return m, m.stepTaskInProject(-1)
+			case tea.KeyDown:
+				return m, m.stepTaskInProject(1)
 			case tea.KeyPgUp:
 				return m, m.stepTaskInProject(-chatScrollStepLines)
 			case tea.KeyPgDown:
@@ -995,6 +1000,7 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
 			// EX-274: PgUp/PgDn scroll the help view by a page — currently j/k
 			// scroll one line at a time but PgUp/PgDn were silent no-ops.
+			// EX-312: ↑/↓ arrow keys also scroll one line (mirror k/j from handleWorkspaceRune).
 			helpMaxOffset := func() int {
 				extra := 2
 				if m.degradedModeBanner() != "" {
@@ -1018,6 +1024,23 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return mo
 			}
 			switch key.Type {
+			case tea.KeyUp:
+				// EX-312: ↑ scrolls up one line (mirrors 'k').
+				if m.helpScrollOffset > 0 {
+					m.helpScrollOffset--
+				} else {
+					m.statusMessage = "Already at top of help."
+				}
+				return m, nil
+			case tea.KeyDown:
+				// EX-312: ↓ scrolls down one line (mirrors 'j').
+				maxOff := helpMaxOffset()
+				if m.helpScrollOffset >= maxOff {
+					m.statusMessage = "Already at bottom of help."
+				} else {
+					m.helpScrollOffset++
+				}
+				return m, nil
 			case tea.KeyPgUp:
 				// PgUp = scroll UP through the document (like pressing k×8).
 				if m.helpScrollOffset == 0 {
@@ -1072,6 +1095,14 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// EX-180: handleEscapeKey now returns a tea.Cmd so it can load
 			// project data when navigating back from task to project view.
 			return m, m.handleEscapeKey()
+		}
+		// EX-312: ↑/↓ in non-navigable main views — give the same hint as j/k (EX-283).
+		if m.focus == MainPanel && (key.Type == tea.KeyUp || key.Type == tea.KeyDown) {
+			switch m.workspace.mainView {
+			case ViewAgents, ViewMerges, ViewSchedules, ViewActivity:
+				m.statusMessage = "j/k navigation not available here. Use r to refresh."
+				return m, nil
+			}
 		}
 		return m, nil
 	case tea.KeySpace:
