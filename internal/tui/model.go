@@ -1576,7 +1576,14 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		}
 	case 'g':
 		if m.focus == SidebarPanel {
+			// EX-297: give label/boundary feedback matching Home (EX-290).
+			prevCursor := m.workspace.sidebarCursor
 			m.workspace.sidebarHome()
+			if m.workspace.sidebarCursor == prevCursor {
+				m.statusMessage = "At first item in sidebar."
+			} else if node := m.workspace.currentSidebarNode(); node != nil {
+				m.statusMessage = "▸ " + truncate(node.Label, 40)
+			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			m.workspace.inboxHome()
 			// EX-273: mirror ViewDashboard g feedback — show item summary.
@@ -1626,7 +1633,14 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		return true, nil
 	case 'G':
 		if m.focus == SidebarPanel {
+			// EX-297: give label/boundary feedback matching End (EX-290).
+			prevCursor := m.workspace.sidebarCursor
 			m.workspace.sidebarEnd()
+			if m.workspace.sidebarCursor == prevCursor {
+				m.statusMessage = "At last item in sidebar."
+			} else if node := m.workspace.currentSidebarNode(); node != nil {
+				m.statusMessage = "▸ " + truncate(node.Label, 40)
+			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			m.workspace.inboxEnd()
 			// EX-273: mirror ViewDashboard G feedback — show item summary.

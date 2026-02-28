@@ -7644,3 +7644,53 @@ func TestProjectJKEmptyFeedbackEX296(t *testing.T) {
 		}
 	}
 }
+
+// TestSidebarGGFeedbackEX297 verifies that g/G in the sidebar show node-label
+// feedback matching Home/End (EX-290) instead of silently jumping.
+func TestSidebarGGFeedbackEX297(t *testing.T) {
+	makeModel := func() Model {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = SidebarPanel
+		m.workspace.topLevel = []string{"node-a", "node-b", "node-c"}
+		m.workspace.nodes = map[string]*sidebarNode{
+			"node-a": {ID: "node-a", Label: "Alpha", Kind: sidebarKindProject, ProjectID: "p-a"},
+			"node-b": {ID: "node-b", Label: "Beta", Kind: sidebarKindProject, ProjectID: "p-b"},
+			"node-c": {ID: "node-c", Label: "Gamma", Kind: sidebarKindProject, ProjectID: "p-c"},
+		}
+		m.workspace.sidebarCursor = 1 // start in the middle
+		return m
+	}
+
+	// G → jumps to last item, shows its label.
+	m := makeModel()
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if m.workspace.sidebarCursor != 2 {
+		t.Errorf("EX-297: G should jump cursor to 2; got %d", m.workspace.sidebarCursor)
+	}
+	if m.statusMessage != "▸ Gamma" {
+		t.Errorf("EX-297: G should show 'Gamma'; got %q", m.statusMessage)
+	}
+
+	// G again → already at last item, boundary message.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if m.statusMessage != "At last item in sidebar." {
+		t.Errorf("EX-297: G at last should say 'At last item in sidebar.'; got %q", m.statusMessage)
+	}
+
+	// g → jumps to first item, shows its label.
+	m = makeModel()
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if m.workspace.sidebarCursor != 0 {
+		t.Errorf("EX-297: g should jump cursor to 0; got %d", m.workspace.sidebarCursor)
+	}
+	if m.statusMessage != "▸ Alpha" {
+		t.Errorf("EX-297: g should show 'Alpha'; got %q", m.statusMessage)
+	}
+
+	// g again → already at first, boundary message.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if m.statusMessage != "At first item in sidebar." {
+		t.Errorf("EX-297: g at first should say 'At first item in sidebar.'; got %q", m.statusMessage)
+	}
+}
