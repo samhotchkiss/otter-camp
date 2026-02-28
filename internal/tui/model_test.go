@@ -9420,3 +9420,40 @@ func TestSidebarToggleHintOnWideScreenEX359(t *testing.T) {
 		t.Errorf("EX-359 regression: 's' on small screen should toggle sidebar, not show wide-screen hint")
 	}
 }
+
+// TestPgUpDnInSearchModeEX360 verifies that pressing PgUp or PgDn while in
+// sidebar/main filter search mode commits the active filter and delegates to
+// normal page-navigation, mirroring the ↑/↓ (EX-313) behaviour (EX-360).
+func TestPgUpDnInSearchModeEX360(t *testing.T) {
+	// PgUp in sidebar search mode → exits search mode and navigates up (sidebar).
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = SidebarPanel
+	m.searchMode = true
+	m.searchPanel = SidebarPanel
+	m.searchQuery = "foo"
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	// Search mode should be exited.
+	if m1.searchMode {
+		t.Errorf("EX-360: PgUp in search mode should exit search mode")
+	}
+	// Filter should be applied.
+	if m1.sidebarFilter != "foo" {
+		t.Errorf("EX-360: PgUp in search mode should commit filter; got %q", m1.sidebarFilter)
+	}
+
+	// PgDn in sidebar search mode → exits search mode and navigates down.
+	m2 := NewModel(DefaultState())
+	m2.width, m2.height = 220, 40
+	m2.focus = SidebarPanel
+	m2.searchMode = true
+	m2.searchPanel = SidebarPanel
+	m2.searchQuery = "bar"
+	m3 := pressKey(m2, tea.KeyMsg{Type: tea.KeyPgDown})
+	if m3.searchMode {
+		t.Errorf("EX-360: PgDn in search mode should exit search mode")
+	}
+	if m3.sidebarFilter != "bar" {
+		t.Errorf("EX-360: PgDn in search mode should commit filter; got %q", m3.sidebarFilter)
+	}
+}

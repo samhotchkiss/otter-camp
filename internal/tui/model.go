@@ -2867,9 +2867,10 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Nothing to delete. Press Esc to exit search mode."
 		}
 		return m, nil
-	case tea.KeyUp, tea.KeyDown:
+	case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
 		// EX-313: ↑/↓ in filter mode commits the filter and then navigates the list,
 		// so the user can type a query and immediately scroll results without pressing Enter first.
+		// EX-360: PgUp/PgDn mirror this behaviour — commit filter + page through results.
 		m.setFilterForPanel(m.searchPanel, m.searchQuery)
 		m.searchMode = false
 		q := strings.TrimSpace(m.searchQuery)
