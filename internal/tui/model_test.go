@@ -7846,6 +7846,68 @@ func TestSidebarSelectCommandSessionFeedbackEX475(t *testing.T) {
 	})
 }
 
+// TestNextUnreadAlreadyActiveSessionEX476 verifies EX-476: pressing 'n' (or
+// running :n/:next) when there is exactly one unread session AND it is already
+// the active session must say "Already on the only unread session." rather than
+// the misleading "Jumped to next unread session." (nothing actually changed).
+func TestNextUnreadAlreadyActiveSessionEX476(t *testing.T) {
+	sessionID := "11111111-2222-3333-4444-555555555555"
+	nodeID := "sess-" + sessionID
+
+	buildModel := func() Model {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.activeSession = sessionID
+		m.workspace.activeSessionID = sessionID
+		m.workspace.nodes = map[string]*sidebarNode{
+			nodeID: {
+				ID:        nodeID,
+				Label:     "Only session",
+				Kind:      sidebarKindSession,
+				SessionID: sessionID,
+				Unread:    2,
+			},
+		}
+		m.workspace.topLevel = []string{nodeID}
+		m.workspace.sidebarCursor = 0
+		return m
+	}
+
+	t.Run("n-key-already-on-only-unread", func(t *testing.T) {
+		m := buildModel()
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+		if got := m.statusMessage; got != "Already on the only unread session." {
+			t.Fatalf("EX-476: n key on already-active unread session = %q, want %q",
+				got, "Already on the only unread session.")
+		}
+	})
+
+	t.Run("n-key-jumps-when-different-session-active", func(t *testing.T) {
+		otherID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		m := buildModel()
+		m.activeSession = otherID
+		m.workspace.activeSessionID = otherID
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+		if got := m.statusMessage; got != "Jumped to next unread session." {
+			t.Fatalf("EX-476: n key jumping to different unread session = %q, want %q",
+				got, "Jumped to next unread session.")
+		}
+	})
+
+	t.Run("colon-n-already-on-only-unread", func(t *testing.T) {
+		m := buildModel()
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+		for _, r := range "n" {
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if got := m.statusMessage; got != "Already on the only unread session." {
+			t.Fatalf("EX-476: :n on already-active unread session = %q, want %q",
+				got, "Already on the only unread session.")
+		}
+	})
+}
+
 // TestHelpCommandIdempotencyEX468 verifies EX-468: :help/:palette when already
 // in ViewHelp says "Help: scrolled to top." (and resets scroll) rather than
 // re-announcing "Keybinding reference." as if opening fresh — mirrors EX-467 for :man.

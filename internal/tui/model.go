@@ -2850,6 +2850,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 	case 'n':
 		if m.focus != ChatPanel {
 			if nextID := m.workspace.nextUnreadSession(); nextID != "" {
+				// EX-476: capture current session before selectSidebarNode mutates it
+				// so we can detect "already there" — when there is only one unread
+				// session and it is already the active session, saying "Jumped to next
+				// unread session." is misleading (nothing actually changed).
+				prevSessionN := strings.TrimSpace(m.activeSession)
 				// Move cursor to the unread session and activate it
 				visible := m.workspace.visibleSidebarIDs()
 				for i, id := range visible {
@@ -2864,7 +2869,13 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.clearTurnIfSwitchingSession(sessionID)
 				m.activeSession = sessionID
 				m.chatScrollOffset = 0
-				m.statusMessage = "Jumped to next unread session."
+				// EX-476: distinguish "jumped" (different session) from "already on
+				// the only unread session" (same session — no navigation occurred).
+				if looksLikeUUID(prevSessionN) && strings.EqualFold(prevSessionN, strings.TrimSpace(sessionID)) {
+					m.statusMessage = "Already on the only unread session."
+				} else {
+					m.statusMessage = "Jumped to next unread session."
+				}
 				m.setFocus(SidebarPanel)
 				// EX-166: reload chat history so the chat panel shows the unread session's
 				// messages, not the previous session's (selectSidebarNode only sets the ID).
@@ -4521,6 +4532,9 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 	case "n", "next":
 		// EX-391: :n/:next (vim: next file/buffer) — jump to next unread session.
 		if nextID := m.workspace.nextUnreadSession(); nextID != "" {
+			// EX-476: capture current session before selectSidebarNode mutates it
+			// (mirrors the 'n' key fix) so we can detect "already on it".
+			prevSessionN := strings.TrimSpace(m.activeSession)
 			visible := m.workspace.visibleSidebarIDs()
 			for i, id := range visible {
 				if id == nextID {
@@ -4533,7 +4547,12 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 			m.clearTurnIfSwitchingSession(sessionID)
 			m.activeSession = sessionID
 			m.chatScrollOffset = 0
-			m.statusMessage = "Jumped to next unread session."
+			// EX-476: distinguish "jumped" from "already on the only unread session".
+			if looksLikeUUID(prevSessionN) && strings.EqualFold(prevSessionN, strings.TrimSpace(sessionID)) {
+				m.statusMessage = "Already on the only unread session."
+			} else {
+				m.statusMessage = "Jumped to next unread session."
+			}
 			m.setFocus(SidebarPanel)
 			if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
 				m.chatMessages = nil
