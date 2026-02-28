@@ -8147,6 +8147,53 @@ func TestCtrlUInCommandModeClearsBufferEX311(t *testing.T) {
 	}
 }
 
+// TestCtrlWInSearchAndCommandModeEX314 verifies Ctrl-W deletes the last word
+// in filter mode (search) and in command mode, mirroring EX-303 for chat.
+func TestCtrlWInSearchAndCommandModeEX314(t *testing.T) {
+	// --- Ctrl-W in filter mode ---
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.searchMode = true
+	m.searchPanel = SidebarPanel
+	m.searchQuery = "hello world"
+	m.setFilterForPanel(SidebarPanel, "hello world")
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlW})
+
+	if !m.searchMode {
+		t.Errorf("EX-314: Ctrl-W in filter mode should stay in search mode")
+	}
+	if m.searchQuery != "hello " {
+		t.Errorf("EX-314 filter: expected %q after Ctrl-W; got %q", "hello ", m.searchQuery)
+	}
+
+	// Delete last word again (only "hello" left after trimming trailing space)
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlW})
+	if m.searchQuery != "" {
+		t.Errorf("EX-314 filter: expected empty after second Ctrl-W; got %q", m.searchQuery)
+	}
+
+	// --- Ctrl-W in command mode ---
+	m2 := NewModel(DefaultState())
+	m2.width, m2.height = 220, 40
+	m2.commandMode = true
+	m2.commandBuffer = ":deploy all"
+
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyCtrlW})
+
+	if !m2.commandMode {
+		t.Errorf("EX-314: Ctrl-W in command mode should stay in command mode")
+	}
+	if m2.commandBuffer != ":deploy " {
+		t.Errorf("EX-314 command: expected ':deploy '; got %q", m2.commandBuffer)
+	}
+
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyCtrlW})
+	if m2.commandBuffer != ":" {
+		t.Errorf("EX-314 command: expected ':' after second Ctrl-W; got %q", m2.commandBuffer)
+	}
+}
+
 // TestEX313EnterInViewHelpAndUpDownInSearchMode tests two EX-313 fixes:
 // 1. Enter in ViewHelp shows a contextual hint (not the generic "not available" message).
 // 2. Up/Down in search mode commits the filter and navigates the list.

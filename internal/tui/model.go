@@ -2575,6 +2575,20 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Filter cleared. Continue typing or Esc to exit."
 		}
 		return m, nil
+	case tea.KeyCtrlW:
+		// EX-314: Ctrl-W in filter mode deletes the last word (mirrors EX-303 for chat).
+		if len(m.searchQuery) > 0 {
+			trimmed := strings.TrimRight(m.searchQuery, " \t")
+			lastSpace := strings.LastIndexAny(trimmed, " \t")
+			if lastSpace >= 0 {
+				m.searchQuery = trimmed[:lastSpace+1]
+			} else {
+				m.searchQuery = ""
+			}
+			m.setFilterForPanel(m.searchPanel, m.searchQuery)
+			m.statusMessage = "Last word deleted."
+		}
+		return m, nil
 	case tea.KeyUp, tea.KeyDown:
 		// EX-313: ↑/↓ in filter mode commits the filter and then navigates the list,
 		// so the user can type a query and immediately scroll results without pressing Enter first.
@@ -2646,6 +2660,21 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.commandBuffer != ":" {
 			m.commandBuffer = ":"
 			m.statusMessage = "Command cleared."
+		}
+		return m, nil
+	case tea.KeyCtrlW:
+		// EX-314: Ctrl-W in command mode deletes the last word (mirrors EX-303 for chat).
+		// Always keep the ":" prompt prefix.
+		suffix := strings.TrimPrefix(m.commandBuffer, ":")
+		if len(suffix) > 0 {
+			trimmed := strings.TrimRight(suffix, " \t")
+			lastSpace := strings.LastIndexAny(trimmed, " \t")
+			if lastSpace >= 0 {
+				m.commandBuffer = ":" + trimmed[:lastSpace+1]
+			} else {
+				m.commandBuffer = ":"
+			}
+			m.statusMessage = "Last word deleted."
 		}
 		return m, nil
 	case tea.KeySpace:
