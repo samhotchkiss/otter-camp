@@ -3198,6 +3198,33 @@ func TestSidebarEmptyJKArrowsEX415(t *testing.T) {
 	}
 }
 
+// EX-416: h/l and ←/→ in an empty sidebar said nothing (silent no-op).
+// They should say "No items in sidebar." to match EX-413/414/415.
+// Note: Backspace in sidebar delegates to ← so it is implicitly covered.
+func TestSidebarEmptyHLArrowsEX416(t *testing.T) {
+	keys := []struct {
+		name string
+		key  tea.KeyMsg
+	}{
+		{"h", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}}},
+		{"l", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}},
+		{"left", tea.KeyMsg{Type: tea.KeyLeft}},
+		{"right", tea.KeyMsg{Type: tea.KeyRight}},
+	}
+	for _, tt := range keys {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = SidebarPanel
+			m.workspace.topLevel = nil
+			m.workspace.nodes = map[string]*sidebarNode{}
+			m = pressKey(m, tt.key)
+			if !strings.Contains(m.statusMessage, "No items") {
+				t.Fatalf("statusMessage = %q, want 'No items in sidebar.'", m.statusMessage)
+			}
+		})
+	}
+}
+
 // EX-160: Inbox approve/reject/defer were local-only; pressing 'a', 'x', 'f'
 // must also return a tea.Cmd that calls ActOnInboxItem with the correct item ID.
 func TestInboxApproveIssuesServerAPICall(t *testing.T) {

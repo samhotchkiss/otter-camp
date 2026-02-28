@@ -2224,6 +2224,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		return true, nil
 	case 'h':
 		if m.focus == SidebarPanel {
+			// EX-416: empty sidebar guard — mirrors EX-413/414/415 for h key.
+			if len(m.workspace.visibleSidebarIDs()) == 0 {
+				m.statusMessage = "No items in sidebar."
+				return true, nil
+			}
 			node := m.workspace.currentSidebarNode()
 			// EX-282: capture state before collapseSidebarNode mutates the node.
 			var nodeLabel string
@@ -2266,6 +2271,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		return true, nil
 	case 'l':
 		if m.focus == SidebarPanel {
+			// EX-416: empty sidebar guard — mirrors EX-413/414/415 for l key.
+			if len(m.workspace.visibleSidebarIDs()) == 0 {
+				m.statusMessage = "No items in sidebar."
+				return true, nil
+			}
 			node := m.workspace.currentSidebarNode()
 			m.workspace.expandSidebarNode()
 			// EX-282: give feedback about what was expanded.
@@ -3181,6 +3191,11 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		return true, nil
 	case tea.KeyLeft:
 		// EX-282: ← mirrors h — give same collapse feedback.
+		// EX-416: empty sidebar guard — mirrors EX-413/414/415 for ← key.
+		if len(m.workspace.visibleSidebarIDs()) == 0 {
+			m.statusMessage = "No items in sidebar."
+			return true, nil
+		}
 		// Capture state before collapseSidebarNode mutates the node pointer.
 		node := m.workspace.currentSidebarNode()
 		var nodeLabel string
@@ -3219,6 +3234,11 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		return true, nil
 	case tea.KeyRight:
 		// EX-282: → mirrors l — give same expand feedback.
+		// EX-416: empty sidebar guard — mirrors EX-413/414/415 for → key.
+		if len(m.workspace.visibleSidebarIDs()) == 0 {
+			m.statusMessage = "No items in sidebar."
+			return true, nil
+		}
 		node := m.workspace.currentSidebarNode()
 		if node != nil {
 			if node.Kind == sidebarKindProject {
