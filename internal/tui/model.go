@@ -5345,6 +5345,12 @@ func (m *Model) executeSidebarCommand(args []string) tea.Cmd {
 		return nil
 	}
 	m.setFocus(SidebarPanel)
+	// EX-418: navigation and selection commands in an empty sidebar should say
+	// "No items in sidebar." rather than a misleading "moved up/down/expanded" etc.
+	if len(m.workspace.visibleSidebarIDs()) == 0 {
+		m.statusMessage = "No items in sidebar."
+		return nil
+	}
 	switch strings.ToLower(args[0]) {
 	case "up":
 		m.workspace.moveSidebar(-1)

@@ -3273,6 +3273,33 @@ func TestScopeCycleProjectEX417(t *testing.T) {
 	})
 }
 
+// EX-418: :sidebar up/down/home/end/expand/collapse/select in an empty sidebar
+// gave misleading "Sidebar cursor moved up." etc. messages rather than acknowledging
+// there is nothing to navigate.
+func TestSidebarCommandEmptySidebarEX418(t *testing.T) {
+	cmds := []string{"up", "down", "home", "end", "expand", "collapse", "select", "open"}
+	for _, cmd := range cmds {
+		t.Run(cmd, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = SidebarPanel
+			m.workspace.topLevel = nil
+			m.workspace.nodes = map[string]*sidebarNode{}
+
+			// Execute via :sidebar <cmd>
+			_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+			m2 := NewModel(DefaultState())
+			m2.focus = SidebarPanel
+			m2.workspace.topLevel = nil
+			m2.workspace.nodes = map[string]*sidebarNode{}
+			// Call executeSidebarCommand directly to avoid command-mode keystrokes.
+			m2.executeSidebarCommand([]string{cmd})
+			if !strings.Contains(m2.statusMessage, "No items") {
+				t.Fatalf(":sidebar %s statusMessage = %q, want 'No items in sidebar.'", cmd, m2.statusMessage)
+			}
+		})
+	}
+}
+
 // EX-160: Inbox approve/reject/defer were local-only; pressing 'a', 'x', 'f'
 // must also return a tea.Cmd that calls ActOnInboxItem with the correct item ID.
 func TestInboxApproveIssuesServerAPICall(t *testing.T) {
