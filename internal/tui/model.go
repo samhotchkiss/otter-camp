@@ -1327,6 +1327,12 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.statusMessage = "Focus sidebar or chat panel to resize with < >"
 					return m, nil
 				}
+				// EX-401: resizeFocusedPanel returned false for a non-MainPanel focus.
+				// This can happen when panel proportions are at extreme values (e.g.
+				// the other panel fills nearly the whole screen). Give honest feedback
+				// rather than silently falling through to an unrelated handler.
+				m.statusMessage = "Cannot resize further — panel at minimum or maximum width."
+				return m, nil
 			}
 			if r == '/' && (m.focus == SidebarPanel || m.focus == MainPanel) {
 				// EX-214: the help view does not filter on mainFilter, so entering

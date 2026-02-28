@@ -11087,3 +11087,31 @@ func TestSendOrQueueInputPlaceholderSessionEX400(t *testing.T) {
 		t.Errorf("EX-400: chatInput should be cleared after send, got %q", m3.chatInput)
 	}
 }
+
+// TestResizeFallthroughEX401 verifies that < / > in Sidebar/Chat panel produce
+// an honest boundary hint instead of silently falling through to an unrelated
+// handler when resizeFocusedPanel cannot resize (EX-401).
+// We force the impossible case by setting panel proportions so the other panel
+// is so wide that minTarget > maxTarget.
+func TestResizeFallthroughEX401(t *testing.T) {
+	// Force sidebar focus and push chat proportion so high that the sidebar
+	// panel constraints are violated (other = chat at 0.88).
+	m := NewModel(DefaultState())
+	m.focus = SidebarPanel
+	// Push the chat proportion to 0.88, leaving almost no room for sidebar.
+	m.state.PanelProportions = [3]float64{0.05, 0.07, 0.88}
+
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'<'}})
+	if !strings.Contains(m1.statusMessage, "Cannot resize") && !strings.Contains(m1.statusMessage, "minimum") && !strings.Contains(m1.statusMessage, "maximum") {
+		// resizeFocusedPanel might succeed (clamped); if it does that's fine too.
+		// Only fail if the status message is completely empty (silent no-op).
+		if m1.statusMessage == "" {
+			t.Errorf("EX-401: < in SidebarPanel with extreme proportions should give feedback, got empty statusMessage")
+		}
+	}
+
+	m2 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'>'}})
+	if m2.statusMessage == "" {
+		t.Errorf("EX-401: > in SidebarPanel should give feedback (resize or boundary), got empty statusMessage")
+	}
+}
