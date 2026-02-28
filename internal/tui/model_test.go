@@ -4909,6 +4909,56 @@ func TestSidebarSelectTaskScopedSessionEX483(t *testing.T) {
 	}
 }
 
+// TestSidebarSelectProjectNodeSetsStateEX484 verifies EX-484: :sidebar select on a
+// project node sets activeScope=ScopeProject, clears stale selectedProject, resets
+// projectTaskCursor, and sets statusMessage to the project name — mirroring the
+// handleEnterKey sidebarKindProject path. Previously scope was wrong, stale project
+// detail persisted, and the status message stayed the generic "Sidebar selection applied.".
+func TestSidebarSelectProjectNodeSetsStateEX484(t *testing.T) {
+	projID := "proj-484"
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjectDetail: func(_ context.Context, id string) (*ProjectDetail, error) {
+			return &ProjectDetail{ID: id, DisplayName: "Gamma Project"}, nil
+		},
+		LoadProjectTasks: func(_ context.Context, id string) ([]SidebarTaskItem, error) {
+			return nil, nil
+		},
+	})
+	m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	if m.workspace.nodes == nil {
+		m.workspace.nodes = make(map[string]*sidebarNode)
+	}
+	// Simulate stale project state from a previous selection
+	m.workspace.selectedProject = &ProjectDetail{ID: "old-proj", DisplayName: "Old Project"}
+	m.workspace.projectTaskCursor = 5
+	m.activeScope = ScopeTask // stale scope from previous task session
+
+	nodeID := "proj-" + projID
+	m.workspace.nodes[nodeID] = &sidebarNode{
+		ID:        nodeID,
+		Kind:      sidebarKindProject,
+		ProjectID: projID,
+		Label:     "Gamma Project",
+	}
+	m.workspace.topLevel = []string{nodeID}
+	m.workspace.sidebarCursor = 0
+
+	_ = m.executeCommand(":sidebar select")
+
+	if m.activeScope != ScopeProject {
+		t.Fatalf("EX-484: activeScope = %v, want ScopeProject", m.activeScope)
+	}
+	if m.workspace.selectedProject != nil {
+		t.Fatal("EX-484: selectedProject should be cleared to nil (stale detail evicted)")
+	}
+	if m.workspace.projectTaskCursor != 0 {
+		t.Fatalf("EX-484: projectTaskCursor = %d, want 0", m.workspace.projectTaskCursor)
+	}
+	if m.statusMessage != "Gamma Project" {
+		t.Fatalf("EX-484: statusMessage = %q, want %q", m.statusMessage, "Gamma Project")
+	}
+}
+
 // TestSidebarSelectOnHeaderGivesExpandCollapseMessageEX456 verifies EX-456:
 // :sidebar select on a section header gives "X section expanded/collapsed."
 // rather than the generic "Sidebar selection applied." — mirrors the Enter key

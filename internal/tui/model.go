@@ -6145,6 +6145,13 @@ func (m *Model) executeSidebarCommand(args []string) tea.Cmd {
 					m.activeScope = ScopeOrg
 				}
 			case sidebarKindProject:
+				// EX-484: set scope + clear stale project state to match handleEnterKey
+				// sidebarKindProject path (scope indicator was wrong; stale task cursor
+				// and project detail persisted across project switches via :sidebar select).
+				m.activeScope = ScopeProject
+				m.statusMessage = node.Label
+				m.workspace.selectedProject = nil
+				m.workspace.projectTaskCursor = 0
 				cmds = append(cmds, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true))
 				if m.runtimeHints.LoadProjectDetail != nil {
 					cmds = append(cmds, loadProjectDetailCmd(node.ProjectID, m.runtimeHints))
