@@ -770,8 +770,13 @@ func (m Model) renderMainPanel(innerW, innerH int, focused bool, layout layoutSt
 	lines = append(lines, viewLines...)
 
 	if searchLine := m.renderSearchBar(MainPanel, cw); searchLine != "" {
+		hint := searchLine
+		// EX-200: match EX-194 — show Esc hint in main panel search bar while editing.
+		if m.searchMode && m.searchPanel == MainPanel {
+			hint = styleMuted.Render(truncate("Search /"+m.mainFilter+"▌  (Esc to cancel)", cw))
+		}
 		lines = append(lines, "")
-		lines = append(lines, searchLine)
+		lines = append(lines, hint)
 	}
 
 	content := buildPanelContent(lines, innerH, cw)

@@ -3104,3 +3104,17 @@ These messages are returned immediately (`return true, nil`) so the auto-clear t
 **Status:** [x] Discovered | [x] Implemented | [x] Tested
 
 ---
+
+## EX-200: Main panel search bar lacks Escape hint (parallels EX-194 for sidebar)
+
+**Observation:** The main panel's search bar showed `"Search /query▌"` while actively receiving input, with no hint about how to exit. This was the same issue as EX-194 for the sidebar, but the fix wasn't applied to the main panel.
+
+**Improvement:** Applied the same pattern as EX-194: when `m.searchMode && m.searchPanel == MainPanel`, the main panel search bar now renders `"Search /query▌  (Esc to cancel)"` instead of the bare prompt.
+
+**Why it matters:** Discoverability. Consistent UX across both search bars — users who learned to press Esc in the sidebar expect the same in the main panel.
+
+**Effort:** Trivial (3 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Implemented | [x] Tested
+
+---
