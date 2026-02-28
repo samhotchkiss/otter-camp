@@ -7421,3 +7421,107 @@ func TestEscClearsChatInputEX289(t *testing.T) {
 	}
 	_ = before // silence unused warning
 }
+
+// TestSidebarHomeEndFeedbackEX290 verifies that Home/End in the sidebar show
+// node-label feedback (matching j/k EX-281) instead of silently jumping.
+func TestSidebarHomeEndFeedbackEX290(t *testing.T) {
+	makeModel := func() Model {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = SidebarPanel
+		m.workspace.topLevel = []string{"node-a", "node-b", "node-c"}
+		m.workspace.nodes = map[string]*sidebarNode{
+			"node-a": {ID: "node-a", Label: "Alpha", Kind: sidebarKindProject, ProjectID: "p-a"},
+			"node-b": {ID: "node-b", Label: "Beta", Kind: sidebarKindProject, ProjectID: "p-b"},
+			"node-c": {ID: "node-c", Label: "Gamma", Kind: sidebarKindProject, ProjectID: "p-c"},
+		}
+		m.workspace.sidebarCursor = 1 // start in the middle
+		return m
+	}
+
+	// End → jumps to last item, shows its label.
+	m := makeModel()
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+	if m.workspace.sidebarCursor != 2 {
+		t.Errorf("EX-290: End should jump cursor to 2; got %d", m.workspace.sidebarCursor)
+	}
+	if m.statusMessage != "▸ Gamma" {
+		t.Errorf("EX-290: End should show 'Gamma'; got %q", m.statusMessage)
+	}
+
+	// End again → already at last item, boundary message.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+	if m.statusMessage != "At last item in sidebar." {
+		t.Errorf("EX-290: End at last should say 'At last item in sidebar.'; got %q", m.statusMessage)
+	}
+
+	// Home → jumps to first item, shows its label.
+	m = makeModel()
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+	if m.workspace.sidebarCursor != 0 {
+		t.Errorf("EX-290: Home should jump cursor to 0; got %d", m.workspace.sidebarCursor)
+	}
+	if m.statusMessage != "▸ Alpha" {
+		t.Errorf("EX-290: Home should show 'Alpha'; got %q", m.statusMessage)
+	}
+
+	// Home again → already at first item, boundary message.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+	if m.statusMessage != "At first item in sidebar." {
+		t.Errorf("EX-290: Home at first should say 'At first item in sidebar.'; got %q", m.statusMessage)
+	}
+}
+
+// TestSidebarPgUpPgDnFeedbackEX291 verifies that PgUp/PgDn in the sidebar
+// show boundary feedback when the page scroll hits the first or last item.
+func TestSidebarPgUpPgDnFeedbackEX291(t *testing.T) {
+	makeModel := func() Model {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = SidebarPanel
+		ids := make([]string, 12)
+		nodes := make(map[string]*sidebarNode, 12)
+		for i := range ids {
+			id := fmt.Sprintf("node-%02d", i)
+			ids[i] = id
+			nodes[id] = &sidebarNode{ID: id, Label: fmt.Sprintf("Item %d", i), Kind: sidebarKindProject, ProjectID: id}
+		}
+		m.workspace.topLevel = ids
+		m.workspace.nodes = nodes
+		m.workspace.sidebarCursor = 5 // start in the middle
+		return m
+	}
+
+	// PgUp from middle → cursor advances toward 0, shows label of new position.
+	m := makeModel()
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.workspace.sidebarCursor != 0 {
+		t.Errorf("EX-291: PgUp from 5 should land at 0 (chatScrollStepLines=8 > 5); got %d", m.workspace.sidebarCursor)
+	}
+	if m.statusMessage != "▸ Item 0" {
+		t.Errorf("EX-291: PgUp should show 'Item 0'; got %q", m.statusMessage)
+	}
+
+	// PgUp at first item → boundary message.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.statusMessage != "At first item in sidebar." {
+		t.Errorf("EX-291: PgUp at first should say 'At first item in sidebar.'; got %q", m.statusMessage)
+	}
+
+	// PgDn from 0 → advances by 8 items.
+	m.workspace.sidebarCursor = 0
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.workspace.sidebarCursor != 8 {
+		t.Errorf("EX-291: PgDn from 0 should land at 8; got %d", m.workspace.sidebarCursor)
+	}
+	if m.statusMessage != "▸ Item 8" {
+		t.Errorf("EX-291: PgDn should show 'Item 8'; got %q", m.statusMessage)
+	}
+
+	// PgDn at last item → boundary message.
+	m.workspace.sidebarCursor = 11
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.statusMessage != "At last item in sidebar." {
+		t.Errorf("EX-291: PgDn at last should say 'At last item in sidebar.'; got %q", m.statusMessage)
+	}
+}

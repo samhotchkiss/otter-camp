@@ -1971,20 +1971,48 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		return true, nil
 	case tea.KeyHome:
 		// EX-277: Home/End in sidebar jump to first/last item (same as g/G).
+		// EX-290: give label/boundary feedback matching j/k and ↑/↓ (EX-281).
+		prevCursor := m.workspace.sidebarCursor
 		m.workspace.sidebarHome()
+		if m.workspace.sidebarCursor == prevCursor {
+			m.statusMessage = "At first item in sidebar."
+		} else if node := m.workspace.currentSidebarNode(); node != nil {
+			m.statusMessage = "▸ " + truncate(node.Label, 40)
+		}
 		return true, nil
 	case tea.KeyEnd:
+		// EX-290: give label/boundary feedback matching j/k and ↑/↓ (EX-281).
+		prevCursor := m.workspace.sidebarCursor
 		m.workspace.sidebarEnd()
+		if m.workspace.sidebarCursor == prevCursor {
+			m.statusMessage = "At last item in sidebar."
+		} else if node := m.workspace.currentSidebarNode(); node != nil {
+			m.statusMessage = "▸ " + truncate(node.Label, 40)
+		}
 		return true, nil
 	case tea.KeyPgUp:
 		// EX-278: PgUp/PgDn in sidebar scroll by a page (8 items at a time).
+		// EX-291: give boundary feedback when the page scroll hits the first item.
+		prevCursor := m.workspace.sidebarCursor
 		for i := 0; i < chatScrollStepLines; i++ {
 			m.workspace.moveSidebar(-1)
 		}
+		if m.workspace.sidebarCursor == prevCursor {
+			m.statusMessage = "At first item in sidebar."
+		} else if node := m.workspace.currentSidebarNode(); node != nil {
+			m.statusMessage = "▸ " + truncate(node.Label, 40)
+		}
 		return true, nil
 	case tea.KeyPgDown:
+		// EX-291: give boundary feedback when the page scroll hits the last item.
+		prevCursor := m.workspace.sidebarCursor
 		for i := 0; i < chatScrollStepLines; i++ {
 			m.workspace.moveSidebar(1)
+		}
+		if m.workspace.sidebarCursor == prevCursor {
+			m.statusMessage = "At last item in sidebar."
+		} else if node := m.workspace.currentSidebarNode(); node != nil {
+			m.statusMessage = "▸ " + truncate(node.Label, 40)
 		}
 		return true, nil
 	}
