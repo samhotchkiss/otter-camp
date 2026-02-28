@@ -4541,11 +4541,43 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		m.statusMessage = "Use the sidebar (1 to focus) to browse sessions and projects."
 	case "reload", "refresh":
 		// EX-391: :reload/:refresh — mirror the 'r' key behaviour.
+		// EX-471: be context-aware like 'r': reload task/project/inbox/agents when
+		// the corresponding view is active, not always the sidebar.
 		if m.workspace.mainView == ViewHelp {
 			m.statusMessage = "r·refresh not available in help view. Press Esc to close."
 			return nil
 		}
-		m.statusMessage = "Refreshing…"
+		if m.workspace.mainView == ViewTask && m.workspace.selectedTaskID != "" {
+			m.statusMessage = "Refreshing task detail…"
+			return loadTaskDetailCmd(m.workspace.selectedTaskID, m.runtimeHints)
+		}
+		if m.workspace.mainView == ViewProject && m.workspace.selectedProjectID != "" {
+			m.statusMessage = "Refreshing project detail…"
+			return tea.Batch(
+				loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints),
+				loadProjectTasksCmd(m.workspace.selectedProjectID, m.runtimeHints, false),
+			)
+		}
+		if m.workspace.mainView == ViewInbox {
+			m.statusMessage = "Refreshing inbox…"
+			return loadInboxItemsCmd(m.runtimeHints)
+		}
+		if m.workspace.mainView == ViewAgents {
+			m.statusMessage = "Refreshing agents…"
+			return loadAgentsCmd(m.runtimeHints)
+		}
+		switch m.workspace.mainView {
+		case ViewDashboard:
+			m.statusMessage = "Refreshing task board…"
+		case ViewActivity:
+			m.statusMessage = "Refreshing activity…"
+		case ViewMerges:
+			m.statusMessage = "Refreshing merges…"
+		case ViewSchedules:
+			m.statusMessage = "Refreshing schedules…"
+		default:
+			m.statusMessage = "Refreshing sidebar data…"
+		}
 		m.workspace.activity = appendActivity(m.workspace.activity,
 			"sidebar refreshed at "+m.now().Format("15:04:05"))
 		return loadSidebarDataCmd(m.runtimeHints)

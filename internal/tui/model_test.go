@@ -7544,6 +7544,89 @@ func TestProjectTaskNoSelectionGuardEX470(t *testing.T) {
 	})
 }
 
+// TestReloadCommandContextAwarenessEX471 verifies EX-471: :reload/:refresh mirrors
+// the 'r' key's context-awareness — refreshing task detail, project detail, inbox,
+// agents, or the dashboard board based on the current main view rather than always
+// running a generic sidebar refresh with "Refreshing…".
+func TestReloadCommandContextAwarenessEX471(t *testing.T) {
+	execCmd := func(m Model, cmd string) Model {
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+		for _, r := range cmd {
+			m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+		return pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	}
+
+	t.Run("reload-in-task-view", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewTask
+		m.workspace.selectedTaskID = "task-abc"
+		m = execCmd(m, "reload")
+		if got := m.statusMessage; got != "Refreshing task detail…" {
+			t.Fatalf("EX-471: :reload in task view = %q, want %q", got, "Refreshing task detail…")
+		}
+	})
+
+	t.Run("reload-in-project-view", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewProject
+		m.workspace.selectedProjectID = "proj-xyz"
+		m = execCmd(m, "reload")
+		if got := m.statusMessage; got != "Refreshing project detail…" {
+			t.Fatalf("EX-471: :reload in project view = %q, want %q", got, "Refreshing project detail…")
+		}
+	})
+
+	t.Run("reload-in-inbox", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewInbox
+		m = execCmd(m, "reload")
+		if got := m.statusMessage; got != "Refreshing inbox…" {
+			t.Fatalf("EX-471: :reload in inbox = %q, want %q", got, "Refreshing inbox…")
+		}
+	})
+
+	t.Run("reload-in-agents", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewAgents
+		m = execCmd(m, "reload")
+		if got := m.statusMessage; got != "Refreshing agents…" {
+			t.Fatalf("EX-471: :reload in agents view = %q, want %q", got, "Refreshing agents…")
+		}
+	})
+
+	t.Run("reload-in-dashboard", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.mainView = ViewDashboard
+		m = execCmd(m, "reload")
+		if got := m.statusMessage; got != "Refreshing task board…" {
+			t.Fatalf("EX-471: :reload in dashboard = %q, want %q", got, "Refreshing task board…")
+		}
+	})
+
+	t.Run("refresh-alias-in-dashboard", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.mainView = ViewDashboard
+		m = execCmd(m, "refresh")
+		if got := m.statusMessage; got != "Refreshing task board…" {
+			t.Fatalf("EX-471: :refresh in dashboard = %q, want %q", got, "Refreshing task board…")
+		}
+	})
+
+	t.Run("reload-in-activity", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.mainView = ViewActivity
+		m = execCmd(m, "reload")
+		if got := m.statusMessage; got != "Refreshing activity…" {
+			t.Fatalf("EX-471: :reload in activity = %q, want %q", got, "Refreshing activity…")
+		}
+	})
+}
+
 // TestHelpCommandIdempotencyEX468 verifies EX-468: :help/:palette when already
 // in ViewHelp says "Help: scrolled to top." (and resets scroll) rather than
 // re-announcing "Keybinding reference." as if opening fresh — mirrors EX-467 for :man.
