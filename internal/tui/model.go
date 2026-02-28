@@ -2017,6 +2017,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 			return true, nil
 		} else if m.focus != ChatPanel {
+			// EX-332: if already on dashboard, say so (mirrors EX-265 for Esc).
+			if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
+				m.statusMessage = "Already on dashboard."
+				return true, nil
+			}
 			m.workspace.setMainView(ViewDashboard)
 			m.setFocus(MainPanel)
 			m.statusMessage = "Dashboard"

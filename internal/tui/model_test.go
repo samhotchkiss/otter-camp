@@ -8776,3 +8776,31 @@ func TestInboxActionsNoTaskEX331(t *testing.T) {
 		}
 	}
 }
+
+// TestDAlreadyOnDashboardEX332 verifies that pressing 'd' when already on the
+// dashboard says "Already on dashboard." instead of silently re-navigating (EX-332).
+func TestDAlreadyOnDashboardEX332(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewDashboard)
+
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if m1.statusMessage != "Already on dashboard." {
+		t.Errorf("EX-332: 'd' when already on dashboard should say 'Already on dashboard.'; got %q", m1.statusMessage)
+	}
+
+	// From another view, 'd' should navigate to dashboard.
+	m.workspace.setMainView(ViewInbox)
+	m2 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if m2.statusMessage != "Dashboard" {
+		t.Errorf("EX-332: 'd' from inbox should say 'Dashboard'; got %q", m2.statusMessage)
+	}
+
+	// 'd' in project view toggles done tasks (not dashboard navigation).
+	m.workspace.setMainView(ViewProject)
+	m3 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if m3.workspace.mainView != ViewProject {
+		t.Errorf("EX-332: 'd' in project view should toggle done tasks, not navigate away; got view %v", m3.workspace.mainView)
+	}
+}
