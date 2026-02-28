@@ -1545,6 +1545,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
 				}
 				m.statusMessage = "▸ " + truncate(label, 40)
+			} else {
+				// EX-287: match EX-190 pattern — give feedback when no open tasks.
+				m.statusMessage = "No open tasks in this project."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
 			// EX-135: jump to first task on dashboard board (g = vim home)
@@ -1592,6 +1595,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
 				}
 				m.statusMessage = "▸ " + truncate(label, 40)
+			} else {
+				// EX-287: match EX-190 pattern — give feedback when no open tasks.
+				m.statusMessage = "No open tasks in this project."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
 			// EX-135: jump to last task on dashboard board (G = vim end)

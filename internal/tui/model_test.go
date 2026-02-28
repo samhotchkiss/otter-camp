@@ -7350,3 +7350,26 @@ func TestStepTaskNoContextFeedbackEX286(t *testing.T) {
 		t.Errorf("EX-286: k with all-done project should say 'No open tasks in this project.'; got %q", m.statusMessage)
 	}
 }
+
+// TestProjectGGNoTasksFeedbackEX287 verifies that g/G in ViewProject when
+// there are no open tasks give "No open tasks in this project." rather than
+// silently doing nothing — matches EX-190 for ViewDashboard.
+func TestProjectGGNoTasksFeedbackEX287(t *testing.T) {
+	for _, key := range []rune{'g', 'G'} {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.mainView = ViewProject
+		m.workspace.selectedProjectID = "proj-1"
+		m.workspace.selectedProject = &ProjectDetail{
+			ID:          "proj-1",
+			DisplayName: "Alpha",
+			Tasks:       []SidebarTaskItem{}, // no open tasks
+		}
+
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		if m.statusMessage != "No open tasks in this project." {
+			t.Errorf("EX-287: %c in ViewProject with no open tasks should say 'No open tasks in this project.'; got %q", key, m.statusMessage)
+		}
+	}
+}
