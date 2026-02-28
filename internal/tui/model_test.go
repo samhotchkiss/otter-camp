@@ -5970,3 +5970,24 @@ func TestCommandModeHelpHintEX246(t *testing.T) {
 		t.Errorf("EX-246: command mode hint should mention Esc cancel; got %q", hint)
 	}
 }
+
+// TestRefreshInHelpViewEX247 verifies EX-247: pressing 'r' in ViewHelp shows a
+// contextual message rather than unexpectedly refreshing sidebar data.
+func TestRefreshInHelpViewEX247(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = MainPanel
+	model.workspace.mainView = ViewHelp
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+
+	// Should NOT say "Refreshing sidebar data" (which is confusing in help view)
+	if strings.Contains(model.statusMessage, "Refreshing sidebar data") {
+		t.Errorf("EX-247: pressing r in help view should not say 'Refreshing sidebar data'; got %q", model.statusMessage)
+	}
+	// Should give a helpful contextual message
+	if strings.Contains(strings.ToLower(model.statusMessage), "help") || strings.Contains(strings.ToLower(model.statusMessage), "scroll") || strings.Contains(strings.ToLower(model.statusMessage), "not available") {
+		// good — message is contextual
+	} else {
+		t.Errorf("EX-247: expected contextual message for r in help view; got %q", model.statusMessage)
+	}
+}

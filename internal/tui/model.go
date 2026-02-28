@@ -1324,6 +1324,12 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			return true, nil
 		}
 	case 'r':
+		// EX-247: r has no meaning in the help view — give a hint instead of
+		// triggering a sidebar refresh that would confuse the user.
+		if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
+			m.statusMessage = "r·refresh not available in help view. Press j/k to scroll or Esc to close."
+			return true, nil
+		}
 		// EX-133: when focused on task or project detail, refresh that view's
 		// data in addition to the sidebar so manual refresh is context-aware.
 		if m.focus == MainPanel && m.workspace.mainView == ViewTask && m.workspace.selectedTaskID != "" {

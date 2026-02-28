@@ -3807,3 +3807,20 @@ default:
 **Status:** [x] Discovered | [x] Fixed | [x] Tested
 
 ---
+
+## EX-247: 'r' in help view triggers confusing sidebar refresh
+
+**Observation:** While viewing the help screen (ViewHelp), pressing `r` triggered a full sidebar data refresh and set the status message to "Refreshing sidebar data…". The help view has no data to refresh, and the sidebar reload message is completely unexpected in this context.
+
+**Root cause:** The `'r'` key handler in `handleWorkspaceRune` has no early exit for `ViewHelp`. The final `switch` default branch fired, setting "Refreshing sidebar data…" and calling `loadSidebarDataCmd`.
+
+**Improvement:** Added an early return for ViewHelp that shows a contextual hint:
+```
+r·refresh not available in help view. Press j/k to scroll or Esc to close.
+```
+
+**Effort:** Trivial (3 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
