@@ -4947,6 +4947,12 @@ func (m *Model) applyQueueActionSteer() {
 	if len(m.queuedMessages) == 0 {
 		return
 	}
+	// EX-453: if already steer-marked, say so instead of repeating "marked"
+	// (mirrors EX-447/448 expand/collapse idempotency pattern).
+	if m.queuedMessages[0].Steer {
+		m.statusMessage = "Queued message already marked for steer/promote."
+		return
+	}
 	m.queuedMessages[0].Steer = true
 	m.statusMessage = "Queued message marked for steer/promote."
 }

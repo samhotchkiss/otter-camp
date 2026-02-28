@@ -6334,6 +6334,41 @@ func TestQueueSteerRequiresActiveTurnEX423(t *testing.T) {
 	})
 }
 
+// TestQueueSteerIdempotencyEX453 verifies EX-453: pressing 's' (or :queue steer)
+// twice on the same queued message gives "already marked" feedback on the second press
+// instead of repeating "marked" — mirrors the EX-447/448 expand/collapse idempotency
+// pattern where no-op actions should say so rather than claiming change.
+func TestQueueSteerIdempotencyEX453(t *testing.T) {
+	t.Run("first-steer-marks-and-confirms", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.activeTurn = true
+		m.queuedMessages = []QueuedMessage{{Text: "pending", Steer: false}}
+
+		m.applyQueueActionSteer()
+
+		if !m.queuedMessages[0].Steer {
+			t.Fatal("EX-453: Steer flag should be true after first press")
+		}
+		want := "Queued message marked for steer/promote."
+		if got := m.statusMessage; got != want {
+			t.Fatalf("EX-453: first steer = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("second-steer-gives-already-feedback", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.activeTurn = true
+		m.queuedMessages = []QueuedMessage{{Text: "pending", Steer: true}} // already marked
+
+		m.applyQueueActionSteer()
+
+		want := "Queued message already marked for steer/promote."
+		if got := m.statusMessage; got != want {
+			t.Fatalf("EX-453: second steer (no-op) = %q, want %q", got, want)
+		}
+	})
+}
+
 // TestRecallHistoryEmptyFeedbackEX243 verifies EX-243: pressing ↑ in chat panel
 // when there is no message history gives a status message instead of silently no-oping.
 func TestRecallHistoryEmptyFeedbackEX243(t *testing.T) {
