@@ -1755,6 +1755,11 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		title := strings.TrimSpace(trimmed[len("task: "):])
 		return m.jumpToTaskByTitle(title)
 	}
+	// EX-228: "cmd: frank" etc. produced by commandPaletteSuggestions — strip the "cmd: " prefix.
+	if strings.HasPrefix(lower, "cmd: ") {
+		trimmed = strings.TrimSpace(trimmed[len("cmd: "):])
+		lower = strings.ToLower(trimmed)
+	}
 
 	fields := strings.Fields(trimmed)
 	if strings.EqualFold(fields[0], "inbox") && len(fields) > 1 {

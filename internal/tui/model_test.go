@@ -5460,3 +5460,21 @@ func TestJumpToTaskByTitleEX228(t *testing.T) {
 		t.Errorf("EX-228: selectedTaskID = %q, want task-1", model.workspace.selectedTaskID)
 	}
 }
+
+// TestCmdPrefixStrippedBeforeExecution verifies that "cmd: frank" style
+// suggestions (from commandPaletteSuggestions) are executed correctly after Tab
+// fills them into the buffer — the "cmd: " prefix must be stripped.
+func TestCmdPrefixStrippedBeforeExecution(t *testing.T) {
+	model := NewModel(DefaultState())
+	// "cmd: dashboard" should navigate to ViewDashboard.
+	_ = model.executeCommand(":cmd: dashboard")
+	if model.workspace.mainView != ViewDashboard {
+		t.Errorf("cmd: dashboard didn't navigate to ViewDashboard; got %v", model.workspace.mainView)
+	}
+
+	// "cmd: quit" should set quitting=true.
+	_ = model.executeCommand(":cmd: quit")
+	if !model.quitting {
+		t.Errorf("cmd: quit didn't set quitting=true")
+	}
+}

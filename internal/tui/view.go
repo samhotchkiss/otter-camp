@@ -2085,7 +2085,8 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	bottomLines = append(bottomLines, inputLines...)
 	if m.commandMode {
 		if suggestions := m.commandPaletteSuggestions(4); len(suggestions) > 0 {
-			bottomLines = append(bottomLines, styleMuted.Render("  suggestions"))
+			// EX-228: hint that Tab fills the top suggestion.
+			bottomLines = append(bottomLines, styleMuted.Render("  suggestions  (Tab to fill)"))
 			for _, suggestion := range suggestions {
 				bottomLines = append(bottomLines, styleSubtle.Render("  "+truncate(suggestion, cw-2)))
 			}
