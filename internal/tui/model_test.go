@@ -10488,3 +10488,36 @@ func TestCtrlYZInModalModesEX387(t *testing.T) {
 		}
 	})
 }
+
+// TestDotAndBackslashHintsEX388 verifies that '.' and '\' in non-chat panels
+// show redirect hints instead of silent no-ops (EX-388).
+func TestDotAndBackslashHintsEX388(t *testing.T) {
+	tests := []struct {
+		r    rune
+		name string
+		want string
+	}{
+		{'.', "dot", ". (dot-repeat) not supported"},
+		{'\\', "backslash", "\\ not bound"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name+"-in-MainPanel", func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.r}})
+			if !strings.Contains(m1.statusMessage, tt.want) {
+				t.Errorf("EX-388: %s in MainPanel: got %q, want to contain %q", tt.name, m1.statusMessage, tt.want)
+			}
+		})
+		t.Run(tt.name+"-in-ChatPanel-types", func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = ChatPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.r}})
+			// In chat, the rune should type (chatInput updated, not a hint)
+			if strings.Contains(m1.statusMessage, tt.want) {
+				t.Errorf("EX-388: %s in ChatPanel should type, not show hint", tt.name)
+			}
+		})
+	}
+}

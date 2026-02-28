@@ -2778,6 +2778,19 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.statusMessage = "Panels: 1 sidebar · 2 main · 3 chat. Press ? for full key reference."
 			return true, nil
 		}
+	case '.':
+		// EX-388: '.' (vim: repeat last action) — not supported. Point to : for commands.
+		// Vim users may press '.' expecting to repeat the last approval/rejection.
+		if m.focus != ChatPanel {
+			m.statusMessage = ". (dot-repeat) not supported. Use : to repeat commands or ? for key reference."
+			return true, nil
+		}
+	case '\\':
+		// EX-388: '\' (vim leader key) — not bound. Point to : and ? shortcuts.
+		if m.focus != ChatPanel {
+			m.statusMessage = "\\ not bound. Use : for commands or ? for key reference."
+			return true, nil
+		}
 	case 'A':
 		// EX-382: capital A — not bound. Users may mean lowercase 'a' (approve).
 		if m.focus != ChatPanel {
