@@ -10521,3 +10521,34 @@ func TestDotAndBackslashHintsEX388(t *testing.T) {
 		})
 	}
 }
+
+// TestTabInSearchModeCommitsFilterEX389 verifies that Tab in search mode commits
+// the filter and exits search mode (same behaviour as Enter) (EX-389).
+func TestTabInSearchModeCommitsFilterEX389(t *testing.T) {
+	t.Run("Tab-commits-non-empty-filter", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = SidebarPanel
+		m.searchQuery = "test"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyTab})
+		if m1.searchMode {
+			t.Errorf("EX-389: Tab should exit search mode")
+		}
+		if !strings.Contains(m1.statusMessage, `"test"`) {
+			t.Errorf("EX-389: Tab: got status %q, want to contain filter name", m1.statusMessage)
+		}
+	})
+	t.Run("Tab-with-empty-filter-clears", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = SidebarPanel
+		m.searchQuery = ""
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyTab})
+		if m1.searchMode {
+			t.Errorf("EX-389: Tab with empty filter should exit search mode")
+		}
+		if !strings.Contains(m1.statusMessage, "cleared") {
+			t.Errorf("EX-389: Tab empty: got status %q, want 'cleared'", m1.statusMessage)
+		}
+	})
+}

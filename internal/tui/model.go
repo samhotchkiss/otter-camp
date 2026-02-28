@@ -3303,6 +3303,18 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Filter cleared."
 		}
 		return m, nil
+	case tea.KeyTab:
+		// EX-389: Tab in search mode commits the current filter and exits search (mirrors Enter).
+		// This is the natural "confirm and move on" gesture — users expect Tab to complete/confirm.
+		m.setFilterForPanel(m.searchPanel, m.searchQuery)
+		m.searchMode = false
+		q := strings.TrimSpace(m.searchQuery)
+		if q != "" {
+			m.statusMessage = fmt.Sprintf("Filter %q applied.", q)
+		} else {
+			m.statusMessage = "Filter cleared."
+		}
+		return m, nil
 	case tea.KeyEnter:
 		m.setFilterForPanel(m.searchPanel, m.searchQuery)
 		m.searchMode = false
