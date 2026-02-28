@@ -450,6 +450,100 @@ func TestQueueHintDropsSteerWhenNoActiveTurnEX422(t *testing.T) {
 	})
 }
 
+// EX-424: pressing 'e' dequeues the first queued message into chatInput and
+// sets editingQueued=true. If the user then cancels with Esc or Ctrl-U, the
+// editingQueued flag must be cleared so the next sent message is not incorrectly
+// marked Edited=true. Previously editingQueued remained true after clearing
+// chatInput, causing a fresh message to carry Edited=true even though it had
+// never been in the queue.
+func TestEditQueuedThenCancelClearsEditingQueuedEX424(t *testing.T) {
+	t.Run("esc-clears-editingQueued", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.focus = ChatPanel
+		model.activeSession = "11111111-2222-3333-4444-555555555555"
+		model.activeTurn = false
+		model.queuedMessages = []QueuedMessage{{Text: "original-msg"}}
+
+		// 'e' pops the message into chatInput.
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+		if model.ChatInput() != "original-msg" {
+			t.Fatalf("chatInput = %q, want %q", model.ChatInput(), "original-msg")
+		}
+		if !model.editingQueued {
+			t.Fatal("editingQueued should be true after 'e'")
+		}
+
+		// Esc cancels the edit — editingQueued must be cleared.
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyEsc})
+		if model.ChatInput() != "" {
+			t.Fatalf("chatInput = %q, want empty after Esc cancel", model.ChatInput())
+		}
+		if model.editingQueued {
+			t.Fatal("EX-424: editingQueued should be false after Esc cancels edit")
+		}
+		if !strings.Contains(model.statusMessage, "cancelled") {
+			t.Fatalf("statusMessage = %q, want 'cancelled' mention", model.statusMessage)
+		}
+	})
+
+	t.Run("ctrl-u-clears-editingQueued", func(t *testing.T) {
+		model := NewModel(DefaultState())
+		model.focus = ChatPanel
+		model.activeSession = "11111111-2222-3333-4444-555555555555"
+		model.activeTurn = false
+		model.queuedMessages = []QueuedMessage{{Text: "queued-msg"}}
+
+		// 'e' pops the message.
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+		if !model.editingQueued {
+			t.Fatal("editingQueued should be true after 'e'")
+		}
+
+		// Ctrl-U clears the input — editingQueued must be cleared.
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyCtrlU})
+		if model.editingQueued {
+			t.Fatal("EX-424: editingQueued should be false after Ctrl-U (EX-424)")
+		}
+		if !strings.Contains(model.statusMessage, "cancelled") {
+			t.Fatalf("statusMessage = %q, want 'cancelled' mention", model.statusMessage)
+		}
+	})
+
+	t.Run("fresh-send-not-marked-edited", func(t *testing.T) {
+		// After editing a queued message and cancelling, the next message sent
+		// must NOT carry Edited=true even though editingQueued was temporarily set.
+		model := NewModel(DefaultState())
+		model.focus = ChatPanel
+		model.activeSession = "11111111-2222-3333-4444-555555555555"
+		model.activeTurn = true
+		model.queuedMessages = []QueuedMessage{{Text: "queued-msg"}}
+
+		// 'e' pops the message.
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+		if !model.editingQueued {
+			t.Fatal("editingQueued should be true after 'e'")
+		}
+
+		// Cancel the edit by clearing the input (activeTurn=true so Esc would cancel
+		// the turn; use Ctrl-U to test clearing input directly).
+		model = pressKey(model, tea.KeyMsg{Type: tea.KeyCtrlU})
+		if model.editingQueued {
+			t.Fatal("EX-424: editingQueued should be false after Ctrl-U")
+		}
+
+		// Now re-queue a fresh message — it must NOT be marked Edited.
+		model.chatInput = "brand-new-message"
+		model.sendOrQueueInput()
+		queue := model.QueueSnapshot()
+		if len(queue) == 0 {
+			t.Fatal("expected 1 queued message after re-send")
+		}
+		if queue[0].Edited {
+			t.Fatal("EX-424: fresh message must NOT be marked Edited after cancelled edit")
+		}
+	})
+}
+
 func mustJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)

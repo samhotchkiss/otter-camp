@@ -618,7 +618,16 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if strings.TrimSpace(m.chatInput) != "" {
 				m.chatInput = ""
 				m.chatHistoryIndex = -1
-				m.statusMessage = "Input cleared."
+				// EX-424: if the user had pressed 'e' to edit a dequeued message, also
+				// clear editingQueued so the next sent message is not incorrectly marked
+				// Edited=true. Give a distinct status so the user knows the in-progress
+				// edit (and the already-dequeued message) was discarded.
+				if m.editingQueued {
+					m.editingQueued = false
+					m.statusMessage = "Edit cancelled — queued message discarded."
+				} else {
+					m.statusMessage = "Input cleared."
+				}
 			} else {
 				// EX-325: give honest feedback when there is nothing to clear.
 				m.statusMessage = "Nothing to clear."
@@ -3454,10 +3463,17 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		// EX-289: Esc with no active turn but non-empty input — clear the draft
 		// so the user can dismiss a partially-typed message without sending it.
+		// EX-424: if the user had pressed 'e' to edit a dequeued message, also clear
+		// editingQueued so the next sent message is not incorrectly marked Edited=true.
 		if strings.TrimSpace(m.chatInput) != "" {
 			m.chatInput = ""
 			m.chatHistoryIndex = -1
-			m.statusMessage = "Input cleared."
+			if m.editingQueued {
+				m.editingQueued = false
+				m.statusMessage = "Edit cancelled — queued message discarded."
+			} else {
+				m.statusMessage = "Input cleared."
+			}
 			return true, nil
 		}
 		// EX-309: Esc with no active turn and empty input — move focus to main panel
