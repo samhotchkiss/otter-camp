@@ -948,6 +948,25 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.statusMessage = "Help scrolled down."
 				}
 				return m, nil
+			case tea.KeyHome:
+				// EX-304: Home in ViewHelp jumps to top (mirrors 'g' key, EX-209).
+				if m.helpScrollOffset == 0 {
+					m.statusMessage = "Already at top of help."
+				} else {
+					m.helpScrollOffset = 0
+					m.statusMessage = "Help jumped to top."
+				}
+				return m, nil
+			case tea.KeyEnd:
+				// EX-304: End in ViewHelp jumps to bottom (mirrors 'G' key, EX-209).
+				maxOff := helpMaxOffset()
+				if m.helpScrollOffset >= maxOff {
+					m.statusMessage = "Already at bottom of help."
+				} else {
+					m.helpScrollOffset = maxOff
+					m.statusMessage = "Help jumped to bottom."
+				}
+				return m, nil
 			}
 		}
 		if key.Type == tea.KeyEnter {

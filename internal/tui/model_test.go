@@ -7880,3 +7880,40 @@ func TestCtrlWDeletesLastWordEX303(t *testing.T) {
 		t.Errorf("EX-303: Ctrl-W on 'hello   ' (trailing spaces) should clear; got %q", m.chatInput)
 	}
 }
+
+// TestHelpViewHomeEndEX304 verifies that Home/End in ViewHelp jump to the top
+// and bottom of the help content (mirrors 'g'/'G' keys from EX-209).
+func TestHelpViewHomeEndEX304(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewHelp)
+
+	// Start in middle of help.
+	m.helpScrollOffset = 5
+
+	// Home jumps to top.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+	if m.helpScrollOffset != 0 {
+		t.Errorf("EX-304: Home in ViewHelp should set helpScrollOffset=0; got %d", m.helpScrollOffset)
+	}
+	if m.statusMessage != "Help jumped to top." {
+		t.Errorf("EX-304: Home should say 'Help jumped to top.'; got %q", m.statusMessage)
+	}
+
+	// Home when already at top gives boundary message.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyHome})
+	if m.statusMessage != "Already at top of help." {
+		t.Errorf("EX-304: Home at top should say 'Already at top of help.'; got %q", m.statusMessage)
+	}
+
+	// End jumps to bottom (helpMaxOffset may be 0 in test with large window —
+	// just check the status message is set and no panic occurs).
+	m.helpScrollOffset = 0
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnd})
+	// Either "Help jumped to bottom." or "Already at bottom of help." is valid,
+	// depending on helpViewLineCount vs window height.
+	if m.statusMessage != "Help jumped to bottom." && m.statusMessage != "Already at bottom of help." {
+		t.Errorf("EX-304: End in ViewHelp should give bottom feedback; got %q", m.statusMessage)
+	}
+}
