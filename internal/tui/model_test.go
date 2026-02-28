@@ -12704,8 +12704,9 @@ func TestArrowUpDownInStaticViewsEX450(t *testing.T) {
 			m.focus = MainPanel
 			m.workspace.setMainView(sv.view)
 			m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
-			if got := m.statusMessage; got != "Navigation not available here. Use r to refresh." {
-				t.Fatalf("↑ in %s = %q, want nav-not-available msg", sv.name, got)
+			const wantNav = "Navigation not available here. Use r to refresh."
+			if got := m.statusMessage; got != wantNav {
+				t.Fatalf("↑ in %s = %q, want %q", sv.name, got, wantNav)
 			}
 		})
 		t.Run("down-in-"+sv.name+"-gives-nav-not-available", func(t *testing.T) {
@@ -12718,4 +12719,37 @@ func TestArrowUpDownInStaticViewsEX450(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestArrowLeftRightOnNonExpandableNodesEX451 verifies that ← and → on inbox
+// and session sidebar nodes give correct feedback. These node types are not
+// expandable/collapsible so:
+//   - ← on top-level inbox → "At top level — use ↑/↓ to navigate." (EX-323 path)
+//   - → on inbox → "Use Enter to open this item." (EX-321 path)
+//
+// EX-451 also adds a defensive nil-node else-branch to both ← and → handlers
+// (mirrors EX-445 for ↑/↓); that path is unreachable in practice because
+// visibleSidebarIDs() filters nil nodes, but the code is present for consistency.
+func TestArrowLeftRightOnNonExpandableNodesEX451(t *testing.T) {
+	// cursor 0 = "inbox" node (sidebarKindInbox, no parent, top-level)
+	t.Run("left-arrow-on-inbox-node-gives-top-level-hint", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.workspace.sidebarCursor = 0 // "inbox"
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyLeft})
+		want := "At top level — use ↑/↓ to navigate."
+		if got := m.statusMessage; got != want {
+			t.Fatalf("EX-451: ← on inbox = %q, want %q", got, want)
+		}
+	})
+	t.Run("right-arrow-on-inbox-node-suggests-enter", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.workspace.sidebarCursor = 0 // "inbox"
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRight})
+		want := "Use Enter to open this item."
+		if got := m.statusMessage; got != want {
+			t.Fatalf("EX-451: → on inbox = %q, want %q", got, want)
+		}
+	})
 }

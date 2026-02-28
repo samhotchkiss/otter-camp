@@ -3460,6 +3460,10 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 					m.statusMessage = "At top level — use ↑/↓ to navigate."
 				}
 			}
+		} else {
+			// EX-451: cursor position is valid but node data is missing — confirm
+			// the action with a generic label (mirrors EX-445 fix for ↑/↓ keys).
+			m.statusMessage = "▸ (sidebar item)"
 		}
 		return true, nil
 	case tea.KeyRight:
@@ -3506,6 +3510,9 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			m.statusMessage = "Use Enter to open this item."
 			return true, nil
 		}
+		// EX-451: cursor position is valid but node data is missing — confirm
+		// the action with a generic label (mirrors EX-445 fix for ↑/↓ keys).
+		m.statusMessage = "▸ (sidebar item)"
 		return true, nil
 	case tea.KeyHome:
 		// EX-277: Home/End in sidebar jump to first/last item (same as g/G).
