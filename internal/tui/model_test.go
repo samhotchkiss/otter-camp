@@ -8927,3 +8927,23 @@ func TestGGInTaskViewEX337338(t *testing.T) {
 		t.Errorf("EX-338: 'G' in ViewTask should set a status message; got empty")
 	}
 }
+
+// TestGGInStaticViewsEX339 verifies that 'g' and 'G' in static views
+// (Agents, Merges, Schedules, Activity) give a navigation hint instead of
+// silently doing nothing (EX-339).
+func TestGGInStaticViewsEX339(t *testing.T) {
+	staticViews := []MainView{ViewAgents, ViewMerges, ViewSchedules, ViewActivity}
+	for _, view := range staticViews {
+		for _, r := range []rune{'g', 'G'} {
+			m := NewModel(DefaultState())
+			m.width, m.height = 220, 40
+			m.focus = MainPanel
+			m.workspace.setMainView(view)
+
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			if m1.statusMessage != "Navigation not available here. Use r to refresh." {
+				t.Errorf("EX-339: %q in %v should give navigation hint; got %q", string(r), view, m1.statusMessage)
+			}
+		}
+	}
+}

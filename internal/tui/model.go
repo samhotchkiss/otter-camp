@@ -1936,6 +1936,12 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewTask {
 			// EX-337: g in task view jumps to first task (mirrors Home/PgUp x inf).
 			return true, m.stepTaskInProject(-99999)
+		} else if m.focus == MainPanel {
+			// EX-339: g in static views (Agents/Merges/Schedules/Activity) mirrors j/k hint (EX-283).
+			switch m.workspace.mainView {
+			case ViewAgents, ViewMerges, ViewSchedules, ViewActivity:
+				m.statusMessage = "Navigation not available here. Use r to refresh."
+			}
 		}
 		return true, nil
 	case 'G':
@@ -2004,6 +2010,12 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewTask {
 			// EX-338: G in task view jumps to last task (mirrors End/PgDn x inf).
 			return true, m.stepTaskInProject(99999)
+		} else if m.focus == MainPanel {
+			// EX-339: G in static views mirrors j/k hint (EX-283).
+			switch m.workspace.mainView {
+			case ViewAgents, ViewMerges, ViewSchedules, ViewActivity:
+				m.statusMessage = "Navigation not available here. Use r to refresh."
+			}
 		}
 		return true, nil
 	case 'q':
