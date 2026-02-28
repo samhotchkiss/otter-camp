@@ -1232,16 +1232,23 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.jumpToFrankSession("0")
 			}
 
+			// EX-352: panel shortcuts 1/2/3 should not steal keystrokes mid-composition.
+			// When chat is focused and the user is typing, numbers should type into
+			// the input (mirrors '0' guard and the '<'/'>' guard pattern).
 			if panel, ok := panelFromShortcut(key.Alt, r); ok {
-				m.setFocus(panel)
-				m.statusMessage = "Focus: " + panelLabel(m.focus)
-				return m, nil
+				if !(m.focus == ChatPanel && strings.TrimSpace(m.chatInput) != "") {
+					m.setFocus(panel)
+					m.statusMessage = "Focus: " + panelLabel(m.focus)
+					return m, nil
+				}
 			}
 
-			if r == '[' {
+			// EX-351: '[' / ']' scope cycling should not intercept typing in chat.
+			// Allow typing '[' and ']' when mid-composition, mirrors '<'/'>' guard.
+			if r == '[' && !(m.focus == ChatPanel && strings.TrimSpace(m.chatInput) != "") {
 				return m, m.switchScope(cycleScope(m.activeScope, false))
 			}
-			if r == ']' {
+			if r == ']' && !(m.focus == ChatPanel && strings.TrimSpace(m.chatInput) != "") {
 				return m, m.switchScope(cycleScope(m.activeScope, true))
 			}
 			if (r == '<' || r == '>') && (m.focus != ChatPanel || strings.TrimSpace(m.chatInput) == "") {
