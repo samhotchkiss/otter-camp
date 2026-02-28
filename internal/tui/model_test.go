@@ -7589,3 +7589,30 @@ func TestDashboardEmptyBoardFeedbackEX294(t *testing.T) {
 		}
 	}
 }
+
+// TestInboxJKEmptyFeedbackEX295 verifies that j/k and ↑/↓ in ViewInbox when
+// the inbox is empty show "Inbox is empty." matching g/G/Home/End (EX-288/292).
+func TestInboxJKEmptyFeedbackEX295(t *testing.T) {
+	type keyInput struct {
+		name string
+		msg  tea.KeyMsg
+	}
+	keys := []keyInput{
+		{"j", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}},
+		{"k", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}},
+		{"↑", tea.KeyMsg{Type: tea.KeyUp}},
+		{"↓", tea.KeyMsg{Type: tea.KeyDown}},
+	}
+	for _, k := range keys {
+		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = MainPanel
+		m.workspace.mainView = ViewInbox
+		m.workspace.inbox = nil // empty
+
+		m = pressKey(m, k.msg)
+		if m.statusMessage != "Inbox is empty." {
+			t.Errorf("EX-295: %s in empty inbox should say 'Inbox is empty.'; got %q", k.name, m.statusMessage)
+		}
+	}
+}

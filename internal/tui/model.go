@@ -659,6 +659,7 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case tea.KeyUp:
 				// EX-272: arrow keys mirror j/k EX-268 navigation with feedback.
+				// EX-295: give "Inbox is empty." feedback matching j/k (EX-268).
 				prevCursor := m.workspace.inboxCursor
 				m.workspace.moveInbox(-1)
 				if item := m.workspace.currentInboxItem(); item != nil {
@@ -667,9 +668,12 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					} else if item.Summary != "" {
 						m.statusMessage = "▸ " + truncate(item.Summary, 40)
 					}
+				} else if len(m.workspace.inbox) == 0 {
+					m.statusMessage = "Inbox is empty."
 				}
 				return m, nil
 			case tea.KeyDown:
+				// EX-295: give "Inbox is empty." feedback matching j/k (EX-268).
 				prevCursor := m.workspace.inboxCursor
 				m.workspace.moveInbox(1)
 				if item := m.workspace.currentInboxItem(); item != nil {
@@ -678,6 +682,8 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					} else if item.Summary != "" {
 						m.statusMessage = "▸ " + truncate(item.Summary, 40)
 					}
+				} else if len(m.workspace.inbox) == 0 {
+					m.statusMessage = "Inbox is empty."
 				}
 				return m, nil
 			}
@@ -1342,6 +1348,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			// EX-268: show item summary on navigation (mirrors EX-266 dashboard pattern).
+			// EX-295: give "Inbox is empty." feedback matching g/G/Home/End (EX-288/292).
 			prevCursor := m.workspace.inboxCursor
 			m.workspace.moveInbox(1)
 			if item := m.workspace.currentInboxItem(); item != nil {
@@ -1350,6 +1357,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				} else if item.Summary != "" {
 					m.statusMessage = "▸ " + truncate(item.Summary, 40)
 				}
+			} else if len(m.workspace.inbox) == 0 {
+				m.statusMessage = "Inbox is empty."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			// EX-270: boundary feedback for project task list (mirrors EX-266 dashboard pattern).
@@ -1433,6 +1442,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			// EX-268: show item summary on navigation (mirrors EX-266 dashboard pattern).
+			// EX-295: give "Inbox is empty." feedback matching g/G/Home/End (EX-288/292).
 			prevCursor := m.workspace.inboxCursor
 			m.workspace.moveInbox(-1)
 			if item := m.workspace.currentInboxItem(); item != nil {
@@ -1441,6 +1451,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				} else if item.Summary != "" {
 					m.statusMessage = "▸ " + truncate(item.Summary, 40)
 				}
+			} else if len(m.workspace.inbox) == 0 {
+				m.statusMessage = "Inbox is empty."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			// EX-270: boundary feedback (mirrors EX-266 dashboard pattern).
