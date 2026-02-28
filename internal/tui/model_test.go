@@ -7908,6 +7908,134 @@ func TestNextUnreadAlreadyActiveSessionEX476(t *testing.T) {
 	})
 }
 
+// TestJumpToSessionByNameIdempotencyEX477 verifies EX-477: :session <name> when
+// the named session is already active says "<name> refreshed." rather than
+// "Switched to <name>." — mirrors the EX-474/475 refresh-vs-switch pattern.
+func TestJumpToSessionByNameIdempotencyEX477(t *testing.T) {
+	sessionID := "11111111-2222-3333-4444-555555555555"
+	nodeID := "sess-" + sessionID
+
+	buildModel := func() Model {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.nodes = map[string]*sidebarNode{
+			nodeID: {
+				ID:        nodeID,
+				Label:     "My session",
+				Kind:      sidebarKindSession,
+				SessionID: sessionID,
+			},
+		}
+		m.workspace.topLevel = []string{nodeID}
+		return m
+	}
+
+	t.Run("session-already-active-says-refreshed", func(t *testing.T) {
+		m := buildModel()
+		m.activeSession = sessionID
+		m.workspace.activeSessionID = sessionID
+		m.jumpToSessionByName("My session")
+		if got := m.statusMessage; got != "My session refreshed." {
+			t.Fatalf("EX-477: :session on already-active = %q, want %q", got, "My session refreshed.")
+		}
+	})
+
+	t.Run("session-different-says-switched", func(t *testing.T) {
+		otherID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		m := buildModel()
+		m.activeSession = otherID
+		m.workspace.activeSessionID = otherID
+		m.jumpToSessionByName("My session")
+		if got := m.statusMessage; got != "Switched to My session." {
+			t.Fatalf("EX-477: :session switching = %q, want %q", got, "Switched to My session.")
+		}
+	})
+}
+
+// TestJumpToProjectByNameIdempotencyEX478 verifies EX-478: :project <name>
+// when already in ViewProject for that project says "Already in project: X.
+// Refreshing tasks…" rather than "Project: X" which implies new navigation.
+func TestJumpToProjectByNameIdempotencyEX478(t *testing.T) {
+	projectID := "proj-111"
+	projectNodeID := "project-" + projectID
+
+	buildModel := func() Model {
+		m := NewModel(DefaultState())
+		m.workspace.nodes = map[string]*sidebarNode{
+			projectNodeID: {
+				ID:        projectNodeID,
+				Label:     "My Project",
+				Kind:      sidebarKindProject,
+				ProjectID: projectID,
+			},
+		}
+		m.workspace.topLevel = []string{projectNodeID}
+		return m
+	}
+
+	t.Run("project-already-active-says-already", func(t *testing.T) {
+		m := buildModel()
+		m.focus = MainPanel
+		m.workspace.mainView = ViewProject
+		m.workspace.selectedProjectID = projectID
+		m.jumpToProjectByName("My Project")
+		want := "Already in project: My Project. Refreshing tasks…"
+		if got := m.statusMessage; got != want {
+			t.Fatalf("EX-478: :project on already-active = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("project-different-view-says-project", func(t *testing.T) {
+		m := buildModel()
+		m.focus = MainPanel
+		m.workspace.mainView = ViewDashboard
+		m.workspace.selectedProjectID = ""
+		m.jumpToProjectByName("My Project")
+		if got := m.statusMessage; got != "Project: My Project" {
+			t.Fatalf("EX-478: :project navigating = %q, want %q", got, "Project: My Project")
+		}
+	})
+}
+
+// TestJumpToTaskByTitleIdempotencyEX479 verifies EX-479: :task <title> when
+// already viewing that task says "Already viewing: X" rather than "Task: X".
+func TestJumpToTaskByTitleIdempotencyEX479(t *testing.T) {
+	taskID := "task-001"
+
+	buildModel := func() Model {
+		m := NewModel(DefaultState())
+		m.workspace.tasks = map[string]*taskRecord{
+			taskID: {ID: taskID, Title: "Fix the bug", TaskNumber: 7},
+		}
+		m.workspace.taskOrder = []string{taskID}
+		return m
+	}
+
+	t.Run("task-already-viewing-says-already", func(t *testing.T) {
+		m := buildModel()
+		m.focus = MainPanel
+		m.workspace.mainView = ViewTask
+		m.workspace.selectedTaskID = taskID
+		m.jumpToTaskByTitle("Fix")
+		want := "Already viewing: OC-7: Fix the bug"
+		if got := m.statusMessage; got != want {
+			t.Fatalf("EX-479: :task on already-active = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("task-different-view-says-task", func(t *testing.T) {
+		m := buildModel()
+		m.focus = MainPanel
+		m.workspace.mainView = ViewDashboard
+		m.workspace.selectedTaskID = ""
+		m.jumpToTaskByTitle("Fix")
+		want := "Task: OC-7: Fix the bug"
+		if got := m.statusMessage; got != want {
+			t.Fatalf("EX-479: :task navigating = %q, want %q", got, want)
+		}
+	})
+}
+
 // TestHelpCommandIdempotencyEX468 verifies EX-468: :help/:palette when already
 // in ViewHelp says "Help: scrolled to top." (and resets scroll) rather than
 // re-announcing "Keybinding reference." as if opening fresh — mirrors EX-467 for :man.

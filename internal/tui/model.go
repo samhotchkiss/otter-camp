@@ -5732,9 +5732,17 @@ func (m *Model) jumpToProjectByName(name string) tea.Cmd {
 			continue
 		}
 		if strings.Contains(strings.ToLower(node.Label), nameLower) {
+			// EX-478: idempotency — if already in ViewProject for this project,
+			// say so instead of "Project: X" as if navigating somewhere new.
+			alreadyHere := m.focus == MainPanel && m.workspace.mainView == ViewProject &&
+				strings.EqualFold(m.workspace.selectedProjectID, node.ProjectID)
 			m.workspace.selectedProjectID = node.ProjectID
 			m.workspace.setMainView(ViewProject)
-			m.statusMessage = "Project: " + node.Label
+			if alreadyHere {
+				m.statusMessage = "Already in project: " + node.Label + ". Refreshing tasks…"
+			} else {
+				m.statusMessage = "Project: " + node.Label
+			}
 			return loadProjectTasksCmd(node.ProjectID, m.runtimeHints, false)
 		}
 	}
@@ -5752,12 +5760,22 @@ func (m *Model) jumpToSessionByName(name string) tea.Cmd {
 		}
 		if strings.Contains(strings.ToLower(node.Label), nameLower) {
 			sessionID := node.SessionID
+			// EX-477: capture prevSession before switching so we can detect
+			// "already on this session" and say "refreshed" rather than implying
+			// a navigation occurred — mirrors the EX-474/475 pattern.
+			prevSession := strings.TrimSpace(m.activeSession)
 			m.clearTurnIfSwitchingSession(sessionID)
 			m.activeSession = sessionID
 			m.state.LastActiveChatSession = sessionID
 			m.chatScrollOffset = 0
 			m.workspace.activeSessionID = sessionID
-			m.statusMessage = "Session: " + node.Label
+			// EX-477: distinguish "switched" from "refreshed" (already on session).
+			alreadyOnSession := looksLikeUUID(prevSession) && strings.EqualFold(prevSession, strings.TrimSpace(sessionID))
+			if alreadyOnSession {
+				m.statusMessage = truncate(node.Label, 36) + " refreshed."
+			} else {
+				m.statusMessage = "Switched to " + truncate(node.Label, 36) + "."
+			}
 			if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
 				m.chatMessages = nil
 				m.chatHistoryLoading = true
@@ -5780,6 +5798,11 @@ func (m *Model) jumpToTaskByTitle(title string) tea.Cmd {
 			continue
 		}
 		if strings.Contains(strings.ToLower(task.Title), titleLower) {
+			// EX-479: idempotency — if already viewing this task, say so rather
+			// than "Task: X" which implies navigation occurred. Mirrors EX-334
+			// ('t' key "Already viewing task detail.") and EX-462 (:task idempotency).
+			alreadyOnTask := m.focus == MainPanel && m.workspace.mainView == ViewTask &&
+				strings.EqualFold(m.workspace.selectedTaskID, taskID)
 			m.workspace.selectedTaskID = taskID
 			m.workspace.setMainView(ViewTask)
 			m.activeScope = ScopeTask
@@ -5787,7 +5810,11 @@ func (m *Model) jumpToTaskByTitle(title string) tea.Cmd {
 			if task.TaskNumber > 0 {
 				label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, task.Title)
 			}
-			m.statusMessage = "Task: " + truncate(label, 40)
+			if alreadyOnTask {
+				m.statusMessage = "Already viewing: " + truncate(label, 40)
+			} else {
+				m.statusMessage = "Task: " + truncate(label, 40)
+			}
 			return nil
 		}
 	}
