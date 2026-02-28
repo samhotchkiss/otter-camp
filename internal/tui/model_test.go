@@ -8848,3 +8848,28 @@ func TestTAlreadyOnTaskDetailEX334(t *testing.T) {
 		t.Errorf("EX-334: 't' from dashboard should say 'Task detail'; got %q", m2.statusMessage)
 	}
 }
+
+// TestQInNonHelpViewEX335 verifies that pressing 'q' in a non-help view gives
+// helpful redirect feedback instead of silently doing nothing (EX-335).
+func TestQInNonHelpViewEX335(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewDashboard)
+
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if m1.statusMessage != "q closes the help view. Use :quit or Ctrl-C to exit." {
+		t.Errorf("EX-335: 'q' in dashboard should give redirect hint; got %q", m1.statusMessage)
+	}
+	// Should not navigate away from dashboard.
+	if m1.workspace.mainView != ViewDashboard {
+		t.Errorf("EX-335: 'q' in dashboard should not change view; got %v", m1.workspace.mainView)
+	}
+
+	// From help view, 'q' still closes it.
+	m.workspace.setMainView(ViewHelp)
+	m2 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if m2.workspace.mainView != ViewDashboard {
+		t.Errorf("EX-335: 'q' in help view should return to dashboard; got %v", m2.workspace.mainView)
+	}
+}

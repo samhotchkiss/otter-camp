@@ -1999,6 +1999,10 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.statusMessage = "Returned to dashboard."
 			return true, nil
 		}
+		// EX-335: 'q' in non-help views is a vim-familiar key that users may try
+		// expecting it to quit or close something — give a helpful redirect.
+		m.statusMessage = "q closes the help view. Use :quit or Ctrl-C to exit."
+		return true, nil
 	case 'i':
 		if m.focus != ChatPanel {
 			m.workspace.setMainView(ViewInbox)
