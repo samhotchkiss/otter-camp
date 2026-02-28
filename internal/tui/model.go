@@ -2661,6 +2661,9 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchQuery = ""
 			m.setFilterForPanel(m.searchPanel, "")
 			m.statusMessage = "Filter cleared. Continue typing or Esc to exit."
+		} else {
+			// EX-329: nothing to clear — give honest feedback.
+			m.statusMessage = "Filter is empty. Press Esc to exit search mode."
 		}
 		return m, nil
 	case tea.KeyCtrlW:
@@ -2675,6 +2678,9 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.setFilterForPanel(m.searchPanel, m.searchQuery)
 			m.statusMessage = "Last word deleted."
+		} else {
+			// EX-330: nothing to delete — give honest feedback.
+			m.statusMessage = "Nothing to delete. Press Esc to exit search mode."
 		}
 		return m, nil
 	case tea.KeyUp, tea.KeyDown:
@@ -2748,6 +2754,9 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.commandBuffer != ":" {
 			m.commandBuffer = ":"
 			m.statusMessage = "Command cleared."
+		} else {
+			// EX-327: nothing to clear — give honest feedback.
+			m.statusMessage = "Nothing to clear."
 		}
 		return m, nil
 	case tea.KeyCtrlW:
@@ -2763,6 +2772,9 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.commandBuffer = ":"
 			}
 			m.statusMessage = "Last word deleted."
+		} else {
+			// EX-328: nothing to delete — give honest feedback.
+			m.statusMessage = "Nothing to delete."
 		}
 		return m, nil
 	case tea.KeySpace:

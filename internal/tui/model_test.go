@@ -8112,11 +8112,10 @@ func TestCtrlUInSearchModeClearsQueryEX310(t *testing.T) {
 		t.Errorf("EX-310: unexpected status %q", m.statusMessage)
 	}
 
-	// Ctrl-U when query is already empty: no-op (no status change).
-	prev := m.statusMessage
+	// Ctrl-U when query is already empty: now gives feedback (EX-329).
 	m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlU})
-	if m.statusMessage != prev {
-		t.Errorf("EX-310: Ctrl-U on empty query should be a no-op; status changed to %q", m.statusMessage)
+	if m.statusMessage != "Filter is empty. Press Esc to exit search mode." {
+		t.Errorf("EX-329: Ctrl-U on empty query should say feedback; got %q", m.statusMessage)
 	}
 }
 
@@ -8140,11 +8139,10 @@ func TestCtrlUInCommandModeClearsBufferEX311(t *testing.T) {
 		t.Errorf("EX-311: unexpected status %q", m.statusMessage)
 	}
 
-	// Ctrl-U when already at prompt (only ":"): no-op.
-	prev := m.statusMessage
+	// Ctrl-U when already at prompt (only ":"): now gives feedback (EX-327).
 	m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlU})
-	if m.statusMessage != prev {
-		t.Errorf("EX-311: Ctrl-U at empty prompt should be a no-op; status changed to %q", m.statusMessage)
+	if m.statusMessage != "Nothing to clear." {
+		t.Errorf("EX-327: Ctrl-U at empty prompt should say 'Nothing to clear.'; got %q", m.statusMessage)
 	}
 	if m.commandBuffer != ":" {
 		t.Errorf("EX-311: buffer should still be ':'; got %q", m.commandBuffer)
@@ -8713,5 +8711,50 @@ func TestCtrlUWEmptyChatEX325326(t *testing.T) {
 	m4 = pressKey(m4, tea.KeyMsg{Type: tea.KeyCtrlW})
 	if m4.statusMessage != "Last word deleted." {
 		t.Errorf("EX-326: Ctrl-W with non-empty input should say 'Last word deleted.'; got %q", m4.statusMessage)
+	}
+}
+
+// TestCtrlUWEmptyCommandAndSearchEX327330 verifies that Ctrl-U and Ctrl-W in
+// command and search modes give feedback when there is nothing to clear/delete
+// (EX-327/328/329/330).
+func TestCtrlUWEmptyCommandAndSearchEX327330(t *testing.T) {
+	// EX-327: Ctrl-U in command mode when buffer is already ":"
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.commandMode = true
+	m.commandBuffer = ":"
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlU})
+	if m1.statusMessage != "Nothing to clear." {
+		t.Errorf("EX-327: Ctrl-U at ':' should say 'Nothing to clear.'; got %q", m1.statusMessage)
+	}
+
+	// EX-328: Ctrl-W in command mode when suffix is empty
+	m2 := m
+	m2.commandBuffer = ":"
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyCtrlW})
+	if m2.statusMessage != "Nothing to delete." {
+		t.Errorf("EX-328: Ctrl-W at ':' should say 'Nothing to delete.'; got %q", m2.statusMessage)
+	}
+
+	// EX-329: Ctrl-U in search mode when query is empty
+	m3 := NewModel(DefaultState())
+	m3.width, m3.height = 220, 40
+	m3.searchMode = true
+	m3.searchPanel = MainPanel
+	m3.searchQuery = ""
+	m3 = pressKey(m3, tea.KeyMsg{Type: tea.KeyCtrlU})
+	if m3.statusMessage != "Filter is empty. Press Esc to exit search mode." {
+		t.Errorf("EX-329: Ctrl-U with empty filter should give feedback; got %q", m3.statusMessage)
+	}
+
+	// EX-330: Ctrl-W in search mode when query is empty
+	m4 := NewModel(DefaultState())
+	m4.width, m4.height = 220, 40
+	m4.searchMode = true
+	m4.searchPanel = MainPanel
+	m4.searchQuery = ""
+	m4 = pressKey(m4, tea.KeyMsg{Type: tea.KeyCtrlW})
+	if m4.statusMessage != "Nothing to delete. Press Esc to exit search mode." {
+		t.Errorf("EX-330: Ctrl-W with empty filter should give feedback; got %q", m4.statusMessage)
 	}
 }
