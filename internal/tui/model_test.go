@@ -8492,3 +8492,50 @@ func TestChatDownArrowNoMessagesEX320(t *testing.T) {
 		t.Errorf("EX-320: ↓ at bottom with messages should say 'Already at latest message.'; got %q", m2.statusMessage)
 	}
 }
+
+// TestSidebarLArrowNonExpandableEX321 verifies that pressing 'l' or → on a
+// non-expandable sidebar node (task, session, inbox) shows "Use Enter to open
+// this item." rather than silently doing nothing (EX-321).
+func TestSidebarLArrowNonExpandableEX321(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = SidebarPanel
+
+	taskID := "task-abc123"
+	m.workspace.nodes[taskID] = &sidebarNode{
+		ID:    taskID,
+		Label: "Fix the bug",
+		Kind:  sidebarKindTask,
+	}
+	m.workspace.topLevel = []string{taskID}
+	m.workspace.sidebarCursor = 0
+
+	// 'l' on a task node
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if m1.statusMessage != "Use Enter to open this item." {
+		t.Errorf("EX-321: 'l' on task node should say 'Use Enter to open this item.'; got %q", m1.statusMessage)
+	}
+
+	// → on a task node
+	m2 := pressKey(m, tea.KeyMsg{Type: tea.KeyRight})
+	if m2.statusMessage != "Use Enter to open this item." {
+		t.Errorf("EX-321: → on task node should say 'Use Enter to open this item.'; got %q", m2.statusMessage)
+	}
+
+	// 'l' on a project node should say "Expanded … — loading tasks…"
+	projectID := "proj-xyz"
+	projNodeID := "project-" + projectID
+	m.workspace.nodes[projNodeID] = &sidebarNode{
+		ID:        projNodeID,
+		Label:     "My Project",
+		Kind:      sidebarKindProject,
+		ProjectID: projectID,
+		Expanded:  false,
+	}
+	m.workspace.topLevel = []string{projNodeID, taskID}
+	m.workspace.sidebarCursor = 0
+	m3 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if !strings.Contains(m3.statusMessage, "Expanded") {
+		t.Errorf("EX-321: 'l' on project node should say 'Expanded...'; got %q", m3.statusMessage)
+	}
+}

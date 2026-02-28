@@ -1831,7 +1831,10 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				}
 				if node.Kind == sidebarKindHeader {
 					m.statusMessage = "Expanded " + truncate(node.Label, 30) + "."
+					return true, nil
 				}
+				// EX-321: non-expandable nodes (task, session, inbox) — suggest Enter.
+				m.statusMessage = "Use Enter to open this item."
 			}
 			return true, nil
 		}
@@ -2299,8 +2302,10 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 				m.statusMessage = "Expanded " + truncate(node.Label, 30) + "."
 				return true, nil
 			}
+			// EX-321: non-expandable nodes (task, session, inbox) — suggest Enter.
+			m.statusMessage = "Use Enter to open this item."
+			return true, nil
 		}
-		m.workspace.expandSidebarNode()
 		return true, nil
 	case tea.KeyHome:
 		// EX-277: Home/End in sidebar jump to first/last item (same as g/G).
