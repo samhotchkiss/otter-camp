@@ -8147,6 +8147,49 @@ func TestCtrlUInCommandModeClearsBufferEX311(t *testing.T) {
 	}
 }
 
+// TestCtrlGAndCtrlPInSearchModeEX315 verifies that Ctrl-G and Ctrl-P in filter
+// mode exit search mode and then act as their global counterparts (jump to
+// Frank and open command mode respectively).
+func TestCtrlGAndCtrlPInSearchModeEX315(t *testing.T) {
+	// --- Ctrl-P exits search and enters command mode ---
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.searchMode = true
+	m.searchPanel = SidebarPanel
+	m.searchQuery = "partial"
+	m.setFilterForPanel(SidebarPanel, "partial")
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlP})
+
+	if m.searchMode {
+		t.Errorf("EX-315: Ctrl-P should exit search mode; still active")
+	}
+	if !m.commandMode {
+		t.Errorf("EX-315: Ctrl-P in search mode should open command mode")
+	}
+	// Filter should be cleared when Ctrl-P interrupts search.
+	if m.sidebarFilter != "" {
+		t.Errorf("EX-315: filter should be cleared on Ctrl-P; got %q", m.sidebarFilter)
+	}
+
+	// --- Ctrl-G exits search (jump logic verified by existing tests) ---
+	m2 := NewModel(DefaultState())
+	m2.width, m2.height = 220, 40
+	m2.searchMode = true
+	m2.searchPanel = MainPanel
+	m2.searchQuery = "query"
+	m2.setFilterForPanel(MainPanel, "query")
+
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyCtrlG})
+
+	if m2.searchMode {
+		t.Errorf("EX-315: Ctrl-G should exit search mode; still active")
+	}
+	if m2.mainFilter != "" {
+		t.Errorf("EX-315: main filter should be cleared on Ctrl-G; got %q", m2.mainFilter)
+	}
+}
+
 // TestCtrlWInSearchAndCommandModeEX314 verifies Ctrl-W deletes the last word
 // in filter mode (search) and in command mode, mirroring EX-303 for chat.
 func TestCtrlWInSearchAndCommandModeEX314(t *testing.T) {

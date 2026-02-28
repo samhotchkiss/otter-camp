@@ -2537,6 +2537,19 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		m.statusMessage = "Exiting TUI."
 		return m, tea.Quit
+	case tea.KeyCtrlG:
+		// EX-315: Ctrl-G in filter mode exits search and jumps to Frank (mirrors global Ctrl-G).
+		m.searchMode = false
+		m.searchQuery = ""
+		m.setFilterForPanel(m.searchPanel, "")
+		return m, m.jumpToFrankSession("Ctrl-G")
+	case tea.KeyCtrlP:
+		// EX-315: Ctrl-P in filter mode exits search and opens command mode (mirrors global Ctrl-P).
+		m.searchMode = false
+		m.searchQuery = ""
+		m.setFilterForPanel(m.searchPanel, "")
+		m.enterCommandMode()
+		return m, nil
 	case tea.KeyEsc:
 		// EX-254: include the query in the message so the user sees what was cleared.
 		prev := strings.TrimSpace(m.searchQuery)
