@@ -3035,8 +3035,10 @@ func (m Model) assistantLabel() string {
 
 func (m Model) commandFallbackHelp() string {
 	if m.commandMode {
-		// EX-155/EX-228: include full command set + Tab hint; ? opens the complete help screen
-		return "Tab autocomplete  ·  :frank · :dashboard · :project · :task · :inbox · :agents · :activity · :merges · :schedules · :scope · :focus · :send · :cancel-turn · :quit  ·  ? help  ·  Esc cancel"
+		// EX-155/EX-228/EX-246: include full command set + Tab hint. Note: ? is NOT
+		// listed because in command mode keypresses go into the command buffer, not to
+		// the ? shortcut. Use :help or Esc+? to reach the keybinding reference.
+		return "Tab autocomplete  ·  :frank · :dashboard · :project · :task · :inbox · :agents · :activity · :merges · :schedules · :scope · :focus · :send · :cancel-turn · :help · :quit  ·  Esc cancel"
 	}
 	switch m.focus {
 	case SidebarPanel:

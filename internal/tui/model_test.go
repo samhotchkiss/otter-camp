@@ -5948,3 +5948,25 @@ func TestHelpInCommandPaletteEX245(t *testing.T) {
 		t.Errorf("EX-245: expected :help in command palette suggestions for ':help'; got %v", suggestions)
 	}
 }
+
+// TestCommandModeHelpHintEX246 verifies EX-246: the help line in command mode shows
+// ":help" not "? help", since "?" in command mode types into the buffer.
+func TestCommandModeHelpHintEX246(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.commandMode = true
+
+	hint := model.commandFallbackHelp()
+
+	// Should NOT say "? help" since ? doesn't work in command mode
+	if strings.Contains(hint, "? help") {
+		t.Errorf("EX-246: command mode hint should not say '? help'; got %q", hint)
+	}
+	// Should mention :help instead
+	if !strings.Contains(hint, ":help") {
+		t.Errorf("EX-246: command mode hint should mention :help; got %q", hint)
+	}
+	// Should still mention Esc cancel
+	if !strings.Contains(hint, "Esc") {
+		t.Errorf("EX-246: command mode hint should mention Esc cancel; got %q", hint)
+	}
+}

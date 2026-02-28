@@ -3793,3 +3793,17 @@ default:
 **Status:** [x] Discovered | [x] Fixed | [x] Tested
 
 ---
+
+## EX-246: "? help" hint in command mode is misleading
+
+**Observation:** The help line shown while in command mode included "? help" at the end, suggesting that pressing `?` opens the keybinding reference. However, when in command mode, all keypresses go into the command buffer — `?` types the literal character into the command buffer rather than activating the `?` shortcut.
+
+**Root cause:** The `commandFallbackHelp` for command mode was written thinking about normal mode shortcuts. The `?` shortcut only works when command mode is off.
+
+**Improvement:** Replaced `"? help"` with `":help"` in the command mode hint, since the user CAN type `:help` and press Enter to open the help view from command mode. Also updated the comment to explain the constraint.
+
+**Effort:** Trivial (1 line)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
