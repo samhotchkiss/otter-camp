@@ -11255,3 +11255,40 @@ func TestNonASCIIRuneInNonChatPanelEX405(t *testing.T) {
 		}
 	})
 }
+
+// TestReconnectCommandEX406 verifies that :reconnect and :connect trigger a
+// sidebar data refresh instead of returning "Unknown command" (EX-406).
+func TestReconnectCommandEX406(t *testing.T) {
+	for _, cmd := range []string{":reconnect", ":connect"} {
+		cmd := cmd
+		t.Run(cmd, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			resultCmd := m.executeCommand(cmd)
+			// Should say "Reconnecting…" and return a command (not nil).
+			if !strings.Contains(m.statusMessage, "Reconnecting") {
+				t.Errorf("EX-406: %s should say 'Reconnecting…', got %q", cmd, m.statusMessage)
+			}
+			if resultCmd == nil {
+				t.Errorf("EX-406: %s should return a non-nil Cmd to trigger sidebar load", cmd)
+			}
+		})
+	}
+
+	// :reconnect should also be in the command palette.
+	t.Run("in-palette", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.commandMode = true
+		m.commandBuffer = ":recon"
+		suggestions := m.commandPaletteSuggestions(5)
+		found := false
+		for _, s := range suggestions {
+			if strings.Contains(strings.ToLower(s), "reconnect") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("EX-406: ':recon' should suggest :reconnect, got %v", suggestions)
+		}
+	})
+}

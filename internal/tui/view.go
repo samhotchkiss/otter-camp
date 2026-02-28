@@ -2595,6 +2595,8 @@ func (m Model) commandPaletteSuggestions(limit int) []string {
 		"cmd: settings", "cmd: config", "cmd: undo", "cmd: redo",
 		"cmd: copy", "cmd: yank", "cmd: paste",
 		"cmd: clear", "cmd: sort", "cmd: ls",
+		// EX-406: :reconnect/:connect for manual SSE reconnect when degraded.
+		"cmd: reconnect", "cmd: connect",
 	} {
 		add(&candidates, command)
 	}

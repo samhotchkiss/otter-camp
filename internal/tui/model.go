@@ -3996,6 +3996,15 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		} else {
 			m.statusMessage = "No unread sessions."
 		}
+	case "reconnect", "connect":
+		// EX-406: :reconnect/:connect — manually trigger a sidebar data refresh,
+		// which causes the SSE stream to reconnect if it has dropped. Useful when
+		// the degraded-mode banner is shown and the user wants to retry immediately
+		// rather than waiting for the auto-reconnect interval.
+		m.statusMessage = "Reconnecting…"
+		m.workspace.activity = appendActivity(m.workspace.activity,
+			"manual reconnect at "+m.now().Format("15:04:05"))
+		return loadSidebarDataCmd(m.runtimeHints)
 	case "clear", "cls":
 		// EX-391: :clear/:cls (shell clear screen) — screen is managed by the TUI.
 		m.statusMessage = "Screen is managed automatically. Use r to refresh data."
