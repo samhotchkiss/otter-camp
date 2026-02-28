@@ -6232,8 +6232,26 @@ func (m *Model) executeSidebarCommand(args []string) tea.Cmd {
 					cmds = append(cmds, loadProjectDetailCmd(node.ProjectID, m.runtimeHints))
 				}
 			case sidebarKindTask:
+				// EX-490: mirror handleEnterKey sidebarKindTask — set scope, project
+				// context, project task cursor, and status message. Previously
+				// :sidebar select on a task node only enqueued loadTaskDetailCmd;
+				// the scope indicator was wrong and "p" (back to project) would fail
+				// because selectedProjectID was never set.
+				m.activeScope = ScopeTask
+				m.statusMessage = "▸ " + truncate(node.Label, 40)
+				var projectIDForTask490 string
+				if node.ParentID != "" {
+					if projNode := m.workspace.nodes[node.ParentID]; projNode != nil && projNode.Kind == sidebarKindProject {
+						m.workspace.selectedProjectID = projNode.ProjectID
+						projectIDForTask490 = projNode.ProjectID
+					}
+				}
+				m.workspace.syncProjectCursorToTask(node.TaskID)
 				if node.TaskID != "" {
 					cmds = append(cmds, loadTaskDetailCmd(node.TaskID, m.runtimeHints))
+				}
+				if projectIDForTask490 != "" && m.workspace.selectedProject == nil && m.runtimeHints.LoadProjectDetail != nil {
+					cmds = append(cmds, loadProjectDetailCmd(projectIDForTask490, m.runtimeHints))
 				}
 			case sidebarKindInbox:
 				cmds = append(cmds, loadInboxItemsCmd(m.runtimeHints))

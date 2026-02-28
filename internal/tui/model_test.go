@@ -11373,6 +11373,81 @@ func TestTKeyFiresTaskDetailLoadEX488(t *testing.T) {
 	}
 }
 
+// TestSidebarSelectTaskNodeSetsStateEX490 verifies EX-490: :sidebar select on a
+// task node (sidebarKindTask) sets activeScope=ScopeTask, statusMessage, selectedProjectID
+// from parent, syncs project cursor, and fires loadTaskDetailCmd + loadProjectDetailCmd —
+// mirroring handleEnterKey sidebarKindTask. Previously only loadTaskDetailCmd was enqueued;
+// scope, project context, cursor, and status message were silently skipped.
+func TestSidebarSelectTaskNodeSetsStateEX490(t *testing.T) {
+	projID := "proj-490"
+	taskID := "task-490"
+	taskDetailCalledWith := ""
+	projDetailCalledWith := ""
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			taskDetailCalledWith = id
+			return &TaskDetailItem{ID: id, Title: "EX-490 task"}, nil
+		},
+		LoadProjectDetail: func(_ context.Context, id string) (*ProjectDetail, error) {
+			projDetailCalledWith = id
+			return &ProjectDetail{ID: id, DisplayName: "EX-490 project"}, nil
+		},
+	})
+	m = pressMsg(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	if m.workspace.nodes == nil {
+		m.workspace.nodes = make(map[string]*sidebarNode)
+	}
+	// Build a project node as parent
+	projNodeID := "project-" + projID
+	m.workspace.nodes[projNodeID] = &sidebarNode{
+		ID:        projNodeID,
+		Kind:      sidebarKindProject,
+		ProjectID: projID,
+		Label:     "Alpha Project",
+	}
+	// Build a task node as child of the project node
+	taskNodeID := "task-" + taskID
+	m.workspace.nodes[taskNodeID] = &sidebarNode{
+		ID:       taskNodeID,
+		Kind:     sidebarKindTask,
+		TaskID:   taskID,
+		ParentID: projNodeID,
+		Label:    "My Task 490",
+	}
+	m.workspace.topLevel = []string{taskNodeID}
+	m.workspace.sidebarCursor = 0
+	m.focus = SidebarPanel
+	// Pre-set stale scope so we can verify it's overwritten
+	m.activeScope = ScopeOrg
+
+	cmd := m.executeCommand(":sidebar select")
+
+	// Scope must be set to ScopeTask
+	if m.activeScope != ScopeTask {
+		t.Fatalf("EX-490: activeScope = %v, want ScopeTask", m.activeScope)
+	}
+	// selectedProjectID must be set from parent node
+	if m.workspace.selectedProjectID != projID {
+		t.Fatalf("EX-490: selectedProjectID = %q, want %q", m.workspace.selectedProjectID, projID)
+	}
+	// statusMessage must include the task label
+	if m.statusMessage != "▸ My Task 490" {
+		t.Fatalf("EX-490: statusMessage = %q, want %q", m.statusMessage, "▸ My Task 490")
+	}
+	// A cmd must be returned
+	if cmd == nil {
+		t.Fatal("EX-490: :sidebar select on task node returned nil cmd")
+	}
+	// Execute batch to confirm both LoadTaskDetail and LoadProjectDetail are called
+	runNonTimerCmds(cmd)
+	if taskDetailCalledWith != taskID {
+		t.Fatalf("EX-490: LoadTaskDetail called with %q, want %q", taskDetailCalledWith, taskID)
+	}
+	if projDetailCalledWith != projID {
+		t.Fatalf("EX-490: LoadProjectDetail called with %q, want %q", projDetailCalledWith, projID)
+	}
+}
+
 // TestQInNonHelpViewEX335 verifies that pressing 'q' in a non-help view gives
 // helpful redirect feedback instead of silently doing nothing (EX-335).
 func TestQInNonHelpViewEX335(t *testing.T) {
