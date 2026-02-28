@@ -1851,6 +1851,9 @@ func (m *Model) handleEnterKey() tea.Cmd {
 			}
 			return nil
 		}
+		// EX-474: capture pre-selection session so we can distinguish "switched" from
+		// "refreshed" when the user presses Enter on the session that's already active.
+		prevSession := strings.TrimSpace(m.activeSession)
 		m.workspace.selectSidebarNode()
 		m.state.LastActiveChatSession = m.workspace.activeSessionID
 		// EX-186: clear stale turn state before switching sessions.
@@ -1861,7 +1864,14 @@ func (m *Model) handleEnterKey() tea.Cmd {
 			switch node.Kind {
 			case sidebarKindSession:
 				// EX-299: override generic "Sidebar selection applied." with session name.
-				m.statusMessage = "Switched to " + truncate(node.Label, 36) + "."
+				// EX-474: if the session is already active, say "refreshed" instead of
+				// "Switched to" — mirrors EX-469 jumpToFrankSession idempotency pattern.
+				alreadyOnSession := looksLikeUUID(prevSession) && strings.EqualFold(prevSession, strings.TrimSpace(node.SessionID))
+				if alreadyOnSession {
+					m.statusMessage = truncate(node.Label, 36) + " refreshed."
+				} else {
+					m.statusMessage = "Switched to " + truncate(node.Label, 36) + "."
+				}
 				// Set scope based on the session's scope type
 				switch node.SessionScope {
 				case "project_task":

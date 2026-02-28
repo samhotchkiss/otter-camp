@@ -7735,6 +7735,59 @@ func TestF1KeyIdempotencyEX473(t *testing.T) {
 	})
 }
 
+// TestSidebarSessionEnterRefreshesVsSwitchesEX474 verifies EX-474: pressing Enter on
+// an already-active session sidebar node says "X refreshed." instead of the misleading
+// "Switched to X." — mirrors EX-469 (jumpToFrankSession "refreshed" vs "switched").
+func TestSidebarSessionEnterRefreshesVsSwitchesEX474(t *testing.T) {
+	sessionID := "11111111-2222-3333-4444-555555555555"
+
+	t.Run("enter-on-already-active-session", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		// Seed an active session that matches the sidebar node.
+		m.activeSession = sessionID
+		m.workspace.activeSessionID = sessionID
+		// Add a session node to the sidebar so the cursor lands on it.
+		m.workspace.nodes = map[string]*sidebarNode{
+			"sess-" + sessionID: {
+				ID:        "sess-" + sessionID,
+				Label:     "Frank's session",
+				Kind:      sidebarKindSession,
+				SessionID: sessionID,
+			},
+		}
+		m.workspace.topLevel = []string{"sess-" + sessionID}
+		m.workspace.sidebarCursor = 0
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if got := m.statusMessage; got != "Frank's session refreshed." {
+			t.Fatalf("EX-474: Enter on active session = %q, want %q", got, "Frank's session refreshed.")
+		}
+	})
+
+	t.Run("enter-on-different-session-switches", func(t *testing.T) {
+		otherID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		// Active session is different from the node being selected.
+		m.activeSession = otherID
+		m.workspace.activeSessionID = otherID
+		m.workspace.nodes = map[string]*sidebarNode{
+			"sess-" + sessionID: {
+				ID:        "sess-" + sessionID,
+				Label:     "Frank's session",
+				Kind:      sidebarKindSession,
+				SessionID: sessionID,
+			},
+		}
+		m.workspace.topLevel = []string{"sess-" + sessionID}
+		m.workspace.sidebarCursor = 0
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if got := m.statusMessage; got != "Switched to Frank's session." {
+			t.Fatalf("EX-474: Enter on different session = %q, want %q", got, "Switched to Frank's session.")
+		}
+	})
+}
+
 // TestHelpCommandIdempotencyEX468 verifies EX-468: :help/:palette when already
 // in ViewHelp says "Help: scrolled to top." (and resets scroll) rather than
 // re-announcing "Keybinding reference." as if opening fresh — mirrors EX-467 for :man.
