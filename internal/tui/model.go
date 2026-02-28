@@ -3669,6 +3669,27 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 	case "sp", "split", "vs", "vsplit", "new", "tabnew":
 		// EX-391: split/window commands — not supported in this single-pane TUI.
 		m.statusMessage = "Split windows not supported. Use 1/2/3 or Tab to cycle panels."
+	case "search", "find", "filter":
+		// EX-392: :search/:find/:filter — enter search/filter mode on the focused panel.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Search not available in chat. Use / in sidebar or main panel (1 or 2 to focus)."
+			return nil
+		}
+		if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
+			m.statusMessage = "Search not available in help view. Press j/k to scroll."
+			return nil
+		}
+		m.enterSearchMode(m.focus)
+		m.statusMessage = "Filter mode — type to filter, Enter to apply, Esc to cancel."
+	case "back":
+		// EX-392: :back — navigate back (same as Esc in main panel).
+		return m.handleEscapeKey()
+	case "sort":
+		// EX-392: :sort — no sort support yet.
+		m.statusMessage = ":sort not supported. Use j/k to navigate, r to refresh."
+	case "history":
+		// EX-392: :history — redirect to chat history navigation.
+		m.statusMessage = "Use ↑/↓ in chat panel (3 or Tab) to browse message history."
 	case "help", "palette":
 		// EX-239: open the help screen directly (same as ?) rather than showing a
 		// truncated status message. The old statusMessage approach was cut off at 80

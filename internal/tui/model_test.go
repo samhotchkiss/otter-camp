@@ -10634,3 +10634,50 @@ func TestAdditionalCommandAliasesEX391(t *testing.T) {
 		}
 	})
 }
+
+// TestMoreCommandAliasesEX392 verifies that :search, :find, :filter, :back, :sort,
+// and :history give helpful responses instead of "Unknown command" (EX-392).
+func TestMoreCommandAliasesEX392(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want string
+	}{
+		{":search", "Filter mode"},
+		{":find", "Filter mode"},
+		{":filter", "Filter mode"},
+		{":back", ""},      // back calls handleEscapeKey which sets a message
+		{":sort", ":sort not supported"},
+		{":history", "↑/↓"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run("cmd-"+tt.cmd, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m.commandMode = true
+			m.commandBuffer = tt.cmd
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+			if tt.want != "" && !strings.Contains(m1.statusMessage, tt.want) {
+				t.Errorf("EX-392: %s: got %q, want to contain %q", tt.cmd, m1.statusMessage, tt.want)
+			}
+			// Verify "Unknown command" is NOT produced
+			if strings.Contains(m1.statusMessage, "Unknown command") {
+				t.Errorf("EX-392: %s: should not produce 'Unknown command', got %q", tt.cmd, m1.statusMessage)
+			}
+		})
+	}
+	// :search in chat panel should give redirect hint (not enter search mode)
+	t.Run("cmd-:search-in-ChatPanel", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m.commandMode = true
+		m.commandBuffer = ":search"
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if m1.searchMode {
+			t.Errorf("EX-392: :search in ChatPanel should not enter search mode")
+		}
+		if !strings.Contains(m1.statusMessage, "not available in chat") {
+			t.Errorf("EX-392: :search in ChatPanel: got %q, want 'not available in chat'", m1.statusMessage)
+		}
+	})
+}
