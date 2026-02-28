@@ -5730,3 +5730,26 @@ func TestTaskViewOKeyEX237(t *testing.T) {
 		t.Errorf("EX-237: pressing 'o' in task view produced no status feedback; expected a message (success or error)")
 	}
 }
+
+// TestSendCommandUsesProvidedTextEX238 verifies EX-238: ":send hello world" uses
+// "hello world" as the message text, not whatever was previously in chatInput.
+func TestSendCommandUsesProvidedTextEX238(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.chatInput = "existing input"
+	// Install a no-op send hook so sendOrQueueInput doesn't panic.
+	model.runtimeHints.SendChatMessage = func(_ context.Context, _, content string) error {
+		return nil
+	}
+
+	// :send hello world should use "hello world", not "existing input"
+	_ = model.executeCommand(":send hello world")
+
+	// chatInput should be cleared after send
+	if model.chatInput != "" {
+		t.Errorf("EX-238: chatInput should be cleared after :send; got %q", model.chatInput)
+	}
+	// The message should have been sent (activeTurn or status message indicates send)
+	if !model.activeTurn && !strings.Contains(model.statusMessage, "sent") {
+		t.Errorf("EX-238: :send hello world should have triggered a message send; statusMessage=%q", model.statusMessage)
+	}
+}

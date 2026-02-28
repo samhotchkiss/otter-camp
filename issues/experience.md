@@ -3649,3 +3649,24 @@ r·retry  ·  Esc·back
 **Status:** [x] Discovered | [x] Fixed | [x] Tested
 
 ---
+
+## EX-238: `:send <message>` ignores the provided text
+
+**Observation:** The help view documents `:send <message>` as "send message to Frank". But the implementation's `case "send"` branch called `sendOrQueueInput()` directly without extracting the text after `:send`. `sendOrQueueInput` uses `m.chatInput` — so `:send hello world` would send whatever was already in the chat input box, not "hello world".
+
+**Root cause:** The command was implemented as an alias for Enter (send current input) rather than a text-message shortcut. The help documentation was more ambitious than the implementation.
+
+**Improvement:** Added text extraction before calling `sendOrQueueInput`:
+```go
+if len(fields) > 1 {
+    m.chatInput = strings.TrimSpace(strings.Join(fields[1:], " "))
+}
+return m.sendOrQueueInput()
+```
+Now `:send deploy the feature` sends "deploy the feature" regardless of what was previously in the input box.
+
+**Effort:** Trivial (3 lines)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---

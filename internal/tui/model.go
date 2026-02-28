@@ -1807,6 +1807,11 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		// EX-164: switchScope returns a history-reload cmd; don't discard it.
 		return m.switchScope(normalizeScope(fields[1]))
 	case "send":
+		// EX-238: if the user typed `:send <message>`, use that text as the input.
+		// Otherwise fall back to whatever is in m.chatInput.
+		if len(fields) > 1 {
+			m.chatInput = strings.TrimSpace(strings.Join(fields[1:], " "))
+		}
 		return m.sendOrQueueInput()
 	case "tour":
 		if len(fields) != 2 {
