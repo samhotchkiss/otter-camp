@@ -8895,3 +8895,35 @@ func TestPgUpDownHomeEndInStaticViewsEX336(t *testing.T) {
 		}
 	}
 }
+
+// TestGGInTaskViewEX337338 verifies that 'g' and 'G' in ViewTask navigate
+// to the first and last task in the project (EX-337/338). The help text
+// documents "g/G Home/End: jump to first/last in view" and ViewTask must honour it.
+func TestGGInTaskViewEX337338(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewTask)
+	// No project context — stepTaskInProject should give "No project context." feedback.
+	m.workspace.selectedTaskID = ""
+	m.workspace.selectedProjectID = ""
+
+	// 'g' with no project context
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if m1.workspace.mainView != ViewTask {
+		t.Errorf("EX-337: 'g' in ViewTask should stay in ViewTask; got %v", m1.workspace.mainView)
+	}
+	// Should not panic or silently do nothing — stepTaskInProject will set a status message.
+	if m1.statusMessage == "" {
+		t.Errorf("EX-337: 'g' in ViewTask should set a status message; got empty")
+	}
+
+	// 'G' with no project context
+	m2 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if m2.workspace.mainView != ViewTask {
+		t.Errorf("EX-338: 'G' in ViewTask should stay in ViewTask; got %v", m2.workspace.mainView)
+	}
+	if m2.statusMessage == "" {
+		t.Errorf("EX-338: 'G' in ViewTask should set a status message; got empty")
+	}
+}

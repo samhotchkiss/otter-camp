@@ -1933,6 +1933,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.helpScrollOffset = 0
 				m.statusMessage = "Help jumped to top."
 			}
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewTask {
+			// EX-337: g in task view jumps to first task (mirrors Home/PgUp x inf).
+			return true, m.stepTaskInProject(-99999)
 		}
 		return true, nil
 	case 'G':
@@ -1998,6 +2001,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				m.helpScrollOffset = 9999
 				m.statusMessage = "Help jumped to bottom."
 			}
+		} else if m.focus == MainPanel && m.workspace.mainView == ViewTask {
+			// EX-338: G in task view jumps to last task (mirrors End/PgDn x inf).
+			return true, m.stepTaskInProject(99999)
 		}
 		return true, nil
 	case 'q':
