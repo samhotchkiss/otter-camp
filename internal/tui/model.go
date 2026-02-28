@@ -4002,7 +4002,9 @@ func (m *Model) setFocus(panel Panel) {
 
 func (m *Model) toggleSidebar() {
 	if m.sizeClass != SizeS {
-		m.statusMessage = "Sidebar toggle is available below 100 columns."
+		// EX-359: clarify why 's' had no effect instead of saying what WOULD work.
+		// At wider widths the sidebar is always visible — toggling it isn't available.
+		m.statusMessage = "Sidebar is always visible above 100 columns. Resize narrower to enable toggling."
 		return
 	}
 	if m.sidebarVisible || m.focus == SidebarPanel {

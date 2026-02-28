@@ -9392,3 +9392,31 @@ func TestBackspaceInSidebarPanelEX358(t *testing.T) {
 			m1.statusMessage, m2.statusMessage)
 	}
 }
+
+// TestSidebarToggleHintOnWideScreenEX359 verifies that pressing 's' to toggle
+// the sidebar on a wide screen (above 100 columns) gives a clear message
+// explaining that the sidebar is always visible at that width, rather than
+// the previous confusing "available below 100 columns" message (EX-359).
+func TestSidebarToggleHintOnWideScreenEX359(t *testing.T) {
+	// Wide screen → sidebar toggle not available.
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40 // well above 100 columns → SizeL/XL, not SizeS
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewDashboard)
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	want := "Sidebar is always visible above 100 columns. Resize narrower to enable toggling."
+	if m1.statusMessage != want {
+		t.Errorf("EX-359: 's' on wide screen should explain sidebar always visible; got %q", m1.statusMessage)
+	}
+
+	// Small screen (SizeS) → sidebar toggle should work (no regression).
+	ms := NewModel(DefaultState())
+	ms.width, ms.height = 90, 30 // below 100 columns → SizeS
+	ms.focus = MainPanel
+	ms.workspace.setMainView(ViewDashboard)
+	ms.sidebarVisible = false
+	ms1 := pressKey(ms, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if ms1.statusMessage == want {
+		t.Errorf("EX-359 regression: 's' on small screen should toggle sidebar, not show wide-screen hint")
+	}
+}
