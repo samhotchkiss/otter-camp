@@ -2043,6 +2043,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		if m.focus == SidebarPanel {
 			// EX-281: boundary + label feedback for sidebar navigation (mirrors j/k
 			// feedback already added for ViewInbox/ViewProject/ViewDashboard).
+			// EX-415: empty sidebar guard — mirrors EX-413/414 for j key.
+			if len(m.workspace.visibleSidebarIDs()) == 0 {
+				m.statusMessage = "No items in sidebar."
+				return true, nil
+			}
 			prevCursor := m.workspace.sidebarCursor
 			m.workspace.moveSidebar(1)
 			if m.workspace.sidebarCursor == prevCursor {
@@ -2140,6 +2145,11 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 	case 'k':
 		if m.focus == SidebarPanel {
 			// EX-281: boundary + label feedback (mirrors j case above).
+			// EX-415: empty sidebar guard — mirrors EX-413/414 for k key.
+			if len(m.workspace.visibleSidebarIDs()) == 0 {
+				m.statusMessage = "No items in sidebar."
+				return true, nil
+			}
 			prevCursor := m.workspace.sidebarCursor
 			m.workspace.moveSidebar(-1)
 			if m.workspace.sidebarCursor == prevCursor {
@@ -3142,6 +3152,11 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 	switch key.Type {
 	case tea.KeyUp:
 		// EX-281: boundary + label feedback for arrow keys (mirrors j/k feedback).
+		// EX-415: empty sidebar guard — give honest "No items" feedback.
+		if len(m.workspace.visibleSidebarIDs()) == 0 {
+			m.statusMessage = "No items in sidebar."
+			return true, nil
+		}
 		prevCursor := m.workspace.sidebarCursor
 		m.workspace.moveSidebar(-1)
 		if m.workspace.sidebarCursor == prevCursor {
@@ -3151,6 +3166,11 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		return true, nil
 	case tea.KeyDown:
+		// EX-415: symmetric empty-sidebar guard.
+		if len(m.workspace.visibleSidebarIDs()) == 0 {
+			m.statusMessage = "No items in sidebar."
+			return true, nil
+		}
 		prevCursor := m.workspace.sidebarCursor
 		m.workspace.moveSidebar(1)
 		if m.workspace.sidebarCursor == prevCursor {

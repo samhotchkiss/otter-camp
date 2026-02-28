@@ -3172,6 +3172,32 @@ func TestSidebarEmptyGGEX414(t *testing.T) {
 	}
 }
 
+// EX-415: j/k and ↑/↓ in an empty sidebar said "At first/last item in sidebar."
+// when there were no items; they should say "No items in sidebar."
+func TestSidebarEmptyJKArrowsEX415(t *testing.T) {
+	keys := []struct {
+		name string
+		key  tea.KeyMsg
+	}{
+		{"j", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}},
+		{"k", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}},
+		{"up", tea.KeyMsg{Type: tea.KeyUp}},
+		{"down", tea.KeyMsg{Type: tea.KeyDown}},
+	}
+	for _, tt := range keys {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = SidebarPanel
+			m.workspace.topLevel = nil
+			m.workspace.nodes = map[string]*sidebarNode{}
+			m = pressKey(m, tt.key)
+			if !strings.Contains(m.statusMessage, "No items") {
+				t.Fatalf("statusMessage = %q, want 'No items in sidebar.'", m.statusMessage)
+			}
+		})
+	}
+}
+
 // EX-160: Inbox approve/reject/defer were local-only; pressing 'a', 'x', 'f'
 // must also return a tea.Cmd that calls ActOnInboxItem with the correct item ID.
 func TestInboxApproveIssuesServerAPICall(t *testing.T) {
