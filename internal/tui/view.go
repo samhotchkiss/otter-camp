@@ -669,6 +669,10 @@ func (m Model) renderSearchBar(panel Panel, width int) string {
 	prompt := "/" + query
 	if editing {
 		prompt += "▌"
+	} else {
+		// EX-208: when a filter is applied but not actively being edited,
+		// show a hint so the user knows how to change or clear it.
+		prompt += "  (/ to edit  ·  Esc to clear)"
 	}
 	return styleMuted.Render(truncate("Search "+prompt, width))
 }

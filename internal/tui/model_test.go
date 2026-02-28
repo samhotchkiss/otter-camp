@@ -4857,3 +4857,22 @@ func TestScopeCycleToTaskWithNoTaskShowsHint(t *testing.T) {
 		t.Errorf("EX-207: expected hint about selecting a task, got %q", model.statusMessage)
 	}
 }
+
+// TestAppliedFilterShowsEditClearHint verifies EX-208: when a search filter is
+// applied (not currently being edited), the search bar shows a
+// "(/ to edit · Esc to clear)" hint so users know how to modify or remove it.
+func TestAppliedFilterShowsEditClearHint(t *testing.T) {
+	model := NewModel(DefaultState())
+	// Apply a filter to the main panel (simulates user pressing / and Enter).
+	model.mainFilter = "todo"
+	model.searchMode = false // filter applied, not actively editing
+
+	layout := computeLayout(80, 20, MainPanel, false, DefaultState().PanelProportions)
+	panel := model.renderMainPanel(80, 20, false, layout)
+	if !strings.Contains(panel, "/ to edit") {
+		t.Errorf("EX-208: expected '/ to edit' hint when filter is applied, got %q", panel)
+	}
+	if !strings.Contains(panel, "Esc to clear") {
+		t.Errorf("EX-208: expected 'Esc to clear' hint when filter is applied, got %q", panel)
+	}
+}
