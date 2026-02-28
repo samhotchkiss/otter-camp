@@ -5927,3 +5927,24 @@ func TestScopeCommandValidatesArgumentEX244(t *testing.T) {
 		}
 	})
 }
+
+// TestHelpInCommandPaletteEX245 verifies EX-245: ":help" appears in command
+// palette suggestions when the user types "help" or ":he".
+func TestHelpInCommandPaletteEX245(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.commandMode = true
+	model.commandBuffer = ":help"
+
+	suggestions := model.commandPaletteSuggestions(10)
+
+	found := false
+	for _, s := range suggestions {
+		if strings.Contains(strings.ToLower(s), "help") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("EX-245: expected :help in command palette suggestions for ':help'; got %v", suggestions)
+	}
+}

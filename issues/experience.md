@@ -3779,3 +3779,17 @@ default:
 **Status:** [x] Discovered | [x] Fixed | [x] Tested
 
 ---
+
+## EX-245: `:help` missing from command palette suggestions
+
+**Observation:** The command palette (`: <Tab>`) suggests all valid commands via `commandPaletteSuggestions`. But `:help` was missing from the candidate list, even though it's a valid command shown in the help view. Typing `:help` would not surface any autocomplete suggestion.
+
+**Root cause:** The candidate slice in `commandPaletteSuggestions` did not include `"cmd: help"`. The EX-216 comment claimed "all valid commands" but help was overlooked.
+
+**Improvement:** Added `"cmd: help"` to the candidates list (between `"cmd: tour dismiss"` and `"cmd: quit"`).
+
+**Effort:** Trivial (1 line)
+**Issue:** N/A
+**Status:** [x] Discovered | [x] Fixed | [x] Tested
+
+---
