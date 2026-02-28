@@ -7627,6 +7627,79 @@ func TestReloadCommandContextAwarenessEX471(t *testing.T) {
 	})
 }
 
+// TestF5KeyContextAwarenessEX472 verifies EX-472: F5 (universally "refresh") mirrors
+// the 'r' key's context-awareness rather than always running a sidebar-only refresh.
+// Previously F5 always said "Refreshing…" and called loadSidebarDataCmd regardless of
+// which view was active.
+func TestF5KeyContextAwarenessEX472(t *testing.T) {
+	pressF5 := func(m Model) Model {
+		return pressKey(m, tea.KeyMsg{Type: tea.KeyF5})
+	}
+
+	t.Run("f5-in-task-view", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewTask
+		m.workspace.selectedTaskID = "task-abc"
+		m = pressF5(m)
+		if got := m.statusMessage; got != "Refreshing task detail…" {
+			t.Fatalf("EX-472: F5 in task view = %q, want %q", got, "Refreshing task detail…")
+		}
+	})
+
+	t.Run("f5-in-project-view", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewProject
+		m.workspace.selectedProjectID = "proj-xyz"
+		m = pressF5(m)
+		if got := m.statusMessage; got != "Refreshing project detail…" {
+			t.Fatalf("EX-472: F5 in project view = %q, want %q", got, "Refreshing project detail…")
+		}
+	})
+
+	t.Run("f5-in-inbox", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewInbox
+		m = pressF5(m)
+		if got := m.statusMessage; got != "Refreshing inbox…" {
+			t.Fatalf("EX-472: F5 in inbox = %q, want %q", got, "Refreshing inbox…")
+		}
+	})
+
+	t.Run("f5-in-agents", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewAgents
+		m = pressF5(m)
+		if got := m.statusMessage; got != "Refreshing agents…" {
+			t.Fatalf("EX-472: F5 in agents view = %q, want %q", got, "Refreshing agents…")
+		}
+	})
+
+	t.Run("f5-in-dashboard-via-sidebar", func(t *testing.T) {
+		// F5 is context-aware based on mainView, so sidebar focus uses default branch.
+		m := NewModel(DefaultState())
+		m.focus = SidebarPanel
+		m.workspace.mainView = ViewDashboard
+		m = pressF5(m)
+		if got := m.statusMessage; got != "Refreshing sidebar data…" {
+			t.Fatalf("EX-472: F5 with sidebar focus = %q, want %q", got, "Refreshing sidebar data…")
+		}
+	})
+
+	t.Run("f5-in-dashboard-main-focus", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = MainPanel
+		m.workspace.mainView = ViewDashboard
+		m = pressF5(m)
+		if got := m.statusMessage; got != "Refreshing task board…" {
+			t.Fatalf("EX-472: F5 in dashboard = %q, want %q", got, "Refreshing task board…")
+		}
+	})
+}
+
 // TestHelpCommandIdempotencyEX468 verifies EX-468: :help/:palette when already
 // in ViewHelp says "Help: scrolled to top." (and resets scroll) rather than
 // re-announcing "Keybinding reference." as if opening fresh — mirrors EX-467 for :man.

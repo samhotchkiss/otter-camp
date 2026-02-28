@@ -1619,11 +1619,43 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyF5:
 		// EX-384: F5 — universally "refresh". Mirror the 'r' key.
+		// EX-472: be context-aware like 'r' and :reload — reload the right data
+		// for the current view instead of always running a sidebar-only refresh.
 		if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
 			m.statusMessage = "r·refresh not available in help view. Press j/k to scroll or Esc to close."
 			return m, nil
 		}
-		m.statusMessage = "Refreshing…"
+		if m.focus == MainPanel && m.workspace.mainView == ViewTask && m.workspace.selectedTaskID != "" {
+			m.statusMessage = "Refreshing task detail…"
+			return m, loadTaskDetailCmd(m.workspace.selectedTaskID, m.runtimeHints)
+		}
+		if m.focus == MainPanel && m.workspace.mainView == ViewProject && m.workspace.selectedProjectID != "" {
+			m.statusMessage = "Refreshing project detail…"
+			return m, tea.Batch(
+				loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints),
+				loadProjectTasksCmd(m.workspace.selectedProjectID, m.runtimeHints, false),
+			)
+		}
+		if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
+			m.statusMessage = "Refreshing inbox…"
+			return m, loadInboxItemsCmd(m.runtimeHints)
+		}
+		if m.focus == MainPanel && m.workspace.mainView == ViewAgents {
+			m.statusMessage = "Refreshing agents…"
+			return m, loadAgentsCmd(m.runtimeHints)
+		}
+		switch {
+		case m.focus == MainPanel && m.workspace.mainView == ViewDashboard:
+			m.statusMessage = "Refreshing task board…"
+		case m.focus == MainPanel && m.workspace.mainView == ViewActivity:
+			m.statusMessage = "Refreshing activity…"
+		case m.focus == MainPanel && m.workspace.mainView == ViewMerges:
+			m.statusMessage = "Refreshing merges…"
+		case m.focus == MainPanel && m.workspace.mainView == ViewSchedules:
+			m.statusMessage = "Refreshing schedules…"
+		default:
+			m.statusMessage = "Refreshing sidebar data…"
+		}
 		m.workspace.activity = appendActivity(m.workspace.activity,
 			"sidebar refreshed at "+m.now().Format("15:04:05"))
 		return m, loadSidebarDataCmd(m.runtimeHints)
