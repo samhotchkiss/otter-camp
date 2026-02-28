@@ -7695,6 +7695,31 @@ func TestSidebarGGFeedbackEX297(t *testing.T) {
 	}
 }
 
+// TestSidebarSessionEnterFeedbackEX299 verifies that Enter on a sidebarKindSession node
+// shows "Switched to [name]." instead of the generic "Sidebar selection applied."
+func TestSidebarSessionEnterFeedbackEX299(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = SidebarPanel
+	// Set up a session node in the sidebar.
+	m.workspace.topLevel = []string{"sess-general"}
+	m.workspace.nodes = map[string]*sidebarNode{
+		"sess-general": {
+			ID:           "sess-general",
+			Label:        "General Chat",
+			Kind:         sidebarKindSession,
+			SessionID:    "sess-general",
+			SessionScope: "organization",
+		},
+	}
+	m.workspace.sidebarCursor = 0
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.statusMessage != "Switched to General Chat." {
+		t.Errorf("EX-299: Enter on session node should say 'Switched to General Chat.'; got %q", m.statusMessage)
+	}
+}
+
 // TestSidebarTaskEnterFeedbackEX298 verifies that Enter on a sidebarKindTask node
 // shows the task label ("▸ [name]") instead of the generic "Sidebar selection applied."
 func TestSidebarTaskEnterFeedbackEX298(t *testing.T) {

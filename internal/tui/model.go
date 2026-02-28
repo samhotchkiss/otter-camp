@@ -1021,6 +1021,8 @@ func (m *Model) handleEnterKey() tea.Cmd {
 		if node != nil {
 			switch node.Kind {
 			case sidebarKindSession:
+				// EX-299: override generic "Sidebar selection applied." with session name.
+				m.statusMessage = "Switched to " + truncate(node.Label, 36) + "."
 				// Set scope based on the session's scope type
 				switch node.SessionScope {
 				case "project_task":
