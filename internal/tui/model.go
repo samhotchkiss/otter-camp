@@ -2938,6 +2938,22 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Delegate to normal key handling to perform the navigation.
 		result, cmd := m.updateKey(key)
 		return result, cmd
+	case tea.KeyLeft, tea.KeyRight:
+		// EX-370: ← / → in filter mode — cursor movement not supported in query field.
+		m.statusMessage = "Text cursor movement not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+		return m, nil
+	case tea.KeyHome:
+		// EX-370: Home in filter mode — give a hint matching the ← hint.
+		m.statusMessage = "Line-start (Home) not supported. Use Ctrl-U to clear the filter."
+		return m, nil
+	case tea.KeyEnd:
+		// EX-370: End in filter mode — give a hint matching the → hint.
+		m.statusMessage = "Line-end (End) not supported. Type to extend the filter."
+		return m, nil
+	case tea.KeyDelete:
+		// EX-370: Delete (forward delete) in filter mode — no cursor concept.
+		m.statusMessage = "Forward-delete not supported in filter mode. Use Backspace or Ctrl-W."
+		return m, nil
 	case tea.KeySpace:
 		m.searchQuery += " "
 		m.setFilterForPanel(m.searchPanel, m.searchQuery)
@@ -3039,6 +3055,18 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// EX-362: ↑ in command mode — command history recall not yet supported.
 		// Give a helpful hint pointing to the available alternatives.
 		m.statusMessage = "Command history not supported. Use Tab to autocomplete."
+		return m, nil
+	case tea.KeyDown:
+		// EX-371: ↓ in command mode — symmetric with ↑ (EX-362), no history.
+		m.statusMessage = "Command history not supported. Use Tab to autocomplete."
+		return m, nil
+	case tea.KeyHome, tea.KeyEnd:
+		// EX-371: Home/End in command mode — cursor movement not supported.
+		m.statusMessage = "Cursor movement not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+		return m, nil
+	case tea.KeyDelete:
+		// EX-371: Delete (forward delete) in command mode — no cursor concept.
+		m.statusMessage = "Forward-delete not supported. Use Backspace or Ctrl-W to delete word."
 		return m, nil
 	case tea.KeyRunes:
 		if len(key.Runes) > 0 {

@@ -9654,3 +9654,65 @@ func TestCtrlBFDAndDeleteKeyEX367368369(t *testing.T) {
 		}
 	})
 }
+
+// TestCursorKeysInSearchModeEX370 verifies that ←, →, Home, End, and Delete
+// in filter/search mode give honest hints instead of silent no-ops (EX-370).
+func TestCursorKeysInSearchModeEX370(t *testing.T) {
+	tests := []struct {
+		name    string
+		keyType tea.KeyType
+		want    string
+	}{
+		{"Left in search", tea.KeyLeft, "Text cursor movement not supported. Use Ctrl-W to delete word, Ctrl-U to clear."},
+		{"Right in search", tea.KeyRight, "Text cursor movement not supported. Use Ctrl-W to delete word, Ctrl-U to clear."},
+		{"Home in search", tea.KeyHome, "Line-start (Home) not supported. Use Ctrl-U to clear the filter."},
+		{"End in search", tea.KeyEnd, "Line-end (End) not supported. Type to extend the filter."},
+		{"Delete in search", tea.KeyDelete, "Forward-delete not supported in filter mode. Use Backspace or Ctrl-W."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.searchMode = true
+			m.searchPanel = SidebarPanel
+			m.searchQuery = "hello"
+			m1 := pressKey(m, tea.KeyMsg{Type: tt.keyType})
+			if m1.statusMessage != tt.want {
+				t.Errorf("EX-370: %s: got %q, want %q", tt.name, m1.statusMessage, tt.want)
+			}
+			// Search mode should still be active (keys didn't commit or cancel filter).
+			if !m1.searchMode {
+				t.Errorf("EX-370: %s: searchMode should remain active", tt.name)
+			}
+		})
+	}
+}
+
+// TestCommandModeExtraKeysEX371 verifies that ↓, Home, End, and Delete
+// in command mode give honest hints instead of silent no-ops (EX-371).
+func TestCommandModeExtraKeysEX371(t *testing.T) {
+	tests := []struct {
+		name    string
+		keyType tea.KeyType
+		want    string
+	}{
+		{"Down in command", tea.KeyDown, "Command history not supported. Use Tab to autocomplete."},
+		{"Home in command", tea.KeyHome, "Cursor movement not supported. Use Ctrl-W to delete word, Ctrl-U to clear."},
+		{"End in command", tea.KeyEnd, "Cursor movement not supported. Use Ctrl-W to delete word, Ctrl-U to clear."},
+		{"Delete in command", tea.KeyDelete, "Forward-delete not supported. Use Backspace or Ctrl-W to delete word."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.commandMode = true
+			m.commandBuffer = ":frank"
+			m1 := pressKey(m, tea.KeyMsg{Type: tt.keyType})
+			if m1.statusMessage != tt.want {
+				t.Errorf("EX-371: %s: got %q, want %q", tt.name, m1.statusMessage, tt.want)
+			}
+			// Command mode should still be active.
+			if !m1.commandMode {
+				t.Errorf("EX-371: %s: commandMode should remain active", tt.name)
+			}
+		})
+	}
+}
