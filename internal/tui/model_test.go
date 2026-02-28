@@ -10135,3 +10135,28 @@ func TestCapitalLetterHintsEX380(t *testing.T) {
 		})
 	}
 }
+
+// TestInboxActionKeysInSidebarPanelEX381 verifies that 'a', 'x', 'f', 'o'
+// in SidebarPanel now show redirect hints instead of silent no-ops (EX-381).
+// Previously these redirect hints only fired for MainPanel focus.
+func TestInboxActionKeysInSidebarPanelEX381(t *testing.T) {
+	tests := []struct {
+		r    rune
+		want string
+	}{
+		{'a', "a·approve works in Inbox or Task view (when ⚠ shown). Press i for Inbox."},
+		{'x', "x·reject works in Inbox or Task view (when ⚠ shown). Press i for Inbox."},
+		{'f', "f·defer works in Inbox or Task view (when ⚠ shown). Press i for Inbox."},
+		{'o', "o·open works in Inbox (opens item) or Task view (opens session). Press i for Inbox."},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("key-%c in SidebarPanel", tt.r), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = SidebarPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.r}})
+			if m1.statusMessage != tt.want {
+				t.Errorf("EX-381: key %c in sidebar: got %q, want %q", tt.r, m1.statusMessage, tt.want)
+			}
+		})
+	}
+}

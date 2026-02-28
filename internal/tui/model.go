@@ -2389,8 +2389,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				return true, nil
 			}
 		}
-		// EX-340: a in other MainPanel views — give redirect hint.
-		if m.focus == MainPanel {
+		// EX-340/EX-381: a in non-inbox/task views or sidebar — give redirect hint.
+		if m.focus == MainPanel || m.focus == SidebarPanel {
 			m.statusMessage = "a·approve works in Inbox or Task view (when ⚠ shown). Press i for Inbox."
 			return true, nil
 		}
@@ -2425,8 +2425,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				return true, nil
 			}
 		}
-		// EX-341: x in other MainPanel views — give redirect hint.
-		if m.focus == MainPanel {
+		// EX-341/EX-381: x in non-inbox/task views or sidebar — give redirect hint.
+		if m.focus == MainPanel || m.focus == SidebarPanel {
 			m.statusMessage = "x·reject works in Inbox or Task view (when ⚠ shown). Press i for Inbox."
 			return true, nil
 		}
@@ -2461,8 +2461,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				return true, nil
 			}
 		}
-		// EX-342: f in other MainPanel views — give redirect hint.
-		if m.focus == MainPanel {
+		// EX-342/EX-381: f in non-inbox/task views or sidebar — give redirect hint.
+		if m.focus == MainPanel || m.focus == SidebarPanel {
 			m.statusMessage = "f·defer works in Inbox or Task view (when ⚠ shown). Press i for Inbox."
 			return true, nil
 		}
@@ -2509,8 +2509,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
 			return true, m.handleEnterKey()
 		}
-		// EX-343: o in other MainPanel views — give redirect hint.
-		if m.focus == MainPanel {
+		// EX-343/EX-381: o in non-inbox/task views or sidebar — give redirect hint.
+		if m.focus == MainPanel || m.focus == SidebarPanel {
 			m.statusMessage = "o·open works in Inbox (opens item) or Task view (opens session). Press i for Inbox."
 			return true, nil
 		}
