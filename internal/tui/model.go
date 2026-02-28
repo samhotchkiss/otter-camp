@@ -1128,8 +1128,13 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			m.workspace.moveProjectTaskCursor(1)
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
+			prevID := m.workspace.selectedTaskID
 			m.workspace.moveDashboardCursor(1)
-			if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
+			// EX-266: when the cursor didn't advance (already at last task),
+			// give directional feedback like EX-202 does for the project view.
+			if m.workspace.selectedTaskID == prevID && prevID != "" {
+				m.statusMessage = "At last task on board."
+			} else if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
 				label := task.Title
 				if task.TaskNumber > 0 {
 					label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
@@ -1176,8 +1181,13 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			m.workspace.moveProjectTaskCursor(-1)
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
+			prevID := m.workspace.selectedTaskID
 			m.workspace.moveDashboardCursor(-1)
-			if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
+			// EX-266: when the cursor didn't retreat (already at first task),
+			// give directional feedback like EX-202 does for the project view.
+			if m.workspace.selectedTaskID == prevID && prevID != "" {
+				m.statusMessage = "At first task on board."
+			} else if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
 				label := task.Title
 				if task.TaskNumber > 0 {
 					label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)

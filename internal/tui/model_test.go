@@ -6458,3 +6458,43 @@ func TestEscFromDashboardEX265(t *testing.T) {
 		t.Errorf("EX-265: Esc from inbox should say 'Returned to dashboard.'; got %q", m.statusMessage)
 	}
 }
+
+// TestDashboardJKAtBoundaryEX266 verifies EX-266: pressing j at the last task or
+// k at the first task on the dashboard gives directional feedback instead of
+// silently repeating the task title (analogous to EX-202 for the project view).
+func TestDashboardJKAtBoundaryEX266(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = MainPanel
+	m.workspace.setMainView(ViewDashboard)
+	// Seed two active tasks.
+	m.workspace.tasks["d-task-1"] = &taskRecord{ID: "d-task-1", Title: "First task", Status: "todo"}
+	m.workspace.tasks["d-task-2"] = &taskRecord{ID: "d-task-2", Title: "Second task", Status: "in_progress"}
+	m.workspace.taskOrder = []string{"d-task-1", "d-task-2"}
+
+	// Navigate to first task.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	firstMsg := m.statusMessage
+
+	// Navigate to second (last) task.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+
+	// Now press j again — cursor is already at last task.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if !strings.Contains(m.statusMessage, "last") {
+		t.Errorf("EX-266: j at last task should say 'last'; got %q (prev: %q)", m.statusMessage, firstMsg)
+	}
+	if strings.Contains(m.statusMessage, "first") {
+		t.Errorf("EX-266: j at last task should not say 'first'; got %q", m.statusMessage)
+	}
+
+	// Navigate back to first task, then press k again.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if !strings.Contains(m.statusMessage, "first") {
+		t.Errorf("EX-266: k at first task should say 'first'; got %q", m.statusMessage)
+	}
+	if strings.Contains(m.statusMessage, "last") {
+		t.Errorf("EX-266: k at first task should not say 'last'; got %q", m.statusMessage)
+	}
+}
