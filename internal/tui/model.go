@@ -2966,6 +2966,72 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			m.statusMessage = "~ not bound. Use : for commands or ? for key reference."
 			return true, nil
 		}
+	case '(':
+		// EX-396: '(' (vim: sentence backward) — not applicable.
+		if m.focus != ChatPanel {
+			m.statusMessage = "( is not bound. Use k/↑ to navigate up, g for top."
+			return true, nil
+		}
+	case ')':
+		// EX-396: ')' (vim: sentence forward) — not applicable.
+		if m.focus != ChatPanel {
+			m.statusMessage = ") is not bound. Use j/↓ to navigate down, G for bottom."
+			return true, nil
+		}
+	case '{':
+		// EX-396: '{' (vim: paragraph backward) — not applicable.
+		if m.focus != ChatPanel {
+			m.statusMessage = "{ is not bound. Use k/↑ or PgUp to navigate up."
+			return true, nil
+		}
+	case '}':
+		// EX-396: '}' (vim: paragraph forward) — not applicable.
+		if m.focus != ChatPanel {
+			m.statusMessage = "} is not bound. Use j/↓ or PgDn to navigate down."
+			return true, nil
+		}
+	case '*':
+		// EX-396: '*' (vim: search forward for word under cursor) — no search.
+		if m.focus != ChatPanel {
+			m.statusMessage = "* (search) not supported. Use / to filter the sidebar or main view."
+			return true, nil
+		}
+	case '#':
+		// EX-396: '#' (vim: search backward for word under cursor) — no search.
+		if m.focus != ChatPanel {
+			m.statusMessage = "# (search) not supported. Use / to filter the sidebar or main view."
+			return true, nil
+		}
+	case '$':
+		// EX-396: '$' (vim: end of line) — not applicable.
+		if m.focus != ChatPanel {
+			m.statusMessage = "$ is not bound. Use G to jump to last item or End to go to bottom."
+			return true, nil
+		}
+	case '%':
+		// EX-396: '%' (vim: match brackets) — not applicable.
+		if m.focus != ChatPanel {
+			m.statusMessage = "% is not bound. Use : for commands or ? for key reference."
+			return true, nil
+		}
+	case '&':
+		// EX-396: '&' (vim: repeat last substitution) — not applicable.
+		if m.focus != ChatPanel {
+			m.statusMessage = "& is not bound. Use : for commands or ? for key reference."
+			return true, nil
+		}
+	case '_':
+		// EX-396: '_' (vim: first non-blank of current/next line) — not applicable.
+		if m.focus != ChatPanel {
+			m.statusMessage = "_ is not bound. Use g for top of list or Enter to open selected item."
+			return true, nil
+		}
+	case '=':
+		// EX-396: '=' (vim: auto-indent) — not applicable.
+		if m.focus != ChatPanel {
+			m.statusMessage = "= is not bound. Use : for commands or ? for key reference."
+			return true, nil
+		}
 	}
 	return false, nil
 }

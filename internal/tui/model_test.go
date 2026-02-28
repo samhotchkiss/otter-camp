@@ -10914,3 +10914,55 @@ func TestExtendedCommandAliasesEX395(t *testing.T) {
 		}
 	})
 }
+
+// TestMorePunctuationHintsEX396 verifies that vim navigation punctuation keys
+// (, ), {, }, *, #, $, %, &, _, = in non-chat panels show helpful hints (EX-396).
+func TestMorePunctuationHintsEX396(t *testing.T) {
+	tests := []struct {
+		rune rune
+		want string
+	}{
+		{'(', "not bound"},
+		{')', "not bound"},
+		{'{', "not bound"},
+		{'}', "not bound"},
+		{'*', "not supported"},
+		{'#', "not supported"},
+		{'$', "not bound"},
+		{'%', "not bound"},
+		{'&', "not bound"},
+		{'_', "not bound"},
+		{'=', "not bound"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(fmt.Sprintf("rune-%c-MainPanel", tt.rune), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.rune}})
+			if !strings.Contains(m1.statusMessage, tt.want) {
+				t.Errorf("EX-396: rune %c in MainPanel: got %q, want to contain %q", tt.rune, m1.statusMessage, tt.want)
+			}
+		})
+		t.Run(fmt.Sprintf("rune-%c-SidebarPanel", tt.rune), func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = SidebarPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.rune}})
+			if !strings.Contains(m1.statusMessage, tt.want) {
+				t.Errorf("EX-396: rune %c in SidebarPanel: got %q, want to contain %q", tt.rune, m1.statusMessage, tt.want)
+			}
+		})
+	}
+	// In chat panel these runes type into the input, not captured as workspace keys
+	t.Run("paren-in-ChatPanel-not-captured", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.focus = ChatPanel
+		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'('}})
+		if strings.Contains(m1.statusMessage, "not bound") {
+			t.Errorf("EX-396: '(' in ChatPanel should not produce workspace hint, got %q", m1.statusMessage)
+		}
+		if !strings.Contains(m1.chatInput, "(") {
+			t.Errorf("EX-396: '(' in ChatPanel should type into input, got chatInput=%q", m1.chatInput)
+		}
+	})
+}
