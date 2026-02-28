@@ -8116,6 +8116,46 @@ func TestJumpToTaskByTitleIdempotencyEX479(t *testing.T) {
 	})
 }
 
+// EX-481: jumpToTaskByTitle navigated to ViewTask but never called loadTaskDetailCmd,
+// so description / session ID / flow info were missing when the task had not been
+// previously detail-fetched. This test verifies the detail load fires.
+func TestJumpToTaskByTitleLoadsDetailEX481(t *testing.T) {
+	taskID := "task-481"
+	loadCalledWith := ""
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			loadCalledWith = id
+			return &TaskDetailItem{ID: id, Title: "Alpha task"}, nil
+		},
+	})
+	m.workspace.tasks = map[string]*taskRecord{
+		taskID: {ID: taskID, Title: "Alpha task", TaskNumber: 3},
+	}
+	m.workspace.taskOrder = []string{taskID}
+	m.focus = MainPanel
+	m.workspace.mainView = ViewDashboard
+
+	cmd := m.jumpToTaskByTitle("Alpha")
+
+	if m.workspace.mainView != ViewTask {
+		t.Fatalf("EX-481: mainView = %v, want ViewTask", m.workspace.mainView)
+	}
+	if m.workspace.selectedTaskID != taskID {
+		t.Fatalf("EX-481: selectedTaskID = %q, want %q", m.workspace.selectedTaskID, taskID)
+	}
+	if cmd == nil {
+		t.Fatal("EX-481: jumpToTaskByTitle returned nil cmd — expected loadTaskDetailCmd")
+	}
+	// Execute the cmd to confirm it calls LoadTaskDetail with the correct task ID.
+	msg := cmd()
+	if loadCalledWith != taskID {
+		t.Fatalf("EX-481: LoadTaskDetail called with %q, want %q", loadCalledWith, taskID)
+	}
+	if _, ok := msg.(taskDetailLoadedMsg); !ok {
+		t.Fatalf("EX-481: cmd returned %T, want taskDetailLoadedMsg", msg)
+	}
+}
+
 // TestHelpCommandIdempotencyEX468 verifies EX-468: :help/:palette when already
 // in ViewHelp says "Help: scrolled to top." (and resets scroll) rather than
 // re-announcing "Keybinding reference." as if opening fresh — mirrors EX-467 for :man.

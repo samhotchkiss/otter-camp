@@ -5820,7 +5820,13 @@ func (m *Model) jumpToTaskByTitle(title string) tea.Cmd {
 			} else {
 				m.statusMessage = "Task: " + truncate(label, 40)
 			}
-			return nil
+			// EX-481: load task detail so the view is populated with description,
+			// session ID, flow info, etc. Without this, `:task <name>` shows an
+			// incomplete panel whenever the task was seeded from a project-task-list
+			// but never individually detail-fetched. Mirrors handleEnterKey
+			// (ViewProject→Enter) and sidebar task selection which both call
+			// loadTaskDetailCmd. The idempotency case still refreshes, which is fine.
+			return loadTaskDetailCmd(taskID, m.runtimeHints)
 		}
 	}
 	m.statusMessage = fmt.Sprintf("Task %q not found.", title)
