@@ -1893,9 +1893,13 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		if len(runes) > 0 {
 			m.chatInput = string(runes[:len(runes)-1])
 		}
+		// EX-279: editing (backspace) also exits history navigation mode.
+		if m.chatHistoryIndex >= 0 {
+			m.chatHistoryIndex = -1
+		}
 		return true, nil
 	case tea.KeyUp:
-		if strings.TrimSpace(m.chatInput) == "" {
+		if strings.TrimSpace(m.chatInput) == "" || m.chatHistoryIndex >= 0 {
 			m.recallHistory()
 			return true, nil
 		}
@@ -1943,6 +1947,12 @@ func (m *Model) handleChatRunes(key tea.KeyMsg) {
 				return
 			}
 		}
+	}
+	// EX-279: typing while in history navigation mode should exit history mode
+	// so that the next ↑ starts fresh from the end of the history list, not
+	// from the middle where the user happened to be browsing.
+	if m.chatHistoryIndex >= 0 {
+		m.chatHistoryIndex = -1
 	}
 	m.chatInput += string(key.Runes)
 	m.tryAutocompleteMention()

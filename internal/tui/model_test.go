@@ -7017,3 +7017,52 @@ func TestSidebarPgUpPgDnEX278(t *testing.T) {
 		t.Errorf("EX-278: PgUp in sidebar should decrease cursor; prev=%d got=%d", prev, m.workspace.sidebarCursor)
 	}
 }
+
+// TestHistoryIndexResetOnTypingEX279 verifies that typing a character or
+// pressing Backspace while in history navigation mode resets chatHistoryIndex
+// to -1, so the next ↑ starts fresh from the newest history entry.
+func TestHistoryIndexResetOnTypingEX279(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	m.chatHistory = []string{"first message", "second message", "third message"}
+	m.chatHistoryIndex = -1
+
+	// ↑ with empty input → recall "third message" (newest)
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+	if m.chatHistoryIndex != 2 {
+		t.Errorf("EX-279: ↑ should go to historyIndex=2; got %d", m.chatHistoryIndex)
+	}
+	if m.chatInput != "third message" {
+		t.Errorf("EX-279: ↑ should set chatInput to 'third message'; got %q", m.chatInput)
+	}
+
+	// ↑ again → recall "second message"
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+	if m.chatHistoryIndex != 1 {
+		t.Errorf("EX-279: ↑↑ should go to historyIndex=1; got %d", m.chatHistoryIndex)
+	}
+
+	// Type a character → history index should reset to -1.
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if m.chatHistoryIndex != -1 {
+		t.Errorf("EX-279: typing should reset chatHistoryIndex to -1; got %d", m.chatHistoryIndex)
+	}
+
+	// ↑ again with non-empty input → recallHistory is only called when input is empty.
+	// But chatHistoryIndex was reset, so next time input IS empty, it should start from end.
+	m.chatInput = "" // simulate clearing
+	m.chatHistoryIndex = -1
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})
+	if m.chatHistoryIndex != 2 {
+		t.Errorf("EX-279: after reset, ↑ should start from historyIndex=2; got %d", m.chatHistoryIndex)
+	}
+
+	// Backspace should also reset history index.
+	m.chatHistoryIndex = 1 // simulate being in history mode
+	m.chatInput = "second message"
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.chatHistoryIndex != -1 {
+		t.Errorf("EX-279: Backspace should reset chatHistoryIndex to -1; got %d", m.chatHistoryIndex)
+	}
+}
