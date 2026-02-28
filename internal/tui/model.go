@@ -2401,6 +2401,14 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			m.statusMessage = "Input cleared."
 			return true, nil
 		}
+		// EX-309: Esc with no active turn and empty input — move focus to main panel
+		// (natural dismissal gesture, mirrors EX-305 for sidebar).
+		// Exception: if ViewHelp is active, let handleEscapeKey close it (EX-205).
+		if m.workspace.mainView != ViewHelp {
+			m.setFocus(MainPanel)
+			m.statusMessage = "Focus: " + panelLabel(m.focus)
+			return true, nil
+		}
 	}
 	return false, nil
 }

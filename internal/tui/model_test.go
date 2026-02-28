@@ -8084,3 +8084,35 @@ func TestInboxProjectPgUpPgDnEX308(t *testing.T) {
 		t.Errorf("EX-308: PgDn at last project task should say 'At last task in project.'; got %q", mp.statusMessage)
 	}
 }
+
+// TestEscInChatEmptyInputFocusesMainEX309 verifies that Esc in the chat panel
+// with no active turn and empty input moves focus to the main panel.
+func TestEscInChatEmptyInputFocusesMainEX309(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.width, m.height = 220, 40
+	m.focus = ChatPanel
+	m.chatInput = ""
+	m.activeTurn = false
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.focus != MainPanel {
+		t.Errorf("EX-309: Esc in chat with empty input should move focus to MainPanel; got %v", m.focus)
+	}
+	if m.statusMessage != "Focus: main" {
+		t.Errorf("EX-309: Esc in chat should say 'Focus: main'; got %q", m.statusMessage)
+	}
+
+	// With non-empty input, Esc still clears input (EX-289) — not move focus.
+	m2 := NewModel(DefaultState())
+	m2.width, m2.height = 220, 40
+	m2.focus = ChatPanel
+	m2.chatInput = "hello"
+	m2.activeTurn = false
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyEsc})
+	if m2.focus != ChatPanel {
+		t.Errorf("EX-309: Esc with non-empty input should stay in ChatPanel; got %v", m2.focus)
+	}
+	if m2.chatInput != "" {
+		t.Errorf("EX-309: Esc with non-empty input should clear it; got %q", m2.chatInput)
+	}
+}
