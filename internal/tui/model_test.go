@@ -167,6 +167,53 @@ func TestSlashSearchMainPanelEscClearsFilter(t *testing.T) {
 	}
 }
 
+// TestEscFromEmptySearchModeExitsEX433 verifies EX-433: pressing Esc from search
+// mode when the query is empty says "Filter mode exited." rather than the
+// misleading "Filter cleared." (which implies a filter existed to clear).
+func TestEscFromEmptySearchModeExitsEX433(t *testing.T) {
+	// Case 1: user enters search mode, types nothing, presses Esc.
+	t.Run("empty-query-on-enter", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = MainPanel
+		m.searchQuery = ""
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+		if m.searchMode {
+			t.Fatal("EX-433: searchMode should be false after Esc")
+		}
+		if got := m.StatusMessage(); got != "Filter mode exited." {
+			t.Errorf("EX-433: Esc on empty search should say 'Filter mode exited.', got %q", got)
+		}
+	})
+
+	// Case 2: user enters search mode, types "foo", clears via Ctrl-U, then presses Esc.
+	t.Run("cleared-query-presses-esc", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = SidebarPanel
+		m.searchQuery = ""  // query already cleared (e.g. via Ctrl-U)
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+		if got := m.StatusMessage(); got != "Filter mode exited." {
+			t.Errorf("EX-433: Esc on empty search should say 'Filter mode exited.', got %q", got)
+		}
+	})
+
+	// Case 3: user enters search mode with an active query, presses Esc → old "Filter X cleared." still works.
+	t.Run("non-empty-query-still-clears", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.searchMode = true
+		m.searchPanel = MainPanel
+		m.searchQuery = "foo"
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+		if m.searchMode {
+			t.Fatal("EX-433: searchMode should be false after Esc")
+		}
+		if got := m.StatusMessage(); got != `Filter "foo" cleared.` {
+			t.Errorf("EX-433: Esc on non-empty search should say 'Filter \"foo\" cleared.', got %q", got)
+		}
+	})
+}
+
 func TestSlashSearchSidebarFiltersSessions(t *testing.T) {
 	model := NewModel(DefaultState())
 	// Seed chat nodes so the sidebar has sessions to filter

@@ -3708,6 +3708,9 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyEsc:
 		// EX-254: include the query in the message so the user sees what was cleared.
+		// EX-433: when the filter query is already empty (no filter to clear), saying
+		// "Filter cleared." implies something was cleared when nothing was. Use
+		// "Filter mode exited." to accurately describe what happened.
 		prev := strings.TrimSpace(m.searchQuery)
 		m.setFilterForPanel(m.searchPanel, "")
 		m.searchMode = false
@@ -3715,7 +3718,7 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if prev != "" {
 			m.statusMessage = fmt.Sprintf("Filter %q cleared.", prev)
 		} else {
-			m.statusMessage = "Filter cleared."
+			m.statusMessage = "Filter mode exited."
 		}
 		return m, nil
 	case tea.KeyTab:
