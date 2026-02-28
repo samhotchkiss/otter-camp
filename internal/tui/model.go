@@ -725,6 +725,13 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if r == '/' && (m.focus == SidebarPanel || m.focus == MainPanel) {
+				// EX-214: the help view does not filter on mainFilter, so entering
+				// search mode while ViewHelp is active would silently set a filter
+				// that persists when the user navigates to another view.
+				if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
+					m.statusMessage = "Search not available in help view. Press j/k to scroll."
+					return m, nil
+				}
 				m.enterSearchMode(m.focus)
 				return m, nil
 			}

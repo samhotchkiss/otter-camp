@@ -5081,3 +5081,29 @@ func TestProjectLoadingStateShowsRetryHint(t *testing.T) {
 		t.Errorf("EX-213: project loading state missing 'Esc·dashboard' hint:\n%s", rendered)
 	}
 }
+
+// TestSearchNotAllowedInHelpView verifies EX-214: pressing '/' while ViewHelp
+// is active must NOT enter search mode (the help view ignores mainFilter, so
+// the filter would silently persist when navigating away to other views).
+func TestSearchNotAllowedInHelpView(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.setMainView(ViewHelp)
+	model.setFocus(MainPanel)
+
+	before := model.mainFilter
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+
+	// Search mode must NOT have been entered.
+	if model.searchMode {
+		t.Errorf("EX-214: search mode entered while in ViewHelp — should be blocked")
+	}
+	// mainFilter must not have been modified.
+	if model.mainFilter != before {
+		t.Errorf("EX-214: mainFilter modified while in ViewHelp: %q", model.mainFilter)
+	}
+	// A helpful status message should explain the block.
+	if !strings.Contains(model.statusMessage, "not available") {
+		t.Errorf("EX-214: expected 'not available' in status message, got %q", model.statusMessage)
+	}
+}
