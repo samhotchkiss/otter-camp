@@ -5012,3 +5012,72 @@ func TestActivityAgentsMergesSchedulesHaveHintFooter(t *testing.T) {
 		}
 	}
 }
+
+// TestEmptyInboxShowsNavigationHint verifies EX-211: the empty-inbox state
+// renders a "r·refresh · Esc·dashboard" hint so the user isn't left with
+// a bare "✓ Inbox clear" message and no guidance.
+func TestEmptyInboxShowsNavigationHint(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.inbox = nil
+	model.workspace.setMainView(ViewInbox)
+
+	lines := model.renderMainViewContent(ViewInbox, 80, 40)
+	rendered := strings.Join(lines, "\n")
+
+	if !strings.Contains(rendered, "Inbox clear") {
+		t.Fatalf("EX-211: expected 'Inbox clear' in empty inbox render:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "r·refresh") {
+		t.Errorf("EX-211: empty inbox missing 'r·refresh' hint:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Esc·dashboard") {
+		t.Errorf("EX-211: empty inbox missing 'Esc·dashboard' hint:\n%s", rendered)
+	}
+}
+
+// TestNoTaskSelectedShowsNavigationHint verifies EX-212: ViewTask with no
+// selected task renders an actionable hint rather than a bare error message.
+func TestNoTaskSelectedShowsNavigationHint(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.selectedTaskID = ""
+	model.workspace.setMainView(ViewTask)
+
+	lines := model.renderMainViewContent(ViewTask, 80, 40)
+	rendered := strings.Join(lines, "\n")
+
+	if !strings.Contains(rendered, "No task selected") {
+		t.Fatalf("EX-212: expected 'No task selected' in render:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Esc") {
+		t.Errorf("EX-212: no-task-selected view missing 'Esc' navigation hint:\n%s", rendered)
+	}
+}
+
+// TestProjectLoadingStateShowsRetryHint verifies EX-213: when the project
+// detail hasn't loaded yet (selectedProject==nil), the view shows a
+// "r·retry · Esc·dashboard" hint rather than just "Loading…".
+func TestProjectLoadingStateShowsRetryHint(t *testing.T) {
+	model := NewModel(DefaultState())
+	// rebuildSidebar creates the sidebar node for "proj-1" so renderProjectView
+	// can find it and reach the proj==nil loading branch.
+	model.workspace.rebuildSidebar("",
+		nil,
+		[]SidebarProjectItem{{ID: "proj-1", DisplayName: "Alpha Project"}},
+	)
+	model.workspace.selectedProjectID = "proj-1"
+	model.workspace.selectedProject = nil // simulate in-progress load
+	model.workspace.setMainView(ViewProject)
+
+	lines := model.renderMainViewContent(ViewProject, 80, 40)
+	rendered := strings.Join(lines, "\n")
+
+	if !strings.Contains(rendered, "Loading") {
+		t.Fatalf("EX-213: expected 'Loading' in project loading state:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "r·retry") {
+		t.Errorf("EX-213: project loading state missing 'r·retry' hint:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Esc·dashboard") {
+		t.Errorf("EX-213: project loading state missing 'Esc·dashboard' hint:\n%s", rendered)
+	}
+}

@@ -1161,8 +1161,10 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 	}
 
 	if proj == nil {
-		// Still loading
+		// Still loading — EX-213: add r·retry hint in case the load stalls.
 		lines = append(lines, styleMuted.Render("  Loading…"))
+		lines = append(lines, "")
+		lines = append(lines, styleMuted.Render("  r·retry  ·  Esc·dashboard"))
 		return lines
 	}
 
@@ -1391,7 +1393,14 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 func (m Model) renderTaskView(width, maxLines int) []string {
 	task := m.workspace.tasks[m.workspace.selectedTaskID]
 	if task == nil {
-		return []string{styleMuted.Render("  No task selected")}
+		// EX-212: include a navigation hint so the user isn't left with a dead end.
+		return []string{
+			styleMuted.Render("  No task selected"),
+			"",
+			styleMuted.Render("  Select a task from the dashboard or sidebar, then press t"),
+			"",
+			styleMuted.Render("  Esc·dashboard"),
+		}
 	}
 
 	var lines []string
@@ -1534,12 +1543,15 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 		} else {
 			emptyMsg = "✓ Inbox clear"
 		}
+		// EX-211: add navigation hint so users know how to leave the empty inbox.
 		return []string{
 			"",
 			lipgloss.JoinHorizontal(lipgloss.Center,
 				lipgloss.NewStyle().Width(width).Align(lipgloss.Center).
 					Foreground(colMuted).Render(emptyMsg),
 			),
+			"",
+			styleMuted.Render("  r·refresh  ·  /·filter  ·  Esc·dashboard"),
 		}
 	}
 
