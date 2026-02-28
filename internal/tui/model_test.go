@@ -3129,6 +3129,32 @@ func TestSessionClosedClearsActiveTurnEX411(t *testing.T) {
 	}
 }
 
+// EX-413: Home/End/PgUp/PgDn in an empty sidebar said "At first/last item in
+// sidebar." when there were no items at all; it should say "No items in sidebar."
+func TestSidebarEmptyHomeEndPgUpPgDnEX413(t *testing.T) {
+	keys := []struct {
+		name string
+		key  tea.KeyMsg
+	}{
+		{"Home", tea.KeyMsg{Type: tea.KeyHome}},
+		{"End", tea.KeyMsg{Type: tea.KeyEnd}},
+		{"PgUp", tea.KeyMsg{Type: tea.KeyPgUp}},
+		{"PgDown", tea.KeyMsg{Type: tea.KeyPgDown}},
+	}
+	for _, tt := range keys {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = SidebarPanel
+			m.workspace.topLevel = nil
+			m.workspace.nodes = map[string]*sidebarNode{}
+			m = pressKey(m, tt.key)
+			if !strings.Contains(m.statusMessage, "No items") {
+				t.Fatalf("statusMessage = %q, want 'No items in sidebar.'", m.statusMessage)
+			}
+		})
+	}
+}
+
 // EX-160: Inbox approve/reject/defer were local-only; pressing 'a', 'x', 'f'
 // must also return a tea.Cmd that calls ActOnInboxItem with the correct item ID.
 func TestInboxApproveIssuesServerAPICall(t *testing.T) {

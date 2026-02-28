@@ -3209,6 +3209,12 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 	case tea.KeyHome:
 		// EX-277: Home/End in sidebar jump to first/last item (same as g/G).
 		// EX-290: give label/boundary feedback matching j/k and ↑/↓ (EX-281).
+		// EX-413: if sidebar is empty, say so instead of the misleading
+		// "At first item in sidebar." (there are no items to be at).
+		if len(m.workspace.visibleSidebarIDs()) == 0 {
+			m.statusMessage = "No items in sidebar."
+			return true, nil
+		}
 		prevCursor := m.workspace.sidebarCursor
 		m.workspace.sidebarHome()
 		if m.workspace.sidebarCursor == prevCursor {
@@ -3219,6 +3225,11 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		return true, nil
 	case tea.KeyEnd:
 		// EX-290: give label/boundary feedback matching j/k and ↑/↓ (EX-281).
+		// EX-413: symmetric empty-sidebar guard.
+		if len(m.workspace.visibleSidebarIDs()) == 0 {
+			m.statusMessage = "No items in sidebar."
+			return true, nil
+		}
 		prevCursor := m.workspace.sidebarCursor
 		m.workspace.sidebarEnd()
 		if m.workspace.sidebarCursor == prevCursor {
@@ -3230,6 +3241,11 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 	case tea.KeyPgUp:
 		// EX-278: PgUp/PgDn in sidebar scroll by a page (8 items at a time).
 		// EX-291: give boundary feedback when the page scroll hits the first item.
+		// EX-413: symmetric empty-sidebar guard.
+		if len(m.workspace.visibleSidebarIDs()) == 0 {
+			m.statusMessage = "No items in sidebar."
+			return true, nil
+		}
 		prevCursor := m.workspace.sidebarCursor
 		for i := 0; i < chatScrollStepLines; i++ {
 			m.workspace.moveSidebar(-1)
@@ -3242,6 +3258,11 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		return true, nil
 	case tea.KeyPgDown:
 		// EX-291: give boundary feedback when the page scroll hits the last item.
+		// EX-413: symmetric empty-sidebar guard.
+		if len(m.workspace.visibleSidebarIDs()) == 0 {
+			m.statusMessage = "No items in sidebar."
+			return true, nil
+		}
 		prevCursor := m.workspace.sidebarCursor
 		for i := 0; i < chatScrollStepLines; i++ {
 			m.workspace.moveSidebar(1)
