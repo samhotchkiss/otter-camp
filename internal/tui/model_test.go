@@ -12586,3 +12586,84 @@ func TestArrowKeyLeftRightAlreadyCollapsedExpandedEX448(t *testing.T) {
 		}
 	})
 }
+
+// TestSidebarCommandExpandCollapseHonestFeedbackEX449 verifies that :sidebar expand and
+// :sidebar collapse give "Already expanded/collapsed." when no state change occurs,
+// matching the EX-447/EX-448 fix applied to the h/l/←/→ key handlers.
+func TestSidebarCommandExpandCollapseHonestFeedbackEX449(t *testing.T) {
+	t.Run("sidebar-expand-on-already-expanded-header-gives-already-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.sidebarCursor = 1 // CHATS header (expanded by default)
+		m.executeSidebarCommand([]string{"expand"})
+		if got := m.statusMessage; got != "Already expanded." {
+			t.Fatalf(":sidebar expand on expanded CHATS = %q, want %q", got, "Already expanded.")
+		}
+	})
+
+	t.Run("sidebar-expand-on-collapsed-header-gives-expanded-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.sidebarCursor = 1 // CHATS header
+		m.workspace.sectionCollapsed[sectionChats] = true
+		m.executeSidebarCommand([]string{"expand"})
+		if got := m.statusMessage; got != "Sidebar node expanded." {
+			t.Fatalf(":sidebar expand on collapsed CHATS = %q, want %q", got, "Sidebar node expanded.")
+		}
+	})
+
+	t.Run("sidebar-collapse-on-already-collapsed-header-gives-already-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.sidebarCursor = 1 // CHATS header
+		m.workspace.sectionCollapsed[sectionChats] = true
+		m.executeSidebarCommand([]string{"collapse"})
+		if got := m.statusMessage; got != "Already collapsed." {
+			t.Fatalf(":sidebar collapse on collapsed CHATS = %q, want %q", got, "Already collapsed.")
+		}
+	})
+
+	t.Run("sidebar-collapse-on-expanded-header-gives-collapsed-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		m.workspace.sidebarCursor = 1 // CHATS header (expanded by default)
+		m.executeSidebarCommand([]string{"collapse"})
+		if got := m.statusMessage; got != "Sidebar node collapsed." {
+			t.Fatalf(":sidebar collapse on expanded CHATS = %q, want %q", got, "Sidebar node collapsed.")
+		}
+	})
+
+	t.Run("sidebar-expand-on-already-expanded-project-gives-already-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		projID := "proj-ex449"
+		nodeID := "project-" + projID
+		m.workspace.nodes[nodeID] = &sidebarNode{
+			ID:        nodeID,
+			Label:     "Gamma Project",
+			Kind:      sidebarKindProject,
+			ProjectID: projID,
+			Expanded:  true,
+		}
+		m.workspace.topLevel = append(m.workspace.topLevel, nodeID)
+		m.workspace.sidebarCursor = 4
+		m.executeSidebarCommand([]string{"expand"})
+		if got := m.statusMessage; got != "Already expanded." {
+			t.Fatalf(":sidebar expand on already-expanded project = %q, want %q", got, "Already expanded.")
+		}
+	})
+
+	t.Run("sidebar-collapse-on-already-collapsed-project-gives-already-msg", func(t *testing.T) {
+		m := NewModel(DefaultState())
+		projID := "proj-ex449b"
+		nodeID := "project-" + projID
+		m.workspace.nodes[nodeID] = &sidebarNode{
+			ID:        nodeID,
+			Label:     "Delta Project",
+			Kind:      sidebarKindProject,
+			ProjectID: projID,
+			Expanded:  false, // already collapsed
+		}
+		m.workspace.topLevel = append(m.workspace.topLevel, nodeID)
+		m.workspace.sidebarCursor = 4
+		m.executeSidebarCommand([]string{"collapse"})
+		if got := m.statusMessage; got != "Already collapsed." {
+			t.Fatalf(":sidebar collapse on already-collapsed project = %q, want %q", got, "Already collapsed.")
+		}
+	})
+}

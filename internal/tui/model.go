@@ -5736,11 +5736,45 @@ func (m *Model) executeSidebarCommand(args []string) tea.Cmd {
 			m.statusMessage = "Sidebar cursor moved end."
 		}
 	case "expand":
-		m.workspace.expandSidebarNode()
-		m.statusMessage = "Sidebar node expanded."
+		// EX-449: capture pre-expansion state (mirrors EX-447/448 fix for l/→ keys).
+		{
+			node := m.workspace.currentSidebarNode()
+			var alreadyExpanded bool
+			if node != nil {
+				if node.Kind == sidebarKindProject {
+					alreadyExpanded = node.Expanded
+				} else if node.Kind == sidebarKindHeader {
+					sID := sidebarSectionID(strings.TrimPrefix(node.ID, "header-"))
+					alreadyExpanded = !m.workspace.sectionCollapsed[sID]
+				}
+			}
+			m.workspace.expandSidebarNode()
+			if alreadyExpanded {
+				m.statusMessage = "Already expanded."
+			} else {
+				m.statusMessage = "Sidebar node expanded."
+			}
+		}
 	case "collapse":
-		m.workspace.collapseSidebarNode()
-		m.statusMessage = "Sidebar node collapsed."
+		// EX-449: capture pre-collapse state (mirrors EX-447/448 fix for h/← keys).
+		{
+			node := m.workspace.currentSidebarNode()
+			var alreadyCollapsed bool
+			if node != nil {
+				if node.Kind == sidebarKindProject {
+					alreadyCollapsed = !node.Expanded
+				} else if node.Kind == sidebarKindHeader {
+					sID := sidebarSectionID(strings.TrimPrefix(node.ID, "header-"))
+					alreadyCollapsed = m.workspace.sectionCollapsed[sID]
+				}
+			}
+			m.workspace.collapseSidebarNode()
+			if alreadyCollapsed {
+				m.statusMessage = "Already collapsed."
+			} else {
+				m.statusMessage = "Sidebar node collapsed."
+			}
+		}
 	case "select", "open":
 		// Capture node before selectSidebarNode modifies state.
 		node := m.workspace.currentSidebarNode()
