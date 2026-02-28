@@ -650,6 +650,30 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Ctrl-W deletes last word from chat input. Press 3 or Tab to focus chat."
 		}
 		return m, nil
+	case tea.KeyCtrlA:
+		// EX-364: Ctrl-A (go to line start) — cursor movement not supported in chat input.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Line-start (Ctrl-A) not supported. Use Ctrl-U to clear, Ctrl-W to delete word."
+		} else {
+			m.statusMessage = "Ctrl-A moves cursor to line start in chat. Press 3 or Tab to focus chat."
+		}
+		return m, nil
+	case tea.KeyCtrlE:
+		// EX-365: Ctrl-E (go to line end) — cursor movement not supported in chat input.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Line-end (Ctrl-E) not supported. Use Ctrl-U to clear, Ctrl-W to delete word."
+		} else {
+			m.statusMessage = "Ctrl-E moves cursor to line end in chat. Press 3 or Tab to focus chat."
+		}
+		return m, nil
+	case tea.KeyCtrlK:
+		// EX-366: Ctrl-K (kill to end of line) — not supported in chat input.
+		if m.focus == ChatPanel {
+			m.statusMessage = "Kill-to-end (Ctrl-K) not supported. Use Ctrl-U to clear all, Ctrl-W to delete word."
+		} else {
+			m.statusMessage = "Ctrl-K kill-to-end is a chat shortcut. Press 3 or Tab to focus chat."
+		}
+		return m, nil
 	case tea.KeyTab:
 		m.focus = nextPanelInOrder(order, m.focus)
 		m.applyResponsiveLayout()

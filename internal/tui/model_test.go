@@ -9513,3 +9513,61 @@ func TestCtrlCInCommandModeEX363(t *testing.T) {
 		t.Errorf("EX-363: Ctrl-C in command mode should say 'Exiting TUI.'; got %q", m1.statusMessage)
 	}
 }
+
+// TestReadlineShortcutsInChatEX364365366 verifies that common readline shortcuts
+// (Ctrl-A, Ctrl-E, Ctrl-K) that are not supported as cursor operations give
+// honest feedback instead of silently doing nothing (EX-364/365/366).
+func TestReadlineShortcutsInChatEX364365366(t *testing.T) {
+	tests := []struct {
+		name    string
+		keyType tea.KeyType
+		wantMsg string
+	}{
+		{
+			name:    "Ctrl-A in chat panel",
+			keyType: tea.KeyCtrlA,
+			wantMsg: "Line-start (Ctrl-A) not supported. Use Ctrl-U to clear, Ctrl-W to delete word.",
+		},
+		{
+			name:    "Ctrl-E in chat panel",
+			keyType: tea.KeyCtrlE,
+			wantMsg: "Line-end (Ctrl-E) not supported. Use Ctrl-U to clear, Ctrl-W to delete word.",
+		},
+		{
+			name:    "Ctrl-K in chat panel",
+			keyType: tea.KeyCtrlK,
+			wantMsg: "Kill-to-end (Ctrl-K) not supported. Use Ctrl-U to clear all, Ctrl-W to delete word.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = ChatPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tt.keyType})
+			if m1.statusMessage != tt.wantMsg {
+				t.Errorf("EX-364/365/366: %s: got %q, want %q", tt.name, m1.statusMessage, tt.wantMsg)
+			}
+		})
+	}
+
+	// EX-364/365/366: outside chat panel — redirect hint
+	redirectTests := []struct {
+		name    string
+		keyType tea.KeyType
+		want    string
+	}{
+		{"Ctrl-A outside chat", tea.KeyCtrlA, "Ctrl-A moves cursor to line start in chat. Press 3 or Tab to focus chat."},
+		{"Ctrl-E outside chat", tea.KeyCtrlE, "Ctrl-E moves cursor to line end in chat. Press 3 or Tab to focus chat."},
+		{"Ctrl-K outside chat", tea.KeyCtrlK, "Ctrl-K kill-to-end is a chat shortcut. Press 3 or Tab to focus chat."},
+	}
+	for _, tt := range redirectTests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(DefaultState())
+			m.focus = MainPanel
+			m1 := pressKey(m, tea.KeyMsg{Type: tt.keyType})
+			if m1.statusMessage != tt.want {
+				t.Errorf("EX-364/365/366: %s: got %q, want %q", tt.name, m1.statusMessage, tt.want)
+			}
+		})
+	}
+}
