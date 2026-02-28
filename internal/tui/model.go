@@ -2897,6 +2897,13 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.Type {
+	case tea.KeyCtrlC:
+		// EX-363: Ctrl-C in command mode should quit the TUI (mirrors global Ctrl-C),
+		// not silently do nothing while leaving the user stuck in command mode.
+		m.quitting = true
+		m.commandMode = false
+		m.statusMessage = "Exiting TUI."
+		return m, tea.Quit
 	case tea.KeyCtrlG:
 		m.commandMode = false
 		m.commandBuffer = ""

@@ -9494,3 +9494,22 @@ func TestArrowKeysInCommandModeEX361362(t *testing.T) {
 		t.Errorf("EX-362: ↑ in command mode should hint about history; got %q", m5.statusMessage)
 	}
 }
+
+// TestCtrlCInCommandModeEX363 verifies that Ctrl-C in command mode quits the
+// TUI rather than silently doing nothing (EX-363). Previously Ctrl-C fell
+// through to the default handler, leaving the user stuck in command mode.
+func TestCtrlCInCommandModeEX363(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.commandMode = true
+	m.commandBuffer = ":frank"
+	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if !m1.quitting {
+		t.Errorf("EX-363: Ctrl-C in command mode should set quitting=true")
+	}
+	if m1.commandMode {
+		t.Errorf("EX-363: Ctrl-C in command mode should exit command mode")
+	}
+	if m1.statusMessage != "Exiting TUI." {
+		t.Errorf("EX-363: Ctrl-C in command mode should say 'Exiting TUI.'; got %q", m1.statusMessage)
+	}
+}
