@@ -2353,7 +2353,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					} else if nodeParentID != "" {
 						m.statusMessage = "Moved to parent."
 					} else {
-						// EX-323: project already collapsed at top level â give honest feedback.
+						// EX-323: project already collapsed at top level — give honest feedback.
 						m.statusMessage = "Already collapsed."
 					}
 				case sidebarKindHeader:
@@ -2362,8 +2362,8 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					if nodeParentID != "" {
 						m.statusMessage = "Moved to parent."
 					} else {
-						// EX-323: no parent to move to â give hint.
-						m.statusMessage = "At top level â use â/â to navigate."
+						// EX-323: no parent to move to — give hint.
+						m.statusMessage = "At top level — use ↑/↓ to navigate."
 					}
 				}
 			}
@@ -3375,7 +3375,7 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 				} else if nodeParentID != "" {
 					m.statusMessage = "Moved to parent."
 				} else {
-					// EX-323: project already collapsed at top level â give honest feedback.
+					// EX-323: project already collapsed at top level — give honest feedback.
 					m.statusMessage = "Already collapsed."
 				}
 			case sidebarKindHeader:
@@ -3384,8 +3384,8 @@ func (m *Model) handleSidebarControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 				if nodeParentID != "" {
 					m.statusMessage = "Moved to parent."
 				} else {
-					// EX-323: no parent to move to â give hint.
-					m.statusMessage = "At top level â use â/â to navigate."
+					// EX-323: no parent to move to — give hint.
+					m.statusMessage = "At top level — use ↑/↓ to navigate."
 				}
 			}
 		}

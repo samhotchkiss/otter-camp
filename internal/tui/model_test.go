@@ -12241,3 +12241,30 @@ func TestStepTaskInProjectFeedbackEX443(t *testing.T) {
 		}
 	})
 }
+
+// TestSidebarHKeyTopLevelNodeFeedbackEX444 verifies that pressing 'h' on a
+// top-level non-project, non-header sidebar node (e.g. inbox) shows
+// "At top level — use ↑/↓ to navigate." rather than the previously
+// garbled double-encoded UTF-8 string (EX-444).
+func TestSidebarHKeyTopLevelNodeFeedbackEX444(t *testing.T) {
+	m := NewModel(DefaultState())
+	m.focus = SidebarPanel
+	// Cursor 0 in the default workspace points to the "inbox" node (sidebarKindInbox),
+	// which has no ParentID, so 'h' hits the "At top level" branch.
+	m.workspace.sidebarCursor = 0
+
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	want := "At top level — use ↑/↓ to navigate."
+	if got := m.StatusMessage(); got != want {
+		t.Fatalf("EX-444: h on top-level inbox node = %q, want %q", got, want)
+	}
+
+	// Also verify via KeyLeft (handleSidebarControlKey mirrors 'h').
+	m2 := NewModel(DefaultState())
+	m2.focus = SidebarPanel
+	m2.workspace.sidebarCursor = 0
+	m2 = pressKey(m2, tea.KeyMsg{Type: tea.KeyLeft})
+	if got := m2.StatusMessage(); got != want {
+		t.Fatalf("EX-444: ← on top-level inbox node = %q, want %q", got, want)
+	}
+}
