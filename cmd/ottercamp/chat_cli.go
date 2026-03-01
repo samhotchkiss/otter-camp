@@ -1059,7 +1059,12 @@ func (c *cliAPIClient) ListChatParticipants(ctx context.Context, sessionID uuid.
 
 func (c *cliAPIClient) CancelChatTurn(ctx context.Context, sessionID uuid.UUID) error {
 	path := fmt.Sprintf("/v1/chat-sessions/%s/cancel-turn", url.PathEscape(sessionID.String()))
-	return c.request(ctx, http.MethodPost, path, map[string]any{}, nil)
+	err := c.request(ctx, http.MethodPost, path, map[string]any{}, nil)
+	// 409 no_active_turn means the turn already completed — treat as success.
+	if apiErr, ok := asCLIAPIError(err); ok && apiErr.StatusCode == 409 && apiErr.Code == "no_active_turn" {
+		return nil
+	}
+	return err
 }
 
 func (c *cliAPIClient) OpenEventsStream(ctx context.Context, scopes string) (io.ReadCloser, error) {
