@@ -481,9 +481,10 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	if err != nil {
 		return fmt.Errorf("worker push delivery consumer setup: %w", err)
 	}
-	bus.Subscribe("push.delivery.consumer", nil, func(ctx context.Context, event eventbus.DomainEvent) error {
+	pushConsumerSub := bus.Subscribe("push.delivery.consumer", nil, func(ctx context.Context, event eventbus.DomainEvent) error {
 		return pushConsumer.Consume(ctx, event)
 	})
+	defer bus.Unsubscribe(pushConsumerSub)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
