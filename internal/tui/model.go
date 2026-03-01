@@ -6657,7 +6657,7 @@ func (m *Model) scrollChatBy(delta int) {
 }
 
 func (m *Model) recordStreamRenderLatency(event EventEnvelope) {
-	if event.EventType != "chat.message.delta" {
+	if event.EventType != "chat.message.delta" && event.EventType != "chat.message.chunk" {
 		return
 	}
 	if event.OccurredAt.IsZero() {

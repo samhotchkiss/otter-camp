@@ -385,49 +385,6 @@ func (c *RealtimeClient) consumeStream(ctx context.Context, stream io.ReadCloser
 			continue
 		}
 
-		// The server sends a "connected" meta-frame on stream open (not a domain event envelope).
-		// Handle it explicitly: if gap:true, mark degraded; otherwise mark connected and replay synced.
-		// On a fresh client (lastSeq=0), seed the reducer to high_watermark so historical replay
-		// frames do not flood the chat pane on startup.
-		if frame.Event == "connected" {
-			var connMeta struct {
-				Gap           bool  `json:"gap"`
-				HighWatermark int64 `json:"high_watermark"`
-			}
-			if jsonErr := json.Unmarshal([]byte(frame.Data), &connMeta); jsonErr == nil {
-				if connMeta.Gap {
-					if degradeErr := c.markDegradedAndRefresh(ctx, "replay_gap", nil); degradeErr != nil {
-						return degradeErr
-					}
-				} else if c.Reducer.LastSeq() == 0 && connMeta.HighWatermark > 0 {
-					c.Reducer.SetLastSeq(connMeta.HighWatermark)
-				}
-			} else {
-				c.degraded = false
-				c.emitState(ConnectionConnected)
-				if !*replayComplete {
-					*replayComplete = true
-					if c.OnReplaySynced != nil && !c.replaySynced {
-						c.replaySynced = true
-						c.OnReplaySynced()
-					}
-				}
-				continue
-			}
-			if !connMeta.Gap {
-				c.degraded = false
-				c.emitState(ConnectionConnected)
-				if !*replayComplete {
-					*replayComplete = true
-					if c.OnReplaySynced != nil && !c.replaySynced {
-						c.replaySynced = true
-						c.OnReplaySynced()
-					}
-				}
-			}
-			continue
-		}
-
 		envelope, err := DecodeEventEnvelope([]byte(frame.Data))
 		if err != nil {
 			if degradeErr := c.markDegradedAndRefresh(ctx, "invalid_envelope", err); degradeErr != nil {
