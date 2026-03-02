@@ -417,6 +417,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.Detail.ID != "" && typed.Detail.ID != m.workspace.selectedProjectID {
 			return m, nil
 		}
+		if m.workspace.selectedProject == nil || m.workspace.selectedProject.ID != typed.Detail.ID {
+			m.workspace.showProjectFiles = false
+		}
 		m.workspace.selectedProject = &typed.Detail
 		// Apply any pending cursor request (task opened before project loaded).
 		if m.workspace.pendingProjectCursorTaskID != "" {
@@ -3403,6 +3406,17 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			return true, nil
 		}
 	case 'f':
+		if m.focus == MainPanel && m.workspace.mainView == ViewProject {
+			if m.workspace.selectedProject != nil && len(m.workspace.selectedProject.Files) > 0 {
+				m.workspace.showProjectFiles = !m.workspace.showProjectFiles
+				if m.workspace.showProjectFiles {
+					m.statusMessage = "Showing project files."
+				} else {
+					m.statusMessage = "Project files hidden."
+				}
+				return true, nil
+			}
+		}
 		// EX-160: capture item ID before applyInboxAction removes it.
 		if m.focus == MainPanel && m.workspace.mainView == ViewInbox {
 			item := m.workspace.currentInboxItem()

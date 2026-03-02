@@ -29,6 +29,8 @@ type ProjectEnvironment struct {
 	Name               string
 	DeliveryMode       string
 	RemoteID           *uuid.UUID
+	RepoURL            *string
+	RepoPath           *string
 	TargetBranch       string
 	DeployTaskID       *uuid.UUID
 	LastDeployedCommit *string
@@ -292,6 +294,8 @@ func (r *ProjectEnvironmentRepo) Create(ctx context.Context, environment Project
 			name,
 			delivery_mode,
 			remote_id,
+			repo_url,
+			repo_path,
 			target_branch,
 			deploy_task_id,
 			last_deployed_commit,
@@ -299,13 +303,15 @@ func (r *ProjectEnvironmentRepo) Create(ctx context.Context, environment Project
 			is_active,
 			schedule_id
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING
 			id,
 			project_id,
 			name,
 			delivery_mode,
 			remote_id,
+			repo_url,
+			repo_path,
 			target_branch,
 			deploy_task_id,
 			last_deployed_commit,
@@ -319,6 +325,8 @@ func (r *ProjectEnvironmentRepo) Create(ctx context.Context, environment Project
 		strings.TrimSpace(environment.Name),
 		strings.TrimSpace(environment.DeliveryMode),
 		environment.RemoteID,
+		normalizeOptionalString(environment.RepoURL),
+		normalizeOptionalString(environment.RepoPath),
 		defaultTargetBranch(environment.TargetBranch),
 		environment.DeployTaskID,
 		normalizeOptionalString(environment.LastDeployedCommit),
@@ -342,6 +350,8 @@ func (r *ProjectEnvironmentRepo) GetByID(ctx context.Context, id uuid.UUID) (Pro
 			name,
 			delivery_mode,
 			remote_id,
+			repo_url,
+			repo_path,
 			target_branch,
 			deploy_task_id,
 			last_deployed_commit,
@@ -372,6 +382,8 @@ func (r *ProjectEnvironmentRepo) ListByProject(ctx context.Context, projectID uu
 			name,
 			delivery_mode,
 			remote_id,
+			repo_url,
+			repo_path,
 			target_branch,
 			deploy_task_id,
 			last_deployed_commit,
@@ -410,9 +422,11 @@ func (r *ProjectEnvironmentRepo) Update(ctx context.Context, environment Project
 			name = $2,
 			delivery_mode = $3,
 			remote_id = $4,
-			target_branch = $5,
-			is_active = $6,
-			schedule_id = $7
+			repo_url = $5,
+			repo_path = $6,
+			target_branch = $7,
+			is_active = $8,
+			schedule_id = $9
 		WHERE id = $1
 		RETURNING
 			id,
@@ -420,6 +434,8 @@ func (r *ProjectEnvironmentRepo) Update(ctx context.Context, environment Project
 			name,
 			delivery_mode,
 			remote_id,
+			repo_url,
+			repo_path,
 			target_branch,
 			deploy_task_id,
 			last_deployed_commit,
@@ -433,6 +449,8 @@ func (r *ProjectEnvironmentRepo) Update(ctx context.Context, environment Project
 		strings.TrimSpace(environment.Name),
 		strings.TrimSpace(environment.DeliveryMode),
 		environment.RemoteID,
+		normalizeOptionalString(environment.RepoURL),
+		normalizeOptionalString(environment.RepoPath),
 		defaultTargetBranch(environment.TargetBranch),
 		environment.IsActive,
 		environment.ScheduleID,
@@ -459,6 +477,8 @@ func (r *ProjectEnvironmentRepo) SetDeployTask(ctx context.Context, environmentI
 			name,
 			delivery_mode,
 			remote_id,
+			repo_url,
+			repo_path,
 			target_branch,
 			deploy_task_id,
 			last_deployed_commit,
@@ -492,6 +512,8 @@ func (r *ProjectEnvironmentRepo) RecordDeployment(ctx context.Context, environme
 			name,
 			delivery_mode,
 			remote_id,
+			repo_url,
+			repo_path,
 			target_branch,
 			deploy_task_id,
 			last_deployed_commit,
@@ -520,6 +542,8 @@ func (r *ProjectEnvironmentRepo) GetActiveByMode(ctx context.Context, mode strin
 			name,
 			delivery_mode,
 			remote_id,
+			repo_url,
+			repo_path,
 			target_branch,
 			deploy_task_id,
 			last_deployed_commit,
@@ -579,6 +603,8 @@ func scanProjectEnvironment(row pgx.Row) (ProjectEnvironment, error) {
 		&environment.Name,
 		&environment.DeliveryMode,
 		&environment.RemoteID,
+		&environment.RepoURL,
+		&environment.RepoPath,
 		&environment.TargetBranch,
 		&environment.DeployTaskID,
 		&environment.LastDeployedCommit,

@@ -355,12 +355,44 @@ func runTUICommand(args []string) int {
 						}
 					}
 				}
+				var filesResp struct {
+					Data struct {
+						RepoURL  *string `json:"repo_url"`
+						RepoPath *string `json:"repo_path"`
+						Files    []struct {
+							Path  string `json:"path"`
+							IsDir bool   `json:"is_dir"`
+							Depth int    `json:"depth"`
+						} `json:"files"`
+					} `json:"data"`
+				}
+				projectFiles := make([]tuiapp.ProjectFileEntry, 0)
+				repoPath := ""
+				filesPath := "/v1/projects/" + url.PathEscape(projectID) + "/files"
+				if apiClient.request(ctx, "GET", filesPath, nil, &filesResp) == nil {
+					if filesResp.Data.RepoURL != nil && strings.TrimSpace(*filesResp.Data.RepoURL) != "" {
+						repoURL = strings.TrimSpace(*filesResp.Data.RepoURL)
+					}
+					if filesResp.Data.RepoPath != nil {
+						repoPath = strings.TrimSpace(*filesResp.Data.RepoPath)
+					}
+					projectFiles = make([]tuiapp.ProjectFileEntry, 0, len(filesResp.Data.Files))
+					for _, file := range filesResp.Data.Files {
+						projectFiles = append(projectFiles, tuiapp.ProjectFileEntry{
+							Path:  file.Path,
+							IsDir: file.IsDir,
+							Depth: file.Depth,
+						})
+					}
+				}
 				return &tuiapp.ProjectDetail{
 					ID:           proj.ID,
 					DisplayName:  proj.DisplayName,
 					Description:  proj.Description,
 					DeliveryMode: proj.DeliveryMode,
 					RepoURL:      repoURL,
+					RepoPath:     repoPath,
+					Files:        projectFiles,
 					Tasks:        tasks,
 					DoneTasks:    doneTasks,
 					DoneCount:    len(doneTasks),

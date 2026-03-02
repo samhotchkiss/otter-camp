@@ -110,6 +110,12 @@ type ProjectAgent struct {
 	Role        string // "pm", "worker", "reviewer", "observer"
 }
 
+type ProjectFileEntry struct {
+	Path  string
+	IsDir bool
+	Depth int
+}
+
 // ProjectDetail holds metadata for a project loaded from the API.
 type ProjectDetail struct {
 	ID           string
@@ -117,6 +123,8 @@ type ProjectDetail struct {
 	Description  string
 	DeliveryMode string
 	RepoURL      string             // connected GitHub repository URL
+	RepoPath     string
+	Files        []ProjectFileEntry
 	Tasks        []SidebarTaskItem  // open tasks only
 	DoneTasks    []SidebarTaskItem  // completed/approved/cancelled tasks
 	DoneCount    int                // count of completed tasks
@@ -142,6 +150,7 @@ type workspaceState struct {
 	projectTaskCursor int    // cursor within the project view open-task list
 	pendingProjectCursorTaskID string // set when task is opened before project detail loads
 	showDoneTasks     bool   // whether to show done tasks in project view
+	showProjectFiles  bool   // whether to show the project file section
 	showTaskHistory   bool   // whether to show task history/audit trail
 	dashboardCursor   int // cursor within the dashboard task board (index into taskOrder excluding done/cancelled)
 

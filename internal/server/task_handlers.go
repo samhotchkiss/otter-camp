@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +27,10 @@ import (
 )
 
 const maxTaskTitleLength = 500
+const projectFileMaxEntries = 50
+const projectFileMaxDepth = 3
+
+var errProjectFileLimitReached = errors.New("project file listing limit reached")
 
 type deliveryTaskCreator interface {
 	CreateDeployTask(ctx context.Context, environmentID uuid.UUID, commitSHA string) (repo.ProjectTask, error)
@@ -180,6 +186,7 @@ func (r *TaskRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.With(middleware.RequireRole("admin")).Delete("/projects/{id}/remotes/{rid}", r.handlers.deleteRemote)
 
 	router.Get("/projects/{id}/environments", r.handlers.listEnvironments)
+	router.Get("/projects/{id}/files", r.handlers.listProjectFiles)
 	router.With(middleware.RequireRole("admin")).Post("/projects/{id}/environments", r.handlers.createEnvironment)
 	router.With(middleware.RequireRole("admin")).Patch("/projects/{id}/environments/{eid}", r.handlers.updateEnvironment)
 	router.With(middleware.RequireRole("admin")).Post("/projects/{id}/deploy", r.handlers.deployProject)
@@ -289,6 +296,8 @@ type createEnvironmentRequest struct {
 	Name         string     `json:"name"`
 	DeliveryMode string     `json:"delivery_mode"`
 	RemoteID     *uuid.UUID `json:"remote_id"`
+	RepoURL      *string    `json:"repo_url"`
+	RepoPath     *string    `json:"repo_path"`
 	TargetBranch *string    `json:"target_branch"`
 	ScheduleID   *uuid.UUID `json:"schedule_id"`
 }
@@ -297,6 +306,8 @@ type updateEnvironmentRequest struct {
 	Name         *string    `json:"name"`
 	DeliveryMode *string    `json:"delivery_mode"`
 	RemoteID     *uuid.UUID `json:"remote_id"`
+	RepoURL      *string    `json:"repo_url"`
+	RepoPath     *string    `json:"repo_path"`
 	TargetBranch *string    `json:"target_branch"`
 	ScheduleID   *uuid.UUID `json:"schedule_id"`
 	IsActive     *bool      `json:"is_active"`
@@ -456,6 +467,8 @@ type environmentResponse struct {
 	Name               string     `json:"name"`
 	DeliveryMode       string     `json:"delivery_mode"`
 	RemoteID           *uuid.UUID `json:"remote_id"`
+	RepoURL            *string    `json:"repo_url"`
+	RepoPath           *string    `json:"repo_path"`
 	TargetBranch       string     `json:"target_branch"`
 	DeployTaskID       *uuid.UUID `json:"deploy_task_id"`
 	LastDeployedCommit *string    `json:"last_deployed_commit"`
@@ -465,6 +478,19 @@ type environmentResponse struct {
 	ScheduleID         *uuid.UUID `json:"schedule_id"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
+}
+
+type projectFileResponse struct {
+	Path  string `json:"path"`
+	IsDir bool   `json:"is_dir"`
+	Depth int    `json:"depth"`
+}
+
+type projectFilesPayload struct {
+	ProjectID uuid.UUID             `json:"project_id"`
+	RepoURL   *string               `json:"repo_url,omitempty"`
+	RepoPath  *string               `json:"repo_path,omitempty"`
+	Files     []projectFileResponse `json:"files"`
 }
 
 func (h taskHandlers) listProjectTasks(w http.ResponseWriter, r *http.Request) {
@@ -2038,6 +2064,54 @@ func (h taskHandlers) listEnvironments(w http.ResponseWriter, r *http.Request) {
 	responder.JSON(w, http.StatusOK, response)
 }
 
+func (h taskHandlers) listProjectFiles(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if h.environments == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "delivery service unavailable")
+		return
+	}
+
+	projectID, err := parseUUIDParam(r, "id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+	if _, ok := h.getProjectForOrg(r.Context(), projectID, principal.OrganizationID, responder, w); !ok {
+		return
+	}
+
+	environments, err := h.environments.ListByProject(r.Context(), projectID)
+	if err != nil {
+		h.respondTaskError(responder, w, err)
+		return
+	}
+
+	repoURL, repoPath := findProjectRepoConfig(environments)
+	response := projectFilesPayload{
+		ProjectID: projectID,
+		RepoURL:   repoURL,
+		RepoPath:  repoPath,
+		Files:     []projectFileResponse{},
+	}
+	if strings.TrimSpace(derefString(repoPath)) == "" {
+		responder.JSON(w, http.StatusOK, response)
+		return
+	}
+
+	files, fileErr := listProjectFilesAtPath(strings.TrimSpace(derefString(repoPath)), projectFileMaxEntries, projectFileMaxDepth)
+	if fileErr != nil {
+		// Invalid/unreachable path should not break the project view.
+		responder.JSON(w, http.StatusOK, response)
+		return
+	}
+	response.Files = files
+	responder.JSON(w, http.StatusOK, response)
+}
+
 func (h taskHandlers) createEnvironment(w http.ResponseWriter, r *http.Request) {
 	responder := api.NewResponder(r.Context())
 	principal, ok := h.requirePrincipal(w, r)
@@ -2089,6 +2163,8 @@ func (h taskHandlers) createEnvironment(w http.ResponseWriter, r *http.Request) 
 		Name:         strings.TrimSpace(req.Name),
 		DeliveryMode: strings.TrimSpace(req.DeliveryMode),
 		RemoteID:     req.RemoteID,
+		RepoURL:      trimStringPointer(req.RepoURL),
+		RepoPath:     trimStringPointer(req.RepoPath),
 		TargetBranch: targetBranch,
 		ScheduleID:   req.ScheduleID,
 		IsActive:     true,
@@ -2159,6 +2235,12 @@ func (h taskHandlers) updateEnvironment(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 		environmentRecord.RemoteID = req.RemoteID
+	}
+	if req.RepoURL != nil {
+		environmentRecord.RepoURL = trimStringPointer(req.RepoURL)
+	}
+	if req.RepoPath != nil {
+		environmentRecord.RepoPath = trimStringPointer(req.RepoPath)
 	}
 	if req.TargetBranch != nil {
 		environmentRecord.TargetBranch = strings.TrimSpace(*req.TargetBranch)
@@ -2927,6 +3009,8 @@ func toEnvironmentResponse(model repo.ProjectEnvironment) environmentResponse {
 		Name:               model.Name,
 		DeliveryMode:       model.DeliveryMode,
 		RemoteID:           model.RemoteID,
+		RepoURL:            model.RepoURL,
+		RepoPath:           model.RepoPath,
 		TargetBranch:       model.TargetBranch,
 		DeployTaskID:       model.DeployTaskID,
 		LastDeployedCommit: model.LastDeployedCommit,
@@ -2937,6 +3021,90 @@ func toEnvironmentResponse(model repo.ProjectEnvironment) environmentResponse {
 		CreatedAt:          model.CreatedAt,
 		UpdatedAt:          model.UpdatedAt,
 	}
+}
+
+func findProjectRepoConfig(environments []repo.ProjectEnvironment) (*string, *string) {
+	for _, environment := range environments {
+		if !environment.IsActive {
+			continue
+		}
+		if strings.TrimSpace(derefString(environment.RepoPath)) == "" {
+			continue
+		}
+		return environment.RepoURL, environment.RepoPath
+	}
+	for _, environment := range environments {
+		if strings.TrimSpace(derefString(environment.RepoPath)) == "" {
+			continue
+		}
+		return environment.RepoURL, environment.RepoPath
+	}
+	return nil, nil
+}
+
+func listProjectFilesAtPath(repoPath string, limit, maxDepth int) ([]projectFileResponse, error) {
+	cleanPath := strings.TrimSpace(repoPath)
+	if cleanPath == "" {
+		return []projectFileResponse{}, nil
+	}
+
+	if !filepath.IsAbs(cleanPath) {
+		absPath, err := filepath.Abs(cleanPath)
+		if err != nil {
+			return nil, err
+		}
+		cleanPath = absPath
+	}
+
+	info, err := os.Stat(cleanPath)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return []projectFileResponse{}, nil
+	}
+
+	files := make([]projectFileResponse, 0, limit)
+	walkErr := filepath.WalkDir(cleanPath, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == cleanPath {
+			return nil
+		}
+		if strings.EqualFold(entry.Name(), ".git") && entry.IsDir() {
+			return filepath.SkipDir
+		}
+
+		relativePath, err := filepath.Rel(cleanPath, path)
+		if err != nil {
+			return err
+		}
+		normalizedPath := filepath.ToSlash(relativePath)
+		depth := strings.Count(normalizedPath, "/") + 1
+		if depth > maxDepth {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		files = append(files, projectFileResponse{
+			Path:  normalizedPath,
+			IsDir: entry.IsDir(),
+			Depth: depth,
+		})
+		if len(files) >= limit {
+			return errProjectFileLimitReached
+		}
+		return nil
+	})
+	if walkErr != nil && !errors.Is(walkErr, errProjectFileLimitReached) {
+		return nil, walkErr
+	}
+	if len(files) > limit {
+		files = files[:limit]
+	}
+	return files, nil
 }
 
 func isTestMode() bool {
@@ -3007,6 +3175,13 @@ func trimStringPointer(value *string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func parseOptionalBool(raw string) (bool, bool) {
