@@ -64,6 +64,8 @@ func NewChatRouteRegistrar(service chat.ChatService, pool *pgxpool.Pool) *ChatRo
 		h.artifacts = repo.NewChatArtifactRepo(pool)
 		h.messages = repo.NewChatMessageRepo(pool)
 		h.agents = repo.NewAgentRepo(pool)
+		h.tasks = repo.NewProjectTaskRepo(pool)
+		h.assignments = repo.NewAgentProjectAssignmentRepo(pool)
 	}
 	return &ChatRouteRegistrar{handlers: h}
 }
@@ -105,6 +107,14 @@ type orgAgentLister interface {
 	GetStarterTrio(ctx context.Context, organizationID uuid.UUID) ([]repo.Agent, error)
 }
 
+type projectTaskReader interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
+}
+
+type projectPMAssignmentReader interface {
+	GetPM(ctx context.Context, projectID uuid.UUID) (repo.AgentProjectAssignment, error)
+}
+
 type chatHandlers struct {
 	service chat.ChatService
 
@@ -113,6 +123,8 @@ type chatHandlers struct {
 	artifacts   chatArtifactRepository
 	messages    chatMessageRepository
 	agents      orgAgentLister
+	tasks       projectTaskReader
+	assignments projectPMAssignmentReader
 	testMode    bool
 }
 
@@ -306,6 +318,12 @@ func (h chatHandlers) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = h.service.AddParticipant(r.Context(), session.ID, participantType, principal.UserID, "owner")
 
+	if strings.EqualFold(scopeType, "project_task") {
+		if responderID, ok := h.resolveTaskResponderID(r.Context(), principal.OrganizationID, scopeID); ok {
+			_, _ = h.service.AddParticipant(r.Context(), session.ID, "agent", responderID, "responder")
+		}
+	}
+
 	// For org-scope sessions, automatically add starter-trio staff agents as
 	// participants so they are immediately available for conversations.
 	if strings.EqualFold(scopeType, "organization") && h.agents != nil {
@@ -317,6 +335,50 @@ func (h chatHandlers) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	responder.JSON(w, http.StatusCreated, toChatSessionResponse(session, nil))
+}
+
+func (h chatHandlers) resolveTaskResponderID(ctx context.Context, organizationID, taskID uuid.UUID) (uuid.UUID, bool) {
+	if h.tasks != nil && taskID != uuid.Nil {
+		if taskRecord, err := h.tasks.GetByID(ctx, taskID); err == nil {
+			if taskRecord.OrganizationID == organizationID || taskRecord.OrganizationID == uuid.Nil {
+				if taskRecord.AssignedAgentID != nil && *taskRecord.AssignedAgentID != uuid.Nil {
+					return *taskRecord.AssignedAgentID, true
+				}
+				if h.assignments != nil {
+					if pm, pmErr := h.assignments.GetPM(ctx, taskRecord.ProjectID); pmErr == nil && pm.IsActive && pm.AgentID != uuid.Nil {
+						return pm.AgentID, true
+					}
+				}
+			}
+		}
+	}
+	return h.resolveFrankStarterID(ctx, organizationID)
+}
+
+func (h chatHandlers) resolveFrankStarterID(ctx context.Context, organizationID uuid.UUID) (uuid.UUID, bool) {
+	if h.agents == nil || organizationID == uuid.Nil {
+		return uuid.Nil, false
+	}
+	starterAgents, err := h.agents.GetStarterTrio(ctx, organizationID)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	for _, agent := range starterAgents {
+		if strings.EqualFold(strings.TrimSpace(agent.DisplayName), "frank") && agent.ID != uuid.Nil {
+			return agent.ID, true
+		}
+	}
+	for _, agent := range starterAgents {
+		if strings.EqualFold(strings.TrimSpace(agent.AgentType), "general") && agent.ID != uuid.Nil {
+			return agent.ID, true
+		}
+	}
+	for _, agent := range starterAgents {
+		if agent.ID != uuid.Nil {
+			return agent.ID, true
+		}
+	}
+	return uuid.Nil, false
 }
 
 func (h chatHandlers) listSessions(w http.ResponseWriter, r *http.Request) {
@@ -923,7 +985,6 @@ func (h chatHandlers) redactMessage(w http.ResponseWriter, r *http.Request) {
 
 	responder.JSON(w, http.StatusOK, toChatMessageResponse(updated))
 }
-
 
 func (h chatHandlers) cancelTurn(w http.ResponseWriter, r *http.Request) {
 	responder := api.NewResponder(r.Context())

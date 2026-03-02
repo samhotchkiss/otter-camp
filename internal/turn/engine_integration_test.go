@@ -70,6 +70,73 @@ func TestTurnEngineIntegrationFullTurnCycle(t *testing.T) {
 	}
 }
 
+func TestTurnEngineIntegrationTaskSessionEventRoutesJobToAssignedAgent(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	assignedAgent := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	frank := mustCreateStarterFrank(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, assignedAgent.ID)
+
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, taskSession.ID, "agent", frank.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant Frank: %v", err)
+	}
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "route this message",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	actorID := fixture.user.ID
+	if err := fixture.engine.HandleUserMessageEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.message.user_sent",
+		ActorType:      "human",
+		ActorID:        &actorID,
+		Payload:        mustJSON(t, map[string]any{"session_id": taskSession.ID.String(), "message_id": userMessage.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleUserMessageEvent: %v", err)
+	}
+
+	var rawPayload []byte
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT payload
+		FROM job_queue
+		WHERE job_type = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, AgentTurnJobType).Scan(&rawPayload); err != nil {
+		t.Fatalf("load agent_turn job payload: %v", err)
+	}
+
+	var payload AgentTurnPayload
+	if err := json.Unmarshal(rawPayload, &payload); err != nil {
+		t.Fatalf("unmarshal agent_turn payload: %v", err)
+	}
+	if payload.AgentID == nil {
+		t.Fatalf("payload.agent_id = nil, want %s", assignedAgent.ID)
+	}
+	if *payload.AgentID != assignedAgent.ID {
+		t.Fatalf("payload.agent_id = %s, want %s", *payload.AgentID, assignedAgent.ID)
+	}
+}
+
 func TestTurnEngineIntegrationTier1ToolDispatchRoundTrip(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	modelCalls := 0
@@ -280,17 +347,18 @@ func TestTurnEngineIntegrationReactionFeedbackAdjustsMemoryConfidence(t *testing
 }
 
 type integrationFixture struct {
-	pool       *pgxpool.Pool
-	org        repo.Organization
-	user       repo.HumanUser
-	agent      repo.Agent
-	session    repo.ChatSession
+	pool        *pgxpool.Pool
+	org         repo.Organization
+	user        repo.HumanUser
+	agent       repo.Agent
+	session     repo.ChatSession
 	userMessage repo.ChatMessage
 
-	bus        *eventbus.Bus
-	engine     *TurnEngine
-	model      *fakeModelGateway
-	dispatcher *fakeDispatcher
+	chatService chat.ChatService
+	bus         *eventbus.Bus
+	engine      *TurnEngine
+	model       *fakeModelGateway
+	dispatcher  *fakeDispatcher
 	runCanceler *fakeRunCanceler
 }
 
@@ -373,6 +441,7 @@ func newIntegrationFixture(t *testing.T) *integrationFixture {
 		agent:       agent,
 		session:     repo.ChatSession(*session),
 		userMessage: repo.ChatMessage(*userMessage),
+		chatService: chatService,
 		bus:         bus,
 		engine:      engine,
 		model:       modelGateway,
@@ -491,11 +560,11 @@ func mustCreateAgent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgI
 func mustCreateProvider(t *testing.T, ctx context.Context, pool *pgxpool.Pool) repo.ModelProvider {
 	t.Helper()
 	item, err := repo.NewModelProviderRepo(pool).Create(ctx, repo.ModelProvider{
-		Slug:         "turn-provider-" + uuid.NewString()[:8],
-		DisplayName:  "Turn Provider",
-		APIBaseURL:   "https://example.invalid",
-		IsEnabled:    true,
-		Metadata:     []byte(`{}`),
+		Slug:        "turn-provider-" + uuid.NewString()[:8],
+		DisplayName: "Turn Provider",
+		APIBaseURL:  "https://example.invalid",
+		IsEnabled:   true,
+		Metadata:    []byte(`{}`),
 	})
 	if err != nil {
 		t.Fatalf("create provider: %v", err)
@@ -523,4 +592,61 @@ func mustCreateProfile(t *testing.T, ctx context.Context, pool *pgxpool.Pool, or
 		t.Fatalf("create profile: %v", err)
 	}
 	return item
+}
+
+func mustCreateStarterFrank(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID) repo.Agent {
+	t.Helper()
+	item, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:       orgID,
+		DisplayName:          "Frank",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "You are Frank.",
+		OperatorInstructions: "",
+		AgentType:            "general",
+		IsStarterTrio:        true,
+		PrivateMemory:        false,
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create Frank starter agent: %v", err)
+	}
+	return item
+}
+
+func mustCreateProject(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, userID uuid.UUID) repo.Project {
+	t.Helper()
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: orgID,
+		Slug:           "turn-project-" + uuid.NewString()[:8],
+		DisplayName:    "Turn Project",
+		Description:    "",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    userID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	return project
+}
+
+func mustCreateTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID, userID, assignedAgentID uuid.UUID) repo.ProjectTask {
+	t.Helper()
+	assigned := assignedAgentID
+	createdBy := userID
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "Route me",
+		WorkStatus:      "in_progress",
+		CreatedByType:   "human_user",
+		CreatedByID:     &createdBy,
+		AssignedAgentID: &assigned,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	return taskRecord
 }

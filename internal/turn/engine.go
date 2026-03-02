@@ -47,8 +47,9 @@ var (
 )
 
 type AgentTurnPayload struct {
-	SessionID uuid.UUID `json:"session_id"`
-	MessageID uuid.UUID `json:"message_id"`
+	SessionID uuid.UUID  `json:"session_id"`
+	MessageID uuid.UUID  `json:"message_id"`
+	AgentID   *uuid.UUID `json:"agent_id,omitempty"`
 }
 
 type ModelRequest struct {
@@ -206,10 +207,15 @@ type sessionRepository interface {
 
 type agentRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.Agent, error)
+	GetStarterTrio(ctx context.Context, organizationID uuid.UUID) ([]repo.Agent, error)
 }
 
 type taskRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
+}
+
+type assignmentRepository interface {
+	GetPM(ctx context.Context, projectID uuid.UUID) (repo.AgentProjectAssignment, error)
 }
 
 type memorySourceRepository interface {
@@ -246,6 +252,7 @@ type Options struct {
 	Sessions      sessionRepository
 	Agents        agentRepository
 	Tasks         taskRepository
+	Assignments   assignmentRepository
 	MemorySources memorySourceRepository
 	Memories      memoryRepository
 
@@ -280,6 +287,7 @@ type TurnEngine struct {
 	sessions    sessionRepository
 	agents      agentRepository
 	tasks       taskRepository
+	assignments assignmentRepository
 	sources     memorySourceRepository
 	memories    memoryRepository
 
@@ -357,6 +365,9 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 	if opts.Tasks == nil {
 		opts.Tasks = repo.NewProjectTaskRepo(opts.Pool)
 	}
+	if opts.Assignments == nil && opts.Pool != nil {
+		opts.Assignments = repo.NewAgentProjectAssignmentRepo(opts.Pool)
+	}
 	if opts.MemorySources == nil {
 		opts.MemorySources = repo.NewMemorySourceRepo(opts.Pool)
 	}
@@ -418,6 +429,7 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 		sessions:              opts.Sessions,
 		agents:                opts.Agents,
 		tasks:                 opts.Tasks,
+		assignments:           opts.Assignments,
 		sources:               opts.MemorySources,
 		memories:              opts.Memories,
 		defaultModelProfileID: opts.DefaultModelProfileID,
@@ -465,7 +477,7 @@ func (e *TurnEngine) HandleTurnJob(ctx context.Context, job jobqueue.Job) error 
 	if payload.SessionID == uuid.Nil || payload.MessageID == uuid.Nil {
 		return fmt.Errorf("%s payload missing session_id or message_id", AgentTurnJobType)
 	}
-	return e.HandleUserMessage(ctx, payload.SessionID, payload.MessageID)
+	return e.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID)
 }
 
 func (e *TurnEngine) HandleUserMessageEvent(ctx context.Context, event eventbus.DomainEvent) error {
@@ -477,6 +489,11 @@ func (e *TurnEngine) HandleUserMessageEvent(ctx context.Context, event eventbus.
 	payload, err := parseAgentTurnPayload(event.Payload)
 	if err != nil {
 		return nil
+	}
+	if session, getErr := e.chat.GetSession(ctx, payload.SessionID); getErr == nil {
+		if responderID, resolveErr := e.resolveSessionAgentForSession(ctx, session); resolveErr == nil && responderID != uuid.Nil {
+			payload.AgentID = &responderID
+		}
 	}
 	_, err = e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, payload, nil)
 	return err
@@ -537,6 +554,10 @@ func (e *TurnEngine) HandleReactionEvent(ctx context.Context, event eventbus.Dom
 }
 
 func (e *TurnEngine) HandleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID) error {
+	return e.handleUserMessage(ctx, sessionID, messageID, nil)
+}
+
+func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID, routedAgentID *uuid.UUID) error {
 	if sessionID == uuid.Nil || messageID == uuid.Nil {
 		return fmt.Errorf("session_id and message_id are required")
 	}
@@ -556,9 +577,16 @@ func (e *TurnEngine) HandleUserMessage(ctx context.Context, sessionID, messageID
 		return nil
 	}
 
-	agentID, err := e.resolveSessionAgent(ctx, sessionID)
-	if err != nil {
-		return err
+	agentID := uuid.Nil
+	if routedAgentID != nil && *routedAgentID != uuid.Nil {
+		agentID = *routedAgentID
+	}
+	if agentID == uuid.Nil {
+		var resolveErr error
+		agentID, resolveErr = e.resolveSessionAgentForSession(ctx, session)
+		if resolveErr != nil {
+			return resolveErr
+		}
 	}
 	agent, err := e.agents.GetByID(ctx, agentID)
 	if err != nil {
@@ -1258,6 +1286,71 @@ func (e *TurnEngine) watchTurnCancellation(ctx context.Context, rt *turnRuntime)
 }
 
 func (e *TurnEngine) resolveSessionAgent(ctx context.Context, sessionID uuid.UUID) (uuid.UUID, error) {
+	session, err := e.chat.GetSession(ctx, sessionID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return e.resolveSessionAgentForSession(ctx, session)
+}
+
+func (e *TurnEngine) resolveSessionAgentForSession(ctx context.Context, session *chat.ChatSession) (uuid.UUID, error) {
+	if session == nil {
+		return uuid.Nil, repo.ErrNotFound
+	}
+	if strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+		if agentID, err := e.resolveTaskScopeAgent(ctx, session.OrganizationID, session.ScopeID); err == nil && agentID != uuid.Nil {
+			return agentID, nil
+		}
+	}
+	return e.resolveFirstAgentParticipant(ctx, session.ID)
+}
+
+func (e *TurnEngine) resolveTaskScopeAgent(ctx context.Context, organizationID, taskID uuid.UUID) (uuid.UUID, error) {
+	if e.tasks != nil && taskID != uuid.Nil {
+		if taskRecord, err := e.tasks.GetByID(ctx, taskID); err == nil {
+			if taskRecord.OrganizationID != uuid.Nil && taskRecord.OrganizationID != organizationID {
+				return uuid.Nil, repo.ErrNotFound
+			}
+			if taskRecord.AssignedAgentID != nil && *taskRecord.AssignedAgentID != uuid.Nil {
+				return *taskRecord.AssignedAgentID, nil
+			}
+			if e.assignments != nil {
+				if pm, pmErr := e.assignments.GetPM(ctx, taskRecord.ProjectID); pmErr == nil && pm.IsActive && pm.AgentID != uuid.Nil {
+					return pm.AgentID, nil
+				}
+			}
+		}
+	}
+	return e.resolveFrankStarterID(ctx, organizationID)
+}
+
+func (e *TurnEngine) resolveFrankStarterID(ctx context.Context, organizationID uuid.UUID) (uuid.UUID, error) {
+	if e.agents == nil {
+		return uuid.Nil, repo.ErrNotFound
+	}
+	starterAgents, err := e.agents.GetStarterTrio(ctx, organizationID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	for _, item := range starterAgents {
+		if strings.EqualFold(strings.TrimSpace(item.DisplayName), "frank") && item.ID != uuid.Nil {
+			return item.ID, nil
+		}
+	}
+	for _, item := range starterAgents {
+		if strings.EqualFold(strings.TrimSpace(item.AgentType), "general") && item.ID != uuid.Nil {
+			return item.ID, nil
+		}
+	}
+	for _, item := range starterAgents {
+		if item.ID != uuid.Nil {
+			return item.ID, nil
+		}
+	}
+	return uuid.Nil, repo.ErrNotFound
+}
+
+func (e *TurnEngine) resolveFirstAgentParticipant(ctx context.Context, sessionID uuid.UUID) (uuid.UUID, error) {
 	participants, err := e.chat.ListParticipants(ctx, sessionID)
 	if err != nil {
 		return uuid.Nil, err
