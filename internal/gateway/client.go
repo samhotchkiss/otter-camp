@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +30,22 @@ const (
 	defaultLiveGatewayTimeout       = 2 * time.Minute
 	defaultAnthropicVersion         = "2023-06-01"
 	defaultAnthropicMaxOutputTokens = 1024
+	anthropicAuthModeAPIKey         = "api_key"
+	anthropicAuthModeSubscription   = "subscription"
+	anthropicSubscriptionTokenURL   = "https://console.anthropic.com/v1/oauth/token"
+	anthropicSubscriptionClientID   = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+	anthropicClaudeCodeUserAgent    = "claude-cli/2.1.2 (external, cli)"
+	anthropicSubscriptionBeta       = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14"
+	anthropicTokenRefreshSkew       = 5 * time.Minute
+)
+
+const (
+	providerConnectionMetadataAuthMode                          = "auth_mode"
+	providerConnectionMetadataSubscriptionAccessTokenSecretRef  = "subscription_access_token_secret_ref"
+	providerConnectionMetadataSubscriptionRefreshTokenSecretRef = "subscription_refresh_token_secret_ref"
+	providerConnectionMetadataSubscriptionTokenURL              = "subscription_token_url"
+	providerConnectionMetadataSubscriptionClientID              = "subscription_client_id"
+	providerConnectionMetadataSubscriptionExpiresAt             = "subscription_expires_at"
 )
 
 type SecretResolver interface {
@@ -62,17 +79,21 @@ type LiveModelGatewayOptions struct {
 }
 
 type LiveModelGateway struct {
-	router      *Router
-	providers   providerByIDLookup
-	secrets     SecretResolver
-	invocations liveModelInvocationRepo
-	enqueuer    rollupJobEnqueuer
-	health      *HealthChecker
-	concurrency *ConcurrencyManager
-	spans       traceSpanCreator
-	httpClient  *http.Client
-	logger      *slog.Logger
-	now         func() time.Time
+	router       *Router
+	providers    providerByIDLookup
+	secrets      SecretResolver
+	invocations  liveModelInvocationRepo
+	enqueuer     rollupJobEnqueuer
+	health       *HealthChecker
+	concurrency  *ConcurrencyManager
+	spans        traceSpanCreator
+	httpClient   *http.Client
+	logger       *slog.Logger
+	now          func() time.Time
+	subscription struct {
+		mu     sync.Mutex
+		tokens map[uuid.UUID]anthropicSubscriptionTokenState
+	}
 }
 
 func NewLiveModelGateway(opts LiveModelGatewayOptions) (*LiveModelGateway, error) {
@@ -119,7 +140,35 @@ func NewLiveModelGateway(opts LiveModelGatewayOptions) (*LiveModelGateway, error
 		httpClient:  opts.HTTPClient,
 		logger:      opts.Logger,
 		now:         opts.Now,
+		subscription: struct {
+			mu     sync.Mutex
+			tokens map[uuid.UUID]anthropicSubscriptionTokenState
+		}{
+			tokens: make(map[uuid.UUID]anthropicSubscriptionTokenState),
+		},
 	}, nil
+}
+
+type anthropicAuthConfig struct {
+	Mode            string
+	APIKeySecretRef string
+	AccessTokenRef  string
+	RefreshTokenRef string
+	TokenURL        string
+	ClientID        string
+	ExpiresAt       time.Time
+}
+
+type anthropicSubscriptionTokenState struct {
+	AccessToken  string
+	RefreshToken string
+	ExpiresAt    time.Time
+}
+
+type anthropicTokenRefreshResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int64  `json:"expires_in"`
 }
 
 func (g *LiveModelGateway) StreamComplete(ctx context.Context, req turn.ModelRequest, onChunk func(string) error) (turn.ModelResponse, error) {
@@ -335,8 +384,8 @@ func (g *LiveModelGateway) recordSpan(
 		"model.profile_id": req.Profile.LogicalProfileID,
 		"model.purpose":    req.Purpose,
 		"model.streaming":  stream,
-		"provider.id":   provider.ID.String(),
-		"provider.slug": provider.Slug,
+		"provider.id":      provider.ID.String(),
+		"provider.slug":    provider.Slug,
 		"connection.id":    connection.ID.String(),
 		"invocation.id":    invocationID.String(),
 	})
@@ -460,22 +509,54 @@ func (g *LiveModelGateway) callProvider(
 		return providerCallResult{}, err
 	}
 
-	apiKey, err := g.secrets.ResolveRef(ctx, orgID, connection.APIKeyRef)
-	if err != nil {
-		return providerCallResult{}, err
-	}
-
 	body, err := buildProviderBody(providerType, req, stream)
 	if err != nil {
 		return providerCallResult{}, err
 	}
 
+	if providerType == "anthropic" {
+		authConfig, authErr := anthropicAuthConfigFromConnection(connection)
+		if authErr != nil {
+			return providerCallResult{}, authErr
+		}
+		if authConfig.Mode == anthropicAuthModeSubscription {
+			return g.callAnthropicSubscriptionProvider(ctx, orgID, endpointURL, body, stream, onChunk, connection.ID, authConfig)
+		}
+		apiKey, resolveErr := g.secrets.ResolveRef(ctx, orgID, authConfig.APIKeySecretRef)
+		if resolveErr != nil {
+			return providerCallResult{}, resolveErr
+		}
+		return g.executeProviderCall(ctx, endpointURL, providerType, body, stream, onChunk, func(httpReq *http.Request) {
+			applyAuthHeaders(httpReq, providerType, apiKey)
+		})
+	}
+
+	apiKey, err := g.secrets.ResolveRef(ctx, orgID, connection.APIKeyRef)
+	if err != nil {
+		return providerCallResult{}, err
+	}
+	return g.executeProviderCall(ctx, endpointURL, providerType, body, stream, onChunk, func(httpReq *http.Request) {
+		applyAuthHeaders(httpReq, providerType, apiKey)
+	})
+}
+
+func (g *LiveModelGateway) executeProviderCall(
+	ctx context.Context,
+	endpointURL string,
+	providerType string,
+	body []byte,
+	stream bool,
+	onChunk func(string) error,
+	applyHeaders func(*http.Request),
+) (providerCallResult, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(body))
 	if err != nil {
 		return providerCallResult{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	applyAuthHeaders(httpReq, providerType, apiKey)
+	if applyHeaders != nil {
+		applyHeaders(httpReq)
+	}
 
 	resp, err := g.httpClient.Do(httpReq)
 	if err != nil {
@@ -491,6 +572,47 @@ func (g *LiveModelGateway) callProvider(
 		return parseProviderStream(resp.Body, providerType, onChunk)
 	}
 	return parseProviderCompletion(resp.Body, providerType)
+}
+
+func (g *LiveModelGateway) callAnthropicSubscriptionProvider(
+	ctx context.Context,
+	orgID uuid.UUID,
+	endpointURL string,
+	body []byte,
+	stream bool,
+	onChunk func(string) error,
+	connectionID uuid.UUID,
+	authConfig anthropicAuthConfig,
+) (providerCallResult, error) {
+	state, err := g.resolveAnthropicSubscriptionState(ctx, orgID, connectionID, authConfig)
+	if err != nil {
+		return providerCallResult{}, err
+	}
+
+	result, err := g.executeProviderCall(ctx, endpointURL, "anthropic", body, stream, onChunk, func(httpReq *http.Request) {
+		applyAnthropicSubscriptionHeaders(httpReq, state.AccessToken)
+	})
+	if err == nil {
+		return result, nil
+	}
+
+	var providerErr ProviderHTTPError
+	if !errors.As(err, &providerErr) || providerErr.StatusCode != http.StatusUnauthorized {
+		return providerCallResult{}, err
+	}
+	if strings.TrimSpace(state.RefreshToken) == "" {
+		return providerCallResult{}, err
+	}
+
+	refreshed, refreshErr := g.refreshAnthropicSubscriptionToken(ctx, authConfig, state.RefreshToken)
+	if refreshErr != nil {
+		return providerCallResult{}, refreshErr
+	}
+	g.setAnthropicSubscriptionState(connectionID, refreshed)
+
+	return g.executeProviderCall(ctx, endpointURL, "anthropic", body, stream, onChunk, func(httpReq *http.Request) {
+		applyAnthropicSubscriptionHeaders(httpReq, refreshed.AccessToken)
+	})
 }
 
 func parseProviderCompletion(body io.Reader, providerType string) (providerCallResult, error) {
@@ -1048,6 +1170,212 @@ func parseRetryAfter(resp *http.Response) time.Duration {
 	return 0
 }
 
+func anthropicAuthConfigFromConnection(connection repo.ProviderConnection) (anthropicAuthConfig, error) {
+	config := anthropicAuthConfig{
+		Mode:            anthropicAuthModeAPIKey,
+		APIKeySecretRef: strings.TrimSpace(connection.APIKeyRef),
+	}
+
+	metadata := metadataMap(connection.Metadata)
+	if mode, _ := metadata[providerConnectionMetadataAuthMode].(string); strings.TrimSpace(mode) != "" {
+		config.Mode = strings.ToLower(strings.TrimSpace(mode))
+	}
+	if config.Mode != anthropicAuthModeAPIKey && config.Mode != anthropicAuthModeSubscription {
+		return anthropicAuthConfig{}, fmt.Errorf("unsupported anthropic auth mode %q", config.Mode)
+	}
+	if config.Mode == anthropicAuthModeAPIKey {
+		if strings.TrimSpace(config.APIKeySecretRef) == "" {
+			return anthropicAuthConfig{}, fmt.Errorf("anthropic api_key auth requires api key secret ref")
+		}
+		return config, nil
+	}
+
+	accessRef, _ := metadata[providerConnectionMetadataSubscriptionAccessTokenSecretRef].(string)
+	accessRef = strings.TrimSpace(accessRef)
+	if accessRef == "" {
+		accessRef = strings.TrimSpace(connection.APIKeyRef)
+	}
+	if accessRef == "" {
+		return anthropicAuthConfig{}, fmt.Errorf("anthropic subscription auth requires access token secret ref")
+	}
+	refreshRef, _ := metadata[providerConnectionMetadataSubscriptionRefreshTokenSecretRef].(string)
+	tokenURL, _ := metadata[providerConnectionMetadataSubscriptionTokenURL].(string)
+	clientID, _ := metadata[providerConnectionMetadataSubscriptionClientID].(string)
+	expiresAtText, _ := metadata[providerConnectionMetadataSubscriptionExpiresAt].(string)
+
+	config.AccessTokenRef = strings.TrimSpace(accessRef)
+	config.RefreshTokenRef = strings.TrimSpace(refreshRef)
+	config.TokenURL = strings.TrimSpace(tokenURL)
+	if config.TokenURL == "" {
+		config.TokenURL = anthropicSubscriptionTokenURL
+	}
+	config.ClientID = strings.TrimSpace(clientID)
+	if config.ClientID == "" {
+		config.ClientID = anthropicSubscriptionClientID
+	}
+	if parsed, err := parseOptionalRFC3339(expiresAtText); err == nil {
+		config.ExpiresAt = parsed
+	}
+
+	return config, nil
+}
+
+func parseOptionalRFC3339(raw string) (time.Time, error) {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, text)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parsed.UTC(), nil
+}
+
+func metadataMap(metadata json.RawMessage) map[string]any {
+	result := map[string]any{}
+	if len(metadata) == 0 {
+		return result
+	}
+	_ = json.Unmarshal(metadata, &result)
+	return result
+}
+
+func (g *LiveModelGateway) resolveAnthropicSubscriptionState(
+	ctx context.Context,
+	orgID uuid.UUID,
+	connectionID uuid.UUID,
+	authConfig anthropicAuthConfig,
+) (anthropicSubscriptionTokenState, error) {
+	if cached, ok := g.getAnthropicSubscriptionState(connectionID); ok {
+		if g.subscriptionStateValid(cached) {
+			return cached, nil
+		}
+		if strings.TrimSpace(cached.RefreshToken) != "" {
+			refreshed, err := g.refreshAnthropicSubscriptionToken(ctx, authConfig, cached.RefreshToken)
+			if err == nil {
+				g.setAnthropicSubscriptionState(connectionID, refreshed)
+				return refreshed, nil
+			}
+		}
+	}
+
+	accessToken, err := g.secrets.ResolveRef(ctx, orgID, authConfig.AccessTokenRef)
+	if err != nil {
+		return anthropicSubscriptionTokenState{}, err
+	}
+	refreshToken := ""
+	if strings.TrimSpace(authConfig.RefreshTokenRef) != "" {
+		refreshToken, err = g.secrets.ResolveRef(ctx, orgID, authConfig.RefreshTokenRef)
+		if err != nil {
+			return anthropicSubscriptionTokenState{}, err
+		}
+	}
+	state := anthropicSubscriptionTokenState{
+		AccessToken:  strings.TrimSpace(accessToken),
+		RefreshToken: strings.TrimSpace(refreshToken),
+		ExpiresAt:    authConfig.ExpiresAt,
+	}
+
+	if g.subscriptionStateExpired(state) && strings.TrimSpace(state.RefreshToken) != "" {
+		refreshed, refreshErr := g.refreshAnthropicSubscriptionToken(ctx, authConfig, state.RefreshToken)
+		if refreshErr != nil {
+			return anthropicSubscriptionTokenState{}, refreshErr
+		}
+		state = refreshed
+	}
+	g.setAnthropicSubscriptionState(connectionID, state)
+	return state, nil
+}
+
+func (g *LiveModelGateway) refreshAnthropicSubscriptionToken(
+	ctx context.Context,
+	authConfig anthropicAuthConfig,
+	refreshToken string,
+) (anthropicSubscriptionTokenState, error) {
+	tokenURL := strings.TrimSpace(authConfig.TokenURL)
+	if tokenURL == "" {
+		tokenURL = anthropicSubscriptionTokenURL
+	}
+	payload := map[string]any{
+		"grant_type":    "refresh_token",
+		"client_id":     strings.TrimSpace(authConfig.ClientID),
+		"refresh_token": strings.TrimSpace(refreshToken),
+	}
+	if strings.TrimSpace(payload["client_id"].(string)) == "" {
+		payload["client_id"] = anthropicSubscriptionClientID
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return anthropicSubscriptionTokenState{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, bytes.NewReader(body))
+	if err != nil {
+		return anthropicSubscriptionTokenState{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", anthropicClaudeCodeUserAgent)
+
+	resp, err := g.httpClient.Do(req)
+	if err != nil {
+		return anthropicSubscriptionTokenState{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusBadRequest {
+		return anthropicSubscriptionTokenState{}, providerHTTPErrorFromResponse(resp)
+	}
+
+	var refreshed anthropicTokenRefreshResponse
+	if err := json.NewDecoder(resp.Body).Decode(&refreshed); err != nil {
+		return anthropicSubscriptionTokenState{}, err
+	}
+	access := strings.TrimSpace(refreshed.AccessToken)
+	if access == "" {
+		return anthropicSubscriptionTokenState{}, fmt.Errorf("anthropic token refresh returned empty access_token")
+	}
+	nextRefresh := strings.TrimSpace(refreshed.RefreshToken)
+	if nextRefresh == "" {
+		nextRefresh = strings.TrimSpace(refreshToken)
+	}
+	var expiresAt time.Time
+	if refreshed.ExpiresIn > 0 {
+		expiresAt = g.now().UTC().Add(time.Duration(refreshed.ExpiresIn) * time.Second).Add(-anthropicTokenRefreshSkew)
+	}
+	return anthropicSubscriptionTokenState{
+		AccessToken:  access,
+		RefreshToken: nextRefresh,
+		ExpiresAt:    expiresAt,
+	}, nil
+}
+
+func (g *LiveModelGateway) subscriptionStateValid(state anthropicSubscriptionTokenState) bool {
+	return strings.TrimSpace(state.AccessToken) != "" && !g.subscriptionStateExpired(state)
+}
+
+func (g *LiveModelGateway) subscriptionStateExpired(state anthropicSubscriptionTokenState) bool {
+	if state.ExpiresAt.IsZero() {
+		return false
+	}
+	return !state.ExpiresAt.After(g.now().UTC())
+}
+
+func (g *LiveModelGateway) getAnthropicSubscriptionState(connectionID uuid.UUID) (anthropicSubscriptionTokenState, bool) {
+	g.subscription.mu.Lock()
+	defer g.subscription.mu.Unlock()
+	state, ok := g.subscription.tokens[connectionID]
+	return state, ok
+}
+
+func (g *LiveModelGateway) setAnthropicSubscriptionState(connectionID uuid.UUID, state anthropicSubscriptionTokenState) {
+	g.subscription.mu.Lock()
+	defer g.subscription.mu.Unlock()
+	if g.subscription.tokens == nil {
+		g.subscription.tokens = make(map[uuid.UUID]anthropicSubscriptionTokenState)
+	}
+	g.subscription.tokens[connectionID] = state
+}
+
 func applyAuthHeaders(req *http.Request, providerType, apiKey string) {
 	switch providerType {
 	case "anthropic":
@@ -1056,6 +1384,16 @@ func applyAuthHeaders(req *http.Request, providerType, apiKey string) {
 	default:
 		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(apiKey))
 	}
+}
+
+func applyAnthropicSubscriptionHeaders(req *http.Request, accessToken string) {
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(accessToken))
+	req.Header.Set("anthropic-version", defaultAnthropicVersion)
+	req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
+	req.Header.Set("anthropic-beta", anthropicSubscriptionBeta)
+	req.Header.Set("x-app", "cli")
+	req.Header.Set("accept", "application/json")
+	req.Header.Set("user-agent", anthropicClaudeCodeUserAgent)
 }
 
 func resolveProviderBaseURL(provider repo.ModelProvider, connection repo.ProviderConnection) string {

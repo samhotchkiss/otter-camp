@@ -269,6 +269,131 @@ func TestLiveModelGatewayMapsAuthErrors(t *testing.T) {
 	}
 }
 
+func TestLiveModelGatewayCompleteAnthropicSubscriptionAuth(t *testing.T) {
+	t.Setenv("OTTERCAMP_MASTER_KEY", base64.StdEncoding.EncodeToString(testMasterKey()))
+	t.Setenv("OTTERCAMP_MASTER_KEY_FILE", "")
+	t.Setenv("OTTERCAMP_KMS_KEY_ID", "")
+
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	orgRepo := repo.NewOrgRepo(pool)
+	providerRepo := repo.NewModelProviderRepo(pool)
+	connectionRepo := repo.NewProviderConnectionRepo(pool)
+	profileRepo := repo.NewModelProfileRepo(pool)
+	invocationRepo := repo.NewModelInvocationRepo(pool)
+	secretSvc := secret.NewService(repo.NewSecretRepo(pool))
+
+	org := mustCreateOrg(t, ctx, orgRepo, repo.Organization{
+		Slug:        "live-gateway-anthropic-subscription-org",
+		DisplayName: "Live Gateway Anthropic Subscription Org",
+	})
+	if err := secretSvc.Set(ctx, org.ID, "anthropic-subscription-access", "Anthropic Subscription Access", "", "sk-ant-oat-access", secret.Principal{Type: "human", ID: uuid.Nil}); err != nil {
+		t.Fatalf("set access secret: %v", err)
+	}
+	if err := secretSvc.Set(ctx, org.ID, "anthropic-subscription-refresh", "Anthropic Subscription Refresh", "", "refresh-token", secret.Principal{Type: "human", ID: uuid.Nil}); err != nil {
+		t.Fatalf("set refresh secret: %v", err)
+	}
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if got := r.Header.Get("Authorization"); got != "Bearer sk-ant-oat-access" {
+			http.Error(w, "invalid authorization", http.StatusUnauthorized)
+			return
+		}
+		if got := r.Header.Get("x-api-key"); got != "" {
+			http.Error(w, "x-api-key must be empty in subscription mode", http.StatusBadRequest)
+			return
+		}
+		if got := r.Header.Get("anthropic-beta"); !strings.Contains(got, "oauth-2025-04-20") {
+			http.Error(w, "missing oauth beta header", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":4,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+
+	provider := mustCreateProvider(t, ctx, providerRepo, repo.ModelProvider{
+		Slug:        "anthropic",
+		DisplayName: "Anthropic",
+		APIBaseURL:  server.URL,
+		IsEnabled:   true,
+	})
+
+	metadata, err := json.Marshal(map[string]any{
+		providerConnectionMetadataAuthMode:                          anthropicAuthModeSubscription,
+		providerConnectionMetadataSubscriptionAccessTokenSecretRef:  "ref:anthropic-subscription-access",
+		providerConnectionMetadataSubscriptionRefreshTokenSecretRef: "ref:anthropic-subscription-refresh",
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+	_ = mustCreateConnection(t, ctx, connectionRepo, repo.ProviderConnection{
+		OrganizationID:     org.ID,
+		ProviderID:         provider.ID,
+		DisplayName:        "Anthropic Subscription",
+		APIKeyRef:          "ref:anthropic-subscription-access",
+		APIBaseURLOverride: stringPtr(server.URL),
+		FailoverPriority:   1,
+		MaxConcurrent:      1,
+		IsEnabled:          true,
+		Metadata:           metadata,
+	})
+
+	orgID := org.ID
+	profile, err := profileRepo.Create(ctx, repo.ModelProfile{
+		LogicalProfileID:    "anthropic-subscription-profile",
+		OrganizationID:      &orgID,
+		Version:             1,
+		IsCurrent:           true,
+		ProviderID:          provider.ID,
+		ModelName:           "claude-3-5-sonnet",
+		DisplayName:         "Anthropic Subscription Profile",
+		ContextWindowTokens: 128000,
+		MaxOutputTokens:     2048,
+		SupportsStreaming:   true,
+		SupportsVision:      false,
+		InvocationPurpose:   "agent_turn",
+	})
+	if err != nil {
+		t.Fatalf("create profile: %v", err)
+	}
+
+	health := NewHealthChecker()
+	gw, err := NewLiveModelGateway(LiveModelGatewayOptions{
+		Router:      NewRouter(profileRepo, connectionRepo, health),
+		Providers:   providerRepo,
+		Secrets:     secretSvc,
+		Invocations: invocationRepo,
+		Health:      health,
+	})
+	if err != nil {
+		t.Fatalf("NewLiveModelGateway: %v", err)
+	}
+
+	response, err := gw.Complete(ctx, turn.ModelRequest{
+		OrganizationID: org.ID,
+		Purpose:        "agent_turn",
+		Profile:        profile,
+		Prompt: &prompt.AssembledPrompt{
+			Messages: []prompt.PromptMessage{
+				{Role: "user", Content: "hello"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if strings.TrimSpace(response.Content) != "ok" {
+		t.Fatalf("response.Content = %q, want ok", response.Content)
+	}
+	if requests != 1 {
+		t.Fatalf("provider request count = %d, want 1", requests)
+	}
+}
+
 func TestLiveModelGatewayCompleteOpenAIToolNamesAreSanitized(t *testing.T) {
 	serverURL := sanitizedToolNameValidationServer(t, "openai")
 	gw, profile, orgID := newToolNameGatewayFixture(t, toolNameGatewayFixtureOptions{

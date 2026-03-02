@@ -139,6 +139,73 @@ func TestPatchProfileVersioningCreatesSequentialCurrentVersion(t *testing.T) {
 	}
 }
 
+func TestBuildProviderConnectionAuthMetadataSubscriptionAnthropic(t *testing.T) {
+	expiresAt := "2026-03-02T12:00:00Z"
+	result, err := buildProviderConnectionAuthMetadata("anthropic", providerConnectionAuthRequest{
+		AuthMode:                          stringPtrTest(connectionAuthModeSubscription),
+		SubscriptionAccessTokenSecretRef:  stringPtrTest("anthropic-access"),
+		SubscriptionRefreshTokenSecretRef: stringPtrTest("anthropic-refresh"),
+		SubscriptionExpiresAt:             &expiresAt,
+	})
+	if err != nil {
+		t.Fatalf("buildProviderConnectionAuthMetadata error: %v", err)
+	}
+	if result.Mode != connectionAuthModeSubscription {
+		t.Fatalf("mode = %q, want %q", result.Mode, connectionAuthModeSubscription)
+	}
+	if result.AccessTokenRef != "ref:anthropic-access" {
+		t.Fatalf("access token ref = %q, want ref:anthropic-access", result.AccessTokenRef)
+	}
+
+	meta := metadataMap(result.Metadata)
+	if got, _ := meta[providerConnectionMetadataAuthMode].(string); got != connectionAuthModeSubscription {
+		t.Fatalf("metadata auth_mode = %q, want %q", got, connectionAuthModeSubscription)
+	}
+	if got, _ := meta[providerConnectionMetadataSubscriptionAccessTokenSecretRef].(string); got != "ref:anthropic-access" {
+		t.Fatalf("subscription access ref = %q, want %q", got, "ref:anthropic-access")
+	}
+	if got, _ := meta[providerConnectionMetadataSubscriptionRefreshTokenSecretRef].(string); got != "ref:anthropic-refresh" {
+		t.Fatalf("subscription refresh ref = %q, want %q", got, "ref:anthropic-refresh")
+	}
+	if got, _ := meta[providerConnectionMetadataSubscriptionExpiresAt].(string); got != expiresAt {
+		t.Fatalf("subscription expires_at = %q, want %q", got, expiresAt)
+	}
+}
+
+func TestBuildProviderConnectionAuthMetadataRejectsNonAnthropicSubscription(t *testing.T) {
+	_, err := buildProviderConnectionAuthMetadata("openai", providerConnectionAuthRequest{
+		AuthMode:                         stringPtrTest(connectionAuthModeSubscription),
+		SubscriptionAccessTokenSecretRef: stringPtrTest("subscription-access"),
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if got := err.Error(); got != "subscription auth_mode is only supported for anthropic providers" {
+		t.Fatalf("error = %q, want anthropic-only validation", got)
+	}
+}
+
+func TestParseProviderConnectionAuthSettingsFlagsReauthWithoutRefreshToken(t *testing.T) {
+	metadata, err := json.Marshal(map[string]any{
+		providerConnectionMetadataAuthMode:                         connectionAuthModeSubscription,
+		providerConnectionMetadataSubscriptionAccessTokenSecretRef: "ref:anthropic-access",
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	settings := parseProviderConnectionAuthSettings(repo.ProviderConnection{
+		APIKeyRef: "ref:anthropic-access",
+		Metadata:  metadata,
+	})
+	if settings.Mode != connectionAuthModeSubscription {
+		t.Fatalf("mode = %q, want %q", settings.Mode, connectionAuthModeSubscription)
+	}
+	if !settings.RequiresReauth {
+		t.Fatal("RequiresReauth = false, want true when refresh token is absent")
+	}
+}
+
 func TestPatchProfileEmptyBodyReturns422(t *testing.T) {
 	orgID := uuid.New()
 	providerID := uuid.New()
@@ -504,4 +571,8 @@ func modelJSONPathValue(t *testing.T, body []byte, path ...string) any {
 	}
 
 	return current
+}
+
+func stringPtrTest(value string) *string {
+	return &value
 }
