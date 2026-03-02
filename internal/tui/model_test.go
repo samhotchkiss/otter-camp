@@ -3367,7 +3367,7 @@ func TestSidebarTaskNodeShowsHumanReviewBadge(t *testing.T) {
 
 	// Render the sidebar node directly
 	node := model.workspace.nodes["task-"+taskID]
-	rendered := model.renderSidebarNode(node, false, 80, false)
+	rendered := model.renderSidebarNode(node, false, false, 80, false)
 
 	if !strings.Contains(rendered, "⚠") {
 		t.Fatalf("sidebar task node missing ⚠ badge for RequiresHumanReview task: %q", rendered)

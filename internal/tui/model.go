@@ -753,9 +753,9 @@ func (m Model) mouseClickSidebar(contentY int) (Model, tea.Cmd) {
 		}
 		if displayLine == contentY {
 			m.workspace.sidebarCursor = idx
-			// Simulate Enter — trigger the same logic as handleEnterKey sidebar path.
-			m.statusMessage = "▸ " + truncate(node.Label, 40)
-			return m, nil
+			// Trigger the same action as pressing Enter on this item.
+			cmd := m.handleEnterKey()
+			return m, cmd
 		}
 		displayLine++
 		if displayLine > contentY {
@@ -841,13 +841,8 @@ func (m Model) mouseClickDashboard(contentY int) (Model, tea.Cmd) {
 	if taskRow >= 0 && taskRow < len(active) {
 		m.workspace.dashboardCursor = taskRow
 		m.workspace.selectedTaskID = active[taskRow]
-		if t := m.workspace.tasks[active[taskRow]]; t != nil {
-			label := t.Title
-			if t.TaskNumber > 0 {
-				label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
-			}
-			m.statusMessage = "▸ " + truncate(label, 40)
-		}
+		cmd := m.handleEnterKey()
+		return m, cmd
 	}
 	return m, nil
 }
@@ -858,8 +853,8 @@ func (m Model) mouseClickInbox(contentY int) (Model, tea.Cmd) {
 	itemIdx := contentY - 1
 	if itemIdx >= 0 && itemIdx < len(m.workspace.inbox) {
 		m.workspace.inboxCursor = itemIdx
-		item := m.workspace.inbox[itemIdx]
-		m.statusMessage = "▸ " + truncate(item.Summary, 40)
+		cmd := m.handleEnterKey()
+		return m, cmd
 	}
 	return m, nil
 }
@@ -888,13 +883,9 @@ func (m Model) mouseClickProject(contentY int) (Model, tea.Cmd) {
 	openTasks := m.workspace.openTasksForProject()
 	if taskIdx >= 0 && taskIdx < len(openTasks) {
 		m.workspace.projectTaskCursor = taskIdx
-		t := openTasks[taskIdx]
-		m.workspace.selectedTaskID = t.ID
-		label := t.Title
-		if t.TaskNumber > 0 {
-			label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
-		}
-		m.statusMessage = "▸ " + truncate(label, 40)
+		m.workspace.selectedTaskID = openTasks[taskIdx].ID
+		cmd := m.handleEnterKey()
+		return m, cmd
 	}
 	return m, nil
 }

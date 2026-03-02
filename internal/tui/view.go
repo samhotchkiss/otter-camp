@@ -448,6 +448,12 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 		}
 	}
 
+	// Compute the hovered display line for visual feedback.
+	hoverDisplayLine := -1
+	if m.hoverPanel == SidebarPanel {
+		hoverDisplayLine = m.hoverY - 1 // subtract top border
+	}
+
 	displayLines := 0
 	lastRendered := 0
 	firstRendered := sidebarScrollStart
@@ -472,7 +478,8 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 				break
 			}
 		}
-		lines = append(lines, m.renderSidebarNode(node, idx == m.workspace.sidebarCursor, cw, iconOnly))
+		isHovered := displayLines == hoverDisplayLine
+		lines = append(lines, m.renderSidebarNode(node, idx == m.workspace.sidebarCursor, isHovered, cw, iconOnly))
 		displayLines++
 		lastRendered = idx + 1
 	}
@@ -516,7 +523,7 @@ func (m Model) renderSidebarPanel(innerW, innerH int, focused bool) string {
 	return panelStyle(innerW, innerH, focused).Render(content)
 }
 
-func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, iconOnly bool) string {
+func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, hovered bool, width int, iconOnly bool) string {
 	isActive := node.Kind == sidebarKindSession &&
 		node.SessionID == m.workspace.activeSessionID
 
@@ -649,6 +656,8 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 			// Always show ✓ for the active session so it's visible at a glance
 			check := " " + styleConnected.Render("✓")
 			rendered = styleActive.Render(truncate(line, maxW-2)) + check
+		case hovered:
+			rendered = styleHover.Render(truncate(line, maxW))
 		default:
 			rendered = styleText.Render(truncate(line, maxW))
 		}
