@@ -115,10 +115,11 @@ type ProjectDetail struct {
 	DisplayName  string
 	Description  string
 	DeliveryMode string
-	Tasks        []SidebarTaskItem // open tasks only
-	DoneTasks    []SidebarTaskItem // completed/approved/cancelled tasks
-	DoneCount    int               // count of completed tasks
-	Agents       []ProjectAgent    // agents assigned to this project
+	RepoURL      string             // connected GitHub repository URL
+	Tasks        []SidebarTaskItem  // open tasks only
+	DoneTasks    []SidebarTaskItem  // completed/approved/cancelled tasks
+	DoneCount    int                // count of completed tasks
+	Agents       []ProjectAgent     // agents assigned to this project
 }
 
 type workspaceState struct {

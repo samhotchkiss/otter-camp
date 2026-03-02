@@ -59,6 +59,12 @@ type inboxActionCompletedMsg struct {
 	Err    error
 }
 
+type connectRemoteCompletedMsg struct {
+	ProjectID string
+	RepoURL   string
+	Err       error
+}
+
 // SessionResolvedMsg carries the resolved UUID of the session when a message is sent.
 // Used to filter SSE events by session, preventing cross-session leakage.
 // SessionID is included so stale history loads (from a session the user has
@@ -583,6 +589,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// local update already removed the item; reloading syncs us back with
 			// the server so a failed approval doesn't silently hide an unreviewed item.
 			return m, loadInboxItemsCmd(m.runtimeHints)
+		}
+		return m, nil
+	case connectRemoteCompletedMsg:
+		if typed.Err != nil {
+			m.statusMessage = "connect-repo failed: " + strings.TrimSpace(typed.Err.Error())
+		} else {
+			m.statusMessage = "Repo connected: " + typed.RepoURL
+			m.workspace.activity = appendActivity(m.workspace.activity, "repo connected: "+typed.RepoURL)
+			// Update the in-memory project detail to show the repo URL immediately.
+			if m.workspace.selectedProject != nil && m.workspace.selectedProject.ID == typed.ProjectID {
+				m.workspace.selectedProject.RepoURL = typed.RepoURL
+			}
 		}
 		return m, nil
 	case statusClearMsg:
@@ -4723,6 +4741,26 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 			}
 		} else {
 			m.statusMessage = "No unread sessions."
+		}
+	case "connect-repo", "repo":
+		if len(fields) < 2 {
+			m.statusMessage = "Usage: :connect-repo <github-url>"
+			return nil
+		}
+		repoURL := strings.TrimSpace(fields[1])
+		if m.workspace.selectedProjectID == "" {
+			m.statusMessage = "No project selected. Navigate to a project first."
+			return nil
+		}
+		if m.runtimeHints.ConnectProjectRemote == nil {
+			m.statusMessage = "connect-repo not available (no API client)."
+			return nil
+		}
+		projectID := m.workspace.selectedProjectID
+		m.statusMessage = "Connecting repo…"
+		return func() tea.Msg {
+			err := m.runtimeHints.ConnectProjectRemote(context.Background(), projectID, repoURL)
+			return connectRemoteCompletedMsg{ProjectID: projectID, RepoURL: repoURL, Err: err}
 		}
 	case "reconnect", "connect":
 		// EX-406: :reconnect/:connect — manually trigger a sidebar data refresh,

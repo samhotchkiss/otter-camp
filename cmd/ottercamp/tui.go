@@ -140,6 +140,16 @@ func runTUICommand(args []string) int {
 				var resp struct{}
 				return apiClient.request(ctx, "POST", "/v1/inbox/"+url.PathEscape(itemID)+"/act", body, &resp)
 			}
+			runtimeHints.ConnectProjectRemote = func(ctx context.Context, projectID, repoURL string) error {
+				body := map[string]interface{}{
+					"name":       "github",
+					"url":        repoURL,
+					"transport":  "https",
+					"is_default": true,
+				}
+				var resp struct{}
+				return apiClient.request(ctx, "POST", "/v1/projects/"+url.PathEscape(projectID)+"/remotes", body, &resp)
+			}
 			runtimeHints.LoadRecentChats = func(ctx context.Context) ([]tuiapp.SidebarChatItem, error) {
 				sessions, err := apiClient.ListChatSessions(ctx, chatListSessionsFilter{
 					Status: "active",
@@ -325,11 +335,28 @@ func runTUICommand(args []string) int {
 						}
 					}
 				}
+				// Fetch connected remotes to show repo URL.
+				var remotesResp struct {
+					Data []struct {
+						URL       string `json:"url"`
+						IsDefault bool   `json:"is_default"`
+					} `json:"data"`
+				}
+				var repoURL string
+				remotesPath := "/v1/projects/" + url.PathEscape(projectID) + "/remotes"
+				if apiClient.request(ctx, "GET", remotesPath, nil, &remotesResp) == nil {
+					for _, r := range remotesResp.Data {
+						if r.IsDefault || repoURL == "" {
+							repoURL = r.URL
+						}
+					}
+				}
 				return &tuiapp.ProjectDetail{
 					ID:           proj.ID,
 					DisplayName:  proj.DisplayName,
 					Description:  proj.Description,
 					DeliveryMode: proj.DeliveryMode,
+					RepoURL:      repoURL,
 					Tasks:        tasks,
 					DoneTasks:    doneTasks,
 					DoneCount:    len(doneTasks),

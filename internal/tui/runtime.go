@@ -105,6 +105,9 @@ type RuntimeHints struct {
 	// ActOnInboxItem sends approve/reject/defer/dismiss for a specific inbox item ID.
 	// EX-160: required so that keyboard shortcuts in the inbox view reach the server.
 	ActOnInboxItem func(ctx context.Context, itemID, action string) error
+	// ConnectProjectRemote links a GitHub repo URL to the active project via
+	// POST /v1/projects/{projectID}/remotes.
+	ConnectProjectRemote func(ctx context.Context, projectID, repoURL string) error
 }
 
 func (h RuntimeHints) now() time.Time {

@@ -1226,6 +1226,12 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		lines = append(lines, "")
 	}
 
+	// Connected repository
+	if proj != nil && strings.TrimSpace(proj.RepoURL) != "" {
+		lines = append(lines, styleMuted.Render("  Repo: "+proj.RepoURL))
+		lines = append(lines, "")
+	}
+
 	if proj == nil {
 		// Still loading — EX-213: add r·retry hint in case the load stalls.
 		lines = append(lines, styleMuted.Render("  Loading…"))
@@ -2107,7 +2113,7 @@ func (m Model) renderSchedulesView(width, maxLines int) []string {
 // helpViewLineCount is the total number of content lines in renderHelpView before
 // scroll clamping. Must stay in sync with the lines slice built inside that function.
 // Verified by TestHelpViewLineCountMatchesEX255; update when adding/removing entries.
-const helpViewLineCount = 68
+const helpViewLineCount = 69
 
 func (m Model) renderHelpView(width, maxLines int) []string {
 	header := func(s string) string {
@@ -2189,6 +2195,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key(":sidebar <action>", "sidebar: up|down|home|end|expand|collapse|select"),
 		key(":inbox <action>", "inbox: approve|reject|defer|open"),
 		key(":tour dismiss", "dismiss the tour overlay"),
+		key(":connect-repo <url>", "link active project to a GitHub repository"),
 		key(":reconnect", "manually trigger SSE reconnect and sidebar refresh"),
 		key(":status / :debug", "show conn/scope/session/turn diagnostic in status bar"),
 		key(":help", "open keybinding reference (same as ?)"),
@@ -2798,6 +2805,8 @@ func (m Model) commandPaletteSuggestions(limit int) []string {
 		"cmd: settings", "cmd: config", "cmd: undo", "cmd: redo",
 		"cmd: copy", "cmd: yank", "cmd: paste",
 		"cmd: clear", "cmd: sort", "cmd: ls",
+		// :connect-repo/:repo for linking a GitHub repository.
+		"cmd: connect-repo", "cmd: repo",
 		// EX-406: :reconnect/:connect for manual SSE reconnect when degraded.
 		"cmd: reconnect", "cmd: connect",
 		// EX-407: :status/:info/:debug for diagnostic connection/session summary.
