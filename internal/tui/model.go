@@ -2089,11 +2089,10 @@ func (m *Model) handleEnterKey() tea.Cmd {
 					m.workspace.selectedTaskID = taskID
 					m.workspace.setMainView(ViewTask)
 					m.workspace.syncSidebarToTask(taskID)
-					// EX-178: task-scoped view; set scope so assistantLabel() and
-					// chat header scope indicators are accurate.
-					m.activeScope = ScopeTask
+					// Switch chat to task session and load its message history.
+					scopeCmd := m.openTaskWithChat()
 					m.statusMessage = "Opened task detail."
-					return loadTaskDetailCmd(taskID, m.runtimeHints)
+					return tea.Batch(loadTaskDetailCmd(taskID, m.runtimeHints), scopeCmd)
 				}
 				// EX-191: no open tasks — give feedback instead of transitioning to a blank task view.
 				if len(proj.Tasks) > 0 {
@@ -2139,9 +2138,8 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				return nil
 			}
 			m.workspace.setMainView(ViewTask)
-			// EX-178: task-scoped view; set scope so assistantLabel() and
-			// chat header scope indicators are accurate.
-			m.activeScope = ScopeTask
+			// Switch chat to task session and load its message history.
+			scopeCmd := m.openTaskWithChat()
 			m.statusMessage = "Opened task detail."
 			if m.workspace.selectedTaskID != "" {
 				// Sync sidebar cursor, project cursor, and project context for
@@ -2154,7 +2152,7 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				}
 				m.workspace.syncSidebarToTask(m.workspace.selectedTaskID)
 				m.workspace.syncProjectCursorToTask(m.workspace.selectedTaskID)
-				cmds := []tea.Cmd{loadTaskDetailCmd(m.workspace.selectedTaskID, m.runtimeHints)}
+				cmds := []tea.Cmd{loadTaskDetailCmd(m.workspace.selectedTaskID, m.runtimeHints), scopeCmd}
 				if m.workspace.selectedProjectID != "" && m.workspace.selectedProject == nil && m.runtimeHints.LoadProjectDetail != nil {
 					cmds = append(cmds, loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints))
 				}
@@ -5812,6 +5810,13 @@ func (m *Model) switchScope(next ChatScope) tea.Cmd {
 		return loadChatHistoryCmd(sessionID, m.runtimeHints.LoadChatHistory)
 	}
 	return nil
+}
+
+// openTaskWithChat sets the scope to ScopeTask and switches the chat session
+// to the task's async session, loading its message history. Returns a cmd
+// that should be batched with any other navigation cmds.
+func (m *Model) openTaskWithChat() tea.Cmd {
+	return m.switchScope(ScopeTask)
 }
 
 // jumpToFrankSession switches the active session to the org-level (Frank) session
