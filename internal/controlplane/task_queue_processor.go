@@ -158,7 +158,7 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 
 	status := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
 	if status == "queued" {
-		if _, err := p.taskService.TransitionStatus(ctx, taskID, "in_progress", tasksvc.Actor{Type: "system"}); err != nil {
+		if _, err := p.taskService.TransitionStatus(ctx, taskID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
 			var transitionErr tasksvc.ErrInvalidStatusTransition
 			if !errors.As(err, &transitionErr) {
 				return err

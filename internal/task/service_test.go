@@ -174,6 +174,102 @@ func TestTransitionStatusRequiresHumanApprovalGate(t *testing.T) {
 	}
 }
 
+func TestTransitionStatusInProgressWithoutActiveFlowReturnsError(t *testing.T) {
+	taskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "queued",
+				Title:          "Task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	_, err := svc.TransitionStatus(context.Background(), taskID, "in_progress", Actor{Type: "human_user", ID: uuid.New()})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrActiveFlowRequired) {
+		t.Fatalf("TransitionStatus err = %v, want ErrActiveFlowRequired", err)
+	}
+	var typedErr ErrInProgressRequiresActiveFlow
+	if !errors.As(err, &typedErr) {
+		t.Fatalf("TransitionStatus err = %v, want ErrInProgressRequiresActiveFlow", err)
+	}
+	if typedErr.TaskID != taskID {
+		t.Fatalf("typed error task_id = %s, want %s", typedErr.TaskID, taskID)
+	}
+}
+
+func TestTransitionStatusInProgressWithActiveFlowSucceeds(t *testing.T) {
+	taskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "queued",
+				Title:          "Task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	flowRepo := &fakeFlowExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{ID: uuid.New(), TaskID: taskID, FlowNodeID: uuid.New(), Status: "active"},
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	svc.executions = flowRepo
+
+	updated, err := svc.TransitionStatus(context.Background(), taskID, "in_progress", Actor{Type: "human_user", ID: uuid.New()})
+	if err != nil {
+		t.Fatalf("TransitionStatus in_progress: %v", err)
+	}
+	if updated.WorkStatus != "in_progress" {
+		t.Fatalf("work_status = %q, want %q", updated.WorkStatus, "in_progress")
+	}
+}
+
+func TestTransitionStatusInProgressSystemOverrideBypassesFlowValidation(t *testing.T) {
+	taskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "queued",
+				Title:          "Task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+
+	updated, err := svc.TransitionStatus(context.Background(), taskID, "in_progress", Actor{
+		Type:              "system",
+		AllowNoActiveFlow: true,
+	})
+	if err != nil {
+		t.Fatalf("TransitionStatus in_progress with override: %v", err)
+	}
+	if updated.WorkStatus != "in_progress" {
+		t.Fatalf("work_status = %q, want %q", updated.WorkStatus, "in_progress")
+	}
+}
+
 func TestTransitionStatusCancelledArchivesActiveMergeQueueEntries(t *testing.T) {
 	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
 	taskID := uuid.New()
@@ -339,6 +435,7 @@ func newUnitService(taskRepo *fakeTaskRepo) *service {
 		assignments: &fakeAssignmentRepo{},
 		agents:      &fakeAgentRepo{},
 		users:       &fakeUserRepo{},
+		executions:  &fakeFlowExecutionRepo{},
 		eventBus:    &fakeEventBus{},
 		clock:       clock.NewFake(time.Now().UTC()),
 	}
@@ -436,6 +533,23 @@ func (f *fakeInboxRepo) MarkActed(_ context.Context, id, actedByID uuid.UUID) (r
 
 type fakeQueueRepo struct {
 	entries []repo.MergeQueueEntry
+}
+
+type fakeFlowExecutionRepo struct {
+	byTask map[uuid.UUID][]repo.FlowNodeExecution
+}
+
+func (f *fakeFlowExecutionRepo) ListByTask(_ context.Context, taskID uuid.UUID) ([]repo.FlowNodeExecution, error) {
+	if f.byTask == nil {
+		return []repo.FlowNodeExecution{}, nil
+	}
+	items, ok := f.byTask[taskID]
+	if !ok {
+		return []repo.FlowNodeExecution{}, nil
+	}
+	out := make([]repo.FlowNodeExecution, 0, len(items))
+	out = append(out, items...)
+	return out, nil
 }
 
 func (f *fakeQueueRepo) Enqueue(_ context.Context, entry repo.MergeQueueEntry) (repo.MergeQueueEntry, error) {

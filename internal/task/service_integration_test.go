@@ -35,7 +35,11 @@ func TestTaskServiceIntegrationStatusLifecycleAndEvents(t *testing.T) {
 	steps := []string{"queued", "in_progress", "review", "done"}
 	current := created
 	for _, step := range steps {
-		next, stepErr := svc.TransitionStatus(ctx, current.ID, step, Actor{Type: "system"})
+		actor := Actor{Type: "system"}
+		if step == "in_progress" {
+			actor.AllowNoActiveFlow = true
+		}
+		next, stepErr := svc.TransitionStatus(ctx, current.ID, step, actor)
 		if stepErr != nil {
 			t.Fatalf("TransitionStatus %s: %v", step, stepErr)
 		}
@@ -166,7 +170,7 @@ func TestTaskServiceIntegrationMarkBlockedCreatesResolutionTaskAndInbox(t *testi
 	if _, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"}); err != nil {
 		t.Fatalf("TransitionStatus queued: %v", err)
 	}
-	if _, err := svc.TransitionStatus(ctx, created.ID, "in_progress", Actor{Type: "system"}); err != nil {
+	if _, err := svc.TransitionStatus(ctx, created.ID, "in_progress", Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
 		t.Fatalf("TransitionStatus in_progress: %v", err)
 	}
 

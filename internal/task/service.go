@@ -39,6 +39,7 @@ var (
 	ErrTransitionTargetRequired  = errors.New("target status is required")
 	ErrActorTypeInvalidForAction = errors.New("actor_type is invalid for action")
 	ErrBrowserHandoffUnavailable = errors.New("browser handoff service unavailable")
+	ErrActiveFlowRequired        = errors.New("task requires an active flow to be in_progress")
 )
 
 var validStatusTransitions = map[string]map[string]struct{}{
@@ -103,8 +104,21 @@ func (e ErrInvalidStatusTransition) Error() string {
 }
 
 type Actor struct {
-	Type string
-	ID   uuid.UUID
+	Type              string
+	ID                uuid.UUID
+	AllowNoActiveFlow bool
+}
+
+type ErrInProgressRequiresActiveFlow struct {
+	TaskID uuid.UUID
+}
+
+func (e ErrInProgressRequiresActiveFlow) Error() string {
+	return ErrActiveFlowRequired.Error()
+}
+
+func (e ErrInProgressRequiresActiveFlow) Is(target error) bool {
+	return target == ErrActiveFlowRequired
 }
 
 type ProjectTask = repo.ProjectTask
@@ -198,6 +212,10 @@ type eventPublisher interface {
 	Publish(ctx context.Context, tx pgx.Tx, event eventbus.DomainEvent) error
 }
 
+type flowExecutionRepository interface {
+	ListByTask(ctx context.Context, taskID uuid.UUID) ([]repo.FlowNodeExecution, error)
+}
+
 type browserHandoffCompleter interface {
 	CompleteHandoffByInboxItem(ctx context.Context, inboxItemID, actedByUserID uuid.UUID, actionDecision string) error
 }
@@ -214,6 +232,7 @@ type Options struct {
 	Assignments agentProjectAssignmentRepository
 	Agents      agentRepository
 	Users       humanUserRepository
+	Executions  flowExecutionRepository
 
 	EventBus eventPublisher
 	Clock    clock.Clock
@@ -233,6 +252,7 @@ type service struct {
 	assignments agentProjectAssignmentRepository
 	agents      agentRepository
 	users       humanUserRepository
+	executions  flowExecutionRepository
 
 	eventBus eventPublisher
 	clock    clock.Clock
@@ -297,6 +317,11 @@ func NewService(opts Options) (TaskService, error) {
 		svc.users = opts.Users
 	} else {
 		svc.users = repo.NewHumanUserRepo(opts.Pool)
+	}
+	if opts.Executions != nil {
+		svc.executions = opts.Executions
+	} else {
+		svc.executions = repo.NewFlowNodeExecutionRepo(opts.Pool)
 	}
 
 	return svc, nil
@@ -390,6 +415,16 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	if target == "queued" && taskRecord.RequiresHumanReview && !approvalOverride {
 		return nil, ErrRequiresHumanApproval
 	}
+	if target == "in_progress" {
+		allowNoActiveFlow := actor.AllowNoActiveFlow && strings.EqualFold(strings.TrimSpace(actor.Type), "system")
+		hasActiveFlow, flowErr := s.hasActiveFlowExecution(ctx, taskRecord.ID)
+		if flowErr != nil {
+			return nil, flowErr
+		}
+		if !hasActiveFlow && !allowNoActiveFlow {
+			return nil, ErrInProgressRequiresActiveFlow{TaskID: taskRecord.ID}
+		}
+	}
 
 	taskRecord.WorkStatus = target
 	if target == "done" || target == "cancelled" {
@@ -432,6 +467,25 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	}
 
 	return &updated, nil
+}
+
+func (s *service) hasActiveFlowExecution(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	if s.executions == nil {
+		return false, nil
+	}
+	rows, err := s.executions.ListByTask(ctx, taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, row := range rows {
+		if strings.EqualFold(strings.TrimSpace(row.Status), "active") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *service) RequestHumanApproval(ctx context.Context, taskID uuid.UUID) (*InboxItem, error) {

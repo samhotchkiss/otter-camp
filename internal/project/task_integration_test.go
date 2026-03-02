@@ -35,7 +35,11 @@ func TestTask_StateMachine_FullPath(t *testing.T) {
 
 	current := taskRecord
 	for _, nextStatus := range []string{"queued", "in_progress", "review", "done"} {
-		current, err = fx.taskService.TransitionStatus(ctx, current.ID, nextStatus, tasksvc.Actor{Type: "system"})
+		actor := tasksvc.Actor{Type: "system"}
+		if nextStatus == "in_progress" {
+			actor.AllowNoActiveFlow = true
+		}
+		current, err = fx.taskService.TransitionStatus(ctx, current.ID, nextStatus, actor)
 		if err != nil {
 			t.Fatalf("TransitionStatus %s: %v", nextStatus, err)
 		}
@@ -112,7 +116,7 @@ func TestTask_StateMachine_Blocked(t *testing.T) {
 	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
 		t.Fatalf("TransitionStatus queued: %v", err)
 	}
-	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "in_progress", tasksvc.Actor{Type: "system"}); err != nil {
+	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
 		t.Fatalf("TransitionStatus in_progress: %v", err)
 	}
 
@@ -159,13 +163,13 @@ func TestTask_StateMachine_OnHold(t *testing.T) {
 	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
 		t.Fatalf("TransitionStatus queued: %v", err)
 	}
-	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "in_progress", tasksvc.Actor{Type: "system"}); err != nil {
+	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
 		t.Fatalf("TransitionStatus in_progress: %v", err)
 	}
 	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "on_hold", tasksvc.Actor{Type: "system"}); err != nil {
 		t.Fatalf("TransitionStatus on_hold: %v", err)
 	}
-	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "in_progress", tasksvc.Actor{Type: "system"}); err != nil {
+	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
 		t.Fatalf("TransitionStatus on_hold->in_progress: %v", err)
 	}
 
@@ -246,7 +250,7 @@ func TestTask_StateMachine_Cancelled(t *testing.T) {
 	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
 		t.Fatalf("TransitionStatus queued: %v", err)
 	}
-	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "in_progress", tasksvc.Actor{Type: "system"}); err != nil {
+	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
 		t.Fatalf("TransitionStatus in_progress: %v", err)
 	}
 	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "review", tasksvc.Actor{Type: "system"}); err != nil {
@@ -293,7 +297,7 @@ func TestMergeQueue_Lifecycle(t *testing.T) {
 	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
 		t.Fatalf("TransitionStatus queued: %v", err)
 	}
-	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "in_progress", tasksvc.Actor{Type: "system"}); err != nil {
+	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
 		t.Fatalf("TransitionStatus in_progress: %v", err)
 	}
 	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "review", tasksvc.Actor{Type: "system"}); err != nil {
