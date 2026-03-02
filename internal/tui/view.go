@@ -56,14 +56,14 @@ var (
 
 	styleSelected = lipgloss.NewStyle().
 			Background(colCursor).
-			Foreground(colFocus).
+			Foreground(lipgloss.Color("#FFFFFF")).
 			Bold(true)
 	// styleCursorRow is used for full-width cursor highlight on list items
 	// (dashboard board, project task list, inbox). The background makes
 	// the selected item immediately obvious.
 	styleCursorRow = lipgloss.NewStyle().
 			Background(colCursor).
-			Foreground(colFocus).
+			Foreground(lipgloss.Color("#FFFFFF")).
 			Bold(true)
 	styleActive = lipgloss.NewStyle().Foreground(colFocus).Bold(true)
 )
@@ -564,7 +564,7 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 	switch node.Kind {
 	case sidebarKindHeader, sidebarKindInbox:
 		if cursor {
-			rendered = styleSelected.Render(truncate(line, width-2))
+			rendered = styleSelected.Width(width - 2).Render(truncate(line, width-2))
 		} else {
 			rendered = styleBold.Render(truncate(line, width-2))
 		}
@@ -578,9 +578,9 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, width int, icon
 		case cursor && isActive:
 			// show ✓ check to distinguish active+cursor from cursor-only
 			check := " " + styleConnected.Render("✓")
-			rendered = styleSelected.Render(truncate(line, maxW-2)) + check
+			rendered = styleSelected.Width(width - 2).Render(truncate(line, maxW-2)) + check
 		case cursor:
-			rendered = styleSelected.Render(truncate(line, maxW))
+			rendered = styleSelected.Width(width - 2).Render(truncate(line, maxW))
 		case isActive:
 			// Always show ✓ for the active session so it's visible at a glance
 			check := " " + styleConnected.Render("✓")
@@ -957,15 +957,21 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		case "done", "approved", "cancelled":
 			if isCursor {
 				doneIdx = len(doneTasks)
+				entry := truncate("► "+taskLabel, colW)
+				doneTasks = append(doneTasks, styleCursorRow.Width(colW).Render(entry))
+			} else {
+				entry := truncate("✓ "+taskLabel, colW)
+				doneTasks = append(doneTasks, styleMuted.Render(entry))
 			}
-			entry := truncate("✓ "+taskLabel, colW)
-			doneTasks = append(doneTasks, styleMuted.Render(entry))
 		case "blocked", "rejected", "deferred":
 			if isCursor {
 				blockedIdx = len(blockedTasks)
+				entry := truncate("► "+taskLabel, colW)
+				blockedTasks = append(blockedTasks, styleCursorRow.Width(colW).Render(entry))
+			} else {
+				entry := truncate("✗ "+taskLabel, colW)
+				blockedTasks = append(blockedTasks, lipgloss.NewStyle().Foreground(colError).Render(entry))
 			}
-			entry := truncate("✗ "+taskLabel, colW)
-			blockedTasks = append(blockedTasks, lipgloss.NewStyle().Foreground(colError).Render(entry))
 		default: // in_progress and unknown active statuses
 			if isCursor {
 				inProgIdx = len(inProgTasks)
