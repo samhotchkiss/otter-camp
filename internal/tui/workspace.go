@@ -61,7 +61,7 @@ type sidebarNode struct {
 	Expanded     bool
 	Unread       int
 	SessionID    string
-	SessionScope string // "organization", "project", "project_task" for session nodes
+	SessionScope string    // "organization", "project", "project_task" for session nodes
 	TaskID       string
 	TaskNumber   int
 	ProjectID    string
@@ -133,16 +133,16 @@ type workspaceState struct {
 	selectedProjectID string
 	selectedProject   *ProjectDetail
 
-	tasks                      map[string]*taskRecord
-	taskOrder                  []string
-	taskSessionIDs             map[string]string
-	sessionToTaskLabel         map[string]string // session UUID → human-readable task label
-	selectedTaskID             string
-	projectTaskCursor          int    // cursor within the project view open-task list
+	tasks             map[string]*taskRecord
+	taskOrder         []string
+	taskSessionIDs    map[string]string
+	sessionToTaskLabel map[string]string // session UUID → human-readable task label
+	selectedTaskID    string
+	projectTaskCursor int    // cursor within the project view open-task list
 	pendingProjectCursorTaskID string // set when task is opened before project detail loads
-	showDoneTasks              bool   // whether to show done tasks in project view
-	showTaskHistory            bool   // whether to show task history/audit trail
-	dashboardCursor            int    // cursor within the dashboard task board (index into taskOrder excluding done/cancelled)
+	showDoneTasks     bool   // whether to show done tasks in project view
+	showTaskHistory   bool   // whether to show task history/audit trail
+	dashboardCursor   int // cursor within the dashboard task board (index into taskOrder excluding done/cancelled)
 
 	inbox       []inboxItem
 	inboxCursor int
@@ -180,22 +180,22 @@ func newWorkspaceState() workspaceState {
 	}
 
 	return workspaceState{
-		mainView:           ViewDashboard,
-		nodes:              nodes,
-		topLevel:           []string{"inbox", "header-chats", generalSidebarNodeID, "header-projects"},
-		sidebarCursor:      0,
-		sectionCollapsed:   map[sidebarSectionID]bool{},
+		mainView:         ViewDashboard,
+		nodes:            nodes,
+		topLevel:         []string{"inbox", "header-chats", generalSidebarNodeID, "header-projects"},
+		sidebarCursor:    0,
+		sectionCollapsed: map[sidebarSectionID]bool{},
 		tasks:              map[string]*taskRecord{},
 		taskOrder:          []string{},
 		taskSessionIDs:     map[string]string{},
 		sessionToTaskLabel: map[string]string{},
 		selectedTaskID:     "",
-		inbox:              []inboxItem{},
-		activity:           []string{"workspace initialized"},
-		agents:             []string{},
-		mergeQueue:         []string{},
-		schedules:          []string{},
-		activeSessionID:    generalSessionID,
+		inbox:            []inboxItem{},
+		activity:         []string{"workspace initialized"},
+		agents:           []string{},
+		mergeQueue:       []string{},
+		schedules:        []string{},
+		activeSessionID:  generalSessionID,
 	}
 }
 

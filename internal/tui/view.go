@@ -313,7 +313,7 @@ func (m Model) viewForShell(shell string) string {
 		pvLines := strings.Split(pv, "\n")
 		if len(pvLines) > panelH {
 			clamped := make([]string, panelH)
-			clamped[0] = pvLines[0]                        // top border
+			clamped[0] = pvLines[0]                         // top border
 			copy(clamped[1:panelH-1], pvLines[1:panelH-1]) // content
 			clamped[panelH-1] = pvLines[len(pvLines)-1]    // bottom border
 			panelViews[i] = strings.Join(clamped, "\n")
@@ -1388,7 +1388,7 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 				continue
 			}
 			openTasks = append(openTasks, SidebarTaskItem{
-				ID:         child.TaskID, // raw UUID, not sidebar node ID
+				ID:         child.TaskID,   // raw UUID, not sidebar node ID
 				Title:      child.Label,
 				WorkStatus: child.WorkStatus,
 				TaskNumber: child.TaskNumber,
@@ -1927,7 +1927,7 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 					Foreground(colMuted).Render(emptyMsg),
 			),
 			"",
-			styleMuted.Render("  " + filterActionHint(query) + "  ·  Tab·navigate  ·  Esc·dashboard"),
+			styleMuted.Render("  "+filterActionHint(query)+"  ·  Tab·navigate  ·  Esc·dashboard"),
 		}
 	}
 
@@ -2720,7 +2720,7 @@ func (m Model) renderChatMessages(width int) []string {
 			if expanded {
 				indicator = "▼"
 			}
-			// EX-221: fall back to positional label when tool name is missing.
+				// EX-221: fall back to positional label when tool name is missing.
 			toolName := tc.Name
 			if strings.TrimSpace(toolName) == "" {
 				toolName = fmt.Sprintf("tool[%d]", i+1)
