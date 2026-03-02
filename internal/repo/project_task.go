@@ -37,6 +37,7 @@ type ProjectTask struct {
 	ScheduleID          *uuid.UUID
 	BranchName          *string
 	RequiresHumanReview bool
+	Priority            int
 	CreatedByType       string
 	CreatedByID         *uuid.UUID
 	AssignedAgentID     *uuid.UUID
@@ -145,13 +146,14 @@ func (r *ProjectTaskRepo) Create(ctx context.Context, task ProjectTask) (Project
 			schedule_id,
 			branch_name,
 			requires_human_review,
+			priority,
 			created_by_type,
 			created_by_id,
 			assigned_agent_id,
 			metadata,
 			completed_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17)
 		RETURNING
 			id,
 			organization_id,
@@ -165,6 +167,7 @@ func (r *ProjectTaskRepo) Create(ctx context.Context, task ProjectTask) (Project
 			schedule_id,
 			branch_name,
 			requires_human_review,
+			priority,
 			created_by_type,
 			created_by_id,
 			assigned_agent_id,
@@ -184,6 +187,7 @@ func (r *ProjectTaskRepo) Create(ctx context.Context, task ProjectTask) (Project
 		task.ScheduleID,
 		task.BranchName,
 		task.RequiresHumanReview,
+		defaultProjectTaskPriority(task.Priority),
 		strings.TrimSpace(task.CreatedByType),
 		task.CreatedByID,
 		task.AssignedAgentID,
@@ -217,6 +221,7 @@ func (r *ProjectTaskRepo) GetByID(ctx context.Context, id uuid.UUID) (ProjectTas
 			schedule_id,
 			branch_name,
 			requires_human_review,
+			priority,
 			created_by_type,
 			created_by_id,
 			assigned_agent_id,
@@ -253,6 +258,7 @@ func (r *ProjectTaskRepo) GetByProjectAndNumber(ctx context.Context, projectID u
 			schedule_id,
 			branch_name,
 			requires_human_review,
+			priority,
 			created_by_type,
 			created_by_id,
 			assigned_agent_id,
@@ -299,6 +305,7 @@ func (r *ProjectTaskRepo) ListByProject(ctx context.Context, projectID uuid.UUID
 			schedule_id,
 			branch_name,
 			requires_human_review,
+			priority,
 			created_by_type,
 			created_by_id,
 			assigned_agent_id,
@@ -351,6 +358,7 @@ func (r *ProjectTaskRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status
 			schedule_id,
 			branch_name,
 			requires_human_review,
+			priority,
 			created_by_type,
 			created_by_id,
 			assigned_agent_id,
@@ -382,9 +390,10 @@ func (r *ProjectTaskRepo) Update(ctx context.Context, task ProjectTask) (Project
 			schedule_id = $7,
 			branch_name = $8,
 			requires_human_review = $9,
-			assigned_agent_id = $10,
-			metadata = $11::jsonb,
-			completed_at = $12
+			priority = $10,
+			assigned_agent_id = $11,
+			metadata = $12::jsonb,
+			completed_at = $13
 		WHERE id = $1
 		RETURNING
 			id,
@@ -399,6 +408,7 @@ func (r *ProjectTaskRepo) Update(ctx context.Context, task ProjectTask) (Project
 			schedule_id,
 			branch_name,
 			requires_human_review,
+			priority,
 			created_by_type,
 			created_by_id,
 			assigned_agent_id,
@@ -416,6 +426,7 @@ func (r *ProjectTaskRepo) Update(ctx context.Context, task ProjectTask) (Project
 		task.ScheduleID,
 		task.BranchName,
 		task.RequiresHumanReview,
+		defaultProjectTaskPriority(task.Priority),
 		task.AssignedAgentID,
 		normalizeProjectTaskJSON(task.Metadata, json.RawMessage(`{}`)),
 		task.CompletedAt,
@@ -449,6 +460,7 @@ func (r *ProjectTaskRepo) SetFlowNode(ctx context.Context, id uuid.UUID, flowNod
 			schedule_id,
 			branch_name,
 			requires_human_review,
+			priority,
 			created_by_type,
 			created_by_id,
 			assigned_agent_id,
@@ -492,6 +504,7 @@ func (r *ProjectTaskRepo) SetBranch(ctx context.Context, id uuid.UUID, branchNam
 			schedule_id,
 			branch_name,
 			requires_human_review,
+			priority,
 			created_by_type,
 			created_by_id,
 			assigned_agent_id,
@@ -1265,6 +1278,7 @@ func scanProjectTask(row pgx.Row) (ProjectTask, error) {
 		&task.ScheduleID,
 		&task.BranchName,
 		&task.RequiresHumanReview,
+		&task.Priority,
 		&task.CreatedByType,
 		&task.CreatedByID,
 		&task.AssignedAgentID,
@@ -1350,6 +1364,13 @@ func defaultProjectTaskStatus(status string) string {
 		return "draft"
 	}
 	return trimmed
+}
+
+func defaultProjectTaskPriority(priority int) int {
+	if priority < 0 || priority > 4 {
+		return 0
+	}
+	return priority
 }
 
 func defaultMergeQueueStatus(status string) string {

@@ -61,7 +61,7 @@ type sidebarNode struct {
 	Expanded     bool
 	Unread       int
 	SessionID    string
-	SessionScope string    // "organization", "project", "project_task" for session nodes
+	SessionScope string // "organization", "project", "project_task" for session nodes
 	TaskID       string
 	TaskNumber   int
 	ProjectID    string
@@ -78,6 +78,7 @@ type taskRecord struct {
 	Subtasks            []string
 	SessionID           string
 	Status              string
+	Priority            int
 	Flow                int
 	FlowNodeName        string // human-readable current flow step name
 	AgentName           string // display_name of assigned agent
@@ -132,16 +133,16 @@ type workspaceState struct {
 	selectedProjectID string
 	selectedProject   *ProjectDetail
 
-	tasks             map[string]*taskRecord
-	taskOrder         []string
-	taskSessionIDs    map[string]string
-	sessionToTaskLabel map[string]string // session UUID → human-readable task label
-	selectedTaskID    string
-	projectTaskCursor int    // cursor within the project view open-task list
+	tasks                      map[string]*taskRecord
+	taskOrder                  []string
+	taskSessionIDs             map[string]string
+	sessionToTaskLabel         map[string]string // session UUID → human-readable task label
+	selectedTaskID             string
+	projectTaskCursor          int    // cursor within the project view open-task list
 	pendingProjectCursorTaskID string // set when task is opened before project detail loads
-	showDoneTasks     bool   // whether to show done tasks in project view
-	showTaskHistory   bool   // whether to show task history/audit trail
-	dashboardCursor   int // cursor within the dashboard task board (index into taskOrder excluding done/cancelled)
+	showDoneTasks              bool   // whether to show done tasks in project view
+	showTaskHistory            bool   // whether to show task history/audit trail
+	dashboardCursor            int    // cursor within the dashboard task board (index into taskOrder excluding done/cancelled)
 
 	inbox       []inboxItem
 	inboxCursor int
@@ -179,22 +180,22 @@ func newWorkspaceState() workspaceState {
 	}
 
 	return workspaceState{
-		mainView:         ViewDashboard,
-		nodes:            nodes,
-		topLevel:         []string{"inbox", "header-chats", generalSidebarNodeID, "header-projects"},
-		sidebarCursor:    0,
-		sectionCollapsed: map[sidebarSectionID]bool{},
+		mainView:           ViewDashboard,
+		nodes:              nodes,
+		topLevel:           []string{"inbox", "header-chats", generalSidebarNodeID, "header-projects"},
+		sidebarCursor:      0,
+		sectionCollapsed:   map[sidebarSectionID]bool{},
 		tasks:              map[string]*taskRecord{},
 		taskOrder:          []string{},
 		taskSessionIDs:     map[string]string{},
 		sessionToTaskLabel: map[string]string{},
 		selectedTaskID:     "",
-		inbox:            []inboxItem{},
-		activity:         []string{"workspace initialized"},
-		agents:           []string{},
-		mergeQueue:       []string{},
-		schedules:        []string{},
-		activeSessionID:  generalSessionID,
+		inbox:              []inboxItem{},
+		activity:           []string{"workspace initialized"},
+		agents:             []string{},
+		mergeQueue:         []string{},
+		schedules:          []string{},
+		activeSessionID:    generalSessionID,
 	}
 }
 
@@ -1061,12 +1062,18 @@ func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskIt
 		}
 		// Seed basic task record so the TASK DETAIL center pane renders immediately,
 		// and so the dashboard board can include done tasks in boardCounts().
-		if _, exists := w.tasks[task.ID]; !exists {
+		if existing, exists := w.tasks[task.ID]; exists {
+			existing.Title = task.Title
+			existing.Status = task.WorkStatus
+			existing.TaskNumber = task.TaskNumber
+			existing.Priority = task.Priority
+		} else {
 			w.tasks[task.ID] = &taskRecord{
 				ID:         task.ID,
 				Title:      task.Title,
 				Status:     task.WorkStatus,
 				TaskNumber: task.TaskNumber,
+				Priority:   task.Priority,
 			}
 			// Add to taskOrder for the dashboard board (deduplicated).
 			w.taskOrder = append(w.taskOrder, task.ID)

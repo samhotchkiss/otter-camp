@@ -83,6 +83,67 @@ func taskStatusColor(s string) lipgloss.Color {
 	}
 }
 
+func taskPriorityColor(priority int) lipgloss.Color {
+	switch priority {
+	case 4:
+		return colError
+	case 3:
+		return colUnread
+	case 2:
+		return colWarning
+	case 1:
+		return colMuted
+	default:
+		return colMuted
+	}
+}
+
+func taskPriorityLabel(priority int) string {
+	switch priority {
+	case 4:
+		return "Critical"
+	case 3:
+		return "High"
+	case 2:
+		return "Medium"
+	case 1:
+		return "Low"
+	default:
+		return ""
+	}
+}
+
+func taskPriorityShort(priority int) string {
+	switch priority {
+	case 4:
+		return "CRIT"
+	case 3:
+		return "HIGH"
+	case 2:
+		return "MED"
+	case 1:
+		return "LOW"
+	default:
+		return ""
+	}
+}
+
+func taskPriorityBadge(priority int, colorize bool) string {
+	short := taskPriorityShort(priority)
+	if short == "" {
+		return ""
+	}
+	plain := "[" + short + "]"
+	if !colorize {
+		return plain
+	}
+	style := lipgloss.NewStyle().Foreground(taskPriorityColor(priority))
+	if priority >= 3 {
+		style = style.Bold(true)
+	}
+	return style.Render(plain)
+}
+
 // formatTaskStatus converts raw status strings to human-readable Title Case labels.
 func formatTaskStatus(s string) string {
 	switch strings.ToLower(s) {
@@ -252,9 +313,9 @@ func (m Model) viewForShell(shell string) string {
 		pvLines := strings.Split(pv, "\n")
 		if len(pvLines) > panelH {
 			clamped := make([]string, panelH)
-			clamped[0] = pvLines[0]                          // top border
-			copy(clamped[1:panelH-1], pvLines[1:panelH-1])  // content
-			clamped[panelH-1] = pvLines[len(pvLines)-1]     // bottom border
+			clamped[0] = pvLines[0]                        // top border
+			copy(clamped[1:panelH-1], pvLines[1:panelH-1]) // content
+			clamped[panelH-1] = pvLines[len(pvLines)-1]    // bottom border
 			panelViews[i] = strings.Join(clamped, "\n")
 		}
 	}
@@ -929,17 +990,41 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 			continue
 		}
 		isCursor := id == cursorID
+		badgePlain := taskPriorityBadge(task.Priority, false)
+		badgeStyled := taskPriorityBadge(task.Priority, true)
+		maxBaseWidth := colW
+		if badgePlain != "" {
+			maxBaseWidth -= lipgloss.Width(badgePlain) + 1
+			if maxBaseWidth < 4 {
+				maxBaseWidth = 4
+			}
+		}
 
 		// Route tasks requiring human review to REVIEW column.
 		if task.RequiresHumanReview {
-			taskLabel = truncate(taskLabel, colW-2) + " ⚠"
 			if isCursor {
 				reviewIdx = len(reviewTasks)
-				entry := truncate("► "+taskLabel, colW)
-				reviewTasks = append(reviewTasks, styleCursorRow.Width(colW).Render(entry))
+				reviewWidth := colW - 2 // Reserve room for trailing warning marker.
+				if reviewWidth < 4 {
+					reviewWidth = 4
+				}
+				entry := truncate("► "+taskLabel, reviewWidth)
+				if badgePlain != "" {
+					baseWidth := reviewWidth - (lipgloss.Width(badgePlain) + 1)
+					if baseWidth < 3 {
+						baseWidth = 3
+					}
+					entry = truncate("► "+taskLabel, baseWidth) + " " + badgePlain
+				}
+				reviewTasks = append(reviewTasks, styleCursorRow.Width(colW).Render(entry+" ⚠"))
 			} else {
-				entry := truncate("⚠ "+taskLabel, colW)
-				reviewTasks = append(reviewTasks, lipgloss.NewStyle().Foreground(colAccent).Bold(true).Render(entry))
+				entry := truncate("⚠ "+taskLabel, maxBaseWidth)
+				rendered := lipgloss.NewStyle().Foreground(colAccent).Bold(true).Render(entry)
+				if badgeStyled != "" {
+					rendered += " " + badgeStyled
+				}
+				rendered += " " + lipgloss.NewStyle().Foreground(colWarning).Bold(true).Render("⚠")
+				reviewTasks = append(reviewTasks, rendered)
 			}
 			continue
 		}
@@ -948,40 +1033,70 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		case "draft", "todo":
 			if isCursor {
 				queuedIdx = len(queuedTasks)
-				entry := truncate("► "+taskLabel, colW)
+				entry := truncate("► "+taskLabel, maxBaseWidth)
+				if badgePlain != "" {
+					entry += " " + badgePlain
+				}
 				queuedTasks = append(queuedTasks, styleCursorRow.Width(colW).Render(entry))
 			} else {
-				entry := truncate("○ "+taskLabel, colW)
-				queuedTasks = append(queuedTasks, styleText.Render(entry))
+				entry := truncate("○ "+taskLabel, maxBaseWidth)
+				rendered := styleText.Render(entry)
+				if badgeStyled != "" {
+					rendered += " " + badgeStyled
+				}
+				queuedTasks = append(queuedTasks, rendered)
 			}
 		case "done", "approved", "cancelled":
 			if isCursor {
 				doneIdx = len(doneTasks)
-				entry := truncate("► "+taskLabel, colW)
+				if badgePlain != "" {
+					entry := truncate("► "+taskLabel, maxBaseWidth)
+					doneTasks = append(doneTasks, styleCursorRow.Width(colW).Render(entry+" "+badgePlain))
+					continue
+				}
+				entry := truncate("► "+taskLabel, maxBaseWidth)
 				doneTasks = append(doneTasks, styleCursorRow.Width(colW).Render(entry))
 			} else {
-				entry := truncate("✓ "+taskLabel, colW)
-				doneTasks = append(doneTasks, styleMuted.Render(entry))
+				entry := truncate("✓ "+taskLabel, maxBaseWidth)
+				rendered := styleMuted.Render(entry)
+				if badgeStyled != "" {
+					rendered += " " + badgeStyled
+				}
+				doneTasks = append(doneTasks, rendered)
 			}
 		case "blocked", "rejected", "deferred":
 			if isCursor {
 				blockedIdx = len(blockedTasks)
-				entry := truncate("► "+taskLabel, colW)
+				entry := truncate("► "+taskLabel, maxBaseWidth)
+				if badgePlain != "" {
+					entry += " " + badgePlain
+				}
 				blockedTasks = append(blockedTasks, styleCursorRow.Width(colW).Render(entry))
 			} else {
-				entry := truncate("✗ "+taskLabel, colW)
-				blockedTasks = append(blockedTasks, lipgloss.NewStyle().Foreground(colError).Render(entry))
+				entry := truncate("✗ "+taskLabel, maxBaseWidth)
+				rendered := lipgloss.NewStyle().Foreground(colError).Render(entry)
+				if badgeStyled != "" {
+					rendered += " " + badgeStyled
+				}
+				blockedTasks = append(blockedTasks, rendered)
 			}
 		default: // in_progress and unknown active statuses
 			if isCursor {
 				inProgIdx = len(inProgTasks)
-				entry := truncate("► "+taskLabel, colW)
+				entry := truncate("► "+taskLabel, maxBaseWidth)
+				if badgePlain != "" {
+					entry += " " + badgePlain
+				}
 				inProgTasks = append(inProgTasks, styleCursorRow.Width(colW).Render(entry))
 			} else {
 				icon := "◌ "
 				taskStyle := lipgloss.NewStyle().Foreground(colWarning)
-				entry := truncate(icon+taskLabel, colW)
-				inProgTasks = append(inProgTasks, taskStyle.Render(entry))
+				entry := truncate(icon+taskLabel, maxBaseWidth)
+				rendered := taskStyle.Render(entry)
+				if badgeStyled != "" {
+					rendered += " " + badgeStyled
+				}
+				inProgTasks = append(inProgTasks, rendered)
 			}
 		}
 	}
@@ -1273,7 +1388,7 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 				continue
 			}
 			openTasks = append(openTasks, SidebarTaskItem{
-				ID:         child.TaskID,   // raw UUID, not sidebar node ID
+				ID:         child.TaskID, // raw UUID, not sidebar node ID
 				Title:      child.Label,
 				WorkStatus: child.WorkStatus,
 				TaskNumber: child.TaskNumber,
@@ -1344,25 +1459,47 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			}
 			statusText := formatTaskStatus(task.WorkStatus)
 			statW := len([]rune(statusText))
+			priority := task.Priority
+			reviewRequired := false
+			if rec := m.workspace.tasks[task.ID]; rec != nil {
+				if priority == 0 {
+					priority = rec.Priority
+				}
+				reviewRequired = rec.RequiresHumanReview
+			}
+			badgePlain := taskPriorityBadge(priority, false)
+			badgeStyled := taskPriorityBadge(priority, true)
+			if reviewRequired {
+				if badgePlain != "" {
+					badgePlain += " ⚠"
+					badgeStyled += " " + lipgloss.NewStyle().Foreground(colWarning).Bold(true).Render("⚠")
+				} else {
+					badgePlain = "⚠"
+					badgeStyled = lipgloss.NewStyle().Foreground(colWarning).Bold(true).Render("⚠")
+				}
+			}
+			badgeWidth := 0
+			if badgePlain != "" {
+				badgeWidth = lipgloss.Width(badgePlain) + 1
+			}
 			taskTitle := task.Title
 			if task.TaskNumber > 0 {
 				taskTitle = fmt.Sprintf("OC-%d: %s", task.TaskNumber, task.Title)
 			}
 			// Right-align the status label: compute how much to pad between title and status.
 			prefixW := 2 + lipgloss.Width(icon) // "  " + icon
-			maxTitleW := width - prefixW - statW - 2
+			maxTitleW := width - prefixW - statW - 2 - badgeWidth
 			if maxTitleW < 4 {
 				maxTitleW = 4
 			}
-			// EX-150: append ⚠ when the task requires human review, consistent with
-			// the dashboard board view (EX-094) so the badge is visible in both views.
-			if rec := m.workspace.tasks[task.ID]; rec != nil && rec.RequiresHumanReview {
-				taskTitle = truncate(taskTitle, maxTitleW-2) + " ⚠"
-			} else {
-				taskTitle = truncate(taskTitle, maxTitleW)
+			leftPart := "  " + icon + truncate(taskTitle, maxTitleW)
+			if badgePlain != "" {
+				if isCursor {
+					leftPart += " " + badgePlain
+				} else {
+					leftPart += " " + badgeStyled
+				}
 			}
-			truncTitle := taskTitle
-			leftPart := "  " + icon + truncTitle
 			padW := width - lipgloss.Width(leftPart) - statW - 1
 			if padW < 1 {
 				padW = 1
@@ -1461,12 +1598,21 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 					}
 					statusText := formatTaskStatus(t.WorkStatus)
 					statW := len([]rune(statusText))
-					maxTitleW := width - 8 - statW
+					badgePlain := taskPriorityBadge(t.Priority, false)
+					badgeStyled := taskPriorityBadge(t.Priority, true)
+					badgeWidth := 0
+					if badgePlain != "" {
+						badgeWidth = lipgloss.Width(badgePlain) + 1
+					}
+					maxTitleW := width - 8 - statW - badgeWidth
 					if maxTitleW < 4 {
 						maxTitleW = 4
 					}
 					truncTitle := truncate(taskLabel, maxTitleW)
 					leftPart := "  ✓ " + truncTitle
+					if badgeStyled != "" {
+						leftPart += " " + badgeStyled
+					}
 					padW := width - lipgloss.Width(leftPart) - statW - 1
 					if padW < 1 {
 						padW = 1
@@ -1534,6 +1680,14 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 
 	lines = append(lines, titleLine)
 	lines = append(lines, statusLine)
+	if task.Priority > 0 {
+		priorityLine := "  Priority: " + taskPriorityLabel(task.Priority)
+		priorityStyle := lipgloss.NewStyle().Foreground(taskPriorityColor(task.Priority))
+		if task.Priority >= 3 {
+			priorityStyle = priorityStyle.Bold(true)
+		}
+		lines = append(lines, priorityStyle.Render(priorityLine))
+	}
 	// Show parent project name if discoverable via sidebar node graph
 	taskNodeID := "task-" + task.ID
 	if taskNode := m.workspace.nodes[taskNodeID]; taskNode != nil && taskNode.ParentID != "" {
@@ -1773,7 +1927,7 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 					Foreground(colMuted).Render(emptyMsg),
 			),
 			"",
-			styleMuted.Render("  "+filterActionHint(query)+"  ·  Tab·navigate  ·  Esc·dashboard"),
+			styleMuted.Render("  " + filterActionHint(query) + "  ·  Tab·navigate  ·  Esc·dashboard"),
 		}
 	}
 
@@ -2566,7 +2720,7 @@ func (m Model) renderChatMessages(width int) []string {
 			if expanded {
 				indicator = "▼"
 			}
-				// EX-221: fall back to positional label when tool name is missing.
+			// EX-221: fall back to positional label when tool name is missing.
 			toolName := tc.Name
 			if strings.TrimSpace(toolName) == "" {
 				toolName = fmt.Sprintf("tool[%d]", i+1)

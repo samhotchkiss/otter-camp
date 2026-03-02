@@ -250,6 +250,7 @@ func runTUICommand(args []string) int {
 						Title      string `json:"title"`
 						WorkStatus string `json:"work_status"`
 						TaskNumber int    `json:"task_number"`
+						Priority   int    `json:"priority"`
 					} `json:"data"`
 				}
 				path := "/v1/projects/" + url.PathEscape(projectID) + "/tasks?limit=20"
@@ -263,6 +264,7 @@ func runTUICommand(args []string) int {
 						Title:      t.Title,
 						WorkStatus: t.WorkStatus,
 						TaskNumber: t.TaskNumber,
+						Priority:   t.Priority,
 					})
 				}
 				return out, nil
@@ -286,6 +288,7 @@ func runTUICommand(args []string) int {
 						Title      string `json:"title"`
 						WorkStatus string `json:"work_status"`
 						TaskNumber int    `json:"task_number"`
+						Priority   int    `json:"priority"`
 					} `json:"data"`
 				}
 				path := "/v1/projects/" + url.PathEscape(projectID) + "/tasks?limit=20"
@@ -298,6 +301,7 @@ func runTUICommand(args []string) int {
 						Title:      t.Title,
 						WorkStatus: t.WorkStatus,
 						TaskNumber: t.TaskNumber,
+						Priority:   t.Priority,
 					}
 					if t.WorkStatus == "done" || t.WorkStatus == "approved" || t.WorkStatus == "cancelled" {
 						doneTasks = append(doneTasks, item)
@@ -364,6 +368,7 @@ func runTUICommand(args []string) int {
 						Title               string  `json:"title"`
 						Description         *string `json:"description"`
 						WorkStatus          string  `json:"work_status"`
+						Priority            int     `json:"priority"`
 						AssignedAgentID     string  `json:"assigned_agent_id"`
 						RequiresHumanReview bool    `json:"requires_human_review"`
 						BranchName          *string `json:"branch_name"`
@@ -387,6 +392,7 @@ func runTUICommand(args []string) int {
 					Title:               d.Title,
 					Description:         desc,
 					WorkStatus:          d.WorkStatus,
+					Priority:            d.Priority,
 					RequiresHumanReview: d.RequiresHumanReview,
 				}
 				if d.BranchName != nil {
