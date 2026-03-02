@@ -457,6 +457,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.workspace.sessionToTaskLabel[sid] = label
 		}
+		// When the task detail arrives with a session ID and we're currently
+		// viewing this task in scope=task, load the task's chat history.
+		// This handles the race where switchScope fires before the detail
+		// loads and finds no session ID yet.
+		if sid := strings.TrimSpace(typed.Detail.SessionID); sid != "" &&
+			looksLikeUUID(sid) &&
+			m.activeScope == ScopeTask &&
+			m.workspace.selectedTaskID == typed.Detail.ID &&
+			m.activeSession != sid &&
+			m.runtimeHints.LoadChatHistory != nil {
+			m.clearTurnIfSwitchingSession(sid)
+			m.activeSession = sid
+			m.chatMessages = nil
+			m.chatHistoryLoading = true
+			m.chatMessageIndex = make(map[string]int)
+			m.chatScrollOffset = 0
+			return m, loadChatHistoryCmd(sid, m.runtimeHints.LoadChatHistory)
+		}
 		return m, nil
 	case inboxItemsLoadedMsg:
 		newInbox := make([]inboxItem, 0, len(typed.Items))
@@ -2004,6 +2022,17 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				if projectIDForTask != "" && m.workspace.selectedProject == nil && m.runtimeHints.LoadProjectDetail != nil {
 					cmds = append(cmds, loadProjectDetailCmd(projectIDForTask, m.runtimeHints))
 				}
+				// Switch chat panel to task session and load its history.
+				taskSessID := m.workspace.taskSessionID(node.TaskID)
+				if looksLikeUUID(taskSessID) && m.runtimeHints.LoadChatHistory != nil {
+					m.clearTurnIfSwitchingSession(taskSessID)
+					m.activeSession = taskSessID
+					m.chatMessages = nil
+					m.chatHistoryLoading = true
+					m.chatMessageIndex = make(map[string]int)
+					m.chatScrollOffset = 0
+					cmds = append(cmds, loadChatHistoryCmd(taskSessID, m.runtimeHints.LoadChatHistory))
+				}
 				return tea.Batch(cmds...)
 			}
 		}
@@ -2269,7 +2298,20 @@ func (m *Model) stepTaskInProject(delta int) tea.Cmd {
 		label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
 	}
 	m.statusMessage = "▸ " + truncate(label, 40)
-	return loadTaskDetailCmd(taskID, m.runtimeHints)
+	// Reload chat history for the new task's session so the chat panel
+	// updates when stepping between tasks with j/k.
+	cmds := []tea.Cmd{loadTaskDetailCmd(taskID, m.runtimeHints)}
+	taskSessID := m.workspace.taskSessionID(taskID)
+	if looksLikeUUID(taskSessID) && m.runtimeHints.LoadChatHistory != nil {
+		m.clearTurnIfSwitchingSession(taskSessID)
+		m.activeSession = taskSessID
+		m.chatMessages = nil
+		m.chatHistoryLoading = true
+		m.chatMessageIndex = make(map[string]int)
+		m.chatScrollOffset = 0
+		cmds = append(cmds, loadChatHistoryCmd(taskSessID, m.runtimeHints.LoadChatHistory))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
@@ -6330,6 +6372,14 @@ func (m *Model) executeSidebarCommand(args []string) tea.Cmd {
 				}
 				if projectIDForTask490 != "" && m.workspace.selectedProject == nil && m.runtimeHints.LoadProjectDetail != nil {
 					cmds = append(cmds, loadProjectDetailCmd(projectIDForTask490, m.runtimeHints))
+				}
+				// Switch active session to the task session so the chat panel
+				// shows the correct history (the generic reload below uses activeSessionID).
+				taskSessID490 := m.workspace.taskSessionID(node.TaskID)
+				if looksLikeUUID(taskSessID490) {
+					m.clearTurnIfSwitchingSession(taskSessID490)
+					m.activeSession = taskSessID490
+					m.workspace.activeSessionID = taskSessID490
 				}
 			case sidebarKindInbox:
 				cmds = append(cmds, loadInboxItemsCmd(m.runtimeHints))
