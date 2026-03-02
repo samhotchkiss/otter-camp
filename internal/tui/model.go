@@ -584,9 +584,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd = tea.Batch(cmd, statusAutoClearCmd(typedModel.statusGeneration))
 		}
 		return typedModel, cmd
+	case tea.MouseMsg:
+		return m.updateMouse(typed), nil
 	default:
 		return m, nil
 	}
+}
+
+// updateMouse handles mouse events for panel focus switching.
+// Clicking on a panel switches focus to it.
+func (m Model) updateMouse(msg tea.MouseMsg) Model {
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+		return m
+	}
+	layout := m.CurrentLayout()
+	x := msg.X
+	// Determine which panel was clicked based on column boundaries.
+	// widths[0]=sidebar, widths[1]=main, widths[2]=chat
+	col0End := 0
+	if layout.visible[0] {
+		col0End = layout.widths[0] + 1 // +1 for border
+	}
+	col1End := col0End
+	if layout.visible[1] {
+		col1End = col0End + layout.widths[1] + 1
+	}
+	var target Panel
+	switch {
+	case layout.visible[0] && x < col0End:
+		target = SidebarPanel
+	case layout.visible[1] && x < col1End:
+		target = MainPanel
+	case layout.visible[2]:
+		target = ChatPanel
+	default:
+		return m
+	}
+	if target != m.focus {
+		m.focus = target
+		m.statusMessage = ""
+	}
+	return m
 }
 
 func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
