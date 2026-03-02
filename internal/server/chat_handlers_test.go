@@ -90,6 +90,196 @@ func TestCreateSessionMapsActiveSyncConflict(t *testing.T) {
 	}
 }
 
+func TestCreateSessionProjectTaskAddsAssignedAgentParticipant(t *testing.T) {
+	orgID := uuid.New()
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := uuid.New()
+	sessionID := uuid.New()
+	principalID := uuid.New()
+
+	type addCall struct {
+		participantType string
+		participantID   uuid.UUID
+		role            string
+	}
+	addCalls := make([]addCall, 0, 2)
+
+	svc := &fakeChatService{
+		createSessionFn: func(context.Context, chat.CreateSessionInput) (*chat.ChatSession, error) {
+			return &chat.ChatSession{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
+				Mode:           "async",
+				Status:         "active",
+			}, nil
+		},
+		addParticipantFn: func(_ context.Context, _ uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error) {
+			addCalls = append(addCalls, addCall{participantType: participantType, participantID: participantID, role: role})
+			return &chat.ChatParticipant{}, nil
+		},
+	}
+	h := chatHandlers{
+		service: svc,
+		tasks: fakeProjectTaskReader{task: repo.ProjectTask{
+			ID:              taskID,
+			OrganizationID:  orgID,
+			ProjectID:       projectID,
+			AssignedAgentID: &assignedID,
+		}},
+	}
+
+	req := newChatRequest(t, http.MethodPost, "/v1/chat-sessions", map[string]any{
+		"scope_type": "project_task",
+		"scope_id":   taskID,
+		"mode":       "async",
+	}, middleware.Principal{UserID: principalID, OrganizationID: orgID, Role: "member"})
+	rr := httptest.NewRecorder()
+
+	h.createSession(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+	if len(addCalls) != 2 {
+		t.Fatalf("add participant calls = %d, want 2", len(addCalls))
+	}
+	if addCalls[0].participantType != "human_user" || addCalls[0].participantID != principalID || addCalls[0].role != "owner" {
+		t.Fatalf("owner add call = %+v, want human_user owner", addCalls[0])
+	}
+	if addCalls[1].participantType != "agent" || addCalls[1].participantID != assignedID || addCalls[1].role != "responder" {
+		t.Fatalf("responder add call = %+v, want assigned agent responder", addCalls[1])
+	}
+}
+
+func TestCreateSessionProjectTaskFallsBackToPM(t *testing.T) {
+	orgID := uuid.New()
+	taskID := uuid.New()
+	projectID := uuid.New()
+	pmID := uuid.New()
+	sessionID := uuid.New()
+
+	type addCall struct {
+		participantID uuid.UUID
+		role          string
+	}
+	addCalls := make([]addCall, 0, 2)
+
+	svc := &fakeChatService{
+		createSessionFn: func(context.Context, chat.CreateSessionInput) (*chat.ChatSession, error) {
+			return &chat.ChatSession{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
+				Mode:           "async",
+				Status:         "active",
+			}, nil
+		},
+		addParticipantFn: func(_ context.Context, _ uuid.UUID, _ string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error) {
+			addCalls = append(addCalls, addCall{participantID: participantID, role: role})
+			return &chat.ChatParticipant{}, nil
+		},
+	}
+	h := chatHandlers{
+		service: svc,
+		tasks: fakeProjectTaskReader{task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+		}},
+		assignments: fakePMAssignmentReader{assignment: repo.AgentProjectAssignment{
+			ProjectID: projectID,
+			AgentID:   pmID,
+			IsActive:  true,
+		}},
+	}
+
+	req := newChatRequest(t, http.MethodPost, "/v1/chat-sessions", map[string]any{
+		"scope_type": "project_task",
+		"scope_id":   taskID,
+		"mode":       "async",
+	}, middleware.Principal{UserID: uuid.New(), OrganizationID: orgID, Role: "member"})
+	rr := httptest.NewRecorder()
+
+	h.createSession(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+	if len(addCalls) != 2 {
+		t.Fatalf("add participant calls = %d, want 2", len(addCalls))
+	}
+	if addCalls[1].participantID != pmID || addCalls[1].role != "responder" {
+		t.Fatalf("responder add call = %+v, want pm responder", addCalls[1])
+	}
+}
+
+func TestCreateSessionProjectTaskFallsBackToFrank(t *testing.T) {
+	orgID := uuid.New()
+	taskID := uuid.New()
+	projectID := uuid.New()
+	frankID := uuid.New()
+
+	type addCall struct {
+		participantID uuid.UUID
+		role          string
+	}
+	addCalls := make([]addCall, 0, 2)
+
+	svc := &fakeChatService{
+		createSessionFn: func(context.Context, chat.CreateSessionInput) (*chat.ChatSession, error) {
+			return &chat.ChatSession{
+				ID:             uuid.New(),
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
+				Mode:           "async",
+				Status:         "active",
+			}, nil
+		},
+		addParticipantFn: func(_ context.Context, _ uuid.UUID, _ string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error) {
+			addCalls = append(addCalls, addCall{participantID: participantID, role: role})
+			return &chat.ChatParticipant{}, nil
+		},
+	}
+	h := chatHandlers{
+		service: svc,
+		tasks: fakeProjectTaskReader{task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+		}},
+		assignments: fakePMAssignmentReader{err: repo.ErrNotFound},
+		agents: fakeStarterAgentLister{agents: []repo.Agent{
+			{ID: uuid.New(), DisplayName: "Lori", AgentType: "pm"},
+			{ID: uuid.New(), DisplayName: "Ellie", AgentType: "general"},
+			{ID: frankID, DisplayName: "Frank", AgentType: "general"},
+		}},
+	}
+
+	req := newChatRequest(t, http.MethodPost, "/v1/chat-sessions", map[string]any{
+		"scope_type": "project_task",
+		"scope_id":   taskID,
+		"mode":       "async",
+	}, middleware.Principal{UserID: uuid.New(), OrganizationID: orgID, Role: "member"})
+	rr := httptest.NewRecorder()
+
+	h.createSession(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+	if len(addCalls) != 2 {
+		t.Fatalf("add participant calls = %d, want 2", len(addCalls))
+	}
+	if addCalls[1].participantID != frankID || addCalls[1].role != "responder" {
+		t.Fatalf("responder add call = %+v, want Frank responder", addCalls[1])
+	}
+}
+
 func TestEditQueuedMessageRejectsAgentAPIKey(t *testing.T) {
 	svc := &fakeChatService{}
 	h := chatHandlers{service: svc}
@@ -538,6 +728,42 @@ func errorCode(t *testing.T, body []byte) string {
 	}
 	value, _ := errorObj["code"].(string)
 	return value
+}
+
+type fakeProjectTaskReader struct {
+	task repo.ProjectTask
+	err  error
+}
+
+func (f fakeProjectTaskReader) GetByID(context.Context, uuid.UUID) (repo.ProjectTask, error) {
+	if f.err != nil {
+		return repo.ProjectTask{}, f.err
+	}
+	return f.task, nil
+}
+
+type fakePMAssignmentReader struct {
+	assignment repo.AgentProjectAssignment
+	err        error
+}
+
+func (f fakePMAssignmentReader) GetPM(context.Context, uuid.UUID) (repo.AgentProjectAssignment, error) {
+	if f.err != nil {
+		return repo.AgentProjectAssignment{}, f.err
+	}
+	return f.assignment, nil
+}
+
+type fakeStarterAgentLister struct {
+	agents []repo.Agent
+	err    error
+}
+
+func (f fakeStarterAgentLister) GetStarterTrio(context.Context, uuid.UUID) ([]repo.Agent, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]repo.Agent(nil), f.agents...), nil
 }
 
 type fakeChatService struct {

@@ -116,6 +116,172 @@ func TestListeningEvalWaitReenqueuesAndSkipsPhase2(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageTaskScopeRoutesToAssignedAgent(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := uuid.New()
+	frankID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.participants = []*chat.ChatParticipant{{
+		ID:              uuid.New(),
+		SessionID:       fixture.session.ID,
+		ParticipantType: "agent",
+		ParticipantID:   frankID,
+	}}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				AssignedAgentID: &assignedID,
+			},
+		},
+	}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{
+			assignedID: {ID: assignedID, OrganizationID: fixture.session.OrganizationID},
+			frankID:    {ID: frankID, OrganizationID: fixture.session.OrganizationID},
+		},
+		starter: []repo.Agent{{ID: frankID, DisplayName: "Frank", AgentType: "general"}},
+	}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	turnID := fixture.chat.waitForTurnID(t)
+	turn := fixture.chat.turnByID(turnID)
+	if turn == nil {
+		t.Fatal("expected created turn")
+	}
+	if turn.RespondingID != assignedID {
+		t.Fatalf("turn responding_id = %s, want %s", turn.RespondingID, assignedID)
+	}
+}
+
+func TestHandleUserMessageTaskScopeFallsBackToProjectPM(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	pmID := uuid.New()
+	frankID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.participants = []*chat.ChatParticipant{{
+		ID:              uuid.New(),
+		SessionID:       fixture.session.ID,
+		ParticipantType: "agent",
+		ParticipantID:   frankID,
+	}}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+			},
+		},
+	}
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		items: map[uuid.UUID]repo.AgentProjectAssignment{
+			projectID: {ProjectID: projectID, AgentID: pmID, IsActive: true},
+		},
+	}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{
+			pmID:    {ID: pmID, OrganizationID: fixture.session.OrganizationID},
+			frankID: {ID: frankID, OrganizationID: fixture.session.OrganizationID},
+		},
+		starter: []repo.Agent{{ID: frankID, DisplayName: "Frank", AgentType: "general"}},
+	}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	turnID := fixture.chat.waitForTurnID(t)
+	turn := fixture.chat.turnByID(turnID)
+	if turn == nil {
+		t.Fatal("expected created turn")
+	}
+	if turn.RespondingID != pmID {
+		t.Fatalf("turn responding_id = %s, want %s", turn.RespondingID, pmID)
+	}
+}
+
+func TestHandleUserMessageTaskScopeFallsBackToFrank(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	otherParticipantID := uuid.New()
+	frankID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.participants = []*chat.ChatParticipant{{
+		ID:              uuid.New(),
+		SessionID:       fixture.session.ID,
+		ParticipantType: "agent",
+		ParticipantID:   otherParticipantID,
+	}}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+			},
+		},
+	}
+	fixture.engine.assignments = &fakeAssignmentRepo{err: repo.ErrNotFound}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{
+			otherParticipantID: {ID: otherParticipantID, OrganizationID: fixture.session.OrganizationID},
+			frankID:            {ID: frankID, OrganizationID: fixture.session.OrganizationID},
+		},
+		starter: []repo.Agent{
+			{ID: uuid.New(), DisplayName: "Lori", AgentType: "pm"},
+			{ID: frankID, DisplayName: "Frank", AgentType: "general"},
+		},
+	}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	turnID := fixture.chat.waitForTurnID(t)
+	turn := fixture.chat.turnByID(turnID)
+	if turn == nil {
+		t.Fatal("expected created turn")
+	}
+	if turn.RespondingID != frankID {
+		t.Fatalf("turn responding_id = %s, want %s", turn.RespondingID, frankID)
+	}
+}
+
 func TestTierRoutingExecutesTier1ParallelThenTier2Sequential(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 
@@ -1245,20 +1411,57 @@ func (f *fakeProfileResolver) Resolve(ctx context.Context, orgID uuid.UUID, purp
 }
 
 type fakeAgentRepo struct {
-	agent repo.Agent
+	agent      repo.Agent
+	items      map[uuid.UUID]repo.Agent
+	starter    []repo.Agent
+	starterErr error
 }
 
 func (f *fakeAgentRepo) GetByID(ctx context.Context, id uuid.UUID) (repo.Agent, error) {
+	if item, ok := f.items[id]; ok {
+		return item, nil
+	}
 	if f.agent.ID != id {
 		return repo.Agent{}, repo.ErrNotFound
 	}
 	return f.agent, nil
 }
 
-type fakeTaskRepo struct{}
+func (f *fakeAgentRepo) GetStarterTrio(context.Context, uuid.UUID) ([]repo.Agent, error) {
+	if f.starterErr != nil {
+		return nil, f.starterErr
+	}
+	return append([]repo.Agent(nil), f.starter...), nil
+}
 
-func (*fakeTaskRepo) GetByID(context.Context, uuid.UUID) (repo.ProjectTask, error) {
+type fakeTaskRepo struct {
+	items map[uuid.UUID]repo.ProjectTask
+	err   error
+}
+
+func (f *fakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectTask, error) {
+	if f.err != nil {
+		return repo.ProjectTask{}, f.err
+	}
+	if item, ok := f.items[id]; ok {
+		return item, nil
+	}
 	return repo.ProjectTask{}, repo.ErrNotFound
+}
+
+type fakeAssignmentRepo struct {
+	items map[uuid.UUID]repo.AgentProjectAssignment
+	err   error
+}
+
+func (f *fakeAssignmentRepo) GetPM(_ context.Context, projectID uuid.UUID) (repo.AgentProjectAssignment, error) {
+	if f.err != nil {
+		return repo.AgentProjectAssignment{}, f.err
+	}
+	if item, ok := f.items[projectID]; ok {
+		return item, nil
+	}
+	return repo.AgentProjectAssignment{}, repo.ErrNotFound
 }
 
 type fakeMemorySourceRepo struct {
