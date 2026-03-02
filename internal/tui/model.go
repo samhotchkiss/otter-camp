@@ -770,6 +770,10 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.statusMessage = "Focus: " + panelLabel(m.focus)
 		return m, nil
 	case tea.KeyShiftTab:
+		// In chat panel, Shift+Tab cycles chat scope (task → project → org).
+		if m.focus == ChatPanel {
+			return m, m.switchScope(cycleScope(m.activeScope, true))
+		}
 		m.focus = previousPanelInOrder(order, m.focus)
 		m.applyResponsiveLayout()
 		m.statusMessage = "Focus: " + panelLabel(m.focus)
@@ -6584,12 +6588,12 @@ func (m Model) commandFallbackHelp() string {
 		if strings.TrimSpace(m.chatInput) == "" {
 			for i := len(m.chatMessages) - 1; i >= 0; i-- {
 				if len(m.chatMessages[i].ToolCalls) > 0 {
-					return "Enter expand/collapse tool · PgUp/PgDn scroll · g/G jump · [/] scope · : commands · ? help"
+					return "Enter expand/collapse tool · PgUp/PgDn scroll · g/G jump · Shift-Tab/[/] scope · : commands · ? help"
 				}
 				break
 			}
 		}
-		return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · [/] scope · Esc cancel turn · : commands · ? help"
+		return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · Shift-Tab/[/] scope · Esc cancel turn · : commands · ? help"
 	}
 	if m.runtimeHints.ModifierReliabilityUncertain {
 		return "tmux-safe: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit"

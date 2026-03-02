@@ -21,10 +21,19 @@ func TestGlobalFocusControls(t *testing.T) {
 		t.Fatalf("focus after Tab = %v, want chat", model.FocusedPanel())
 	}
 
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyShiftTab})
+	// Shift+Tab in chat cycles scope (not panel focus).
+	// Use '2' to get back to main for the rest of the test.
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	if model.FocusedPanel() != MainPanel {
-		t.Fatalf("focus after Shift-Tab = %v, want main", model.FocusedPanel())
+		t.Fatalf("focus after 2 = %v, want main", model.FocusedPanel())
 	}
+	// Shift+Tab from main panel still cycles panel focus backwards.
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if model.FocusedPanel() != SidebarPanel {
+		t.Fatalf("focus after Shift-Tab from main = %v, want sidebar", model.FocusedPanel())
+	}
+	// Back to main for rest of test.
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
 	if model.FocusedPanel() != SidebarPanel {
