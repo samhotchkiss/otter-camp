@@ -1202,17 +1202,20 @@ func TestDashboardCursorJKMoveSelection(t *testing.T) {
 		t.Fatalf("selectedTaskID after second j = %q, want task-2", got)
 	}
 
-	// Press j again — should stay on task-2 (task-3 is done and excluded)
+	// Press j again — should advance to task-3 (done, now included in column-based nav)
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	if got := model.workspace.selectedTaskID; got != "task-2" {
-		t.Fatalf("selectedTaskID after third j (clamped) = %q, want task-2", got)
+	if got := model.workspace.selectedTaskID; got != "task-3" {
+		t.Fatalf("selectedTaskID after third j = %q, want task-3", got)
 	}
 
-	// Press k — should go back to task-1
+	// Press k — should go back to task-2 (in_progress, middle of column order)
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	if got := model.workspace.selectedTaskID; got != "task-1" {
-		t.Fatalf("selectedTaskID after k = %q, want task-1", got)
+	if got := model.workspace.selectedTaskID; got != "task-2" {
+		t.Fatalf("selectedTaskID after k = %q, want task-2", got)
 	}
+
+	// Press k again — should go to task-1 (queued column)
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 
 	// Dashboard view should show ► on selected task
 	view := strings.Join(model.renderDashboardView(120, 20), "\n")
@@ -1238,20 +1241,20 @@ func TestDashboardArrowKeysMoveCursor(t *testing.T) {
 	model.focus = MainPanel
 	model.workspace.setMainView(ViewDashboard)
 
-	// Down arrow → first task (task-b, task_number=2, comes first)
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyDown})
-	if got := model.workspace.selectedTaskID; got != "task-b" {
-		t.Fatalf("selectedTaskID after Down = %q, want task-b", got)
-	}
-	// Down arrow again → second task
+	// Down arrow → first task by column order (task-a is todo/queued, comes before task-b in_progress)
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyDown})
 	if got := model.workspace.selectedTaskID; got != "task-a" {
-		t.Fatalf("selectedTaskID after second Down = %q, want task-a", got)
+		t.Fatalf("selectedTaskID after Down = %q, want task-a (queued column first)", got)
+	}
+	// Down arrow again → second task (task-b, in_progress column)
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyDown})
+	if got := model.workspace.selectedTaskID; got != "task-b" {
+		t.Fatalf("selectedTaskID after second Down = %q, want task-b", got)
 	}
 	// Up arrow → back to first
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyUp})
-	if got := model.workspace.selectedTaskID; got != "task-b" {
-		t.Fatalf("selectedTaskID after Up = %q, want task-b", got)
+	if got := model.workspace.selectedTaskID; got != "task-a" {
+		t.Fatalf("selectedTaskID after Up = %q, want task-a", got)
 	}
 }
 
@@ -2212,9 +2215,10 @@ func TestGUpperKeyInDashboardJumpsToLastTask(t *testing.T) {
 	model.workspace.dashboardCursor = 0
 	model.workspace.selectedTaskID = "task-a"
 
+	// Column order: queued=[task-a, task-c], in_progress=[task-b]. Last is task-b.
 	updated := pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
-	if updated.workspace.selectedTaskID != "task-c" {
-		t.Fatalf("G should select last task 'task-c', got: %q", updated.workspace.selectedTaskID)
+	if updated.workspace.selectedTaskID != "task-b" {
+		t.Fatalf("G should select last task 'task-b' (in_progress, last column), got: %q", updated.workspace.selectedTaskID)
 	}
 	if updated.workspace.dashboardCursor != 2 {
 		t.Fatalf("G should set dashboardCursor to 2, got: %d", updated.workspace.dashboardCursor)

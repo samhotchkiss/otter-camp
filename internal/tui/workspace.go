@@ -695,17 +695,35 @@ func (w *workspaceState) moveProjectTaskCursor(delta int) {
 // dashboardActiveTasks returns the ordered list of task IDs that are visible on the dashboard board
 // (excludes done/approved/cancelled tasks).
 func (w *workspaceState) dashboardActiveTasks() []string {
-	out := make([]string, 0, len(w.taskOrder))
+	// Group tasks by column so j/k navigation moves within a column before
+	// crossing to the next. Order: queued → in_progress → blocked → review → done.
+	var queued, inProg, blocked, review, done []string
 	for _, id := range w.taskOrder {
 		t := w.tasks[id]
 		if t == nil {
 			continue
 		}
-		if t.Status == "done" || t.Status == "approved" || t.Status == "cancelled" {
+		if t.RequiresHumanReview {
+			review = append(review, id)
 			continue
 		}
-		out = append(out, id)
+		switch t.Status {
+		case "draft", "todo":
+			queued = append(queued, id)
+		case "done", "approved", "cancelled":
+			done = append(done, id)
+		case "blocked", "rejected", "deferred":
+			blocked = append(blocked, id)
+		default:
+			inProg = append(inProg, id)
+		}
 	}
+	out := make([]string, 0, len(w.taskOrder))
+	out = append(out, queued...)
+	out = append(out, inProg...)
+	out = append(out, blocked...)
+	out = append(out, review...)
+	out = append(out, done...)
 	return out
 }
 
