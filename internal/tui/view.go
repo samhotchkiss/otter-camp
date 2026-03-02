@@ -1347,6 +1347,26 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 	// Connected repository
 	if proj != nil && strings.TrimSpace(proj.RepoURL) != "" {
 		lines = append(lines, styleMuted.Render("  Repo: "+proj.RepoURL))
+		if strings.TrimSpace(proj.RepoPath) != "" {
+			lines = append(lines, styleMuted.Render("  Path: "+proj.RepoPath))
+		}
+		lines = append(lines, "")
+	}
+
+	if proj != nil && len(proj.Files) > 0 {
+		lines = append(lines, styleLabel.Render(fmt.Sprintf("FILES (%d)", len(proj.Files))))
+		if !m.workspace.showProjectFiles {
+			lines = append(lines, styleMuted.Render("  hidden  ·  f·show files"))
+		} else {
+			for _, item := range proj.Files {
+				indent := strings.Repeat("  ", maxInt(0, item.Depth-1))
+				prefix := "• "
+				if item.IsDir {
+					prefix = "▸ "
+				}
+				lines = append(lines, styleMuted.Render("  "+indent+prefix+item.Path))
+			}
+		}
 		lines = append(lines, "")
 	}
 
@@ -1640,6 +1660,13 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 				hintParts += "  ·  d·hide done"
 			} else {
 				hintParts += fmt.Sprintf("  ·  d·show %d done", proj.DoneCount)
+			}
+		}
+		if proj != nil && len(proj.Files) > 0 {
+			if m.workspace.showProjectFiles {
+				hintParts += "  ·  f·hide files"
+			} else {
+				hintParts += "  ·  f·show files"
 			}
 		}
 		if len(lines) < maxLines {

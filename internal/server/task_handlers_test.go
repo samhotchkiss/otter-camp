@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -56,6 +58,7 @@ func TestTaskRoutesRegistered(t *testing.T) {
 		"PATCH /projects/{id}/remotes/{rid}",
 		"DELETE /projects/{id}/remotes/{rid}",
 		"GET /projects/{id}/environments",
+		"GET /projects/{id}/files",
 		"POST /projects/{id}/environments",
 		"PATCH /projects/{id}/environments/{eid}",
 		"POST /projects/{id}/deploy",
@@ -252,6 +255,139 @@ func TestReviewDecisionNonTargetUserReturns403(t *testing.T) {
 	}
 }
 
+func TestListProjectFilesReturnsTreeForConfiguredProject(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+
+	repoRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoRoot, "cmd", "ottercamp"), 0o755); err != nil {
+		t.Fatalf("mkdir tree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("readme"), 0o644); err != nil {
+		t.Fatalf("write readme: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "cmd", "ottercamp", "main.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+
+	h := taskHandlers{
+		projects: &fakeProjectRepoForTaskHandlers{
+			items: map[uuid.UUID]repo.Project{
+				projectID: {ID: projectID, OrganizationID: orgID, DisplayName: "Project Files"},
+			},
+		},
+		environments: &fakeEnvironmentRepoForTaskHandlers{
+			byProject: map[uuid.UUID][]repo.ProjectEnvironment{
+				projectID: {
+					{
+						ID:           uuid.New(),
+						ProjectID:    projectID,
+						Name:         "prod",
+						IsActive:     true,
+						RepoPath:     strPtrTaskHandler(repoRoot),
+						DeliveryMode: "gated",
+					},
+				},
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/projects/"+projectID.String()+"/files", nil)
+	req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{
+		UserID:         uuid.New(),
+		OrganizationID: orgID,
+		Role:           "member",
+	}))
+	req = withRouteParams(req, map[string]string{"id": projectID.String()})
+	rr := httptest.NewRecorder()
+
+	h.listProjectFiles(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var payload struct {
+		Data struct {
+			Files []struct {
+				Path  string `json:"path"`
+				IsDir bool   `json:"is_dir"`
+				Depth int    `json:"depth"`
+			} `json:"files"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, rr.Body.String())
+	}
+	if len(payload.Data.Files) == 0 {
+		t.Fatalf("files length = 0, want > 0 body=%s", rr.Body.String())
+	}
+	paths := make([]string, 0, len(payload.Data.Files))
+	for _, item := range payload.Data.Files {
+		paths = append(paths, item.Path)
+	}
+	joined := strings.Join(paths, "\n")
+	if !strings.Contains(joined, "README.md") {
+		t.Fatalf("expected README.md in files; got paths:\n%s", joined)
+	}
+	if !strings.Contains(joined, "cmd/ottercamp/main.go") {
+		t.Fatalf("expected cmd/ottercamp/main.go in files; got paths:\n%s", joined)
+	}
+}
+
+func TestListProjectFilesReturnsEmptyForUnconfiguredProject(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+
+	h := taskHandlers{
+		projects: &fakeProjectRepoForTaskHandlers{
+			items: map[uuid.UUID]repo.Project{
+				projectID: {ID: projectID, OrganizationID: orgID, DisplayName: "No Repo Project"},
+			},
+		},
+		environments: &fakeEnvironmentRepoForTaskHandlers{
+			byProject: map[uuid.UUID][]repo.ProjectEnvironment{
+				projectID: {
+					{
+						ID:           uuid.New(),
+						ProjectID:    projectID,
+						Name:         "prod",
+						IsActive:     true,
+						DeliveryMode: "gated",
+					},
+				},
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/projects/"+projectID.String()+"/files", nil)
+	req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{
+		UserID:         uuid.New(),
+		OrganizationID: orgID,
+		Role:           "member",
+	}))
+	req = withRouteParams(req, map[string]string{"id": projectID.String()})
+	rr := httptest.NewRecorder()
+
+	h.listProjectFiles(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var payload struct {
+		Data struct {
+			Files []struct {
+				Path string `json:"path"`
+			} `json:"files"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, rr.Body.String())
+	}
+	if len(payload.Data.Files) != 0 {
+		t.Fatalf("files length = %d, want 0 body=%s", len(payload.Data.Files), rr.Body.String())
+	}
+}
+
 type fakeProjectTaskRepo struct {
 	items map[uuid.UUID]repo.ProjectTask
 }
@@ -267,6 +403,75 @@ func (f *fakeProjectTaskRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Pro
 func (f *fakeProjectTaskRepo) Update(_ context.Context, task repo.ProjectTask) (repo.ProjectTask, error) {
 	f.items[task.ID] = task
 	return task, nil
+}
+
+type fakeProjectRepoForTaskHandlers struct {
+	items map[uuid.UUID]repo.Project
+}
+
+func (f *fakeProjectRepoForTaskHandlers) GetByID(_ context.Context, id uuid.UUID) (repo.Project, error) {
+	item, ok := f.items[id]
+	if !ok {
+		return repo.Project{}, repo.ErrNotFound
+	}
+	return item, nil
+}
+
+type fakeEnvironmentRepoForTaskHandlers struct {
+	byProject map[uuid.UUID][]repo.ProjectEnvironment
+	byID      map[uuid.UUID]repo.ProjectEnvironment
+}
+
+func (f *fakeEnvironmentRepoForTaskHandlers) Create(_ context.Context, environment repo.ProjectEnvironment) (repo.ProjectEnvironment, error) {
+	if environment.ID == uuid.Nil {
+		environment.ID = uuid.New()
+	}
+	if f.byID == nil {
+		f.byID = map[uuid.UUID]repo.ProjectEnvironment{}
+	}
+	if f.byProject == nil {
+		f.byProject = map[uuid.UUID][]repo.ProjectEnvironment{}
+	}
+	f.byID[environment.ID] = environment
+	f.byProject[environment.ProjectID] = append(f.byProject[environment.ProjectID], environment)
+	return environment, nil
+}
+
+func (f *fakeEnvironmentRepoForTaskHandlers) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectEnvironment, error) {
+	if item, ok := f.byID[id]; ok {
+		return item, nil
+	}
+	return repo.ProjectEnvironment{}, repo.ErrNotFound
+}
+
+func (f *fakeEnvironmentRepoForTaskHandlers) ListByProject(_ context.Context, projectID uuid.UUID) ([]repo.ProjectEnvironment, error) {
+	if rows, ok := f.byProject[projectID]; ok {
+		return append([]repo.ProjectEnvironment(nil), rows...), nil
+	}
+	return []repo.ProjectEnvironment{}, nil
+}
+
+func (f *fakeEnvironmentRepoForTaskHandlers) Update(_ context.Context, environment repo.ProjectEnvironment) (repo.ProjectEnvironment, error) {
+	if f.byID == nil {
+		return repo.ProjectEnvironment{}, repo.ErrNotFound
+	}
+	if _, ok := f.byID[environment.ID]; !ok {
+		return repo.ProjectEnvironment{}, repo.ErrNotFound
+	}
+	f.byID[environment.ID] = environment
+	rows := f.byProject[environment.ProjectID]
+	for i := range rows {
+		if rows[i].ID == environment.ID {
+			rows[i] = environment
+		}
+	}
+	f.byProject[environment.ProjectID] = rows
+	return environment, nil
+}
+
+func strPtrTaskHandler(value string) *string {
+	copy := value
+	return &copy
 }
 
 type fakeTaskService struct {
