@@ -46,6 +46,73 @@ func TestPromptAssemblerLayer1AlwaysPresent(t *testing.T) {
 	}
 }
 
+func TestPromptAssemblerIncludesTaskContextForTaskScopedSession(t *testing.T) {
+	assembled := assembleTaskContextPrompt(t)
+	if !strings.Contains(assembled.SystemPrompt, "[Task Context]") {
+		t.Fatalf("system prompt missing [Task Context] block")
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Task: OC-5: Build OtterCamp sales landing page") {
+		t.Fatalf("system prompt missing task title")
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Status: in_progress") {
+		t.Fatalf("system prompt missing task status")
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Current Flow Step: Implement (active)") {
+		t.Fatalf("system prompt missing current flow step")
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Subtasks:\n- [done] Set up Next.js project") {
+		t.Fatalf("system prompt missing subtasks block")
+	}
+}
+
+func TestPromptAssemblerOmitsTaskContextForOrgScope(t *testing.T) {
+	orgID := uuid.New()
+	assembler := mustUnitAssembler(t, unitAssemblerConfig{
+		session:  repo.ChatSession{ID: uuid.New(), OrganizationID: orgID, ScopeType: "organization", ScopeID: orgID, Mode: "sync"},
+		agent:    repo.Agent{ID: uuid.New(), OrganizationID: orgID, SystemPrompt: "Agent"},
+		messages: []repo.ChatMessage{{SequenceNumber: 1, Role: "user", Content: "context"}},
+	})
+
+	assembled, err := assembler.Assemble(context.Background(), AssemblyInput{
+		SessionID: assembler.sessions.(*fakeSessionRepo).session.ID,
+		AgentID:   assembler.agents.(*fakeAgentRepo).agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("Assemble error = %v", err)
+	}
+	if strings.Contains(assembled.SystemPrompt, "[Task Context]") {
+		t.Fatalf("system prompt unexpectedly contains [Task Context] block")
+	}
+}
+
+func TestPromptAssemblerTaskContextBlockFormat(t *testing.T) {
+	assembled := assembleTaskContextPrompt(t)
+	expectedBlock := strings.Join([]string{
+		"[Task Context]",
+		"Task: OC-5: Build OtterCamp sales landing page",
+		"Project: Landing Site",
+		"Status: in_progress",
+		"Description: Create a responsive landing page for OtterCamp.",
+		"Acceptance Criteria:",
+		"- Mobile responsive design",
+		"- Page load < 2s",
+		"Current Flow Step: Implement (active)",
+		"Completed Flow Steps:",
+		"- Plan",
+		"Pending Flow Steps:",
+		"- Review",
+		"Subtasks:",
+		"- [done] Set up Next.js project",
+		"- [active] Build hero section",
+		"- [pending] Add pricing table",
+		"Dependencies:",
+		"- OC-4: Finalize copy deck",
+	}, "\n")
+	if !strings.Contains(assembled.SystemPrompt, expectedBlock) {
+		t.Fatalf("task context block format mismatch.\nwant block:\n%s\n\ngot system prompt:\n%s", expectedBlock, assembled.SystemPrompt)
+	}
+}
+
 func TestPromptAssemblerLayer5OrderingMostRelevantLast(t *testing.T) {
 	orgID := uuid.New()
 	idA := uuid.New()
@@ -268,6 +335,132 @@ func TestPromptAssemblerMCPPromptConflictSkillWins(t *testing.T) {
 	}
 }
 
+func assembleTaskContextPrompt(t *testing.T) *AssembledPrompt {
+	t.Helper()
+
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	depTaskID := uuid.New()
+	flowTemplateID := uuid.New()
+	nodePlanID := uuid.New()
+	nodeImplementID := uuid.New()
+	nodeReviewID := uuid.New()
+	activeExecutionID := uuid.New()
+
+	taskMetadata := json.RawMessage(`{"acceptance_criteria":["Mobile responsive design","Page load < 2s"]}`)
+	currentFlowNodeID := nodeImplementID
+	taskFlowTemplateID := flowTemplateID
+
+	assembler := mustUnitAssembler(t, unitAssemblerConfig{
+		session: repo.ChatSession{
+			ID:             uuid.New(),
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+		},
+		agent: repo.Agent{
+			ID:             uuid.New(),
+			OrganizationID: orgID,
+			SystemPrompt:   "Agent",
+		},
+		messages: []repo.ChatMessage{
+			{SequenceNumber: 1, Role: "user", Content: "start"},
+		},
+	})
+
+	assembler.projects = &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {ID: projectID, OrganizationID: orgID, DisplayName: "Landing Site"},
+		},
+	}
+	assembler.tasks = &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    orgID,
+				ProjectID:         projectID,
+				TaskNumber:        5,
+				Title:             "Build OtterCamp sales landing page",
+				Description:       strPtr("Create a responsive landing page for OtterCamp."),
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &currentFlowNodeID,
+				FlowTemplateID:    &taskFlowTemplateID,
+				Metadata:          taskMetadata,
+			},
+			depTaskID: {
+				ID:             depTaskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				TaskNumber:     4,
+				Title:          "Finalize copy deck",
+			},
+		},
+	}
+	assembler.flowNodes = &fakeFlowNodeRepo{
+		nodesByID: map[uuid.UUID]repo.FlowNode{
+			nodePlanID:      {ID: nodePlanID, FlowTemplateID: flowTemplateID, DisplayName: "Plan"},
+			nodeImplementID: {ID: nodeImplementID, FlowTemplateID: flowTemplateID, DisplayName: "Implement"},
+			nodeReviewID:    {ID: nodeReviewID, FlowTemplateID: flowTemplateID, DisplayName: "Review"},
+		},
+		nodesByTemplate: map[uuid.UUID][]repo.FlowNode{
+			flowTemplateID: {
+				{ID: nodePlanID, FlowTemplateID: flowTemplateID, DisplayName: "Plan", Position: 1},
+				{ID: nodeImplementID, FlowTemplateID: flowTemplateID, DisplayName: "Implement", Position: 2},
+				{ID: nodeReviewID, FlowTemplateID: flowTemplateID, DisplayName: "Review", Position: 3},
+			},
+		},
+	}
+	assembler.flowExecutions = &fakeFlowExecutionRepo{
+		activeByTaskAndNode: map[string]repo.FlowNodeExecution{
+			taskID.String() + "|" + nodeImplementID.String(): {
+				ID:         activeExecutionID,
+				TaskID:     taskID,
+				FlowNodeID: nodeImplementID,
+				Status:     "active",
+			},
+		},
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{ID: uuid.New(), TaskID: taskID, FlowNodeID: nodePlanID, Status: "completed"},
+				{ID: activeExecutionID, TaskID: taskID, FlowNodeID: nodeImplementID, Status: "active"},
+			},
+		},
+	}
+	assembler.subtasks = &fakeSubtaskRepo{
+		byExecution: map[uuid.UUID][]repo.ProjectSubtask{
+			activeExecutionID: {
+				{TaskID: taskID, FlowNodeExecutionID: activeExecutionID, Title: "Set up Next.js project", WorkStatus: "done", SequenceNumber: 1},
+				{TaskID: taskID, FlowNodeExecutionID: activeExecutionID, Title: "Build hero section", WorkStatus: "active", SequenceNumber: 2},
+				{TaskID: taskID, FlowNodeExecutionID: activeExecutionID, Title: "Add pricing table", WorkStatus: "pending", SequenceNumber: 3},
+			},
+		},
+	}
+	assembler.dependencies = &fakeDependencyRepo{
+		outboundBySource: map[uuid.UUID][]repo.ProjectTaskDependency{
+			taskID: {
+				{
+					ID:            uuid.New(),
+					SourceType:    "project_task",
+					SourceID:      taskID,
+					DependsOnType: "project_task",
+					DependsOnID:   depTaskID,
+				},
+			},
+		},
+	}
+
+	assembled, err := assembler.Assemble(context.Background(), AssemblyInput{
+		SessionID: assembler.sessions.(*fakeSessionRepo).session.ID,
+		AgentID:   assembler.agents.(*fakeAgentRepo).agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("Assemble error = %v", err)
+	}
+	return assembled
+}
+
 func containsTool(items []tools.ToolDescriptor, name string) bool {
 	for _, item := range items {
 		if item.Name == name {
@@ -317,6 +510,8 @@ func mustUnitAssembler(t *testing.T, cfg unitAssemblerConfig) *PromptAssembler {
 		FlowNodes:           &fakeFlowNodeRepo{},
 		FlowExecutions:      &fakeFlowExecutionRepo{},
 		FlowNodeSkills:      &fakeFlowNodeSkillRepo{},
+		Subtasks:            &fakeSubtaskRepo{},
+		Dependencies:        &fakeDependencyRepo{},
 		Agents:              &fakeAgentRepo{agent: cfg.agent},
 		ModelProfiles:       &fakeModelProfileRepo{profile: cfg.modelProfile},
 		MemoryRetriever:     &fakeMemoryRetriever{result: cfg.retrieval},
@@ -371,15 +566,25 @@ func (f *fakeOrganizationRepo) GetByID(context.Context, uuid.UUID) (repo.Organiz
 	return f.org, nil
 }
 
-type fakeProjectRepo struct{}
+type fakeProjectRepo struct {
+	projects map[uuid.UUID]repo.Project
+}
 
-func (f *fakeProjectRepo) GetByID(context.Context, uuid.UUID) (repo.Project, error) {
+func (f *fakeProjectRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Project, error) {
+	if item, ok := f.projects[id]; ok {
+		return item, nil
+	}
 	return repo.Project{}, repo.ErrNotFound
 }
 
-type fakeTaskRepo struct{}
+type fakeTaskRepo struct {
+	tasks map[uuid.UUID]repo.ProjectTask
+}
 
-func (f *fakeTaskRepo) GetByID(context.Context, uuid.UUID) (repo.ProjectTask, error) {
+func (f *fakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectTask, error) {
+	if item, ok := f.tasks[id]; ok {
+		return item, nil
+	}
 	return repo.ProjectTask{}, repo.ErrNotFound
 }
 
@@ -389,22 +594,74 @@ func (f *fakeFlowTemplateRepo) GetByID(context.Context, uuid.UUID) (repo.FlowTem
 	return repo.FlowTemplate{}, repo.ErrNotFound
 }
 
-type fakeFlowNodeRepo struct{}
+type fakeFlowNodeRepo struct {
+	nodesByID       map[uuid.UUID]repo.FlowNode
+	nodesByTemplate map[uuid.UUID][]repo.FlowNode
+}
 
-func (f *fakeFlowNodeRepo) GetByID(context.Context, uuid.UUID) (repo.FlowNode, error) {
+func (f *fakeFlowNodeRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNode, error) {
+	if item, ok := f.nodesByID[id]; ok {
+		return item, nil
+	}
 	return repo.FlowNode{}, repo.ErrNotFound
 }
 
-type fakeFlowExecutionRepo struct{}
+func (f *fakeFlowNodeRepo) GetByTemplateOrdered(_ context.Context, flowTemplateID uuid.UUID) ([]repo.FlowNode, error) {
+	if rows, ok := f.nodesByTemplate[flowTemplateID]; ok {
+		return append([]repo.FlowNode(nil), rows...), nil
+	}
+	return nil, repo.ErrNotFound
+}
 
-func (f *fakeFlowExecutionRepo) GetActive(context.Context, uuid.UUID, uuid.UUID) (repo.FlowNodeExecution, error) {
+type fakeFlowExecutionRepo struct {
+	activeByTaskAndNode map[string]repo.FlowNodeExecution
+	byTask              map[uuid.UUID][]repo.FlowNodeExecution
+}
+
+func (f *fakeFlowExecutionRepo) GetActive(_ context.Context, taskID, flowNodeID uuid.UUID) (repo.FlowNodeExecution, error) {
+	key := taskID.String() + "|" + flowNodeID.String()
+	if item, ok := f.activeByTaskAndNode[key]; ok {
+		return item, nil
+	}
 	return repo.FlowNodeExecution{}, repo.ErrNotFound
+}
+
+func (f *fakeFlowExecutionRepo) ListByTask(_ context.Context, taskID uuid.UUID) ([]repo.FlowNodeExecution, error) {
+	if rows, ok := f.byTask[taskID]; ok {
+		return append([]repo.FlowNodeExecution(nil), rows...), nil
+	}
+	return nil, repo.ErrNotFound
 }
 
 type fakeFlowNodeSkillRepo struct{}
 
 func (f *fakeFlowNodeSkillRepo) ListByNode(context.Context, uuid.UUID) ([]repo.FlowNodeSkill, error) {
 	return nil, nil
+}
+
+type fakeSubtaskRepo struct {
+	byExecution map[uuid.UUID][]repo.ProjectSubtask
+}
+
+func (f *fakeSubtaskRepo) ListByExecution(_ context.Context, flowNodeExecutionID uuid.UUID) ([]repo.ProjectSubtask, error) {
+	if rows, ok := f.byExecution[flowNodeExecutionID]; ok {
+		return append([]repo.ProjectSubtask(nil), rows...), nil
+	}
+	return []repo.ProjectSubtask{}, nil
+}
+
+type fakeDependencyRepo struct {
+	outboundBySource map[uuid.UUID][]repo.ProjectTaskDependency
+}
+
+func (f *fakeDependencyRepo) ListOutbound(_ context.Context, sourceType string, sourceID uuid.UUID) ([]repo.ProjectTaskDependency, error) {
+	if strings.TrimSpace(sourceType) != "project_task" {
+		return []repo.ProjectTaskDependency{}, nil
+	}
+	if rows, ok := f.outboundBySource[sourceID]; ok {
+		return append([]repo.ProjectTaskDependency(nil), rows...), nil
+	}
+	return []repo.ProjectTaskDependency{}, nil
 }
 
 type fakeModelProfileRepo struct{ profile repo.ModelProfile }
@@ -479,6 +736,11 @@ type fakeMCPPromptLister struct {
 
 func (f *fakeMCPPromptLister) ListPrompts(context.Context, repo.MCPConnection) ([]MCPPrompt, error) {
 	return append([]MCPPrompt(nil), f.prompts...), nil
+}
+
+func strPtr(value string) *string {
+	copyValue := value
+	return &copyValue
 }
 
 func osWriteFile(path string, data []byte) error {
