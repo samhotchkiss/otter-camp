@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
@@ -448,6 +449,239 @@ func TestFlowAdvanceTerminalPropagatesGetByIDError(t *testing.T) {
 	}
 	if tasks.setFlowNodeCalls != 0 {
 		t.Fatalf("set flow node calls=%d, want 0", tasks.setFlowNodeCalls)
+	}
+}
+
+// ── Project creation auto-assignment tests ──────────────────────────────
+
+type fakeProjectRepo struct {
+	lastCreated repo.Project
+}
+
+func (f *fakeProjectRepo) Create(_ context.Context, p repo.Project) (repo.Project, error) {
+	p.ID = uuid.New()
+	f.lastCreated = p
+	return p, nil
+}
+func (f *fakeProjectRepo) List(context.Context, uuid.UUID) ([]repo.Project, error) {
+	return nil, nil
+}
+func (f *fakeProjectRepo) GetByID(context.Context, uuid.UUID) (repo.Project, error) {
+	return repo.Project{}, nil
+}
+func (f *fakeProjectRepo) GetBySlug(context.Context, uuid.UUID, string) (repo.Project, error) {
+	return repo.Project{}, nil
+}
+func (f *fakeProjectRepo) Update(context.Context, repo.Project) (repo.Project, error) {
+	return repo.Project{}, nil
+}
+func (f *fakeProjectRepo) Archive(context.Context, uuid.UUID) error { return nil }
+
+type fakeAgentRepo struct {
+	agents []repo.Agent
+}
+
+func (f *fakeAgentRepo) Create(context.Context, repo.Agent) (repo.Agent, error) {
+	return repo.Agent{}, nil
+}
+func (f *fakeAgentRepo) GetByID(context.Context, uuid.UUID) (repo.Agent, error) {
+	return repo.Agent{}, nil
+}
+func (f *fakeAgentRepo) List(context.Context, uuid.UUID) ([]repo.Agent, error) {
+	return f.agents, nil
+}
+func (f *fakeAgentRepo) Update(context.Context, repo.Agent) (repo.Agent, error) {
+	return repo.Agent{}, nil
+}
+
+type fakeAssignmentRepo struct {
+	assignments []repo.AgentProjectAssignment
+}
+
+func (f *fakeAssignmentRepo) Assign(_ context.Context, a repo.AgentProjectAssignment) (repo.AgentProjectAssignment, error) {
+	a.ID = uuid.New()
+	a.IsActive = true
+	f.assignments = append(f.assignments, a)
+	return a, nil
+}
+func (f *fakeAssignmentRepo) ListByProject(_ context.Context, projectID uuid.UUID) ([]repo.AgentProjectAssignment, error) {
+	var result []repo.AgentProjectAssignment
+	for _, a := range f.assignments {
+		if a.ProjectID == projectID {
+			result = append(result, a)
+		}
+	}
+	return result, nil
+}
+
+type fakeChatSessionRepo struct {
+	lastCreated repo.ChatSession
+}
+
+func (f *fakeChatSessionRepo) Create(_ context.Context, s repo.ChatSession) (repo.ChatSession, error) {
+	s.ID = uuid.New()
+	f.lastCreated = s
+	return s, nil
+}
+func (f *fakeChatSessionRepo) GetByID(context.Context, uuid.UUID) (repo.ChatSession, error) {
+	return repo.ChatSession{}, nil
+}
+func (f *fakeChatSessionRepo) ListByOrg(context.Context, uuid.UUID) ([]repo.ChatSession, error) {
+	return nil, nil
+}
+
+type fakeParticipantRepo struct {
+	participants []repo.ChatParticipant
+}
+
+func (f *fakeParticipantRepo) Create(_ context.Context, p repo.ChatParticipant) (repo.ChatParticipant, error) {
+	p.ID = uuid.New()
+	f.participants = append(f.participants, p)
+	return p, nil
+}
+func (f *fakeParticipantRepo) ListBySession(context.Context, uuid.UUID) ([]repo.ChatParticipant, error) {
+	return nil, nil
+}
+
+func TestProjectCreateAutoAssignsAgents(t *testing.T) {
+	frankID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+	loriID := uuid.New()
+	orgID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+
+	projects := &fakeProjectRepo{}
+	agents := &fakeAgentRepo{
+		agents: []repo.Agent{
+			{ID: frankID, OrganizationID: orgID, DisplayName: "Frank", AgentType: "general", IsStarterTrio: true},
+			{ID: loriID, OrganizationID: orgID, DisplayName: "Lori", AgentType: "pm", IsStarterTrio: true},
+			{ID: uuid.New(), OrganizationID: orgID, DisplayName: "Ellie", AgentType: "general", IsStarterTrio: true},
+		},
+	}
+	assignments := &fakeAssignmentRepo{}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.projects = projects
+	executor.agents = agents
+	executor.assignments = assignments
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &frankID,
+	})
+
+	out, err := executor.Execute(ctx, "project.create", map[string]any{
+		"name":        "Super Bowl Ad",
+		"description": "Create a Super Bowl ad for OtterCamp",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+
+	// Verify project was created
+	proj, ok := out["project"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing project in output: %v", out)
+	}
+	if proj["name"] != "Super Bowl Ad" {
+		t.Fatalf("project name = %v, want Super Bowl Ad", proj["name"])
+	}
+
+	// Verify auto-assignments
+	assigned, ok := out["assigned_agents"].([]map[string]any)
+	if !ok || len(assigned) != 2 {
+		t.Fatalf("assigned_agents = %v, want 2 entries", out["assigned_agents"])
+	}
+
+	// First assignment should be Frank as PM
+	if assigned[0]["role"] != "pm" {
+		t.Fatalf("assigned[0].role = %v, want pm", assigned[0]["role"])
+	}
+
+	// Second assignment should be Lori as worker
+	if assigned[1]["role"] != "worker" {
+		t.Fatalf("assigned[1].role = %v, want worker", assigned[1]["role"])
+	}
+	if assigned[1]["agent_name"] != "Lori" {
+		t.Fatalf("assigned[1].agent_name = %v, want Lori", assigned[1]["agent_name"])
+	}
+
+	// Verify underlying assignment records
+	if len(assignments.assignments) != 2 {
+		t.Fatalf("assignment repo entries = %d, want 2", len(assignments.assignments))
+	}
+	if assignments.assignments[0].AgentID != frankID {
+		t.Fatalf("assignment[0].agent_id = %v, want Frank", assignments.assignments[0].AgentID)
+	}
+	if assignments.assignments[1].AgentID != loriID {
+		t.Fatalf("assignment[1].agent_id = %v, want Lori", assignments.assignments[1].AgentID)
+	}
+}
+
+func TestSessionCreateAutoAddsProjectParticipants(t *testing.T) {
+	frankID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+	loriID := uuid.New()
+	orgID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	projectID := uuid.New()
+
+	sessions := &fakeChatSessionRepo{}
+	participants := &fakeParticipantRepo{}
+	assignments := &fakeAssignmentRepo{
+		assignments: []repo.AgentProjectAssignment{
+			{AgentID: frankID, ProjectID: projectID, Role: "pm", IsActive: true},
+			{AgentID: loriID, ProjectID: projectID, Role: "worker", IsActive: true},
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.chatSessions = sessions
+	executor.participants = participants
+	executor.assignments = assignments
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &frankID,
+	})
+
+	out, err := executor.Execute(ctx, "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+
+	// Verify session was created
+	session, ok := out["session"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing session in output: %v", out)
+	}
+	if session["mode"] != "async" {
+		t.Fatalf("session mode = %v, want async", session["mode"])
+	}
+
+	// Verify auto-participants were added
+	autoParticipants, ok := out["auto_participants"].([]map[string]any)
+	if !ok || len(autoParticipants) != 2 {
+		t.Fatalf("auto_participants = %v, want 2 entries", out["auto_participants"])
+	}
+
+	// Worker should be added FIRST (so they become primary responder)
+	if autoParticipants[0]["project_role"] != "worker" {
+		t.Fatalf("first participant role = %v, want worker", autoParticipants[0]["project_role"])
+	}
+	if autoParticipants[1]["project_role"] != "pm" {
+		t.Fatalf("second participant role = %v, want pm", autoParticipants[1]["project_role"])
+	}
+
+	// Verify participant records: worker first, then PM
+	if len(participants.participants) != 2 {
+		t.Fatalf("participant entries = %d, want 2", len(participants.participants))
+	}
+	if participants.participants[0].ParticipantID != loriID {
+		t.Fatalf("first participant = %v, want Lori", participants.participants[0].ParticipantID)
+	}
+	if participants.participants[1].ParticipantID != frankID {
+		t.Fatalf("second participant = %v, want Frank", participants.participants[1].ParticipantID)
 	}
 }
 
