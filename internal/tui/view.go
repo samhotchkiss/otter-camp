@@ -1367,15 +1367,19 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			if rec != nil {
 				var details []string
 				if rec.AgentName != "" {
-					details = append(details, rec.AgentName)
+					if strings.EqualFold(rec.AgentName, "Frank") {
+						details = append(details, rec.AgentName+" ⚠")
+					} else {
+						details = append(details, rec.AgentName)
+					}
+				} else {
+					details = append(details, "unassigned")
 				}
 				if rec.FlowNodeName != "" {
 					details = append(details, "step: "+rec.FlowNodeName)
 				}
-				if len(details) > 0 {
-					detailLine := "      " + styleMuted.Render(strings.Join(details, "  ·  "))
-					taskLines = append(taskLines, detailLine)
-				}
+				detailLine := "      " + styleMuted.Render(strings.Join(details, "  ·  "))
+				taskLines = append(taskLines, detailLine)
 			}
 		}
 		// If task list overflows available space, use a stateless scroll window
@@ -1522,7 +1526,15 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 		}
 	}
 	if task.AgentName != "" {
-		lines = append(lines, styleMuted.Render("  Agent: "+task.AgentName))
+		agentLine := "  Agent: " + task.AgentName
+		if strings.EqualFold(task.AgentName, "Frank") {
+			agentLine += "  ⚠ org assistant — should be a worker agent"
+			lines = append(lines, lipgloss.NewStyle().Foreground(colWarning).Render(agentLine))
+		} else {
+			lines = append(lines, styleMuted.Render(agentLine))
+		}
+	} else {
+		lines = append(lines, lipgloss.NewStyle().Foreground(colWarning).Render("  Agent: unassigned ⚠"))
 	}
 	if task.BranchName != "" {
 		lines = append(lines, styleMuted.Render("  Branch: "+task.BranchName))
