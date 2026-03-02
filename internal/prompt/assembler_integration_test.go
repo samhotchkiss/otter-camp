@@ -166,6 +166,127 @@ func TestPromptAssemblerIntegrationMemoryCooldown(t *testing.T) {
 	}
 }
 
+func TestPromptAssemblerIntegrationTaskScopeIncludesTaskContext(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org := createPromptOrg(t, ctx, pool)
+	project := createPromptProject(t, ctx, pool, org.ID)
+	agent := createPromptAgent(t, ctx, pool, org.ID, "task agent")
+
+	template := createPromptFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	planNode := createPromptFlowNode(t, ctx, pool, template.ID, "Plan", 1)
+	implementNode := createPromptFlowNode(t, ctx, pool, template.ID, "Implement", 2)
+	reviewNode := createPromptFlowNode(t, ctx, pool, template.ID, "Review", 3)
+
+	taskRecord := createPromptTask(t, ctx, pool, org.ID, project.ID, template.ID, implementNode.ID)
+	dependencyTask := createPromptDependentTask(t, ctx, pool, org.ID, project.ID)
+
+	flowExecutions := repo.NewFlowNodeExecutionRepo(pool)
+	completedExec, err := flowExecutions.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  planNode.ID,
+		VisitNumber: 1,
+		Status:      "completed",
+	})
+	if err != nil {
+		t.Fatalf("create completed flow execution: %v", err)
+	}
+	if completedExec.ID == uuid.Nil {
+		t.Fatalf("completed flow execution id is nil")
+	}
+	activeExec, err := flowExecutions.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  implementNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create active flow execution: %v", err)
+	}
+
+	subtasks := repo.NewProjectSubtaskRepo(pool)
+	if _, err := subtasks.Create(ctx, repo.ProjectSubtask{
+		TaskID:              taskRecord.ID,
+		FlowNodeExecutionID: activeExec.ID,
+		Title:               "Set up Next.js project",
+		WorkStatus:          "done",
+		SequenceNumber:      1,
+		CreatedByType:       "system",
+		CreatedByID:         ptrUUID(uuid.Nil),
+	}); err != nil {
+		t.Fatalf("create done subtask: %v", err)
+	}
+	if _, err := subtasks.Create(ctx, repo.ProjectSubtask{
+		TaskID:              taskRecord.ID,
+		FlowNodeExecutionID: activeExec.ID,
+		Title:               "Build hero section",
+		WorkStatus:          "in_progress",
+		SequenceNumber:      2,
+		CreatedByType:       "system",
+		CreatedByID:         ptrUUID(uuid.Nil),
+	}); err != nil {
+		t.Fatalf("create active subtask: %v", err)
+	}
+	if _, err := subtasks.Create(ctx, repo.ProjectSubtask{
+		TaskID:              taskRecord.ID,
+		FlowNodeExecutionID: activeExec.ID,
+		Title:               "Add pricing table",
+		WorkStatus:          "pending",
+		SequenceNumber:      3,
+		CreatedByType:       "system",
+		CreatedByID:         ptrUUID(uuid.Nil),
+	}); err != nil {
+		t.Fatalf("create pending subtask: %v", err)
+	}
+
+	if _, err := repo.NewProjectTaskDependencyRepo(pool).Add(ctx, repo.ProjectTaskDependency{
+		SourceType:    "project_task",
+		SourceID:      taskRecord.ID,
+		DependsOnType: "project_task",
+		DependsOnID:   dependencyTask.ID,
+		CreatedByType: "system",
+		CreatedByID:   ptrUUID(uuid.Nil),
+	}); err != nil {
+		t.Fatalf("create dependency: %v", err)
+	}
+
+	session := createPromptSession(t, ctx, pool, org.ID, "project_task", taskRecord.ID)
+	seedPromptMessages(t, ctx, pool, session.ID, 1)
+
+	assembler, err := NewPromptAssembler(AssemblerOptions{Pool: pool})
+	if err != nil {
+		t.Fatalf("NewPromptAssembler: %v", err)
+	}
+	assembled, err := assembler.Assemble(ctx, AssemblyInput{SessionID: session.ID, AgentID: agent.ID})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+
+	if !strings.Contains(assembled.SystemPrompt, "[Task Context]") {
+		t.Fatalf("missing [Task Context] block")
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Task: OC-") || !strings.Contains(assembled.SystemPrompt, "Build OtterCamp sales landing page") {
+		t.Fatalf("missing task title line")
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Status: in_progress") {
+		t.Fatalf("missing task status line")
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Current Flow Step: Implement (active)") {
+		t.Fatalf("missing current flow step line")
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Subtasks:\n- [done] Set up Next.js project\n- [active] Build hero section\n- [pending] Add pricing table") {
+		t.Fatalf("missing expected subtasks block")
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Dependencies:\n- OC-") || !strings.Contains(assembled.SystemPrompt, "Finalize copy deck") {
+		t.Fatalf("missing expected dependencies block")
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Pending Flow Steps:\n- Review") {
+		t.Fatalf("missing expected pending flow steps")
+	}
+	_ = reviewNode
+}
+
 func createPromptOrg(t *testing.T, ctx context.Context, pool *pgxpool.Pool) repo.Organization {
 	t.Helper()
 	item, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{Slug: "prompt-org-" + uuid.NewString()[:8], DisplayName: "Prompt Org"})
@@ -189,6 +310,88 @@ func createPromptProject(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 	})
 	if err != nil {
 		t.Fatalf("create project: %v", err)
+	}
+	return item
+}
+
+func createPromptFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID uuid.UUID) repo.FlowTemplate {
+	t.Helper()
+	project := projectID
+	item, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &project,
+		Slug:           "prompt-flow-" + uuid.NewString()[:8],
+		DisplayName:    "Prompt Flow",
+		Description:    "prompt flow",
+		IsCurrent:      true,
+		Version:        1,
+		IsSystem:       false,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	return item
+}
+
+func createPromptFlowNode(t *testing.T, ctx context.Context, pool *pgxpool.Pool, templateID uuid.UUID, name string, position int) repo.FlowNode {
+	t.Helper()
+	item, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: templateID,
+		DisplayName:    name,
+		NodeType:       "work",
+		Position:       position,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	return item
+}
+
+func createPromptTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID, flowTemplateID, flowNodeID uuid.UUID) repo.ProjectTask {
+	t.Helper()
+	currentFlowNodeID := flowNodeID
+	templateID := flowTemplateID
+	item, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    orgID,
+		ProjectID:         projectID,
+		Title:             "Build OtterCamp sales landing page",
+		Description:       ptrString("Create a responsive landing page for OtterCamp."),
+		WorkStatus:        "in_progress",
+		CurrentFlowNodeID: &currentFlowNodeID,
+		FlowTemplateID:    &templateID,
+		CreatedByType:     "system",
+		CreatedByID:       ptrUUID(uuid.Nil),
+		Metadata:          json.RawMessage(`{"acceptance_criteria":["Mobile responsive design","Page load < 2s"]}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if item.TaskNumber != 1 {
+		t.Fatalf("task number = %d, want 1", item.TaskNumber)
+	}
+	return item
+}
+
+func createPromptDependentTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID uuid.UUID) repo.ProjectTask {
+	t.Helper()
+	item, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		Title:          "Finalize copy deck",
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		CreatedByID:    ptrUUID(uuid.Nil),
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create dependent task: %v", err)
+	}
+	if item.TaskNumber != 2 {
+		t.Fatalf("dependent task number = %d, want 2", item.TaskNumber)
 	}
 	return item
 }
@@ -287,4 +490,14 @@ func createPromptSkill(t *testing.T, ctx context.Context, pool *pgxpool.Pool, or
 		t.Fatalf("create skill: %v", err)
 	}
 	return item
+}
+
+func ptrString(value string) *string {
+	copyValue := value
+	return &copyValue
+}
+
+func ptrUUID(value uuid.UUID) *uuid.UUID {
+	copyValue := value
+	return &copyValue
 }

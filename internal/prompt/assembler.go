@@ -60,9 +60,9 @@ type PromptToolCall struct {
 }
 
 type PromptMessage struct {
-	Role       string          `json:"role"`
-	Content    string          `json:"content"`
-	ToolCallID *string         `json:"tool_call_id,omitempty"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	ToolCallID *string          `json:"tool_call_id,omitempty"`
 	ToolCalls  []PromptToolCall `json:"tool_calls,omitempty"`
 }
 
@@ -121,14 +121,24 @@ type flowTemplateRepository interface {
 
 type flowNodeRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.FlowNode, error)
+	GetByTemplateOrdered(ctx context.Context, flowTemplateID uuid.UUID) ([]repo.FlowNode, error)
 }
 
 type flowNodeExecutionRepository interface {
 	GetActive(ctx context.Context, taskID, flowNodeID uuid.UUID) (repo.FlowNodeExecution, error)
+	ListByTask(ctx context.Context, taskID uuid.UUID) ([]repo.FlowNodeExecution, error)
 }
 
 type flowNodeSkillRepository interface {
 	ListByNode(ctx context.Context, flowNodeID uuid.UUID) ([]repo.FlowNodeSkill, error)
+}
+
+type subtaskRepository interface {
+	ListByExecution(ctx context.Context, flowNodeExecutionID uuid.UUID) ([]repo.ProjectSubtask, error)
+}
+
+type taskDependencyRepository interface {
+	ListOutbound(ctx context.Context, sourceType string, sourceID uuid.UUID) ([]repo.ProjectTaskDependency, error)
 }
 
 type agentRepository interface {
@@ -190,6 +200,8 @@ type AssemblerOptions struct {
 	FlowNodes       flowNodeRepository
 	FlowExecutions  flowNodeExecutionRepository
 	FlowNodeSkills  flowNodeSkillRepository
+	Subtasks        subtaskRepository
+	Dependencies    taskDependencyRepository
 	Agents          agentRepository
 	AgentSkills     agentSkillAttachmentRepository
 	Skills          skillRepository
@@ -224,6 +236,8 @@ type PromptAssembler struct {
 	flowNodes      flowNodeRepository
 	flowExecutions flowNodeExecutionRepository
 	flowNodeSkills flowNodeSkillRepository
+	subtasks       subtaskRepository
+	dependencies   taskDependencyRepository
 	agents         agentRepository
 	agentSkills    agentSkillAttachmentRepository
 	skills         skillRepository
@@ -302,6 +316,8 @@ func NewPromptAssembler(opts AssemblerOptions) (*PromptAssembler, error) {
 		flowNodes:           opts.FlowNodes,
 		flowExecutions:      opts.FlowExecutions,
 		flowNodeSkills:      opts.FlowNodeSkills,
+		subtasks:            opts.Subtasks,
+		dependencies:        opts.Dependencies,
 		agents:              opts.Agents,
 		agentSkills:         opts.AgentSkills,
 		skills:              opts.Skills,
@@ -368,6 +384,12 @@ func NewPromptAssembler(opts AssemblerOptions) (*PromptAssembler, error) {
 	}
 	if a.flowNodeSkills == nil {
 		a.flowNodeSkills = repo.NewFlowNodeSkillRepo(opts.Pool)
+	}
+	if a.subtasks == nil {
+		a.subtasks = repo.NewProjectSubtaskRepo(opts.Pool)
+	}
+	if a.dependencies == nil {
+		a.dependencies = repo.NewProjectTaskDependencyRepo(opts.Pool)
 	}
 	if a.agents == nil {
 		a.agents = repo.NewAgentRepo(opts.Pool)
@@ -448,10 +470,20 @@ func (a *PromptAssembler) Assemble(ctx context.Context, input AssemblyInput) (*A
 		ToolDescriptors: append([]tools.ToolDescriptor(nil), input.ToolDescriptors...),
 	}
 
+	var taskCtx *projectTaskContext
+	if strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+		contextRow, contextErr := a.buildProjectTaskContext(ctx, session.ScopeID)
+		if contextErr != nil {
+			assembled.Errors = append(assembled.Errors, fmt.Sprintf("task context unavailable: %v", contextErr))
+		} else {
+			taskCtx = &contextRow
+		}
+	}
+
 	layer1 := buildLayer1(agentRecord)
 	layer2 := a.buildLayer2(ctx, session, agentRecord, input.ToolDescriptors)
-	layer3 := a.buildLayer3(ctx, session)
-	layer4 := a.buildLayer4(ctx, session, agentRecord.ID, input.ToolDescriptors, &assembled.Errors)
+	layer3 := a.buildLayer3(ctx, session, taskCtx)
+	layer4 := a.buildLayer4(ctx, session, taskCtx, agentRecord.ID, input.ToolDescriptors, &assembled.Errors)
 	layer5, manifest := a.buildLayer5(ctx, session, agentRecord.ID, messages, input.PreviousManifest, memoryBudget)
 	assembled.MemoryManifest = manifest
 
@@ -617,7 +649,7 @@ func (a *PromptAssembler) buildLayer2(ctx context.Context, session repo.ChatSess
 	return strings.Join(lines, "\n")
 }
 
-func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSession) string {
+func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSession, taskCtx *projectTaskContext) string {
 	lines := []string{"## Current Context"}
 	scopeType := strings.TrimSpace(session.ScopeType)
 
@@ -661,24 +693,80 @@ func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSess
 			lines = append(lines, "Flow template: "+flowTemplate)
 		}
 	case "project_task":
-		context, err := a.buildProjectTaskContext(ctx, session.ScopeID)
-		if err != nil {
-			lines = append(lines, "Project task ID: "+session.ScopeID.String())
+		lines = append(lines, "[Task Context]")
+		if taskCtx == nil {
+			lines = append(lines, "Task ID: "+session.ScopeID.String())
 			break
 		}
-		lines = append(lines, "Project: "+context.projectName)
-		lines = append(lines, "Task: "+context.taskTitle)
-		if context.taskDescription != "" {
-			lines = append(lines, "Task description: "+context.taskDescription)
+		taskLabel := strings.TrimSpace(taskCtx.taskTitle)
+		if taskCtx.taskNumber > 0 {
+			taskLabel = fmt.Sprintf("OC-%d: %s", taskCtx.taskNumber, taskLabel)
 		}
-		if context.nodeName != "" {
-			lines = append(lines, "Flow node: "+context.nodeName)
+		if taskLabel == "" {
+			taskLabel = session.ScopeID.String()
 		}
-		if context.nodeDescription != "" {
-			lines = append(lines, "Flow node description: "+context.nodeDescription)
+		lines = append(lines, "Task: "+taskLabel)
+		if strings.TrimSpace(taskCtx.projectName) != "" {
+			lines = append(lines, "Project: "+strings.TrimSpace(taskCtx.projectName))
 		}
-		if context.visitCount > 1 {
-			lines = append(lines, fmt.Sprintf("Note: this node has been visited %d times previously.", context.visitCount))
+		if strings.TrimSpace(taskCtx.taskStatus) != "" {
+			lines = append(lines, "Status: "+strings.TrimSpace(taskCtx.taskStatus))
+		}
+		if strings.TrimSpace(taskCtx.taskDescription) != "" {
+			lines = append(lines, "Description: "+strings.TrimSpace(taskCtx.taskDescription))
+		}
+		if len(taskCtx.acceptanceCriteria) > 0 {
+			lines = append(lines, "Acceptance Criteria:")
+			for _, item := range taskCtx.acceptanceCriteria {
+				if strings.TrimSpace(item) == "" {
+					continue
+				}
+				lines = append(lines, "- "+strings.TrimSpace(item))
+			}
+		}
+		if strings.TrimSpace(taskCtx.currentFlowStep) != "" {
+			line := "Current Flow Step: " + strings.TrimSpace(taskCtx.currentFlowStep)
+			if strings.TrimSpace(taskCtx.currentFlowStatus) != "" {
+				line += " (" + strings.TrimSpace(taskCtx.currentFlowStatus) + ")"
+			}
+			lines = append(lines, line)
+		}
+		if len(taskCtx.completedFlowSteps) > 0 {
+			lines = append(lines, "Completed Flow Steps:")
+			for _, step := range taskCtx.completedFlowSteps {
+				if strings.TrimSpace(step) == "" {
+					continue
+				}
+				lines = append(lines, "- "+strings.TrimSpace(step))
+			}
+		}
+		if len(taskCtx.pendingFlowSteps) > 0 {
+			lines = append(lines, "Pending Flow Steps:")
+			for _, step := range taskCtx.pendingFlowSteps {
+				if strings.TrimSpace(step) == "" {
+					continue
+				}
+				lines = append(lines, "- "+strings.TrimSpace(step))
+			}
+		}
+		if len(taskCtx.subtasks) > 0 {
+			lines = append(lines, "Subtasks:")
+			for _, item := range taskCtx.subtasks {
+				if strings.TrimSpace(item.title) == "" {
+					continue
+				}
+				status := displaySubtaskStatus(item.status)
+				lines = append(lines, fmt.Sprintf("- [%s] %s", status, strings.TrimSpace(item.title)))
+			}
+		}
+		if len(taskCtx.dependencies) > 0 {
+			lines = append(lines, "Dependencies:")
+			for _, item := range taskCtx.dependencies {
+				if strings.TrimSpace(item) == "" {
+					continue
+				}
+				lines = append(lines, "- "+strings.TrimSpace(item))
+			}
 		}
 	default:
 		lines = append(lines, "Scope: "+scopeType)
@@ -701,7 +789,7 @@ func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSess
 		return layer3
 	}
 
-	prefix := "Task description: "
+	prefix := "Description: "
 	full := strings.TrimPrefix(lines[index], prefix)
 	others := append([]string(nil), lines...)
 	others[index] = prefix
@@ -725,16 +813,25 @@ func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSess
 	return strings.Join(lines, "\n")
 }
 
+type taskContextSubtask struct {
+	title  string
+	status string
+}
+
 type projectTaskContext struct {
-	projectName     string
-	taskTitle       string
-	taskDescription string
-	nodeName        string
-	nodeDescription string
-	visitCount      int
-	flowNodeID      *uuid.UUID
-	flowTemplateID  *uuid.UUID
-	organizationID  uuid.UUID
+	projectName        string
+	taskTitle          string
+	taskNumber         int
+	taskStatus         string
+	taskDescription    string
+	acceptanceCriteria []string
+	currentFlowStep    string
+	currentFlowStatus  string
+	completedFlowSteps []string
+	pendingFlowSteps   []string
+	subtasks           []taskContextSubtask
+	dependencies       []string
+	flowNodeID         *uuid.UUID
 }
 
 func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uuid.UUID) (projectTaskContext, error) {
@@ -746,11 +843,16 @@ func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uu
 		return projectTaskContext{}, err
 	}
 	out := projectTaskContext{
-		taskTitle:       strings.TrimSpace(taskRecord.Title),
-		taskDescription: strings.TrimSpace(derefString(taskRecord.Description)),
-		flowNodeID:      taskRecord.CurrentFlowNodeID,
-		flowTemplateID:  taskRecord.FlowTemplateID,
-		organizationID:  taskRecord.OrganizationID,
+		taskTitle:          strings.TrimSpace(taskRecord.Title),
+		taskNumber:         taskRecord.TaskNumber,
+		taskStatus:         strings.TrimSpace(taskRecord.WorkStatus),
+		taskDescription:    strings.TrimSpace(derefString(taskRecord.Description)),
+		acceptanceCriteria: parseTaskAcceptanceCriteria(taskRecord.Metadata),
+		flowNodeID:         taskRecord.CurrentFlowNodeID,
+		completedFlowSteps: make([]string, 0),
+		pendingFlowSteps:   make([]string, 0),
+		subtasks:           make([]taskContextSubtask, 0),
+		dependencies:       make([]string, 0),
 	}
 	if out.taskTitle == "" {
 		out.taskTitle = taskRecord.ID.String()
@@ -766,24 +868,178 @@ func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uu
 		out.projectName = taskRecord.ProjectID.String()
 	}
 
-	if taskRecord.CurrentFlowNodeID != nil && a.flowNodes != nil {
-		node, nodeErr := a.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
-		if nodeErr == nil {
-			out.nodeName = strings.TrimSpace(node.DisplayName)
-			out.nodeDescription = strings.TrimSpace(node.NodeType)
-			if a.flowExecutions != nil {
-				execRow, execErr := a.flowExecutions.GetActive(ctx, taskRecord.ID, node.ID)
-				if execErr == nil {
-					out.visitCount = execRow.VisitNumber
-				}
+	executionStatusByNode := map[uuid.UUID]string{}
+	if a.flowExecutions != nil {
+		if executions, listErr := a.flowExecutions.ListByTask(ctx, taskRecord.ID); listErr == nil {
+			for _, execution := range executions {
+				executionStatusByNode[execution.FlowNodeID] = strings.TrimSpace(execution.Status)
 			}
 		}
 	}
+
+	if taskRecord.FlowTemplateID != nil && a.flowNodes != nil {
+		if flowNodes, listErr := a.flowNodes.GetByTemplateOrdered(ctx, *taskRecord.FlowTemplateID); listErr == nil {
+			for _, node := range flowNodes {
+				stepLabel := flowStepLabel(node)
+				status := strings.TrimSpace(executionStatusByNode[node.ID])
+				if taskRecord.CurrentFlowNodeID != nil && node.ID == *taskRecord.CurrentFlowNodeID {
+					out.currentFlowStep = stepLabel
+					if status == "" {
+						status = "active"
+					}
+					out.currentFlowStatus = status
+					continue
+				}
+				if strings.EqualFold(status, "completed") {
+					out.completedFlowSteps = append(out.completedFlowSteps, stepLabel)
+					continue
+				}
+				out.pendingFlowSteps = append(out.pendingFlowSteps, stepLabel)
+			}
+		}
+	}
+
+	var activeExecutionID *uuid.UUID
+	if taskRecord.CurrentFlowNodeID != nil && a.flowExecutions != nil {
+		if execution, activeErr := a.flowExecutions.GetActive(ctx, taskRecord.ID, *taskRecord.CurrentFlowNodeID); activeErr == nil {
+			executionID := execution.ID
+			activeExecutionID = &executionID
+			if out.currentFlowStatus == "" {
+				out.currentFlowStatus = strings.TrimSpace(execution.Status)
+			}
+		}
+	}
+
+	if out.currentFlowStep == "" && taskRecord.CurrentFlowNodeID != nil && a.flowNodes != nil {
+		if node, nodeErr := a.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID); nodeErr == nil {
+			out.currentFlowStep = flowStepLabel(node)
+		}
+	}
+	if out.currentFlowStep != "" && out.currentFlowStatus == "" {
+		out.currentFlowStatus = "active"
+	}
+
+	if activeExecutionID != nil && a.subtasks != nil {
+		if subtasks, subErr := a.subtasks.ListByExecution(ctx, *activeExecutionID); subErr == nil {
+			for _, subtask := range subtasks {
+				title := strings.TrimSpace(subtask.Title)
+				if title == "" {
+					continue
+				}
+				status := strings.TrimSpace(subtask.WorkStatus)
+				if status == "" {
+					status = "pending"
+				}
+				out.subtasks = append(out.subtasks, taskContextSubtask{title: title, status: status})
+			}
+		}
+	}
+
+	if a.dependencies != nil {
+		if deps, depErr := a.dependencies.ListOutbound(ctx, "project_task", taskRecord.ID); depErr == nil {
+			for _, dep := range deps {
+				label := strings.TrimSpace(dep.DependsOnType) + ": " + dep.DependsOnID.String()
+				if strings.EqualFold(strings.TrimSpace(dep.DependsOnType), "project_task") && a.tasks != nil {
+					if dependsTask, taskErr := a.tasks.GetByID(ctx, dep.DependsOnID); taskErr == nil {
+						taskLabel := strings.TrimSpace(dependsTask.Title)
+						if dependsTask.TaskNumber > 0 {
+							taskLabel = fmt.Sprintf("OC-%d: %s", dependsTask.TaskNumber, taskLabel)
+						}
+						if strings.TrimSpace(taskLabel) != "" {
+							label = taskLabel
+						}
+					}
+				}
+				out.dependencies = append(out.dependencies, label)
+			}
+		}
+	}
+
 	return out, nil
 }
 
-func (a *PromptAssembler) buildLayer4(ctx context.Context, session repo.ChatSession, agentID uuid.UUID, toolDescriptors []tools.ToolDescriptor, errorsOut *[]string) string {
-	skillsLoaded := a.loadSkills(ctx, session, agentID, errorsOut)
+func flowStepLabel(node repo.FlowNode) string {
+	label := strings.TrimSpace(node.DisplayName)
+	if label != "" {
+		return label
+	}
+	label = strings.TrimSpace(node.NodeType)
+	if label != "" {
+		return label
+	}
+	return node.ID.String()
+}
+
+func parseTaskAcceptanceCriteria(metadata json.RawMessage) []string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return nil
+	}
+	keys := []string{"acceptance_criteria", "acceptanceCriteria"}
+	criteria := make([]string, 0)
+	for _, key := range keys {
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			criteria = appendAcceptanceCriteriaText(criteria, typed)
+		case []any:
+			for _, item := range typed {
+				text, ok := item.(string)
+				if !ok {
+					continue
+				}
+				criteria = appendAcceptanceCriteriaText(criteria, text)
+			}
+		}
+		if len(criteria) > 0 {
+			break
+		}
+	}
+	return criteria
+}
+
+func appendAcceptanceCriteriaText(criteria []string, raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return criteria
+	}
+	parts := strings.Split(trimmed, "\n")
+	if len(parts) == 1 && strings.Contains(trimmed, ";") {
+		parts = strings.Split(trimmed, ";")
+	}
+	for _, part := range parts {
+		item := strings.TrimSpace(part)
+		item = strings.TrimPrefix(item, "-")
+		item = strings.TrimPrefix(item, "*")
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		criteria = append(criteria, item)
+	}
+	return criteria
+}
+
+func displaySubtaskStatus(status string) string {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	switch normalized {
+	case "":
+		return "pending"
+	case "in_progress":
+		return "active"
+	default:
+		return normalized
+	}
+}
+
+func (a *PromptAssembler) buildLayer4(ctx context.Context, session repo.ChatSession, taskCtx *projectTaskContext, agentID uuid.UUID, toolDescriptors []tools.ToolDescriptor, errorsOut *[]string) string {
+	skillsLoaded := a.loadSkills(ctx, session, taskCtx, agentID, errorsOut)
 	promptsLoaded := a.loadMCPPrompts(ctx, session, toolDescriptors, errorsOut)
 	promptsLoaded = suppressPromptConflicts(skillsLoaded, promptsLoaded, a.logger, errorsOut)
 
@@ -834,7 +1090,7 @@ type loadedSkill struct {
 	priority    int
 }
 
-func (a *PromptAssembler) loadSkills(ctx context.Context, session repo.ChatSession, agentID uuid.UUID, errorsOut *[]string) []loadedSkill {
+func (a *PromptAssembler) loadSkills(ctx context.Context, session repo.ChatSession, taskCtx *projectTaskContext, agentID uuid.UUID, errorsOut *[]string) []loadedSkill {
 	if a.skills == nil {
 		return nil
 	}
@@ -844,10 +1100,18 @@ func (a *PromptAssembler) loadSkills(ctx context.Context, session repo.ChatSessi
 	}
 	ordered := make([]attachment, 0)
 
-	if strings.TrimSpace(session.ScopeType) == "project_task" && a.tasks != nil && a.flowNodeSkills != nil {
-		taskRecord, err := a.tasks.GetByID(ctx, session.ScopeID)
-		if err == nil && taskRecord.CurrentFlowNodeID != nil {
-			rows, rowErr := a.flowNodeSkills.ListByNode(ctx, *taskRecord.CurrentFlowNodeID)
+	if strings.TrimSpace(session.ScopeType) == "project_task" && a.flowNodeSkills != nil {
+		flowNodeID := (*uuid.UUID)(nil)
+		if taskCtx != nil {
+			flowNodeID = taskCtx.flowNodeID
+		}
+		if flowNodeID == nil && a.tasks != nil {
+			if taskRecord, err := a.tasks.GetByID(ctx, session.ScopeID); err == nil {
+				flowNodeID = taskRecord.CurrentFlowNodeID
+			}
+		}
+		if flowNodeID != nil {
+			rows, rowErr := a.flowNodeSkills.ListByNode(ctx, *flowNodeID)
 			if rowErr == nil {
 				for _, row := range rows {
 					ordered = append(ordered, attachment{skillID: row.SkillID, priority: row.Position})
