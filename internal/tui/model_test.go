@@ -1124,6 +1124,8 @@ func TestTaskDetailViewShowsExtendedFieldsAndFullEventLog(t *testing.T) {
 		"queued review",
 		"awaiting operator approval",
 	}
+	// Enable task history display (collapsed by default, toggled with 'h')
+	model.workspace.showTaskHistory = true
 
 	view := strings.Join(model.renderTaskView(120, 40), "\n")
 	for _, want := range []string{

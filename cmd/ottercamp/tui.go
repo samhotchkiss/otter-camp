@@ -345,7 +345,9 @@ func runTUICommand(args []string) int {
 						WorkStatus          string  `json:"work_status"`
 						AssignedAgentID     string  `json:"assigned_agent_id"`
 						RequiresHumanReview bool    `json:"requires_human_review"`
+						BranchName          *string `json:"branch_name"`
 						CurrentFlowNode     *struct {
+							ID          string `json:"id"`
 							DisplayName string `json:"display_name"`
 						} `json:"current_flow_node"`
 					} `json:"data"`
@@ -366,6 +368,9 @@ func runTUICommand(args []string) int {
 					WorkStatus:          d.WorkStatus,
 					RequiresHumanReview: d.RequiresHumanReview,
 				}
+				if d.BranchName != nil {
+					item.BranchName = *d.BranchName
+				}
 				if d.CurrentFlowNode != nil {
 					item.FlowNodeName = d.CurrentFlowNode.DisplayName
 				}
@@ -378,6 +383,53 @@ func runTUICommand(args []string) int {
 					}
 					if apiClient.request(ctx, "GET", "/v1/agents/"+url.PathEscape(d.AssignedAgentID), nil, &agentResp) == nil {
 						item.AgentName = agentResp.Data.DisplayName
+					}
+				}
+				// Fetch flow pipeline data
+				var flowResp struct {
+					Data struct {
+						CurrentNode *struct {
+							ID          string `json:"id"`
+							DisplayName string `json:"display_name"`
+							NodeType    string `json:"node_type"`
+						} `json:"current_node"`
+						Executions []struct {
+							FlowNodeID string `json:"flow_node_id"`
+							Status     string `json:"status"`
+						} `json:"executions"`
+						Subtasks []struct {
+							Title  string `json:"title"`
+							Status string `json:"status"`
+						} `json:"subtasks"`
+					} `json:"data"`
+				}
+				flowPath := "/v1/tasks/" + url.PathEscape(taskID) + "/flow"
+				if apiClient.request(ctx, "GET", flowPath, nil, &flowResp) == nil {
+					f := flowResp.Data
+					// Build flow steps from executions
+					if f.CurrentNode != nil {
+						// Map execution statuses by node ID
+						execMap := map[string]string{}
+						for _, ex := range f.Executions {
+							execMap[ex.FlowNodeID] = ex.Status
+						}
+						step := tuiapp.FlowStep{
+							Name:     f.CurrentNode.DisplayName,
+							NodeType: f.CurrentNode.NodeType,
+						}
+						if status, ok := execMap[f.CurrentNode.ID]; ok {
+							step.Status = status
+						} else {
+							step.Status = "pending"
+						}
+						item.FlowSteps = append(item.FlowSteps, step)
+					}
+					// Subtasks
+					for _, st := range f.Subtasks {
+						item.SubtaskItems = append(item.SubtaskItems, tuiapp.SubtaskItem{
+							Title:  st.Title,
+							Status: st.Status,
+						})
 					}
 				}
 				// Find the task's async chat session (scope_type=project_task)

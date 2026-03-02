@@ -45,6 +45,19 @@ type SidebarTaskItem struct {
 	TaskNumber int
 }
 
+// FlowStep represents a single step in a task's flow pipeline.
+type FlowStep struct {
+	Name     string // display_name of the flow node
+	NodeType string // "work" or "review"
+	Status   string // "completed", "active", "pending"
+}
+
+// SubtaskItem represents a subtask within a task.
+type SubtaskItem struct {
+	Title  string
+	Status string // "pending", "in_progress", "done"
+}
+
 // TaskDetailItem is the full task record fetched on demand when the user selects a task.
 type TaskDetailItem struct {
 	ID                  string
@@ -56,6 +69,9 @@ type TaskDetailItem struct {
 	AgentName           string // display_name of the assigned agent, if any
 	FlowNodeName        string // current flow node display_name, if any
 	RequiresHumanReview bool   // whether this task requires human review
+	BranchName          string // git branch name, if any
+	FlowSteps           []FlowStep
+	SubtaskItems        []SubtaskItem
 }
 
 type RuntimeHints struct {

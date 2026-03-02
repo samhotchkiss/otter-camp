@@ -438,6 +438,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rec.AgentName = typed.Detail.AgentName
 		rec.FlowNodeName = typed.Detail.FlowNodeName
 		rec.RequiresHumanReview = typed.Detail.RequiresHumanReview
+		rec.BranchName = typed.Detail.BranchName
+		rec.FlowSteps = typed.Detail.FlowSteps
+		rec.SubtaskItems = typed.Detail.SubtaskItems
 		if typed.Detail.Title != "" {
 			rec.Title = typed.Detail.Title
 		}
@@ -2475,6 +2478,15 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		}
 		return true, nil
 	case 'h':
+		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
+			m.workspace.showTaskHistory = !m.workspace.showTaskHistory
+			if m.workspace.showTaskHistory {
+				m.statusMessage = "Showing task history"
+			} else {
+				m.statusMessage = "Task history hidden"
+			}
+			return true, nil
+		}
 		if m.focus == SidebarPanel {
 			// EX-416: empty sidebar guard — mirrors EX-413/414/415 for h key.
 			if len(m.workspace.visibleSidebarIDs()) == 0 {

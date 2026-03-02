@@ -1483,7 +1483,35 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	if task.AgentName != "" {
 		lines = append(lines, styleMuted.Render("  Agent: "+task.AgentName))
 	}
-	if task.Flow > 0 || task.FlowNodeName != "" {
+	if task.BranchName != "" {
+		lines = append(lines, styleMuted.Render("  Branch: "+task.BranchName))
+	}
+	if task.RequiresHumanReview {
+		lines = append(lines, lipgloss.NewStyle().Foreground(colWarning).Render("  ⚠  Human review required"))
+	}
+	// Flow pipeline visualization
+	if len(task.FlowSteps) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, divider(width, "Flow"))
+		var pipeline []string
+		for _, step := range task.FlowSteps {
+			var icon string
+			var style lipgloss.Style
+			switch step.Status {
+			case "completed":
+				icon = "[✓]"
+				style = lipgloss.NewStyle().Foreground(colConnected)
+			case "active":
+				icon = "[*]"
+				style = lipgloss.NewStyle().Foreground(colWarning).Bold(true)
+			default:
+				icon = "[ ]"
+				style = lipgloss.NewStyle().Foreground(colMuted)
+			}
+			pipeline = append(pipeline, style.Render(icon+" "+step.Name))
+		}
+		lines = append(lines, "  "+strings.Join(pipeline, styleMuted.Render("  →  ")))
+	} else if task.Flow > 0 || task.FlowNodeName != "" {
 		flowLine := "  Flow: "
 		if task.FlowNodeName != "" {
 			flowLine += task.FlowNodeName
@@ -1494,9 +1522,6 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 			flowLine += fmt.Sprintf("step %d", task.Flow)
 		}
 		lines = append(lines, styleMuted.Render(flowLine))
-	}
-	if task.RequiresHumanReview {
-		lines = append(lines, lipgloss.NewStyle().Foreground(colWarning).Render("  ⚠  Human review required"))
 	}
 
 	if desc := strings.TrimSpace(task.Description); desc != "" {
@@ -1515,7 +1540,32 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 		}
 	}
 
-	if len(task.Subtasks) > 0 {
+	// Show structured subtasks from flow data (with status)
+	if len(task.SubtaskItems) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, divider(width, "Subtasks"))
+		for i, st := range task.SubtaskItems {
+			var icon string
+			var style lipgloss.Style
+			switch st.Status {
+			case "done", "approved":
+				icon = "✓"
+				style = lipgloss.NewStyle().Foreground(colConnected)
+			case "in_progress":
+				icon = "◌"
+				style = lipgloss.NewStyle().Foreground(colWarning)
+			default:
+				icon = "○"
+				style = styleMuted
+			}
+			label := st.Title
+			if task.TaskNumber > 0 {
+				label = fmt.Sprintf("OC-%d.%d: %s", task.TaskNumber, i+1, st.Title)
+			}
+			lines = append(lines, style.Render(fmt.Sprintf("  %s %s", icon, truncate(label, width-6))))
+		}
+	} else if len(task.Subtasks) > 0 {
+		// Fallback: plain string subtasks
 		lines = append(lines, "")
 		lines = append(lines, divider(width, "Subtasks"))
 		for _, subtask := range task.Subtasks {
@@ -1533,10 +1583,15 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	}
 
 	if len(task.History) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, divider(width, "Event Log"))
-		for _, h := range task.History {
-			lines = append(lines, styleMuted.Render("  · "+h))
+		if m.workspace.showTaskHistory {
+			lines = append(lines, "")
+			lines = append(lines, divider(width, "Event Log"))
+			for _, h := range task.History {
+				lines = append(lines, styleMuted.Render("  · "+h))
+			}
+		} else {
+			lines = append(lines, "")
+			lines = append(lines, styleMuted.Render(fmt.Sprintf("  h·show history (%d events)", len(task.History))))
 		}
 	}
 

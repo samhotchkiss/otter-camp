@@ -83,6 +83,9 @@ type taskRecord struct {
 	AgentName           string // display_name of assigned agent
 	RequiresHumanReview bool
 	History             []string
+	BranchName          string
+	FlowSteps           []FlowStep
+	SubtaskItems        []SubtaskItem
 }
 
 type inboxItem struct {
@@ -128,6 +131,7 @@ type workspaceState struct {
 	projectTaskCursor int    // cursor within the project view open-task list
 	pendingProjectCursorTaskID string // set when task is opened before project detail loads
 	showDoneTasks     bool   // whether to show done tasks in project view
+	showTaskHistory   bool   // whether to show task history/audit trail
 	dashboardCursor   int // cursor within the dashboard task board (index into taskOrder excluding done/cancelled)
 
 	inbox       []inboxItem
