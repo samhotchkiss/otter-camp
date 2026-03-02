@@ -28,7 +28,7 @@ const (
 	colUnread    = lipgloss.Color("#F97316") // orange-500
 	colAccent    = lipgloss.Color("#EC4899") // pink-500
 	colStatusBg  = lipgloss.Color("#111827") // gray-900
-	colCursor    = lipgloss.Color("#1E1B4B") // indigo-950
+	colCursor    = lipgloss.Color("#312E81") // indigo-900 (visible selection bg)
 )
 
 // ── Style primitives ────────────────────────────────────────────────────────
@@ -55,6 +55,13 @@ var (
 	styleLabel   = lipgloss.NewStyle().Foreground(colMuted).Bold(true)
 
 	styleSelected = lipgloss.NewStyle().
+			Background(colCursor).
+			Foreground(colFocus).
+			Bold(true)
+	// styleCursorRow is used for full-width cursor highlight on list items
+	// (dashboard board, project task list, inbox). The background makes
+	// the selected item immediately obvious.
+	styleCursorRow = lipgloss.NewStyle().
 			Background(colCursor).
 			Foreground(colFocus).
 			Bold(true)
@@ -925,7 +932,7 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 			if isCursor {
 				todoIdx = len(todoTasks)
 				entry := truncate("► "+taskLabel, colW)
-				todoTasks = append(todoTasks, styleBold.Foreground(colFocus).Render(entry))
+				todoTasks = append(todoTasks, styleCursorRow.Width(colW).Render(entry))
 			} else {
 				entry := truncate("○ "+taskLabel, colW)
 				todoTasks = append(todoTasks, styleText.Render(entry))
@@ -947,7 +954,7 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 			if isCursor {
 				inProgIdx = len(inProgTasks)
 				entry := truncate("► "+taskLabel, colW)
-				inProgTasks = append(inProgTasks, styleBold.Foreground(colFocus).Render(entry))
+				inProgTasks = append(inProgTasks, styleCursorRow.Width(colW).Render(entry))
 			} else {
 				// Use amber for normal in-progress, use warning/amber with ⚠ badge
 				// for review-required so it visually pops.
@@ -1324,7 +1331,7 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			statusLabel := lipgloss.NewStyle().Foreground(statusColor).Render(statusText)
 			var taskLine string
 			if isCursor {
-				taskLine = styleBold.Foreground(colFocus).Render(leftPart) + lipgloss.NewStyle().Foreground(statusColor).Render(spacer+statusText)
+				taskLine = styleCursorRow.Width(width).Render(leftPart + spacer + statusText)
 			} else {
 				taskLine = styleText.Render(leftPart+spacer) + statusLabel
 			}
@@ -1622,7 +1629,7 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 		var rowStyle lipgloss.Style
 		if isCursor {
 			prefix = "► "
-			rowStyle = lipgloss.NewStyle().Foreground(colFocus).Bold(true)
+			rowStyle = styleCursorRow
 		} else {
 			prefix = "  "
 			rowStyle = styleText
@@ -1637,7 +1644,11 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 			taskBadgeLabel = item.TaskID[:8] + "…"
 		}
 		taskBadge := lipgloss.NewStyle().Foreground(colMuted).Render("  " + taskBadgeLabel)
-		lines = append(lines, rowStyle.Render(prefix+summary)+taskBadge)
+		if isCursor {
+			lines = append(lines, styleCursorRow.Width(width).Render(prefix+summary+"  "+taskBadgeLabel))
+		} else {
+			lines = append(lines, rowStyle.Render(prefix+summary)+taskBadge)
+		}
 
 		if isCursor {
 			// EX-124: show "N of M" position so users know where they are in
