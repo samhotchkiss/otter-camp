@@ -351,6 +351,21 @@ func (w *workspaceState) selectedTaskSessionID() string {
 	return w.taskSessionID(w.selectedTaskID)
 }
 
+// projectSessionID returns the session ID for a project-scoped chat session,
+// found by scanning sidebar nodes for a session with SessionScope="project"
+// and ProjectID matching. Returns "" if no match found.
+func (w *workspaceState) projectSessionID(projectID string) string {
+	if projectID == "" {
+		return ""
+	}
+	for _, node := range w.nodes {
+		if node.Kind == sidebarKindSession && node.SessionScope == "project" && node.ProjectID == projectID {
+			return node.SessionID
+		}
+	}
+	return ""
+}
+
 func (w *workspaceState) openSelectedTaskSession() (string, bool) {
 	sessionID := w.selectedTaskSessionID()
 	if sessionID == "" {
@@ -996,8 +1011,12 @@ func (w *workspaceState) rebuildSidebar(orgSessionID string, chats []SidebarChat
 		}
 		id := "chat-" + chat.SessionID
 		taskID := ""
+		projectID := ""
 		if chat.ScopeType == "project_task" {
 			taskID = chat.ScopeID
+		}
+		if chat.ScopeType == "project" {
+			projectID = chat.ScopeID
 		}
 		newNodes[id] = &sidebarNode{
 			ID:           id,
@@ -1005,6 +1024,7 @@ func (w *workspaceState) rebuildSidebar(orgSessionID string, chats []SidebarChat
 			Kind:         sidebarKindSession,
 			SessionID:    chat.SessionID,
 			SessionScope: chat.ScopeType,
+			ProjectID:    projectID,
 			TaskID:       taskID,
 			WorkStatus:   chat.WorkStatus,
 			UpdatedAt:    chat.UpdatedAt,

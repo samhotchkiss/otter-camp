@@ -6096,15 +6096,15 @@ func (m *Model) switchScope(next ChatScope) tea.Cmd {
 			sessionID = sessionForScope(next)
 		}
 	case ScopeProject:
-		// EX-417: project scope uses the org/Frank session (same as ScopeOrg),
-		// because project-scoped chats route through the general org session.
-		// Previously the default case called sessionForScope(ScopeProject) which
-		// returns the non-UUID placeholder "session-project-current", causing
-		// sendOrQueueInput to show "Session loading — please wait..." instead of
-		// a helpful "no project selected" hint.
-		sessionID = m.workspace.activeSessionID
-		if sessionID == "" {
-			sessionID = sessionForScope(next)
+		// Prefer the project's own chat session if one exists; fall back to
+		// the org session (Frank) when no project session is available yet.
+		if projSess := m.workspace.projectSessionID(m.workspace.selectedProjectID); looksLikeUUID(projSess) {
+			sessionID = projSess
+		} else {
+			sessionID = m.workspace.activeSessionID
+			if sessionID == "" {
+				sessionID = sessionForScope(next)
+			}
 		}
 		if m.workspace.selectedProjectID == "" {
 			m.statusMessage = "Scope: project (no project selected — select a project from the sidebar first)"
@@ -7872,6 +7872,19 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		cmds := []tea.Cmd{loadProjectTasksCmd(payload.TargetID, m.runtimeHints, true)}
 		if m.runtimeHints.LoadProjectDetail != nil {
 			cmds = append(cmds, loadProjectDetailCmd(payload.TargetID, m.runtimeHints))
+		}
+		// Switch to the project's chat session if one exists in the sidebar,
+		// so the user sees the project conversation (e.g. Lori's handoff).
+		if sessID := m.workspace.projectSessionID(payload.TargetID); looksLikeUUID(sessID) {
+			m.clearTurnIfSwitchingSession(sessID)
+			m.activeSession = sessID
+			m.chatMessages = nil
+			m.chatHistoryLoading = true
+			m.chatMessageIndex = make(map[string]int)
+			m.chatScrollOffset = 0
+			if m.runtimeHints.LoadChatHistory != nil {
+				cmds = append(cmds, loadChatHistoryCmd(sessID, m.runtimeHints.LoadChatHistory))
+			}
 		}
 		return tea.Batch(cmds...)
 	case "task":

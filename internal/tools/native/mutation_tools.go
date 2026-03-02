@@ -539,14 +539,78 @@ func (e *NativeToolExecutor) handleProjectCreate(ctx context.Context, input map[
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+
+	// Auto-assign agents to the new project.
+	var assigned []map[string]any
+	if e.assignments != nil && e.agents != nil {
+		assigned = e.autoAssignProjectAgents(ctx, scope, created.ID, actor)
+	}
+
+	result := map[string]any{
 		"project": map[string]any{
 			"id":     created.ID,
 			"slug":   created.Slug,
 			"name":   created.DisplayName,
 			"status": "active",
 		},
-	}, nil
+	}
+	if len(assigned) > 0 {
+		result["assigned_agents"] = assigned
+	}
+	return result, nil
+}
+
+// autoAssignProjectAgents assigns the creating agent as PM and the starter-trio
+// worker as worker on the newly created project. Returns summaries of assignments
+// so the calling agent knows who was assigned.
+func (e *NativeToolExecutor) autoAssignProjectAgents(ctx context.Context, scope workspaceScope, projectID uuid.UUID, actor executionActor) []map[string]any {
+	var assigned []map[string]any
+
+	// Assign the creating agent as PM (if we know which agent is calling).
+	if actor.createdByType == "agent" && actor.createdByID != uuid.Nil {
+		_, err := e.assignments.Assign(ctx, repo.AgentProjectAssignment{
+			AgentID:        actor.createdByID,
+			ProjectID:      projectID,
+			Role:           "pm",
+			AssignedByType: actor.createdByType,
+			AssignedByID:   actor.createdByPtr,
+		})
+		if err == nil {
+			assigned = append(assigned, map[string]any{
+				"agent_id": actor.createdByID,
+				"role":     "pm",
+			})
+		}
+	}
+
+	// Find the starter-trio project manager agent (Lori) and assign as worker
+	// on this project. Lori's agent_type is "pm" (project manager), meaning she
+	// manages projects — distinct from the project assignment role "worker".
+	agents, err := e.agents.List(ctx, scope.organizationID)
+	if err != nil {
+		return assigned
+	}
+	for _, ag := range agents {
+		if ag.IsStarterTrio && ag.AgentType == "pm" && ag.ID != actor.createdByID {
+			_, err := e.assignments.Assign(ctx, repo.AgentProjectAssignment{
+				AgentID:        ag.ID,
+				ProjectID:      projectID,
+				Role:           "worker",
+				AssignedByType: actor.createdByType,
+				AssignedByID:   actor.createdByPtr,
+			})
+			if err == nil {
+				assigned = append(assigned, map[string]any{
+					"agent_id":   ag.ID,
+					"agent_name": ag.DisplayName,
+					"role":       "worker",
+				})
+			}
+			break
+		}
+	}
+
+	return assigned
 }
 
 func (e *NativeToolExecutor) handleProjectUpdate(ctx context.Context, input map[string]any) (map[string]any, error) {
@@ -1449,13 +1513,84 @@ func (e *NativeToolExecutor) handleSessionCreate(ctx context.Context, input map[
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+
+	// Auto-add project-assigned agents as participants for project-scoped sessions.
+	// Workers are added before PMs so that resolveFirstAgentParticipant picks
+	// the worker as the primary responder.
+	var participants []map[string]any
+	if (scopeType == "project" || scopeType == "project_task") && e.assignments != nil && e.participants != nil {
+		participants = e.autoAddProjectParticipants(ctx, created.ID, scopeType, scopeID)
+	}
+
+	result := map[string]any{
 		"session": map[string]any{
 			"id":     created.ID,
 			"status": created.Status,
 			"mode":   created.Mode,
 		},
-	}, nil
+	}
+	if len(participants) > 0 {
+		result["auto_participants"] = participants
+	}
+	return result, nil
+}
+
+// autoAddProjectParticipants looks up agents assigned to the project and adds
+// them as session participants. Workers are added first so that
+// resolveFirstAgentParticipant selects the worker as the primary responder.
+func (e *NativeToolExecutor) autoAddProjectParticipants(ctx context.Context, sessionID uuid.UUID, scopeType string, scopeID uuid.UUID) []map[string]any {
+	// For project_task scope, resolve the project ID from the task.
+	projectID := scopeID
+	if scopeType == "project_task" && e.tasks != nil {
+		task, err := e.tasks.GetByID(ctx, scopeID)
+		if err != nil {
+			return nil
+		}
+		projectID = task.ProjectID
+	}
+
+	assignments, err := e.assignments.ListByProject(ctx, projectID)
+	if err != nil || len(assignments) == 0 {
+		return nil
+	}
+
+	// Sort: workers first, then PMs, then others — so the worker becomes
+	// the primary responder via resolveFirstAgentParticipant.
+	roleOrder := map[string]int{"worker": 0, "reviewer": 1, "pm": 2, "observer": 3}
+	sortedAssignments := make([]repo.AgentProjectAssignment, len(assignments))
+	copy(sortedAssignments, assignments)
+	for i := 0; i < len(sortedAssignments)-1; i++ {
+		for j := i + 1; j < len(sortedAssignments); j++ {
+			oi := roleOrder[sortedAssignments[i].Role]
+			oj := roleOrder[sortedAssignments[j].Role]
+			if oi > oj {
+				sortedAssignments[i], sortedAssignments[j] = sortedAssignments[j], sortedAssignments[i]
+			}
+		}
+	}
+
+	var participants []map[string]any
+	for _, a := range sortedAssignments {
+		if !a.IsActive {
+			continue
+		}
+		_, err := e.participants.Create(ctx, repo.ChatParticipant{
+			SessionID:              sessionID,
+			ParticipantType:        "agent",
+			ParticipantID:          a.AgentID,
+			NotificationPreference: "all",
+			Role:                   "member",
+		})
+		if err != nil {
+			continue
+		}
+		participants = append(participants, map[string]any{
+			"agent_id":     a.AgentID,
+			"project_role": a.Role,
+		})
+	}
+
+	return participants
 }
 
 func (e *NativeToolExecutor) handleSessionInviteAgent(ctx context.Context, input map[string]any) (map[string]any, error) {

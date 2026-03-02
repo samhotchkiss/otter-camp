@@ -133,6 +133,11 @@ type dependencyRepository interface {
 	Remove(ctx context.Context, id uuid.UUID) error
 }
 
+type projectAssigner interface {
+	Assign(ctx context.Context, assignment repo.AgentProjectAssignment) (repo.AgentProjectAssignment, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.AgentProjectAssignment, error)
+}
+
 type eventPublisher interface {
 	Publish(ctx context.Context, tx pgx.Tx, event eventbus.DomainEvent) error
 }
@@ -177,6 +182,7 @@ type NativeToolExecutor struct {
 	schedules      scheduleReader
 	mergeQueue     mergeQueueReader
 	dependencies   dependencyRepository
+	assignments    projectAssigner
 	audit          *repo.AuditEventRepo
 	memories       *repo.MemoryRepo
 
@@ -220,6 +226,7 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 		exec.schedules = repo.NewTaskScheduleRepo(opts.Pool)
 		exec.mergeQueue = repo.NewMergeQueueEntryRepo(opts.Pool)
 		exec.dependencies = repo.NewProjectTaskDependencyRepo(opts.Pool)
+		exec.assignments = repo.NewAgentProjectAssignmentRepo(opts.Pool)
 		exec.audit = repo.NewAuditEventRepo(opts.Pool)
 		exec.memories = repo.NewMemoryRepo(opts.Pool)
 		if exec.events == nil {
