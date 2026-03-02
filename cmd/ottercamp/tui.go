@@ -600,7 +600,7 @@ func runTUICommand(args []string) int {
 		}
 	}
 
-	program = tea.NewProgram(tuiapp.NewModelWithRuntime(state, runtimeHints), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	program = tea.NewProgram(tuiapp.NewModelWithRuntime(state, runtimeHints), tea.WithAltScreen(), tea.WithMouseAllMotion())
 
 	// Wire up SSE realtime connection using stored credentials.
 	if serverURL != "" && apiKey != "" {
