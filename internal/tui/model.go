@@ -441,6 +441,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rec.Description = typed.Detail.Description
 		rec.SessionID = typed.Detail.SessionID
 		rec.TaskNumber = typed.Detail.TaskNumber
+		rec.Priority = typed.Detail.Priority
 		rec.AgentName = typed.Detail.AgentName
 		rec.FlowNodeName = typed.Detail.FlowNodeName
 		rec.RequiresHumanReview = typed.Detail.RequiresHumanReview

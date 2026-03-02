@@ -107,6 +107,51 @@ func TestTaskHTTPCreateQueueReviewDecisionLifecycle(t *testing.T) {
 	}
 }
 
+func TestTaskHTTPPatchPriorityRoundTrip(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "task-priority", false)
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+project.ID.String()+"/tasks", map[string]any{
+		"title": "Priority Task",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if created.StatusCode != http.StatusCreated {
+		t.Fatalf("create task status = %d, want %d body=%s", created.StatusCode, http.StatusCreated, string(created.Body))
+	}
+	taskID := jsonPathString(t, created.Body, "data", "id")
+	if got := jsonPathValue(t, created.Body, "data", "priority"); got != float64(0) {
+		t.Fatalf("create priority = %v, want 0 body=%s", got, string(created.Body))
+	}
+
+	patched := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/tasks/"+taskID, map[string]any{
+		"priority": 4,
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if patched.StatusCode != http.StatusOK {
+		t.Fatalf("patch task status = %d, want %d body=%s", patched.StatusCode, http.StatusOK, string(patched.Body))
+	}
+	if got := jsonPathValue(t, patched.Body, "data", "priority"); got != float64(4) {
+		t.Fatalf("patch priority = %v, want 4 body=%s", got, string(patched.Body))
+	}
+
+	got := mustJSON(t, http.MethodGet, testServer.URL+"/v1/tasks/"+taskID, nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if got.StatusCode != http.StatusOK {
+		t.Fatalf("get task status = %d, want %d body=%s", got.StatusCode, http.StatusOK, string(got.Body))
+	}
+	if value := jsonPathValue(t, got.Body, "data", "priority"); value != float64(4) {
+		t.Fatalf("get priority = %v, want 4 body=%s", value, string(got.Body))
+	}
+
+	listed := mustJSON(t, http.MethodGet, testServer.URL+"/v1/projects/"+project.ID.String()+"/tasks", nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if listed.StatusCode != http.StatusOK {
+		t.Fatalf("list tasks status = %d, want %d body=%s", listed.StatusCode, http.StatusOK, string(listed.Body))
+	}
+	if value := jsonPathValue(t, listed.Body, "data", "0", "priority"); value != float64(4) {
+		t.Fatalf("list priority = %v, want 4 body=%s", value, string(listed.Body))
+	}
+}
+
 func TestTaskHTTPAdvanceFlowAndMissingActiveExecution(t *testing.T) {
 	testServer, org, adminUser, _ := newTaskTestServer(t)
 	defer testServer.Close()

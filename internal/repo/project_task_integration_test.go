@@ -25,6 +25,7 @@ func TestProjectTaskRepoCreateUpdateStatusAndTaskNumber(t *testing.T) {
 		ProjectID:           project.ID,
 		Title:               "First task",
 		WorkStatus:          "draft",
+		Priority:            2,
 		CreatedByType:       "system",
 		CreatedByID:         nil,
 		RequiresHumanReview: false,
@@ -36,6 +37,9 @@ func TestProjectTaskRepoCreateUpdateStatusAndTaskNumber(t *testing.T) {
 	if created.TaskNumber != 1 {
 		t.Fatalf("task_number = %d, want 1", created.TaskNumber)
 	}
+	if created.Priority != 2 {
+		t.Fatalf("priority = %d, want 2", created.Priority)
+	}
 
 	time.Sleep(10 * time.Millisecond)
 	updated, err := taskRepo.UpdateStatus(ctx, created.ID, "in_progress")
@@ -44,6 +48,9 @@ func TestProjectTaskRepoCreateUpdateStatusAndTaskNumber(t *testing.T) {
 	}
 	if updated.WorkStatus != "in_progress" {
 		t.Fatalf("work_status = %q, want %q", updated.WorkStatus, "in_progress")
+	}
+	if updated.Priority != 2 {
+		t.Fatalf("priority after status update = %d, want 2", updated.Priority)
 	}
 	if !updated.UpdatedAt.After(created.UpdatedAt) {
 		t.Fatalf("updated_at = %s, want after %s", updated.UpdatedAt, created.UpdatedAt)

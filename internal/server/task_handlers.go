@@ -224,6 +224,7 @@ type updateTaskRequest struct {
 	Description         *string    `json:"description"`
 	AssignedAgentID     *uuid.UUID `json:"assigned_agent_id"`
 	RequiresHumanReview *bool      `json:"requires_human_review"`
+	Priority            *int       `json:"priority"`
 }
 
 type reviewDecisionRequest struct {
@@ -330,6 +331,7 @@ type taskResponse struct {
 	ScheduleID          *uuid.UUID        `json:"schedule_id"`
 	BranchName          *string           `json:"branch_name"`
 	RequiresHumanReview bool              `json:"requires_human_review"`
+	Priority            int               `json:"priority"`
 	CreatedByType       string            `json:"created_by_type"`
 	CreatedByID         *uuid.UUID        `json:"created_by_id"`
 	AssignedAgentID     *uuid.UUID        `json:"assigned_agent_id"`
@@ -512,6 +514,7 @@ func (h taskHandlers) listProjectTasks(w http.ResponseWriter, r *http.Request) {
 			schedule_id,
 			branch_name,
 			requires_human_review,
+			priority,
 			created_by_type,
 			created_by_id,
 			assigned_agent_id,
@@ -557,6 +560,7 @@ func (h taskHandlers) listProjectTasks(w http.ResponseWriter, r *http.Request) {
 			&item.ScheduleID,
 			&item.BranchName,
 			&item.RequiresHumanReview,
+			&item.Priority,
 			&item.CreatedByType,
 			&item.CreatedByID,
 			&item.AssignedAgentID,
@@ -729,6 +733,13 @@ func (h taskHandlers) patchTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.RequiresHumanReview != nil {
 		taskRecord.RequiresHumanReview = *req.RequiresHumanReview
+	}
+	if req.Priority != nil {
+		if *req.Priority < 0 || *req.Priority > 4 {
+			responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "priority must be between 0 and 4")
+			return
+		}
+		taskRecord.Priority = *req.Priority
 	}
 	if req.AssignedAgentID != nil {
 		if *req.AssignedAgentID == uuid.Nil {
@@ -2529,6 +2540,7 @@ func (h taskHandlers) toTaskResponse(ctx context.Context, taskRecord repo.Projec
 		ScheduleID:          taskRecord.ScheduleID,
 		BranchName:          taskRecord.BranchName,
 		RequiresHumanReview: taskRecord.RequiresHumanReview,
+		Priority:            taskRecord.Priority,
 		CreatedByType:       taskRecord.CreatedByType,
 		CreatedByID:         taskRecord.CreatedByID,
 		AssignedAgentID:     taskRecord.AssignedAgentID,

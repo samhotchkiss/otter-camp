@@ -43,6 +43,7 @@ type SidebarTaskItem struct {
 	Title      string
 	WorkStatus string
 	TaskNumber int
+	Priority   int
 }
 
 // FlowStep represents a single step in a task's flow pipeline.
@@ -72,6 +73,7 @@ type TaskDetailItem struct {
 	Title               string
 	Description         string
 	WorkStatus          string
+	Priority            int
 	SessionID           string
 	AgentName           string // display_name of the assigned agent, if any
 	FlowNodeName        string // current flow node display_name, if any

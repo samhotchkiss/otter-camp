@@ -78,6 +78,7 @@ type taskRecord struct {
 	Subtasks            []string
 	SessionID           string
 	Status              string
+	Priority            int
 	Flow                int
 	FlowNodeName        string // human-readable current flow step name
 	AgentName           string // display_name of assigned agent
@@ -1062,12 +1063,18 @@ func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskIt
 		}
 		// Seed basic task record so the TASK DETAIL center pane renders immediately,
 		// and so the dashboard board can include done tasks in boardCounts().
-		if _, exists := w.tasks[task.ID]; !exists {
+		if existing, exists := w.tasks[task.ID]; exists {
+			existing.Title = task.Title
+			existing.Status = task.WorkStatus
+			existing.TaskNumber = task.TaskNumber
+			existing.Priority = task.Priority
+		} else {
 			w.tasks[task.ID] = &taskRecord{
 				ID:         task.ID,
 				Title:      task.Title,
 				Status:     task.WorkStatus,
 				TaskNumber: task.TaskNumber,
+				Priority:   task.Priority,
 			}
 			// Add to taskOrder for the dashboard board (deduplicated).
 			w.taskOrder = append(w.taskOrder, task.ID)

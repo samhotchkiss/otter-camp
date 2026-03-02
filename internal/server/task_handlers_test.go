@@ -122,6 +122,91 @@ func TestPatchTaskUnknownFieldIgnoredNot400(t *testing.T) {
 	}
 }
 
+func TestPatchTaskPriorityUpdated(t *testing.T) {
+	taskID := uuid.New()
+	orgID := uuid.New()
+
+	fakeTasks := &fakeProjectTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      uuid.New(),
+				Title:          "priority task",
+				WorkStatus:     "draft",
+				Priority:       0,
+				CreatedAt:      time.Now().UTC(),
+				UpdatedAt:      time.Now().UTC(),
+				Metadata:       json.RawMessage(`{}`),
+			},
+		},
+	}
+	h := taskHandlers{tasks: fakeTasks}
+
+	req := httptest.NewRequest(http.MethodPatch, "/v1/tasks/"+taskID.String(), bytes.NewBufferString(`{"priority":3}`))
+	req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{UserID: uuid.New(), OrganizationID: orgID, Role: "member"}))
+	req = withRouteParams(req, map[string]string{"id": taskID.String()})
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.patchTask(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if fakeTasks.items[taskID].Priority != 3 {
+		t.Fatalf("stored priority = %d, want 3", fakeTasks.items[taskID].Priority)
+	}
+	var payload struct {
+		Data struct {
+			Priority int `json:"priority"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, rr.Body.String())
+	}
+	if payload.Data.Priority != 3 {
+		t.Fatalf("response priority = %d, want 3 body=%s", payload.Data.Priority, rr.Body.String())
+	}
+}
+
+func TestPatchTaskPriorityOutOfRangeReturns422(t *testing.T) {
+	taskID := uuid.New()
+	orgID := uuid.New()
+
+	fakeTasks := &fakeProjectTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      uuid.New(),
+				Title:          "priority validation",
+				WorkStatus:     "draft",
+				Priority:       0,
+				CreatedAt:      time.Now().UTC(),
+				UpdatedAt:      time.Now().UTC(),
+				Metadata:       json.RawMessage(`{}`),
+			},
+		},
+	}
+	h := taskHandlers{tasks: fakeTasks}
+
+	req := httptest.NewRequest(http.MethodPatch, "/v1/tasks/"+taskID.String(), bytes.NewBufferString(`{"priority":9}`))
+	req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{UserID: uuid.New(), OrganizationID: orgID, Role: "member"}))
+	req = withRouteParams(req, map[string]string{"id": taskID.String()})
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.patchTask(rr, req)
+
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusUnprocessableEntity, rr.Body.String())
+	}
+	if fakeTasks.items[taskID].Priority != 0 {
+		t.Fatalf("stored priority = %d, want 0", fakeTasks.items[taskID].Priority)
+	}
+}
+
 func TestReviewDecisionNonTargetUserReturns403(t *testing.T) {
 	taskID := uuid.New()
 	orgID := uuid.New()
