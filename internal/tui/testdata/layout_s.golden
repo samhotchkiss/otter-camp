@@ -5,7 +5,7 @@
 │ ────────────────────────────────────────────────── ││ ──────────────────────────────── │
 │                                                    ││                                  │
 │ Task Board                                         ││         no messages yet          │
-│ TODO (0)       IN PROGRE… (0) DONE (0)             ││  Enter·send a message to Frank   │
+│ QUEUED (0)     IN PROGRE… (0) DONE (0)             ││  Enter·send a message to Frank   │
 │ ─────────────  ─────────────  ─────────────        ││                                  │
 │                                                    ││ ╭────────────────────────────╮   │
 │ ──────────────────── Activity ──────────────────── ││ │ type a message...          │   │
@@ -38,7 +38,7 @@ Help: i inbox · n next unread · Tab navigate · : commands · ? help
 │ ────────────────────────────────────────────────── ││ ──────────────────────────────── │
 │                                                    ││                                  │
 │ Task Board                                         ││         no messages yet          │
-│ TODO (0)       IN PROGRE… (0) DONE (0)             ││  Enter·send a message to Frank   │
+│ QUEUED (0)     IN PROGRE… (0) DONE (0)             ││  Enter·send a message to Frank   │
 │ ─────────────  ─────────────  ─────────────        ││                                  │
 │                                                    ││ ╭────────────────────────────╮   │
 │ ──────────────────── Activity ──────────────────── ││ │ type a message...          │   │
@@ -71,7 +71,7 @@ Help: i inbox · n next unread · Tab navigate · : commands · ? help
 │ ────────────────────────────────────────────────── ││ ──────────────────────────────── │
 │                                                    ││                                  │
 │ Task Board                                         ││         no messages yet          │
-│ TODO (0)       IN PROGRE… (0) DONE (0)             ││  Enter·send a message to Frank   │
+│ QUEUED (0)     IN PROGRE… (0) DONE (0)             ││  Enter·send a message to Frank   │
 │ ─────────────  ─────────────  ─────────────        ││                                  │
 │                                                    ││ ╭────────────────────────────╮   │
 │ ──────────────────── Activity ──────────────────── ││ │ type a message...          │   │

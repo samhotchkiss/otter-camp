@@ -1,5 +1,5 @@
 ### L dashboard
-view=dashboard size=L tasks(todo=0,in_progress=0,done=0,blocked=0) inbox=0
+view=dashboard size=L tasks(queued=0,in_progress=0,done=0,blocked=0,review=0) inbox=0
 
 ### L project
 view=project size=L projects=0 selected_session=session-org-general

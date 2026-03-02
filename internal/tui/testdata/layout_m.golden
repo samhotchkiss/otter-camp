@@ -5,7 +5,7 @@
 │ ───────────────   ││ ──────────────────────────────────────────────────────── ││ ─────────────────────────────────── │
 │ ▾ CHATS           ││                                                          ││                                     │
 │   Frank / Ge… ✓   ││ Task Board                                               ││           no messages yet           │
-│ ───────────────   ││ TODO (0)         IN PROGRESS (0)  DONE (0)               ││    Enter·send a message to Frank    │
+│ ───────────────   ││ QUEUED (0)       IN PROGRESS (0)  DONE (0)               ││    Enter·send a message to Frank    │
 │ ▾ PROJECTS        ││ ───────────────  ───────────────  ───────────────        ││                                     │
 │                   ││                                                          ││ ╭───────────────────────────────╮   │
 │                   ││ ─────────────────────── Activity ─────────────────────── ││ │ type a message...             │   │
@@ -37,7 +37,7 @@ Help: i inbox · n next unread · Tab navigate · : commands · ? help
 │ ───────────────   ││ ──────────────────────────────────────────────────────── ││ ─────────────────────────────────── │
 │ ▾ CHATS           ││                                                          ││                                     │
 │   Frank / Ge… ✓   ││ Task Board                                               ││           no messages yet           │
-│ ───────────────   ││ TODO (0)         IN PROGRESS (0)  DONE (0)               ││    Enter·send a message to Frank    │
+│ ───────────────   ││ QUEUED (0)       IN PROGRESS (0)  DONE (0)               ││    Enter·send a message to Frank    │
 │ ▾ PROJECTS        ││ ───────────────  ───────────────  ───────────────        ││                                     │
 │                   ││                                                          ││ ╭───────────────────────────────╮   │
 │                   ││ ─────────────────────── Activity ─────────────────────── ││ │ type a message...             │   │
@@ -69,7 +69,7 @@ Help: i inbox · n next unread · Tab navigate · : commands · ? help
 │ ───────────────   ││ ──────────────────────────────────────────────────────── ││ ─────────────────────────────────── │
 │ ▾ CHATS           ││                                                          ││                                     │
 │   Frank / Ge… ✓   ││ Task Board                                               ││           no messages yet           │
-│ ───────────────   ││ TODO (0)         IN PROGRESS (0)  DONE (0)               ││    Enter·send a message to Frank    │
+│ ───────────────   ││ QUEUED (0)       IN PROGRESS (0)  DONE (0)               ││    Enter·send a message to Frank    │
 │ ▾ PROJECTS        ││ ───────────────  ───────────────  ───────────────        ││                                     │
 │                   ││                                                          ││ ╭───────────────────────────────╮   │
 │                   ││ ─────────────────────── Activity ─────────────────────── ││ │ type a message...             │   │

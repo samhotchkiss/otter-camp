@@ -95,10 +95,11 @@ type inboxItem struct {
 }
 
 type boardCounts struct {
-	Todo       int
+	Queued     int
 	InProgress int
 	Done       int
 	Blocked    int
+	Review     int
 }
 
 // ProjectDetail holds metadata for a project loaded from the API.
@@ -613,9 +614,13 @@ func (w *workspaceState) boardCounts() boardCounts {
 		if task == nil {
 			continue
 		}
+		if task.RequiresHumanReview {
+			counts.Review++
+			continue
+		}
 		switch task.Status {
 		case "draft", "todo":
-			counts.Todo++
+			counts.Queued++
 		case "done", "approved", "cancelled":
 			counts.Done++
 		case "blocked", "rejected", "deferred":
@@ -1086,7 +1091,7 @@ func (w *workspaceState) render(view MainView, class SizeClass) string {
 	counts := w.boardCounts()
 	switch view {
 	case ViewDashboard:
-		return fmt.Sprintf("view=dashboard size=%s tasks(todo=%d,in_progress=%d,done=%d,blocked=%d) inbox=%d", class, counts.Todo, counts.InProgress, counts.Done, counts.Blocked, len(w.inbox))
+		return fmt.Sprintf("view=dashboard size=%s tasks(queued=%d,in_progress=%d,done=%d,blocked=%d,review=%d) inbox=%d", class, counts.Queued, counts.InProgress, counts.Done, counts.Blocked, counts.Review, len(w.inbox))
 	case ViewProject:
 		return fmt.Sprintf("view=project size=%s projects=%d selected_session=%s", class, w.projectCount(), valueOrPlaceholder(w.activeSessionID))
 	case ViewTask:

@@ -1,5 +1,5 @@
 ### M dashboard
-view=dashboard size=M tasks(todo=0,in_progress=0,done=0,blocked=0) inbox=0
+view=dashboard size=M tasks(queued=0,in_progress=0,done=0,blocked=0,review=0) inbox=0
 
 ### M project
 view=project size=M projects=0 selected_session=session-org-general
