@@ -15021,3 +15021,41 @@ func TestHomEndCommandsBoundaryPhraseEX452(t *testing.T) {
 		}
 	})
 }
+
+func TestMouseClickSidebarSelectsItem(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model.workspace.nodes["project-1"] = &sidebarNode{
+		ID: "project-1", Kind: sidebarKindProject, Label: "My Project", ProjectID: "proj-id",
+	}
+	model.workspace.topLevel = []string{"project-1"}
+	model.workspace.sidebarCursor = 0
+
+	// Simulate a mouse click on Y=1 (first content line in sidebar).
+	m, _ := model.updateMouse(tea.MouseMsg{
+		X: 5, Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	})
+	if m.focus != SidebarPanel {
+		t.Fatalf("expected sidebar focus, got %v", m.focus)
+	}
+	if m.workspace.sidebarCursor != 0 {
+		t.Fatalf("expected cursor at 0, got %d", m.workspace.sidebarCursor)
+	}
+}
+
+func TestMouseHoverUpdatesPanelAndY(t *testing.T) {
+	t.Parallel()
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	m, _ := model.updateMouse(tea.MouseMsg{
+		X: 5, Y: 10, Action: tea.MouseActionMotion,
+	})
+	if m.hoverPanel != SidebarPanel {
+		t.Fatalf("expected hover on sidebar, got %v", m.hoverPanel)
+	}
+	if m.hoverY != 10 {
+		t.Fatalf("expected hoverY=10, got %d", m.hoverY)
+	}
+}

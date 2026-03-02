@@ -66,6 +66,9 @@ var (
 			Foreground(lipgloss.Color("#FFFFFF")).
 			Bold(true)
 	styleActive = lipgloss.NewStyle().Foreground(colFocus).Bold(true)
+	// styleHover provides subtle visual feedback when the mouse hovers over
+	// a clickable item (underline to indicate interactivity).
+	styleHover = lipgloss.NewStyle().Underline(true)
 )
 
 // taskStatusColor returns a colour for the given work_status string.

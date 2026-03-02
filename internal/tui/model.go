@@ -174,6 +174,10 @@ type Model struct {
 	activeScope          ChatScope
 	activeSession        string
 	localMessageSeq      int
+
+	// Mouse hover tracking for visual feedback.
+	hoverPanel Panel
+	hoverY     int
 }
 
 func NewModel(state UIState) Model {
@@ -626,25 +630,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return typedModel, cmd
 	case tea.MouseMsg:
-		return m.updateMouse(typed), nil
+		return m.updateMouse(typed)
 	default:
 		return m, nil
 	}
 }
 
-// updateMouse handles mouse events for panel focus switching.
-// Clicking on a panel switches focus to it.
-func (m Model) updateMouse(msg tea.MouseMsg) Model {
-	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
-		return m
-	}
+// updateMouse handles mouse events for panel focus switching and item selection.
+func (m Model) updateMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 	layout := m.CurrentLayout()
 	x := msg.X
-	// Determine which panel was clicked based on column boundaries.
-	// widths[0]=sidebar, widths[1]=main, widths[2]=chat
+
+	// Determine which panel was clicked/hovered based on column boundaries.
 	col0End := 0
 	if layout.visible[0] {
-		col0End = layout.widths[0] + 1 // +1 for border
+		col0End = layout.widths[0] + 1
 	}
 	col1End := col0End
 	if layout.visible[1] {
@@ -659,13 +659,241 @@ func (m Model) updateMouse(msg tea.MouseMsg) Model {
 	case layout.visible[2]:
 		target = ChatPanel
 	default:
-		return m
+		return m, nil
 	}
+
+	// Track hover position for visual feedback.
+	if msg.Action == tea.MouseActionMotion {
+		m.hoverPanel = target
+		m.hoverY = msg.Y
+		return m, nil
+	}
+
+	// Only handle left clicks from here.
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+		return m, nil
+	}
+
 	if target != m.focus {
 		m.focus = target
 		m.statusMessage = ""
 	}
-	return m
+
+	// Y coordinate within the panel content area (subtract top border).
+	contentY := msg.Y - 1 // 1 for top border line
+	if contentY < 0 {
+		return m, nil
+	}
+
+	switch target {
+	case SidebarPanel:
+		return m.mouseClickSidebar(contentY)
+	case MainPanel:
+		return m.mouseClickMain(contentY)
+	}
+	return m, nil
+}
+
+// mouseClickSidebar maps a Y offset within the sidebar content to a sidebar item.
+func (m Model) mouseClickSidebar(contentY int) (Model, tea.Cmd) {
+	visible := m.workspace.visibleSidebarIDs()
+	visible = m.filteredSidebarIDs(visible, m.sidebarFilter)
+	if len(visible) == 0 {
+		return m, nil
+	}
+
+	// Compute sidebarScrollStart using the same logic as renderSidebarPanel.
+	_, termH := normalizeDimensions(m.width, m.height)
+	innerH := termH - 2 // minus borders
+	if m.degradedModeBanner() != "" {
+		innerH--
+	}
+	if m.coldOpenActive {
+		innerH--
+	}
+	if m.tourActive {
+		innerH--
+	}
+	innerH -= 2 // status bar + help line
+	maxNodeLines := innerH
+	if m.searchMode && m.searchPanel == SidebarPanel || m.sidebarFilter != "" {
+		maxNodeLines -= 2
+	}
+	if len(visible) > maxNodeLines && maxNodeLines > 0 {
+		maxNodeLines--
+	}
+	if maxNodeLines < 1 {
+		maxNodeLines = 1
+	}
+
+	sidebarScrollStart := m.sidebarScrollStart(visible, maxNodeLines)
+
+	// Walk through visible items from scrollStart, counting display lines
+	// (including section dividers) to find which item is at contentY.
+	displayLine := 0
+	for i, id := range visible[sidebarScrollStart:] {
+		idx := i + sidebarScrollStart
+		node := m.workspace.nodes[id]
+		if node == nil {
+			continue
+		}
+		// Section dividers add a display line before each header (except the first).
+		if node.Kind == sidebarKindHeader && idx > sidebarScrollStart {
+			if displayLine == contentY {
+				// Clicked on a divider — treat as the header below it.
+				m.workspace.sidebarCursor = idx
+				m.workspace.selectSidebarNode()
+				m.statusMessage = node.Label + " toggled."
+				return m, nil
+			}
+			displayLine++
+		}
+		if displayLine == contentY {
+			m.workspace.sidebarCursor = idx
+			// Simulate Enter — trigger the same logic as handleEnterKey sidebar path.
+			m.statusMessage = "▸ " + truncate(node.Label, 40)
+			return m, nil
+		}
+		displayLine++
+		if displayLine > contentY {
+			break
+		}
+	}
+	return m, nil
+}
+
+// sidebarScrollStart computes the scroll offset for the sidebar (mirrors renderSidebarPanel logic).
+func (m Model) sidebarScrollStart(visible []string, maxNodeLines int) int {
+	cursor := m.workspace.sidebarCursor
+	if cursor <= 0 || maxNodeLines <= 0 {
+		return 0
+	}
+	displayAtCursor := 0
+	prevWasContent := false
+	for i, id := range visible {
+		node := m.workspace.nodes[id]
+		if node == nil {
+			if i == cursor {
+				break
+			}
+			prevWasContent = true
+			continue
+		}
+		if node.Kind == sidebarKindHeader && prevWasContent {
+			displayAtCursor++
+		}
+		displayAtCursor++
+		if i == cursor {
+			break
+		}
+		prevWasContent = node.Kind != sidebarKindHeader
+	}
+	if displayAtCursor <= maxNodeLines {
+		return 0
+	}
+	excess := displayAtCursor - maxNodeLines
+	consumed := 0
+	prevWasContent2 := false
+	for i, id := range visible {
+		node := m.workspace.nodes[id]
+		if node == nil {
+			prevWasContent2 = true
+			continue
+		}
+		if node.Kind == sidebarKindHeader && prevWasContent2 {
+			consumed++
+		}
+		consumed++
+		prevWasContent2 = node.Kind != sidebarKindHeader
+		if consumed >= excess {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// mouseClickMain maps a Y offset within the main panel content to an item.
+func (m Model) mouseClickMain(contentY int) (Model, tea.Cmd) {
+	switch m.workspace.mainView {
+	case ViewDashboard:
+		return m.mouseClickDashboard(contentY)
+	case ViewInbox:
+		return m.mouseClickInbox(contentY)
+	case ViewProject:
+		return m.mouseClickProject(contentY)
+	}
+	return m, nil
+}
+
+// mouseClickDashboard maps a click in the dashboard board to a task.
+func (m Model) mouseClickDashboard(contentY int) (Model, tea.Cmd) {
+	// Board header takes 4 lines: blank + title + column headers + dividers.
+	// Tasks start at line 4 (0-indexed).
+	taskStartY := 4
+	if contentY < taskStartY {
+		return m, nil
+	}
+	taskRow := contentY - taskStartY
+	active := m.workspace.dashboardActiveTasks()
+	if taskRow >= 0 && taskRow < len(active) {
+		m.workspace.dashboardCursor = taskRow
+		m.workspace.selectedTaskID = active[taskRow]
+		if t := m.workspace.tasks[active[taskRow]]; t != nil {
+			label := t.Title
+			if t.TaskNumber > 0 {
+				label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+			}
+			m.statusMessage = "▸ " + truncate(label, 40)
+		}
+	}
+	return m, nil
+}
+
+// mouseClickInbox maps a click in the inbox view to an inbox item.
+func (m Model) mouseClickInbox(contentY int) (Model, tea.Cmd) {
+	// Inbox view: line 0 = blank, lines 1+ = items.
+	itemIdx := contentY - 1
+	if itemIdx >= 0 && itemIdx < len(m.workspace.inbox) {
+		m.workspace.inboxCursor = itemIdx
+		item := m.workspace.inbox[itemIdx]
+		m.statusMessage = "▸ " + truncate(item.Summary, 40)
+	}
+	return m, nil
+}
+
+// mouseClickProject maps a click in the project view to a task in the task list.
+func (m Model) mouseClickProject(contentY int) (Model, tea.Cmd) {
+	proj := m.workspace.selectedProject
+	if proj == nil {
+		return m, nil
+	}
+	// Project view: title(1) + divider(1) + description(~2) + agents(~2) + repo(~2) + divider(1) + tasks...
+	// This is approximate — we count the header lines to find where tasks start.
+	headerLines := 2 // title + divider
+	if strings.TrimSpace(proj.Description) != "" {
+		headerLines += len(wrapText(proj.Description, 60)) + 1
+	}
+	if len(proj.Agents) > 0 {
+		headerLines += 2
+	}
+	if strings.TrimSpace(proj.RepoURL) != "" {
+		headerLines += 2
+	}
+	headerLines++ // task section divider
+
+	taskIdx := contentY - headerLines
+	openTasks := m.workspace.openTasksForProject()
+	if taskIdx >= 0 && taskIdx < len(openTasks) {
+		m.workspace.projectTaskCursor = taskIdx
+		t := openTasks[taskIdx]
+		m.workspace.selectedTaskID = t.ID
+		label := t.Title
+		if t.TaskNumber > 0 {
+			label = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+		}
+		m.statusMessage = "▸ " + truncate(label, 40)
+	}
+	return m, nil
 }
 
 func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
