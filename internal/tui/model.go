@@ -4793,7 +4793,7 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 	case "history":
 		// EX-392: :history — redirect to chat history navigation.
 		m.statusMessage = "Use ↑/↓ in chat panel (3 or Tab) to browse message history."
-	case "help", "palette":
+	case "help", "palette", "keybindings", "keys":
 		// EX-239: open the help screen directly (same as ?) rather than showing a
 		// truncated status message. The old statusMessage approach was cut off at 80
 		// chars (~5 commands visible) which defeated the purpose of a quick reference.

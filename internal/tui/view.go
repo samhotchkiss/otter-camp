@@ -2899,6 +2899,28 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 	if focus == MainPanel {
 		focusStr = strings.ToLower(string(m.workspace.mainView))
 	}
+	// Breadcrumb context: show project > task path when in task or project view
+	breadcrumb := ""
+	if m.workspace.mainView == ViewTask && m.workspace.selectedTaskID != "" {
+		if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil {
+			taskNodeID := "task-" + task.ID
+			if taskNode := m.workspace.nodes[taskNodeID]; taskNode != nil && taskNode.ParentID != "" {
+				if projNode := m.workspace.nodes[taskNode.ParentID]; projNode != nil {
+					breadcrumb = projNode.Label
+				}
+			}
+			if task.TaskNumber > 0 {
+				if breadcrumb != "" {
+					breadcrumb += " > "
+				}
+				breadcrumb += fmt.Sprintf("OC-%d", task.TaskNumber)
+			}
+		}
+	} else if m.workspace.mainView == ViewProject && m.workspace.selectedProjectID != "" {
+		if projNode := m.workspace.nodes["project-"+m.workspace.selectedProjectID]; projNode != nil {
+			breadcrumb = projNode.Label
+		}
+	}
 
 	status := ""
 	if m.statusMessage != "" {
@@ -2916,8 +2938,11 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 	}
 	bar := dot + "  " + connStyle.Render(connText) +
 		styleMuted.Render("  ·  ") + styleMuted.Render(sessionDisplay) +
-		styleMuted.Render("  ·  ") + styleSubtle.Render(sizeStr+"/"+focusStr) +
-		status
+		styleMuted.Render("  ·  ") + styleSubtle.Render(sizeStr+"/"+focusStr)
+	if breadcrumb != "" {
+		bar += styleMuted.Render("  ·  ") + styleSubtle.Render(breadcrumb)
+	}
+	bar += status
 
 	// EX-101: inbox badge — alert users to pending inbox items even when the
 	// sidebar is collapsed (narrow screens) and the inbox count isn't visible.
