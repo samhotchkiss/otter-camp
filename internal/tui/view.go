@@ -1210,6 +1210,16 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		lines = append(lines, "")
 	}
 
+	// Agent roster
+	if proj != nil && len(proj.Agents) > 0 {
+		var rosterParts []string
+		for _, a := range proj.Agents {
+			rosterParts = append(rosterParts, a.DisplayName+" ("+a.Role+")")
+		}
+		lines = append(lines, styleMuted.Render("  Team: "+strings.Join(rosterParts, "  ·  ")))
+		lines = append(lines, "")
+	}
+
 	if proj == nil {
 		// Still loading — EX-213: add r·retry hint in case the load stalls.
 		lines = append(lines, styleMuted.Render("  Loading…"))

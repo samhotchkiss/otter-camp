@@ -103,6 +103,12 @@ type boardCounts struct {
 	Review     int
 }
 
+// ProjectAgent represents an agent assigned to a project.
+type ProjectAgent struct {
+	DisplayName string
+	Role        string // "pm", "worker", "reviewer", "observer"
+}
+
 // ProjectDetail holds metadata for a project loaded from the API.
 type ProjectDetail struct {
 	ID           string
@@ -112,6 +118,7 @@ type ProjectDetail struct {
 	Tasks        []SidebarTaskItem // open tasks only
 	DoneTasks    []SidebarTaskItem // completed/approved/cancelled tasks
 	DoneCount    int               // count of completed tasks
+	Agents       []ProjectAgent    // agents assigned to this project
 }
 
 type workspaceState struct {

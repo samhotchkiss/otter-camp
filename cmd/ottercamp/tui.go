@@ -305,6 +305,26 @@ func runTUICommand(args []string) int {
 						tasks = append(tasks, item)
 					}
 				}
+				// Fetch assigned agents
+				var agentsResp struct {
+					Data []struct {
+						AgentDisplayName string `json:"agent_display_name"`
+						Role             string `json:"role"`
+						IsActive         bool   `json:"is_active"`
+					} `json:"data"`
+				}
+				agentsPath := "/v1/projects/" + url.PathEscape(projectID) + "/agents"
+				var agents []tuiapp.ProjectAgent
+				if apiClient.request(ctx, "GET", agentsPath, nil, &agentsResp) == nil {
+					for _, a := range agentsResp.Data {
+						if a.IsActive {
+							agents = append(agents, tuiapp.ProjectAgent{
+								DisplayName: a.AgentDisplayName,
+								Role:        a.Role,
+							})
+						}
+					}
+				}
 				return &tuiapp.ProjectDetail{
 					ID:           proj.ID,
 					DisplayName:  proj.DisplayName,
@@ -313,6 +333,7 @@ func runTUICommand(args []string) int {
 					Tasks:        tasks,
 					DoneTasks:    doneTasks,
 					DoneCount:    len(doneTasks),
+					Agents:       agents,
 				}, nil
 			}
 			runtimeHints.LoadAgents = func(ctx context.Context) ([]string, error) {
