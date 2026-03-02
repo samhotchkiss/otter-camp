@@ -1754,6 +1754,11 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 			flowLine += fmt.Sprintf("step %d", task.Flow)
 		}
 		lines = append(lines, styleMuted.Render(flowLine))
+	} else if task.Status == "in_progress" || task.Status == "in progress" {
+		// Warn when a task is in_progress but has no active flow execution.
+		lines = append(lines, "")
+		lines = append(lines, lipgloss.NewStyle().Foreground(colWarning).Render(
+			"  ⚠ No active flow — task should have a flow to be in progress"))
 	}
 
 	if desc := strings.TrimSpace(task.Description); desc != "" {
