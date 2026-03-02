@@ -219,6 +219,53 @@ func TestModelAPIAssignmentUpsertListDeleteAndOrgDeleteGuard(t *testing.T) {
 	}
 }
 
+func TestModelAPIProviderConnectionSupportsSubscriptionAuthMode(t *testing.T) {
+	testServer, _, adminA, _, _, _ := newModelTestServer(t)
+	defer testServer.Close()
+
+	providerRepo := repo.NewModelProviderRepo(testServer.Pool)
+	provider, err := providerRepo.Create(context.Background(), repo.ModelProvider{
+		Slug:        "anthropic",
+		DisplayName: "Anthropic",
+		APIBaseURL:  "https://api.anthropic.com",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+
+	adminToken := loginToken(t, testServer.URL, adminA.Email, "admin-password")
+	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/model/providers/"+provider.ID.String()+"/connections", map[string]any{
+		"display_name":                          "Anthropic Subscription",
+		"auth_mode":                             "subscription",
+		"subscription_access_token_secret_ref":  "anthropic-subscription-access",
+		"subscription_refresh_token_secret_ref": "anthropic-subscription-refresh",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if created.StatusCode != http.StatusCreated {
+		t.Fatalf("create connection status=%d want=%d body=%s", created.StatusCode, http.StatusCreated, string(created.Body))
+	}
+	if mode := jsonPathString(t, created.Body, "data", "auth_mode"); mode != "subscription" {
+		t.Fatalf("auth_mode=%q want=subscription body=%s", mode, string(created.Body))
+	}
+	if requiresReauth := jsonPathBoolValue(t, created.Body, "data", "requires_reauth"); requiresReauth {
+		t.Fatalf("requires_reauth=%v want=false body=%s", requiresReauth, string(created.Body))
+	}
+	if accessRef := jsonPathString(t, created.Body, "data", "subscription", "access_token_secret_ref"); accessRef != "ref:anthropic-subscription-access" {
+		t.Fatalf("subscription access ref=%q want=%q body=%s", accessRef, "ref:anthropic-subscription-access", string(created.Body))
+	}
+
+	connectionID := jsonPathString(t, created.Body, "data", "id")
+	patched := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/model/providers/"+provider.ID.String()+"/connections/"+connectionID, map[string]any{
+		"subscription_refresh_token_secret_ref": "",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if patched.StatusCode != http.StatusOK {
+		t.Fatalf("patch connection status=%d want=%d body=%s", patched.StatusCode, http.StatusOK, string(patched.Body))
+	}
+	if requiresReauth := jsonPathBoolValue(t, patched.Body, "data", "requires_reauth"); !requiresReauth {
+		t.Fatalf("requires_reauth=%v want=true body=%s", requiresReauth, string(patched.Body))
+	}
+}
+
 func TestModelAPIUsageQueryAndOrgIsolation(t *testing.T) {
 	testServer, orgA, adminA, _, orgB, adminB := newModelTestServer(t)
 	defer testServer.Close()

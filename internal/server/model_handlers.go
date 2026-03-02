@@ -22,6 +22,17 @@ const (
 	defaultModelProfileContextWindow = 200000
 	defaultModelProfileMaxTokens     = 4096
 	defaultInvocationPurpose         = "agent_turn"
+	connectionAuthModeAPIKey         = "api_key"
+	connectionAuthModeSubscription   = "subscription"
+)
+
+const (
+	providerConnectionMetadataAuthMode                          = "auth_mode"
+	providerConnectionMetadataSubscriptionAccessTokenSecretRef  = "subscription_access_token_secret_ref"
+	providerConnectionMetadataSubscriptionRefreshTokenSecretRef = "subscription_refresh_token_secret_ref"
+	providerConnectionMetadataSubscriptionTokenURL              = "subscription_token_url"
+	providerConnectionMetadataSubscriptionClientID              = "subscription_client_id"
+	providerConnectionMetadataSubscriptionExpiresAt             = "subscription_expires_at"
 )
 
 type modelProviderRepository interface {
@@ -118,19 +129,31 @@ type patchProviderRequest struct {
 }
 
 type providerConnectionRequest struct {
-	DisplayName      string  `json:"display_name"`
-	APIKeySecretRef  string  `json:"api_key_secret_ref"`
-	BaseURL          *string `json:"base_url"`
-	FailoverPriority *int    `json:"failover_priority"`
-	MaxConcurrent    *int    `json:"max_concurrent"`
+	DisplayName                       string  `json:"display_name"`
+	APIKeySecretRef                   string  `json:"api_key_secret_ref"`
+	AuthMode                          *string `json:"auth_mode"`
+	SubscriptionAccessTokenSecretRef  *string `json:"subscription_access_token_secret_ref"`
+	SubscriptionRefreshTokenSecretRef *string `json:"subscription_refresh_token_secret_ref"`
+	SubscriptionTokenURL              *string `json:"subscription_token_url"`
+	SubscriptionClientID              *string `json:"subscription_client_id"`
+	SubscriptionExpiresAt             *string `json:"subscription_expires_at"`
+	BaseURL                           *string `json:"base_url"`
+	FailoverPriority                  *int    `json:"failover_priority"`
+	MaxConcurrent                     *int    `json:"max_concurrent"`
 }
 
 type patchProviderConnectionRequest struct {
-	DisplayName      *string `json:"display_name"`
-	APIKeySecretRef  *string `json:"api_key_secret_ref"`
-	FailoverPriority *int    `json:"failover_priority"`
-	MaxConcurrent    *int    `json:"max_concurrent"`
-	IsEnabled        *bool   `json:"is_enabled"`
+	DisplayName                       *string `json:"display_name"`
+	APIKeySecretRef                   *string `json:"api_key_secret_ref"`
+	AuthMode                          *string `json:"auth_mode"`
+	SubscriptionAccessTokenSecretRef  *string `json:"subscription_access_token_secret_ref"`
+	SubscriptionRefreshTokenSecretRef *string `json:"subscription_refresh_token_secret_ref"`
+	SubscriptionTokenURL              *string `json:"subscription_token_url"`
+	SubscriptionClientID              *string `json:"subscription_client_id"`
+	SubscriptionExpiresAt             *string `json:"subscription_expires_at"`
+	FailoverPriority                  *int    `json:"failover_priority"`
+	MaxConcurrent                     *int    `json:"max_concurrent"`
+	IsEnabled                         *bool   `json:"is_enabled"`
 }
 
 type createProfileRequest struct {
@@ -168,18 +191,29 @@ type providerResponse struct {
 }
 
 type providerConnectionResponse struct {
-	ID               uuid.UUID `json:"id"`
-	OrganizationID   uuid.UUID `json:"organization_id"`
-	ProviderID       uuid.UUID `json:"provider_id"`
-	DisplayName      string    `json:"display_name"`
-	APIKeySecretRef  string    `json:"api_key_secret_ref"`
-	BaseURL          *string   `json:"base_url"`
-	FailoverPriority int       `json:"failover_priority"`
-	MaxConcurrent    int       `json:"max_concurrent"`
-	HealthStatus     string    `json:"health_status"`
-	IsEnabled        bool      `json:"is_enabled"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID               uuid.UUID                           `json:"id"`
+	OrganizationID   uuid.UUID                           `json:"organization_id"`
+	ProviderID       uuid.UUID                           `json:"provider_id"`
+	DisplayName      string                              `json:"display_name"`
+	APIKeySecretRef  string                              `json:"api_key_secret_ref"`
+	AuthMode         string                              `json:"auth_mode"`
+	Subscription     *providerConnectionSubscriptionInfo `json:"subscription,omitempty"`
+	RequiresReauth   bool                                `json:"requires_reauth"`
+	BaseURL          *string                             `json:"base_url"`
+	FailoverPriority int                                 `json:"failover_priority"`
+	MaxConcurrent    int                                 `json:"max_concurrent"`
+	HealthStatus     string                              `json:"health_status"`
+	IsEnabled        bool                                `json:"is_enabled"`
+	CreatedAt        time.Time                           `json:"created_at"`
+	UpdatedAt        time.Time                           `json:"updated_at"`
+}
+
+type providerConnectionSubscriptionInfo struct {
+	AccessTokenSecretRef  string  `json:"access_token_secret_ref"`
+	RefreshTokenSecretRef *string `json:"refresh_token_secret_ref,omitempty"`
+	TokenURL              *string `json:"token_url,omitempty"`
+	ClientID              *string `json:"client_id,omitempty"`
+	ExpiresAt             *string `json:"expires_at,omitempty"`
 }
 
 type profileResponse struct {
@@ -456,7 +490,8 @@ func (h modelHandlers) createProviderConnection(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	if _, err := h.providers.GetByID(r.Context(), providerID); err != nil {
+	provider, err := h.providers.GetByID(r.Context(), providerID)
+	if err != nil {
 		h.respondModelError(responder, w, err)
 		return
 	}
@@ -470,20 +505,31 @@ func (h modelHandlers) createProviderConnection(w http.ResponseWriter, r *http.R
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "display_name is required")
 		return
 	}
-	if strings.TrimSpace(req.APIKeySecretRef) == "" {
-		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "api_key_secret_ref is required")
-		return
-	}
 
 	connection := repo.ProviderConnection{
 		OrganizationID:     principal.OrganizationID,
 		ProviderID:         providerID,
 		DisplayName:        strings.TrimSpace(req.DisplayName),
-		APIKeyRef:          normalizeSecretRef(req.APIKeySecretRef),
 		APIBaseURLOverride: normalizeOptionalString(req.BaseURL),
 		IsEnabled:          true,
 		HealthStatus:       "healthy",
 	}
+	authMetadata, authErr := buildProviderConnectionAuthMetadata(provider.Slug, providerConnectionAuthRequest{
+		AuthMode:                          req.AuthMode,
+		APIKeySecretRef:                   req.APIKeySecretRef,
+		SubscriptionAccessTokenSecretRef:  req.SubscriptionAccessTokenSecretRef,
+		SubscriptionRefreshTokenSecretRef: req.SubscriptionRefreshTokenSecretRef,
+		SubscriptionTokenURL:              req.SubscriptionTokenURL,
+		SubscriptionClientID:              req.SubscriptionClientID,
+		SubscriptionExpiresAt:             req.SubscriptionExpiresAt,
+	})
+	if authErr != nil {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, authErr.Error())
+		return
+	}
+	connection.APIKeyRef = authMetadata.AccessTokenRef
+	connection.Metadata = authMetadata.Metadata
+
 	if req.FailoverPriority != nil {
 		connection.FailoverPriority = *req.FailoverPriority
 	}
@@ -514,7 +560,8 @@ func (h modelHandlers) patchProviderConnection(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
-	if _, err := h.providers.GetByID(r.Context(), providerID); err != nil {
+	provider, err := h.providers.GetByID(r.Context(), providerID)
+	if err != nil {
 		h.respondModelError(responder, w, err)
 		return
 	}
@@ -547,20 +594,32 @@ func (h modelHandlers) patchProviderConnection(w http.ResponseWriter, r *http.Re
 		}
 		current.DisplayName = trimmed
 	}
-	if req.APIKeySecretRef != nil {
-		trimmed := strings.TrimSpace(*req.APIKeySecretRef)
-		if trimmed == "" {
-			responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "api_key_secret_ref is required")
-			return
-		}
-		current.APIKeyRef = normalizeSecretRef(trimmed)
-	}
 	if req.FailoverPriority != nil {
 		current.FailoverPriority = *req.FailoverPriority
 	}
 	if req.MaxConcurrent != nil {
 		current.MaxConcurrent = *req.MaxConcurrent
 	}
+	accessKeyRefValue := ""
+	if req.APIKeySecretRef != nil {
+		accessKeyRefValue = strings.TrimSpace(*req.APIKeySecretRef)
+	}
+	authMetadata, authErr := updateProviderConnectionAuthMetadata(provider.Slug, current, providerConnectionAuthPatchRequest{
+		AuthMode:                          req.AuthMode,
+		APIKeySecretRef:                   req.APIKeySecretRef,
+		AccessTokenSecretRefValue:         accessKeyRefValue,
+		SubscriptionAccessTokenSecretRef:  req.SubscriptionAccessTokenSecretRef,
+		SubscriptionRefreshTokenSecretRef: req.SubscriptionRefreshTokenSecretRef,
+		SubscriptionTokenURL:              req.SubscriptionTokenURL,
+		SubscriptionClientID:              req.SubscriptionClientID,
+		SubscriptionExpiresAt:             req.SubscriptionExpiresAt,
+	})
+	if authErr != nil {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, authErr.Error())
+		return
+	}
+	current.APIKeyRef = authMetadata.AccessTokenRef
+	current.Metadata = authMetadata.Metadata
 
 	updated, err := h.connections.Update(r.Context(), current)
 	if err != nil {
@@ -1538,6 +1597,207 @@ func normalizeSecretRef(raw string) string {
 	return "ref:" + trimmed
 }
 
+type providerConnectionAuthRequest struct {
+	AuthMode                          *string
+	APIKeySecretRef                   string
+	SubscriptionAccessTokenSecretRef  *string
+	SubscriptionRefreshTokenSecretRef *string
+	SubscriptionTokenURL              *string
+	SubscriptionClientID              *string
+	SubscriptionExpiresAt             *string
+}
+
+type providerConnectionAuthPatchRequest struct {
+	AuthMode                          *string
+	APIKeySecretRef                   *string
+	AccessTokenSecretRefValue         string
+	SubscriptionAccessTokenSecretRef  *string
+	SubscriptionRefreshTokenSecretRef *string
+	SubscriptionTokenURL              *string
+	SubscriptionClientID              *string
+	SubscriptionExpiresAt             *string
+}
+
+type providerConnectionAuthMetadata struct {
+	Mode           string
+	AccessTokenRef string
+	Metadata       json.RawMessage
+}
+
+func buildProviderConnectionAuthMetadata(providerSlug string, req providerConnectionAuthRequest) (providerConnectionAuthMetadata, error) {
+	mode := connectionAuthModeAPIKey
+	if req.AuthMode != nil {
+		mode = strings.ToLower(strings.TrimSpace(*req.AuthMode))
+	}
+	if mode != connectionAuthModeAPIKey && mode != connectionAuthModeSubscription {
+		return providerConnectionAuthMetadata{}, errors.New("auth_mode must be one of api_key, subscription")
+	}
+
+	metadata := map[string]any{
+		providerConnectionMetadataAuthMode: mode,
+	}
+
+	switch mode {
+	case connectionAuthModeAPIKey:
+		apiKey := normalizeSecretRef(req.APIKeySecretRef)
+		if apiKey == "" {
+			return providerConnectionAuthMetadata{}, errors.New("api_key_secret_ref is required")
+		}
+		encoded, err := json.Marshal(metadata)
+		if err != nil {
+			return providerConnectionAuthMetadata{}, err
+		}
+		return providerConnectionAuthMetadata{
+			Mode:           mode,
+			AccessTokenRef: apiKey,
+			Metadata:       encoded,
+		}, nil
+	default:
+		if strings.ToLower(strings.TrimSpace(providerSlug)) != "anthropic" {
+			return providerConnectionAuthMetadata{}, errors.New("subscription auth_mode is only supported for anthropic providers")
+		}
+		accessRef := normalizeSecretRef(req.APIKeySecretRef)
+		if req.SubscriptionAccessTokenSecretRef != nil && strings.TrimSpace(*req.SubscriptionAccessTokenSecretRef) != "" {
+			accessRef = normalizeSecretRef(*req.SubscriptionAccessTokenSecretRef)
+		}
+		if accessRef == "" {
+			return providerConnectionAuthMetadata{}, errors.New("subscription_access_token_secret_ref is required")
+		}
+		metadata[providerConnectionMetadataSubscriptionAccessTokenSecretRef] = accessRef
+		if req.SubscriptionRefreshTokenSecretRef != nil && strings.TrimSpace(*req.SubscriptionRefreshTokenSecretRef) != "" {
+			metadata[providerConnectionMetadataSubscriptionRefreshTokenSecretRef] = normalizeSecretRef(*req.SubscriptionRefreshTokenSecretRef)
+		}
+		if req.SubscriptionTokenURL != nil && strings.TrimSpace(*req.SubscriptionTokenURL) != "" {
+			metadata[providerConnectionMetadataSubscriptionTokenURL] = strings.TrimSpace(*req.SubscriptionTokenURL)
+		}
+		if req.SubscriptionClientID != nil && strings.TrimSpace(*req.SubscriptionClientID) != "" {
+			metadata[providerConnectionMetadataSubscriptionClientID] = strings.TrimSpace(*req.SubscriptionClientID)
+		}
+		if req.SubscriptionExpiresAt != nil && strings.TrimSpace(*req.SubscriptionExpiresAt) != "" {
+			parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*req.SubscriptionExpiresAt))
+			if err != nil {
+				return providerConnectionAuthMetadata{}, errors.New("subscription_expires_at must be RFC3339")
+			}
+			metadata[providerConnectionMetadataSubscriptionExpiresAt] = parsed.UTC().Format(time.RFC3339)
+		}
+		encoded, err := json.Marshal(metadata)
+		if err != nil {
+			return providerConnectionAuthMetadata{}, err
+		}
+		return providerConnectionAuthMetadata{
+			Mode:           mode,
+			AccessTokenRef: accessRef,
+			Metadata:       encoded,
+		}, nil
+	}
+}
+
+func updateProviderConnectionAuthMetadata(providerSlug string, current repo.ProviderConnection, req providerConnectionAuthPatchRequest) (providerConnectionAuthMetadata, error) {
+	parsed := parseProviderConnectionAuthSettings(current)
+	mode := parsed.Mode
+	if req.AuthMode != nil {
+		mode = strings.ToLower(strings.TrimSpace(*req.AuthMode))
+	}
+	if mode != connectionAuthModeAPIKey && mode != connectionAuthModeSubscription {
+		return providerConnectionAuthMetadata{}, errors.New("auth_mode must be one of api_key, subscription")
+	}
+
+	metadata := metadataMap(current.Metadata)
+	metadata[providerConnectionMetadataAuthMode] = mode
+	accessRef := strings.TrimSpace(current.APIKeyRef)
+
+	if req.APIKeySecretRef != nil {
+		trimmed := strings.TrimSpace(req.AccessTokenSecretRefValue)
+		if trimmed == "" {
+			return providerConnectionAuthMetadata{}, errors.New("api_key_secret_ref is required")
+		}
+		accessRef = normalizeSecretRef(trimmed)
+	}
+
+	switch mode {
+	case connectionAuthModeAPIKey:
+		if req.SubscriptionAccessTokenSecretRef != nil ||
+			req.SubscriptionRefreshTokenSecretRef != nil ||
+			req.SubscriptionTokenURL != nil ||
+			req.SubscriptionClientID != nil ||
+			req.SubscriptionExpiresAt != nil {
+			return providerConnectionAuthMetadata{}, errors.New("subscription fields require auth_mode=subscription")
+		}
+		if accessRef == "" {
+			return providerConnectionAuthMetadata{}, errors.New("api_key_secret_ref is required")
+		}
+		delete(metadata, providerConnectionMetadataSubscriptionAccessTokenSecretRef)
+		delete(metadata, providerConnectionMetadataSubscriptionRefreshTokenSecretRef)
+		delete(metadata, providerConnectionMetadataSubscriptionTokenURL)
+		delete(metadata, providerConnectionMetadataSubscriptionClientID)
+		delete(metadata, providerConnectionMetadataSubscriptionExpiresAt)
+	default:
+		if strings.ToLower(strings.TrimSpace(providerSlug)) != "anthropic" {
+			return providerConnectionAuthMetadata{}, errors.New("subscription auth_mode is only supported for anthropic providers")
+		}
+		if req.SubscriptionAccessTokenSecretRef != nil {
+			trimmed := strings.TrimSpace(*req.SubscriptionAccessTokenSecretRef)
+			if trimmed == "" {
+				return providerConnectionAuthMetadata{}, errors.New("subscription_access_token_secret_ref is required")
+			}
+			accessRef = normalizeSecretRef(trimmed)
+		}
+		if accessRef == "" {
+			accessRef = strings.TrimSpace(parsed.SubscriptionAccessTokenRef)
+		}
+		if accessRef == "" {
+			return providerConnectionAuthMetadata{}, errors.New("subscription_access_token_secret_ref is required")
+		}
+		metadata[providerConnectionMetadataSubscriptionAccessTokenSecretRef] = accessRef
+		if req.SubscriptionRefreshTokenSecretRef != nil {
+			trimmed := strings.TrimSpace(*req.SubscriptionRefreshTokenSecretRef)
+			if trimmed == "" {
+				delete(metadata, providerConnectionMetadataSubscriptionRefreshTokenSecretRef)
+			} else {
+				metadata[providerConnectionMetadataSubscriptionRefreshTokenSecretRef] = normalizeSecretRef(trimmed)
+			}
+		}
+		if req.SubscriptionTokenURL != nil {
+			trimmed := strings.TrimSpace(*req.SubscriptionTokenURL)
+			if trimmed == "" {
+				delete(metadata, providerConnectionMetadataSubscriptionTokenURL)
+			} else {
+				metadata[providerConnectionMetadataSubscriptionTokenURL] = trimmed
+			}
+		}
+		if req.SubscriptionClientID != nil {
+			trimmed := strings.TrimSpace(*req.SubscriptionClientID)
+			if trimmed == "" {
+				delete(metadata, providerConnectionMetadataSubscriptionClientID)
+			} else {
+				metadata[providerConnectionMetadataSubscriptionClientID] = trimmed
+			}
+		}
+		if req.SubscriptionExpiresAt != nil {
+			trimmed := strings.TrimSpace(*req.SubscriptionExpiresAt)
+			if trimmed == "" {
+				delete(metadata, providerConnectionMetadataSubscriptionExpiresAt)
+			} else {
+				parsedExpiry, err := time.Parse(time.RFC3339, trimmed)
+				if err != nil {
+					return providerConnectionAuthMetadata{}, errors.New("subscription_expires_at must be RFC3339")
+				}
+				metadata[providerConnectionMetadataSubscriptionExpiresAt] = parsedExpiry.UTC().Format(time.RFC3339)
+			}
+		}
+	}
+
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return providerConnectionAuthMetadata{}, err
+	}
+	return providerConnectionAuthMetadata{
+		Mode:           mode,
+		AccessTokenRef: accessRef,
+		Metadata:       encoded,
+	}, nil
+}
+
 func metadataMap(metadata json.RawMessage) map[string]any {
 	result := map[string]any{}
 	if len(metadata) == 0 {
@@ -1564,6 +1824,65 @@ func providerNotes(metadata json.RawMessage) *string {
 	return &text
 }
 
+type providerConnectionAuthSettings struct {
+	Mode                        string
+	SubscriptionAccessTokenRef  string
+	SubscriptionRefreshTokenRef *string
+	SubscriptionTokenURL        *string
+	SubscriptionClientID        *string
+	SubscriptionExpiresAt       *string
+	RequiresReauth              bool
+}
+
+func parseProviderConnectionAuthSettings(connection repo.ProviderConnection) providerConnectionAuthSettings {
+	parsed := metadataMap(connection.Metadata)
+	mode := connectionAuthModeAPIKey
+	if value, ok := parsed[providerConnectionMetadataAuthMode].(string); ok && strings.TrimSpace(value) != "" {
+		mode = strings.ToLower(strings.TrimSpace(value))
+	}
+	settings := providerConnectionAuthSettings{Mode: mode}
+	if settings.Mode != connectionAuthModeSubscription {
+		return settings
+	}
+
+	accessRef := strings.TrimSpace(connection.APIKeyRef)
+	if value, ok := parsed[providerConnectionMetadataSubscriptionAccessTokenSecretRef].(string); ok && strings.TrimSpace(value) != "" {
+		accessRef = strings.TrimSpace(value)
+	}
+	settings.SubscriptionAccessTokenRef = accessRef
+
+	if value, ok := parsed[providerConnectionMetadataSubscriptionRefreshTokenSecretRef].(string); ok {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			settings.SubscriptionRefreshTokenRef = &trimmed
+		}
+	}
+	if value, ok := parsed[providerConnectionMetadataSubscriptionTokenURL].(string); ok {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			settings.SubscriptionTokenURL = &trimmed
+		}
+	}
+	if value, ok := parsed[providerConnectionMetadataSubscriptionClientID].(string); ok {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			settings.SubscriptionClientID = &trimmed
+		}
+	}
+	if value, ok := parsed[providerConnectionMetadataSubscriptionExpiresAt].(string); ok {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			if parsedTime, err := time.Parse(time.RFC3339, trimmed); err == nil {
+				formatted := parsedTime.UTC().Format(time.RFC3339)
+				settings.SubscriptionExpiresAt = &formatted
+			}
+		}
+	}
+
+	settings.RequiresReauth = settings.SubscriptionRefreshTokenRef == nil
+	return settings
+}
+
 func toProviderResponse(provider repo.ModelProvider) providerResponse {
 	return providerResponse{
 		ID:                provider.ID,
@@ -1579,12 +1898,27 @@ func toProviderResponse(provider repo.ModelProvider) providerResponse {
 }
 
 func toProviderConnectionResponse(connection repo.ProviderConnection) providerConnectionResponse {
+	authSettings := parseProviderConnectionAuthSettings(connection)
+	var subscription *providerConnectionSubscriptionInfo
+	if authSettings.Mode == connectionAuthModeSubscription {
+		subscription = &providerConnectionSubscriptionInfo{
+			AccessTokenSecretRef:  authSettings.SubscriptionAccessTokenRef,
+			RefreshTokenSecretRef: authSettings.SubscriptionRefreshTokenRef,
+			TokenURL:              authSettings.SubscriptionTokenURL,
+			ClientID:              authSettings.SubscriptionClientID,
+			ExpiresAt:             authSettings.SubscriptionExpiresAt,
+		}
+	}
+
 	return providerConnectionResponse{
 		ID:               connection.ID,
 		OrganizationID:   connection.OrganizationID,
 		ProviderID:       connection.ProviderID,
 		DisplayName:      connection.DisplayName,
 		APIKeySecretRef:  connection.APIKeyRef,
+		AuthMode:         authSettings.Mode,
+		Subscription:     subscription,
+		RequiresReauth:   authSettings.RequiresReauth,
 		BaseURL:          connection.APIBaseURLOverride,
 		FailoverPriority: connection.FailoverPriority,
 		MaxConcurrent:    connection.MaxConcurrent,
