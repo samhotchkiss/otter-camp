@@ -1088,10 +1088,10 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		}
 	}
 
-	// Activity section
+	// Activity section — filter noise (supervisor recovery, heartbeat) and search query.
 	filteredActivity := make([]string, 0, len(m.workspace.activity))
 	for _, entry := range m.workspace.activity {
-		if matchesFilter(entry, query) {
+		if !isNoiseActivity(entry) && matchesFilter(entry, query) {
 			filteredActivity = append(filteredActivity, entry)
 		}
 	}
@@ -1833,6 +1833,22 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 	return lines
 }
 
+// isNoiseActivity returns true for internal system events that clutter the
+// activity log without providing value to the human operator.
+func isNoiseActivity(entry string) bool {
+	lower := strings.ToLower(entry)
+	for _, pattern := range []string{
+		"supervisor recovery",
+		"heartbeat silence",
+		"supervisor escalation: heartbeat",
+	} {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 // activityIcon returns a coloured icon appropriate for an activity log entry.
 // Task status entries (added by EX-092) get icons that reflect the new status.
 // EX-147: extended to handle run failures, rollbacks, review rejections, and
@@ -1872,7 +1888,7 @@ func (m Model) renderActivityView(width, maxLines int) []string {
 	query := normalizedFilterQuery(m.mainFilter)
 	filteredActivity := make([]string, 0, len(m.workspace.activity))
 	for _, entry := range m.workspace.activity {
-		if matchesFilter(entry, query) {
+		if !isNoiseActivity(entry) && matchesFilter(entry, query) {
 			filteredActivity = append(filteredActivity, entry)
 		}
 	}

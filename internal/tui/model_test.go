@@ -3131,6 +3131,26 @@ func TestActivityIconEX147(t *testing.T) {
 	}
 }
 
+func TestIsNoiseActivityFiltersSupervisorRecovery(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		entry string
+		noise bool
+	}{
+		{"run failed: supervisor recovery: heartbeat silence exceeded", true},
+		{"run failed: supervisor recovery: context deadline exceeded", true},
+		{"run failed: heartbeat silence exceeded 5m0s", true},
+		{"run failed: context deadline exceeded", false},
+		{"OC-3: in progress", false},
+		{"session created", false},
+	}
+	for _, tc := range cases {
+		if got := isNoiseActivity(tc.entry); got != tc.noise {
+			t.Errorf("isNoiseActivity(%q) = %v, want %v", tc.entry, got, tc.noise)
+		}
+	}
+}
+
 // EX-148: a/x/f keys should work from ViewTask (not just ViewInbox) when
 // RequiresHumanReview is set. The task view shows these hints — they must be functional.
 
