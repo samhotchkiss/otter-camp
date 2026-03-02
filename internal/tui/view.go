@@ -1630,6 +1630,47 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 		}
 	}
 
+	// Dependencies section
+	if len(task.Dependencies) > 0 {
+		var dependsOn, blocks []string
+		for _, dep := range task.Dependencies {
+			title := dep.TaskTitle
+			if title == "" {
+				// Resolve from workspace tasks
+				if rec := m.workspace.tasks[dep.TaskID]; rec != nil {
+					if rec.TaskNumber > 0 {
+						title = fmt.Sprintf("OC-%d: %s", rec.TaskNumber, rec.Title)
+					} else {
+						title = rec.Title
+					}
+				} else if len(dep.TaskID) >= 8 {
+					title = dep.TaskID[:8] + "…"
+				} else {
+					title = dep.TaskID
+				}
+			}
+			if dep.Direction == "depends_on" {
+				dependsOn = append(dependsOn, title)
+			} else {
+				blocks = append(blocks, title)
+			}
+		}
+		if len(dependsOn) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, divider(width, "Depends On"))
+			for _, t := range dependsOn {
+				lines = append(lines, styleMuted.Render("  → "+truncate(t, width-6)))
+			}
+		}
+		if len(blocks) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, divider(width, "Blocks"))
+			for _, t := range blocks {
+				lines = append(lines, styleMuted.Render("  ← "+truncate(t, width-6)))
+			}
+		}
+	}
+
 	sessionID := strings.TrimSpace(task.SessionID)
 	if sessionID == "" {
 		sessionID = m.workspace.taskSessionID(task.ID)

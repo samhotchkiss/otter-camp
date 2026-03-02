@@ -58,6 +58,13 @@ type SubtaskItem struct {
 	Status string // "pending", "in_progress", "done"
 }
 
+// TaskDependency represents a dependency relationship between tasks.
+type TaskDependency struct {
+	TaskID     string // UUID of the related task
+	TaskTitle  string // resolved display title (e.g. "OC-5: Build landing page")
+	Direction  string // "depends_on" or "blocks"
+}
+
 // TaskDetailItem is the full task record fetched on demand when the user selects a task.
 type TaskDetailItem struct {
 	ID                  string
@@ -72,6 +79,7 @@ type TaskDetailItem struct {
 	BranchName          string // git branch name, if any
 	FlowSteps           []FlowStep
 	SubtaskItems        []SubtaskItem
+	Dependencies        []TaskDependency
 }
 
 type RuntimeHints struct {

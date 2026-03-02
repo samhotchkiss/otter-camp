@@ -441,6 +441,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rec.BranchName = typed.Detail.BranchName
 		rec.FlowSteps = typed.Detail.FlowSteps
 		rec.SubtaskItems = typed.Detail.SubtaskItems
+		rec.Dependencies = typed.Detail.Dependencies
 		if typed.Detail.Title != "" {
 			rec.Title = typed.Detail.Title
 		}

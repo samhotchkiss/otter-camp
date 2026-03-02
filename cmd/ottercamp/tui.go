@@ -432,6 +432,21 @@ func runTUICommand(args []string) int {
 						})
 					}
 				}
+				// Fetch task dependencies (outbound = "depends on")
+				var depsResp struct {
+					Data []struct {
+						DependsOnID string `json:"depends_on_id"`
+					} `json:"data"`
+				}
+				depsPath := "/v1/tasks/" + url.PathEscape(taskID) + "/dependencies"
+				if apiClient.request(ctx, "GET", depsPath, nil, &depsResp) == nil {
+					for _, dep := range depsResp.Data {
+						item.Dependencies = append(item.Dependencies, tuiapp.TaskDependency{
+							TaskID:    dep.DependsOnID,
+							Direction: "depends_on",
+						})
+					}
+				}
 				// Find the task's async chat session (scope_type=project_task)
 				var sessResp struct {
 					Data []struct {

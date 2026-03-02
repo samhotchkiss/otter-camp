@@ -86,6 +86,7 @@ type taskRecord struct {
 	BranchName          string
 	FlowSteps           []FlowStep
 	SubtaskItems        []SubtaskItem
+	Dependencies        []TaskDependency
 }
 
 type inboxItem struct {
