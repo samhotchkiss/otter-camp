@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	ansitrunc "github.com/muesli/reflow/truncate"
 )
 
 // ── Color palette ──────────────────────────────────────────────────────────
@@ -1089,15 +1090,15 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 			} else {
 				nameLabel = truncate(task.Title, 42)
 			}
-			lines = append(lines, styleBold.Foreground(colFocus).Render("  "+nameLabel)+styleMuted.Render("  ·  Enter·open  ·  j/k·navigate"+filterHint))
+			lines = append(lines, styleBold.Foreground(colFocus).Render("  "+nameLabel)+styleMuted.Render("  ·  Enter·open"+filterHint))
 		} else {
-			lines = append(lines, styleMuted.Render("  j/k·select task  ·  Enter·open"+filterHint))
+			lines = append(lines, styleMuted.Render("  Enter·open"+filterHint))
 		}
 	} else {
 		// EX-219: when no active tasks exist, show a navigation hint so the user
-		// knows how to interact with the dashboard (r·refresh, :frank to chat, i·inbox).
+		// knows how to interact with the dashboard (Tab·navigate, :frank to chat, i·inbox).
 		lines = append(lines, "")
-		lines = append(lines, styleMuted.Render("  r·refresh  ·  i·inbox  ·  :frank·chat"))
+		lines = append(lines, styleMuted.Render("  Tab·navigate  ·  i·inbox  ·  :frank·chat"))
 	}
 
 	return lines
@@ -1410,7 +1411,7 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		// Navigation hint row.
 		// EX-233: include filterActionHint so users know / clears an active filter.
 		// EX-235: include r·refresh so users know they can reload the task list.
-		hintParts := "Enter·open  ·  j/k·navigate  ·  " + filterActionHint(query) + "  ·  r·refresh  ·  Esc·dashboard"
+		hintParts := "Enter·open  ·  " + filterActionHint(query) + "  ·  Tab·navigate  ·  Esc·dashboard"
 		if proj != nil && proj.DoneCount > 0 {
 			if m.workspace.showDoneTasks {
 				hintParts += "  ·  d·hide done"
@@ -1554,8 +1555,7 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	} else {
 		hintParts = append(hintParts, "Esc·dashboard")
 	}
-	// EX-234: r·refresh is available in task detail view; include it in the hint.
-	hintParts = append(hintParts, "r·refresh")
+	hintParts = append(hintParts, "Tab·navigate")
 	if m.workspace.selectedProjectID != "" {
 		hintParts = append(hintParts, "p·project view")
 		openTasks := m.workspace.openTasksForProject()
@@ -1601,7 +1601,7 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 					Foreground(colMuted).Render(emptyMsg),
 			),
 			"",
-			styleMuted.Render("  r·refresh  ·  "+filterActionHint(query)+"  ·  Esc·dashboard"),
+			styleMuted.Render("  "+filterActionHint(query)+"  ·  Tab·navigate  ·  Esc·dashboard"),
 		}
 	}
 
@@ -1646,13 +1646,13 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 			if len(filteredInbox) > 1 {
 				posHint = fmt.Sprintf("  ·  %d of %d", i+1, len(filteredInbox))
 			}
-			actions := styleMuted.Render("  a·approve  ·  x·reject  ·  f·defer  ·  o·open  ·  j/k·navigate" + posHint)
+			actions := styleMuted.Render("  a·approve  ·  x·reject  ·  f·defer  ·  o·open" + posHint)
 			lines = append(lines, actions)
 		}
 	}
-	// EX-230: footer hint so users know about refresh and filter even when the inbox has items.
+	// EX-230: footer hint so users know about filter even when the inbox has items.
 	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("  r·refresh  ·  "+filterActionHint(query)+"  ·  Esc·dashboard"))
+	lines = append(lines, styleMuted.Render("  "+filterActionHint(query)+"  ·  Tab·navigate  ·  Esc·dashboard"))
 
 	return lines
 }
@@ -1736,7 +1736,7 @@ func (m Model) renderActivityView(width, maxLines int) []string {
 	}
 	// EX-210: hint footer so users know which keys work in this view.
 	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("  r·refresh  ·  "+filterActionHint(query)+"  ·  Esc·dashboard"))
+	lines = append(lines, styleMuted.Render("  "+filterActionHint(query)+"  ·  Tab·navigate  ·  Esc·dashboard"))
 	return lines
 }
 
@@ -1748,7 +1748,7 @@ func (m Model) renderAgentsView(width, maxLines int) []string {
 			Foreground(colSubtle).Render("no agents loaded"))
 		// EX-210: hint footer even on empty state.
 		lines = append(lines, "")
-		lines = append(lines, styleMuted.Render("  r·refresh  ·  Esc·dashboard"))
+		lines = append(lines, styleMuted.Render("  Tab·navigate  ·  Esc·dashboard"))
 		return lines
 	}
 	// EX-110: apply search filter so agents view responds to mainFilter like all other views.
@@ -1808,7 +1808,7 @@ func (m Model) renderAgentsView(width, maxLines int) []string {
 	}
 	// EX-210: hint footer so users know which keys work in this view.
 	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("  r·refresh  ·  "+filterActionHint(query)+"  ·  Esc·dashboard"))
+	lines = append(lines, styleMuted.Render("  "+filterActionHint(query)+"  ·  Tab·navigate  ·  Esc·dashboard"))
 	return lines
 }
 
@@ -1859,7 +1859,7 @@ func (m Model) renderMergesView(width, maxLines int) []string {
 	}
 	// EX-210: hint footer so users know which keys work in this view.
 	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("  r·refresh  ·  "+filterActionHint(query)+"  ·  Esc·dashboard"))
+	lines = append(lines, styleMuted.Render("  "+filterActionHint(query)+"  ·  Tab·navigate  ·  Esc·dashboard"))
 	return lines
 }
 
@@ -1908,7 +1908,7 @@ func (m Model) renderSchedulesView(width, maxLines int) []string {
 	}
 	// EX-210: hint footer so users know which keys work in this view.
 	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("  r·refresh  ·  "+filterActionHint(query)+"  ·  Esc·dashboard"))
+	lines = append(lines, styleMuted.Render("  "+filterActionHint(query)+"  ·  Tab·navigate  ·  Esc·dashboard"))
 	return lines
 }
 
@@ -2845,6 +2845,16 @@ func prefixLines(s, prefix string) string {
 // It handles embedded newlines in individual items by splitting the joined result
 // and trimming to exactly targetH actual lines.
 func buildPanelContent(lines []string, targetH, width int) string {
+	// Clamp each line's visible width so that lipgloss does not word-wrap
+	// inside panelStyle.Render(), which would produce extra rows and push
+	// the input box off the bottom of the chat panel.
+	if width > 0 {
+		for i, line := range lines {
+			if lipgloss.Width(line) > width {
+				lines[i] = ansitrunc.String(line, uint(width))
+			}
+		}
+	}
 	// Trim to fit
 	if len(lines) > targetH {
 		lines = lines[:targetH]

@@ -1630,7 +1630,7 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// EX-472: be context-aware like 'r' and :reload — reload the right data
 		// for the current view instead of always running a sidebar-only refresh.
 		if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
-			m.statusMessage = "r·refresh not available in help view. Press j/k to scroll or Esc to close."
+			m.statusMessage = "Not available in help view. Press j/k to scroll or Esc to close."
 			return m, nil
 		}
 		if m.focus == MainPanel && m.workspace.mainView == ViewTask && m.workspace.selectedTaskID != "" {
@@ -2340,7 +2340,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		} else if m.focus == MainPanel {
 			// EX-283: j/k in static views (Agents, Merges, Schedules, Activity)
 			// have no cursor to move — give a hint instead of silently doing nothing.
-			m.statusMessage = "j/k navigation not available here. Use r to refresh."
+			m.statusMessage = "Navigation not available here."
 		}
 		return true, nil
 	case 'k':
@@ -2429,7 +2429,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 		} else if m.focus == MainPanel {
 			// EX-283: k in static views has no cursor — give a hint.
-			m.statusMessage = "j/k navigation not available here. Use r to refresh."
+			m.statusMessage = "Navigation not available here."
 		}
 		return true, nil
 	case 'h':
@@ -2939,7 +2939,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		// EX-247: r has no meaning in the help view — give a hint instead of
 		// triggering a sidebar refresh that would confuse the user.
 		if m.focus == MainPanel && m.workspace.mainView == ViewHelp {
-			m.statusMessage = "r·refresh not available in help view. Press j/k to scroll or Esc to close."
+			m.statusMessage = "Not available in help view. Press j/k to scroll or Esc to close."
 			return true, nil
 		}
 		// EX-133: when focused on task or project detail, refresh that view's
@@ -4679,7 +4679,7 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		// EX-471: be context-aware like 'r': reload task/project/inbox/agents when
 		// the corresponding view is active, not always the sidebar.
 		if m.workspace.mainView == ViewHelp {
-			m.statusMessage = "r·refresh not available in help view. Press Esc to close."
+			m.statusMessage = "Not available in help view. Press Esc to close."
 			return nil
 		}
 		if m.workspace.mainView == ViewTask && m.workspace.selectedTaskID != "" {
@@ -6494,11 +6494,11 @@ func (m Model) commandFallbackHelp() string {
 		if strings.TrimSpace(m.sidebarFilter) != "" {
 			sidebarSearchHint = "/ clear filter"
 		}
-		return "j/k navigate · Space expand · Enter select · n next unread · i inbox · d dashboard · r refresh · " + sidebarSearchHint + " · ? help"
+		return "j/k navigate · Space expand · Enter select · n next unread · i inbox · d dashboard · Tab navigate · " + sidebarSearchHint + " · ? help"
 	case MainPanel:
 		switch m.workspace.mainView {
 		case ViewInbox:
-			return "a approve · x reject · f defer · o open · j/k navigate · n next unread · s toggle sidebar · Esc back · : commands"
+			return "a approve · x reject · f defer · o open · n next unread · s toggle sidebar · Tab navigate · Esc back · : commands"
 		case ViewTask:
 			// EX-149: surface approve/reject/defer hints when RequiresHumanReview is set.
 			var reviewHints string
@@ -6510,17 +6510,17 @@ func (m Model) commandFallbackHelp() string {
 				if len(m.workspace.openTasksForProject()) >= 2 {
 					taskHelp += " · j/k next/prev"
 				}
-				taskHelp += reviewHints + " · p project view · r refresh · n next unread · : commands · ? help"
+				taskHelp += reviewHints + " · p project view · Tab navigate · n next unread · : commands · ? help"
 				return taskHelp
 			}
-			return "Enter open session · Esc dashboard" + reviewHints + " · r refresh · n next unread · : commands · ? help"
+			return "Enter open session · Esc dashboard" + reviewHints + " · Tab navigate · n next unread · : commands · ? help"
 		case ViewProject:
 			// EX-121: reflect current showDoneTasks state so the hint is actionable.
 			doneHint := "d show done"
 			if m.workspace.showDoneTasks {
 				doneHint = "d hide done"
 			}
-			return "j/k navigate tasks · Enter open task · " + doneHint + " · r refresh · Esc dashboard · n next unread · : commands · ? help"
+			return "Enter open task · " + doneHint + " · Tab navigate · Esc dashboard · n next unread · : commands · ? help"
 		case ViewHelp:
 			// EX-241: help view hint shows scroll/close keys; r·refresh and / filter
 			// are irrelevant here so replace the default with a focused hint set.
@@ -6530,15 +6530,15 @@ func (m Model) commandFallbackHelp() string {
 			if len(m.workspace.dashboardActiveTasks()) > 0 {
 				// EX-116: include "t·task" hint when a task is selected so users know
 				// how to jump back to the task detail view from the dashboard.
-				taskHint := "j/k select task · Enter open"
+				taskHint := "Enter open"
 				if m.workspace.selectedTaskID != "" {
 					taskHint += " · t task detail"
 				}
-				return taskHint + " · g/G first/last · i inbox · n next unread · / filter · : commands · ? help"
+				return taskHint + " · g/G first/last · i inbox · n next unread · Tab navigate · / filter · : commands · ? help"
 			}
-			return "i inbox · n next unread · r refresh · : commands · ? help"
+			return "i inbox · n next unread · Tab navigate · : commands · ? help"
 		default:
-			return "i inbox · d dashboard · n next unread · r refresh · / filter · : commands · ? help"
+			return "i inbox · d dashboard · n next unread · Tab navigate · / filter · : commands · ? help"
 		}
 	case ChatPanel:
 		// EX-091: when input is empty and the latest assistant message has tool

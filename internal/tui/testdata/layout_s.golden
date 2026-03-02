@@ -11,7 +11,7 @@
 │ ──────────────────── Activity ──────────────────── ││ │ type a message...          │   │
 │   ✓ workspace initialized                          ││ ╰────────────────────────────╯   │
 │                                                    ││                                  │
-│   r·refresh  ·  i·inbox  ·  :frank·chat            ││                                  │
+│   Tab·navigate  ·  i·inbox  ·  :frank·chat         ││                                  │
 │                                                    ││                                  │
 │                                                    ││                                  │
 │                                                    ││                                  │
@@ -29,7 +29,7 @@
 ╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  S/dashboard  ·  snapshot  ·  Hidden panes: sidebar hidden  
  (1 or :focus sidebar)                                                                    
-Help: i inbox · n next unread · r refresh · : commands · ? help
+Help: i inbox · n next unread · Tab navigate · : commands · ? help
 
 ### S chat
 ⚠ DEGRADED MODE: Connection lost — data may be stale. Reconnecting automatically.
@@ -44,7 +44,7 @@ Help: i inbox · n next unread · r refresh · : commands · ? help
 │ ──────────────────── Activity ──────────────────── ││ │ type a message...          │   │
 │   ✓ workspace initialized                          ││ ╰────────────────────────────╯   │
 │                                                    ││                                  │
-│   r·refresh  ·  i·inbox  ·  :frank·chat            ││                                  │
+│   Tab·navigate  ·  i·inbox  ·  :frank·chat         ││                                  │
 │                                                    ││                                  │
 │                                                    ││                                  │
 │                                                    ││                                  │
@@ -62,7 +62,7 @@ Help: i inbox · n next unread · r refresh · : commands · ? help
 ╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  S/dashboard  ·  snapshot  ·  Hidden panes: sidebar hidden  
  (1 or :focus sidebar)                                                                    
-Help: i inbox · n next unread · r refresh · : commands · ? help
+Help: i inbox · n next unread · Tab navigate · : commands · ? help
 
 ### S inbox
 ⚠ DEGRADED MODE: Connection lost — data may be stale. Reconnecting automatically.
@@ -77,7 +77,7 @@ Help: i inbox · n next unread · r refresh · : commands · ? help
 │ ──────────────────── Activity ──────────────────── ││ │ type a message...          │   │
 │   ✓ workspace initialized                          ││ ╰────────────────────────────╯   │
 │                                                    ││                                  │
-│   r·refresh  ·  i·inbox  ·  :frank·chat            ││                                  │
+│   Tab·navigate  ·  i·inbox  ·  :frank·chat         ││                                  │
 │                                                    ││                                  │
 │                                                    ││                                  │
 │                                                    ││                                  │
@@ -95,7 +95,7 @@ Help: i inbox · n next unread · r refresh · : commands · ? help
 ╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  S/dashboard  ·  snapshot  ·  Hidden panes: sidebar hidden  
  (1 or :focus sidebar)                                                                    
-Help: i inbox · n next unread · r refresh · : commands · ? help
+Help: i inbox · n next unread · Tab navigate · : commands · ? help
 
 ### S board-sidebar-focus
 ⚠ DEGRADED MODE: Connection lost — data may be stale. Reconnecting automatically.
@@ -128,4 +128,4 @@ Help: i inbox · n next unread · r refresh · : commands · ? help
 ╰──────────────────────────────╯╰────────────────────────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  S/sidebar  ·  snapshot  ·  Hidden panes: main hidden (2 or 
  :focus main)                                                                             
-Help: j/k navigate · Space expand · Enter select · n next unread · i inbox · d dashboard · r refresh · / filter · ? help
+Help: j/k navigate · Space expand · Enter select · n next unread · i inbox · d dashboard · Tab navigate · / filter · ? help

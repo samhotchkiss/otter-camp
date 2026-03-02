@@ -11,7 +11,7 @@
 │                                     ││ ──────────────────────────────────────────────── Activity ──────────────────────────────────────────────── ││ │ type a message...                                             │   │
 │                                     ││   ✓ workspace initialized                                                                                  ││ ╰───────────────────────────────────────────────────────────────╯   │
 │                                     ││                                                                                                            ││                                                                     │
-│                                     ││   r·refresh  ·  i·inbox  ·  :frank·chat                                                                    ││                                                                     │
+│                                     ││   Tab·navigate  ·  i·inbox  ·  :frank·chat                                                                 ││                                                                     │
 │                                     ││                                                                                                            ││                                                                     │
 │                                     ││                                                                                                            ││                                                                     │
 │                                     ││                                                                                                            ││                                                                     │
@@ -38,7 +38,7 @@
 │                                     ││                                                                                                            ││                                                                     │
 ╰─────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯╰─────────────────────────────────────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  XL/dashboard  ·  snapshot                                                                                                                                                                    
-Help: i inbox · n next unread · r refresh · : commands · ? help
+Help: i inbox · n next unread · Tab navigate · : commands · ? help
 
 ### XL chat
 ⚠ DEGRADED MODE: Connection lost — data may be stale. Reconnecting automatically.
@@ -53,7 +53,7 @@ Help: i inbox · n next unread · r refresh · : commands · ? help
 │                                     ││ ──────────────────────────────────────────────── Activity ──────────────────────────────────────────────── ││ │ type a message...                                             │   │
 │                                     ││   ✓ workspace initialized                                                                                  ││ ╰───────────────────────────────────────────────────────────────╯   │
 │                                     ││                                                                                                            ││                                                                     │
-│                                     ││   r·refresh  ·  i·inbox  ·  :frank·chat                                                                    ││                                                                     │
+│                                     ││   Tab·navigate  ·  i·inbox  ·  :frank·chat                                                                 ││                                                                     │
 │                                     ││                                                                                                            ││                                                                     │
 │                                     ││                                                                                                            ││                                                                     │
 │                                     ││                                                                                                            ││                                                                     │
@@ -80,7 +80,7 @@ Help: i inbox · n next unread · r refresh · : commands · ? help
 │                                     ││                                                                                                            ││                                                                     │
 ╰─────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯╰─────────────────────────────────────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  XL/dashboard  ·  snapshot                                                                                                                                                                    
-Help: i inbox · n next unread · r refresh · : commands · ? help
+Help: i inbox · n next unread · Tab navigate · : commands · ? help
 
 ### XL inbox
 ⚠ DEGRADED MODE: Connection lost — data may be stale. Reconnecting automatically.
@@ -95,7 +95,7 @@ Help: i inbox · n next unread · r refresh · : commands · ? help
 │                                     ││ ──────────────────────────────────────────────── Activity ──────────────────────────────────────────────── ││ │ type a message...                                             │   │
 │                                     ││   ✓ workspace initialized                                                                                  ││ ╰───────────────────────────────────────────────────────────────╯   │
 │                                     ││                                                                                                            ││                                                                     │
-│                                     ││   r·refresh  ·  i·inbox  ·  :frank·chat                                                                    ││                                                                     │
+│                                     ││   Tab·navigate  ·  i·inbox  ·  :frank·chat                                                                 ││                                                                     │
 │                                     ││                                                                                                            ││                                                                     │
 │                                     ││                                                                                                            ││                                                                     │
 │                                     ││                                                                                                            ││                                                                     │
@@ -122,4 +122,4 @@ Help: i inbox · n next unread · r refresh · : commands · ? help
 │                                     ││                                                                                                            ││                                                                     │
 ╰─────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯╰─────────────────────────────────────────────────────────────────────╯
  ○  disconnected  ·  Frank  ·  XL/dashboard  ·  snapshot                                                                                                                                                                    
-Help: i inbox · n next unread · r refresh · : commands · ? help
+Help: i inbox · n next unread · Tab navigate · : commands · ? help

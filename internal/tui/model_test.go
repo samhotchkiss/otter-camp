@@ -6040,7 +6040,7 @@ func TestHelpViewScrollsWithJK(t *testing.T) {
 
 // TestActivityAgentsMergesSchedulesHaveHintFooter verifies EX-210: the Activity,
 // Agents, Merges, and Schedules views always render a navigation hint footer so
-// users know which keys are available (r·refresh, /·filter, Esc·dashboard).
+// users know which keys are available (Tab·navigate, /·filter, Esc·dashboard).
 func TestActivityAgentsMergesSchedulesHaveHintFooter(t *testing.T) {
 	model := NewModel(DefaultState())
 
@@ -6052,42 +6052,42 @@ func TestActivityAgentsMergesSchedulesHaveHintFooter(t *testing.T) {
 		{
 			view:  ViewActivity,
 			setup: func(m *Model) { m.workspace.activity = nil },
-			want:  "r·refresh",
+			want:  "Tab·navigate",
 		},
 		{
 			view:  ViewActivity,
 			setup: func(m *Model) { m.workspace.activity = []string{"event one", "event two"} },
-			want:  "r·refresh",
+			want:  "Tab·navigate",
 		},
 		{
 			view:  ViewAgents,
 			setup: func(m *Model) { m.workspace.agents = nil },
-			want:  "r·refresh",
+			want:  "Tab·navigate",
 		},
 		{
 			view:  ViewAgents,
 			setup: func(m *Model) { m.workspace.agents = []string{"Ellie=active"} },
-			want:  "r·refresh",
+			want:  "Tab·navigate",
 		},
 		{
 			view:  ViewMerges,
 			setup: func(m *Model) { m.workspace.mergeQueue = nil },
-			want:  "r·refresh",
+			want:  "Tab·navigate",
 		},
 		{
 			view:  ViewMerges,
 			setup: func(m *Model) { m.workspace.mergeQueue = []string{"PR #42"} },
-			want:  "r·refresh",
+			want:  "Tab·navigate",
 		},
 		{
 			view:  ViewSchedules,
 			setup: func(m *Model) { m.workspace.schedules = nil },
-			want:  "r·refresh",
+			want:  "Tab·navigate",
 		},
 		{
 			view:  ViewSchedules,
 			setup: func(m *Model) { m.workspace.schedules = []string{"nightly build"} },
-			want:  "r·refresh",
+			want:  "Tab·navigate",
 		},
 	} {
 		m := model
@@ -6105,7 +6105,7 @@ func TestActivityAgentsMergesSchedulesHaveHintFooter(t *testing.T) {
 }
 
 // TestEmptyInboxShowsNavigationHint verifies EX-211: the empty-inbox state
-// renders a "r·refresh · Esc·dashboard" hint so the user isn't left with
+// renders a "Tab·navigate · Esc·dashboard" hint so the user isn't left with
 // a bare "✓ Inbox clear" message and no guidance.
 func TestEmptyInboxShowsNavigationHint(t *testing.T) {
 	model := NewModel(DefaultState())
@@ -6118,8 +6118,8 @@ func TestEmptyInboxShowsNavigationHint(t *testing.T) {
 	if !strings.Contains(rendered, "Inbox clear") {
 		t.Fatalf("EX-211: expected 'Inbox clear' in empty inbox render:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "r·refresh") {
-		t.Errorf("EX-211: empty inbox missing 'r·refresh' hint:\n%s", rendered)
+	if !strings.Contains(rendered, "Tab·navigate") {
+		t.Errorf("EX-211: empty inbox missing 'Tab·navigate' hint:\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "Esc·dashboard") {
 		t.Errorf("EX-211: empty inbox missing 'Esc·dashboard' hint:\n%s", rendered)
@@ -6200,7 +6200,7 @@ func TestSearchNotAllowedInHelpView(t *testing.T) {
 }
 
 // TestActivityHintFooterVisibleWhenFull verifies EX-215: the hint footer
-// (r·refresh · /·filter · Esc·dashboard) must be visible even when the
+// (Tab·navigate · /·filter · Esc·dashboard) must be visible even when the
 // activity list fills the maxLines budget, and older entries should show a
 // "↑ N older entries hidden" indicator.
 func TestActivityHintFooterVisibleWhenFull(t *testing.T) {
@@ -6217,7 +6217,7 @@ func TestActivityHintFooterVisibleWhenFull(t *testing.T) {
 	rendered := strings.Join(lines, "\n")
 
 	// Hint footer must be present.
-	if !strings.Contains(rendered, "r·refresh") {
+	if !strings.Contains(rendered, "Tab·navigate") {
 		t.Errorf("EX-215: hint footer missing from full activity view:\n%s", rendered)
 	}
 	// Older-entries indicator must appear.
@@ -6310,7 +6310,7 @@ func TestMergesSchedulesTruncationIndicator(t *testing.T) {
 		if !strings.Contains(rendered, "more") {
 			t.Errorf("EX-226: merges truncation indicator missing:\n%s", rendered)
 		}
-		if !strings.Contains(rendered, "r·refresh") {
+		if !strings.Contains(rendered, "Tab·navigate") {
 			t.Errorf("EX-226: merges hint footer missing when full:\n%s", rendered)
 		}
 		if len(lines) > maxLines {
@@ -6330,7 +6330,7 @@ func TestMergesSchedulesTruncationIndicator(t *testing.T) {
 		if !strings.Contains(rendered, "more") {
 			t.Errorf("EX-226: schedules truncation indicator missing:\n%s", rendered)
 		}
-		if !strings.Contains(rendered, "r·refresh") {
+		if !strings.Contains(rendered, "Tab·navigate") {
 			t.Errorf("EX-226: schedules hint footer missing when full:\n%s", rendered)
 		}
 		if len(lines) > maxLines {
@@ -6413,8 +6413,8 @@ func TestDashboardEmptyStateHintEX219(t *testing.T) {
 	lines := model.renderDashboardView(80, 20)
 	rendered := strings.Join(lines, "\n")
 
-	if !strings.Contains(rendered, "r·refresh") {
-		t.Errorf("EX-219: dashboard empty state missing r·refresh hint; rendered:\n%s", rendered)
+	if !strings.Contains(rendered, "Tab·navigate") {
+		t.Errorf("EX-219: dashboard empty state missing Tab·navigate hint; rendered:\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "i·inbox") {
 		t.Errorf("EX-219: dashboard empty state missing i·inbox hint; rendered:\n%s", rendered)
@@ -6437,7 +6437,7 @@ func TestAgentsTruncationIndicator(t *testing.T) {
 	if !strings.Contains(rendered, "more") {
 		t.Errorf("agents truncation indicator missing:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "r·refresh") {
+	if !strings.Contains(rendered, "Tab·navigate") {
 		t.Errorf("agents hint footer missing when full:\n%s", rendered)
 	}
 	if len(lines) > maxLines {
@@ -6617,7 +6617,7 @@ func TestFilterActionHintEX229(t *testing.T) {
 }
 
 // TestInboxViewFooterHintEX230 verifies EX-230: the inbox view with items shows
-// a footer hint (r·refresh, /·filter, Esc·dashboard) below the item list.
+// a footer hint (Tab·navigate, /·filter, Esc·dashboard) below the item list.
 func TestInboxViewFooterHintEX230(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.workspace.inbox = []inboxItem{
@@ -6627,8 +6627,8 @@ func TestInboxViewFooterHintEX230(t *testing.T) {
 	lines := model.renderInboxView(80, 20)
 	rendered := strings.Join(lines, "\n")
 
-	if !strings.Contains(rendered, "r·refresh") {
-		t.Errorf("EX-230: inbox view with items should show 'r·refresh' footer; got:\n%s", rendered)
+	if !strings.Contains(rendered, "Tab·navigate") {
+		t.Errorf("EX-230: inbox view with items should show 'Tab·navigate' footer; got:\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "Esc·dashboard") {
 		t.Errorf("EX-230: inbox view with items should show 'Esc·dashboard' footer; got:\n%s", rendered)
@@ -6724,7 +6724,7 @@ func TestProjectViewFilterHintEX233(t *testing.T) {
 	})
 }
 
-// TestTaskViewRefreshHintEX234 verifies EX-234: the task view footer shows r·refresh.
+// TestTaskViewRefreshHintEX234 verifies EX-234: the task view footer shows Tab·navigate.
 func TestTaskViewRefreshHintEX234(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.workspace.tasks["task-1"] = &taskRecord{
@@ -6739,12 +6739,12 @@ func TestTaskViewRefreshHintEX234(t *testing.T) {
 	lines := model.renderTaskView(80, 40)
 	rendered := strings.Join(lines, "\n")
 
-	if !strings.Contains(rendered, "r·refresh") {
-		t.Errorf("EX-234: task view footer should show 'r·refresh'; got:\n%s", rendered)
+	if !strings.Contains(rendered, "Tab·navigate") {
+		t.Errorf("EX-234: task view footer should show 'Tab·navigate'; got:\n%s", rendered)
 	}
 }
 
-// TestProjectViewRefreshHintEX235 verifies EX-235: the project view task footer shows r·refresh.
+// TestProjectViewRefreshHintEX235 verifies EX-235: the project view task footer shows Tab·navigate.
 func TestProjectViewRefreshHintEX235(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.workspace.selectedProjectID = "proj-1"
@@ -6763,8 +6763,8 @@ func TestProjectViewRefreshHintEX235(t *testing.T) {
 	lines := model.renderProjectView(80, 30)
 	rendered := strings.Join(lines, "\n")
 
-	if !strings.Contains(rendered, "r·refresh") {
-		t.Errorf("EX-235: project view footer should show 'r·refresh'; got:\n%s", rendered)
+	if !strings.Contains(rendered, "Tab·navigate") {
+		t.Errorf("EX-235: project view footer should show 'Tab·navigate'; got:\n%s", rendered)
 	}
 }
 
@@ -9586,13 +9586,13 @@ func TestStaticViewJKFeedbackEX283(t *testing.T) {
 		m.workspace.mainView = view
 
 		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-		if m.statusMessage != "j/k navigation not available here. Use r to refresh." {
+		if m.statusMessage != "Navigation not available here." {
 			t.Errorf("EX-283: j in %v should give hint; got %q", view, m.statusMessage)
 		}
 
 		m.statusMessage = ""
 		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-		if m.statusMessage != "j/k navigation not available here. Use r to refresh." {
+		if m.statusMessage != "Navigation not available here." {
 			t.Errorf("EX-283: k in %v should give hint; got %q", view, m.statusMessage)
 		}
 	}
@@ -13152,8 +13152,8 @@ func TestFunctionKeyAndCtrlOHintsEX384(t *testing.T) {
 		m.focus = MainPanel
 		m.workspace.setMainView(ViewHelp)
 		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyF5})
-		if !strings.Contains(m1.statusMessage, "not available in help view") {
-			t.Errorf("EX-384: F5 in help: got %q, want 'not available in help view'", m1.statusMessage)
+		if !strings.Contains(m1.statusMessage, "Not available in help view") {
+			t.Errorf("EX-384: F5 in help: got %q, want 'Not available in help view'", m1.statusMessage)
 		}
 	})
 	otherFkeys := []tea.KeyType{
