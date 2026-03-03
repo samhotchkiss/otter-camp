@@ -98,6 +98,7 @@ type agentReader interface {
 type flowTemplateReader interface {
 	Create(ctx context.Context, template repo.FlowTemplate) (repo.FlowTemplate, error)
 	GetByID(ctx context.Context, id uuid.UUID) (repo.FlowTemplate, error)
+	ListCurrent(ctx context.Context, organizationID, projectID *uuid.UUID) ([]repo.FlowTemplate, error)
 	Update(ctx context.Context, template repo.FlowTemplate) (repo.FlowTemplate, error)
 }
 
@@ -381,6 +382,8 @@ func (e *NativeToolExecutor) Execute(ctx context.Context, toolName string, input
 		return e.handleAgentGet(ctx, input)
 	case "flow.get_template":
 		return e.handleFlowGetTemplate(ctx, input)
+	case "flow.list_templates":
+		return e.handleFlowListTemplates(ctx, input)
 	case "flow.get_execution":
 		return e.handleFlowGetExecution(ctx, input)
 	case "schedule.list":

@@ -445,6 +445,163 @@ func TestIntegrationTaskUpdateRejectsFlowTemplateChangeOutsideDraft(t *testing.T
 	}
 }
 
+func TestIntegrationFlowListTemplatesReturnsNodeSummaries(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	actorType := "agent"
+
+	defaultReview, err := templateRepo.Create(context.Background(), repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &project.ID,
+		Slug:           "default-review-" + uuid.NewString()[:8],
+		DisplayName:    "Default Review",
+		Description:    "default review flow",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create default review template: %v", err)
+	}
+	reviewWork, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: defaultReview.ID,
+		DisplayName:    "Draft",
+		NodeType:       "work",
+		Position:       1,
+		ActorType:      &actorType,
+		ActorID:        &agent.ID,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create default review work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: defaultReview.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		ActorType:      &actorType,
+		ActorID:        &agent.ID,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create default review review node: %v", err)
+	}
+	reviewWork.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(context.Background(), reviewWork); err != nil {
+		t.Fatalf("link default review nodes: %v", err)
+	}
+	defaultReview.StartNodeID = &reviewWork.ID
+	if _, err := templateRepo.Update(context.Background(), defaultReview); err != nil {
+		t.Fatalf("set default review start node: %v", err)
+	}
+
+	bugfixTemplate, err := templateRepo.Create(context.Background(), repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &project.ID,
+		Slug:           "bugfix-flow-" + uuid.NewString()[:8],
+		DisplayName:    "Bugfix Flow",
+		Description:    "bugfix flow",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create bugfix template: %v", err)
+	}
+	bugfixNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: bugfixTemplate.ID,
+		DisplayName:    "Fix",
+		NodeType:       "work",
+		Position:       1,
+		ActorType:      &actorType,
+		ActorID:        &agent.ID,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create bugfix node: %v", err)
+	}
+	bugfixTemplate.StartNodeID = &bugfixNode.ID
+	if _, err := templateRepo.Update(context.Background(), bugfixTemplate); err != nil {
+		t.Fatalf("set bugfix start node: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	ctx := integrationExecCtxWith(orgID, agent.ID)
+	out, err := executor.Execute(ctx, "flow.list_templates", map[string]any{
+		"project_id": project.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("flow.list_templates: %v", err)
+	}
+
+	rawTemplates, ok := out["templates"].([]map[string]any)
+	if !ok {
+		rawAny, castOK := out["templates"].([]any)
+		if !castOK {
+			t.Fatalf("templates output type = %T, want slice", out["templates"])
+		}
+		rawTemplates = make([]map[string]any, 0, len(rawAny))
+		for _, item := range rawAny {
+			row, rowOK := item.(map[string]any)
+			if !rowOK {
+				t.Fatalf("template row type = %T, want map[string]any", item)
+			}
+			rawTemplates = append(rawTemplates, row)
+		}
+	}
+	if len(rawTemplates) < 2 {
+		t.Fatalf("templates count = %d, want >= 2", len(rawTemplates))
+	}
+
+	foundDefaultReview := false
+	for _, template := range rawTemplates {
+		if strings.TrimSpace(fmt.Sprintf("%v", template["display_name"])) != "Default Review" {
+			continue
+		}
+		foundDefaultReview = true
+		nodes := make([]map[string]any, 0)
+		switch typed := template["nodes"].(type) {
+		case []map[string]any:
+			nodes = typed
+		case []any:
+			for _, item := range typed {
+				row, rowOK := item.(map[string]any)
+				if !rowOK {
+					t.Fatalf("node row type = %T, want map[string]any", item)
+				}
+				nodes = append(nodes, row)
+			}
+		default:
+			t.Fatalf("template nodes type = %T, want slice", template["nodes"])
+		}
+		if len(nodes) < 2 {
+			t.Fatalf("default review nodes count = %d, want >= 2", len(nodes))
+		}
+		first := nodes[0]
+		if strings.TrimSpace(fmt.Sprintf("%v", first["display_name"])) == "" {
+			t.Fatalf("first node display_name = %v, want non-empty", first["display_name"])
+		}
+		if strings.TrimSpace(fmt.Sprintf("%v", first["node_type"])) == "" {
+			t.Fatalf("first node node_type = %v, want non-empty", first["node_type"])
+		}
+		if _, ok := first["position"]; !ok {
+			t.Fatalf("first node missing position: %#v", first)
+		}
+		break
+	}
+	if !foundDefaultReview {
+		t.Fatalf("expected template display_name %q in list", "Default Review")
+	}
+}
+
 func TestIntegrationFlowAdvanceMovesToNextNode(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)

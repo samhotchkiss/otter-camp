@@ -571,6 +571,85 @@ func (e *NativeToolExecutor) handleFlowGetTemplate(ctx context.Context, input ma
 	}, nil
 }
 
+func (e *NativeToolExecutor) handleFlowListTemplates(ctx context.Context, input map[string]any) (map[string]any, error) {
+	if e.flowTemplates == nil {
+		return nil, errors.New("flow template repository not configured")
+	}
+	scope, err := e.resolveScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var projectID *uuid.UUID
+	if requestedProjectID, ok := readUUID(input, "project_id"); ok && requestedProjectID != uuid.Nil {
+		projectID = &requestedProjectID
+	} else if scope.projectID != nil {
+		projectID = scope.projectID
+	}
+
+	combined := make([]repo.FlowTemplate, 0)
+	seen := make(map[uuid.UUID]struct{})
+	addTemplates := func(items []repo.FlowTemplate) {
+		for _, item := range items {
+			if _, exists := seen[item.ID]; exists {
+				continue
+			}
+			seen[item.ID] = struct{}{}
+			combined = append(combined, item)
+		}
+	}
+
+	globalTemplates, err := e.flowTemplates.ListCurrent(ctx, &scope.organizationID, nil)
+	if err != nil {
+		return nil, err
+	}
+	addTemplates(globalTemplates)
+
+	if projectID != nil {
+		projectTemplates, listErr := e.flowTemplates.ListCurrent(ctx, &scope.organizationID, projectID)
+		if listErr != nil {
+			return nil, listErr
+		}
+		addTemplates(projectTemplates)
+	}
+
+	sort.Slice(combined, func(i, j int) bool {
+		left := strings.ToLower(strings.TrimSpace(combined[i].DisplayName))
+		right := strings.ToLower(strings.TrimSpace(combined[j].DisplayName))
+		if left == right {
+			return combined[i].ID.String() < combined[j].ID.String()
+		}
+		return left < right
+	})
+
+	templatesPayload := make([]map[string]any, 0, len(combined))
+	for _, template := range combined {
+		nodesPayload := make([]map[string]any, 0)
+		if e.flowNodes != nil {
+			nodes, listErr := e.flowNodes.GetByTemplateOrdered(ctx, template.ID)
+			if listErr != nil {
+				return nil, listErr
+			}
+			nodesPayload = make([]map[string]any, 0, len(nodes))
+			for _, node := range nodes {
+				nodesPayload = append(nodesPayload, map[string]any{
+					"display_name": node.DisplayName,
+					"node_type":    node.NodeType,
+					"position":     node.Position,
+				})
+			}
+		}
+
+		templatesPayload = append(templatesPayload, map[string]any{
+			"id":           template.ID.String(),
+			"display_name": template.DisplayName,
+			"nodes":        nodesPayload,
+		})
+	}
+
+	return map[string]any{"templates": templatesPayload}, nil
+}
+
 func (e *NativeToolExecutor) handleFlowGetExecution(ctx context.Context, input map[string]any) (map[string]any, error) {
 	if e.flowExecs == nil {
 		return nil, errors.New("flow execution repository not configured")
