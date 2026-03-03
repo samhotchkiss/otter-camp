@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -100,6 +101,13 @@ func TestProjectCreatePublishesStaffingNeededEvent(t *testing.T) {
 	}
 	if !projectRequiresPMQueueSetting(projects.lastCreated.Settings) {
 		t.Fatalf("project settings = %s, want requires_pm_assignment_before_queue=true", string(projects.lastCreated.Settings))
+	}
+}
+
+func TestWithProjectStaffingDefaultsHandlesJSONNull(t *testing.T) {
+	settings := withProjectStaffingDefaults(json.RawMessage("null"))
+	if !projectRequiresPMQueueSetting(settings) {
+		t.Fatalf("settings = %s, want requires_pm_assignment_before_queue=true", string(settings))
 	}
 }
 

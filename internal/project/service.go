@@ -1116,6 +1116,9 @@ func withProjectStaffingDefaults(settings json.RawMessage) json.RawMessage {
 	if err := json.Unmarshal(settings, &payload); err != nil {
 		return settings
 	}
+	if payload == nil {
+		payload = make(map[string]any)
+	}
 	payload["requires_pm_assignment_before_queue"] = true
 	encoded, err := json.Marshal(payload)
 	if err != nil {

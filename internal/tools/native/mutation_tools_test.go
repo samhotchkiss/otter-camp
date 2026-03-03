@@ -857,23 +857,6 @@ func (f *fakeProjectRepo) Update(context.Context, repo.Project) (repo.Project, e
 }
 func (f *fakeProjectRepo) Archive(context.Context, uuid.UUID) error { return nil }
 
-type fakeAgentRepo struct {
-	agents []repo.Agent
-}
-
-func (f *fakeAgentRepo) Create(context.Context, repo.Agent) (repo.Agent, error) {
-	return repo.Agent{}, nil
-}
-func (f *fakeAgentRepo) GetByID(context.Context, uuid.UUID) (repo.Agent, error) {
-	return repo.Agent{}, nil
-}
-func (f *fakeAgentRepo) List(context.Context, uuid.UUID) ([]repo.Agent, error) {
-	return f.agents, nil
-}
-func (f *fakeAgentRepo) Update(context.Context, repo.Agent) (repo.Agent, error) {
-	return repo.Agent{}, nil
-}
-
 type fakeAssignmentRepo struct {
 	assignments []repo.AgentProjectAssignment
 }
