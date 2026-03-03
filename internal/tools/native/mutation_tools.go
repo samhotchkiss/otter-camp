@@ -744,6 +744,15 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	if description, ok := readString(input, "description"); ok {
 		current.Description = &description
 	}
+	if flowTemplateID, ok := readUUID(input, "flow_template_id"); ok && flowTemplateID != uuid.Nil {
+		if !strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") {
+			return map[string]any{"error": "flow_template_id can only be changed while task is draft"}, nil
+		}
+		current.FlowTemplateID = &flowTemplateID
+	}
+	if assignedAgentID, ok := readUUID(input, "assigned_agent_id"); ok && assignedAgentID != uuid.Nil {
+		current.AssignedAgentID = &assignedAgentID
+	}
 	previousStatus := strings.TrimSpace(current.WorkStatus)
 	statusChanged := false
 	if status, ok := readString(input, "work_status"); ok && status != "" {

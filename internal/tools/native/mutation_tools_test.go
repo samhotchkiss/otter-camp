@@ -504,6 +504,99 @@ func TestTaskUpdateAllowsDraftToQueuedWithFlowTemplate(t *testing.T) {
 	}
 }
 
+func TestTaskUpdateSetsFlowTemplateIDWhileDraft(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			WorkStatus:     "draft",
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":          taskID.String(),
+		"flow_template_id": flowTemplateID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if _, ok := out["task"].(map[string]any); !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if tasks.task.FlowTemplateID == nil || *tasks.task.FlowTemplateID != flowTemplateID {
+		t.Fatalf("flow_template_id = %v, want %s", tasks.task.FlowTemplateID, flowTemplateID)
+	}
+	if tasks.updateCalls != 1 {
+		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
+	}
+}
+
+func TestTaskUpdateRejectsFlowTemplateChangeOutsideDraft(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":          taskID.String(),
+		"flow_template_id": flowTemplateID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != "flow_template_id can only be changed while task is draft" {
+		t.Fatalf("error = %v, want draft-only flow template message", out["error"])
+	}
+	if tasks.updateCalls != 0 {
+		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)
+	}
+}
+
+func TestTaskUpdateSetsAssignedAgentID(t *testing.T) {
+	taskID := uuid.New()
+	assignedAgentID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			WorkStatus:     "draft",
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":           taskID.String(),
+		"assigned_agent_id": assignedAgentID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if _, ok := out["task"].(map[string]any); !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if tasks.task.AssignedAgentID == nil || *tasks.task.AssignedAgentID != assignedAgentID {
+		t.Fatalf("assigned_agent_id = %v, want %s", tasks.task.AssignedAgentID, assignedAgentID)
+	}
+	if tasks.updateCalls != 1 {
+		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
+	}
+}
+
 func TestTaskUpdateRejectsDraftToQueuedWithoutPMWhenProjectRequiresPM(t *testing.T) {
 	taskID := uuid.New()
 	projectID := uuid.New()
