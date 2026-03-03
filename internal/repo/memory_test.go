@@ -13,3 +13,24 @@ func TestCandidatePromotionCutoffUsesDefaultHoldWindow(t *testing.T) {
 		t.Fatalf("cutoff = %s, want %s", got, want)
 	}
 }
+
+func TestNormalizeMemoryCompactionErrorMessageAddsDefaultForFailedStatus(t *testing.T) {
+	got := normalizeMemoryCompactionErrorMessage("failed", nil)
+	if got == nil {
+		t.Fatal("error message = nil, want default")
+	}
+	if *got != MemoryCompactionDefaultFailedMessage {
+		t.Fatalf("error message = %q, want %q", *got, MemoryCompactionDefaultFailedMessage)
+	}
+}
+
+func TestNormalizeMemoryCompactionErrorMessageTrimsProvidedMessage(t *testing.T) {
+	input := "  downstream timeout  "
+	got := normalizeMemoryCompactionErrorMessage("failed", &input)
+	if got == nil {
+		t.Fatal("error message = nil, want non-nil")
+	}
+	if *got != "downstream timeout" {
+		t.Fatalf("error message = %q, want %q", *got, "downstream timeout")
+	}
+}

@@ -4,7 +4,9 @@ package compaction
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,6 +157,94 @@ func TestSleepReflectorRunDecayIsIdempotentWithinHalfLife(t *testing.T) {
 	}
 }
 
+func TestSleepReflectorRunWithoutMemoriesCompletes(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedOrg(t, ctx, pool)
+	runRepo := repo.NewMemoryCompactionRunRepo(pool)
+
+	run, err := runRepo.Create(ctx, repo.MemoryCompactionRun{
+		OrganizationID: org.ID,
+		RunType:        "sleep_reflection",
+		Status:         "pending",
+		ScopeContext:   `{"trigger":"no-memories"}`,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	reflector, err := NewSleepReflector(SleepReflectorOptions{
+		Pool:         pool,
+		Deduplicator: &staticCandidateDeduplicator{},
+	})
+	if err != nil {
+		t.Fatalf("NewSleepReflector: %v", err)
+	}
+	if err := reflector.Run(ctx, org.ID, run.ID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	finalRun, err := runRepo.GetByID(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if finalRun.Status != "completed" {
+		t.Fatalf("status = %q, want completed", finalRun.Status)
+	}
+	if finalRun.ErrorMessage != nil {
+		t.Fatalf("error_message = %v, want nil", finalRun.ErrorMessage)
+	}
+}
+
+func TestSleepReflectorRunFailureSetsRunErrorMessage(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedOrg(t, ctx, pool)
+	runRepo := repo.NewMemoryCompactionRunRepo(pool)
+
+	old := time.Now().UTC().Add(-2 * 24 * time.Hour)
+	insertMemoryWithTimes(t, ctx, pool, memorySeed{
+		OrganizationID: org.ID,
+		MemoryType:     "semantic",
+		Scope:          "org",
+		Status:         "candidate",
+		Content:        "candidate for failing dedup",
+		Confidence:     0.7,
+		CreatedAt:      old,
+		UpdatedAt:      old,
+	})
+
+	run, err := runRepo.Create(ctx, repo.MemoryCompactionRun{
+		OrganizationID: org.ID,
+		RunType:        "sleep_reflection",
+		Status:         "pending",
+		ScopeContext:   `{"trigger":"failure-path"}`,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	reflector, err := NewSleepReflector(SleepReflectorOptions{
+		Pool:         pool,
+		Deduplicator: failingCandidateDeduplicator{err: errors.New("deduplicator exploded")},
+	})
+	if err != nil {
+		t.Fatalf("NewSleepReflector: %v", err)
+	}
+	if err := reflector.Run(ctx, org.ID, run.ID); err == nil {
+		t.Fatal("Run error = nil, want failure")
+	}
+
+	finalRun, err := runRepo.GetByID(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if finalRun.Status != "failed" {
+		t.Fatalf("status = %q, want failed", finalRun.Status)
+	}
+	if finalRun.ErrorMessage == nil || strings.TrimSpace(*finalRun.ErrorMessage) == "" {
+		t.Fatalf("error_message = %v, want non-empty", finalRun.ErrorMessage)
+	}
+}
+
 func TestSleepReflectorRunCandidateDedupProcessesBatchAndUpdatesRunCounters(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -287,6 +377,17 @@ func (d *staticCandidateDeduplicator) ReviewCandidateBatch(_ context.Context, _ 
 	copied := append([]CandidateMemory(nil), batch...)
 	d.batches = append(d.batches, copied)
 	return append([]CandidateReview(nil), d.reviews...), nil
+}
+
+type failingCandidateDeduplicator struct {
+	err error
+}
+
+func (d failingCandidateDeduplicator) ReviewCandidateBatch(context.Context, uuid.UUID, []CandidateMemory) ([]CandidateReview, error) {
+	if d.err == nil {
+		return nil, errors.New("failed review")
+	}
+	return nil, d.err
 }
 
 type memorySeed struct {

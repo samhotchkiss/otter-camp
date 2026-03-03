@@ -122,6 +122,9 @@ func (r *SleepReflector) Run(ctx context.Context, orgID uuid.UUID, compactionRun
 	if compactionRunID == uuid.Nil {
 		return fmt.Errorf("compaction run id is required")
 	}
+	if _, err := r.runs.FailStalePending(ctx, r.now().UTC().Add(-time.Hour), repo.MemoryCompactionPendingTimeoutReason); err != nil {
+		return err
+	}
 
 	startedAt := r.now().UTC()
 	if _, err := r.runs.UpdateStatus(ctx, compactionRunID, "running", nil, &startedAt, nil); err != nil {
@@ -136,6 +139,9 @@ func (r *SleepReflector) Run(ctx context.Context, orgID uuid.UUID, compactionRun
 	defer func() {
 		if err != nil {
 			message := strings.TrimSpace(err.Error())
+			if message == "" {
+				message = repo.MemoryCompactionDefaultFailedMessage
+			}
 			failedAt := r.now().UTC()
 			_, _ = r.runs.UpdateStatus(ctx, compactionRunID, "failed", &message, &startedAt, &failedAt)
 			return

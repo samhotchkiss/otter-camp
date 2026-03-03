@@ -288,11 +288,11 @@ func buildScopeFilterSQLForStatus(req RetrievalRequest, readScopes []string, sta
 			scopeClauses = append(scopeClauses, fmt.Sprintf("(scope = 'task' AND project_task_id = $%d)", nextArg))
 			args = append(args, *req.TaskID)
 			nextArg++
-		case "agent_private":
+		case "agent", "agent_private":
 			if req.AgentID == nil || *req.AgentID == uuid.Nil {
 				continue
 			}
-			scopeClauses = append(scopeClauses, fmt.Sprintf("(scope = 'agent_private' AND agent_id = $%d)", nextArg))
+			scopeClauses = append(scopeClauses, fmt.Sprintf("(scope = 'agent' AND agent_id = $%d)", nextArg))
 			args = append(args, *req.AgentID)
 			nextArg++
 		}

@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
+	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"github.com/samhotchkiss/otter-camp/internal/testutil"
@@ -230,6 +231,69 @@ func TestIntegrationFileReadUsesSlugWorkspacePath(t *testing.T) {
 	}
 	if got := out["content"]; got != "hello from slug workspace" {
 		t.Fatalf("file.read content = %v, want hello from slug workspace", got)
+	}
+}
+
+func TestIntegrationMemoryRecordPersistsAndQueryReturnsMemory(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:          pool,
+		WorkspaceRoot: t.TempDir(),
+	})
+	ctx := integrationExecCtxWith(orgID, agent.ID)
+
+	recorded, err := executor.Execute(ctx, "memory.record", map[string]any{
+		"content": "deployment runbook includes rollback checklist",
+		"scope":   "agent",
+	})
+	if err != nil {
+		t.Fatalf("memory.record: %v", err)
+	}
+	if got := recorded["status"]; got != "stored" {
+		t.Fatalf("record status = %v, want stored", got)
+	}
+	memoryID := mustUUIDValue(t, recorded["memory_id"])
+
+	stored, err := repo.NewMemoryRepo(pool).GetByID(context.Background(), memoryID)
+	if err != nil {
+		t.Fatalf("load recorded memory: %v", err)
+	}
+	if stored.Status != "active" {
+		t.Fatalf("stored status = %q, want active", stored.Status)
+	}
+	if len(stored.Embedding) != memoryRecordEmbeddingDims {
+		t.Fatalf("stored embedding dims = %d, want %d", len(stored.Embedding), memoryRecordEmbeddingDims)
+	}
+
+	retriever, err := memory.NewRetriever(memory.RetrieverOptions{
+		Pool:     pool,
+		Embedder: deterministicMemoryQueryEmbedder{},
+	})
+	if err != nil {
+		t.Fatalf("new retriever: %v", err)
+	}
+	result, err := retriever.Query(context.Background(), memory.RetrievalRequest{
+		OrganizationID: orgID,
+		AgentID:        &agent.ID,
+		Query:          "rollback checklist",
+		Mode:           memory.RetrievalModePassive,
+		MaxResults:     5,
+	})
+	if err != nil {
+		t.Fatalf("memory query: %v", err)
+	}
+	found := false
+	for _, ranked := range result.Memories {
+		if ranked.Memory.ID == memoryID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("retrieval did not include recorded memory %s", memoryID)
 	}
 }
 
@@ -597,4 +661,14 @@ func integrationExecCtx() context.Context {
 		OrganizationID: orgID,
 		AgentID:        &agentID,
 	})
+}
+
+type deterministicMemoryQueryEmbedder struct{}
+
+func (deterministicMemoryQueryEmbedder) Embed(_ context.Context, _ uuid.UUID, _ string, inputs []string) ([][]float32, error) {
+	vectors := make([][]float32, 0, len(inputs))
+	for _, input := range inputs {
+		vectors = append(vectors, deterministicMemoryEmbedding(input))
+	}
+	return vectors, nil
 }

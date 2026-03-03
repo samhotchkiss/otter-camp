@@ -104,6 +104,9 @@ func (c *TaskConsolidator) Consolidate(ctx context.Context, orgID, projectID, ta
 	if orgID == uuid.Nil || projectID == uuid.Nil || taskID == uuid.Nil {
 		return fmt.Errorf("organization_id, project_id, and task_id are required")
 	}
+	if _, err := c.runs.FailStalePending(ctx, c.now().UTC().Add(-time.Hour), repo.MemoryCompactionPendingTimeoutReason); err != nil {
+		return err
+	}
 
 	exists, err := c.completedRunExists(ctx, orgID, taskID)
 	if err != nil {
@@ -138,6 +141,9 @@ func (c *TaskConsolidator) Consolidate(ctx context.Context, orgID, projectID, ta
 	defer func() {
 		if err != nil {
 			message := strings.TrimSpace(err.Error())
+			if message == "" {
+				message = repo.MemoryCompactionDefaultFailedMessage
+			}
 			completedAt := c.now().UTC()
 			_, _ = c.runs.UpdateStatus(ctx, run.ID, "failed", &message, &startedAt, &completedAt)
 			return
