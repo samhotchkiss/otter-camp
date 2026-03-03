@@ -26,11 +26,12 @@ func TestDailyRollupJobRunUpsertsAgentAndProjectRowsIdempotently(t *testing.T) {
 		orgID: orgID,
 		rowsByDimension: map[string][][]any{
 			"agent_id": {
-				{orgID, &agentA, 3, int64(100), int64(50)},
-				{orgID, &agentB, 2, int64(40), int64(20)},
+				{orgID, &agentA, "claude-opus-4-6", json.RawMessage(`{}`), 3, int64(100), int64(50)},
+				{orgID, &agentB, "claude-haiku-3-5", json.RawMessage(`{}`), 2, int64(40), int64(20)},
 			},
 			"project_id": {
-				{orgID, &projectID, 5, int64(140), int64(70)},
+				{orgID, &projectID, "claude-opus-4-6", json.RawMessage(`{}`), 3, int64(100), int64(50)},
+				{orgID, &projectID, "claude-haiku-3-5", json.RawMessage(`{}`), 2, int64(40), int64(20)},
 			},
 		},
 	}
@@ -53,9 +54,9 @@ func TestDailyRollupJobRunUpsertsAgentAndProjectRowsIdempotently(t *testing.T) {
 	if len(writer.store) != 3 {
 		t.Fatalf("rollup row count = %d, want 3", len(writer.store))
 	}
-	assertRollupTokens(t, writer, orgID, "agent", &agentA, 100, 50)
-	assertRollupTokens(t, writer, orgID, "agent", &agentB, 40, 20)
-	assertRollupTokens(t, writer, orgID, "project", &projectID, 140, 70)
+	assertRollupTotals(t, writer, orgID, "agent", &agentA, 100, 50, 525000000)
+	assertRollupTotals(t, writer, orgID, "agent", &agentB, 40, 20, 11200000)
+	assertRollupTotals(t, writer, orgID, "project", &projectID, 140, 70, 536200000)
 
 	if len(events.events) == 0 {
 		t.Fatal("expected model.usage_rollup.completed domain event")
@@ -76,7 +77,7 @@ func TestDailyRollupJobRunUpsertsAgentAndProjectRowsIdempotently(t *testing.T) {
 	}
 }
 
-func assertRollupTokens(t *testing.T, writer *fakeModelUsageRollupWriter, orgID uuid.UUID, rollupType string, rollupID *uuid.UUID, input, output int64) {
+func assertRollupTotals(t *testing.T, writer *fakeModelUsageRollupWriter, orgID uuid.UUID, rollupType string, rollupID *uuid.UUID, input, output, cost int64) {
 	t.Helper()
 	item, ok := writer.store[rollupStoreKey(orgID, rollupType, rollupID)]
 	if !ok {
@@ -87,6 +88,9 @@ func assertRollupTokens(t *testing.T, writer *fakeModelUsageRollupWriter, orgID 
 	}
 	if item.TotalOutputTokens != output {
 		t.Fatalf("%s output_tokens = %d, want %d", rollupType, item.TotalOutputTokens, output)
+	}
+	if item.TotalCostMicrocents != cost {
+		t.Fatalf("%s total_cost_microcents = %d, want %d", rollupType, item.TotalCostMicrocents, cost)
 	}
 }
 
@@ -142,11 +146,34 @@ func (f *fakeRollupRows) Scan(dest ...any) error {
 			*d = row[i].(int)
 		case *int64:
 			*d = row[i].(int64)
+		case *string:
+			*d = row[i].(string)
+		case *json.RawMessage:
+			raw := row[i].(json.RawMessage)
+			*d = append((*d)[:0], raw...)
 		default:
 			return nil
 		}
 	}
 	return nil
+}
+
+func TestEstimateCostMicrocents(t *testing.T) {
+	t.Parallel()
+
+	got := estimateCostMicrocents(500, 200, 2.0, 4.0)
+	if got != 1800000 {
+		t.Fatalf("estimateCostMicrocents = %d, want 1800000", got)
+	}
+}
+
+func TestResolveRollupModelCostsUsesModelFallback(t *testing.T) {
+	t.Parallel()
+
+	input, output := resolveRollupModelCosts("claude-haiku-3-5", json.RawMessage(`{}`))
+	if input != 80 || output != 400 {
+		t.Fatalf("fallback costs = (%v,%v), want (80,400)", input, output)
+	}
 }
 
 type fakeModelUsageRollupWriter struct {

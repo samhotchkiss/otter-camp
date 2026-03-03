@@ -175,7 +175,7 @@ func TestDailyRollupJobRunIntegrationIdempotentAgentProjectGrouping(t *testing.T
 	pool := testdb.New(t)
 
 	org := mustCreateOrg(t, ctx, pool, "daily-rollup-org")
-	provider, connection := mustCreateProviderConnection(t, ctx, pool, org.ID)
+	provider, connection := mustCreateProviderConnectionWithCosts(t, ctx, pool, org.ID, 2.0, 4.0)
 	agentA := mustCreateAgent(t, ctx, pool, org.ID, "Rollup Agent A")
 	agentB := mustCreateAgent(t, ctx, pool, org.ID, "Rollup Agent B")
 	project := mustCreateProject(t, ctx, pool, org.ID, "daily-rollup-project")
@@ -224,17 +224,17 @@ func TestDailyRollupJobRunIntegrationIdempotentAgentProjectGrouping(t *testing.T
 	if len(agentRows) != 2 {
 		t.Fatalf("agent rollup rows = %d, want 2", len(agentRows))
 	}
-	if row := agentRows[agentA.ID]; row.TotalInputTokens != 60 || row.TotalOutputTokens != 30 {
-		t.Fatalf("agent A totals = (%d,%d), want (60,30)", row.TotalInputTokens, row.TotalOutputTokens)
+	if row := agentRows[agentA.ID]; row.TotalInputTokens != 60 || row.TotalOutputTokens != 30 || row.TotalCostMicrocents != 240000 {
+		t.Fatalf("agent A totals = (%d,%d,%d), want (60,30,240000)", row.TotalInputTokens, row.TotalOutputTokens, row.TotalCostMicrocents)
 	}
-	if row := agentRows[agentB.ID]; row.TotalInputTokens != 90 || row.TotalOutputTokens != 45 {
-		t.Fatalf("agent B totals = (%d,%d), want (90,45)", row.TotalInputTokens, row.TotalOutputTokens)
+	if row := agentRows[agentB.ID]; row.TotalInputTokens != 90 || row.TotalOutputTokens != 45 || row.TotalCostMicrocents != 360000 {
+		t.Fatalf("agent B totals = (%d,%d,%d), want (90,45,360000)", row.TotalInputTokens, row.TotalOutputTokens, row.TotalCostMicrocents)
 	}
 	if len(projectRows) != 1 {
 		t.Fatalf("project rollup rows = %d, want 1", len(projectRows))
 	}
-	if row := projectRows[project.ID]; row.TotalInputTokens != 150 || row.TotalOutputTokens != 75 {
-		t.Fatalf("project totals = (%d,%d), want (150,75)", row.TotalInputTokens, row.TotalOutputTokens)
+	if row := projectRows[project.ID]; row.TotalInputTokens != 150 || row.TotalOutputTokens != 75 || row.TotalCostMicrocents != 600000 {
+		t.Fatalf("project totals = (%d,%d,%d), want (150,75,600000)", row.TotalInputTokens, row.TotalOutputTokens, row.TotalCostMicrocents)
 	}
 
 	var agentRowCount int
