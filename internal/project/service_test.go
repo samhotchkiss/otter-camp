@@ -129,6 +129,69 @@ func TestWithProjectStaffingDefaultsHandlesJSONNull(t *testing.T) {
 	}
 }
 
+func TestValidateFlowTemplateReviewPathRejectsWorkToDoneWithoutReview(t *testing.T) {
+	doneID := uuid.New()
+	work := repo.FlowNode{ID: uuid.New(), NodeType: "work", NextNodeID: &doneID}
+	done := repo.FlowNode{ID: doneID, NodeType: "done"}
+
+	err := validateFlowTemplateReviewPath(work.ID, []repo.FlowNode{work, done})
+	if !errors.Is(err, ErrFlowTemplateReviewPath) {
+		t.Fatalf("validateFlowTemplateReviewPath err = %v, want ErrFlowTemplateReviewPath", err)
+	}
+}
+
+func TestValidateFlowTemplateReviewPathAcceptsWorkReviewDone(t *testing.T) {
+	doneID := uuid.New()
+	reviewID := uuid.New()
+	work := repo.FlowNode{ID: uuid.New(), NodeType: "work", NextNodeID: &reviewID}
+	review := repo.FlowNode{ID: reviewID, NodeType: "review", NextNodeID: &doneID, RejectNodeID: &doneID}
+	done := repo.FlowNode{ID: doneID, NodeType: "done"}
+
+	if err := validateFlowTemplateReviewPath(work.ID, []repo.FlowNode{work, review, done}); err != nil {
+		t.Fatalf("validateFlowTemplateReviewPath err = %v, want nil", err)
+	}
+}
+
+func TestValidateFlowTemplateReviewPathRejectsBranchWithoutReview(t *testing.T) {
+	doneID := uuid.New()
+	reviewID := uuid.New()
+	work := repo.FlowNode{ID: uuid.New(), NodeType: "work", NextNodeID: &doneID, RejectNodeID: &reviewID}
+	review := repo.FlowNode{ID: reviewID, NodeType: "review", NextNodeID: &doneID, RejectNodeID: &doneID}
+	done := repo.FlowNode{ID: doneID, NodeType: "done"}
+
+	err := validateFlowTemplateReviewPath(work.ID, []repo.FlowNode{work, review, done})
+	if !errors.Is(err, ErrFlowTemplateReviewPath) {
+		t.Fatalf("validateFlowTemplateReviewPath err = %v, want ErrFlowTemplateReviewPath", err)
+	}
+}
+
+func TestValidateFlowTemplateReviewPathAcceptsAllBranchesThroughReview(t *testing.T) {
+	doneID := uuid.New()
+	reviewAID := uuid.New()
+	reviewBID := uuid.New()
+	work := repo.FlowNode{ID: uuid.New(), NodeType: "work", NextNodeID: &reviewAID, RejectNodeID: &reviewBID}
+	reviewA := repo.FlowNode{ID: reviewAID, NodeType: "review", NextNodeID: &doneID, RejectNodeID: &doneID}
+	reviewB := repo.FlowNode{ID: reviewBID, NodeType: "review", NextNodeID: &doneID, RejectNodeID: &doneID}
+	done := repo.FlowNode{ID: doneID, NodeType: "done"}
+
+	if err := validateFlowTemplateReviewPath(work.ID, []repo.FlowNode{work, reviewA, reviewB, done}); err != nil {
+		t.Fatalf("validateFlowTemplateReviewPath err = %v, want nil", err)
+	}
+}
+
+func TestValidateFlowTemplateReviewPathRequiresRejectEdgeOnReviewNodes(t *testing.T) {
+	doneID := uuid.New()
+	reviewID := uuid.New()
+	work := repo.FlowNode{ID: uuid.New(), NodeType: "work", NextNodeID: &reviewID}
+	review := repo.FlowNode{ID: reviewID, NodeType: "review", NextNodeID: &doneID}
+	done := repo.FlowNode{ID: doneID, NodeType: "done"}
+
+	err := validateFlowTemplateReviewPath(work.ID, []repo.FlowNode{work, review, done})
+	if !errors.Is(err, ErrReviewNodeEdgesRequired) {
+		t.Fatalf("validateFlowTemplateReviewPath err = %v, want ErrReviewNodeEdgesRequired", err)
+	}
+}
+
 type fakeProjectCreateRepo struct {
 	createdID   uuid.UUID
 	lastCreated repo.Project
