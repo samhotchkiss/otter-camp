@@ -1218,6 +1218,8 @@ func mapProjectError(err error) mappedProjectError {
 	case errors.Is(err, projectsvc.ErrInvalidSlug),
 		errors.Is(err, projectsvc.ErrDisplayNameInvalid),
 		errors.Is(err, projectsvc.ErrFlowNodeTemplateMismatch),
+		errors.Is(err, projectsvc.ErrFlowTemplateReviewPath),
+		errors.Is(err, projectsvc.ErrReviewNodeEdgesRequired),
 		errors.Is(err, projectsvc.ErrOrganizationIDRequired),
 		errors.Is(err, projectsvc.ErrProjectIDRequired),
 		errors.Is(err, projectsvc.ErrTemplateIDRequired),

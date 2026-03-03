@@ -409,6 +409,94 @@ func TestProjectHTTPFlowNodeCreatePersistsNextNodeID(t *testing.T) {
 	}
 }
 
+func TestProjectHTTPFlowTemplateRejectsPathsWithoutReview(t *testing.T) {
+	testServer, _, adminUser, memberUser := newProjectTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	memberToken := loginToken(t, testServer.URL, memberUser.Email, "member-password")
+
+	createdProject := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects", map[string]any{
+		"slug":          "template-review-gate-" + strings.ToLower(uuid.NewString()[:8]),
+		"display_name":  "Template Review Gate",
+		"delivery_mode": "gated",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if createdProject.StatusCode != http.StatusCreated {
+		t.Fatalf("create project status = %d, want %d body=%s", createdProject.StatusCode, http.StatusCreated, string(createdProject.Body))
+	}
+	projectID := jsonPathString(t, createdProject.Body, "data", "id")
+
+	projectTemplate := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+projectID+"/flow-templates", map[string]any{
+		"slug":         "review-gate-flow",
+		"display_name": "Review Gate Flow",
+		"description":  "validation",
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if projectTemplate.StatusCode != http.StatusCreated {
+		t.Fatalf("create flow template status = %d, want %d body=%s", projectTemplate.StatusCode, http.StatusCreated, string(projectTemplate.Body))
+	}
+	templateID := jsonPathString(t, projectTemplate.Body, "data", "id")
+
+	terminalNode := mustJSON(t, http.MethodPost, testServer.URL+"/v1/flow-templates/"+templateID+"/nodes", map[string]any{
+		"display_name": "Terminal",
+		"node_type":    "work",
+		"position":     2,
+		"max_visits":   10,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if terminalNode.StatusCode != http.StatusCreated {
+		t.Fatalf("create terminal node status = %d, want %d body=%s", terminalNode.StatusCode, http.StatusCreated, string(terminalNode.Body))
+	}
+	terminalNodeID := jsonPathString(t, terminalNode.Body, "data", "id")
+
+	workNode := mustJSON(t, http.MethodPost, testServer.URL+"/v1/flow-templates/"+templateID+"/nodes", map[string]any{
+		"display_name": "Work",
+		"node_type":    "work",
+		"position":     1,
+		"next_node_id": terminalNodeID,
+		"max_visits":   10,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if workNode.StatusCode != http.StatusCreated {
+		t.Fatalf("create work node status = %d, want %d body=%s", workNode.StatusCode, http.StatusCreated, string(workNode.Body))
+	}
+	workNodeID := jsonPathString(t, workNode.Body, "data", "id")
+
+	invalidStart := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/flow-templates/"+templateID, map[string]any{
+		"start_node_id": workNodeID,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if invalidStart.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid start status = %d, want %d body=%s", invalidStart.StatusCode, http.StatusUnprocessableEntity, string(invalidStart.Body))
+	}
+	if got := jsonPathString(t, invalidStart.Body, "error", "message"); got != "flow template must include at least one review node on every path to completion" {
+		t.Fatalf("error.message = %q body=%s", got, string(invalidStart.Body))
+	}
+
+	reviewNode := mustJSON(t, http.MethodPost, testServer.URL+"/v1/flow-templates/"+templateID+"/nodes", map[string]any{
+		"display_name":   "Review",
+		"node_type":      "review",
+		"position":       3,
+		"next_node_id":   terminalNodeID,
+		"reject_node_id": terminalNodeID,
+		"max_visits":     10,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if reviewNode.StatusCode != http.StatusCreated {
+		t.Fatalf("create review node status = %d, want %d body=%s", reviewNode.StatusCode, http.StatusCreated, string(reviewNode.Body))
+	}
+	reviewNodeID := jsonPathString(t, reviewNode.Body, "data", "id")
+
+	updateWork := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/flow-templates/"+templateID+"/nodes/"+workNodeID, map[string]any{
+		"next_node_id": reviewNodeID,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if updateWork.StatusCode != http.StatusOK {
+		t.Fatalf("update work node status = %d, want %d body=%s", updateWork.StatusCode, http.StatusOK, string(updateWork.Body))
+	}
+
+	validStart := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/flow-templates/"+templateID, map[string]any{
+		"start_node_id": workNodeID,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if validStart.StatusCode != http.StatusOK {
+		t.Fatalf("valid start status = %d, want %d body=%s", validStart.StatusCode, http.StatusOK, string(validStart.Body))
+	}
+}
+
 func newProjectTestServer(t *testing.T) (*authIntegrationServer, repo.Organization, repo.HumanUser, repo.HumanUser) {
 	t.Helper()
 

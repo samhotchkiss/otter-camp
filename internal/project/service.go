@@ -32,6 +32,8 @@ var (
 	ErrAgentNotFound            = errors.New("agent not found")
 	ErrFlowNodeTemplateMismatch = errors.New("flow node does not belong to flow template")
 	ErrDisplayNameInvalid       = errors.New("display_name contains HTML tags")
+	ErrFlowTemplateReviewPath   = errors.New("flow template must include at least one review node on every path to completion")
+	ErrReviewNodeEdgesRequired  = errors.New("review nodes must define both approve and reject edges")
 	ErrOrganizationIDRequired   = errors.New("organization_id is required")
 	ErrProjectIDRequired        = errors.New("project_id is required")
 	ErrTemplateIDRequired       = errors.New("template_id is required")
@@ -666,6 +668,9 @@ func (s *service) UpdateFlowTemplate(ctx context.Context, orgID, templateID uuid
 	if req.StartNodeID != nil {
 		next.StartNodeID = req.StartNodeID
 	}
+	if err := s.validateFlowTemplateReviewCoverage(ctx, template.ID, next.StartNodeID, nil); err != nil {
+		return nil, err
+	}
 
 	if inUse {
 		versioned, deprecateErr := s.templates.Deprecate(ctx, template.ID, repo.FlowTemplate{
@@ -791,6 +796,9 @@ func (s *service) UpdateFlowNode(ctx context.Context, nodeID uuid.UUID, req Upda
 	}
 
 	if err := s.validateNodeActor(ctx, template.OrganizationID, next.ActorType, next.ActorID); err != nil {
+		return nil, err
+	}
+	if err := s.validateFlowTemplateReviewCoverage(ctx, template.ID, template.StartNodeID, &next); err != nil {
 		return nil, err
 	}
 
@@ -1160,4 +1168,102 @@ func withProjectStaffingDefaults(settings json.RawMessage) json.RawMessage {
 		return settings
 	}
 	return encoded
+}
+
+type flowValidationState struct {
+	NodeID    uuid.UUID
+	HasReview bool
+}
+
+func (s *service) validateFlowTemplateReviewCoverage(ctx context.Context, templateID uuid.UUID, startNodeID *uuid.UUID, overrideNode *repo.FlowNode) error {
+	if startNodeID == nil || *startNodeID == uuid.Nil {
+		return nil
+	}
+
+	nodes, err := s.nodes.GetByTemplateOrdered(ctx, templateID)
+	if err != nil {
+		return err
+	}
+
+	if overrideNode != nil {
+		replaced := false
+		for i := range nodes {
+			if nodes[i].ID == overrideNode.ID {
+				nodes[i] = *overrideNode
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			nodes = append(nodes, *overrideNode)
+		}
+	}
+
+	return validateFlowTemplateReviewPath(*startNodeID, nodes)
+}
+
+func validateFlowTemplateReviewPath(startNodeID uuid.UUID, nodes []repo.FlowNode) error {
+	nodeByID := make(map[uuid.UUID]repo.FlowNode, len(nodes))
+	for i := range nodes {
+		nodeByID[nodes[i].ID] = nodes[i]
+	}
+
+	startNode, ok := nodeByID[startNodeID]
+	if !ok {
+		return ErrFlowNodeTemplateMismatch
+	}
+
+	visited := make(map[flowValidationState]struct{})
+	var walk func(node repo.FlowNode, hasReview bool) error
+	walk = func(node repo.FlowNode, hasReview bool) error {
+		hasReview = hasReview || strings.EqualFold(strings.TrimSpace(node.NodeType), "review")
+		state := flowValidationState{
+			NodeID:    node.ID,
+			HasReview: hasReview,
+		}
+		if _, seen := visited[state]; seen {
+			return nil
+		}
+		visited[state] = struct{}{}
+
+		nextNodeIDs := make([]uuid.UUID, 0, 2)
+		appendEdge := func(id *uuid.UUID) {
+			if id == nil || *id == uuid.Nil {
+				return
+			}
+			for _, existing := range nextNodeIDs {
+				if existing == *id {
+					return
+				}
+			}
+			nextNodeIDs = append(nextNodeIDs, *id)
+		}
+
+		isReview := strings.EqualFold(strings.TrimSpace(node.NodeType), "review")
+		if isReview && (node.NextNodeID == nil || node.RejectNodeID == nil) {
+			return ErrReviewNodeEdgesRequired
+		}
+		appendEdge(node.NextNodeID)
+		appendEdge(node.RejectNodeID)
+
+		if len(nextNodeIDs) == 0 {
+			if !hasReview {
+				return ErrFlowTemplateReviewPath
+			}
+			return nil
+		}
+
+		for _, nextID := range nextNodeIDs {
+			nextNode, exists := nodeByID[nextID]
+			if !exists {
+				return ErrFlowNodeTemplateMismatch
+			}
+			if err := walk(nextNode, hasReview); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	return walk(startNode, false)
 }
