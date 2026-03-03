@@ -11,7 +11,9 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/validation"
 )
 
 const (
@@ -25,6 +27,7 @@ var (
 	ErrInvalidSlug              = errors.New("invalid slug")
 	ErrProjectScopedUnsupported = errors.New("project-scoped skills are not supported until task 016")
 	ErrDisplayNameRequired      = errors.New("display_name is required")
+	ErrDisplayNameInvalid       = errors.New("display_name contains HTML tags")
 	ErrFilePathRequired         = errors.New("file_path is required")
 	ErrCreatedByTypeInvalid     = errors.New("created_by_type must be human, agent, or system")
 )
@@ -95,6 +98,9 @@ func (s *service) Create(ctx context.Context, orgID uuid.UUID, req CreateRequest
 	if displayName == "" {
 		return nil, ErrDisplayNameRequired
 	}
+	if validation.HasHTMLTag(displayName) {
+		return nil, ErrDisplayNameInvalid
+	}
 
 	filePath := strings.TrimSpace(req.FilePath)
 	if filePath == "" {
@@ -144,6 +150,9 @@ func (s *service) Update(ctx context.Context, skillID uuid.UUID, req UpdateReque
 		displayName := strings.TrimSpace(*req.DisplayName)
 		if displayName == "" {
 			return nil, ErrDisplayNameRequired
+		}
+		if validation.HasHTMLTag(displayName) {
+			return nil, ErrDisplayNameInvalid
 		}
 		existing.DisplayName = displayName
 	}

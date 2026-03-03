@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
 	"github.com/samhotchkiss/otter-camp/internal/api"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
@@ -1215,6 +1216,7 @@ func mapProjectError(err error) mappedProjectError {
 	case errors.Is(err, projectsvc.ErrAgentNotFound):
 		return mappedProjectError{Status: http.StatusUnprocessableEntity, Code: api.ErrCodeValidation, Message: projectsvc.ErrAgentNotFound.Error()}
 	case errors.Is(err, projectsvc.ErrInvalidSlug),
+		errors.Is(err, projectsvc.ErrDisplayNameInvalid),
 		errors.Is(err, projectsvc.ErrFlowNodeTemplateMismatch),
 		errors.Is(err, projectsvc.ErrOrganizationIDRequired),
 		errors.Is(err, projectsvc.ErrProjectIDRequired),

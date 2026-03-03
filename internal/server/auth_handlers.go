@@ -15,12 +15,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/samhotchkiss/otter-camp/internal/api"
 	"github.com/samhotchkiss/otter-camp/internal/audit"
 	"github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
-	"golang.org/x/crypto/bcrypt"
+	"github.com/samhotchkiss/otter-camp/internal/validation"
 )
 
 type authHandlers struct {
@@ -555,10 +557,18 @@ func (h authHandlers) issueAPIKey(w http.ResponseWriter, r *http.Request) {
 		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "display_name is required")
 		return
 	}
+	if validation.HasHTMLTag(displayName) {
+		api.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "display_name contains HTML tags")
+		return
+	}
 
 	scopes := normalizeScopes(req.Scopes)
 	issued, err := h.service.IssueAPIKey(r.Context(), principal.UserID, displayName, scopes, req.ExpiresAt)
 	if err != nil {
+		if errors.Is(err, auth.ErrDisplayNameInvalid) {
+			api.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, err.Error())
+			return
+		}
 		api.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to issue api key")
 		return
 	}
@@ -715,6 +725,10 @@ func (h authHandlers) createUser(w http.ResponseWriter, r *http.Request) {
 		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "email, password, and name are required")
 		return
 	}
+	if validation.HasHTMLTag(displayName) {
+		api.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "name contains HTML tags")
+		return
+	}
 
 	role, err := normalizeUserRole(req.Role, "member")
 	if err != nil {
@@ -768,6 +782,10 @@ func (h authHandlers) createOrganization(w http.ResponseWriter, r *http.Request)
 		api.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "slug and name are required")
 		return
 	}
+	if validation.HasHTMLTag(name) {
+		api.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "name contains HTML tags")
+		return
+	}
 
 	adminEmail := strings.TrimSpace(req.AdminEmail)
 	if adminEmail == "" {
@@ -784,6 +802,10 @@ func (h authHandlers) createOrganization(w http.ResponseWriter, r *http.Request)
 	adminName := strings.TrimSpace(req.AdminName)
 	if adminName == "" {
 		adminName = "Admin"
+	}
+	if validation.HasHTMLTag(adminName) {
+		api.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "admin_name contains HTML tags")
+		return
 	}
 
 	org, err := h.orgs.Create(r.Context(), repo.Organization{

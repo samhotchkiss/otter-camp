@@ -11,13 +11,14 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
+
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	secretsvc "github.com/samhotchkiss/otter-camp/internal/secret"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
-	"golang.org/x/crypto/bcrypt"
 )
 
 func TestMCPHTTPRoundTripCreateRefreshEnableTestDelete(t *testing.T) {
@@ -222,6 +223,39 @@ func TestMCPHTTPRBACAndUnauth(t *testing.T) {
 	unauth := mustJSON(t, http.MethodGet, testServer.URL+"/v1/mcp/connections", nil, nil)
 	if unauth.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauth list status = %d, want %d body=%s", unauth.StatusCode, http.StatusUnauthorized, string(unauth.Body))
+	}
+}
+
+func TestMCPHTTPCreateConnectionRejectsSSRFURL(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, _ := newMCPTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	linkLocal := mustJSON(t, http.MethodPost, testServer.URL+"/v1/mcp/connections", map[string]any{
+		"display_name": "Blocked Link Local",
+		"slug":         "blocked-link-local",
+		"transport":    "http",
+		"transport_config": map[string]any{
+			"url": "http://169.254.169.254/latest/meta-data/",
+		},
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if linkLocal.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("link-local create status = %d, want %d body=%s", linkLocal.StatusCode, http.StatusUnprocessableEntity, string(linkLocal.Body))
+	}
+
+	privateNet := mustJSON(t, http.MethodPost, testServer.URL+"/v1/mcp/connections", map[string]any{
+		"display_name": "Blocked Private Net",
+		"slug":         "blocked-private-net",
+		"transport":    "http",
+		"transport_config": map[string]any{
+			"url": "http://10.0.0.1/internal",
+		},
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if privateNet.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("private-net create status = %d, want %d body=%s", privateNet.StatusCode, http.StatusUnprocessableEntity, string(privateNet.Body))
 	}
 }
 

@@ -104,6 +104,24 @@ func TestProjectCreatePublishesStaffingNeededEvent(t *testing.T) {
 	}
 }
 
+func TestProjectCreateRejectsHTMLDisplayName(t *testing.T) {
+	svc := &service{
+		projects: &fakeProjectCreateRepo{createdID: uuid.New()},
+		events:   &fakeProjectEventBus{},
+	}
+
+	_, err := svc.Create(context.Background(), CreateProjectRequest{
+		OrganizationID: uuid.New(),
+		Slug:           "safe-slug",
+		DisplayName:    "<script>alert(1)</script>",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+	})
+	if !errors.Is(err, ErrDisplayNameInvalid) {
+		t.Fatalf("Create err = %v, want ErrDisplayNameInvalid", err)
+	}
+}
+
 func TestWithProjectStaffingDefaultsHandlesJSONNull(t *testing.T) {
 	settings := withProjectStaffingDefaults(json.RawMessage("null"))
 	if !projectRequiresPMQueueSetting(settings) {

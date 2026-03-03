@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
@@ -194,5 +195,22 @@ func TestComputeTempExpiresAt(t *testing.T) {
 	}
 	if !expiresAt.Equal(now.Add(time.Hour)) {
 		t.Fatalf("expiresAt = %v, want %v", *expiresAt, now.Add(time.Hour))
+	}
+}
+
+func TestCreateRejectsHTMLDisplayName(t *testing.T) {
+	t.Parallel()
+
+	svc := &service{
+		agents: &fakeAgentRepo{},
+	}
+
+	_, err := svc.Create(context.Background(), CreateAgentRequest{
+		OrganizationID: uuid.New(),
+		DisplayName:    "<script>alert(1)</script>",
+		CreatedByType:  "system",
+	})
+	if !errors.Is(err, ErrDisplayNameInvalid) {
+		t.Fatalf("Create err = %v, want ErrDisplayNameInvalid", err)
 	}
 }

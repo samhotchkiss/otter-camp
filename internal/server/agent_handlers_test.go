@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
 	"github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/audit"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
@@ -250,6 +251,12 @@ func TestMapAgentErrorMappings(t *testing.T) {
 			err:        agent.ErrStarterTrioProtected,
 			wantStatus: http.StatusForbidden,
 			wantCode:   "starter_trio_protected",
+		},
+		{
+			name:       "display name invalid",
+			err:        agent.ErrDisplayNameInvalid,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantCode:   "validation_error",
 		},
 		{
 			name:       "not found",

@@ -12,9 +12,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/validation"
 )
 
 const (
@@ -41,6 +43,7 @@ var (
 
 	ErrOrganizationIDRequired     = errors.New("organization_id is required")
 	ErrDisplayNameRequired        = errors.New("display_name is required")
+	ErrDisplayNameInvalid         = errors.New("display_name contains HTML tags")
 	ErrTempProjectIDRequired      = errors.New("temp_project_id is required")
 	ErrInvalidCreatedByType       = errors.New("created_by_type must be human_user, agent, or system")
 	ErrCreatedByIDRequired        = errors.New("created_by_id is required")
@@ -224,6 +227,9 @@ func (s *service) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 	if displayName == "" {
 		return nil, ErrDisplayNameRequired
 	}
+	if validation.HasHTMLTag(displayName) {
+		return nil, ErrDisplayNameInvalid
+	}
 
 	createdByType, createdByID, err := normalizeCreatedBy(req.CreatedByType, req.CreatedByID)
 	if err != nil {
@@ -300,6 +306,9 @@ func (s *service) Update(ctx context.Context, orgID, agentID uuid.UUID, req Upda
 		if next == "" {
 			return nil, ErrDisplayNameRequired
 		}
+		if validation.HasHTMLTag(next) {
+			return nil, ErrDisplayNameInvalid
+		}
 		existing.DisplayName = next
 	}
 	if req.SystemPrompt != nil {
@@ -372,6 +381,9 @@ func (s *service) CreateTemp(ctx context.Context, orgID uuid.UUID, req CreateTem
 	displayName := strings.TrimSpace(req.DisplayName)
 	if displayName == "" {
 		return nil, ErrDisplayNameRequired
+	}
+	if validation.HasHTMLTag(displayName) {
+		return nil, ErrDisplayNameInvalid
 	}
 
 	createdByType, createdByID, err := normalizeCreatedBy(req.CreatedByType, req.CreatedByID)

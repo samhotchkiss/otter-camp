@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
@@ -41,6 +42,15 @@ func TestServiceCreateValidatesSlug(t *testing.T) {
 		FilePath:    "skills/invalid.md",
 	}); !errors.Is(err, ErrInvalidSlug) {
 		t.Fatalf("Create error = %v, want ErrInvalidSlug", err)
+	}
+
+	if _, err := svc.Create(context.Background(), orgID, CreateRequest{
+		Slug:        "valid-slug",
+		DisplayName: "<script>alert(1)</script>",
+		Description: "Invalid",
+		FilePath:    "skills/invalid.md",
+	}); !errors.Is(err, ErrDisplayNameInvalid) {
+		t.Fatalf("Create error = %v, want ErrDisplayNameInvalid", err)
 	}
 
 	created, err := svc.Create(context.Background(), orgID, CreateRequest{

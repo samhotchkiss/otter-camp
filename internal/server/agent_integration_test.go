@@ -13,13 +13,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/audit"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
-	"golang.org/x/crypto/bcrypt"
 )
 
 func TestAgentHTTPCreatePauseAndGet(t *testing.T) {
@@ -71,6 +72,22 @@ func TestAgentHTTPCreatePauseAndGet(t *testing.T) {
 	}
 	if status := jsonPathString(t, got.Body, "data", "lifecycle_status"); status != "paused" {
 		t.Fatalf("lifecycle_status = %q, want %q body=%s", status, "paused", string(got.Body))
+	}
+}
+
+func TestAgentHTTPCreateRejectsHTMLDisplayName(t *testing.T) {
+	testServer, _, adminUser, _ := newAgentTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents", map[string]any{
+		"display_name": "<script>alert(1)</script>",
+		"agent_class":  "staff",
+		"agent_type":   "worker",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if created.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("create status = %d, want %d body=%s", created.StatusCode, http.StatusUnprocessableEntity, string(created.Body))
 	}
 }
 
