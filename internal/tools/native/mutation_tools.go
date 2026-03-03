@@ -782,7 +782,11 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		return nil, err
 	}
 	if statusChanged {
-		_ = e.publishTaskStatusEvents(ctx, nil, current, strings.TrimSpace(updated.WorkStatus))
+		eventTask := current
+		eventTask.WorkStatus = previousStatus
+		if err := e.publishTaskStatusEvents(ctx, nil, eventTask, strings.TrimSpace(updated.WorkStatus)); err != nil {
+			return nil, err
+		}
 	}
 	return map[string]any{
 		"task": map[string]any{

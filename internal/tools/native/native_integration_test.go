@@ -602,6 +602,46 @@ func TestIntegrationFlowListTemplatesReturnsNodeSummaries(t *testing.T) {
 	}
 }
 
+func TestIntegrationTaskUpdatePublishesStatusChangedDomainEvent(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	template := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "draft",
+	})
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	ctx := integrationExecCtxWith(orgID, actor.ID)
+	out, err := executor.Execute(ctx, "task.update", map[string]any{
+		"task_id":     task.ID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("task.update error = %v, want nil", out["error"])
+	}
+
+	var eventCount int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM domain_event
+		WHERE organization_id = $1
+		  AND event_type = 'task.status_changed'
+		  AND payload->>'task_id' = $2
+		  AND payload->>'to_status' = 'queued'
+	`, orgID, task.ID.String()).Scan(&eventCount); err != nil {
+		t.Fatalf("count task.status_changed domain events: %v", err)
+	}
+	if eventCount < 1 {
+		t.Fatalf("task.status_changed domain events = %d, want >= 1", eventCount)
+	}
+}
+
 func TestIntegrationFlowAdvanceMovesToNextNode(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
