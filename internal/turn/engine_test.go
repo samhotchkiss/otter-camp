@@ -393,7 +393,7 @@ func TestTierRoutingTwoTier2ToolsAreSequential(t *testing.T) {
 	}
 }
 
-func TestMaxToolCallsStopCondition(t *testing.T) {
+func TestMaxToolCallsSyncStops(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.engine.maxToolCalls = 3
 
@@ -411,6 +411,118 @@ func TestMaxToolCallsStopCondition(t *testing.T) {
 	}
 	if !fixture.messages.containsContent("[Max tool calls reached. Turn ended.]") {
 		t.Fatal("missing max tool calls stop system message")
+	}
+	if fixture.model.continuationSummaryCalls != 0 {
+		t.Fatalf("continuation summary calls = %d, want 0", fixture.model.continuationSummaryCalls)
+	}
+	if len(fixture.chat.turnOrder) != 1 {
+		t.Fatalf("turn count = %d, want 1", len(fixture.chat.turnOrder))
+	}
+	firstTurn := fixture.chat.turnByID(fixture.chat.turnOrder[0])
+	if firstTurn == nil || firstTurn.StopReason == nil || *firstTurn.StopReason != stopReasonMaxToolCalls {
+		t.Fatalf("first turn stop_reason = %v, want %q", firstTurn.StopReason, stopReasonMaxToolCalls)
+	}
+}
+
+func TestMaxToolCallsAsyncContinuation(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.maxToolCalls = 3
+
+	var (
+		mu              sync.Mutex
+		dispatchedTier1 []string
+	)
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		mu.Lock()
+		dispatchedTier1 = append(dispatchedTier1, call.ID)
+		mu.Unlock()
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}}, nil
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		round++
+		switch round {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{
+				{ID: "a", Name: "file.read", Tier: "tier1"},
+				{ID: "b", Name: "memory.query", Tier: "tier1"},
+				{ID: "c", Name: "chat.search", Tier: "tier1"},
+				{ID: "d", Name: "task.list", Tier: "tier1"},
+			}}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{
+				{ID: "e", Name: "chat.search", Tier: "tier1"},
+				{ID: "f", Name: "task.list", Tier: "tier1"},
+			}}, nil
+		default:
+			return ModelResponse{Content: "final"}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	mu.Lock()
+	got := append([]string(nil), dispatchedTier1...)
+	mu.Unlock()
+	sort.Strings(got)
+	if len(got) != 5 {
+		t.Fatalf("tier1 dispatches = %v, want 5 total tool calls across continuation", got)
+	}
+	if strings.Join(got, ",") != "a,b,c,e,f" {
+		t.Fatalf("tier1 dispatch calls = %v, want [a b c e f]", got)
+	}
+	if fixture.model.continuationSummaryCalls != 1 {
+		t.Fatalf("continuation summary calls = %d, want 1", fixture.model.continuationSummaryCalls)
+	}
+	if len(fixture.chat.turnOrder) != 2 {
+		t.Fatalf("turn count = %d, want 2", len(fixture.chat.turnOrder))
+	}
+	if !fixture.messages.containsContent("[Max tool calls reached. Turn ended.]") {
+		t.Fatal("missing max tool calls stop system message")
+	}
+	if !fixture.messages.containsContent("[Continuation summary] respond") {
+		t.Fatal("missing continuation summary message")
+	}
+	firstTurn := fixture.chat.turnByID(fixture.chat.turnOrder[0])
+	if firstTurn == nil || firstTurn.StopReason == nil || *firstTurn.StopReason != stopReasonMaxToolCalls {
+		t.Fatalf("first turn stop_reason = %v, want %q", firstTurn.StopReason, stopReasonMaxToolCalls)
+	}
+}
+
+func TestMaxToolCallsContinuationDepthLimit(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.maxToolCalls = 1
+
+	var dispatched int
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		dispatched++
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}}, nil
+	}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		return ModelResponse{ToolCalls: []ModelToolCall{
+			{ID: uuid.NewString(), Name: "file.read", Tier: "tier1"},
+			{ID: uuid.NewString(), Name: "task.list", Tier: "tier1"},
+		}}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if fixture.model.continuationSummaryCalls != 3 {
+		t.Fatalf("continuation summary calls = %d, want 3", fixture.model.continuationSummaryCalls)
+	}
+	if len(fixture.chat.turnOrder) != 4 {
+		t.Fatalf("turn count = %d, want 4 (original + 3 continuations)", len(fixture.chat.turnOrder))
+	}
+	if dispatched != 4 {
+		t.Fatalf("dispatched tool calls = %d, want 4", dispatched)
+	}
+	lastTurn := fixture.chat.turnByID(fixture.chat.turnOrder[len(fixture.chat.turnOrder)-1])
+	if lastTurn == nil || lastTurn.StopReason == nil || *lastTurn.StopReason != stopReasonMaxToolCalls {
+		t.Fatalf("last turn stop_reason = %v, want %q", lastTurn.StopReason, stopReasonMaxToolCalls)
 	}
 }
 
@@ -464,6 +576,10 @@ func TestMaxToolCallsBudgetAccumulatesAcrossRounds(t *testing.T) {
 	}
 	if !fixture.messages.containsContent("[Max tool calls reached. Turn ended.]") {
 		t.Fatal("missing max tool calls stop system message")
+	}
+	turn := fixture.chat.turnByID(fixture.chat.turnOrder[0])
+	if turn == nil || turn.StopReason == nil || *turn.StopReason != stopReasonMaxToolCalls {
+		t.Fatalf("turn stop_reason = %v, want %q", turn.StopReason, stopReasonMaxToolCalls)
 	}
 }
 
@@ -1003,6 +1119,22 @@ func (f *fakeChatService) ListBySession(ctx context.Context, sessionID uuid.UUID
 		items = append(items, repo.ChatTurn(*turn))
 	}
 	return items, nil
+}
+
+func (f *fakeChatService) SetStopReason(ctx context.Context, id uuid.UUID, stopReason *string) (repo.ChatTurn, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	turn := f.turns[id]
+	if turn == nil {
+		return repo.ChatTurn{}, repo.ErrNotFound
+	}
+	if stopReason == nil || strings.TrimSpace(*stopReason) == "" {
+		turn.StopReason = nil
+	} else {
+		reason := strings.TrimSpace(*stopReason)
+		turn.StopReason = &reason
+	}
+	return repo.ChatTurn(*turn), nil
 }
 
 func (f *fakeChatService) Create(ctx context.Context, turn repo.ChatTurn) (repo.ChatTurn, error) {
