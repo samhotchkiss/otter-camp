@@ -15049,3 +15049,81 @@ func TestMouseHoverUpdatesPanelAndY(t *testing.T) {
 		t.Fatalf("expected hoverY=10, got %d", m.hoverY)
 	}
 }
+
+// EX-494: when project reload fails (e.g. 429), sidebar should preserve existing
+// projects instead of wiping PROJECTS.
+func TestSidebarDataLoadedPreservesProjectsOnProjectsErrEX494(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.rebuildSidebar(
+		"org-old",
+		[]SidebarChatItem{{SessionID: "chat-old", DisplayName: "Old Chat", ScopeType: "project", ScopeID: "proj-old"}},
+		[]SidebarProjectItem{{ID: "proj-old", DisplayName: "Old Project"}},
+	)
+
+	model = pressMsg(model, sidebarDataLoadedMsg{
+		OrgSessionID: "org-new",
+		Chats:        []SidebarChatItem{{SessionID: "chat-new", DisplayName: "New Chat", ScopeType: "project", ScopeID: "proj-new"}},
+		Projects:     []SidebarProjectItem{{ID: "proj-new", DisplayName: "New Project"}},
+		ProjectsErr:  errors.New("429 too many requests"),
+	})
+
+	gotProjects := model.workspace.existingProjects()
+	if len(gotProjects) != 1 || gotProjects[0].ID != "proj-old" || gotProjects[0].DisplayName != "Old Project" {
+		t.Fatalf("EX-494: projects should be preserved on ProjectsErr, got %+v", gotProjects)
+	}
+	gotChats := model.workspace.existingChats()
+	if len(gotChats) != 1 || gotChats[0].SessionID != "chat-new" || gotChats[0].DisplayName != "New Chat" {
+		t.Fatalf("EX-494: chats should still update when only ProjectsErr is set, got %+v", gotChats)
+	}
+}
+
+// EX-494: when chat reload fails (e.g. 429), sidebar should preserve existing
+// chats instead of wiping CHATS.
+func TestSidebarDataLoadedPreservesChatsOnChatsErrEX494(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.rebuildSidebar(
+		"org-old",
+		[]SidebarChatItem{{SessionID: "chat-old", DisplayName: "Old Chat", ScopeType: "project", ScopeID: "proj-old"}},
+		[]SidebarProjectItem{{ID: "proj-old", DisplayName: "Old Project"}},
+	)
+
+	model = pressMsg(model, sidebarDataLoadedMsg{
+		OrgSessionID: "org-new",
+		Chats:        []SidebarChatItem{{SessionID: "chat-new", DisplayName: "New Chat", ScopeType: "project", ScopeID: "proj-new"}},
+		Projects:     []SidebarProjectItem{{ID: "proj-new", DisplayName: "New Project"}},
+		ChatsErr:     errors.New("429 too many requests"),
+	})
+
+	gotChats := model.workspace.existingChats()
+	if len(gotChats) != 1 || gotChats[0].SessionID != "chat-old" || gotChats[0].DisplayName != "Old Chat" {
+		t.Fatalf("EX-494: chats should be preserved on ChatsErr, got %+v", gotChats)
+	}
+	gotProjects := model.workspace.existingProjects()
+	if len(gotProjects) != 1 || gotProjects[0].ID != "proj-new" || gotProjects[0].DisplayName != "New Project" {
+		t.Fatalf("EX-494: projects should still update when only ChatsErr is set, got %+v", gotProjects)
+	}
+}
+
+func TestSidebarDataLoadedReplacesSidebarOnSuccessEX494(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.rebuildSidebar(
+		"org-old",
+		[]SidebarChatItem{{SessionID: "chat-old", DisplayName: "Old Chat", ScopeType: "project", ScopeID: "proj-old"}},
+		[]SidebarProjectItem{{ID: "proj-old", DisplayName: "Old Project"}},
+	)
+
+	model = pressMsg(model, sidebarDataLoadedMsg{
+		OrgSessionID: "org-new",
+		Chats:        []SidebarChatItem{{SessionID: "chat-new", DisplayName: "New Chat", ScopeType: "project", ScopeID: "proj-new"}},
+		Projects:     []SidebarProjectItem{{ID: "proj-new", DisplayName: "New Project"}},
+	})
+
+	gotChats := model.workspace.existingChats()
+	if len(gotChats) != 1 || gotChats[0].SessionID != "chat-new" || gotChats[0].DisplayName != "New Chat" {
+		t.Fatalf("EX-494: chats should be replaced on successful reload, got %+v", gotChats)
+	}
+	gotProjects := model.workspace.existingProjects()
+	if len(gotProjects) != 1 || gotProjects[0].ID != "proj-new" || gotProjects[0].DisplayName != "New Project" {
+		t.Fatalf("EX-494: projects should be replaced on successful reload, got %+v", gotProjects)
+	}
+}
