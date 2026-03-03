@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -674,6 +675,221 @@ func TestEnqueueForMergeUsesSequentialPosition(t *testing.T) {
 	}
 }
 
+func TestActOnInboxItemTaskReviewApproveAdvancesFlowAndMarksActed(t *testing.T) {
+	taskID := uuid.New()
+	userID := uuid.New()
+	itemID := uuid.New()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	flowNodeID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "review",
+				Title:          "Review task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+	inboxRepo := &fakeInboxRepo{
+		items: []repo.InboxItem{
+			{
+				ID:             itemID,
+				OrganizationID: orgID,
+				ItemType:       "task_review",
+				SourceTaskID:   &taskID,
+				ActionPayload:  json.RawMessage(`{"task_id":"` + taskID.String() + `"}`),
+			},
+		},
+	}
+	flowActions := &fakeFlowReviewActions{}
+	svc := newUnitService(taskRepo)
+	svc.inbox = inboxRepo
+	svc.flowReviews = flowActions
+	svc.executions = &fakeFlowExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{ID: uuid.New(), TaskID: taskID, FlowNodeID: flowNodeID, Status: "active"},
+			},
+		},
+	}
+
+	if err := svc.ActOnInboxItem(context.Background(), itemID, userID, "approve", nil); err != nil {
+		t.Fatalf("ActOnInboxItem approve: %v", err)
+	}
+	if flowActions.advanceCalls != 1 {
+		t.Fatalf("advance calls = %d, want 1", flowActions.advanceCalls)
+	}
+	if flowActions.rejectCalls != 0 {
+		t.Fatalf("reject calls = %d, want 0", flowActions.rejectCalls)
+	}
+	if flowActions.lastTaskID != taskID {
+		t.Fatalf("advance task_id = %s, want %s", flowActions.lastTaskID, taskID)
+	}
+	if flowActions.lastActor.Type != "human_user" || flowActions.lastActor.ID != userID {
+		t.Fatalf("advance actor = %+v, want human_user/%s", flowActions.lastActor, userID)
+	}
+	acted, err := inboxRepo.GetByID(context.Background(), itemID)
+	if err != nil {
+		t.Fatalf("GetByID inbox item: %v", err)
+	}
+	if !acted.IsActed {
+		t.Fatal("inbox item is_acted = false, want true")
+	}
+	updatedTask, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", updatedTask.WorkStatus)
+	}
+}
+
+func TestActOnInboxItemTaskReviewRejectCallsRejectWithReasonAndMarksActed(t *testing.T) {
+	taskID := uuid.New()
+	userID := uuid.New()
+	itemID := uuid.New()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	flowNodeID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "review",
+				Title:          "Review task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+	inboxRepo := &fakeInboxRepo{
+		items: []repo.InboxItem{
+			{
+				ID:             itemID,
+				OrganizationID: orgID,
+				ItemType:       "task_review",
+				SourceTaskID:   &taskID,
+				ActionPayload:  json.RawMessage(`{"task_id":"` + taskID.String() + `"}`),
+			},
+		},
+	}
+	flowActions := &fakeFlowReviewActions{}
+	eventRepo := &fakeTaskEventRepo{}
+	eventBus := &fakeEventBus{}
+	svc := newUnitService(taskRepo)
+	svc.inbox = inboxRepo
+	svc.events = eventRepo
+	svc.eventBus = eventBus
+	svc.flowReviews = flowActions
+	svc.executions = &fakeFlowExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{ID: uuid.New(), TaskID: taskID, FlowNodeID: flowNodeID, Status: "active"},
+			},
+		},
+	}
+
+	if err := svc.ActOnInboxItem(context.Background(), itemID, userID, "reject", json.RawMessage(`{"reason":"needs more detail"}`)); err != nil {
+		t.Fatalf("ActOnInboxItem reject: %v", err)
+	}
+	if flowActions.rejectCalls != 1 {
+		t.Fatalf("reject calls = %d, want 1", flowActions.rejectCalls)
+	}
+	if flowActions.advanceCalls != 0 {
+		t.Fatalf("advance calls = %d, want 0", flowActions.advanceCalls)
+	}
+	if flowActions.lastTaskID != taskID {
+		t.Fatalf("reject task_id = %s, want %s", flowActions.lastTaskID, taskID)
+	}
+	if flowActions.lastReason != "needs more detail" {
+		t.Fatalf("reject reason = %q, want %q", flowActions.lastReason, "needs more detail")
+	}
+	if flowActions.lastActor.Type != "human_user" || flowActions.lastActor.ID != userID {
+		t.Fatalf("reject actor = %+v, want human_user/%s", flowActions.lastActor, userID)
+	}
+	acted, err := inboxRepo.GetByID(context.Background(), itemID)
+	if err != nil {
+		t.Fatalf("GetByID inbox item: %v", err)
+	}
+	if !acted.IsActed {
+		t.Fatal("inbox item is_acted = false, want true")
+	}
+	updatedTask, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", updatedTask.WorkStatus)
+	}
+
+	foundReviewRejectedEvent := false
+	for _, event := range eventRepo.events {
+		if event.EventType == "task.review_rejected" {
+			foundReviewRejectedEvent = true
+			break
+		}
+	}
+	if !foundReviewRejectedEvent {
+		t.Fatal("expected task.review_rejected event to be recorded")
+	}
+	if len(eventBus.events) == 0 {
+		t.Fatal("expected task.review_rejected domain event to be published")
+	}
+}
+
+func TestActOnInboxItemTaskReviewDismissMarksActedOnly(t *testing.T) {
+	taskID := uuid.New()
+	userID := uuid.New()
+	itemID := uuid.New()
+	orgID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      uuid.New(),
+				WorkStatus:     "review",
+				Title:          "Review task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+	inboxRepo := &fakeInboxRepo{
+		items: []repo.InboxItem{
+			{
+				ID:             itemID,
+				OrganizationID: orgID,
+				ItemType:       "task_review",
+				SourceTaskID:   &taskID,
+				ActionPayload:  json.RawMessage(`{"task_id":"` + taskID.String() + `"}`),
+			},
+		},
+	}
+	flowActions := &fakeFlowReviewActions{}
+	svc := newUnitService(taskRepo)
+	svc.inbox = inboxRepo
+	svc.flowReviews = flowActions
+
+	if err := svc.ActOnInboxItem(context.Background(), itemID, userID, "dismiss", nil); err != nil {
+		t.Fatalf("ActOnInboxItem dismiss: %v", err)
+	}
+	if flowActions.advanceCalls != 0 || flowActions.rejectCalls != 0 {
+		t.Fatalf("flow calls advance=%d reject=%d, want 0/0", flowActions.advanceCalls, flowActions.rejectCalls)
+	}
+	acted, err := inboxRepo.GetByID(context.Background(), itemID)
+	if err != nil {
+		t.Fatalf("GetByID inbox item: %v", err)
+	}
+	if !acted.IsActed {
+		t.Fatal("inbox item is_acted = false, want true")
+	}
+}
+
 func newUnitService(taskRepo *fakeTaskRepo) *service {
 	return &service{
 		tasks:       taskRepo,
@@ -804,6 +1020,29 @@ func (f *fakeFlowExecutionRepo) ListByTask(_ context.Context, taskID uuid.UUID) 
 
 type fakeFlowNodeRepo struct {
 	nodes map[uuid.UUID]repo.FlowNode
+}
+
+type fakeFlowReviewActions struct {
+	advanceCalls int
+	rejectCalls  int
+	lastTaskID   uuid.UUID
+	lastActor    Actor
+	lastReason   string
+}
+
+func (f *fakeFlowReviewActions) AdvanceTaskReview(_ context.Context, taskID uuid.UUID, actor Actor) error {
+	f.advanceCalls++
+	f.lastTaskID = taskID
+	f.lastActor = actor
+	return nil
+}
+
+func (f *fakeFlowReviewActions) RejectTaskReview(_ context.Context, taskID uuid.UUID, actor Actor, reason string) error {
+	f.rejectCalls++
+	f.lastTaskID = taskID
+	f.lastActor = actor
+	f.lastReason = strings.TrimSpace(reason)
+	return nil
 }
 
 func (f *fakeFlowNodeRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNode, error) {

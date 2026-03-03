@@ -42,6 +42,7 @@ var (
 	ErrActorTypeInvalidForAction = errors.New("actor_type is invalid for action")
 	ErrBrowserHandoffUnavailable = errors.New("browser handoff service unavailable")
 	ErrActiveFlowRequired        = errors.New("task requires an active flow to be in_progress")
+	ErrFlowServiceUnavailable    = errors.New("flow service unavailable")
 )
 
 var validStatusTransitions = map[string]map[string]struct{}{
@@ -227,6 +228,11 @@ type browserHandoffCompleter interface {
 	CompleteHandoffByInboxItem(ctx context.Context, inboxItemID, actedByUserID uuid.UUID, actionDecision string) error
 }
 
+type FlowReviewActions interface {
+	AdvanceTaskReview(ctx context.Context, taskID uuid.UUID, actor Actor) error
+	RejectTaskReview(ctx context.Context, taskID uuid.UUID, actor Actor, reason string) error
+}
+
 type Options struct {
 	Pool *pgxpool.Pool
 
@@ -246,6 +252,7 @@ type Options struct {
 	Clock    clock.Clock
 
 	BrowserHandoffs browserHandoffCompleter
+	FlowReviews     FlowReviewActions
 }
 
 type service struct {
@@ -267,6 +274,7 @@ type service struct {
 	clock    clock.Clock
 
 	browserHandoffs browserHandoffCompleter
+	flowReviews     FlowReviewActions
 }
 
 func NewService(opts Options) (TaskService, error) {
@@ -283,6 +291,7 @@ func NewService(opts Options) (TaskService, error) {
 		clock:    opts.Clock,
 
 		browserHandoffs: opts.BrowserHandoffs,
+		flowReviews:     opts.FlowReviews,
 	}
 	if svc.clock == nil {
 		svc.clock = clock.Real{}
@@ -339,6 +348,12 @@ func NewService(opts Options) (TaskService, error) {
 	}
 
 	return svc, nil
+}
+
+func AttachFlowReviewActions(taskService any, actions FlowReviewActions) {
+	if impl, ok := taskService.(*service); ok {
+		impl.flowReviews = actions
+	}
 }
 
 func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*ProjectTask, error) {
@@ -838,8 +853,41 @@ func (s *service) ActOnInboxItem(ctx context.Context, itemID, userID uuid.UUID, 
 			return ErrUnknownInboxAction
 		}
 	case "task_review":
+		taskID, err := extractTaskReviewTaskID(item)
+		if err != nil {
+			return err
+		}
+		actor := Actor{Type: "human_user", ID: userID}
 		switch normalizedAction {
-		case "approve", "reject", "dismiss", "ack", "acknowledge":
+		case "approve":
+			if s.flowReviews == nil {
+				return ErrFlowServiceUnavailable
+			}
+			if err := s.flowReviews.AdvanceTaskReview(ctx, taskID, actor); err != nil {
+				return err
+			}
+			if err := s.resumeTaskFromReview(ctx, taskID, actor); err != nil {
+				return err
+			}
+			_, err := s.inbox.MarkActed(ctx, item.ID, userID)
+			return err
+		case "reject":
+			if s.flowReviews == nil {
+				return ErrFlowServiceUnavailable
+			}
+			reason := extractReason(payload)
+			if err := s.flowReviews.RejectTaskReview(ctx, taskID, actor, reason); err != nil {
+				return err
+			}
+			if err := s.recordTaskReviewRejection(ctx, taskID, userID, reason); err != nil {
+				return err
+			}
+			if err := s.resumeTaskFromReview(ctx, taskID, actor); err != nil {
+				return err
+			}
+			_, err := s.inbox.MarkActed(ctx, item.ID, userID)
+			return err
+		case "dismiss", "ack", "acknowledge":
 			_, err := s.inbox.MarkActed(ctx, item.ID, userID)
 			return err
 		default:
@@ -856,6 +904,51 @@ func (s *service) ActOnInboxItem(ctx context.Context, itemID, userID uuid.UUID, 
 	default:
 		return ErrUnknownInboxItemType
 	}
+}
+
+func extractTaskReviewTaskID(item repo.InboxItem) (uuid.UUID, error) {
+	if len(item.ActionPayload) > 0 {
+		var payload map[string]any
+		if err := json.Unmarshal(item.ActionPayload, &payload); err == nil {
+			if rawTaskID, ok := payload["task_id"]; ok {
+				if parsedTaskID, err := uuid.Parse(strings.TrimSpace(fmt.Sprintf("%v", rawTaskID))); err == nil {
+					return parsedTaskID, nil
+				}
+			}
+		}
+	}
+	if item.SourceTaskID != nil && *item.SourceTaskID != uuid.Nil {
+		return *item.SourceTaskID, nil
+	}
+	return uuid.Nil, ErrSourceTaskRequired
+}
+
+func (s *service) recordTaskReviewRejection(ctx context.Context, taskID, userID uuid.UUID, reason string) error {
+	taskRecord, err := s.tasks.GetByID(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"task_id": taskID,
+		"reason":  strings.TrimSpace(reason),
+	}
+	if err := s.recordTaskEvent(ctx, taskRecord, "task.review_rejected", "human_user", &userID, payload); err != nil {
+		return err
+	}
+	return s.publishTaskDomainEvent(ctx, taskRecord.OrganizationID, "task.review_rejected", "human_user", &userID, payload)
+}
+
+func (s *service) resumeTaskFromReview(ctx context.Context, taskID uuid.UUID, actor Actor) error {
+	taskRecord, err := s.tasks.GetByID(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		if _, err := s.transitionStatus(ctx, taskID, "in_progress", actor, nil, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *service) EnqueueForMerge(ctx context.Context, taskID uuid.UUID) (*MergeQueueEntry, error) {

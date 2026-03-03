@@ -1700,7 +1700,6 @@ func (h taskHandlers) actOnInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var inboxItem *repo.InboxItem
 	if h.inbox != nil {
 		item, err := h.inbox.GetByID(r.Context(), itemID)
 		if err != nil {
@@ -1715,7 +1714,6 @@ func (h taskHandlers) actOnInbox(w http.ResponseWriter, r *http.Request) {
 			responder.Error(w, http.StatusForbidden, api.ErrCodeForbidden, "forbidden")
 			return
 		}
-		inboxItem = &item
 	}
 
 	var req actInboxRequest
@@ -1732,40 +1730,6 @@ func (h taskHandlers) actOnInbox(w http.ResponseWriter, r *http.Request) {
 	if err := h.taskService.ActOnInboxItem(r.Context(), itemID, principal.UserID, action, req.Payload); err != nil {
 		h.respondTaskError(responder, w, err)
 		return
-	}
-
-	// Task review approvals/resolutions should advance or reject the current review node.
-	if inboxItem != nil && strings.EqualFold(strings.TrimSpace(inboxItem.ItemType), "task_review") && inboxItem.SourceTaskID != nil && h.flowService != nil {
-		taskID := *inboxItem.SourceTaskID
-		actor := tasksvc.Actor{Type: "human_user", ID: principal.UserID}
-		switch action {
-		case "approve":
-			if _, err := h.flowService.AdvanceFlow(r.Context(), taskID, flowsvc.Actor{Type: "human_user", ID: principal.UserID}); err != nil {
-				h.respondTaskError(responder, w, err)
-				return
-			}
-			if h.tasks != nil {
-				if refreshed, getErr := h.tasks.GetByID(r.Context(), taskID); getErr == nil && refreshed.WorkStatus == "review" {
-					if _, statusErr := h.taskService.TransitionStatus(r.Context(), taskID, "in_progress", actor); statusErr != nil {
-						h.respondTaskError(responder, w, statusErr)
-						return
-					}
-				}
-			}
-		case "reject":
-			if _, err := h.flowService.RejectFlowNode(r.Context(), taskID, flowsvc.Actor{Type: "human_user", ID: principal.UserID}); err != nil {
-				h.respondTaskError(responder, w, err)
-				return
-			}
-			if h.tasks != nil {
-				if refreshed, getErr := h.tasks.GetByID(r.Context(), taskID); getErr == nil && refreshed.WorkStatus == "review" {
-					if _, statusErr := h.taskService.TransitionStatus(r.Context(), taskID, "in_progress", actor); statusErr != nil {
-						h.respondTaskError(responder, w, statusErr)
-						return
-					}
-				}
-			}
-		}
 	}
 
 	responder.JSON(w, http.StatusOK, map[string]any{

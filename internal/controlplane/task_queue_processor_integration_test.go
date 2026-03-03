@@ -683,6 +683,141 @@ func TestTaskQueueProcessorIntegrationFlowAdvancedTransitionsKickOffNextAgent(t 
 	})
 }
 
+func TestTaskQueueProcessorIntegrationTaskReviewApproveAdvancesAndKickOffsNextAgent(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	worker := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "worker", "Review Worker", "worker")
+	reviewer := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "reviewer", "Review Reviewer", "reviewer")
+	template, nodeWorkA, nodeReview, nodeWorkB := seedTaskQueueHumanReviewFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID, worker.ID, reviewer.ID)
+
+	reviewActor, err := repo.NewHumanUserRepo(fx.pool).Create(ctx, repo.HumanUser{
+		OrganizationID: fx.org.ID,
+		Email:          "review-actor+" + uuid.NewString()[:8] + "@example.com",
+		DisplayName:    "Review Actor",
+		Role:           "admin",
+		IsActive:       true,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create review actor: %v", err)
+	}
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Task review approval flow",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &worker.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	executionRepo := repo.NewFlowNodeExecutionRepo(fx.pool)
+	runRepo := NewRunRepository(fx.pool)
+	messageRepo := repo.NewChatMessageRepo(fx.pool)
+	inboxRepo := repo.NewInboxItemRepo(fx.pool)
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		return taskRecord.CurrentFlowNodeID != nil && *taskRecord.CurrentFlowNodeID == nodeWorkA.ID, nil
+	})
+
+	if _, err := fx.flow.AdvanceFlow(ctx, created.ID, flowsvc.Actor{Type: "agent", ID: worker.ID}); err != nil {
+		t.Fatalf("AdvanceFlow work->review: %v", err)
+	}
+
+	var reviewInbox repo.InboxItem
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeReview.ID {
+			return false, nil
+		}
+		if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+			return false, nil
+		}
+		items, err := inboxRepo.ListForUser(ctx, fx.org.ID, reviewActor.ID, repo.InboxListOptions{
+			ItemType:     "task_review",
+			IncludeActed: true,
+			Limit:        50,
+		})
+		if err != nil {
+			return false, err
+		}
+		for _, item := range items {
+			if item.SourceTaskID != nil && *item.SourceTaskID == created.ID {
+				reviewInbox = item
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+
+	if err := fx.tasks.ActOnInboxItem(ctx, reviewInbox.ID, reviewActor.ID, "approve", nil); err != nil {
+		t.Fatalf("ActOnInboxItem approve: %v", err)
+	}
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeWorkB.ID {
+			return false, nil
+		}
+		execution, err := executionRepo.GetActive(ctx, created.ID, nodeWorkB.ID)
+		if err != nil {
+			if err == repo.ErrNotFound {
+				return false, nil
+			}
+			return false, err
+		}
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			FlowNodeID:     &nodeWorkB.ID,
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		if !hasRunForPrincipal(runs, worker.ID) {
+			return false, nil
+		}
+		if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+			return false, nil
+		}
+		messages, err := messageRepo.ListBySession(ctx, *execution.SessionID)
+		if err != nil {
+			return false, err
+		}
+		return hasFlowKickoffMessage(messages, "flow.advanced", execution.ID), nil
+	})
+
+	updatedInbox, err := inboxRepo.GetByID(ctx, reviewInbox.ID)
+	if err != nil {
+		t.Fatalf("GetByID review inbox: %v", err)
+	}
+	if !updatedInbox.IsActed {
+		t.Fatal("review inbox is_acted = false, want true")
+	}
+}
+
 func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)
@@ -1090,6 +1225,87 @@ func seedTaskQueueTransitionFlowTemplate(
 	template.StartNodeID = &workA.ID
 	if _, err := templateRepo.Update(ctx, template); err != nil {
 		t.Fatalf("set template start node: %v", err)
+	}
+	return template, workA, review, workB
+}
+
+func seedTaskQueueHumanReviewFlowTemplate(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	orgID, projectID uuid.UUID,
+	workerAgentID, reviewerAgentID uuid.UUID,
+) (repo.FlowTemplate, repo.FlowNode, repo.FlowNode, repo.FlowNode) {
+	t.Helper()
+
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	actorAgent := "agent"
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           "flow-human-review-" + uuid.NewString()[:8],
+		DisplayName:    "Flow Human Review",
+		Description:    "human review template",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create human review template: %v", err)
+	}
+	workA, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work A",
+		NodeType:       "work",
+		Position:       1,
+		ActorType:      &actorAgent,
+		ActorID:        &workerAgentID,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create work A node: %v", err)
+	}
+	review, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID:      template.ID,
+		DisplayName:         "Review",
+		NodeType:            "review",
+		Position:            2,
+		ActorType:           &actorAgent,
+		ActorID:             &reviewerAgentID,
+		RequiresHumanReview: true,
+		MaxVisits:           5,
+	})
+	if err != nil {
+		t.Fatalf("create human review node: %v", err)
+	}
+	workB, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work B",
+		NodeType:       "work",
+		Position:       3,
+		ActorType:      &actorAgent,
+		ActorID:        &workerAgentID,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create work B node: %v", err)
+	}
+
+	workA.NextNodeID = &review.ID
+	review.NextNodeID = &workB.ID
+	if _, err := nodeRepo.Update(ctx, workA); err != nil {
+		t.Fatalf("update work A edge: %v", err)
+	}
+	if _, err := nodeRepo.Update(ctx, review); err != nil {
+		t.Fatalf("update review edge: %v", err)
+	}
+
+	template.StartNodeID = &workA.ID
+	if _, err := templateRepo.Update(ctx, template); err != nil {
+		t.Fatalf("set human review template start node: %v", err)
 	}
 	return template, workA, review, workB
 }
