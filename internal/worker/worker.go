@@ -194,6 +194,8 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		TaskService:    tasks,
 		Flow:           flowService,
 		FlowExecutions: repo.NewFlowNodeExecutionRepo(pool.Raw()),
+		FlowNodes:      repo.NewFlowNodeRepo(pool.Raw()),
+		Assignments:    repo.NewAgentProjectAssignmentRepo(pool.Raw()),
 		Runs:           runService,
 		Chats:          chatService,
 		Sessions:       repo.NewChatSessionRepo(pool.Raw()),
@@ -207,6 +209,8 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	defer bus.Unsubscribe(taskCompletedSub)
 	runCancellationSub := queueProcessor.SubscribeRunCancellationRequested(nil)
 	defer bus.Unsubscribe(runCancellationSub)
+	flowAdvancedSub := queueProcessor.SubscribeFlowAdvanced(nil)
+	defer bus.Unsubscribe(flowAdvancedSub)
 	toolResolver, err := tools.NewToolResolver(tools.ToolResolverOptions{
 		Pool:   pool.Raw(),
 		Events: bus,
