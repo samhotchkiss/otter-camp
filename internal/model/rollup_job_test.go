@@ -54,9 +54,9 @@ func TestDailyRollupJobRunUpsertsAgentAndProjectRowsIdempotently(t *testing.T) {
 	if len(writer.store) != 3 {
 		t.Fatalf("rollup row count = %d, want 3", len(writer.store))
 	}
-	assertRollupTotals(t, writer, orgID, "agent", &agentA, 100, 50, 525000000)
-	assertRollupTotals(t, writer, orgID, "agent", &agentB, 40, 20, 11200000)
-	assertRollupTotals(t, writer, orgID, "project", &projectID, 140, 70, 536200000)
+	assertRollupTotals(t, writer, orgID, "agent", &agentA, 100, 50, 525000)
+	assertRollupTotals(t, writer, orgID, "agent", &agentB, 40, 20, 11200)
+	assertRollupTotals(t, writer, orgID, "project", &projectID, 140, 70, 536200)
 
 	if len(events.events) == 0 {
 		t.Fatal("expected model.usage_rollup.completed domain event")
@@ -171,8 +171,35 @@ func TestResolveRollupModelCostsUsesModelFallback(t *testing.T) {
 	t.Parallel()
 
 	input, output := resolveRollupModelCosts("claude-haiku-3-5", json.RawMessage(`{}`))
-	if input != 80 || output != 400 {
-		t.Fatalf("fallback costs = (%v,%v), want (80,400)", input, output)
+	if input != 0.08 || output != 0.4 {
+		t.Fatalf("fallback costs = (%v,%v), want (0.08,0.4)", input, output)
+	}
+}
+
+func TestDefaultModelCostsPer1KKnownModels(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		modelName  string
+		inputCost  float64
+		outputCost float64
+	}{
+		{modelName: "claude-opus-4-6", inputCost: 1.5, outputCost: 7.5},
+		{modelName: "claude-sonnet-4-5", inputCost: 0.3, outputCost: 1.5},
+		{modelName: "claude-haiku-4-5", inputCost: 0.08, outputCost: 0.4},
+		{modelName: "gpt-4o", inputCost: 0.5, outputCost: 1.5},
+		{modelName: "gpt-4.1-mini", inputCost: 0.2, outputCost: 0.8},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.modelName, func(t *testing.T) {
+			t.Parallel()
+			input, output := defaultModelCostsPer1K(tc.modelName)
+			if input != tc.inputCost || output != tc.outputCost {
+				t.Fatalf("defaultModelCostsPer1K(%q) = (%v,%v), want (%v,%v)", tc.modelName, input, output, tc.inputCost, tc.outputCost)
+			}
+		})
 	}
 }
 

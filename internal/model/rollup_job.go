@@ -271,15 +271,15 @@ func defaultModelCostsPer1K(modelName string) (float64, float64) {
 	normalized := strings.ToLower(strings.TrimSpace(modelName))
 	switch {
 	case strings.Contains(normalized, "claude-opus"):
-		return 1500, 7500
+		return 1.5, 7.5
 	case strings.Contains(normalized, "claude-sonnet"):
-		return 300, 1500
+		return 0.3, 1.5
 	case strings.Contains(normalized, "claude-haiku"):
-		return 80, 400
+		return 0.08, 0.4
 	case strings.Contains(normalized, "gpt-4o"):
-		return 500, 1500
+		return 0.5, 1.5
 	case strings.Contains(normalized, "gpt-4.1"):
-		return 200, 800
+		return 0.2, 0.8
 	default:
 		return 0, 0
 	}
