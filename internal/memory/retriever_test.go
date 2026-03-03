@@ -57,8 +57,8 @@ func TestBuildScopeFilterSQLAgentPrivateRequiresScopeAndAgentID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildScopeFilterSQL: %v", err)
 	}
-	if !strings.Contains(where, "scope = 'agent_private'") {
-		t.Fatalf("where clause missing agent_private scope guard: %s", where)
+	if !strings.Contains(where, "scope = 'agent'") {
+		t.Fatalf("where clause missing agent scope guard: %s", where)
 	}
 	if !strings.Contains(where, "agent_id = $2") {
 		t.Fatalf("where clause missing agent_id binding: %s", where)

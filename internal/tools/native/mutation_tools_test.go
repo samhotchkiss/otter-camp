@@ -214,6 +214,60 @@ func TestMemoryRecordDelegatesToRecorder(t *testing.T) {
 	}
 }
 
+type stubMemoryWriter struct {
+	called  bool
+	last    repo.Memory
+	created repo.Memory
+}
+
+func (s *stubMemoryWriter) Create(_ context.Context, memory repo.Memory) (repo.Memory, error) {
+	s.called = true
+	s.last = memory
+	created := memory
+	if s.created.ID == uuid.Nil {
+		created.ID = uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+	} else {
+		created.ID = s.created.ID
+	}
+	s.created = created
+	return created, nil
+}
+
+func TestMemoryRecordFallbackPersistsActiveMemoryWithEmbedding(t *testing.T) {
+	writer := &stubMemoryWriter{}
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+	})
+	executor.memories = writer
+
+	out, err := executor.Execute(testExecCtx(), "memory.record", map[string]any{
+		"content": "remember deployment runbook",
+		"scope":   "agent",
+	})
+	if err != nil {
+		t.Fatalf("memory.record: %v", err)
+	}
+	if !writer.called {
+		t.Fatal("expected memory writer to be called")
+	}
+	if writer.last.Status != "active" {
+		t.Fatalf("status = %q, want active", writer.last.Status)
+	}
+	if len(writer.last.Embedding) != memoryRecordEmbeddingDims {
+		t.Fatalf("embedding dims = %d, want %d", len(writer.last.Embedding), memoryRecordEmbeddingDims)
+	}
+	if out["status"] != "stored" {
+		t.Fatalf("status = %v, want stored", out["status"])
+	}
+	memoryID, ok := out["memory_id"].(uuid.UUID)
+	if !ok {
+		t.Fatalf("memory_id type = %T, want uuid.UUID", out["memory_id"])
+	}
+	if memoryID != writer.created.ID {
+		t.Fatalf("memory_id = %s, want %s", memoryID, writer.created.ID)
+	}
+}
+
 type fakeInboxRepo struct {
 	created []repo.InboxItem
 }

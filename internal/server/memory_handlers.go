@@ -75,6 +75,7 @@ type memoryImportRepository interface {
 type memoryCompactionRunRepository interface {
 	Create(ctx context.Context, item repo.MemoryCompactionRun) (repo.MemoryCompactionRun, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, errorMessage *string, startedAt, completedAt *time.Time) (repo.MemoryCompactionRun, error)
+	FailStalePending(ctx context.Context, olderThan time.Time, reason string) (int64, error)
 }
 
 type memoryProjectTaskRepository interface {
@@ -1206,6 +1207,12 @@ func (h memoryHandlers) listMemoryCompactionRuns(w http.ResponseWriter, r *http.
 		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "memory compaction repository unavailable")
 		return
 	}
+	if h.runs != nil {
+		if _, err := h.runs.FailStalePending(r.Context(), time.Now().UTC().Add(-time.Hour), repo.MemoryCompactionPendingTimeoutReason); err != nil {
+			responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "request failed")
+			return
+		}
+	}
 
 	query := r.URL.Query()
 	status := strings.ToLower(strings.TrimSpace(query.Get("status")))
@@ -1264,6 +1271,10 @@ func (h memoryHandlers) createMemoryCompactionRun(w http.ResponseWriter, r *http
 	}
 	if h.runs == nil || h.enqueuer == nil {
 		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "memory compaction unavailable")
+		return
+	}
+	if _, err := h.runs.FailStalePending(r.Context(), time.Now().UTC().Add(-time.Hour), repo.MemoryCompactionPendingTimeoutReason); err != nil {
+		responder.Error(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to prepare compaction runs")
 		return
 	}
 

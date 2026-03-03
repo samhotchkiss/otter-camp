@@ -23,7 +23,12 @@ import (
 
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
 
-const taskDoneTerminalNodeMessage = "task can only be marked done when its flow reaches a terminal node"
+const (
+	taskDoneTerminalNodeMessage   = "task can only be marked done when its flow reaches a terminal node"
+	memoryRecordEmbeddingDims     = 1536
+	memoryRecordDefaultConfidence = 0.85
+	memoryRecordDefaultUtility    = 0.7
+)
 
 type executionActor struct {
 	createdByType string
@@ -148,6 +153,17 @@ func writeFileAtomically(target string, payload []byte) error {
 func hashSHA256Hex(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
+}
+
+func deterministicMemoryEmbedding(value string) []float32 {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(value)))
+	vector := make([]float32, memoryRecordEmbeddingDims)
+	vector[0] = float32(sum[0]) / 255.0
+	vector[1] = 1
+	for i := 0; i < len(sum) && i+2 < len(vector); i++ {
+		vector[i+2] = float32(sum[i]) / 255.0
+	}
+	return vector
 }
 
 func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[string]any) (map[string]any, error) {
@@ -461,6 +477,12 @@ func (e *NativeToolExecutor) handleMemoryRecord(ctx context.Context, input map[s
 	if !ok || scopeName == "" {
 		scopeName = "org"
 	}
+	scopeName = strings.ToLower(strings.TrimSpace(scopeName))
+	switch scopeName {
+	case "org", "project", "task", "agent":
+	default:
+		scopeName = "org"
+	}
 	sensitivity, ok := readString(input, "sensitivity")
 	if !ok || sensitivity == "" {
 		sensitivity = "normal"
@@ -493,14 +515,25 @@ func (e *NativeToolExecutor) handleMemoryRecord(ctx context.Context, input map[s
 		Scope:          scopeName,
 		Content:        content,
 		ContentHash:    hashSHA256Hex(content),
-		Status:         "candidate",
+		Embedding:      deterministicMemoryEmbedding(content),
+		Confidence:     memoryRecordDefaultConfidence,
+		UtilityScore:   memoryRecordDefaultUtility,
+		Status:         "active",
 		Sensitivity:    sensitivity,
+		TrustTier:      0.8,
 	}
 	if scopeName == "project" && scope.projectID != nil {
 		record.ProjectID = scope.projectID
 	}
+	if scopeName == "task" && scope.taskID != nil {
+		record.ProjectTaskID = scope.taskID
+		if scope.projectID != nil {
+			record.ProjectID = scope.projectID
+		}
+	}
 	if scopeName == "agent" {
 		record.ProjectID = nil
+		record.ProjectTaskID = nil
 	}
 	created, err := e.memories.Create(ctx, record)
 	if err != nil {

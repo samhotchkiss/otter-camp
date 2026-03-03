@@ -22,11 +22,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
+	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	memoryimporter "github.com/samhotchkiss/otter-camp/internal/memory/importer"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/storage"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
+	nativetools "github.com/samhotchkiss/otter-camp/internal/tools/native"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -55,6 +57,99 @@ func TestMemoryQueryPassiveIncludeRestrictedReturns422(t *testing.T) {
 
 	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d body=%s", resp.StatusCode, http.StatusUnprocessableEntity, string(resp.Body))
+	}
+}
+
+func TestMemoryRecordToolExecutionAppearsInListAndQuery(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+	fixture := newMemoryAPITestServer(t)
+	defer fixture.Close()
+
+	ctx := context.Background()
+	agent, err := repo.NewAgentRepo(fixture.Pool).Create(ctx, repo.Agent{
+		OrganizationID:       fixture.Org.ID,
+		DisplayName:          "Memory Agent",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "",
+		OperatorInstructions: "",
+		AgentType:            "worker",
+		PrivateMemory:        false,
+		MemoryReadScopes:     []string{"org", "project", "agent"},
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	executor := nativetools.NewExecutor(nativetools.ExecutorOptions{
+		Pool:          fixture.Pool,
+		WorkspaceRoot: t.TempDir(),
+	})
+	execCtx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: fixture.Org.ID,
+		AgentID:        &agent.ID,
+	})
+	recorded, err := executor.Execute(execCtx, "memory.record", map[string]any{
+		"content": "release retrospective highlighted rollback checklist",
+		"scope":   "org",
+	})
+	if err != nil {
+		t.Fatalf("memory.record: %v", err)
+	}
+	if got := recorded["status"]; got != "stored" {
+		t.Fatalf("record status = %v, want stored", got)
+	}
+	memoryID, ok := recorded["memory_id"].(uuid.UUID)
+	if !ok {
+		t.Fatalf("memory_id type = %T, want uuid.UUID", recorded["memory_id"])
+	}
+
+	token := loginToken(t, fixture.URL, fixture.Admin.Email, "admin-password")
+	items := mustJSON(t, http.MethodGet, fixture.URL+"/v1/memory/items?status=active", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if items.StatusCode != http.StatusOK {
+		t.Fatalf("items status = %d, want %d body=%s", items.StatusCode, http.StatusOK, string(items.Body))
+	}
+	var itemPayload struct {
+		Data []memoryItemRecord `json:"data"`
+	}
+	if err := json.Unmarshal(items.Body, &itemPayload); err != nil {
+		t.Fatalf("unmarshal items: %v", err)
+	}
+	found := false
+	for _, item := range itemPayload.Data {
+		if item.ID == memoryID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("recorded memory %s missing from /v1/memory/items body=%s", memoryID, string(items.Body))
+	}
+
+	query := mustJSON(t, http.MethodPost, fixture.URL+"/v1/memory/query", map[string]any{
+		"query":       "rollback checklist",
+		"mode":        "passive",
+		"max_results": 5,
+	}, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if query.StatusCode != http.StatusOK {
+		t.Fatalf("query status = %d, want %d body=%s", query.StatusCode, http.StatusOK, string(query.Body))
+	}
+	var queryPayload struct {
+		Data struct {
+			Memories []memoryQueryResultItem `json:"memories"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(query.Body, &queryPayload); err != nil {
+		t.Fatalf("unmarshal query: %v", err)
+	}
+	if len(queryPayload.Data.Memories) == 0 {
+		t.Fatalf("expected query to return recorded memory body=%s", string(query.Body))
 	}
 }
 
@@ -342,6 +437,63 @@ func TestMemoryConsolidateValidationAndRBAC(t *testing.T) {
 	}, map[string]string{"Authorization": "Bearer " + memberToken})
 	if forbidden.StatusCode != http.StatusForbidden {
 		t.Fatalf("forbidden status = %d, want %d body=%s", forbidden.StatusCode, http.StatusForbidden, string(forbidden.Body))
+	}
+}
+
+func TestMemoryCompactionRunsAutoFailStalePending(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+	fixture := newMemoryAPITestServer(t)
+	defer fixture.Close()
+
+	ctx := context.Background()
+	runs := repo.NewMemoryCompactionRunRepo(fixture.Pool)
+	stale, err := runs.Create(ctx, repo.MemoryCompactionRun{
+		OrganizationID: fixture.Org.ID,
+		RunType:        "task_consolidation",
+		Status:         "pending",
+		ScopeContext:   `{"task_id":"` + uuid.NewString() + `"}`,
+	})
+	if err != nil {
+		t.Fatalf("create stale run: %v", err)
+	}
+	if _, err := fixture.Pool.Exec(ctx, `
+		UPDATE memory_compaction_run
+		SET created_at = $2
+		WHERE id = $1
+	`, stale.ID, time.Now().UTC().Add(-2*time.Hour)); err != nil {
+		t.Fatalf("age stale run: %v", err)
+	}
+
+	token := loginToken(t, fixture.URL, fixture.Admin.Email, "admin-password")
+	resp := mustJSON(t, http.MethodGet, fixture.URL+"/v1/memory/compaction-runs", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	var payload struct {
+		Data []memoryCompactionRunRecord `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body, &payload); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	found := false
+	for _, item := range payload.Data {
+		if item.ID != stale.ID {
+			continue
+		}
+		found = true
+		if item.Status != "failed" {
+			t.Fatalf("stale run status = %q, want failed", item.Status)
+		}
+		if item.ErrorMessage == nil || strings.TrimSpace(*item.ErrorMessage) != repo.MemoryCompactionPendingTimeoutReason {
+			t.Fatalf("stale run error_message = %v, want %q", item.ErrorMessage, repo.MemoryCompactionPendingTimeoutReason)
+		}
+		break
+	}
+	if !found {
+		t.Fatalf("stale run %s not found in response body=%s", stale.ID, string(resp.Body))
 	}
 }
 

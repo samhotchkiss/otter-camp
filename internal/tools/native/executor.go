@@ -39,6 +39,10 @@ type memoryRecordService interface {
 	RecordExplicit(ctx context.Context, agentID uuid.UUID, content, scope, sensitivity string, tags []string) (uuid.UUID, string, error)
 }
 
+type memoryWriter interface {
+	Create(ctx context.Context, memory repo.Memory) (repo.Memory, error)
+}
+
 type chatSessionReader interface {
 	Create(ctx context.Context, session repo.ChatSession) (repo.ChatSession, error)
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ChatSession, error)
@@ -195,7 +199,7 @@ type NativeToolExecutor struct {
 	dependencies   dependencyRepository
 	assignments    projectAssigner
 	audit          *repo.AuditEventRepo
-	memories       *repo.MemoryRepo
+	memories       memoryWriter
 	secrets        secretResolver
 
 	mu         sync.Mutex

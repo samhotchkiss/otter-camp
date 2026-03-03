@@ -60,6 +60,11 @@ type RetrievalFilter struct {
 
 const CandidatePromotionHoldDuration = 24 * time.Hour
 
+const (
+	MemoryCompactionDefaultFailedMessage = "compaction run failed"
+	MemoryCompactionPendingTimeoutReason = "timed out after 1 hour pending"
+)
+
 func CandidatePromotionCutoff(now time.Time) time.Time {
 	return now.UTC().Add(-CandidatePromotionHoldDuration)
 }
@@ -879,6 +884,7 @@ func (r *MemoryCompactionRunRepo) GetByID(ctx context.Context, id uuid.UUID) (Me
 }
 
 func (r *MemoryCompactionRunRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string, errorMessage *string, startedAt, completedAt *time.Time) (MemoryCompactionRun, error) {
+	errorMessage = normalizeMemoryCompactionErrorMessage(status, errorMessage)
 	row := r.pool.QueryRow(ctx, `
 		UPDATE memory_compaction_run
 		SET status = $2,
@@ -897,6 +903,25 @@ func (r *MemoryCompactionRunRepo) UpdateStatus(ctx context.Context, id uuid.UUID
 		return MemoryCompactionRun{}, mapDBError(err)
 	}
 	return updated, nil
+}
+
+func (r *MemoryCompactionRunRepo) FailStalePending(ctx context.Context, olderThan time.Time, reason string) (int64, error) {
+	message := strings.TrimSpace(reason)
+	if message == "" {
+		message = MemoryCompactionPendingTimeoutReason
+	}
+	command, err := r.pool.Exec(ctx, `
+		UPDATE memory_compaction_run
+		SET status = 'failed',
+		    error_message = COALESCE(NULLIF(error_message, ''), $2),
+		    completed_at = COALESCE(completed_at, now())
+		WHERE status = 'pending'
+		  AND created_at < $1
+	`, olderThan.UTC(), message)
+	if err != nil {
+		return 0, mapDBError(err)
+	}
+	return command.RowsAffected(), nil
 }
 
 func (r *MemoryCompactionRunRepo) UpdateCounts(ctx context.Context, id uuid.UUID, examined, updated, archived, created int) (MemoryCompactionRun, error) {
@@ -940,6 +965,20 @@ func scanMemoryCompactionRun(row pgx.Row) (MemoryCompactionRun, error) {
 		return MemoryCompactionRun{}, err
 	}
 	return item, nil
+}
+
+func normalizeMemoryCompactionErrorMessage(status string, errorMessage *string) *string {
+	if !strings.EqualFold(strings.TrimSpace(status), "failed") {
+		return errorMessage
+	}
+	if errorMessage != nil {
+		trimmed := strings.TrimSpace(*errorMessage)
+		if trimmed != "" {
+			return &trimmed
+		}
+	}
+	message := MemoryCompactionDefaultFailedMessage
+	return &message
 }
 
 type MemoryDedupReviewed struct {
