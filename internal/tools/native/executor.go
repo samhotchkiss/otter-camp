@@ -477,6 +477,7 @@ func (e *NativeToolExecutor) workspaceForContext(ctx context.Context) (SessionWo
 	if err != nil {
 		return SessionWorkDir{}, workspaceScope{}, err
 	}
+
 	e.workspaces[cacheKey] = wd
 	return wd, scope, nil
 }

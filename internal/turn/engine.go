@@ -28,7 +28,7 @@ import (
 const (
 	AgentTurnJobType            = "agent_turn"
 	defaultAgentTurnJobPriority = 70
-	defaultMaxToolCalls         = 25
+	defaultMaxToolCalls         = 75
 	defaultSyncMaxDuration      = 5 * time.Minute
 	defaultAsyncMaxDuration     = 30 * time.Minute
 	defaultListeningEvalDelay   = 500 * time.Millisecond

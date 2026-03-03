@@ -437,11 +437,28 @@ ottercamp serve
 | `LOG_FORMAT` | `json` | Log format: `json` or `text`. `text` is human-readable for local dev. |
 | `METRICS_ENABLED` | `false` | Enable Prometheus metrics endpoint at `/metrics`. |
 
+#### Data Directory
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OTTERCAMP_DATA_DIR` | `~/otter-data` | Root directory for all OtterCamp workspace data. All agent work, project files, and artifacts are stored here. Directory names use human-readable slugs, never UUIDs. |
+
+Workspace directory structure:
+```
+~/otter-data/
+  workspaces/
+    {org-slug}/
+      general/                  # org-level workspace
+      {project-slug}/           # project workspace (shared by all tasks in the project)
+```
+
+**Important:** UUIDs must never appear in user-visible filesystem paths. All directories use slugs.
+
 #### Git
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GIT_REPOS_PATH` | `~/.ottercamp/repos` | Local path for project git repositories. |
+| `GIT_REPOS_PATH` | `~/otter-data/repos` | Local path for project git repositories. |
 
 #### Advanced
 

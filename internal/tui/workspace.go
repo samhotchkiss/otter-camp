@@ -695,17 +695,32 @@ func (w *workspaceState) openTasksForProject() []SidebarTaskItem {
 	return result
 }
 
-func (w *workspaceState) moveProjectTaskCursor(delta int) {
+// navigableTasksForProject returns all tasks the cursor can reach:
+// open tasks first, then done tasks (when showDoneTasks is true or
+// when all open tasks are complete — matching the auto-show logic in
+// renderProjectView).
+func (w *workspaceState) navigableTasksForProject() []SidebarTaskItem {
 	if w.selectedProject == nil {
-		return
+		return nil
 	}
-	openCount := 0
+	var result []SidebarTaskItem
 	for _, t := range w.selectedProject.Tasks {
 		if t.WorkStatus != "done" && t.WorkStatus != "approved" && t.WorkStatus != "cancelled" {
-			openCount++
+			result = append(result, t)
 		}
 	}
-	if openCount == 0 {
+	// EX-491: auto-show done tasks when all open tasks are complete,
+	// matching the autoShowDone logic in renderProjectView.
+	autoShowDone := len(result) == 0 && w.selectedProject.DoneCount > 0
+	if w.showDoneTasks || autoShowDone {
+		result = append(result, w.selectedProject.DoneTasks...)
+	}
+	return result
+}
+
+func (w *workspaceState) moveProjectTaskCursor(delta int) {
+	nav := w.navigableTasksForProject()
+	if len(nav) == 0 {
 		w.projectTaskCursor = 0
 		return
 	}
@@ -713,8 +728,8 @@ func (w *workspaceState) moveProjectTaskCursor(delta int) {
 	if w.projectTaskCursor < 0 {
 		w.projectTaskCursor = 0
 	}
-	if w.projectTaskCursor >= openCount {
-		w.projectTaskCursor = openCount - 1
+	if w.projectTaskCursor >= len(nav) {
+		w.projectTaskCursor = len(nav) - 1
 	}
 }
 
@@ -1055,6 +1070,44 @@ func (w *workspaceState) rebuildSidebar(orgSessionID string, chats []SidebarChat
 
 	w.nodes = newNodes
 	w.topLevel = newTopLevel
+}
+
+// existingProjects extracts the current project items from the sidebar nodes.
+// EX-494: used to preserve projects when a sidebar reload fails (e.g. rate-limiting).
+func (w *workspaceState) existingProjects() []SidebarProjectItem {
+	var out []SidebarProjectItem
+	for _, id := range w.topLevel {
+		if node := w.nodes[id]; node != nil && node.Kind == sidebarKindProject {
+			out = append(out, SidebarProjectItem{
+				ID:          node.ProjectID,
+				DisplayName: node.Label,
+			})
+		}
+	}
+	return out
+}
+
+// existingChats extracts the current chat session items from the sidebar nodes.
+// EX-494: used to preserve chats when a sidebar reload fails (e.g. rate-limiting).
+func (w *workspaceState) existingChats() []SidebarChatItem {
+	var out []SidebarChatItem
+	for _, id := range w.topLevel {
+		if node := w.nodes[id]; node != nil && node.Kind == sidebarKindSession && id != generalSidebarNodeID {
+			scopeID := node.TaskID
+			if node.SessionScope == "project" {
+				scopeID = node.ProjectID
+			}
+			out = append(out, SidebarChatItem{
+				SessionID:   node.SessionID,
+				DisplayName: node.Label,
+				ScopeType:   node.SessionScope,
+				ScopeID:     scopeID,
+				WorkStatus:  node.WorkStatus,
+				UpdatedAt:   node.UpdatedAt,
+			})
+		}
+	}
+	return out
 }
 
 // setProjectTasks replaces the task children for the given project ID.

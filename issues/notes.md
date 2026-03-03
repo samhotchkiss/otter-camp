@@ -2,6 +2,28 @@
 
 Use this file to track blockers, follow-ups, and handoff notes.
 
+## [2026-03-03] Issue 194 — APPROVED and COMPLETED
+
+**Task:** 194-task-requires-flow-template
+**Reviewed by:** Claude Opus 4 (reviewer agent)
+**PR:** #1573 (`task-194-task-requires-flow-template`) merged into v2 at 2026-03-03T19:03:01Z (commit f9c4e126)
+**Result:** ACCEPTED
+
+All 4 acceptance criteria met. Service-layer + native tool validation both guard draft→queued without flow template. Error mapped to 422. 3 unit tests (draft→queued reject, draft→queued accept, draft→cancelled accept) + 2 native tool tests + 1 integration test (HTTP 422). 6 test files updated with flow template fixtures. No regressions.
+
+---
+
+## [2026-03-03] Issue 193 — APPROVED and COMPLETED
+
+**Task:** 193-workspace-data-directory
+**Reviewed by:** Claude Opus 4 (reviewer agent)
+**PR:** #1572 (`task-193-workspace-data-directory`) merged into v2 at 2026-03-03T19:03:05Z (commit 245f8e01)
+**Result:** ACCEPTED
+
+All 5 acceptance criteria met. `OTTERCAMP_DATA_DIR` env var with `~/otter-data/` default, slug-based workspace paths from DB, task scope shares project workspace. 5 unit tests + 2 integration tests. Initially blocked by transient GitHub 502 errors; merge succeeded via REST API retry.
+
+---
+
 ## [2026-03-02] Issue 191 — CHANGES REQUIRED, returned to 01-ready
 
 **Task:** 191-task-flow-validation
@@ -10099,3 +10121,49 @@ Enforces active flow requirement for `in_progress` task transitions. Previous re
 ### P0 Fix Verified
 - Migration renumbered from 0096 → 0097 (0096 is `project_environment_repo_config.sql` from task 190) ✓
 - No migration number conflicts on v2 ✓
+
+## [2026-03-03] Task 193 — Workspace data directory slug paths
+
+**Task file:** `193-workspace-data-directory.md`
+
+### Fixes applied
+- Added configurable native tools data root resolution with `OTTERCAMP_DATA_DIR` support and default `~/otter-data/` expansion.
+- Wired worker startup to pass `OTTERCAMP_DATA_DIR` into `nativetools.NewExecutor`.
+- Updated native workspace resolution to use DB-backed slugs instead of UUID paths:
+  - Org scope: `{dataDir}/workspaces/{orgSlug}/general`
+  - Project scope: `{dataDir}/workspaces/{orgSlug}/{projectSlug}`
+  - Task scope: same project workspace path (no task UUID segment)
+- Updated workspace cache keying to slug-based keys and ensured project/task contexts share the same cached workspace.
+- Added unit tests for default data dir behavior, env override behavior, and slug-based workspace path resolution for org/project/task scopes.
+- Added integration tests validating file write/read use slug-based workspace directories.
+
+### Tests run
+- `go test ./internal/tools/native ./internal/worker`
+- `go test ./internal/tools/native -tags integration -run '^TestIntegrationFileWriteUsesSlugWorkspacePath$'`
+- `go test ./internal/tools/native -tags integration -run '^TestIntegrationFileReadUsesSlugWorkspacePath$'`
+- `go test ./internal/tools/native -tags integration` *(fails in existing suite due intermittent `internal/testdb` drop-database timeout during cleanup; targeted required integration tests above passed)*
+
+## [2026-03-03] Task 194 — Require flow template before queueing task
+
+**Task file:** `194-task-requires-flow-template.md`
+
+### Fixes applied
+- Added service-layer guard in `TransitionStatus` to reject `draft -> queued` when `flow_template_id` is NULL.
+- Added new task service error constant with exact required message: `task requires a flow template before it can be queued`.
+- Added API error mapping so the new service error returns `422` validation responses.
+- Added native `task.update` guard to block `draft -> queued` without `flow_template_id` and return the same clear message.
+- Added unit tests for:
+  - draft→queued without flow template (fails)
+  - draft→queued with flow template (succeeds)
+  - draft→cancelled without flow template (succeeds)
+  - native `task.update` queued transition checks
+- Added integration test `TestTaskHTTPQueueRequiresFlowTemplate` to verify API queue call returns `422` with required message when flow template is missing.
+- Updated affected integration fixtures/tests to provide a real flow template ID for draft→queued transitions that are meant to succeed.
+
+### Tests run
+- `go test ./internal/task ./internal/tools/native`
+- `go test ./internal/server -tags integration -run '^TestTaskHTTPQueueRequiresFlowTemplate$'`
+- `go test ./internal/task -tags integration -run '^TestTaskServiceIntegrationStatusLifecycleAndEvents$'`
+- `go test ./internal/project -tags integration -run '^TestTask_StateMachine_FullPath$'`
+- `go test ./internal/controlplane -tags integration -run '^TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun$'`
+- `go test ./internal/controlplane -tags integration -run '^TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun$'` *(first run hit intermittent `internal/testdb` drop timeout during cleanup; second run passed)*

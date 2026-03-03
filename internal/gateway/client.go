@@ -27,9 +27,9 @@ import (
 )
 
 const (
-	defaultLiveGatewayTimeout       = 2 * time.Minute
+	defaultLiveGatewayTimeout       = 5 * time.Minute
 	defaultAnthropicVersion         = "2023-06-01"
-	defaultAnthropicMaxOutputTokens = 1024
+	defaultAnthropicMaxOutputTokens = 16384
 	anthropicAuthModeAPIKey         = "api_key"
 	anthropicAuthModeSubscription   = "subscription"
 	anthropicSubscriptionTokenURL   = "https://console.anthropic.com/v1/oauth/token"
@@ -1725,6 +1725,26 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 
 	flushToolResults := func() {
 		if len(pendingToolResults) > 0 {
+			// Inject synthetic tool_result blocks for any tool_use IDs that
+			// don't have matching results (e.g. turn ended mid-dispatch due to
+			// max tool calls or model output truncation).
+			answeredIDs := map[string]bool{}
+			for _, tr := range pendingToolResults {
+				if m, ok := tr.(map[string]any); ok {
+					if id, _ := m["tool_use_id"].(string); id != "" {
+						answeredIDs[id] = true
+					}
+				}
+			}
+			for id := range validToolCallIDs {
+				if !answeredIDs[id] {
+					pendingToolResults = append(pendingToolResults, map[string]any{
+						"type":       "tool_result",
+						"tool_use_id": id,
+						"content":    "[Turn ended before tool result was received]",
+					})
+				}
+			}
 			out = append(out, map[string]any{
 				"role":    "user",
 				"content": pendingToolResults,

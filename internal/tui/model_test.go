@@ -994,35 +994,25 @@ func TestForwardHistoryNavigation(t *testing.T) {
 }
 
 func TestScopeCycleShortcutsTraverseAllScopeLevels(t *testing.T) {
+	// EX-490: '['/']' removed; use Shift-Tab from chat panel to cycle scopes.
 	model := NewModel(DefaultState())
+	model.width, model.height = 220, 40
+	model.focus = ChatPanel
 	if got := model.ChatScope(); got != ScopeOrg {
 		t.Fatalf("initial scope = %s, want %s", got, ScopeOrg)
 	}
 
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyShiftTab})
 	if got := model.ChatScope(); got != ScopeProject {
-		t.Fatalf("scope after ] = %s, want %s", got, ScopeProject)
+		t.Fatalf("scope after Shift-Tab = %s, want %s", got, ScopeProject)
 	}
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyShiftTab})
 	if got := model.ChatScope(); got != ScopeTask {
-		t.Fatalf("scope after second ] = %s, want %s", got, ScopeTask)
+		t.Fatalf("scope after second Shift-Tab = %s, want %s", got, ScopeTask)
 	}
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyShiftTab})
 	if got := model.ChatScope(); got != ScopeOrg {
-		t.Fatalf("scope after third ] = %s, want %s", got, ScopeOrg)
-	}
-
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
-	if got := model.ChatScope(); got != ScopeTask {
-		t.Fatalf("scope after [ from org = %s, want %s", got, ScopeTask)
-	}
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
-	if got := model.ChatScope(); got != ScopeProject {
-		t.Fatalf("scope after second [ = %s, want %s", got, ScopeProject)
-	}
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
-	if got := model.ChatScope(); got != ScopeOrg {
-		t.Fatalf("scope after third [ = %s, want %s", got, ScopeOrg)
+		t.Fatalf("scope after third Shift-Tab = %s, want %s", got, ScopeOrg)
 	}
 }
 
@@ -3837,14 +3827,17 @@ func TestSidebarEmptyHLArrowsEX416(t *testing.T) {
 // please wait..." which is misleading. Now ScopeProject uses the org session (same
 // as ScopeOrg) and gives "no project selected" feedback when none is selected.
 func TestScopeCycleProjectEX417(t *testing.T) {
+	// EX-490: '['/']' removed; use Shift-Tab from chat panel instead.
 	t.Run("no-project-gives-hint", func(t *testing.T) {
 		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = ChatPanel
 		m.workspace.activeSessionID = "11111111-2222-3333-4444-555555555555"
 		m.activeSession = m.workspace.activeSessionID
 		// No project selected: workspace.selectedProjectID == ""
 
-		// Cycle to project scope via ']'
-		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+		// Cycle to project scope via Shift-Tab
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 
 		if m.ChatScope() != ScopeProject {
 			t.Fatalf("scope = %q, want project", m.ChatScope())
@@ -3860,11 +3853,13 @@ func TestScopeCycleProjectEX417(t *testing.T) {
 
 	t.Run("with-project-uses-org-session", func(t *testing.T) {
 		m := NewModel(DefaultState())
+		m.width, m.height = 220, 40
+		m.focus = ChatPanel
 		m.workspace.activeSessionID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 		m.activeSession = m.workspace.activeSessionID
 		m.workspace.selectedProjectID = "proj-123"
 
-		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+		m = pressKey(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 
 		if m.ChatScope() != ScopeProject {
 			t.Fatalf("scope = %q, want project", m.ChatScope())
@@ -9733,13 +9728,13 @@ func TestStepTaskNoContextFeedbackEX286(t *testing.T) {
 	}
 
 	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	if m.statusMessage != "No open tasks in this project." {
+	if m.statusMessage != "No tasks to navigate. Press 'd' to toggle done tasks." {
 		t.Errorf("EX-286: k with all-done project should say 'No open tasks in this project.'; got %q", m.statusMessage)
 	}
 }
 
 // TestProjectGGNoTasksFeedbackEX287 verifies that g/G in ViewProject when
-// there are no open tasks give "No open tasks in this project." rather than
+// there are no open tasks give "No tasks to navigate. Press 'd' to toggle done tasks." rather than
 // silently doing nothing — matches EX-190 for ViewDashboard.
 func TestProjectGGNoTasksFeedbackEX287(t *testing.T) {
 	for _, key := range []rune{'g', 'G'} {
@@ -9755,7 +9750,7 @@ func TestProjectGGNoTasksFeedbackEX287(t *testing.T) {
 		}
 
 		m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
-		if m.statusMessage != "No open tasks in this project." {
+		if m.statusMessage != "No tasks to navigate. Press 'd' to toggle done tasks." {
 			t.Errorf("EX-287: %c in ViewProject with no open tasks should say 'No open tasks in this project.'; got %q", key, m.statusMessage)
 		}
 	}
@@ -9993,7 +9988,7 @@ func TestInboxHomeEndBoundaryFeedbackEX457(t *testing.T) {
 }
 
 // TestProjectHomeEndEmptyFeedbackEX293 verifies that Home/End in ViewProject
-// when there are no open tasks shows "No open tasks in this project." matching g/G (EX-287).
+// when there are no open tasks shows "No tasks to navigate. Press 'd' to toggle done tasks." matching g/G (EX-287).
 func TestProjectHomeEndEmptyFeedbackEX293(t *testing.T) {
 	for _, keyType := range []tea.KeyType{tea.KeyHome, tea.KeyEnd} {
 		m := NewModel(DefaultState())
@@ -10004,7 +9999,7 @@ func TestProjectHomeEndEmptyFeedbackEX293(t *testing.T) {
 		// No project detail → openTasksForProject returns nil.
 
 		m = pressKey(m, tea.KeyMsg{Type: keyType})
-		if m.statusMessage != "No open tasks in this project." {
+		if m.statusMessage != "No tasks to navigate. Press 'd' to toggle done tasks." {
 			t.Errorf("EX-293: %v in empty project should say 'No open tasks in this project.'; got %q", keyType, m.statusMessage)
 		}
 	}
@@ -10196,7 +10191,7 @@ func TestInboxJKEmptyFeedbackEX295(t *testing.T) {
 }
 
 // TestProjectJKEmptyFeedbackEX296 verifies that j/k and ↑/↓ in ViewProject
-// when there are no open tasks show "No open tasks in this project." matching g/G/Home/End.
+// when there are no open tasks show "No tasks to navigate. Press 'd' to toggle done tasks." matching g/G/Home/End.
 func TestProjectJKEmptyFeedbackEX296(t *testing.T) {
 	type keyInput struct {
 		name string
@@ -10217,7 +10212,7 @@ func TestProjectJKEmptyFeedbackEX296(t *testing.T) {
 		// No project detail → openTasksForProject returns nil.
 
 		m = pressKey(m, k.msg)
-		if m.statusMessage != "No open tasks in this project." {
+		if m.statusMessage != "No tasks to navigate. Press 'd' to toggle done tasks." {
 			t.Errorf("EX-296: %s in empty project should say 'No open tasks in this project.'; got %q", k.name, m.statusMessage)
 		}
 	}
@@ -12074,19 +12069,14 @@ func TestBracketsAndNumbersInChatCompositionEX351352(t *testing.T) {
 		t.Errorf("EX-351: ']' with non-empty chat input should type ']'; got %q", m2.chatInput)
 	}
 
-	// '[' with empty chat input should still cycle scope.
+	// EX-490: '[' with empty chat input now types '[' (scope cycling via brackets removed).
 	m3 := NewModel(DefaultState())
 	m3.width, m3.height = 220, 40
 	m3.focus = ChatPanel
 	m3.chatInput = ""
-	prevScope := m3.activeScope
 	m4 := pressKey(m3, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
-	if m4.chatInput != "" {
-		t.Errorf("EX-351: '[' with empty chat input should not type; got %q", m4.chatInput)
-	}
-	if m4.activeScope == prevScope {
-		// Note: cycleScope might wrap around, or switchScope might not change in all states.
-		// Just verify '[' didn't type the character.
+	if m4.chatInput != "[" {
+		t.Errorf("EX-490: '[' with empty chat input should type '['; got %q", m4.chatInput)
 	}
 
 	// '1'/'2'/'3' with non-empty chat input should type the digit.

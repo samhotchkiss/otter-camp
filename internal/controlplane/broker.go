@@ -302,6 +302,12 @@ func (b *ToolBroker) dispatchToExecutor(ctx context.Context, domain, toolName st
 		if b.native == nil {
 			return nil, ErrToolNotSupported
 		}
+		// EX-493: cli.execute is registered as a native tool but delegates to the
+		// CLI executor, which requires run_id/task_id/project_id/agent_id injected.
+		// Without this, cli.execute always fails with "run_id is required".
+		if toolName == "cli.execute" || toolName == "cli_execute" {
+			safeInput = injectCLIExecutionContext(ctx, safeInput, dispatch, runRecord)
+		}
 		return b.native.Execute(ctx, toolName, safeInput)
 	case "cli":
 		if b.cli == nil {

@@ -305,8 +305,14 @@ func (e *NativeToolExecutor) handleGitCommit(ctx context.Context, input map[stri
 		return nil, err
 	}
 	branch := strings.TrimSpace(branchOut)
+	// Only enforce branch protection when a remote is configured.
+	// Local workspace repos don't have remotes, so agents must commit to main.
 	if branch == "main" || branch == "master" {
-		return map[string]any{"error": "cannot_commit_to_main"}, nil
+		remoteOut, remoteErr := e.runCommand(ctx, dir, "git", "remote")
+		hasRemote := remoteErr == nil && strings.TrimSpace(remoteOut) != ""
+		if hasRemote {
+			return map[string]any{"error": "cannot_commit_to_main"}, nil
+		}
 	}
 
 	message, ok := readString(input, "message")

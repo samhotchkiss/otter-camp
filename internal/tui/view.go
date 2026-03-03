@@ -1293,6 +1293,15 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 	var lines []string
 	lines = append(lines, "")
 
+	// Compute hover line index within this view's content.
+	// Main panel: 1 (border) + 2 (title+divider) = 3 lines before view content.
+	hoverLine := -1
+	if m.hoverPanel == MainPanel {
+		hoverLine = m.hoverY - 3
+	}
+	// Track which line indices are interactive (task lines) for hover feedback.
+	interactiveLines := map[int]bool{}
+
 	// Find the selected project node
 	projectNodeID := "project-" + m.workspace.selectedProjectID
 	node := m.workspace.nodes[projectNodeID]
@@ -1444,7 +1453,8 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		} else {
 			lines = append(lines, styleMuted.Render("  No open tasks."))
 		}
-	} else {
+	}
+	if len(openTasks) > 0 {
 		// EX-223: show per-status breakdown in the OPEN TASKS header so users
 		// see at a glance how many tasks are in each state without drilling in.
 		taskHeader := fmt.Sprintf("OPEN TASKS (%d)", len(openTasks))
@@ -1604,83 +1614,122 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			taskLines = append(shown, styleMuted.Italic(true).Render(footerText))
 		}
 		lines = append(lines, styleLabel.Render(taskHeader))
+		taskBase := len(lines)
 		lines = append(lines, taskLines...)
-		// Done tasks section (toggle with 'd').
-		if m.workspace.showDoneTasks && proj != nil && len(proj.DoneTasks) > 0 {
-			// EX-115: filter done tasks by the active query, consistent with the open-task section.
-			var filteredDone []SidebarTaskItem
-			for _, t := range proj.DoneTasks {
-				doneLabel := t.Title
+		// Mark open task title lines as interactive for hover.
+		// Each task has a title line; some also have a detail line below.
+		for idx := taskBase; idx < len(lines); idx++ {
+			interactiveLines[idx] = true
+		}
+	}
+
+	// EX-489/EX-491: Done tasks section renders regardless of open task count.
+	// Auto-show done tasks when all open tasks are complete (no manual 'd' toggle needed).
+	autoShowDone := len(openTasks) == 0 && proj != nil && proj.DoneCount > 0
+	if (m.workspace.showDoneTasks || autoShowDone) && proj != nil && len(proj.DoneTasks) > 0 {
+		// EX-115: filter done tasks by the active query, consistent with the open-task section.
+		var filteredDone []SidebarTaskItem
+		for _, t := range proj.DoneTasks {
+			doneLabel := t.Title
+			if t.TaskNumber > 0 {
+				doneLabel = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+			}
+			if matchesFilter(doneLabel, query) || matchesFilter(t.WorkStatus, query) {
+				filteredDone = append(filteredDone, t)
+			}
+		}
+		if len(filteredDone) > 0 {
+			if len(lines) < maxLines {
+				lines = append(lines, "")
+			}
+			if len(lines) < maxLines {
+				doneHeader := fmt.Sprintf("DONE (%d)", len(filteredDone))
+				lines = append(lines, styleLabel.Render(doneHeader))
+			}
+			// Cursor offset: done tasks start after all open tasks in the navigable list.
+			doneCursorBase := len(openTasks)
+			cursor := m.workspace.projectTaskCursor
+			for i, t := range filteredDone {
+				if len(lines) >= maxLines {
+					break
+				}
+				isCursor := cursor == doneCursorBase+i
+				taskLabel := t.Title
 				if t.TaskNumber > 0 {
-					doneLabel = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
+					taskLabel = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
 				}
-				if matchesFilter(doneLabel, query) || matchesFilter(t.WorkStatus, query) {
-					filteredDone = append(filteredDone, t)
+				statusText := formatTaskStatus(t.WorkStatus)
+				statW := len([]rune(statusText))
+				badgePlain := taskPriorityBadge(t.Priority, false)
+				badgeStyled := taskPriorityBadge(t.Priority, true)
+				badgeWidth := 0
+				if badgePlain != "" {
+					badgeWidth = lipgloss.Width(badgePlain) + 1
 				}
-			}
-			if len(filteredDone) > 0 {
-				if len(lines) < maxLines {
-					lines = append(lines, "")
+				var icon string
+				if isCursor {
+					icon = "► "
+				} else {
+					icon = "✓ "
 				}
-				if len(lines) < maxLines {
-					doneHeader := fmt.Sprintf("DONE (%d)", len(filteredDone))
-					lines = append(lines, styleLabel.Render(doneHeader))
+				prefixW := 2 + lipgloss.Width(icon)
+				maxTitleW := width - prefixW - statW - 2 - badgeWidth
+				if maxTitleW < 4 {
+					maxTitleW = 4
 				}
-				for _, t := range filteredDone {
-					if len(lines) >= maxLines {
-						break
-					}
-					taskLabel := t.Title
-					if t.TaskNumber > 0 {
-						taskLabel = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
-					}
-					statusText := formatTaskStatus(t.WorkStatus)
-					statW := len([]rune(statusText))
-					badgePlain := taskPriorityBadge(t.Priority, false)
-					badgeStyled := taskPriorityBadge(t.Priority, true)
-					badgeWidth := 0
+				leftPart := "  " + icon + truncate(taskLabel, maxTitleW)
+				if isCursor {
 					if badgePlain != "" {
-						badgeWidth = lipgloss.Width(badgePlain) + 1
+						leftPart += " " + badgePlain
 					}
-					maxTitleW := width - 8 - statW - badgeWidth
-					if maxTitleW < 4 {
-						maxTitleW = 4
-					}
-					truncTitle := truncate(taskLabel, maxTitleW)
-					leftPart := "  ✓ " + truncTitle
-					if badgeStyled != "" {
-						leftPart += " " + badgeStyled
-					}
-					padW := width - lipgloss.Width(leftPart) - statW - 1
-					if padW < 1 {
-						padW = 1
-					}
-					spacer := strings.Repeat(" ", padW)
-					lines = append(lines, styleMuted.Render(leftPart+spacer+statusText))
+				} else if badgeStyled != "" {
+					leftPart += " " + badgeStyled
 				}
+				padW := width - lipgloss.Width(leftPart) - statW - 1
+				if padW < 1 {
+					padW = 1
+				}
+				spacer := strings.Repeat(" ", padW)
+				lineIdx := len(lines)
+				if isCursor {
+					lines = append(lines, styleCursorRow.Width(width).Render(leftPart+spacer+statusText))
+				} else {
+					statusLabel := lipgloss.NewStyle().Foreground(taskStatusColor(t.WorkStatus)).Render(statusText)
+					lines = append(lines, styleMuted.Render(leftPart+spacer)+statusLabel)
+				}
+				interactiveLines[lineIdx] = true
 			}
 		}
-		// Navigation hint row.
-		// EX-233: include filterActionHint so users know / clears an active filter.
-		// EX-235: include r·refresh so users know they can reload the task list.
-		hintParts := "Enter·open  ·  " + filterActionHint(query) + "  ·  Tab·navigate  ·  Esc·dashboard"
-		if proj != nil && proj.DoneCount > 0 {
-			if m.workspace.showDoneTasks {
-				hintParts += "  ·  d·hide done"
-			} else {
-				hintParts += fmt.Sprintf("  ·  d·show %d done", proj.DoneCount)
-			}
+	}
+	// Navigation hint row.
+	// EX-233: include filterActionHint so users know / clears an active filter.
+	// EX-235: include r·refresh so users know they can reload the task list.
+	hintParts := filterActionHint(query) + "  ·  Tab·navigate  ·  Esc·dashboard"
+	if len(openTasks) > 0 || autoShowDone {
+		hintParts = "Enter·open  ·  " + hintParts
+	}
+	if proj != nil && proj.DoneCount > 0 {
+		if m.workspace.showDoneTasks || autoShowDone {
+			hintParts += "  ·  d·hide done"
+		} else {
+			hintParts += fmt.Sprintf("  ·  d·show %d done", proj.DoneCount)
 		}
-		if proj != nil && len(proj.Files) > 0 {
-			if m.workspace.showProjectFiles {
-				hintParts += "  ·  f·hide files"
-			} else {
-				hintParts += "  ·  f·show files"
-			}
+	}
+	if proj != nil && len(proj.Files) > 0 {
+		if m.workspace.showProjectFiles {
+			hintParts += "  ·  f·hide files"
+		} else {
+			hintParts += "  ·  f·show files"
 		}
-		if len(lines) < maxLines {
-			lines = append(lines, styleMuted.Render("  "+hintParts))
-		}
+	}
+	if len(lines) < maxLines {
+		lines = append(lines, styleMuted.Render("  "+hintParts))
+	}
+
+	// Apply hover background to interactive lines (task rows).
+	if hoverLine >= 0 && hoverLine < len(lines) && interactiveLines[hoverLine] {
+		lines[hoverLine] = styleHover.Width(width).Render(
+			lipgloss.NewStyle().UnsetBackground().Render(lines[hoverLine]))
 	}
 
 	return lines

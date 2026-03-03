@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -11,6 +12,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// sgrMouseLeakPattern matches fragments of SGR mouse escape sequences that
+// leak through bubbletea's parser as KeyRunes. This happens when rapid scroll
+// events cause the ESC byte to be consumed as a standalone key, leaving the
+// remainder ([<65;171;59M) as runes. Strip these before appending to chatInput.
+var sgrMouseLeakPattern = regexp.MustCompile(`\[?<\d+;\d+;\d+[Mm]`)
 
 type Panel int
 
@@ -89,6 +96,10 @@ type sidebarDataLoadedMsg struct {
 	OrgSessionID string
 	Chats        []SidebarChatItem
 	Projects     []SidebarProjectItem
+	// EX-494: track per-section errors so the handler can preserve existing
+	// sidebar data when a reload fails (e.g. due to rate-limiting 429).
+	ChatsErr    error
+	ProjectsErr error
 }
 
 type projectTasksLoadedMsg struct {
@@ -357,7 +368,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sidebarDataLoadedMsg:
 		m.sidebarLoaded = true
 		m.workspace.inboxCount = typed.InboxCount
-		m.workspace.rebuildSidebar(typed.OrgSessionID, typed.Chats, typed.Projects)
+		// EX-494: when a sidebar section failed to load (e.g. 429 rate-limit),
+		// preserve the existing data so a failed reload doesn't wipe the sidebar.
+		chats := typed.Chats
+		if typed.ChatsErr != nil {
+			chats = m.workspace.existingChats()
+		}
+		projects := typed.Projects
+		if typed.ProjectsErr != nil {
+			projects = m.workspace.existingProjects()
+		}
+		m.workspace.rebuildSidebar(typed.OrgSessionID, chats, projects)
 		activityParts := []string{}
 		if len(typed.Projects) > 0 {
 			activityParts = append(activityParts, fmt.Sprintf("%d project(s)", len(typed.Projects)))
@@ -955,18 +976,20 @@ func (m Model) mouseClickProject(contentY int) (Model, tea.Cmd) {
 	}
 	hdr++ // "OPEN TASKS (N)" header
 
+	// Build the open tasks list (matching renderProjectView's filter).
 	openTasks := m.workspace.openTasksForProject()
-	if len(openTasks) == 0 {
-		return m, nil
-	}
 
 	lineInTaskArea := contentY - hdr
 	if lineInTaskArea < 0 {
 		return m, nil
 	}
 
-	// Each task occupies 1 line (title) + 1 line (detail) when a workspace record exists.
+	// Check clicks in the open tasks area.
+	// Each open task occupies 1 line (title) + 1 line (detail) when a workspace record exists.
 	lineOffset := 0
+	if len(openTasks) == 0 {
+		lineOffset++ // "✓ All N tasks complete" or "No open tasks." line
+	}
 	for i, task := range openTasks {
 		start := lineOffset
 		lineOffset++ // task title line
@@ -980,6 +1003,26 @@ func (m Model) mouseClickProject(contentY int) (Model, tea.Cmd) {
 			return m, cmd
 		}
 	}
+
+	// Check clicks in the done tasks area (if visible).
+	// EX-491: match auto-show logic — done tasks are visible when explicitly
+	// toggled OR when all open tasks are complete.
+	autoShowDone := len(openTasks) == 0 && proj.DoneCount > 0
+	if (m.workspace.showDoneTasks || autoShowDone) && len(proj.DoneTasks) > 0 {
+		lineOffset++ // blank line before DONE header
+		lineOffset++ // "DONE (N)" header
+		for i, task := range proj.DoneTasks {
+			if lineInTaskArea == lineOffset {
+				cursorIdx := len(openTasks) + i
+				m.workspace.projectTaskCursor = cursorIdx
+				m.workspace.selectedTaskID = task.ID
+				cmd := m.handleEnterKey()
+				return m, cmd
+			}
+			lineOffset++ // done task line (1 per task)
+		}
+	}
+
 	return m, nil
 }
 
@@ -1341,7 +1384,7 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// EX-276: Home/End in ViewProject jump to first/last (same as g/G).
 				// EX-293: give "No open tasks." feedback matching g/G (EX-287).
 				// EX-458: add prevCursor check — mirrors ↑/↓ which already have boundary feedback.
-				if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+				if openTasks := m.workspace.navigableTasksForProject(); len(openTasks) > 0 {
 					prevCursor := m.workspace.projectTaskCursor
 					m.workspace.projectTaskCursor = 0
 					if m.workspace.projectTaskCursor == prevCursor {
@@ -1355,13 +1398,13 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.statusMessage = "▸ " + truncate(label, 40)
 					}
 				} else {
-					m.statusMessage = "No open tasks in this project."
+					m.statusMessage = "No tasks to navigate. Press 'd' to toggle done tasks."
 				}
 				return m, nil
 			case tea.KeyEnd:
 				// EX-293: give "No open tasks." feedback matching g/G (EX-287).
 				// EX-458: add prevCursor check — mirrors ↑/↓ which already have boundary feedback.
-				if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+				if openTasks := m.workspace.navigableTasksForProject(); len(openTasks) > 0 {
 					prevCursor := m.workspace.projectTaskCursor
 					m.workspace.projectTaskCursor = len(openTasks) - 1
 					if m.workspace.projectTaskCursor == prevCursor {
@@ -1375,7 +1418,7 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.statusMessage = "▸ " + truncate(label, 40)
 					}
 				} else {
-					m.statusMessage = "No open tasks in this project."
+					m.statusMessage = "No tasks to navigate. Press 'd' to toggle done tasks."
 				}
 				return m, nil
 			case tea.KeyUp:
@@ -1383,7 +1426,7 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// EX-296: give "No open tasks." feedback matching k (EX-270).
 				prevCursor := m.workspace.projectTaskCursor
 				m.workspace.moveProjectTaskCursor(-1)
-				if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+				if openTasks := m.workspace.navigableTasksForProject(); len(openTasks) > 0 {
 					if m.workspace.projectTaskCursor == prevCursor {
 						m.statusMessage = "At first task in project."
 					} else if cur := m.workspace.projectTaskCursor; cur >= 0 && cur < len(openTasks) {
@@ -1395,14 +1438,14 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.statusMessage = "▸ " + truncate(label, 40)
 					}
 				} else {
-					m.statusMessage = "No open tasks in this project."
+					m.statusMessage = "No tasks to navigate. Press 'd' to toggle done tasks."
 				}
 				return m, nil
 			case tea.KeyDown:
 				// EX-296: give "No open tasks." feedback matching j (EX-270).
 				prevCursor := m.workspace.projectTaskCursor
 				m.workspace.moveProjectTaskCursor(1)
-				if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+				if openTasks := m.workspace.navigableTasksForProject(); len(openTasks) > 0 {
 					if m.workspace.projectTaskCursor == prevCursor {
 						m.statusMessage = "At last task in project."
 					} else if cur := m.workspace.projectTaskCursor; cur >= 0 && cur < len(openTasks) {
@@ -1414,14 +1457,14 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.statusMessage = "▸ " + truncate(label, 40)
 					}
 				} else {
-					m.statusMessage = "No open tasks in this project."
+					m.statusMessage = "No tasks to navigate. Press 'd' to toggle done tasks."
 				}
 				return m, nil
 			case tea.KeyPgUp:
 				// EX-308: PgUp/PgDn in ViewProject page through tasks (8 at a time).
-				openTasks := m.workspace.openTasksForProject()
+				openTasks := m.workspace.navigableTasksForProject()
 				if len(openTasks) == 0 {
-					m.statusMessage = "No open tasks in this project."
+					m.statusMessage = "No tasks to navigate. Press 'd' to toggle done tasks."
 					return m, nil
 				}
 				prevCursor := m.workspace.projectTaskCursor
@@ -1441,9 +1484,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case tea.KeyPgDown:
 				// EX-308: PgDown in ViewProject pages forward through tasks.
-				openTasks := m.workspace.openTasksForProject()
+				openTasks := m.workspace.navigableTasksForProject()
 				if len(openTasks) == 0 {
-					m.statusMessage = "No open tasks in this project."
+					m.statusMessage = "No tasks to navigate. Press 'd' to toggle done tasks."
 					return m, nil
 				}
 				prevCursor := m.workspace.projectTaskCursor
@@ -1800,7 +1843,7 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.statusMessage = "Space is not bound. Use Enter/o to open, a·approve x·reject f·defer."
 				}
 			case ViewProject:
-				if openTasks := m.workspace.openTasksForProject(); len(openTasks) == 0 {
+				if openTasks := m.workspace.navigableTasksForProject(); len(openTasks) == 0 {
 					m.statusMessage = "No open tasks. Space is not bound here."
 				} else {
 					m.statusMessage = "Space is not bound. Use Enter to open task detail, j/k to navigate."
@@ -1844,6 +1887,14 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyRunes:
+		// EX-488: discard leaked SGR mouse escape sequences early, before any
+		// shortcut processing. When rapid scroll events outpace bubbletea's
+		// parser, the ESC byte is consumed standalone and the remainder
+		// ([<65;171;59M) arrives as runes. Without this guard, the leading '['
+		// triggers scope cycling and the digits get typed into chat.
+		if sgrMouseLeakPattern.MatchString(string(key.Runes)) {
+			return m, nil
+		}
 		if len(key.Runes) == 1 {
 			r := key.Runes[0]
 			// EX-350: ':' enters command mode only when not mid-composition in chat.
@@ -1876,14 +1927,11 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			// EX-351: '[' / ']' scope cycling should not intercept typing in chat.
-			// Allow typing '[' and ']' when mid-composition, mirrors '<'/'>' guard.
-			if r == '[' && !(m.focus == ChatPanel && strings.TrimSpace(m.chatInput) != "") {
-				return m, m.switchScope(cycleScope(m.activeScope, false))
-			}
-			if r == ']' && !(m.focus == ChatPanel && strings.TrimSpace(m.chatInput) != "") {
-				return m, m.switchScope(cycleScope(m.activeScope, true))
-			}
+			// EX-490: '[' / ']' scope cycling removed entirely.
+			// SGR mouse scroll fragments (\x1b[<65;x;yM) leak bare '[' as
+			// a single rune that triggered scope cycling on every scroll event,
+			// regardless of which panel has focus. Shift-Tab and header scope
+			// tabs remain available for scope cycling.
 			if (r == '<' || r == '>') && (m.focus != ChatPanel || strings.TrimSpace(m.chatInput) == "") {
 				delta := panelResizeStep
 				if r == '<' {
@@ -2371,6 +2419,9 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				// Update scope indicator + status bar to show project context
 				m.activeScope = ScopeProject
 				m.statusMessage = node.Label
+				// EX-492: set selectedProjectID so the projectDetailLoadedMsg handler
+				// doesn't discard the detail as "stale" when switching between projects.
+				m.workspace.selectedProjectID = node.ProjectID
 				// Switch chat panel to Frank/org session when viewing a project
 				// so the session title matches the context (not a stale task session)
 				if frankNode := m.workspace.nodes[generalSidebarNodeID]; frankNode != nil && frankNode.SessionID != "" {
@@ -2507,17 +2558,13 @@ func (m *Model) handleEnterKey() tea.Cmd {
 			return nil
 		}
 		if m.workspace.mainView == ViewProject {
-			// Navigate to the task highlighted by projectTaskCursor
+			// Navigate to the task highlighted by projectTaskCursor.
+			// EX-489: navigable list includes done tasks when showDoneTasks is on.
 			if proj := m.workspace.selectedProject; proj != nil {
-				openTasks := make([]SidebarTaskItem, 0, len(proj.Tasks))
-				for _, t := range proj.Tasks {
-					if t.WorkStatus != "done" && t.WorkStatus != "approved" && t.WorkStatus != "cancelled" {
-						openTasks = append(openTasks, t)
-					}
-				}
+				navTasks := m.workspace.navigableTasksForProject()
 				cursor := m.workspace.projectTaskCursor
-				if len(openTasks) > 0 && cursor >= 0 && cursor < len(openTasks) {
-					taskID := openTasks[cursor].ID
+				if len(navTasks) > 0 && cursor >= 0 && cursor < len(navTasks) {
+					taskID := navTasks[cursor].ID
 					m.workspace.selectedTaskID = taskID
 					m.workspace.setMainView(ViewTask)
 					m.workspace.syncSidebarToTask(taskID)
@@ -2526,10 +2573,10 @@ func (m *Model) handleEnterKey() tea.Cmd {
 					m.statusMessage = "Opened task detail."
 					return tea.Batch(loadTaskDetailCmd(taskID, m.runtimeHints), scopeCmd)
 				}
-				// EX-191: no open tasks — give feedback instead of transitioning to a blank task view.
-				if len(proj.Tasks) > 0 {
+				// No navigable tasks — give feedback.
+				if proj.DoneCount > 0 && !m.workspace.showDoneTasks {
 					m.statusMessage = "All tasks complete. Press 'd' to show done tasks."
-				} else {
+				} else if len(proj.Tasks) == 0 && proj.DoneCount == 0 {
 					m.statusMessage = "No tasks in this project."
 				}
 				return nil
@@ -2654,7 +2701,7 @@ func (m *Model) handleEscapeKey() tea.Cmd {
 // at the new position. A no-op (returns nil) when there is no project context
 // or the project has fewer than 2 tasks.
 func (m *Model) stepTaskInProject(delta int) tea.Cmd {
-	openTasks := m.workspace.openTasksForProject()
+	openTasks := m.workspace.navigableTasksForProject()
 	if len(openTasks) < 2 {
 		// EX-202: give feedback when there's nothing to navigate through.
 		// EX-286: also give feedback when there are 0 open tasks (no project context
@@ -2664,7 +2711,7 @@ func (m *Model) stepTaskInProject(delta int) tea.Cmd {
 			if m.workspace.selectedProjectID == "" {
 				m.statusMessage = "No project context. Open a task from a project to use j/k navigation."
 			} else {
-				m.statusMessage = "No open tasks in this project."
+				m.statusMessage = "No tasks to navigate. Press 'd' to toggle done tasks."
 			}
 		case 1:
 			m.statusMessage = "Only one task in this project."
@@ -2759,7 +2806,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			// EX-296: give "No open tasks." feedback matching g/G/Home/End (EX-287/293).
 			prevCursor := m.workspace.projectTaskCursor
 			m.workspace.moveProjectTaskCursor(1)
-			if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+			if openTasks := m.workspace.navigableTasksForProject(); len(openTasks) > 0 {
 				if m.workspace.projectTaskCursor == prevCursor {
 					m.statusMessage = "At last task in project."
 				} else if cur := m.workspace.projectTaskCursor; cur >= 0 && cur < len(openTasks) {
@@ -2771,7 +2818,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					m.statusMessage = "▸ " + truncate(label, 40)
 				}
 			} else {
-				m.statusMessage = "No open tasks in this project."
+				m.statusMessage = "No tasks to navigate. Press 'd' to toggle done tasks."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
 			prevID := m.workspace.selectedTaskID
@@ -2871,7 +2918,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			// EX-296: give "No open tasks." feedback matching g/G/Home/End (EX-287/293).
 			prevCursor := m.workspace.projectTaskCursor
 			m.workspace.moveProjectTaskCursor(-1)
-			if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+			if openTasks := m.workspace.navigableTasksForProject(); len(openTasks) > 0 {
 				if m.workspace.projectTaskCursor == prevCursor {
 					m.statusMessage = "At first task in project."
 				} else if cur := m.workspace.projectTaskCursor; cur >= 0 && cur < len(openTasks) {
@@ -2883,7 +2930,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 					m.statusMessage = "▸ " + truncate(label, 40)
 				}
 			} else {
-				m.statusMessage = "No open tasks in this project."
+				m.statusMessage = "No tasks to navigate. Press 'd' to toggle done tasks."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
 			prevID := m.workspace.selectedTaskID
@@ -3083,7 +3130,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewProject {
 			// EX-464: add prevCursor check — mirrors ↑/↓/Home/End which already have boundary feedback.
-			if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+			if openTasks := m.workspace.navigableTasksForProject(); len(openTasks) > 0 {
 				prevCursor := m.workspace.projectTaskCursor
 				m.workspace.projectTaskCursor = 0
 				if m.workspace.projectTaskCursor == prevCursor {
@@ -3098,7 +3145,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				}
 			} else {
 				// EX-287: match EX-190 pattern — give feedback when no open tasks.
-				m.statusMessage = "No open tasks in this project."
+				m.statusMessage = "No tasks to navigate. Press 'd' to toggle done tasks."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
 			// EX-135: jump to first task on dashboard board (g = vim home)
@@ -3182,7 +3229,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			// EX-273: use openTasksForProject so cursor lands within bounds and
 			// we can show the title — matches the g case feedback pattern.
 			// EX-464: add prevCursor check — mirrors ↑/↓/Home/End.
-			if openTasks := m.workspace.openTasksForProject(); len(openTasks) > 0 {
+			if openTasks := m.workspace.navigableTasksForProject(); len(openTasks) > 0 {
 				prevCursor := m.workspace.projectTaskCursor
 				m.workspace.projectTaskCursor = len(openTasks) - 1
 				if m.workspace.projectTaskCursor == prevCursor {
@@ -3197,7 +3244,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				}
 			} else {
 				// EX-287: match EX-190 pattern — give feedback when no open tasks.
-				m.statusMessage = "No open tasks in this project."
+				m.statusMessage = "No tasks to navigate. Press 'd' to toggle done tasks."
 			}
 		} else if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
 			// EX-135: jump to last task on dashboard board (G = vim end)
@@ -4503,7 +4550,15 @@ func (m *Model) handleChatRunes(key tea.KeyMsg) {
 	if m.chatHistoryIndex >= 0 {
 		m.chatHistoryIndex = -1
 	}
-	m.chatInput += string(key.Runes)
+	// EX-488: discard leaked SGR mouse escape fragments. When rapid scroll
+	// events outpace bubbletea's escape parser the ESC byte is consumed
+	// as a standalone key and the remainder ([<65;171;59M) arrives as runes.
+	// Strip all fragments; only append whatever clean text remains.
+	typed := sgrMouseLeakPattern.ReplaceAllString(string(key.Runes), "")
+	if typed == "" {
+		return
+	}
+	m.chatInput += typed
 	m.tryAutocompleteMention()
 }
 
@@ -4802,6 +4857,9 @@ func (m Model) updateSearchInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.setFilterForPanel(m.searchPanel, m.searchQuery)
 		return m, nil
 	case tea.KeyRunes:
+		if sgrMouseLeakPattern.MatchString(string(key.Runes)) {
+			return m, nil
+		}
 		if len(key.Runes) > 0 {
 			m.searchQuery += string(key.Runes)
 			m.setFilterForPanel(m.searchPanel, m.searchQuery)
@@ -5019,6 +5077,9 @@ func (m Model) updateCommandInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.statusMessage = "PgUp/PgDn not supported in command mode. Press Esc to exit and navigate."
 		return m, nil
 	case tea.KeyRunes:
+		if sgrMouseLeakPattern.MatchString(string(key.Runes)) {
+			return m, nil
+		}
 		if len(key.Runes) > 0 {
 			m.commandBuffer += string(key.Runes)
 		}
@@ -6785,8 +6846,10 @@ func (m *Model) executeSidebarCommand(args []string) tea.Cmd {
 				// EX-484: set scope + clear stale project state to match handleEnterKey
 				// sidebarKindProject path (scope indicator was wrong; stale task cursor
 				// and project detail persisted across project switches via :sidebar select).
+				// EX-492: set selectedProjectID so projectDetailLoadedMsg isn't discarded.
 				m.activeScope = ScopeProject
 				m.statusMessage = node.Label
+				m.workspace.selectedProjectID = node.ProjectID
 				m.workspace.selectedProject = nil
 				m.workspace.projectTaskCursor = 0
 				cmds = append(cmds, loadProjectTasksCmd(node.ProjectID, m.runtimeHints, true))
@@ -7059,7 +7122,7 @@ func (m Model) commandFallbackHelp() string {
 			}
 			if m.workspace.selectedProjectID != "" {
 				taskHelp := "Enter open session · Esc project"
-				if len(m.workspace.openTasksForProject()) >= 2 {
+				if len(m.workspace.navigableTasksForProject()) >= 2 {
 					taskHelp += " · j/k next/prev"
 				}
 				taskHelp += reviewHints + " · p project view · Tab navigate · n next unread · : commands · ? help"
@@ -7098,12 +7161,12 @@ func (m Model) commandFallbackHelp() string {
 		if strings.TrimSpace(m.chatInput) == "" {
 			for i := len(m.chatMessages) - 1; i >= 0; i-- {
 				if len(m.chatMessages[i].ToolCalls) > 0 {
-					return "Enter expand/collapse tool · PgUp/PgDn scroll · g/G jump · Shift-Tab/[/] scope · : commands · ? help"
+					return "Enter expand/collapse tool · PgUp/PgDn scroll · g/G jump · Shift-Tab scope · : commands · ? help"
 				}
 				break
 			}
 		}
-		return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · Shift-Tab/[/] scope · Esc cancel turn · : commands · ? help"
+		return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · Shift-Tab scope · Esc cancel turn · : commands · ? help"
 	}
 	if m.runtimeHints.ModifierReliabilityUncertain {
 		return "tmux-safe: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit"
@@ -7376,13 +7439,16 @@ func loadSidebarDataCmd(hints RuntimeHints) tea.Cmd {
 			n, _ := hints.LoadInboxCount(ctx)
 			inboxCount = n
 		}
+		var chatsErr, projectsErr error
 		if hints.LoadRecentChats != nil {
-			c, _ := hints.LoadRecentChats(ctx)
+			c, err := hints.LoadRecentChats(ctx)
 			chats = c
+			chatsErr = err
 		}
 		if hints.LoadProjects != nil {
-			p, _ := hints.LoadProjects(ctx)
+			p, err := hints.LoadProjects(ctx)
 			projects = p
+			projectsErr = err
 		}
 
 		return sidebarDataLoadedMsg{
@@ -7390,6 +7456,8 @@ func loadSidebarDataCmd(hints RuntimeHints) tea.Cmd {
 			OrgSessionID: orgSessionID,
 			Chats:        chats,
 			Projects:     projects,
+			ChatsErr:     chatsErr,
+			ProjectsErr:  projectsErr,
 		}
 	}
 }
