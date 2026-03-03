@@ -542,83 +542,45 @@ func (e *NativeToolExecutor) handleProjectCreate(ctx context.Context, input map[
 		DeliveryMode:   deliveryMode,
 		CreatedByType:  actor.createdByType,
 		CreatedByID:    actor.createdByID,
-		Settings:       json.RawMessage(`{}`),
+		Settings:       json.RawMessage(`{"requires_pm_assignment_before_queue":true}`),
 	})
 	if err != nil {
 		return nil, err
 	}
-
-	// Auto-assign agents to the new project.
-	var assigned []map[string]any
-	if e.assignments != nil && e.agents != nil {
-		assigned = e.autoAssignProjectAgents(ctx, scope, created.ID, actor)
+	if e.events != nil {
+		payload, marshalErr := json.Marshal(map[string]any{
+			"project_id":                  created.ID,
+			"slug":                        created.Slug,
+			"requires_human_confirmation": true,
+			"pm_required":                 true,
+		})
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		_ = e.events.Publish(ctx, nil, eventbus.DomainEvent{
+			OrganizationID: scope.organizationID,
+			EventType:      "project.created",
+			ActorType:      actor.createdByType,
+			ActorID:        actor.createdByPtr,
+			Payload:        payload,
+		})
+		_ = e.events.Publish(ctx, nil, eventbus.DomainEvent{
+			OrganizationID: scope.organizationID,
+			EventType:      "project.staffing_needed",
+			ActorType:      actor.createdByType,
+			ActorID:        actor.createdByPtr,
+			Payload:        payload,
+		})
 	}
 
-	result := map[string]any{
+	return map[string]any{
 		"project": map[string]any{
 			"id":     created.ID,
 			"slug":   created.Slug,
 			"name":   created.DisplayName,
 			"status": "active",
 		},
-	}
-	if len(assigned) > 0 {
-		result["assigned_agents"] = assigned
-	}
-	return result, nil
-}
-
-// autoAssignProjectAgents assigns the creating agent as PM and the starter-trio
-// worker as worker on the newly created project. Returns summaries of assignments
-// so the calling agent knows who was assigned.
-func (e *NativeToolExecutor) autoAssignProjectAgents(ctx context.Context, scope workspaceScope, projectID uuid.UUID, actor executionActor) []map[string]any {
-	var assigned []map[string]any
-
-	// Assign the creating agent as PM (if we know which agent is calling).
-	if actor.createdByType == "agent" && actor.createdByID != uuid.Nil {
-		_, err := e.assignments.Assign(ctx, repo.AgentProjectAssignment{
-			AgentID:        actor.createdByID,
-			ProjectID:      projectID,
-			Role:           "pm",
-			AssignedByType: actor.createdByType,
-			AssignedByID:   actor.createdByPtr,
-		})
-		if err == nil {
-			assigned = append(assigned, map[string]any{
-				"agent_id": actor.createdByID,
-				"role":     "pm",
-			})
-		}
-	}
-
-	// Find the starter-trio project manager agent (Lori) and assign as worker
-	// on this project. Lori's agent_type is "pm" (project manager), meaning she
-	// manages projects — distinct from the project assignment role "worker".
-	agents, err := e.agents.List(ctx, scope.organizationID)
-	if err != nil {
-		return assigned
-	}
-	for _, ag := range agents {
-		if ag.IsStarterTrio && ag.AgentType == "pm" && ag.ID != actor.createdByID {
-			_, err := e.assignments.Assign(ctx, repo.AgentProjectAssignment{
-				AgentID:        ag.ID,
-				ProjectID:      projectID,
-				Role:           "worker",
-				AssignedByType: actor.createdByType,
-				AssignedByID:   actor.createdByPtr,
-			})
-			if err == nil {
-				assigned = append(assigned, map[string]any{
-					"agent_id":   ag.ID,
-					"agent_name": ag.DisplayName,
-					"role":       "worker",
-				})
-			}
-			break
-		}
-	}
-
-	return assigned
+	}, nil
 }
 
 func (e *NativeToolExecutor) handleProjectUpdate(ctx context.Context, input map[string]any) (map[string]any, error) {
@@ -755,6 +717,12 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			current.FlowTemplateID == nil {
 			return map[string]any{"error": "task requires a flow template before it can be queued"}, nil
 		}
+		if strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
+			strings.EqualFold(strings.TrimSpace(status), "queued") &&
+			e.projectRequiresPMBeforeQueue(ctx, current.ProjectID) &&
+			!e.projectHasActivePM(ctx, current.ProjectID) {
+			return map[string]any{"error": "project has no active PM assignment"}, nil
+		}
 		if strings.EqualFold(strings.TrimSpace(status), "done") {
 			if err := e.validateTaskDoneTransition(ctx, current); err != nil {
 				return map[string]any{"error": err.Error()}, nil
@@ -773,6 +741,45 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			"work_status": updated.WorkStatus,
 		},
 	}, nil
+}
+
+func (e *NativeToolExecutor) projectRequiresPMBeforeQueue(ctx context.Context, projectID uuid.UUID) bool {
+	if e.projects == nil {
+		return false
+	}
+	projectRecord, err := e.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(projectRecord.Settings, &payload); err != nil {
+		return false
+	}
+	raw, ok := payload["requires_pm_assignment_before_queue"]
+	if !ok {
+		return false
+	}
+	flag, ok := raw.(bool)
+	return ok && flag
+}
+
+func (e *NativeToolExecutor) projectHasActivePM(ctx context.Context, projectID uuid.UUID) bool {
+	if e.assignments == nil {
+		return false
+	}
+	assignments, err := e.assignments.ListByProject(ctx, projectID)
+	if err != nil {
+		return false
+	}
+	for _, assignment := range assignments {
+		if !assignment.IsActive {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(assignment.Role), "pm") {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *NativeToolExecutor) validateTaskDoneTransition(ctx context.Context, taskRecord repo.ProjectTask) error {

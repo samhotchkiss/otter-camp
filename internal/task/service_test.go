@@ -224,6 +224,80 @@ func TestTransitionStatusDraftToQueuedWithFlowTemplateSucceeds(t *testing.T) {
 	}
 }
 
+func TestTransitionStatusDraftToQueuedWithFlowTemplateRequiresPMWhenProjectConfigured(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				WorkStatus:     "draft",
+				FlowTemplateID: &flowTemplateID,
+				Title:          "Task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	svc.project = &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:       projectID,
+				Settings: json.RawMessage(`{"requires_pm_assignment_before_queue":true}`),
+			},
+		},
+	}
+	if _, err := svc.TransitionStatus(context.Background(), taskID, "queued", Actor{Type: "system"}); !errors.Is(err, ErrPMNotAssigned) {
+		t.Fatalf("TransitionStatus queued err = %v, want ErrPMNotAssigned", err)
+	}
+}
+
+func TestTransitionStatusDraftToQueuedWithFlowTemplateAndPMSucceedsWhenProjectConfigured(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				WorkStatus:     "draft",
+				FlowTemplateID: &flowTemplateID,
+				Title:          "Task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	svc.project = &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:       projectID,
+				Settings: json.RawMessage(`{"requires_pm_assignment_before_queue":true}`),
+			},
+		},
+	}
+	svc.assignments = &fakeAssignmentRepo{
+		pmByProject: map[uuid.UUID]repo.AgentProjectAssignment{
+			projectID: {ID: uuid.New(), ProjectID: projectID, Role: "pm", IsActive: true},
+		},
+	}
+
+	updated, err := svc.TransitionStatus(context.Background(), taskID, "queued", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if updated.WorkStatus != "queued" {
+		t.Fatalf("work_status = %q, want queued", updated.WorkStatus)
+	}
+}
+
 func TestTransitionStatusDraftToCancelledWithoutFlowTemplateSucceeds(t *testing.T) {
 	taskID := uuid.New()
 	taskRepo := &fakeTaskRepo{

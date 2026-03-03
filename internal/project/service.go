@@ -320,6 +320,7 @@ func (s *service) Create(ctx context.Context, req CreateProjectRequest) (*Projec
 	if err != nil {
 		return nil, err
 	}
+	settings := withProjectStaffingDefaults(req.Settings)
 
 	created, err := s.projects.Create(ctx, repo.Project{
 		OrganizationID:       req.OrganizationID,
@@ -328,7 +329,7 @@ func (s *service) Create(ctx context.Context, req CreateProjectRequest) (*Projec
 		Description:          req.Description,
 		DeliveryMode:         strings.TrimSpace(req.DeliveryMode),
 		DeployFlowTemplateID: req.DeployFlowTemplateID,
-		Settings:             req.Settings,
+		Settings:             settings,
 		CreatedByType:        createdByType,
 		CreatedByID:          createdByID,
 	})
@@ -342,6 +343,12 @@ func (s *service) Create(ctx context.Context, req CreateProjectRequest) (*Projec
 	_ = s.publishEvent(ctx, created.OrganizationID, "project.created", createdByType, actorIDPointer(createdByID), map[string]any{
 		"project_id": created.ID,
 		"slug":       created.Slug,
+	})
+	_ = s.publishEvent(ctx, created.OrganizationID, "project.staffing_needed", createdByType, actorIDPointer(createdByID), map[string]any{
+		"project_id":                  created.ID,
+		"slug":                        created.Slug,
+		"requires_human_confirmation": true,
+		"pm_required":                 true,
 	})
 
 	return &created, nil
@@ -1097,4 +1104,25 @@ func trimStringPointer(value *string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func withProjectStaffingDefaults(settings json.RawMessage) json.RawMessage {
+	trimmed := strings.TrimSpace(string(settings))
+	if trimmed == "" {
+		return json.RawMessage(`{"requires_pm_assignment_before_queue":true}`)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(settings, &payload); err != nil {
+		return settings
+	}
+	if payload == nil {
+		payload = make(map[string]any)
+	}
+	payload["requires_pm_assignment_before_queue"] = true
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return settings
+	}
+	return encoded
 }

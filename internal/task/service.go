@@ -432,6 +432,20 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	if from == "draft" && target == "queued" && taskRecord.FlowTemplateID == nil {
 		return nil, ErrFlowTemplateRequired
 	}
+	if from == "draft" && target == "queued" {
+		requiresPM, pmReqErr := s.projectRequiresPMBeforeQueue(ctx, taskRecord.ProjectID)
+		if pmReqErr != nil {
+			return nil, pmReqErr
+		}
+		if requiresPM {
+			if _, pmErr := s.assignments.GetPM(ctx, taskRecord.ProjectID); pmErr != nil {
+				if errors.Is(pmErr, repo.ErrNotFound) {
+					return nil, ErrPMNotAssigned
+				}
+				return nil, pmErr
+			}
+		}
+	}
 	if target == "in_progress" {
 		allowNoActiveFlow := actor.AllowNoActiveFlow && strings.EqualFold(strings.TrimSpace(actor.Type), "system")
 		hasActiveFlow, flowErr := s.hasActiveFlowExecution(ctx, taskRecord.ID)
@@ -489,6 +503,33 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	}
 
 	return &updated, nil
+}
+
+func (s *service) projectRequiresPMBeforeQueue(ctx context.Context, projectID uuid.UUID) (bool, error) {
+	if s.project == nil {
+		return false, nil
+	}
+	projectRecord, err := s.project.GetByID(ctx, projectID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return projectRequiresPMBeforeQueueSetting(projectRecord.Settings), nil
+}
+
+func projectRequiresPMBeforeQueueSetting(settings json.RawMessage) bool {
+	var payload map[string]any
+	if err := json.Unmarshal(settings, &payload); err != nil {
+		return false
+	}
+	raw, ok := payload["requires_pm_assignment_before_queue"]
+	if !ok {
+		return false
+	}
+	flag, ok := raw.(bool)
+	return ok && flag
 }
 
 func (s *service) validateDoneTransition(ctx context.Context, taskRecord repo.ProjectTask) error {

@@ -49,16 +49,22 @@ When a conversation leads to a concrete project idea:
 
 ## Project Kickoff Protocol
 
-When you receive a handoff from Frank (or another PM) on a new project:
+When you receive a handoff from Frank (or another PM) on a new project, or a system event indicating project.staffing_needed:
 1. Acknowledge the handoff and review the context provided
-2. Ask clarifying questions about scope, priorities, and constraints
-3. Make recommendations for:
+2. Propose a staffing plan that includes:
+   - A PM recommendation (assign an existing PM staff agent or propose creating a new PM)
+   - Initial worker/reviewer recommendations
+3. Present the staffing plan as a human approval request (inbox item or explicit chat approval prompt)
+4. Do not assign PM/worker/reviewer roles until the human approves the staffing plan
+5. After approval, assign the PM first, then finalize workers/reviewers
+6. Ask clarifying questions about scope, priorities, and constraints
+7. Make recommendations for:
    - Task breakdown (what work items are needed)
    - Flow design (what stages each task goes through)
    - Timeline estimates
    - Any risks or blockers you foresee
-4. Once scope is agreed upon with the user, create the tasks and flows
-5. Your goal is to turn a rough idea into a well-structured, executable project`,
+8. Once scope is agreed upon with the user, create the tasks and flows
+9. Your goal is to turn a rough idea into a well-structured, executable project`,
 		agentType: "pm",
 	},
 	{
