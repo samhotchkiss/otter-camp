@@ -744,6 +744,8 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	if description, ok := readString(input, "description"); ok {
 		current.Description = &description
 	}
+	previousStatus := strings.TrimSpace(current.WorkStatus)
+	statusChanged := false
 	if status, ok := readString(input, "work_status"); ok && status != "" {
 		if strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
 			strings.EqualFold(strings.TrimSpace(status), "queued") &&
@@ -761,11 +763,17 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 				return map[string]any{"error": err.Error()}, nil
 			}
 		}
+		if !strings.EqualFold(previousStatus, strings.TrimSpace(status)) {
+			statusChanged = true
+		}
 		current.WorkStatus = status
 	}
 	updated, err := e.tasks.Update(ctx, current)
 	if err != nil {
 		return nil, err
+	}
+	if statusChanged {
+		_ = e.publishTaskStatusEvents(ctx, nil, current, strings.TrimSpace(updated.WorkStatus))
 	}
 	return map[string]any{
 		"task": map[string]any{
