@@ -1383,10 +1383,24 @@ func (e *TurnEngine) resolveSessionAgentForSession(ctx context.Context, session 
 	if session == nil {
 		return uuid.Nil, repo.ErrNotFound
 	}
-	if strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+	scopeType := strings.TrimSpace(session.ScopeType)
+	if strings.EqualFold(scopeType, "project_task") {
 		if agentID, err := e.resolveTaskScopeAgent(ctx, session.OrganizationID, session.ScopeID); err == nil && agentID != uuid.Nil {
 			return agentID, nil
 		}
+	}
+	if strings.EqualFold(scopeType, "project") {
+		// For project-scoped sessions, prefer the project PM, then fall back to Frank.
+		if e.assignments != nil && session.ScopeID != uuid.Nil {
+			if pm, pmErr := e.assignments.GetPM(ctx, session.ScopeID); pmErr == nil && pm.IsActive && pm.AgentID != uuid.Nil {
+				return pm.AgentID, nil
+			}
+		}
+		return e.resolveFrankStarterID(ctx, session.OrganizationID)
+	}
+	if strings.EqualFold(scopeType, "organization") {
+		// For org-scoped sessions, always route to Frank (the receptionist).
+		return e.resolveFrankStarterID(ctx, session.OrganizationID)
 	}
 	return e.resolveFirstAgentParticipant(ctx, session.ID)
 }
