@@ -133,6 +133,14 @@ func run(args []string) int {
 	}
 
 	switch remaining[0] {
+	case "agent":
+		return runAgentCommand(remaining[1:])
+	case "project":
+		return runProjectCommand(remaining[1:])
+	case "task":
+		return runTaskCommand(remaining[1:])
+	case "org":
+		return runOrgCommand(remaining[1:])
 	case "server":
 		return runServerCommand(remaining[1:])
 	case "db":
@@ -1345,7 +1353,8 @@ func runScheduleList(args []string) int {
 	flags := flag.NewFlagSet("schedule list", flag.ContinueOnError)
 	projectSlug := flags.String("project", "", "project slug")
 	jsonOutput := flags.Bool("json", false, "emit JSON output")
-	apiURLFlag := flags.String("api-url", "", "ottercamp API base URL (or OTTERCAMP_API_URL)")
+	serverURLFlag := flags.String("server-url", "", "ottercamp server URL")
+	apiURLFlag := flags.String("api-url", "", "legacy alias for --server-url")
 	apiKeyFlag := flags.String("api-key", "", "ottercamp API key (or OTTERCAMP_API_KEY)")
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "schedule list argument error: %v\n", err)
@@ -1356,7 +1365,12 @@ func runScheduleList(args []string) int {
 		return 1
 	}
 
-	client, err := newCLIAPIClient(*apiURLFlag, *apiKeyFlag)
+	serverURL := strings.TrimSpace(*serverURLFlag)
+	if serverURL == "" {
+		serverURL = strings.TrimSpace(*apiURLFlag)
+	}
+
+	client, err := newCLIAPIClient(serverURL, *apiKeyFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "schedule list setup error: %v\n", err)
 		return 1
@@ -1411,7 +1425,8 @@ func runScheduleToggle(args []string, enable bool) int {
 	flags := flag.NewFlagSet(commandName, flag.ContinueOnError)
 	projectSlug := flags.String("project", "", "project slug")
 	jsonOutput := flags.Bool("json", false, "emit JSON output")
-	apiURLFlag := flags.String("api-url", "", "ottercamp API base URL (or OTTERCAMP_API_URL)")
+	serverURLFlag := flags.String("server-url", "", "ottercamp server URL")
+	apiURLFlag := flags.String("api-url", "", "legacy alias for --server-url")
 	apiKeyFlag := flags.String("api-key", "", "ottercamp API key (or OTTERCAMP_API_KEY)")
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "%s argument error: %v\n", commandName, err)
@@ -1431,7 +1446,12 @@ func runScheduleToggle(args []string, enable bool) int {
 		return 1
 	}
 
-	client, err := newCLIAPIClient(*apiURLFlag, *apiKeyFlag)
+	serverURL := strings.TrimSpace(*serverURLFlag)
+	if serverURL == "" {
+		serverURL = strings.TrimSpace(*apiURLFlag)
+	}
+
+	client, err := newCLIAPIClient(serverURL, *apiKeyFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s setup error: %v\n", commandName, err)
 		return 1
@@ -1932,7 +1952,7 @@ func printSecretUsage(w *os.File) {
 }
 
 func printUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp [--server-url URL] [--api-key KEY] [--output table|json|quiet] [--no-color] <server|db|auth|secret|backup|health|version|schedule|chat|tui>")
+	fmt.Fprintln(w, "usage: ottercamp [--server-url URL] [--api-key KEY] [--output table|json|quiet] [--no-color] <agent|project|task|org|bootstrap|migrate|server|db|auth|secret|backup|health|version|schedule|chat|memory|tui>")
 }
 
 func valueOrZero(value *int) int {
@@ -1950,21 +1970,89 @@ type globalCLIOptions struct {
 }
 
 func parseGlobalCLIOptions(args []string) (globalCLIOptions, []string, error) {
+	trimmedArgs, trailingServerURL, trailingAPIKey, err := extractGlobalConnectionFlags(args)
+	if err != nil {
+		return globalCLIOptions{}, nil, err
+	}
+
 	flags := flag.NewFlagSet("ottercamp", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	serverURL := flags.String("server-url", "", "server URL (or OTTERCAMP_SERVER_URL)")
 	apiKey := flags.String("api-key", "", "API key (or OTTERCAMP_API_KEY)")
 	output := flags.String("output", defaultOutputMode, "output mode: table|json|quiet")
 	noColor := flags.Bool("no-color", false, "disable ANSI color in table output")
-	if err := flags.Parse(args); err != nil {
+	if err := flags.Parse(trimmedArgs); err != nil {
 		return globalCLIOptions{}, nil, err
 	}
+	resolvedServerURL := strings.TrimSpace(*serverURL)
+	if strings.TrimSpace(trailingServerURL) != "" {
+		resolvedServerURL = strings.TrimSpace(trailingServerURL)
+	}
+	resolvedAPIKey := strings.TrimSpace(*apiKey)
+	if strings.TrimSpace(trailingAPIKey) != "" {
+		resolvedAPIKey = strings.TrimSpace(trailingAPIKey)
+	}
 	return globalCLIOptions{
-		ServerURL: strings.TrimSpace(*serverURL),
-		APIKey:    strings.TrimSpace(*apiKey),
+		ServerURL: resolvedServerURL,
+		APIKey:    resolvedAPIKey,
 		Output:    strings.ToLower(strings.TrimSpace(*output)),
 		NoColor:   *noColor,
 	}, flags.Args(), nil
+}
+
+func extractGlobalConnectionFlags(args []string) ([]string, string, string, error) {
+	if len(args) == 0 {
+		return nil, "", "", nil
+	}
+
+	result := make([]string, 0, len(args))
+	serverURL := ""
+	apiKey := ""
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			result = append(result, args[i:]...)
+			break
+		}
+
+		flagName := arg
+		flagValue := ""
+		hasEquals := false
+		if idx := strings.Index(arg, "="); idx >= 0 {
+			flagName = arg[:idx]
+			flagValue = arg[idx+1:]
+			hasEquals = true
+		}
+
+		switch flagName {
+		case "--server-url", "-server-url":
+			if hasEquals {
+				serverURL = strings.TrimSpace(flagValue)
+				continue
+			}
+			if i+1 >= len(args) {
+				return nil, "", "", fmt.Errorf("flag needs an argument: %s", flagName)
+			}
+			i++
+			serverURL = strings.TrimSpace(args[i])
+			continue
+		case "--api-key", "-api-key":
+			if hasEquals {
+				apiKey = strings.TrimSpace(flagValue)
+				continue
+			}
+			if i+1 >= len(args) {
+				return nil, "", "", fmt.Errorf("flag needs an argument: %s", flagName)
+			}
+			i++
+			apiKey = strings.TrimSpace(args[i])
+			continue
+		default:
+			result = append(result, arg)
+		}
+	}
+
+	return result, serverURL, apiKey, nil
 }
 
 func applyGlobalCLIOptions(options globalCLIOptions) {
