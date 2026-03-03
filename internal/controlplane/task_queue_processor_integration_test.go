@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +33,7 @@ func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.
 	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
 	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
 	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
 	stopTurnRuntime := startTaskQueueTurnRuntime(t, ctx, fx.pool, fx.bus, fx.org.ID)
 	defer stopTurnRuntime()
 
@@ -207,6 +209,7 @@ func TestTaskQueueProcessorIntegrationSchedulerRunCompletedOnTaskDone(t *testing
 	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
 	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
 	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
 
 	template := seedTaskQueueFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID)
 	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
@@ -261,6 +264,7 @@ func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testin
 	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
 	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
 	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
 	stopTurnRuntime := startTaskQueueTurnRuntime(t, ctx, fx.pool, fx.bus, fx.org.ID)
 	defer stopTurnRuntime()
 	template := seedTaskQueueFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID)
@@ -430,6 +434,7 @@ func TestTaskQueueProcessorIntegrationSupervisorRunCompletedOnTaskDone(t *testin
 	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
 	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
 	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
 
 	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
 		ProjectID:     fx.project.ID,
@@ -486,6 +491,7 @@ func TestTaskQueueProcessorIntegrationRunCancellationRequestedConfirmsSchedulerA
 	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
 	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
 	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
 
 	runRepo := NewRunRepository(fx.pool)
 	projectRecord, taskRecord := seedRunProjectTaskWithPM(t, ctx, fx.pool, fx.org.ID)
@@ -555,13 +561,262 @@ func TestTaskQueueProcessorIntegrationRunCancellationRequestedConfirmsSchedulerA
 	}
 }
 
+func TestTaskQueueProcessorIntegrationFlowAdvancedTransitionsKickOffNextAgent(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	worker := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "worker", "Flow Worker", "worker")
+	reviewer := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "reviewer", "Flow Reviewer", "reviewer")
+	template, nodeWorkA, nodeReview, nodeWorkB := seedTaskQueueTransitionFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID, worker.ID, reviewer.ID)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Flow transition task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &worker.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	executionRepo := repo.NewFlowNodeExecutionRepo(fx.pool)
+	runRepo := NewRunRepository(fx.pool)
+	messageRepo := repo.NewChatMessageRepo(fx.pool)
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		return taskRecord.CurrentFlowNodeID != nil && *taskRecord.CurrentFlowNodeID == nodeWorkA.ID, nil
+	})
+
+	if _, err := fx.flow.AdvanceFlow(ctx, created.ID, flowsvc.Actor{Type: "agent", ID: worker.ID}); err != nil {
+		t.Fatalf("AdvanceFlow work->review: %v", err)
+	}
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeReview.ID {
+			return false, nil
+		}
+		execution, err := executionRepo.GetActive(ctx, created.ID, nodeReview.ID)
+		if err != nil {
+			if err == repo.ErrNotFound {
+				return false, nil
+			}
+			return false, err
+		}
+		if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+			return false, nil
+		}
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			FlowNodeID:     &nodeReview.ID,
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		if !hasRunForPrincipal(runs, reviewer.ID) {
+			return false, nil
+		}
+		messages, err := messageRepo.ListBySession(ctx, *execution.SessionID)
+		if err != nil {
+			return false, err
+		}
+		return hasFlowKickoffMessage(messages, "flow.advanced", execution.ID), nil
+	})
+
+	if _, err := fx.flow.AdvanceFlow(ctx, created.ID, flowsvc.Actor{Type: "agent", ID: reviewer.ID}); err != nil {
+		t.Fatalf("AdvanceFlow review->work: %v", err)
+	}
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeWorkB.ID {
+			return false, nil
+		}
+		execution, err := executionRepo.GetActive(ctx, created.ID, nodeWorkB.ID)
+		if err != nil {
+			if err == repo.ErrNotFound {
+				return false, nil
+			}
+			return false, err
+		}
+		if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+			return false, nil
+		}
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			FlowNodeID:     &nodeWorkB.ID,
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		if !hasRunForPrincipal(runs, worker.ID) {
+			return false, nil
+		}
+		messages, err := messageRepo.ListBySession(ctx, *execution.SessionID)
+		if err != nil {
+			return false, err
+		}
+		return hasFlowKickoffMessage(messages, "flow.advanced", execution.ID), nil
+	})
+}
+
+func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	worker := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "worker", "Reject Worker", "worker")
+	reviewer := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "reviewer", "Reject Reviewer", "reviewer")
+	template, nodeWork, nodeReview := seedTaskQueueRejectFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID, worker.ID, reviewer.ID)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Flow reject task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &worker.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	executionRepo := repo.NewFlowNodeExecutionRepo(fx.pool)
+	runRepo := NewRunRepository(fx.pool)
+	messageRepo := repo.NewChatMessageRepo(fx.pool)
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		return taskRecord.CurrentFlowNodeID != nil && *taskRecord.CurrentFlowNodeID == nodeWork.ID, nil
+	})
+
+	if _, err := fx.flow.AdvanceFlow(ctx, created.ID, flowsvc.Actor{Type: "agent", ID: worker.ID}); err != nil {
+		t.Fatalf("AdvanceFlow work->review: %v", err)
+	}
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		return taskRecord.CurrentFlowNodeID != nil && *taskRecord.CurrentFlowNodeID == nodeReview.ID, nil
+	})
+
+	if _, err := fx.flow.RejectFlowNode(ctx, created.ID, flowsvc.Actor{Type: "agent", ID: reviewer.ID}); err != nil {
+		t.Fatalf("RejectFlowNode review->work: %v", err)
+	}
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeWork.ID {
+			return false, nil
+		}
+		execution, err := executionRepo.GetActive(ctx, created.ID, nodeWork.ID)
+		if err != nil {
+			if err == repo.ErrNotFound {
+				return false, nil
+			}
+			return false, err
+		}
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			FlowNodeID:     &nodeWork.ID,
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		if !hasRunForPrincipal(runs, worker.ID) {
+			return false, nil
+		}
+		if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+			return false, nil
+		}
+		messages, err := messageRepo.ListBySession(ctx, *execution.SessionID)
+		if err != nil {
+			return false, err
+		}
+		return hasFlowKickoffMessage(messages, "flow.rejected", execution.ID), nil
+	})
+}
+
+func hasRunForPrincipal(runs []Run, principalID uuid.UUID) bool {
+	for _, run := range runs {
+		if run.PrincipalType == "agent" && run.PrincipalID == principalID {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFlowKickoffMessage(messages []repo.ChatMessage, eventType string, executionID uuid.UUID) bool {
+	for _, message := range messages {
+		if message.Role != "user" || len(message.Metadata) == 0 {
+			continue
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(message.Metadata, &metadata); err != nil {
+			continue
+		}
+		if metadata["source"] != "task_queue_processor" {
+			continue
+		}
+		if strings.TrimSpace(valueAsString(metadata["flow_event_type"])) != strings.TrimSpace(eventType) {
+			continue
+		}
+		if strings.TrimSpace(valueAsString(metadata["flow_node_execution_id"])) != executionID.String() {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 type taskQueueProcessorFixture struct {
 	pool               *pgxpool.Pool
 	bus                *eventbus.Bus
 	taskQueuedSub      eventbus.Subscription
 	taskCompletedSub   eventbus.Subscription
 	runCancellationSub eventbus.Subscription
+	flowAdvancedSub    eventbus.Subscription
 	tasks              tasksvc.TaskService
+	flow               flowsvc.FlowExecutionService
 	org                repo.Organization
 	project            repo.Project
 	agent              repo.Agent
@@ -622,6 +877,8 @@ func seedTaskQueueProcessorFixture(t *testing.T, ctx context.Context) taskQueueP
 		TaskService:    taskService,
 		Flow:           flowService,
 		FlowExecutions: repo.NewFlowNodeExecutionRepo(pool),
+		FlowNodes:      repo.NewFlowNodeRepo(pool),
+		Assignments:    repo.NewAgentProjectAssignmentRepo(pool),
 		Runs:           runService,
 		Chats:          chatService,
 		Sessions:       repo.NewChatSessionRepo(pool),
@@ -633,6 +890,7 @@ func seedTaskQueueProcessorFixture(t *testing.T, ctx context.Context) taskQueueP
 	subscription := processor.SubscribeTaskQueued(&org.ID)
 	taskCompletedSub := processor.SubscribeTaskCompleted(&org.ID)
 	runCancellationSub := processor.SubscribeRunCancellationRequested(&org.ID)
+	flowAdvancedSub := processor.SubscribeFlowAdvanced(&org.ID)
 
 	return taskQueueProcessorFixture{
 		pool:               pool,
@@ -640,7 +898,9 @@ func seedTaskQueueProcessorFixture(t *testing.T, ctx context.Context) taskQueueP
 		taskQueuedSub:      subscription,
 		taskCompletedSub:   taskCompletedSub,
 		runCancellationSub: runCancellationSub,
+		flowAdvancedSub:    flowAdvancedSub,
 		tasks:              taskService,
+		flow:               flowService,
 		org:                org,
 		project:            project,
 		agent:              agent,
@@ -712,6 +972,193 @@ func seedTaskQueueProjectWithAgent(t *testing.T, ctx context.Context, pool *pgxp
 		t.Fatalf("assign agent to project: %v", err)
 	}
 	return org, project, agent
+}
+
+func mustCreateTaskQueueAgentAssignment(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	orgID, projectID uuid.UUID,
+	role, displayName, agentType string,
+) repo.Agent {
+	t.Helper()
+
+	agentRepo := repo.NewAgentRepo(pool)
+	assignmentRepo := repo.NewAgentProjectAssignmentRepo(pool)
+
+	agent, err := agentRepo.Create(ctx, repo.Agent{
+		OrganizationID:       orgID,
+		DisplayName:          displayName + "-" + strings.ToLower(uuid.NewString()[:8]),
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		AgentType:            agentType,
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+		MemoryReadScopes:     []string{},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		OperatorInstructions: "",
+		SystemPrompt:         "",
+	})
+	if err != nil {
+		t.Fatalf("create agent (%s): %v", role, err)
+	}
+	if _, err := assignmentRepo.Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        agent.ID,
+		ProjectID:      projectID,
+		Role:           role,
+		AssignedByType: "system",
+	}); err != nil {
+		t.Fatalf("assign agent role %s: %v", role, err)
+	}
+	return agent
+}
+
+func seedTaskQueueTransitionFlowTemplate(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	orgID, projectID uuid.UUID,
+	workerAgentID, reviewerAgentID uuid.UUID,
+) (repo.FlowTemplate, repo.FlowNode, repo.FlowNode, repo.FlowNode) {
+	t.Helper()
+
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	actorAgent := "agent"
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           "flow-transition-" + uuid.NewString()[:8],
+		DisplayName:    "Flow Transition",
+		Description:    "transition template",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create transition template: %v", err)
+	}
+	workA, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work A",
+		NodeType:       "work",
+		Position:       1,
+		ActorType:      &actorAgent,
+		ActorID:        &workerAgentID,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create work A node: %v", err)
+	}
+	review, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		ActorType:      &actorAgent,
+		ActorID:        &reviewerAgentID,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create review node: %v", err)
+	}
+	workB, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work B",
+		NodeType:       "work",
+		Position:       3,
+		ActorType:      &actorAgent,
+		ActorID:        &workerAgentID,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create work B node: %v", err)
+	}
+
+	workA.NextNodeID = &review.ID
+	review.NextNodeID = &workB.ID
+	if _, err := nodeRepo.Update(ctx, workA); err != nil {
+		t.Fatalf("update work A edge: %v", err)
+	}
+	if _, err := nodeRepo.Update(ctx, review); err != nil {
+		t.Fatalf("update review edge: %v", err)
+	}
+
+	template.StartNodeID = &workA.ID
+	if _, err := templateRepo.Update(ctx, template); err != nil {
+		t.Fatalf("set template start node: %v", err)
+	}
+	return template, workA, review, workB
+}
+
+func seedTaskQueueRejectFlowTemplate(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	orgID, projectID uuid.UUID,
+	workerAgentID, reviewerAgentID uuid.UUID,
+) (repo.FlowTemplate, repo.FlowNode, repo.FlowNode) {
+	t.Helper()
+
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	actorAgent := "agent"
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           "flow-reject-" + uuid.NewString()[:8],
+		DisplayName:    "Flow Reject",
+		Description:    "reject template",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create reject template: %v", err)
+	}
+	workNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		ActorType:      &actorAgent,
+		ActorID:        &workerAgentID,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		ActorType:      &actorAgent,
+		ActorID:        &reviewerAgentID,
+		RejectNodeID:   &workNode.ID,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create review node: %v", err)
+	}
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
+		t.Fatalf("update work node edge: %v", err)
+	}
+	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
+		t.Fatalf("update review node edge: %v", err)
+	}
+
+	template.StartNodeID = &workNode.ID
+	if _, err := templateRepo.Update(ctx, template); err != nil {
+		t.Fatalf("set reject template start node: %v", err)
+	}
+	return template, workNode, reviewNode
 }
 
 func seedTaskQueueFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID uuid.UUID) repo.FlowTemplate {

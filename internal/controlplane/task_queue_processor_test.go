@@ -45,6 +45,218 @@ func TestTaskQueueProcessorHandleTaskQueuedEventIgnoresNonQueuedEvents(t *testin
 	}
 }
 
+func TestTaskQueueProcessorHandleFlowAdvancedEventCreatesRunForAgentNode(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	agentID := uuid.New()
+	sessionID := uuid.New()
+	runID := uuid.New()
+
+	runService := &fakeTaskQueueRunStarter{
+		run: Run{ID: runID, SessionID: &sessionID},
+	}
+	chatService := &fakeTaskQueueChatService{}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "Flow advanced task",
+			},
+		},
+		flowNodes: &fakeTaskQueueFlowNodeRepository{
+			node: repo.FlowNode{
+				ID:          nodeID,
+				DisplayName: "Review",
+				NodeType:    "review",
+				ActorType:   strPtr("agent"),
+				ActorID:     &agentID,
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: nodeID, SessionID: &sessionID},
+		},
+		runs:  runService,
+		chats: chatService,
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":              taskID,
+		"project_id":           projectID,
+		"to_flow_node_id":      nodeID,
+		"to_flow_execution_id": executionID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := processor.handleFlowAdvancedEvent(ctx, eventbus.DomainEvent{EventType: "flow.advanced", Payload: payload}); err != nil {
+		t.Fatalf("handleFlowAdvancedEvent: %v", err)
+	}
+
+	if len(runService.createRunInputs) != 1 {
+		t.Fatalf("CreateRun calls = %d, want 1", len(runService.createRunInputs))
+	}
+	createInput := runService.createRunInputs[0]
+	if createInput.PrincipalType != "agent" || createInput.PrincipalID != agentID {
+		t.Fatalf("CreateRun principal = (%s,%s), want (agent,%s)", createInput.PrincipalType, createInput.PrincipalID, agentID)
+	}
+	if createInput.IdempotencyKey == nil || *createInput.IdempotencyKey != "flow-transition:"+executionID.String() {
+		t.Fatalf("CreateRun idempotency_key = %v, want flow-transition:%s", createInput.IdempotencyKey, executionID)
+	}
+	if len(chatService.addParticipantCalls) != 1 {
+		t.Fatalf("AddParticipant calls = %d, want 1", len(chatService.addParticipantCalls))
+	}
+	if len(chatService.appendMessages) != 1 {
+		t.Fatalf("AppendMessage calls = %d, want 1", len(chatService.appendMessages))
+	}
+	if !strings.Contains(chatService.appendMessages[0].Content, "Flow node: Review") {
+		t.Fatalf("kickoff content missing flow node details: %q", chatService.appendMessages[0].Content)
+	}
+}
+
+func TestTaskQueueProcessorHandleFlowAdvancedEventIgnoresHumanActor(t *testing.T) {
+	ctx := context.Background()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	sessionID := uuid.New()
+
+	runService := &fakeTaskQueueRunStarter{}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:        taskID,
+				ProjectID: projectID,
+			},
+		},
+		flowNodes: &fakeTaskQueueFlowNodeRepository{
+			node: repo.FlowNode{
+				ID:        nodeID,
+				NodeType:  "review",
+				ActorType: strPtr("human"),
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: nodeID, SessionID: &sessionID},
+		},
+		runs:  runService,
+		chats: &fakeTaskQueueChatService{},
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":              taskID,
+		"project_id":           projectID,
+		"to_flow_node_id":      nodeID,
+		"to_flow_execution_id": executionID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := processor.handleFlowAdvancedEvent(ctx, eventbus.DomainEvent{EventType: "flow.advanced", Payload: payload}); err != nil {
+		t.Fatalf("handleFlowAdvancedEvent: %v", err)
+	}
+	if len(runService.createRunInputs) != 0 {
+		t.Fatalf("CreateRun calls = %d, want 0", len(runService.createRunInputs))
+	}
+}
+
+func TestTaskQueueProcessorHandleFlowAdvancedEventIgnoresTerminalTransition(t *testing.T) {
+	ctx := context.Background()
+
+	runService := &fakeTaskQueueRunStarter{}
+	processor := &TaskQueueProcessor{
+		runs: runService,
+	}
+	payload, err := json.Marshal(map[string]any{
+		"task_id":                  uuid.New(),
+		"project_id":               uuid.New(),
+		"to_flow_node_id":          uuid.New(),
+		"to_flow_execution_id":     uuid.New(),
+		"terminal_transition_done": true,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := processor.handleFlowAdvancedEvent(ctx, eventbus.DomainEvent{EventType: "flow.advanced", Payload: payload}); err != nil {
+		t.Fatalf("handleFlowAdvancedEvent: %v", err)
+	}
+	if len(runService.createRunInputs) != 0 {
+		t.Fatalf("CreateRun calls = %d, want 0", len(runService.createRunInputs))
+	}
+}
+
+func TestTaskQueueProcessorHandleFlowAdvancedEventDuplicateIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	agentID := uuid.New()
+	sessionID := uuid.New()
+	runID := uuid.New()
+
+	runService := &fakeTaskQueueRunStarter{
+		run:                 Run{ID: runID, SessionID: &sessionID},
+		dedupeByIdempotency: true,
+	}
+	chatService := &fakeTaskQueueChatService{}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "Flow duplicate task",
+			},
+		},
+		flowNodes: &fakeTaskQueueFlowNodeRepository{
+			node: repo.FlowNode{
+				ID:        nodeID,
+				NodeType:  "work",
+				ActorType: strPtr("agent"),
+				ActorID:   &agentID,
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: nodeID, SessionID: &sessionID},
+		},
+		runs:  runService,
+		chats: chatService,
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":              taskID,
+		"project_id":           projectID,
+		"to_flow_node_id":      nodeID,
+		"to_flow_execution_id": executionID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	first := eventbus.DomainEvent{ID: uuid.New(), EventType: "flow.advanced", Payload: payload}
+	second := eventbus.DomainEvent{ID: uuid.New(), EventType: "flow.advanced", Payload: payload}
+	if err := processor.handleFlowAdvancedEvent(ctx, first); err != nil {
+		t.Fatalf("first handleFlowAdvancedEvent: %v", err)
+	}
+	if err := processor.handleFlowAdvancedEvent(ctx, second); err != nil {
+		t.Fatalf("second handleFlowAdvancedEvent: %v", err)
+	}
+
+	if runService.uniqueCreateRunCount != 1 {
+		t.Fatalf("unique CreateRun calls = %d, want 1", runService.uniqueCreateRunCount)
+	}
+	if len(chatService.appendMessages) != 1 {
+		t.Fatalf("AppendMessage calls = %d, want 1", len(chatService.appendMessages))
+	}
+}
+
 func TestTaskQueueProcessorHandleTaskCompletedEventConfirmsCancellingSchedulerRuns(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
@@ -407,6 +619,18 @@ func (f *fakeTaskQueueSessionRepository) GetByScopeAndMode(context.Context, stri
 	return f.session, nil
 }
 
+type fakeTaskQueueTaskRepository struct {
+	task repo.ProjectTask
+	err  error
+}
+
+func (f *fakeTaskQueueTaskRepository) GetByID(context.Context, uuid.UUID) (repo.ProjectTask, error) {
+	if f.err != nil {
+		return repo.ProjectTask{}, f.err
+	}
+	return f.task, nil
+}
+
 type fakeTaskQueueRunStarter struct {
 	run                     Run
 	createErr               error
@@ -419,6 +643,10 @@ type fakeTaskQueueRunStarter struct {
 	completeRunCalls        []completeRunCall
 	confirmCancelledCalls   []uuid.UUID
 	listRunsByTaskCalls     []listRunsByTaskCall
+	createRunInputs         []CreateRunInput
+	dedupeByIdempotency     bool
+	idempotentRuns          map[string]Run
+	uniqueCreateRunCount    int
 }
 
 type completeRunCall struct {
@@ -437,12 +665,25 @@ func (f *fakeTaskQueueRunStarter) CreateRun(_ context.Context, input CreateRunIn
 	if f.createErr != nil {
 		return Run{}, f.createErr
 	}
+	f.createRunInputs = append(f.createRunInputs, input)
+	if f.dedupeByIdempotency && input.IdempotencyKey != nil {
+		if f.idempotentRuns == nil {
+			f.idempotentRuns = map[string]Run{}
+		}
+		if existing, ok := f.idempotentRuns[*input.IdempotencyKey]; ok {
+			return existing, nil
+		}
+	}
 	run := f.run
 	if run.ID == uuid.Nil {
 		run.ID = uuid.New()
 	}
 	if run.SessionID == nil {
 		run.SessionID = input.SessionID
+	}
+	if f.dedupeByIdempotency && input.IdempotencyKey != nil {
+		f.uniqueCreateRunCount++
+		f.idempotentRuns[*input.IdempotencyKey] = run
 	}
 	return run, nil
 }
@@ -511,6 +752,46 @@ func (f *fakeTaskQueueFlowExecutionRepository) GetActive(context.Context, uuid.U
 	return f.execution, nil
 }
 
+func (f *fakeTaskQueueFlowExecutionRepository) GetByID(context.Context, uuid.UUID) (repo.FlowNodeExecution, error) {
+	if f.err != nil {
+		return repo.FlowNodeExecution{}, f.err
+	}
+	return f.execution, nil
+}
+
+type fakeTaskQueueFlowNodeRepository struct {
+	node repo.FlowNode
+	err  error
+}
+
+func (f *fakeTaskQueueFlowNodeRepository) GetByID(context.Context, uuid.UUID) (repo.FlowNode, error) {
+	if f.err != nil {
+		return repo.FlowNode{}, f.err
+	}
+	return f.node, nil
+}
+
+type fakeTaskQueueAssignmentRepository struct {
+	pm          repo.AgentProjectAssignment
+	pmErr       error
+	assignments []repo.AgentProjectAssignment
+	listErr     error
+}
+
+func (f *fakeTaskQueueAssignmentRepository) GetPM(context.Context, uuid.UUID) (repo.AgentProjectAssignment, error) {
+	if f.pmErr != nil {
+		return repo.AgentProjectAssignment{}, f.pmErr
+	}
+	return f.pm, nil
+}
+
+func (f *fakeTaskQueueAssignmentRepository) ListByProject(context.Context, uuid.UUID) ([]repo.AgentProjectAssignment, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return append([]repo.AgentProjectAssignment(nil), f.assignments...), nil
+}
+
 type addParticipantCall struct {
 	sessionID       uuid.UUID
 	participantType string
@@ -575,13 +856,15 @@ func (f *fakeTaskQueueChatService) AppendMessage(_ context.Context, input chat.A
 	if f.appendMessageErr != nil {
 		return nil, f.appendMessageErr
 	}
-	return &chat.ChatMessage{
+	message := &chat.ChatMessage{
 		ID:        uuid.New(),
 		SessionID: input.SessionID,
 		Role:      input.Role,
 		Content:   input.Content,
 		Metadata:  input.Metadata,
-	}, nil
+	}
+	f.listMessages = append(f.listMessages, message)
+	return message, nil
 }
 
 func (f *fakeTaskQueueChatService) ListMessages(context.Context, uuid.UUID, chat.MessageFilter) ([]*chat.ChatMessage, error) {
@@ -595,3 +878,6 @@ var _ taskQueueChatService = (*fakeTaskQueueChatService)(nil)
 var _ taskQueueSessionRepository = (*fakeTaskQueueSessionRepository)(nil)
 var _ taskQueueRunStarter = (*fakeTaskQueueRunStarter)(nil)
 var _ taskQueueFlowExecutionRepository = (*fakeTaskQueueFlowExecutionRepository)(nil)
+var _ taskQueueTaskRepository = (*fakeTaskQueueTaskRepository)(nil)
+var _ taskQueueFlowNodeRepository = (*fakeTaskQueueFlowNodeRepository)(nil)
+var _ taskQueueAssignmentRepository = (*fakeTaskQueueAssignmentRepository)(nil)
