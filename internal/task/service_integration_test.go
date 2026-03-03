@@ -22,11 +22,13 @@ func TestTaskServiceIntegrationStatusLifecycleAndEvents(t *testing.T) {
 	pool := testdb.New(t)
 	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
 	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
 
 	created, err := svc.CreateTask(ctx, CreateTaskRequest{
-		ProjectID:     project.ID,
-		Title:         "Lifecycle task",
-		CreatedByType: "system",
+		ProjectID:      project.ID,
+		Title:          "Lifecycle task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
 	})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
@@ -104,13 +106,15 @@ func TestTaskServiceIntegrationHumanApprovalGate(t *testing.T) {
 	pmUser := seedTaskServiceUser(t, ctx, pool, org.ID, "pm-user", "admin")
 	pmAgent := seedTaskServiceAgent(t, ctx, pool, org.ID, "PM Agent", "staff", "pm", "human_user", pmUser.ID)
 	assignPMToProject(t, ctx, pool, pmAgent.ID, project.ID)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
 
 	svc := newTaskIntegrationService(t, pool)
 
 	taskRecord, err := svc.CreateTask(ctx, CreateTaskRequest{
-		ProjectID:     project.ID,
-		Title:         "Needs approval",
-		CreatedByType: "system",
+		ProjectID:      project.ID,
+		Title:          "Needs approval",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
 	})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
@@ -154,15 +158,17 @@ func TestTaskServiceIntegrationMarkBlockedCreatesResolutionTaskAndInbox(t *testi
 	pmUser := seedTaskServiceUser(t, ctx, pool, org.ID, "pm-user", "admin")
 	pmAgent := seedTaskServiceAgent(t, ctx, pool, org.ID, "PM Agent", "staff", "pm", "human_user", pmUser.ID)
 	assignPMToProject(t, ctx, pool, pmAgent.ID, project.ID)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
 
 	svc := newTaskIntegrationService(t, pool)
 	taskRepo := repo.NewProjectTaskRepo(pool)
 	inboxRepo := repo.NewInboxItemRepo(pool)
 
 	created, err := svc.CreateTask(ctx, CreateTaskRequest{
-		ProjectID:     project.ID,
-		Title:         "Work item",
-		CreatedByType: "system",
+		ProjectID:      project.ID,
+		Title:          "Work item",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
 	})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
@@ -331,6 +337,26 @@ func seedTaskServiceOrgProject(t *testing.T, ctx context.Context, pool *pgxpool.
 		t.Fatalf("create project: %v", err)
 	}
 	return org, project
+}
+
+func seedTaskServiceFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID uuid.UUID) repo.FlowTemplate {
+	t.Helper()
+
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           "task-svc-flow-" + uuid.NewString()[:8],
+		DisplayName:    "Task Service Flow",
+		Description:    "integration test flow",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	return template
 }
 
 func seedTaskServiceUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, prefix, role string) repo.HumanUser {

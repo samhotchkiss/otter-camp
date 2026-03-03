@@ -275,8 +275,10 @@ type mockTaskRepo struct {
 	getByIDErr          error
 	setFlowNodeErr      error
 	updateStatusErr     error
+	updateErr           error
 	setFlowNodeCalls    int
 	updateStatusCalls   int
+	updateCalls         int
 	lastSetFlowNodeID   *uuid.UUID
 	lastUpdatedTaskID   uuid.UUID
 	lastUpdatedTaskStat string
@@ -319,8 +321,75 @@ func (m *mockTaskRepo) UpdateStatus(_ context.Context, id uuid.UUID, status stri
 	return m.task, nil
 }
 
-func (m *mockTaskRepo) Update(context.Context, repo.ProjectTask) (repo.ProjectTask, error) {
-	return repo.ProjectTask{}, errors.New("not implemented")
+func (m *mockTaskRepo) Update(_ context.Context, task repo.ProjectTask) (repo.ProjectTask, error) {
+	m.updateCalls++
+	if m.updateErr != nil {
+		return repo.ProjectTask{}, m.updateErr
+	}
+	m.task = task
+	return m.task, nil
+}
+
+func TestTaskUpdateRejectsDraftToQueuedWithoutFlowTemplate(t *testing.T) {
+	taskID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			WorkStatus:     "draft",
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != "task requires a flow template before it can be queued" {
+		t.Fatalf("error = %v, want flow template required message", out["error"])
+	}
+	if tasks.updateCalls != 0 {
+		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)
+	}
+}
+
+func TestTaskUpdateAllowsDraftToQueuedWithFlowTemplate(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			WorkStatus:     "draft",
+			FlowTemplateID: &flowTemplateID,
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if got := taskOut["work_status"]; got != "queued" {
+		t.Fatalf("work_status = %v, want queued", got)
+	}
+	if tasks.updateCalls != 1 {
+		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
+	}
 }
 
 type recordingEventPublisher struct {

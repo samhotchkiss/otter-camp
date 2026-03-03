@@ -323,7 +323,7 @@ func newFlowFixture073(t *testing.T) flowFixture073 {
 
 	ctx := context.Background()
 	pool := testdb.New(t)
-	org, projectRecord, pmUser, pmAgent := seedTaskFixtureData073(t, ctx, pool, false)
+	org, projectRecord, _, pmUser, pmAgent := seedTaskFixtureData073(t, ctx, pool, false)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	bus := eventbus.New(pool, logger, eventbus.Config{})
