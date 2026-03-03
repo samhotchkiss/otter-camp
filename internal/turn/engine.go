@@ -38,6 +38,8 @@ const (
 	maxContinuationTurnDepth    = 3
 	defaultTurnConsumerName     = "turn-engine.user-message"
 	defaultReactionConsumerName = "turn-engine.reactions"
+	stopReasonMaxToolCalls      = "max_tool_calls"
+	stopReasonMaxDuration       = "max_duration"
 )
 
 var (
@@ -198,6 +200,7 @@ type messageRepository interface {
 type turnRepository interface {
 	Create(ctx context.Context, turn repo.ChatTurn) (repo.ChatTurn, error)
 	ListBySession(ctx context.Context, sessionID uuid.UUID) ([]repo.ChatTurn, error)
+	SetStopReason(ctx context.Context, id uuid.UUID, stopReason *string) (repo.ChatTurn, error)
 }
 
 type sessionRepository interface {
@@ -315,6 +318,7 @@ type turnRuntime struct {
 	modelRetryUsed    int
 	invocationAttempt int
 	toolSet           []tools.ToolDescriptor
+	stopReason        string
 }
 
 func NewEngine(opts Options) (*TurnEngine, error) {
@@ -667,6 +671,7 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			if continuations > maxContinuationTurnDepth {
 				return fmt.Errorf("context compression continuation depth exceeded")
 			}
+			rt.stopReason = ""
 			if err := e.continueTurn(ctx, rt); err != nil {
 				return err
 			}
@@ -752,6 +757,18 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			return dispatchErr
 		}
 		if stop {
+			shouldContinue, err := e.shouldContinueMaxToolCalls(ctx, rt)
+			if err != nil {
+				return err
+			}
+			if shouldContinue {
+				if err := e.continueTurn(ctx, rt); err != nil {
+					return err
+				}
+				listeningChecked = false
+				previousManifest = nil
+				continue
+			}
 			if err := e.completeTurn(ctx, rt); err != nil {
 				return err
 			}
@@ -761,6 +778,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 }
 
 func (e *TurnEngine) completeTurn(ctx context.Context, rt *turnRuntime) error {
+	if err := e.recordStopReason(ctx, rt); err != nil {
+		return err
+	}
 	if err := e.chat.CompleteTurn(ctx, rt.turn.ID); err != nil {
 		return err
 	}
@@ -771,7 +791,14 @@ func (e *TurnEngine) completeTurn(ctx context.Context, rt *turnRuntime) error {
 }
 
 func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
-	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Context compressed — continuing in a new turn.]"); err != nil {
+	notice := "[Context compressed - continuing in a new turn.]"
+	if strings.EqualFold(strings.TrimSpace(rt.stopReason), stopReasonMaxToolCalls) {
+		notice = "[Max tool calls reached - continuing in a new turn.]"
+	}
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, notice); err != nil {
+		return err
+	}
+	if err := e.recordStopReason(ctx, rt); err != nil {
 		return err
 	}
 	if err := e.chat.CompleteTurn(ctx, rt.turn.ID); err != nil {
@@ -825,8 +852,10 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 		return err
 	}
 	rt.startedAt = e.turnStartTime(rt.turn)
+	rt.toolCallsUsed = 0
 	rt.modelRetryUsed = 0
 	rt.invocationAttempt = 0
+	rt.stopReason = ""
 
 	profile, err := e.resolveModelProfile(ctx, rt.session, rt.agent, "continuation_summary")
 	if err != nil {
@@ -853,6 +882,53 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	}
 	_, err = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Continuation summary] "+summary)
 	return err
+}
+
+func (e *TurnEngine) shouldContinueMaxToolCalls(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.stopReason), stopReasonMaxToolCalls) {
+		return false, nil
+	}
+	continuations, err := e.cycleContinuationCount(ctx, rt)
+	if err != nil {
+		return false, err
+	}
+	return continuations < maxContinuationTurnDepth, nil
+}
+
+func (e *TurnEngine) cycleContinuationCount(ctx context.Context, rt *turnRuntime) (int, error) {
+	if rt == nil || rt.turn == nil || rt.turn.CycleID == nil {
+		return 0, nil
+	}
+	turns, err := e.turns.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return 0, err
+	}
+	matches := 0
+	for _, turn := range turns {
+		if turn.CycleID != nil && *turn.CycleID == *rt.turn.CycleID {
+			matches++
+		}
+	}
+	if matches <= 1 {
+		return 0, nil
+	}
+	return matches - 1, nil
+}
+
+func (e *TurnEngine) recordStopReason(ctx context.Context, rt *turnRuntime) error {
+	reason := strings.TrimSpace(rt.stopReason)
+	if reason == "" {
+		return nil
+	}
+	updated, err := e.turns.SetStopReason(ctx, rt.turn.ID, &reason)
+	if err != nil {
+		return err
+	}
+	rt.turn.StopReason = updated.StopReason
+	return nil
 }
 
 func (e *TurnEngine) runListeningEval(ctx context.Context, rt *turnRuntime, assembled *prompt.AssembledPrompt) (bool, error) {
@@ -890,6 +966,7 @@ func (e *TurnEngine) runListeningEval(ctx context.Context, rt *turnRuntime, asse
 }
 
 func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls []ModelToolCall) (bool, error) {
+	rt.stopReason = ""
 	if len(calls) == 0 {
 		return false, nil
 	}
@@ -960,6 +1037,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		toolBudget = 1
 	}
 	if rt.toolCallsUsed >= toolBudget {
+		rt.stopReason = stopReasonMaxToolCalls
 		_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
 		return true, nil
 	}
@@ -976,10 +1054,12 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 
 	if len(tier1) > 0 {
 		if e.now().After(rt.startedAt.Add(maxDuration)) {
+			rt.stopReason = stopReasonMaxDuration
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Turn duration limit reached. Turn ended.]")
 			return true, nil
 		}
 		if rt.toolCallsUsed >= toolBudget {
+			rt.stopReason = stopReasonMaxToolCalls
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
 			return true, nil
 		}
@@ -997,6 +1077,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		rt.toolCallsUsed += len(runCalls)
 		if rt.toolCallsUsed >= toolBudget {
+			rt.stopReason = stopReasonMaxToolCalls
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
 			return true, nil
 		}
@@ -1004,10 +1085,12 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 
 	for _, call := range tier2 {
 		if e.now().After(rt.startedAt.Add(maxDuration)) {
+			rt.stopReason = stopReasonMaxDuration
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Turn duration limit reached. Turn ended.]")
 			return true, nil
 		}
 		if rt.toolCallsUsed >= toolBudget {
+			rt.stopReason = stopReasonMaxToolCalls
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
 			return true, nil
 		}
@@ -1026,6 +1109,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		rt.toolCallsUsed++
 		if rt.toolCallsUsed >= toolBudget {
+			rt.stopReason = stopReasonMaxToolCalls
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
 			return true, nil
 		}

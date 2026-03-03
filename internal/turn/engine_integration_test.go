@@ -177,6 +177,33 @@ func TestTurnEngineIntegrationTier1ToolDispatchRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTurnEngineIntegrationMaxToolCallsSetsStopReason(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	fixture.engine.maxToolCalls = 1
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{ToolCalls: []ModelToolCall{
+			{ID: "tool-1", Name: "memory.query", Tier: "tier1"},
+			{ID: "tool-2", Name: "memory.query", Tier: "tier1"},
+		}}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turns) == 0 {
+		t.Fatal("expected at least one turn")
+	}
+	last := turns[len(turns)-1]
+	if last.StopReason == nil || *last.StopReason != stopReasonMaxToolCalls {
+		t.Fatalf("turn stop_reason = %v, want %q", last.StopReason, stopReasonMaxToolCalls)
+	}
+}
+
 func TestTurnEngineIntegrationRetryTransientErrorRecordsThreeAttempts(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	attempt := 0

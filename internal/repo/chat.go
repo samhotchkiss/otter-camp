@@ -451,6 +451,7 @@ type ChatTurn struct {
 	CompletedAt       *time.Time
 	DurationMS        *int
 	ErrorMessage      *string
+	StopReason        *string
 	CreatedAt         time.Time
 }
 
@@ -475,12 +476,13 @@ func (r *ChatTurnRepo) Create(ctx context.Context, turn ChatTurn) (ChatTurn, err
 			started_at,
 			completed_at,
 			duration_ms,
-			error_message
+			error_message,
+			stop_reason
 		)
-		VALUES ($1, $2, $3, COALESCE(NULLIF($4, ''), 'agent'), $5, COALESCE(NULLIF($6, ''), 'pending'), $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, COALESCE(NULLIF($4, ''), 'agent'), $5, COALESCE(NULLIF($6, ''), 'pending'), $7, $8, $9, $10, $11, $12)
 		RETURNING id, session_id, turn_number, cycle_id, responding_type, responding_id, status, cancel_requested_at,
-		          started_at, completed_at, duration_ms, error_message, created_at
-	`, turn.SessionID, turn.TurnNumber, turn.CycleID, strings.TrimSpace(turn.RespondingType), turn.RespondingID, strings.TrimSpace(turn.Status), turn.CancelRequestedAt, turn.StartedAt, turn.CompletedAt, turn.DurationMS, trimStringPointer(turn.ErrorMessage))
+		          started_at, completed_at, duration_ms, error_message, stop_reason, created_at
+	`, turn.SessionID, turn.TurnNumber, turn.CycleID, strings.TrimSpace(turn.RespondingType), turn.RespondingID, strings.TrimSpace(turn.Status), turn.CancelRequestedAt, turn.StartedAt, turn.CompletedAt, turn.DurationMS, trimStringPointer(turn.ErrorMessage), trimStringPointer(turn.StopReason))
 
 	item, err := scanChatTurn(row)
 	if err != nil {
@@ -492,7 +494,7 @@ func (r *ChatTurnRepo) Create(ctx context.Context, turn ChatTurn) (ChatTurn, err
 func (r *ChatTurnRepo) GetByID(ctx context.Context, id uuid.UUID) (ChatTurn, error) {
 	row := r.db.QueryRow(ctx, `
 		SELECT id, session_id, turn_number, cycle_id, responding_type, responding_id, status, cancel_requested_at,
-		       started_at, completed_at, duration_ms, error_message, created_at
+		       started_at, completed_at, duration_ms, error_message, stop_reason, created_at
 		FROM chat_turn
 		WHERE id = $1
 	`, id)
@@ -510,7 +512,7 @@ func (r *ChatTurnRepo) GetByID(ctx context.Context, id uuid.UUID) (ChatTurn, err
 func (r *ChatTurnRepo) GetBySessionAndNumber(ctx context.Context, sessionID uuid.UUID, turnNumber int) (ChatTurn, error) {
 	row := r.db.QueryRow(ctx, `
 		SELECT id, session_id, turn_number, cycle_id, responding_type, responding_id, status, cancel_requested_at,
-		       started_at, completed_at, duration_ms, error_message, created_at
+		       started_at, completed_at, duration_ms, error_message, stop_reason, created_at
 		FROM chat_turn
 		WHERE session_id = $1
 		  AND turn_number = $2
@@ -529,7 +531,7 @@ func (r *ChatTurnRepo) GetBySessionAndNumber(ctx context.Context, sessionID uuid
 func (r *ChatTurnRepo) ListBySession(ctx context.Context, sessionID uuid.UUID) ([]ChatTurn, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, session_id, turn_number, cycle_id, responding_type, responding_id, status, cancel_requested_at,
-		       started_at, completed_at, duration_ms, error_message, created_at
+		       started_at, completed_at, duration_ms, error_message, stop_reason, created_at
 		FROM chat_turn
 		WHERE session_id = $1
 		ORDER BY turn_number ASC
@@ -559,7 +561,7 @@ func (r *ChatTurnRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status st
 		SET status = $2
 		WHERE id = $1
 		RETURNING id, session_id, turn_number, cycle_id, responding_type, responding_id, status, cancel_requested_at,
-		          started_at, completed_at, duration_ms, error_message, created_at
+		          started_at, completed_at, duration_ms, error_message, stop_reason, created_at
 	`, id, strings.TrimSpace(status))
 	return scanChatTurnWithNotFound(row)
 }
@@ -571,7 +573,7 @@ func (r *ChatTurnRepo) SetStarted(ctx context.Context, id uuid.UUID, startedAt t
 		    started_at = $2
 		WHERE id = $1
 		RETURNING id, session_id, turn_number, cycle_id, responding_type, responding_id, status, cancel_requested_at,
-		          started_at, completed_at, duration_ms, error_message, created_at
+		          started_at, completed_at, duration_ms, error_message, stop_reason, created_at
 	`, id, startedAt.UTC())
 	return scanChatTurnWithNotFound(row)
 }
@@ -584,7 +586,7 @@ func (r *ChatTurnRepo) SetCompleted(ctx context.Context, id uuid.UUID, completed
 		    duration_ms = $3
 		WHERE id = $1
 		RETURNING id, session_id, turn_number, cycle_id, responding_type, responding_id, status, cancel_requested_at,
-		          started_at, completed_at, duration_ms, error_message, created_at
+		          started_at, completed_at, duration_ms, error_message, stop_reason, created_at
 	`, id, completedAt.UTC(), durationMS)
 	return scanChatTurnWithNotFound(row)
 }
@@ -597,7 +599,7 @@ func (r *ChatTurnRepo) SetCancelled(ctx context.Context, id uuid.UUID, cancelReq
 		    completed_at = $3
 		WHERE id = $1
 		RETURNING id, session_id, turn_number, cycle_id, responding_type, responding_id, status, cancel_requested_at,
-		          started_at, completed_at, duration_ms, error_message, created_at
+		          started_at, completed_at, duration_ms, error_message, stop_reason, created_at
 	`, id, cancelRequestedAt.UTC(), completedAt.UTC())
 	return scanChatTurnWithNotFound(row)
 }
@@ -610,8 +612,19 @@ func (r *ChatTurnRepo) SetFailed(ctx context.Context, id uuid.UUID, errorMessage
 		    completed_at = $3
 		WHERE id = $1
 		RETURNING id, session_id, turn_number, cycle_id, responding_type, responding_id, status, cancel_requested_at,
-		          started_at, completed_at, duration_ms, error_message, created_at
+		          started_at, completed_at, duration_ms, error_message, stop_reason, created_at
 	`, id, strings.TrimSpace(errorMessage), completedAt.UTC())
+	return scanChatTurnWithNotFound(row)
+}
+
+func (r *ChatTurnRepo) SetStopReason(ctx context.Context, id uuid.UUID, stopReason *string) (ChatTurn, error) {
+	row := r.db.QueryRow(ctx, `
+		UPDATE chat_turn
+		SET stop_reason = $2
+		WHERE id = $1
+		RETURNING id, session_id, turn_number, cycle_id, responding_type, responding_id, status, cancel_requested_at,
+		          started_at, completed_at, duration_ms, error_message, stop_reason, created_at
+	`, id, trimStringPointer(stopReason))
 	return scanChatTurnWithNotFound(row)
 }
 
@@ -641,6 +654,7 @@ func scanChatTurn(row pgx.Row) (ChatTurn, error) {
 		&item.CompletedAt,
 		&item.DurationMS,
 		&item.ErrorMessage,
+		&item.StopReason,
 		&item.CreatedAt,
 	); err != nil {
 		return ChatTurn{}, err
