@@ -336,7 +336,9 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 
 	var nextExecution *repo.FlowNodeExecution
 	if currentNode.NextNodeID == nil {
-		if _, err := s.taskService.TransitionStatus(ctx, taskRecord.ID, "done", toTaskActor(actor)); err != nil {
+		taskActor := toTaskActor(actor)
+		taskActor.AllowDoneBypass = true
+		if _, err := s.taskService.TransitionStatus(ctx, taskRecord.ID, "done", taskActor); err != nil {
 			return nil, err
 		}
 		if _, err := s.tasks.SetFlowNode(ctx, taskRecord.ID, nil); err != nil {

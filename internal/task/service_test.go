@@ -32,6 +32,8 @@ func TestStatusTransitionMatrix(t *testing.T) {
 		{"review", "done"},
 		{"review", "in_progress"},
 		{"review", "cancelled"},
+		{"done", "cancelled"},
+		{"cancelled", "cancelled"},
 	}
 	for _, pair := range valid {
 		if !isTransitionAllowed(pair[0], pair[1]) {
@@ -111,7 +113,7 @@ func TestTransitionStatusCompletedAtBehavior(t *testing.T) {
 	svc := newUnitService(taskRepo)
 	svc.clock = clock.NewFake(now)
 
-	doneTask, err := svc.TransitionStatus(context.Background(), taskID, "done", Actor{Type: "system"})
+	doneTask, err := svc.TransitionStatus(context.Background(), taskID, "done", Actor{Type: "system", AllowDoneBypass: true})
 	if err != nil {
 		t.Fatalf("TransitionStatus done: %v", err)
 	}
@@ -244,6 +246,106 @@ func TestTransitionStatusDraftToCancelledWithoutFlowTemplateSucceeds(t *testing.
 	}
 	if updated.WorkStatus != "cancelled" {
 		t.Fatalf("work_status = %q, want cancelled", updated.WorkStatus)
+	}
+}
+
+func TestTransitionStatusDoneWithoutFlowTemplateReturnsError(t *testing.T) {
+	taskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "review",
+				Title:          "Task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+	svc := newUnitService(taskRepo)
+
+	if _, err := svc.TransitionStatus(context.Background(), taskID, "done", Actor{Type: "agent", ID: uuid.New()}); !errors.Is(err, ErrDoneRequiresTerminalFlow) {
+		t.Fatalf("TransitionStatus done err = %v, want ErrDoneRequiresTerminalFlow", err)
+	}
+}
+
+func TestTransitionStatusDoneWithNonTerminalFlowNodeReturnsError(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowNodeID := uuid.New()
+	nextNodeID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    uuid.New(),
+				ProjectID:         uuid.New(),
+				WorkStatus:        "review",
+				FlowTemplateID:    &flowTemplateID,
+				CurrentFlowNodeID: &flowNodeID,
+				Title:             "Task",
+				CreatedByType:     "system",
+			},
+		},
+	}
+	svc := newUnitService(taskRepo)
+	svc.flowNodes = &fakeFlowNodeRepo{
+		nodes: map[uuid.UUID]repo.FlowNode{
+			flowNodeID: {ID: flowNodeID, NextNodeID: &nextNodeID},
+		},
+	}
+	svc.executions = &fakeFlowExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{ID: uuid.New(), TaskID: taskID, FlowNodeID: flowNodeID, Status: "active"},
+			},
+		},
+	}
+
+	if _, err := svc.TransitionStatus(context.Background(), taskID, "done", Actor{Type: "agent", ID: uuid.New()}); !errors.Is(err, ErrDoneRequiresTerminalFlow) {
+		t.Fatalf("TransitionStatus done err = %v, want ErrDoneRequiresTerminalFlow", err)
+	}
+}
+
+func TestTransitionStatusDoneWithCompletedTerminalFlowNodeSucceeds(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowNodeID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    uuid.New(),
+				ProjectID:         uuid.New(),
+				WorkStatus:        "review",
+				FlowTemplateID:    &flowTemplateID,
+				CurrentFlowNodeID: &flowNodeID,
+				Title:             "Task",
+				CreatedByType:     "system",
+			},
+		},
+	}
+	svc := newUnitService(taskRepo)
+	svc.flowNodes = &fakeFlowNodeRepo{
+		nodes: map[uuid.UUID]repo.FlowNode{
+			flowNodeID: {ID: flowNodeID, NextNodeID: nil},
+		},
+	}
+	svc.executions = &fakeFlowExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{ID: uuid.New(), TaskID: taskID, FlowNodeID: flowNodeID, Status: "completed"},
+			},
+		},
+	}
+
+	updated, err := svc.TransitionStatus(context.Background(), taskID, "done", Actor{Type: "agent", ID: uuid.New()})
+	if err != nil {
+		t.Fatalf("TransitionStatus done: %v", err)
+	}
+	if updated.WorkStatus != "done" {
+		t.Fatalf("work_status = %q, want done", updated.WorkStatus)
 	}
 }
 
@@ -509,6 +611,7 @@ func newUnitService(taskRepo *fakeTaskRepo) *service {
 		agents:      &fakeAgentRepo{},
 		users:       &fakeUserRepo{},
 		executions:  &fakeFlowExecutionRepo{},
+		flowNodes:   &fakeFlowNodeRepo{nodes: map[uuid.UUID]repo.FlowNode{}},
 		eventBus:    &fakeEventBus{},
 		clock:       clock.NewFake(time.Now().UTC()),
 	}
@@ -623,6 +726,21 @@ func (f *fakeFlowExecutionRepo) ListByTask(_ context.Context, taskID uuid.UUID) 
 	out := make([]repo.FlowNodeExecution, 0, len(items))
 	out = append(out, items...)
 	return out, nil
+}
+
+type fakeFlowNodeRepo struct {
+	nodes map[uuid.UUID]repo.FlowNode
+}
+
+func (f *fakeFlowNodeRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNode, error) {
+	if f.nodes == nil {
+		return repo.FlowNode{}, repo.ErrNotFound
+	}
+	item, ok := f.nodes[id]
+	if !ok {
+		return repo.FlowNode{}, repo.ErrNotFound
+	}
+	return item, nil
 }
 
 func (f *fakeQueueRepo) Enqueue(_ context.Context, entry repo.MergeQueueEntry) (repo.MergeQueueEntry, error) {

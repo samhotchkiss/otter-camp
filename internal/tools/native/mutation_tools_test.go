@@ -330,6 +330,64 @@ func (m *mockTaskRepo) Update(_ context.Context, task repo.ProjectTask) (repo.Pr
 	return m.task, nil
 }
 
+type mockFlowNodeRepo struct {
+	nodes map[uuid.UUID]repo.FlowNode
+}
+
+func (m *mockFlowNodeRepo) Create(context.Context, repo.FlowNode) (repo.FlowNode, error) {
+	return repo.FlowNode{}, errors.New("not implemented")
+}
+
+func (m *mockFlowNodeRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNode, error) {
+	if m.nodes == nil {
+		return repo.FlowNode{}, repo.ErrNotFound
+	}
+	node, ok := m.nodes[id]
+	if !ok {
+		return repo.FlowNode{}, repo.ErrNotFound
+	}
+	return node, nil
+}
+
+func (m *mockFlowNodeRepo) GetByTemplateOrdered(context.Context, uuid.UUID) ([]repo.FlowNode, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockFlowNodeRepo) Update(context.Context, repo.FlowNode) (repo.FlowNode, error) {
+	return repo.FlowNode{}, errors.New("not implemented")
+}
+
+type mockFlowExecutionRepo struct {
+	byTask map[uuid.UUID][]repo.FlowNodeExecution
+}
+
+func (m *mockFlowExecutionRepo) Complete(context.Context, uuid.UUID) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, errors.New("not implemented")
+}
+
+func (m *mockFlowExecutionRepo) Create(context.Context, repo.FlowNodeExecution) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, errors.New("not implemented")
+}
+
+func (m *mockFlowExecutionRepo) GetByID(context.Context, uuid.UUID) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, errors.New("not implemented")
+}
+
+func (m *mockFlowExecutionRepo) ListByTask(_ context.Context, taskID uuid.UUID) ([]repo.FlowNodeExecution, error) {
+	if m.byTask == nil {
+		return nil, nil
+	}
+	return append([]repo.FlowNodeExecution(nil), m.byTask[taskID]...), nil
+}
+
+func (m *mockFlowExecutionRepo) RecordCommitSHA(context.Context, uuid.UUID, string) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, errors.New("not implemented")
+}
+
+func (m *mockFlowExecutionRepo) Reject(context.Context, uuid.UUID) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, errors.New("not implemented")
+}
+
 func TestTaskUpdateRejectsDraftToQueuedWithoutFlowTemplate(t *testing.T) {
 	taskID := uuid.New()
 	tasks := &mockTaskRepo{
@@ -386,6 +444,155 @@ func TestTaskUpdateAllowsDraftToQueuedWithFlowTemplate(t *testing.T) {
 	}
 	if got := taskOut["work_status"]; got != "queued" {
 		t.Fatalf("work_status = %v, want queued", got)
+	}
+	if tasks.updateCalls != 1 {
+		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
+	}
+}
+
+func TestTaskUpdateRejectsDoneWithoutFlowTemplate(t *testing.T) {
+	taskID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			WorkStatus:     "review",
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "done",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != taskDoneTerminalNodeMessage {
+		t.Fatalf("error = %v, want %q", out["error"], taskDoneTerminalNodeMessage)
+	}
+	if tasks.updateCalls != 0 {
+		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)
+	}
+}
+
+func TestTaskUpdateRejectsDoneWhenFlowNodeNotTerminal(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowNodeID := uuid.New()
+	nextNodeID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:                taskID,
+			OrganizationID:    uuid.New(),
+			ProjectID:         uuid.New(),
+			WorkStatus:        "review",
+			FlowTemplateID:    &flowTemplateID,
+			CurrentFlowNodeID: &flowNodeID,
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.flowNodes = &mockFlowNodeRepo{
+		nodes: map[uuid.UUID]repo.FlowNode{
+			flowNodeID: {ID: flowNodeID, NextNodeID: &nextNodeID},
+		},
+	}
+	executor.flowExecs = &mockFlowExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {{ID: uuid.New(), TaskID: taskID, FlowNodeID: flowNodeID, Status: "completed"}},
+		},
+	}
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "done",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != taskDoneTerminalNodeMessage {
+		t.Fatalf("error = %v, want %q", out["error"], taskDoneTerminalNodeMessage)
+	}
+	if tasks.updateCalls != 0 {
+		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)
+	}
+}
+
+func TestTaskUpdateAllowsDoneWhenTerminalExecutionCompleted(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowNodeID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:                taskID,
+			OrganizationID:    uuid.New(),
+			ProjectID:         uuid.New(),
+			WorkStatus:        "review",
+			FlowTemplateID:    &flowTemplateID,
+			CurrentFlowNodeID: &flowNodeID,
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.flowNodes = &mockFlowNodeRepo{
+		nodes: map[uuid.UUID]repo.FlowNode{
+			flowNodeID: {ID: flowNodeID, NextNodeID: nil},
+		},
+	}
+	executor.flowExecs = &mockFlowExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {{ID: uuid.New(), TaskID: taskID, FlowNodeID: flowNodeID, Status: "completed"}},
+		},
+	}
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "done",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if got := taskOut["work_status"]; got != "done" {
+		t.Fatalf("work_status = %v, want done", got)
+	}
+	if tasks.updateCalls != 1 {
+		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
+	}
+}
+
+func TestTaskUpdateAllowsCancelledWithoutFlowTemplate(t *testing.T) {
+	taskID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			WorkStatus:     "draft",
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "cancelled",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if got := taskOut["work_status"]; got != "cancelled" {
+		t.Fatalf("work_status = %v, want cancelled", got)
 	}
 	if tasks.updateCalls != 1 {
 		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)

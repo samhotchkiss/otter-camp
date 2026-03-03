@@ -108,6 +108,7 @@ type flowExecutionReader interface {
 	Complete(ctx context.Context, id uuid.UUID) (repo.FlowNodeExecution, error)
 	Create(ctx context.Context, execution repo.FlowNodeExecution) (repo.FlowNodeExecution, error)
 	GetByID(ctx context.Context, id uuid.UUID) (repo.FlowNodeExecution, error)
+	ListByTask(ctx context.Context, taskID uuid.UUID) ([]repo.FlowNodeExecution, error)
 	RecordCommitSHA(ctx context.Context, id uuid.UUID, commitSHA string) (repo.FlowNodeExecution, error)
 	Reject(ctx context.Context, id uuid.UUID) (repo.FlowNodeExecution, error)
 }

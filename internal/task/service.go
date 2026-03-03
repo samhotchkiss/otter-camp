@@ -37,6 +37,7 @@ var (
 	ErrSourceProjectIDRequired   = errors.New("source_project_id is required for this inbox item type")
 	ErrRequiresHumanApproval     = errors.New("task requires human approval before queueing")
 	ErrFlowTemplateRequired      = errors.New("task requires a flow template before it can be queued")
+	ErrDoneRequiresTerminalFlow  = errors.New("task can only be marked done when its flow reaches a terminal node")
 	ErrTransitionTargetRequired  = errors.New("target status is required")
 	ErrActorTypeInvalidForAction = errors.New("actor_type is invalid for action")
 	ErrBrowserHandoffUnavailable = errors.New("browser handoff service unavailable")
@@ -108,6 +109,7 @@ type Actor struct {
 	Type              string
 	ID                uuid.UUID
 	AllowNoActiveFlow bool
+	AllowDoneBypass   bool
 }
 
 type ErrInProgressRequiresActiveFlow struct {
@@ -217,6 +219,10 @@ type flowExecutionRepository interface {
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]repo.FlowNodeExecution, error)
 }
 
+type flowNodeRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.FlowNode, error)
+}
+
 type browserHandoffCompleter interface {
 	CompleteHandoffByInboxItem(ctx context.Context, inboxItemID, actedByUserID uuid.UUID, actionDecision string) error
 }
@@ -234,6 +240,7 @@ type Options struct {
 	Agents      agentRepository
 	Users       humanUserRepository
 	Executions  flowExecutionRepository
+	FlowNodes   flowNodeRepository
 
 	EventBus eventPublisher
 	Clock    clock.Clock
@@ -254,6 +261,7 @@ type service struct {
 	agents      agentRepository
 	users       humanUserRepository
 	executions  flowExecutionRepository
+	flowNodes   flowNodeRepository
 
 	eventBus eventPublisher
 	clock    clock.Clock
@@ -323,6 +331,11 @@ func NewService(opts Options) (TaskService, error) {
 		svc.executions = opts.Executions
 	} else {
 		svc.executions = repo.NewFlowNodeExecutionRepo(opts.Pool)
+	}
+	if opts.FlowNodes != nil {
+		svc.flowNodes = opts.FlowNodes
+	} else {
+		svc.flowNodes = repo.NewFlowNodeRepo(opts.Pool)
 	}
 
 	return svc, nil
@@ -429,6 +442,11 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 			return nil, ErrInProgressRequiresActiveFlow{TaskID: taskRecord.ID}
 		}
 	}
+	if target == "done" && !actor.AllowDoneBypass {
+		if err := s.validateDoneTransition(ctx, taskRecord); err != nil {
+			return nil, err
+		}
+	}
 
 	taskRecord.WorkStatus = target
 	if target == "done" || target == "cancelled" {
@@ -471,6 +489,41 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	}
 
 	return &updated, nil
+}
+
+func (s *service) validateDoneTransition(ctx context.Context, taskRecord repo.ProjectTask) error {
+	if taskRecord.FlowTemplateID == nil || taskRecord.CurrentFlowNodeID == nil {
+		return ErrDoneRequiresTerminalFlow
+	}
+	if s.flowNodes == nil || s.executions == nil {
+		return ErrDoneRequiresTerminalFlow
+	}
+	node, err := s.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return ErrDoneRequiresTerminalFlow
+		}
+		return err
+	}
+	if node.NextNodeID != nil {
+		return ErrDoneRequiresTerminalFlow
+	}
+	rows, err := s.executions.ListByTask(ctx, taskRecord.ID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return ErrDoneRequiresTerminalFlow
+		}
+		return err
+	}
+	for _, row := range rows {
+		if row.FlowNodeID != node.ID {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(row.Status), "completed") {
+			return nil
+		}
+	}
+	return ErrDoneRequiresTerminalFlow
 }
 
 func (s *service) hasActiveFlowExecution(ctx context.Context, taskID uuid.UUID) (bool, error) {
@@ -1002,11 +1055,16 @@ func toDomainActor(actorType string, actorID *uuid.UUID) (string, *uuid.UUID) {
 }
 
 func isTransitionAllowed(fromStatus, toStatus string) bool {
-	allowedTargets, ok := validStatusTransitions[normalizeStatus(fromStatus)]
+	from := normalizeStatus(fromStatus)
+	target := normalizeStatus(toStatus)
+	allowedTargets, ok := validStatusTransitions[from]
 	if !ok {
 		return false
 	}
-	_, ok = allowedTargets[normalizeStatus(toStatus)]
+	if target == "cancelled" {
+		return true
+	}
+	_, ok = allowedTargets[target]
 	return ok
 }
 
