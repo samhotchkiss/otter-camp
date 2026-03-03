@@ -26,6 +26,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/memory/compaction"
 	"github.com/samhotchkiss/otter-camp/internal/memory/importer"
 	"github.com/samhotchkiss/otter-camp/internal/model"
+	"github.com/samhotchkiss/otter-camp/internal/observability"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
@@ -36,7 +37,6 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/secret"
 	"github.com/samhotchkiss/otter-camp/internal/storage"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
-	"github.com/samhotchkiss/otter-camp/internal/observability"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 	nativetools "github.com/samhotchkiss/otter-camp/internal/tools/native"
 	"github.com/samhotchkiss/otter-camp/internal/turn"
@@ -248,6 +248,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	}
 	nativeExecutor := nativetools.NewExecutor(nativetools.ExecutorOptions{
 		Pool:    pool.Raw(),
+		DataDir: strings.TrimSpace(os.Getenv("OTTERCAMP_DATA_DIR")),
 		Memory:  memoryRetriever,
 		CLI:     cliExecutor,
 		Secrets: secretService,

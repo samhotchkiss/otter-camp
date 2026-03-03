@@ -142,6 +142,97 @@ func TestIntegrationFileWriteReadDeleteRoundTrip(t *testing.T) {
 	}
 }
 
+func TestIntegrationFileWriteUsesSlugWorkspacePath(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project", project.ID)
+	dataDir := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:    pool,
+		DataDir: dataDir,
+	})
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agent.ID,
+		SessionID:      &session.ID,
+	})
+
+	if _, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "notes/plan.md",
+		"content":     "ship it",
+		"create_dirs": true,
+	}); err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+
+	orgRecord, err := repo.NewOrgRepo(pool).GetByID(context.Background(), orgID)
+	if err != nil {
+		t.Fatalf("load org: %v", err)
+	}
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+
+	expectedPath := filepath.Join(dataDir, "workspaces", orgRecord.Slug, projectRecord.Slug, "notes", "plan.md")
+	if _, err := os.Stat(expectedPath); err != nil {
+		t.Fatalf("expected file at slug workspace path %q: %v", expectedPath, err)
+	}
+	if strings.Contains(expectedPath, orgID.String()) || strings.Contains(expectedPath, project.ID.String()) {
+		t.Fatalf("workspace path should not include UUIDs: %q", expectedPath)
+	}
+}
+
+func TestIntegrationFileReadUsesSlugWorkspacePath(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project", project.ID)
+	dataDir := t.TempDir()
+
+	orgRecord, err := repo.NewOrgRepo(pool).GetByID(context.Background(), orgID)
+	if err != nil {
+		t.Fatalf("load org: %v", err)
+	}
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+
+	workspacePath := filepath.Join(dataDir, "workspaces", orgRecord.Slug, projectRecord.Slug)
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		t.Fatalf("mkdir workspace path: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacePath, "existing.md"), []byte("hello from slug workspace"), 0o644); err != nil {
+		t.Fatalf("write existing workspace file: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:    pool,
+		DataDir: dataDir,
+	})
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agent.ID,
+		SessionID:      &session.ID,
+	})
+	out, err := executor.Execute(ctx, "file.read", map[string]any{
+		"path": "existing.md",
+	})
+	if err != nil {
+		t.Fatalf("file.read: %v", err)
+	}
+	if got := out["content"]; got != "hello from slug workspace" {
+		t.Fatalf("file.read content = %v, want hello from slug workspace", got)
+	}
+}
+
 func TestIntegrationTaskDependencyCreateRemoveAndCycleDetection(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)

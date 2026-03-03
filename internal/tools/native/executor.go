@@ -45,6 +45,10 @@ type chatSessionReader interface {
 	ListByOrg(ctx context.Context, organizationID uuid.UUID) ([]repo.ChatSession, error)
 }
 
+type organizationReader interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.Organization, error)
+}
+
 type projectReader interface {
 	Create(ctx context.Context, project repo.Project) (repo.Project, error)
 	List(ctx context.Context, organizationID uuid.UUID) ([]repo.Project, error)
@@ -174,6 +178,7 @@ type NativeToolExecutor struct {
 	events         eventPublisher
 	command        commandContextFunc
 	chatSessions   chatSessionReader
+	organizations  organizationReader
 	projects       projectReader
 	tasks          taskReader
 	inbox          inboxReader
@@ -197,10 +202,7 @@ type NativeToolExecutor struct {
 }
 
 func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
-	dataDir := strings.TrimSpace(opts.DataDir)
-	if dataDir == "" {
-		dataDir = "./data"
-	}
+	dataDir := resolveDataDir(opts.DataDir)
 	command := opts.Command
 	if command == nil {
 		command = exec.CommandContext
@@ -220,6 +222,7 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 
 	if opts.Pool != nil {
 		exec.chatSessions = repo.NewChatSessionRepo(opts.Pool)
+		exec.organizations = repo.NewOrgRepo(opts.Pool)
 		exec.projects = repo.NewProjectRepo(opts.Pool)
 		exec.tasks = repo.NewProjectTaskRepo(opts.Pool)
 		exec.inbox = repo.NewInboxItemRepo(opts.Pool)
@@ -242,6 +245,39 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 	}
 
 	return exec
+}
+
+func resolveDataDir(raw string) string {
+	dataDir := strings.TrimSpace(raw)
+	if dataDir == "" {
+		dataDir = strings.TrimSpace(os.Getenv("OTTERCAMP_DATA_DIR"))
+	}
+	if dataDir == "" {
+		dataDir = "~/otter-data/"
+	}
+	expanded, err := expandDataDir(dataDir)
+	if err == nil {
+		return expanded
+	}
+	return dataDir
+}
+
+func expandDataDir(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", fmt.Errorf("data directory path is required")
+	}
+	if trimmed == "~" || strings.HasPrefix(trimmed, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve user home: %w", err)
+		}
+		if trimmed == "~" {
+			return filepath.Clean(home), nil
+		}
+		return filepath.Clean(filepath.Join(home, trimmed[2:])), nil
+	}
+	return filepath.Clean(trimmed), nil
 }
 
 func (e *NativeToolExecutor) Execute(ctx context.Context, toolName string, input map[string]any) (map[string]any, error) {
@@ -418,18 +454,17 @@ func (e *NativeToolExecutor) workspaceForContext(ctx context.Context) (SessionWo
 	if root != "" {
 		cacheKey = "explicit:" + root
 	} else {
-		cacheKey = scope.organizationID.String()
-		base := filepath.Join(e.dataDir, "workspaces", scope.organizationID.String())
-		switch {
-		case scope.projectID != nil && scope.taskID != nil:
-			root = filepath.Join(base, scope.projectID.String(), scope.taskID.String())
-			cacheKey += ":project:" + scope.projectID.String() + ":task:" + scope.taskID.String()
-		case scope.projectID != nil:
-			root = filepath.Join(base, scope.projectID.String(), "general")
-			cacheKey += ":project:" + scope.projectID.String() + ":general"
-		default:
+		orgSlug, projectSlug, slugErr := e.resolveWorkspaceSlugs(ctx, scope)
+		if slugErr != nil {
+			return SessionWorkDir{}, workspaceScope{}, slugErr
+		}
+		base := filepath.Join(e.dataDir, "workspaces", orgSlug)
+		if projectSlug != "" {
+			cacheKey = "org:" + orgSlug + ":project:" + projectSlug
+			root = filepath.Join(base, projectSlug)
+		} else {
+			cacheKey = "org:" + orgSlug + ":general"
 			root = filepath.Join(base, "general")
-			cacheKey += ":general"
 		}
 	}
 
@@ -444,6 +479,41 @@ func (e *NativeToolExecutor) workspaceForContext(ctx context.Context) (SessionWo
 	}
 	e.workspaces[cacheKey] = wd
 	return wd, scope, nil
+}
+
+func (e *NativeToolExecutor) resolveWorkspaceSlugs(ctx context.Context, scope workspaceScope) (string, string, error) {
+	if e.organizations == nil {
+		return "", "", fmt.Errorf("organization repository is required for workspace resolution")
+	}
+	org, err := e.organizations.GetByID(ctx, scope.organizationID)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve organization slug: %w", err)
+	}
+	orgSlug := strings.TrimSpace(org.Slug)
+	if orgSlug == "" {
+		return "", "", fmt.Errorf("organization %s has empty slug", scope.organizationID)
+	}
+
+	if scope.projectID == nil {
+		return orgSlug, "", nil
+	}
+
+	if e.projects == nil {
+		return "", "", fmt.Errorf("project repository is required for workspace resolution")
+	}
+	projectRecord, err := e.projects.GetByID(ctx, *scope.projectID)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve project slug: %w", err)
+	}
+	if projectRecord.OrganizationID != scope.organizationID {
+		return "", "", fmt.Errorf("project organization mismatch")
+	}
+	projectSlug := strings.TrimSpace(projectRecord.Slug)
+	if projectSlug == "" {
+		return "", "", fmt.Errorf("project %s has empty slug", projectRecord.ID)
+	}
+
+	return orgSlug, projectSlug, nil
 }
 
 func (e *NativeToolExecutor) resolveInputPath(ctx context.Context, input map[string]any, key string) (SessionWorkDir, workspaceScope, string, error) {
