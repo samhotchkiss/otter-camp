@@ -68,6 +68,29 @@ func TestAgentAssignmentHTTPPMFlow(t *testing.T) {
 	}
 }
 
+func TestAgentAssignmentHTTPRejectsStarterTrioAsPM(t *testing.T) {
+	testServer, org, adminUser, _ := newAgentTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	project := seedAssignmentProject(t, testServer.Pool, org.ID)
+	frank := seedStarterTrioAssignmentAgent(t, testServer.Pool, org.ID, "Frank")
+
+	assignResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents/"+frank.ID.String()+"/project-assignments", map[string]any{
+		"project_id": project.ID.String(),
+		"role":       "pm",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if assignResp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("assign status = %d, want %d body=%s", assignResp.StatusCode, http.StatusUnprocessableEntity, string(assignResp.Body))
+	}
+	if got := jsonPathString(t, assignResp.Body, "error", "code"); got != "validation_error" {
+		t.Fatalf("error.code = %q, want %q body=%s", got, "validation_error", string(assignResp.Body))
+	}
+	if got := jsonPathString(t, assignResp.Body, "error", "message"); got != "starter trio agents (Frank, Lori, Ellie) operate at the organization level and cannot be assigned as project PM, worker, or reviewer" {
+		t.Fatalf("error.message = %q body=%s", got, string(assignResp.Body))
+	}
+}
+
 func TestProjectAgentsHTTPAssignmentLifecycle(t *testing.T) {
 	testServer, org, adminUser, _ := newAgentTestServer(t)
 	defer testServer.Close()
@@ -332,6 +355,32 @@ func seedActiveAssignmentAgent(t *testing.T, pool *pgxpool.Pool, orgID uuid.UUID
 	})
 	if err != nil {
 		t.Fatalf("create agent: %v", err)
+	}
+	return created
+}
+
+func seedStarterTrioAssignmentAgent(t *testing.T, pool *pgxpool.Pool, orgID uuid.UUID, name string) repo.Agent {
+	t.Helper()
+
+	agentRepo := repo.NewAgentRepo(pool)
+	created, err := agentRepo.Create(context.Background(), repo.Agent{
+		OrganizationID:       orgID,
+		DisplayName:          name,
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "prompt",
+		OperatorInstructions: "",
+		AgentType:            "general",
+		IsStarterTrio:        true,
+		PrivateMemory:        false,
+		MemoryReadScopes:     []string{"org"},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create starter trio agent: %v", err)
 	}
 	return created
 }

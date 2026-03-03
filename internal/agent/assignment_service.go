@@ -21,6 +21,7 @@ var (
 	ErrAssignmentProjectIDRequired = errors.New("assignment project_id is required")
 	ErrAssignmentSkillIDRequired   = errors.New("assignment skill_id is required")
 	ErrAssignmentInvalidRole       = errors.New("assignment role must be pm, worker, reviewer, or observer")
+	ErrAssignmentStarterTrioRole   = errors.New("starter trio agents (Frank, Lori, Ellie) operate at the organization level and cannot be assigned as project PM, worker, or reviewer")
 	ErrPMConflict                  = repo.ErrPMConflict
 )
 
@@ -58,11 +59,16 @@ type assignmentProjectLookup interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.Project, error)
 }
 
+type assignmentAgentLookup interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.Agent, error)
+}
+
 type AssignmentServiceOptions struct {
 	Pool               *pgxpool.Pool
 	ProjectAssignments assignmentProjectRepository
 	SkillAttachments   assignmentSkillRepository
 	Projects           assignmentProjectLookup
+	Agents             assignmentAgentLookup
 	Events             eventbus.EventBus
 }
 
@@ -71,6 +77,7 @@ type assignmentService struct {
 	projectAssignments assignmentProjectRepository
 	skillAttachments   assignmentSkillRepository
 	projects           assignmentProjectLookup
+	agents             assignmentAgentLookup
 	events             eventbus.EventBus
 }
 
@@ -91,6 +98,10 @@ func NewAssignmentService(opts AssignmentServiceOptions) (AssignmentService, err
 	if projects == nil {
 		projects = repo.NewProjectRepo(opts.Pool)
 	}
+	agents := opts.Agents
+	if agents == nil {
+		agents = repo.NewAgentRepo(opts.Pool)
+	}
 	if opts.Events == nil {
 		return nil, fmt.Errorf("assignment service requires an event bus")
 	}
@@ -100,6 +111,7 @@ func NewAssignmentService(opts AssignmentServiceOptions) (AssignmentService, err
 		projectAssignments: projectAssignments,
 		skillAttachments:   skillAttachments,
 		projects:           projects,
+		agents:             agents,
 		events:             opts.Events,
 	}, nil
 }
@@ -115,6 +127,15 @@ func (s *assignmentService) AssignToProject(ctx context.Context, agentID, projec
 	role = normalizeAssignmentRole(role)
 	if role == "" {
 		return nil, ErrAssignmentInvalidRole
+	}
+	if s.agents != nil && roleRequiresDedicatedProjectAgent(role) {
+		agentRecord, err := s.agents.GetByID(ctx, agentID)
+		if err != nil {
+			return nil, err
+		}
+		if agentRecord.IsStarterTrio {
+			return nil, ErrAssignmentStarterTrioRole
+		}
 	}
 
 	assignedByType, assignedByID, err := normalizeAssignmentActor(assignedBy)
@@ -318,4 +339,13 @@ func normalizePriority(priority int) int {
 		return defaultSkillPriority
 	}
 	return priority
+}
+
+func roleRequiresDedicatedProjectAgent(role string) bool {
+	switch role {
+	case "pm", "worker", "reviewer":
+		return true
+	default:
+		return false
+	}
 }

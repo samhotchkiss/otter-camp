@@ -110,6 +110,17 @@ func (f *fakeProjectAssignments) GetPMTx(_ context.Context, tx pgx.Tx, _ uuid.UU
 	return f.currentPM, nil
 }
 
+type fakeAssignmentAgents struct {
+	getByIDFn func(context.Context, uuid.UUID) (repo.Agent, error)
+}
+
+func (f *fakeAssignmentAgents) GetByID(ctx context.Context, id uuid.UUID) (repo.Agent, error) {
+	if f.getByIDFn != nil {
+		return f.getByIDFn(ctx, id)
+	}
+	return repo.Agent{ID: id}, nil
+}
+
 type fakeSkillAttachments struct {
 	records   map[string]repo.AgentSkillAttachment
 	setCalls  map[uuid.UUID]int
@@ -209,6 +220,11 @@ func TestAssignToProjectPMSwapUsesSingleTransaction(t *testing.T) {
 	svc := &assignmentService{
 		txStarter:          txStarter,
 		projectAssignments: assignments,
+		agents: &fakeAssignmentAgents{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Agent, error) {
+				return repo.Agent{ID: id, IsStarterTrio: false}, nil
+			},
+		},
 	}
 
 	result, err := svc.AssignToProject(context.Background(), newPM, projectID, "pm", AssignmentActor{Type: "system"})
@@ -341,10 +357,91 @@ func TestAssignToProjectReturnsPMConflict(t *testing.T) {
 	svc := &assignmentService{
 		txStarter:          txStarter,
 		projectAssignments: assignments,
+		agents: &fakeAssignmentAgents{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Agent, error) {
+				return repo.Agent{ID: id, IsStarterTrio: false}, nil
+			},
+		},
 	}
 
 	_, err := svc.AssignToProject(context.Background(), uuid.New(), uuid.New(), "pm", AssignmentActor{Type: "system"})
 	if !errors.Is(err, ErrPMConflict) {
 		t.Fatalf("AssignToProject error = %v, want ErrPMConflict", err)
+	}
+}
+
+func TestAssignToProjectRejectsStarterTrioForPMWorkerReviewerRoles(t *testing.T) {
+	t.Parallel()
+
+	for _, role := range []string{"pm", "worker", "reviewer"} {
+		role := role
+		t.Run(role, func(t *testing.T) {
+			t.Parallel()
+
+			tx := &fakeTx{}
+			txStarter := &fakeTxStarter{tx: tx}
+			assignments := &fakeProjectAssignments{}
+			svc := &assignmentService{
+				txStarter:          txStarter,
+				projectAssignments: assignments,
+				agents: &fakeAssignmentAgents{
+					getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Agent, error) {
+						return repo.Agent{ID: id, IsStarterTrio: true}, nil
+					},
+				},
+			}
+
+			_, err := svc.AssignToProject(context.Background(), uuid.New(), uuid.New(), role, AssignmentActor{Type: "system"})
+			if !errors.Is(err, ErrAssignmentStarterTrioRole) {
+				t.Fatalf("AssignToProject error = %v, want ErrAssignmentStarterTrioRole", err)
+			}
+			if len(assignments.callOrder) != 0 {
+				t.Fatalf("assignment calls = %d, want 0", len(assignments.callOrder))
+			}
+			if tx.commitCount != 0 || tx.rollbackCount != 0 {
+				t.Fatalf("tx counts commit=%d rollback=%d, want 0/0", tx.commitCount, tx.rollbackCount)
+			}
+		})
+	}
+}
+
+func TestAssignToProjectAllowsStarterTrioObserverRole(t *testing.T) {
+	t.Parallel()
+
+	tx := &fakeTx{}
+	txStarter := &fakeTxStarter{tx: tx}
+	starterTrioID := uuid.New()
+	projectID := uuid.New()
+	assignments := &fakeProjectAssignments{
+		assignResult: repo.AgentProjectAssignment{
+			ID:        uuid.New(),
+			AgentID:   starterTrioID,
+			ProjectID: projectID,
+			Role:      "observer",
+			IsActive:  true,
+		},
+	}
+	svc := &assignmentService{
+		txStarter:          txStarter,
+		projectAssignments: assignments,
+		agents: &fakeAssignmentAgents{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Agent, error) {
+				return repo.Agent{ID: id, IsStarterTrio: true}, nil
+			},
+		},
+	}
+
+	result, err := svc.AssignToProject(context.Background(), starterTrioID, projectID, "observer", AssignmentActor{Type: "system"})
+	if err != nil {
+		t.Fatalf("AssignToProject observer returned error: %v", err)
+	}
+	if result.Role != "observer" {
+		t.Fatalf("assigned role = %q, want observer", result.Role)
+	}
+	if len(assignments.callOrder) != 1 || assignments.callOrder[0] != "assign" {
+		t.Fatalf("assignment calls = %v, want [assign]", assignments.callOrder)
+	}
+	if tx.commitCount != 1 {
+		t.Fatalf("commit count = %d, want 1", tx.commitCount)
 	}
 }
