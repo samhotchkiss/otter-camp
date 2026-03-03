@@ -24,10 +24,11 @@ func TestTask_StateMachine_FullPath(t *testing.T) {
 	fx := newTaskFixture073(t, false)
 
 	taskRecord, err := fx.taskService.CreateTask(ctx, tasksvc.CreateTaskRequest{
-		ProjectID:     fx.project.ID,
-		Title:         "state-machine-full-path",
-		CreatedByType: "system",
-		CreatedByID:   uuid.Nil,
+		ProjectID:      fx.project.ID,
+		Title:          "state-machine-full-path",
+		FlowTemplateID: &fx.flowTemplate.ID,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
 	})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
@@ -368,15 +369,16 @@ func TestInboxItem_Creation(t *testing.T) {
 }
 
 type taskFixture073 struct {
-	pool        *pgxpool.Pool
-	taskService tasksvc.TaskService
-	org         repo.Organization
-	project     repo.Project
-	pmUser      repo.HumanUser
-	pmAgent     repo.Agent
-	taskRepo    *repo.ProjectTaskRepo
-	queueRepo   *repo.MergeQueueEntryRepo
-	inboxRepo   *repo.InboxItemRepo
+	pool         *pgxpool.Pool
+	taskService  tasksvc.TaskService
+	org          repo.Organization
+	project      repo.Project
+	flowTemplate repo.FlowTemplate
+	pmUser       repo.HumanUser
+	pmAgent      repo.Agent
+	taskRepo     *repo.ProjectTaskRepo
+	queueRepo    *repo.MergeQueueEntryRepo
+	inboxRepo    *repo.InboxItemRepo
 }
 
 func newTaskFixture073(t *testing.T, requiresHumanReview bool) taskFixture073 {
@@ -384,7 +386,7 @@ func newTaskFixture073(t *testing.T, requiresHumanReview bool) taskFixture073 {
 
 	ctx := context.Background()
 	pool := testdb.New(t)
-	org, projectRecord, pmUser, pmAgent := seedTaskFixtureData073(t, ctx, pool, requiresHumanReview)
+	org, projectRecord, flowTemplate, pmUser, pmAgent := seedTaskFixtureData073(t, ctx, pool, requiresHumanReview)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	bus := eventbus.New(pool, logger, eventbus.Config{})
@@ -397,19 +399,20 @@ func newTaskFixture073(t *testing.T, requiresHumanReview bool) taskFixture073 {
 	}
 
 	return taskFixture073{
-		pool:        pool,
-		taskService: taskService,
-		org:         org,
-		project:     projectRecord,
-		pmUser:      pmUser,
-		pmAgent:     pmAgent,
-		taskRepo:    repo.NewProjectTaskRepo(pool),
-		queueRepo:   repo.NewMergeQueueEntryRepo(pool),
-		inboxRepo:   repo.NewInboxItemRepo(pool),
+		pool:         pool,
+		taskService:  taskService,
+		org:          org,
+		project:      projectRecord,
+		flowTemplate: flowTemplate,
+		pmUser:       pmUser,
+		pmAgent:      pmAgent,
+		taskRepo:     repo.NewProjectTaskRepo(pool),
+		queueRepo:    repo.NewMergeQueueEntryRepo(pool),
+		inboxRepo:    repo.NewInboxItemRepo(pool),
 	}
 }
 
-func seedTaskFixtureData073(t *testing.T, ctx context.Context, pool *pgxpool.Pool, requiresHumanReview bool) (repo.Organization, repo.Project, repo.HumanUser, repo.Agent) {
+func seedTaskFixtureData073(t *testing.T, ctx context.Context, pool *pgxpool.Pool, requiresHumanReview bool) (repo.Organization, repo.Project, repo.FlowTemplate, repo.HumanUser, repo.Agent) {
 	t.Helper()
 
 	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
@@ -435,6 +438,20 @@ func seedTaskFixtureData073(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	})
 	if err != nil {
 		t.Fatalf("create project: %v", err)
+	}
+	flowTemplate, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &projectRecord.ID,
+		Slug:           "task-073-flow-" + uuid.NewString()[:8],
+		DisplayName:    "Task 073 Flow",
+		Description:    "integration test flow",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
 	}
 
 	pmUser, err := repo.NewHumanUserRepo(pool).Create(ctx, repo.HumanUser{
@@ -478,17 +495,18 @@ func seedTaskFixtureData073(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 		t.Fatalf("assign pm agent: %v", err)
 	}
 
-	return org, projectRecord, pmUser, pmAgent
+	return org, projectRecord, flowTemplate, pmUser, pmAgent
 }
 
 func createTask073(t *testing.T, ctx context.Context, fx taskFixture073, title string) *tasksvc.ProjectTask {
 	t.Helper()
 
 	created, err := fx.taskService.CreateTask(ctx, tasksvc.CreateTaskRequest{
-		ProjectID:     fx.project.ID,
-		Title:         title,
-		CreatedByType: "system",
-		CreatedByID:   uuid.Nil,
+		ProjectID:      fx.project.ID,
+		Title:          title,
+		FlowTemplateID: &fx.flowTemplate.ID,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
 	})
 	if err != nil {
 		t.Fatalf("CreateTask %q: %v", title, err)

@@ -742,6 +742,11 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		current.Description = &description
 	}
 	if status, ok := readString(input, "work_status"); ok && status != "" {
+		if strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
+			strings.EqualFold(strings.TrimSpace(status), "queued") &&
+			current.FlowTemplateID == nil {
+			return map[string]any{"error": "task requires a flow template before it can be queued"}, nil
+		}
 		current.WorkStatus = status
 	}
 	updated, err := e.tasks.Update(ctx, current)

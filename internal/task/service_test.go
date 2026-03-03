@@ -174,6 +174,79 @@ func TestTransitionStatusRequiresHumanApprovalGate(t *testing.T) {
 	}
 }
 
+func TestTransitionStatusDraftToQueuedRequiresFlowTemplate(t *testing.T) {
+	taskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "draft",
+				Title:          "Task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	if _, err := svc.TransitionStatus(context.Background(), taskID, "queued", Actor{Type: "system"}); !errors.Is(err, ErrFlowTemplateRequired) {
+		t.Fatalf("TransitionStatus queued err = %v, want ErrFlowTemplateRequired", err)
+	}
+}
+
+func TestTransitionStatusDraftToQueuedWithFlowTemplateSucceeds(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "draft",
+				FlowTemplateID: &flowTemplateID,
+				Title:          "Task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	updated, err := svc.TransitionStatus(context.Background(), taskID, "queued", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if updated.WorkStatus != "queued" {
+		t.Fatalf("work_status = %q, want queued", updated.WorkStatus)
+	}
+}
+
+func TestTransitionStatusDraftToCancelledWithoutFlowTemplateSucceeds(t *testing.T) {
+	taskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "draft",
+				Title:          "Task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	updated, err := svc.TransitionStatus(context.Background(), taskID, "cancelled", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus cancelled: %v", err)
+	}
+	if updated.WorkStatus != "cancelled" {
+		t.Fatalf("work_status = %q, want cancelled", updated.WorkStatus)
+	}
+}
+
 func TestTransitionStatusInProgressWithoutActiveFlowReturnsError(t *testing.T) {
 	taskID := uuid.New()
 	taskRepo := &fakeTaskRepo{

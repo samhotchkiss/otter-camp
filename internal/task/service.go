@@ -36,6 +36,7 @@ var (
 	ErrSourceTaskRequired        = errors.New("source_task_id is required for this inbox item type")
 	ErrSourceProjectIDRequired   = errors.New("source_project_id is required for this inbox item type")
 	ErrRequiresHumanApproval     = errors.New("task requires human approval before queueing")
+	ErrFlowTemplateRequired      = errors.New("task requires a flow template before it can be queued")
 	ErrTransitionTargetRequired  = errors.New("target status is required")
 	ErrActorTypeInvalidForAction = errors.New("actor_type is invalid for action")
 	ErrBrowserHandoffUnavailable = errors.New("browser handoff service unavailable")
@@ -414,6 +415,9 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	}
 	if target == "queued" && taskRecord.RequiresHumanReview && !approvalOverride {
 		return nil, ErrRequiresHumanApproval
+	}
+	if from == "draft" && target == "queued" && taskRecord.FlowTemplateID == nil {
+		return nil, ErrFlowTemplateRequired
 	}
 	if target == "in_progress" {
 		allowNoActiveFlow := actor.AllowNoActiveFlow && strings.EqualFold(strings.TrimSpace(actor.Type), "system")

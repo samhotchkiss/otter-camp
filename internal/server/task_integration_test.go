@@ -107,6 +107,31 @@ func TestTaskHTTPCreateQueueReviewDecisionLifecycle(t *testing.T) {
 	}
 }
 
+func TestTaskHTTPQueueRequiresFlowTemplate(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "task-queue-flow-template", false)
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+project.ID.String()+"/tasks", map[string]any{
+		"title":       "Queue needs flow",
+		"description": "should fail without flow template",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if created.StatusCode != http.StatusCreated {
+		t.Fatalf("create task status = %d, want %d body=%s", created.StatusCode, http.StatusCreated, string(created.Body))
+	}
+	taskID := jsonPathString(t, created.Body, "data", "id")
+
+	queued := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskID+"/queue", map[string]any{}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if queued.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("queue task status = %d, want %d body=%s", queued.StatusCode, http.StatusUnprocessableEntity, string(queued.Body))
+	}
+	if got := jsonPathString(t, queued.Body, "error", "message"); got != "task requires a flow template before it can be queued" {
+		t.Fatalf("queue error message = %q, want %q body=%s", got, "task requires a flow template before it can be queued", string(queued.Body))
+	}
+}
+
 func TestTaskHTTPPatchPriorityRoundTrip(t *testing.T) {
 	testServer, org, adminUser, _ := newTaskTestServer(t)
 	defer testServer.Close()

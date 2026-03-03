@@ -263,11 +263,13 @@ func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testin
 	defer fx.bus.Unsubscribe(fx.runCancellationSub)
 	stopTurnRuntime := startTaskQueueTurnRuntime(t, ctx, fx.pool, fx.bus, fx.org.ID)
 	defer stopTurnRuntime()
+	template := seedTaskQueueFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID)
 
 	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
 		ProjectID:       fx.project.ID,
 		Title:           "Queued assigned-agent task",
 		Description:     stringPtr("Investigate and start this queued task."),
+		FlowTemplateID:  &template.ID,
 		AssignedAgentID: &fx.agent.ID,
 		CreatedByType:   "system",
 	})
@@ -310,7 +312,7 @@ func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testin
 		}
 		var hasInProgressRun bool
 		for _, candidate := range runs {
-			if candidate.FlowNodeID == nil && candidate.Status == "in_progress" {
+			if candidate.Status == "in_progress" {
 				runRecord = candidate
 				hasInProgressRun = true
 				break
