@@ -542,6 +542,15 @@ func (s *service) CreateFlowTemplate(ctx context.Context, req CreateFlowTemplate
 	if err != nil {
 		return nil, err
 	}
+	if req.StartNodeID != nil && *req.StartNodeID != uuid.Nil {
+		startNode, startErr := s.nodes.GetByID(ctx, *req.StartNodeID)
+		if startErr != nil {
+			return nil, startErr
+		}
+		if err := s.validateFlowTemplateReviewCoverage(ctx, startNode.FlowTemplateID, req.StartNodeID, nil, nil); err != nil {
+			return nil, err
+		}
+	}
 	createdByType, createdByID, err := normalizeActor(req.CreatedByType, req.CreatedByID)
 	if err != nil {
 		return nil, err
@@ -668,7 +677,7 @@ func (s *service) UpdateFlowTemplate(ctx context.Context, orgID, templateID uuid
 	if req.StartNodeID != nil {
 		next.StartNodeID = req.StartNodeID
 	}
-	if err := s.validateFlowTemplateReviewCoverage(ctx, template.ID, next.StartNodeID, nil); err != nil {
+	if err := s.validateFlowTemplateReviewCoverage(ctx, template.ID, next.StartNodeID, nil, nil); err != nil {
 		return nil, err
 	}
 
@@ -736,6 +745,14 @@ func (s *service) AddFlowNode(ctx context.Context, templateID uuid.UUID, req Add
 	if err != nil {
 		return nil, err
 	}
+	if template.StartNodeID != nil && *template.StartNodeID != uuid.Nil {
+		if err := s.validateFlowTemplateReviewCoverage(ctx, template.ID, template.StartNodeID, &created, nil); err != nil {
+			if rollbackErr := s.nodes.Delete(ctx, created.ID); rollbackErr != nil {
+				return nil, fmt.Errorf("%w: rollback add flow node: %v", err, rollbackErr)
+			}
+			return nil, err
+		}
+	}
 	return &created, nil
 }
 
@@ -798,7 +815,7 @@ func (s *service) UpdateFlowNode(ctx context.Context, nodeID uuid.UUID, req Upda
 	if err := s.validateNodeActor(ctx, template.OrganizationID, next.ActorType, next.ActorID); err != nil {
 		return nil, err
 	}
-	if err := s.validateFlowTemplateReviewCoverage(ctx, template.ID, template.StartNodeID, &next); err != nil {
+	if err := s.validateFlowTemplateReviewCoverage(ctx, template.ID, template.StartNodeID, &next, nil); err != nil {
 		return nil, err
 	}
 
@@ -817,6 +834,15 @@ func (s *service) RemoveFlowNode(ctx context.Context, nodeID uuid.UUID) error {
 	node, err := s.nodes.GetByID(ctx, nodeID)
 	if err != nil {
 		return err
+	}
+	template, err := s.templates.GetByID(ctx, node.FlowTemplateID)
+	if err != nil {
+		return err
+	}
+	if template.StartNodeID != nil && *template.StartNodeID != uuid.Nil {
+		if err := s.validateFlowTemplateReviewCoverage(ctx, template.ID, template.StartNodeID, nil, &nodeID); err != nil {
+			return err
+		}
 	}
 
 	inUse, err := s.hasActiveTemplateTasks(ctx, node.FlowTemplateID)
@@ -1175,7 +1201,7 @@ type flowValidationState struct {
 	HasReview bool
 }
 
-func (s *service) validateFlowTemplateReviewCoverage(ctx context.Context, templateID uuid.UUID, startNodeID *uuid.UUID, overrideNode *repo.FlowNode) error {
+func (s *service) validateFlowTemplateReviewCoverage(ctx context.Context, templateID uuid.UUID, startNodeID *uuid.UUID, overrideNode *repo.FlowNode, removedNodeID *uuid.UUID) error {
 	if startNodeID == nil || *startNodeID == uuid.Nil {
 		return nil
 	}
@@ -1199,7 +1225,74 @@ func (s *service) validateFlowTemplateReviewCoverage(ctx context.Context, templa
 		}
 	}
 
-	return validateFlowTemplateReviewPath(*startNodeID, nodes)
+	if removedNodeID != nil && *removedNodeID != uuid.Nil {
+		filtered := make([]repo.FlowNode, 0, len(nodes))
+		for i := range nodes {
+			if nodes[i].ID == *removedNodeID {
+				continue
+			}
+			node := nodes[i]
+			if node.NextNodeID != nil && *node.NextNodeID == *removedNodeID {
+				node.NextNodeID = nil
+			}
+			if node.RejectNodeID != nil && *node.RejectNodeID == *removedNodeID {
+				node.RejectNodeID = nil
+			}
+			filtered = append(filtered, node)
+		}
+		nodes = filtered
+	}
+
+	return validateFlowTemplateReviewEntries(*startNodeID, nodes)
+}
+
+func validateFlowTemplateReviewEntries(startNodeID uuid.UUID, nodes []repo.FlowNode) error {
+	nodeByID := make(map[uuid.UUID]repo.FlowNode, len(nodes))
+	incoming := make(map[uuid.UUID]int, len(nodes))
+	for i := range nodes {
+		nodeByID[nodes[i].ID] = nodes[i]
+	}
+	if _, ok := nodeByID[startNodeID]; !ok {
+		return ErrFlowNodeTemplateMismatch
+	}
+
+	for i := range nodes {
+		node := nodes[i]
+		if node.NextNodeID != nil && *node.NextNodeID != uuid.Nil {
+			if _, ok := nodeByID[*node.NextNodeID]; ok {
+				incoming[*node.NextNodeID]++
+			}
+		}
+		if node.RejectNodeID != nil && *node.RejectNodeID != uuid.Nil {
+			if _, ok := nodeByID[*node.RejectNodeID]; ok {
+				if node.NextNodeID == nil || *node.NextNodeID != *node.RejectNodeID {
+					incoming[*node.RejectNodeID]++
+				}
+			}
+		}
+	}
+
+	entryNodeIDs := make([]uuid.UUID, 0, len(nodes)+1)
+	seenEntries := map[uuid.UUID]struct{}{startNodeID: {}}
+	entryNodeIDs = append(entryNodeIDs, startNodeID)
+	for i := range nodes {
+		node := nodes[i]
+		if incoming[node.ID] != 0 {
+			continue
+		}
+		if _, seen := seenEntries[node.ID]; seen {
+			continue
+		}
+		seenEntries[node.ID] = struct{}{}
+		entryNodeIDs = append(entryNodeIDs, node.ID)
+	}
+
+	for _, entryNodeID := range entryNodeIDs {
+		if err := validateFlowTemplateReviewPath(entryNodeID, nodes); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateFlowTemplateReviewPath(startNodeID uuid.UUID, nodes []repo.FlowNode) error {

@@ -138,6 +138,12 @@ func TestMapProjectErrorMappings(t *testing.T) {
 			wantStatus: http.StatusUnprocessableEntity,
 			wantCode:   "validation_error",
 		},
+		{
+			name:       "review node edges required",
+			err:        projectsvc.ErrReviewNodeEdgesRequired,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantCode:   "validation_error",
+		},
 	}
 
 	for _, tc := range tests {
