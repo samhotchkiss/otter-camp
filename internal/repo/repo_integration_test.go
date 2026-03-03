@@ -228,6 +228,7 @@ func TestToolDefinitionTier1SeedMigration(t *testing.T) {
 		"agent.list",
 		"agent.get",
 		"flow.get_template",
+		"flow.list_templates",
 		"flow.get_execution",
 		"schedule.list",
 		"merge_queue.status",

@@ -42,6 +42,7 @@ func TestKeyToolSchemasExposeRequiredParameters(t *testing.T) {
 		{name: "memory.query", requiredKeys: []string{"query"}, propertyKeys: []string{"query", "scope", "limit"}},
 		{name: "task.create", requiredKeys: []string{"project_id", "title"}, propertyKeys: []string{"project_id", "title", "description"}},
 		{name: "task.update", requiredKeys: []string{"task_id"}, propertyKeys: []string{"task_id", "title", "description", "work_status", "flow_template_id", "assigned_agent_id"}},
+		{name: "flow.list_templates", propertyKeys: []string{"project_id"}},
 		{name: "file.write", requiredKeys: []string{"path", "content"}, propertyKeys: []string{"path", "content"}},
 		{name: "git.diff", propertyKeys: []string{"ref", "staged", "file_path"}},
 		{name: "browser.navigate", requiredKeys: []string{"url"}, propertyKeys: []string{"url"}},
