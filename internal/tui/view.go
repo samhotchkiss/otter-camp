@@ -2914,11 +2914,6 @@ func (m Model) renderChatInputBox(width int, focused bool) string {
 
 	displayText := inputText
 
-	// EX-016: show character count when message is getting long
-	if !m.commandMode && len([]rune(m.chatInput)) > 100 {
-		displayText += styleMuted.Render(fmt.Sprintf(" [%d]", len([]rune(m.chatInput))))
-	}
-
 	if focused && !m.commandMode {
 		displayText += "▌" // cursor
 	}

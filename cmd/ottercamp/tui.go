@@ -565,6 +565,40 @@ func runTUICommand(args []string) int {
 				}
 				return apiClient.CancelChatTurn(ctx, resolvedID)
 			}
+			runtimeHints.ResetOrgSession = func(ctx context.Context, currentSessionID string) (string, error) {
+				// Archive the current active sync session (not just whatever the TUI is displaying).
+				sessions, err := apiClient.ListChatSessions(ctx, chatListSessionsFilter{Status: "active", ScopeType: "organization", Limit: 20})
+				if err != nil {
+					return "", fmt.Errorf("list sessions: %w", err)
+				}
+				for _, s := range sessions.Data {
+					if strings.EqualFold(s.Mode, "sync") {
+						_ = apiClient.ArchiveChatSession(ctx, s.ID)
+					}
+				}
+				// Also archive the displayed session if it's different.
+				if currentID, err := uuid.Parse(strings.TrimSpace(currentSessionID)); err == nil {
+					_ = apiClient.ArchiveChatSession(ctx, currentID)
+				}
+				// Resolve org ID and create a fresh sync session.
+				var orgResp struct {
+					Data struct {
+						ID string `json:"id"`
+					} `json:"data"`
+				}
+				if err := apiClient.request(ctx, "GET", "/v1/orgs/current", nil, &orgResp); err != nil {
+					return "", fmt.Errorf("resolve org: %w", err)
+				}
+				created, err := apiClient.CreateChatSession(ctx, chatCreateSessionRequest{
+					ScopeType: "organization",
+					ScopeID:   orgResp.Data.ID,
+					Mode:      "sync",
+				})
+				if err != nil {
+					return "", err
+				}
+				return created.Data.ID.String(), nil
+			}
 			runtimeHints.LoadChatHistory = func(ctx context.Context, sessionID string) ([]tuiapp.ChatMessage, error) {
 				resolvedID, resolveErr := resolveTUIChatSessionID(ctx, apiClient, sessionID)
 				if resolveErr != nil {

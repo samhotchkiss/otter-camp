@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/glamour"
+	glamourstyles "github.com/charmbracelet/glamour/styles"
 )
 
 type ChatScope string
@@ -113,8 +114,15 @@ func markdownToPlain(raw string, width int) string {
 		width = 20
 	}
 
+	// Use the dark style but with zero document margin so rendered text
+	// aligns flush-left inside the chat panel. The default "auto" style
+	// adds a 2-char left margin that eats into the panel width and causes
+	// assistant messages to appear shifted right / clipped.
+	chatStyle := glamourstyles.DarkStyleConfig
+	chatStyle.Document.Margin = uintPtr(0)
+	chatStyle.CodeBlock.Margin = uintPtr(0)
 	renderer, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("auto"),
+		glamour.WithStyles(chatStyle),
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {
@@ -180,6 +188,8 @@ func normalizeRenderedMarkdown(rendered string) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+func uintPtr(v uint) *uint { return &v }
 
 func autocompleteMention(seed string) string {
 	candidates := []string{"@frank", "@lori", "@ellie"}

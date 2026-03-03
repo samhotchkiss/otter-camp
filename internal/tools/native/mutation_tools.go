@@ -1640,10 +1640,12 @@ func (e *NativeToolExecutor) handleMessageSend(ctx context.Context, input map[st
 	}
 	var authorType *string
 	var authorID *uuid.UUID
+	actorType := "system"
 	if scope.agentID != nil && *scope.agentID != uuid.Nil {
 		typed := "agent"
 		authorType = &typed
 		authorID = scope.agentID
+		actorType = "agent"
 	}
 	created, err := e.messages.Create(ctx, repo.ChatMessage{
 		SessionID:  sessionID,
@@ -1657,6 +1659,36 @@ func (e *NativeToolExecutor) handleMessageSend(ctx context.Context, input map[st
 	if err != nil {
 		return nil, err
 	}
+
+	// Publish events so the target session triggers an agent turn.
+	if e.events != nil && e.chatSessions != nil {
+		session, sessErr := e.chatSessions.GetByID(ctx, sessionID)
+		if sessErr == nil {
+			payload, _ := json.Marshal(map[string]any{
+				"session_id":      session.ID,
+				"message_id":      created.ID,
+				"sequence_number": created.SequenceNumber,
+				"status":          created.Status,
+			})
+			_ = e.events.Publish(ctx, nil, eventbus.DomainEvent{
+				OrganizationID: session.OrganizationID,
+				EventType:      "chat.message.created",
+				ActorType:      actorType,
+				ActorID:        authorID,
+				Payload:        payload,
+			})
+			if role == "user" {
+				_ = e.events.Publish(ctx, nil, eventbus.DomainEvent{
+					OrganizationID: session.OrganizationID,
+					EventType:      "chat.message.user_sent",
+					ActorType:      actorType,
+					ActorID:        authorID,
+					Payload:        payload,
+				})
+			}
+		}
+	}
+
 	return map[string]any{
 		"message_id": created.ID,
 		"sequence":   created.SequenceNumber,

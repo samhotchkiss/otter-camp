@@ -1,0 +1,64 @@
+---
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import { getCollection } from 'astro:content';
+
+const photos = (await getCollection('photography', ({ data }) => !data.draft))
+  .sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
+---
+
+<BaseLayout title="Photography" description="Photography by Sam">
+  <h1>Photography</h1>
+  {photos.length > 0 ? (
+    <div class="photo-grid">
+      {photos.map((photo) => (
+        <article>
+          <img src={photo.data.image} alt={photo.data.imageAlt || photo.data.title} loading="lazy" />
+          <h3>{photo.data.title}</h3>
+          {photo.data.description && <p>{photo.data.description}</p>}
+          {photo.data.location && <span class="location">{photo.data.location}</span>}
+        </article>
+      ))}
+    </div>
+  ) : (
+    <p>No photos yet. Check back soon!</p>
+  )}
+</BaseLayout>
+
+<style>
+  h1 {
+    margin-bottom: 2rem;
+  }
+
+  .photo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 2rem;
+  }
+
+  .photo-grid article {
+    border-radius: 0.5rem;
+    overflow: hidden;
+  }
+
+  .photo-grid img {
+    width: 100%;
+    aspect-ratio: 4/3;
+    object-fit: cover;
+    border-radius: 0.5rem;
+  }
+
+  .photo-grid h3 {
+    font-size: 1rem;
+    margin-top: 0.5rem;
+  }
+
+  .photo-grid p {
+    font-size: 0.875rem;
+    color: #666;
+  }
+
+  .location {
+    font-size: 0.75rem;
+    color: #888;
+  }
+</style>

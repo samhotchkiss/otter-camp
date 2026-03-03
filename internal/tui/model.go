@@ -50,6 +50,10 @@ type chatCancelRequestedMsg struct {
 type chatCancelCompletedMsg struct {
 	Err error
 }
+type sessionResetMsg struct {
+	NewSessionID string
+	Err          error
+}
 
 // inboxActionCompletedMsg is dispatched when the async API call for an inbox
 // action (approve/reject/defer) completes. EX-160.
@@ -588,6 +592,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Cancel request failed: " + strings.TrimSpace(typed.Err.Error())
 		}
 		return m, nil
+	case sessionResetMsg:
+		if typed.Err != nil {
+			m.statusMessage = "Session reset failed: " + strings.TrimSpace(typed.Err.Error())
+			return m, nil
+		}
+		newID := strings.TrimSpace(typed.NewSessionID)
+		if newID == "" {
+			m.statusMessage = "Session reset failed: no new session ID returned."
+			return m, nil
+		}
+		m.chatMessages = nil
+		m.chatMessageIndex = make(map[string]int)
+		m.toolCallExpanded = make(map[string]map[string]bool)
+		m.toolCallMessageIndex = make(map[string]int)
+		m.chatScrollOffset = 0
+		m.chatHistoryIndex = -1
+		m.localMessageSeq = 0
+		m.activeSession = newID
+		m.activeScope = ScopeOrg
+		m.activeTurnSessionID = newID
+		m.workspace.activeSessionID = newID
+		m.state.LastActiveChatSession = newID
+		m.workspace.activity = appendActivity(m.workspace.activity, "session created: organization")
+		m.statusMessage = "Session reset. Chat cleared."
+		var cmds []tea.Cmd
+		if m.runtimeHints.LoadChatHistory != nil {
+			cmds = append(cmds, loadChatHistoryCmd(newID, m.runtimeHints.LoadChatHistory))
+		}
+		cmds = append(cmds, loadSidebarDataCmd(m.runtimeHints))
+		return m, tea.Batch(cmds...)
 	case inboxActionCompletedMsg:
 		// EX-160: server-side error for approve/reject/defer surfaces in the status bar.
 		// On success there is nothing to do — local state is already updated optimistically.
@@ -672,6 +706,18 @@ func (m Model) updateMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Mouse wheel scrolling for chat panel.
+	if msg.Action == tea.MouseActionPress && target == ChatPanel {
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.scrollChatBy(3)
+			return m, nil
+		case tea.MouseButtonWheelDown:
+			m.scrollChatBy(-3)
+			return m, nil
+		}
+	}
+
 	// Only handle left clicks from here.
 	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
 		return m, nil
@@ -693,6 +739,10 @@ func (m Model) updateMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 		return m.mouseClickSidebar(contentY)
 	case MainPanel:
 		return m.mouseClickMain(contentY)
+	case ChatPanel:
+		if contentY == 0 {
+			return m.mouseClickChatHeader(msg.X, layout)
+		}
 	}
 	return m, nil
 }
@@ -860,34 +910,145 @@ func (m Model) mouseClickInbox(contentY int) (Model, tea.Cmd) {
 }
 
 // mouseClickProject maps a click in the project view to a task in the task list.
+// The header line count must exactly match renderProjectView (view.go).
 func (m Model) mouseClickProject(contentY int) (Model, tea.Cmd) {
 	proj := m.workspace.selectedProject
 	if proj == nil {
 		return m, nil
 	}
-	// Project view: title(1) + divider(1) + description(~2) + agents(~2) + repo(~2) + divider(1) + tasks...
-	// This is approximate — we count the header lines to find where tasks start.
-	headerLines := 2 // title + divider
+
+	// Compute content width matching renderMainPanel → renderProjectView.
+	layout := m.CurrentLayout()
+	cw := layout.widths[1] - 4 // -2 border, -2 padding
+	if cw < 4 {
+		cw = 4
+	}
+
+	// Count lines before the first task line, matching renderProjectView exactly.
+	// Main panel header (renderMainPanel):
+	hdr := 2 // title + divider
+	// renderProjectView output:
+	hdr++ // blank line
+	hdr++ // project title
+	hdr++ // project divider
 	if strings.TrimSpace(proj.Description) != "" {
-		headerLines += len(wrapText(proj.Description, 60)) + 1
+		hdr += len(wrapText(proj.Description, maxInt(10, cw))) + 1
 	}
 	if len(proj.Agents) > 0 {
-		headerLines += 2
+		hdr += 2 // team line + blank
 	}
 	if strings.TrimSpace(proj.RepoURL) != "" {
-		headerLines += 2
+		hdr++ // repo line
+		if strings.TrimSpace(proj.RepoPath) != "" {
+			hdr++ // path line
+		}
+		hdr++ // blank line
 	}
-	headerLines++ // task section divider
+	if len(proj.Files) > 0 {
+		hdr++ // FILES (N) header
+		if !m.workspace.showProjectFiles {
+			hdr++ // hidden hint
+		} else {
+			hdr += len(proj.Files)
+		}
+		hdr++ // blank line
+	}
+	hdr++ // "OPEN TASKS (N)" header
 
-	taskIdx := contentY - headerLines
 	openTasks := m.workspace.openTasksForProject()
-	if taskIdx >= 0 && taskIdx < len(openTasks) {
-		m.workspace.projectTaskCursor = taskIdx
-		m.workspace.selectedTaskID = openTasks[taskIdx].ID
-		cmd := m.handleEnterKey()
-		return m, cmd
+	if len(openTasks) == 0 {
+		return m, nil
+	}
+
+	lineInTaskArea := contentY - hdr
+	if lineInTaskArea < 0 {
+		return m, nil
+	}
+
+	// Each task occupies 1 line (title) + 1 line (detail) when a workspace record exists.
+	lineOffset := 0
+	for i, task := range openTasks {
+		start := lineOffset
+		lineOffset++ // task title line
+		if m.workspace.tasks[task.ID] != nil {
+			lineOffset++ // detail line (agent + flow step)
+		}
+		if lineInTaskArea >= start && lineInTaskArea < lineOffset {
+			m.workspace.projectTaskCursor = i
+			m.workspace.selectedTaskID = task.ID
+			cmd := m.handleEnterKey()
+			return m, cmd
+		}
 	}
 	return m, nil
+}
+
+// mouseClickChatHeader maps a click on the chat header to a scope toggle.
+// The header renders: session_label  ·  [task] [project] [org]
+func (m Model) mouseClickChatHeader(absX int, layout layoutState) (Model, tea.Cmd) {
+	chatPanelStart := 0
+	if layout.visible[0] {
+		chatPanelStart += layout.widths[0] + 1
+	}
+	if layout.visible[1] {
+		chatPanelStart += layout.widths[1] + 1
+	}
+	localX := absX - chatPanelStart - 2 // -1 border, -1 padding
+
+	cw := layout.widths[2] - 4
+	if cw < 4 {
+		cw = 4
+	}
+
+	// Determine thinking badge width (same condition as renderChatPanel).
+	isThinking := m.activeTurn && (m.activeTurnSessionID == "" ||
+		strings.EqualFold(strings.TrimSpace(m.activeSession), m.activeTurnSessionID))
+	thinkingW := 0
+	if isThinking {
+		thinkingW = 3
+	}
+
+	// Scope indicator: "[task] [project] [org]" = 22 chars (non-compact)
+	// Compact mode: "[t] [p] [o]" = 11 chars
+	separatorW := 5 // "  ·  "
+	fullIndicatorW := 22
+	compact := (cw - separatorW - fullIndicatorW - thinkingW) < 8
+	indicatorW := fullIndicatorW
+	if compact {
+		indicatorW = 11
+	}
+
+	indicatorStart := cw - indicatorW - thinkingW
+	if localX < indicatorStart {
+		return m, nil // clicked on session label
+	}
+
+	posInIndicator := localX - indicatorStart
+	var newScope ChatScope
+	if !compact {
+		// [task] [project] [org]
+		// 0-5    7-15      17-21
+		if posInIndicator <= 5 {
+			newScope = ScopeTask
+		} else if posInIndicator <= 15 {
+			newScope = ScopeProject
+		} else {
+			newScope = ScopeOrg
+		}
+	} else {
+		// [t] [p] [o]
+		// 0-2  4-6 8-10
+		if posInIndicator <= 2 {
+			newScope = ScopeTask
+		} else if posInIndicator <= 6 {
+			newScope = ScopeProject
+		} else {
+			newScope = ScopeOrg
+		}
+	}
+
+	cmd := m.switchScope(newScope)
+	return m, cmd
 }
 
 func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -5036,8 +5197,17 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		m.statusMessage = fmt.Sprintf("conn:%s  scope:%s  session:%s  turn:%s",
 			connLabel, scopeLabel, sessionLabel, turnLabel)
 	case "clear", "cls":
-		// EX-391: :clear/:cls (shell clear screen) — screen is managed by the TUI.
-		m.statusMessage = "Screen is managed automatically. Use r to refresh data."
+		if m.runtimeHints.ResetOrgSession == nil {
+			m.statusMessage = "Session reset is not configured."
+			return nil
+		}
+		if m.activeTurn {
+			m.statusMessage = "Cannot reset session while a turn is active."
+			return nil
+		}
+		currentSession := m.ActiveChatSession()
+		m.statusMessage = "Resetting session..."
+		return resetOrgSessionCmd(currentSession, m.runtimeHints.ResetOrgSession)
 	case "ls", "list":
 		// EX-391: :ls (vim list buffers / shell list) — point to sidebar.
 		m.statusMessage = "Use the sidebar (1 to focus) to browse sessions and projects."
@@ -7098,6 +7268,13 @@ func cancelChatTurnCmd(
 		}
 		err := cancelFn(context.Background(), strings.TrimSpace(request.SessionID))
 		return chatCancelCompletedMsg{Err: err}
+	}
+}
+
+func resetOrgSessionCmd(currentSessionID string, resetFn func(ctx context.Context, currentSessionID string) (string, error)) tea.Cmd {
+	return func() tea.Msg {
+		newID, err := resetFn(context.Background(), strings.TrimSpace(currentSessionID))
+		return sessionResetMsg{NewSessionID: newID, Err: err}
 	}
 }
 

@@ -1,0 +1,25 @@
+# Cloudflare Pages configuration
+# Connect this repo to Cloudflare Pages with these settings:
+#
+# Build command:    npm run build
+# Output directory: dist
+# Node version:     20 (set via environment variable NODE_VERSION=20)
+#
+# Environment variables (set in Cloudflare dashboard):
+#   NODE_VERSION = 20
+#
+# Branch deployments:
+#   Production branch: main
+#   Preview branches:  All non-production branches (default)
+#
+# Custom domain:
+#   sam.blog → configured in Cloudflare DNS + Pages custom domains
+
+# wrangler.toml is optional for Pages — the dashboard config is sufficient.
+# Including this for documentation purposes only.
+
+name = "sam-blog"
+compatibility_date = "2025-01-01"
+
+[site]
+bucket = "./dist"

@@ -2,6 +2,151 @@
 
 Use this file to track blockers, follow-ups, and handoff notes.
 
+## [2026-03-02] Issue 191 — CHANGES REQUIRED, returned to 01-ready
+
+**Task:** 191-task-flow-validation
+**Reviewed by:** Claude Opus 4 (reviewer agent)
+**PR:** #1570 (`task-191-task-flow-validation`) — NOT MERGED
+**Result:** CHANGES REQUIRED
+
+### Blocker (P0)
+**Migration number conflict:** `migrations/0096_in_progress_task_flow_cleanup.sql` collides with `0096_project_environment_repo_config.sql` (already on v2 from task 190 / PR #1569). Must rebase onto v2 and renumber to 0097.
+
+### Otherwise Approved
+Implementation is solid: typed error + system override flag + cleanup migration logic + 3 unit tests + integration test updates all correct. Lint failure is pre-existing. Only the migration numbering needs fixing before merge.
+
+---
+
+## [2026-03-02] Issue 190 — APPROVED and COMPLETED
+
+**Task:** 190-project-file-listing
+**Reviewed by:** Claude Opus 4 (reviewer agent)
+**PR:** #1569 (`task-190-project-file-listing`) merged into v2 at 2026-03-02T21:58:51Z (commit bb7c4bdf)
+**Result:** ACCEPTED
+
+### Summary
+Adds project file listing to TUI project view. All 4 acceptance criteria verified:
+- Environment model supports `repo_url`/`repo_path` configuration via migration 0096 ✓
+- `GET /v1/projects/{id}/files` returns bounded file tree (max 50 entries, depth 3) for configured projects ✓
+- TUI project view shows collapsible "FILES" section with `f` key toggle when file data available ✓
+- Graceful fallback when no repo configured — section hidden, no error ✓
+
+### Tests
+- 2 unit tests in `task_handlers_test.go`: file listing returns tree for configured project, returns empty for unconfigured project ✓
+- 2 unit tests in `project_files_render_test.go`: TUI renders files section when present, hides when absent ✓
+- 1 route registration test updated to include `GET /projects/{id}/files` ✓
+- No out-of-scope changes (9 files modified/added, all within task scope) ✓
+
+### Implementation Notes
+- File listing reads from local filesystem at configured `repo_path` (not remote Git)
+- `.git` directories excluded from listing
+- `findProjectRepoConfig` prioritizes active environments, falls back to any environment
+- All fakes implement correct interfaces (`projectRepository`, `projectEnvironmentRepository`)
+
+### CI Note
+Lint failure on PR is pre-existing on v2 branch (same stuttering names, unused code, gofmt issues as documented in Tasks 187/189). Not introduced by this PR. Merged with admin override.
+
+---
+
+## [2026-03-02] Issue 189 — APPROVED and COMPLETED
+
+**Task:** 189-agent-task-context-awareness
+**Reviewed by:** Claude Opus 4 (reviewer agent)
+**PR:** #1568 (`task-189-agent-task-context-awareness`) merged into v2 at 2026-03-02T21:48:25Z (commit 5e798874)
+**Result:** ACCEPTED
+
+### Summary
+Injects a structured `[Task Context]` block into assembled system prompts for `project_task`-scoped sessions. All 4 acceptance criteria verified:
+- System prompt includes `[Task Context]` block for task-scoped sessions with full task metadata ✓
+- Context includes: title (OC-N prefix), status, description, acceptance criteria, current/completed/pending flow steps, subtasks with status, dependencies ✓
+- Context is NOT injected for org-scope or project-scope sessions (gated on `project_task` scope type) ✓
+- Agent awareness follows from context injection into system prompt ✓
+
+### Tests
+- 3 unit tests in `assembler_test.go`: task context included for task scope, omitted for org scope, block format validation ✓
+- 1 integration test in `assembler_integration_test.go`: full round-trip with real DB — org, project, flow template, 3 flow nodes, task with metadata, flow executions, subtasks, dependencies ✓
+- No out-of-scope changes (only 3 files in `internal/prompt/` modified) ✓
+
+### CI Note
+Lint failure on PR is pre-existing on v2 branch (same stuttering names, unchecked fmt.Fscan issues as documented in Task 187). Not introduced by this PR. Merged with admin override.
+
+---
+
+## [2026-03-02] Issue 187 — APPROVED and COMPLETED (re-review)
+
+**Task:** 187-task-priority-field
+**Reviewed by:** Claude Opus 4 (reviewer agent)
+**PR:** #1566 (`task-187-priority-field`) merged into v2 at 2026-03-02T21:37:15Z (commit 073389fe)
+**Result:** ACCEPTED
+
+### Summary
+Previous review blocker (P1 merge conflict with v2 in `internal/tui/view.go`) has been resolved. All 5 acceptance criteria verified:
+- Migration 0095 adds `priority smallint NOT NULL DEFAULT 0` with CHECK(0-4) and index ✓
+- GET /v1/tasks/{id} and GET /v1/projects/{id}/tasks include `priority` field ✓
+- PATCH /v1/tasks/{id} validates priority 0-4, returns 422 on invalid ✓
+- TUI task detail shows "Priority: {label}" with color coding (critical=red, high=orange, medium=yellow, low=muted) ✓
+- TUI board/project list shows `[CRIT]`/`[HIGH]`/`[MED]`/`[LOW]` badges ✓
+
+### Tests
+- 2 unit tests in `task_handlers_test.go`: PATCH happy path (priority 3), invalid priority 422 ✓
+- 2 unit tests in `priority_render_test.go`: task view shows priority labels, dashboard/project show badges ✓
+- 1 integration test in `project_task_integration_test.go`: create with priority, verify persistence through status update ✓
+- 1 integration test in `task_integration_test.go`: full CRUD round-trip (create default 0 → patch to 4 → get → list) ✓
+- No out-of-scope changes detected ✓
+
+### CI Note
+Lint failure on PR is pre-existing on v2 branch (all v2 CI runs fail with same lint issues: unused symbols, stuttering names, gofmt, etc.). Not introduced by this PR. Merged with admin override.
+
+---
+
+## [2026-03-02] Issue 188 — APPROVED and COMPLETED
+
+**Task:** 188-task-chat-agent-routing
+**Reviewed by:** Claude Opus 4 (reviewer agent)
+**PR:** #1567 (`task-188-task-chat-agent-routing`) merged into v2 at 2026-03-02T21:29:38Z (commit a0fd6bd2)
+**Result:** ACCEPTED
+
+### Summary
+Routes task-scoped chat sessions to the task's assigned agent instead of defaulting to Frank. All 4 acceptance criteria met:
+- Session creation for `scope_type=project_task` adds assigned agent as "responder" participant ✓
+- Turn engine resolves task-scope agent via `resolveTaskScopeAgent` / `resolveSessionAgentForSession` ✓
+- Fallback chain: assigned_agent → project PM (via `GetPM`) → Frank (via `GetStarterTrio` name match) ✓
+- Org-scope and project-scope sessions unchanged (logic gated on `project_task` scope type) ✓
+- TUI display follows from routing fix (no TUI code changes needed — header already shows responding agent) ✓
+
+### Tests
+- 3 unit tests in `chat_handlers_test.go`: assigned agent, PM fallback, Frank fallback ✓
+- 3 unit tests in `engine_test.go`: assigned agent, PM fallback, Frank fallback ✓
+- 1 integration test in `engine_integration_test.go`: task session event routes job to assigned agent ✓
+- Full `internal/server` and `internal/turn` test suites pass with no regressions ✓
+- `go build ./...` and `go vet ./...` clean ✓
+
+---
+
+## [2026-03-02] Issue 187 — CHANGES REQUIRED → moved to 01-ready
+
+**Task:** 187-task-priority-field
+**Reviewed by:** Claude Opus 4 (reviewer agent)
+**PR:** #1566 (`task-187-priority-field`) — NOT merged
+**Result:** CHANGES REQUIRED (P1: merge conflict)
+
+### Summary
+Implementation is correct and all 5 acceptance criteria are met in the code:
+- Migration 0095 adds `priority smallint NOT NULL DEFAULT 0` with CHECK and index ✓
+- GET /v1/tasks/{id} and GET /v1/projects/{id}/tasks include `priority` field ✓
+- PATCH /v1/tasks/{id} validates priority 0-4, returns 422 on invalid ✓
+- TUI task detail shows "Priority: {label}" with color coding ✓
+- TUI board/project list shows `[CRIT]`/`[HIGH]`/`[MED]`/`[LOW]` badges ✓
+- Unit tests (PATCH happy/invalid, TUI render) and integration tests (round-trip) present ✓
+
+### Blocker (P1)
+PR has merge conflicts with v2 in `internal/tui/view.go`. Six commits on v2 since branch point have modified this file (kanban columns, agent roster, task deps, cursor highlighting, keybindings, agent warnings). Branch must be rebased and conflicts resolved.
+
+### P2 recommendation
+Remove out-of-scope whitespace/alignment reformatting in `model.go`, `workspace.go`, and `view.go` to reduce conflict surface on future rebases.
+
+---
+
 ## [2026-02-27] Issue 182 — APPROVED and COMPLETED
 
 **Task:** 182-usage-rollup-404
@@ -9736,3 +9881,221 @@ All acceptance criteria met:
 - All 5 acceptance criteria met: resize keys, in-memory state update, layout restoration, clamping, help screen hint
 - All 3 required unit tests present: computeLayout with custom proportions, fallback-to-defaults, '<' key reduces sidebar by 0.02
 - Lint failures pre-existing across v2 baseline; no new issues introduced by this PR
+
+## 2026-03-02 - 187-task-priority-field.md
+- Fixes applied:
+  - Added migration `0095_project_task_priority.sql` to add `project_task.priority smallint NOT NULL DEFAULT 0`, enforce range `0..4`, and index `(project_id, priority)`.
+  - Extended `repo.ProjectTask` and all `project_task` repo SQL scans/returns/updates to include `priority`.
+  - Updated task API payloads:
+    - `GET /v1/tasks/{id}` includes `priority`
+    - `GET /v1/projects/{id}/tasks` includes `priority`
+    - `PATCH /v1/tasks/{id}` accepts `priority` with validation (`0..4`)
+  - Wired TUI client loading (`cmd/ottercamp/tui.go`) to read task priority from task detail/list APIs.
+  - Updated TUI runtime/workspace/task model to store priority and render:
+    - Task detail line: `Priority: Low|Medium|High|Critical`
+    - Dashboard board and project task list badges: `[LOW]`, `[MED]`, `[HIGH]`, `[CRIT]` with severity colors.
+  - Added tests for API patch validation/update, API integration round-trip, repo integration persistence, and TUI priority rendering.
+- Tests run:
+  - `go test ./internal/server -run 'TestPatchTaskPriorityUpdated|TestPatchTaskPriorityOutOfRangeReturns422'`
+  - `go test ./internal/tui -run 'TestRenderTaskViewShowsPriorityLine|TestRenderDashboardAndProjectShowPriorityBadges'`
+  - `go test ./internal/server -tags integration -run TestTaskHTTPPatchPriorityRoundTrip`
+  - `go test ./internal/repo -tags integration -run TestProjectTaskRepoCreateUpdateStatusAndTaskNumber`
+  - `go test ./internal/server ./internal/tui ./internal/repo`
+  - `go build ./cmd/ottercamp && ./ottercamp tui --non-interactive`
+
+## [2026-03-02] Task 188 — Task-Scoped Chat Agent Routing
+
+**Task file:** `188-task-chat-agent-routing.md`
+
+### Fixes applied
+- Added task-scope responder seeding in `internal/server/chat_handlers.go` for `POST /v1/chat-sessions` when `scope_type=project_task`.
+- Implemented resolver chain for task sessions: `assigned_agent_id -> project PM -> Frank`.
+- Wired turn routing in `internal/turn/engine.go` so `HandleUserMessageEvent` resolves responder and enqueues `agent_turn` payload with `agent_id`; job execution respects routed `agent_id` and task-scope resolver precedence.
+- Kept org-scope starter-trio behavior unchanged.
+
+### Tests run
+- `go test ./internal/server -run 'TestCreateSessionProjectTaskAddsAssignedAgentParticipant|TestCreateSessionProjectTaskFallsBackToPM|TestCreateSessionProjectTaskFallsBackToFrank'`
+- `go test ./internal/turn -run 'TestHandleUserMessageTaskScopeRoutesToAssignedAgent|TestHandleUserMessageTaskScopeFallsBackToProjectPM|TestHandleUserMessageTaskScopeFallsBackToFrank'`
+- `go test ./internal/turn -tags integration -run TestTurnEngineIntegrationTaskSessionEventRoutesJobToAssignedAgent`
+- `go test ./internal/server ./internal/turn`
+
+## [2026-03-02] Task 187 Rework — Reviewer Required Changes Resolved
+
+**Task file:** `187-task-priority-field.md`
+
+### Fixes applied
+- Rebases branch `task-187-priority-field` onto current `v2` and resolves `internal/tui/view.go` conflicts with the updated kanban/cursor rendering.
+- Preserves priority rendering behavior in dashboard cards, project task rows, and task detail.
+- Removes out-of-scope whitespace/alignment churn from `internal/tui/model.go`, `internal/tui/workspace.go`, and `internal/tui/view.go` while keeping functional priority changes.
+- Updates PR #1566 with a rework summary and validation details.
+
+### Tests run
+- `go test ./internal/tui/...`
+- `go test ./internal/tui -run 'TestRenderDashboardAndProjectShowPriorityBadges|TestRenderTaskViewShowsPriorityLine'`
+- `go test ./internal/server -run 'TestPatchTaskPriorityUpdated|TestPatchTaskPriorityOutOfRangeReturns422'`
+- `go test ./internal/server -tags integration -run TestTaskHTTPPatchPriorityRoundTrip`
+- `go test ./internal/repo -tags integration -run TestProjectTaskRepoCreateUpdateStatusAndTaskNumber`
+
+## [2026-03-02] Task 189 — Agent Task Context Awareness
+
+**Task file:** `189-agent-task-context-awareness.md`
+
+### Fixes applied
+- Added task-scoped context enrichment to `internal/prompt/assembler.go` for `scope_type=project_task` sessions.
+- Injected structured `[Task Context]` prompt block including task line (`OC-#` when available), project, status, description, acceptance criteria, current flow step, completed/pending steps, subtasks, and dependencies.
+- Added one-turn task context caching inside `Assemble` and reused cached context in layer assembly and flow-node skill resolution to avoid repeated task lookups.
+- Extended prompt assembler dependencies with subtask/dependency repositories and flow-node/execution list methods needed to assemble flow progress context.
+- Added unit and integration tests covering include/omit behavior and expected task context formatting.
+
+### Tests run
+- `go test ./internal/prompt -run 'TestPromptAssemblerIncludesTaskContextForTaskScopedSession|TestPromptAssemblerOmitsTaskContextForOrgScope|TestPromptAssemblerTaskContextBlockFormat'`
+- `go test ./internal/prompt -tags integration -run TestPromptAssemblerIntegrationTaskScopeIncludesTaskContext`
+- `go test ./internal/prompt`
+- `go test ./internal/prompt -tags integration`
+
+## [2026-03-02] Task 190 — Project File Listing In TUI Project View
+
+**Task file:** `190-project-file-listing.md`
+
+### Fixes applied
+- Added migration `0096_project_environment_repo_config.sql` to extend `project_environment` with `repo_url` and `repo_path`.
+- Extended `repo.ProjectEnvironment` and all related SQL scans/queries in `internal/repo/delivery.go` to persist/load `repo_url` + `repo_path`.
+- Extended environment API payloads in `internal/server/task_handlers.go`:
+  - `POST /v1/projects/{id}/environments` accepts optional `repo_url` and `repo_path`
+  - `PATCH /v1/projects/{id}/environments/{eid}` updates optional `repo_url` and `repo_path`
+  - environment responses include `repo_url` and `repo_path`
+- Added `GET /v1/projects/{id}/files` route to task handlers:
+  - resolves project/org authorization
+  - reads repo config from active project environments
+  - returns bounded file listing (`max 50`, `depth 3`) from configured `repo_path`
+  - gracefully returns empty file list when no repo is configured or path is unavailable
+- Updated TUI project detail loading (`cmd/ottercamp/tui.go`) to call `/v1/projects/{id}/files` and populate `ProjectDetail.Files`.
+- Added project view files section rendering in `internal/tui/view.go`:
+  - shows `FILES (N)` section only when file data exists
+  - default collapsed (`hidden  ·  f·show files`)
+  - toggle via `f` key in project view when files are present
+  - hides section entirely when no files are available
+
+### Tests run
+- `go test ./internal/server -run 'TestListProjectFilesReturnsTreeForConfiguredProject|TestListProjectFilesReturnsEmptyForUnconfiguredProject'`
+- `go test ./internal/tui -run 'TestRenderProjectViewShowsFilesSectionWhenPresent|TestRenderProjectViewHidesFilesSectionWhenAbsent'`
+- `go test ./internal/server ./internal/tui`
+- `go test ./internal/repo -tags integration -run TestProjectEnvironmentRepoSetDeployTaskRecordDeploymentAndGetActiveByMode`
+
+## [2026-03-02] Task 191 — Enforce Flow Requirement For In-Progress Tasks
+
+**Task file:** `191-task-flow-validation.md`
+
+### Fixes applied
+- Added active-flow validation in `internal/task/service.go` for `TransitionStatus(..., "in_progress", ...)`.
+  - Returns typed error `ErrInProgressRequiresActiveFlow` with message: `task requires an active flow to be in_progress` when no active flow execution exists.
+- Added system override flag on task actor: `Actor.AllowNoActiveFlow`.
+  - Override is allowed only for `actor.Type == "system"` to support scheduler/supervisor-style transitions.
+- Wired default flow execution lookup into task service via `flowExecutionRepository` (`repo.NewFlowNodeExecutionRepo` by default).
+- Mapped `tasksvc.ErrActiveFlowRequired` to HTTP `422` validation responses in `internal/server/task_handlers.go`.
+- Added migration `0096_in_progress_task_flow_cleanup.sql` to clean up existing invalid rows:
+  - tasks in `project_task` with `work_status='in_progress'` and no active `flow_node_execution` are moved to `queued`.
+- Updated system-initiated `in_progress` transitions in affected code/tests to use explicit override flag where bypass is intended.
+
+### Tests run
+- `go test ./internal/task -run 'TestTransitionStatusInProgressWithoutActiveFlowReturnsError|TestTransitionStatusInProgressWithActiveFlowSucceeds|TestTransitionStatusInProgressSystemOverrideBypassesFlowValidation'`
+- `go test ./internal/task ./internal/project ./internal/controlplane ./internal/server`
+- `go test ./internal/task -tags integration -run 'TestTaskServiceIntegrationStatusLifecycleAndEvents|TestTaskServiceIntegrationMarkBlockedCreatesResolutionTaskAndInbox'`
+- `go test ./internal/project -tags integration -run TestTask_StateMachine_FullPath`
+- `go test ./internal/controlplane -tags integration -run TestTaskQueueProcessorIntegration`
+
+## [2026-03-02] Task 192 — Codex Claude Subscription Auth
+
+**Task file:** `192-codex-claude-subscription.md`
+
+### Fixes applied
+- Researched Pearl's Claude subscription workaround and adapted it in OtterCamp's Anthropic gateway path:
+  - OAuth-style request headers in subscription mode (`Authorization: Bearer`, Claude CLI-style beta/app/user-agent headers).
+  - Refresh flow via `POST https://console.anthropic.com/v1/oauth/token` using refresh token + client id.
+  - Single retry on Anthropic 401 after refresh; in-memory refreshed token cache keyed by provider connection.
+- Added Anthropic provider connection auth-mode configuration support to model API handlers:
+  - `auth_mode`: `api_key` (default) or `subscription` (Anthropic only).
+  - Subscription fields: `subscription_access_token_secret_ref`, `subscription_refresh_token_secret_ref`, `subscription_token_url`, `subscription_client_id`, `subscription_expires_at`.
+  - Response now includes `auth_mode`, `subscription` details, and `requires_reauth`.
+- Preserved existing API key authentication behavior unchanged for Anthropic and other providers.
+- Documented configuration and Pearl-derived approach in `README.md` under **Anthropic Auth Modes**.
+
+### Tests run
+- `go test ./internal/gateway -run 'TestApplyAnthropicSubscriptionHeaders|TestResolveAnthropicSubscriptionStateRefreshesExpiredToken'`
+- `go test ./internal/gateway -tags integration -run TestLiveModelGatewayCompleteAnthropicSubscriptionAuth`
+- `go test ./internal/server -run 'TestBuildProviderConnectionAuthMetadataSubscriptionAnthropic|TestBuildProviderConnectionAuthMetadataRejectsNonAnthropicSubscription|TestParseProviderConnectionAuthSettingsFlagsReauthWithoutRefreshToken'`
+- `go test ./internal/server -tags integration -run TestModelAPIProviderConnectionSupportsSubscriptionAuthMode`
+- `go test ./internal/gateway ./internal/server`
+
+## [2026-03-02] Task 191 Rework — Migration Number Conflict Resolved
+
+**Task file:** `191-task-flow-validation.md`
+
+### Fixes applied
+- Rebases `task-191-task-flow-validation` onto current `v2`.
+- Renamed migration:
+  - `migrations/0096_in_progress_task_flow_cleanup.sql`
+  - -> `migrations/0097_in_progress_task_flow_cleanup.sql`
+- Verified no duplicate migration numbers remain in the `009*` range.
+- Removed the top-level `## Reviewer Required Changes` block from the task file after all required items were resolved.
+
+### Tests run
+- `ls migrations/009*.sql | sort`
+- `go test ./internal/task -run 'TestTransitionStatusInProgressWithoutActiveFlowReturnsError|TestTransitionStatusInProgressWithActiveFlowSucceeds|TestTransitionStatusInProgressSystemOverrideBypassesFlowValidation'`
+- `go test ./internal/task -tags integration -run TestTaskServiceIntegrationStatusLifecycleAndEvents`
+- `go test ./internal/project -tags integration -run TestTask_StateMachine_FullPath`
+- `go test ./internal/controlplane -tags integration -run TestTaskQueueProcessorIntegration`
+
+---
+
+## [2026-03-02] Issue 192 — APPROVED and COMPLETED
+
+**Task:** 192-codex-claude-subscription
+**Reviewed by:** Claude Opus 4 (reviewer agent)
+**PR:** #1571 (`task-192-codex-claude-subscription`) merged into v2 at 2026-03-02T22:15:01Z (commit 295b3cda)
+**Result:** ACCEPTED
+
+### Summary
+Adds Claude subscription (Pro/Team plan) auth support to the Anthropic model provider gateway as an alternative to API key auth. All 4 acceptance criteria verified:
+- Anthropic provider supports subscription-based auth via `auth_mode: "subscription"` in connection metadata ✓
+- Token refresh/rotation handled gracefully — in-memory token cache with OAuth refresh flow and automatic 401 retry ✓
+- Existing API key auth continues working unchanged — defaults to `api_key` mode ✓
+- Configuration documented in README ✓
+
+### Tests
+- 2 unit tests in `client_subscription_test.go`: subscription headers correct, expired token triggers refresh ✓
+- 3 unit tests in `model_handlers_test.go`: subscription metadata build, non-anthropic rejection, reauth flag ✓
+- 1 integration test in `client_integration_test.go`: full subscription Complete() call with mocked Anthropic API ✓
+- 1 integration test in `model_integration_test.go`: API endpoint supports subscription auth mode create/patch ✓
+
+### Implementation Notes
+- 7 files modified/added, all within task scope
+- Gateway layer (`internal/gateway/client.go`): subscription auth config parsing, token state caching, refresh flow, subscription-specific HTTP headers
+- API layer (`internal/server/model_handlers.go`): connection create/patch support for subscription fields, `requires_reauth` response signal
+- CI lint failure is pre-existing (same as previous reviews)
+- P3 observation: `metadataMap` function and `providerConnectionMetadata*` constants are duplicated across `gateway` and `server` packages — acceptable for package decoupling but worth consolidating later
+
+---
+
+## [2026-03-02] Issue 191 — APPROVED and COMPLETED (re-review)
+
+**Task:** 191-task-flow-validation
+**Reviewed by:** Claude Opus 4 (reviewer agent)
+**PR:** #1570 (`task-191-task-flow-validation`) merged into v2 at 2026-03-02T22:17:03Z (commit c1075ffe)
+**Result:** ACCEPTED (P0 migration numbering fix verified)
+
+### Summary
+Enforces active flow requirement for `in_progress` task transitions. Previous review identified P0 migration number conflict (0096 already taken by task 190). Re-submission includes fix commit renumbering to 0097. All 4 acceptance criteria verified:
+- `TransitionStatus("in_progress")` validates flow existence via `hasActiveFlowExecution` ✓
+- Clear error: "task requires an active flow to be in_progress" (`ErrActiveFlowRequired`) ✓
+- System-initiated transitions bypass with `AllowNoActiveFlow` flag (only when actor.Type="system") ✓
+- Cleanup migration 0097 reverts orphaned in_progress tasks to queued ✓
+
+### Tests
+- 3 unit tests in `service_test.go`: without flow returns error, with active flow succeeds, system override bypasses ✓
+- Integration tests in `task_integration_test.go` and `service_integration_test.go` updated with override flag ✓
+- Error mapping in `task_handlers.go` includes `ErrActiveFlowRequired` ✓
+
+### P0 Fix Verified
+- Migration renumbered from 0096 → 0097 (0096 is `project_environment_repo_config.sql` from task 190) ✓
+- No migration number conflicts on v2 ✓

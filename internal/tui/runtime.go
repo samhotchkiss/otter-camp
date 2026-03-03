@@ -110,6 +110,9 @@ type RuntimeHints struct {
 	// ConnectProjectRemote links a GitHub repo URL to the active project via
 	// POST /v1/projects/{projectID}/remotes.
 	ConnectProjectRemote func(ctx context.Context, projectID, repoURL string) error
+	// ResetOrgSession archives the current org session and creates a new one.
+	// Returns the new session UUID string.
+	ResetOrgSession func(ctx context.Context, currentSessionID string) (string, error)
 }
 
 func (h RuntimeHints) now() time.Time {

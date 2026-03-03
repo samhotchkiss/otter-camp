@@ -146,6 +146,10 @@ type cliExecutor interface {
 	Execute(ctx context.Context, input map[string]any) (map[string]any, error)
 }
 
+type secretResolver interface {
+	Get(ctx context.Context, orgID uuid.UUID, slug string) (string, error)
+}
+
 type commandContextFunc func(ctx context.Context, name string, args ...string) *exec.Cmd
 
 type ExecutorOptions struct {
@@ -157,6 +161,7 @@ type ExecutorOptions struct {
 	CLI            cliExecutor
 	Events         eventPublisher
 	Command        commandContextFunc
+	Secrets        secretResolver
 }
 
 type NativeToolExecutor struct {
@@ -185,6 +190,7 @@ type NativeToolExecutor struct {
 	assignments    projectAssigner
 	audit          *repo.AuditEventRepo
 	memories       *repo.MemoryRepo
+	secrets        secretResolver
 
 	mu         sync.Mutex
 	workspaces map[string]SessionWorkDir
@@ -208,6 +214,7 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 		cli:            opts.CLI,
 		events:         opts.Events,
 		command:        command,
+		secrets:        opts.Secrets,
 		workspaces:     make(map[string]SessionWorkDir),
 	}
 
@@ -341,6 +348,10 @@ func (e *NativeToolExecutor) Execute(ctx context.Context, toolName string, input
 		return e.handleMergeQueueStatus(ctx, input)
 	case "tui.navigate":
 		return e.handleTUINavigate(ctx, input)
+	case "web.search":
+		return e.handleWebSearch(ctx, input)
+	case "web.fetch":
+		return e.handleWebFetch(ctx, input)
 	default:
 		return nil, ErrUnknownTool
 	}

@@ -457,6 +457,7 @@ func runServe() int {
 				RunService: controlRunService,
 			}),
 			server.NewTraceRouteRegistrar(pool.Raw()),
+			server.NewSecretRouteRegistrar(secretService),
 		},
 		TestMode:     cfg.Mode == config.ModeTest,
 		TestResetter: resetter,

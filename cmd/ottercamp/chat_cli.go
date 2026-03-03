@@ -991,6 +991,11 @@ func (c *cliAPIClient) CreateChatSession(ctx context.Context, req chatCreateSess
 	return response, nil
 }
 
+func (c *cliAPIClient) ArchiveChatSession(ctx context.Context, sessionID uuid.UUID) error {
+	path := fmt.Sprintf("/v1/chat-sessions/%s", url.PathEscape(sessionID.String()))
+	return c.request(ctx, http.MethodPatch, path, map[string]any{"status": "archived"}, nil)
+}
+
 func (c *cliAPIClient) SendChatMessage(ctx context.Context, sessionID uuid.UUID, content string) (chatMessageEnvelope, error) {
 	path := fmt.Sprintf("/v1/chat-sessions/%s/messages", url.PathEscape(sessionID.String()))
 	var response chatMessageEnvelope

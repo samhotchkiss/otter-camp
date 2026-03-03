@@ -926,7 +926,9 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		arguments := cloneMap(call.Arguments)
 		arguments["organization_id"] = rt.session.OrganizationID.String()
-		arguments["session_id"] = rt.session.ID.String()
+		if _, exists := arguments["session_id"]; !exists {
+			arguments["session_id"] = rt.session.ID.String()
+		}
 		arguments["turn_id"] = rt.turn.ID.String()
 		arguments["agent_id"] = rt.agent.ID.String()
 		if projectID := resolveProjectID(ctx, rt.session, e.tasks); projectID != nil {

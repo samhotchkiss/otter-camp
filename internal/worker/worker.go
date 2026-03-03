@@ -247,9 +247,10 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		return fmt.Errorf("worker memory retriever setup: %w", err)
 	}
 	nativeExecutor := nativetools.NewExecutor(nativetools.ExecutorOptions{
-		Pool:   pool.Raw(),
-		Memory: memoryRetriever,
-		CLI:    cliExecutor,
+		Pool:    pool.Raw(),
+		Memory:  memoryRetriever,
+		CLI:     cliExecutor,
+		Secrets: secretService,
 	})
 	browserExecutor, err := browser.NewExecutor(browser.ExecutorOptions{
 		Pool:      pool.Raw(),
