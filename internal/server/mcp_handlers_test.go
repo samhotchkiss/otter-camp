@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 )
@@ -68,6 +69,46 @@ func TestMapMCPErrorMappings(t *testing.T) {
 	if code != "circuit_open" {
 		t.Fatalf("code = %q, want %q", code, "circuit_open")
 	}
+}
+
+func TestValidateMCPTransportURL(t *testing.T) {
+	t.Run("rejects private and localhost hosts", func(t *testing.T) {
+		t.Setenv("OTTERCAMP_MODE", "prod")
+
+		cases := []string{
+			`{"url":"https://10.0.0.1/x"}`,
+			`{"url":"https://172.16.0.1/x"}`,
+			`{"url":"https://192.168.1.1/x"}`,
+			`{"url":"https://169.254.169.254/latest/meta-data/"}`,
+			`{"url":"https://127.0.0.1/x"}`,
+			`{"url":"https://localhost/x"}`,
+			`{"url":"https://[::1]/x"}`,
+		}
+		for _, raw := range cases {
+			if err := validateMCPTransportURL(json.RawMessage(raw)); err == nil {
+				t.Fatalf("validateMCPTransportURL(%s) err=nil, want rejection", raw)
+			}
+		}
+	})
+
+	t.Run("rejects http in non-test mode", func(t *testing.T) {
+		t.Setenv("OTTERCAMP_MODE", "prod")
+		if err := validateMCPTransportURL(json.RawMessage(`{"url":"http://example.com"}`)); err == nil {
+			t.Fatalf("http URL should be rejected outside test mode")
+		}
+	})
+
+	t.Run("allows https and test-mode http", func(t *testing.T) {
+		t.Setenv("OTTERCAMP_MODE", "prod")
+		if err := validateMCPTransportURL(json.RawMessage(`{"url":"https://example.com"}`)); err != nil {
+			t.Fatalf("https URL rejected: %v", err)
+		}
+
+		t.Setenv("OTTERCAMP_MODE", "test")
+		if err := validateMCPTransportURL(json.RawMessage(`{"url":"http://example.com"}`)); err != nil {
+			t.Fatalf("test-mode http URL rejected: %v", err)
+		}
+	})
 }
 
 func TestMCPExecutionsStubReturnsTopLevelArrayData(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
 	"github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/api"
 	"github.com/samhotchkiss/otter-camp/internal/audit"
@@ -1894,6 +1895,7 @@ func mapAgentError(err error) (status int, code, message string) {
 	case errors.Is(err, repo.ErrConflict):
 		return http.StatusConflict, api.ErrCodeConflict, "conflict"
 	case errors.Is(err, agent.ErrDisplayNameRequired),
+		errors.Is(err, agent.ErrDisplayNameInvalid),
 		errors.Is(err, agent.ErrOrganizationIDRequired),
 		errors.Is(err, agent.ErrTempProjectIDRequired),
 		errors.Is(err, agent.ErrInvalidCreatedByType),

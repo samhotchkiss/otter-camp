@@ -12,10 +12,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/scheduling"
+	"github.com/samhotchkiss/otter-camp/internal/validation"
 )
 
 var (
@@ -29,6 +31,7 @@ var (
 	ErrInvalidCronExpression    = errors.New("invalid cron expression")
 	ErrAgentNotFound            = errors.New("agent not found")
 	ErrFlowNodeTemplateMismatch = errors.New("flow node does not belong to flow template")
+	ErrDisplayNameInvalid       = errors.New("display_name contains HTML tags")
 	ErrOrganizationIDRequired   = errors.New("organization_id is required")
 	ErrProjectIDRequired        = errors.New("project_id is required")
 	ErrTemplateIDRequired       = errors.New("template_id is required")
@@ -320,12 +323,16 @@ func (s *service) Create(ctx context.Context, req CreateProjectRequest) (*Projec
 	if err != nil {
 		return nil, err
 	}
+	displayName := strings.TrimSpace(req.DisplayName)
+	if validation.HasHTMLTag(displayName) {
+		return nil, ErrDisplayNameInvalid
+	}
 	settings := withProjectStaffingDefaults(req.Settings)
 
 	created, err := s.projects.Create(ctx, repo.Project{
 		OrganizationID:       req.OrganizationID,
 		Slug:                 slug,
-		DisplayName:          strings.TrimSpace(req.DisplayName),
+		DisplayName:          displayName,
 		Description:          req.Description,
 		DeliveryMode:         strings.TrimSpace(req.DeliveryMode),
 		DeployFlowTemplateID: req.DeployFlowTemplateID,
@@ -442,7 +449,11 @@ func (s *service) Update(ctx context.Context, orgID, projectID uuid.UUID, req Up
 	updated := *current
 	updated.Slug = slug
 	if req.DisplayName != nil {
-		updated.DisplayName = strings.TrimSpace(*req.DisplayName)
+		trimmed := strings.TrimSpace(*req.DisplayName)
+		if validation.HasHTMLTag(trimmed) {
+			return nil, ErrDisplayNameInvalid
+		}
+		updated.DisplayName = trimmed
 	}
 	if req.Description != nil {
 		updated.Description = *req.Description
@@ -533,12 +544,16 @@ func (s *service) CreateFlowTemplate(ctx context.Context, req CreateFlowTemplate
 	if err != nil {
 		return nil, err
 	}
+	templateName := strings.TrimSpace(req.DisplayName)
+	if validation.HasHTMLTag(templateName) {
+		return nil, ErrDisplayNameInvalid
+	}
 
 	created, err := s.templates.Create(ctx, repo.FlowTemplate{
 		OrganizationID: req.OrganizationID,
 		ProjectID:      req.ProjectID,
 		Slug:           slug,
-		DisplayName:    strings.TrimSpace(req.DisplayName),
+		DisplayName:    templateName,
 		Description:    req.Description,
 		StartNodeID:    req.StartNodeID,
 		IsSystem:       req.IsSystem,
@@ -639,7 +654,11 @@ func (s *service) UpdateFlowTemplate(ctx context.Context, orgID, templateID uuid
 		next.Slug = normalized
 	}
 	if req.DisplayName != nil {
-		next.DisplayName = strings.TrimSpace(*req.DisplayName)
+		trimmed := strings.TrimSpace(*req.DisplayName)
+		if validation.HasHTMLTag(trimmed) {
+			return nil, ErrDisplayNameInvalid
+		}
+		next.DisplayName = trimmed
 	}
 	if req.Description != nil {
 		next.Description = *req.Description
@@ -689,10 +708,14 @@ func (s *service) AddFlowNode(ctx context.Context, templateID uuid.UUID, req Add
 	if err := s.validateNodeActor(ctx, template.OrganizationID, req.ActorType, req.ActorID); err != nil {
 		return nil, err
 	}
+	nodeName := strings.TrimSpace(req.DisplayName)
+	if validation.HasHTMLTag(nodeName) {
+		return nil, ErrDisplayNameInvalid
+	}
 
 	created, err := s.nodes.Create(ctx, repo.FlowNode{
 		FlowTemplateID:      templateID,
-		DisplayName:         strings.TrimSpace(req.DisplayName),
+		DisplayName:         nodeName,
 		NodeType:            strings.TrimSpace(req.NodeType),
 		Position:            req.Position,
 		ActorType:           trimStringPointer(req.ActorType),
@@ -727,7 +750,11 @@ func (s *service) UpdateFlowNode(ctx context.Context, nodeID uuid.UUID, req Upda
 
 	next := current
 	if req.DisplayName != nil {
-		next.DisplayName = strings.TrimSpace(*req.DisplayName)
+		trimmed := strings.TrimSpace(*req.DisplayName)
+		if validation.HasHTMLTag(trimmed) {
+			return nil, ErrDisplayNameInvalid
+		}
+		next.DisplayName = trimmed
 	}
 	if req.NodeType != nil {
 		next.NodeType = strings.TrimSpace(*req.NodeType)
@@ -834,12 +861,16 @@ func (s *service) CreateSchedule(ctx context.Context, req CreateScheduleRequest)
 	if err != nil {
 		return nil, err
 	}
+	scheduleName := strings.TrimSpace(req.DisplayName)
+	if validation.HasHTMLTag(scheduleName) {
+		return nil, ErrDisplayNameInvalid
+	}
 
 	created, err := s.schedules.Create(ctx, repo.TaskSchedule{
 		OrganizationID: req.OrganizationID,
 		ProjectID:      req.ProjectID,
 		FlowTemplateID: req.FlowTemplateID,
-		DisplayName:    strings.TrimSpace(req.DisplayName),
+		DisplayName:    scheduleName,
 		CronExpression: cronExpression,
 		OverlapPolicy:  strings.TrimSpace(req.OverlapPolicy),
 		MaxDurationMS:  req.MaxDurationMS,
@@ -899,7 +930,11 @@ func (s *service) UpdateSchedule(ctx context.Context, scheduleID uuid.UUID, req 
 		next.FlowTemplateID = *req.FlowTemplateID
 	}
 	if req.DisplayName != nil {
-		next.DisplayName = strings.TrimSpace(*req.DisplayName)
+		trimmed := strings.TrimSpace(*req.DisplayName)
+		if validation.HasHTMLTag(trimmed) {
+			return nil, ErrDisplayNameInvalid
+		}
+		next.DisplayName = trimmed
 	}
 	if req.CronExpression != nil {
 		expression := strings.TrimSpace(*req.CronExpression)

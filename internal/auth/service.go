@@ -16,11 +16,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/samhotchkiss/otter-camp/internal/audit"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/ratelimit"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
-	"golang.org/x/crypto/bcrypt"
+	"github.com/samhotchkiss/otter-camp/internal/validation"
 )
 
 const (
@@ -54,6 +56,7 @@ var (
 	ErrTokenExpired             = errors.New("token expired")
 	ErrNoDefaultOrganization    = errors.New("default organization is not configured")
 	ErrNoAdminForLocalAutoLogin = errors.New("no admin user available for local auto-login")
+	ErrDisplayNameInvalid       = errors.New("display_name contains HTML tags")
 )
 
 type Service interface {
@@ -475,6 +478,11 @@ func (s *service) ValidateAPIKey(ctx context.Context, rawKey string) (*APIKeyInf
 }
 
 func (s *service) IssueAPIKey(ctx context.Context, userID uuid.UUID, displayName string, scopes []string, expiresAt *time.Time) (*IssueResult, error) {
+	displayName = strings.TrimSpace(displayName)
+	if validation.HasHTMLTag(displayName) {
+		return nil, ErrDisplayNameInvalid
+	}
+
 	rawKey, err := s.generateAPIKey()
 	if err != nil {
 		return nil, err
@@ -490,7 +498,7 @@ func (s *service) IssueAPIKey(ctx context.Context, userID uuid.UUID, displayName
 		UserID:      userID,
 		KeyHash:     keyHash,
 		KeyPrefix:   keyPrefix,
-		DisplayName: strings.TrimSpace(displayName),
+		DisplayName: displayName,
 		Scopes:      append([]string{}, scopes...),
 		ExpiresAt:   expiresAt,
 	})

@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -122,6 +123,12 @@ func TestMapProjectErrorMappings(t *testing.T) {
 		{
 			name:       "agent not found",
 			err:        projectsvc.ErrAgentNotFound,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantCode:   "validation_error",
+		},
+		{
+			name:       "display name invalid",
+			err:        projectsvc.ErrDisplayNameInvalid,
 			wantStatus: http.StatusUnprocessableEntity,
 			wantCode:   "validation_error",
 		},

@@ -8,9 +8,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
-	"golang.org/x/crypto/bcrypt"
 )
 
 func TestGenerateTokenUniqueAcrossIterations(t *testing.T) {
@@ -106,6 +107,23 @@ func TestMagicLinkTTLAndSingleUse(t *testing.T) {
 	fakeClock.Advance(16 * time.Minute)
 	if err := svc.ResetPassword(context.Background(), next.Token, "later-password"); !errors.Is(err, ErrTokenExpired) {
 		t.Fatalf("ResetPassword after TTL err = %v, want ErrTokenExpired", err)
+	}
+}
+
+func TestIssueAPIKeyRejectsHTMLDisplayName(t *testing.T) {
+	svc, err := NewService(Options{
+		Users:        &stubUserRepo{},
+		Sessions:     &stubSessionRepo{},
+		APIKeys:      &stubAPIKeyRepo{},
+		DefaultOrgID: uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	_, err = svc.IssueAPIKey(context.Background(), uuid.New(), "<script>alert(1)</script>", []string{"all"}, nil)
+	if !errors.Is(err, ErrDisplayNameInvalid) {
+		t.Fatalf("IssueAPIKey err = %v, want ErrDisplayNameInvalid", err)
 	}
 }
 

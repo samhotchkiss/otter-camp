@@ -8,20 +8,20 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
 	"github.com/samhotchkiss/otter-camp/internal/api"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
-// validateMCPTransportURL checks the URL in transport_config against SSRF attack vectors.
-// It blocks non-http(s) schemes, cloud metadata endpoints, and loopback/link-local addresses.
-// Local addresses (localhost, 127.x) are allowed to support dev-mode MCP servers.
+// validateMCPTransportURL checks a transport_config `url` value against SSRF vectors.
 func validateMCPTransportURL(rawConfig json.RawMessage) error {
 	if len(rawConfig) == 0 {
 		return nil
@@ -33,27 +33,51 @@ func validateMCPTransportURL(rawConfig json.RawMessage) error {
 		return nil
 	}
 	u, err := url.Parse(cfg.URL)
-	if err != nil {
+	if err != nil || strings.TrimSpace(u.Hostname()) == "" {
 		return fmt.Errorf("invalid transport URL")
 	}
 	scheme := strings.ToLower(u.Scheme)
 	if scheme != "http" && scheme != "https" {
 		return fmt.Errorf("transport URL scheme must be http or https")
 	}
+	if scheme == "http" && !strings.EqualFold(strings.TrimSpace(os.Getenv("OTTERCAMP_MODE")), "test") {
+		return fmt.Errorf("transport URL must use https")
+	}
+
 	host := u.Hostname()
-	// Block well-known cloud metadata endpoints
-	if strings.EqualFold(host, "169.254.169.254") || // AWS/Azure/GCP instance metadata
-		strings.EqualFold(host, "metadata.google.internal") ||
-		strings.EqualFold(host, "metadata.internal") {
+	if strings.EqualFold(host, "localhost") || strings.EqualFold(host, "::1") {
 		return fmt.Errorf("transport URL host is not allowed")
 	}
-	// Block link-local addresses (169.254.x.x) if not caught above
+
 	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		if isBlockedMCPTransportIP(ip) {
 			return fmt.Errorf("transport URL host is not allowed")
 		}
 	}
 	return nil
+}
+
+func isBlockedMCPTransportIP(ip net.IP) bool {
+	if ip4 := ip.To4(); ip4 != nil {
+		switch {
+		case ip4[0] == 10:
+			return true
+		case ip4[0] == 127:
+			return true
+		case ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31:
+			return true
+		case ip4[0] == 192 && ip4[1] == 168:
+			return true
+		case ip4[0] == 169 && ip4[1] == 254:
+			return true
+		default:
+			return false
+		}
+	}
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	return false
 }
 
 type mcpHandlers struct {
