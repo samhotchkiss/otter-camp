@@ -26,11 +26,12 @@ func TestDailyRollupJobRunUpsertsAgentAndProjectRowsIdempotently(t *testing.T) {
 		orgID: orgID,
 		rowsByDimension: map[string][][]any{
 			"agent_id": {
-				{orgID, &agentA, 3, int64(100), int64(50)},
-				{orgID, &agentB, 2, int64(40), int64(20)},
+				{orgID, &agentA, "claude-opus-4-6", json.RawMessage(`{}`), 3, int64(100), int64(50)},
+				{orgID, &agentB, "claude-haiku-3-5", json.RawMessage(`{}`), 2, int64(40), int64(20)},
 			},
 			"project_id": {
-				{orgID, &projectID, 5, int64(140), int64(70)},
+				{orgID, &projectID, "claude-opus-4-6", json.RawMessage(`{}`), 3, int64(100), int64(50)},
+				{orgID, &projectID, "claude-haiku-3-5", json.RawMessage(`{}`), 2, int64(40), int64(20)},
 			},
 		},
 	}
@@ -53,9 +54,9 @@ func TestDailyRollupJobRunUpsertsAgentAndProjectRowsIdempotently(t *testing.T) {
 	if len(writer.store) != 3 {
 		t.Fatalf("rollup row count = %d, want 3", len(writer.store))
 	}
-	assertRollupTokens(t, writer, orgID, "agent", &agentA, 100, 50)
-	assertRollupTokens(t, writer, orgID, "agent", &agentB, 40, 20)
-	assertRollupTokens(t, writer, orgID, "project", &projectID, 140, 70)
+	assertRollupTotals(t, writer, orgID, "agent", &agentA, 100, 50, 525000)
+	assertRollupTotals(t, writer, orgID, "agent", &agentB, 40, 20, 11200)
+	assertRollupTotals(t, writer, orgID, "project", &projectID, 140, 70, 536200)
 
 	if len(events.events) == 0 {
 		t.Fatal("expected model.usage_rollup.completed domain event")
@@ -76,7 +77,7 @@ func TestDailyRollupJobRunUpsertsAgentAndProjectRowsIdempotently(t *testing.T) {
 	}
 }
 
-func assertRollupTokens(t *testing.T, writer *fakeModelUsageRollupWriter, orgID uuid.UUID, rollupType string, rollupID *uuid.UUID, input, output int64) {
+func assertRollupTotals(t *testing.T, writer *fakeModelUsageRollupWriter, orgID uuid.UUID, rollupType string, rollupID *uuid.UUID, input, output, cost int64) {
 	t.Helper()
 	item, ok := writer.store[rollupStoreKey(orgID, rollupType, rollupID)]
 	if !ok {
@@ -87,6 +88,9 @@ func assertRollupTokens(t *testing.T, writer *fakeModelUsageRollupWriter, orgID 
 	}
 	if item.TotalOutputTokens != output {
 		t.Fatalf("%s output_tokens = %d, want %d", rollupType, item.TotalOutputTokens, output)
+	}
+	if item.TotalCostMicrocents != cost {
+		t.Fatalf("%s total_cost_microcents = %d, want %d", rollupType, item.TotalCostMicrocents, cost)
 	}
 }
 
@@ -142,11 +146,61 @@ func (f *fakeRollupRows) Scan(dest ...any) error {
 			*d = row[i].(int)
 		case *int64:
 			*d = row[i].(int64)
+		case *string:
+			*d = row[i].(string)
+		case *json.RawMessage:
+			raw := row[i].(json.RawMessage)
+			*d = append((*d)[:0], raw...)
 		default:
 			return nil
 		}
 	}
 	return nil
+}
+
+func TestEstimateCostMicrocents(t *testing.T) {
+	t.Parallel()
+
+	got := estimateCostMicrocents(500, 200, 2.0, 4.0)
+	if got != 1800000 {
+		t.Fatalf("estimateCostMicrocents = %d, want 1800000", got)
+	}
+}
+
+func TestResolveRollupModelCostsUsesModelFallback(t *testing.T) {
+	t.Parallel()
+
+	input, output := resolveRollupModelCosts("claude-haiku-3-5", json.RawMessage(`{}`))
+	if input != 0.08 || output != 0.4 {
+		t.Fatalf("fallback costs = (%v,%v), want (0.08,0.4)", input, output)
+	}
+}
+
+func TestDefaultModelCostsPer1KKnownModels(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		modelName  string
+		inputCost  float64
+		outputCost float64
+	}{
+		{modelName: "claude-opus-4-6", inputCost: 1.5, outputCost: 7.5},
+		{modelName: "claude-sonnet-4-5", inputCost: 0.3, outputCost: 1.5},
+		{modelName: "claude-haiku-4-5", inputCost: 0.08, outputCost: 0.4},
+		{modelName: "gpt-4o", inputCost: 0.5, outputCost: 1.5},
+		{modelName: "gpt-4.1-mini", inputCost: 0.2, outputCost: 0.8},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.modelName, func(t *testing.T) {
+			t.Parallel()
+			input, output := defaultModelCostsPer1K(tc.modelName)
+			if input != tc.inputCost || output != tc.outputCost {
+				t.Fatalf("defaultModelCostsPer1K(%q) = (%v,%v), want (%v,%v)", tc.modelName, input, output, tc.inputCost, tc.outputCost)
+			}
+		})
+	}
 }
 
 type fakeModelUsageRollupWriter struct {
