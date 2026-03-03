@@ -178,6 +178,20 @@ type service struct {
 	sessionBridge flowSessionBridge
 }
 
+type taskReviewFlowAdapter struct {
+	flow FlowExecutionService
+}
+
+func (a taskReviewFlowAdapter) AdvanceTaskReview(ctx context.Context, taskID uuid.UUID, actor tasksvc.Actor) error {
+	_, err := a.flow.AdvanceFlow(ctx, taskID, Actor{Type: actor.Type, ID: actor.ID})
+	return err
+}
+
+func (a taskReviewFlowAdapter) RejectTaskReview(ctx context.Context, taskID uuid.UUID, actor tasksvc.Actor, _ string) error {
+	_, err := a.flow.RejectFlowNode(ctx, taskID, Actor{Type: actor.Type, ID: actor.ID})
+	return err
+}
+
 func NewService(opts Options) (FlowExecutionService, error) {
 	if opts.Pool == nil {
 		return nil, fmt.Errorf("flow execution service requires a database pool")
@@ -189,6 +203,7 @@ func NewService(opts Options) (FlowExecutionService, error) {
 	svc := &service{
 		events: opts.Events,
 	}
+	var flowReviewBindTarget any
 	if opts.FlowTemplates != nil {
 		svc.flowTemplates = opts.FlowTemplates
 	} else {
@@ -236,6 +251,7 @@ func NewService(opts Options) (FlowExecutionService, error) {
 	}
 	if opts.TasksService != nil {
 		svc.taskService = opts.TasksService
+		flowReviewBindTarget = opts.TasksService
 	} else {
 		taskService, err := tasksvc.NewService(tasksvc.Options{
 			Pool:     opts.Pool,
@@ -245,6 +261,7 @@ func NewService(opts Options) (FlowExecutionService, error) {
 			return nil, err
 		}
 		svc.taskService = taskService
+		flowReviewBindTarget = taskService
 	}
 	if opts.Agents != nil {
 		svc.agents = opts.Agents
@@ -257,6 +274,7 @@ func NewService(opts Options) (FlowExecutionService, error) {
 		svc.users = repo.NewHumanUserRepo(opts.Pool)
 	}
 	svc.sessionBridge = opts.SessionBridge
+	tasksvc.AttachFlowReviewActions(flowReviewBindTarget, taskReviewFlowAdapter{flow: svc})
 
 	return svc, nil
 }
