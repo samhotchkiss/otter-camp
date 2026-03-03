@@ -1927,6 +1927,7 @@ func mapAssignmentError(err error) (status int, code, message string) {
 		errors.Is(err, agent.ErrAssignmentProjectIDRequired),
 		errors.Is(err, agent.ErrAssignmentSkillIDRequired),
 		errors.Is(err, agent.ErrAssignmentInvalidRole),
+		errors.Is(err, agent.ErrStarterTrioRoleForbidden),
 		errors.Is(err, agent.ErrInvalidCreatedByType),
 		errors.Is(err, agent.ErrCreatedByIDRequired):
 		return http.StatusUnprocessableEntity, api.ErrCodeValidation, err.Error()

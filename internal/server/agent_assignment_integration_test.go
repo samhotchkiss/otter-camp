@@ -293,6 +293,23 @@ func TestAgentAssignmentHTTPOrgIsolationAndRBAC(t *testing.T) {
 	}
 }
 
+func TestAgentAssignmentHTTPStarterTrioCannotBeAssignedPM(t *testing.T) {
+	testServer, org, adminUser, _ := newAgentTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	project := seedAssignmentProject(t, testServer.Pool, org.ID)
+	frank := seedStarterTrioAssignmentAgent(t, testServer.Pool, org.ID, "Frank")
+
+	assignResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents/"+frank.ID.String()+"/project-assignments", map[string]any{
+		"project_id": project.ID.String(),
+		"role":       "pm",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if assignResp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("starter trio pm assign status = %d, want %d body=%s", assignResp.StatusCode, http.StatusUnprocessableEntity, string(assignResp.Body))
+	}
+}
+
 func seedAssignmentProject(t *testing.T, pool *pgxpool.Pool, orgID uuid.UUID) repo.Project {
 	t.Helper()
 
@@ -332,6 +349,32 @@ func seedActiveAssignmentAgent(t *testing.T, pool *pgxpool.Pool, orgID uuid.UUID
 	})
 	if err != nil {
 		t.Fatalf("create agent: %v", err)
+	}
+	return created
+}
+
+func seedStarterTrioAssignmentAgent(t *testing.T, pool *pgxpool.Pool, orgID uuid.UUID, name string) repo.Agent {
+	t.Helper()
+
+	agentRepo := repo.NewAgentRepo(pool)
+	created, err := agentRepo.Create(context.Background(), repo.Agent{
+		OrganizationID:       orgID,
+		DisplayName:          name + "-" + uuid.NewString()[:8],
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "prompt",
+		OperatorInstructions: "",
+		AgentType:            "general",
+		PrivateMemory:        false,
+		MemoryReadScopes:     []string{"org"},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+		IsStarterTrio:        true,
+	})
+	if err != nil {
+		t.Fatalf("create starter trio agent: %v", err)
 	}
 	return created
 }

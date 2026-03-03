@@ -68,6 +68,22 @@ type fakeProjectAssignments struct {
 	callTxs   []pgx.Tx
 }
 
+type fakeAssignmentAgents struct {
+	items map[uuid.UUID]repo.Agent
+	err   error
+}
+
+func (f *fakeAssignmentAgents) GetByID(_ context.Context, id uuid.UUID) (repo.Agent, error) {
+	if f.err != nil {
+		return repo.Agent{}, f.err
+	}
+	item, ok := f.items[id]
+	if !ok {
+		return repo.Agent{}, repo.ErrNotFound
+	}
+	return item, nil
+}
+
 func (f *fakeProjectAssignments) AssignTx(_ context.Context, tx pgx.Tx, assignment repo.AgentProjectAssignment) (repo.AgentProjectAssignment, error) {
 	f.callOrder = append(f.callOrder, "assign")
 	f.callTxs = append(f.callTxs, tx)
@@ -346,5 +362,94 @@ func TestAssignToProjectReturnsPMConflict(t *testing.T) {
 	_, err := svc.AssignToProject(context.Background(), uuid.New(), uuid.New(), "pm", AssignmentActor{Type: "system"})
 	if !errors.Is(err, ErrPMConflict) {
 		t.Fatalf("AssignToProject error = %v, want ErrPMConflict", err)
+	}
+}
+
+func TestAssignToProjectRejectsStarterTrioRestrictedRoles(t *testing.T) {
+	t.Parallel()
+
+	for _, role := range []string{"pm", "worker", "reviewer"} {
+		t.Run(role, func(t *testing.T) {
+			txStarter := &fakeTxStarter{}
+			assignments := &fakeProjectAssignments{
+				getPMErr: repo.ErrNotFound,
+			}
+			agentID := uuid.New()
+			svc := &assignmentService{
+				txStarter:          txStarter,
+				projectAssignments: assignments,
+				agents: &fakeAssignmentAgents{
+					items: map[uuid.UUID]repo.Agent{
+						agentID: {ID: agentID, IsStarterTrio: true},
+					},
+				},
+			}
+
+			_, err := svc.AssignToProject(context.Background(), agentID, uuid.New(), role, AssignmentActor{Type: "system"})
+			if !errors.Is(err, ErrStarterTrioRoleForbidden) {
+				t.Fatalf("AssignToProject error = %v, want ErrStarterTrioRoleForbidden", err)
+			}
+			if txStarter.tx != nil {
+				t.Fatalf("transaction should not start for starter trio %q role", role)
+			}
+		})
+	}
+}
+
+func TestAssignToProjectAllowsStarterTrioObserver(t *testing.T) {
+	t.Parallel()
+
+	tx := &fakeTx{}
+	txStarter := &fakeTxStarter{tx: tx}
+	assignments := &fakeProjectAssignments{
+		getPMErr: repo.ErrNotFound,
+	}
+	agentID := uuid.New()
+	projectID := uuid.New()
+	svc := &assignmentService{
+		txStarter:          txStarter,
+		projectAssignments: assignments,
+		agents: &fakeAssignmentAgents{
+			items: map[uuid.UUID]repo.Agent{
+				agentID: {ID: agentID, IsStarterTrio: true},
+			},
+		},
+	}
+
+	assigned, err := svc.AssignToProject(context.Background(), agentID, projectID, "observer", AssignmentActor{Type: "system"})
+	if err != nil {
+		t.Fatalf("AssignToProject observer: %v", err)
+	}
+	if assigned.Role != "observer" {
+		t.Fatalf("assigned role = %q, want observer", assigned.Role)
+	}
+}
+
+func TestAssignToProjectAllowsNonStarterTrioPM(t *testing.T) {
+	t.Parallel()
+
+	tx := &fakeTx{}
+	txStarter := &fakeTxStarter{tx: tx}
+	assignments := &fakeProjectAssignments{
+		getPMErr: repo.ErrNotFound,
+	}
+	agentID := uuid.New()
+	projectID := uuid.New()
+	svc := &assignmentService{
+		txStarter:          txStarter,
+		projectAssignments: assignments,
+		agents: &fakeAssignmentAgents{
+			items: map[uuid.UUID]repo.Agent{
+				agentID: {ID: agentID, IsStarterTrio: false},
+			},
+		},
+	}
+
+	assigned, err := svc.AssignToProject(context.Background(), agentID, projectID, "pm", AssignmentActor{Type: "system"})
+	if err != nil {
+		t.Fatalf("AssignToProject pm: %v", err)
+	}
+	if assigned.Role != "pm" {
+		t.Fatalf("assigned role = %q, want pm", assigned.Role)
 	}
 }
