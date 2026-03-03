@@ -100,6 +100,9 @@ func TestGitCommitMainBranchReturnsPayloadError(t *testing.T) {
 			if len(args) == 3 && args[0] == "rev-parse" && args[1] == "--abbrev-ref" && args[2] == "HEAD" {
 				return helperCommand(ctx, "git-branch-main", nil)
 			}
+			if len(args) == 1 && args[0] == "remote" {
+				return helperCommand(ctx, "git-status", nil)
+			}
 			t.Fatalf("unexpected git invocation: %v", args)
 			return nil
 		},
