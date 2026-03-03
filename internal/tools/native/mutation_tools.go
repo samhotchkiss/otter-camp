@@ -23,6 +23,8 @@ import (
 
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
 
+const taskDoneTerminalNodeMessage = "task can only be marked done when its flow reaches a terminal node"
+
 type executionActor struct {
 	createdByType string
 	createdByID   uuid.UUID
@@ -753,6 +755,11 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			current.FlowTemplateID == nil {
 			return map[string]any{"error": "task requires a flow template before it can be queued"}, nil
 		}
+		if strings.EqualFold(strings.TrimSpace(status), "done") {
+			if err := e.validateTaskDoneTransition(ctx, current); err != nil {
+				return map[string]any{"error": err.Error()}, nil
+			}
+		}
 		current.WorkStatus = status
 	}
 	updated, err := e.tasks.Update(ctx, current)
@@ -766,6 +773,41 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			"work_status": updated.WorkStatus,
 		},
 	}, nil
+}
+
+func (e *NativeToolExecutor) validateTaskDoneTransition(ctx context.Context, taskRecord repo.ProjectTask) error {
+	if taskRecord.FlowTemplateID == nil || taskRecord.CurrentFlowNodeID == nil {
+		return errors.New(taskDoneTerminalNodeMessage)
+	}
+	if e.flowNodes == nil || e.flowExecs == nil {
+		return errors.New(taskDoneTerminalNodeMessage)
+	}
+	node, err := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New(taskDoneTerminalNodeMessage)
+		}
+		return err
+	}
+	if node.NextNodeID != nil {
+		return errors.New(taskDoneTerminalNodeMessage)
+	}
+	executions, err := e.flowExecs.ListByTask(ctx, taskRecord.ID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return errors.New(taskDoneTerminalNodeMessage)
+		}
+		return err
+	}
+	for _, execution := range executions {
+		if execution.FlowNodeID != node.ID {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(execution.Status), "completed") {
+			return nil
+		}
+	}
+	return errors.New(taskDoneTerminalNodeMessage)
 }
 
 func (e *NativeToolExecutor) handleTaskAddDependency(ctx context.Context, input map[string]any) (map[string]any, error) {
