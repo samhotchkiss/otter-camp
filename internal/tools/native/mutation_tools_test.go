@@ -450,6 +450,98 @@ func TestTaskUpdateAllowsDraftToQueuedWithFlowTemplate(t *testing.T) {
 	}
 }
 
+func TestTaskUpdateRejectsDraftToQueuedWithoutPMWhenProjectRequiresPM(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      projectID,
+			WorkStatus:     "draft",
+			FlowTemplateID: &flowTemplateID,
+		},
+	}
+	projects := &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:       projectID,
+				Settings: json.RawMessage(`{"requires_pm_assignment_before_queue":true}`),
+			},
+		},
+	}
+	assignments := &fakeAssignmentRepo{}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.projects = projects
+	executor.assignments = assignments
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != "project has no active PM assignment" {
+		t.Fatalf("error = %v, want PM assignment required message", out["error"])
+	}
+	if tasks.updateCalls != 0 {
+		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)
+	}
+}
+
+func TestTaskUpdateAllowsDraftToQueuedWithPMWhenProjectRequiresPM(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      projectID,
+			WorkStatus:     "draft",
+			FlowTemplateID: &flowTemplateID,
+		},
+	}
+	projects := &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:       projectID,
+				Settings: json.RawMessage(`{"requires_pm_assignment_before_queue":true}`),
+			},
+		},
+	}
+	assignments := &fakeAssignmentRepo{
+		assignments: []repo.AgentProjectAssignment{
+			{ID: uuid.New(), ProjectID: projectID, Role: "pm", IsActive: true},
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.projects = projects
+	executor.assignments = assignments
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if got := taskOut["work_status"]; got != "queued" {
+		t.Fatalf("work_status = %v, want queued", got)
+	}
+	if tasks.updateCalls != 1 {
+		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
+	}
+}
+
 func TestTaskUpdateRejectsDoneWithoutFlowTemplate(t *testing.T) {
 	taskID := uuid.New()
 	tasks := &mockTaskRepo{
@@ -732,18 +824,30 @@ func TestFlowAdvanceTerminalPropagatesGetByIDError(t *testing.T) {
 
 type fakeProjectRepo struct {
 	lastCreated repo.Project
+	projects    map[uuid.UUID]repo.Project
 }
 
 func (f *fakeProjectRepo) Create(_ context.Context, p repo.Project) (repo.Project, error) {
 	p.ID = uuid.New()
 	f.lastCreated = p
+	if f.projects == nil {
+		f.projects = make(map[uuid.UUID]repo.Project)
+	}
+	f.projects[p.ID] = p
 	return p, nil
 }
 func (f *fakeProjectRepo) List(context.Context, uuid.UUID) ([]repo.Project, error) {
 	return nil, nil
 }
-func (f *fakeProjectRepo) GetByID(context.Context, uuid.UUID) (repo.Project, error) {
-	return repo.Project{}, nil
+func (f *fakeProjectRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Project, error) {
+	if f.projects == nil {
+		return repo.Project{}, repo.ErrNotFound
+	}
+	projectRecord, ok := f.projects[id]
+	if !ok {
+		return repo.Project{}, repo.ErrNotFound
+	}
+	return projectRecord, nil
 }
 func (f *fakeProjectRepo) GetBySlug(context.Context, uuid.UUID, string) (repo.Project, error) {
 	return repo.Project{}, nil
@@ -819,24 +923,19 @@ func (f *fakeParticipantRepo) ListBySession(context.Context, uuid.UUID) ([]repo.
 	return nil, nil
 }
 
-func TestProjectCreateAutoAssignsAgents(t *testing.T) {
+func TestProjectCreatePublishesStaffingEventAndDoesNotAutoAssignAgents(t *testing.T) {
 	frankID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
-	loriID := uuid.New()
 	orgID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
 
 	projects := &fakeProjectRepo{}
-	agents := &fakeAgentRepo{
-		agents: []repo.Agent{
-			{ID: frankID, OrganizationID: orgID, DisplayName: "Frank", AgentType: "general", IsStarterTrio: true},
-			{ID: loriID, OrganizationID: orgID, DisplayName: "Lori", AgentType: "pm", IsStarterTrio: true},
-			{ID: uuid.New(), OrganizationID: orgID, DisplayName: "Ellie", AgentType: "general", IsStarterTrio: true},
-		},
-	}
 	assignments := &fakeAssignmentRepo{}
+	publisher := &recordingEventPublisher{}
 
-	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+		Events:        publisher,
+	})
 	executor.projects = projects
-	executor.agents = agents
 	executor.assignments = assignments
 
 	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
@@ -860,35 +959,23 @@ func TestProjectCreateAutoAssignsAgents(t *testing.T) {
 	if proj["name"] != "Super Bowl Ad" {
 		t.Fatalf("project name = %v, want Super Bowl Ad", proj["name"])
 	}
-
-	// Verify auto-assignments
-	assigned, ok := out["assigned_agents"].([]map[string]any)
-	if !ok || len(assigned) != 2 {
-		t.Fatalf("assigned_agents = %v, want 2 entries", out["assigned_agents"])
+	if _, ok := out["assigned_agents"]; ok {
+		t.Fatalf("assigned_agents should be omitted, got %v", out["assigned_agents"])
 	}
-
-	// First assignment should be Frank as PM
-	if assigned[0]["role"] != "pm" {
-		t.Fatalf("assigned[0].role = %v, want pm", assigned[0]["role"])
+	if len(assignments.assignments) != 0 {
+		t.Fatalf("assignment repo entries = %d, want 0", len(assignments.assignments))
 	}
-
-	// Second assignment should be Lori as worker
-	if assigned[1]["role"] != "worker" {
-		t.Fatalf("assigned[1].role = %v, want worker", assigned[1]["role"])
+	if !strings.Contains(string(projects.lastCreated.Settings), `"requires_pm_assignment_before_queue":true`) {
+		t.Fatalf("project settings = %s, want requires_pm_assignment_before_queue=true", string(projects.lastCreated.Settings))
 	}
-	if assigned[1]["agent_name"] != "Lori" {
-		t.Fatalf("assigned[1].agent_name = %v, want Lori", assigned[1]["agent_name"])
+	if len(publisher.events) != 2 {
+		t.Fatalf("published events=%d, want 2", len(publisher.events))
 	}
-
-	// Verify underlying assignment records
-	if len(assignments.assignments) != 2 {
-		t.Fatalf("assignment repo entries = %d, want 2", len(assignments.assignments))
+	if publisher.events[0].EventType != "project.created" {
+		t.Fatalf("event[0].type = %q, want project.created", publisher.events[0].EventType)
 	}
-	if assignments.assignments[0].AgentID != frankID {
-		t.Fatalf("assignment[0].agent_id = %v, want Frank", assignments.assignments[0].AgentID)
-	}
-	if assignments.assignments[1].AgentID != loriID {
-		t.Fatalf("assignment[1].agent_id = %v, want Lori", assignments.assignments[1].AgentID)
+	if publisher.events[1].EventType != "project.staffing_needed" {
+		t.Fatalf("event[1].type = %q, want project.staffing_needed", publisher.events[1].EventType)
 	}
 }
 

@@ -5,6 +5,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -296,6 +297,40 @@ func TestTaskServiceIntegrationMergeQueueOrderingAndDequeue(t *testing.T) {
 	}
 	if active[0].Position != 1 || active[1].Position != 3 {
 		t.Fatalf("active positions = [%d,%d], want [1,3]", active[0].Position, active[1].Position)
+	}
+}
+
+func TestTaskServiceIntegrationQueueRequiresPMWhenProjectConfigured(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{"requires_pm_assignment_before_queue":true}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "PM-gated queue",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	if _, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"}); !errors.Is(err, ErrPMNotAssigned) {
+		t.Fatalf("TransitionStatus queued err = %v, want ErrPMNotAssigned", err)
+	}
+
+	pmUser := seedTaskServiceUser(t, ctx, pool, org.ID, "pm-gated-user", "admin")
+	pmAgent := seedTaskServiceAgent(t, ctx, pool, org.ID, "PM Agent", "staff", "pm", "human_user", pmUser.ID)
+	assignPMToProject(t, ctx, pool, pmAgent.ID, project.ID)
+
+	queued, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus queued with PM: %v", err)
+	}
+	if queued.WorkStatus != "queued" {
+		t.Fatalf("queued work_status = %q, want queued", queued.WorkStatus)
 	}
 }
 

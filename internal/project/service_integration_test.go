@@ -72,6 +72,43 @@ func TestProjectServiceCreateGetBySlugAndUniqueness(t *testing.T) {
 	}
 }
 
+func TestProjectServiceCreatePublishesStaffingNeededEvent(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	svc := newIntegrationService(t, pool)
+	orgRepo := repo.NewOrgRepo(pool)
+
+	org, err := orgRepo.Create(ctx, repo.Organization{Slug: "proj-svc-staffing-" + uuid.NewString()[:8], DisplayName: "Staffing Org"})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+
+	created, err := svc.Create(ctx, CreateProjectRequest{
+		OrganizationID: org.ID,
+		Slug:           "staffing-required",
+		DisplayName:    "Staffing Required",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var staffingCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM domain_event
+		WHERE organization_id = $1
+		  AND event_type = 'project.staffing_needed'
+		  AND payload ->> 'project_id' = $2
+	`, org.ID, created.ID.String()).Scan(&staffingCount); err != nil {
+		t.Fatalf("count project.staffing_needed: %v", err)
+	}
+	if staffingCount < 1 {
+		t.Fatalf("project.staffing_needed count = %d, want >= 1", staffingCount)
+	}
+}
+
 func TestProjectServiceDeleteActiveTasksBlocked(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

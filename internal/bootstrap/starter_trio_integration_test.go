@@ -4,6 +4,7 @@ package bootstrap
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -61,6 +62,52 @@ func TestRegisterStarterTrioStepCreatesAgentsIdempotently(t *testing.T) {
 	for _, expected := range []string{"Frank", "Lori", "Ellie"} {
 		if names[expected] != 1 {
 			t.Fatalf("starter trio %s count = %d, want 1", expected, names[expected])
+		}
+	}
+}
+
+func TestStarterTrioLoriPromptIncludesStaffingWorkflow(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	orgRepo := repo.NewOrgRepo(pool)
+	agentRepo := repo.NewAgentRepo(pool)
+
+	org, err := orgRepo.Create(ctx, repo.Organization{Slug: "bootstrap-lori-prompt", DisplayName: "Bootstrap Lori Prompt"})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+
+	bootstrapper := NewBootstrapper(Options{DisableDefaultStep: true})
+	RegisterStarterTrioStep(bootstrapper, agentRepo)
+	if err := bootstrapper.RunWithState(ctx, &State{OrganizationID: org.ID}); err != nil {
+		t.Fatalf("bootstrap run: %v", err)
+	}
+
+	trio, err := agentRepo.GetStarterTrio(ctx, org.ID)
+	if err != nil {
+		t.Fatalf("GetStarterTrio: %v", err)
+	}
+
+	var loriPrompt string
+	for _, agent := range trio {
+		if agent.DisplayName == "Lori" {
+			loriPrompt = agent.SystemPrompt
+			break
+		}
+	}
+	if loriPrompt == "" {
+		t.Fatal("missing Lori prompt in starter trio")
+	}
+
+	for _, snippet := range []string{
+		"project.staffing_needed",
+		"PM recommendation",
+		"worker/reviewer recommendations",
+		"human approval request",
+	} {
+		if !strings.Contains(loriPrompt, snippet) {
+			t.Fatalf("Lori prompt missing %q", snippet)
 		}
 	}
 }
