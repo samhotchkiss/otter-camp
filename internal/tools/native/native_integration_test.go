@@ -376,6 +376,75 @@ func TestIntegrationTaskDependencyCreateRemoveAndCycleDetection(t *testing.T) {
 	}
 }
 
+func TestIntegrationTaskUpdateSetsFlowTemplateAndAssignedAgent(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	assignee := testutil.MakeAgent(t, pool, orgID)
+	template := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{})
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	ctx := integrationExecCtxWith(orgID, actor.ID)
+	out, err := executor.Execute(ctx, "task.update", map[string]any{
+		"task_id":           task.ID.String(),
+		"flow_template_id":  template.ID.String(),
+		"assigned_agent_id": assignee.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("task.update error = %v, want nil", out["error"])
+	}
+
+	updated, err := repo.NewProjectTaskRepo(pool).GetByID(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("load updated task: %v", err)
+	}
+	if updated.FlowTemplateID == nil || *updated.FlowTemplateID != template.ID {
+		t.Fatalf("flow_template_id = %v, want %s", updated.FlowTemplateID, template.ID)
+	}
+	if updated.AssignedAgentID == nil || *updated.AssignedAgentID != assignee.ID {
+		t.Fatalf("assigned_agent_id = %v, want %s", updated.AssignedAgentID, assignee.ID)
+	}
+}
+
+func TestIntegrationTaskUpdateRejectsFlowTemplateChangeOutsideDraft(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	initialTemplate := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	replacementTemplate := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &initialTemplate.ID,
+		WorkStatus:     "in_progress",
+	})
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	ctx := integrationExecCtxWith(orgID, actor.ID)
+	out, err := executor.Execute(ctx, "task.update", map[string]any{
+		"task_id":          task.ID.String(),
+		"flow_template_id": replacementTemplate.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != "flow_template_id can only be changed while task is draft" {
+		t.Fatalf("error = %v, want draft-only flow template message", out["error"])
+	}
+
+	updated, err := repo.NewProjectTaskRepo(pool).GetByID(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("load task after rejected update: %v", err)
+	}
+	if updated.FlowTemplateID == nil || *updated.FlowTemplateID != initialTemplate.ID {
+		t.Fatalf("flow_template_id = %v, want %s", updated.FlowTemplateID, initialTemplate.ID)
+	}
+}
+
 func TestIntegrationFlowAdvanceMovesToNextNode(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
