@@ -66,9 +66,9 @@ var (
 			Foreground(lipgloss.Color("#FFFFFF")).
 			Bold(true)
 	styleActive = lipgloss.NewStyle().Foreground(colFocus).Bold(true)
-	// styleHover provides subtle visual feedback when the mouse hovers over
-	// a clickable item (underline to indicate interactivity).
-	styleHover = lipgloss.NewStyle().Underline(true)
+	// styleHover provides visual feedback when the mouse hovers over a
+	// clickable item — gray background that transitions to purple on click.
+	styleHover = lipgloss.NewStyle().Background(lipgloss.Color("#374151")).Foreground(lipgloss.Color("#F9FAFB"))
 )
 
 // taskStatusColor returns a colour for the given work_status string.
@@ -657,7 +657,7 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, hovered bool, w
 			check := " " + styleConnected.Render("✓")
 			rendered = styleActive.Render(truncate(line, maxW-2)) + check
 		case hovered:
-			rendered = styleHover.Render(truncate(line, maxW))
+			rendered = styleHover.Width(width - 2).Render(truncate(line, maxW))
 		default:
 			rendered = styleText.Render(truncate(line, maxW))
 		}
