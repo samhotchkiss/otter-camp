@@ -838,6 +838,95 @@ func TestTaskUpdateAllowsCancelledWithoutFlowTemplate(t *testing.T) {
 	}
 }
 
+func TestTaskUpdatePublishesStatusChangedEventWhenWorkStatusChanges(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	orgID := uuid.New()
+	flowTemplateID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "draft",
+			FlowTemplateID: &flowTemplateID,
+		},
+	}
+	publisher := &recordingEventPublisher{}
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+		Events:        publisher,
+	})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if taskOut["work_status"] != "queued" {
+		t.Fatalf("work_status = %v, want queued", taskOut["work_status"])
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("published events = %d, want 1", len(publisher.events))
+	}
+	if publisher.events[0].EventType != "task.status_changed" {
+		t.Fatalf("event type = %q, want task.status_changed", publisher.events[0].EventType)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(publisher.events[0].Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload["from_status"] != "draft" {
+		t.Fatalf("from_status = %v, want draft", payload["from_status"])
+	}
+	if payload["to_status"] != "queued" {
+		t.Fatalf("to_status = %v, want queued", payload["to_status"])
+	}
+	if payload["task_id"] != taskID.String() {
+		t.Fatalf("task_id = %v, want %s", payload["task_id"], taskID.String())
+	}
+}
+
+func TestTaskUpdateDoesNotPublishStatusChangedEventWhenWorkStatusUnchanged(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	orgID := uuid.New()
+	flowTemplateID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "draft",
+			FlowTemplateID: &flowTemplateID,
+		},
+	}
+	publisher := &recordingEventPublisher{}
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+		Events:        publisher,
+	})
+	executor.tasks = tasks
+
+	if _, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "draft",
+	}); err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if len(publisher.events) != 0 {
+		t.Fatalf("published events = %d, want 0", len(publisher.events))
+	}
+}
+
 type recordingEventPublisher struct {
 	events []eventbus.DomainEvent
 	err    error
