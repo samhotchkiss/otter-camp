@@ -149,6 +149,7 @@ type updateFlowTemplateRequest struct {
 
 type createFlowNodeRequest struct {
 	DisplayName         string                 `json:"display_name"`
+	Label               string                 `json:"label"`
 	Name                string                 `json:"name"`
 	NodeType            string                 `json:"node_type"`
 	ActorType           *string                `json:"actor_type"`
@@ -160,6 +161,7 @@ type createFlowNodeRequest struct {
 	RequiresHumanReview bool                   `json:"requires_human_review"`
 	MaxVisits           int                    `json:"max_visits"`
 	Position            int                    `json:"position"`
+	Ordinal             *int                   `json:"ordinal"`
 	Metadata            json.RawMessage        `json:"metadata"`
 }
 
@@ -232,6 +234,7 @@ type flowTemplateResponse struct {
 type flowNodeResponse struct {
 	ID                  uuid.UUID              `json:"id"`
 	FlowTemplateID      uuid.UUID              `json:"flow_template_id"`
+	Label               string                 `json:"label"`
 	DisplayName         string                 `json:"display_name"`
 	NodeType            string                 `json:"node_type"`
 	Position            int                    `json:"position"`
@@ -744,28 +747,37 @@ func (h projectHandlers) addFlowNode(w http.ResponseWriter, r *http.Request) {
 	}
 	displayName := strings.TrimSpace(req.DisplayName)
 	if displayName == "" {
+		displayName = strings.TrimSpace(req.Label)
+	}
+	if displayName == "" {
 		displayName = strings.TrimSpace(req.Name)
 	}
 	if displayName == "" {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "display_name is required")
 		return
 	}
-	nodeType := strings.TrimSpace(req.NodeType)
+	nodeType := strings.ToLower(strings.TrimSpace(req.NodeType))
 	switch nodeType {
 	case "agent_work":
 		nodeType = "work"
 	case "human_review":
 		nodeType = "review"
+	case "execute":
+		nodeType = "work"
 	}
 	if nodeType == "" {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "node_type is required")
 		return
 	}
+	position := req.Position
+	if req.Ordinal != nil {
+		position = *req.Ordinal
+	}
 
 	created, createErr := h.service.AddFlowNode(r.Context(), templateID, projectsvc.AddFlowNodeRequest{
 		DisplayName:         displayName,
 		NodeType:            nodeType,
-		Position:            req.Position,
+		Position:            position,
 		ActorType:           req.ActorType,
 		ActorID:             req.ActorID,
 		NextNodeID:          req.NextNodeID,
@@ -1419,6 +1431,7 @@ func toFlowNodeResponse(model *projectsvc.FlowNode) flowNodeResponse {
 	return flowNodeResponse{
 		ID:                  model.ID,
 		FlowTemplateID:      model.FlowTemplateID,
+		Label:               model.DisplayName,
 		DisplayName:         model.DisplayName,
 		NodeType:            model.NodeType,
 		Position:            model.Position,

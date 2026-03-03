@@ -409,6 +409,86 @@ func TestProjectHTTPFlowNodeCreatePersistsNextNodeID(t *testing.T) {
 	}
 }
 
+func TestProjectHTTPFlowNodeCreateAcceptsLabelOrdinalAndListsLabel(t *testing.T) {
+	testServer, _, adminUser, memberUser := newProjectTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	memberToken := loginToken(t, testServer.URL, memberUser.Email, "member-password")
+
+	createdProject := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects", map[string]any{
+		"slug":          "node-label-" + strings.ToLower(uuid.NewString()[:8]),
+		"display_name":  "Node Label Project",
+		"delivery_mode": "gated",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if createdProject.StatusCode != http.StatusCreated {
+		t.Fatalf("create project status = %d, want %d body=%s", createdProject.StatusCode, http.StatusCreated, string(createdProject.Body))
+	}
+	projectID := jsonPathString(t, createdProject.Body, "data", "id")
+
+	templateResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+projectID+"/flow-templates", map[string]any{
+		"slug":         "label-flow",
+		"display_name": "Label Flow",
+		"description":  "label test",
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if templateResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create flow template status = %d, want %d body=%s", templateResp.StatusCode, http.StatusCreated, string(templateResp.Body))
+	}
+	templateID := jsonPathString(t, templateResp.Body, "data", "id")
+
+	workNode := mustJSON(t, http.MethodPost, testServer.URL+"/v1/flow-templates/"+templateID+"/nodes", map[string]any{
+		"label":     "Code",
+		"node_type": "work",
+		"ordinal":   1,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if workNode.StatusCode != http.StatusCreated {
+		t.Fatalf("create work node status = %d, want %d body=%s", workNode.StatusCode, http.StatusCreated, string(workNode.Body))
+	}
+	if got := jsonPathString(t, workNode.Body, "data", "label"); got != "Code" {
+		t.Fatalf("work node label = %q, want %q body=%s", got, "Code", string(workNode.Body))
+	}
+	if got := jsonPathString(t, workNode.Body, "data", "display_name"); got != "Code" {
+		t.Fatalf("work node display_name = %q, want %q body=%s", got, "Code", string(workNode.Body))
+	}
+
+	reviewNode := mustJSON(t, http.MethodPost, testServer.URL+"/v1/flow-templates/"+templateID+"/nodes", map[string]any{
+		"label":     "Review",
+		"node_type": "review",
+		"ordinal":   2,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if reviewNode.StatusCode != http.StatusCreated {
+		t.Fatalf("create review node status = %d, want %d body=%s", reviewNode.StatusCode, http.StatusCreated, string(reviewNode.Body))
+	}
+
+	nodes := mustJSON(t, http.MethodGet, testServer.URL+"/v1/flow-templates/"+templateID+"/nodes", nil, map[string]string{
+		"Authorization": "Bearer " + memberToken,
+	})
+	if nodes.StatusCode != http.StatusOK {
+		t.Fatalf("list nodes status = %d, want %d body=%s", nodes.StatusCode, http.StatusOK, string(nodes.Body))
+	}
+	if got := jsonPathString(t, nodes.Body, "data", "0", "label"); got != "Code" {
+		t.Fatalf("node[0].label = %q, want %q body=%s", got, "Code", string(nodes.Body))
+	}
+	if got := jsonPathString(t, nodes.Body, "data", "0", "node_type"); got != "work" {
+		t.Fatalf("node[0].node_type = %q, want %q body=%s", got, "work", string(nodes.Body))
+	}
+
+	listData, ok := jsonPathValue(t, nodes.Body, "data").([]any)
+	if !ok || len(listData) < 2 {
+		t.Fatalf("list nodes data malformed body=%s", string(nodes.Body))
+	}
+	second, ok := listData[1].(map[string]any)
+	if !ok {
+		t.Fatalf("node[1] is not object body=%s", string(nodes.Body))
+	}
+	if got, _ := second["label"].(string); got != "Review" {
+		t.Fatalf("node[1].label = %q, want %q body=%s", got, "Review", string(nodes.Body))
+	}
+	if got, _ := second["node_type"].(string); got != "review" {
+		t.Fatalf("node[1].node_type = %q, want %q body=%s", got, "review", string(nodes.Body))
+	}
+}
+
 func TestProjectHTTPFlowTemplateRejectsPathsWithoutReview(t *testing.T) {
 	testServer, _, adminUser, memberUser := newProjectTestServer(t)
 	defer testServer.Close()
