@@ -27,6 +27,17 @@ Execution rules:
 - When implementation and required tests pass, move the task to `03-needs-review`.
 - Reviewer moves files between `04-in-review` and either `05-completed` or back to `01-ready`.
 
+Test gating policy:
+- Run task-scoped tests first (packages touched by the task) and treat these as blocking.
+  - Example: `go test ./internal/foo ./internal/bar`
+  - Integration if required by task: `go test ./internal/foo ./internal/bar -tags integration`
+- Do not run broad `go test ./...` as the first signal for task completion.
+- Optional full-suite runs are non-blocking unless they fail in the touched task scope.
+- Every run summary must classify test outcomes explicitly:
+  - `task_scope`: pass/fail (blocking)
+  - `baseline_unrelated`: pass/fail (non-blocking if pre-existing/unrelated)
+  - `decision`: `proceed` or `blocked`
+
 Reviewer-required changes handling:
 - A top-level `## Reviewer Required Changes` block in a task file is authoritative and must be treated as mandatory acceptance criteria for that rework pass.
 - Resolve each checklist item in that block with concrete code/test changes.

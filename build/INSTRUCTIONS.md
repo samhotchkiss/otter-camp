@@ -289,6 +289,15 @@ go test ./... -tags integration
 go test ./... -tags e2e
 ```
 
+**Autowork test gating policy:**
+- Execute scoped task tests first (touched packages only); these are the primary blocking signal.
+- Use full-suite runs (`go test ./...`, `... -tags integration`) only after scoped tests and classify them as baseline checks.
+- Baseline failures outside touched scope are non-blocking when clearly pre-existing/unrelated.
+- Always report test outcomes in three buckets:
+  - `task_scope` (blocking)
+  - `baseline_unrelated` (non-blocking if unrelated)
+  - final `decision` (`proceed` or `blocked`)
+
 **tmux verification checklist (TUI work):**
 - Run the TUI in tmux and confirm fallback-first paths remain usable:
   - `:focus sidebar|main|chat`
