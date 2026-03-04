@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -598,6 +601,186 @@ func runTUICommand(args []string) int {
 					return "", err
 				}
 				return created.Data.ID.String(), nil
+			}
+			runtimeHints.LoadSettings = func(ctx context.Context) (*tuiapp.SettingsData, error) {
+				// 1. Load model profiles
+				var profilesResp struct {
+					Data []struct {
+						LogicalProfileID string `json:"logical_profile_id"`
+						ProviderID       string `json:"provider_id"`
+						ModelName        string `json:"model_name"`
+					} `json:"data"`
+				}
+				if err := apiClient.request(ctx, "GET", "/v1/model/profiles", nil, &profilesResp); err != nil {
+					return nil, fmt.Errorf("load profiles: %w", err)
+				}
+
+				// 2. Load providers
+				var providersResp struct {
+					Data []struct {
+						ID          string `json:"id"`
+						Slug        string `json:"slug"`
+						DisplayName string `json:"display_name"`
+						IsEnabled   bool   `json:"is_enabled"`
+					} `json:"data"`
+				}
+				if err := apiClient.request(ctx, "GET", "/v1/model/providers", nil, &providersResp); err != nil {
+					return nil, fmt.Errorf("load providers: %w", err)
+				}
+
+				// Build provider ID→name map
+				providerNames := make(map[string]string)
+				for _, p := range providersResp.Data {
+					providerNames[p.ID] = p.DisplayName
+				}
+
+				// Build profiles
+				profiles := make([]tuiapp.ModelProfileItem, 0, len(profilesResp.Data))
+				for _, p := range profilesResp.Data {
+					profiles = append(profiles, tuiapp.ModelProfileItem{
+						LogicalID:    p.LogicalProfileID,
+						ProviderID:   p.ProviderID,
+						ProviderName: providerNames[p.ProviderID],
+						ModelName:    p.ModelName,
+					})
+				}
+
+				// 3. Load connections for each provider
+				providers := make([]tuiapp.ProviderItem, 0, len(providersResp.Data))
+				for _, prov := range providersResp.Data {
+					var connsResp struct {
+						Data []struct {
+							ID          string `json:"id"`
+							DisplayName string `json:"display_name"`
+							AuthMode    string `json:"auth_mode"`
+							IsEnabled   bool   `json:"is_enabled"`
+							Health      string `json:"health"`
+						} `json:"data"`
+					}
+					connPath := "/v1/model/providers/" + url.PathEscape(prov.ID) + "/connections"
+					_ = apiClient.request(ctx, "GET", connPath, nil, &connsResp)
+
+					conns := make([]tuiapp.ConnectionItem, 0, len(connsResp.Data))
+					for _, c := range connsResp.Data {
+						conns = append(conns, tuiapp.ConnectionItem{
+							ID:          c.ID,
+							ProviderID:  prov.ID,
+							DisplayName: c.DisplayName,
+							AuthMode:    c.AuthMode,
+							IsEnabled:   c.IsEnabled,
+							Health:      c.Health,
+						})
+					}
+					providers = append(providers, tuiapp.ProviderItem{
+						ID:          prov.ID,
+						Slug:        prov.Slug,
+						DisplayName: prov.DisplayName,
+						IsEnabled:   prov.IsEnabled,
+						Connections: conns,
+					})
+				}
+
+				// 4. Load secrets
+				var secretsResp struct {
+					Data []struct {
+						Slug        string `json:"slug"`
+						DisplayName string `json:"display_name"`
+					} `json:"data"`
+				}
+				_ = apiClient.request(ctx, "GET", "/v1/secrets", nil, &secretsResp)
+
+				secrets := make([]tuiapp.SecretItem, 0, len(secretsResp.Data))
+				for _, s := range secretsResp.Data {
+					secrets = append(secrets, tuiapp.SecretItem{
+						Slug:        s.Slug,
+						DisplayName: s.DisplayName,
+					})
+				}
+
+				return &tuiapp.SettingsData{
+					Profiles:  profiles,
+					Providers: providers,
+					Secrets:   secrets,
+				}, nil
+			}
+			runtimeHints.CreateSecret = func(ctx context.Context, slug, value string) error {
+				body := map[string]string{"slug": slug, "value": value, "display_name": slug}
+				var resp struct{}
+				return apiClient.request(ctx, "POST", "/v1/secrets", body, &resp)
+			}
+			runtimeHints.DeleteSecret = func(ctx context.Context, slug string) error {
+				return apiClient.request(ctx, "DELETE", "/v1/secrets/"+url.PathEscape(slug), nil, nil)
+			}
+			runtimeHints.UpdateModelProfile = func(ctx context.Context, profileID, providerID, modelName string) error {
+				body := map[string]any{"provider_id": providerID, "model_name": modelName}
+				var resp struct{}
+				return apiClient.request(ctx, "PATCH", "/v1/model/profiles/"+url.PathEscape(profileID), body, &resp)
+			}
+			runtimeHints.UpdateConnectionAuth = func(ctx context.Context, providerID, connectionID, authMode, secretSlug string) error {
+				body := map[string]any{"auth_mode": authMode}
+				if authMode == "subscription" {
+					body["subscription_access_token_secret_ref"] = "ref:" + secretSlug
+				}
+				path := "/v1/model/providers/" + url.PathEscape(providerID) + "/connections/" + url.PathEscape(connectionID)
+				var resp struct{}
+				return apiClient.request(ctx, "PATCH", path, body, &resp)
+			}
+			runtimeHints.Login = func(ctx context.Context, email, password string) error {
+				base := strings.TrimRight(serverURL, "/")
+
+				// Step 1: authenticate
+				loginBody, _ := json.Marshal(map[string]string{"email": email, "password": password})
+				loginResp, err := http.Post(base+"/v1/auth/login", "application/json", bytes.NewReader(loginBody))
+				if err != nil {
+					return fmt.Errorf("connect error: %w", err)
+				}
+				defer loginResp.Body.Close()
+				respBody, _ := io.ReadAll(io.LimitReader(loginResp.Body, 64<<10))
+				if loginResp.StatusCode != http.StatusOK {
+					return fmt.Errorf("login returned %d: %s", loginResp.StatusCode, strings.TrimSpace(string(respBody)))
+				}
+				var loginResult struct {
+					Data struct {
+						SessionToken string `json:"session_token"`
+					} `json:"data"`
+				}
+				if err := json.Unmarshal(respBody, &loginResult); err != nil || loginResult.Data.SessionToken == "" {
+					return fmt.Errorf("failed to parse session token")
+				}
+
+				// Step 2: create admin-scoped API key
+				keyBody, _ := json.Marshal(map[string]any{
+					"display_name": "tui-admin",
+					"scopes":       []string{"admin:*"},
+				})
+				keyReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/api-keys", bytes.NewReader(keyBody))
+				keyReq.Header.Set("Content-Type", "application/json")
+				keyReq.Header.Set("Authorization", "Bearer "+loginResult.Data.SessionToken)
+				keyResp, err := http.DefaultClient.Do(keyReq)
+				if err != nil {
+					return fmt.Errorf("create API key error: %w", err)
+				}
+				defer keyResp.Body.Close()
+				keyRespBody, _ := io.ReadAll(io.LimitReader(keyResp.Body, 64<<10))
+				if keyResp.StatusCode != http.StatusOK && keyResp.StatusCode != http.StatusCreated {
+					return fmt.Errorf("API key creation returned %d: %s", keyResp.StatusCode, strings.TrimSpace(string(keyRespBody)))
+				}
+				var keyResult struct {
+					Data struct {
+						Key string `json:"key"`
+					} `json:"data"`
+				}
+				if err := json.Unmarshal(keyRespBody, &keyResult); err != nil || keyResult.Data.Key == "" {
+					return fmt.Errorf("failed to parse API key")
+				}
+
+				// Step 3: save credentials and hot-swap
+				store := clitools.NewCredentialStore()
+				if err := store.Save(clitools.Credentials{ServerURL: base, APIKey: keyResult.Data.Key}); err != nil {
+					return fmt.Errorf("save credentials error: %w", err)
+				}
+				apiClient.apiKey = keyResult.Data.Key
+				return nil
 			}
 			runtimeHints.LoadChatHistory = func(ctx context.Context, sessionID string) ([]tuiapp.ChatMessage, error) {
 				resolvedID, resolveErr := resolveTUIChatSessionID(ctx, apiClient, sessionID)

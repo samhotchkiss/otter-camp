@@ -200,6 +200,8 @@ func mainViewTitle(view MainView) string {
 		return "SCHEDULES"
 	case ViewHelp:
 		return "HELP"
+	case ViewSettings:
+		return "SETTINGS"
 	default:
 		return strings.ToUpper(string(view))
 	}
@@ -897,6 +899,8 @@ func (m Model) renderMainViewContent(view MainView, width, maxLines int) []strin
 		return m.renderSchedulesView(width, maxLines)
 	case ViewHelp:
 		return m.renderHelpView(width, maxLines)
+	case ViewSettings:
+		return m.renderSettingsView(width, maxLines)
 	default:
 		return []string{styleMuted.Render(fmt.Sprintf("view: %s", view))}
 	}
@@ -2357,6 +2361,161 @@ func (m Model) renderSchedulesView(width, maxLines int) []string {
 	return lines
 }
 
+func (m Model) renderSettingsView(width, maxLines int) []string {
+	data := m.workspace.settings
+	if data == nil {
+		return []string{
+			"",
+			lipgloss.NewStyle().Width(width).Align(lipgloss.Center).
+				Foreground(colMuted).Render("Loading settings…"),
+			"",
+			styleMuted.Render("  r·refresh  Esc·back"),
+		}
+	}
+
+	items := settingsSelectableItems(data)
+	cursor := m.settingsCursor
+	if cursor >= len(items) {
+		cursor = len(items) - 1
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+
+	sectionHeader := func(s string) string {
+		return lipgloss.NewStyle().Foreground(colFocus).Bold(true).Render(s)
+	}
+
+	var lines []string
+	lines = append(lines, "")
+
+	// Track which item index we're at in the flat list.
+	idx := 0
+
+	// MODEL PROFILES
+	lines = append(lines, sectionHeader("MODEL PROFILES"))
+	for _, p := range data.Profiles {
+		indicator := "  "
+		style := styleText
+		if idx == cursor {
+			indicator = stylePrimary.Render("► ")
+			style = styleCursorRow
+		}
+		line := indicator + style.Render(
+			fmt.Sprintf("%-18s →  %s / %s", p.LogicalID, p.ProviderName, p.ModelName))
+		lines = append(lines, line)
+
+		// Show picker if this item is being edited
+		if idx == cursor && m.settingsEditState == settingsPickProfile {
+			opts := profilePickerOptions(data)
+			for oi, opt := range opts {
+				subInd := "    "
+				subStyle := styleMuted
+				if oi == m.settingsSubCursor {
+					subInd = "  " + stylePrimary.Render("► ")
+					subStyle = styleText
+				}
+				lines = append(lines, subInd+subStyle.Render(opt.Label))
+			}
+		}
+		idx++
+	}
+	lines = append(lines, "")
+
+	// PROVIDERS & CONNECTIONS
+	lines = append(lines, sectionHeader("PROVIDERS & CONNECTIONS"))
+	for _, prov := range data.Providers {
+		enabledStr := lipgloss.NewStyle().Foreground(colConnected).Render("● enabled")
+		if !prov.IsEnabled {
+			enabledStr = lipgloss.NewStyle().Foreground(colError).Render("○ disabled")
+		}
+		nameW := width - 6 - len(enabledStr) + 10 // account for ANSI codes
+		if nameW < 20 {
+			nameW = 20
+		}
+		lines = append(lines, fmt.Sprintf("    %-*s %s", nameW, prov.DisplayName, enabledStr))
+
+		for _, conn := range prov.Connections {
+			indicator := "    "
+			style := styleText
+			if idx == cursor {
+				indicator = "  " + stylePrimary.Render("► ")
+				style = styleCursorRow
+			}
+			lines = append(lines, indicator+style.Render(
+				conn.DisplayName+"  auth:"+conn.AuthMode))
+
+			// Show auth picker if editing this connection
+			if idx == cursor && m.settingsEditState == settingsPickAuth {
+				for oi, opt := range authPickerOptions() {
+					subInd := "      "
+					subStyle := styleMuted
+					if oi == m.settingsSubCursor {
+						subInd = "    " + stylePrimary.Render("► ")
+						subStyle = styleText
+					}
+					lines = append(lines, subInd+subStyle.Render(opt))
+				}
+			}
+			// Show secret picker if picking secret for subscription
+			if idx == cursor && m.settingsEditState == settingsPickSecret {
+				for oi, s := range data.Secrets {
+					subInd := "      "
+					subStyle := styleMuted
+					if oi == m.settingsSubCursor {
+						subInd = "    " + stylePrimary.Render("► ")
+						subStyle = styleText
+					}
+					lines = append(lines, subInd+subStyle.Render(s.Slug))
+				}
+			}
+			idx++
+		}
+	}
+	lines = append(lines, "")
+
+	// SECRETS
+	lines = append(lines, sectionHeader("SECRETS"))
+	if len(data.Secrets) == 0 {
+		lines = append(lines, styleMuted.Render("    (none stored)"))
+	}
+	for _, s := range data.Secrets {
+		indicator := "    "
+		style := styleText
+		if idx == cursor {
+			indicator = "  " + stylePrimary.Render("► ")
+			style = styleCursorRow
+		}
+		line := indicator + style.Render(s.Slug)
+		if idx == cursor && m.settingsEditState == settingsConfirmDelete {
+			line += "  " + lipgloss.NewStyle().Foreground(colError).Bold(true).Render("Delete? y/n")
+		}
+		lines = append(lines, line)
+		idx++
+	}
+
+	// Input modes
+	if m.settingsEditState == settingsInputSlug {
+		lines = append(lines, "")
+		lines = append(lines, stylePrimary.Render("  Slug: ")+styleText.Render(m.settingsInput+"█"))
+	}
+	if m.settingsEditState == settingsInputValue {
+		lines = append(lines, "")
+		masked := strings.Repeat("●", len(m.settingsInput))
+		lines = append(lines, stylePrimary.Render("  Value: ")+styleText.Render(masked+"█"))
+	}
+
+	// Footer hints
+	lines = append(lines, "")
+	lines = append(lines, styleMuted.Render("  j/k·navigate  Enter·edit  n·new secret  d·delete  r·refresh  Esc·back"))
+
+	// Clamp output to maxLines
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+	}
+	return lines
+}
+
 // helpViewLineCount is the total number of content lines in renderHelpView before
 // scroll clamping. Must stay in sync with the lines slice built inside that function.
 // Verified by TestHelpViewLineCountMatchesEX255; update when adding/removing entries.
@@ -2957,17 +3116,19 @@ func (m Model) renderChatInputBox(width int, focused bool) string {
 	var inputText string
 	if m.commandMode {
 		inputText = m.commandBuffer
+	} else if m.loginStep > 0 {
+		inputText = m.settingsInput
 	} else {
 		inputText = m.chatInput
 	}
 
 	displayText := inputText
 
-	if focused && !m.commandMode {
+	if focused && !m.commandMode && m.loginStep == 0 {
 		displayText += "▌" // cursor
 	}
 
-	if displayText == "" && !focused {
+	if displayText == "" && !focused && m.loginStep == 0 {
 		displayText = styleMuted.Render("type a message...")
 	}
 
@@ -2975,7 +3136,7 @@ func (m Model) renderChatInputBox(width int, focused bool) string {
 	if focused {
 		boxBc = colPrimary
 	}
-	if m.commandMode {
+	if m.commandMode || m.loginStep > 0 {
 		boxBc = colWarning
 	}
 
@@ -2990,6 +3151,12 @@ func (m Model) renderChatInputBox(width int, focused bool) string {
 		prefix = styleReconnecting.Render(":") + " "
 		displayText = strings.TrimPrefix(displayText, ":")
 		displayText += "▌" // EX-009: cursor always visible in command mode
+	} else if m.loginStep == 1 {
+		prefix = styleReconnecting.Render("Email: ")
+		displayText += "▌"
+	} else if m.loginStep == 2 {
+		prefix = styleReconnecting.Render("Password: ")
+		displayText = strings.Repeat("●", len(m.settingsInput)) + "▌"
 	}
 
 	return boxStyle.Render(prefix + displayText)

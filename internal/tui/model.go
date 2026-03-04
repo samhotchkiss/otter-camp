@@ -27,6 +27,26 @@ const (
 	ChatPanel
 )
 
+type settingsEditMode int
+
+const (
+	settingsBrowse settingsEditMode = iota
+	settingsPickProfile
+	settingsPickAuth
+	settingsPickSecret
+	settingsInputSlug
+	settingsInputValue
+	settingsConfirmDelete
+)
+
+// settingsItem represents a single selectable row in the settings view.
+type settingsItem struct {
+	Kind       string // "profile", "connection", "secret"
+	ID         string // logical_id, connection_id, or slug
+	ProviderID string // for connections
+	Label      string // display text
+}
+
 type WorkspaceEnvelopeMsg struct {
 	Envelope EventEnvelope
 }
@@ -74,6 +94,18 @@ type connectRemoteCompletedMsg struct {
 	ProjectID string
 	RepoURL   string
 	Err       error
+}
+
+type loginCompletedMsg struct {
+	Err error
+}
+
+type settingsLoadedMsg struct {
+	Data *SettingsData
+	Err  error
+}
+type settingsActionMsg struct {
+	Err error
 }
 
 // SessionResolvedMsg carries the resolved UUID of the session when a message is sent.
@@ -189,6 +221,18 @@ type Model struct {
 	activeScope          ChatScope
 	activeSession        string
 	localMessageSeq      int
+
+	// Settings dashboard state
+	settingsCursor    int
+	settingsEditState settingsEditMode
+	settingsSubCursor int
+	settingsInput     string
+	settingsEditID    string // ID of the item being edited
+	settingsEditCtx   string // extra context (e.g. provider_id for connection edits)
+
+	// Login flow state: 0=off, 1=email input, 2=password input
+	loginStep  int
+	loginEmail string
 
 	// Mouse hover tracking for visual feedback.
 	hoverPanel Panel
@@ -455,6 +499,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(typed.Agents) > 0 {
 			m.workspace.agents = typed.Agents
 		}
+		return m, nil
+	case settingsLoadedMsg:
+		if typed.Err != nil {
+			m.statusMessage = "Settings load error: " + typed.Err.Error()
+			return m, nil
+		}
+		m.workspace.settings = typed.Data
+		m.settingsEditState = settingsBrowse
+		m.statusMessage = "Settings loaded."
+		return m, nil
+	case settingsActionMsg:
+		if typed.Err != nil {
+			m.statusMessage = "Settings error: " + typed.Err.Error()
+			return m, nil
+		}
+		m.statusMessage = "Settings updated."
+		return m, loadSettingsCmd(m.runtimeHints)
+	case loginCompletedMsg:
+		m.loginStep = 0
+		if typed.Err != nil {
+			m.statusMessage = "Login failed: " + typed.Err.Error()
+			return m, nil
+		}
+		m.statusMessage = "Logged in — admin API key saved. Restart TUI to apply."
 		return m, nil
 	case taskDetailLoadedMsg:
 		rec := m.workspace.tasks[typed.Detail.ID]
@@ -1101,6 +1169,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.searchMode {
 		return m.updateSearchInput(key)
 	}
+	if m.loginStep > 0 {
+		return m.updateLoginInput(key)
+	}
 
 	m.applyResponsiveLayout()
 	order := m.focusOrder()
@@ -1253,6 +1324,11 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.focus == ChatPanel {
 			if handled, cmd := m.handleChatControlKey(key); handled {
+				return m, cmd
+			}
+		}
+		if m.focus == MainPanel && m.workspace.mainView == ViewSettings {
+			if handled, cmd := m.handleSettingsKey(key); handled {
 				return m, cmd
 			}
 		}
@@ -1827,6 +1903,8 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// EX-346: Space in MainPanel — give a contextual hint (Space is only documented for sidebar).
 		if m.focus == MainPanel {
 			switch m.workspace.mainView {
+			case ViewSettings:
+				m.statusMessage = "Space not bound. Use j/k to navigate, Enter to edit, n for new secret."
 			case ViewAgents, ViewMerges, ViewSchedules, ViewActivity:
 				m.statusMessage = "Space not available here. Use r to refresh."
 			// EX-408: Space in navigable views — redirect to Enter/o which opens the selected item.
@@ -1894,6 +1972,16 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// triggers scope cycling and the digits get typed into chat.
 		if sgrMouseLeakPattern.MatchString(string(key.Runes)) {
 			return m, nil
+		}
+		// When settings is in text input mode, capture ALL runes before global
+		// shortcuts (0→Frank, 1/2/3→panels, :→command, /→search, ?→help) can
+		// intercept them. Without this, characters like '0','1','3',':','/' in
+		// secret values are stolen by global handlers.
+		if m.focus == MainPanel && m.workspace.mainView == ViewSettings &&
+			(m.settingsEditState == settingsInputSlug || m.settingsEditState == settingsInputValue) {
+			if handled, cmd := m.handleSettingsKey(key); handled {
+				return m, cmd
+			}
 		}
 		if len(key.Runes) == 1 {
 			r := key.Runes[0]
@@ -2034,6 +2122,13 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+			// Settings view intercepts rune keys before the generic workspace handler.
+			if m.focus == MainPanel && m.workspace.mainView == ViewSettings {
+				if handled, cmd := m.handleSettingsKey(key); handled {
+					return m, cmd
+				}
+			}
+
 			if handled, cmd := m.handleWorkspaceRune(r); handled {
 				return m, cmd
 			}
@@ -2165,6 +2260,10 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.focus == MainPanel && m.workspace.mainView == ViewAgents {
 			m.statusMessage = "Refreshing agents…"
 			return m, loadAgentsCmd(m.runtimeHints)
+		}
+		if m.focus == MainPanel && m.workspace.mainView == ViewSettings {
+			m.statusMessage = "Refreshing settings…"
+			return m, loadSettingsCmd(m.runtimeHints)
 		}
 		switch {
 		case m.focus == MainPanel && m.workspace.mainView == ViewDashboard:
@@ -5568,9 +5667,23 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		}
 		m.setFocus(ChatPanel)
 		m.statusMessage = "Chat panel focused. Type your message and press Enter to send."
+	case "login":
+		if m.runtimeHints.Login == nil {
+			m.statusMessage = "Login not configured."
+			return nil
+		}
+		m.loginStep = 1
+		m.loginEmail = ""
+		m.settingsInput = ""
+		m.statusMessage = "Email:"
+		return nil
 	case "settings", "config", "preferences", "prefs":
-		// EX-395: :settings/:config — no settings UI yet; redirect to CLAUDE.md or env.
-		m.statusMessage = ":settings not available in TUI. Edit .env to configure model profiles."
+		m.workspace.setMainView(ViewSettings)
+		m.setFocus(MainPanel)
+		m.settingsEditState = settingsBrowse
+		m.settingsCursor = 0
+		m.statusMessage = "Settings"
+		return loadSettingsCmd(m.runtimeHints)
 	case "version", "ver":
 		// EX-395: :version — display build info hint.
 		m.statusMessage = "Run `ottercamp version` in a terminal to see version info."
@@ -7198,6 +7311,8 @@ func viewNavLabel(view MainView) string {
 		return "Task detail"
 	case ViewHelp:
 		return "Help"
+	case ViewSettings:
+		return "Settings"
 	default:
 		return string(view)
 	}
@@ -7532,6 +7647,477 @@ func loadInboxItemsCmd(hints RuntimeHints) tea.Cmd {
 		}
 		return inboxItemsLoadedMsg{Items: items}
 	}
+}
+
+func loadSettingsCmd(hints RuntimeHints) tea.Cmd {
+	if hints.LoadSettings == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		data, err := hints.LoadSettings(ctx)
+		return settingsLoadedMsg{Data: data, Err: err}
+	}
+}
+
+func settingsActionCmd(hints RuntimeHints, action func(ctx context.Context) error) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return settingsActionMsg{Err: action(ctx)}
+	}
+}
+
+// settingsSelectableItems builds a flat list of selectable items from the current settings data.
+func settingsSelectableItems(data *SettingsData) []settingsItem {
+	if data == nil {
+		return nil
+	}
+	var items []settingsItem
+	for _, p := range data.Profiles {
+		items = append(items, settingsItem{
+			Kind:  "profile",
+			ID:    p.LogicalID,
+			Label: p.LogicalID + "  →  " + p.ProviderName + " / " + p.ModelName,
+		})
+	}
+	for _, prov := range data.Providers {
+		for _, conn := range prov.Connections {
+			items = append(items, settingsItem{
+				Kind:       "connection",
+				ID:         conn.ID,
+				ProviderID: prov.ID,
+				Label:      prov.DisplayName + " / " + conn.DisplayName + "  auth:" + conn.AuthMode,
+			})
+		}
+	}
+	for _, s := range data.Secrets {
+		items = append(items, settingsItem{
+			Kind:  "secret",
+			ID:    s.Slug,
+			Label: s.Slug,
+		})
+	}
+	return items
+}
+
+// profilePickerOptions returns the available model profile choices.
+func profilePickerOptions(data *SettingsData) []settingsItem {
+	if data == nil {
+		return nil
+	}
+	type modelOption struct {
+		providerID   string
+		providerName string
+		modelName    string
+	}
+	knownModels := map[string][]string{
+		"Anthropic": {"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"},
+		"OpenAI":    {"gpt-4o", "gpt-4o-mini"},
+	}
+	var options []settingsItem
+	for _, prov := range data.Providers {
+		models, ok := knownModels[prov.DisplayName]
+		if !ok {
+			models = knownModels[prov.Slug]
+		}
+		if len(models) == 0 {
+			continue
+		}
+		for _, m := range models {
+			options = append(options, settingsItem{
+				Kind:       "profile_option",
+				ID:         m,
+				ProviderID: prov.ID,
+				Label:      prov.DisplayName + " / " + m,
+			})
+		}
+	}
+	return options
+}
+
+// authPickerOptions returns auth mode choices for a connection.
+func authPickerOptions() []string {
+	return []string{"api_key", "subscription"}
+}
+
+// handleSettingsKey handles key events when ViewSettings is active and focus is MainPanel.
+// Returns (handled bool, cmd tea.Cmd).
+func (m *Model) handleSettingsKey(key tea.KeyMsg) (bool, tea.Cmd) {
+	switch m.settingsEditState {
+	case settingsBrowse:
+		return m.handleSettingsBrowseKey(key)
+	case settingsPickProfile, settingsPickAuth, settingsPickSecret:
+		handled, cmd := m.handleSettingsPickerKey(key)
+		if !handled {
+			// Absorb unhandled keys in picker mode to prevent fallthrough.
+			return true, nil
+		}
+		return handled, cmd
+	case settingsInputSlug, settingsInputValue:
+		handled, cmd := m.handleSettingsInputKey(key)
+		if !handled {
+			return true, nil
+		}
+		return handled, cmd
+	case settingsConfirmDelete:
+		handled, cmd := m.handleSettingsConfirmDeleteKey(key)
+		if !handled {
+			return true, nil
+		}
+		return handled, cmd
+	}
+	return false, nil
+}
+
+func (m *Model) handleSettingsBrowseKey(key tea.KeyMsg) (bool, tea.Cmd) {
+	items := settingsSelectableItems(m.workspace.settings)
+	switch key.Type {
+	case tea.KeyUp:
+		if len(items) > 0 && m.settingsCursor > 0 {
+			m.settingsCursor--
+			m.statusMessage = "▸ " + truncate(items[m.settingsCursor].Label, 50)
+		}
+		return true, nil
+	case tea.KeyDown:
+		if len(items) > 0 && m.settingsCursor < len(items)-1 {
+			m.settingsCursor++
+			m.statusMessage = "▸ " + truncate(items[m.settingsCursor].Label, 50)
+		}
+		return true, nil
+	case tea.KeyEnter:
+		if len(items) == 0 {
+			return true, nil
+		}
+		item := items[m.settingsCursor]
+		switch item.Kind {
+		case "profile":
+			m.settingsEditState = settingsPickProfile
+			m.settingsSubCursor = 0
+			m.settingsEditID = item.ID
+			m.statusMessage = "Pick new model for " + item.ID
+		case "connection":
+			m.settingsEditState = settingsPickAuth
+			m.settingsSubCursor = 0
+			m.settingsEditID = item.ID
+			m.settingsEditCtx = item.ProviderID
+			m.statusMessage = "Pick auth mode"
+		case "secret":
+			m.statusMessage = "Secret: " + item.ID + " (press d to delete)"
+		}
+		return true, nil
+	case tea.KeyEsc:
+		m.workspace.setMainView(ViewDashboard)
+		m.statusMessage = "Returned to dashboard."
+		return true, nil
+	case tea.KeyRunes:
+		if len(key.Runes) == 1 {
+			r := key.Runes[0]
+			switch r {
+			case 'j':
+				if len(items) > 0 && m.settingsCursor < len(items)-1 {
+					m.settingsCursor++
+					m.statusMessage = "▸ " + truncate(items[m.settingsCursor].Label, 50)
+				} else if len(items) > 0 {
+					m.statusMessage = "At last settings item."
+				}
+				return true, nil
+			case 'k':
+				if len(items) > 0 && m.settingsCursor > 0 {
+					m.settingsCursor--
+					m.statusMessage = "▸ " + truncate(items[m.settingsCursor].Label, 50)
+				} else if len(items) > 0 {
+					m.statusMessage = "At first settings item."
+				}
+				return true, nil
+			case 'n':
+				// New secret
+				m.settingsEditState = settingsInputSlug
+				m.settingsInput = ""
+				m.statusMessage = "Enter secret slug:"
+				return true, nil
+			case 'd':
+				if len(items) > 0 && items[m.settingsCursor].Kind == "secret" {
+					m.settingsEditState = settingsConfirmDelete
+					m.settingsEditID = items[m.settingsCursor].ID
+					m.statusMessage = "Delete secret '" + m.settingsEditID + "'? y/n"
+				} else {
+					m.statusMessage = "Select a secret to delete."
+				}
+				return true, nil
+			case 'r':
+				m.statusMessage = "Refreshing settings…"
+				return true, loadSettingsCmd(m.runtimeHints)
+			}
+		}
+	}
+	return false, nil
+}
+
+func (m *Model) handleSettingsPickerKey(key tea.KeyMsg) (bool, tea.Cmd) {
+	var options []string
+	switch m.settingsEditState {
+	case settingsPickProfile:
+		for _, o := range profilePickerOptions(m.workspace.settings) {
+			options = append(options, o.Label)
+		}
+	case settingsPickAuth:
+		options = authPickerOptions()
+	case settingsPickSecret:
+		if m.workspace.settings != nil {
+			for _, s := range m.workspace.settings.Secrets {
+				options = append(options, s.Slug)
+			}
+		}
+	}
+	if len(options) == 0 {
+		m.settingsEditState = settingsBrowse
+		m.statusMessage = "No options available."
+		return true, nil
+	}
+
+	switch key.Type {
+	case tea.KeyUp:
+		if m.settingsSubCursor > 0 {
+			m.settingsSubCursor--
+		}
+		m.statusMessage = "▸ " + options[m.settingsSubCursor]
+		return true, nil
+	case tea.KeyDown:
+		if m.settingsSubCursor < len(options)-1 {
+			m.settingsSubCursor++
+		}
+		m.statusMessage = "▸ " + options[m.settingsSubCursor]
+		return true, nil
+	case tea.KeyEnter:
+		return m.confirmSettingsPick(options)
+	case tea.KeyEsc:
+		m.settingsEditState = settingsBrowse
+		m.statusMessage = "Cancelled."
+		return true, nil
+	case tea.KeyRunes:
+		if len(key.Runes) == 1 {
+			switch key.Runes[0] {
+			case 'j':
+				if m.settingsSubCursor < len(options)-1 {
+					m.settingsSubCursor++
+				}
+				m.statusMessage = "▸ " + options[m.settingsSubCursor]
+				return true, nil
+			case 'k':
+				if m.settingsSubCursor > 0 {
+					m.settingsSubCursor--
+				}
+				m.statusMessage = "▸ " + options[m.settingsSubCursor]
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func (m *Model) confirmSettingsPick(options []string) (bool, tea.Cmd) {
+	switch m.settingsEditState {
+	case settingsPickProfile:
+		pickerOpts := profilePickerOptions(m.workspace.settings)
+		if m.settingsSubCursor >= len(pickerOpts) {
+			m.settingsEditState = settingsBrowse
+			return true, nil
+		}
+		chosen := pickerOpts[m.settingsSubCursor]
+		profileID := m.settingsEditID
+		providerID := chosen.ProviderID
+		modelName := chosen.ID
+		m.settingsEditState = settingsBrowse
+		m.statusMessage = "Updating " + profileID + "…"
+		if m.runtimeHints.UpdateModelProfile == nil {
+			m.statusMessage = "UpdateModelProfile not wired."
+			return true, nil
+		}
+		return true, settingsActionCmd(m.runtimeHints, func(ctx context.Context) error {
+			return m.runtimeHints.UpdateModelProfile(ctx, profileID, providerID, modelName)
+		})
+	case settingsPickAuth:
+		if m.settingsSubCursor >= len(options) {
+			m.settingsEditState = settingsBrowse
+			return true, nil
+		}
+		chosen := options[m.settingsSubCursor]
+		if chosen == "subscription" {
+			if m.workspace.settings != nil && len(m.workspace.settings.Secrets) > 0 {
+				m.settingsEditState = settingsPickSecret
+				m.settingsSubCursor = 0
+				m.statusMessage = "Pick secret for subscription auth:"
+			} else {
+				// No visible secrets (may lack API scope); prompt for slug directly.
+				m.settingsEditState = settingsInputSlug
+				m.settingsInput = ""
+				m.statusMessage = "Enter secret slug for subscription auth:"
+			}
+			return true, nil
+		}
+		// api_key mode
+		connID := m.settingsEditID
+		provID := m.settingsEditCtx
+		m.settingsEditState = settingsBrowse
+		m.statusMessage = "Updating connection auth…"
+		if m.runtimeHints.UpdateConnectionAuth == nil {
+			m.statusMessage = "UpdateConnectionAuth not wired."
+			return true, nil
+		}
+		return true, settingsActionCmd(m.runtimeHints, func(ctx context.Context) error {
+			return m.runtimeHints.UpdateConnectionAuth(ctx, provID, connID, "api_key", "")
+		})
+	case settingsPickSecret:
+		if m.workspace.settings == nil || m.settingsSubCursor >= len(m.workspace.settings.Secrets) {
+			m.settingsEditState = settingsBrowse
+			return true, nil
+		}
+		secretSlug := m.workspace.settings.Secrets[m.settingsSubCursor].Slug
+		connID := m.settingsEditID
+		provID := m.settingsEditCtx
+		m.settingsEditState = settingsBrowse
+		m.statusMessage = "Updating connection to subscription auth…"
+		if m.runtimeHints.UpdateConnectionAuth == nil {
+			m.statusMessage = "UpdateConnectionAuth not wired."
+			return true, nil
+		}
+		return true, settingsActionCmd(m.runtimeHints, func(ctx context.Context) error {
+			return m.runtimeHints.UpdateConnectionAuth(ctx, provID, connID, "subscription", secretSlug)
+		})
+	}
+	return true, nil
+}
+
+func (m Model) updateLoginInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key.Type {
+	case tea.KeyEsc:
+		m.loginStep = 0
+		m.settingsInput = ""
+		m.loginEmail = ""
+		m.statusMessage = "Login cancelled."
+		return m, nil
+	case tea.KeyEnter:
+		input := strings.TrimSpace(m.settingsInput)
+		if input == "" {
+			return m, nil
+		}
+		if m.loginStep == 1 {
+			m.loginEmail = input
+			m.settingsInput = ""
+			m.loginStep = 2
+			m.statusMessage = "Password:"
+			return m, nil
+		}
+		// loginStep == 2: submit
+		email := m.loginEmail
+		password := input
+		m.settingsInput = ""
+		m.loginStep = 0
+		m.statusMessage = "Logging in…"
+		return m, func() tea.Msg {
+			err := m.runtimeHints.Login(context.Background(), email, password)
+			return loginCompletedMsg{Err: err}
+		}
+	case tea.KeyBackspace:
+		if len(m.settingsInput) > 0 {
+			m.settingsInput = m.settingsInput[:len(m.settingsInput)-1]
+		}
+		return m, nil
+	case tea.KeyRunes:
+		m.settingsInput += string(key.Runes)
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *Model) handleSettingsInputKey(key tea.KeyMsg) (bool, tea.Cmd) {
+	switch key.Type {
+	case tea.KeyEnter:
+		input := strings.TrimSpace(m.settingsInput)
+		if input == "" {
+			m.statusMessage = "Input cannot be empty."
+			return true, nil
+		}
+		if m.settingsEditState == settingsInputSlug {
+			// If editCtx has a provider ID, this slug is for subscription auth, not secret creation.
+			if m.settingsEditCtx != "" {
+				connID := m.settingsEditID
+				provID := m.settingsEditCtx
+				m.settingsEditState = settingsBrowse
+				m.settingsInput = ""
+				m.statusMessage = "Updating connection to subscription auth…"
+				if m.runtimeHints.UpdateConnectionAuth == nil {
+					m.statusMessage = "UpdateConnectionAuth not wired."
+					return true, nil
+				}
+				return true, settingsActionCmd(m.runtimeHints, func(ctx context.Context) error {
+					return m.runtimeHints.UpdateConnectionAuth(ctx, provID, connID, "subscription", input)
+				})
+			}
+			m.settingsEditID = input
+			m.settingsEditState = settingsInputValue
+			m.settingsInput = ""
+			m.statusMessage = "Enter secret value:"
+			return true, nil
+		}
+		// settingsInputValue
+		slug := m.settingsEditID
+		value := m.settingsInput
+		m.settingsEditState = settingsBrowse
+		m.settingsInput = ""
+		m.statusMessage = "Creating secret…"
+		if m.runtimeHints.CreateSecret == nil {
+			m.statusMessage = "CreateSecret not wired."
+			return true, nil
+		}
+		return true, settingsActionCmd(m.runtimeHints, func(ctx context.Context) error {
+			return m.runtimeHints.CreateSecret(ctx, slug, value)
+		})
+	case tea.KeyEsc:
+		m.settingsEditState = settingsBrowse
+		m.settingsInput = ""
+		m.statusMessage = "Cancelled."
+		return true, nil
+	case tea.KeyBackspace:
+		if len(m.settingsInput) > 0 {
+			m.settingsInput = m.settingsInput[:len(m.settingsInput)-1]
+		}
+		return true, nil
+	case tea.KeyRunes:
+		m.settingsInput += string(key.Runes)
+		return true, nil
+	}
+	return false, nil
+}
+
+func (m *Model) handleSettingsConfirmDeleteKey(key tea.KeyMsg) (bool, tea.Cmd) {
+	if key.Type == tea.KeyRunes && len(key.Runes) == 1 {
+		switch key.Runes[0] {
+		case 'y', 'Y':
+			slug := m.settingsEditID
+			m.settingsEditState = settingsBrowse
+			m.statusMessage = "Deleting secret…"
+			if m.runtimeHints.DeleteSecret == nil {
+				m.statusMessage = "DeleteSecret not wired."
+				return true, nil
+			}
+			return true, settingsActionCmd(m.runtimeHints, func(ctx context.Context) error {
+				return m.runtimeHints.DeleteSecret(ctx, slug)
+			})
+		case 'n', 'N':
+			m.settingsEditState = settingsBrowse
+			m.statusMessage = "Cancelled."
+			return true, nil
+		}
+	}
+	if key.Type == tea.KeyEsc {
+		m.settingsEditState = settingsBrowse
+		m.statusMessage = "Cancelled."
+		return true, nil
+	}
+	return true, nil
 }
 
 // taskLabel returns a short human-readable label for a task record, falling

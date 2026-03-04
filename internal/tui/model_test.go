@@ -13726,9 +13726,9 @@ func TestExtendedCommandAliasesEX395(t *testing.T) {
 		noError bool // should not say "Unknown command"
 	}{
 		{":chat", "Chat panel", true},
-		{":settings", "not available", true},
-		{":config", "not available", true},
-		{":preferences", "not available", true},
+		{":settings", "Settings", true},
+		{":config", "Settings", true},
+		{":preferences", "Settings", true},
 		{":version", "ottercamp version", true},
 		{":ver", "ottercamp version", true},
 		{":agent", "Agents", true},

@@ -20,6 +20,7 @@ const (
 	ViewMerges    MainView = "merges"
 	ViewSchedules MainView = "schedules"
 	ViewHelp      MainView = "help"
+	ViewSettings  MainView = "settings"
 )
 
 var commandToView = map[string]MainView{
@@ -162,6 +163,7 @@ type workspaceState struct {
 	schedules   []string
 
 	activeSessionID string
+	settings        *SettingsData
 }
 
 func newWorkspaceState() workspaceState {
@@ -1234,6 +1236,12 @@ func (w *workspaceState) render(view MainView, class SizeClass) string {
 		return fmt.Sprintf("view=merges size=%s count=%d", class, len(w.mergeQueue))
 	case ViewSchedules:
 		return fmt.Sprintf("view=schedules size=%s count=%d", class, len(w.schedules))
+	case ViewSettings:
+		profiles := 0
+		if w.settings != nil {
+			profiles = len(w.settings.Profiles)
+		}
+		return fmt.Sprintf("view=settings size=%s profiles=%d", class, profiles)
 	default:
 		return fmt.Sprintf("view=%s size=%s", view, class)
 	}

@@ -13,6 +13,46 @@ const (
 	defaultMemorySteadyStateBoundMB = 128
 )
 
+// SettingsData holds the full settings snapshot for the settings dashboard.
+type SettingsData struct {
+	Profiles  []ModelProfileItem
+	Providers []ProviderItem
+	Secrets   []SecretItem
+}
+
+// ModelProfileItem represents a single model profile (high-capability, standard, haiku).
+type ModelProfileItem struct {
+	LogicalID    string
+	ProviderID   string
+	ProviderName string
+	ModelName    string
+}
+
+// ProviderItem represents a model provider (Anthropic, OpenAI).
+type ProviderItem struct {
+	ID          string
+	Slug        string
+	DisplayName string
+	IsEnabled   bool
+	Connections []ConnectionItem
+}
+
+// ConnectionItem represents a provider connection with auth configuration.
+type ConnectionItem struct {
+	ID          string
+	ProviderID  string
+	DisplayName string
+	AuthMode    string
+	IsEnabled   bool
+	Health      string
+}
+
+// SecretItem represents a stored secret reference.
+type SecretItem struct {
+	Slug        string
+	DisplayName string
+}
+
 // InboxSummaryItem is a single unacted inbox item for display in the inbox view.
 type InboxSummaryItem struct {
 	ID      string
@@ -113,6 +153,17 @@ type RuntimeHints struct {
 	// ResetOrgSession archives the current org session and creates a new one.
 	// Returns the new session UUID string.
 	ResetOrgSession func(ctx context.Context, currentSessionID string) (string, error)
+
+	// Settings dashboard callbacks
+	LoadSettings         func(ctx context.Context) (*SettingsData, error)
+	CreateSecret         func(ctx context.Context, slug, value string) error
+	DeleteSecret         func(ctx context.Context, slug string) error
+	UpdateModelProfile   func(ctx context.Context, profileID, providerID, modelName string) error
+	UpdateConnectionAuth func(ctx context.Context, providerID, connectionID, authMode, secretSlug string) error
+
+	// Login authenticates with email/password, creates an admin-scoped API key,
+	// saves it to credentials, and hot-swaps the API client.
+	Login func(ctx context.Context, email, password string) error
 }
 
 func (h RuntimeHints) now() time.Time {
