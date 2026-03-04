@@ -1621,15 +1621,19 @@ func openAIMessages(req turn.ModelRequest) []any {
 			continue
 		}
 
+		// Skip tool messages without a tool_call_id (system-generated messages
+		// like run_log_link from scheduler/supervisor).
+		if role == "tool" && item.ToolCallID == nil {
+			continue
+		}
+
 		// Skip tool_result messages whose call_id does not match any of the
 		// IDs declared in the current assistant+tool_calls message. This handles
 		// duplicate-worker race conditions where two assistant+tool_calls blocks
 		// were stored back-to-back; the first is dropped as dangling but its
 		// corresponding tool_result would otherwise survive and mismatch.
-		if role == "tool" && item.ToolCallID != nil && len(validToolCallIDs) > 0 {
-			if !validToolCallIDs[*item.ToolCallID] {
-				continue
-			}
+		if role == "tool" && len(validToolCallIDs) > 0 && !validToolCallIDs[*item.ToolCallID] {
+			continue
 		}
 
 		// A non-tool message signals the end of a tool exchange. If no tool_results
@@ -1639,6 +1643,26 @@ func openAIMessages(req turn.ModelRequest) []any {
 		if role != "tool" && lastAssistantHadToolCalls {
 			if !toolResultsAdded && lastToolCallsIdx >= 0 {
 				messages = append(messages[:lastToolCallsIdx], messages[lastToolCallsIdx+1:]...)
+			} else if toolResultsAdded {
+				// Inject synthetic tool results for any tool_call_ids that
+				// don't have matching responses (e.g. turn ended mid-dispatch).
+				answeredIDs := map[string]bool{}
+				for i := lastToolCallsIdx + 1; i < len(messages); i++ {
+					if m, ok := messages[i].(map[string]any); ok {
+						if id, _ := m["tool_call_id"].(string); id != "" {
+							answeredIDs[id] = true
+						}
+					}
+				}
+				for id := range validToolCallIDs {
+					if !answeredIDs[id] {
+						messages = append(messages, map[string]any{
+							"role":         "tool",
+							"tool_call_id": id,
+							"content":      "[Turn ended before tool result was received]",
+						})
+					}
+				}
 			}
 			lastAssistantHadToolCalls = false
 			lastToolCallsIdx = -1
@@ -1693,10 +1717,31 @@ func openAIMessages(req turn.ModelRequest) []any {
 		}
 		messages = append(messages, msg)
 	}
-	// If the conversation ends with a dangling assistant+tool_calls (no tool
-	// results were added after it), remove it from the output.
-	if lastAssistantHadToolCalls && !toolResultsAdded && lastToolCallsIdx >= 0 {
-		messages = append(messages[:lastToolCallsIdx], messages[lastToolCallsIdx+1:]...)
+	// Handle trailing assistant+tool_calls at the end of conversation.
+	if lastAssistantHadToolCalls && lastToolCallsIdx >= 0 {
+		if !toolResultsAdded {
+			// No tool results at all — remove the dangling assistant+tool_calls.
+			messages = append(messages[:lastToolCallsIdx], messages[lastToolCallsIdx+1:]...)
+		} else {
+			// Inject synthetic tool results for any unmatched tool_call_ids.
+			answeredIDs := map[string]bool{}
+			for i := lastToolCallsIdx + 1; i < len(messages); i++ {
+				if m, ok := messages[i].(map[string]any); ok {
+					if id, _ := m["tool_call_id"].(string); id != "" {
+						answeredIDs[id] = true
+					}
+				}
+			}
+			for id := range validToolCallIDs {
+				if !answeredIDs[id] {
+					messages = append(messages, map[string]any{
+						"role":         "tool",
+						"tool_call_id": id,
+						"content":      "[Turn ended before tool result was received]",
+					})
+				}
+			}
+		}
 	}
 	if len(messages) == 0 {
 		messages = append(messages, map[string]any{"role": "user", "content": "Respond with a concise answer."})
@@ -1805,22 +1850,22 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 			if !lastAssistantHadToolCalls {
 				continue
 			}
+			// Skip tool_result messages without a tool_call_id (system-generated
+			// messages like run_log_link from scheduler/supervisor).
+			if item.ToolCallID == nil {
+				continue
+			}
 			// Skip tool_result messages whose call_id does not match the current
 			// assistant+tool_calls block (handles duplicate-worker race condition).
-			if item.ToolCallID != nil && len(validToolCallIDs) > 0 {
-				if !validToolCallIDs[*item.ToolCallID] {
-					continue
-				}
+			if len(validToolCallIDs) > 0 && !validToolCallIDs[*item.ToolCallID] {
+				continue
 			}
 			// Accumulate tool results — they'll be flushed as one user message.
-			toolResultContent := map[string]any{
-				"type":    "tool_result",
-				"content": item.Content,
-			}
-			if item.ToolCallID != nil {
-				toolResultContent["tool_use_id"] = *item.ToolCallID
-			}
-			pendingToolResults = append(pendingToolResults, toolResultContent)
+			pendingToolResults = append(pendingToolResults, map[string]any{
+				"type":       "tool_result",
+				"tool_use_id": *item.ToolCallID,
+				"content":    item.Content,
+			})
 		default:
 			// Flush pending tool results before a user/other message.
 			flushToolResults()

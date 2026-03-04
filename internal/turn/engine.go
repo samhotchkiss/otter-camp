@@ -625,6 +625,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		return nil
 	}
 
+	e.logger.Error("turn failed", "error", err, "session_id", sessionID, "turn_id", runtime.turn.ID, "agent_id", agentID)
 	_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(err))
 	_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, fmt.Sprintf("[Turn failed: %s]", summarizeFailure(err)))
 	return err
@@ -642,12 +643,12 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 
 		profile, err := e.resolveModelProfile(ctx, rt.session, rt.agent, "agent_turn")
 		if err != nil {
-			return err
+			return fmt.Errorf("resolveModelProfile: %w", err)
 		}
 
 		toolSet, err := e.toolResolver.GetSessionToolSet(ctx, rt.session.ID, rt.agent.ID)
 		if err != nil {
-			return err
+			return fmt.Errorf("getSessionToolSet: %w", err)
 		}
 		rt.toolSet = toolSet
 
@@ -660,7 +661,7 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			PreviousManifest: previousManifest,
 		})
 		if assembleErr != nil && !errors.Is(assembleErr, prompt.ErrContextCompressed) {
-			return assembleErr
+			return fmt.Errorf("assemble: %w", assembleErr)
 		}
 		if assembled != nil {
 			manifestCopy := assembled.MemoryManifest
@@ -726,14 +727,14 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			currentMessage, _ := e.messages.GetByID(ctx, assistantMessage.ID)
 			if strings.EqualFold(strings.TrimSpace(currentMessage.Status), "pending") {
 				if _, err := e.messages.UpdateStatus(ctx, assistantMessage.ID, "streaming", ""); err != nil {
-					return err
+					return fmt.Errorf("no-tool pending→streaming: %w", err)
 				}
 			}
 			if _, err := e.messages.UpdateStatus(ctx, assistantMessage.ID, "final", ""); err != nil {
-				return err
+				return fmt.Errorf("no-tool →final (msg status=%s): %w", currentMessage.Status, err)
 			}
 			if err := e.completeTurn(ctx, rt); err != nil {
-				return err
+				return fmt.Errorf("no-tool completeTurn: %w", err)
 			}
 			return nil
 		}
@@ -754,23 +755,23 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			if errors.Is(dispatchErr, context.Canceled) {
 				return e.handleCancellation(ctx, rt)
 			}
-			return dispatchErr
+			return fmt.Errorf("dispatchTools: %w", dispatchErr)
 		}
 		if stop {
 			shouldContinue, err := e.shouldContinueMaxToolCalls(ctx, rt)
 			if err != nil {
-				return err
+				return fmt.Errorf("shouldContinueMaxToolCalls: %w", err)
 			}
 			if shouldContinue {
 				if err := e.continueTurn(ctx, rt); err != nil {
-					return err
+					return fmt.Errorf("continueTurn: %w", err)
 				}
 				listeningChecked = false
 				previousManifest = nil
 				continue
 			}
 			if err := e.completeTurn(ctx, rt); err != nil {
-				return err
+				return fmt.Errorf("stop completeTurn: %w", err)
 			}
 			return nil
 		}
@@ -791,6 +792,14 @@ func (e *TurnEngine) completeTurn(ctx context.Context, rt *turnRuntime) error {
 }
 
 func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
+	// Check for cancellation before attempting to complete the current turn.
+	// This handles the race where a supervisor/API cancel changed the turn
+	// status in the DB and published a cancel event, but the context
+	// cancellation wasn't detected before we reached this point.
+	if err := ctx.Err(); err != nil {
+		return e.handleCancellation(ctx, rt)
+	}
+
 	notice := "[Context compressed - continuing in a new turn.]"
 	if strings.EqualFold(strings.TrimSpace(rt.stopReason), stopReasonMaxToolCalls) {
 		notice = "[Max tool calls reached - continuing in a new turn.]"
@@ -802,7 +811,13 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 		return err
 	}
 	if err := e.chat.CompleteTurn(ctx, rt.turn.ID); err != nil {
-		return err
+		// If the turn was cancelled externally (supervisor/API), treat as cancellation.
+		if errors.Is(err, chat.ErrInvalidStatusTransition) {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return e.handleCancellation(ctx, rt)
+			}
+		}
+		return fmt.Errorf("continueTurn CompleteTurn (turn_status=%s): %w", rt.turn.Status, err)
 	}
 
 	currentTurn, err := e.chat.GetTurn(ctx, rt.turn.ID)
@@ -844,7 +859,7 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 		return err
 	}
 	if err := e.chat.StartTurn(ctx, created.ID); err != nil {
-		return err
+		return fmt.Errorf("continueTurn StartTurn: %w", err)
 	}
 
 	rt.turn, err = e.chat.GetTurn(ctx, created.ID)
