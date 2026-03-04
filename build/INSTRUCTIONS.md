@@ -61,6 +61,16 @@ Do not treat lookup misses as task-failing regressions. Keep failure summaries s
 - `lookup_miss` (path/discovery misses)
 - `build_or_test_failure` (actual implementation regressions)
 
+## Startup Context Caching (Autowork)
+
+Autowork runners may cache startup context for stable docs using file hashes:
+
+- Cache target docs: `issues/instructions.md`, `build/INSTRUCTIONS.md`, `build/CONTEXT.md`
+  (and reviewer equivalents for review runs).
+- On cache hit: runners use cached briefing text and skip full doc rereads.
+- On cache miss: runners re-read full docs and refresh cache metadata.
+- Runner logs must explicitly show cache status (`hit`/`miss`) and changed-doc identifiers.
+
 ---
 
 ## How Tasks Are Organized

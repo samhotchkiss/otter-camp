@@ -28,6 +28,12 @@ CLAUDE_DIR="${AUTO_REVIEW_CLAUDE_DIR:-${HOME}/.claude}"
 MCP_NEEDS_AUTH_CACHE_FILE="${AUTO_REVIEW_MCP_NEEDS_AUTH_CACHE_FILE:-${CLAUDE_DIR}/mcp-needs-auth-cache.json}"
 AUTO_REVIEW_ENABLE_CLAUDEAI_MCP="${AUTO_REVIEW_ENABLE_CLAUDEAI_MCP:-0}"
 ENABLE_CLAUDEAI_MCP_SERVERS_VALUE="false"
+DOC_BUILD_INSTRUCTIONS="${CONTROL_REPO_DIR}/build/INSTRUCTIONS.md"
+DOC_BUILD_CONTEXT="${CONTROL_REPO_DIR}/build/CONTEXT.md"
+CONTEXT_CACHE_FILE="${STATE_DIR}/reviewer-startup-context-cache.env"
+CONTEXT_CACHE_MODE="miss"
+CONTEXT_CACHE_CHANGED_DOCS="cache_uninitialized"
+CONTEXT_CACHE_PREFACE=""
 
 mkdir -p "${STATE_DIR}"
 touch "${RUNNER_LOG}" "${STREAM_LOG}" "${LAST_MESSAGE_FILE}"
@@ -81,6 +87,83 @@ configure_headless_mcp() {
 
   ENABLE_CLAUDEAI_MCP_SERVERS_VALUE="true"
   log "reviewer-mcp preflight: claude_ai_mcp=enabled reason=opt_in_and_auth_present"
+}
+
+hash_file() {
+  local file="$1"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "${file}" | awk '{print $1}'
+    return
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "${file}" | awk '{print $1}'
+    return
+  fi
+  cksum "${file}" | awk '{print $1}'
+}
+
+setup_startup_context_cache() {
+  local cached_review_instructions_hash="" cached_build_instructions_hash="" cached_build_context_hash=""
+  local current_review_instructions_hash current_build_instructions_hash current_build_context_hash
+  local changed_docs=()
+
+  if [[ -f "${CONTEXT_CACHE_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${CONTEXT_CACHE_FILE}" || true
+  fi
+
+  current_review_instructions_hash="$(hash_file "${REVIEW_INSTRUCTIONS_FILE}")"
+  current_build_instructions_hash="$(hash_file "${DOC_BUILD_INSTRUCTIONS}")"
+  current_build_context_hash="$(hash_file "${DOC_BUILD_CONTEXT}")"
+
+  if [[ -n "${cached_review_instructions_hash}" && -n "${cached_build_instructions_hash}" && -n "${cached_build_context_hash}" ]] \
+    && [[ "${cached_review_instructions_hash}" == "${current_review_instructions_hash}" ]] \
+    && [[ "${cached_build_instructions_hash}" == "${current_build_instructions_hash}" ]] \
+    && [[ "${cached_build_context_hash}" == "${current_build_context_hash}" ]]; then
+    CONTEXT_CACHE_MODE="hit"
+    CONTEXT_CACHE_CHANGED_DOCS="none"
+  else
+    CONTEXT_CACHE_MODE="miss"
+    [[ "${cached_review_instructions_hash:-}" != "${current_review_instructions_hash}" ]] && changed_docs+=("issues/reviewer-instructions.md")
+    [[ "${cached_build_instructions_hash:-}" != "${current_build_instructions_hash}" ]] && changed_docs+=("build/INSTRUCTIONS.md")
+    [[ "${cached_build_context_hash:-}" != "${current_build_context_hash}" ]] && changed_docs+=("build/CONTEXT.md")
+    if (( ${#changed_docs[@]} == 0 )); then
+      changed_docs=("cache_uninitialized")
+    fi
+    CONTEXT_CACHE_CHANGED_DOCS="$(IFS=','; echo "${changed_docs[*]}")"
+  fi
+
+  cat > "${CONTEXT_CACHE_FILE}" <<EOF
+cached_review_instructions_hash='${current_review_instructions_hash}'
+cached_build_instructions_hash='${current_build_instructions_hash}'
+cached_build_context_hash='${current_build_context_hash}'
+cached_generated_at='$(date '+%Y-%m-%dT%H:%M:%S%z')'
+EOF
+
+  if [[ "${CONTEXT_CACHE_MODE}" == "hit" ]]; then
+    CONTEXT_CACHE_PREFACE=$(
+      cat <<EOF
+Startup context cache: HIT.
+Doc hashes unchanged for:
+- ${REVIEW_INSTRUCTIONS_FILE}
+- ${DOC_BUILD_INSTRUCTIONS}
+- ${DOC_BUILD_CONTEXT}
+Use the cached briefing in this prompt; do not re-read full doc bodies unless an inconsistency appears.
+EOF
+    )
+  else
+    CONTEXT_CACHE_PREFACE=$(
+      cat <<EOF
+Startup context cache: MISS (changed: ${CONTEXT_CACHE_CHANGED_DOCS}).
+Re-read these docs fully this run before acting:
+- ${REVIEW_INSTRUCTIONS_FILE}
+- ${DOC_BUILD_INSTRUCTIONS}
+- ${DOC_BUILD_CONTEXT}
+EOF
+    )
+  fi
+
+  log "startup-context cache=${CONTEXT_CACHE_MODE} changed=${CONTEXT_CACHE_CHANGED_DOCS}"
 }
 
 is_dirty_worktree() {
@@ -221,6 +304,16 @@ if [[ ! -f "${REVIEW_INSTRUCTIONS_FILE}" ]]; then
   exit 1
 fi
 
+if [[ ! -f "${DOC_BUILD_INSTRUCTIONS}" ]]; then
+  log "build instructions missing: ${DOC_BUILD_INSTRUCTIONS}"
+  exit 1
+fi
+
+if [[ ! -f "${DOC_BUILD_CONTEXT}" ]]; then
+  log "build context missing: ${DOC_BUILD_CONTEXT}"
+  exit 1
+fi
+
 if [[ ! -d "${SHARED_ISSUES_DIR}/03-needs-review" ]]; then
   log "needs-review directory missing: ${SHARED_ISSUES_DIR}/03-needs-review"
   exit 1
@@ -265,8 +358,12 @@ else
 fi
 
 configure_headless_mcp
+setup_startup_context_cache
+configure_headless_mcp
 
 cat > "${PROMPT_FILE}" <<PROMPT
+${CONTEXT_CACHE_PREFACE}
+
 Read and follow ${REVIEW_INSTRUCTIONS_FILE} exactly.
 
 Primary operating docs:

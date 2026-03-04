@@ -68,3 +68,9 @@ Routing guardrails:
 - Primary API routes are under `/v1/*`.
 - Health routes are `/health/live`, `/health/ready` (aliases: `/health`, `/ready`).
 - Test-mode reset route is `POST /test/reset` (only when `OTTERCAMP_MODE=test`).
+
+Startup context caching:
+- Runner scripts may cache startup context state for immutable docs using file hashes.
+- On cache hit (unchanged hashes), use cached briefing text and skip full doc rereads.
+- On cache miss (hash change), re-read full docs before proceeding and refresh cache.
+- Runner logs must include startup context cache status (`cache=hit` or `cache=miss`) and changed doc list.
