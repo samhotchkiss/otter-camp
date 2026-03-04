@@ -8,12 +8,16 @@ CONTROL_REPO_DIR="${AUTO_WORK_CONTROL_REPO_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}
 WORKTREE_DIR="${AUTO_WORK_WORKTREE_DIR:-${CONTROL_REPO_DIR}}"
 SHARED_ISSUES_DIR="${AUTO_WORK_ISSUES_DIR:-${CONTROL_REPO_DIR}/issues}"
 REQUIRED_BASE_BRANCH="${AUTO_WORK_BASE_BRANCH:-v2}"
+ISSUE_LANE_CLI="${SCRIPT_DIR}/issue-lane.sh"
 SESSION_NAME="${AUTO_WORK_SESSION_NAME:-codex-autowork}"
 STATE_DIR="${AUTO_WORK_STATE_DIR:-${HOME}/otter-data/sessions}"
 RUNNER_LOG="${STATE_DIR}/runner.log"
 PROMPT_FILE="${STATE_DIR}/autowork-prompt.txt"
 AUTOWORK_OUTPUT_FILE="${STATE_DIR}/autowork-last-message.txt"
 STREAM_LOG="${STATE_DIR}/stream.log"
+
+# shellcheck source=scripts/lib/issue-queue.sh
+source "${SCRIPT_DIR}/lib/issue-queue.sh"
 
 mkdir -p "${STATE_DIR}"
 touch "${RUNNER_LOG}" "${STREAM_LOG}"
@@ -107,6 +111,133 @@ has_active_autowork_codex() {
   return 1
 }
 
+completed_task_numbers() {
+  local completed_dir="${SHARED_ISSUES_DIR}/05-completed"
+  [[ -d "${completed_dir}" ]] || return 0
+  find "${completed_dir}" -maxdepth 1 -type f -name '*.md' \
+    | sed -E 's#.*/([0-9]{3})-.*\.md#\1#' \
+    | sort -u
+}
+
+extract_dep_numbers() {
+  local file="$1"
+  local raw
+  raw="$(
+    awk '
+      BEGIN { IGNORECASE=1 }
+      /^##[[:space:]]/ { exit }
+      {
+        line=$0
+        if (line ~ /^\|[[:space:]]*Depends on[[:space:]]*\|/) {
+          sub(/^\|[[:space:]]*Depends on[[:space:]]*\|[[:space:]]*/, "", line)
+          sub(/[[:space:]]*\|[[:space:]]*$/, "", line)
+          print line
+          exit
+        }
+        if (line ~ /^Depends on:[[:space:]]*/) {
+          sub(/^Depends on:[[:space:]]*/, "", line)
+          print line
+          exit
+        }
+      }
+    ' "${file}" 2>/dev/null || true
+  )"
+
+  [[ -z "${raw}" ]] && return 0
+  local raw_lc
+  raw_lc="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
+  [[ "${raw_lc}" == "—" || "${raw_lc}" == "-" || "${raw_lc}" == "none" ]] && return 0
+
+  local token norm
+  while IFS= read -r token; do
+    [[ -z "${token}" ]] && continue
+    norm="$(printf '%s' "${token}" | tr -d ' ')"
+    norm="${norm//–/-}"
+    norm="${norm//—/-}"
+    if [[ "${norm}" =~ ^([0-9]{3})-([0-9]{3})$ ]]; then
+      local start end i
+      start=$((10#${BASH_REMATCH[1]}))
+      end=$((10#${BASH_REMATCH[2]}))
+      if (( start <= end )); then
+        for ((i=start; i<=end; i++)); do printf '%03d\n' "${i}"; done
+      else
+        for ((i=end; i<=start; i++)); do printf '%03d\n' "${i}"; done
+      fi
+    elif [[ "${norm}" =~ ^[0-9]{3}$ ]]; then
+      printf '%s\n' "${norm}"
+    fi
+  done < <(printf '%s\n' "${raw}" | tr ',' '\n') | sort -u
+}
+
+has_reviewer_required_changes() {
+  local file="$1"
+  grep -q '^## Reviewer Required Changes$' "${file}" 2>/dev/null
+}
+
+deps_satisfied() {
+  local file="$1"
+  local deps
+  deps="$(extract_dep_numbers "${file}")"
+  [[ -z "${deps}" ]] && return 0
+
+  local completed
+  completed="$(completed_task_numbers)"
+  local dep
+  while IFS= read -r dep; do
+    [[ -z "${dep}" ]] && continue
+    if ! printf '%s\n' "${completed}" | grep -qx "${dep}"; then
+      return 1
+    fi
+  done <<< "${deps}"
+  return 0
+}
+
+select_next_actionable_ready_task() {
+  local ready_dir="${SHARED_ISSUES_DIR}/01-ready"
+  [[ -d "${ready_dir}" ]] || return 0
+
+  local file normal_candidate=""
+  while IFS= read -r file; do
+    [[ -z "${file}" ]] && continue
+    if ! deps_satisfied "${file}"; then
+      continue
+    fi
+    if has_reviewer_required_changes "${file}"; then
+      printf '%s\n' "${file}"
+      return 0
+    fi
+    if [[ -z "${normal_candidate}" ]]; then
+      normal_candidate="${file}"
+    fi
+  done < <(find "${ready_dir}" -maxdepth 1 -type f -name '*.md' | sort)
+
+  [[ -n "${normal_candidate}" ]] && printf '%s\n' "${normal_candidate}"
+}
+
+claim_next_ready_task_if_needed() {
+  if [[ ! -x "${ISSUE_LANE_CLI}" ]]; then
+    log "queue helper missing or not executable: ${ISSUE_LANE_CLI}"
+    return 0
+  fi
+
+  local in_progress_count
+  in_progress_count="$(in_progress_task_count)"
+  if [[ "${in_progress_count}" -gt 0 ]]; then
+    return 0
+  fi
+
+  local next_task
+  next_task="$(select_next_actionable_ready_task || true)"
+  if [[ -z "${next_task}" ]]; then
+    log "queue claim outcome=missing task=<none-actionable>"
+    return 0
+  fi
+
+  local status
+  status="$("${ISSUE_LANE_CLI}" claim "${SHARED_ISSUES_DIR}" "${next_task}" || echo "missing")"
+  log "queue claim outcome=${status} task=$(basename "${next_task}")"
+}
+
 if ! command -v codex >/dev/null 2>&1; then
   log "codex binary not found on PATH"
   exit 1
@@ -170,6 +301,8 @@ else
   log "AUTO_WORK_FORCE=1 set; bypassing active autowork guard."
 fi
 
+claim_next_ready_task_if_needed
+
 cat > "${PROMPT_FILE}" <<PROMPT
 Read and follow ${SHARED_ISSUES_DIR}/instructions.md exactly.
 
@@ -187,8 +320,8 @@ Lane workflow (strict):
 1. If any task already exists in ${SHARED_ISSUES_DIR}/02-in-progress, resume that task first (do not pull a new task).
 2. On a fresh run with empty 02-in-progress and 05-completed, start with 001-project-scaffold.md.
 3. When selecting from ${SHARED_ISSUES_DIR}/01-ready, prioritize tasks that contain a top-level "## Reviewer Required Changes" block before net-new tasks (lowest task number first).
-4. Pull next actionable task from ${SHARED_ISSUES_DIR}/01-ready (respect Depends on).
-5. Move it to ${SHARED_ISSUES_DIR}/02-in-progress before coding.
+4. Claim from ${SHARED_ISSUES_DIR}/01-ready with \`${ISSUE_LANE_CLI} claim ${SHARED_ISSUES_DIR} <task-file>\` (respect Depends on).
+5. Use \`${ISSUE_LANE_CLI} move ${SHARED_ISSUES_DIR} <src-lane> <dst-lane> <task-file>\` for lane transitions; treat outcomes \`claimed\`, \`already_claimed\`, \`already_completed\`, \`missing\` as idempotent non-fatal queue states.
 6. Implement exactly scoped requirements from the task file.
 7. Run required tests from the task (unit/integration/e2e as specified).
 8. For CLI tasks, run a CLI smoke check after build.

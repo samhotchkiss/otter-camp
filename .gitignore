@@ -37,8 +37,8 @@ scripts/*
 !scripts/install.sh
 !scripts/codex-autowork.sh
 !scripts/autowork-supervisor-watchdog.sh
-!scripts/claude-review-autowork.sh
-!scripts/autowork-state-defaults-test.sh
+!scripts/issue-lane.sh
+!scripts/replay-queue-ops-test.sh
 !scripts/install_test.sh
 !scripts/setup.sh
 !scripts/setup_test.sh
@@ -46,6 +46,8 @@ scripts/*
 !scripts/uninstall.sh
 !scripts/seed/
 !scripts/seed/**
+!scripts/lib/
+!scripts/lib/**
 !scripts/build-indeed.sh
 
 # Testing
