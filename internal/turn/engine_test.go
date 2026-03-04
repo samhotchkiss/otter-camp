@@ -226,6 +226,68 @@ func TestHandleUserMessageTaskScopeFallsBackToProjectPM(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageProjectScopeRoutesToProjectPMAndAddsParticipant(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	pmID := uuid.New()
+	frankID := uuid.New()
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.chat.participants = []*chat.ChatParticipant{{
+		ID:              uuid.New(),
+		SessionID:       fixture.session.ID,
+		ParticipantType: "agent",
+		ParticipantID:   frankID,
+	}}
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		items: map[uuid.UUID]repo.AgentProjectAssignment{
+			projectID: {ProjectID: projectID, AgentID: pmID, IsActive: true},
+		},
+	}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{
+			pmID:    {ID: pmID, OrganizationID: fixture.session.OrganizationID},
+			frankID: {ID: frankID, OrganizationID: fixture.session.OrganizationID},
+		},
+		starter: []repo.Agent{{ID: frankID, DisplayName: "Frank", AgentType: "general"}},
+	}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	turnID := fixture.chat.waitForTurnID(t)
+	turn := fixture.chat.turnByID(turnID)
+	if turn == nil {
+		t.Fatal("expected created turn")
+	}
+	if turn.RespondingID != pmID {
+		t.Fatalf("turn responding_id = %s, want %s", turn.RespondingID, pmID)
+	}
+
+	participants, err := fixture.chat.ListParticipants(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListParticipants: %v", err)
+	}
+	hasPM := false
+	for _, participant := range participants {
+		if participant != nil && strings.EqualFold(strings.TrimSpace(participant.ParticipantType), "agent") && participant.ParticipantID == pmID {
+			hasPM = true
+			break
+		}
+	}
+	if !hasPM {
+		t.Fatalf("expected project PM %s to be added as a session participant", pmID)
+	}
+}
+
 func TestHandleUserMessageTaskScopeFallsBackToFrank(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -1121,6 +1183,8 @@ func (f *fakeChatService) GetTurn(ctx context.Context, turnID uuid.UUID) (*chat.
 }
 
 func (f *fakeChatService) ListParticipants(ctx context.Context, sessionID uuid.UUID) ([]*chat.ChatParticipant, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if sessionID != f.session.ID {
 		return nil, repo.ErrNotFound
 	}
@@ -1130,6 +1194,40 @@ func (f *fakeChatService) ListParticipants(ctx context.Context, sessionID uuid.U
 		result = append(result, &copyItem)
 	}
 	return result, nil
+}
+
+func (f *fakeChatService) AddParticipant(ctx context.Context, sessionID uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if sessionID != f.session.ID {
+		return nil, repo.ErrNotFound
+	}
+	if participantID == uuid.Nil {
+		return nil, fmt.Errorf("participant_id is required")
+	}
+	normalizedType := strings.TrimSpace(strings.ToLower(participantType))
+	normalizedRole := strings.TrimSpace(strings.ToLower(role))
+	if normalizedRole == "" {
+		normalizedRole = "member"
+	}
+	for _, existing := range f.participants {
+		if existing == nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(existing.ParticipantType), normalizedType) && existing.ParticipantID == participantID {
+			return nil, chat.ErrAlreadyParticipant
+		}
+	}
+	added := &chat.ChatParticipant{
+		ID:              uuid.New(),
+		SessionID:       sessionID,
+		ParticipantType: normalizedType,
+		ParticipantID:   participantID,
+		Role:            normalizedRole,
+	}
+	f.participants = append(f.participants, added)
+	copyItem := *added
+	return &copyItem, nil
 }
 
 func (f *fakeChatService) AppendMessage(ctx context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error) {

@@ -176,6 +176,88 @@ func TestTurnEngineIntegrationTaskSessionEventRoutesJobToAssignedAgent(t *testin
 	}
 }
 
+func TestTurnEngineIntegrationProjectSessionEventRoutesJobToPMAndAddsParticipant(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	pmAgent := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	frank := mustCreateStarterFrank(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, pmAgent.ID, fixture.user.ID)
+
+	projectSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession project scope: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, projectSession.ID, "agent", frank.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant Frank: %v", err)
+	}
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  projectSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "hello pm",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	actorID := fixture.user.ID
+	if err := fixture.engine.HandleUserMessageEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.message.user_sent",
+		ActorType:      "human",
+		ActorID:        &actorID,
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "message_id": userMessage.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleUserMessageEvent: %v", err)
+	}
+
+	var rawPayload []byte
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT payload
+		FROM job_queue
+		WHERE job_type = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, AgentTurnJobType).Scan(&rawPayload); err != nil {
+		t.Fatalf("load agent_turn job payload: %v", err)
+	}
+
+	var payload AgentTurnPayload
+	if err := json.Unmarshal(rawPayload, &payload); err != nil {
+		t.Fatalf("unmarshal agent_turn payload: %v", err)
+	}
+	if payload.AgentID == nil {
+		t.Fatalf("payload.agent_id = nil, want %s", pmAgent.ID)
+	}
+	if *payload.AgentID != pmAgent.ID {
+		t.Fatalf("payload.agent_id = %s, want %s", *payload.AgentID, pmAgent.ID)
+	}
+
+	participants, err := fixture.chatService.ListParticipants(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListParticipants: %v", err)
+	}
+	hasPM := false
+	for _, participant := range participants {
+		if participant != nil && participant.ParticipantType == "agent" && participant.ParticipantID == pmAgent.ID {
+			hasPM = true
+			break
+		}
+	}
+	if !hasPM {
+		t.Fatalf("expected PM %s in session participants", pmAgent.ID)
+	}
+}
+
 func TestTurnEngineIntegrationTier1ToolDispatchRoundTrip(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	modelCalls := 0
@@ -767,4 +849,19 @@ func mustCreateTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID
 		t.Fatalf("create task: %v", err)
 	}
 	return taskRecord
+}
+
+func mustAssignProjectPM(t *testing.T, ctx context.Context, pool *pgxpool.Pool, projectID, agentID, userID uuid.UUID) repo.AgentProjectAssignment {
+	t.Helper()
+	assignment, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        agentID,
+		ProjectID:      projectID,
+		Role:           "pm",
+		AssignedByType: "human_user",
+		AssignedByID:   &userID,
+	})
+	if err != nil {
+		t.Fatalf("assign project PM: %v", err)
+	}
+	return assignment
 }
