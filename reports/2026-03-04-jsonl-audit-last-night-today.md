@@ -85,3 +85,18 @@ Interpretation:
 Validation:
 - `bash -n scripts/codex-autowork.sh scripts/autowork-supervisor-watchdog.sh scripts/lib/issue-queue.sh scripts/issue-lane.sh scripts/replay-queue-ops-test.sh`
 - `scripts/replay-queue-ops-test.sh`
+
+## TestDB Drop Timeout Hardening (Task 233)
+- `internal/testdb/testdb.go` teardown now:
+  - terminates open sessions before each drop attempt,
+  - retries drop with bounded backoff for retryable errors (`SQLSTATE 55006`, timeout/deadline variants),
+  - surfaces active session PID telemetry in terminal drop errors.
+- Added targeted regression coverage in `internal/testdb/testdb_test.go` for:
+  - transient retry-to-success behavior,
+  - fail-fast permanent errors,
+  - retry exhaustion with attempt + PID telemetry in error output.
+
+Validation:
+- `go test ./internal/testdb`
+- `go test ./internal/testdb -tags integration`
+- `go test ./internal/testdb -tags integration -run TestNewReturnsIsolatedDatabaseAndDropsOnCleanup -count=20`

@@ -2,6 +2,7 @@ package testdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/migrate"
 )
@@ -24,6 +26,47 @@ var (
 )
 
 const templatePrepLockID int64 = 9_226_014_608
+
+const (
+	defaultDropCleanupTimeout      = 15 * time.Second
+	defaultDropRetryAttemptTimeout = 3 * time.Second
+	defaultDropRetryMaxAttempts    = 5
+	defaultDropRetryInitialBackoff = 100 * time.Millisecond
+	defaultDropRetryMaxBackoff     = 2 * time.Second
+	dropRetryObjectInUseSQLState   = "55006"
+)
+
+type databaseAdmin interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+type dropRetryConfig struct {
+	MaxAttempts    int
+	AttemptTimeout time.Duration
+	InitialBackoff time.Duration
+	MaxBackoff     time.Duration
+}
+
+func (c dropRetryConfig) normalize() dropRetryConfig {
+	cfg := c
+	if cfg.MaxAttempts <= 0 {
+		cfg.MaxAttempts = defaultDropRetryMaxAttempts
+	}
+	if cfg.AttemptTimeout <= 0 {
+		cfg.AttemptTimeout = defaultDropRetryAttemptTimeout
+	}
+	if cfg.InitialBackoff < 0 {
+		cfg.InitialBackoff = 0
+	}
+	if cfg.MaxBackoff <= 0 {
+		cfg.MaxBackoff = defaultDropRetryMaxBackoff
+	}
+	if cfg.InitialBackoff > cfg.MaxBackoff {
+		cfg.InitialBackoff = cfg.MaxBackoff
+	}
+	return cfg
+}
 
 func New(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -77,7 +120,7 @@ func New(t *testing.T) *pgxpool.Pool {
 
 	t.Cleanup(func() {
 		pool.Close()
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultDropCleanupTimeout)
 		defer cancel()
 
 		cleanupAdmin, cleanupErr := pgxpool.New(cleanupCtx, adminURL)
@@ -86,14 +129,13 @@ func New(t *testing.T) *pgxpool.Pool {
 		}
 		defer cleanupAdmin.Close()
 
-		_, _ = cleanupAdmin.Exec(cleanupCtx, `
-			SELECT pg_terminate_backend(pid)
-			FROM pg_stat_activity
-			WHERE datname = $1 AND pid <> pg_backend_pid()
-		`, testDBName)
-
-		dropSQL := fmt.Sprintf("DROP DATABASE IF EXISTS %s", pgx.Identifier{testDBName}.Sanitize())
-		if _, dropErr := cleanupAdmin.Exec(cleanupCtx, dropSQL); dropErr != nil {
+		dropCfg := dropRetryConfig{
+			MaxAttempts:    defaultDropRetryMaxAttempts,
+			AttemptTimeout: defaultDropRetryAttemptTimeout,
+			InitialBackoff: defaultDropRetryInitialBackoff,
+			MaxBackoff:     defaultDropRetryMaxBackoff,
+		}
+		if dropErr := dropDatabaseWithRetry(cleanupCtx, cleanupAdmin, testDBName, dropCfg); dropErr != nil {
 			t.Fatalf("drop test database %s: %v", testDBName, dropErr)
 		}
 	})
@@ -164,4 +206,94 @@ func withDBName(rawURL, dbName string) (string, error) {
 	}
 	u.Path = "/" + dbName
 	return u.String(), nil
+}
+
+func dropDatabaseWithRetry(ctx context.Context, admin databaseAdmin, dbName string, cfg dropRetryConfig) error {
+	cfg = cfg.normalize()
+	dropSQL := fmt.Sprintf("DROP DATABASE IF EXISTS %s", pgx.Identifier{dbName}.Sanitize())
+
+	backoff := cfg.InitialBackoff
+	lastPIDs := make([]int32, 0)
+	var lastErr error
+
+	for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return fmt.Errorf("drop database %s aborted before attempt %d: %w (active_pids=%v)", dbName, attempt, ctx.Err(), lastPIDs)
+		}
+
+		if err := terminateDatabaseConnections(ctx, admin, dbName); err != nil {
+			return fmt.Errorf("terminate database connections for %s: %w", dbName, err)
+		}
+
+		attemptCtx, cancel := context.WithTimeout(ctx, cfg.AttemptTimeout)
+		_, err := admin.Exec(attemptCtx, dropSQL)
+		cancel()
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+		if pids, pidErr := activeDatabaseSessionPIDs(ctx, admin, dbName); pidErr == nil {
+			lastPIDs = pids
+		}
+
+		if !isRetryableDropError(err) || attempt == cfg.MaxAttempts {
+			break
+		}
+
+		if backoff > 0 {
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return fmt.Errorf("drop database %s cancelled while waiting to retry attempt %d: %w (active_pids=%v)", dbName, attempt+1, ctx.Err(), lastPIDs)
+			}
+			backoff *= 2
+			if backoff > cfg.MaxBackoff {
+				backoff = cfg.MaxBackoff
+			}
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = errors.New("drop attempt failed for unknown reason")
+	}
+	return fmt.Errorf("drop database %s failed after %d attempt(s): %w (active_pids=%v)", dbName, cfg.MaxAttempts, lastErr, lastPIDs)
+}
+
+func terminateDatabaseConnections(ctx context.Context, admin databaseAdmin, dbName string) error {
+	_, err := admin.Exec(ctx, `
+		SELECT pg_terminate_backend(pid)
+		FROM pg_stat_activity
+		WHERE datname = $1 AND pid <> pg_backend_pid()
+	`, dbName)
+	return err
+}
+
+func activeDatabaseSessionPIDs(ctx context.Context, admin databaseAdmin, dbName string) ([]int32, error) {
+	var pids []int32
+	if err := admin.QueryRow(ctx, `
+		SELECT COALESCE(array_agg(pid ORDER BY pid), ARRAY[]::integer[])
+		FROM pg_stat_activity
+		WHERE datname = $1 AND pid <> pg_backend_pid()
+	`, dbName).Scan(&pids); err != nil {
+		return nil, err
+	}
+	return pids, nil
+}
+
+func isRetryableDropError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == dropRetryObjectInUseSQLState {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "being accessed by other users") ||
+		strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "timeout")
 }
