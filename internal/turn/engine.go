@@ -1026,7 +1026,9 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			arguments["session_id"] = rt.session.ID.String()
 		}
 		arguments["turn_id"] = rt.turn.ID.String()
-		arguments["agent_id"] = rt.agent.ID.String()
+		if _, exists := arguments["agent_id"]; !exists {
+			arguments["agent_id"] = rt.agent.ID.String()
+		}
 		if projectID := resolveProjectID(ctx, rt.session, e.tasks); projectID != nil {
 			if _, exists := arguments["project_id"]; !exists {
 				arguments["project_id"] = projectID.String()
