@@ -88,8 +88,9 @@ func runTUICommand(args []string) int {
 		if err == nil {
 			runtimeHints.LoadOrgSession = func(ctx context.Context) (string, error) {
 				sessions, err := apiClient.ListChatSessions(ctx, chatListSessionsFilter{
-					Status: "active",
-					Limit:  5,
+					Status:    "active",
+					ScopeType: "organization",
+					Limit:     5,
 				})
 				if err != nil {
 					return "", err
