@@ -609,7 +609,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		return err
 	}
 	if err := e.chat.StartTurn(ctx, turn.ID); err != nil {
-		return err
+		return e.describeTurnTransitionError(ctx, turn.ID, "handleUserMessage StartTurn", "pending->in_progress", err)
 	}
 	refreshedTurn, err := e.chat.GetTurn(ctx, turn.ID)
 	if err == nil {
@@ -639,6 +639,10 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 }
 
 func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
+	if err := e.requireTurnInProgress(ctx, rt); err != nil {
+		return err
+	}
+
 	continuations := 0
 	listeningChecked := false
 	var previousManifest *prompt.MemoryManifest
@@ -790,7 +794,7 @@ func (e *TurnEngine) completeTurn(ctx context.Context, rt *turnRuntime) error {
 		return err
 	}
 	if err := e.chat.CompleteTurn(ctx, rt.turn.ID); err != nil {
-		return err
+		return e.describeTurnTransitionError(ctx, rt.turn.ID, "completeTurn CompleteTurn", "in_progress->completed", err)
 	}
 	return e.publishEvent(ctx, rt.session.OrganizationID, "chat.turn.completed", "agent", &rt.agent.ID, map[string]any{
 		"session_id": rt.session.ID,
@@ -820,11 +824,23 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	if err := e.chat.CompleteTurn(ctx, rt.turn.ID); err != nil {
 		// If the turn was cancelled externally (supervisor/API), treat as cancellation.
 		if errors.Is(err, chat.ErrInvalidStatusTransition) {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return e.handleCancellation(ctx, rt)
+			current, getErr := e.chat.GetTurn(ctx, rt.turn.ID)
+			if getErr == nil && isTerminalTurnStatus(current.Status) {
+				e.logger.Warn("continuation skip complete for terminal turn",
+					"session_id", rt.session.ID,
+					"turn_id", rt.turn.ID,
+					"turn_status", strings.ToLower(strings.TrimSpace(current.Status)),
+				)
+				rt.turn = current
+			} else {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return e.handleCancellation(ctx, rt)
+				}
+				return e.describeTurnTransitionError(ctx, rt.turn.ID, "continueTurn CompleteTurn", "in_progress->completed", err)
 			}
+		} else {
+			return e.describeTurnTransitionError(ctx, rt.turn.ID, "continueTurn CompleteTurn", "in_progress->completed", err)
 		}
-		return fmt.Errorf("continueTurn CompleteTurn (turn_status=%s): %w", rt.turn.Status, err)
 	}
 
 	currentTurn, err := e.chat.GetTurn(ctx, rt.turn.ID)
@@ -904,6 +920,53 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	}
 	_, err = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Continuation summary] "+summary)
 	return err
+}
+
+func (e *TurnEngine) requireTurnInProgress(ctx context.Context, rt *turnRuntime) error {
+	if rt == nil || rt.turn == nil {
+		return fmt.Errorf("runTurn requires an initialized turn runtime")
+	}
+	current, err := e.chat.GetTurn(ctx, rt.turn.ID)
+	if err != nil {
+		return fmt.Errorf("runTurn GetTurn: %w", err)
+	}
+	rt.turn = current
+	if strings.EqualFold(strings.TrimSpace(current.Status), "in_progress") {
+		return nil
+	}
+	return fmt.Errorf(
+		"runTurn preflight invalid turn state (operation=execute_turn expected_status=in_progress turn_status=%s turn_id=%s): %w",
+		strings.ToLower(strings.TrimSpace(current.Status)),
+		current.ID,
+		chat.ErrInvalidStatusTransition,
+	)
+}
+
+func (e *TurnEngine) describeTurnTransitionError(ctx context.Context, turnID uuid.UUID, operation, transition string, err error) error {
+	if !errors.Is(err, chat.ErrInvalidStatusTransition) {
+		return err
+	}
+	status := "unknown"
+	if current, getErr := e.chat.GetTurn(ctx, turnID); getErr == nil {
+		status = strings.ToLower(strings.TrimSpace(current.Status))
+	}
+	return fmt.Errorf(
+		"%s invalid turn transition (transition=%s turn_id=%s turn_status=%s): %w",
+		operation,
+		transition,
+		turnID,
+		status,
+		err,
+	)
+}
+
+func isTerminalTurnStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "cancelled", "failed":
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *TurnEngine) shouldContinueMaxToolCalls(ctx context.Context, rt *turnRuntime) (bool, error) {
@@ -1557,8 +1620,11 @@ func (e *TurnEngine) appendSystemMessage(ctx context.Context, turnID, sessionID 
 	if err != nil {
 		return nil, err
 	}
+	if err := e.chat.UpdateMessageStatus(ctx, msg.ID, "streaming", ""); err != nil {
+		return nil, fmt.Errorf("appendSystemMessage pending->streaming: %w", err)
+	}
 	if err := e.chat.UpdateMessageStatus(ctx, msg.ID, "final", ""); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("appendSystemMessage streaming->final: %w", err)
 	}
 	return msg, nil
 }

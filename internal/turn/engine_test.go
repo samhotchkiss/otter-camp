@@ -838,6 +838,48 @@ func TestContinuationTurnOnContextCompressed(t *testing.T) {
 	}
 }
 
+func TestContinuationTurnRecoversWhenTurnAlreadyCompleted(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
+	}
+
+	var completeErr error
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		if call != 1 || completeErr != nil {
+			return
+		}
+		completeErr = fixture.chat.CompleteTurn(context.Background(), input.TurnID)
+	}
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			return ModelResponse{Content: "summary"}, nil
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if completeErr != nil {
+		t.Fatalf("external completion err = %v, want nil", completeErr)
+	}
+	if len(fixture.chat.turnOrder) < 2 {
+		t.Fatalf("turn count = %d, want >= 2", len(fixture.chat.turnOrder))
+	}
+	last := fixture.chat.turnByID(fixture.chat.turnOrder[len(fixture.chat.turnOrder)-1])
+	if last == nil || last.Status != "completed" {
+		t.Fatalf("last turn status = %v, want completed", last)
+	}
+}
+
 type unitFixture struct {
 	engine        *TurnEngine
 	events        *fakeEventBus
@@ -872,9 +914,10 @@ func newUnitFixture(t *testing.T, mode string) *unitFixture {
 			ParticipantType: "agent",
 			ParticipantID:   agentID,
 		}},
-		messages: messages,
-		turns:    map[uuid.UUID]*chat.ChatTurn{},
-		turnCh:   make(chan uuid.UUID, 4),
+		messages:      messages,
+		turns:         map[uuid.UUID]*chat.ChatTurn{},
+		turnCh:        make(chan uuid.UUID, 4),
+		enforceStatus: true,
 	}
 
 	profile := repo.ModelProfile{
@@ -957,6 +1000,7 @@ type fakeChatService struct {
 	turnOrder     []uuid.UUID
 	turnCh        chan uuid.UUID
 	startedAt     time.Time
+	enforceStatus bool
 	cancelCalls   int
 	completeCalls int
 	failCalls     int
@@ -1001,6 +1045,9 @@ func (f *fakeChatService) StartTurn(ctx context.Context, turnID uuid.UUID) error
 	if turn == nil {
 		return repo.ErrNotFound
 	}
+	if f.enforceStatus && !strings.EqualFold(strings.TrimSpace(turn.Status), "pending") {
+		return chat.ErrInvalidStatusTransition
+	}
 	turn.Status = "in_progress"
 	at := f.startedAt
 	if at.IsZero() {
@@ -1017,6 +1064,9 @@ func (f *fakeChatService) CompleteTurn(ctx context.Context, turnID uuid.UUID) er
 	if turn == nil {
 		return repo.ErrNotFound
 	}
+	if f.enforceStatus && !strings.EqualFold(strings.TrimSpace(turn.Status), "in_progress") {
+		return chat.ErrInvalidStatusTransition
+	}
 	f.completeCalls++
 	turn.Status = "completed"
 	now := time.Now().UTC()
@@ -1030,6 +1080,9 @@ func (f *fakeChatService) CancelTurn(ctx context.Context, turnID uuid.UUID, reas
 	turn := f.turns[turnID]
 	if turn == nil {
 		return repo.ErrNotFound
+	}
+	if f.enforceStatus && !strings.EqualFold(strings.TrimSpace(turn.Status), "in_progress") {
+		return chat.ErrInvalidStatusTransition
 	}
 	f.cancelCalls++
 	turn.Status = "cancelled"
@@ -1045,6 +1098,9 @@ func (f *fakeChatService) FailTurn(ctx context.Context, turnID uuid.UUID, errorM
 	turn := f.turns[turnID]
 	if turn == nil {
 		return repo.ErrNotFound
+	}
+	if f.enforceStatus && !strings.EqualFold(strings.TrimSpace(turn.Status), "in_progress") {
+		return chat.ErrInvalidStatusTransition
 	}
 	f.failCalls++
 	turn.Status = "failed"
@@ -1349,20 +1405,30 @@ type assembleResult struct {
 }
 
 type fakeAssembler struct {
-	mu      sync.Mutex
-	results []assembleResult
-	calls   int
+	mu         sync.Mutex
+	results    []assembleResult
+	calls      int
+	onAssemble func(input prompt.AssemblyInput, call int)
 }
 
 func (f *fakeAssembler) Assemble(ctx context.Context, input prompt.AssemblyInput) (*prompt.AssembledPrompt, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls++
+	call := f.calls
+	hook := f.onAssemble
 	if len(f.results) == 0 {
+		f.mu.Unlock()
+		if hook != nil {
+			hook(input, call)
+		}
 		return &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "default"}}, TotalTokens: 10}, nil
 	}
 	result := f.results[0]
 	f.results = f.results[1:]
+	f.mu.Unlock()
+	if hook != nil {
+		hook(input, call)
+	}
 	return result.prompt, result.err
 }
 
