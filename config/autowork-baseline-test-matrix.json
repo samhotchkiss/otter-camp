@@ -1,0 +1,22 @@
+{
+  "version": "2026-03-04.1",
+  "updated_at": "2026-03-04T00:00:00Z",
+  "baseline_health": "healthy",
+  "commands": [
+    {
+      "id": "unit-testdb",
+      "scope": "unit",
+      "command": "go test ./internal/testdb"
+    },
+    {
+      "id": "integration-testdb",
+      "scope": "integration",
+      "command": "go test ./internal/testdb -tags integration"
+    },
+    {
+      "id": "queue-replay",
+      "scope": "integration",
+      "command": "scripts/replay-queue-ops-test.sh"
+    }
+  ]
+}

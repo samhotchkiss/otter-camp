@@ -18,6 +18,8 @@ STREAM_LOG="${STATE_DIR}/stream.log"
 DOC_ISSUES_INSTRUCTIONS="${SHARED_ISSUES_DIR}/instructions.md"
 DOC_BUILD_INSTRUCTIONS="${CONTROL_REPO_DIR}/build/INSTRUCTIONS.md"
 DOC_BUILD_CONTEXT="${CONTROL_REPO_DIR}/build/CONTEXT.md"
+BASELINE_MATRIX_FILE="${CONTROL_REPO_DIR}/config/autowork-baseline-test-matrix.json"
+FLAKE_REGISTRY_FILE="${CONTROL_REPO_DIR}/config/autowork-flake-registry.json"
 CONTEXT_CACHE_FILE="${STATE_DIR}/startup-context-cache.env"
 CONTEXT_CACHE_MODE="miss"
 CONTEXT_CACHE_CHANGED_DOCS="cache_uninitialized"
@@ -462,6 +464,12 @@ Execution policy:
 - Continue until no actionable tasks remain in ${SHARED_ISSUES_DIR}/01-ready.
 - If blocked, append clear blocker notes to ${SHARED_ISSUES_DIR}/notes.md, then continue with the next actionable task.
 
+Baseline health gate artifacts:
+- Baseline test matrix: ${BASELINE_MATRIX_FILE}
+- Flake registry (owner + expiry + evidence): ${FLAKE_REGISTRY_FILE}
+- Treat unmatched build/test failures as task-scope regressions.
+- Treat only active, non-expired registry matches as waived known flakes (always cite flake IDs).
+
 Queue mutation reconciliation protocol:
 - If queue files change externally while you are running, do not stop immediately.
 - Snapshot lane state (`01-ready` through `05-completed`) and identify the affected task.
@@ -609,6 +617,16 @@ set -e
 
 command_summary="$(summarize_run_jsonl_command_outcomes "${RUN_JSON_LOG}")"
 printf '[%s] command-outcome-summary %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "${command_summary}" | tee -a "${RUN_LOG}" "${STREAM_LOG}"
+
+baseline_gate_script="${WORKTREE_DIR}/scripts/lib/baseline-health-gate.sh"
+if [[ -x "${baseline_gate_script}" ]]; then
+  baseline_summary="$("${baseline_gate_script}" "${RUN_JSON_LOG}" "${WORKTREE_DIR}/config/autowork-baseline-test-matrix.json" "${WORKTREE_DIR}/config/autowork-flake-registry.json" || true)"
+  printf '[%s] baseline-health-summary %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "${baseline_summary}" | tee -a "${RUN_LOG}" "${STREAM_LOG}"
+else
+  printf '[%s] baseline-health-summary gate_status=artifact_missing baseline_health_status=unknown matrix_version=missing registry_version=missing task_scope_regressions=0 waived_known_flakes=0 waived_flake_refs=none\n' \
+    "$(date '+%Y-%m-%d %H:%M:%S %Z')" | tee -a "${RUN_LOG}" "${STREAM_LOG}"
+fi
+
 if (( status == 0 )); then
   terminal_reason="runner_exit_without_terminal_event"
 else
