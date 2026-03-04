@@ -3,6 +3,7 @@ package jobqueue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,11 +22,16 @@ import (
 const (
 	jobEnqueuedChannel       = "job_enqueued"
 	idempotencyCleanupJob    = "idempotency.cleanup"
+	agentTurnJobType         = "agent_turn"
 	defaultBatchSize         = 10
 	defaultPollInterval      = 5 * time.Second
 	defaultStaleScanInterval = 60 * time.Second
 	defaultStaleThreshold    = 5 * time.Minute
 	defaultCleanupInterval   = 24 * time.Hour
+
+	agentTurnRateLimitMinBackoff = 30 * time.Second
+	agentTurnRateLimitBackoffCap = 30 * time.Minute
+	agentTurnRateLimitMaxRetries = 6
 )
 
 type JobWorker interface {
@@ -442,8 +448,24 @@ func (w *Worker) markFailure(ctx context.Context, job Job, jobErr error) error {
 		errText = "unknown job failure"
 	}
 
-	if job.Attempts < job.MaxAttempts {
-		runAfter := w.clock.Now().UTC().Add(backoffDelay(job.Attempts))
+	retryAfterHint, rateLimited := rateLimitRetryAfter(jobErr)
+	retryDelay := backoffDelay(job.Attempts)
+	retryMaxAttempts := retryAttemptLimit(job, rateLimited)
+	if strings.EqualFold(strings.TrimSpace(job.JobType), agentTurnJobType) && rateLimited {
+		retryDelay = agentTurnRateLimitDelay(job.Attempts, retryAfterHint)
+		w.logger.Info(
+			"job queue: scheduling rate-limited retry",
+			"job_id", job.ID,
+			"job_type", job.JobType,
+			"attempt", job.Attempts,
+			"max_attempts", retryMaxAttempts,
+			"backoff", retryDelay.String(),
+			"retry_after", retryAfterHint.String(),
+		)
+	}
+
+	if job.Attempts < retryMaxAttempts {
+		runAfter := w.clock.Now().UTC().Add(retryDelay)
 		_, err := w.pool.Exec(ctx, `
 			UPDATE job_queue
 			SET status = 'pending',
@@ -666,6 +688,59 @@ func backoffDelay(attempts int) time.Duration {
 
 	if delay > 5*time.Minute {
 		return 5 * time.Minute
+	}
+	return delay
+}
+
+type rateLimitRetryAfterProvider interface {
+	RateLimitRetryAfter() time.Duration
+}
+
+func rateLimitRetryAfter(err error) (time.Duration, bool) {
+	if err == nil {
+		return 0, false
+	}
+
+	var provider rateLimitRetryAfterProvider
+	if errors.As(err, &provider) {
+		retryAfter := provider.RateLimitRetryAfter()
+		if retryAfter < 0 {
+			return 0, true
+		}
+		return retryAfter, true
+	}
+
+	text := strings.ToLower(strings.TrimSpace(err.Error()))
+	if strings.Contains(text, "rate limit") {
+		return 0, true
+	}
+	return 0, false
+}
+
+func retryAttemptLimit(job Job, rateLimited bool) int {
+	maxAttempts := job.MaxAttempts
+	if rateLimited && strings.EqualFold(strings.TrimSpace(job.JobType), agentTurnJobType) && maxAttempts < agentTurnRateLimitMaxRetries {
+		return agentTurnRateLimitMaxRetries
+	}
+	return maxAttempts
+}
+
+func agentTurnRateLimitDelay(attempts int, retryAfterHint time.Duration) time.Duration {
+	if attempts <= 1 {
+		attempts = 1
+	}
+
+	delay := agentTurnRateLimitMinBackoff
+	for i := 1; i < attempts; i++ {
+		if delay >= (agentTurnRateLimitBackoffCap / 2) {
+			delay = agentTurnRateLimitBackoffCap
+			break
+		}
+		delay *= 2
+	}
+
+	if retryAfterHint > delay {
+		return retryAfterHint
 	}
 	return delay
 }

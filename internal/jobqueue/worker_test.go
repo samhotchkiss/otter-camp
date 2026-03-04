@@ -1,6 +1,7 @@
 package jobqueue
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -31,4 +32,119 @@ func TestBuildWorkerIDFormat(t *testing.T) {
 	if len(parts) < 3 {
 		t.Fatalf("worker id %q should contain hostname, pid, uuid", id)
 	}
+}
+
+func TestAgentTurnRateLimitDelay(t *testing.T) {
+	tests := []struct {
+		name      string
+		attempts  int
+		retryHint time.Duration
+		want      time.Duration
+	}{
+		{name: "first attempt minimum", attempts: 1, want: 30 * time.Second},
+		{name: "second attempt minimum", attempts: 2, want: 60 * time.Second},
+		{name: "third attempt minimum", attempts: 3, want: 120 * time.Second},
+		{name: "fourth attempt continues exponential", attempts: 4, want: 240 * time.Second},
+		{name: "retry after extends first attempt", attempts: 1, retryHint: 45 * time.Second, want: 45 * time.Second},
+		{name: "retry after shorter than minimum ignored", attempts: 2, retryHint: 10 * time.Second, want: 60 * time.Second},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := agentTurnRateLimitDelay(tc.attempts, tc.retryHint); got != tc.want {
+				t.Fatalf("agentTurnRateLimitDelay(%d, %s) = %s, want %s", tc.attempts, tc.retryHint, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRetryAttemptLimit(t *testing.T) {
+	tests := []struct {
+		name        string
+		job         Job
+		rateLimited bool
+		want        int
+	}{
+		{
+			name:        "rate-limited agent_turn raises low max attempts",
+			job:         Job{JobType: "agent_turn", MaxAttempts: 3},
+			rateLimited: true,
+			want:        6,
+		},
+		{
+			name:        "rate-limited agent_turn keeps high max attempts",
+			job:         Job{JobType: "agent_turn", MaxAttempts: 8},
+			rateLimited: true,
+			want:        8,
+		},
+		{
+			name:        "non-agent job unchanged",
+			job:         Job{JobType: "not_agent_turn", MaxAttempts: 3},
+			rateLimited: true,
+			want:        3,
+		},
+		{
+			name:        "non-rate-limited unchanged",
+			job:         Job{JobType: "agent_turn", MaxAttempts: 3},
+			rateLimited: false,
+			want:        3,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := retryAttemptLimit(tc.job, tc.rateLimited); got != tc.want {
+				t.Fatalf("retryAttemptLimit(%+v, %t) = %d, want %d", tc.job, tc.rateLimited, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRateLimitRetryAfter(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantDelay   time.Duration
+		wantLimited bool
+	}{
+		{
+			name:        "typed rate-limit error with retry hint",
+			err:         stubRateLimitError{retryAfter: 75 * time.Second},
+			wantDelay:   75 * time.Second,
+			wantLimited: true,
+		},
+		{
+			name:        "text-only rate-limit error",
+			err:         errors.New("provider RATE LIMIT exceeded"),
+			wantDelay:   0,
+			wantLimited: true,
+		},
+		{
+			name:        "non-rate-limit error",
+			err:         errors.New("boom"),
+			wantDelay:   0,
+			wantLimited: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotDelay, gotLimited := rateLimitRetryAfter(tc.err)
+			if gotDelay != tc.wantDelay || gotLimited != tc.wantLimited {
+				t.Fatalf("rateLimitRetryAfter(%v) = (%s, %t), want (%s, %t)", tc.err, gotDelay, gotLimited, tc.wantDelay, tc.wantLimited)
+			}
+		})
+	}
+}
+
+type stubRateLimitError struct {
+	retryAfter time.Duration
+}
+
+func (e stubRateLimitError) Error() string {
+	return "rate limited"
+}
+
+func (e stubRateLimitError) RateLimitRetryAfter() time.Duration {
+	return e.retryAfter
 }

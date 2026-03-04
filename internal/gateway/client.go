@@ -459,7 +459,7 @@ func (g *LiveModelGateway) mapProviderError(connectionID uuid.UUID, err error) (
 			return fmt.Errorf("%w", turn.ErrAuthFailed), false
 		case http.StatusTooManyRequests:
 			g.health.MarkRateLimited(connectionID)
-			return fmt.Errorf("%w", turn.ErrRateLimited), true
+			return turn.NewRateLimitedError(providerErr.RetryAfter, providerErr), true
 		default:
 			if providerErr.StatusCode >= http.StatusInternalServerError {
 				g.health.RecordFailure(connectionID, err)
@@ -1784,9 +1784,9 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 			for id := range validToolCallIDs {
 				if !answeredIDs[id] {
 					pendingToolResults = append(pendingToolResults, map[string]any{
-						"type":       "tool_result",
+						"type":        "tool_result",
 						"tool_use_id": id,
-						"content":    "[Turn ended before tool result was received]",
+						"content":     "[Turn ended before tool result was received]",
 					})
 				}
 			}
@@ -1862,9 +1862,9 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 			}
 			// Accumulate tool results — they'll be flushed as one user message.
 			pendingToolResults = append(pendingToolResults, map[string]any{
-				"type":       "tool_result",
+				"type":        "tool_result",
 				"tool_use_id": *item.ToolCallID,
-				"content":    item.Content,
+				"content":     item.Content,
 			})
 		default:
 			// Flush pending tool results before a user/other message.
