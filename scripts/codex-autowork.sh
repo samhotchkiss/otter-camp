@@ -460,6 +460,14 @@ Shell quoting guardrails:
 - For notes appends, always use a single-quoted heredoc delimiter:
   - `cat <<'EOF' >> ${SHARED_ISSUES_DIR}/notes.md` ... `EOF`
 - If any command fails due quoting/substitution, rerun with the safe file/heredoc template.
+
+GitHub transport retry policy:
+- For `git push`, `gh pr create`, and `gh pr edit`, do not call raw commands directly.
+- Use shared retry wrapper:
+  - `scripts/lib/github-retry.sh git push <remote> <refspec>`
+  - `scripts/lib/github-retry.sh gh pr create <args...>`
+  - `scripts/lib/github-retry.sh gh pr edit <args...>`
+- Treat wrapper `action=fail_fast` as non-retryable (auth/permission/invalid args); fix root cause before proceeding.
 PROMPT
 
 RUN_NAME="run-$(date '+%Y%m%d-%H%M%S')"
