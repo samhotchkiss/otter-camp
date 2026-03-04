@@ -573,9 +573,6 @@ func (a *PromptAssembler) resolveLayer6Budget(contextWindow int) int {
 	if adaptive < 1024 {
 		adaptive = 1024
 	}
-	if a.defaultLayer6Budget > 0 && a.defaultLayer6Budget < adaptive {
-		return a.defaultLayer6Budget
-	}
 	return adaptive
 }
 
