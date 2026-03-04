@@ -112,6 +112,7 @@ type ChatService interface {
 	FailTurn(ctx context.Context, turnID uuid.UUID, errorMsg string) error
 	GetTurn(ctx context.Context, turnID uuid.UUID) (*chat.ChatTurn, error)
 	ListParticipants(ctx context.Context, sessionID uuid.UUID) ([]*chat.ChatParticipant, error)
+	AddParticipant(ctx context.Context, sessionID uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error)
 	AppendMessage(ctx context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error)
 	UpdateMessageStatus(ctx context.Context, messageID uuid.UUID, newStatus, errorMsg string) error
 }
@@ -1475,16 +1476,36 @@ func (e *TurnEngine) resolveSessionAgentForSession(ctx context.Context, session 
 		// For project-scoped sessions, prefer the project PM, then fall back to Frank.
 		if e.assignments != nil && session.ScopeID != uuid.Nil {
 			if pm, pmErr := e.assignments.GetPM(ctx, session.ScopeID); pmErr == nil && pm.IsActive && pm.AgentID != uuid.Nil {
+				if err := e.ensureAgentParticipant(ctx, session.ID, pm.AgentID); err != nil {
+					return uuid.Nil, err
+				}
 				return pm.AgentID, nil
 			}
 		}
-		return e.resolveFrankStarterID(ctx, session.OrganizationID)
+		frankID, err := e.resolveFrankStarterID(ctx, session.OrganizationID)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if err := e.ensureAgentParticipant(ctx, session.ID, frankID); err != nil {
+			return uuid.Nil, err
+		}
+		return frankID, nil
 	}
 	if strings.EqualFold(scopeType, "organization") {
 		// For org-scoped sessions, always route to Frank (the receptionist).
 		return e.resolveFrankStarterID(ctx, session.OrganizationID)
 	}
 	return e.resolveFirstAgentParticipant(ctx, session.ID)
+}
+
+func (e *TurnEngine) ensureAgentParticipant(ctx context.Context, sessionID, agentID uuid.UUID) error {
+	if sessionID == uuid.Nil || agentID == uuid.Nil {
+		return nil
+	}
+	if _, err := e.chat.AddParticipant(ctx, sessionID, "agent", agentID, "member"); err != nil && !errors.Is(err, chat.ErrAlreadyParticipant) {
+		return err
+	}
+	return nil
 }
 
 func (e *TurnEngine) resolveTaskScopeAgent(ctx context.Context, organizationID, taskID uuid.UUID) (uuid.UUID, error) {
