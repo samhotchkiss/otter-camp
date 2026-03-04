@@ -160,6 +160,7 @@ type RuntimeHints struct {
 	DeleteSecret         func(ctx context.Context, slug string) error
 	UpdateModelProfile   func(ctx context.Context, profileID, providerID, modelName string) error
 	UpdateConnectionAuth func(ctx context.Context, providerID, connectionID, authMode, secretSlug string) error
+	CreateConnection     func(ctx context.Context, providerID, displayName, apiKeySecretSlug string, failoverPriority int) error
 
 	// Login authenticates with email/password, creates an admin-scoped API key,
 	// saves it to credentials, and hot-swaps the API client.

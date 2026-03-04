@@ -2504,10 +2504,18 @@ func (m Model) renderSettingsView(width, maxLines int) []string {
 		masked := strings.Repeat("●", len(m.settingsInput))
 		lines = append(lines, stylePrimary.Render("  Value: ")+styleText.Render(masked+"█"))
 	}
+	if m.settingsEditState == settingsConnName {
+		lines = append(lines, "")
+		lines = append(lines, stylePrimary.Render("  Connection name: ")+styleText.Render(m.settingsInput+"█"))
+	}
+	if m.settingsEditState == settingsConnSecret {
+		lines = append(lines, "")
+		lines = append(lines, stylePrimary.Render("  Secret slug: ")+styleText.Render(m.settingsInput+"█"))
+	}
 
 	// Footer hints
 	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("  j/k·navigate  Enter·edit  n·new secret  d·delete  r·refresh  Esc·back"))
+	lines = append(lines, styleMuted.Render("  j/k·navigate  Enter·edit  n·new secret  c·new connection  d·delete  r·refresh  Esc·back"))
 
 	// Clamp output to maxLines
 	if len(lines) > maxLines {

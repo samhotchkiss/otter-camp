@@ -726,6 +726,16 @@ func runTUICommand(args []string) int {
 				var resp struct{}
 				return apiClient.request(ctx, "PATCH", path, body, &resp)
 			}
+			runtimeHints.CreateConnection = func(ctx context.Context, providerID, displayName, apiKeySecretSlug string, failoverPriority int) error {
+				body := map[string]any{
+					"display_name":      displayName,
+					"api_key_secret_ref": "ref:" + apiKeySecretSlug,
+					"failover_priority": failoverPriority,
+				}
+				path := "/v1/model/providers/" + url.PathEscape(providerID) + "/connections"
+				var resp struct{}
+				return apiClient.request(ctx, "POST", path, body, &resp)
+			}
 			runtimeHints.Login = func(ctx context.Context, email, password string) error {
 				base := strings.TrimRight(serverURL, "/")
 

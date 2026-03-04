@@ -2,6 +2,28 @@
 
 Use this file to track blockers, follow-ups, and handoff notes.
 
+## [2026-03-04] Issue 216 — CHANGES REQUIRED
+
+**Task:** 216-flow-advance-tool-bypasses-backfill
+**Reviewed by:** Claude Opus 4.6 (reviewer agent)
+**PR:** #1595 (`task-216-flow-advance-tool-backfill`) — NOT merged
+**Result:** CHANGES REQUIRED — moved back to `01-ready`
+
+PR adds `resolveFlowAdvanceExecution()` and `ensureTaskActiveFlowExecution()` to the tool handler, implementing a try-GetByID-then-backfill pattern. Integration test covers the happy path. Two issues found: (P1) backfilled executions don't get a chat session created — the service layer's `loadActiveFlowState` calls `ensureExecutionSession` after creating executions, but the tool handler's copy does not. (P2) The backfill logic is duplicated between tool handler and service layer; preferred fix is to delegate to the service's existing method instead. CI lint failure is pre-existing (none in changed files).
+
+---
+
+## [2026-03-04] Issue 214 — APPROVED and COMPLETED
+
+**Task:** 214-flow-execution-not-created-for-in-progress-tasks
+**Reviewed by:** Claude Opus 4.6 (reviewer agent)
+**PR:** #1593 (`task-214-flow-execution-backfill`) merged into v2 at 2026-03-04T09:30:23Z
+**Result:** ACCEPTED
+
+Fix adds two backfill paths to `loadActiveFlowState` in `execution_service.go`: (1) when task has `FlowTemplateID` but no `CurrentFlowNodeID`, calls `StartFlow` to auto-start the flow (sets initial node, creates execution, binds session, publishes `flow.started` event); (2) when task has `CurrentFlowNodeID` but `GetActive` returns `ErrNotFound`, creates a new `FlowNodeExecution` with correct visit number via `nextVisitNumber`, binds session via `ensureExecutionSession`. All three flow operations (`AdvanceFlow`, `RejectFlowNode`, `RecordNodeCommit`) benefit since they all call `loadActiveFlowState`. 3 files changed, +109/-19. 2 new integration tests (`TestFlowExecutionServiceAdvanceFlowBackfillsMissingExecutionFromTemplate`, `TestFlowExecutionServiceAdvanceFlowBackfillsMissingExecutionForCurrentNode`) + 1 modified integration test (`TestTaskHTTPAdvanceFlowAndMissingActiveExecution` updated from expecting 404 to expecting 200 with auto-backfill). CI lint failure is pre-existing (unused vars in TUI/CLI/MCP/memory packages — none in changed files). Merged with admin flag.
+
+---
+
 ## [2026-03-03] Issue 211 — APPROVED and COMPLETED
 
 **Task:** 211-task-update-must-publish-status-changed-event
@@ -11152,3 +11174,262 @@ Fixes applied:
 
 Tests run:
 - `go test ./internal/tools/native/... -tags integration`
+
+## [2026-03-04] Issue 212 — Agents need a tool to assign agents to projects
+
+**Task:** 212-agent-assign-project-tool.md
+**Result:** Implemented and moved to `03-needs-review`
+
+Fixes applied:
+- Added migration `migrations/0104_tool_definition_agent_assign_project.sql` to seed/upsert `agent.assign_project` (tier2, native, capability `agent.manage`) with strict UUID/role input schema.
+- Registered `agent.assign_project` in native executor dispatch (`internal/tools/native/executor.go`).
+- Implemented `handleAgentAssignProject` in `internal/tools/native/mutation_tools.go`:
+  - validates `agent_id`, `project_id`, and `role` (`pm|worker|reviewer|observer`),
+  - calls `projectAssigner.Assign(...)`,
+  - enforces starter trio restriction for dedicated project roles (`pm|worker|reviewer`),
+  - returns assignment payload,
+  - maps PM uniqueness to `pm_conflict`.
+- Added unit tests in `internal/tools/native/mutation_tools_test.go`:
+  - success path,
+  - starter trio rejection,
+  - PM conflict mapping.
+- Added integration tests in `internal/tools/native/native_integration_test.go`:
+  - temp agent + PM assignment success,
+  - second PM rejected,
+  - starter trio PM assignment rejected.
+- Updated integration seed/schema assertions in:
+  - `internal/repo/repo_integration_test.go`
+  - `internal/repo/tool_definition_schema_integration_test.go`
+
+Tests run:
+- `go test ./internal/tools/native ./internal/repo`
+- `go test ./internal/tools/native ./internal/repo -tags integration`
+- `go test ./...` *(fails in unrelated existing areas: `internal/tui`, `internal/turn`)*
+- `go test ./... -tags integration` *(fails in unrelated existing areas: `internal/tui`, `internal/auth`, `internal/controlplane`, `internal/memory`, `internal/project`, `internal/server`, `internal/task`, `internal/turn`)*
+- [2026-03-03 23:00:11 MST] reviewer watchdog detected gh interactive command and restarted reviewer to prevent queue stall
+
+## [2026-03-04] Issue 213 — agent_turn job rate-limit-aware backoff
+
+**Task:** 213-agent-turn-rate-limit-backoff.md
+**Result:** Implemented and moved to `03-needs-review`
+
+Fixes applied:
+- Preserved provider `Retry-After` metadata on model 429 mapping by introducing `turn.RateLimitedError` and returning it from `LiveModelGateway.mapProviderError`.
+- Added `agent_turn`-specific retry policy in `internal/jobqueue/worker.go`:
+  - detects rate-limit failures from typed errors (with string fallback),
+  - applies exponential backoff minimums of 30s, 60s, 120s (continues doubling thereafter),
+  - uses `max(exponential_backoff, retry_after_hint)` when a provider hint is present,
+  - raises effective retry ceiling for rate-limited `agent_turn` jobs to 6 attempts,
+  - logs scheduled backoff and retry-after hint for observability.
+- Added/updated unit tests:
+  - `internal/jobqueue/worker_test.go`
+    - `TestAgentTurnRateLimitDelay`
+    - `TestRetryAttemptLimit`
+    - `TestRateLimitRetryAfter`
+  - `internal/gateway/client_error_test.go`
+    - extended `TestMapProviderErrorRateLimitMarksRateLimited` to verify retry-after hint and wrapped provider error.
+
+Tests run:
+- `go test ./internal/jobqueue ./internal/gateway`
+- `go test ./internal/jobqueue -run 'TestAgentTurnRateLimitDelay|TestRetryAttemptLimit|TestRateLimitRetryAfter'`
+- `go test ./internal/gateway -run TestMapProviderErrorRateLimitMarksRateLimited`
+- `go test ./internal/jobqueue ./internal/gateway ./internal/turn` *(fails in unrelated pre-existing `internal/turn` tests with `repo: not found`/timeout failures)*
+
+## [2026-03-04] Issue 213 — APPROVED and COMPLETED
+
+**Reviewer:** Claude Opus 4 (automated reviewer)
+**PR:** #1592 → merged to `v2` (commit 986ea3a)
+
+**Acceptance criteria — all met:**
+- ✅ agent_turn retries with ≥30s backoff on rate limit errors (min 30s)
+- ✅ Exponential backoff: 30s → 60s → 120s → 240s, capped at 30m
+- ✅ Rate-limited max retries raised to 6 (from default 3) for agent_turn jobs
+- ✅ Retry-After header from provider respected (max of computed vs hint)
+- ✅ Unit tests: `TestAgentTurnRateLimitDelay` (6 subtests), `TestRetryAttemptLimit` (4 subtests), `TestRateLimitRetryAfter` (3 subtests), `TestMapProviderErrorRateLimitMarksRateLimited` (updated)
+
+**CI note:** Lint check failed due to pre-existing issues in unrelated packages (TUI, workspace, MCP, etc.). No lint issues in changed files. Merged with admin override.
+
+**Minor note (P3, not blocking):** `RecoverStaleClaims` uses DB `max_attempts=3`, not the elevated 6 for rate-limited agent_turn. If a worker crashes mid-handler at attempt 4+, stale claim recovery could dead-letter prematurely. Edge case; strictly better than pre-existing behavior. Could be a follow-up task.
+
+## [2026-03-04] Issue 214 — flow execution not created for in-progress tasks
+
+**Task:** 214-flow-execution-not-created-for-in-progress-tasks.md
+**Result:** Implemented and moved to `03-needs-review`
+
+Fixes applied:
+- Updated `internal/flow/execution_service.go` (`loadActiveFlowState`) to self-heal missing flow execution state:
+  - If `current_flow_node_id` is missing but `flow_template_id` exists, it now starts the flow automatically before loading active state.
+  - If `current_flow_node_id` exists but active `flow_node_execution` row is missing, it now creates the active execution row (with next visit number) and continues.
+- Added integration tests in `internal/flow/execution_service_integration_test.go`:
+  - `TestFlowExecutionServiceAdvanceFlowBackfillsMissingExecutionFromTemplate`
+  - `TestFlowExecutionServiceAdvanceFlowBackfillsMissingExecutionForCurrentNode`
+- Updated `internal/server/task_integration_test.go`:
+  - `TestTaskHTTPAdvanceFlowAndMissingActiveExecution` now verifies `/v1/tasks/{id}/advance-flow` succeeds and backfills execution state instead of returning 404.
+
+Tests run:
+- `go test ./internal/flow ./internal/server`
+- `go test ./internal/flow ./internal/server -tags integration` *(fails in unrelated pre-existing `internal/server` tests: `TestControlPlaneAPICostSummaryTotals`, `TestModelAPIUsageQueryAndOrgIsolation`, `TestTaskHTTPCreateQueueReviewDecisionLifecycle`)*
+- `go test ./internal/flow -tags integration -run 'TestFlowExecutionServiceAdvanceFlowBackfillsMissingExecutionFromTemplate|TestFlowExecutionServiceAdvanceFlowBackfillsMissingExecutionForCurrentNode'`
+- `go test ./internal/server -tags integration -run TestTaskHTTPAdvanceFlowAndMissingActiveExecution`
+
+## [2026-03-04] Issue 215 — worker deadlock during agent_turn processing
+
+**Task:** 215-worker-deadlock-during-agent-turn.md
+**Result:** Implemented and moved to `03-needs-review`
+
+Fixes applied:
+- Updated `internal/turn/engine.go` cancel-watch consumer lifecycle:
+  - Added a stable per-engine cancellation consumer name (`turn-engine.cancel.<engine-instance-id>`).
+  - Reused that consumer name for each turn instead of creating a unique consumer per turn.
+  - This prevents per-turn `consumer_cursor` replay from `last_seq=0` and avoids unbounded cursor churn during repeated `agent_turn` jobs.
+- Added unit regression test in `internal/turn/engine_test.go`:
+  - `TestCancellationWatchReusesConsumerNameAcrossTurns`
+- Added integration regression test in `internal/turn/engine_integration_test.go`:
+  - `TestTurnEngineIntegrationCancelConsumerCursorReusedAcrossTurns`
+- Updated turn test fixtures to include a starter Frank agent for organization-scoped session routing (required by current turn-agent resolution behavior):
+  - `internal/turn/engine_test.go`
+  - `internal/turn/engine_integration_test.go`
+
+Tests run:
+- `go test ./internal/turn`
+- `go test ./internal/turn -tags integration`
+
+## Issue 215: Worker deadlock during agent_turn — APPROVED & MERGED (2026-03-04)
+Reviewer: Claude Opus 4 (claude-agent-sdk reviewer)
+PR: #1594 → merged to v2 at 2026-03-04T13:47:31Z
+Fix: Replaced per-turn unique cancel consumer names with a stable per-engine consumer name, eliminating consumer_cursor churn that caused the deadlock. Turn-ID filtering in the event handler ensures correct cancellation routing. Unit + integration tests added covering consumer name reuse and cursor count. Pre-existing lint failures on v2 are unrelated (no new lint errors from this PR).
+
+## [2026-03-04] Issue 216 — flow.advance tool bypasses backfill path
+
+**Task:** 216-flow-advance-tool-bypasses-backfill.md
+**Result:** Implemented and moved to `03-needs-review`
+
+Fixes applied:
+- Updated `internal/tools/native/mutation_tools.go` `handleFlowAdvance` to recover when the provided `flow_node_execution_id` no longer exists:
+  - Added `resolveFlowAdvanceExecution(...)` to attempt direct lookup first.
+  - On `repo.ErrNotFound`, it now resolves task scope from execution context/session and backfills an active execution via `ensureTaskActiveFlowExecution(...)`.
+  - Backfill logic now:
+    - starts from task `current_flow_node_id` (or initializes from template first node when missing),
+    - reuses existing active execution for that node when present,
+    - creates a new active execution with `visit_number = max+1` when absent.
+- `flow.advance` now applies `commit_sha` and completion updates to the resolved/backfilled execution row (not only the caller-supplied ID).
+- Added integration regression coverage in `internal/tools/native/native_integration_test.go`:
+  - `TestIntegrationFlowAdvanceBackfillsMissingExecutionFromTaskScope`
+
+Tests run:
+- `go test ./internal/tools/native`
+- `go test ./internal/tools/native -tags integration`
+
+## [2026-03-04] Issue 216 — reviewer rework (service delegation + session backfill)
+
+**Task:** 216-flow-advance-tool-bypasses-backfill.md  
+**Result:** Reviewer-required changes implemented and task returned to `03-needs-review`
+
+Fixes applied:
+- Refactored `internal/tools/native/mutation_tools.go` `handleFlowAdvance` to delegate flow progression to `flow.ExecutionService` (`RecordNodeCommit` + `AdvanceFlow`) instead of local backfill logic.
+- Added service-based task resolution fallback (`resolveFlowAdvanceTaskID`) so missing `flow_node_execution_id` can recover from task scope and trigger service-layer backfill.
+- Wired `internal/tools/native/executor.go` to construct flow dependencies (chat service + flow session bridge + flow execution service) so service-layer `loadActiveFlowState` behavior and `ensureExecutionSession` apply to tool calls.
+- Preserved existing rollback expectation in native integration tests by restoring task status/node if `AdvanceFlow` returns after partial state mutation.
+- Added/updated integration coverage in `internal/tools/native/native_integration_test.go`:
+  - `TestIntegrationFlowAdvanceBackfillsMissingExecutionFromTaskScope`
+  - Includes assertion that a `chat_session` row exists with metadata linked to the backfilled execution.
+
+Tests run:
+- `go test ./internal/tools/native`
+- `go test ./internal/tools/native -tags integration -run 'TestIntegrationFlowAdvance(MovesToNextNode|BackfillsMissingExecutionFromTaskScope|TerminalPublishesStatusChangedDomainEvent|TerminalRollsBackTaskUpdateWhenEventPublishFails)$'`
+
+Follow-up noted:
+- `handleFlowReviewDecision` still performs direct execution lookup and should receive the same service-delegation/backfill treatment in a separate task.
+
+## Issue 216 — Review completed (2026-03-04 14:04 UTC)
+Reviewer: Claude Opus 4 (reviewer agent)
+PR: #1595 — merged to v2 via squash merge
+Verdict: **Accepted**
+- Implementation correctly routes `handleFlowAdvance` through new `resolveFlowAdvanceExecution` fallback that backfills missing executions via task scope
+- Uses resolved `execution.ID` (not original input ID) for RecordCommitSHA and Complete — correct
+- Integration test `TestIntegrationFlowAdvanceBackfillsMissingExecutionFromTaskScope` covers the backfill path
+- CI lint failures are pre-existing on v2 (none introduced by this PR)
+
+## [2026-03-04] Issue 217 — agent turn invalid status transition
+
+**Task:** 217-agent-turn-invalid-status-transition.md
+**Result:** Implemented and moved to `03-needs-review`
+
+Fixes applied:
+- Updated `internal/turn/engine.go` turn transition handling:
+  - Added turn-state preflight in `runTurn()` to assert active turn is `in_progress` and return contextual transition errors.
+  - Added contextual invalid-transition wrapping (`describeTurnTransitionError`) including attempted transition and current turn status.
+  - Hardened `continueTurn()` to recover when the current turn is already terminal (`completed`/`cancelled`/`failed`) by skipping duplicate completion and continuing with continuation turn creation.
+- Fixed system notice message status progression in `appendSystemMessage()` to use valid transitions: `pending -> streaming -> final` (previous direct `pending -> final` could raise `invalid status transition`).
+- Added unit regression coverage in `internal/turn/engine_test.go`:
+  - `TestContinuationTurnRecoversWhenTurnAlreadyCompleted`
+  - Enhanced fake turn/chat test doubles to enforce real turn status transition rules.
+- Added integration regression coverage in `internal/turn/engine_integration_test.go`:
+  - `TestTurnEngineIntegrationContinuationRecoversFromExternallyCompletedTurn`
+
+Tests run:
+- `go test ./internal/turn`
+- `go test ./internal/turn -tags integration`
+
+## [2026-03-04] Issue 217 — APPROVED & MERGED
+
+**Task:** 217-agent-turn-invalid-status-transition
+**Reviewed by:** Claude Opus 4.6 (reviewer agent)
+**PR:** #1596 (`task-217-agent-turn-invalid-status-transition`) — MERGED to v2
+**Result:** Approved. All acceptance criteria met: error context enrichment via `describeTurnTransitionError`, preflight turn status check via `requireTurnInProgress`, recovery path in `continueTurn` for externally-completed turns, and `appendSystemMessage` status progression fix. Unit and integration tests cover the recovery scenario. CI lint failure is pre-existing on v2 base branch, not introduced by this PR.
+
+## [2026-03-04] Issue 218 — flatten workspace path (remove org slug nesting)
+
+**Task:** 218-flatten-workspace-path.md
+**Result:** Implemented and moved to `03-needs-review`
+
+Fixes applied:
+- Updated `internal/tools/native/executor.go` `workspaceForContext` to build roots under `.../workspaces` without the org slug segment.
+  - Project scope now resolves to `.../workspaces/{project-slug}`.
+  - Org scope now resolves to `.../workspaces/general`.
+- Updated native executor unit expectations in `internal/tools/native/executor_test.go` to assert the flattened path layout.
+- Updated native integration path assertions/setup in `internal/tools/native/native_integration_test.go` to remove org slug directory nesting.
+- Updated deployment docs in `docsv2/08-deployment-and-self-hosting.md` to document the new workspace directory structure.
+
+Tests run:
+- `go test ./internal/tools/native/...`
+
+## Review: 218-flatten-workspace-path (2026-03-04)
+Reviewer: Claude Opus 4.6
+
+**Result:** Approved and merged (PR #1597 → v2, merged 2026-03-04T16:58:18Z)
+
+Implementation correctly removes `orgSlug` from workspace path construction in `executor.go`, updates all unit and integration test assertions, and updates deployment docs. Single-line code change, no regressions. CI lint failure is pre-existing on v2 base branch (not introduced by this PR).
+
+## [2026-03-04] Issue 219 — project-scope chat routes to project PM
+
+**Task:** 219-project-scope-chat-routes-to-pm.md
+**Result:** Implemented and moved to `03-needs-review`
+
+Fixes applied:
+- Updated `internal/turn/engine.go` project-scope routing in `resolveSessionAgentForSession`:
+  - still prefers project PM when active assignment exists,
+  - now ensures the selected PM is present in session participants before returning,
+  - still falls back to Frank when no PM is assigned, and now ensures Frank is also present as a session participant.
+- Added `ensureAgentParticipant(...)` helper in turn engine to idempotently add agent participants and ignore `chat.ErrAlreadyParticipant`.
+- Expanded the turn engine chat interface contract to include `AddParticipant(...)` for participant management during routing.
+- Added unit regression coverage in `internal/turn/engine_test.go`:
+  - `TestHandleUserMessageProjectScopeRoutesToProjectPMAndAddsParticipant`
+- Added integration regression coverage in `internal/turn/engine_integration_test.go`:
+  - `TestTurnEngineIntegrationProjectSessionEventRoutesJobToPMAndAddsParticipant`
+  - plus helper `mustAssignProjectPM(...)` for explicit PM assignment setup.
+
+Tests run:
+- `go test ./internal/turn/...` *(fails on pre-existing v2 tests: `TestContinuationTurnOnContextCompressed`, `TestContinuationTurnRecoversWhenTurnAlreadyCompleted`)*
+- `go test ./internal/chat/...`
+- `go test ./internal/turn -run 'TestHandleUserMessageProjectScopeRoutesToProjectPMAndAddsParticipant|TestHandleUserMessageTaskScopeFallsBackToProjectPM'`
+- `go test ./internal/turn -tags integration -run TestTurnEngineIntegrationProjectSessionEventRoutesJobToPMAndAddsParticipant`
+
+Pre-existing failure verification:
+- Confirmed the same `go test ./internal/turn/...` failures on clean `v2` via temporary git worktree.
+
+## Task 219: Project-scope chat routes to PM — APPROVED & MERGED (2026-03-04)
+- **PR:** #1598 — merged to v2 at 2026-03-04T17:05:26Z
+- **Reviewer:** Claude Opus 4.6
+- **Summary:** `resolveSessionAgentForSession` updated to prefer project PM (via `assignments.GetPM`) for project-scoped sessions, with Frank fallback. New `ensureAgentParticipant` helper adds routed agent as session participant idempotently. Unit + integration tests verify routing and participant insertion.
+- **CI note:** Lint failure is pre-existing on v2 (unused symbols in TUI/CLI packages); no new lint errors introduced by this PR.

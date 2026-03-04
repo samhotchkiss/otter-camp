@@ -37,6 +37,8 @@ const (
 	settingsInputSlug
 	settingsInputValue
 	settingsConfirmDelete
+	settingsConnName   // entering display name for new connection
+	settingsConnSecret // entering secret slug for new connection's api_key_ref
 )
 
 // settingsItem represents a single selectable row in the settings view.
@@ -1978,7 +1980,8 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// intercept them. Without this, characters like '0','1','3',':','/' in
 		// secret values are stolen by global handlers.
 		if m.focus == MainPanel && m.workspace.mainView == ViewSettings &&
-			(m.settingsEditState == settingsInputSlug || m.settingsEditState == settingsInputValue) {
+			(m.settingsEditState == settingsInputSlug || m.settingsEditState == settingsInputValue ||
+				m.settingsEditState == settingsConnName || m.settingsEditState == settingsConnSecret) {
 			if handled, cmd := m.handleSettingsKey(key); handled {
 				return m, cmd
 			}
@@ -7755,7 +7758,7 @@ func (m *Model) handleSettingsKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		return handled, cmd
-	case settingsInputSlug, settingsInputValue:
+	case settingsInputSlug, settingsInputValue, settingsConnName, settingsConnSecret:
 		handled, cmd := m.handleSettingsInputKey(key)
 		if !handled {
 			return true, nil
@@ -7849,6 +7852,31 @@ func (m *Model) handleSettingsBrowseKey(key tea.KeyMsg) (bool, tea.Cmd) {
 			case 'r':
 				m.statusMessage = "Refreshing settings…"
 				return true, loadSettingsCmd(m.runtimeHints)
+			case 'c':
+				// New connection — resolve provider ID from cursor context.
+				providerID := ""
+				if len(items) > 0 {
+					item := items[m.settingsCursor]
+					if item.Kind == "connection" {
+						providerID = item.ProviderID
+					}
+				}
+				if providerID == "" && m.workspace.settings != nil {
+					// Default to first provider if cursor isn't on a connection.
+					for _, p := range m.workspace.settings.Providers {
+						providerID = p.ID
+						break
+					}
+				}
+				if providerID == "" {
+					m.statusMessage = "No provider available."
+					return true, nil
+				}
+				m.settingsEditCtx = providerID
+				m.settingsEditState = settingsConnName
+				m.settingsInput = ""
+				m.statusMessage = "Connection display name:"
+				return true, nil
 			}
 		}
 	}
@@ -8039,6 +8067,42 @@ func (m *Model) handleSettingsInputKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		if input == "" {
 			m.statusMessage = "Input cannot be empty."
 			return true, nil
+		}
+		if m.settingsEditState == settingsConnName {
+			// Store display name in editID, advance to secret slug input.
+			m.settingsEditID = input
+			m.settingsEditState = settingsConnSecret
+			m.settingsInput = ""
+			m.statusMessage = "Secret slug for API key:"
+			return true, nil
+		}
+		if m.settingsEditState == settingsConnSecret {
+			// Create the connection.
+			displayName := m.settingsEditID
+			secretSlug := input
+			providerID := m.settingsEditCtx
+			// Auto-assign failover priority: 100 * (existing connection count + 1).
+			priority := 100
+			if m.workspace.settings != nil {
+				for _, p := range m.workspace.settings.Providers {
+					if p.ID == providerID {
+						priority = (len(p.Connections) + 1) * 100
+						break
+					}
+				}
+			}
+			m.settingsEditState = settingsBrowse
+			m.settingsInput = ""
+			m.settingsEditID = ""
+			m.settingsEditCtx = ""
+			m.statusMessage = "Creating connection…"
+			if m.runtimeHints.CreateConnection == nil {
+				m.statusMessage = "CreateConnection not wired."
+				return true, nil
+			}
+			return true, settingsActionCmd(m.runtimeHints, func(ctx context.Context) error {
+				return m.runtimeHints.CreateConnection(ctx, providerID, displayName, secretSlug, priority)
+			})
 		}
 		if m.settingsEditState == settingsInputSlug {
 			// If editCtx has a provider ID, this slug is for subscription auth, not secret creation.
