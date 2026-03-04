@@ -521,7 +521,7 @@ func (e *NativeToolExecutor) workspaceForContext(ctx context.Context) (SessionWo
 		if slugErr != nil {
 			return SessionWorkDir{}, workspaceScope{}, slugErr
 		}
-		base := filepath.Join(e.dataDir, "workspaces", orgSlug)
+		base := filepath.Join(e.dataDir, "workspaces")
 		if projectSlug != "" {
 			cacheKey = "org:" + orgSlug + ":project:" + projectSlug
 			root = filepath.Join(base, projectSlug)

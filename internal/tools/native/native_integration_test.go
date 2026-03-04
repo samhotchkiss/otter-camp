@@ -170,16 +170,12 @@ func TestIntegrationFileWriteUsesSlugWorkspacePath(t *testing.T) {
 		t.Fatalf("file.write: %v", err)
 	}
 
-	orgRecord, err := repo.NewOrgRepo(pool).GetByID(context.Background(), orgID)
-	if err != nil {
-		t.Fatalf("load org: %v", err)
-	}
 	projectRecord, err := repo.NewProjectRepo(pool).GetByID(context.Background(), project.ID)
 	if err != nil {
 		t.Fatalf("load project: %v", err)
 	}
 
-	expectedPath := filepath.Join(dataDir, "workspaces", orgRecord.Slug, projectRecord.Slug, "notes", "plan.md")
+	expectedPath := filepath.Join(dataDir, "workspaces", projectRecord.Slug, "notes", "plan.md")
 	if _, err := os.Stat(expectedPath); err != nil {
 		t.Fatalf("expected file at slug workspace path %q: %v", expectedPath, err)
 	}
@@ -196,16 +192,12 @@ func TestIntegrationFileReadUsesSlugWorkspacePath(t *testing.T) {
 	session := testutil.MakeSession(t, pool, orgID, "project", project.ID)
 	dataDir := t.TempDir()
 
-	orgRecord, err := repo.NewOrgRepo(pool).GetByID(context.Background(), orgID)
-	if err != nil {
-		t.Fatalf("load org: %v", err)
-	}
 	projectRecord, err := repo.NewProjectRepo(pool).GetByID(context.Background(), project.ID)
 	if err != nil {
 		t.Fatalf("load project: %v", err)
 	}
 
-	workspacePath := filepath.Join(dataDir, "workspaces", orgRecord.Slug, projectRecord.Slug)
+	workspacePath := filepath.Join(dataDir, "workspaces", projectRecord.Slug)
 	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
 		t.Fatalf("mkdir workspace path: %v", err)
 	}

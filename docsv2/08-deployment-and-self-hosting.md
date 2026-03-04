@@ -447,9 +447,8 @@ Workspace directory structure:
 ```
 ~/otter-data/
   workspaces/
-    {org-slug}/
-      general/                  # org-level workspace
-      {project-slug}/           # project workspace (shared by all tasks in the project)
+    general/                    # org-level workspace
+    {project-slug}/             # project workspace (shared by all tasks in the project)
 ```
 
 **Important:** UUIDs must never appear in user-visible filesystem paths. All directories use slugs.
