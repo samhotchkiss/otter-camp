@@ -283,6 +283,9 @@ Critical rules:
 - Also append a concise summary to ${SHARED_ISSUES_DIR}/notes.md.
 - Use non-interactive GitHub CLI checks/actions (gh pr view, gh pr checks, gh pr merge).
 - Never run gh pr create or interactive auth/login commands.
+- Never inline multi-line markdown in shell one-liners.
+  - For any long markdown payload, write to a file with `cat <<'EOF' > <file>` and pass the file path to CLI flags.
+  - For notes appends, use `cat <<'EOF' >> ${SHARED_ISSUES_DIR}/notes.md`.
 - Append blocker details to ${SHARED_ISSUES_DIR}/notes.md.
 - API routes are /v1/* except health (/health*) and test reset (POST /test/reset).
 - Headless MCP policy: claude.ai MCP servers are disabled by default for reviewer runs.

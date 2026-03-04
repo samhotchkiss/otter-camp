@@ -359,6 +359,15 @@ Command path guardrails:
 - Keep failure reporting explicit with separate buckets:
   - `lookup_miss`: path/discovery misses
   - `build_or_test_failure`: actual regressions
+
+Shell quoting guardrails:
+- Never inline markdown payloads in quoted shell one-liners for PRs or notes.
+- For PR descriptions, always use file-backed payloads:
+  - `cat <<'EOF' > /tmp/pr-body.md` ... `EOF`
+  - `gh pr create --body-file /tmp/pr-body.md`
+- For notes appends, always use a single-quoted heredoc delimiter:
+  - `cat <<'EOF' >> ${SHARED_ISSUES_DIR}/notes.md` ... `EOF`
+- If any command fails due quoting/substitution, rerun with the safe file/heredoc template.
 PROMPT
 
 RUN_NAME="run-$(date '+%Y%m%d-%H%M%S')"

@@ -55,6 +55,15 @@ Reviewer-required changes handling:
 - When all required items are resolved, remove the top-level `## Reviewer Required Changes` block before moving the file back to `03-needs-review`.
 - Preserve reviewer feedback and resolution evidence in `issues/notes.md` (include task file name, fix summary, and test commands run).
 
+Shell quoting guardrails:
+- Never pass multi-line markdown payloads inline to shell flags like `--body "..."`.
+- For PR bodies, always write markdown to a file first and use `gh pr create --body-file <file>` (or `gh pr edit --body-file <file>`).
+- For notes append operations, use a single-quoted heredoc delimiter to disable interpolation:
+  - `cat <<'EOF' >> issues/notes.md`
+  - `<literal markdown>`
+  - `EOF`
+- Treat inline markdown/backtick quoting mistakes as avoidable command-construction failures; rerun with the safe file/heredoc template.
+
 Routing guardrails:
 - Primary API routes are under `/v1/*`.
 - Health routes are `/health/live`, `/health/ready` (aliases: `/health`, `/ready`).
