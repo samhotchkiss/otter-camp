@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -239,6 +240,58 @@ func TestTurnEngineIntegrationMaxToolCallsSetsStopReason(t *testing.T) {
 	last := turns[len(turns)-1]
 	if last.StopReason == nil || *last.StopReason != stopReasonMaxToolCalls {
 		t.Fatalf("turn stop_reason = %v, want %q", last.StopReason, stopReasonMaxToolCalls)
+	}
+}
+
+func TestTurnEngineIntegrationContinuationRecoversFromExternallyCompletedTurn(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+
+	assembler := &fakeAssembler{
+		results: []assembleResult{
+			{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+			{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
+		},
+	}
+	var completeErr error
+	var completeOnce sync.Once
+	assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		if call != 1 {
+			return
+		}
+		completeOnce.Do(func() {
+			completeErr = fixture.chatService.CompleteTurn(context.Background(), input.TurnID)
+		})
+	}
+	fixture.engine.assembler = assembler
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			return ModelResponse{Content: "summary"}, nil
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if completeErr != nil {
+		t.Fatalf("external CompleteTurn err = %v, want nil", completeErr)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) < 2 {
+		t.Fatalf("turn count = %d, want >= 2", len(turns))
+	}
+	if turns[len(turns)-1].Status != "completed" {
+		t.Fatalf("last turn status = %s, want completed", turns[len(turns)-1].Status)
 	}
 }
 
