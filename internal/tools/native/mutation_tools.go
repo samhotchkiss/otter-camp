@@ -1226,10 +1226,7 @@ func (e *NativeToolExecutor) handleFlowAdvance(ctx context.Context, input map[st
 		}
 		return map[string]any{"error": "flow_repository_unavailable"}, nil
 	}
-	flowNodeExecutionID, ok := readUUID(input, "flow_node_execution_id")
-	if !ok || flowNodeExecutionID == uuid.Nil {
-		return map[string]any{"error": "flow_node_execution_id_required"}, nil
-	}
+	flowNodeExecutionID, _ := readUUID(input, "flow_node_execution_id")
 	taskID, err := e.resolveFlowAdvanceTaskID(ctx, flowNodeExecutionID)
 	if err != nil {
 		return nil, err
