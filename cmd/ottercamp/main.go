@@ -534,7 +534,11 @@ func runMigrate() int {
 	}
 	defer pool.Close()
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logLevel := slog.LevelInfo
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("OTTERCAMP_LOG_LEVEL")), "debug") {
+		logLevel = slog.LevelDebug
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	runner, err := migrate.NewRunnerFromEnv(pool.Raw(), logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migration setup error: %v\n", err)

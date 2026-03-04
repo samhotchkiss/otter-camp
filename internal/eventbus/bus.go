@@ -210,6 +210,7 @@ func (b *Bus) runConsumer(ctx context.Context, consumerName string, orgID *uuid.
 		b.logger.Error("failed to initialize consumer cursor", "consumer_name", consumerName, "error", err)
 		return
 	}
+	b.logger.Info("consumer started", "consumer_name", consumerName, "last_seq", lastSeq)
 
 	notifyCh := make(chan struct{}, 1)
 	go b.listenNotifications(ctx, notifyCh)

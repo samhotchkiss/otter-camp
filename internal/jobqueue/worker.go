@@ -271,6 +271,52 @@ func (w *Worker) Enqueue(ctx context.Context, tx pgx.Tx, jobType string, priorit
 	return jobID, nil
 }
 
+// PurgeStaleAgentTurnJobs dead-letters pending agent_turn jobs whose sessions
+// are closed or archived. This prevents wasting LLM calls on stale turns after
+// a worker restart.
+func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
+	// Condition 1: session is closed/archived
+	ct1, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    last_error = 'purged at worker startup: session closed',
+		    updated_at = now()
+		WHERE jq.status = 'pending'
+		  AND jq.job_type = 'agent_turn'
+		  AND EXISTS (
+		    SELECT 1 FROM chat_session cs
+		    WHERE cs.id = (jq.payload->>'session_id')::uuid
+		      AND cs.status IN ('closed', 'archived')
+		  )
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("purge stale agent_turn jobs (closed sessions): %w", err)
+	}
+
+	// Condition 2: the triggering message was injected by supervisor recovery.
+	// These agent_turn jobs were created as part of supervisor recovery cascade
+	// and will just waste LLM calls repeating "resume task" on stale sessions.
+	ct2, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    last_error = 'purged at worker startup: supervisor recovery message',
+		    updated_at = now()
+		WHERE jq.status = 'pending'
+		  AND jq.job_type = 'agent_turn'
+		  AND EXISTS (
+		    SELECT 1 FROM chat_message cm
+		    WHERE cm.id = (jq.payload->>'message_id')::uuid
+		      AND cm.metadata->>'source' = 'supervisor'
+		  )
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("purge stale agent_turn jobs (supervisor messages): %w", err)
+	}
+
+	total := ct1.RowsAffected() + ct2.RowsAffected()
+	return total, nil
+}
+
 func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
 	staleBefore := w.clock.Now().UTC().Add(-w.staleClaimThreshold)
 	ct, err := w.pool.Exec(ctx, `
@@ -295,15 +341,24 @@ func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
 
 func (w *Worker) processAvailableJobs(ctx context.Context) error {
 	for {
+		w.logger.Debug("job queue: claiming pending jobs")
 		jobs, err := w.claimPending(ctx)
 		if err != nil {
+			w.logger.Error("job queue: claim failed", "error", err)
 			return err
 		}
 		if len(jobs) == 0 {
+			w.logger.Debug("job queue: no pending jobs")
 			return nil
 		}
+		types := make([]string, len(jobs))
+		for i, j := range jobs {
+			types[i] = j.JobType
+		}
+		w.logger.Info("job queue: claimed", "count", len(jobs), "types", strings.Join(types, ","))
 
 		for _, job := range jobs {
+			w.logger.Info("job queue: executing", "job_id", job.ID, "job_type", job.JobType, "attempts", job.Attempts)
 			if err := w.executeClaimedJob(ctx, job); err != nil {
 				w.logger.Error("failed to execute claimed job", "job_id", job.ID, "job_type", job.JobType, "error", err)
 			}

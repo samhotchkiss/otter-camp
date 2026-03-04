@@ -50,6 +50,7 @@ type deadLetterNotifier interface {
 }
 
 type supervisorChatService interface {
+	GetSession(ctx context.Context, sessionID uuid.UUID) (*chat.ChatSession, error)
 	AddParticipant(ctx context.Context, sessionID uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error)
 	AppendMessage(ctx context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error)
 }
@@ -438,6 +439,27 @@ func (s *Supervisor) detectExpiredBrowserHandoffs(ctx context.Context) error {
 }
 
 func (s *Supervisor) recoverRun(ctx context.Context, runRecord Run, reason string) error {
+	// Skip recovery for runs whose session is closed or archived — there's
+	// nothing useful to recover and creating new turns wastes LLM calls.
+	if s.chatService != nil && runRecord.SessionID != nil && *runRecord.SessionID != uuid.Nil {
+		if session, err := s.chatService.GetSession(ctx, *runRecord.SessionID); err == nil {
+			if strings.EqualFold(session.Status, "closed") || strings.EqualFold(session.Status, "archived") {
+				s.logger.Info("supervisor: skipping recovery for closed session", "run_id", runRecord.ID, "session_id", *runRecord.SessionID)
+				return nil
+			}
+		}
+	}
+
+	// Never create a recovery run for a run that is itself a supervisor
+	// recovery. This prevents infinite cascade: supervisor creates recovery
+	// run B for stuck run A, then B gets stuck, supervisor creates C, etc.
+	// Instead, just fail the stuck recovery run — the original task can be
+	// retried via the normal blocker/escalation flow.
+	if strings.EqualFold(runRecord.TriggerType, "supervisor") {
+		s.logger.Info("supervisor: skipping re-recovery of supervisor run", "run_id", runRecord.ID)
+		return nil
+	}
+
 	if runRecord.TaskID != nil && runRecord.FlowNodeID != nil {
 		deadLetterCount, err := s.runs.CountDeadLetterByTaskFlowNode(ctx, *runRecord.TaskID, *runRecord.FlowNodeID)
 		if err != nil {

@@ -570,6 +570,10 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	if err != nil {
 		return err
 	}
+	if strings.EqualFold(session.Status, "closed") || strings.EqualFold(session.Status, "archived") {
+		e.logger.Info("skipping agent turn for closed session", "session_id", sessionID)
+		return nil
+	}
 	message, err := e.messages.GetByID(ctx, messageID)
 	if err != nil {
 		return err

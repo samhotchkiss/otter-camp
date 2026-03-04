@@ -506,6 +506,15 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	supervisor.Start(runCtx)
 	defer supervisor.Stop()
 
+	// Purge stale agent_turn jobs for closed/archived sessions before
+	// starting the job worker. This prevents wasting LLM calls on old turns
+	// after a restart.
+	if purged, purgeErr := jqWorker.PurgeStaleAgentTurnJobs(runCtx); purgeErr != nil {
+		logger.Warn("failed to purge stale agent_turn jobs", "error", purgeErr)
+	} else if purged > 0 {
+		logger.Info("purged stale agent_turn jobs", "count", purged)
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- jqWorker.Start(runCtx)
