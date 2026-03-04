@@ -55,3 +55,18 @@ Interpretation:
 - Runner prompts require safe non-blocking exploratory search forms (`|| true`) where appropriate.
 - Runner emits end-of-run `command-outcome-summary ...` with taxonomy counters.
 - Exploratory misses are separated from hard blockers in structured run output.
+
+## GitHub Retry Hardening (Task 232)
+- Added shared retry wrapper: `scripts/lib/github-retry.sh`
+- Supported wrapped commands:
+  - `scripts/lib/github-retry.sh git push ...`
+  - `scripts/lib/github-retry.sh gh pr create ...`
+  - `scripts/lib/github-retry.sh gh pr edit ...`
+- Retry behavior:
+  - Bounded exponential backoff + jitter for transient classes (`transient_http_5xx`, `transient_network`)
+  - Fail-fast for non-retryable classes (`permanent_auth_or_permission`, `permanent_invalid_args`)
+- Structured retry logging format (attempt counts + terminal reason):
+  - `github_retry attempt=1/5 action=retry classification=transient_http_5xx backoff_seconds=... exit_code=...`
+  - `github_retry attempt=3/5 action=success terminal_reason=success`
+  - `github_retry attempt=1/5 action=fail_fast classification=permanent_auth_or_permission terminal_reason=non_retryable exit_code=...`
+- Regression test: `scripts/lib/github-retry-test.sh` (pass)

@@ -14,6 +14,7 @@ REVIEWER_REPO_DIR="${AUTOWORK_REVIEWER_REPO_DIR:-${STATE_DIR}/repos/reviewer}"
 
 CODEX_RUNNER="${AUTOWORK_CODEX_RUNNER:-${REPO_DIR}/scripts/codex-autowork.sh}"
 REVIEW_RUNNER="${AUTOWORK_REVIEW_RUNNER:-${REPO_DIR}/scripts/claude-review-autowork.sh}"
+GITHUB_RETRY_HELPER="${AUTOWORK_GITHUB_RETRY_HELPER:-${REPO_DIR}/scripts/lib/github-retry.sh}"
 
 CODEX_MARKER="${STATE_DIR}/autowork-last-message.txt"
 REVIEW_MARKER="${ISSUES_DIR}/reviewer-instructions.md"
@@ -760,6 +761,9 @@ main() {
   if [[ ! -d "${ISSUES_DIR}" ]]; then
     log "issues directory missing: ${ISSUES_DIR}"
     exit 1
+  fi
+  if [[ ! -x "${GITHUB_RETRY_HELPER}" ]]; then
+    log "github retry helper missing or not executable: ${GITHUB_RETRY_HELPER}"
   fi
 
   log "run started (dry_run=${DRY_RUN}, base_branch=${BASE_BRANCH}, enforce_dep_graph=${ENFORCE_DEP_GRAPH}, stale_builder=${STALE_BUILDER_SECONDS}s, stale_reviewer=${STALE_REVIEWER_SECONDS}s, stale_in_review=${STALE_IN_REVIEW_SECONDS}s, stale_in_progress=${STALE_IN_PROGRESS_SECONDS}s, stale_needs_review=${STALE_NEEDS_REVIEW_SECONDS}s)"

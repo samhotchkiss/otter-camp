@@ -390,6 +390,10 @@ Critical rules:
   - `infra_failure`: CLI/auth/network/runtime failures
 - For exploratory search/discovery commands that may miss, use non-blocking form (`|| true`) where safe.
 - Never suppress non-zero exits for required verification commands (tests/build/checks).
+- For `git push` and `gh pr edit`, use retry wrapper:
+  - `scripts/lib/github-retry.sh git push <remote> <refspec>`
+  - `scripts/lib/github-retry.sh gh pr edit <args...>`
+- Wrapper output includes retry attempt count and terminal reason; treat `action=fail_fast` as non-retryable.
 - Append blocker details to ${SHARED_ISSUES_DIR}/notes.md.
 - API routes are /v1/* except health (/health*) and test reset (POST /test/reset).
 - Headless MCP policy: claude.ai MCP servers are disabled by default for reviewer runs.
