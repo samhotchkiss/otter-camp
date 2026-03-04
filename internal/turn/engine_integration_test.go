@@ -70,6 +70,44 @@ func TestTurnEngineIntegrationFullTurnCycle(t *testing.T) {
 	}
 }
 
+func TestTurnEngineIntegrationCancelConsumerCursorReusedAcrossTurns(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage first turn: %v", err)
+	}
+	authorType := "human_user"
+	secondMessage, err := fixture.chatService.AppendMessage(context.Background(), chat.AppendMessageInput{
+		SessionID:  fixture.session.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "second",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage second user: %v", err)
+	}
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, secondMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage second turn: %v", err)
+	}
+
+	var count int
+	if err := fixture.pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM consumer_cursor
+		WHERE organization_id = $1
+		  AND consumer_name LIKE 'turn-engine.cancel.%'
+	`, fixture.org.ID).Scan(&count); err != nil {
+		t.Fatalf("count turn cancel cursors: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("turn cancel consumer_cursor rows = %d, want 1", count)
+	}
+}
+
 func TestTurnEngineIntegrationTaskSessionEventRoutesJobToAssignedAgent(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -396,7 +434,7 @@ func newIntegrationFixture(t *testing.T) *integrationFixture {
 
 	org := mustCreateOrg(t, ctx, pool)
 	user := mustCreateUser(t, ctx, pool, org.ID)
-	agent := mustCreateAgent(t, ctx, pool, org.ID)
+	agent := mustCreateStarterFrank(t, ctx, pool, org.ID)
 	provider := mustCreateProvider(t, ctx, pool)
 	profile := mustCreateProfile(t, ctx, pool, org.ID, provider.ID)
 

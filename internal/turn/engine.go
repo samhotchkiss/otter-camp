@@ -38,6 +38,7 @@ const (
 	maxContinuationTurnDepth    = 3
 	defaultTurnConsumerName     = "turn-engine.user-message"
 	defaultReactionConsumerName = "turn-engine.reactions"
+	defaultCancelConsumerPrefix = "turn-engine.cancel"
 	stopReasonMaxToolCalls      = "max_tool_calls"
 	stopReasonMaxDuration       = "max_duration"
 )
@@ -304,6 +305,7 @@ type TurnEngine struct {
 	now                   func() time.Time
 	sleep                 func(context.Context, time.Duration) error
 	logger                *slog.Logger
+	cancelConsumerName    string
 }
 
 type turnRuntime struct {
@@ -446,6 +448,7 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 		now:                   opts.Now,
 		sleep:                 opts.Sleep,
 		logger:                opts.Logger,
+		cancelConsumerName:    defaultCancelConsumerPrefix + "." + uuid.NewString(),
 	}, nil
 }
 
@@ -1365,7 +1368,7 @@ func (e *TurnEngine) handleCancellation(ctx context.Context, rt *turnRuntime) er
 
 func (e *TurnEngine) watchTurnCancellation(ctx context.Context, rt *turnRuntime) (context.Context, func()) {
 	cancelCtx, cancel := context.WithCancel(ctx)
-	consumer := "turn-engine.cancel." + rt.turn.ID.String() + "." + uuid.NewString()
+	consumer := e.cancelConsumerName
 	sub := e.events.Subscribe(consumer, &rt.session.OrganizationID, func(_ context.Context, event eventbus.DomainEvent) error {
 		if event.EventType != "chat.turn.cancelled" {
 			return nil
