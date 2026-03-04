@@ -486,12 +486,53 @@ RUN_LOG="${RUN_LOG:?RUN_LOG is required}"
 RUN_JSON_LOG="${RUN_JSON_LOG:?RUN_JSON_LOG is required}"
 STREAM_LOG="${STREAM_LOG:?STREAM_LOG is required}"
 
+# shellcheck source=scripts/lib/run-jsonl.sh
+source "${WORKTREE_DIR}/scripts/lib/run-jsonl.sh"
 # shellcheck source=scripts/lib/command-outcome.sh
 source "${WORKTREE_DIR}/scripts/lib/command-outcome.sh"
 
-printf '[%s] autowork run started\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
-touch "${RUN_JSON_LOG}"
+status=1
+terminal_reason="runner_exit_without_terminal_event"
 
+append_terminal_marker_if_needed() {
+  local action
+  action="$(
+    run_jsonl_append_interrupted_terminal \
+      "${RUN_JSON_LOG}" \
+      "${terminal_reason}" \
+      "codex-autowork-runner" \
+      "${status}" \
+      "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  )"
+  if [[ "${action}" == "appended" ]]; then
+    printf '[%s] synthesized terminal run event (reason=%s exit=%s)\n' \
+      "$(date '+%Y-%m-%d %H:%M:%S %Z')" "${terminal_reason}" "${status}" \
+      | tee -a "${RUN_LOG}" "${STREAM_LOG}" >/dev/null
+  fi
+}
+
+on_exit() {
+  append_terminal_marker_if_needed
+}
+
+on_signal() {
+  local signal_name="$1"
+  terminal_reason="runner_signal_${signal_name}"
+  status=130
+  case "${signal_name}" in
+    TERM) status=143 ;;
+    HUP) status=129 ;;
+  esac
+  exit "${status}"
+}
+
+trap on_exit EXIT
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
+trap 'on_signal HUP' HUP
+
+touch "${RUN_JSON_LOG}"
+printf '[%s] autowork run started\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
 set +e
 if command -v jq >/dev/null 2>&1; then
   codex exec \
@@ -533,6 +574,11 @@ set -e
 
 command_summary="$(summarize_run_jsonl_command_outcomes "${RUN_JSON_LOG}")"
 printf '[%s] command-outcome-summary %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "${command_summary}" | tee -a "${RUN_LOG}" "${STREAM_LOG}"
+if (( status == 0 )); then
+  terminal_reason="runner_exit_without_terminal_event"
+else
+  terminal_reason="codex_exit_${status}_without_terminal_event"
+fi
 
 printf '[%s] autowork run finished (exit=%s)\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "${status}"
 exit "${status}"
