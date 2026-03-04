@@ -4494,6 +4494,23 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		return true, nil
 	case tea.KeyBackspace:
+		if key.Alt {
+			// Option+Backspace: delete last word (same as Ctrl-W).
+			if len(m.chatInput) > 0 {
+				trimmed := strings.TrimRight(m.chatInput, " \t\n")
+				lastSpace := strings.LastIndexAny(trimmed, " \t\n")
+				if lastSpace >= 0 {
+					m.chatInput = trimmed[:lastSpace+1]
+				} else {
+					m.chatInput = ""
+				}
+				m.chatHistoryIndex = -1
+				if m.editingQueued && strings.TrimSpace(m.chatInput) == "" {
+					m.editingQueued = false
+				}
+			}
+			return true, nil
+		}
 		runes := []rune(m.chatInput)
 		if len(runes) > 0 {
 			m.chatInput = string(runes[:len(runes)-1])
@@ -4602,8 +4619,8 @@ func (m *Model) handleChatControlKey(key tea.KeyMsg) (bool, tea.Cmd) {
 		// EX-356/357: ← / → in the chat panel normally move the text cursor,
 		// but this input does not track a cursor position. Give a hint so the
 		// user understands why the key appears to do nothing and learns the
-		// available text-editing shortcuts (Ctrl-W, Ctrl-U).
-		m.statusMessage = "Text cursor movement not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+		// available text-editing shortcuts.
+		m.statusMessage = "Cursor movement not supported. Use Opt-Backspace/Ctrl-W to delete word, Ctrl-U to clear."
 		return true, nil
 	}
 	return false, nil
