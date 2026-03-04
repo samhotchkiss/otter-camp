@@ -12194,7 +12194,7 @@ func TestUpDownArrowInChatWithNonEmptyInputEX354355(t *testing.T) {
 // chat panel gives a helpful hint about text cursor movement not being supported
 // rather than silently doing nothing (EX-356/357).
 func TestLeftRightArrowInChatPanelEX356357(t *testing.T) {
-	wantMsg := "Text cursor movement not supported. Use Ctrl-W to delete word, Ctrl-U to clear."
+	wantMsg := "Cursor movement not supported. Use Opt-Backspace/Ctrl-W to delete word, Ctrl-U to clear."
 
 	// ← in ChatPanel with some input → hint.
 	m := NewModel(DefaultState())
@@ -13470,8 +13470,8 @@ func TestAdditionalCommandAliasesEX391(t *testing.T) {
 	}{
 		{":e", ":edit not supported", false},
 		{":edit", ":edit not supported", false},
-		{":clear", "managed automatically", false},
-		{":cls", "managed automatically", false},
+		{":clear", "Session reset is not configured", false},
+		{":cls", "Session reset is not configured", false},
 		{":ls", "sidebar", false},
 		{":list", "sidebar", false},
 		{":reload", "Refreshing", false},

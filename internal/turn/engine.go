@@ -1475,7 +1475,8 @@ func (e *TurnEngine) resolveSessionAgentForSession(ctx context.Context, session 
 	if strings.EqualFold(scopeType, "project") {
 		// For project-scoped sessions, prefer the project PM, then fall back to Frank.
 		if e.assignments != nil && session.ScopeID != uuid.Nil {
-			if pm, pmErr := e.assignments.GetPM(ctx, session.ScopeID); pmErr == nil && pm.IsActive && pm.AgentID != uuid.Nil {
+			pm, pmErr := e.assignments.GetPM(ctx, session.ScopeID)
+			if pmErr == nil && pm.IsActive && pm.AgentID != uuid.Nil {
 				if err := e.ensureAgentParticipant(ctx, session.ID, pm.AgentID); err != nil {
 					return uuid.Nil, err
 				}

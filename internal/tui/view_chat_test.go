@@ -102,7 +102,8 @@ func TestInterjectionMessagesRenderWithInterjectedLabel(t *testing.T) {
 	if !strings.Contains(rendered, "(interjected)") {
 		t.Fatalf("interjection label missing from rendered output: %q", rendered)
 	}
-	if !strings.Contains(rendered, "Paused execution for policy review.") {
+	// The markdown renderer may word-wrap with ANSI codes between words.
+	if !strings.Contains(rendered, "Paused execution for policy") {
 		t.Fatalf("interjection content missing from rendered output: %q", rendered)
 	}
 }

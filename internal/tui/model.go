@@ -651,12 +651,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, sendChatMessageCmd(typed, m.runtimeHints.SendChatMessage)
 	case SessionResolvedMsg:
+		resolved := strings.TrimSpace(typed.SessionID)
 		// EX-189: only apply the resolved session ID while a turn is still active.
 		// If the user switched sessions after sending (EX-188 set activeTurnSessionID
 		// to the new session's UUID), a stale SessionResolvedMsg from the previous
 		// session's in-flight send must not overwrite the new session's filter.
 		if m.activeTurn {
-			m.activeTurnSessionID = strings.TrimSpace(typed.SessionID)
+			m.activeTurnSessionID = resolved
+		}
+		// Replace placeholder activeSession with the resolved UUID so subsequent
+		// messages send directly without re-resolution.
+		if strings.HasPrefix(m.activeSession, "session-") && looksLikeUUID(resolved) {
+			m.activeSession = resolved
 		}
 		return m, nil
 	case chatSendCompletedMsg:
@@ -5898,7 +5904,7 @@ func (m *Model) sendOrQueueInput() tea.Cmd {
 	// misleading. Block early with an honest message so the user waits or refreshes.
 	if !m.activeTurn {
 		sessionID := m.ActiveChatSession()
-		if !looksLikeUUID(sessionID) {
+		if !looksLikeUUID(sessionID) && !isResolvableSessionAlias(sessionID) {
 			m.statusMessage = "Session loading — please wait a moment, then try again (r to refresh)."
 			return nil
 		}
@@ -6452,9 +6458,13 @@ func (m *Model) switchScope(next ChatScope) tea.Cmd {
 		}
 	case ScopeProject:
 		// Prefer the project's own chat session if one exists; fall back to
-		// the org session (Frank) when no project session is available yet.
+		// requesting the resolver to create/find one by scope_id.
 		if projSess := m.workspace.projectSessionID(m.workspace.selectedProjectID); looksLikeUUID(projSess) {
 			sessionID = projSess
+		} else if looksLikeUUID(m.workspace.selectedProjectID) {
+			// No sidebar session node found; pass project ID so the resolver
+			// can find or create an appropriate project-scoped session.
+			sessionID = "session-project-" + m.workspace.selectedProjectID
 		} else {
 			sessionID = m.workspace.activeSessionID
 			if sessionID == "" {
@@ -7214,6 +7224,20 @@ func initialStatusMessage(state UIState, runtime RuntimeHints) string {
 	return base
 }
 
+// isResolvableSessionAlias returns true for session placeholder strings that
+// embed enough info for the SendChatMessage callback to resolve on the fly
+// (e.g. "session-project-<UUID>" carries the project ID for auto-creation).
+// Generic placeholders like "session-org-general" are NOT resolvable — they
+// require the sidebar/SSE data load to supply the real UUID first.
+func isResolvableSessionAlias(s string) bool {
+	const prefix = "session-project-"
+	if !strings.HasPrefix(s, prefix) {
+		return false
+	}
+	// The suffix after the prefix must be a valid UUID (the project ID).
+	return looksLikeUUID(s[len(prefix):])
+}
+
 // assistantLabel returns the display name for assistant-role messages.
 // In task-scoped sessions it resolves the assigned agent's name from the
 // task record so multi-agent deployments show the correct agent (e.g.
@@ -7222,6 +7246,13 @@ func (m Model) assistantLabel() string {
 	if m.activeScope == ScopeTask && m.workspace.selectedTaskID != "" {
 		if task := m.workspace.tasks[m.workspace.selectedTaskID]; task != nil && task.AgentName != "" {
 			return task.AgentName
+		}
+	}
+	if m.activeScope == ScopeProject && m.workspace.selectedProject != nil {
+		for _, agent := range m.workspace.selectedProject.Agents {
+			if strings.EqualFold(agent.Role, "pm") && agent.DisplayName != "" {
+				return agent.DisplayName
+			}
 		}
 	}
 	return "Frank"

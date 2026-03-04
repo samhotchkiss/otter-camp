@@ -926,6 +926,7 @@ func resolveTUIChatSessionID(ctx context.Context, client *cliAPIClient, sessionI
 	}
 
 	scopeType := ""
+	scopeID := ""
 	switch {
 	case strings.HasPrefix(trimmed, "session-org-"), trimmed == "session-general",
 		trimmed == "org-session":
@@ -934,17 +935,40 @@ func resolveTUIChatSessionID(ctx context.Context, client *cliAPIClient, sessionI
 		scopeType = "project_task"
 	case strings.HasPrefix(trimmed, "session-project-"), trimmed == "project-session":
 		scopeType = "project"
+		// Extract project ID if embedded: "session-project-<uuid>"
+		if after, ok := strings.CutPrefix(trimmed, "session-project-"); ok {
+			if _, err := uuid.Parse(after); err == nil {
+				scopeID = after
+			}
+		}
 	default:
 		return uuid.Nil, fmt.Errorf("unknown session %q: expected UUID or known TUI alias", trimmed)
 	}
 
-	sessions, err := client.ListChatSessions(ctx, chatListSessionsFilter{
+	filter := chatListSessionsFilter{
 		Status:    "active",
 		ScopeType: scopeType,
 		Limit:     20,
-	})
+	}
+	if scopeID != "" {
+		filter.ScopeID = scopeID
+	}
+	sessions, err := client.ListChatSessions(ctx, filter)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("resolve %s session: %w", scopeType, err)
+	}
+
+	// If we have a project scope_id and no existing session, create one.
+	if len(sessions.Data) == 0 && scopeID != "" && scopeType == "project" {
+		created, createErr := client.CreateChatSession(ctx, chatCreateSessionRequest{
+			ScopeType: scopeType,
+			ScopeID:   scopeID,
+			Mode:      "sync",
+		})
+		if createErr != nil {
+			return uuid.Nil, fmt.Errorf("create %s session: %w", scopeType, createErr)
+		}
+		return created.Data.ID, nil
 	}
 	if len(sessions.Data) == 0 {
 		return uuid.Nil, fmt.Errorf("no active %s chat session found", scopeType)
