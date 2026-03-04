@@ -15,6 +15,13 @@ RUNNER_LOG="${STATE_DIR}/runner.log"
 PROMPT_FILE="${STATE_DIR}/autowork-prompt.txt"
 AUTOWORK_OUTPUT_FILE="${STATE_DIR}/autowork-last-message.txt"
 STREAM_LOG="${STATE_DIR}/stream.log"
+DOC_ISSUES_INSTRUCTIONS="${SHARED_ISSUES_DIR}/instructions.md"
+DOC_BUILD_INSTRUCTIONS="${CONTROL_REPO_DIR}/build/INSTRUCTIONS.md"
+DOC_BUILD_CONTEXT="${CONTROL_REPO_DIR}/build/CONTEXT.md"
+CONTEXT_CACHE_FILE="${STATE_DIR}/startup-context-cache.env"
+CONTEXT_CACHE_MODE="miss"
+CONTEXT_CACHE_CHANGED_DOCS="cache_uninitialized"
+CONTEXT_CACHE_PREFACE=""
 
 # shellcheck source=scripts/lib/issue-queue.sh
 source "${SCRIPT_DIR}/lib/issue-queue.sh"
@@ -28,6 +35,83 @@ now() {
 
 log() {
   printf '[%s] %s\n' "$(now)" "$*" | tee -a "${RUNNER_LOG}"
+}
+
+hash_file() {
+  local file="$1"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "${file}" | awk '{print $1}'
+    return
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "${file}" | awk '{print $1}'
+    return
+  fi
+  cksum "${file}" | awk '{print $1}'
+}
+
+setup_startup_context_cache() {
+  local cached_issues_hash="" cached_build_instructions_hash="" cached_build_context_hash=""
+  local current_issues_hash current_build_instructions_hash current_build_context_hash
+  local changed_docs=()
+
+  if [[ -f "${CONTEXT_CACHE_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${CONTEXT_CACHE_FILE}" || true
+  fi
+
+  current_issues_hash="$(hash_file "${DOC_ISSUES_INSTRUCTIONS}")"
+  current_build_instructions_hash="$(hash_file "${DOC_BUILD_INSTRUCTIONS}")"
+  current_build_context_hash="$(hash_file "${DOC_BUILD_CONTEXT}")"
+
+  if [[ -n "${cached_issues_hash}" && -n "${cached_build_instructions_hash}" && -n "${cached_build_context_hash}" ]] \
+    && [[ "${cached_issues_hash}" == "${current_issues_hash}" ]] \
+    && [[ "${cached_build_instructions_hash}" == "${current_build_instructions_hash}" ]] \
+    && [[ "${cached_build_context_hash}" == "${current_build_context_hash}" ]]; then
+    CONTEXT_CACHE_MODE="hit"
+    CONTEXT_CACHE_CHANGED_DOCS="none"
+  else
+    CONTEXT_CACHE_MODE="miss"
+    [[ "${cached_issues_hash:-}" != "${current_issues_hash}" ]] && changed_docs+=("issues/instructions.md")
+    [[ "${cached_build_instructions_hash:-}" != "${current_build_instructions_hash}" ]] && changed_docs+=("build/INSTRUCTIONS.md")
+    [[ "${cached_build_context_hash:-}" != "${current_build_context_hash}" ]] && changed_docs+=("build/CONTEXT.md")
+    if (( ${#changed_docs[@]} == 0 )); then
+      changed_docs=("cache_uninitialized")
+    fi
+    CONTEXT_CACHE_CHANGED_DOCS="$(IFS=','; echo "${changed_docs[*]}")"
+  fi
+
+  cat > "${CONTEXT_CACHE_FILE}" <<EOF
+cached_issues_hash='${current_issues_hash}'
+cached_build_instructions_hash='${current_build_instructions_hash}'
+cached_build_context_hash='${current_build_context_hash}'
+cached_generated_at='$(date '+%Y-%m-%dT%H:%M:%S%z')'
+EOF
+
+  if [[ "${CONTEXT_CACHE_MODE}" == "hit" ]]; then
+    CONTEXT_CACHE_PREFACE=$(
+      cat <<EOF
+Startup context cache: HIT.
+Doc hashes unchanged for:
+- ${DOC_ISSUES_INSTRUCTIONS}
+- ${DOC_BUILD_INSTRUCTIONS}
+- ${DOC_BUILD_CONTEXT}
+Use the cached briefing in this prompt; do not re-read full doc bodies unless an inconsistency appears.
+EOF
+    )
+  else
+    CONTEXT_CACHE_PREFACE=$(
+      cat <<EOF
+Startup context cache: MISS (changed: ${CONTEXT_CACHE_CHANGED_DOCS}).
+Re-read these docs fully this run before acting:
+- ${DOC_ISSUES_INSTRUCTIONS}
+- ${DOC_BUILD_INSTRUCTIONS}
+- ${DOC_BUILD_CONTEXT}
+EOF
+    )
+  fi
+
+  log "startup-context cache=${CONTEXT_CACHE_MODE} changed=${CONTEXT_CACHE_CHANGED_DOCS}"
 }
 
 ensure_on_base_branch() {
@@ -258,13 +342,18 @@ if [[ ! -d "${SHARED_ISSUES_DIR}" ]]; then
   exit 1
 fi
 
-if [[ ! -f "${SHARED_ISSUES_DIR}/instructions.md" ]]; then
-  log "missing issues instructions: ${SHARED_ISSUES_DIR}/instructions.md"
+if [[ ! -f "${DOC_ISSUES_INSTRUCTIONS}" ]]; then
+  log "missing issues instructions: ${DOC_ISSUES_INSTRUCTIONS}"
   exit 1
 fi
 
-if [[ ! -f "${CONTROL_REPO_DIR}/build/INSTRUCTIONS.md" ]]; then
-  log "missing build instructions: ${CONTROL_REPO_DIR}/build/INSTRUCTIONS.md"
+if [[ ! -f "${DOC_BUILD_INSTRUCTIONS}" ]]; then
+  log "missing build instructions: ${DOC_BUILD_INSTRUCTIONS}"
+  exit 1
+fi
+
+if [[ ! -f "${DOC_BUILD_CONTEXT}" ]]; then
+  log "missing build context: ${DOC_BUILD_CONTEXT}"
   exit 1
 fi
 
@@ -302,8 +391,11 @@ else
 fi
 
 claim_next_ready_task_if_needed
+setup_startup_context_cache
 
 cat > "${PROMPT_FILE}" <<PROMPT
+${CONTEXT_CACHE_PREFACE}
+
 Read and follow ${SHARED_ISSUES_DIR}/instructions.md exactly.
 
 Primary operating docs:
