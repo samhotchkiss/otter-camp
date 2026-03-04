@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
@@ -1190,6 +1191,13 @@ func domainActorFromExecutionActor(actor executionActor) (string, *uuid.UUID) {
 	}
 }
 
+func flowActorFromExecutionActor(actor executionActor) flowsvc.Actor {
+	return flowsvc.Actor{
+		Type: strings.TrimSpace(actor.principalType),
+		ID:   actor.principalID,
+	}
+}
+
 func (e *NativeToolExecutor) advanceExecutionToNode(ctx context.Context, taskID uuid.UUID, nextNodeID *uuid.UUID) (map[string]any, error) {
 	if nextNodeID == nil {
 		return e.completeFlowTask(ctx, taskID)
@@ -1212,30 +1220,76 @@ func (e *NativeToolExecutor) advanceExecutionToNode(ctx context.Context, taskID 
 }
 
 func (e *NativeToolExecutor) handleFlowAdvance(ctx context.Context, input map[string]any) (map[string]any, error) {
-	if e.flowExecs == nil || e.flowNodes == nil || e.tasks == nil {
+	if e.flowService == nil {
+		if e.flowServiceErr != nil {
+			return nil, e.flowServiceErr
+		}
 		return map[string]any{"error": "flow_repository_unavailable"}, nil
 	}
 	flowNodeExecutionID, ok := readUUID(input, "flow_node_execution_id")
 	if !ok || flowNodeExecutionID == uuid.Nil {
 		return map[string]any{"error": "flow_node_execution_id_required"}, nil
 	}
-	execution, err := e.flowExecs.GetByID(ctx, flowNodeExecutionID)
+	taskID, err := e.resolveFlowAdvanceTaskID(ctx, flowNodeExecutionID)
 	if err != nil {
 		return nil, err
 	}
+	originalTask, loadOriginalTaskErr := repo.ProjectTask{}, error(nil)
+	if e.tasks != nil {
+		originalTask, loadOriginalTaskErr = e.tasks.GetByID(ctx, taskID)
+	}
 	if commitSHA, ok := readString(input, "commit_sha"); ok && commitSHA != "" {
-		if _, err := e.flowExecs.RecordCommitSHA(ctx, flowNodeExecutionID, commitSHA); err != nil {
+		if _, err := e.flowService.RecordNodeCommit(ctx, taskID, commitSHA, ""); err != nil {
 			return nil, err
 		}
 	}
-	currentNode, err := e.flowNodes.GetByID(ctx, execution.FlowNodeID)
+	execution, err := e.flowService.AdvanceFlow(ctx, taskID, flowActorFromExecutionActor(actorFromContext(ctx)))
 	if err != nil {
+		if e.tasks != nil && loadOriginalTaskErr == nil {
+			currentTask, currentTaskErr := e.tasks.GetByID(ctx, taskID)
+			if currentTaskErr == nil {
+				currentNodeID, originalNodeID := currentTask.CurrentFlowNodeID, originalTask.CurrentFlowNodeID
+				nodeUnchanged := (currentNodeID == nil && originalNodeID == nil) ||
+					(currentNodeID != nil && originalNodeID != nil && *currentNodeID == *originalNodeID)
+				if currentTask.WorkStatus != originalTask.WorkStatus || !nodeUnchanged {
+					_, _ = e.tasks.UpdateStatus(ctx, taskID, originalTask.WorkStatus)
+					_, _ = e.tasks.SetFlowNode(ctx, taskID, originalTask.CurrentFlowNodeID)
+				}
+			}
+		}
 		return nil, err
 	}
-	if _, err := e.flowExecs.Complete(ctx, flowNodeExecutionID); err != nil {
-		return nil, err
+
+	flowCompleted := strings.EqualFold(strings.TrimSpace(execution.Status), "completed")
+	var advancedToNodeID any
+	if !flowCompleted {
+		advancedToNodeID = execution.FlowNodeID
 	}
-	return e.advanceExecutionToNode(ctx, execution.TaskID, currentNode.NextNodeID)
+	return map[string]any{
+		"advanced_to_node_id": advancedToNodeID,
+		"flow_completed":      flowCompleted,
+	}, nil
+}
+
+func (e *NativeToolExecutor) resolveFlowAdvanceTaskID(ctx context.Context, flowNodeExecutionID uuid.UUID) (uuid.UUID, error) {
+	if e.flowExecs != nil {
+		execution, err := e.flowExecs.GetByID(ctx, flowNodeExecutionID)
+		if err == nil {
+			return execution.TaskID, nil
+		}
+		if !errors.Is(err, repo.ErrNotFound) {
+			return uuid.Nil, err
+		}
+	}
+
+	scope, err := e.resolveScope(ctx)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if scope.taskID == nil || *scope.taskID == uuid.Nil {
+		return uuid.Nil, repo.ErrNotFound
+	}
+	return *scope.taskID, nil
 }
 
 func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input map[string]any) (map[string]any, error) {
