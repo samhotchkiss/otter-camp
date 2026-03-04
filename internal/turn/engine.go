@@ -826,6 +826,7 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 		return err
 	}
 
+	continuations := 0
 	listeningChecked := false
 	var previousManifest *prompt.MemoryManifest
 
@@ -861,13 +862,17 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			previousManifest = &manifestCopy
 		}
 		if errors.Is(assembleErr, prompt.ErrContextCompressed) {
-			// Context was compressed (old messages dropped). The assembler already
-			// enqueued a summarization job. Proceed with the compressed prompt
-			// rather than creating a continuation turn (which would add messages
-			// without reducing stored history, causing an infinite loop).
-			e.logger.Info("context compressed, proceeding with compressed prompt",
-				"session_id", rt.session.ID, "turn_id", rt.turn.ID,
-				"total_tokens", assembled.TotalTokens)
+			continuations++
+			if continuations > maxContinuationTurnDepth {
+				return fmt.Errorf("context compression continuation depth exceeded")
+			}
+			rt.stopReason = ""
+			if err := e.continueTurn(ctx, rt); err != nil {
+				return err
+			}
+			listeningChecked = false
+			previousManifest = nil
+			continue
 		}
 
 		if e.summarization != nil {
@@ -972,6 +977,16 @@ func (e *TurnEngine) completeTurn(ctx context.Context, rt *turnRuntime) error {
 		return err
 	}
 	if err := e.chat.CompleteTurn(ctx, rt.turn.ID); err != nil {
+		if errors.Is(err, chat.ErrInvalidStatusTransition) {
+			if current, getErr := e.chat.GetTurn(ctx, rt.turn.ID); getErr == nil && strings.EqualFold(strings.TrimSpace(current.Status), "completed") {
+				e.logger.Warn("completeTurn no-op for already completed turn",
+					"session_id", rt.session.ID,
+					"turn_id", rt.turn.ID,
+				)
+				rt.turn = current
+				return nil
+			}
+		}
 		return e.describeTurnTransitionError(ctx, rt.turn.ID, "completeTurn CompleteTurn", "in_progress->completed", err)
 	}
 	return nil
