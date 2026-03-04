@@ -32,15 +32,18 @@ const (
 	defaultSyncMaxDuration      = 5 * time.Minute
 	defaultAsyncMaxDuration     = 30 * time.Minute
 	defaultListeningEvalDelay   = 500 * time.Millisecond
+	defaultAutoContinueDelay    = 2 * time.Second
 	defaultModelRetryBudget     = 3
 	defaultRateLimitBackoff     = 30 * time.Second
 	maxRateLimitBackoff         = 30 * time.Minute
 	maxRateLimitRetries         = 5
+	maxConsecutiveAutoTurns     = 10
 	defaultSummarizeLayerBudget = 0
 	chunkPollSteerEveryNChunks  = 10
 	maxContinuationTurnDepth    = 3
 	defaultTurnConsumerName     = "turn-engine.user-message"
 	defaultReactionConsumerName = "turn-engine.reactions"
+	defaultTurnCompletedName    = "turn-engine.turn-completed"
 	defaultCancelConsumerPrefix = "turn-engine.cancel"
 	stopReasonMaxToolCalls      = "max_tool_calls"
 	stopReasonMaxDuration       = "max_duration"
@@ -223,6 +226,10 @@ type taskRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
 }
 
+type flowNodeRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.FlowNode, error)
+}
+
 type assignmentRepository interface {
 	GetPM(ctx context.Context, projectID uuid.UUID) (repo.AgentProjectAssignment, error)
 }
@@ -261,6 +268,7 @@ type Options struct {
 	Sessions      sessionRepository
 	Agents        agentRepository
 	Tasks         taskRepository
+	FlowNodes     flowNodeRepository
 	Assignments   assignmentRepository
 	MemorySources memorySourceRepository
 	Memories      memoryRepository
@@ -296,6 +304,7 @@ type TurnEngine struct {
 	sessions    sessionRepository
 	agents      agentRepository
 	tasks       taskRepository
+	flowNodes   flowNodeRepository
 	assignments assignmentRepository
 	sources     memorySourceRepository
 	memories    memoryRepository
@@ -376,6 +385,9 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 	if opts.Tasks == nil {
 		opts.Tasks = repo.NewProjectTaskRepo(opts.Pool)
 	}
+	if opts.FlowNodes == nil && opts.Pool != nil {
+		opts.FlowNodes = repo.NewFlowNodeRepo(opts.Pool)
+	}
 	if opts.Assignments == nil && opts.Pool != nil {
 		opts.Assignments = repo.NewAgentProjectAssignmentRepo(opts.Pool)
 	}
@@ -440,6 +452,7 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 		sessions:              opts.Sessions,
 		agents:                opts.Agents,
 		tasks:                 opts.Tasks,
+		flowNodes:             opts.FlowNodes,
 		assignments:           opts.Assignments,
 		sources:               opts.MemorySources,
 		memories:              opts.Memories,
@@ -475,6 +488,12 @@ func (e *TurnEngine) SubscribeUserMessageEnqueue(orgID *uuid.UUID) eventbus.Subs
 func (e *TurnEngine) SubscribeReactionFeedback(orgID *uuid.UUID) eventbus.Subscription {
 	return e.events.Subscribe(defaultReactionConsumerName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
 		return e.HandleReactionEvent(ctx, event)
+	})
+}
+
+func (e *TurnEngine) SubscribeTurnCompletedAutoContinuation(orgID *uuid.UUID) eventbus.Subscription {
+	return e.events.Subscribe(defaultTurnCompletedName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
+		return e.HandleTurnCompletedEvent(ctx, event)
 	})
 }
 
@@ -563,6 +582,115 @@ func (e *TurnEngine) HandleReactionEvent(ctx context.Context, event eventbus.Dom
 		_, _ = e.memories.UpdateConfidence(ctx, source.MemoryID, next)
 	}
 	return nil
+}
+
+func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbus.DomainEvent) error {
+	if event.EventType != "chat.turn.completed" {
+		return nil
+	}
+
+	var payload struct {
+		SessionID uuid.UUID `json:"session_id"`
+		TurnID    uuid.UUID `json:"turn_id"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return nil
+	}
+	if payload.SessionID == uuid.Nil || payload.TurnID == uuid.Nil {
+		return nil
+	}
+
+	session, err := e.chat.GetSession(ctx, payload.SessionID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.Status), "active") {
+		return nil
+	}
+	if e.tasks == nil || e.flowNodes == nil {
+		return nil
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, session.ScopeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "in_progress") {
+		return nil
+	}
+	if taskRecord.CurrentFlowNodeID == nil {
+		return nil
+	}
+
+	currentNode, err := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "work") {
+		return nil
+	}
+
+	turns, err := e.turns.ListBySession(ctx, session.ID)
+	if err != nil {
+		return err
+	}
+	latestCompleted := latestCompletedTurn(turns)
+	if latestCompleted == nil || latestCompleted.ID != payload.TurnID {
+		return nil
+	}
+
+	messages, err := e.messages.ListBySession(ctx, session.ID)
+	if err != nil {
+		return err
+	}
+	latestUser := latestUserMessage(messages)
+	if latestUser == nil {
+		return nil
+	}
+	assistant := latestAssistantFinalForTurn(messages, payload.TurnID)
+	if assistant == nil {
+		return nil
+	}
+	if latestUser.SequenceNumber > assistant.SequenceNumber {
+		return nil
+	}
+	if indicatesTaskCompletion(assistant.Content) {
+		return nil
+	}
+
+	if consecutive := consecutiveAutoTurnsSinceLatestUser(turns, messages, latestUser.SequenceNumber); consecutive >= maxConsecutiveAutoTurns {
+		e.logger.Warn("auto continuation cap reached",
+			"session_id", session.ID,
+			"turn_id", payload.TurnID,
+			"task_id", session.ScopeID,
+			"consecutive_auto_turns", consecutive,
+		)
+		return nil
+	}
+
+	nextPayload := AgentTurnPayload{
+		SessionID: session.ID,
+		MessageID: latestUser.ID,
+	}
+	if latestCompleted.RespondingID != uuid.Nil {
+		agentID := latestCompleted.RespondingID
+		nextPayload.AgentID = &agentID
+	}
+	runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
+	_, err = e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, nextPayload, &runAfter)
+	return err
 }
 
 func (e *TurnEngine) HandleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID) error {
@@ -846,10 +974,7 @@ func (e *TurnEngine) completeTurn(ctx context.Context, rt *turnRuntime) error {
 	if err := e.chat.CompleteTurn(ctx, rt.turn.ID); err != nil {
 		return e.describeTurnTransitionError(ctx, rt.turn.ID, "completeTurn CompleteTurn", "in_progress->completed", err)
 	}
-	return e.publishEvent(ctx, rt.session.OrganizationID, "chat.turn.completed", "agent", &rt.agent.ID, map[string]any{
-		"session_id": rt.session.ID,
-		"turn_id":    rt.turn.ID,
-	})
+	return nil
 }
 
 func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
@@ -1794,6 +1919,119 @@ func parseAgentTurnPayload(raw json.RawMessage) (AgentTurnPayload, error) {
 		payload.RetryCount = 0
 	}
 	return payload, nil
+}
+
+func latestCompletedTurn(turns []repo.ChatTurn) *repo.ChatTurn {
+	var latest *repo.ChatTurn
+	for i := range turns {
+		turn := turns[i]
+		if !strings.EqualFold(strings.TrimSpace(turn.Status), "completed") {
+			continue
+		}
+		if latest == nil || turn.TurnNumber > latest.TurnNumber {
+			copyTurn := turn
+			latest = &copyTurn
+		}
+	}
+	return latest
+}
+
+func latestUserMessage(messages []repo.ChatMessage) *repo.ChatMessage {
+	var latest *repo.ChatMessage
+	for i := range messages {
+		message := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			continue
+		}
+		if latest == nil || message.SequenceNumber > latest.SequenceNumber {
+			copyMessage := message
+			latest = &copyMessage
+		}
+	}
+	return latest
+}
+
+func latestAssistantFinalForTurn(messages []repo.ChatMessage, turnID uuid.UUID) *repo.ChatMessage {
+	var latest *repo.ChatMessage
+	for i := range messages {
+		message := messages[i]
+		if message.TurnID == nil || *message.TurnID != turnID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "assistant") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Status), "final") {
+			continue
+		}
+		if latest == nil || message.SequenceNumber > latest.SequenceNumber {
+			copyMessage := message
+			latest = &copyMessage
+		}
+	}
+	return latest
+}
+
+func consecutiveAutoTurnsSinceLatestUser(turns []repo.ChatTurn, messages []repo.ChatMessage, latestUserSequence int64) int {
+	if latestUserSequence <= 0 {
+		return 0
+	}
+	maxMessageSeqByTurn := make(map[uuid.UUID]int64)
+	for _, message := range messages {
+		if message.TurnID == nil || *message.TurnID == uuid.Nil {
+			continue
+		}
+		current := maxMessageSeqByTurn[*message.TurnID]
+		if message.SequenceNumber > current {
+			maxMessageSeqByTurn[*message.TurnID] = message.SequenceNumber
+		}
+	}
+
+	completedSinceUser := 0
+	for _, turn := range turns {
+		if !strings.EqualFold(strings.TrimSpace(turn.Status), "completed") {
+			continue
+		}
+		if maxMessageSeqByTurn[turn.ID] <= latestUserSequence {
+			continue
+		}
+		completedSinceUser++
+	}
+	if completedSinceUser <= 1 {
+		return 0
+	}
+	return completedSinceUser - 1
+}
+
+func indicatesTaskCompletion(content string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(content))
+	if normalized == "" {
+		return false
+	}
+	if normalized == "done" || normalized == "complete" || normalized == "completed" {
+		return true
+	}
+	phrases := []string{
+		"task complete",
+		"task completed",
+		"work complete",
+		"work completed",
+		"completed the task",
+		"all done",
+		"i'm done",
+		"i am done",
+		"ready for review",
+		"awaiting review",
+		"please review",
+		"mark this done",
+		"marking this done",
+	}
+	for _, phrase := range phrases {
+		if strings.Contains(normalized, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 type rateLimitRetryAfterProvider interface {

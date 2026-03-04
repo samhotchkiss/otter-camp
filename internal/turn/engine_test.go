@@ -240,6 +240,151 @@ func TestHandleTurnJobRateLimitedRetryCapStopsRequeue(t *testing.T) {
 	}
 }
 
+func TestHandleTurnCompletedEventEnqueuesAutoContinuation(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700000000, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "Investigating the next step.")
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil {
+		t.Fatal("auto continuation payload missing")
+	}
+	if jobs[0].payload.SessionID != fixture.session.ID {
+		t.Fatalf("payload.session_id = %s, want %s", jobs[0].payload.SessionID, fixture.session.ID)
+	}
+	if jobs[0].payload.MessageID != fixture.userMessageID {
+		t.Fatalf("payload.message_id = %s, want %s", jobs[0].payload.MessageID, fixture.userMessageID)
+	}
+	if jobs[0].payload.AgentID == nil || *jobs[0].payload.AgentID != agentID {
+		t.Fatalf("payload.agent_id = %v, want %s", jobs[0].payload.AgentID, agentID)
+	}
+	if jobs[0].runAfter == nil {
+		t.Fatal("auto continuation run_after missing")
+	}
+	wantRunAfter := base.Add(defaultAutoContinueDelay)
+	if !jobs[0].runAfter.Equal(wantRunAfter) {
+		t.Fatalf("run_after = %s, want %s", *jobs[0].runAfter, wantRunAfter)
+	}
+}
+
+func TestHandleTurnCompletedEventSkipsWhenCompletionMessagePresent(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "Task complete and ready for review.")
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+}
+
+func TestHandleTurnCompletedEventSkipsAtAutoContinuationCap(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	var latestTurnID uuid.UUID
+	for i := 0; i < maxConsecutiveAutoTurns+1; i++ {
+		latestTurnID = createCompletedTurnWithAssistantMessage(t, fixture, agentID, fmt.Sprintf("loop step %d", i+1))
+	}
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": latestTurnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+}
+
 func TestHandleUserMessageTaskScopeRoutesToAssignedAgent(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -1149,6 +1294,7 @@ func newUnitFixture(t *testing.T, mode string) *unitFixture {
 		Sessions:      chatSvc,
 		Agents:        &fakeAgentRepo{agent: agentRecord, starter: []repo.Agent{agentRecord}},
 		Tasks:         &fakeTaskRepo{},
+		FlowNodes:     &fakeFlowNodeRepo{},
 		MemorySources: memSources,
 		Memories:      memories,
 		Now:           func() time.Time { return time.Now().UTC() },
@@ -1924,6 +2070,21 @@ func (f *fakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectTas
 	return repo.ProjectTask{}, repo.ErrNotFound
 }
 
+type fakeFlowNodeRepo struct {
+	items map[uuid.UUID]repo.FlowNode
+	err   error
+}
+
+func (f *fakeFlowNodeRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNode, error) {
+	if f.err != nil {
+		return repo.FlowNode{}, f.err
+	}
+	if item, ok := f.items[id]; ok {
+		return item, nil
+	}
+	return repo.FlowNode{}, repo.ErrNotFound
+}
+
 type fakeAssignmentRepo struct {
 	items map[uuid.UUID]repo.AgentProjectAssignment
 	err   error
@@ -1977,4 +2138,40 @@ func (f *fakeMemoryRepo) UpdateConfidence(ctx context.Context, id uuid.UUID, con
 	item.Confidence = confidence
 	f.items[id] = item
 	return item, nil
+}
+
+func createCompletedTurnWithAssistantMessage(t *testing.T, fixture *unitFixture, agentID uuid.UUID, assistantContent string) uuid.UUID {
+	t.Helper()
+
+	turn, err := fixture.chat.CreateTurn(context.Background(), fixture.session.ID, agentID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := fixture.chat.StartTurn(context.Background(), turn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+	if err := fixture.chat.CompleteTurn(context.Background(), turn.ID); err != nil {
+		t.Fatalf("CompleteTurn: %v", err)
+	}
+
+	authorType := "agent"
+	fixture.messages.create(repo.ChatMessage{
+		SessionID:  fixture.session.ID,
+		TurnID:     &turn.ID,
+		AuthorType: &authorType,
+		AuthorID:   &agentID,
+		Role:       "assistant",
+		Status:     "final",
+		Content:    assistantContent,
+	})
+	return turn.ID
+}
+
+func mustRawJSON(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal json: %v", err)
+	}
+	return raw
 }
