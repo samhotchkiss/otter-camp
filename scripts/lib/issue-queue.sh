@@ -4,6 +4,19 @@
 # Status vocabulary is intentionally small for deterministic logging:
 # claimed | already_claimed | already_completed | missing
 
+queue_lane_snapshot() {
+  local issues_dir="$1"
+  local lane count
+  while IFS= read -r lane; do
+    if [[ -d "${issues_dir}/${lane}" ]]; then
+      count="$(find "${issues_dir}/${lane}" -maxdepth 1 -type f -name '*.md' | wc -l | tr -d ' ')"
+    else
+      count=0
+    fi
+    printf '%s=%s\n' "${lane}" "${count}"
+  done < <(queue_known_lanes)
+}
+
 queue_known_lanes() {
   printf '%s\n' "01-ready" "02-in-progress" "03-needs-review" "04-in-review" "05-completed"
 }
@@ -159,4 +172,22 @@ queue_move_task() {
   local task_basename="$4"
 
   queue_with_task_lock "${issues_dir}" "${task_basename}" _queue_move_impl "${src_lane}" "${dst_lane}"
+}
+
+queue_reconcile_move() {
+  local issues_dir="$1"
+  local src_lane="$2"
+  local dst_lane="$3"
+  local task_basename="$4"
+  local status
+
+  status="$(queue_move_task "${issues_dir}" "${src_lane}" "${dst_lane}" "${task_basename}" || echo "missing")"
+  case "${status}" in
+    claimed|already_claimed|already_completed)
+      printf 'queue_reconciled\n'
+      ;;
+    *)
+      printf 'queue_conflict_hard_stop\n'
+      ;;
+  esac
 }

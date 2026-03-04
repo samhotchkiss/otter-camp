@@ -317,9 +317,29 @@ claim_next_ready_task_if_needed() {
     return 0
   fi
 
-  local status
+  local task_basename status reconcile_outcome before_snapshot after_snapshot
+  task_basename="$(basename "${next_task}")"
+  before_snapshot="$(queue_lane_snapshot "${SHARED_ISSUES_DIR}" | tr '\n' ',' | sed 's/,$//')"
   status="$("${ISSUE_LANE_CLI}" claim "${SHARED_ISSUES_DIR}" "${next_task}" || echo "missing")"
-  log "queue claim outcome=${status} task=$(basename "${next_task}")"
+  after_snapshot="$(queue_lane_snapshot "${SHARED_ISSUES_DIR}" | tr '\n' ',' | sed 's/,$//')"
+
+  case "${status}" in
+    claimed)
+      log "queue claim outcome=claimed task=${task_basename} snapshot_before=${before_snapshot} snapshot_after=${after_snapshot}"
+      ;;
+    already_claimed|already_completed)
+      reconcile_outcome="$("${ISSUE_LANE_CLI}" reconcile "${SHARED_ISSUES_DIR}" "01-ready" "02-in-progress" "${task_basename}" || echo "queue_conflict_hard_stop")"
+      log "queue reconcile outcome=${reconcile_outcome} status=${status} task=${task_basename} snapshot_before=${before_snapshot} snapshot_after=${after_snapshot}"
+      if [[ "${reconcile_outcome}" == "queue_conflict_hard_stop" ]]; then
+        log "queue conflict hard stop: unable to reconcile external lane mutation for ${task_basename}"
+        exit 1
+      fi
+      ;;
+    *)
+      log "queue reconcile outcome=queue_conflict_hard_stop status=${status} task=${task_basename} snapshot_before=${before_snapshot} snapshot_after=${after_snapshot}"
+      exit 1
+      ;;
+  esac
 }
 
 if ! command -v codex >/dev/null 2>&1; then
@@ -413,7 +433,7 @@ Lane workflow (strict):
 2. On a fresh run with empty 02-in-progress and 05-completed, start with 001-project-scaffold.md.
 3. When selecting from ${SHARED_ISSUES_DIR}/01-ready, prioritize tasks that contain a top-level "## Reviewer Required Changes" block before net-new tasks (lowest task number first).
 4. Claim from ${SHARED_ISSUES_DIR}/01-ready with \`${ISSUE_LANE_CLI} claim ${SHARED_ISSUES_DIR} <task-file>\` (respect Depends on).
-5. Use \`${ISSUE_LANE_CLI} move ${SHARED_ISSUES_DIR} <src-lane> <dst-lane> <task-file>\` for lane transitions; treat outcomes \`claimed\`, \`already_claimed\`, \`already_completed\`, \`missing\` as idempotent non-fatal queue states.
+5. Use \`${ISSUE_LANE_CLI} move ${SHARED_ISSUES_DIR} <src-lane> <dst-lane> <task-file>\` for lane transitions; treat \`claimed\`, \`already_claimed\`, and \`already_completed\` as idempotent non-fatal states.
 6. Implement exactly scoped requirements from the task file.
 7. Run required tests from the task (unit/integration/e2e as specified).
 8. For CLI tasks, run a CLI smoke check after build.
@@ -441,6 +461,13 @@ Implementation directives:
 Execution policy:
 - Continue until no actionable tasks remain in ${SHARED_ISSUES_DIR}/01-ready.
 - If blocked, append clear blocker notes to ${SHARED_ISSUES_DIR}/notes.md, then continue with the next actionable task.
+
+Queue mutation reconciliation protocol:
+- If queue files change externally while you are running, do not stop immediately.
+- Snapshot lane state (`01-ready` through `05-completed`) and identify the affected task.
+- Run \`${ISSUE_LANE_CLI} reconcile ${SHARED_ISSUES_DIR} <src-lane> <dst-lane> <task-file>\`.
+- Continue automatically on \`queue_reconciled\`.
+- Escalate only on \`queue_conflict_hard_stop\` (document why invariants failed).
 
 Command path guardrails:
 - Required pattern: discover -> open.

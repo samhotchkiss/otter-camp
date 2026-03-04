@@ -64,4 +64,18 @@ if [[ "${missing_move}" != "missing" ]]; then
   exit 1
 fi
 
+# Reconciliation outcome: benign already-completed race.
+reconcile_ok="$("${ISSUE_LANE_CLI}" reconcile "${ISSUES_DIR}" "02-in-progress" "03-needs-review" "${TASK_FILE}")"
+if [[ "${reconcile_ok}" != "queue_reconciled" ]]; then
+  echo "expected queue_reconciled status, got: ${reconcile_ok}" >&2
+  exit 1
+fi
+
+# Reconciliation outcome: missing file should hard-stop.
+reconcile_conflict="$("${ISSUE_LANE_CLI}" reconcile "${ISSUES_DIR}" "01-ready" "02-in-progress" "404-missing.md")"
+if [[ "${reconcile_conflict}" != "queue_conflict_hard_stop" ]]; then
+  echo "expected queue_conflict_hard_stop status, got: ${reconcile_conflict}" >&2
+  exit 1
+fi
+
 echo "queue replay test passed"

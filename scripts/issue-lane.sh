@@ -10,9 +10,11 @@ usage() {
 Usage:
   $(basename "$0") claim <issues_dir> <task-file>
   $(basename "$0") move <issues_dir> <src-lane> <dst-lane> <task-file>
+  $(basename "$0") reconcile <issues_dir> <src-lane> <dst-lane> <task-file>
 
 Outputs exactly one status token:
   claimed | already_claimed | already_completed | missing
+  queue_reconciled | queue_conflict_hard_stop
 USAGE
 }
 
@@ -44,6 +46,17 @@ case "${cmd}" in
     dst_lane="$3"
     task_basename="$(queue_task_basename "$4")"
     queue_move_task "${issues_dir}" "${src_lane}" "${dst_lane}" "${task_basename}"
+    ;;
+  reconcile)
+    if (( $# != 4 )); then
+      usage
+      exit 2
+    fi
+    issues_dir="$1"
+    src_lane="$2"
+    dst_lane="$3"
+    task_basename="$(queue_task_basename "$4")"
+    queue_reconcile_move "${issues_dir}" "${src_lane}" "${dst_lane}" "${task_basename}"
     ;;
   *)
     usage
