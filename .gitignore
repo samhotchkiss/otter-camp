@@ -35,6 +35,10 @@ scripts/*
 !scripts/init-pgvector.sql
 !scripts/seed-dev.sh
 !scripts/install.sh
+!scripts/codex-autowork.sh
+!scripts/autowork-supervisor-watchdog.sh
+!scripts/claude-review-autowork.sh
+!scripts/autowork-state-defaults-test.sh
 !scripts/install_test.sh
 !scripts/setup.sh
 !scripts/setup_test.sh

@@ -49,6 +49,26 @@ make install
 ottercamp tui
 ```
 
+## Autowork Session Logs
+
+Autowork scripts now default session/runtime state to:
+
+`~/otter-data/sessions`
+
+Scripts:
+- `scripts/codex-autowork.sh` (`AUTO_WORK_STATE_DIR`)
+- `scripts/autowork-supervisor-watchdog.sh` (`AUTOWORK_STATE_DIR`)
+- `scripts/claude-review-autowork.sh` (`AUTO_REVIEW_STATE_DIR`)
+
+Each override variable above is still supported and takes precedence over the default path.
+
+Migration note for existing local runs:
+
+```bash
+mkdir -p ~/otter-data/sessions
+cp -R .autowork/run-*.jsonl ~/otter-data/sessions/ 2>/dev/null || true
+```
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
