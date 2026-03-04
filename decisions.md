@@ -102,3 +102,60 @@ Lori tried to find the template via `flow.get_template` but used wrong IDs (proj
 
 ---
 
+## Decision 4: Supervisor recovery cascade fix (2026-03-03 22:17)
+
+**Context**: After worker restart, 81+ stale `agent_turn` jobs from supervisor recovery runs were clogging the job queue. Each called the LLM (30-120s) before the next could run. Meanwhile, the supervisor kept detecting its own recovery runs as "stuck" and creating new recovery runs — an infinite cascade generating ~6 new agent_turn jobs per minute.
+
+**Root cause**: The supervisor's `recoverRun()` had no guard against recovering its own recovery runs. When a recovery run got stuck (because the agent_turn job was waiting in a backlogged queue), the next supervisor tick would create ANOTHER recovery run for it, ad infinitum.
+
+**Fixes applied** (commit 8c2b3c77):
+1. `recoverRun()` skips runs with `trigger_type='supervisor'` — no cascading recoveries
+2. `recoverRun()` skips runs whose session is closed/archived
+3. `handleUserMessage()` skips closed/archived sessions (prevents wasted LLM calls)
+4. `PurgeStaleAgentTurnJobs()` at worker startup dead-letters jobs for closed sessions and supervisor-injected messages
+5. Debug logging for job queue operations
+
+**One-time cleanup**: Failed 20 stale in_progress supervisor runs and purged 95 pending agent_turn jobs via SQL before restart.
+
+**Risk**: Supervisor recovery is now less aggressive — a supervisor-triggered run that gets stuck will be failed but not re-recovered. The task's blocker/escalation flow handles further retries.
+
+---
+
+## Decision 5: agent_id injection fix (2026-03-03 23:10)
+
+**Context**: The turn engine (engine.go:1029) unconditionally overwrote `arguments["agent_id"]` with the calling agent's ID. This meant `agent.get`, `agent.update`, and the new `agent.assign_project` always operated on the caller instead of the target agent. Frank correctly diagnosed this as "agent_get keeps returning my profile regardless of which agent ID I pass."
+
+**Decision**: Changed to conditional injection (like session_id and project_id): only inject agent_id if the model didn't provide one. This is a 1-line fix in the turn engine, well within the ≤2 line direct-fix threshold.
+
+**Also fixed**: Invalidated cached session_tool_set rows so Frank's session picks up the new `agent.assign_project` tool (migration 0104). Filed this cache-invalidation gap as something the platform should handle automatically on new tool deployments.
+
+**Result**: Frank successfully created a temp PM agent, assigned it with `agent.assign_project`, and queued all 11 tasks. Tasks immediately moved to in_progress.
+
+---
+
+## Decision 6: Anthropic API rate limit blocker (2026-03-03 23:40)
+
+**Context**: Phase 4 (Task Execution) was underway — Frank (as Sam.blog Worker) was scaffolding the Hugo site, working through file_write vs CLI workspace sync issues. At 23:18, all 11 task sessions simultaneously hit Anthropic API rate limits. Every agent_turn job failed with "model provider rate limited" and dead-lettered after 3 rapid retries (~5s apart).
+
+**Problem**: Two issues compounded:
+1. **External**: Anthropic API key hit its quota limit. Rate limit persists 20+ minutes after the initial burst (still active at 23:40). This is not a per-minute rate limit.
+2. **Platform**: agent_turn job retries every ~5s with no rate-limit-aware backoff, exhausting all 3 attempts in ~15s. Filed as issue 213.
+3. **Recovery**: Supervisor created recovery runs, but those also failed. Our cascade-prevention fix (Decision 4) then blocks re-recovery of supervisor-triggered runs → deadlock.
+
+**Decision**: Stop testing. Wait for Anthropic rate limits to clear naturally. Check every 5-10 minutes with a test message via TUI. Once rate limits clear:
+1. Restart server + worker to clear stale health state
+2. Send messages to stuck task sessions to re-trigger agent turns
+3. Monitor for successful turn completion
+
+**Why not switch providers**: CLAUDE.md explicitly prohibits switching model providers without Sam's approval. OpenAI is available but not authorized.
+
+**Filed**: Issue 213 (rate-limit backoff) pushed to v2.
+
+**Diagnostic update** (23:59): Added slog.Warn to gateway client.go to log provider error detail on 429. Results:
+- Provider: Anthropic (connection `84a9141d`)
+- Error: "This request would exceed your account's rate limit."
+- Retry-After: `1h0m46s` → rate limit resets ~01:00 MST
+- The account's hourly quota was exhausted by the burst of 11 simultaneous task sessions.
+
+**Plan**: Wait until 01:00 MST, then retry. Do not send any messages to OtterCamp until then to avoid wasting the 3-attempt dead-letter budget on each retry.
+
