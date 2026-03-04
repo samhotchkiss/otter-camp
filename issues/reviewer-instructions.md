@@ -12,6 +12,9 @@ Lane flow:
 Review standards:
 - Verify acceptance criteria from the task file are actually met.
 - Verify required test layers for that task were run and results are plausible.
+- Verify the implementer reported scoped-vs-baseline test classification:
+  - `task_scope` failures block completion.
+  - `baseline_unrelated` failures are only acceptable when clearly pre-existing and outside touched scope.
 - Verify the implementation includes matching test updates (new/changed `*_test.go`, integration/e2e additions, or explicit task-justified rationale when no test file change is expected).
 - Prioritize bugs, regressions, missing tests, and spec non-compliance.
 - Keep feedback concrete and actionable (file paths, failing behavior, missing assertions).
