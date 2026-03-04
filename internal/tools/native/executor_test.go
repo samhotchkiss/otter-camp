@@ -34,7 +34,7 @@ func TestResolveDataDirUsesEnvOverride(t *testing.T) {
 	}
 }
 
-func TestWorkspaceForContextUsesOrgSlugWorkspace(t *testing.T) {
+func TestWorkspaceForContextUsesGeneralWorkspaceWithoutOrgSlug(t *testing.T) {
 	dataDir := t.TempDir()
 	resolvedDataDir, err := filepath.EvalSymlinks(dataDir)
 	if err != nil {
@@ -58,13 +58,13 @@ func TestWorkspaceForContextUsesOrgSlugWorkspace(t *testing.T) {
 		t.Fatalf("workspaceForContext: %v", err)
 	}
 
-	want := filepath.Join(resolvedDataDir, "workspaces", "acme", "general")
+	want := filepath.Join(resolvedDataDir, "workspaces", "general")
 	if wd.Root() != want {
 		t.Fatalf("workspace root = %q, want %q", wd.Root(), want)
 	}
 }
 
-func TestWorkspaceForContextUsesProjectSlugWorkspace(t *testing.T) {
+func TestWorkspaceForContextUsesProjectSlugWorkspaceWithoutOrgSlug(t *testing.T) {
 	dataDir := t.TempDir()
 	resolvedDataDir, err := filepath.EvalSymlinks(dataDir)
 	if err != nil {
@@ -101,7 +101,7 @@ func TestWorkspaceForContextUsesProjectSlugWorkspace(t *testing.T) {
 		t.Fatalf("workspaceForContext: %v", err)
 	}
 
-	want := filepath.Join(resolvedDataDir, "workspaces", "acme", "site-redesign")
+	want := filepath.Join(resolvedDataDir, "workspaces", "site-redesign")
 	if wd.Root() != want {
 		t.Fatalf("workspace root = %q, want %q", wd.Root(), want)
 	}
@@ -160,7 +160,7 @@ func TestWorkspaceForContextTaskScopeSharesProjectWorkspace(t *testing.T) {
 		t.Fatalf("workspaceForContext task scope: %v", err)
 	}
 
-	want := filepath.Join(resolvedDataDir, "workspaces", "acme", "site-redesign")
+	want := filepath.Join(resolvedDataDir, "workspaces", "site-redesign")
 	if projectWD.Root() != want {
 		t.Fatalf("project workspace root = %q, want %q", projectWD.Root(), want)
 	}
