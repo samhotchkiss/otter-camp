@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/turn"
@@ -78,13 +79,33 @@ func TestMapProviderErrorRateLimitMarksRateLimited(t *testing.T) {
 	health := NewHealthChecker()
 	gateway := &LiveModelGateway{health: health}
 	connectionID := uuid.New()
+	retryAfter := 45 * time.Second
 
-	err, retryable := gateway.mapProviderError(connectionID, ProviderHTTPError{StatusCode: http.StatusTooManyRequests})
+	err, retryable := gateway.mapProviderError(connectionID, ProviderHTTPError{
+		StatusCode: http.StatusTooManyRequests,
+		RetryAfter: retryAfter,
+	})
 	if !retryable {
 		t.Fatalf("retryable for 429 = false, want true")
 	}
 	if !errors.Is(err, turn.ErrRateLimited) {
 		t.Fatalf("err for 429 = %v, want turn.ErrRateLimited", err)
+	}
+	var retryHint interface {
+		RateLimitRetryAfter() time.Duration
+	}
+	if !errors.As(err, &retryHint) {
+		t.Fatalf("err for 429 = %v, want retry hint", err)
+	}
+	if got := retryHint.RateLimitRetryAfter(); got != retryAfter {
+		t.Fatalf("retry_after = %s, want %s", got, retryAfter)
+	}
+	var providerErr ProviderHTTPError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("err for 429 = %v, want underlying ProviderHTTPError", err)
+	}
+	if providerErr.StatusCode != http.StatusTooManyRequests || providerErr.RetryAfter != retryAfter {
+		t.Fatalf("provider err = %+v, want status=429 retry_after=%s", providerErr, retryAfter)
 	}
 	if state := health.GetState(connectionID); state != HealthStateRateLimited {
 		t.Fatalf("state after 429 = %q, want %q", state, HealthStateRateLimited)
@@ -106,4 +127,3 @@ func (mockNetworkError) Timeout() bool {
 func (mockNetworkError) Temporary() bool {
 	return false
 }
-
