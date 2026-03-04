@@ -48,6 +48,19 @@ conflict, the task file wins — it reflects resolved decisions.
 a specific section for detail not reproduced in the task file. The task files are complete
 enough to implement from.
 
+## Command Discovery Guardrails (Autowork)
+
+When investigating code paths during task execution, use a required `discover -> open` pattern:
+
+1. **Discover path first** with `rg --files <root> | rg '<fragment>'` (or `find` if `rg` is unavailable).
+2. **Verify existence** with `test -f <path>` / `ls <path>`.
+3. **Open file** with `sed/cat` only after the path is verified.
+
+If a path lookup fails, classify it as a recoverable `lookup_miss` and continue discovery.
+Do not treat lookup misses as task-failing regressions. Keep failure summaries split between:
+- `lookup_miss` (path/discovery misses)
+- `build_or_test_failure` (actual implementation regressions)
+
 ---
 
 ## How Tasks Are Organized

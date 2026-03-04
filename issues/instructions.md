@@ -38,6 +38,16 @@ Test gating policy:
   - `baseline_unrelated`: pass/fail (non-blocking if pre-existing/unrelated)
   - `decision`: `proceed` or `blocked`
 
+Path discovery guardrails:
+- Use a required `discover -> open` pattern for uncertain paths:
+  - Discover first: `rg --files <root> | rg '<name-or-fragment>'` (or `find` if `rg` is unavailable).
+  - Open second: only run `sed/cat` after confirming the exact path exists.
+- Before direct file reads on explicit paths, verify with `test -f <path>` (or `ls <path>`).
+- Classify missing-path command failures as `lookup_miss` (recoverable), not task failure.
+- In task notes and summaries, report failures in separate buckets:
+  - `lookup_miss` (path discovery misses)
+  - `build_or_test_failure` (actual regressions)
+
 Reviewer-required changes handling:
 - A top-level `## Reviewer Required Changes` block in a task file is authoritative and must be treated as mandatory acceptance criteria for that rework pass.
 - Resolve each checklist item in that block with concrete code/test changes.
