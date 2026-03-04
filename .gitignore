@@ -35,6 +35,7 @@ scripts/*
 !scripts/init-pgvector.sql
 !scripts/seed-dev.sh
 !scripts/install.sh
+!scripts/AUTOWORK.md
 !scripts/codex-autowork.sh
 !scripts/autowork-supervisor-watchdog.sh
 !scripts/issue-lane.sh

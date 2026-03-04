@@ -26,6 +26,10 @@ Review standards:
 - Only move to `05-completed` after merge is confirmed.
 - If PR/merge state cannot be verified non-interactively, or merge fails/is blocked (conflicts, permissions, required checks), append blocker details to `issues/notes.md` and move the task back to `01-ready`.
 - If findings exist, required changes must be written directly into the task file in a top-level `## Reviewer Required Changes` block.
+- Headless MCP policy for reviewer autowork:
+  - `AUTO_REVIEW_ENABLE_CLAUDEAI_MCP=1` is required to enable claude.ai MCP servers in unattended runs.
+  - Default unattended behavior disables claude.ai MCP servers to avoid repeated Gmail/Calendar auth noise.
+  - If runner logs `cached_needs_auth_for_google_connectors`, keep MCP disabled until OAuth is configured.
 
 Routing/test conventions:
 - API routes: `/v1/*`

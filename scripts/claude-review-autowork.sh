@@ -24,6 +24,10 @@ RUNNER_LOG="${STATE_DIR}/reviewer-runner.log"
 STREAM_LOG="${STATE_DIR}/reviewer-stream.log"
 LAST_MESSAGE_FILE="${STATE_DIR}/reviewer-last-message.txt"
 PROMPT_FILE="${STATE_DIR}/reviewer-prompt.txt"
+CLAUDE_DIR="${AUTO_REVIEW_CLAUDE_DIR:-${HOME}/.claude}"
+MCP_NEEDS_AUTH_CACHE_FILE="${AUTO_REVIEW_MCP_NEEDS_AUTH_CACHE_FILE:-${CLAUDE_DIR}/mcp-needs-auth-cache.json}"
+AUTO_REVIEW_ENABLE_CLAUDEAI_MCP="${AUTO_REVIEW_ENABLE_CLAUDEAI_MCP:-0}"
+ENABLE_CLAUDEAI_MCP_SERVERS_VALUE="false"
 
 mkdir -p "${STATE_DIR}"
 touch "${RUNNER_LOG}" "${STREAM_LOG}" "${LAST_MESSAGE_FILE}"
@@ -34,6 +38,49 @@ now() {
 
 log() {
   printf '[%s] %s\n' "$(now)" "$*" | tee -a "${RUNNER_LOG}"
+}
+
+has_claude_ai_oauth() {
+  local file
+  for file in \
+    "${CLAUDE_DIR}/.credentials.json" \
+    "${CLAUDE_DIR}/credentials-account2.json" \
+    "${CLAUDE_DIR}/.credentials-account1-backup.json"; do
+    if [[ -f "${file}" ]] && grep -q '"claudeAiOauth"' "${file}" && grep -q '"accessToken"' "${file}"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+needs_auth_cache_has_google_connectors() {
+  if [[ ! -f "${MCP_NEEDS_AUTH_CACHE_FILE}" ]]; then
+    return 1
+  fi
+  grep -Eiq 'claude\.ai (gmail|google calendar)' "${MCP_NEEDS_AUTH_CACHE_FILE}"
+}
+
+configure_headless_mcp() {
+  if [[ "${AUTO_REVIEW_ENABLE_CLAUDEAI_MCP}" != "1" ]]; then
+    ENABLE_CLAUDEAI_MCP_SERVERS_VALUE="false"
+    log "reviewer-mcp preflight: claude_ai_mcp=disabled reason=opt_in_required env=AUTO_REVIEW_ENABLE_CLAUDEAI_MCP=1"
+    return 0
+  fi
+
+  if ! has_claude_ai_oauth; then
+    ENABLE_CLAUDEAI_MCP_SERVERS_VALUE="false"
+    log "reviewer-mcp preflight: claude_ai_mcp=disabled reason=missing_claude_ai_oauth"
+    return 0
+  fi
+
+  if needs_auth_cache_has_google_connectors; then
+    ENABLE_CLAUDEAI_MCP_SERVERS_VALUE="false"
+    log "reviewer-mcp preflight: claude_ai_mcp=disabled reason=cached_needs_auth_for_google_connectors"
+    return 0
+  fi
+
+  ENABLE_CLAUDEAI_MCP_SERVERS_VALUE="true"
+  log "reviewer-mcp preflight: claude_ai_mcp=enabled reason=opt_in_and_auth_present"
 }
 
 is_dirty_worktree() {
@@ -217,6 +264,8 @@ else
   log "AUTO_REVIEW_FORCE=1 set; bypassing active reviewer guard."
 fi
 
+configure_headless_mcp
+
 cat > "${PROMPT_FILE}" <<PROMPT
 Read and follow ${REVIEW_INSTRUCTIONS_FILE} exactly.
 
@@ -236,6 +285,9 @@ Critical rules:
 - Never run gh pr create or interactive auth/login commands.
 - Append blocker details to ${SHARED_ISSUES_DIR}/notes.md.
 - API routes are /v1/* except health (/health*) and test reset (POST /test/reset).
+- Headless MCP policy: claude.ai MCP servers are disabled by default for reviewer runs.
+  - To enable when auth is configured, set AUTO_REVIEW_ENABLE_CLAUDEAI_MCP=1.
+  - If preflight logs cached Google connector auth gaps, keep MCP disabled until OAuth is fixed.
 
 Begin reviewing now and continue until no review items remain in 03-needs-review or 04-in-review.
 PROMPT
@@ -255,6 +307,7 @@ RUN_LOG="${RUN_LOG:?RUN_LOG is required}"
 STREAM_LOG="${STREAM_LOG:?STREAM_LOG is required}"
 LAST_MESSAGE_FILE="${LAST_MESSAGE_FILE:?LAST_MESSAGE_FILE is required}"
 TIMEOUT_CMD="${TIMEOUT_CMD:-}"
+ENABLE_CLAUDEAI_MCP_SERVERS_VALUE="${ENABLE_CLAUDEAI_MCP_SERVERS_VALUE:-false}"
 
 cd "${REVIEW_WORKTREE_DIR}"
 printf '[%s] reviewer run started\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
@@ -262,6 +315,7 @@ printf '[%s] reviewer run started\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
 REVIEW_TIMEOUT="${REVIEW_TIMEOUT:-1200}"
 export GH_PROMPT_DISABLED=1
 export GIT_TERMINAL_PROMPT=0
+export ENABLE_CLAUDEAI_MCP_SERVERS="${ENABLE_CLAUDEAI_MCP_SERVERS_VALUE}"
 SYSTEM_PROMPT="reviewer instructions path: ${REVIEW_INSTRUCTIONS_FILE}"
 REVIEW_PROMPT="$(cat "${PROMPT_FILE}")"
 
@@ -298,6 +352,6 @@ if [[ "${AUTO_REVIEW_DRY_RUN:-0}" == "1" ]]; then
 fi
 
 tmux new-window -d -t "${SESSION_NAME}" -n "${RUN_NAME}" \
-  "REVIEW_WORKTREE_DIR='${REVIEW_WORKTREE_DIR}' PROMPT_FILE='${PROMPT_FILE}' REVIEW_INSTRUCTIONS_FILE='${REVIEW_INSTRUCTIONS_FILE}' RUN_LOG='${RUN_LOG}' STREAM_LOG='${STREAM_LOG}' LAST_MESSAGE_FILE='${LAST_MESSAGE_FILE}' TIMEOUT_CMD='${TIMEOUT_CMD}' '${RUN_SCRIPT}'"
+  "REVIEW_WORKTREE_DIR='${REVIEW_WORKTREE_DIR}' PROMPT_FILE='${PROMPT_FILE}' REVIEW_INSTRUCTIONS_FILE='${REVIEW_INSTRUCTIONS_FILE}' RUN_LOG='${RUN_LOG}' STREAM_LOG='${STREAM_LOG}' LAST_MESSAGE_FILE='${LAST_MESSAGE_FILE}' TIMEOUT_CMD='${TIMEOUT_CMD}' ENABLE_CLAUDEAI_MCP_SERVERS_VALUE='${ENABLE_CLAUDEAI_MCP_SERVERS_VALUE}' '${RUN_SCRIPT}'"
 
 log "Started reviewer autowork in tmux session '${SESSION_NAME}' window '${RUN_NAME}'. Attach with: tmux attach -t ${SESSION_NAME}"
