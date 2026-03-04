@@ -119,6 +119,79 @@ func TestFlowExecutionServiceAdvanceThroughTerminalNode(t *testing.T) {
 	}
 }
 
+func TestFlowExecutionServiceAdvanceFlowBackfillsMissingExecutionFromTemplate(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, nodes := seedLinearTemplate(t, ctx, fixture, false, 5)
+	taskRecord := seedFlowTask(t, ctx, fixture, "Flow task missing execution", "in_progress", &template.ID)
+
+	advanced, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID})
+	if err != nil {
+		t.Fatalf("AdvanceFlow: %v", err)
+	}
+	if advanced.FlowNodeID != nodes[1].ID {
+		t.Fatalf("advanced flow_node_id = %s, want %s", advanced.FlowNodeID, nodes[1].ID)
+	}
+
+	updatedTask, err := fixture.taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[1].ID {
+		t.Fatalf("current_flow_node_id = %v, want %s", updatedTask.CurrentFlowNodeID, nodes[1].ID)
+	}
+
+	executions, err := fixture.executionRepo.ListByTask(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("ListByTask executions: %v", err)
+	}
+	if len(executions) != 2 {
+		t.Fatalf("execution row count = %d, want 2", len(executions))
+	}
+	if executions[0].FlowNodeID != nodes[0].ID || executions[0].Status != "completed" {
+		t.Fatalf("execution[0] = %+v, want node=%s status=completed", executions[0], nodes[0].ID)
+	}
+	if executions[1].FlowNodeID != nodes[1].ID || executions[1].Status != "active" {
+		t.Fatalf("execution[1] = %+v, want node=%s status=active", executions[1], nodes[1].ID)
+	}
+}
+
+func TestFlowExecutionServiceAdvanceFlowBackfillsMissingExecutionForCurrentNode(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, nodes := seedLinearTemplate(t, ctx, fixture, false, 5)
+	taskRecord := seedFlowTask(t, ctx, fixture, "Flow task missing active row", "in_progress", &template.ID)
+	if _, err := fixture.taskRepo.SetFlowNode(ctx, taskRecord.ID, &nodes[0].ID); err != nil {
+		t.Fatalf("SetFlowNode: %v", err)
+	}
+
+	advanced, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID})
+	if err != nil {
+		t.Fatalf("AdvanceFlow: %v", err)
+	}
+	if advanced.FlowNodeID != nodes[1].ID {
+		t.Fatalf("advanced flow_node_id = %s, want %s", advanced.FlowNodeID, nodes[1].ID)
+	}
+
+	executions, err := fixture.executionRepo.ListByTask(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("ListByTask executions: %v", err)
+	}
+	if len(executions) != 2 {
+		t.Fatalf("execution row count = %d, want 2", len(executions))
+	}
+	if executions[0].FlowNodeID != nodes[0].ID || executions[0].Status != "completed" {
+		t.Fatalf("execution[0] = %+v, want node=%s status=completed", executions[0], nodes[0].ID)
+	}
+	if executions[1].FlowNodeID != nodes[1].ID || executions[1].Status != "active" {
+		t.Fatalf("execution[1] = %+v, want node=%s status=active", executions[1], nodes[1].ID)
+	}
+}
+
 func TestFlowExecutionServiceRejectionLoopVisitIncrements(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

@@ -187,26 +187,12 @@ func TestTaskHTTPAdvanceFlowAndMissingActiveExecution(t *testing.T) {
 
 	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
 
-	missing := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskRecord.ID.String()+"/advance-flow", map[string]any{}, map[string]string{"Authorization": "Bearer " + adminToken})
-	if missing.StatusCode != http.StatusNotFound {
-		t.Fatalf("advance without execution status = %d, want %d body=%s", missing.StatusCode, http.StatusNotFound, string(missing.Body))
-	}
-
-	execRepo := repo.NewFlowNodeExecutionRepo(testServer.Pool)
-	if _, err := execRepo.Create(context.Background(), repo.FlowNodeExecution{
-		TaskID:      taskRecord.ID,
-		FlowNodeID:  nodeA.ID,
-		VisitNumber: 1,
-		Status:      "active",
-	}); err != nil {
-		t.Fatalf("create active execution: %v", err)
-	}
-
 	advanced := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskRecord.ID.String()+"/advance-flow", map[string]any{}, map[string]string{"Authorization": "Bearer " + adminToken})
 	if advanced.StatusCode != http.StatusOK {
 		t.Fatalf("advance status = %d, want %d body=%s", advanced.StatusCode, http.StatusOK, string(advanced.Body))
 	}
 
+	execRepo := repo.NewFlowNodeExecutionRepo(testServer.Pool)
 	taskAfter, err := repo.NewProjectTaskRepo(testServer.Pool).GetByID(context.Background(), taskRecord.ID)
 	if err != nil {
 		t.Fatalf("get task after advance: %v", err)
@@ -222,8 +208,8 @@ func TestTaskHTTPAdvanceFlowAndMissingActiveExecution(t *testing.T) {
 	if len(executions) != 2 {
 		t.Fatalf("execution count = %d, want 2", len(executions))
 	}
-	if executions[0].Status != "completed" {
-		t.Fatalf("first execution status = %q, want %q", executions[0].Status, "completed")
+	if executions[0].FlowNodeID != nodeA.ID || executions[0].Status != "completed" {
+		t.Fatalf("first execution = %+v, want node=%s status=completed", executions[0], nodeA.ID)
 	}
 	if executions[1].FlowNodeID != nodeB.ID || executions[1].Status != "active" {
 		t.Fatalf("second execution = %+v, want node=%s status=active", executions[1], nodeB.ID)

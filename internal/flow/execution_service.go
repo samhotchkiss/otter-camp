@@ -776,16 +776,47 @@ func (s *service) loadActiveFlowState(ctx context.Context, taskID uuid.UUID) (re
 	if err != nil {
 		return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
 	}
+
 	if taskRecord.CurrentFlowNodeID == nil {
-		return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, ErrFlowNotStarted
+		if taskRecord.FlowTemplateID == nil {
+			return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, ErrFlowNotStarted
+		}
+		if _, err := s.StartFlow(ctx, taskRecord.ID); err != nil {
+			return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
+		}
+		taskRecord, err = s.tasks.GetByID(ctx, taskID)
+		if err != nil {
+			return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
+		}
+		if taskRecord.CurrentFlowNodeID == nil {
+			return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, ErrFlowNotStarted
+		}
 	}
 
 	currentNode, err := s.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
 	if err != nil {
 		return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
 	}
+
 	activeExecution, err := s.executions.GetActive(ctx, taskRecord.ID, currentNode.ID)
-	if err != nil {
+	if errors.Is(err, repo.ErrNotFound) {
+		nextVisit, visitErr := s.nextVisitNumber(ctx, taskRecord.ID, currentNode.ID)
+		if visitErr != nil {
+			return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, visitErr
+		}
+		activeExecution, err = s.executions.Create(ctx, repo.FlowNodeExecution{
+			TaskID:      taskRecord.ID,
+			FlowNodeID:  currentNode.ID,
+			VisitNumber: nextVisit,
+			Status:      "active",
+		})
+		if err != nil {
+			return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
+		}
+		if err := s.ensureExecutionSession(ctx, &activeExecution); err != nil {
+			return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
+		}
+	} else if err != nil {
 		return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
 	}
 
