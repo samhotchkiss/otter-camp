@@ -41,6 +41,8 @@ touch "${WATCHDOG_LOG}"
 
 # shellcheck source=scripts/lib/issue-queue.sh
 source "${SCRIPT_DIR}/lib/issue-queue.sh"
+# shellcheck source=scripts/lib/run-jsonl.sh
+source "${SCRIPT_DIR}/lib/run-jsonl.sh"
 
 now_epoch() { date +%s; }
 now_ts() { date '+%Y-%m-%d %H:%M:%S %Z'; }
@@ -149,6 +151,54 @@ count_lane_files() {
 latest_file() {
   local pattern="$1"
   ls -t ${pattern} 2>/dev/null | head -n 1 || true
+}
+
+validate_run_jsonl_terminal_state() {
+  local latest_json active_builder_pids
+  latest_json="$(latest_file "${STATE_DIR}/run-*.jsonl")"
+  active_builder_pids="$(codex_active_pids)"
+
+  local total=0 missing=0 repaired=0 skipped=0
+  local file base started terminal action
+
+  while IFS= read -r file; do
+    [[ -z "${file}" ]] && continue
+    total=$((total + 1))
+    base="$(basename "${file}")"
+    started="$(run_jsonl_started_count "${file}")"
+    terminal="$(run_jsonl_terminal_count "${file}")"
+
+    if (( started > 0 && terminal == 0 )); then
+      missing=$((missing + 1))
+      if [[ -n "${active_builder_pids}" && -n "${latest_json}" && "${file}" == "${latest_json}" ]]; then
+        skipped=$((skipped + 1))
+        log "jsonl-validator outcome=missing_terminal_pending_active_run file=${base} started=${started} terminal=${terminal}"
+        continue
+      fi
+
+      action="$(
+        run_jsonl_append_interrupted_terminal \
+          "${file}" \
+          "missing_terminal_event_detected_by_supervisor" \
+          "autowork-supervisor-watchdog"
+      )"
+      if [[ "${action}" == "appended" ]]; then
+        repaired=$((repaired + 1))
+        log "jsonl-validator outcome=terminalized file=${base} started=${started} terminal_before=${terminal}"
+      else
+        log "jsonl-validator outcome=missing_terminal_unresolved file=${base} started=${started} terminal_before=${terminal}"
+      fi
+    fi
+  done < <(find "${STATE_DIR}" -maxdepth 1 -type f -name 'run-*.jsonl' | sort)
+
+  if (( missing > 0 )); then
+    append_note_throttled \
+      "jsonl-terminal-validator-missing" \
+      600 \
+      "JSONL validator found missing terminal state in ${missing} run log(s); repaired=${repaired} skipped_active=${skipped}"
+  fi
+
+  log "jsonl-validator summary total=${total} missing=${missing} repaired=${repaired} skipped_active=${skipped}"
 }
 
 task_num_from_file() {
@@ -716,6 +766,7 @@ main() {
 
   enforce_completed_dependencies
   enforce_in_progress_dependencies
+  validate_run_jsonl_terminal_state
   requeue_stale_in_review
   requeue_stale_in_progress
   flag_stale_needs_review
