@@ -1059,6 +1059,23 @@ func TestFlowAdvanceTerminalPropagatesGetByIDError(t *testing.T) {
 	}
 }
 
+func mustUUIDFromAny(t *testing.T, raw any) uuid.UUID {
+	t.Helper()
+	switch typed := raw.(type) {
+	case uuid.UUID:
+		return typed
+	case string:
+		parsed, err := uuid.Parse(strings.TrimSpace(typed))
+		if err != nil {
+			t.Fatalf("parse uuid %q: %v", typed, err)
+		}
+		return parsed
+	default:
+		t.Fatalf("unsupported uuid value type %T (%v)", raw, raw)
+		return uuid.Nil
+	}
+}
+
 // ── Project creation auto-assignment tests ──────────────────────────────
 
 type fakeProjectRepo struct {
@@ -1098,9 +1115,13 @@ func (f *fakeProjectRepo) Archive(context.Context, uuid.UUID) error { return nil
 
 type fakeAssignmentRepo struct {
 	assignments []repo.AgentProjectAssignment
+	assignErr   error
 }
 
 func (f *fakeAssignmentRepo) Assign(_ context.Context, a repo.AgentProjectAssignment) (repo.AgentProjectAssignment, error) {
+	if f.assignErr != nil {
+		return repo.AgentProjectAssignment{}, f.assignErr
+	}
 	a.ID = uuid.New()
 	a.IsActive = true
 	f.assignments = append(f.assignments, a)
@@ -1114,6 +1135,49 @@ func (f *fakeAssignmentRepo) ListByProject(_ context.Context, projectID uuid.UUI
 		}
 	}
 	return result, nil
+}
+
+type fakeAgentRepo struct {
+	agents map[uuid.UUID]repo.Agent
+}
+
+func (f *fakeAgentRepo) Create(_ context.Context, agent repo.Agent) (repo.Agent, error) {
+	agent.ID = uuid.New()
+	if f.agents == nil {
+		f.agents = make(map[uuid.UUID]repo.Agent)
+	}
+	f.agents[agent.ID] = agent
+	return agent, nil
+}
+
+func (f *fakeAgentRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Agent, error) {
+	if f.agents == nil {
+		return repo.Agent{}, repo.ErrNotFound
+	}
+	agent, ok := f.agents[id]
+	if !ok {
+		return repo.Agent{}, repo.ErrNotFound
+	}
+	return agent, nil
+}
+
+func (f *fakeAgentRepo) List(_ context.Context, _ uuid.UUID) ([]repo.Agent, error) {
+	items := make([]repo.Agent, 0, len(f.agents))
+	for _, agent := range f.agents {
+		items = append(items, agent)
+	}
+	return items, nil
+}
+
+func (f *fakeAgentRepo) Update(_ context.Context, agent repo.Agent) (repo.Agent, error) {
+	if f.agents == nil {
+		return repo.Agent{}, repo.ErrNotFound
+	}
+	if _, ok := f.agents[agent.ID]; !ok {
+		return repo.Agent{}, repo.ErrNotFound
+	}
+	f.agents[agent.ID] = agent
+	return agent, nil
 }
 
 type fakeChatSessionRepo struct {
@@ -1267,6 +1331,109 @@ func TestSessionCreateAutoAddsProjectParticipants(t *testing.T) {
 	}
 	if participants.participants[1].ParticipantID != frankID {
 		t.Fatalf("second participant = %v, want Frank", participants.participants[1].ParticipantID)
+	}
+}
+
+func TestAgentAssignProjectCreatesAssignment(t *testing.T) {
+	assigneeID := uuid.New()
+	projectID := uuid.New()
+	assignments := &fakeAssignmentRepo{}
+	agents := &fakeAgentRepo{
+		agents: map[uuid.UUID]repo.Agent{
+			assigneeID: {ID: assigneeID, IsStarterTrio: false},
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.assignments = assignments
+	executor.agents = agents
+
+	out, err := executor.Execute(testExecCtx(), "agent.assign_project", map[string]any{
+		"agent_id":   assigneeID.String(),
+		"project_id": projectID.String(),
+		"role":       "pm",
+	})
+	if err != nil {
+		t.Fatalf("agent.assign_project: %v", err)
+	}
+
+	assignment, ok := out["assignment"].(map[string]any)
+	if !ok {
+		t.Fatalf("assignment output = %T, want map[string]any", out["assignment"])
+	}
+	if mustUUIDFromAny(t, assignment["agent_id"]) != assigneeID {
+		t.Fatalf("agent_id = %v, want %s", assignment["agent_id"], assigneeID)
+	}
+	if mustUUIDFromAny(t, assignment["project_id"]) != projectID {
+		t.Fatalf("project_id = %v, want %s", assignment["project_id"], projectID)
+	}
+	if assignment["role"] != "pm" {
+		t.Fatalf("role = %v, want pm", assignment["role"])
+	}
+	if len(assignments.assignments) != 1 {
+		t.Fatalf("assignment repo entries = %d, want 1", len(assignments.assignments))
+	}
+	if assignments.assignments[0].AssignedByType != "agent" {
+		t.Fatalf("assigned_by_type = %q, want agent", assignments.assignments[0].AssignedByType)
+	}
+	if assignments.assignments[0].AssignedByID == nil {
+		t.Fatal("assigned_by_id = nil, want execution agent id")
+	}
+	execAgentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+	if *assignments.assignments[0].AssignedByID != execAgentID {
+		t.Fatalf("assigned_by_id = %s, want %s", *assignments.assignments[0].AssignedByID, execAgentID)
+	}
+}
+
+func TestAgentAssignProjectRejectsStarterTrioPMRole(t *testing.T) {
+	starterID := uuid.New()
+	assignments := &fakeAssignmentRepo{}
+	agents := &fakeAgentRepo{
+		agents: map[uuid.UUID]repo.Agent{
+			starterID: {ID: starterID, IsStarterTrio: true},
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.assignments = assignments
+	executor.agents = agents
+
+	out, err := executor.Execute(testExecCtx(), "agent.assign_project", map[string]any{
+		"agent_id":   starterID.String(),
+		"project_id": uuid.NewString(),
+		"role":       "pm",
+	})
+	if err != nil {
+		t.Fatalf("agent.assign_project: %v", err)
+	}
+	if out["error"] != "starter_trio_cannot_be_assigned" {
+		t.Fatalf("error = %v, want starter_trio_cannot_be_assigned", out["error"])
+	}
+	if len(assignments.assignments) != 0 {
+		t.Fatalf("assignment repo entries = %d, want 0", len(assignments.assignments))
+	}
+}
+
+func TestAgentAssignProjectMapsPMConflict(t *testing.T) {
+	assigneeID := uuid.New()
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.assignments = &fakeAssignmentRepo{assignErr: repo.ErrPMConflict}
+	executor.agents = &fakeAgentRepo{
+		agents: map[uuid.UUID]repo.Agent{
+			assigneeID: {ID: assigneeID, IsStarterTrio: false},
+		},
+	}
+
+	out, err := executor.Execute(testExecCtx(), "agent.assign_project", map[string]any{
+		"agent_id":   assigneeID.String(),
+		"project_id": uuid.NewString(),
+		"role":       "pm",
+	})
+	if err != nil {
+		t.Fatalf("agent.assign_project: %v", err)
+	}
+	if out["error"] != "pm_conflict" {
+		t.Fatalf("error = %v, want pm_conflict", out["error"])
 	}
 }
 

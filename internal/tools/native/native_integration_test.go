@@ -376,6 +376,182 @@ func TestIntegrationTaskDependencyCreateRemoveAndCycleDetection(t *testing.T) {
 	}
 }
 
+func TestIntegrationAgentAssignProjectCreatesPMAssignment(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	ctx := integrationExecCtxWith(orgID, actor.ID)
+
+	createdTemp, err := executor.Execute(ctx, "agent.create_temp", map[string]any{
+		"name":        "Temp PM",
+		"scope_type":  "project",
+		"scope_id":    project.ID.String(),
+		"ttl_seconds": 3600,
+	})
+	if err != nil {
+		t.Fatalf("agent.create_temp: %v", err)
+	}
+	tempAgentID := nestedUUID(t, createdTemp, "agent", "id")
+
+	out, err := executor.Execute(ctx, "agent.assign_project", map[string]any{
+		"agent_id":   tempAgentID.String(),
+		"project_id": project.ID.String(),
+		"role":       "pm",
+	})
+	if err != nil {
+		t.Fatalf("agent.assign_project: %v", err)
+	}
+	assignment, ok := out["assignment"].(map[string]any)
+	if !ok {
+		t.Fatalf("assignment output = %T, want map[string]any", out["assignment"])
+	}
+	if mustUUIDValue(t, assignment["agent_id"]) != tempAgentID {
+		t.Fatalf("assignment agent_id = %v, want %s", assignment["agent_id"], tempAgentID)
+	}
+	if mustUUIDValue(t, assignment["project_id"]) != project.ID {
+		t.Fatalf("assignment project_id = %v, want %s", assignment["project_id"], project.ID)
+	}
+	if assignment["role"] != "pm" {
+		t.Fatalf("assignment role = %v, want pm", assignment["role"])
+	}
+
+	var activeAssignments int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM agent_project_assignment
+		WHERE project_id = $1
+		  AND agent_id = $2
+		  AND role = 'pm'
+		  AND is_active = true
+	`, project.ID, tempAgentID).Scan(&activeAssignments); err != nil {
+		t.Fatalf("count pm assignments: %v", err)
+	}
+	if activeAssignments != 1 {
+		t.Fatalf("active pm assignments = %d, want 1", activeAssignments)
+	}
+}
+
+func TestIntegrationAgentAssignProjectRejectsSecondPM(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	ctx := integrationExecCtxWith(orgID, actor.ID)
+
+	firstTemp, err := executor.Execute(ctx, "agent.create_temp", map[string]any{
+		"name":       "First PM",
+		"scope_type": "project",
+		"scope_id":   project.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("agent.create_temp first: %v", err)
+	}
+	firstID := nestedUUID(t, firstTemp, "agent", "id")
+
+	if _, err := executor.Execute(ctx, "agent.assign_project", map[string]any{
+		"agent_id":   firstID.String(),
+		"project_id": project.ID.String(),
+		"role":       "pm",
+	}); err != nil {
+		t.Fatalf("agent.assign_project first pm: %v", err)
+	}
+
+	secondTemp, err := executor.Execute(ctx, "agent.create_temp", map[string]any{
+		"name":       "Second PM",
+		"scope_type": "project",
+		"scope_id":   project.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("agent.create_temp second: %v", err)
+	}
+	secondID := nestedUUID(t, secondTemp, "agent", "id")
+
+	secondAssign, err := executor.Execute(ctx, "agent.assign_project", map[string]any{
+		"agent_id":   secondID.String(),
+		"project_id": project.ID.String(),
+		"role":       "pm",
+	})
+	if err != nil {
+		t.Fatalf("agent.assign_project second pm: %v", err)
+	}
+	if secondAssign["error"] != "pm_conflict" {
+		t.Fatalf("second pm error = %v, want pm_conflict", secondAssign["error"])
+	}
+
+	var activePMCount int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM agent_project_assignment
+		WHERE project_id = $1
+		  AND role = 'pm'
+		  AND is_active = true
+	`, project.ID).Scan(&activePMCount); err != nil {
+		t.Fatalf("count active pm assignments: %v", err)
+	}
+	if activePMCount != 1 {
+		t.Fatalf("active pm assignments = %d, want 1", activePMCount)
+	}
+}
+
+func TestIntegrationAgentAssignProjectRejectsStarterTrioPMRole(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+
+	starterTrio, err := repo.NewAgentRepo(pool).Create(context.Background(), repo.Agent{
+		OrganizationID:       orgID,
+		DisplayName:          "Frank",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "prompt",
+		OperatorInstructions: "",
+		AgentType:            "general",
+		IsStarterTrio:        true,
+		PrivateMemory:        false,
+		MemoryReadScopes:     []string{"org"},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create starter trio agent: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	ctx := integrationExecCtxWith(orgID, actor.ID)
+	out, err := executor.Execute(ctx, "agent.assign_project", map[string]any{
+		"agent_id":   starterTrio.ID.String(),
+		"project_id": project.ID.String(),
+		"role":       "pm",
+	})
+	if err != nil {
+		t.Fatalf("agent.assign_project: %v", err)
+	}
+	if out["error"] != "starter_trio_cannot_be_assigned" {
+		t.Fatalf("error = %v, want starter_trio_cannot_be_assigned", out["error"])
+	}
+
+	var assignments int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM agent_project_assignment
+		WHERE project_id = $1
+		  AND agent_id = $2
+	`, project.ID, starterTrio.ID).Scan(&assignments); err != nil {
+		t.Fatalf("count starter trio assignments: %v", err)
+	}
+	if assignments != 0 {
+		t.Fatalf("starter trio assignments = %d, want 0", assignments)
+	}
+}
+
 func TestIntegrationTaskUpdateSetsFlowTemplateAndAssignedAgent(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)

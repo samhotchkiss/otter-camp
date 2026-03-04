@@ -285,6 +285,7 @@ func TestToolDefinitionTier2SeedMigration(t *testing.T) {
 		"schedule.delete":        "project.manage",
 		"agent.create_temp":      "agent.create_temp",
 		"agent.update":           "agent.manage",
+		"agent.assign_project":   "agent.manage",
 		"session.create":         "session.manage",
 		"session.invite_agent":   "session.manage",
 		"message.send":           "message.send",
@@ -329,8 +330,8 @@ func TestToolDefinitionSeedSchemasIncludePropertiesAndRequiredParameters(t *test
 	`).Scan(&schemaCount); err != nil {
 		t.Fatalf("count native/browser tool definitions: %v", err)
 	}
-	if schemaCount != 66 {
-		t.Fatalf("native/browser tool definition count = %d, want 66", schemaCount)
+	if schemaCount != 72 {
+		t.Fatalf("native/browser tool definition count = %d, want 72", schemaCount)
 	}
 
 	rows, err := pool.Query(ctx, `
@@ -344,13 +345,18 @@ func TestToolDefinitionSeedSchemasIncludePropertiesAndRequiredParameters(t *test
 	defer rows.Close()
 
 	requiredExpectations := map[string][]string{
-		"file.write":         {"path"},
-		"file.edit":          {"path", "old_string", "new_string"},
-		"task.create":        {"project_id", "title"},
-		"task.update":        {"task_id"},
-		"flow.advance":       {"flow_node_execution_id"},
-		"schedule.create":    {"project_id", "flow_template_id", "cron"},
-		"message.send":       {"session_id", "content"},
+		"file.write":      {"path"},
+		"file.edit":       {"path", "old_string", "new_string"},
+		"task.create":     {"project_id", "title"},
+		"task.update":     {"task_id"},
+		"flow.advance":    {"flow_node_execution_id"},
+		"schedule.create": {"project_id", "flow_template_id", "cron"},
+		"message.send":    {"session_id", "content"},
+		"agent.assign_project": {
+			"agent_id",
+			"project_id",
+			"role",
+		},
 		"browser.navigate":   {"url"},
 		"browser.type":       {"selector", "text"},
 		"browser.press_key":  {"key"},

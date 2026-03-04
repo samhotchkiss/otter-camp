@@ -358,6 +358,8 @@ func (e *NativeToolExecutor) Execute(ctx context.Context, toolName string, input
 		return e.handleAgentCreateTemp(ctx, input)
 	case "agent.update":
 		return e.handleAgentUpdate(ctx, input)
+	case "agent.assign_project":
+		return e.handleAgentAssignProject(ctx, input)
 	case "session.create":
 		return e.handleSessionCreate(ctx, input)
 	case "session.invite_agent":

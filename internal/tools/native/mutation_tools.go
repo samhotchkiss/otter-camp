@@ -1491,6 +1491,92 @@ func (e *NativeToolExecutor) handleScheduleDelete(ctx context.Context, input map
 	return map[string]any{"deleted": true}, nil
 }
 
+func normalizeProjectAssignmentRole(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "pm", "worker", "reviewer", "observer":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func projectAssignmentRoleRequiresDedicatedAgent(role string) bool {
+	switch role {
+	case "pm", "worker", "reviewer":
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *NativeToolExecutor) handleAgentAssignProject(ctx context.Context, input map[string]any) (map[string]any, error) {
+	if e.assignments == nil {
+		return map[string]any{"error": "assignment_repository_unavailable"}, nil
+	}
+	if e.agents == nil {
+		return map[string]any{"error": "agent_repository_unavailable"}, nil
+	}
+
+	agentID, ok := readUUID(input, "agent_id")
+	if !ok || agentID == uuid.Nil {
+		return map[string]any{"error": "agent_id_required"}, nil
+	}
+	projectID, ok := readUUID(input, "project_id")
+	if !ok || projectID == uuid.Nil {
+		return map[string]any{"error": "project_id_required"}, nil
+	}
+	roleRaw, ok := readString(input, "role")
+	if !ok || strings.TrimSpace(roleRaw) == "" {
+		return map[string]any{"error": "role_required"}, nil
+	}
+	role := normalizeProjectAssignmentRole(roleRaw)
+	if role == "" {
+		return map[string]any{"error": "invalid_role"}, nil
+	}
+
+	agentRecord, err := e.agents.GetByID(ctx, agentID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return map[string]any{"error": "not_found"}, nil
+		}
+		return nil, err
+	}
+	if projectAssignmentRoleRequiresDedicatedAgent(role) && agentRecord.IsStarterTrio {
+		return map[string]any{"error": "starter_trio_cannot_be_assigned"}, nil
+	}
+
+	actor := actorFromContext(ctx)
+	assignment, err := e.assignments.Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        agentID,
+		ProjectID:      projectID,
+		Role:           role,
+		AssignedByType: actor.createdByType,
+		AssignedByID:   actor.createdByPtr,
+	})
+	if err != nil {
+		if errors.Is(err, repo.ErrPMConflict) {
+			return map[string]any{"error": "pm_conflict"}, nil
+		}
+		if errors.Is(err, repo.ErrConflict) {
+			return map[string]any{"error": "invalid_reference"}, nil
+		}
+		return nil, err
+	}
+
+	return map[string]any{
+		"assignment": map[string]any{
+			"assignment_id":    assignment.ID,
+			"agent_id":         assignment.AgentID,
+			"project_id":       assignment.ProjectID,
+			"role":             assignment.Role,
+			"is_active":        assignment.IsActive,
+			"assigned_by_type": assignment.AssignedByType,
+			"assigned_by_id":   assignment.AssignedByID,
+			"assigned_at":      toRFC3339(&assignment.AssignedAt),
+		},
+	}, nil
+}
+
 func (e *NativeToolExecutor) handleAgentCreateTemp(ctx context.Context, input map[string]any) (map[string]any, error) {
 	if e.agents == nil {
 		return map[string]any{"error": "agent_repository_unavailable"}, nil
