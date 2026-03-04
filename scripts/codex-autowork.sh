@@ -216,6 +216,16 @@ Implementation directives:
 Execution policy:
 - Continue until no actionable tasks remain in ${SHARED_ISSUES_DIR}/01-ready.
 - If blocked, append clear blocker notes to ${SHARED_ISSUES_DIR}/notes.md, then continue with the next actionable task.
+
+Command path guardrails:
+- Required pattern: discover -> open.
+  - Discover candidate paths first: `rg --files ${WORKTREE_DIR} | rg '<name-or-fragment>'`.
+  - Verify selected path exists: `test -f <path>` (or `ls <path>`).
+  - Only then run `sed/cat` on that file.
+- Missing-path command exits are recoverable `lookup_miss` events, not hard failures.
+- Keep failure reporting explicit with separate buckets:
+  - `lookup_miss`: path/discovery misses
+  - `build_or_test_failure`: actual regressions
 PROMPT
 
 RUN_NAME="run-$(date '+%Y%m%d-%H%M%S')"
