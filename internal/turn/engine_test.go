@@ -743,6 +743,34 @@ func TestCancellationDuringTier2DispatchRequestsRunCancel(t *testing.T) {
 	}
 }
 
+func TestCancellationWatchReusesConsumerNameAcrossTurns(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage first turn: %v", err)
+	}
+	second := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "second message",
+	})
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, second.ID); err != nil {
+		t.Fatalf("HandleUserMessage second turn: %v", err)
+	}
+
+	cancelSubs := fixture.events.subscriptionNamesWithPrefix("turn-engine.cancel.")
+	if len(cancelSubs) != 2 {
+		t.Fatalf("cancel subscription count = %d, want 2", len(cancelSubs))
+	}
+	if cancelSubs[0] != cancelSubs[1] {
+		t.Fatalf("cancel consumer name differs across turns: %q != %q", cancelSubs[0], cancelSubs[1])
+	}
+}
+
 func TestReactionFeedbackNoLinkedMemories(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	assistant := fixture.messages.create(repo.ChatMessage{
@@ -830,6 +858,7 @@ func newUnitFixture(t *testing.T, mode string) *unitFixture {
 	orgID := uuid.New()
 	sessionID := uuid.New()
 	agentID := uuid.New()
+	agentRecord := repo.Agent{ID: agentID, OrganizationID: orgID, DisplayName: "Frank"}
 
 	session := &chat.ChatSession{ID: sessionID, OrganizationID: orgID, ScopeType: "organization", ScopeID: orgID, Mode: mode, Status: "active"}
 	messages := newFakeMessageRepo()
@@ -889,7 +918,7 @@ func newUnitFixture(t *testing.T, mode string) *unitFixture {
 		Messages:      messages,
 		Turns:         chatSvc,
 		Sessions:      chatSvc,
-		Agents:        &fakeAgentRepo{agent: repo.Agent{ID: agentID, OrganizationID: orgID}},
+		Agents:        &fakeAgentRepo{agent: agentRecord, starter: []repo.Agent{agentRecord}},
 		Tasks:         &fakeTaskRepo{},
 		MemorySources: memSources,
 		Memories:      memories,
@@ -1414,8 +1443,9 @@ type fakeEventBus struct {
 }
 
 type fakeSubscription struct {
-	orgID   *uuid.UUID
-	handler eventbus.EventHandler
+	consumerName string
+	orgID        *uuid.UUID
+	handler      eventbus.EventHandler
 }
 
 func (f *fakeEventBus) Publish(ctx context.Context, tx pgx.Tx, event eventbus.DomainEvent) error {
@@ -1437,14 +1467,27 @@ func (f *fakeEventBus) Publish(ctx context.Context, tx pgx.Tx, event eventbus.Do
 	return nil
 }
 
-func (f *fakeEventBus) Subscribe(_ string, orgID *uuid.UUID, handler eventbus.EventHandler) eventbus.Subscription {
+func (f *fakeEventBus) Subscribe(consumerName string, orgID *uuid.UUID, handler eventbus.EventHandler) eventbus.Subscription {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.subs = append(f.subs, fakeSubscription{orgID: orgID, handler: handler})
+	f.subs = append(f.subs, fakeSubscription{consumerName: strings.TrimSpace(consumerName), orgID: orgID, handler: handler})
 	return eventbus.Subscription{}
 }
 
 func (f *fakeEventBus) Unsubscribe(_ eventbus.Subscription) {}
+
+func (f *fakeEventBus) subscriptionNamesWithPrefix(prefix string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, 0, len(f.subs))
+	for _, sub := range f.subs {
+		if !strings.HasPrefix(sub.consumerName, prefix) {
+			continue
+		}
+		out = append(out, sub.consumerName)
+	}
+	return out
+}
 
 type fakeEnqueuer struct {
 	mu   sync.Mutex
