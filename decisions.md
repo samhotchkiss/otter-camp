@@ -159,3 +159,15 @@ Lori tried to find the template via `flow.get_template` but used wrong IDs (proj
 
 **Plan**: Wait until 01:00 MST, then retry. Do not send any messages to OtterCamp until then to avoid wasting the 3-attempt dead-letter budget on each retry.
 
+---
+
+## Decision 7: Flow execution gap — continue work despite broken flow (2026-03-04 02:20)
+
+**Context**: During Phase 4, agents calling `flow.advance` get "not found" errors on all 11 Sam.blog tasks. Root cause: Decision 4 applied `flow_template_id` via SQL AFTER tasks were already `in_progress`. The `TaskQueueProcessor` creates flow executions during `queued→in_progress`, so no flow executions were ever created.
+
+**Impact**: Tasks cannot advance Work → Review → Done via the flow system. Agents are using `task.update` to change `work_status` manually, bypassing flow enforcement. 3 tasks (OC-2, OC-6, OC-9) reached "Review" this way, but none can reach "Done" via flow terminal node.
+
+**Decision**: Filed issue 214. Continue monitoring agent work — the agents can still create deliverables even if the flow completion is broken. When the fix lands, flow executions can be retroactively created and tasks can complete properly.
+
+**Risk**: This means the Ralph Loop can't fully validate the Work → Review → Done flow path. The spec compliance for "task done only via flow terminal node" can't be tested on this iteration.
+
