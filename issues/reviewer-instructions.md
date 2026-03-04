@@ -22,6 +22,8 @@ Review standards:
 - Dependency gate: do not move a task to `05-completed` if any task listed in its `Depends on` header is not already in `05-completed`.
 - Use non-interactive GitHub CLI checks/actions (for example `gh pr view`, `gh pr list`, `gh pr checks`, `gh pr merge`).
 - Do not run `gh pr create` or any interactive auth/login command from reviewer flow.
+- Never inline multi-line markdown payloads in quoted shell one-liners.
+- For notes append operations, use a single-quoted heredoc delimiter: `cat <<'EOF' >> issues/notes.md`.
 - If accepted and dependency gate passes, attempt to merge the PR to `v2` from reviewer flow.
 - Only move to `05-completed` after merge is confirmed.
 - If PR/merge state cannot be verified non-interactively, or merge fails/is blocked (conflicts, permissions, required checks), append blocker details to `issues/notes.md` and move the task back to `01-ready`.

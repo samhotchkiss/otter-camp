@@ -331,6 +331,22 @@ go test ./... -tags e2e
 Coverage gate: 90% minimum everywhere; 95% on critical paths. PRs that regress coverage by
 more than 1% do not merge.
 
+## Shell Safety Guardrails (Autowork)
+
+When constructing shell commands that include markdown or multi-line text:
+
+- Do **not** inline markdown payloads in quoted one-liners (for example `--body "..."`).
+- For PR descriptions, always write markdown to a file first and use `--body-file`.
+- For notes/changelog append commands, use a single-quoted heredoc delimiter:
+
+```bash
+cat <<'EOF' >> issues/notes.md
+<literal markdown>
+EOF
+```
+
+This prevents command substitution and quote-break failures caused by backticks and `$` expansion.
+
 ---
 
 ## How to Pick Up a Task
