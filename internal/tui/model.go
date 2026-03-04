@@ -207,6 +207,7 @@ type Model struct {
 	perfMetrics    TUIPerformanceMetrics
 
 	chatInput            string
+	lastEscNano          int64 // monotonic timestamp of last ESC keypress (for CSI fragment detection)
 	chatHistory          []string
 	chatHistoryIndex     int
 	chatMessages         []ChatMessage
@@ -749,6 +750,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyMsg:
+		// Track ESC keypresses and suppress standalone '[' that follows within
+		// 50ms — these are CSI introducer fragments from SGR mouse escape
+		// sequences that bubbletea's parser split across events.
+		now := time.Now().UnixNano()
+		if typed.Type == tea.KeyEscape {
+			m.lastEscNano = now
+		} else if typed.Type == tea.KeyRunes && len(typed.Runes) == 1 && typed.Runes[0] == '[' {
+			if now-m.lastEscNano < 50_000_000 { // 50ms
+				return m, nil
+			}
+		}
 		started := m.now()
 		updated, cmd := m.updateKey(typed)
 		typedModel, ok := updated.(Model)
