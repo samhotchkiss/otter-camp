@@ -3,6 +3,7 @@ package turn
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/model"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -113,6 +115,128 @@ func TestListeningEvalWaitReenqueuesAndSkipsPhase2(t *testing.T) {
 	}
 	if !job.runAfter.After(base) {
 		t.Fatalf("run_after = %s, want > %s", job.runAfter, base)
+	}
+}
+
+func TestHandleTurnJobRateLimitedEnqueuesRetryUsingProviderHint(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	base := time.Unix(1700000000, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+	fixture.engine.modelRetryBudget = 1
+
+	retryAfter := 8*time.Minute + 4*time.Second
+	fixture.model.streamFn = func(context.Context, ModelRequest, func(string) error) (ModelResponse, error) {
+		return ModelResponse{}, NewRateLimitedError(retryAfter, errors.New("http status 429"))
+	}
+
+	payload, err := json.Marshal(AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("HandleTurnJob: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn retries = %d, want 1", len(jobs))
+	}
+	job := jobs[0]
+	if job.payload == nil {
+		t.Fatal("retry payload missing")
+	}
+	if job.payload.RetryCount != 1 {
+		t.Fatalf("retry_count = %d, want 1", job.payload.RetryCount)
+	}
+	if job.runAfter == nil {
+		t.Fatal("retry run_after missing")
+	}
+	wantRunAfter := base.Add(retryAfter)
+	if !job.runAfter.Equal(wantRunAfter) {
+		t.Fatalf("run_after = %s, want %s", *job.runAfter, wantRunAfter)
+	}
+
+	if !fixture.messages.containsContent("[Rate limited, retrying in 8m4s...]") {
+		t.Fatal("missing rate-limited retry status message")
+	}
+	if fixture.messages.containsContentSubstring("[Turn failed:") {
+		t.Fatal("unexpected generic turn failed message for rate-limited retry")
+	}
+}
+
+func TestHandleTurnJobRateLimitedUsesBackoffWhenNoRetryHint(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	base := time.Unix(1700000000, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+	fixture.engine.modelRetryBudget = 1
+
+	fixture.model.streamFn = func(context.Context, ModelRequest, func(string) error) (ModelResponse, error) {
+		return ModelResponse{}, NewRateLimitedError(0, errors.New("http status 429"))
+	}
+
+	payload, err := json.Marshal(AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("HandleTurnJob: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn retries = %d, want 1", len(jobs))
+	}
+	if jobs[0].runAfter == nil {
+		t.Fatal("retry run_after missing")
+	}
+	wantRunAfter := base.Add(defaultRateLimitBackoff)
+	if !jobs[0].runAfter.Equal(wantRunAfter) {
+		t.Fatalf("run_after = %s, want %s", *jobs[0].runAfter, wantRunAfter)
+	}
+	if !fixture.messages.containsContent("[Rate limited, retrying in 30s...]") {
+		t.Fatal("missing backoff retry status message")
+	}
+}
+
+func TestHandleTurnJobRateLimitedRetryCapStopsRequeue(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.engine.modelRetryBudget = 1
+	fixture.model.streamFn = func(context.Context, ModelRequest, func(string) error) (ModelResponse, error) {
+		return ModelResponse{}, NewRateLimitedError(45*time.Second, errors.New("http status 429"))
+	}
+
+	payload, err := json.Marshal(AgentTurnPayload{
+		SessionID:  fixture.session.ID,
+		MessageID:  fixture.userMessageID,
+		RetryCount: maxRateLimitRetries,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("HandleTurnJob: %v", err)
+	}
+
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn retries = %d, want 0", len(jobs))
+	}
+	if !fixture.messages.containsContent("[Turn failed: model retries exhausted after 5 attempts.]") {
+		t.Fatal("missing retries exhausted status message")
 	}
 }
 
@@ -1469,6 +1593,18 @@ func (f *fakeMessageRepo) containsContent(content string) bool {
 	defer f.mu.Unlock()
 	for _, item := range f.items {
 		if strings.TrimSpace(item.Content) == strings.TrimSpace(content) {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *fakeMessageRepo) containsContentSubstring(content string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	needle := strings.TrimSpace(content)
+	for _, item := range f.items {
+		if strings.Contains(strings.TrimSpace(item.Content), needle) {
 			return true
 		}
 	}

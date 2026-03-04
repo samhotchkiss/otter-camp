@@ -33,6 +33,9 @@ const (
 	defaultAsyncMaxDuration     = 30 * time.Minute
 	defaultListeningEvalDelay   = 500 * time.Millisecond
 	defaultModelRetryBudget     = 3
+	defaultRateLimitBackoff     = 30 * time.Second
+	maxRateLimitBackoff         = 30 * time.Minute
+	maxRateLimitRetries         = 5
 	defaultSummarizeLayerBudget = 0
 	chunkPollSteerEveryNChunks  = 10
 	maxContinuationTurnDepth    = 3
@@ -50,9 +53,10 @@ var (
 )
 
 type AgentTurnPayload struct {
-	SessionID uuid.UUID  `json:"session_id"`
-	MessageID uuid.UUID  `json:"message_id"`
-	AgentID   *uuid.UUID `json:"agent_id,omitempty"`
+	SessionID  uuid.UUID  `json:"session_id"`
+	MessageID  uuid.UUID  `json:"message_id"`
+	AgentID    *uuid.UUID `json:"agent_id,omitempty"`
+	RetryCount int        `json:"retry_count,omitempty"`
 }
 
 type ModelRequest struct {
@@ -485,7 +489,7 @@ func (e *TurnEngine) HandleTurnJob(ctx context.Context, job jobqueue.Job) error 
 	if payload.SessionID == uuid.Nil || payload.MessageID == uuid.Nil {
 		return fmt.Errorf("%s payload missing session_id or message_id", AgentTurnJobType)
 	}
-	return e.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID)
+	return e.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount)
 }
 
 func (e *TurnEngine) HandleUserMessageEvent(ctx context.Context, event eventbus.DomainEvent) error {
@@ -562,10 +566,10 @@ func (e *TurnEngine) HandleReactionEvent(ctx context.Context, event eventbus.Dom
 }
 
 func (e *TurnEngine) HandleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID) error {
-	return e.handleUserMessage(ctx, sessionID, messageID, nil)
+	return e.handleUserMessage(ctx, sessionID, messageID, nil, 0)
 }
 
-func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID, routedAgentID *uuid.UUID) error {
+func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID, routedAgentID *uuid.UUID, retryCount int) error {
 	if sessionID == uuid.Nil || messageID == uuid.Nil {
 		return fmt.Errorf("session_id and message_id are required")
 	}
@@ -632,11 +636,61 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	if err == nil || errors.Is(err, errTurnDeferred) || errors.Is(err, errTurnCancelled) {
 		return nil
 	}
+	if errors.Is(err, ErrRateLimited) {
+		handled, handleErr := e.handleRateLimitedTurnFailure(ctx, runtime, messageID, routedAgentID, retryCount, err)
+		if handleErr != nil {
+			return handleErr
+		}
+		if handled {
+			return nil
+		}
+	}
 
 	e.logger.Error("turn failed", "error", err, "session_id", sessionID, "turn_id", runtime.turn.ID, "agent_id", agentID)
 	_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(err))
 	_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, fmt.Sprintf("[Turn failed: %s]", summarizeFailure(err)))
 	return err
+}
+
+func (e *TurnEngine) handleRateLimitedTurnFailure(
+	ctx context.Context,
+	runtime *turnRuntime,
+	messageID uuid.UUID,
+	routedAgentID *uuid.UUID,
+	retryCount int,
+	cause error,
+) (bool, error) {
+	if runtime == nil || runtime.turn == nil || runtime.session == nil {
+		return false, nil
+	}
+	if retryCount < 0 {
+		retryCount = 0
+	}
+	if retryCount >= maxRateLimitRetries {
+		_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(cause))
+		_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, fmt.Sprintf("[Turn failed: model retries exhausted after %d attempts.]", maxRateLimitRetries))
+		return true, nil
+	}
+
+	nextPayload := AgentTurnPayload{
+		SessionID:  runtime.session.ID,
+		MessageID:  messageID,
+		RetryCount: retryCount + 1,
+	}
+	if routedAgentID != nil && *routedAgentID != uuid.Nil {
+		agentID := *routedAgentID
+		nextPayload.AgentID = &agentID
+	}
+
+	retryDelay := rateLimitRetryDelay(retryCount, rateLimitRetryAfterHint(cause))
+	runAfter := e.now().Add(retryDelay).UTC()
+	if _, err := e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, nextPayload, &runAfter); err != nil {
+		return false, fmt.Errorf("enqueue rate-limited turn retry: %w", err)
+	}
+
+	_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(cause))
+	_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, fmt.Sprintf("[Rate limited, retrying in %s...]", formatRetryDelay(retryDelay)))
+	return true, nil
 }
 
 func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
@@ -1736,7 +1790,56 @@ func parseAgentTurnPayload(raw json.RawMessage) (AgentTurnPayload, error) {
 	if payload.SessionID == uuid.Nil || payload.MessageID == uuid.Nil {
 		return AgentTurnPayload{}, fmt.Errorf("missing session_id or message_id")
 	}
+	if payload.RetryCount < 0 {
+		payload.RetryCount = 0
+	}
 	return payload, nil
+}
+
+type rateLimitRetryAfterProvider interface {
+	RateLimitRetryAfter() time.Duration
+}
+
+func rateLimitRetryAfterHint(err error) time.Duration {
+	if err == nil {
+		return 0
+	}
+	var provider rateLimitRetryAfterProvider
+	if errors.As(err, &provider) {
+		hint := provider.RateLimitRetryAfter()
+		if hint > 0 {
+			return hint
+		}
+	}
+	return 0
+}
+
+func rateLimitRetryDelay(retryCount int, retryAfterHint time.Duration) time.Duration {
+	if retryAfterHint > 0 {
+		return retryAfterHint
+	}
+	if retryCount < 0 {
+		retryCount = 0
+	}
+
+	delay := defaultRateLimitBackoff
+	for i := 0; i < retryCount; i++ {
+		if delay >= (maxRateLimitBackoff / 2) {
+			return maxRateLimitBackoff
+		}
+		delay *= 2
+	}
+	if delay > maxRateLimitBackoff {
+		return maxRateLimitBackoff
+	}
+	return delay
+}
+
+func formatRetryDelay(delay time.Duration) string {
+	if delay <= 0 {
+		delay = time.Second
+	}
+	return delay.Round(time.Second).String()
 }
 
 func payloadUUID(payload map[string]any, key string) (uuid.UUID, bool) {
