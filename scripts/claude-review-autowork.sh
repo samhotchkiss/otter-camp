@@ -383,6 +383,13 @@ Critical rules:
 - Never inline multi-line markdown in shell one-liners.
   - For any long markdown payload, write to a file with `cat <<'EOF' > <file>` and pass the file path to CLI flags.
   - For notes appends, use `cat <<'EOF' >> ${SHARED_ISSUES_DIR}/notes.md`.
+- Command outcome taxonomy:
+  - `lookup_miss`: path/glob/file discovery miss (`No such file`, `no matches found`)
+  - `search_miss`: zero-result search (`rg`/`grep`/`find` with no matches)
+  - `build_or_test_failure`: actual failing verification/build/test commands
+  - `infra_failure`: CLI/auth/network/runtime failures
+- For exploratory search/discovery commands that may miss, use non-blocking form (`|| true`) where safe.
+- Never suppress non-zero exits for required verification commands (tests/build/checks).
 - Append blocker details to ${SHARED_ISSUES_DIR}/notes.md.
 - API routes are /v1/* except health (/health*) and test reset (POST /test/reset).
 - Headless MCP policy: claude.ai MCP servers are disabled by default for reviewer runs.

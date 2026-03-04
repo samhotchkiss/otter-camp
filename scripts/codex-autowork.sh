@@ -447,10 +447,15 @@ Command path guardrails:
   - Discover candidate paths first: `rg --files ${WORKTREE_DIR} | rg '<name-or-fragment>'`.
   - Verify selected path exists: `test -f <path>` (or `ls <path>`).
   - Only then run `sed/cat` on that file.
-- Missing-path command exits are recoverable `lookup_miss` events, not hard failures.
-- Keep failure reporting explicit with separate buckets:
+- Command outcome taxonomy (use these exact classes in reasoning and notes):
   - `lookup_miss`: path/discovery misses
+  - `search_miss`: no-result search/discovery command
   - `build_or_test_failure`: actual regressions
+  - `infra_failure`: transport/auth/tooling/runtime failures not tied to code correctness
+- Exploratory miss policy:
+  - For discovery commands expected to miss, prefer non-blocking form with `|| true`.
+  - Examples: `rg -n "<pattern>" <path> || true`, `find <dir> -name "<glob>" || true`, `ls <path-that-may-not-exist> || true`.
+  - Never add `|| true` to build/test/verification commands.
 
 Shell quoting guardrails:
 - Never inline markdown payloads in quoted shell one-liners for PRs or notes.
@@ -481,8 +486,13 @@ RUN_LOG="${RUN_LOG:?RUN_LOG is required}"
 RUN_JSON_LOG="${RUN_JSON_LOG:?RUN_JSON_LOG is required}"
 STREAM_LOG="${STREAM_LOG:?STREAM_LOG is required}"
 
-printf '[%s] autowork run started\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+# shellcheck source=scripts/lib/command-outcome.sh
+source "${WORKTREE_DIR}/scripts/lib/command-outcome.sh"
 
+printf '[%s] autowork run started\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+touch "${RUN_JSON_LOG}"
+
+set +e
 if command -v jq >/dev/null 2>&1; then
   codex exec \
     --json \
@@ -519,6 +529,10 @@ else
     | tee -a "${RUN_LOG}" "${STREAM_LOG}"
   status=$?
 fi
+set -e
+
+command_summary="$(summarize_run_jsonl_command_outcomes "${RUN_JSON_LOG}")"
+printf '[%s] command-outcome-summary %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "${command_summary}" | tee -a "${RUN_LOG}" "${STREAM_LOG}"
 
 printf '[%s] autowork run finished (exit=%s)\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "${status}"
 exit "${status}"
