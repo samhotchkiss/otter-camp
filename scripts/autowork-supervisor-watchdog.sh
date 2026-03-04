@@ -8,6 +8,7 @@ REPO_DIR="${AUTOWORK_REPO_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 ISSUES_DIR="${AUTOWORK_ISSUES_DIR:-${REPO_DIR}/issues}"
 STATE_DIR="${AUTOWORK_STATE_DIR:-${HOME}/otter-data/sessions}"
 BASE_BRANCH="${AUTOWORK_BASE_BRANCH:-v2}"
+ISSUE_LANE_CLI="${REPO_DIR}/scripts/issue-lane.sh"
 BUILDER_REPO_DIR="${AUTOWORK_BUILDER_REPO_DIR:-${STATE_DIR}/repos/builder}"
 REVIEWER_REPO_DIR="${AUTOWORK_REVIEWER_REPO_DIR:-${STATE_DIR}/repos/reviewer}"
 
@@ -37,6 +38,9 @@ ENFORCE_DEP_GRAPH="${WATCHDOG_ENFORCE_DEP_GRAPH:-1}"
 mkdir -p "${STATE_DIR}"
 mkdir -p "${NOTE_THROTTLE_DIR}"
 touch "${WATCHDOG_LOG}"
+
+# shellcheck source=scripts/lib/issue-queue.sh
+source "${SCRIPT_DIR}/lib/issue-queue.sh"
 
 now_epoch() { date +%s; }
 now_ts() { date '+%Y-%m-%d %H:%M:%S %Z'; }
@@ -391,6 +395,30 @@ append_note_throttled() {
   append_note "${message}"
 }
 
+move_lane_idempotent() {
+  local src_lane="$1"
+  local dst_lane="$2"
+  local task_basename="$3"
+  local context="$4"
+  local status
+
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    status="$(queue_classify_lane "$(queue_find_lane "${ISSUES_DIR}" "${task_basename}" || echo "missing")" "${dst_lane}")"
+  else
+    status="$(queue_move_task "${ISSUES_DIR}" "${src_lane}" "${dst_lane}" "${task_basename}" || echo "missing")"
+  fi
+
+  log "${context}: outcome=${status} task=${task_basename} from=${src_lane} to=${dst_lane}"
+  case "${status}" in
+    claimed|already_claimed|already_completed|missing)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 enforce_completed_dependencies() {
   [[ "${ENFORCE_DEP_GRAPH}" == "1" ]] || return 0
 
@@ -399,8 +427,7 @@ enforce_completed_dependencies() {
   [[ -d "${completed_dir}" ]] || return 0
   [[ -d "${needs_review_dir}" ]] || return 0
 
-  local now moved file task_num deps missing dep completed_nums target base
-  now="$(now_epoch)"
+  local moved file task_num deps missing dep completed_nums base
   moved=0
 
   while IFS= read -r file; do
@@ -423,16 +450,9 @@ enforce_completed_dependencies() {
     fi
 
     base="$(basename "${file}")"
-    target="${needs_review_dir}/${base}"
-    if [[ -e "${target}" ]]; then
-      target="${needs_review_dir}/${base%.md}.dep-${now}.md"
-    fi
-
-    log "dependency mismatch: ${base} in 05-completed has unmet deps:${missing}; moving to $(basename "${target}")"
+    log "dependency mismatch: ${base} in 05-completed has unmet deps:${missing}; requeue to 03-needs-review"
     append_note_throttled "dep-mismatch-${task_num}" 1800 "dependency-integrity guard moved ${base} from 05-completed to 03-needs-review; unmet Depends on:${missing}"
-    if [[ "${DRY_RUN}" != "1" ]]; then
-      mv "${file}" "${target}"
-    fi
+    move_lane_idempotent "05-completed" "03-needs-review" "${base}" "dependency-integrity-completed"
     moved=$((moved + 1))
   done < <(find "${completed_dir}" -maxdepth 1 -type f -name '*.md' | sort)
 
@@ -449,9 +469,8 @@ enforce_in_progress_dependencies() {
   [[ -d "${in_progress_dir}" ]] || return 0
   [[ -d "${ready_dir}" ]] || return 0
 
-  local now moved file task_num deps missing dep completed_nums target base
+  local moved file task_num deps missing dep completed_nums base
   local active_pids killed_builder
-  now="$(now_epoch)"
   moved=0
   active_pids="$(codex_active_pids)"
   killed_builder=0
@@ -482,16 +501,9 @@ enforce_in_progress_dependencies() {
     fi
 
     base="$(basename "${file}")"
-    target="${ready_dir}/${base}"
-    if [[ -e "${target}" ]]; then
-      target="${ready_dir}/${base%.md}.dep-${now}.md"
-    fi
-
-    log "dependency mismatch: ${base} in 02-in-progress has unmet deps:${missing}; moving to $(basename "${target}")"
+    log "dependency mismatch: ${base} in 02-in-progress has unmet deps:${missing}; requeue to 01-ready"
     append_note_throttled "dep-in-progress-${task_num}" 900 "dependency-integrity guard requeued ${base} from 02-in-progress to 01-ready; unmet Depends on:${missing}"
-    if [[ "${DRY_RUN}" != "1" ]]; then
-      mv "${file}" "${target}"
-    fi
+    move_lane_idempotent "02-in-progress" "01-ready" "${base}" "dependency-integrity-in-progress"
     moved=$((moved + 1))
   done < <(find "${in_progress_dir}" -maxdepth 1 -type f -name '*.md' | sort)
 
@@ -543,8 +555,7 @@ requeue_stale_in_progress() {
     return 0
   fi
 
-  local now moved age base target
-  now="$(now_epoch)"
+  local moved age base
   moved=0
 
   while IFS= read -r file; do
@@ -555,16 +566,9 @@ requeue_stale_in_progress() {
     fi
 
     base="$(basename "${file}")"
-    target="${ready_dir}/${base}"
-    if [[ -e "${target}" ]]; then
-      target="${ready_dir}/${base%.md}.stale-${now}.md"
-    fi
-
-    log "stale build file detected (${age}s): ${base} -> $(basename "${target}")"
+    log "stale build file detected (${age}s): ${base} -> 01-ready"
     append_note_throttled "stale-in-progress-${base}" 1800 "stuck-build catcher requeued ${base} from 02-in-progress to 01-ready after ${age}s with no active builder"
-    if [[ "${DRY_RUN}" != "1" ]]; then
-      mv "${file}" "${target}"
-    fi
+    move_lane_idempotent "02-in-progress" "01-ready" "${base}" "stale-in-progress"
     moved=$((moved + 1))
   done < <(find "${in_progress_dir}" -maxdepth 1 -type f -name '*.md' | sort)
 
@@ -608,8 +612,6 @@ requeue_stale_in_review() {
   [[ -d "${in_review_dir}" ]] || return 0
   [[ -d "${needs_review_dir}" ]] || return 0
 
-  local now
-  now=$(now_epoch)
   local moved=0
 
   while IFS= read -r file; do
@@ -622,16 +624,9 @@ requeue_stale_in_review() {
 
     local base
     base="$(basename "${file}")"
-    local target="${needs_review_dir}/${base}"
-    if [[ -e "${target}" ]]; then
-      target="${needs_review_dir}/${base%.md}.stuck-${now}.md"
-    fi
-
-    log "stale review file detected (${age}s): ${base} -> $(basename "${target}")"
+    log "stale review file detected (${age}s): ${base} -> 03-needs-review"
     append_note "stuck-review catcher requeued ${base} from 04-in-review to 03-needs-review after ${age}s with no file updates"
-    if [[ "${DRY_RUN}" != "1" ]]; then
-      mv "${file}" "${target}"
-    fi
+    move_lane_idempotent "04-in-review" "03-needs-review" "${base}" "stale-in-review"
     moved=$((moved + 1))
   done < <(find "${in_review_dir}" -maxdepth 1 -type f -name '*.md' | sort)
 
