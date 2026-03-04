@@ -171,3 +171,21 @@ Lori tried to find the template via `flow.get_template` but used wrong IDs (proj
 
 **Risk**: This means the Ralph Loop can't fully validate the Work → Review → Done flow path. The spec compliance for "task done only via flow terminal node" can't be tested on this iteration.
 
+---
+
+## Decision 8: Second Anthropic rate limit hit (2026-03-04 02:24)
+
+**Context**: After the first rate limit cleared at ~01:00 MST (Decision 6), agents processed turns from 01:00-02:19 (~80 minutes of active work). At 02:23, all new agent_turn jobs hit rate limits again with `retry_after: 3h36m` → resets ~06:00 MST.
+
+**Root cause**: 11 task sessions with ~200KB conversation contexts each. Each agent_turn sends the full conversation history to the Anthropic API. The burst of turns from 01:00-02:19 exhausted the account's hourly token quota again.
+
+**Progress made during the window (01:00-02:19)**:
+- All 11 tasks now have Sam.blog Worker assigned with active runs
+- 3 tasks advanced to Review status (OC-2, OC-6, OC-9) via task.update workaround
+- Agents did significant work: Hugo scaffolding, SEO setup, content migration, taxonomy design, deployment pipeline
+- Discovered flow.advance is broken (Issue 214 filed)
+
+**Decision**: Stop testing. Wait for rate limits to clear at ~06:00 MST. The rate-limit backoff (Issue 213 fix) will automatically retry at the right time. Do not send any messages until then.
+
+**Why not reduce concurrent sessions**: The sessions already exist. We can't reduce the conversation context size without chat summarization (which also costs tokens). The fundamental constraint is the account's hourly token quota vs. the amount of work needed.
+
