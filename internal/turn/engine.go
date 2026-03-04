@@ -643,7 +643,6 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 		return err
 	}
 
-	continuations := 0
 	listeningChecked := false
 	var previousManifest *prompt.MemoryManifest
 
@@ -679,17 +678,13 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			previousManifest = &manifestCopy
 		}
 		if errors.Is(assembleErr, prompt.ErrContextCompressed) {
-			continuations++
-			if continuations > maxContinuationTurnDepth {
-				return fmt.Errorf("context compression continuation depth exceeded")
-			}
-			rt.stopReason = ""
-			if err := e.continueTurn(ctx, rt); err != nil {
-				return err
-			}
-			listeningChecked = false
-			previousManifest = nil
-			continue
+			// Context was compressed (old messages dropped). The assembler already
+			// enqueued a summarization job. Proceed with the compressed prompt
+			// rather than creating a continuation turn (which would add messages
+			// without reducing stored history, causing an infinite loop).
+			e.logger.Info("context compressed, proceeding with compressed prompt",
+				"session_id", rt.session.ID, "turn_id", rt.turn.ID,
+				"total_tokens", assembled.TotalTokens)
 		}
 
 		if e.summarization != nil {

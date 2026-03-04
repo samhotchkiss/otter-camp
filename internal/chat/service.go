@@ -43,6 +43,7 @@ const (
 var messageStatusTransitions = map[string]map[string]struct{}{
 	"pending": {
 		"streaming": {},
+		"final":     {},
 		"failed":    {},
 	},
 	"streaming": {
