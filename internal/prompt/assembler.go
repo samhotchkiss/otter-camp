@@ -706,6 +706,7 @@ func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSess
 			taskLabel = session.ScopeID.String()
 		}
 		lines = append(lines, "Task: "+taskLabel)
+		lines = append(lines, "Task ID: "+session.ScopeID.String())
 		if strings.TrimSpace(taskCtx.projectName) != "" {
 			lines = append(lines, "Project: "+strings.TrimSpace(taskCtx.projectName))
 		}
