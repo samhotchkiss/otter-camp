@@ -189,3 +189,25 @@ Lori tried to find the template via `flow.get_template` but used wrong IDs (proj
 
 **Why not reduce concurrent sessions**: The sessions already exist. We can't reduce the conversation context size without chat summarization (which also costs tokens). The fundamental constraint is the account's hourly token quota vs. the amount of work needed.
 
+---
+
+## Decision 9: flow.advance still broken — continue with task.update workaround (2026-03-04 06:30)
+
+**Context**: After rate limits cleared at ~06:00, agents resumed work and tried calling `flow.advance` as instructed. They got "repo: not found" errors. Investigation revealed PR #1593's backfill logic is in the flow execution service's `AdvanceFlow()` method, but the native tool handler `handleFlowAdvance()` bypasses it by going directly to the repository layer (`GetByID()`).
+
+**Impact**: Same as Decision 7 — tasks cannot advance through the flow system. Agents use `task.update` to change `work_status` to "review" as a workaround. Tasks cannot reach "done" via flow terminal node.
+
+**Decision**: Filed issue 216 for Codex. Continue with task.update workaround. If Codex fixes 216, we can retry flow.advance. If not, manual DB intervention may be needed at Phase 5 to retroactively complete flows.
+
+**Risk**: The Ralph Loop can't validate the Work → Review → Done flow path. This is now the same gap noted in Decision 7.
+
+---
+
+## Decision 10: Worker deadlock workaround (2026-03-04 06:30)
+
+**Context**: Worker process (ottercamp worker) deadlocks after processing 3-8 agent_turn jobs. The job queue polling loop stops entirely. Process is alive but at 0% CPU. Last log entry is always a cancel consumer startup.
+
+**Decision**: Filed issue 215 for Codex. Manually restart the worker when it hangs. This is sufficient to keep tasks progressing since jobs are retried from the DB queue on worker restart.
+
+**Risk**: Manual restarts mean agent work is interrupted and retried. Some turns may be wasted (LLM call completes but worker can't process the result). Rate limit budget is consumed by these wasted turns.
+
