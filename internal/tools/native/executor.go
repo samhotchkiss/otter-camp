@@ -14,9 +14,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	chatsvc "github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
+	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
@@ -152,6 +155,23 @@ type eventPublisher interface {
 	Publish(ctx context.Context, tx pgx.Tx, event eventbus.DomainEvent) error
 }
 
+type subscribedEventPublisher interface {
+	eventPublisher
+	Subscribe(consumerName string, orgID *uuid.UUID, handler eventbus.EventHandler) eventbus.Subscription
+}
+
+type publishOnlyEventBus struct {
+	publisher eventPublisher
+}
+
+func (b publishOnlyEventBus) Publish(ctx context.Context, tx pgx.Tx, event eventbus.DomainEvent) error {
+	return b.publisher.Publish(ctx, tx, event)
+}
+
+func (publishOnlyEventBus) Subscribe(string, *uuid.UUID, eventbus.EventHandler) eventbus.Subscription {
+	return eventbus.Subscription{}
+}
+
 type cliExecutor interface {
 	Execute(ctx context.Context, input map[string]any) (map[string]any, error)
 }
@@ -183,6 +203,8 @@ type NativeToolExecutor struct {
 	cli            cliExecutor
 	events         eventPublisher
 	command        commandContextFunc
+	flowService    flowsvc.FlowExecutionService
+	flowServiceErr error
 	chatSessions   chatSessionReader
 	organizations  organizationReader
 	projects       projectReader
@@ -247,6 +269,37 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 		exec.memories = repo.NewMemoryRepo(opts.Pool)
 		if exec.events == nil {
 			exec.events = eventbus.New(opts.Pool, nil, eventbus.Config{})
+		}
+
+		chatService, chatErr := chatsvc.NewService(chatsvc.Options{
+			Pool:   opts.Pool,
+			Events: exec.events,
+		})
+		if chatErr != nil {
+			exec.flowServiceErr = chatErr
+		} else {
+			flowSessionBridge, bridgeErr := projectsvc.NewFlowSessionBridge(projectsvc.FlowSessionBridgeOptions{
+				Pool:  opts.Pool,
+				Chats: chatService,
+			})
+			if bridgeErr != nil {
+				exec.flowServiceErr = bridgeErr
+			} else {
+				var flowEvents subscribedEventPublisher = publishOnlyEventBus{publisher: exec.events}
+				if bus, ok := exec.events.(subscribedEventPublisher); ok {
+					flowEvents = bus
+				}
+				flowService, flowErr := flowsvc.NewService(flowsvc.Options{
+					Pool:          opts.Pool,
+					Events:        flowEvents,
+					SessionBridge: flowSessionBridge,
+				})
+				if flowErr != nil {
+					exec.flowServiceErr = flowErr
+				} else {
+					exec.flowService = flowService
+				}
+			}
 		}
 	}
 

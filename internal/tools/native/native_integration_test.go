@@ -883,6 +883,131 @@ func TestIntegrationFlowAdvanceMovesToNextNode(t *testing.T) {
 	}
 }
 
+func TestIntegrationFlowAdvanceBackfillsMissingExecutionFromTaskScope(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	template := testutil.MakeFlowTemplate(t, pool, project.ID, 2)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(context.Background(), template.ID)
+	if err != nil {
+		t.Fatalf("list flow nodes: %v", err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("nodes count = %d, want 2", len(nodes))
+	}
+
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(context.Background(), task.ID, &nodes[0].ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	sessionRepo := repo.NewChatSessionRepo(pool)
+	session, err := sessionRepo.Create(context.Background(), repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create task-scoped session: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	sessionID := session.ID
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agent.ID,
+		SessionID:      &sessionID,
+	})
+
+	out, err := executor.Execute(ctx, "flow.advance", map[string]any{
+		"flow_node_execution_id": uuid.NewString(),
+		"commit_sha":             "abc123",
+	})
+	if err != nil {
+		t.Fatalf("flow.advance with missing execution: %v", err)
+	}
+	if out["flow_completed"] != false {
+		t.Fatalf("flow_completed = %v, want false", out["flow_completed"])
+	}
+	if mustUUIDValue(t, out["advanced_to_node_id"]) != nodes[1].ID {
+		t.Fatalf("advanced_to_node_id = %v, want %s", out["advanced_to_node_id"], nodes[1].ID)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	executions, err := executionRepo.ListByTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("list executions: %v", err)
+	}
+	var (
+		backfilledExecutionID      uuid.UUID
+		foundBackfilledCompleted   bool
+		foundBackfilledSession     bool
+		foundNextActiveWithSession bool
+	)
+	for _, execution := range executions {
+		switch execution.FlowNodeID {
+		case nodes[0].ID:
+			if execution.Status != "completed" {
+				t.Fatalf("current node execution status = %q, want completed", execution.Status)
+			}
+			if execution.CommitSHA == nil || *execution.CommitSHA != "abc123" {
+				t.Fatalf("current node commit_sha = %v, want abc123", execution.CommitSHA)
+			}
+			if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+				t.Fatalf("current node execution session_id = %v, want non-nil", execution.SessionID)
+			}
+			backfilledExecutionID = execution.ID
+			foundBackfilledCompleted = true
+			foundBackfilledSession = true
+		case nodes[1].ID:
+			if execution.Status == "active" {
+				if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+					t.Fatalf("next node execution session_id = %v, want non-nil", execution.SessionID)
+				}
+				foundNextActiveWithSession = true
+			}
+		}
+	}
+	if !foundBackfilledCompleted {
+		t.Fatal("expected backfilled execution for current node")
+	}
+	if !foundBackfilledSession {
+		t.Fatal("expected backfilled execution to be linked to a chat session")
+	}
+	if !foundNextActiveWithSession {
+		t.Fatal("expected active execution for next node with a chat session")
+	}
+
+	var sessionCount int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM chat_session
+		WHERE organization_id = $1
+		  AND scope_type = 'project_task'
+		  AND scope_id = $2
+		  AND metadata->>'flow_node_execution_id' = $3
+	`, orgID, task.ID, backfilledExecutionID.String()).Scan(&sessionCount); err != nil {
+		t.Fatalf("count chat_session rows for backfilled execution: %v", err)
+	}
+	if sessionCount < 1 {
+		t.Fatalf("chat_session rows for backfilled execution = %d, want >= 1", sessionCount)
+	}
+}
+
 func TestIntegrationFlowAdvanceTerminalPublishesStatusChangedDomainEvent(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
