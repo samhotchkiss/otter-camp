@@ -404,6 +404,8 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	defer bus.Unsubscribe(turnUserSub)
 	turnReactionSub := turnEngine.SubscribeReactionFeedback(nil)
 	defer bus.Unsubscribe(turnReactionSub)
+	turnCompletedSub := turnEngine.SubscribeTurnCompletedAutoContinuation(nil)
+	defer bus.Unsubscribe(turnCompletedSub)
 
 	memoryConsumer, err := memory.NewEventConsumer(memory.EventConsumerOptions{
 		Pool:     pool.Raw(),
