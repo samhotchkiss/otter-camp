@@ -70,3 +70,18 @@ Interpretation:
   - `github_retry attempt=3/5 action=success terminal_reason=success`
   - `github_retry attempt=1/5 action=fail_fast classification=permanent_auth_or_permission terminal_reason=non_retryable exit_code=...`
 - Regression test: `scripts/lib/github-retry-test.sh` (pass)
+
+## Queue Reconciliation Hardening (Task 234)
+- Added shared reconciliation primitive in queue helpers:
+  - `scripts/issue-lane.sh reconcile <issues_dir> <src-lane> <dst-lane> <task-file>`
+  - Outputs structured outcome: `queue_reconciled` or `queue_conflict_hard_stop`
+- `scripts/codex-autowork.sh` claim path now:
+  - snapshots lane counts before/after claim,
+  - reconciles external lane races idempotently,
+  - emits structured `queue_reconciled` vs `queue_conflict_hard_stop` logs.
+- `scripts/autowork-supervisor-watchdog.sh` lane move logs now emit structured reconcile outcomes with raw queue status.
+- Prompt contract now includes an explicit queue-mutation reconciliation protocol (continue on `queue_reconciled`, escalate only on `queue_conflict_hard_stop`).
+
+Validation:
+- `bash -n scripts/codex-autowork.sh scripts/autowork-supervisor-watchdog.sh scripts/lib/issue-queue.sh scripts/issue-lane.sh scripts/replay-queue-ops-test.sh`
+- `scripts/replay-queue-ops-test.sh`

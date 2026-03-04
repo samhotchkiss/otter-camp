@@ -451,7 +451,7 @@ move_lane_idempotent() {
   local dst_lane="$2"
   local task_basename="$3"
   local context="$4"
-  local status
+  local status reconcile_outcome
 
   if [[ "${DRY_RUN}" == "1" ]]; then
     status="$(queue_classify_lane "$(queue_find_lane "${ISSUES_DIR}" "${task_basename}" || echo "missing")" "${dst_lane}")"
@@ -459,15 +459,20 @@ move_lane_idempotent() {
     status="$(queue_move_task "${ISSUES_DIR}" "${src_lane}" "${dst_lane}" "${task_basename}" || echo "missing")"
   fi
 
-  log "${context}: outcome=${status} task=${task_basename} from=${src_lane} to=${dst_lane}"
   case "${status}" in
-    claimed|already_claimed|already_completed|missing)
-      return 0
+    claimed|already_claimed|already_completed)
+      reconcile_outcome="queue_reconciled"
       ;;
     *)
-      return 1
+      reconcile_outcome="queue_conflict_hard_stop"
       ;;
   esac
+
+  log "${context}: outcome=${reconcile_outcome} raw_status=${status} task=${task_basename} from=${src_lane} to=${dst_lane}"
+  if [[ "${reconcile_outcome}" != "queue_reconciled" ]]; then
+    append_note_throttled "queue-conflict-${task_basename}" 900 "queue_conflict_hard_stop context=${context} task=${task_basename} from=${src_lane} to=${dst_lane} raw_status=${status}"
+  fi
+  return 0
 }
 
 enforce_completed_dependencies() {
