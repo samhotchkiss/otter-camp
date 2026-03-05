@@ -5,7 +5,7 @@ This spec defines OtterCamp's project and task management domain -- the core sys
 
 Each task is governed by a **flow template** -- an immutable, directed graph of `work` and `review` nodes designed conversationally through the project manager. Flow progression is always explicit: agents must signal "step done" to advance; run completion does not auto-advance. Review nodes gate quality with approve/reject decisions. Rejection loops create new `flow_node_execution` records (tracked by a visit counter), preserving full audit history per attempt. Tasks can optionally be decomposed into **subtasks** scoped to a specific flow node execution. Subtasks are sequential (they share the task branch to avoid git conflicts), have a reduced status set, and cannot have their own flows -- if a subtask needs a flow, the parent task is too big and should be split.
 
-The scheduling system manages concurrency via global and per-provider limits. Priority levels (`urgent`, `high`, `normal`, `low`) combined with FIFO ordering determine pickup order. Blockers are modeled as tasks with dependency links (not a separate entity), and escalation flows PM -> Frank -> human. The human's **inbox** is an action-required queue (distinct from notifications) for scoping reviews, work reviews, draft action approvals, escalations, and capability approvals. A **merge queue** serializes completed task branches merging to `main`, with auto-resolution for trivial conflicts and PM escalation for non-trivial ones. **Scheduled tasks** create recurring work from templates on a cron cadence, with three overlap policies (skip, queue, replace) and max duration enforcement. The schema comprises 12 tables: `project`, `project_task`, `project_subtask`, `project_task_participant`, `project_task_dependency`, `project_task_event`, `flow_template`, `flow_node`, `flow_node_execution`, `task_schedule`, `inbox_item`, and `merge_queue_entry`.
+The scheduling system manages concurrency via global and per-provider limits. Priority levels (`urgent`, `high`, `normal`, `low`) combined with FIFO ordering determine pickup order. Blockers are modeled as tasks with dependency links (not a separate entity), and escalation flows PM -> Frank -> human. Tasks can also declare `blocks_scope = 'all'` to create a project-wide execution gate: while any such task is outstanding, only the lowest-numbered gate task may start. The human's **inbox** is an action-required queue (distinct from notifications) for scoping reviews, work reviews, draft action approvals, escalations, and capability approvals. A **merge queue** serializes completed task branches merging to `main`, with auto-resolution for trivial conflicts and PM escalation for non-trivial ones. **Scheduled tasks** create recurring work from templates on a cron cadence, with three overlap policies (skip, queue, replace) and max duration enforcement. The schema comprises 12 tables: `project`, `project_task`, `project_subtask`, `project_task_participant`, `project_task_dependency`, `project_task_event`, `flow_template`, `flow_node`, `flow_node_execution`, `task_schedule`, `inbox_item`, and `merge_queue_entry`.
 
 ---
 
@@ -45,6 +45,19 @@ Tasks are always created through agents or chat — there is no direct UI creati
 - **Any agent (blocker)**: when an agent encounters an issue that prevents progress, it files a new task with a dependency link (see Blockers and Escalation).
 - **Frank**: can create tasks at org level that get assigned to projects.
 - **Schedule**: recurring task schedules automatically create tasks on a cadence (see Scheduled Tasks). These are pre-scoped and go straight to `queued`.
+
+### Project Bootstrap Gate Task
+
+Every new project starts with a mandatory bootstrap task as the first project task:
+
+- `task_number = 1`
+- `blocks_scope = 'all'`
+- Flow default:
+  - `work` node assigned directly to Lori (`actor_type = 'agent'`, `actor_id = lori`) to produce staffing + decomposition output
+  - `review` node assigned directly to Frank (`actor_type = 'agent'`, `actor_id = frank`) to approve/reject the setup
+  - Reject loops back to Lori for revision
+
+This uses the normal flow system and normal scheduler rules. The bootstrap task's `blocks_scope = 'all'` gate prevents any other task from starting until Frank approves and the task reaches `done`.
 
 ### The `requires_human_review` Flag
 
@@ -165,6 +178,7 @@ When a task transitions to `queued`, it enters the scheduling queue. The schedul
 - The scheduler monitors concurrency slots managed by the model gateway (`07-models-and-inference.md`).
 - When a slot opens, the scheduler picks the highest-priority eligible task and kicks off its first flow node — resolving the actor, creating an async session, and starting a run.
 - **Dependency-aware scheduling**: a task is only eligible for pickup if all its dependencies are `done`. A task can be `queued` with unresolved dependencies — it sits in the queue but is skipped until dependencies clear. This ensures order of operations without requiring the PM to manually sequence queuing.
+- **Project gate scheduling (`blocks_scope = 'all'`)**: if any task in a project has `blocks_scope = 'all'` and `work_status` not in (`done`, `cancelled`), the scheduler may only start the lowest `task_number` among those gate tasks. No other task in that project may start until that gate task reaches `done` or `cancelled`.
 - Subtasks within a node also go through the scheduler. They are queued as work units and picked up when slots are available, respecting inter-subtask dependencies.
 
 ### Priority
@@ -530,6 +544,13 @@ Dependencies govern execution order. They are separate from the task/subtask con
 - Dependencies form a DAG -- cycles are rejected at creation time. Cross-level dependencies (task depending on a subtask of another task, or vice versa) are not allowed. Dependencies can only be task->task or subtask->subtask within the same parent task.
 - **Removing dependencies**: the PM can remove a dependency at any time. When a dependency is removed from a `blocked` task and no other unresolved dependencies remain, the task transitions to its previous active state (`in_progress` or `queued`). Dependency removal is logged in `project_task_event`.
 
+**Project-wide gate tasks (`blocks_scope = 'all'`):**
+
+- This is a scheduler gate, not a dependency edge in the DAG.
+- It applies at project scope: while a gate task is outstanding (`work_status` not in `done`, `cancelled`), no other task can start.
+- If multiple gate tasks are outstanding, they are processed in strict `task_number` order (lowest first).
+- Use this for governance checkpoints (for example: staffing/decomposition kickoff approval) where broad sequencing is required.
+
 **Cancelled dependencies:**
 
 - If a dependency task is cancelled, the system automatically creates a new resolution task assigned to the PM. This task describes the situation ("OC-3 was cancelled, OC-7 depends on it — resolve this dependency") and has a dependency link to the downstream task.
@@ -657,6 +678,8 @@ create table project_task (
     check (work_status in ('draft', 'queued', 'in_progress', 'blocked', 'on_hold', 'review', 'done', 'cancelled')),
   priority              text not null default 'normal'
     check (priority in ('urgent', 'high', 'normal', 'low')),
+  blocks_scope          text not null default 'none'
+    check (blocks_scope in ('none', 'all')),
   requires_human_review boolean not null default false,
   flow_template_id      uuid references flow_template(id), -- nullable in draft; set during scoping
   current_flow_node_id  uuid references flow_node(id),
@@ -677,12 +700,14 @@ create table project_task (
 
 create index on project_task (project_id, work_status);
 create index on project_task (work_status, priority);  -- scheduler pickup query
+create index on project_task (project_id, blocks_scope, task_number, work_status);  -- project-wide gate resolution
 create index on project_task (flow_template_id);
 create index on project_task (schedule_id) where schedule_id is not null;  -- query instances of a schedule
 ```
 
 - Tasks are flat at the project level. No `parent_task_id` — large efforts are multiple tasks with dependencies.
 - `task_number` is auto-incremented per project. Display format: `{project_slug}-{task_number}` (e.g., `OC-5`).
+- `blocks_scope = 'all'` creates a project-wide scheduler gate. While the task is outstanding, only the lowest-numbered outstanding gate task in the project may start.
 
 ### flow_node_execution
 
@@ -923,6 +948,8 @@ create index on project_task_event (task_id, created_at);
 - **Rejection loops create new flow_node_execution records.** Visit counter tracks which attempt. Each visit has its own subtasks, session, timestamps, and commit_sha.
 - **`commit_sha` on flow_node_execution for review diff base.** Each reviewer sees only changes since the last completed node, not the full branch diff.
 - **Blockers are tasks, not a separate entity.** Agent files a new task with a dependency link. PM triages. Escalation: PM → Frank → human.
+- **`blocks_scope = 'all'` is a project-wide execution gate.** While any gate task is outstanding, only the lowest-numbered outstanding gate task in that project may start.
+- **Every new project starts with a bootstrap gate task.** Task 1 is a `blocks_scope = 'all'` governance flow: Lori does staffing/decomposition work, Frank reviews and approves before other tasks can start.
 - **Cancelled dependencies create resolution tasks.** When a dependency is cancelled, the system auto-creates a task for the PM to resolve the situation. Blocked progress creates tasks, not notifications.
 - **Dependencies can be removed.** PM can unlink a dependency at any time. If a blocked task has no remaining unresolved dependencies, it resumes.
 - **Dependencies form a DAG.** Cycles rejected at creation time.
@@ -947,4 +974,3 @@ create index on project_task_event (task_id, created_at);
 ## Open Questions
 
 _None currently outstanding._
-

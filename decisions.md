@@ -303,3 +303,40 @@ Lori tried to find the template via `flow.get_template` but used wrong IDs (proj
 
 **Decision**: Phase 5 passes. The Ralph Loop's primary purpose — testing the platform end-to-end — was thoroughly accomplished. Deliverables are partial but the platform workflow was fully exercised. Pipeline is empty. All decisions logged.
 
+---
+
+## Decision 16: PM routing for project scope (2026-03-04)
+
+**Context**: When chatting in project scope, Frank (org receptionist) was responding instead of the project's assigned PM. Issue 219 fix (PR #1598) correctly routes turns to the PM in the turn engine, but the TUI's session resolution was wrong — it was sending messages to the org session or wrong project session.
+
+**Problem**: Three-part chain:
+1. Sam.blog had no sync project-scope session (only async ones from Frank)
+2. TUI `ScopeProject` handler fell back to org session UUID when no sidebar project session existed
+3. The `looksLikeUUID()` guard blocked `"session-project-<UUID>"` aliases from being sent
+
+**Decision**:
+- Embed project UUID in session alias: `"session-project-<projectID>"`
+- Resolver extracts project ID, filters by scope_id, auto-creates sync session if needed
+- `isResolvableSessionAlias()` allows these specific aliases through the send guard
+- `SessionResolvedMsg` now updates `activeSession` so subsequent messages use the real UUID
+- `assistantLabel()` shows PM name in project scope (from ProjectDetail.Agents)
+
+**Verified**: Worker logs confirm `pm_agent_id=7bcebe8b` (Sam.blog PM) is resolved for project-scope turns. Rate limiting prevented visual confirmation of the PM label display.
+
+## Decision 14: Auto-retry for rate-limited agent turns (2026-03-04 11:55)
+
+**Context**: All 11 Sam.blog task turns were killed by Anthropic rate limiting overnight. Tasks stalled permanently — required manual re-triggering via Frank. This is unacceptable for production.
+
+**Decision**: Filed issue #220 (agent-turn-rate-limit-auto-retry). When a model provider returns 429, the turn handler should schedule a new agent_turn job with `run_at = now() + retry_after`, capped at 5 retries. The `retry_after` duration is already parsed by the gateway.
+
+## Decision 15: Task event history in TUI (2026-03-04 11:44)
+
+**Context**: The task event API (`GET /tasks/{id}/events`) was already wired in the TUI but events were never formatted into the `rec.History` strings that the view renders. Added formatting in model.go's `taskDetailLoadedMsg` handler.
+
+**Change**: `internal/tui/model.go` — format TaskEvents into History strings (Created, status changes, review rejected) with timestamps and actor types. Press `h` in task detail view to see event log.
+
+## Decision 16: Sam.blog project completion (2026-03-04 13:45)
+
+**Context**: Ralph Loop goal was to drive all Sam.blog tasks to done status. All 11 tasks stalled due to rate limiting and lack of auto-continuation (issues #220, #221). Required manual "Continue" messages each time the worker went idle after processing a turn batch.
+
+**Outcome**: All 11 Sam.blog tasks reached Done status through Work → Review → Done flow progression. Tasks completed across ~4 rounds of manual continue messages over ~2 hours. Key gap remains: auto-continuation (issue #221) — without it, every task requires human prodding after each turn.

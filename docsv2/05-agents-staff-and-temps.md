@@ -94,7 +94,7 @@ Frank is the human's right hand. He is the first agent the human talks to and th
 - **Org-level skills**: Frank creates org-level skills when the human identifies cross-project standards (see doc 10).
 
 **What Frank does NOT do:**
-- Manage individual tasks or flow nodes. That's the PM's job.
+- Manage routine individual tasks or flow nodes. That's the PM's job. Exception: Frank can be directly assigned specific governance review nodes (for example, project bootstrap gate review) via `actor_type = 'agent'`.
 - Design flows or scope tasks. That's also the PM's job.
 - Hire or staff agents. That's Lori's job. Frank can @mention Lori when staffing needs arise.
 - Manage memory. That's Ellie's job.
@@ -118,7 +118,7 @@ Lori is responsible for the agent workforce. She creates staff agents, recommend
 - **Agent directory**: Lori knows every agent in the org — their skills, current assignments, workload, and history. The human can ask "who's available to review Go code?" and Lori has the answer.
 
 **What Lori does NOT do:**
-- Assign agents to specific tasks or flow nodes. The PM does that.
+- Assign agents to specific tasks or flow nodes in normal project execution. The PM does that. Exception: Lori can be directly assigned governance setup nodes (for example, project bootstrap decomposition/staffing work) via `actor_type = 'agent'`.
 - Manage project workflow. The PM does that.
 - Make staffing decisions unilaterally. Lori recommends — the human approves.
 
@@ -318,6 +318,8 @@ Projects need agents to do work. The staffing process is conversational — Lori
 3. The human approves or adjusts the staffing plan.
 4. Assignments are recorded in `agent_project_assignment`.
 
+For project bootstrap governance flows, Lori and Frank may be assigned directly on specific flow nodes using `actor_type = 'agent'`. This is intentional and does not change the standard project role model (`project_manager`, `worker`, `reviewer`, `planner`).
+
 **Ongoing staffing:**
 
 - The PM can @mention Lori at any time to request staffing changes. "We need a second worker for this sprint" or "Can we get a reviewer who knows database migrations?"
@@ -354,7 +356,7 @@ When a flow node begins execution, the system resolves which specific agent hand
 
 - **`role`**: resolve to an agent assigned to that role in the project's `agent_project_assignment`. For staff roles (PM, staff reviewers), resolves to the assigned staff agent. For temp-default roles (worker, code reviewer), the system spins up a new temp agent using the project's temp profile template for that role, scoped to the task. If multiple agents have the role, the scheduler picks the one with the lowest current workload.
 - **`project_manager`**: resolve to the project's PM.
-- **`agent`**: resolve to a specific agent by ID (set on `flow_node.actor_id`). Used for flow steps that must be handled by a particular agent.
+- **`agent`**: resolve to a specific agent by ID (set on `flow_node.actor_id`). Used for flow steps that must be handled by a particular agent, including governance exceptions that directly target Lori or Frank.
 - **`human`**: the flow node requires human action. An inbox item is created (see 03-projects-and-task-flow.md Inbox).
 
 ### Model Override Per Flow Node
@@ -887,6 +889,7 @@ create index on agent_profile_template (is_active) where organization_id is null
 41. **Temp retirement is explicit or TTL-based.** The PM or Lori explicitly retires a temp when the project no longer needs that role. An optional TTL (`temp_ttl_seconds`) auto-retires the temp after a set duration. On expiration/retirement, `agent_project_assignment.is_active` is set to false.
 42. **When a staff agent is removed from a project, it loses access to that project's memory.** `memory_read_scopes = {assigned_projects}` automatically excludes the removed project. Memories the agent captured while working on that project remain at the project scope, accessible to other agents still assigned. The agent's private memories remain intact.
 43. **Project roles map to but are distinct from task participant roles.** Project roles (`agent_project_assignment`) define the agent's capacity within the project. Task participant roles (`project_task_participant`) define who is working on a specific task. The PM assigns task participants from the project's assigned agents.
+44. **Lori/Frank direct task assignment is a governance exception, not a role expansion.** In normal execution, PM-owned roles handle task work. For bootstrap gate flows and similar governance checkpoints, flow nodes may directly target Lori/Frank via `actor_type = 'agent'`.
 
 ## Open Questions
 
