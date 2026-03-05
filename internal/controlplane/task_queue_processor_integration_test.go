@@ -203,6 +203,132 @@ func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.
 	}
 }
 
+func TestTaskQueueProcessorIntegrationQueuedNonGateTaskWaitsForOutstandingGate(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	template := seedTaskQueueFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID)
+
+	gateTask, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:      fx.project.ID,
+		Title:          "Bootstrap gate",
+		FlowTemplateID: &template.ID,
+		BlocksScope:    "all",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask gate: %v", err)
+	}
+	regularTask, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:      fx.project.ID,
+		Title:          "Regular queued task",
+		FlowTemplateID: &template.ID,
+		BlocksScope:    "none",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask regular: %v", err)
+	}
+
+	if _, err := fx.tasks.TransitionStatus(ctx, gateTask.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus gate queued: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		gate, err := taskRepo.GetByID(ctx, gateTask.ID)
+		if err != nil {
+			return false, err
+		}
+		return gate.WorkStatus == "in_progress", nil
+	})
+
+	if _, err := fx.tasks.TransitionStatus(ctx, regularTask.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus regular queued: %v", err)
+	}
+
+	time.Sleep(750 * time.Millisecond)
+	regularAfter, err := taskRepo.GetByID(ctx, regularTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID regular: %v", err)
+	}
+	if regularAfter.WorkStatus != "queued" {
+		t.Fatalf("regular task work_status = %q, want queued while gate is outstanding", regularAfter.WorkStatus)
+	}
+}
+
+func TestTaskQueueProcessorIntegrationCompletingGateStartsNextQueuedTask(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	template := seedTaskQueueFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID)
+
+	gateTask, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:      fx.project.ID,
+		Title:          "Bootstrap gate",
+		FlowTemplateID: &template.ID,
+		BlocksScope:    "all",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask gate: %v", err)
+	}
+	regularTask, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:      fx.project.ID,
+		Title:          "Regular queued task",
+		FlowTemplateID: &template.ID,
+		BlocksScope:    "none",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask regular: %v", err)
+	}
+
+	if _, err := fx.tasks.TransitionStatus(ctx, gateTask.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus gate queued: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		gate, err := taskRepo.GetByID(ctx, gateTask.ID)
+		if err != nil {
+			return false, err
+		}
+		return gate.WorkStatus == "in_progress", nil
+	})
+
+	if _, err := fx.tasks.TransitionStatus(ctx, regularTask.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus regular queued: %v", err)
+	}
+	time.Sleep(250 * time.Millisecond)
+	regularBefore, err := taskRepo.GetByID(ctx, regularTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID regular before gate done: %v", err)
+	}
+	if regularBefore.WorkStatus != "queued" {
+		t.Fatalf("regular task work_status before gate completion = %q, want queued", regularBefore.WorkStatus)
+	}
+
+	if _, err := fx.tasks.TransitionStatus(ctx, gateTask.ID, "done", tasksvc.Actor{Type: "system", AllowDoneBypass: true}); err != nil {
+		t.Fatalf("TransitionStatus gate done: %v", err)
+	}
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		regular, err := taskRepo.GetByID(ctx, regularTask.ID)
+		if err != nil {
+			return false, err
+		}
+		return regular.WorkStatus == "in_progress", nil
+	})
+}
+
 func TestTaskQueueProcessorIntegrationSchedulerRunCompletedOnTaskDone(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)

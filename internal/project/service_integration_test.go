@@ -109,6 +109,98 @@ func TestProjectServiceCreatePublishesStaffingNeededEvent(t *testing.T) {
 	}
 }
 
+func TestProjectServiceCreateAutoGeneratesBootstrapGateTaskAndFlow(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	svc := newIntegrationService(t, pool)
+	orgRepo := repo.NewOrgRepo(pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	org, err := orgRepo.Create(ctx, repo.Organization{
+		Slug:        "proj-svc-bootstrap-" + uuid.NewString()[:8],
+		DisplayName: "Bootstrap Org",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+
+	loriID := seedStarterAgent(t, ctx, pool, org.ID, "Lori", "pm")
+	frankID := seedStarterAgent(t, ctx, pool, org.ID, "Frank", "general")
+
+	created, err := svc.Create(ctx, CreateProjectRequest{
+		OrganizationID: org.ID,
+		Slug:           "bootstrap-gated-project",
+		DisplayName:    "Bootstrap Gated Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	bootstrapTask, err := taskRepo.GetByProjectAndNumber(ctx, created.ID, 1)
+	if err != nil {
+		t.Fatalf("GetByProjectAndNumber bootstrap task: %v", err)
+	}
+	if bootstrapTask.BlocksScope != "all" {
+		t.Fatalf("bootstrap blocks_scope = %q, want %q", bootstrapTask.BlocksScope, "all")
+	}
+	if bootstrapTask.FlowTemplateID == nil || *bootstrapTask.FlowTemplateID == uuid.Nil {
+		t.Fatal("bootstrap flow_template_id is nil, want non-nil")
+	}
+
+	template, err := templateRepo.GetByID(ctx, *bootstrapTask.FlowTemplateID)
+	if err != nil {
+		t.Fatalf("GetByID bootstrap flow template: %v", err)
+	}
+	if template.StartNodeID == nil || *template.StartNodeID == uuid.Nil {
+		t.Fatal("bootstrap start_node_id is nil, want non-nil")
+	}
+
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
+	if err != nil {
+		t.Fatalf("GetByTemplateOrdered bootstrap nodes: %v", err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("bootstrap flow nodes len = %d, want 2", len(nodes))
+	}
+
+	setupNode := nodes[0]
+	reviewNode := nodes[1]
+	if setupNode.ID != *template.StartNodeID {
+		t.Fatalf("start_node_id = %s, want setup node %s", *template.StartNodeID, setupNode.ID)
+	}
+	if setupNode.NodeType != "work" {
+		t.Fatalf("setup node_type = %q, want work", setupNode.NodeType)
+	}
+	if reviewNode.NodeType != "review" {
+		t.Fatalf("review node_type = %q, want review", reviewNode.NodeType)
+	}
+	if setupNode.ActorType == nil || *setupNode.ActorType != "agent" {
+		t.Fatalf("setup actor_type = %v, want agent", setupNode.ActorType)
+	}
+	if setupNode.ActorID == nil || *setupNode.ActorID != loriID {
+		t.Fatalf("setup actor_id = %v, want Lori %s", setupNode.ActorID, loriID)
+	}
+	if reviewNode.ActorType == nil || *reviewNode.ActorType != "agent" {
+		t.Fatalf("review actor_type = %v, want agent", reviewNode.ActorType)
+	}
+	if reviewNode.ActorID == nil || *reviewNode.ActorID != frankID {
+		t.Fatalf("review actor_id = %v, want Frank %s", reviewNode.ActorID, frankID)
+	}
+	if setupNode.NextNodeID == nil || *setupNode.NextNodeID != reviewNode.ID {
+		t.Fatalf("setup next_node_id = %v, want review node %s", setupNode.NextNodeID, reviewNode.ID)
+	}
+	if reviewNode.RejectNodeID == nil || *reviewNode.RejectNodeID != setupNode.ID {
+		t.Fatalf("review reject_node_id = %v, want setup node %s", reviewNode.RejectNodeID, setupNode.ID)
+	}
+	if reviewNode.NextNodeID != nil {
+		t.Fatalf("review next_node_id = %v, want nil for terminal approval", reviewNode.NextNodeID)
+	}
+}
+
 func TestProjectServiceDeleteActiveTasksBlocked(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -135,6 +227,27 @@ func TestProjectServiceDeleteActiveTasksBlocked(t *testing.T) {
 	if !errors.Is(err, ErrProjectHasActiveTasks) {
 		t.Fatalf("Delete err = %v, want ErrProjectHasActiveTasks", err)
 	}
+}
+
+func seedStarterAgent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, displayName, agentType string) uuid.UUID {
+	t.Helper()
+	created, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:       orgID,
+		DisplayName:          displayName,
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "Bootstrap starter",
+		OperatorInstructions: "",
+		AgentType:            agentType,
+		IsStarterTrio:        true,
+		PrivateMemory:        false,
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create starter agent %s: %v", displayName, err)
+	}
+	return created.ID
 }
 
 func TestProjectServiceUpdateFlowTemplateInUseCreatesNewVersion(t *testing.T) {

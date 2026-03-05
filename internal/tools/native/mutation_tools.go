@@ -708,6 +708,14 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		}
 		flowTemplateID = &value
 	}
+	blocksScope := "none"
+	if value, ok := readString(input, "blocks_scope"); ok {
+		normalized, valid := normalizeTaskBlocksScope(value)
+		if !valid {
+			return map[string]any{"error": "blocks_scope must be one of: none, all"}, nil
+		}
+		blocksScope = normalized
+	}
 	requiresHumanReview := readBool(input, "requires_human_review", false)
 	actor := actorFromContext(ctx)
 	created, err := e.tasks.Create(ctx, repo.ProjectTask{
@@ -715,6 +723,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		ProjectID:           projectID,
 		Title:               title,
 		Description:         description,
+		BlocksScope:         blocksScope,
 		FlowTemplateID:      flowTemplateID,
 		RequiresHumanReview: requiresHumanReview,
 		CreatedByType:       actor.createdByType,
@@ -726,9 +735,10 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	}
 	return map[string]any{
 		"task": map[string]any{
-			"id":          created.ID,
-			"task_number": created.TaskNumber,
-			"work_status": created.WorkStatus,
+			"id":           created.ID,
+			"task_number":  created.TaskNumber,
+			"work_status":  created.WorkStatus,
+			"blocks_scope": created.BlocksScope,
 		},
 	}, nil
 }
@@ -769,6 +779,13 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	}
 	if assignedAgentID, ok := readUUID(input, "assigned_agent_id"); ok && assignedAgentID != uuid.Nil {
 		current.AssignedAgentID = &assignedAgentID
+	}
+	if value, ok := readString(input, "blocks_scope"); ok {
+		normalized, valid := normalizeTaskBlocksScope(value)
+		if !valid {
+			return map[string]any{"error": "blocks_scope must be one of: none, all"}, nil
+		}
+		current.BlocksScope = normalized
 	}
 	previousStatus := strings.TrimSpace(current.WorkStatus)
 	statusChanged := false
@@ -823,9 +840,10 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	}
 	response := map[string]any{
 		"task": map[string]any{
-			"id":          updated.ID,
-			"task_number": updated.TaskNumber,
-			"work_status": updated.WorkStatus,
+			"id":           updated.ID,
+			"task_number":  updated.TaskNumber,
+			"work_status":  updated.WorkStatus,
+			"blocks_scope": updated.BlocksScope,
 		},
 	}
 	if decomposition.applied {
@@ -1009,6 +1027,17 @@ func (e *NativeToolExecutor) applyQueueDecomposition(ctx context.Context, taskRe
 		applied:      true,
 		childTaskIDs: childTaskIDs,
 	}, nil
+}
+
+func normalizeTaskBlocksScope(value string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "none":
+		return "none", true
+	case "all":
+		return "all", true
+	default:
+		return "", false
+	}
 }
 
 func (e *NativeToolExecutor) handleTaskAddDependency(ctx context.Context, input map[string]any) (map[string]any, error) {

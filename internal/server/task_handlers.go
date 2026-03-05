@@ -223,12 +223,14 @@ type createTaskRequest struct {
 	Title           string     `json:"title"`
 	Description     *string    `json:"description"`
 	FlowTemplateID  *uuid.UUID `json:"flow_template_id"`
+	BlocksScope     string     `json:"blocks_scope"`
 	AssignedAgentID *uuid.UUID `json:"assigned_agent_id"`
 }
 
 type updateTaskRequest struct {
 	Title               *string    `json:"title"`
 	Description         *string    `json:"description"`
+	BlocksScope         *string    `json:"blocks_scope"`
 	AssignedAgentID     *uuid.UUID `json:"assigned_agent_id"`
 	RequiresHumanReview *bool      `json:"requires_human_review"`
 	Priority            *int       `json:"priority"`
@@ -336,6 +338,7 @@ type taskResponse struct {
 	Title               string            `json:"title"`
 	Description         *string           `json:"description"`
 	WorkStatus          string            `json:"work_status"`
+	BlocksScope         string            `json:"blocks_scope"`
 	CurrentFlowNodeID   *uuid.UUID        `json:"current_flow_node_id"`
 	CurrentFlowNode     *flowNodeResponse `json:"current_flow_node,omitempty"`
 	FlowTemplateID      *uuid.UUID        `json:"flow_template_id"`
@@ -535,6 +538,7 @@ func (h taskHandlers) listProjectTasks(w http.ResponseWriter, r *http.Request) {
 			title,
 			description,
 			work_status,
+			blocks_scope,
 			current_flow_node_id,
 			flow_template_id,
 			schedule_id,
@@ -581,6 +585,7 @@ func (h taskHandlers) listProjectTasks(w http.ResponseWriter, r *http.Request) {
 			&item.Title,
 			&item.Description,
 			&item.WorkStatus,
+			&item.BlocksScope,
 			&item.CurrentFlowNodeID,
 			&item.FlowTemplateID,
 			&item.ScheduleID,
@@ -664,6 +669,7 @@ func (h taskHandlers) createTask(w http.ResponseWriter, r *http.Request) {
 		ProjectID:       projectID,
 		Title:           title,
 		Description:     trimStringPointer(req.Description),
+		BlocksScope:     strings.TrimSpace(req.BlocksScope),
 		FlowTemplateID:  req.FlowTemplateID,
 		AssignedAgentID: req.AssignedAgentID,
 		CreatedByType:   "human_user",
@@ -756,6 +762,14 @@ func (h taskHandlers) patchTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Description != nil {
 		taskRecord.Description = trimStringPointer(req.Description)
+	}
+	if req.BlocksScope != nil {
+		normalized, ok := normalizeBlocksScope(*req.BlocksScope)
+		if !ok {
+			responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, tasksvc.ErrInvalidBlocksScope.Error())
+			return
+		}
+		taskRecord.BlocksScope = normalized
 	}
 	if req.RequiresHumanReview != nil {
 		taskRecord.RequiresHumanReview = *req.RequiresHumanReview
@@ -2581,6 +2595,7 @@ func (h taskHandlers) toTaskResponse(ctx context.Context, taskRecord repo.Projec
 		Title:               taskRecord.Title,
 		Description:         taskRecord.Description,
 		WorkStatus:          taskRecord.WorkStatus,
+		BlocksScope:         taskRecord.BlocksScope,
 		CurrentFlowNodeID:   taskRecord.CurrentFlowNodeID,
 		FlowTemplateID:      taskRecord.FlowTemplateID,
 		ScheduleID:          taskRecord.ScheduleID,
@@ -2806,6 +2821,7 @@ func mapTaskError(err error) (int, string, string) {
 		errors.Is(err, tasksvc.ErrTransitionTargetRequired),
 		errors.Is(err, tasksvc.ErrFlowTemplateRequired),
 		errors.Is(err, tasksvc.ErrFlowTemplateReviewRequired),
+		errors.Is(err, tasksvc.ErrInvalidBlocksScope),
 		errors.Is(err, tasksvc.ErrPMNotAssigned),
 		errors.Is(err, tasksvc.ErrActiveFlowRequired),
 		errors.Is(err, tasksvc.ErrActorTypeInvalidForAction),
@@ -2845,6 +2861,17 @@ func normalizeMultiValue(values []string) []string {
 		result = append(result, trimmed)
 	}
 	return result
+}
+
+func normalizeBlocksScope(value string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "none":
+		return "none", true
+	case "all":
+		return "all", true
+	default:
+		return "", false
+	}
 }
 
 func toFlowNodeExecutionResponse(model repo.FlowNodeExecution) flowNodeExecutionResponse {

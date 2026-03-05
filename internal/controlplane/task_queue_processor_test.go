@@ -45,6 +45,32 @@ func TestTaskQueueProcessorHandleTaskQueuedEventIgnoresNonQueuedEvents(t *testin
 	}
 }
 
+func TestSelectNextQueuedTaskUnderProjectGatePrefersLowestOutstandingGate(t *testing.T) {
+	projectID := uuid.New()
+	gateOne := repo.ProjectTask{ID: uuid.New(), ProjectID: projectID, TaskNumber: 1, WorkStatus: "queued", BlocksScope: "all"}
+	gateTwo := repo.ProjectTask{ID: uuid.New(), ProjectID: projectID, TaskNumber: 2, WorkStatus: "queued", BlocksScope: "all"}
+	normal := repo.ProjectTask{ID: uuid.New(), ProjectID: projectID, TaskNumber: 3, WorkStatus: "queued", BlocksScope: "none"}
+
+	selected := selectNextQueuedTaskUnderProjectGate([]repo.ProjectTask{normal, gateTwo, gateOne})
+	if selected == nil || selected.ID != gateOne.ID {
+		t.Fatalf("selected queued task = %v, want gate task %s", selected, gateOne.ID)
+	}
+
+	gateOneDone := gateOne
+	gateOneDone.WorkStatus = "done"
+	selected = selectNextQueuedTaskUnderProjectGate([]repo.ProjectTask{normal, gateTwo, gateOneDone})
+	if selected == nil || selected.ID != gateTwo.ID {
+		t.Fatalf("selected queued task after first gate done = %v, want gate task %s", selected, gateTwo.ID)
+	}
+
+	gateTwoDone := gateTwo
+	gateTwoDone.WorkStatus = "done"
+	selected = selectNextQueuedTaskUnderProjectGate([]repo.ProjectTask{normal, gateTwoDone, gateOneDone})
+	if selected == nil || selected.ID != normal.ID {
+		t.Fatalf("selected queued task after gates complete = %v, want task %s", selected, normal.ID)
+	}
+}
+
 func TestTaskQueueProcessorHandleFlowAdvancedEventCreatesRunForAgentNode(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
@@ -620,8 +646,9 @@ func (f *fakeTaskQueueSessionRepository) GetByScopeAndMode(context.Context, stri
 }
 
 type fakeTaskQueueTaskRepository struct {
-	task repo.ProjectTask
-	err  error
+	task           repo.ProjectTask
+	tasksByProject []repo.ProjectTask
+	err            error
 }
 
 func (f *fakeTaskQueueTaskRepository) GetByID(context.Context, uuid.UUID) (repo.ProjectTask, error) {
@@ -629,6 +656,19 @@ func (f *fakeTaskQueueTaskRepository) GetByID(context.Context, uuid.UUID) (repo.
 		return repo.ProjectTask{}, f.err
 	}
 	return f.task, nil
+}
+
+func (f *fakeTaskQueueTaskRepository) ListByProject(context.Context, uuid.UUID, ...string) ([]repo.ProjectTask, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.tasksByProject) > 0 {
+		return append([]repo.ProjectTask(nil), f.tasksByProject...), nil
+	}
+	if f.task.ID == uuid.Nil {
+		return nil, nil
+	}
+	return []repo.ProjectTask{f.task}, nil
 }
 
 type fakeTaskQueueRunStarter struct {
