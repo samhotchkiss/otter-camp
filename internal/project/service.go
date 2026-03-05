@@ -228,6 +228,18 @@ type taskRepository interface {
 	Create(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 }
 
+type modelInvocationProjectCleaner interface {
+	ClearProjectReferences(ctx context.Context, projectID uuid.UUID) error
+}
+
+type chatSessionProjectCleaner interface {
+	DeleteProjectScoped(ctx context.Context, projectID uuid.UUID) error
+}
+
+type projectTaskActivityChecker interface {
+	HasActiveProjectTasks(ctx context.Context, projectID uuid.UUID) (bool, error)
+}
+
 type agentRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.Agent, error)
 	List(ctx context.Context, organizationID uuid.UUID) ([]repo.Agent, error)
@@ -236,12 +248,14 @@ type agentRepository interface {
 type Options struct {
 	Pool *pgxpool.Pool
 
-	Projects  projectRepository
-	Templates flowTemplateRepository
-	Nodes     flowNodeRepository
-	Schedules taskScheduleRepository
-	Tasks     taskRepository
-	Agents    agentRepository
+	Projects         projectRepository
+	Templates        flowTemplateRepository
+	Nodes            flowNodeRepository
+	Schedules        taskScheduleRepository
+	Tasks            taskRepository
+	ModelInvocations modelInvocationProjectCleaner
+	ChatSessions     chatSessionProjectCleaner
+	Agents           agentRepository
 
 	Events eventbus.EventBus
 	Clock  clock.Clock
@@ -250,15 +264,18 @@ type Options struct {
 type service struct {
 	pool *pgxpool.Pool
 
-	projects  projectRepository
-	templates flowTemplateRepository
-	nodes     flowNodeRepository
-	schedules taskScheduleRepository
-	tasks     taskRepository
-	agents    agentRepository
+	projects         projectRepository
+	templates        flowTemplateRepository
+	nodes            flowNodeRepository
+	schedules        taskScheduleRepository
+	tasks            taskRepository
+	modelInvocations modelInvocationProjectCleaner
+	chatSessions     chatSessionProjectCleaner
+	agents           agentRepository
 
-	events eventbus.EventBus
-	clock  clock.Clock
+	activeTaskChecker projectTaskActivityChecker
+	events            eventbus.EventBus
+	clock             clock.Clock
 
 	cronParser      *scheduling.CronParser
 	scheduleService *scheduling.TaskScheduleService
@@ -305,6 +322,16 @@ func NewService(opts Options) (ProjectService, error) {
 		svc.tasks = opts.Tasks
 	} else {
 		svc.tasks = repo.NewProjectTaskRepo(opts.Pool)
+	}
+	if opts.ModelInvocations != nil {
+		svc.modelInvocations = opts.ModelInvocations
+	} else {
+		svc.modelInvocations = repo.NewModelInvocationRepo(opts.Pool)
+	}
+	if opts.ChatSessions != nil {
+		svc.chatSessions = opts.ChatSessions
+	} else {
+		svc.chatSessions = repo.NewChatSessionRepo(opts.Pool)
 	}
 	if opts.Agents != nil {
 		svc.agents = opts.Agents
@@ -696,6 +723,10 @@ func (s *service) Delete(ctx context.Context, orgID, projectID uuid.UUID) error 
 		return ErrProjectHasActiveTasks
 	}
 
+	if err := s.cleanupProjectDeleteReferences(ctx, project.ID); err != nil {
+		return err
+	}
+
 	if err := s.projects.Delete(ctx, project.ID); err != nil {
 		return err
 	}
@@ -705,6 +736,20 @@ func (s *service) Delete(ctx context.Context, orgID, projectID uuid.UUID) error 
 		"slug":       project.Slug,
 	})
 
+	return nil
+}
+
+func (s *service) cleanupProjectDeleteReferences(ctx context.Context, projectID uuid.UUID) error {
+	if s.modelInvocations != nil {
+		if err := s.modelInvocations.ClearProjectReferences(ctx, projectID); err != nil {
+			return err
+		}
+	}
+	if s.chatSessions != nil {
+		if err := s.chatSessions.DeleteProjectScoped(ctx, projectID); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1262,6 +1307,10 @@ func (s *service) computeNextFireAt(expression string) (time.Time, error) {
 }
 
 func (s *service) hasActiveProjectTasks(ctx context.Context, projectID uuid.UUID) (bool, error) {
+	if s.activeTaskChecker != nil {
+		return s.activeTaskChecker.HasActiveProjectTasks(ctx, projectID)
+	}
+
 	var exists bool
 	err := s.pool.QueryRow(ctx, `
 		SELECT EXISTS (

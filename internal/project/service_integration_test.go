@@ -218,7 +218,7 @@ func TestProjectServiceDeleteActiveTasksBlocked(t *testing.T) {
 			created_by_type,
 			metadata
 		)
-		VALUES ($1, $2, 1, 'active task', 'in_progress', 'system', '{}'::jsonb)
+		VALUES ($1, $2, 1, 'active task', 'draft', 'system', '{}'::jsonb)
 	`, orgID, projectID); err != nil {
 		t.Fatalf("insert active project_task row: %v", err)
 	}
@@ -226,6 +226,80 @@ func TestProjectServiceDeleteActiveTasksBlocked(t *testing.T) {
 	err := svc.Delete(ctx, orgID, projectID)
 	if !errors.Is(err, ErrProjectHasActiveTasks) {
 		t.Fatalf("Delete err = %v, want ErrProjectHasActiveTasks", err)
+	}
+}
+
+func TestProjectServiceDeleteCompletedTasksCleansHistoricalReferencesAndPublishesSingleEvent(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	svc := newIntegrationService(t, pool)
+	projectRepo := repo.NewProjectRepo(pool)
+	invocationRepo := repo.NewModelInvocationRepo(pool)
+
+	orgID, projectID := seedProject(t, ctx, pool)
+	doneTaskID := seedProjectTask(t, ctx, pool, orgID, projectID, 1, "done")
+	_ = seedProjectTask(t, ctx, pool, orgID, projectID, 2, "cancelled")
+	invocationID := seedHistoricalModelInvocation(t, ctx, pool, orgID, projectID, doneTaskID)
+
+	if err := svc.Delete(ctx, orgID, projectID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if _, err := projectRepo.GetByID(ctx, projectID); !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("GetByID after delete err = %v, want repo.ErrNotFound", err)
+	}
+
+	invocation, err := invocationRepo.GetByID(ctx, invocationID)
+	if err != nil {
+		t.Fatalf("GetByID invocation: %v", err)
+	}
+	if invocation.ProjectID != nil {
+		t.Fatalf("invocation project_id = %v, want nil", invocation.ProjectID)
+	}
+	if invocation.ProjectTaskID != nil {
+		t.Fatalf("invocation project_task_id = %v, want nil", invocation.ProjectTaskID)
+	}
+
+	var deletedCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM domain_event
+		WHERE organization_id = $1
+		  AND event_type = 'project.deleted'
+		  AND payload ->> 'project_id' = $2
+	`, orgID, projectID.String()).Scan(&deletedCount); err != nil {
+		t.Fatalf("count project.deleted: %v", err)
+	}
+	if deletedCount != 1 {
+		t.Fatalf("project.deleted count = %d, want 1", deletedCount)
+	}
+}
+
+func TestProjectServiceDeleteRemovesProjectAndTaskScopedChatSessions(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	svc := newIntegrationService(t, pool)
+	sessionRepo := repo.NewChatSessionRepo(pool)
+
+	orgID, projectID := seedProject(t, ctx, pool)
+	taskID := seedProjectTask(t, ctx, pool, orgID, projectID, 1, "done")
+
+	projectSessionID := seedScopedChatSession(t, ctx, pool, orgID, "project", projectID)
+	taskSessionID := seedScopedChatSession(t, ctx, pool, orgID, "project_task", taskID)
+	orgSessionID := seedScopedChatSession(t, ctx, pool, orgID, "organization", orgID)
+
+	if err := svc.Delete(ctx, orgID, projectID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if _, err := sessionRepo.GetByID(ctx, projectSessionID); !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("project-scoped session err = %v, want repo.ErrNotFound", err)
+	}
+	if _, err := sessionRepo.GetByID(ctx, taskSessionID); !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("task-scoped session err = %v, want repo.ErrNotFound", err)
+	}
+	if _, err := sessionRepo.GetByID(ctx, orgSessionID); err != nil {
+		t.Fatalf("organization-scoped session should remain, got err: %v", err)
 	}
 }
 
@@ -521,6 +595,121 @@ func seedProjectWithSlug(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 		t.Fatalf("create project (%s): %v", slug, err)
 	}
 	return orgID, project.ID
+}
+
+func seedProjectTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID uuid.UUID, taskNumber int, workStatus string) uuid.UUID {
+	t.Helper()
+
+	var flowTemplateID *uuid.UUID
+	switch workStatus {
+	case "queued", "in_progress", "review", "done":
+		id := seedProjectFlowTemplate(t, ctx, pool, orgID, projectID)
+		flowTemplateID = &id
+	}
+
+	var taskID uuid.UUID
+	err := pool.QueryRow(ctx, `
+		INSERT INTO project_task (
+			organization_id,
+			project_id,
+			task_number,
+			title,
+			flow_template_id,
+			work_status,
+			created_by_type,
+			metadata
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, 'system', '{}'::jsonb)
+		RETURNING id
+	`, orgID, projectID, taskNumber, workStatus+" task", flowTemplateID, workStatus).Scan(&taskID)
+	if err != nil {
+		t.Fatalf("insert project_task row: %v", err)
+	}
+	return taskID
+}
+
+func seedProjectFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID uuid.UUID) uuid.UUID {
+	t.Helper()
+
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           "project-delete-flow-" + uuid.NewString()[:8],
+		DisplayName:    "Project Delete Flow",
+		Description:    "Delete-path test flow template",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	return template.ID
+}
+
+func seedHistoricalModelInvocation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID, taskID uuid.UUID) uuid.UUID {
+	t.Helper()
+
+	providerRepo := repo.NewModelProviderRepo(pool)
+	connectionRepo := repo.NewProviderConnectionRepo(pool)
+	invocationRepo := repo.NewModelInvocationRepo(pool)
+
+	provider, err := providerRepo.Create(ctx, repo.ModelProvider{
+		Slug:        "project-delete-provider-" + uuid.NewString()[:8],
+		DisplayName: "Project Delete Provider",
+		APIBaseURL:  "https://provider.example/v1",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+
+	connection, err := connectionRepo.Create(ctx, repo.ProviderConnection{
+		OrganizationID: orgID,
+		ProviderID:     provider.ID,
+		DisplayName:    "Project Delete Connection",
+		APIKeyRef:      "ref:project-delete-" + uuid.NewString()[:8],
+		IsEnabled:      true,
+	})
+	if err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+
+	profileID := "standard"
+	invocation, err := invocationRepo.Create(ctx, repo.ModelInvocation{
+		OrganizationID:       orgID,
+		ModelProviderID:      provider.ID,
+		ProviderConnectionID: &connection.ID,
+		ModelProfileID:       &profileID,
+		InvocationPurpose:    "agent_turn",
+		Status:               "completed",
+		ModelName:            "gpt-4o-mini",
+		ProjectID:            &projectID,
+		ProjectTaskID:        &taskID,
+	})
+	if err != nil {
+		t.Fatalf("create model invocation: %v", err)
+	}
+	return invocation.ID
+}
+
+func seedScopedChatSession(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, scopeType string, scopeID uuid.UUID) uuid.UUID {
+	t.Helper()
+
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      scopeType,
+		ScopeID:        scopeID,
+		Mode:           "sync",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create %s chat session: %v", scopeType, err)
+	}
+	return session.ID
 }
 
 func ensureProjectTaskTable(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
