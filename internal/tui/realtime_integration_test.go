@@ -197,7 +197,7 @@ func TestRealtimeConnectionStateReflectedInModelStatus(t *testing.T) {
 	}
 }
 
-func TestRealtimeConnectedMetaFrameNoGap(t *testing.T) {
+func TestRealtimeConnectedMetaFrameNoGapIntegration(t *testing.T) {
 	t.Parallel()
 
 	server := newScriptedSSEServer(t, []scriptedResponse{
@@ -245,7 +245,7 @@ func TestRealtimeConnectedMetaFrameNoGap(t *testing.T) {
 	}
 }
 
-func TestRealtimeConnectedMetaFrameWithGapDegrades(t *testing.T) {
+func TestRealtimeConnectedMetaFrameWithGapDegradesIntegration(t *testing.T) {
 	t.Parallel()
 
 	server := newScriptedSSEServer(t, []scriptedResponse{

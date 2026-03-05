@@ -98,3 +98,27 @@ func TestSessionLabelResolvesTaskScopeId(t *testing.T) {
 		t.Fatalf("task scope label = %q, want %q", got, "Launch docs")
 	}
 }
+
+func TestRebuildSidebarBuildsProjectNodesFromActiveItems(t *testing.T) {
+	workspace := newWorkspaceState()
+
+	workspace.rebuildSidebar(
+		"org-1",
+		nil,
+		[]SidebarProjectItem{
+			{ID: "proj-alpha", DisplayName: "Alpha"},
+			{ID: "proj-beta", DisplayName: "Beta"},
+		},
+	)
+
+	got := workspace.existingProjects()
+	if len(got) != 2 {
+		t.Fatalf("project count = %d, want 2", len(got))
+	}
+	if got[0].ID != "proj-alpha" || got[0].DisplayName != "Alpha" {
+		t.Fatalf("first project = %+v, want proj-alpha/Alpha", got[0])
+	}
+	if got[1].ID != "proj-beta" || got[1].DisplayName != "Beta" {
+		t.Fatalf("second project = %+v, want proj-beta/Beta", got[1])
+	}
+}

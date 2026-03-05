@@ -62,7 +62,7 @@ type sidebarNode struct {
 	Expanded     bool
 	Unread       int
 	SessionID    string
-	SessionScope string    // "organization", "project", "project_task" for session nodes
+	SessionScope string // "organization", "project", "project_task" for session nodes
 	TaskID       string
 	TaskNumber   int
 	ProjectID    string
@@ -72,6 +72,7 @@ type sidebarNode struct {
 
 type taskRecord struct {
 	ID                  string
+	ProjectID           string
 	TaskNumber          int
 	Title               string
 	Description         string
@@ -123,13 +124,13 @@ type ProjectDetail struct {
 	DisplayName  string
 	Description  string
 	DeliveryMode string
-	RepoURL      string             // connected GitHub repository URL
+	RepoURL      string // connected GitHub repository URL
 	RepoPath     string
 	Files        []ProjectFileEntry
-	Tasks        []SidebarTaskItem  // open tasks only
-	DoneTasks    []SidebarTaskItem  // completed/approved/cancelled tasks
-	DoneCount    int                // count of completed tasks
-	Agents       []ProjectAgent     // agents assigned to this project
+	Tasks        []SidebarTaskItem // open tasks only
+	DoneTasks    []SidebarTaskItem // completed/approved/cancelled tasks
+	DoneCount    int               // count of completed tasks
+	Agents       []ProjectAgent    // agents assigned to this project
 }
 
 type workspaceState struct {
@@ -143,17 +144,17 @@ type workspaceState struct {
 	selectedProjectID string
 	selectedProject   *ProjectDetail
 
-	tasks             map[string]*taskRecord
-	taskOrder         []string
-	taskSessionIDs    map[string]string
-	sessionToTaskLabel map[string]string // session UUID → human-readable task label
-	selectedTaskID    string
-	projectTaskCursor int    // cursor within the project view open-task list
+	tasks                      map[string]*taskRecord
+	taskOrder                  []string
+	taskSessionIDs             map[string]string
+	sessionToTaskLabel         map[string]string // session UUID → human-readable task label
+	selectedTaskID             string
+	projectTaskCursor          int    // cursor within the project view open-task list
 	pendingProjectCursorTaskID string // set when task is opened before project detail loads
-	showDoneTasks     bool   // whether to show done tasks in project view
-	showProjectFiles  bool   // whether to show the project file section
-	showTaskHistory   bool   // whether to show task history/audit trail
-	dashboardCursor   int // cursor within the dashboard task board (index into taskOrder excluding done/cancelled)
+	showDoneTasks              bool   // whether to show done tasks in project view
+	showProjectFiles           bool   // whether to show the project file section
+	showTaskHistory            bool   // whether to show task history/audit trail
+	dashboardCursor            int    // cursor within the dashboard task board (index into taskOrder excluding done/cancelled)
 
 	inbox       []inboxItem
 	inboxCursor int
@@ -192,22 +193,22 @@ func newWorkspaceState() workspaceState {
 	}
 
 	return workspaceState{
-		mainView:         ViewDashboard,
-		nodes:            nodes,
-		topLevel:         []string{"inbox", "header-chats", generalSidebarNodeID, "header-projects"},
-		sidebarCursor:    0,
-		sectionCollapsed: map[sidebarSectionID]bool{},
+		mainView:           ViewDashboard,
+		nodes:              nodes,
+		topLevel:           []string{"inbox", "header-chats", generalSidebarNodeID, "header-projects"},
+		sidebarCursor:      0,
+		sectionCollapsed:   map[sidebarSectionID]bool{},
 		tasks:              map[string]*taskRecord{},
 		taskOrder:          []string{},
 		taskSessionIDs:     map[string]string{},
 		sessionToTaskLabel: map[string]string{},
 		selectedTaskID:     "",
-		inbox:            []inboxItem{},
-		activity:         []string{"workspace initialized"},
-		agents:           []string{},
-		mergeQueue:       []string{},
-		schedules:        []string{},
-		activeSessionID:  generalSessionID,
+		inbox:              []inboxItem{},
+		activity:           []string{"workspace initialized"},
+		agents:             []string{},
+		mergeQueue:         []string{},
+		schedules:          []string{},
+		activeSessionID:    generalSessionID,
 	}
 }
 
@@ -1089,6 +1090,83 @@ func (w *workspaceState) existingProjects() []SidebarProjectItem {
 	return out
 }
 
+func (w *workspaceState) knownActiveProjects() []SidebarProjectItem {
+	seen := make(map[string]struct{})
+	out := make([]SidebarProjectItem, 0)
+	add := func(id, label string, updatedAt time.Time) {
+		trimmedID := strings.TrimSpace(id)
+		if trimmedID == "" {
+			return
+		}
+		if _, exists := seen[trimmedID]; exists {
+			return
+		}
+		resolvedLabel := strings.TrimSpace(label)
+		if resolvedLabel == "" {
+			resolvedLabel = w.projectDisplayName(trimmedID)
+		}
+		out = append(out, SidebarProjectItem{
+			ID:          trimmedID,
+			DisplayName: resolvedLabel,
+			UpdatedAt:   updatedAt,
+		})
+		seen[trimmedID] = struct{}{}
+	}
+
+	for _, project := range w.existingProjects() {
+		add(project.ID, project.DisplayName, project.UpdatedAt)
+	}
+	if w.selectedProject != nil {
+		add(w.selectedProject.ID, w.selectedProject.DisplayName, time.Time{})
+	}
+	if strings.TrimSpace(w.selectedProjectID) != "" {
+		add(w.selectedProjectID, "", time.Time{})
+	}
+	for _, id := range w.topLevel {
+		node := w.nodes[id]
+		if node == nil || node.Kind != sidebarKindSession || node.SessionScope != "project" {
+			continue
+		}
+		add(node.ProjectID, node.Label, node.UpdatedAt)
+	}
+	for _, task := range w.tasks {
+		if task == nil {
+			continue
+		}
+		add(task.ProjectID, "", time.Time{})
+	}
+
+	return out
+}
+
+func (w *workspaceState) projectDisplayName(projectID string) string {
+	trimmedID := strings.TrimSpace(projectID)
+	if trimmedID == "" {
+		return ""
+	}
+	if w.selectedProject != nil &&
+		strings.EqualFold(strings.TrimSpace(w.selectedProject.ID), trimmedID) &&
+		strings.TrimSpace(w.selectedProject.DisplayName) != "" {
+		return strings.TrimSpace(w.selectedProject.DisplayName)
+	}
+	if node := w.nodes["project-"+trimmedID]; node != nil && strings.TrimSpace(node.Label) != "" {
+		return strings.TrimSpace(node.Label)
+	}
+	for _, id := range w.topLevel {
+		node := w.nodes[id]
+		if node == nil || node.Kind != sidebarKindSession || node.SessionScope != "project" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(node.ProjectID), trimmedID) && strings.TrimSpace(node.Label) != "" {
+			return strings.TrimSpace(node.Label)
+		}
+	}
+	if len(trimmedID) > 8 {
+		return "Project " + trimmedID[:8]
+	}
+	return "Project " + trimmedID
+}
+
 // existingChats extracts the current chat session items from the sidebar nodes.
 // EX-494: used to preserve chats when a sidebar reload fails (e.g. rate-limiting).
 func (w *workspaceState) existingChats() []SidebarChatItem {
@@ -1148,6 +1226,7 @@ func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskIt
 		// Seed basic task record so the TASK DETAIL center pane renders immediately,
 		// and so the dashboard board can include done tasks in boardCounts().
 		if existing, exists := w.tasks[task.ID]; exists {
+			existing.ProjectID = projectID
 			existing.Title = task.Title
 			existing.Status = task.WorkStatus
 			existing.TaskNumber = task.TaskNumber
@@ -1155,6 +1234,7 @@ func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskIt
 		} else {
 			w.tasks[task.ID] = &taskRecord{
 				ID:         task.ID,
+				ProjectID:  projectID,
 				Title:      task.Title,
 				Status:     task.WorkStatus,
 				TaskNumber: task.TaskNumber,
