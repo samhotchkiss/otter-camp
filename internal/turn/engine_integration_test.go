@@ -494,15 +494,15 @@ func TestTurnEngineIntegrationKickoffSummaryCarriesOriginatingWorkstreams(t *tes
 			promptText.WriteString(strings.ToLower(strings.TrimSpace(message.Content)))
 			promptText.WriteString("\n")
 		}
-			promptBlob := promptText.String()
-			if strings.Contains(promptBlob, "kickoff handoff requirement") &&
-				strings.Contains(promptBlob, "landing page") &&
-				strings.Contains(promptBlob, "stripe billing integration") &&
-				strings.Contains(promptBlob, "analytics dashboard setup") {
-				return ModelResponse{Content: "Handoff to Lori: workstreams are landing page, Stripe billing integration, and analytics dashboard setup."}, nil
-			}
-			return ModelResponse{Content: "Handoff to Lori: missing required workstreams."}, nil
+		promptBlob := promptText.String()
+		if strings.Contains(promptBlob, "kickoff handoff requirement") &&
+			strings.Contains(promptBlob, "landing page") &&
+			strings.Contains(promptBlob, "stripe billing integration") &&
+			strings.Contains(promptBlob, "analytics dashboard setup") {
+			return ModelResponse{Content: "Handoff to Lori: workstreams are landing page, Stripe billing integration, and analytics dashboard setup."}, nil
 		}
+		return ModelResponse{Content: "Handoff to Lori: missing required workstreams."}, nil
+	}
 
 	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID); err != nil {
 		t.Fatalf("HandleUserMessage: %v", err)
