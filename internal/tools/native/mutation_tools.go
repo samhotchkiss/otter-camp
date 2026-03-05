@@ -697,6 +697,13 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	}
 	var flowTemplateID *uuid.UUID
 	if value, ok := readUUID(input, "flow_template_id"); ok && value != uuid.Nil {
+		hasReviewNode, reviewErr := e.flowTemplateHasReviewNode(ctx, value)
+		if reviewErr != nil {
+			return nil, reviewErr
+		}
+		if !hasReviewNode {
+			return map[string]any{"error": "flow template must include at least one review node"}, nil
+		}
 		flowTemplateID = &value
 	}
 	requiresHumanReview := readBool(input, "requires_human_review", false)
@@ -749,6 +756,13 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		if !strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") {
 			return map[string]any{"error": "flow_template_id can only be changed while task is draft"}, nil
 		}
+		hasReviewNode, reviewErr := e.flowTemplateHasReviewNode(ctx, flowTemplateID)
+		if reviewErr != nil {
+			return nil, reviewErr
+		}
+		if !hasReviewNode {
+			return map[string]any{"error": "flow template must include at least one review node"}, nil
+		}
 		current.FlowTemplateID = &flowTemplateID
 	}
 	if assignedAgentID, ok := readUUID(input, "assigned_agent_id"); ok && assignedAgentID != uuid.Nil {
@@ -757,8 +771,17 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	previousStatus := strings.TrimSpace(current.WorkStatus)
 	statusChanged := false
 	if status, ok := readString(input, "work_status"); ok && status != "" {
-		if taskStatusRequiresFlowTemplate(status) && current.FlowTemplateID == nil {
+		if strings.EqualFold(strings.TrimSpace(status), "queued") && current.FlowTemplateID == nil {
 			return map[string]any{"error": "task requires a flow template before it can be queued"}, nil
+		}
+		if strings.EqualFold(strings.TrimSpace(status), "queued") && current.FlowTemplateID != nil {
+			hasReviewNode, reviewErr := e.flowTemplateHasReviewNode(ctx, *current.FlowTemplateID)
+			if reviewErr != nil {
+				return nil, reviewErr
+			}
+			if !hasReviewNode {
+				return map[string]any{"error": "flow template must include at least one review node"}, nil
+			}
 		}
 		if strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
 			strings.EqualFold(strings.TrimSpace(status), "queued") &&
@@ -870,13 +893,26 @@ func (e *NativeToolExecutor) validateTaskDoneTransition(ctx context.Context, tas
 	return errors.New(taskDoneTerminalNodeMessage)
 }
 
-func taskStatusRequiresFlowTemplate(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "queued", "in_progress", "review", "done":
-		return true
-	default:
-		return false
+func (e *NativeToolExecutor) flowTemplateHasReviewNode(ctx context.Context, flowTemplateID uuid.UUID) (bool, error) {
+	if flowTemplateID == uuid.Nil || e.flowNodes == nil {
+		return true, nil
 	}
+	nodes, err := e.flowNodes.GetByTemplateOrdered(ctx, flowTemplateID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return true, nil
+		}
+		return false, err
+	}
+	if len(nodes) == 0 {
+		return false, nil
+	}
+	for _, node := range nodes {
+		if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (e *NativeToolExecutor) handleTaskAddDependency(ctx context.Context, input map[string]any) (map[string]any, error) {
@@ -1362,6 +1398,29 @@ func (e *NativeToolExecutor) handleFlowCreateTemplate(ctx context.Context, input
 	if !ok || name == "" {
 		return map[string]any{"error": "name_required"}, nil
 	}
+	nodesRaw, hasNodes := input["nodes"].([]any)
+	if !hasNodes || len(nodesRaw) == 0 {
+		return map[string]any{"error": "flow template must include at least one review node"}, nil
+	}
+	declaredReviewNode := false
+	for _, item := range nodesRaw {
+		nodeMap, mapOK := item.(map[string]any)
+		if !mapOK {
+			continue
+		}
+		nodeType, typeOK := readString(nodeMap, "node_type")
+		if !typeOK || nodeType == "" {
+			nodeType = "work"
+		}
+		if strings.EqualFold(strings.TrimSpace(nodeType), "review") {
+			declaredReviewNode = true
+			break
+		}
+	}
+	if !declaredReviewNode {
+		return map[string]any{"error": "flow template must include at least one review node"}, nil
+	}
+
 	actor := actorFromContext(ctx)
 	orgID := scope.organizationID
 	template, err := e.flowTemplates.Create(ctx, repo.FlowTemplate{
@@ -1380,47 +1439,38 @@ func (e *NativeToolExecutor) handleFlowCreateTemplate(ctx context.Context, input
 	}
 
 	createdNodes := make([]repo.FlowNode, 0)
-	nodesRaw, hasNodes := input["nodes"].([]any)
-	if hasNodes && len(nodesRaw) > 0 {
-		for idx, item := range nodesRaw {
-			nodeMap, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			displayName, ok := readString(nodeMap, "display_name")
-			if !ok || displayName == "" {
-				displayName = fmt.Sprintf("Node %d", idx+1)
-			}
-			nodeType, ok := readString(nodeMap, "node_type")
-			if !ok || nodeType == "" {
-				nodeType = "work"
-			}
-			created, err := e.flowNodes.Create(ctx, repo.FlowNode{
-				FlowTemplateID: template.ID,
-				DisplayName:    displayName,
-				NodeType:       nodeType,
-				Position:       idx + 1,
-				ToolDomains:    readStringSlice(nodeMap, "tool_domains"),
-				MaxVisits:      10,
-			})
-			if err != nil {
-				return nil, err
-			}
-			createdNodes = append(createdNodes, created)
+	hasReviewNode := false
+	for idx, item := range nodesRaw {
+		nodeMap, ok := item.(map[string]any)
+		if !ok {
+			continue
 		}
-	}
-	if len(createdNodes) == 0 {
+		displayName, ok := readString(nodeMap, "display_name")
+		if !ok || displayName == "" {
+			displayName = fmt.Sprintf("Node %d", idx+1)
+		}
+		nodeType, ok := readString(nodeMap, "node_type")
+		if !ok || nodeType == "" {
+			nodeType = "work"
+		}
+		if strings.EqualFold(strings.TrimSpace(nodeType), "review") {
+			hasReviewNode = true
+		}
 		created, err := e.flowNodes.Create(ctx, repo.FlowNode{
 			FlowTemplateID: template.ID,
-			DisplayName:    "Node 1",
-			NodeType:       "work",
-			Position:       1,
+			DisplayName:    displayName,
+			NodeType:       nodeType,
+			Position:       idx + 1,
+			ToolDomains:    readStringSlice(nodeMap, "tool_domains"),
 			MaxVisits:      10,
 		})
 		if err != nil {
 			return nil, err
 		}
 		createdNodes = append(createdNodes, created)
+	}
+	if len(createdNodes) == 0 || !hasReviewNode {
+		return map[string]any{"error": "flow template must include at least one review node"}, nil
 	}
 
 	for i := 0; i < len(createdNodes)-1; i++ {

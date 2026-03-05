@@ -77,10 +77,14 @@ func MakeFlowTemplate(t testing.TB, db *pgxpool.Pool, projectID uuid.UUID, nodeC
 	nodeRepo := repo.NewFlowNodeRepo(db)
 	nodes := make([]repo.FlowNode, 0, nodeCount)
 	for i := 0; i < nodeCount; i++ {
+		nodeType := "work"
+		if i == nodeCount-1 {
+			nodeType = "review"
+		}
 		node, createErr := nodeRepo.Create(ctx, repo.FlowNode{
 			FlowTemplateID: templateRecord.ID,
 			DisplayName:    "Node " + uuid.NewString()[:8],
-			NodeType:       "work",
+			NodeType:       nodeType,
 			Position:       i + 1,
 			MCPTools:       []repo.FlowNodeMCPTool{},
 			ToolDomains:    []string{},
