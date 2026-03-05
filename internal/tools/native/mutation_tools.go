@@ -828,7 +828,7 @@ func (e *NativeToolExecutor) projectHasActivePM(ctx context.Context, projectID u
 		if !assignment.IsActive {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(assignment.Role), "pm") {
+		if isProjectManagerRole(assignment.Role) {
 			return true
 		}
 	}
@@ -1551,7 +1551,9 @@ func (e *NativeToolExecutor) handleScheduleDelete(ctx context.Context, input map
 
 func normalizeProjectAssignmentRole(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "pm", "worker", "reviewer", "observer":
+	case "pm", "project_manager":
+		return "project_manager"
+	case "worker", "reviewer", "observer":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return ""
@@ -1560,11 +1562,15 @@ func normalizeProjectAssignmentRole(value string) string {
 
 func projectAssignmentRoleRequiresDedicatedAgent(role string) bool {
 	switch role {
-	case "pm", "worker", "reviewer":
+	case "project_manager", "worker", "reviewer":
 		return true
 	default:
 		return false
 	}
+}
+
+func isProjectManagerRole(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "project_manager") || strings.EqualFold(strings.TrimSpace(value), "pm")
 }
 
 func (e *NativeToolExecutor) handleAgentAssignProject(ctx context.Context, input map[string]any) (map[string]any, error) {
@@ -1601,6 +1607,9 @@ func (e *NativeToolExecutor) handleAgentAssignProject(ctx context.Context, input
 	}
 	if projectAssignmentRoleRequiresDedicatedAgent(role) && agentRecord.IsStarterTrio {
 		return map[string]any{"error": "starter_trio_cannot_be_assigned"}, nil
+	}
+	if role == "project_manager" && !strings.EqualFold(strings.TrimSpace(agentRecord.AgentClass), "staff") {
+		return map[string]any{"error": "project_manager_requires_staff_agent"}, nil
 	}
 
 	actor := actorFromContext(ctx)
@@ -1814,13 +1823,13 @@ func (e *NativeToolExecutor) autoAddProjectParticipants(ctx context.Context, ses
 
 	// Sort: workers first, then PMs, then others — so the worker becomes
 	// the primary responder via resolveFirstAgentParticipant.
-	roleOrder := map[string]int{"worker": 0, "reviewer": 1, "pm": 2, "observer": 3}
+	roleOrder := map[string]int{"worker": 0, "reviewer": 1, "project_manager": 2, "observer": 3}
 	sortedAssignments := make([]repo.AgentProjectAssignment, len(assignments))
 	copy(sortedAssignments, assignments)
 	for i := 0; i < len(sortedAssignments)-1; i++ {
 		for j := i + 1; j < len(sortedAssignments); j++ {
-			oi := roleOrder[sortedAssignments[i].Role]
-			oj := roleOrder[sortedAssignments[j].Role]
+			oi := roleOrder[normalizeProjectAssignmentRole(sortedAssignments[i].Role)]
+			oj := roleOrder[normalizeProjectAssignmentRole(sortedAssignments[j].Role)]
 			if oi > oj {
 				sortedAssignments[i], sortedAssignments[j] = sortedAssignments[j], sortedAssignments[i]
 			}

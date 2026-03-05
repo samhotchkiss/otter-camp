@@ -265,7 +265,7 @@ func TestAgentAssignmentHTTPConcurrentPMRequests(t *testing.T) {
 		SELECT COUNT(*)
 		FROM agent_project_assignment
 		WHERE project_id = $1
-		  AND role = 'pm'
+		  AND role = 'project_manager'
 		  AND is_active = true
 	`, project.ID).Scan(&activePMCount); err != nil {
 		t.Fatalf("count active pm rows: %v", err)

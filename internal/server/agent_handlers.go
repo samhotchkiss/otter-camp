@@ -1184,9 +1184,9 @@ func (h agentHandlers) createAgentProjectAssignment(w http.ResponseWriter, r *ht
 		return
 	}
 
-	role := strings.ToLower(strings.TrimSpace(req.Role))
-	if role != "pm" && role != "worker" && role != "reviewer" && role != "observer" {
-		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "role must be one of pm, worker, reviewer, observer")
+	role := normalizeProjectAssignmentRole(req.Role)
+	if role == "" {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "role must be one of project_manager, worker, reviewer, observer")
 		return
 	}
 
@@ -1381,12 +1381,12 @@ func (h agentHandlers) createProjectAgent(w http.ResponseWriter, r *http.Request
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "agent_id is required")
 		return
 	}
-	role := strings.ToLower(strings.TrimSpace(req.Role))
+	role := normalizeProjectAssignmentRole(req.Role)
 	if role == "" {
 		role = "worker"
 	}
-	if role != "pm" && role != "worker" && role != "reviewer" && role != "observer" {
-		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "role must be one of pm, worker, reviewer, observer")
+	if role == "" {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "role must be one of project_manager, worker, reviewer, observer")
 		return
 	}
 
@@ -1917,6 +1917,17 @@ func mapTemplateError(err error) (status int, code, message string) {
 	}
 }
 
+func normalizeProjectAssignmentRole(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "pm", "project_manager":
+		return "project_manager"
+	case "worker", "reviewer", "observer":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
 func mapAssignmentError(err error) (status int, code, message string) {
 	switch {
 	case err == nil:
@@ -1929,6 +1940,7 @@ func mapAssignmentError(err error) (status int, code, message string) {
 		errors.Is(err, agent.ErrAssignmentProjectIDRequired),
 		errors.Is(err, agent.ErrAssignmentSkillIDRequired),
 		errors.Is(err, agent.ErrAssignmentInvalidRole),
+		errors.Is(err, agent.ErrAssignmentPMRequiresStaff),
 		errors.Is(err, agent.ErrAssignmentStarterTrioRole),
 		errors.Is(err, agent.ErrInvalidCreatedByType),
 		errors.Is(err, agent.ErrCreatedByIDRequired):

@@ -108,7 +108,7 @@ type boardCounts struct {
 // ProjectAgent represents an agent assigned to a project.
 type ProjectAgent struct {
 	DisplayName string
-	Role        string // "pm", "worker", "reviewer", "observer"
+	Role        string // "project_manager", "worker", "reviewer", "observer"
 }
 
 type ProjectFileEntry struct {

@@ -1341,7 +1341,7 @@ func TestAgentAssignProjectCreatesAssignment(t *testing.T) {
 	assignments := &fakeAssignmentRepo{}
 	agents := &fakeAgentRepo{
 		agents: map[uuid.UUID]repo.Agent{
-			assigneeID: {ID: assigneeID, IsStarterTrio: false},
+			assigneeID: {ID: assigneeID, AgentClass: "staff", IsStarterTrio: false},
 		},
 	}
 
@@ -1368,8 +1368,8 @@ func TestAgentAssignProjectCreatesAssignment(t *testing.T) {
 	if mustUUIDFromAny(t, assignment["project_id"]) != projectID {
 		t.Fatalf("project_id = %v, want %s", assignment["project_id"], projectID)
 	}
-	if assignment["role"] != "pm" {
-		t.Fatalf("role = %v, want pm", assignment["role"])
+	if assignment["role"] != "project_manager" {
+		t.Fatalf("role = %v, want project_manager", assignment["role"])
 	}
 	if len(assignments.assignments) != 1 {
 		t.Fatalf("assignment repo entries = %d, want 1", len(assignments.assignments))
@@ -1415,13 +1415,42 @@ func TestAgentAssignProjectRejectsStarterTrioPMRole(t *testing.T) {
 	}
 }
 
+func TestAgentAssignProjectRejectsProjectManagerRoleForTempAgent(t *testing.T) {
+	assigneeID := uuid.New()
+	assignments := &fakeAssignmentRepo{}
+	agents := &fakeAgentRepo{
+		agents: map[uuid.UUID]repo.Agent{
+			assigneeID: {ID: assigneeID, AgentClass: "temp", IsStarterTrio: false},
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.assignments = assignments
+	executor.agents = agents
+
+	out, err := executor.Execute(testExecCtx(), "agent.assign_project", map[string]any{
+		"agent_id":   assigneeID.String(),
+		"project_id": uuid.NewString(),
+		"role":       "project_manager",
+	})
+	if err != nil {
+		t.Fatalf("agent.assign_project: %v", err)
+	}
+	if out["error"] != "project_manager_requires_staff_agent" {
+		t.Fatalf("error = %v, want project_manager_requires_staff_agent", out["error"])
+	}
+	if len(assignments.assignments) != 0 {
+		t.Fatalf("assignment repo entries = %d, want 0", len(assignments.assignments))
+	}
+}
+
 func TestAgentAssignProjectMapsPMConflict(t *testing.T) {
 	assigneeID := uuid.New()
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
 	executor.assignments = &fakeAssignmentRepo{assignErr: repo.ErrPMConflict}
 	executor.agents = &fakeAgentRepo{
 		agents: map[uuid.UUID]repo.Agent{
-			assigneeID: {ID: assigneeID, IsStarterTrio: false},
+			assigneeID: {ID: assigneeID, AgentClass: "staff", IsStarterTrio: false},
 		},
 	}
 

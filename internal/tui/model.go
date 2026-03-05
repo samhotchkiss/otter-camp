@@ -7262,7 +7262,7 @@ func (m Model) assistantLabel() string {
 	}
 	if m.activeScope == ScopeProject && m.workspace.selectedProject != nil {
 		for _, agent := range m.workspace.selectedProject.Agents {
-			if strings.EqualFold(agent.Role, "pm") && agent.DisplayName != "" {
+			if (strings.EqualFold(agent.Role, "project_manager") || strings.EqualFold(agent.Role, "pm")) && agent.DisplayName != "" {
 				return agent.DisplayName
 			}
 		}
