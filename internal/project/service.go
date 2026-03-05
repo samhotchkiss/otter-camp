@@ -45,6 +45,9 @@ const (
 	actorHuman  = "human_user"
 	actorAgent  = "agent"
 	actorSystem = "system"
+
+	bootstrapBlocksScopeAll = "all"
+	bootstrapTemplateSlug   = "bootstrap-governance-gate"
 )
 
 type Project = repo.Project
@@ -216,8 +219,13 @@ type taskScheduleRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
+type taskRepository interface {
+	Create(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
+}
+
 type agentRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.Agent, error)
+	List(ctx context.Context, organizationID uuid.UUID) ([]repo.Agent, error)
 }
 
 type Options struct {
@@ -227,6 +235,7 @@ type Options struct {
 	Templates flowTemplateRepository
 	Nodes     flowNodeRepository
 	Schedules taskScheduleRepository
+	Tasks     taskRepository
 	Agents    agentRepository
 
 	Events eventbus.EventBus
@@ -240,6 +249,7 @@ type service struct {
 	templates flowTemplateRepository
 	nodes     flowNodeRepository
 	schedules taskScheduleRepository
+	tasks     taskRepository
 	agents    agentRepository
 
 	events eventbus.EventBus
@@ -285,6 +295,11 @@ func NewService(opts Options) (ProjectService, error) {
 		svc.schedules = opts.Schedules
 	} else {
 		svc.schedules = repo.NewTaskScheduleRepo(opts.Pool)
+	}
+	if opts.Tasks != nil {
+		svc.tasks = opts.Tasks
+	} else {
+		svc.tasks = repo.NewProjectTaskRepo(opts.Pool)
 	}
 	if opts.Agents != nil {
 		svc.agents = opts.Agents
@@ -348,6 +363,9 @@ func (s *service) Create(ctx context.Context, req CreateProjectRequest) (*Projec
 	if err != nil {
 		return nil, err
 	}
+	if bootstrapErr := s.createBootstrapGate(ctx, created, createdByType, createdByID); bootstrapErr != nil {
+		return nil, bootstrapErr
+	}
 
 	_ = s.publishEvent(ctx, created.OrganizationID, "project.created", createdByType, actorIDPointer(createdByID), map[string]any{
 		"project_id": created.ID,
@@ -361,6 +379,142 @@ func (s *service) Create(ctx context.Context, req CreateProjectRequest) (*Projec
 	})
 
 	return &created, nil
+}
+
+type bootstrapAgents struct {
+	loriID  *uuid.UUID
+	frankID *uuid.UUID
+}
+
+func (s *service) createBootstrapGate(ctx context.Context, projectRecord repo.Project, createdByType string, createdByID uuid.UUID) error {
+	if s.templates == nil || s.nodes == nil || s.tasks == nil {
+		return nil
+	}
+
+	agents, err := s.resolveBootstrapAgents(ctx, projectRecord.OrganizationID)
+	if err != nil {
+		return err
+	}
+
+	orgID := projectRecord.OrganizationID
+	projectID := projectRecord.ID
+	template, err := s.templates.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           bootstrapTemplateSlug,
+		DisplayName:    "Bootstrap Governance Gate",
+		Description:    "Initial governance bootstrap gate for new projects.",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  createdByType,
+		CreatedByID:    createdByID,
+	})
+	if err != nil {
+		return err
+	}
+
+	setupActorType := "role"
+	var setupActorID *uuid.UUID
+	setupMetadata := json.RawMessage(`{"role":"project_manager"}`)
+	if agents.loriID != nil && *agents.loriID != uuid.Nil {
+		setupActorType = "agent"
+		setupActorID = agents.loriID
+		setupMetadata = json.RawMessage(`{}`)
+	}
+	reviewActorType := "role"
+	var reviewActorID *uuid.UUID
+	reviewMetadata := json.RawMessage(`{"role":"reviewer"}`)
+	if agents.frankID != nil && *agents.frankID != uuid.Nil {
+		reviewActorType = "agent"
+		reviewActorID = agents.frankID
+		reviewMetadata = json.RawMessage(`{}`)
+	}
+
+	setupNode, err := s.nodes.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Lori Setup",
+		NodeType:       "work",
+		Position:       1,
+		ActorType:      &setupActorType,
+		ActorID:        setupActorID,
+		Metadata:       setupMetadata,
+	})
+	if err != nil {
+		return err
+	}
+	reviewNode, err := s.nodes.Create(ctx, repo.FlowNode{
+		FlowTemplateID:      template.ID,
+		DisplayName:         "Frank Review",
+		NodeType:            "review",
+		Position:            2,
+		ActorType:           &reviewActorType,
+		ActorID:             reviewActorID,
+		RequiresHumanReview: true,
+		Metadata:            reviewMetadata,
+	})
+	if err != nil {
+		return err
+	}
+
+	setupNode.NextNodeID = &reviewNode.ID
+	if _, err := s.nodes.Update(ctx, setupNode); err != nil {
+		return err
+	}
+	reviewNode.NextNodeID = nil
+	reviewNode.RejectNodeID = &setupNode.ID
+	if _, err := s.nodes.Update(ctx, reviewNode); err != nil {
+		return err
+	}
+
+	template.StartNodeID = &setupNode.ID
+	if _, err := s.templates.Update(ctx, template); err != nil {
+		return err
+	}
+
+	description := "Project bootstrap gate: Lori performs setup and Frank reviews before other tasks can start."
+	if _, err := s.tasks.Create(ctx, repo.ProjectTask{
+		OrganizationID:      projectRecord.OrganizationID,
+		ProjectID:           projectRecord.ID,
+		Title:               "Bootstrap governance gate",
+		Description:         &description,
+		WorkStatus:          "draft",
+		BlocksScope:         bootstrapBlocksScopeAll,
+		FlowTemplateID:      &template.ID,
+		RequiresHumanReview: false,
+		CreatedByType:       createdByType,
+		CreatedByID:         actorIDPointer(createdByID),
+		AssignedAgentID:     agents.loriID,
+		Metadata:            json.RawMessage(`{"bootstrap_gate":true}`),
+	}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *service) resolveBootstrapAgents(ctx context.Context, organizationID uuid.UUID) (bootstrapAgents, error) {
+	result := bootstrapAgents{}
+	if s.agents == nil {
+		return result, nil
+	}
+	agents, err := s.agents.List(ctx, organizationID)
+	if err != nil {
+		return bootstrapAgents{}, err
+	}
+	for _, agent := range agents {
+		if !agent.IsStarterTrio {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(agent.DisplayName)) {
+		case "lori":
+			id := agent.ID
+			result.loriID = &id
+		case "frank":
+			id := agent.ID
+			result.frankID = &id
+		}
+	}
+	return result, nil
 }
 
 func (s *service) Get(ctx context.Context, orgID, projectID uuid.UUID) (*Project, error) {

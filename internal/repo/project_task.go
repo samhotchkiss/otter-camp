@@ -32,6 +32,7 @@ type ProjectTask struct {
 	Title               string
 	Description         *string
 	WorkStatus          string
+	BlocksScope         string
 	CurrentFlowNodeID   *uuid.UUID
 	FlowTemplateID      *uuid.UUID
 	ScheduleID          *uuid.UUID
@@ -141,6 +142,7 @@ func (r *ProjectTaskRepo) Create(ctx context.Context, task ProjectTask) (Project
 			title,
 			description,
 			work_status,
+			blocks_scope,
 			current_flow_node_id,
 			flow_template_id,
 			schedule_id,
@@ -153,7 +155,7 @@ func (r *ProjectTaskRepo) Create(ctx context.Context, task ProjectTask) (Project
 			metadata,
 			completed_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18)
 		RETURNING
 			id,
 			organization_id,
@@ -162,6 +164,7 @@ func (r *ProjectTaskRepo) Create(ctx context.Context, task ProjectTask) (Project
 			title,
 			description,
 			work_status,
+			blocks_scope,
 			current_flow_node_id,
 			flow_template_id,
 			schedule_id,
@@ -182,6 +185,7 @@ func (r *ProjectTaskRepo) Create(ctx context.Context, task ProjectTask) (Project
 		strings.TrimSpace(task.Title),
 		task.Description,
 		defaultProjectTaskStatus(task.WorkStatus),
+		defaultProjectTaskBlocksScope(task.BlocksScope),
 		task.CurrentFlowNodeID,
 		task.FlowTemplateID,
 		task.ScheduleID,
@@ -216,6 +220,7 @@ func (r *ProjectTaskRepo) GetByID(ctx context.Context, id uuid.UUID) (ProjectTas
 			title,
 			description,
 			work_status,
+			blocks_scope,
 			current_flow_node_id,
 			flow_template_id,
 			schedule_id,
@@ -253,6 +258,7 @@ func (r *ProjectTaskRepo) GetByProjectAndNumber(ctx context.Context, projectID u
 			title,
 			description,
 			work_status,
+			blocks_scope,
 			current_flow_node_id,
 			flow_template_id,
 			schedule_id,
@@ -300,6 +306,7 @@ func (r *ProjectTaskRepo) ListByProject(ctx context.Context, projectID uuid.UUID
 			title,
 			description,
 			work_status,
+			blocks_scope,
 			current_flow_node_id,
 			flow_template_id,
 			schedule_id,
@@ -353,6 +360,7 @@ func (r *ProjectTaskRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status
 			title,
 			description,
 			work_status,
+			blocks_scope,
 			current_flow_node_id,
 			flow_template_id,
 			schedule_id,
@@ -385,15 +393,16 @@ func (r *ProjectTaskRepo) Update(ctx context.Context, task ProjectTask) (Project
 			title = $2,
 			description = $3,
 			work_status = $4,
-			current_flow_node_id = $5,
-			flow_template_id = $6,
-			schedule_id = $7,
-			branch_name = $8,
-			requires_human_review = $9,
-			priority = $10,
-			assigned_agent_id = $11,
-			metadata = $12::jsonb,
-			completed_at = $13
+			blocks_scope = $5,
+			current_flow_node_id = $6,
+			flow_template_id = $7,
+			schedule_id = $8,
+			branch_name = $9,
+			requires_human_review = $10,
+			priority = $11,
+			assigned_agent_id = $12,
+			metadata = $13::jsonb,
+			completed_at = $14
 		WHERE id = $1
 		RETURNING
 			id,
@@ -403,6 +412,7 @@ func (r *ProjectTaskRepo) Update(ctx context.Context, task ProjectTask) (Project
 			title,
 			description,
 			work_status,
+			blocks_scope,
 			current_flow_node_id,
 			flow_template_id,
 			schedule_id,
@@ -421,6 +431,7 @@ func (r *ProjectTaskRepo) Update(ctx context.Context, task ProjectTask) (Project
 		strings.TrimSpace(task.Title),
 		task.Description,
 		strings.TrimSpace(task.WorkStatus),
+		defaultProjectTaskBlocksScope(task.BlocksScope),
 		task.CurrentFlowNodeID,
 		task.FlowTemplateID,
 		task.ScheduleID,
@@ -455,6 +466,7 @@ func (r *ProjectTaskRepo) SetFlowNode(ctx context.Context, id uuid.UUID, flowNod
 			title,
 			description,
 			work_status,
+			blocks_scope,
 			current_flow_node_id,
 			flow_template_id,
 			schedule_id,
@@ -499,6 +511,7 @@ func (r *ProjectTaskRepo) SetBranch(ctx context.Context, id uuid.UUID, branchNam
 			title,
 			description,
 			work_status,
+			blocks_scope,
 			current_flow_node_id,
 			flow_template_id,
 			schedule_id,
@@ -1273,6 +1286,7 @@ func scanProjectTask(row pgx.Row) (ProjectTask, error) {
 		&task.Title,
 		&task.Description,
 		&task.WorkStatus,
+		&task.BlocksScope,
 		&task.CurrentFlowNodeID,
 		&task.FlowTemplateID,
 		&task.ScheduleID,
@@ -1364,6 +1378,18 @@ func defaultProjectTaskStatus(status string) string {
 		return "draft"
 	}
 	return trimmed
+}
+
+func defaultProjectTaskBlocksScope(scope string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(scope))
+	switch trimmed {
+	case "", "none":
+		return "none"
+	case "all":
+		return "all"
+	default:
+		return "none"
+	}
 }
 
 func defaultProjectTaskPriority(priority int) int {

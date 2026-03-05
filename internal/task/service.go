@@ -138,6 +138,7 @@ type CreateTaskRequest struct {
 	Description     *string
 	FlowTemplateID  *uuid.UUID
 	ScheduleID      *uuid.UUID
+	BlocksScope     string
 	AssignedAgentID *uuid.UUID
 	CreatedByType   string
 	CreatedByID     uuid.UUID
@@ -386,6 +387,11 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 		}
 	}
 
+	blocksScope := normalizeBlocksScope(req.BlocksScope)
+	if blocksScope == "" {
+		return nil, ErrInvalidBlocksScope
+	}
+
 	if req.AssignedAgentID != nil {
 		assignment, getErr := s.assignments.GetByAgentAndProject(ctx, *req.AssignedAgentID, req.ProjectID)
 		if getErr != nil || !assignment.IsActive {
@@ -400,6 +406,7 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 		Title:               strings.TrimSpace(req.Title),
 		Description:         req.Description,
 		WorkStatus:          "draft",
+		BlocksScope:         blocksScope,
 		FlowTemplateID:      req.FlowTemplateID,
 		ScheduleID:          req.ScheduleID,
 		RequiresHumanReview: requiresHumanReview,
@@ -1357,6 +1364,17 @@ func normalizeJSON(value json.RawMessage) json.RawMessage {
 		return json.RawMessage(`{}`)
 	}
 	return value
+}
+
+func normalizeBlocksScope(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "none":
+		return "none"
+	case "all":
+		return "all"
+	default:
+		return ""
+	}
 }
 
 func extractReason(payload json.RawMessage) string {
