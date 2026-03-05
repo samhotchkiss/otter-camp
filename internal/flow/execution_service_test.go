@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -135,10 +136,134 @@ func TestRejectFlowNodeMaxVisitsExceeded(t *testing.T) {
 	}
 }
 
+func TestAdvanceFlowRejectsSelfReview(t *testing.T) {
+	taskID := uuid.New()
+	workNodeID := uuid.New()
+	reviewNodeID := uuid.New()
+	executionID := uuid.New()
+	projectID := uuid.New()
+	workerID := uuid.New()
+
+	executions := &fakeExecutionRepo{
+		active: repo.FlowNodeExecution{
+			ID:         executionID,
+			TaskID:     taskID,
+			FlowNodeID: reviewNodeID,
+			Status:     "active",
+		},
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{
+					ID:         uuid.New(),
+					TaskID:     taskID,
+					FlowNodeID: workNodeID,
+					Status:     "completed",
+					Metadata:   executionMetadataWithCompletedBy(nil, Actor{Type: "agent", ID: workerID}),
+				},
+				{
+					ID:         executionID,
+					TaskID:     taskID,
+					FlowNodeID: reviewNodeID,
+					Status:     "active",
+				},
+			},
+		},
+	}
+	svc := &service{
+		tasks: &fakeTaskRepo{
+			items: map[uuid.UUID]repo.ProjectTask{
+				taskID: {
+					ID:                taskID,
+					ProjectID:         projectID,
+					OrganizationID:    uuid.New(),
+					CurrentFlowNodeID: &reviewNodeID,
+					WorkStatus:        "in_progress",
+				},
+			},
+		},
+		flowNodes: &fakeNodeRepo{
+			items: map[uuid.UUID]repo.FlowNode{
+				workNodeID:   {ID: workNodeID, NodeType: "work", NextNodeID: &reviewNodeID},
+				reviewNodeID: {ID: reviewNodeID, NodeType: "review"},
+			},
+		},
+		executions:  executions,
+		taskService: &fakeTaskCoordinator{},
+	}
+
+	if _, err := svc.AdvanceFlow(context.Background(), taskID, Actor{Type: "agent", ID: workerID}); !errors.Is(err, ErrSelfReviewForbidden) {
+		t.Fatalf("AdvanceFlow err = %v, want ErrSelfReviewForbidden", err)
+	}
+	if executions.completeCalls != 0 {
+		t.Fatalf("complete calls = %d, want 0", executions.completeCalls)
+	}
+	if executions.updateMetadataCalls != 0 {
+		t.Fatalf("update metadata calls = %d, want 0", executions.updateMetadataCalls)
+	}
+}
+
+func TestAdvanceFlowTerminalRequiresReviewedWorkBeforeMutatingExecution(t *testing.T) {
+	taskID := uuid.New()
+	workNodeID := uuid.New()
+	executionID := uuid.New()
+
+	executions := &fakeExecutionRepo{
+		active: repo.FlowNodeExecution{
+			ID:         executionID,
+			TaskID:     taskID,
+			FlowNodeID: workNodeID,
+			Status:     "active",
+		},
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{
+					ID:         executionID,
+					TaskID:     taskID,
+					FlowNodeID: workNodeID,
+					Status:     "active",
+				},
+			},
+		},
+	}
+	svc := &service{
+		tasks: &fakeTaskRepo{
+			items: map[uuid.UUID]repo.ProjectTask{
+				taskID: {
+					ID:                taskID,
+					ProjectID:         uuid.New(),
+					OrganizationID:    uuid.New(),
+					CurrentFlowNodeID: &workNodeID,
+					WorkStatus:        "in_progress",
+				},
+			},
+		},
+		flowNodes: &fakeNodeRepo{
+			items: map[uuid.UUID]repo.FlowNode{
+				workNodeID: {ID: workNodeID, NodeType: "work"},
+			},
+		},
+		executions:  executions,
+		taskService: &fakeTaskCoordinator{},
+	}
+
+	if _, err := svc.AdvanceFlow(context.Background(), taskID, Actor{Type: "agent", ID: uuid.New()}); !errors.Is(err, tasksvc.ErrDoneRequiresTerminalFlow) {
+		t.Fatalf("AdvanceFlow err = %v, want ErrDoneRequiresTerminalFlow", err)
+	}
+	if executions.completeCalls != 0 {
+		t.Fatalf("complete calls = %d, want 0", executions.completeCalls)
+	}
+	if executions.updateMetadataCalls != 0 {
+		t.Fatalf("update metadata calls = %d, want 0", executions.updateMetadataCalls)
+	}
+}
+
 type fakeExecutionRepo struct {
-	active repo.FlowNodeExecution
-	byTask map[uuid.UUID][]repo.FlowNodeExecution
-	byID   map[uuid.UUID]repo.FlowNodeExecution
+	active              repo.FlowNodeExecution
+	byTask              map[uuid.UUID][]repo.FlowNodeExecution
+	byID                map[uuid.UUID]repo.FlowNodeExecution
+	completeCalls       int
+	rejectCalls         int
+	updateMetadataCalls int
 }
 
 func (f *fakeExecutionRepo) Create(context.Context, repo.FlowNodeExecution) (repo.FlowNodeExecution, error) {
@@ -160,12 +285,19 @@ func (f *fakeExecutionRepo) ListByTask(_ context.Context, taskID uuid.UUID) ([]r
 	return f.byTask[taskID], nil
 }
 func (f *fakeExecutionRepo) Complete(_ context.Context, _ uuid.UUID) (repo.FlowNodeExecution, error) {
+	f.completeCalls++
 	return f.active, nil
 }
 func (f *fakeExecutionRepo) Reject(_ context.Context, _ uuid.UUID) (repo.FlowNodeExecution, error) {
+	f.rejectCalls++
 	return f.active, nil
 }
 func (f *fakeExecutionRepo) RecordCommitSHA(_ context.Context, _ uuid.UUID, _ string) (repo.FlowNodeExecution, error) {
+	return f.active, nil
+}
+func (f *fakeExecutionRepo) UpdateMetadata(_ context.Context, _ uuid.UUID, metadata json.RawMessage) (repo.FlowNodeExecution, error) {
+	f.updateMetadataCalls++
+	f.active.Metadata = metadata
 	return f.active, nil
 }
 

@@ -90,7 +90,7 @@ func TestBuildSystemTemplateNodeSeedPlan(t *testing.T) {
 	startID := uuid.New()
 	existingNodeID := uuid.New()
 
-	t.Run("single-agent template seeds one work node", func(t *testing.T) {
+	t.Run("single-agent template seeds work then review", func(t *testing.T) {
 		plan, err := buildSystemTemplateNodeSeedPlan(repo.FlowTemplate{
 			ID:       templateID,
 			Slug:     "default-single-agent",
@@ -102,14 +102,20 @@ func TestBuildSystemTemplateNodeSeedPlan(t *testing.T) {
 		if plan.StartNodeID != nil {
 			t.Fatalf("StartNodeID = %v, want nil", plan.StartNodeID)
 		}
-		if len(plan.Seeds) != 1 {
-			t.Fatalf("seed count = %d, want 1", len(plan.Seeds))
+		if len(plan.Seeds) != 2 {
+			t.Fatalf("seed count = %d, want 2", len(plan.Seeds))
 		}
 		if plan.Seeds[0].NodeType != "work" {
 			t.Fatalf("seed node_type = %q, want %q", plan.Seeds[0].NodeType, "work")
 		}
 		if plan.Seeds[0].ActorType == nil || *plan.Seeds[0].ActorType != "role" {
 			t.Fatalf("seed actor_type = %v, want role", plan.Seeds[0].ActorType)
+		}
+		if plan.Seeds[0].NextSeedIndex == nil || *plan.Seeds[0].NextSeedIndex != 1 {
+			t.Fatalf("seed NextSeedIndex = %v, want 1", plan.Seeds[0].NextSeedIndex)
+		}
+		if plan.Seeds[1].NodeType != "review" {
+			t.Fatalf("second node_type = %q, want %q", plan.Seeds[1].NodeType, "review")
 		}
 	})
 

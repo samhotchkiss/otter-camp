@@ -20,6 +20,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/assignmentrole"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
+	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
@@ -27,8 +28,11 @@ import (
 
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
 
+var errInvalidExecutableFlowTemplate = errors.New(flowTemplateValidationMessage)
+
 const (
 	taskDoneTerminalNodeMessage   = "task can only be marked done when its flow reaches a terminal node"
+	flowTemplateValidationMessage = "flow template must define a work -> review -> completion path"
 	memoryRecordEmbeddingDims     = 1536
 	memoryRecordDefaultConfidence = 0.85
 	memoryRecordDefaultUtility    = 0.7
@@ -700,12 +704,11 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	}
 	var flowTemplateID *uuid.UUID
 	if value, ok := readUUID(input, "flow_template_id"); ok && value != uuid.Nil {
-		hasReviewNode, reviewErr := e.flowTemplateHasReviewNode(ctx, value)
-		if reviewErr != nil {
-			return nil, reviewErr
-		}
-		if !hasReviewNode {
-			return map[string]any{"error": "flow template must include at least one review node"}, nil
+		if err := e.validateExecutableFlowTemplate(ctx, value); err != nil {
+			if errors.Is(err, errInvalidExecutableFlowTemplate) {
+				return map[string]any{"error": err.Error()}, nil
+			}
+			return nil, err
 		}
 		flowTemplateID = &value
 	}
@@ -769,12 +772,11 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		if !strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") {
 			return map[string]any{"error": "flow_template_id can only be changed while task is draft"}, nil
 		}
-		hasReviewNode, reviewErr := e.flowTemplateHasReviewNode(ctx, flowTemplateID)
-		if reviewErr != nil {
-			return nil, reviewErr
-		}
-		if !hasReviewNode {
-			return map[string]any{"error": "flow template must include at least one review node"}, nil
+		if err := e.validateExecutableFlowTemplate(ctx, flowTemplateID); err != nil {
+			if errors.Is(err, errInvalidExecutableFlowTemplate) {
+				return map[string]any{"error": err.Error()}, nil
+			}
+			return nil, err
 		}
 		current.FlowTemplateID = &flowTemplateID
 	}
@@ -796,12 +798,11 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			return map[string]any{"error": "task requires a flow template before it can be queued"}, nil
 		}
 		if strings.EqualFold(strings.TrimSpace(status), "queued") && current.FlowTemplateID != nil {
-			hasReviewNode, reviewErr := e.flowTemplateHasReviewNode(ctx, *current.FlowTemplateID)
-			if reviewErr != nil {
-				return nil, reviewErr
-			}
-			if !hasReviewNode {
-				return map[string]any{"error": "flow template must include at least one review node"}, nil
+			if err := e.validateExecutableFlowTemplate(ctx, *current.FlowTemplateID); err != nil {
+				if errors.Is(err, errInvalidExecutableFlowTemplate) {
+					return map[string]any{"error": err.Error()}, nil
+				}
+				return nil, err
 			}
 		}
 		if strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
@@ -930,26 +931,21 @@ func (e *NativeToolExecutor) validateTaskDoneTransition(ctx context.Context, tas
 	return errors.New(taskDoneTerminalNodeMessage)
 }
 
-func (e *NativeToolExecutor) flowTemplateHasReviewNode(ctx context.Context, flowTemplateID uuid.UUID) (bool, error) {
+func (e *NativeToolExecutor) validateExecutableFlowTemplate(ctx context.Context, flowTemplateID uuid.UUID) error {
 	if flowTemplateID == uuid.Nil {
-		return false, errors.New("flow_template_id_required")
+		return errors.New("flow_template_id_required")
 	}
 	if e.flowNodes == nil {
-		return false, fmt.Errorf("native tool flow-template validation requires flow node repository")
+		return fmt.Errorf("native tool flow-template validation requires flow node repository")
 	}
 	nodes, err := e.flowNodes.GetByTemplateOrdered(ctx, flowTemplateID)
 	if err != nil {
-		return false, err
+		return err
 	}
-	if len(nodes) == 0 {
-		return false, nil
+	if err := flowpolicy.ValidateExecutableFlowNodes(nodes); err != nil {
+		return errInvalidExecutableFlowTemplate
 	}
-	for _, node := range nodes {
-		if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") {
-			return true, nil
-		}
-	}
-	return false, nil
+	return nil
 }
 
 func taskStatusRequiresFlowTemplate(status string) bool {
@@ -1489,7 +1485,10 @@ func (e *NativeToolExecutor) resolveFlowAdvanceTaskID(ctx context.Context, flowN
 }
 
 func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input map[string]any) (map[string]any, error) {
-	if e.flowExecs == nil || e.flowNodes == nil || e.tasks == nil {
+	if e.flowService == nil || e.flowExecs == nil {
+		if e.flowServiceErr != nil {
+			return nil, e.flowServiceErr
+		}
 		return map[string]any{"error": "flow_repository_unavailable"}, nil
 	}
 	flowNodeExecutionID, ok := readUUID(input, "flow_node_execution_id")
@@ -1504,38 +1503,23 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 	if err != nil {
 		return nil, err
 	}
-	currentNode, err := e.flowNodes.GetByID(ctx, execution.FlowNodeID)
-	if err != nil {
-		return nil, err
-	}
 	if decision == "approve" {
-		if _, err := e.flowExecs.Complete(ctx, flowNodeExecutionID); err != nil {
-			return nil, err
-		}
-		result, err := e.advanceExecutionToNode(ctx, execution.TaskID, currentNode.NextNodeID)
+		next, err := e.flowService.AdvanceFlow(ctx, execution.TaskID, flowActorFromExecutionActor(actorFromContext(ctx)))
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"next_node_id": result["advanced_to_node_id"]}, nil
+		var nextNodeID any
+		if !strings.EqualFold(strings.TrimSpace(next.Status), "completed") {
+			nextNodeID = next.FlowNodeID
+		}
+		return map[string]any{"next_node_id": nextNodeID}, nil
 	}
 
-	if _, err := e.flowExecs.Reject(ctx, flowNodeExecutionID); err != nil {
+	next, err := e.flowService.RejectFlowNode(ctx, execution.TaskID, flowActorFromExecutionActor(actorFromContext(ctx)))
+	if err != nil {
 		return nil, err
 	}
-	if _, err := e.tasks.SetFlowNode(ctx, execution.TaskID, currentNode.RejectNodeID); err != nil {
-		return nil, err
-	}
-	if currentNode.RejectNodeID != nil {
-		if _, err := e.flowExecs.Create(ctx, repo.FlowNodeExecution{
-			TaskID:      execution.TaskID,
-			FlowNodeID:  *currentNode.RejectNodeID,
-			VisitNumber: 1,
-			Status:      "active",
-		}); err != nil {
-			return nil, err
-		}
-	}
-	return map[string]any{"next_node_id": currentNode.RejectNodeID}, nil
+	return map[string]any{"next_node_id": next.FlowNodeID}, nil
 }
 
 func (e *NativeToolExecutor) handleFlowCreateTemplate(ctx context.Context, input map[string]any) (map[string]any, error) {
@@ -1556,25 +1540,41 @@ func (e *NativeToolExecutor) handleFlowCreateTemplate(ctx context.Context, input
 	}
 	nodesRaw, hasNodes := input["nodes"].([]any)
 	if !hasNodes || len(nodesRaw) == 0 {
-		return map[string]any{"error": "flow template must include at least one review node"}, nil
+		return map[string]any{"error": flowTemplateValidationMessage}, nil
 	}
-	declaredReviewNode := false
-	for _, item := range nodesRaw {
+
+	plannedNodes := make([]repo.FlowNode, 0, len(nodesRaw))
+	for idx, item := range nodesRaw {
 		nodeMap, mapOK := item.(map[string]any)
 		if !mapOK {
 			continue
+		}
+		nodeID := uuid.New()
+		displayName, ok := readString(nodeMap, "display_name")
+		if !ok || displayName == "" {
+			displayName = fmt.Sprintf("Node %d", idx+1)
 		}
 		nodeType, typeOK := readString(nodeMap, "node_type")
 		if !typeOK || nodeType == "" {
 			nodeType = "work"
 		}
-		if strings.EqualFold(strings.TrimSpace(nodeType), "review") {
-			declaredReviewNode = true
-			break
-		}
+		plannedNodes = append(plannedNodes, repo.FlowNode{
+			ID:          nodeID,
+			DisplayName: displayName,
+			NodeType:    nodeType,
+			Position:    idx + 1,
+			ToolDomains: readStringSlice(nodeMap, "tool_domains"),
+			MaxVisits:   10,
+		})
 	}
-	if !declaredReviewNode {
-		return map[string]any{"error": "flow template must include at least one review node"}, nil
+	if len(plannedNodes) == 0 {
+		return map[string]any{"error": flowTemplateValidationMessage}, nil
+	}
+	for i := 0; i < len(plannedNodes)-1; i++ {
+		plannedNodes[i].NextNodeID = &plannedNodes[i+1].ID
+	}
+	if err := flowpolicy.ValidateExecutableFlowTemplate(&plannedNodes[0].ID, plannedNodes); err != nil {
+		return map[string]any{"error": flowTemplateValidationMessage}, nil
 	}
 
 	actor := actorFromContext(ctx)
@@ -1595,26 +1595,14 @@ func (e *NativeToolExecutor) handleFlowCreateTemplate(ctx context.Context, input
 	}
 
 	createdNodes := make([]repo.FlowNode, 0)
-	for idx, item := range nodesRaw {
-		nodeMap, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		displayName, ok := readString(nodeMap, "display_name")
-		if !ok || displayName == "" {
-			displayName = fmt.Sprintf("Node %d", idx+1)
-		}
-		nodeType, ok := readString(nodeMap, "node_type")
-		if !ok || nodeType == "" {
-			nodeType = "work"
-		}
+	for _, plannedNode := range plannedNodes {
 		created, err := e.flowNodes.Create(ctx, repo.FlowNode{
 			FlowTemplateID: template.ID,
-			DisplayName:    displayName,
-			NodeType:       nodeType,
-			Position:       idx + 1,
-			ToolDomains:    readStringSlice(nodeMap, "tool_domains"),
-			MaxVisits:      10,
+			DisplayName:    plannedNode.DisplayName,
+			NodeType:       plannedNode.NodeType,
+			Position:       plannedNode.Position,
+			ToolDomains:    plannedNode.ToolDomains,
+			MaxVisits:      plannedNode.MaxVisits,
 		})
 		if err != nil {
 			return nil, err
@@ -1622,7 +1610,7 @@ func (e *NativeToolExecutor) handleFlowCreateTemplate(ctx context.Context, input
 		createdNodes = append(createdNodes, created)
 	}
 	if len(createdNodes) == 0 {
-		return map[string]any{"error": "flow template must include at least one review node"}, nil
+		return map[string]any{"error": flowTemplateValidationMessage}, nil
 	}
 
 	for i := 0; i < len(createdNodes)-1; i++ {

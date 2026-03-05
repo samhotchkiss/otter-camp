@@ -228,8 +228,8 @@ func TestBootstrapSeedsSystemFlowTemplatesIdempotently(t *testing.T) {
 	`).Scan(&totalNodes); err != nil {
 		t.Fatalf("count system flow nodes: %v", err)
 	}
-	if totalNodes != 3 {
-		t.Fatalf("system flow node count = %d, want 3", totalNodes)
+	if totalNodes != 4 {
+		t.Fatalf("system flow node count = %d, want 4", totalNodes)
 	}
 }
 

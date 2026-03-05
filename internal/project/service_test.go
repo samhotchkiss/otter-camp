@@ -179,16 +179,25 @@ func TestValidateFlowTemplateReviewPathAcceptsAllBranchesThroughReview(t *testin
 	}
 }
 
-func TestValidateFlowTemplateReviewPathRequiresRejectEdgeOnReviewNodes(t *testing.T) {
-	doneID := uuid.New()
-	reviewID := uuid.New()
-	work := repo.FlowNode{ID: uuid.New(), NodeType: "work", NextNodeID: &reviewID}
-	review := repo.FlowNode{ID: reviewID, NodeType: "review", NextNodeID: &doneID}
-	done := repo.FlowNode{ID: doneID, NodeType: "done"}
+func TestValidateFlowTemplateReviewPathRejectsReviewOnlyCompletion(t *testing.T) {
+	review := repo.FlowNode{ID: uuid.New(), NodeType: "review"}
 
-	err := validateFlowTemplateReviewPath(work.ID, []repo.FlowNode{work, review, done})
-	if !errors.Is(err, ErrReviewNodeEdgesRequired) {
-		t.Fatalf("validateFlowTemplateReviewPath err = %v, want ErrReviewNodeEdgesRequired", err)
+	err := validateFlowTemplateReviewPath(review.ID, []repo.FlowNode{review})
+	if !errors.Is(err, ErrFlowTemplateReviewPath) {
+		t.Fatalf("validateFlowTemplateReviewPath err = %v, want ErrFlowTemplateReviewPath", err)
+	}
+}
+
+func TestValidateFlowTemplateReviewPathRejectsTerminalWorkAfterReview(t *testing.T) {
+	reviewID := uuid.New()
+	terminalWorkID := uuid.New()
+	work := repo.FlowNode{ID: uuid.New(), NodeType: "work", NextNodeID: &reviewID}
+	review := repo.FlowNode{ID: reviewID, NodeType: "review", NextNodeID: &terminalWorkID}
+	terminalWork := repo.FlowNode{ID: terminalWorkID, NodeType: "work"}
+
+	err := validateFlowTemplateReviewPath(work.ID, []repo.FlowNode{work, review, terminalWork})
+	if !errors.Is(err, ErrFlowTemplateReviewPath) {
+		t.Fatalf("validateFlowTemplateReviewPath err = %v, want ErrFlowTemplateReviewPath", err)
 	}
 }
 

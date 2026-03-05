@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 )
@@ -38,7 +39,7 @@ var (
 	ErrSourceProjectIDRequired    = errors.New("source_project_id is required for this inbox item type")
 	ErrRequiresHumanApproval      = errors.New("task requires human approval before queueing")
 	ErrFlowTemplateRequired       = errors.New("task requires a flow template before it can be queued")
-	ErrFlowTemplateReviewRequired = errors.New("flow template must include at least one review node")
+	ErrFlowTemplateReviewRequired = errors.New("flow template must define a work -> review -> completion path")
 	ErrInvalidBlocksScope         = errors.New("blocks_scope must be one of: none, all")
 	ErrDoneRequiresTerminalFlow   = errors.New("task can only be marked done when its flow reaches a terminal node")
 	ErrTransitionTargetRequired   = errors.New("target status is required")
@@ -379,11 +380,7 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 		return nil, err
 	}
 	if req.FlowTemplateID != nil && *req.FlowTemplateID != uuid.Nil {
-		hasReviewNode, reviewErr := s.flowTemplateHasReviewNode(ctx, *req.FlowTemplateID)
-		if reviewErr != nil {
-			return nil, reviewErr
-		}
-		if !hasReviewNode {
+		if err := s.validateExecutableFlowTemplate(ctx, *req.FlowTemplateID); err != nil {
 			return nil, ErrFlowTemplateReviewRequired
 		}
 	}
@@ -468,11 +465,7 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 		return nil, ErrFlowTemplateRequired
 	}
 	if target == "queued" && taskRecord.FlowTemplateID != nil {
-		hasReviewNode, reviewErr := s.flowTemplateHasReviewNode(ctx, *taskRecord.FlowTemplateID)
-		if reviewErr != nil {
-			return nil, reviewErr
-		}
-		if !hasReviewNode {
+		if err := s.validateExecutableFlowTemplate(ctx, *taskRecord.FlowTemplateID); err != nil {
 			return nil, ErrFlowTemplateReviewRequired
 		}
 	}
@@ -683,15 +676,66 @@ func (s *service) validateDoneTransition(ctx context.Context, taskRecord repo.Pr
 		}
 		return err
 	}
+	terminalCompleted := false
+	progress, err := s.reviewProgressFromExecutions(ctx, rows)
+	if err != nil {
+		return err
+	}
 	for _, row := range rows {
 		if row.FlowNodeID != node.ID {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(row.Status), "completed") {
-			return nil
+			terminalCompleted = true
+			break
 		}
 	}
-	return ErrDoneRequiresTerminalFlow
+	if !terminalCompleted || !progress.hasWork || !progress.hasReviewedWork || progress.pendingReviewWork {
+		return ErrDoneRequiresTerminalFlow
+	}
+	return nil
+}
+
+type executionReviewProgress struct {
+	hasWork           bool
+	hasReviewedWork   bool
+	pendingReviewWork bool
+}
+
+func (s *service) reviewProgressFromExecutions(ctx context.Context, executions []repo.FlowNodeExecution) (executionReviewProgress, error) {
+	progress := executionReviewProgress{}
+	nodeCache := make(map[uuid.UUID]repo.FlowNode, len(executions))
+
+	for _, execution := range executions {
+		if !strings.EqualFold(strings.TrimSpace(execution.Status), "completed") {
+			continue
+		}
+		node, ok := nodeCache[execution.FlowNodeID]
+		if !ok {
+			loaded, err := s.flowNodes.GetByID(ctx, execution.FlowNodeID)
+			if err != nil {
+				if errors.Is(err, repo.ErrNotFound) {
+					return executionReviewProgress{}, ErrDoneRequiresTerminalFlow
+				}
+				return executionReviewProgress{}, err
+			}
+			node = loaded
+			nodeCache[execution.FlowNodeID] = node
+		}
+
+		switch strings.ToLower(strings.TrimSpace(node.NodeType)) {
+		case "work":
+			progress.hasWork = true
+			progress.pendingReviewWork = true
+		case "review":
+			if progress.pendingReviewWork {
+				progress.hasReviewedWork = true
+				progress.pendingReviewWork = false
+			}
+		}
+	}
+
+	return progress, nil
 }
 
 func (s *service) hasActiveFlowExecution(ctx context.Context, taskID uuid.UUID) (bool, error) {
@@ -807,11 +851,7 @@ func (s *service) MarkBlocked(ctx context.Context, taskID uuid.UUID, reason stri
 		return nil, ErrPMNotAssigned
 	}
 	if blocked.FlowTemplateID != nil {
-		hasReviewNode, reviewErr := s.flowTemplateHasReviewNode(ctx, *blocked.FlowTemplateID)
-		if reviewErr != nil {
-			return nil, reviewErr
-		}
-		if !hasReviewNode {
+		if err := s.validateExecutableFlowTemplate(ctx, *blocked.FlowTemplateID); err != nil {
 			return nil, ErrFlowTemplateReviewRequired
 		}
 	}
@@ -1337,27 +1377,19 @@ func statusRequiresFlowTemplate(status string) bool {
 	}
 }
 
-func (s *service) flowTemplateHasReviewNode(ctx context.Context, flowTemplateID uuid.UUID) (bool, error) {
+func (s *service) validateExecutableFlowTemplate(ctx context.Context, flowTemplateID uuid.UUID) error {
 	if flowTemplateID == uuid.Nil {
-		return false, ErrFlowTemplateRequired
+		return ErrFlowTemplateRequired
 	}
 	if s.flowNodes == nil {
-		return false, fmt.Errorf("task service flow-template validation requires flow node repository")
+		return fmt.Errorf("task service flow-template validation requires flow node repository")
 	}
 
 	nodes, err := s.flowNodes.GetByTemplateOrdered(ctx, flowTemplateID)
 	if err != nil {
-		return false, fmt.Errorf("load flow template nodes: %w", err)
+		return fmt.Errorf("load flow template nodes: %w", err)
 	}
-	if len(nodes) == 0 {
-		return false, nil
-	}
-	for _, node := range nodes {
-		if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") {
-			return true, nil
-		}
-	}
-	return false, nil
+	return flowpolicy.ValidateExecutableFlowNodes(nodes)
 }
 
 func normalizeJSON(value json.RawMessage) json.RawMessage {

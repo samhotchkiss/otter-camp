@@ -5,6 +5,7 @@ package flow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
 
@@ -86,10 +88,10 @@ func TestFlowExecutionServiceAdvanceThroughTerminalNode(t *testing.T) {
 	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
 		t.Fatalf("AdvanceFlow step 1: %v", err)
 	}
-	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.reviewerAgent.ID}); err != nil {
 		t.Fatalf("AdvanceFlow step 2: %v", err)
 	}
-	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.reviewerAgent.ID}); err != nil {
 		t.Fatalf("AdvanceFlow terminal step: %v", err)
 	}
 
@@ -116,6 +118,107 @@ func TestFlowExecutionServiceAdvanceThroughTerminalNode(t *testing.T) {
 
 	if nodes[0].ID != executions[0].FlowNodeID || nodes[1].ID != executions[1].FlowNodeID || nodes[2].ID != executions[2].FlowNodeID {
 		t.Fatalf("unexpected flow node execution order")
+	}
+}
+
+func TestFlowExecutionServiceRejectsSelfReview(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, _ := seedLinearTemplate(t, ctx, fixture, false, 5)
+	taskRecord := seedFlowTask(t, ctx, fixture, "Self review task", "in_progress", &template.ID)
+
+	if _, err := fixture.service.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow to review: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); !errors.Is(err, ErrSelfReviewForbidden) {
+		t.Fatalf("AdvanceFlow self-review err = %v, want ErrSelfReviewForbidden", err)
+	}
+
+	updatedTask, err := fixture.taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.CurrentFlowNodeID == nil {
+		t.Fatal("current_flow_node_id = nil, want active review node")
+	}
+	executions, err := fixture.executionRepo.ListByTask(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("ListByTask executions: %v", err)
+	}
+	if len(executions) != 2 {
+		t.Fatalf("execution row count = %d, want 2", len(executions))
+	}
+	if executions[1].Status != "active" {
+		t.Fatalf("review execution status = %q, want active", executions[1].Status)
+	}
+}
+
+func TestFlowExecutionServiceTerminalAdvanceRequiresCompletedReview(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, err := fixture.templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &fixture.organization.ID,
+		ProjectID:      &fixture.project.ID,
+		Slug:           "work-only-" + uuid.NewString()[:8],
+		DisplayName:    "Work Only",
+		Description:    "missing internal review",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	workNode, err := fixture.nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create work node: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
+	if _, err := fixture.templateRepo.Update(ctx, template); err != nil {
+		t.Fatalf("update template start node: %v", err)
+	}
+
+	taskRecord := seedFlowTask(t, ctx, fixture, "Terminal review required", "in_progress", &template.ID)
+	if _, err := fixture.service.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); !errors.Is(err, tasksvc.ErrDoneRequiresTerminalFlow) {
+		t.Fatalf("AdvanceFlow terminal err = %v, want ErrDoneRequiresTerminalFlow", err)
+	}
+
+	updatedTask, err := fixture.taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != workNode.ID {
+		t.Fatalf("current_flow_node_id = %v, want %s", updatedTask.CurrentFlowNodeID, workNode.ID)
+	}
+	executions, err := fixture.executionRepo.ListByTask(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("ListByTask executions: %v", err)
+	}
+	if len(executions) != 1 {
+		t.Fatalf("execution row count = %d, want 1", len(executions))
+	}
+	if executions[0].Status != "active" {
+		t.Fatalf("execution status = %q, want active", executions[0].Status)
 	}
 }
 
@@ -384,6 +487,7 @@ type integrationFixture struct {
 	project       repo.Project
 	pmUser        repo.HumanUser
 	pmAgent       repo.Agent
+	reviewerAgent repo.Agent
 	taskRepo      *repo.ProjectTaskRepo
 	templateRepo  *repo.FlowTemplateRepo
 	nodeRepo      *repo.FlowNodeRepo
@@ -458,6 +562,31 @@ func seedFlowIntegrationFixture(t *testing.T, ctx context.Context, pool *pgxpool
 	}); err != nil {
 		t.Fatalf("assign pm: %v", err)
 	}
+	reviewerAgent, err := agentRepo.Create(ctx, repo.Agent{
+		OrganizationID:       org.ID,
+		DisplayName:          "Reviewer Agent",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		AgentType:            "reviewer",
+		CreatedByType:        "human_user",
+		CreatedByID:          pmUser.ID,
+		MemoryReadScopes:     []string{},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		OperatorInstructions: "",
+		SystemPrompt:         "",
+	})
+	if err != nil {
+		t.Fatalf("create reviewer agent: %v", err)
+	}
+	if _, err := assignmentRepo.Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        reviewerAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "reviewer",
+		AssignedByType: "system",
+	}); err != nil {
+		t.Fatalf("assign reviewer: %v", err)
+	}
 
 	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})
 	svc, err := NewService(Options{
@@ -474,6 +603,7 @@ func seedFlowIntegrationFixture(t *testing.T, ctx context.Context, pool *pgxpool
 		project:       project,
 		pmUser:        pmUser,
 		pmAgent:       pmAgent,
+		reviewerAgent: reviewerAgent,
 		taskRepo:      taskRepo,
 		templateRepo:  templateRepo,
 		nodeRepo:      nodeRepo,
@@ -521,8 +651,8 @@ func seedLinearTemplate(t *testing.T, ctx context.Context, fixture integrationFi
 	}
 	node3, err := fixture.nodeRepo.Create(ctx, repo.FlowNode{
 		FlowTemplateID: template.ID,
-		DisplayName:    "Node 3",
-		NodeType:       "work",
+		DisplayName:    "Merge",
+		NodeType:       "merge",
 		Position:       3,
 		MaxVisits:      maxVisits,
 	})

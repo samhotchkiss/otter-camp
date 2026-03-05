@@ -2832,6 +2832,7 @@ func mapTaskError(err error) (int, string, string) {
 		errors.Is(err, flowsvc.ErrCrossLevelDependency),
 		errors.Is(err, flowsvc.ErrSelfDependency),
 		errors.Is(err, flowsvc.ErrCyclicDependency),
+		errors.Is(err, flowsvc.ErrSelfReviewForbidden),
 		errors.Is(err, flowsvc.ErrInvalidSubtaskTransition),
 		errors.Is(err, flowsvc.ErrNoRejectionPath),
 		errors.Is(err, deliverysvc.ErrEnvironmentIDRequired):

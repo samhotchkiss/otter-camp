@@ -629,8 +629,8 @@ func TestProjectHTTPFlowTemplateRejectsPathsWithoutReview(t *testing.T) {
 	templateID := jsonPathString(t, projectTemplate.Body, "data", "id")
 
 	terminalNode := mustJSON(t, http.MethodPost, testServer.URL+"/v1/flow-templates/"+templateID+"/nodes", map[string]any{
-		"display_name": "Terminal",
-		"node_type":    "work",
+		"display_name": "Merge",
+		"node_type":    "merge",
 		"position":     2,
 		"max_visits":   10,
 	}, map[string]string{"Authorization": "Bearer " + memberToken})
@@ -657,7 +657,7 @@ func TestProjectHTTPFlowTemplateRejectsPathsWithoutReview(t *testing.T) {
 	if invalidStart.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid start status = %d, want %d body=%s", invalidStart.StatusCode, http.StatusUnprocessableEntity, string(invalidStart.Body))
 	}
-	if got := jsonPathString(t, invalidStart.Body, "error", "message"); got != "flow template must include at least one review node on every path to completion" {
+	if got := jsonPathString(t, invalidStart.Body, "error", "message"); got != "flow template must define a work -> review -> completion path" {
 		t.Fatalf("error.message = %q body=%s", got, string(invalidStart.Body))
 	}
 
@@ -666,7 +666,7 @@ func TestProjectHTTPFlowTemplateRejectsPathsWithoutReview(t *testing.T) {
 		"node_type":      "review",
 		"position":       3,
 		"next_node_id":   terminalNodeID,
-		"reject_node_id": terminalNodeID,
+		"reject_node_id": workNodeID,
 		"max_visits":     10,
 	}, map[string]string{"Authorization": "Bearer " + memberToken})
 	if reviewNode.StatusCode != http.StatusCreated {

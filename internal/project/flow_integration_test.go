@@ -39,10 +39,10 @@ func TestFlow_Progression_LinearChain(t *testing.T) {
 	if _, err := fx.flowService.AdvanceFlow(ctx, taskRecord.ID, flowsvc.Actor{Type: "agent", ID: fx.pmAgent.ID}); err != nil {
 		t.Fatalf("AdvanceFlow step 1: %v", err)
 	}
-	if _, err := fx.flowService.AdvanceFlow(ctx, taskRecord.ID, flowsvc.Actor{Type: "agent", ID: fx.pmAgent.ID}); err != nil {
+	if _, err := fx.flowService.AdvanceFlow(ctx, taskRecord.ID, flowsvc.Actor{Type: "agent", ID: fx.reviewerAgent.ID}); err != nil {
 		t.Fatalf("AdvanceFlow step 2: %v", err)
 	}
-	if _, err := fx.flowService.AdvanceFlow(ctx, taskRecord.ID, flowsvc.Actor{Type: "agent", ID: fx.pmAgent.ID}); err != nil {
+	if _, err := fx.flowService.AdvanceFlow(ctx, taskRecord.ID, flowsvc.Actor{Type: "agent", ID: fx.reviewerAgent.ID}); err != nil {
 		t.Fatalf("AdvanceFlow terminal: %v", err)
 	}
 
@@ -309,6 +309,7 @@ type flowFixture073 struct {
 	project        repo.Project
 	pmUser         repo.HumanUser
 	pmAgent        repo.Agent
+	reviewerAgent  repo.Agent
 	taskRepo       *repo.ProjectTaskRepo
 	templateRepo   *repo.FlowTemplateRepo
 	nodeRepo       *repo.FlowNodeRepo
@@ -324,6 +325,31 @@ func newFlowFixture073(t *testing.T) flowFixture073 {
 	ctx := context.Background()
 	pool := testdb.New(t)
 	org, projectRecord, _, pmUser, pmAgent := seedTaskFixtureData073(t, ctx, pool, false)
+	reviewerAgent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:       org.ID,
+		DisplayName:          "Reviewer Agent",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		AgentType:            "reviewer",
+		CreatedByType:        "human_user",
+		CreatedByID:          pmUser.ID,
+		MemoryReadScopes:     []string{},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		SystemPrompt:         "",
+		OperatorInstructions: "",
+	})
+	if err != nil {
+		t.Fatalf("create reviewer agent: %v", err)
+	}
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        reviewerAgent.ID,
+		ProjectID:      projectRecord.ID,
+		Role:           "reviewer",
+		AssignedByType: "system",
+	}); err != nil {
+		t.Fatalf("assign reviewer: %v", err)
+	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	bus := eventbus.New(pool, logger, eventbus.Config{})
@@ -366,6 +392,7 @@ func newFlowFixture073(t *testing.T) flowFixture073 {
 		project:        projectRecord,
 		pmUser:         pmUser,
 		pmAgent:        pmAgent,
+		reviewerAgent:  reviewerAgent,
 		taskRepo:       repo.NewProjectTaskRepo(pool),
 		templateRepo:   repo.NewFlowTemplateRepo(pool),
 		nodeRepo:       repo.NewFlowNodeRepo(pool),
@@ -379,8 +406,8 @@ func newFlowFixture073(t *testing.T) flowFixture073 {
 func createLinearTemplate073(t *testing.T, ctx context.Context, fx flowFixture073, nodeCount int, rejectLoop bool, maxVisits int) (repo.FlowTemplate, []repo.FlowNode) {
 	t.Helper()
 
-	if nodeCount < 1 {
-		nodeCount = 1
+	if nodeCount < 2 {
+		nodeCount = 2
 	}
 	if maxVisits < 1 {
 		maxVisits = 1
@@ -403,10 +430,16 @@ func createLinearTemplate073(t *testing.T, ctx context.Context, fx flowFixture07
 
 	nodes := make([]repo.FlowNode, 0, nodeCount)
 	for i := 0; i < nodeCount; i++ {
+		nodeType := "work"
+		if i == 1 {
+			nodeType = "review"
+		} else if i > 1 {
+			nodeType = "merge"
+		}
 		node, createErr := fx.nodeRepo.Create(ctx, repo.FlowNode{
 			FlowTemplateID: template.ID,
 			DisplayName:    "Node " + uuid.NewString()[:8],
-			NodeType:       "work",
+			NodeType:       nodeType,
 			Position:       i + 1,
 			MCPTools:       []repo.FlowNodeMCPTool{},
 			ToolDomains:    []string{},
