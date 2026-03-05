@@ -230,6 +230,7 @@ func (w *DeployWorker) createContinuousDeployTask(ctx context.Context, payload d
 		ProjectID:           payload.ProjectID,
 		Title:               title,
 		WorkStatus:          "queued",
+		FlowTemplateID:      projectRecord.DeployFlowTemplateID,
 		CreatedByType:       deliverySystemActorType,
 		CreatedByID:         nil,
 		AssignedAgentID:     assignedAgentID,

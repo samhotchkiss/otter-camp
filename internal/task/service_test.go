@@ -99,6 +99,7 @@ func TestTransitionStatusInvalidReturnsTypedError(t *testing.T) {
 func TestTransitionStatusCompletedAtBehavior(t *testing.T) {
 	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
 	taskID := uuid.New()
+	flowTemplateID := uuid.New()
 	taskRepo := &fakeTaskRepo{
 		tasks: map[uuid.UUID]repo.ProjectTask{
 			taskID: {
@@ -106,6 +107,7 @@ func TestTransitionStatusCompletedAtBehavior(t *testing.T) {
 				OrganizationID: uuid.New(),
 				ProjectID:      uuid.New(),
 				WorkStatus:     "in_progress",
+				FlowTemplateID: &flowTemplateID,
 				Title:          "Task",
 				CreatedByType:  "system",
 			},
@@ -127,6 +129,7 @@ func TestTransitionStatusCompletedAtBehavior(t *testing.T) {
 		OrganizationID: doneTask.OrganizationID,
 		ProjectID:      doneTask.ProjectID,
 		WorkStatus:     "in_progress",
+		FlowTemplateID: &flowTemplateID,
 		Title:          "Task",
 		CreatedByType:  "system",
 	}
@@ -143,6 +146,7 @@ func TestTransitionStatusCompletedAtBehavior(t *testing.T) {
 		OrganizationID: doneTask.OrganizationID,
 		ProjectID:      doneTask.ProjectID,
 		WorkStatus:     "in_progress",
+		FlowTemplateID: &flowTemplateID,
 		Title:          "Task",
 		CreatedByType:  "system",
 	}
@@ -195,6 +199,43 @@ func TestTransitionStatusDraftToQueuedRequiresFlowTemplate(t *testing.T) {
 	svc := newUnitService(taskRepo)
 	if _, err := svc.TransitionStatus(context.Background(), taskID, "queued", Actor{Type: "system"}); !errors.Is(err, ErrFlowTemplateRequired) {
 		t.Fatalf("TransitionStatus queued err = %v, want ErrFlowTemplateRequired", err)
+	}
+}
+
+func TestTransitionStatusExecutionStatesRequireFlowTemplate(t *testing.T) {
+	tests := []struct {
+		name       string
+		fromStatus string
+		toStatus   string
+	}{
+		{name: "draft to queued", fromStatus: "draft", toStatus: "queued"},
+		{name: "queued to in_progress", fromStatus: "queued", toStatus: "in_progress"},
+		{name: "in_progress to review", fromStatus: "in_progress", toStatus: "review"},
+		{name: "review to done", fromStatus: "review", toStatus: "done"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			taskID := uuid.New()
+			taskRepo := &fakeTaskRepo{
+				tasks: map[uuid.UUID]repo.ProjectTask{
+					taskID: {
+						ID:             taskID,
+						OrganizationID: uuid.New(),
+						ProjectID:      uuid.New(),
+						WorkStatus:     tc.fromStatus,
+						FlowTemplateID: nil,
+						Title:          "Task",
+						CreatedByType:  "system",
+					},
+				},
+			}
+
+			svc := newUnitService(taskRepo)
+			if _, err := svc.TransitionStatus(context.Background(), taskID, tc.toStatus, Actor{Type: "system", AllowNoActiveFlow: true}); !errors.Is(err, ErrFlowTemplateRequired) {
+				t.Fatalf("TransitionStatus %s->%s err = %v, want ErrFlowTemplateRequired", tc.fromStatus, tc.toStatus, err)
+			}
+		})
 	}
 }
 
@@ -324,7 +365,7 @@ func TestTransitionStatusDraftToCancelledWithoutFlowTemplateSucceeds(t *testing.
 	}
 }
 
-func TestTransitionStatusDoneWithoutFlowTemplateReturnsError(t *testing.T) {
+func TestTransitionStatusDoneWithoutFlowTemplateReturnsFlowTemplateError(t *testing.T) {
 	taskID := uuid.New()
 	taskRepo := &fakeTaskRepo{
 		tasks: map[uuid.UUID]repo.ProjectTask{
@@ -340,8 +381,8 @@ func TestTransitionStatusDoneWithoutFlowTemplateReturnsError(t *testing.T) {
 	}
 	svc := newUnitService(taskRepo)
 
-	if _, err := svc.TransitionStatus(context.Background(), taskID, "done", Actor{Type: "agent", ID: uuid.New()}); !errors.Is(err, ErrDoneRequiresTerminalFlow) {
-		t.Fatalf("TransitionStatus done err = %v, want ErrDoneRequiresTerminalFlow", err)
+	if _, err := svc.TransitionStatus(context.Background(), taskID, "done", Actor{Type: "agent", ID: uuid.New()}); !errors.Is(err, ErrFlowTemplateRequired) {
+		t.Fatalf("TransitionStatus done err = %v, want ErrFlowTemplateRequired", err)
 	}
 }
 
@@ -426,6 +467,7 @@ func TestTransitionStatusDoneWithCompletedTerminalFlowNodeSucceeds(t *testing.T)
 
 func TestTransitionStatusInProgressWithoutActiveFlowReturnsError(t *testing.T) {
 	taskID := uuid.New()
+	flowTemplateID := uuid.New()
 	taskRepo := &fakeTaskRepo{
 		tasks: map[uuid.UUID]repo.ProjectTask{
 			taskID: {
@@ -433,6 +475,7 @@ func TestTransitionStatusInProgressWithoutActiveFlowReturnsError(t *testing.T) {
 				OrganizationID: uuid.New(),
 				ProjectID:      uuid.New(),
 				WorkStatus:     "queued",
+				FlowTemplateID: &flowTemplateID,
 				Title:          "Task",
 				CreatedByType:  "system",
 			},
@@ -458,6 +501,7 @@ func TestTransitionStatusInProgressWithoutActiveFlowReturnsError(t *testing.T) {
 
 func TestTransitionStatusInProgressWithActiveFlowSucceeds(t *testing.T) {
 	taskID := uuid.New()
+	flowTemplateID := uuid.New()
 	taskRepo := &fakeTaskRepo{
 		tasks: map[uuid.UUID]repo.ProjectTask{
 			taskID: {
@@ -465,6 +509,7 @@ func TestTransitionStatusInProgressWithActiveFlowSucceeds(t *testing.T) {
 				OrganizationID: uuid.New(),
 				ProjectID:      uuid.New(),
 				WorkStatus:     "queued",
+				FlowTemplateID: &flowTemplateID,
 				Title:          "Task",
 				CreatedByType:  "system",
 			},
@@ -493,6 +538,7 @@ func TestTransitionStatusInProgressWithActiveFlowSucceeds(t *testing.T) {
 
 func TestTransitionStatusInProgressSystemOverrideBypassesFlowValidation(t *testing.T) {
 	taskID := uuid.New()
+	flowTemplateID := uuid.New()
 	taskRepo := &fakeTaskRepo{
 		tasks: map[uuid.UUID]repo.ProjectTask{
 			taskID: {
@@ -500,6 +546,7 @@ func TestTransitionStatusInProgressSystemOverrideBypassesFlowValidation(t *testi
 				OrganizationID: uuid.New(),
 				ProjectID:      uuid.New(),
 				WorkStatus:     "queued",
+				FlowTemplateID: &flowTemplateID,
 				Title:          "Task",
 				CreatedByType:  "system",
 			},
@@ -682,6 +729,7 @@ func TestActOnInboxItemTaskReviewApproveAdvancesFlowAndMarksActed(t *testing.T) 
 	orgID := uuid.New()
 	projectID := uuid.New()
 	flowNodeID := uuid.New()
+	flowTemplateID := uuid.New()
 	taskRepo := &fakeTaskRepo{
 		tasks: map[uuid.UUID]repo.ProjectTask{
 			taskID: {
@@ -689,6 +737,7 @@ func TestActOnInboxItemTaskReviewApproveAdvancesFlowAndMarksActed(t *testing.T) 
 				OrganizationID: orgID,
 				ProjectID:      projectID,
 				WorkStatus:     "review",
+				FlowTemplateID: &flowTemplateID,
 				Title:          "Review task",
 				CreatedByType:  "system",
 			},
@@ -755,6 +804,7 @@ func TestActOnInboxItemTaskReviewRejectCallsRejectWithReasonAndMarksActed(t *tes
 	orgID := uuid.New()
 	projectID := uuid.New()
 	flowNodeID := uuid.New()
+	flowTemplateID := uuid.New()
 	taskRepo := &fakeTaskRepo{
 		tasks: map[uuid.UUID]repo.ProjectTask{
 			taskID: {
@@ -762,6 +812,7 @@ func TestActOnInboxItemTaskReviewRejectCallsRejectWithReasonAndMarksActed(t *tes
 				OrganizationID: orgID,
 				ProjectID:      projectID,
 				WorkStatus:     "review",
+				FlowTemplateID: &flowTemplateID,
 				Title:          "Review task",
 				CreatedByType:  "system",
 			},

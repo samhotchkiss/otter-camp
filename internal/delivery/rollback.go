@@ -113,6 +113,7 @@ func (s *RollbackService) InitiateRollback(ctx context.Context, projectID uuid.U
 		ProjectID:           projectID,
 		Title:               title,
 		WorkStatus:          "queued",
+		FlowTemplateID:      projectRecord.DeployFlowTemplateID,
 		BranchName:          &branchCopy,
 		RequiresHumanReview: false,
 		CreatedByType:       deliverySystemActorType,

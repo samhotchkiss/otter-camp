@@ -5,6 +5,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -19,12 +20,14 @@ func TestProjectTaskRepoCreateUpdateStatusAndTaskNumber(t *testing.T) {
 	pool := testdb.New(t)
 	org, project := seedTaskRepoOrgProject(t, ctx, pool)
 	taskRepo := NewProjectTaskRepo(pool)
+	template := seedTaskRepoFlowTemplate(t, ctx, pool, org.ID, project.ID)
 
 	created, err := taskRepo.Create(ctx, ProjectTask{
 		OrganizationID:      org.ID,
 		ProjectID:           project.ID,
 		Title:               "First task",
 		WorkStatus:          "draft",
+		FlowTemplateID:      &template.ID,
 		Priority:            2,
 		CreatedByType:       "system",
 		CreatedByID:         nil,
@@ -54,6 +57,42 @@ func TestProjectTaskRepoCreateUpdateStatusAndTaskNumber(t *testing.T) {
 	}
 	if !updated.UpdatedAt.After(created.UpdatedAt) {
 		t.Fatalf("updated_at = %s, want after %s", updated.UpdatedAt, created.UpdatedAt)
+	}
+}
+
+func TestProjectTaskRepoRejectsExecutionStatusWithoutFlowTemplate(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskRepoOrgProject(t, ctx, pool)
+	taskRepo := NewProjectTaskRepo(pool)
+
+	created, err := taskRepo.Create(ctx, ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Missing flow template",
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("Create task: %v", err)
+	}
+
+	if _, err := taskRepo.UpdateStatus(ctx, created.ID, "queued"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("UpdateStatus queued err = %v, want ErrConflict", err)
+	}
+
+	var invalidCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task
+		WHERE work_status IN ('queued', 'in_progress', 'review', 'done')
+		  AND flow_template_id IS NULL
+	`).Scan(&invalidCount); err != nil {
+		t.Fatalf("count invalid execution tasks: %v", err)
+	}
+	if invalidCount != 0 {
+		t.Fatalf("invalid execution task count = %d, want 0", invalidCount)
 	}
 }
 
@@ -284,6 +323,25 @@ func seedTaskRepoOrgProject(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 		t.Fatalf("create project: %v", err)
 	}
 	return org, project
+}
+
+func seedTaskRepoFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID uuid.UUID) FlowTemplate {
+	t.Helper()
+	template, err := NewFlowTemplateRepo(pool).Create(ctx, FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           "task-repo-flow-" + uuid.NewString()[:8],
+		DisplayName:    "Task Repo Flow",
+		Description:    "Task repo integration flow template",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	return template
 }
 
 func seedTaskRepoUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, prefix string) HumanUser {

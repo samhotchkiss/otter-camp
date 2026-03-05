@@ -273,6 +273,27 @@ func seedDeliveryOrgProject(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
+
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "delivery-flow-" + uuid.NewString()[:8],
+		DisplayName:    "Delivery Flow",
+		Description:    "Flow template used for delivery lifecycle tasks",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create project flow template: %v", err)
+	}
+
+	project.DeployFlowTemplateID = &template.ID
+	project, err = projectRepo.Update(ctx, project)
+	if err != nil {
+		t.Fatalf("set deploy flow template: %v", err)
+	}
 	return org, project
 }
 

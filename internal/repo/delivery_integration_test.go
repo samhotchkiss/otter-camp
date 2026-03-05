@@ -88,6 +88,7 @@ func TestProjectEnvironmentRepoSetDeployTaskRecordDeploymentAndGetActiveByMode(t
 	remoteRepo := NewProjectRemoteRepo(pool)
 	environmentRepo := NewProjectEnvironmentRepo(pool)
 	taskRepo := NewProjectTaskRepo(pool)
+	template := seedTaskRepoFlowTemplate(t, ctx, pool, org.ID, project.ID)
 
 	remote, err := remoteRepo.Create(ctx, ProjectRemote{
 		ProjectID: project.ID,
@@ -137,6 +138,7 @@ func TestProjectEnvironmentRepoSetDeployTaskRecordDeploymentAndGetActiveByMode(t
 		ProjectID:      project.ID,
 		Title:          "Deploy production",
 		WorkStatus:     "queued",
+		FlowTemplateID: &template.ID,
 		CreatedByType:  "system",
 		CreatedByID:    nil,
 		Metadata:       json.RawMessage(`{}`),
