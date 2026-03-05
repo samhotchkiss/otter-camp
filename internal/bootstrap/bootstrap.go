@@ -669,6 +669,32 @@ func buildSystemTemplateNodeSeedPlan(template repo.FlowTemplate, existing []repo
 				},
 			},
 		}, nil
+	case "default-review-refinement":
+		nextIndex := 1
+		finalIndex := 2
+		return systemTemplateNodeSeedPlan{
+			Seeds: []flowNodeSeedSpec{
+				{
+					DisplayName:   "Generation",
+					NodeType:      "work",
+					Position:      0,
+					ActorType:     &roleActor,
+					NextSeedIndex: &nextIndex,
+				},
+				{
+					DisplayName:   "Internal Review",
+					NodeType:      "review",
+					Position:      1,
+					NextSeedIndex: &finalIndex,
+				},
+				{
+					DisplayName:         "Human Review",
+					NodeType:            "review",
+					Position:            2,
+					RequiresHumanReview: true,
+				},
+			},
+		}, nil
 	default:
 		return systemTemplateNodeSeedPlan{}, fmt.Errorf("unsupported system flow template slug %q", template.Slug)
 	}
@@ -918,6 +944,18 @@ func defaultFlowTemplateSeeds() []repo.FlowTemplate {
 			Slug:           "default-review",
 			DisplayName:    "Default Review",
 			Description:    "Review-oriented default task flow template.",
+			IsCurrent:      true,
+			Version:        1,
+			IsSystem:       true,
+			CreatedByType:  systemActorType,
+			CreatedByID:    systemActorID,
+		},
+		{
+			OrganizationID: nil,
+			ProjectID:      nil,
+			Slug:           "default-review-refinement",
+			DisplayName:    "Default Review Refinement",
+			Description:    "Subjective multi-option flow with internal review and human review handoff.",
 			IsCurrent:      true,
 			Version:        1,
 			IsSystem:       true,

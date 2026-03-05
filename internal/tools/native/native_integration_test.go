@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,8 +16,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -366,6 +370,167 @@ func TestIntegrationTaskDependencyCreateRemoveAndCycleDetection(t *testing.T) {
 	}
 	if cycleResp["error"] != "cycle_detected" {
 		t.Fatalf("cycle error = %v, want cycle_detected", cycleResp["error"])
+	}
+}
+
+func TestIntegrationTaskCreateSubjectiveMultiOptionUsesReviewRefinementPlanning(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	template := seedReviewRefinementSystemTemplate(t, ctx, pool)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":   project.ID.String(),
+		"title":        "Homepage design options",
+		"description":  "Generate 10 homepage design options, compare them, shortlist the strongest directions, and recommend one with tradeoffs.",
+		"blocks_scope": "none",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+
+	planning, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	if planning["mode"] != "review_and_refinement" {
+		t.Fatalf("planning.mode = %v, want review_and_refinement", planning["mode"])
+	}
+	if planning["default_template_slug"] != "default-review-refinement" {
+		t.Fatalf("default_template_slug = %v, want default-review-refinement", planning["default_template_slug"])
+	}
+
+	taskID := nestedUUID(t, out, "task", "id")
+	taskRecord, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if taskRecord.FlowTemplateID == nil {
+		t.Fatal("flow_template_id is nil, want resolved review-refinement template")
+	}
+	if *taskRecord.FlowTemplateID != template.ID {
+		t.Fatalf("flow_template_id = %s, want %s", *taskRecord.FlowTemplateID, template.ID)
+	}
+
+	nodes, err := repo.NewFlowNodeRepo(pool).GetByTemplateOrdered(ctx, template.ID)
+	if err != nil {
+		t.Fatalf("load template nodes: %v", err)
+	}
+	if len(nodes) != 3 {
+		t.Fatalf("template node count = %d, want 3", len(nodes))
+	}
+	if nodes[0].DisplayName != "Generation" || nodes[1].DisplayName != "Internal Review" || nodes[2].DisplayName != "Human Review" {
+		t.Fatalf("unexpected node sequence = [%s %s %s]", nodes[0].DisplayName, nodes[1].DisplayName, nodes[2].DisplayName)
+	}
+}
+
+func TestIntegrationBlogIdeasCreateReviewPacketInboxHandoff(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	worker := testutil.MakeAgent(t, pool, orgID)
+	reviewer := testutil.MakeAgent(t, pool, orgID)
+
+	seedReviewRefinementSystemTemplate(t, ctx, pool)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, worker.ID), "task.create", map[string]any{
+		"project_id":  project.ID.String(),
+		"title":       "Launch-week blog post ideas",
+		"description": "Brainstorm 12 launch-week blog post ideas, compare them, shortlist the best options, and recommend a sequence with tradeoffs.",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+
+	taskID := nestedUUID(t, out, "task", "id")
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.UpdateStatus(ctx, taskID, "in_progress"); err != nil {
+		t.Fatalf("UpdateStatus in_progress: %v", err)
+	}
+
+	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})
+	flowService, err := flowsvc.NewService(flowsvc.Options{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService flow: %v", err)
+	}
+
+	if _, err := flowService.StartFlow(ctx, taskID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := flowService.AdvanceFlow(ctx, taskID, flowsvc.Actor{Type: "agent", ID: worker.ID}); err != nil {
+		t.Fatalf("AdvanceFlow generation: %v", err)
+	}
+
+	afterGeneration, err := taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetByID after generation: %v", err)
+	}
+	if afterGeneration.WorkStatus == "done" {
+		t.Fatalf("task work_status = %q after generation, want non-terminal", afterGeneration.WorkStatus)
+	}
+
+	if _, err := flowService.AdvanceFlow(ctx, taskID, flowsvc.Actor{Type: "agent", ID: reviewer.ID}); err != nil {
+		t.Fatalf("AdvanceFlow internal review: %v", err)
+	}
+
+	taskRecord, err := taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetByID after human-review handoff: %v", err)
+	}
+	if taskRecord.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review", taskRecord.WorkStatus)
+	}
+
+	var (
+		title         string
+		body          *string
+		actionPayload json.RawMessage
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT title, body, action_payload
+		FROM inbox_item
+		WHERE organization_id = $1
+		  AND item_type = 'task_review'
+		  AND source_task_id = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, orgID, taskID).Scan(&title, &body, &actionPayload); err != nil {
+		t.Fatalf("load task_review inbox item: %v", err)
+	}
+	if title != "Review options and recommendation" {
+		t.Fatalf("inbox title = %q, want review packet title", title)
+	}
+	if body == nil || !strings.Contains(*body, "comparison") || !strings.Contains(*body, "recommendation") {
+		t.Fatalf("inbox body = %v, want review packet sections", body)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(actionPayload, &payload); err != nil {
+		t.Fatalf("unmarshal action_payload: %v", err)
+	}
+	rawPacket, ok := payload["review_packet"].(map[string]any)
+	if !ok {
+		t.Fatalf("review_packet payload = %T, want map[string]any", payload["review_packet"])
+	}
+	sections, ok := rawPacket["sections"].([]any)
+	if !ok {
+		t.Fatalf("review packet sections = %T, want []any", rawPacket["sections"])
+	}
+	joined := make([]string, 0, len(sections))
+	for _, item := range sections {
+		joined = append(joined, fmt.Sprintf("%v", item))
+	}
+	if !containsString(joined, "comparison") || !containsString(joined, "shortlist") || !containsString(joined, "recommendation") {
+		t.Fatalf("review packet sections = %v, want comparison/shortlist/recommendation", joined)
 	}
 }
 
@@ -1189,6 +1354,84 @@ func mustRunGit(t *testing.T, dir string, args ...string) {
 	if err != nil {
 		t.Fatalf("git %v failed: %v (%s)", args, err, string(output))
 	}
+}
+
+func seedReviewRefinementSystemTemplate(t *testing.T, ctx context.Context, pool *pgxpool.Pool) repo.FlowTemplate {
+	t.Helper()
+
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		Slug:          "default-review-refinement",
+		DisplayName:   "Default Review Refinement",
+		Description:   "Subjective multi-option review refinement",
+		IsCurrent:     true,
+		Version:       1,
+		IsSystem:      true,
+		CreatedByType: "system",
+		CreatedByID:   uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create system review refinement template: %v", err)
+	}
+
+	generation, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Generation",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create generation node: %v", err)
+	}
+	internalReview, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Internal Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create internal review node: %v", err)
+	}
+	humanReview, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID:      template.ID,
+		DisplayName:         "Human Review",
+		NodeType:            "review",
+		Position:            3,
+		MaxVisits:           10,
+		RequiresHumanReview: true,
+	})
+	if err != nil {
+		t.Fatalf("create human review node: %v", err)
+	}
+
+	generation.NextNodeID = &internalReview.ID
+	if _, err := nodeRepo.Update(ctx, generation); err != nil {
+		t.Fatalf("link generation node: %v", err)
+	}
+	internalReview.NextNodeID = &humanReview.ID
+	if _, err := nodeRepo.Update(ctx, internalReview); err != nil {
+		t.Fatalf("link internal review node: %v", err)
+	}
+
+	template.StartNodeID = &generation.ID
+	updated, err := templateRepo.Update(ctx, template)
+	if err != nil {
+		t.Fatalf("set review refinement start node: %v", err)
+	}
+	return updated
+}
+
+func containsString(items []string, needle string) bool {
+	for _, item := range items {
+		if item == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func integrationExecCtx() context.Context {

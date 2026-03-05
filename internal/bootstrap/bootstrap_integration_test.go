@@ -171,12 +171,12 @@ func TestBootstrapSeedsSystemFlowTemplatesIdempotently(t *testing.T) {
 		WHERE organization_id IS NULL
 		  AND project_id IS NULL
 		  AND is_system = true
-		  AND slug IN ('default-single-agent', 'default-review')
+		  AND slug IN ('default-single-agent', 'default-review', 'default-review-refinement')
 	`).Scan(&count); err != nil {
 		t.Fatalf("count flow templates: %v", err)
 	}
-	if count != 2 {
-		t.Fatalf("system flow template count = %d, want 2", count)
+	if count != 3 {
+		t.Fatalf("system flow template count = %d, want 3", count)
 	}
 
 	rows, err := pool.Query(ctx, `
@@ -185,7 +185,7 @@ func TestBootstrapSeedsSystemFlowTemplatesIdempotently(t *testing.T) {
 		WHERE organization_id IS NULL
 		  AND project_id IS NULL
 		  AND is_system = true
-		  AND slug IN ('default-single-agent', 'default-review')
+		  AND slug IN ('default-single-agent', 'default-review', 'default-review-refinement')
 		ORDER BY slug ASC
 	`)
 	if err != nil {
@@ -211,7 +211,7 @@ func TestBootstrapSeedsSystemFlowTemplatesIdempotently(t *testing.T) {
 		t.Fatalf("iterate system templates: %v", rows.Err())
 	}
 
-	for _, slug := range []string{"default-review", "default-single-agent"} {
+	for _, slug := range []string{"default-review", "default-review-refinement", "default-single-agent"} {
 		if _, ok := startNodeBySlug[slug]; !ok {
 			t.Fatalf("missing seeded system template %q", slug)
 		}
@@ -225,12 +225,12 @@ func TestBootstrapSeedsSystemFlowTemplatesIdempotently(t *testing.T) {
 		WHERE t.organization_id IS NULL
 		  AND t.project_id IS NULL
 		  AND t.is_system = true
-		  AND t.slug IN ('default-single-agent', 'default-review')
+		  AND t.slug IN ('default-single-agent', 'default-review', 'default-review-refinement')
 	`).Scan(&totalNodes); err != nil {
 		t.Fatalf("count system flow nodes: %v", err)
 	}
-	if totalNodes != 4 {
-		t.Fatalf("system flow node count = %d, want 4", totalNodes)
+	if totalNodes != 7 {
+		t.Fatalf("system flow node count = %d, want 7", totalNodes)
 	}
 }
 

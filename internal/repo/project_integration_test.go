@@ -174,6 +174,16 @@ func TestFlowTemplateRepoDeprecateAndBulkUpsertBySlugIdempotent(t *testing.T) {
 			CreatedByType: "system",
 			CreatedByID:   uuid.Nil,
 		},
+		{
+			Slug:          "default-review-refinement",
+			DisplayName:   "Default Review Refinement",
+			Description:   "system",
+			IsCurrent:     true,
+			Version:       1,
+			IsSystem:      true,
+			CreatedByType: "system",
+			CreatedByID:   uuid.Nil,
+		},
 	}
 	if _, err := templateRepo.BulkUpsertBySlug(ctx, systemSeeds); err != nil {
 		t.Fatalf("BulkUpsertBySlug first call: %v", err)
@@ -188,12 +198,12 @@ func TestFlowTemplateRepoDeprecateAndBulkUpsertBySlugIdempotent(t *testing.T) {
 		FROM flow_template
 		WHERE organization_id IS NULL
 		  AND project_id IS NULL
-		  AND slug IN ('default-single-agent', 'default-review')
+		  AND slug IN ('default-single-agent', 'default-review', 'default-review-refinement')
 	`).Scan(&systemCount); err != nil {
 		t.Fatalf("count system templates: %v", err)
 	}
-	if systemCount != 2 {
-		t.Fatalf("system template count = %d, want 2", systemCount)
+	if systemCount != 3 {
+		t.Fatalf("system template count = %d, want 3", systemCount)
 	}
 }
 
