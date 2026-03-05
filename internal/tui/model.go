@@ -425,7 +425,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.ProjectsErr != nil {
 			projects = m.workspace.existingProjects()
 		}
+
+		selectionStillValid := true
+		if m.workspace.selectedProjectID != "" {
+			selectionStillValid = false
+			for _, proj := range projects {
+				if strings.EqualFold(strings.TrimSpace(proj.ID), strings.TrimSpace(m.workspace.selectedProjectID)) {
+					selectionStillValid = true
+					break
+				}
+			}
+		}
+
 		m.workspace.rebuildSidebar(typed.OrgSessionID, chats, projects)
+		if !selectionStillValid {
+			m.workspace.selectedProjectID = ""
+			m.workspace.selectedProject = nil
+			if m.activeScope == ScopeProject {
+				m.activeScope = ScopeOrg
+			}
+			m.workspace.activity = appendActivity(m.workspace.activity, "selected project no longer active; context cleared")
+			m.statusMessage = "Selected project is no longer active."
+		}
 		activityParts := []string{}
 		if len(typed.Projects) > 0 {
 			activityParts = append(activityParts, fmt.Sprintf("%d project(s)", len(typed.Projects)))

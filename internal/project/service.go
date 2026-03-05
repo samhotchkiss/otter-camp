@@ -56,6 +56,7 @@ type Task = repo.ProjectTask
 type ProjectFilter struct {
 	DeliveryMode string
 	SlugPrefix   string
+	Status       string
 }
 
 type CreateProjectRequest struct {
@@ -190,6 +191,10 @@ type projectRepository interface {
 	Update(ctx context.Context, project repo.Project) (repo.Project, error)
 	Archive(ctx context.Context, id uuid.UUID) error
 	Delete(ctx context.Context, id uuid.UUID) error
+}
+
+type projectRepositoryListAll interface {
+	ListAll(ctx context.Context, organizationID uuid.UUID) ([]repo.Project, error)
 }
 
 type flowTemplateRepository interface {
@@ -402,9 +407,19 @@ func (s *service) List(ctx context.Context, orgID uuid.UUID, filter ProjectFilte
 		return nil, ErrOrganizationIDRequired
 	}
 
+	statusFilter := normalizeProjectStatusFilter(filter.Status)
+
 	projects, err := s.projects.List(ctx, orgID)
 	if err != nil {
 		return nil, err
+	}
+	if statusFilter != "active" {
+		if listAllRepo, ok := s.projects.(projectRepositoryListAll); ok {
+			projects, err = listAllRepo.ListAll(ctx, orgID)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	deliveryModeFilter := strings.TrimSpace(filter.DeliveryMode)
@@ -413,6 +428,15 @@ func (s *service) List(ctx context.Context, orgID uuid.UUID, filter ProjectFilte
 	result := make([]*Project, 0, len(projects))
 	for i := range projects {
 		item := projects[i]
+		if statusFilter != "all" {
+			status := strings.ToLower(strings.TrimSpace(item.Status))
+			if status == "" {
+				status = "active"
+			}
+			if status != statusFilter {
+				continue
+			}
+		}
 		if deliveryModeFilter != "" && item.DeliveryMode != deliveryModeFilter {
 			continue
 		}
@@ -424,6 +448,19 @@ func (s *service) List(ctx context.Context, orgID uuid.UUID, filter ProjectFilte
 	}
 
 	return result, nil
+}
+
+func normalizeProjectStatusFilter(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "active":
+		return "active"
+	case "archived":
+		return "archived"
+	case "all":
+		return "all"
+	default:
+		return "active"
+	}
 }
 
 func (s *service) Update(ctx context.Context, orgID, projectID uuid.UUID, req UpdateProjectRequest) (*Project, error) {

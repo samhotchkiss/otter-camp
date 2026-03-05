@@ -277,9 +277,18 @@ func (h projectHandlers) listProjects(w http.ResponseWriter, r *http.Request) {
 	}
 
 	params := api.ParsePaginationParams(r.URL.Query())
+	statusFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+	if statusFilter == "" {
+		statusFilter = "active"
+	}
+	if statusFilter != "active" && statusFilter != "archived" && statusFilter != "all" {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "status must be one of active, archived, all")
+		return
+	}
 	filter := projectsvc.ProjectFilter{
 		DeliveryMode: strings.TrimSpace(r.URL.Query().Get("delivery_mode")),
 		SlugPrefix:   strings.TrimSpace(r.URL.Query().Get("slug_prefix")),
+		Status:       statusFilter,
 	}
 	items, err := h.service.List(r.Context(), principal.OrganizationID, filter)
 	if err != nil {

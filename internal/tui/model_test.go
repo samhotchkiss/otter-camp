@@ -112,8 +112,8 @@ func TestFocusCommandIdempotencyEX460(t *testing.T) {
 // :focus EX-460. Before this fix they always said "Focus: X." on repeat press.
 func TestPanelShortcutIdempotencyEX463(t *testing.T) {
 	cases := []struct {
-		key       rune
-		panel     Panel
+		key         rune
+		panel       Panel
 		wantAlready string
 		wantSwitch  string
 	}{
@@ -294,7 +294,7 @@ func TestEscFromEmptySearchModeExitsEX433(t *testing.T) {
 		m := NewModel(DefaultState())
 		m.searchMode = true
 		m.searchPanel = SidebarPanel
-		m.searchQuery = ""  // query already cleared (e.g. via Ctrl-U)
+		m.searchQuery = "" // query already cleared (e.g. via Ctrl-U)
 		m = pressKey(m, tea.KeyMsg{Type: tea.KeyEsc})
 		if got := m.StatusMessage(); got != "Filter mode exited." {
 			t.Errorf("EX-433: Esc on empty search should say 'Filter mode exited.', got %q", got)
@@ -504,8 +504,8 @@ func TestTaskViewApproveRejectDeferStaleInboxEX437(t *testing.T) {
 			// Seed a task with RequiresHumanReview but NO inbox item.
 			m.workspace.selectedTaskID = "task-stale"
 			m.workspace.tasks["task-stale"] = &taskRecord{
-				ID:                 "task-stale",
-				Title:              "Stale Review Task",
+				ID:                  "task-stale",
+				Title:               "Stale Review Task",
 				RequiresHumanReview: true,
 			}
 			// inbox is empty — applyInboxActionForTask will return false.
@@ -1712,8 +1712,8 @@ func TestTaskCreatedEventAddsActivityEntry(t *testing.T) {
 	model.turnsSynced = true
 
 	rawPayload, _ := json.Marshal(map[string]any{
-		"task_id":    "task-new-123",
-		"project_id": "proj-abc",
+		"task_id":     "task-new-123",
+		"project_id":  "proj-abc",
 		"task_number": 9,
 	})
 	envelope := EventEnvelope{
@@ -9462,7 +9462,7 @@ func TestChatDownAtBottomEX280(t *testing.T) {
 	// ↑ ↑ to go into history mode and reach end, then ↓ twice to get back to "Back to new message."
 	m.chatInput = ""
 	m.chatHistoryIndex = -1
-	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp}) // → historyIndex=1 (newest)
+	m = pressKey(m, tea.KeyMsg{Type: tea.KeyUp})   // → historyIndex=1 (newest)
 	m = pressKey(m, tea.KeyMsg{Type: tea.KeyDown}) // → "Back to new message." historyIndex=2
 	// Now chatHistoryIndex == len(chatHistory) == 2
 	// ↓ again: should say "Already at newest message."
@@ -9578,7 +9578,7 @@ func TestSidebarHLCollapseFeedbackEX282(t *testing.T) {
 	// Need header expanded so proj-a is visible; proj-a starts Expanded:false.
 	m = setup()
 	m.workspace.sectionCollapsed = map[sidebarSectionID]bool{} // header expanded
-	m.workspace.sidebarCursor = 1                               // proj-a at index 1
+	m.workspace.sidebarCursor = 1                              // proj-a at index 1
 	m = pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if m.statusMessage != "Expanded Acme Project — loading tasks…" {
 		t.Errorf("EX-282: l on project should say 'Expanded Acme Project — loading tasks…'; got %q", m.statusMessage)
@@ -10152,7 +10152,7 @@ func TestDashboardEmptyBoardFeedbackEX294(t *testing.T) {
 		m.width, m.height = 220, 40
 		m.focus = MainPanel
 		m.workspace.mainView = ViewDashboard
-		m.workspace.taskOrder = nil  // empty board
+		m.workspace.taskOrder = nil // empty board
 		m.workspace.tasks = nil
 		m.workspace.selectedTaskID = ""
 
@@ -13464,9 +13464,9 @@ func TestVimQuitAliasesEX390(t *testing.T) {
 // "Unknown command" (EX-391).
 func TestAdditionalCommandAliasesEX391(t *testing.T) {
 	tests := []struct {
-		cmd     string
-		want    string
-		quits   bool
+		cmd   string
+		want  string
+		quits bool
 	}{
 		{":e", ":edit not supported", false},
 		{":edit", ":edit not supported", false},
@@ -13519,7 +13519,7 @@ func TestMoreCommandAliasesEX392(t *testing.T) {
 		{":search", "Filter mode"},
 		{":find", "Filter mode"},
 		{":filter", "Filter mode"},
-		{":back", ""},      // back calls handleEscapeKey which sets a message
+		{":back", ""}, // back calls handleEscapeKey which sets a message
 		{":sort", ":sort not supported"},
 		{":history", "↑/↓"},
 	}
@@ -14002,7 +14002,7 @@ func TestCommandPaletteSuggestionsEX402(t *testing.T) {
 		{"past", "cmd: paste"},
 		{"clea", "cmd: clear"},
 		{"sort", "cmd: sort"},
-		{"ls",   "cmd: ls"},
+		{"ls", "cmd: ls"},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -15125,5 +15125,87 @@ func TestSidebarDataLoadedReplacesSidebarOnSuccessEX494(t *testing.T) {
 	gotProjects := model.workspace.existingProjects()
 	if len(gotProjects) != 1 || gotProjects[0].ID != "proj-new" || gotProjects[0].DisplayName != "New Project" {
 		t.Fatalf("EX-494: projects should be replaced on successful reload, got %+v", gotProjects)
+	}
+}
+
+func TestSidebarDataLoadedClearsInvalidSelectedProjectContextAfterArchive(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.rebuildSidebar(
+		"org-old",
+		nil,
+		[]SidebarProjectItem{
+			{ID: "proj-archived", DisplayName: "Archived Project"},
+			{ID: "proj-active", DisplayName: "Active Project"},
+		},
+	)
+	model.workspace.selectedProjectID = "proj-archived"
+	model.workspace.selectedProject = &ProjectDetail{ID: "proj-archived", DisplayName: "Archived Project"}
+	model.workspace.mainView = ViewProject
+	model.activeScope = ScopeProject
+
+	model = pressMsg(model, sidebarDataLoadedMsg{
+		OrgSessionID: "org-new",
+		Projects: []SidebarProjectItem{
+			{ID: "proj-active", DisplayName: "Active Project"},
+		},
+	})
+
+	if model.workspace.selectedProjectID != "" {
+		t.Fatalf("selectedProjectID = %q, want empty", model.workspace.selectedProjectID)
+	}
+	if model.workspace.selectedProject != nil {
+		t.Fatalf("selectedProject = %+v, want nil", model.workspace.selectedProject)
+	}
+	if model.activeScope != ScopeOrg {
+		t.Fatalf("activeScope = %v, want %v", model.activeScope, ScopeOrg)
+	}
+	if got := model.statusMessage; got != "Selected project is no longer active." {
+		t.Fatalf("statusMessage = %q, want %q", got, "Selected project is no longer active.")
+	}
+}
+
+func TestProjectArchivedEventReloadCommandRefreshesSidebarStore(t *testing.T) {
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjects: func(context.Context) ([]SidebarProjectItem, error) {
+			return []SidebarProjectItem{{ID: "proj-active", DisplayName: "Active Project"}}, nil
+		},
+	})
+	model.workspace.rebuildSidebar(
+		"org-old",
+		nil,
+		[]SidebarProjectItem{
+			{ID: "proj-archived", DisplayName: "Archived Project"},
+			{ID: "proj-active", DisplayName: "Active Project"},
+		},
+	)
+	model.workspace.selectedProjectID = "proj-archived"
+	model.workspace.selectedProject = &ProjectDetail{ID: "proj-archived", DisplayName: "Archived Project"}
+	model.workspace.mainView = ViewProject
+	model.activeScope = ScopeProject
+
+	raw, _ := json.Marshal(map[string]any{"project_id": "proj-archived", "slug": "archived-project"})
+	updated, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "project.archived",
+		OrgID:     "org-1",
+		Payload:   raw,
+	}})
+	if cmd == nil {
+		t.Fatal("project.archived should return loadSidebarDataCmd (non-nil cmd)")
+	}
+
+	model = updated.(Model)
+	msg := cmd()
+	sidebarMsg, ok := msg.(sidebarDataLoadedMsg)
+	if !ok {
+		t.Fatalf("archive reload command returned %T, want sidebarDataLoadedMsg", msg)
+	}
+	model = pressMsg(model, sidebarMsg)
+
+	gotProjects := model.workspace.existingProjects()
+	if len(gotProjects) != 1 || gotProjects[0].ID != "proj-active" {
+		t.Fatalf("projects after archive refresh = %+v, want only active project", gotProjects)
+	}
+	if model.workspace.selectedProjectID != "" {
+		t.Fatalf("selectedProjectID after archive refresh = %q, want empty", model.workspace.selectedProjectID)
 	}
 }
