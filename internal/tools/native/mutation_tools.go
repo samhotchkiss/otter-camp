@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
 	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/assignmentrole"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"

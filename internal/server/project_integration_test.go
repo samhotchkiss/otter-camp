@@ -13,12 +13,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
+
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
-	"golang.org/x/crypto/bcrypt"
 )
 
 func TestProjectHTTPCRUDAndRBAC(t *testing.T) {

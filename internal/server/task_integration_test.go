@@ -66,6 +66,7 @@ func TestTaskHTTPCreateQueueReviewDecisionLifecycle(t *testing.T) {
 
 	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
 	taskUUID := uuid.MustParse(taskID)
+	seedReviewedTerminalFlowState(t, testServer.Pool, org.ID, project.ID, taskUUID)
 	taskRecord, err := taskRepo.GetByID(context.Background(), taskUUID)
 	if err != nil {
 		t.Fatalf("get task after queue: %v", err)
@@ -655,4 +656,92 @@ func seedFlowTask(t *testing.T, pool *pgxpool.Pool, orgID, projectID uuid.UUID) 
 	taskRecord.CurrentFlowNodeID = &nodeA.ID
 
 	return taskRecord, template.ID, nodeA, nodeB
+}
+
+func seedReviewedTerminalFlowState(t *testing.T, pool *pgxpool.Pool, orgID, projectID, taskID uuid.UUID) {
+	t.Helper()
+
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	execRepo := repo.NewFlowNodeExecutionRepo(pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	template, err := templateRepo.Create(context.Background(), repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           "review-terminal-" + uuid.NewString()[:8],
+		DisplayName:    "Review Terminal",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create review terminal template: %v", err)
+	}
+
+	workNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create review node: %v", err)
+	}
+	doneNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Merge",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create done node: %v", err)
+	}
+
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(context.Background(), workNode); err != nil {
+		t.Fatalf("update work node next_node_id: %v", err)
+	}
+	reviewNode.NextNodeID = &doneNode.ID
+	reviewNode.RejectNodeID = &workNode.ID
+	if _, err := nodeRepo.Update(context.Background(), reviewNode); err != nil {
+		t.Fatalf("update review node edges: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
+	if _, err := templateRepo.Update(context.Background(), template); err != nil {
+		t.Fatalf("update template start node: %v", err)
+	}
+
+	taskRecord, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("get task for terminal flow seed: %v", err)
+	}
+	taskRecord.FlowTemplateID = &template.ID
+	taskRecord.CurrentFlowNodeID = &doneNode.ID
+	if _, err := taskRepo.Update(context.Background(), taskRecord); err != nil {
+		t.Fatalf("update task terminal flow state: %v", err)
+	}
+
+	for index, nodeID := range []uuid.UUID{workNode.ID, reviewNode.ID, doneNode.ID} {
+		if _, err := execRepo.Create(context.Background(), repo.FlowNodeExecution{
+			TaskID:      taskID,
+			FlowNodeID:  nodeID,
+			VisitNumber: index + 1,
+			Status:      "completed",
+			Metadata:    json.RawMessage(`{}`),
+		}); err != nil {
+			t.Fatalf("create completed execution %d: %v", index+1, err)
+		}
+	}
 }
