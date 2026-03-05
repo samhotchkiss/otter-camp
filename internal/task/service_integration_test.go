@@ -337,6 +337,67 @@ func TestTaskServiceIntegrationQueueRequiresPMWhenProjectConfigured(t *testing.T
 	}
 }
 
+func TestTaskServiceIntegrationQueueDecomposesOversizedTaskIntoChildWorkUnits(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	description := strings.Join([]string{
+		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
+		"- Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage.",
+		"- Rebuild taxonomy/tag mappings and verify inbound URL parity against production analytics snapshots.",
+	}, "\n")
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Blog migration epic",
+		Description:    &description,
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	queued, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if queued.WorkStatus != "queued" {
+		t.Fatalf("queued work_status = %q, want queued", queued.WorkStatus)
+	}
+	if queued.Description == nil || !strings.Contains(*queued.Description, "Migrate all legacy markdown posts") {
+		t.Fatalf("queued description = %v, want focused primary deliverable", queued.Description)
+	}
+
+	var childCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task
+		WHERE project_id = $1
+		  AND metadata->>'decomposition_parent_task_id' = $2
+	`, project.ID, created.ID.String()).Scan(&childCount); err != nil {
+		t.Fatalf("count decomposed child tasks: %v", err)
+	}
+	if childCount < 1 {
+		t.Fatalf("decomposed child task count = %d, want >= 1", childCount)
+	}
+
+	var primaryDeliverable string
+	if err := pool.QueryRow(ctx, `
+		SELECT COALESCE(metadata #>> '{decomposition,primary_deliverable}', '')
+		FROM project_task
+		WHERE id = $1
+	`, created.ID).Scan(&primaryDeliverable); err != nil {
+		t.Fatalf("read decomposition metadata: %v", err)
+	}
+	if !strings.Contains(primaryDeliverable, "Migrate all legacy markdown posts") {
+		t.Fatalf("primary_deliverable = %q, want focused deliverable", primaryDeliverable)
+	}
+}
+
 func newTaskIntegrationService(t *testing.T, pool *pgxpool.Pool) TaskService {
 	t.Helper()
 	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})

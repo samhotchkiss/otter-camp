@@ -15,6 +15,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 )
 
 var (
@@ -447,7 +448,15 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	if statusRequiresFlowTemplate(target) && taskRecord.FlowTemplateID == nil {
 		return nil, ErrFlowTemplateRequired
 	}
+
+	decomposition := queueDecompositionResult{}
 	if from == "draft" && target == "queued" {
+		decompositionResult, decompErr := s.applyQueueDecomposition(ctx, &taskRecord)
+		if decompErr != nil {
+			return nil, decompErr
+		}
+		decomposition = decompositionResult
+
 		requiresPM, pmReqErr := s.projectRequiresPMBeforeQueue(ctx, taskRecord.ProjectID)
 		if pmReqErr != nil {
 			return nil, pmReqErr
@@ -506,6 +515,10 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 		"task_id":     updated.ID,
 		"project_id":  updated.ProjectID,
 	}
+	if decomposition.applied {
+		payload["decomposition_applied"] = true
+		payload["decomposition_child_task_ids"] = uuidStrings(decomposition.childTaskIDs)
+	}
 	for key, value := range extraPayload {
 		payload[key] = value
 	}
@@ -518,6 +531,77 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	}
 
 	return &updated, nil
+}
+
+type queueDecompositionResult struct {
+	applied      bool
+	childTaskIDs []uuid.UUID
+}
+
+func (s *service) applyQueueDecomposition(ctx context.Context, taskRecord *repo.ProjectTask) (queueDecompositionResult, error) {
+	if taskRecord == nil {
+		return queueDecompositionResult{}, nil
+	}
+	prepared, err := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
+		ParentTaskID: taskRecord.ID,
+		Title:        taskRecord.Title,
+		Description:  taskRecord.Description,
+		Metadata:     taskRecord.Metadata,
+	})
+	if err != nil {
+		return queueDecompositionResult{}, err
+	}
+	if !prepared.Applied {
+		return queueDecompositionResult{}, nil
+	}
+
+	childTaskIDs := make([]uuid.UUID, 0, len(prepared.ChildDrafts))
+	for _, childDraft := range prepared.ChildDrafts {
+		createdChild, createErr := s.tasks.Create(ctx, repo.ProjectTask{
+			OrganizationID:      taskRecord.OrganizationID,
+			ProjectID:           taskRecord.ProjectID,
+			Title:               childDraft.Title,
+			Description:         childDraft.Description,
+			WorkStatus:          "draft",
+			FlowTemplateID:      taskRecord.FlowTemplateID,
+			ScheduleID:          taskRecord.ScheduleID,
+			RequiresHumanReview: taskRecord.RequiresHumanReview,
+			Priority:            taskRecord.Priority,
+			CreatedByType:       taskRecord.CreatedByType,
+			CreatedByID:         taskRecord.CreatedByID,
+			Metadata:            childDraft.Metadata,
+		})
+		if createErr != nil {
+			return queueDecompositionResult{}, createErr
+		}
+		childTaskIDs = append(childTaskIDs, createdChild.ID)
+
+		if err := s.recordTaskEvent(ctx, createdChild, "task.created", taskRecord.CreatedByType, taskRecord.CreatedByID, map[string]any{
+			"task_id":               createdChild.ID,
+			"task_number":           createdChild.TaskNumber,
+			"decomposition_parent":  taskRecord.ID,
+			"decomposition_applied": true,
+		}); err != nil {
+			return queueDecompositionResult{}, err
+		}
+		if err := s.publishTaskDomainEvent(ctx, createdChild.OrganizationID, "task.created", taskRecord.CreatedByType, taskRecord.CreatedByID, map[string]any{
+			"task_id":               createdChild.ID,
+			"project_id":            createdChild.ProjectID,
+			"task_number":           createdChild.TaskNumber,
+			"decomposition_parent":  taskRecord.ID,
+			"decomposition_applied": true,
+		}); err != nil {
+			return queueDecompositionResult{}, err
+		}
+	}
+
+	taskRecord.Description = pointerString(prepared.Plan.PrimaryDeliverable)
+	taskRecord.Metadata = taskdecomp.ApplyMetadata(taskRecord.Metadata, prepared.Plan, prepared.SourceDescription, childTaskIDs)
+
+	return queueDecompositionResult{
+		applied:      true,
+		childTaskIDs: childTaskIDs,
+	}, nil
 }
 
 func (s *service) projectRequiresPMBeforeQueue(ctx context.Context, projectID uuid.UUID) (bool, error) {
@@ -1249,6 +1333,14 @@ func pointerString(value string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func uuidStrings(ids []uuid.UUID) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, id.String())
+	}
+	return out
 }
 
 func projectRequiresHumanReview(settings json.RawMessage) bool {
