@@ -1515,6 +1515,11 @@ func (e *TurnEngine) appendToolResults(ctx context.Context, rt *turnRuntime, res
 				return err
 			}
 		}
+		if instruction, ok := e.buildProjectKickoffHandoffInstruction(ctx, rt, result); ok {
+			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, instruction); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -1534,7 +1539,7 @@ func parseProjectIdentityFromToolResult(result ToolResult) (*projectIdentity, bo
 	if !ok || len(projectMap) == 0 {
 		return nil, false
 	}
-	projectID, ok := parseUUIDValue(projectMap["id"])
+	projectID, ok := parseUUIDAny(projectMap["id"])
 	if !ok || projectID == uuid.Nil {
 		return nil, false
 	}
@@ -1545,7 +1550,65 @@ func parseProjectIdentityFromToolResult(result ToolResult) (*projectIdentity, bo
 	return &projectIdentity{id: projectID, slug: slug}, true
 }
 
-func parseUUIDValue(value any) (uuid.UUID, bool) {
+func (e *TurnEngine) buildProjectKickoffHandoffInstruction(ctx context.Context, rt *turnRuntime, result ToolResult) (string, bool) {
+	if rt == nil || rt.session == nil {
+		return "", false
+	}
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "project.create") {
+		return "", false
+	}
+	if strings.TrimSpace(result.Error) != "" {
+		return "", false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.agent.DisplayName), "frank") && !strings.EqualFold(strings.TrimSpace(rt.agent.AgentType), "general") {
+		return "", false
+	}
+	scope := strings.TrimSpace(rt.session.ScopeType)
+	if !strings.EqualFold(scope, "organization") && !strings.EqualFold(scope, "project") {
+		return "", false
+	}
+
+	projectID, projectSlug, ok := parseProjectCreateIdentity(result)
+	if !ok {
+		return "", false
+	}
+
+	originatingRequest := ""
+	if e.messages != nil && rt.initialMessageID != uuid.Nil {
+		if source, err := e.messages.GetByID(ctx, rt.initialMessageID); err == nil && strings.EqualFold(strings.TrimSpace(source.Role), "user") {
+			originatingRequest = normalizeInstructionText(source.Content)
+		}
+	}
+	if originatingRequest == "" {
+		return fmt.Sprintf("[Kickoff handoff requirement: provide Lori a complete handoff summary that includes all major requested workstreams for the created project (slug=%s, project_id=%s).]", projectSlug, projectID), true
+	}
+	return fmt.Sprintf("[Kickoff handoff requirement: provide Lori a complete handoff summary that includes all major requested workstreams from the originating user request. Created project: slug=%s project_id=%s. Originating user request: %s]", projectSlug, projectID, originatingRequest), true
+}
+
+func parseProjectCreateIdentity(result ToolResult) (uuid.UUID, string, bool) {
+	if len(result.Output) == 0 {
+		return uuid.Nil, "", false
+	}
+	rawProject, ok := result.Output["project"]
+	if !ok || rawProject == nil {
+		return uuid.Nil, "", false
+	}
+	project, ok := rawProject.(map[string]any)
+	if !ok {
+		return uuid.Nil, "", false
+	}
+	projectID, ok := parseUUIDAny(project["id"])
+	if !ok || projectID == uuid.Nil {
+		return uuid.Nil, "", false
+	}
+	projectSlug := strings.TrimSpace(fmt.Sprintf("%v", project["slug"]))
+	if projectSlug == "" {
+		return uuid.Nil, "", false
+	}
+	return projectID, projectSlug, true
+}
+
+func parseUUIDAny(value any) (uuid.UUID, bool) {
 	switch typed := value.(type) {
 	case uuid.UUID:
 		if typed == uuid.Nil {
@@ -1575,6 +1638,15 @@ func buildProjectCreateConflictGuardError(identity *projectIdentity) string {
 		return "project already created in this flow"
 	}
 	return fmt.Sprintf("project already created in this flow as slug=%s project_id=%s; continue with that project unless the user explicitly starts a new create attempt", strings.TrimSpace(identity.slug), identity.id)
+}
+
+func normalizeInstructionText(value string) string {
+	normalized := strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	const maxLen = 800
+	if len(normalized) <= maxLen {
+		return normalized
+	}
+	return normalized[:maxLen] + "..."
 }
 
 func (e *TurnEngine) callMainModel(
@@ -1787,7 +1859,7 @@ func (e *TurnEngine) resolveSessionAgentForSession(ctx context.Context, session 
 		}
 	}
 	if strings.EqualFold(scopeType, "project") {
-		// For project-scoped sessions, prefer the project PM, then fall back to Frank.
+		// For project-scoped sessions, prefer the project PM.
 		if e.assignments != nil && session.ScopeID != uuid.Nil {
 			pm, pmErr := e.assignments.GetPM(ctx, session.ScopeID)
 			if pmErr == nil && pm.IsActive && pm.AgentID != uuid.Nil {
@@ -1797,9 +1869,20 @@ func (e *TurnEngine) resolveSessionAgentForSession(ctx context.Context, session 
 				return pm.AgentID, nil
 			}
 		}
+
+		// During early kickoff (before a PM is assigned), route the first turn to
+		// Frank and then hand off to Lori for staffing/scoping follow-up.
 		frankID, err := e.resolveFrankStarterID(ctx, session.OrganizationID)
 		if err != nil {
 			return uuid.Nil, err
+		}
+		if loriID, loriErr := e.resolveLoriStarterID(ctx, session.OrganizationID); loriErr == nil && loriID != uuid.Nil {
+			if e.shouldRouteProjectKickoffToLori(ctx, session.ID, frankID) {
+				if err := e.ensureAgentParticipant(ctx, session.ID, loriID); err != nil {
+					return uuid.Nil, err
+				}
+				return loriID, nil
+			}
 		}
 		if err := e.ensureAgentParticipant(ctx, session.ID, frankID); err != nil {
 			return uuid.Nil, err
@@ -1896,6 +1979,29 @@ func (e *TurnEngine) resolveLoriStarterID(ctx context.Context, organizationID uu
 		return item.ID, nil
 	}
 	return uuid.Nil, repo.ErrNotFound
+}
+
+func (e *TurnEngine) shouldRouteProjectKickoffToLori(ctx context.Context, sessionID, frankID uuid.UUID) bool {
+	if e.turns == nil || sessionID == uuid.Nil || frankID == uuid.Nil {
+		return false
+	}
+	turns, err := e.turns.ListBySession(ctx, sessionID)
+	if err != nil {
+		return false
+	}
+	for _, turn := range turns {
+		if !strings.EqualFold(strings.TrimSpace(turn.RespondingType), "agent") {
+			continue
+		}
+		if turn.RespondingID != frankID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(turn.Status), "completed") {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (e *TurnEngine) resolveFirstAgentParticipant(ctx context.Context, sessionID uuid.UUID) (uuid.UUID, error) {
