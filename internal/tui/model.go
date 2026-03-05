@@ -428,8 +428,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			chats = m.workspace.existingChats()
 		}
 		projects := typed.Projects
+		var projectLoadStatus string
+		var projectLoadActivity string
 		if typed.ProjectsErr != nil {
-			projects = m.workspace.existingProjects()
+			projects = m.workspace.knownActiveProjects()
+			projectLoadStatus = "Project list reload failed — keeping known active projects."
+			projectLoadActivity = "project list reload failed; preserving known active projects"
+		} else if len(projects) == 0 {
+			fallbackProjects := m.workspace.knownActiveProjects()
+			if len(fallbackProjects) > 0 {
+				projects = fallbackProjects
+				projectLoadStatus = "Project list returned empty while active project data exists — keeping known active projects."
+				projectLoadActivity = "project list returned empty; preserving known active projects"
+			}
+		}
+		if projectLoadStatus != "" {
+			m.statusMessage = projectLoadStatus
+			m.workspace.activity = appendActivity(m.workspace.activity, projectLoadActivity)
 		}
 
 		selectionStillValid := true
@@ -454,8 +469,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Selected project is no longer active."
 		}
 		activityParts := []string{}
-		if len(typed.Projects) > 0 {
-			activityParts = append(activityParts, fmt.Sprintf("%d project(s)", len(typed.Projects)))
+		if len(projects) > 0 {
+			activityParts = append(activityParts, fmt.Sprintf("%d project(s)", len(projects)))
 		}
 		if len(typed.Chats) > 0 {
 			activityParts = append(activityParts, fmt.Sprintf("%d recent chat(s)", len(typed.Chats)))
@@ -471,7 +486,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// If a project is the persisted selected project, expand its sidebar node so the user
 		// sees their active project's task list on startup without needing to click.
 		var cmds []tea.Cmd
-		for _, proj := range typed.Projects {
+		for _, proj := range projects {
 			expand := m.workspace.selectedProjectID == proj.ID
 			cmds = append(cmds, loadProjectTasksCmd(proj.ID, m.runtimeHints, expand))
 		}
@@ -8363,7 +8378,14 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		}
 		// Update the task record if loaded
 		if rec := m.workspace.tasks[payload.TaskID]; rec != nil {
+			rec.ProjectID = payload.ProjectID
 			rec.Status = payload.ToStatus
+		} else if payload.ProjectID != "" {
+			m.workspace.tasks[payload.TaskID] = &taskRecord{
+				ID:        payload.TaskID,
+				ProjectID: payload.ProjectID,
+				Status:    payload.ToStatus,
+			}
 		}
 		// Update the sidebar task node WorkStatus so its icon refreshes
 		taskNodeID := "task-" + payload.TaskID
@@ -8426,6 +8448,16 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 		label := payload.TaskID
 		if payload.TaskNumber > 0 {
 			label = fmt.Sprintf("OC-%d", payload.TaskNumber)
+		}
+		if existing := m.workspace.tasks[payload.TaskID]; existing != nil {
+			existing.ProjectID = payload.ProjectID
+			existing.TaskNumber = payload.TaskNumber
+		} else {
+			m.workspace.tasks[payload.TaskID] = &taskRecord{
+				ID:         payload.TaskID,
+				ProjectID:  payload.ProjectID,
+				TaskNumber: payload.TaskNumber,
+			}
 		}
 		m.workspace.activity = appendActivity(m.workspace.activity, label+": created")
 		// Reload project detail when the new task belongs to the currently

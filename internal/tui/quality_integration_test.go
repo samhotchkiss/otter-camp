@@ -141,6 +141,121 @@ func TestTUIPerformanceBudgets(t *testing.T) {
 	}
 }
 
+func TestConnectionConnectedLoadsActiveProjectsIntoSidebarEX244(t *testing.T) {
+	t.Parallel()
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjects: func(context.Context) ([]SidebarProjectItem, error) {
+			return []SidebarProjectItem{{ID: "proj-active", DisplayName: "Active Project"}}, nil
+		},
+		LoadProjectTasks: func(_ context.Context, projectID string) ([]SidebarTaskItem, error) {
+			if projectID != "proj-active" {
+				t.Fatalf("LoadProjectTasks projectID = %q, want proj-active", projectID)
+			}
+			return []SidebarTaskItem{{ID: "task-1", Title: "Ship sidebar fix", WorkStatus: "in_progress", TaskNumber: 1}}, nil
+		},
+	})
+
+	model = connectAndLoadSidebar(t, model)
+
+	gotProjects := model.workspace.existingProjects()
+	if len(gotProjects) != 1 || gotProjects[0].ID != "proj-active" || gotProjects[0].DisplayName != "Active Project" {
+		t.Fatalf("projects after connect = %+v, want active project", gotProjects)
+	}
+
+	model = pressRealtimeMsg(model, loadProjectTasksCmd("proj-active", model.runtimeHints, false)())
+	if task := model.workspace.tasks["task-1"]; task == nil || task.ProjectID != "proj-active" {
+		t.Fatalf("task-1 after project task load = %+v, want project-backed task record", task)
+	}
+}
+
+func TestFreshStartupMatchesRunningClientProjectListEX244(t *testing.T) {
+	t.Parallel()
+
+	runtimeHints := RuntimeHints{
+		LoadProjects: func(context.Context) ([]SidebarProjectItem, error) {
+			return []SidebarProjectItem{
+				{ID: "proj-alpha", DisplayName: "Alpha"},
+				{ID: "proj-beta", DisplayName: "Beta"},
+			}, nil
+		},
+	}
+
+	running := NewModelWithRuntime(DefaultState(), runtimeHints)
+	running.workspace.rebuildSidebar(
+		"org-old",
+		nil,
+		[]SidebarProjectItem{{ID: "proj-stale", DisplayName: "Stale"}},
+	)
+	running = connectAndLoadSidebar(t, running)
+
+	fresh := NewModelWithRuntime(DefaultState(), runtimeHints)
+	fresh = connectAndLoadSidebar(t, fresh)
+
+	runningProjects := running.workspace.existingProjects()
+	freshProjects := fresh.workspace.existingProjects()
+	if len(runningProjects) != len(freshProjects) {
+		t.Fatalf("project counts differ: running=%+v fresh=%+v", runningProjects, freshProjects)
+	}
+	for i := range freshProjects {
+		if runningProjects[i] != freshProjects[i] {
+			t.Fatalf("project[%d] mismatch: running=%+v fresh=%+v", i, runningProjects[i], freshProjects[i])
+		}
+	}
+}
+
+func TestSidebarEmptyProjectsPayloadKeepsTaskBackedProjectEX244(t *testing.T) {
+	t.Parallel()
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjects: func(context.Context) ([]SidebarProjectItem, error) {
+			return nil, nil
+		},
+	})
+	model.workspace.selectedProjectID = "proj-active"
+	model.workspace.selectedProject = &ProjectDetail{ID: "proj-active", DisplayName: "Active Project"}
+	model.workspace.tasks["task-1"] = &taskRecord{
+		ID:        "task-1",
+		ProjectID: "proj-active",
+		Title:     "Ship sidebar fix",
+		Status:    "in_progress",
+	}
+
+	model = connectAndLoadSidebar(t, model)
+
+	gotProjects := model.workspace.existingProjects()
+	if len(gotProjects) != 1 || gotProjects[0].ID != "proj-active" || gotProjects[0].DisplayName != "Active Project" {
+		t.Fatalf("projects after empty payload = %+v, want task-backed active project", gotProjects)
+	}
+	if got := model.statusMessage; got != "Project list returned empty while active project data exists — keeping known active projects." {
+		t.Fatalf("statusMessage = %q, want unexpected-empty warning", got)
+	}
+	if activity := strings.Join(model.ActivityEntries(), " | "); !strings.Contains(activity, "project list returned empty; preserving known active projects") {
+		t.Fatalf("activity missing unexpected-empty warning: %q", activity)
+	}
+}
+
+func connectAndLoadSidebar(t *testing.T, model Model) Model {
+	t.Helper()
+
+	updated, cmd := model.Update(ConnectionStateMsg{State: ConnectionConnected})
+	if cmd == nil {
+		t.Fatal("ConnectionConnected should schedule sidebar load")
+	}
+
+	next, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("updated model type = %T, want tui.Model", updated)
+	}
+	msg := cmd()
+	sidebarMsg, ok := msg.(sidebarDataLoadedMsg)
+	if !ok {
+		t.Fatalf("sidebar load cmd returned %T, want sidebarDataLoadedMsg", msg)
+	}
+
+	return pressRealtimeMsg(next, sidebarMsg)
+}
+
 func synthFrames(start, end int64) []string {
 	frames := make([]string, 0, end-start+1)
 	for seq := start; seq <= end; seq++ {
