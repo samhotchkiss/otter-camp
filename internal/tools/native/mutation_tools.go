@@ -21,6 +21,7 @@ import (
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 )
 
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
@@ -757,9 +758,18 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	}
 	previousStatus := strings.TrimSpace(current.WorkStatus)
 	statusChanged := false
+	decomposition := queueDecompositionResult{}
 	if status, ok := readString(input, "work_status"); ok && status != "" {
 		if taskStatusRequiresFlowTemplate(status) && current.FlowTemplateID == nil {
 			return map[string]any{"error": "task requires a flow template before it can be queued"}, nil
+		}
+		if strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
+			strings.EqualFold(strings.TrimSpace(status), "queued") {
+			decompResult, decompErr := e.applyQueueDecomposition(ctx, &current)
+			if decompErr != nil {
+				return nil, decompErr
+			}
+			decomposition = decompResult
 		}
 		if strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
 			strings.EqualFold(strings.TrimSpace(status), "queued") &&
@@ -788,13 +798,20 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			return nil, err
 		}
 	}
-	return map[string]any{
+	response := map[string]any{
 		"task": map[string]any{
 			"id":          updated.ID,
 			"task_number": updated.TaskNumber,
 			"work_status": updated.WorkStatus,
 		},
-	}, nil
+	}
+	if decomposition.applied {
+		response["decomposition"] = map[string]any{
+			"applied":        true,
+			"child_task_ids": uuidStringSlice(decomposition.childTaskIDs),
+		}
+	}
+	return response, nil
 }
 
 func (e *NativeToolExecutor) projectRequiresPMBeforeQueue(ctx context.Context, projectID uuid.UUID) bool {
@@ -878,6 +895,89 @@ func taskStatusRequiresFlowTemplate(status string) bool {
 	default:
 		return false
 	}
+}
+
+func strPtr(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func uuidStringSlice(ids []uuid.UUID) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, id.String())
+	}
+	return out
+}
+
+type queueDecompositionResult struct {
+	applied      bool
+	childTaskIDs []uuid.UUID
+}
+
+func (e *NativeToolExecutor) applyQueueDecomposition(ctx context.Context, taskRecord *repo.ProjectTask) (queueDecompositionResult, error) {
+	if taskRecord == nil {
+		return queueDecompositionResult{}, nil
+	}
+	if strings.TrimSpace(taskdecomp.ParsePrimaryDeliverable(taskRecord.Metadata)) != "" {
+		return queueDecompositionResult{}, nil
+	}
+	plan := taskdecomp.Analyze(taskRecord.Title, taskRecord.Description)
+	if !plan.RequiresDecomposition {
+		return queueDecompositionResult{}, nil
+	}
+
+	sourceDescription := strings.TrimSpace("")
+	if taskRecord.Description != nil {
+		sourceDescription = strings.TrimSpace(*taskRecord.Description)
+	}
+	actor := actorFromContext(ctx)
+
+	childTaskIDs := make([]uuid.UUID, 0, len(plan.ChildDeliverables))
+	for idx, deliverable := range plan.ChildDeliverables {
+		childTitle := strings.TrimSpace(taskRecord.Title)
+		if childTitle == "" {
+			childTitle = taskRecord.ID.String()
+		}
+		childTitle = fmt.Sprintf("%s (Workstream %d)", childTitle, idx+2)
+
+		childMetadataRaw, err := json.Marshal(map[string]any{
+			"decomposition_parent_task_id": taskRecord.ID.String(),
+			"workstream_index":             idx + 2,
+		})
+		if err != nil {
+			return queueDecompositionResult{}, err
+		}
+
+		createdChild, err := e.tasks.Create(ctx, repo.ProjectTask{
+			OrganizationID:      taskRecord.OrganizationID,
+			ProjectID:           taskRecord.ProjectID,
+			Title:               childTitle,
+			Description:         strPtr(strings.TrimSpace(deliverable)),
+			WorkStatus:          "draft",
+			FlowTemplateID:      taskRecord.FlowTemplateID,
+			RequiresHumanReview: taskRecord.RequiresHumanReview,
+			Priority:            taskRecord.Priority,
+			CreatedByType:       actor.createdByType,
+			CreatedByID:         actor.createdByPtr,
+			Metadata:            json.RawMessage(childMetadataRaw),
+		})
+		if err != nil {
+			return queueDecompositionResult{}, err
+		}
+		childTaskIDs = append(childTaskIDs, createdChild.ID)
+	}
+
+	taskRecord.Description = strPtr(strings.TrimSpace(plan.PrimaryDeliverable))
+	taskRecord.Metadata = taskdecomp.ApplyMetadata(taskRecord.Metadata, plan, sourceDescription, childTaskIDs)
+
+	return queueDecompositionResult{
+		applied:      true,
+		childTaskIDs: childTaskIDs,
+	}, nil
 }
 
 func (e *NativeToolExecutor) handleTaskAddDependency(ctx context.Context, input map[string]any) (map[string]any, error) {

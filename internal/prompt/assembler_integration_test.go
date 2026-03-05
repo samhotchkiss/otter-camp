@@ -287,6 +287,74 @@ func TestPromptAssemblerIntegrationTaskScopeIncludesTaskContext(t *testing.T) {
 	_ = reviewNode
 }
 
+func TestPromptAssemblerIntegrationTaskContextUsesDecomposedPrimaryDeliverable(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org := createPromptOrg(t, ctx, pool)
+	project := createPromptProject(t, ctx, pool, org.ID)
+	agent := createPromptAgent(t, ctx, pool, org.ID, "task agent")
+
+	template := createPromptFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	planNode := createPromptFlowNode(t, ctx, pool, template.ID, "Plan", 1)
+	implementNode := createPromptFlowNode(t, ctx, pool, template.ID, "Implement", 2)
+	createPromptFlowNode(t, ctx, pool, template.ID, "Review", 3)
+
+	taskRecord := createPromptTask(t, ctx, pool, org.ID, project.ID, template.ID, implementNode.ID)
+	fullDescription := strings.Join([]string{
+		"Coordinate full migration planning for blog content and media.",
+		"Rebuild taxonomy alignment for tags and categories.",
+		"Validate analytics parity after URL remapping.",
+	}, " ")
+	taskRecord.Description = &fullDescription
+	taskRecord.Metadata = json.RawMessage(`{
+		"decomposition": {
+			"applied": true,
+			"primary_deliverable": "Coordinate full migration planning for blog content and media.",
+			"source_description": "Coordinate full migration planning for blog content and media. Rebuild taxonomy alignment for tags and categories. Validate analytics parity after URL remapping."
+		}
+	}`)
+	if _, err := repo.NewProjectTaskRepo(pool).Update(ctx, taskRecord); err != nil {
+		t.Fatalf("update task metadata for decomposition: %v", err)
+	}
+
+	if _, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  planNode.ID,
+		VisitNumber: 1,
+		Status:      "completed",
+	}); err != nil {
+		t.Fatalf("create completed flow execution: %v", err)
+	}
+	if _, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  implementNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+	}); err != nil {
+		t.Fatalf("create active flow execution: %v", err)
+	}
+
+	session := createPromptSession(t, ctx, pool, org.ID, "project_task", taskRecord.ID)
+	seedPromptMessages(t, ctx, pool, session.ID, 1)
+
+	assembler, err := NewPromptAssembler(AssemblerOptions{Pool: pool})
+	if err != nil {
+		t.Fatalf("NewPromptAssembler: %v", err)
+	}
+	assembled, err := assembler.Assemble(ctx, AssemblyInput{SessionID: session.ID, AgentID: agent.ID})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+
+	if !strings.Contains(assembled.SystemPrompt, "Description: Coordinate full migration planning for blog content and media.") {
+		t.Fatalf("expected focused decomposed description, prompt=%s", assembled.SystemPrompt)
+	}
+	if strings.Contains(assembled.SystemPrompt, "Rebuild taxonomy alignment for tags and categories.") {
+		t.Fatalf("prompt includes unrelated decomposed workstream context: %s", assembled.SystemPrompt)
+	}
+}
+
 func createPromptOrg(t *testing.T, ctx context.Context, pool *pgxpool.Pool) repo.Organization {
 	t.Helper()
 	item, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{Slug: "prompt-org-" + uuid.NewString()[:8], DisplayName: "Prompt Org"})

@@ -21,6 +21,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 )
 
@@ -840,11 +841,15 @@ func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uu
 	if err != nil {
 		return projectTaskContext{}, err
 	}
+	taskDescription := strings.TrimSpace(derefString(taskRecord.Description))
+	if focused := strings.TrimSpace(taskdecomp.ParsePrimaryDeliverable(taskRecord.Metadata)); focused != "" {
+		taskDescription = focused
+	}
 	out := projectTaskContext{
 		taskTitle:          strings.TrimSpace(taskRecord.Title),
 		taskNumber:         taskRecord.TaskNumber,
 		taskStatus:         strings.TrimSpace(taskRecord.WorkStatus),
-		taskDescription:    strings.TrimSpace(derefString(taskRecord.Description)),
+		taskDescription:    taskDescription,
 		acceptanceCriteria: parseTaskAcceptanceCriteria(taskRecord.Metadata),
 		flowNodeID:         taskRecord.CurrentFlowNodeID,
 		completedFlowSteps: make([]string, 0),

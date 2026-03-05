@@ -329,10 +329,12 @@ func TestEmailComposeCreatesDraftActionReviewInboxItem(t *testing.T) {
 
 type mockTaskRepo struct {
 	task                repo.ProjectTask
+	createdTasks        []repo.ProjectTask
 	getByIDErr          error
 	setFlowNodeErr      error
 	updateStatusErr     error
 	updateErr           error
+	createCalls         int
 	setFlowNodeCalls    int
 	updateStatusCalls   int
 	updateCalls         int
@@ -341,8 +343,17 @@ type mockTaskRepo struct {
 	lastUpdatedTaskStat string
 }
 
-func (m *mockTaskRepo) Create(context.Context, repo.ProjectTask) (repo.ProjectTask, error) {
-	return repo.ProjectTask{}, errors.New("not implemented")
+func (m *mockTaskRepo) Create(_ context.Context, task repo.ProjectTask) (repo.ProjectTask, error) {
+	m.createCalls++
+	created := task
+	if created.ID == uuid.Nil {
+		created.ID = uuid.New()
+	}
+	if created.TaskNumber == 0 {
+		created.TaskNumber = 100 + m.createCalls
+	}
+	m.createdTasks = append(m.createdTasks, created)
+	return created, nil
 }
 
 func (m *mockTaskRepo) GetByID(context.Context, uuid.UUID) (repo.ProjectTask, error) {
@@ -504,6 +515,61 @@ func TestTaskUpdateAllowsDraftToQueuedWithFlowTemplate(t *testing.T) {
 	}
 	if tasks.updateCalls != 1 {
 		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
+	}
+}
+
+func TestTaskUpdateQueuedOversizedTaskCreatesDecomposedChildWorkUnits(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	description := strings.Join([]string{
+		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
+		"- Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage.",
+		"- Rebuild taxonomy/tag mappings and verify inbound URL parity against production analytics snapshots.",
+	}, "\n")
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			Title:          "Blog migration epic",
+			Description:    &description,
+			WorkStatus:     "draft",
+			FlowTemplateID: &flowTemplateID,
+			Metadata:       json.RawMessage(`{}`),
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if tasks.updateCalls != 1 {
+		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
+	}
+	if tasks.createCalls < 1 {
+		t.Fatalf("create calls = %d, want >= 1", tasks.createCalls)
+	}
+	if tasks.task.Description == nil || !strings.Contains(*tasks.task.Description, "Migrate all legacy markdown posts") {
+		t.Fatalf("updated description = %v, want focused primary deliverable", tasks.task.Description)
+	}
+	decomp, ok := out["decomposition"].(map[string]any)
+	if !ok {
+		t.Fatalf("decomposition output = %T, want map[string]any", out["decomposition"])
+	}
+	if applied, _ := decomp["applied"].(bool); !applied {
+		t.Fatalf("decomposition.applied = %v, want true", decomp["applied"])
+	}
+	childIDs, ok := decomp["child_task_ids"].([]string)
+	if !ok {
+		t.Fatalf("decomposition.child_task_ids = %T, want []string", decomp["child_task_ids"])
+	}
+	if len(childIDs) != tasks.createCalls {
+		t.Fatalf("decomposition.child_task_ids len = %d, want %d", len(childIDs), tasks.createCalls)
 	}
 }
 
