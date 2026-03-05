@@ -39,6 +39,7 @@ var (
 	ErrRequiresHumanApproval      = errors.New("task requires human approval before queueing")
 	ErrFlowTemplateRequired       = errors.New("task requires a flow template before it can be queued")
 	ErrFlowTemplateReviewRequired = errors.New("flow template must include at least one review node")
+	ErrInvalidBlocksScope         = errors.New("blocks_scope must be one of: none, all")
 	ErrDoneRequiresTerminalFlow   = errors.New("task can only be marked done when its flow reaches a terminal node")
 	ErrTransitionTargetRequired   = errors.New("target status is required")
 	ErrActorTypeInvalidForAction  = errors.New("actor_type is invalid for action")
