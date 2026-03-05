@@ -180,6 +180,30 @@ type TUIPerformanceMetrics struct {
 	MemoryBoundBytes        uint64
 }
 
+type taskPaneTab string
+
+const (
+	taskPaneTabJournal    taskPaneTab = "journal"
+	taskPaneTabEvents     taskPaneTab = "events"
+	taskPaneTabDiscussion taskPaneTab = "discussion"
+	taskPaneTabTrace      taskPaneTab = "trace"
+)
+
+type taskPaneMode string
+
+const (
+	taskPaneModeCompose  taskPaneMode = "compose"
+	taskPaneModeNavigate taskPaneMode = "navigate"
+)
+
+type cachedChatSession struct {
+	messages             []ChatMessage
+	messageIndex         map[string]int
+	toolCallExpanded     map[string]map[string]bool
+	toolCallMessageIndex map[string]int
+	historyLoading       bool
+}
+
 type Model struct {
 	state            UIState
 	focus            Panel
@@ -229,6 +253,11 @@ type Model struct {
 	turnsSynced          bool   // true once ReplaySyncedMsg received; gates live turn events
 	activeScope          ChatScope
 	activeSession        string
+	sessionCache         map[string]cachedChatSession
+	taskPaneTab          taskPaneTab
+	taskPaneMode         taskPaneMode
+	taskPaneTaskID       string
+	taskPaneScroll       map[string]int
 	localMessageSeq      int
 
 	// Settings dashboard state
@@ -280,6 +309,10 @@ func NewModelWithRuntime(state UIState, runtime RuntimeHints) Model {
 		toolCallMessageIndex: map[string]int{},
 		activeScope:          scope,
 		activeSession:        strings.TrimSpace(normalized.LastActiveChatSession),
+		sessionCache:         map[string]cachedChatSession{},
+		taskPaneTab:          taskPaneTabDiscussion,
+		taskPaneMode:         taskPaneModeCompose,
+		taskPaneScroll:       map[string]int{},
 		perfMetrics: TUIPerformanceMetrics{
 			MemoryBoundBytes: runtime.memoryBoundBytes(),
 		},
@@ -327,6 +360,319 @@ func (m Model) Init() tea.Cmd {
 		return nil
 	}
 	return tea.Batch(commands...)
+}
+
+func (m Model) activeTaskRecord() *taskRecord {
+	return m.workspace.tasks[m.workspace.selectedTaskID]
+}
+
+func (m Model) taskPaneEnabled() bool {
+	return m.workspace.mainView == ViewTask
+}
+
+func (m Model) taskPaneNavigationActive() bool {
+	return m.taskPaneEnabled() && m.focus == ChatPanel && m.taskPaneMode == taskPaneModeNavigate
+}
+
+func (m Model) taskDiscussionSessionID(task *taskRecord) string {
+	if task == nil {
+		return ""
+	}
+	switch {
+	case strings.TrimSpace(task.DiscussionSessionID) != "":
+		return strings.TrimSpace(task.DiscussionSessionID)
+	case strings.TrimSpace(m.workspace.taskDiscussionSessionID(task.ID)) != "":
+		return strings.TrimSpace(m.workspace.taskDiscussionSessionID(task.ID))
+	default:
+		return ""
+	}
+}
+
+func (m Model) taskExecutionSessionID(task *taskRecord) string {
+	if task == nil {
+		return ""
+	}
+	switch {
+	case strings.TrimSpace(task.ActiveExecutionID) != "":
+		return strings.TrimSpace(task.ActiveExecutionID)
+	case strings.TrimSpace(task.RecentExecutionID) != "":
+		return strings.TrimSpace(task.RecentExecutionID)
+	case strings.TrimSpace(task.SessionID) != "":
+		return strings.TrimSpace(task.SessionID)
+	default:
+		return ""
+	}
+}
+
+func (m Model) defaultTaskPaneTab(task *taskRecord) taskPaneTab {
+	if strings.TrimSpace(m.taskExecutionSessionID(task)) != "" {
+		return taskPaneTabJournal
+	}
+	return taskPaneTabDiscussion
+}
+
+func (m Model) taskPaneScrollKey(taskID string, scope ChatScope, tab taskPaneTab) string {
+	if !m.taskPaneEnabled() {
+		return ""
+	}
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:%s:%s", taskID, scope, tab)
+}
+
+func (m Model) currentTaskPaneScrollKey() string {
+	return m.taskPaneScrollKey(m.workspace.selectedTaskID, m.activeScope, m.taskPaneTab)
+}
+
+func (m *Model) rememberTaskPaneScroll() {
+	if key := m.currentTaskPaneScrollKey(); key != "" {
+		m.taskPaneScroll[key] = m.chatScrollOffset
+	}
+}
+
+func (m *Model) rememberTaskPaneScrollFor(taskID string, scope ChatScope, tab taskPaneTab) {
+	if key := m.taskPaneScrollKey(taskID, scope, tab); key != "" {
+		m.taskPaneScroll[key] = m.chatScrollOffset
+	}
+}
+
+func (m *Model) restoreTaskPaneScroll() {
+	if key := m.currentTaskPaneScrollKey(); key != "" {
+		m.chatScrollOffset = m.taskPaneScroll[key]
+		return
+	}
+	m.chatScrollOffset = 0
+}
+
+func (m *Model) restoreTaskPaneScrollFor(taskID string, scope ChatScope, tab taskPaneTab) {
+	if key := m.taskPaneScrollKey(taskID, scope, tab); key != "" {
+		m.chatScrollOffset = m.taskPaneScroll[key]
+		return
+	}
+	m.chatScrollOffset = 0
+}
+
+func (m *Model) saveActiveSessionState() {
+	sessionID := strings.TrimSpace(m.activeSession)
+	if sessionID == "" {
+		return
+	}
+	m.sessionCache[sessionID] = cachedChatSession{
+		messages:             m.chatMessages,
+		messageIndex:         m.chatMessageIndex,
+		toolCallExpanded:     m.toolCallExpanded,
+		toolCallMessageIndex: m.toolCallMessageIndex,
+		historyLoading:       m.chatHistoryLoading,
+	}
+}
+
+func (m *Model) restoreSessionState(sessionID string) bool {
+	state, ok := m.sessionCache[strings.TrimSpace(sessionID)]
+	if !ok {
+		return false
+	}
+	m.chatMessages = state.messages
+	m.chatMessageIndex = state.messageIndex
+	m.toolCallExpanded = state.toolCallExpanded
+	m.toolCallMessageIndex = state.toolCallMessageIndex
+	m.chatHistoryLoading = state.historyLoading
+	return true
+}
+
+func (m *Model) clearVisibleSessionState() {
+	m.chatMessages = nil
+	m.chatHistoryLoading = false
+	m.chatMessageIndex = make(map[string]int)
+	m.toolCallExpanded = map[string]map[string]bool{}
+	m.toolCallMessageIndex = make(map[string]int)
+}
+
+func (m Model) taskPaneSessionID(task *taskRecord, scope ChatScope, tab taskPaneTab) string {
+	switch scope {
+	case ScopeTask:
+		switch tab {
+		case taskPaneTabDiscussion:
+			return m.taskDiscussionSessionID(task)
+		case taskPaneTabJournal, taskPaneTabTrace, taskPaneTabEvents:
+			return m.taskExecutionSessionID(task)
+		default:
+			return m.taskDiscussionSessionID(task)
+		}
+	case ScopeProject:
+		if projectSessionID := m.workspace.projectSessionID(m.workspace.selectedProjectID); looksLikeUUID(projectSessionID) {
+			return projectSessionID
+		}
+		if looksLikeUUID(m.workspace.selectedProjectID) {
+			return "session-project-" + m.workspace.selectedProjectID
+		}
+		if strings.TrimSpace(m.workspace.activeSessionID) != "" {
+			return strings.TrimSpace(m.workspace.activeSessionID)
+		}
+		return sessionForScope(scope)
+	default:
+		if strings.TrimSpace(m.workspace.activeSessionID) != "" {
+			return strings.TrimSpace(m.workspace.activeSessionID)
+		}
+		return sessionForScope(scope)
+	}
+}
+
+func (m *Model) switchVisibleSession(sessionID string, preserveTurn bool) tea.Cmd {
+	target := strings.TrimSpace(sessionID)
+	current := strings.TrimSpace(m.activeSession)
+	if strings.EqualFold(current, target) {
+		if looksLikeUUID(target) && m.runtimeHints.LoadChatHistory != nil {
+			return loadChatHistoryCmd(target, m.runtimeHints.LoadChatHistory)
+		}
+		return nil
+	}
+
+	if current != "" {
+		m.saveActiveSessionState()
+	}
+	if !preserveTurn {
+		m.clearTurnIfSwitchingSession(target)
+	}
+	m.activeSession = target
+	if target != "" {
+		m.state.LastActiveChatSession = target
+	}
+
+	restored := false
+	if target != "" {
+		restored = m.restoreSessionState(target)
+	} else {
+		m.clearVisibleSessionState()
+	}
+
+	if looksLikeUUID(target) && m.runtimeHints.LoadChatHistory != nil {
+		if !restored {
+			m.clearVisibleSessionState()
+			m.chatHistoryLoading = true
+		}
+		return loadChatHistoryCmd(target, m.runtimeHints.LoadChatHistory)
+	}
+	if !restored && target != "" {
+		m.clearVisibleSessionState()
+	}
+	return nil
+}
+
+func (m *Model) applyTaskPaneSelection(task *taskRecord, scope ChatScope, tab taskPaneTab, force bool) tea.Cmd {
+	if task == nil {
+		return nil
+	}
+	prevTaskID := strings.TrimSpace(m.taskPaneTaskID)
+	if prevTaskID == "" {
+		prevTaskID = strings.TrimSpace(m.workspace.selectedTaskID)
+	}
+	m.rememberTaskPaneScrollFor(prevTaskID, m.activeScope, m.taskPaneTab)
+	if force || m.taskPaneTaskID != task.ID {
+		m.taskPaneTaskID = task.ID
+	}
+	if scope != ScopeTask && tab != taskPaneTabDiscussion {
+		tab = taskPaneTabDiscussion
+	}
+	m.activeScope = scope
+	m.taskPaneTab = tab
+	cmd := m.switchVisibleSession(m.taskPaneSessionID(task, m.activeScope, m.taskPaneTab), true)
+	m.restoreTaskPaneScrollFor(task.ID, m.activeScope, m.taskPaneTab)
+	return cmd
+}
+
+func (m *Model) syncTaskPaneSelection(force bool) tea.Cmd {
+	if !m.taskPaneEnabled() {
+		return nil
+	}
+	task := m.activeTaskRecord()
+	if task == nil {
+		return nil
+	}
+	nextTab := m.taskPaneTab
+	if force || m.taskPaneTaskID != task.ID {
+		nextTab = m.defaultTaskPaneTab(task)
+	}
+	return m.applyTaskPaneSelection(task, m.activeScope, nextTab, force)
+}
+
+func (m *Model) cycleTaskPaneTab(forward bool) tea.Cmd {
+	task := m.activeTaskRecord()
+	if task == nil {
+		return nil
+	}
+	order := []taskPaneTab{taskPaneTabJournal, taskPaneTabEvents, taskPaneTabDiscussion, taskPaneTabTrace}
+	index := 0
+	for i, tab := range order {
+		if tab == m.taskPaneTab {
+			index = i
+			break
+		}
+	}
+	if forward {
+		index = (index + 1) % len(order)
+	} else {
+		index = (index + len(order) - 1) % len(order)
+	}
+	next := order[index]
+	nextScope := m.activeScope
+	if next != taskPaneTabDiscussion {
+		nextScope = ScopeTask
+	}
+	return m.applyTaskPaneSelection(task, nextScope, next, false)
+}
+
+func (m *Model) cycleTaskPaneScope(forward bool) tea.Cmd {
+	task := m.activeTaskRecord()
+	if task == nil {
+		return nil
+	}
+	nextScope := cycleScope(m.activeScope, forward)
+	nextTab := m.taskPaneTab
+	if nextScope != ScopeTask && nextTab != taskPaneTabDiscussion {
+		nextTab = taskPaneTabDiscussion
+	}
+	return m.applyTaskPaneSelection(task, nextScope, nextTab, false)
+}
+
+func (m *Model) handleTaskPaneKey(key tea.KeyMsg) (bool, tea.Cmd) {
+	if m.focus != ChatPanel || !m.taskPaneEnabled() {
+		return false, nil
+	}
+	if m.taskPaneMode == taskPaneModeCompose {
+		if key.Type == tea.KeyEsc {
+			m.taskPaneMode = taskPaneModeNavigate
+			m.statusMessage = "Right pane navigation mode."
+			return true, nil
+		}
+		return false, nil
+	}
+
+	switch key.Type {
+	case tea.KeyEsc:
+		m.setFocus(MainPanel)
+		m.statusMessage = "Focus: " + panelLabel(m.focus)
+		return true, nil
+	case tea.KeyEnter:
+		m.taskPaneMode = taskPaneModeCompose
+		m.statusMessage = "Right pane composer ready."
+		return true, nil
+	case tea.KeyLeft:
+		return true, m.cycleTaskPaneTab(false)
+	case tea.KeyRight:
+		return true, m.cycleTaskPaneTab(true)
+	case tea.KeyUp:
+		return true, m.cycleTaskPaneScope(false)
+	case tea.KeyDown:
+		return true, m.cycleTaskPaneScope(true)
+	default:
+		if len(key.Runes) > 0 {
+			m.statusMessage = "Navigation mode: Enter composer, Esc main, ←/→ tabs, ↑/↓ scope."
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -585,6 +931,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		rec.Description = typed.Detail.Description
 		rec.SessionID = typed.Detail.SessionID
+		rec.DiscussionSessionID = typed.Detail.DiscussionSessionID
+		rec.ActiveExecutionID = typed.Detail.ActiveExecutionID
+		rec.RecentExecutionID = typed.Detail.RecentExecutionID
 		rec.TaskNumber = typed.Detail.TaskNumber
 		rec.Priority = typed.Detail.Priority
 		rec.AgentName = typed.Detail.AgentName
@@ -594,6 +943,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rec.FlowSteps = typed.Detail.FlowSteps
 		rec.SubtaskItems = typed.Detail.SubtaskItems
 		rec.Dependencies = typed.Detail.Dependencies
+		rec.Events = append([]TaskEvent(nil), typed.Detail.Events...)
 		// Format task events into human-readable history strings
 		if len(typed.Detail.Events) > 0 {
 			hist := make([]string, 0, len(typed.Detail.Events))
@@ -635,23 +985,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.workspace.sessionToTaskLabel[sid] = label
 		}
+		if sid := strings.TrimSpace(rec.DiscussionSessionID); sid != "" && rec.Title != "" {
+			label := strings.TrimSpace(rec.Title)
+			if rec.TaskNumber > 0 {
+				label = fmt.Sprintf("OC-%d: %s", rec.TaskNumber, label)
+			}
+			m.workspace.sessionToTaskLabel[sid] = label
+		}
 		// When the task detail arrives with a session ID and we're currently
 		// viewing this task in scope=task, load the task's chat history.
 		// This handles the race where switchScope fires before the detail
 		// loads and finds no session ID yet.
-		if sid := strings.TrimSpace(typed.Detail.SessionID); sid != "" &&
-			looksLikeUUID(sid) &&
-			m.activeScope == ScopeTask &&
-			m.workspace.selectedTaskID == typed.Detail.ID &&
-			m.activeSession != sid &&
-			m.runtimeHints.LoadChatHistory != nil {
-			m.clearTurnIfSwitchingSession(sid)
-			m.activeSession = sid
-			m.chatMessages = nil
-			m.chatHistoryLoading = true
-			m.chatMessageIndex = make(map[string]int)
-			m.chatScrollOffset = 0
-			return m, loadChatHistoryCmd(sid, m.runtimeHints.LoadChatHistory)
+		if m.workspace.mainView == ViewTask &&
+			m.workspace.selectedTaskID == typed.Detail.ID {
+			if cmd := m.syncTaskPaneSelection(m.taskPaneTaskID != typed.Detail.ID); cmd != nil {
+				return m, cmd
+			}
 		}
 		return m, nil
 	case inboxItemsLoadedMsg:
@@ -1262,6 +1611,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	m.applyResponsiveLayout()
+	if handled, cmd := m.handleTaskPaneKey(key); handled {
+		return m, cmd
+	}
 	order := m.focusOrder()
 
 	switch key.Type {
@@ -3900,10 +4252,10 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 	case 'c':
 		// EX-373: 'c' is not a documented shortcut, but users familiar with vim/tmux
 		// may press it expecting to cancel the current agent turn. Redirect to the
-		// actual cancel shortcut (Esc in chat panel) or :cancel-turn command.
+		// explicit cancel command path.
 		if m.focus != ChatPanel {
 			if m.activeTurn {
-				m.statusMessage = "c is not bound. Press Esc in chat (3 or Tab) or type :cancel-turn to cancel the turn."
+				m.statusMessage = "c is not bound. Press 3 or Tab to focus chat, then type :cancel to cancel the turn."
 			} else {
 				m.statusMessage = "c is not bound here. Press ? for help or : for commands."
 			}
@@ -4027,9 +4379,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			return true, nil
 		}
 	case 'C':
-		// EX-382: capital C — not bound. Users may mean lowercase 'c' (cancel-turn hint).
+		// EX-382: capital C — not bound. Users may mean lowercase 'c' (cancel hint).
 		if m.focus != ChatPanel {
-			m.statusMessage = "C is not bound. Press c (lowercase) or use :cancel-turn for active-turn hints."
+			m.statusMessage = "C is not bound. Press c (lowercase) or use :cancel for active-turn hints."
 			return true, nil
 		}
 	case 'E':
@@ -5866,8 +6218,8 @@ func (m Model) StreamDegraded() bool             { return m.streamDegraded }
 func (m Model) ActiveTurn() bool     { return m.activeTurn }
 func (m Model) ChatScope() ChatScope { return m.activeScope }
 func (m Model) ActiveChatSession() string {
-	if strings.TrimSpace(m.activeSession) != "" {
-		return m.activeSession
+	if strings.TrimSpace(m.activeSession) != "" || m.taskPaneEnabled() {
+		return strings.TrimSpace(m.activeSession)
 	}
 	return m.workspace.activeSessionID
 }
@@ -6117,6 +6469,13 @@ func (m *Model) sessionMatchesActive(sessionID string) bool {
 	return strings.EqualFold(strings.TrimSpace(sessionID), m.activeTurnSessionID)
 }
 
+func (m *Model) sessionMatchesVisible(sessionID string) bool {
+	if strings.TrimSpace(sessionID) == "" {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(sessionID), strings.TrimSpace(m.activeSession))
+}
+
 // applyChatEnvelope processes a chat SSE event and returns a tea.Cmd when one
 // is needed (e.g. to send a promoted queued message to the server — EX-163).
 func (m *Model) applyChatEnvelope(event EventEnvelope) tea.Cmd {
@@ -6138,6 +6497,9 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) tea.Cmd {
 		if !m.activeTurn {
 			return nil
 		}
+		if !m.sessionMatchesVisible(payload.SessionID) {
+			return nil
+		}
 		if !m.sessionMatchesActive(payload.SessionID) {
 			return nil
 		}
@@ -6157,6 +6519,9 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) tea.Cmd {
 			return nil
 		}
 		if strings.EqualFold(strings.TrimSpace(payload.Role), "tool_result") {
+			if !m.sessionMatchesVisible(payload.SessionID) {
+				return nil
+			}
 			m.attachToolResult(strings.TrimSpace(payload.ToolCallID), payload.Content)
 			return nil
 		}
@@ -6173,6 +6538,12 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) tea.Cmd {
 		// completeTurnAndPromoteQueue prematurely, resetting activeTurn=false
 		// before the agent turn even begins — which drops streaming chunks.
 		if strings.EqualFold(strings.TrimSpace(payload.Role), "user") {
+			return nil
+		}
+		if !m.sessionMatchesVisible(payload.SessionID) {
+			if strings.EqualFold(strings.TrimSpace(payload.Role), "assistant") {
+				m.workspace.markSessionUnread(payload.SessionID)
+			}
 			return nil
 		}
 		if !m.sessionMatchesActive(payload.SessionID) {
@@ -6210,6 +6581,9 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) tea.Cmd {
 		if decodePayload(event.Payload, &payload) && !m.sessionMatchesActive(payload.SessionID) {
 			return nil
 		}
+		if !m.sessionMatchesVisible(payload.SessionID) {
+			return nil
+		}
 		m.activeTurn = true
 		// EX-127: capture activeTurnSessionID from the event payload immediately
 		// so cross-session SSE events are filtered correctly from turn start,
@@ -6226,6 +6600,13 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) tea.Cmd {
 			SessionID string `json:"session_id"`
 		}
 		_ = decodePayload(event.Payload, &payload)
+		if !m.sessionMatchesVisible(payload.SessionID) {
+			if m.sessionMatchesActive(payload.SessionID) {
+				m.activeTurn = false
+				m.activeTurnSessionID = ""
+			}
+			return nil
+		}
 		if !m.sessionMatchesActive(payload.SessionID) {
 			return nil
 		}
@@ -6242,6 +6623,13 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) tea.Cmd {
 			SessionID string `json:"session_id"`
 		}
 		_ = decodePayload(event.Payload, &payload)
+		if !m.sessionMatchesVisible(payload.SessionID) {
+			if m.sessionMatchesActive(payload.SessionID) {
+				m.activeTurn = false
+				m.activeTurnSessionID = ""
+			}
+			return nil
+		}
 		if !m.sessionMatchesActive(payload.SessionID) {
 			return nil
 		}
@@ -6273,6 +6661,10 @@ func (m *Model) applyChatEnvelope(event EventEnvelope) tea.Cmd {
 			return nil
 		}
 		if !m.activeTurn {
+			return nil
+		}
+		if m.activeTurnSessionID != "" &&
+			!strings.EqualFold(strings.TrimSpace(m.activeSession), m.activeTurnSessionID) {
 			return nil
 		}
 		index := m.ensureMessage(payload.MessageID, "assistant", event.OccurredAt)
@@ -6542,15 +6934,26 @@ func decodePayload(raw json.RawMessage, out any) bool {
 func (m *Model) switchScope(next ChatScope) tea.Cmd {
 	prevScope := m.activeScope
 	m.activeScope = next
+	if m.taskPaneEnabled() && next != ScopeTask && m.taskPaneTab != taskPaneTabDiscussion {
+		m.taskPaneTab = taskPaneTabDiscussion
+	}
 	var sessionID string
 	switch next {
 	case ScopeOrg:
-		sessionID = m.workspace.activeSessionID
-		if sessionID == "" {
-			sessionID = sessionForScope(next)
+		if m.taskPaneEnabled() {
+			sessionID = m.taskPaneSessionID(m.activeTaskRecord(), next, m.taskPaneTab)
+		} else {
+			sessionID = m.workspace.activeSessionID
+			if sessionID == "" {
+				sessionID = sessionForScope(next)
+			}
 		}
 	case ScopeTask:
-		sessionID = m.workspace.selectedTaskSessionID()
+		if m.taskPaneEnabled() {
+			sessionID = m.taskPaneSessionID(m.activeTaskRecord(), next, m.taskPaneTab)
+		} else {
+			sessionID = m.workspace.selectedTaskSessionID()
+		}
 		// EX-207: if no task session is available, let the user know so they
 		// understand why the chat panel shows a placeholder instead of messages.
 		if sessionID == "" {
@@ -6558,18 +6961,22 @@ func (m *Model) switchScope(next ChatScope) tea.Cmd {
 			sessionID = sessionForScope(next)
 		}
 	case ScopeProject:
-		// Prefer the project's own chat session if one exists; fall back to
-		// requesting the resolver to create/find one by scope_id.
-		if projSess := m.workspace.projectSessionID(m.workspace.selectedProjectID); looksLikeUUID(projSess) {
-			sessionID = projSess
-		} else if looksLikeUUID(m.workspace.selectedProjectID) {
-			// No sidebar session node found; pass project ID so the resolver
-			// can find or create an appropriate project-scoped session.
-			sessionID = "session-project-" + m.workspace.selectedProjectID
+		if m.taskPaneEnabled() {
+			sessionID = m.taskPaneSessionID(m.activeTaskRecord(), next, m.taskPaneTab)
 		} else {
-			sessionID = m.workspace.activeSessionID
-			if sessionID == "" {
-				sessionID = sessionForScope(next)
+			// Prefer the project's own chat session if one exists; fall back to
+			// requesting the resolver to create/find one by scope_id.
+			if projSess := m.workspace.projectSessionID(m.workspace.selectedProjectID); looksLikeUUID(projSess) {
+				sessionID = projSess
+			} else if looksLikeUUID(m.workspace.selectedProjectID) {
+				// No sidebar session node found; pass project ID so the resolver
+				// can find or create an appropriate project-scoped session.
+				sessionID = "session-project-" + m.workspace.selectedProjectID
+			} else {
+				sessionID = m.workspace.activeSessionID
+				if sessionID == "" {
+					sessionID = sessionForScope(next)
+				}
 			}
 		}
 		if m.workspace.selectedProjectID == "" {
@@ -6590,6 +6997,9 @@ func (m *Model) switchScope(next ChatScope) tea.Cmd {
 		} else {
 			m.statusMessage = fmt.Sprintf("Scope switched to %s.", next)
 		}
+	}
+	if m.taskPaneEnabled() {
+		return m.switchVisibleSession(sessionID, false)
 	}
 	if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
 		// EX-181: clear stale messages before loading so the chat panel shows
@@ -6846,6 +7256,9 @@ func (m *Model) setFocus(panel Panel) {
 	m.focus = panel
 	if panel == SidebarPanel {
 		m.sidebarVisible = true
+	}
+	if panel == ChatPanel && m.taskPaneEnabled() {
+		m.taskPaneMode = taskPaneModeCompose
 	}
 	if m.sizeClass == SizeS && panel != SidebarPanel {
 		m.sidebarVisible = false
@@ -7372,7 +7785,7 @@ func (m Model) commandFallbackHelp() string {
 		// EX-155/EX-228/EX-246: include full command set + Tab hint. Note: ? is NOT
 		// listed because in command mode keypresses go into the command buffer, not to
 		// the ? shortcut. Use :help or Esc+? to reach the keybinding reference.
-		return "Tab autocomplete  ·  :frank · :dashboard · :project · :task · :inbox · :agents · :activity · :merges · :schedules · :scope · :focus · :send · :cancel-turn · :help · :quit  ·  Esc cancel"
+		return "Tab autocomplete  ·  :frank · :dashboard · :project · :task · :inbox · :agents · :activity · :merges · :schedules · :scope · :focus · :send · :cancel · :help · :quit  ·  Esc cancel"
 	}
 	switch m.focus {
 	case SidebarPanel:
@@ -7439,12 +7852,15 @@ func (m Model) commandFallbackHelp() string {
 				break
 			}
 		}
-		return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · Shift-Tab scope · Esc cancel turn · : commands · ? help"
+		if m.taskPaneEnabled() {
+			return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · Shift-Tab scope · Esc right-pane nav · :cancel turn · ? help"
+		}
+		return "Enter send · Alt-Enter newline · PgUp/PgDn scroll · Shift-Tab scope · :cancel turn · : commands · ? help"
 	}
 	if m.runtimeHints.ModifierReliabilityUncertain {
-		return "tmux-safe: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | :quit"
+		return "tmux-safe: :focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel | :quit"
 	}
-	return ":focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel-turn | PgUp/PgDn scroll | :quit"
+	return ":focus sidebar|main|chat | :frank | :dashboard/:project/:task/:inbox | :send | :cancel | PgUp/PgDn scroll | :quit"
 }
 
 // viewNavLabel returns a human-readable status message label for main view navigation.
