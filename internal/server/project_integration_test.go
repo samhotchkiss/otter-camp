@@ -125,6 +125,118 @@ func TestProjectHTTPCRUDAndRBAC(t *testing.T) {
 	}
 }
 
+func TestProjectHTTPListStatusFiltersAfterArchive(t *testing.T) {
+	testServer, _, adminUser, _ := newProjectTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	createArchivedTarget := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects", map[string]any{
+		"slug":          "archive-target",
+		"display_name":  "Archive Target",
+		"delivery_mode": "gated",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if createArchivedTarget.StatusCode != http.StatusCreated {
+		t.Fatalf("create archive target status = %d, want %d body=%s", createArchivedTarget.StatusCode, http.StatusCreated, string(createArchivedTarget.Body))
+	}
+	archivedTargetID := jsonPathString(t, createArchivedTarget.Body, "data", "id")
+
+	createStillActive := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects", map[string]any{
+		"slug":          "still-active",
+		"display_name":  "Still Active",
+		"delivery_mode": "gated",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if createStillActive.StatusCode != http.StatusCreated {
+		t.Fatalf("create still-active status = %d, want %d body=%s", createStillActive.StatusCode, http.StatusCreated, string(createStillActive.Body))
+	}
+	stillActiveID := jsonPathString(t, createStillActive.Body, "data", "id")
+
+	archivedResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+archivedTargetID+"/archive", map[string]any{}, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if archivedResp.StatusCode != http.StatusOK {
+		t.Fatalf("archive status = %d, want %d body=%s", archivedResp.StatusCode, http.StatusOK, string(archivedResp.Body))
+	}
+	if got := jsonPathString(t, archivedResp.Body, "data", "status"); got != "archived" {
+		t.Fatalf("archive response status = %q, want %q body=%s", got, "archived", string(archivedResp.Body))
+	}
+
+	defaultList := mustJSON(t, http.MethodGet, testServer.URL+"/v1/projects", nil, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if defaultList.StatusCode != http.StatusOK {
+		t.Fatalf("default list status = %d, want %d body=%s", defaultList.StatusCode, http.StatusOK, string(defaultList.Body))
+	}
+	defaultItems, ok := jsonPathValue(t, defaultList.Body, "data").([]any)
+	if !ok {
+		t.Fatalf("default list data is not an array body=%s", string(defaultList.Body))
+	}
+	if len(defaultItems) != 1 {
+		t.Fatalf("default list count = %d, want 1 body=%s", len(defaultItems), string(defaultList.Body))
+	}
+	if got := jsonPathString(t, defaultList.Body, "data", "0", "id"); got != stillActiveID {
+		t.Fatalf("default list first id = %q, want %q body=%s", got, stillActiveID, string(defaultList.Body))
+	}
+
+	archivedList := mustJSON(t, http.MethodGet, testServer.URL+"/v1/projects?status=archived", nil, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if archivedList.StatusCode != http.StatusOK {
+		t.Fatalf("archived list status = %d, want %d body=%s", archivedList.StatusCode, http.StatusOK, string(archivedList.Body))
+	}
+	archivedItems, ok := jsonPathValue(t, archivedList.Body, "data").([]any)
+	if !ok {
+		t.Fatalf("archived list data is not an array body=%s", string(archivedList.Body))
+	}
+	if len(archivedItems) != 1 {
+		t.Fatalf("archived list count = %d, want 1 body=%s", len(archivedItems), string(archivedList.Body))
+	}
+	if got := jsonPathString(t, archivedList.Body, "data", "0", "id"); got != archivedTargetID {
+		t.Fatalf("archived list first id = %q, want %q body=%s", got, archivedTargetID, string(archivedList.Body))
+	}
+	if got := jsonPathString(t, archivedList.Body, "data", "0", "status"); got != "archived" {
+		t.Fatalf("archived list first status = %q, want %q body=%s", got, "archived", string(archivedList.Body))
+	}
+
+	allList := mustJSON(t, http.MethodGet, testServer.URL+"/v1/projects?status=all", nil, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if allList.StatusCode != http.StatusOK {
+		t.Fatalf("all list status = %d, want %d body=%s", allList.StatusCode, http.StatusOK, string(allList.Body))
+	}
+	allItems, ok := jsonPathValue(t, allList.Body, "data").([]any)
+	if !ok {
+		t.Fatalf("all list data is not an array body=%s", string(allList.Body))
+	}
+	if len(allItems) != 2 {
+		t.Fatalf("all list count = %d, want 2 body=%s", len(allItems), string(allList.Body))
+	}
+	ids := make(map[string]bool, len(allItems))
+	for i := range allItems {
+		item, ok := allItems[i].(map[string]any)
+		if !ok {
+			t.Fatalf("all list item[%d] not an object body=%s", i, string(allList.Body))
+		}
+		id, _ := item["id"].(string)
+		if id != "" {
+			ids[id] = true
+		}
+	}
+	if !ids[archivedTargetID] || !ids[stillActiveID] {
+		t.Fatalf("all list ids = %+v, want both %s and %s body=%s", ids, archivedTargetID, stillActiveID, string(allList.Body))
+	}
+
+	invalidStatus := mustJSON(t, http.MethodGet, testServer.URL+"/v1/projects?status=unknown", nil, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if invalidStatus.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid status code = %d, want %d body=%s", invalidStatus.StatusCode, http.StatusUnprocessableEntity, string(invalidStatus.Body))
+	}
+	if msg := jsonPathString(t, invalidStatus.Body, "error", "message"); msg != "status must be one of active, archived, all" {
+		t.Fatalf("invalid status message = %q, want %q body=%s", msg, "status must be one of active, archived, all", string(invalidStatus.Body))
+	}
+}
+
 func TestProjectHTTPFlowTemplateScheduleAndNodes(t *testing.T) {
 	testServer, org, adminUser, memberUser := newProjectTestServer(t)
 	defer testServer.Close()

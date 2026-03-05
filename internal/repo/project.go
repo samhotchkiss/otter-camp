@@ -173,6 +173,32 @@ func (r *ProjectRepo) List(ctx context.Context, organizationID uuid.UUID) ([]Pro
 	return projects, nil
 }
 
+func (r *ProjectRepo) ListAll(ctx context.Context, organizationID uuid.UUID) ([]Project, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, organization_id, slug, display_name, description, delivery_mode, status, deploy_flow_template_id, settings, created_by_type, created_by_id, created_at, updated_at
+		FROM project
+		WHERE organization_id = $1
+		ORDER BY created_at DESC, id DESC
+	`, organizationID)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	projects := make([]Project, 0)
+	for rows.Next() {
+		project, scanErr := scanProject(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		projects = append(projects, project)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return projects, nil
+}
+
 func (r *ProjectRepo) ListByOrg(ctx context.Context, organizationID uuid.UUID, limit int, cursor string) ([]Project, string, error) {
 	projects, err := r.List(ctx, organizationID)
 	if err != nil {
