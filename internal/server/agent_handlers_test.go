@@ -280,6 +280,19 @@ func TestMapAgentErrorMappings(t *testing.T) {
 	}
 }
 
+func TestMapAssignmentErrorStarterTrioPolicyMapping(t *testing.T) {
+	status, code, message := mapAssignmentError(agent.ErrAssignmentStarterTrioRole)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", status, http.StatusUnprocessableEntity)
+	}
+	if code != agent.StarterTrioProjectRoleErrorCode {
+		t.Fatalf("code = %q, want %q", code, agent.StarterTrioProjectRoleErrorCode)
+	}
+	if message != agent.ErrAssignmentStarterTrioRole.Error() {
+		t.Fatalf("message = %q, want %q", message, agent.ErrAssignmentStarterTrioRole.Error())
+	}
+}
+
 func TestAgentAssignmentRoutesRegistered(t *testing.T) {
 	registrar := NewAgentRouteRegistrar(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := chi.NewRouter()

@@ -22,7 +22,6 @@ var (
 	ErrAssignmentSkillIDRequired   = errors.New("assignment skill_id is required")
 	ErrAssignmentInvalidRole       = errors.New("assignment role must be project_manager, worker, reviewer, or observer")
 	ErrAssignmentPMRequiresStaff   = errors.New("project_manager assignments require staff-class agents")
-	ErrAssignmentStarterTrioRole   = errors.New("starter trio agents (Frank, Lori, Ellie) operate at the organization level and cannot be assigned as project PM, worker, or reviewer")
 	ErrPMConflict                  = repo.ErrPMConflict
 )
 
@@ -129,16 +128,13 @@ func (s *assignmentService) AssignToProject(ctx context.Context, agentID, projec
 	if role == "" {
 		return nil, ErrAssignmentInvalidRole
 	}
-	if s.agents != nil && roleRequiresDedicatedProjectAgent(role) {
+	if s.agents != nil {
 		agentRecord, err := s.agents.GetByID(ctx, agentID)
 		if err != nil {
 			return nil, err
 		}
-		if agentRecord.IsStarterTrio {
-			return nil, ErrAssignmentStarterTrioRole
-		}
-		if role == "project_manager" && !strings.EqualFold(strings.TrimSpace(agentRecord.AgentClass), "staff") {
-			return nil, ErrAssignmentPMRequiresStaff
+		if err := ValidateProjectAssignmentTarget(agentRecord, role); err != nil {
+			return nil, err
 		}
 	}
 
@@ -345,13 +341,4 @@ func normalizePriority(priority int) int {
 		return defaultSkillPriority
 	}
 	return priority
-}
-
-func roleRequiresDedicatedProjectAgent(role string) bool {
-	switch role {
-	case "project_manager", "worker", "reviewer":
-		return true
-	default:
-		return false
-	}
 }

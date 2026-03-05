@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -1707,32 +1708,40 @@ func TestAgentAssignProjectCreatesAssignment(t *testing.T) {
 	}
 }
 
-func TestAgentAssignProjectRejectsStarterTrioPMRole(t *testing.T) {
-	starterID := uuid.New()
-	assignments := &fakeAssignmentRepo{}
-	agents := &fakeAgentRepo{
-		agents: map[uuid.UUID]repo.Agent{
-			starterID: {ID: starterID, IsStarterTrio: true},
-		},
-	}
+func TestAgentAssignProjectRejectsStarterTrioProjectRoles(t *testing.T) {
+	for _, role := range []string{"pm", "worker", "reviewer", "observer"} {
+		role := role
+		t.Run(role, func(t *testing.T) {
+			starterID := uuid.New()
+			assignments := &fakeAssignmentRepo{}
+			agents := &fakeAgentRepo{
+				agents: map[uuid.UUID]repo.Agent{
+					starterID: {ID: starterID, IsStarterTrio: true},
+				},
+			}
 
-	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
-	executor.assignments = assignments
-	executor.agents = agents
+			executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+			executor.assignments = assignments
+			executor.agents = agents
 
-	out, err := executor.Execute(testExecCtx(), "agent.assign_project", map[string]any{
-		"agent_id":   starterID.String(),
-		"project_id": uuid.NewString(),
-		"role":       "pm",
-	})
-	if err != nil {
-		t.Fatalf("agent.assign_project: %v", err)
-	}
-	if out["error"] != "starter_trio_cannot_be_assigned" {
-		t.Fatalf("error = %v, want starter_trio_cannot_be_assigned", out["error"])
-	}
-	if len(assignments.assignments) != 0 {
-		t.Fatalf("assignment repo entries = %d, want 0", len(assignments.assignments))
+			out, err := executor.Execute(testExecCtx(), "agent.assign_project", map[string]any{
+				"agent_id":   starterID.String(),
+				"project_id": uuid.NewString(),
+				"role":       role,
+			})
+			if err != nil {
+				t.Fatalf("agent.assign_project: %v", err)
+			}
+			if out["error"] != agentsvc.StarterTrioProjectRoleErrorCode {
+				t.Fatalf("error = %v, want %s", out["error"], agentsvc.StarterTrioProjectRoleErrorCode)
+			}
+			if out["message"] != agentsvc.ErrAssignmentStarterTrioRole.Error() {
+				t.Fatalf("message = %v, want %q", out["message"], agentsvc.ErrAssignmentStarterTrioRole.Error())
+			}
+			if len(assignments.assignments) != 0 {
+				t.Fatalf("assignment repo entries = %d, want 0", len(assignments.assignments))
+			}
+		})
 	}
 }
 

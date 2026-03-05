@@ -1927,12 +1927,13 @@ func mapAssignmentError(err error) (status int, code, message string) {
 		return http.StatusNotFound, api.ErrCodeNotFound, "resource not found"
 	case errors.Is(err, repo.ErrConflict), errors.Is(err, agent.ErrPMConflict):
 		return http.StatusConflict, api.ErrCodeConflict, "conflict"
+	case errors.Is(err, agent.ErrAssignmentStarterTrioRole):
+		return http.StatusUnprocessableEntity, agent.StarterTrioProjectRoleErrorCode, err.Error()
 	case errors.Is(err, agent.ErrAssignmentAgentIDRequired),
 		errors.Is(err, agent.ErrAssignmentProjectIDRequired),
 		errors.Is(err, agent.ErrAssignmentSkillIDRequired),
 		errors.Is(err, agent.ErrAssignmentInvalidRole),
 		errors.Is(err, agent.ErrAssignmentPMRequiresStaff),
-		errors.Is(err, agent.ErrAssignmentStarterTrioRole),
 		errors.Is(err, agent.ErrInvalidCreatedByType),
 		errors.Is(err, agent.ErrCreatedByIDRequired):
 		return http.StatusUnprocessableEntity, api.ErrCodeValidation, err.Error()
