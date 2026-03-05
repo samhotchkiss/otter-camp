@@ -29,6 +29,7 @@ type taskQueueEventSubscriber interface {
 
 type taskQueueTaskRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID, statuses ...string) ([]repo.ProjectTask, error)
 }
 
 type taskQueueStatusTransitioner interface {
@@ -163,8 +164,9 @@ func (p *TaskQueueProcessor) handleTaskQueuedEvent(ctx context.Context, event ev
 	}
 
 	var payload struct {
-		TaskID   uuid.UUID `json:"task_id"`
-		ToStatus string    `json:"to_status"`
+		TaskID    uuid.UUID `json:"task_id"`
+		ProjectID uuid.UUID `json:"project_id"`
+		ToStatus  string    `json:"to_status"`
 	}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return nil
@@ -183,6 +185,11 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 	}
 	if err != nil {
 		return err
+	}
+	if blocked, blockErr := p.isBlockedByOutstandingProjectGate(ctx, taskRecord); blockErr != nil {
+		return blockErr
+	} else if blocked {
+		return nil
 	}
 
 	status := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
@@ -212,6 +219,70 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 		return p.ensureAssignedAgentRun(ctx, event, taskRecord)
 	}
 	return nil
+}
+
+func (p *TaskQueueProcessor) isBlockedByOutstandingProjectGate(ctx context.Context, taskRecord repo.ProjectTask) (bool, error) {
+	projectTasks, err := p.tasks.ListByProject(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return false, err
+	}
+	gateTask := lowestOutstandingGateTask(projectTasks)
+	if gateTask == nil {
+		return false, nil
+	}
+	return gateTask.ID != taskRecord.ID, nil
+}
+
+func (p *TaskQueueProcessor) processNextEligibleQueuedTask(ctx context.Context, event eventbus.DomainEvent, projectID uuid.UUID) error {
+	projectTasks, err := p.tasks.ListByProject(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	next := selectNextQueuedTaskUnderProjectGate(projectTasks)
+	if next == nil {
+		return nil
+	}
+	return p.processQueuedTask(ctx, event, next.ID)
+}
+
+func lowestOutstandingGateTask(tasks []repo.ProjectTask) *repo.ProjectTask {
+	var selected *repo.ProjectTask
+	for _, taskRecord := range tasks {
+		if !strings.EqualFold(strings.TrimSpace(taskRecord.BlocksScope), "all") {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
+		if status == "done" || status == "cancelled" {
+			continue
+		}
+		if selected == nil || taskRecord.TaskNumber < selected.TaskNumber {
+			clone := taskRecord
+			selected = &clone
+		}
+	}
+	return selected
+}
+
+func selectNextQueuedTaskUnderProjectGate(tasks []repo.ProjectTask) *repo.ProjectTask {
+	if gate := lowestOutstandingGateTask(tasks); gate != nil {
+		if strings.EqualFold(strings.TrimSpace(gate.WorkStatus), "queued") {
+			clone := *gate
+			return &clone
+		}
+		return nil
+	}
+
+	var selected *repo.ProjectTask
+	for _, taskRecord := range tasks {
+		if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "queued") {
+			continue
+		}
+		if selected == nil || taskRecord.TaskNumber < selected.TaskNumber {
+			clone := taskRecord
+			selected = &clone
+		}
+	}
+	return selected
 }
 
 func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.DomainEvent, taskRecord repo.ProjectTask) error {
@@ -476,8 +547,9 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 	}
 
 	var payload struct {
-		TaskID   uuid.UUID `json:"task_id"`
-		ToStatus string    `json:"to_status"`
+		TaskID    uuid.UUID `json:"task_id"`
+		ProjectID uuid.UUID `json:"project_id"`
+		ToStatus  string    `json:"to_status"`
 	}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return nil
@@ -503,6 +575,11 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 			for _, r := range runs {
 				_ = p.runs.ConfirmCancelled(ctx, r.ID)
 			}
+		}
+	}
+	if payload.ProjectID != uuid.Nil {
+		if err := p.processNextEligibleQueuedTask(ctx, event, payload.ProjectID); err != nil {
+			return err
 		}
 	}
 	return nil
