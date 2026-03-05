@@ -573,6 +573,67 @@ func TestTaskUpdateQueuedOversizedTaskCreatesDecomposedChildWorkUnits(t *testing
 	}
 }
 
+func TestTaskUpdateQueuedOversizedTaskPublishesTaskCreatedEventsForDecomposedChildren(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	description := strings.Join([]string{
+		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
+		"- Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage.",
+		"- Rebuild taxonomy/tag mappings and verify inbound URL parity against production analytics snapshots.",
+	}, "\n")
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			Title:          "Blog migration epic",
+			Description:    &description,
+			WorkStatus:     "draft",
+			FlowTemplateID: &flowTemplateID,
+			Metadata:       json.RawMessage(`{}`),
+		},
+	}
+	publisher := &recordingEventPublisher{}
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+		Events:        publisher,
+	})
+	executor.tasks = tasks
+
+	if _, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "queued",
+	}); err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if tasks.createCalls < 1 {
+		t.Fatalf("create calls = %d, want >= 1", tasks.createCalls)
+	}
+
+	createdEvents := make([]eventbus.DomainEvent, 0, len(publisher.events))
+	for _, event := range publisher.events {
+		if event.EventType == "task.created" {
+			createdEvents = append(createdEvents, event)
+		}
+	}
+	if len(createdEvents) != tasks.createCalls {
+		t.Fatalf("task.created events = %d, want %d", len(createdEvents), tasks.createCalls)
+	}
+
+	for _, event := range createdEvents {
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal task.created payload: %v", err)
+		}
+		if payload["decomposition_applied"] != true {
+			t.Fatalf("decomposition_applied = %v, want true", payload["decomposition_applied"])
+		}
+		if payload["decomposition_parent"] != taskID.String() {
+			t.Fatalf("decomposition_parent = %v, want %s", payload["decomposition_parent"], taskID.String())
+		}
+	}
+}
+
 func TestTaskUpdateSetsFlowTemplateIDWhileDraft(t *testing.T) {
 	taskID := uuid.New()
 	flowTemplateID := uuid.New()

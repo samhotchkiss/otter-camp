@@ -897,14 +897,6 @@ func taskStatusRequiresFlowTemplate(status string) bool {
 	}
 }
 
-func strPtr(value string) *string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return nil
-	}
-	return &trimmed
-}
-
 func uuidStringSlice(ids []uuid.UUID) []string {
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {
@@ -922,57 +914,51 @@ func (e *NativeToolExecutor) applyQueueDecomposition(ctx context.Context, taskRe
 	if taskRecord == nil {
 		return queueDecompositionResult{}, nil
 	}
-	if strings.TrimSpace(taskdecomp.ParsePrimaryDeliverable(taskRecord.Metadata)) != "" {
-		return queueDecompositionResult{}, nil
+	prepared, err := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
+		ParentTaskID: taskRecord.ID,
+		Title:        taskRecord.Title,
+		Description:  taskRecord.Description,
+		Metadata:     taskRecord.Metadata,
+	})
+	if err != nil {
+		return queueDecompositionResult{}, err
 	}
-	plan := taskdecomp.Analyze(taskRecord.Title, taskRecord.Description)
-	if !plan.RequiresDecomposition {
+	if !prepared.Applied {
 		return queueDecompositionResult{}, nil
-	}
-
-	sourceDescription := strings.TrimSpace("")
-	if taskRecord.Description != nil {
-		sourceDescription = strings.TrimSpace(*taskRecord.Description)
 	}
 	actor := actorFromContext(ctx)
 
-	childTaskIDs := make([]uuid.UUID, 0, len(plan.ChildDeliverables))
-	for idx, deliverable := range plan.ChildDeliverables {
-		childTitle := strings.TrimSpace(taskRecord.Title)
-		if childTitle == "" {
-			childTitle = taskRecord.ID.String()
-		}
-		childTitle = fmt.Sprintf("%s (Workstream %d)", childTitle, idx+2)
-
-		childMetadataRaw, err := json.Marshal(map[string]any{
-			"decomposition_parent_task_id": taskRecord.ID.String(),
-			"workstream_index":             idx + 2,
-		})
-		if err != nil {
-			return queueDecompositionResult{}, err
-		}
-
-		createdChild, err := e.tasks.Create(ctx, repo.ProjectTask{
+	childTaskIDs := make([]uuid.UUID, 0, len(prepared.ChildDrafts))
+	for _, childDraft := range prepared.ChildDrafts {
+		createdChild, createErr := e.tasks.Create(ctx, repo.ProjectTask{
 			OrganizationID:      taskRecord.OrganizationID,
 			ProjectID:           taskRecord.ProjectID,
-			Title:               childTitle,
-			Description:         strPtr(strings.TrimSpace(deliverable)),
+			Title:               childDraft.Title,
+			Description:         childDraft.Description,
 			WorkStatus:          "draft",
 			FlowTemplateID:      taskRecord.FlowTemplateID,
 			RequiresHumanReview: taskRecord.RequiresHumanReview,
 			Priority:            taskRecord.Priority,
 			CreatedByType:       actor.createdByType,
 			CreatedByID:         actor.createdByPtr,
-			Metadata:            json.RawMessage(childMetadataRaw),
+			Metadata:            childDraft.Metadata,
 		})
-		if err != nil {
-			return queueDecompositionResult{}, err
+		if createErr != nil {
+			return queueDecompositionResult{}, createErr
 		}
 		childTaskIDs = append(childTaskIDs, createdChild.ID)
+		if err := e.publishTaskCreatedEvent(ctx, nil, createdChild, &taskRecord.ID, true); err != nil {
+			return queueDecompositionResult{}, err
+		}
 	}
 
-	taskRecord.Description = strPtr(strings.TrimSpace(plan.PrimaryDeliverable))
-	taskRecord.Metadata = taskdecomp.ApplyMetadata(taskRecord.Metadata, plan, sourceDescription, childTaskIDs)
+	primary := strings.TrimSpace(prepared.Plan.PrimaryDeliverable)
+	if primary == "" {
+		taskRecord.Description = nil
+	} else {
+		taskRecord.Description = &primary
+	}
+	taskRecord.Metadata = taskdecomp.ApplyMetadata(taskRecord.Metadata, prepared.Plan, prepared.SourceDescription, childTaskIDs)
 
 	return queueDecompositionResult{
 		applied:      true,
@@ -1276,6 +1262,36 @@ func (e *NativeToolExecutor) publishTaskStatusEvents(ctx context.Context, tx pgx
 	}
 
 	return nil
+}
+
+func (e *NativeToolExecutor) publishTaskCreatedEvent(ctx context.Context, tx pgx.Tx, task repo.ProjectTask, parentTaskID *uuid.UUID, decompositionApplied bool) error {
+	if e.events == nil {
+		return nil
+	}
+	actorType, actorID := domainActorFromExecutionActor(actorFromContext(ctx))
+	payload := map[string]any{
+		"task_id":     task.ID,
+		"project_id":  task.ProjectID,
+		"task_number": task.TaskNumber,
+	}
+	if parentTaskID != nil && *parentTaskID != uuid.Nil {
+		payload["decomposition_parent"] = *parentTaskID
+	}
+	if decompositionApplied {
+		payload["decomposition_applied"] = true
+	}
+
+	encodedPayload, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return e.events.Publish(ctx, tx, eventbus.DomainEvent{
+		OrganizationID: task.OrganizationID,
+		EventType:      "task.created",
+		ActorType:      actorType,
+		ActorID:        actorID,
+		Payload:        encodedPayload,
+	})
 }
 
 func domainActorFromExecutionActor(actor executionActor) (string, *uuid.UUID) {

@@ -542,42 +542,26 @@ func (s *service) applyQueueDecomposition(ctx context.Context, taskRecord *repo.
 	if taskRecord == nil {
 		return queueDecompositionResult{}, nil
 	}
-	if strings.TrimSpace(taskdecomp.ParsePrimaryDeliverable(taskRecord.Metadata)) != "" {
+	prepared, err := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
+		ParentTaskID: taskRecord.ID,
+		Title:        taskRecord.Title,
+		Description:  taskRecord.Description,
+		Metadata:     taskRecord.Metadata,
+	})
+	if err != nil {
+		return queueDecompositionResult{}, err
+	}
+	if !prepared.Applied {
 		return queueDecompositionResult{}, nil
 	}
 
-	plan := taskdecomp.Analyze(taskRecord.Title, taskRecord.Description)
-	if !plan.RequiresDecomposition {
-		return queueDecompositionResult{}, nil
-	}
-
-	sourceDescription := strings.TrimSpace("")
-	if taskRecord.Description != nil {
-		sourceDescription = strings.TrimSpace(*taskRecord.Description)
-	}
-
-	childTaskIDs := make([]uuid.UUID, 0, len(plan.ChildDeliverables))
-	for idx, deliverable := range plan.ChildDeliverables {
-		childTitle := strings.TrimSpace(taskRecord.Title)
-		if childTitle == "" {
-			childTitle = taskRecord.ID.String()
-		}
-		childTitle = fmt.Sprintf("%s (Workstream %d)", childTitle, idx+2)
-
-		childMetadata := map[string]any{
-			"decomposition_parent_task_id": taskRecord.ID.String(),
-			"workstream_index":             idx + 2,
-		}
-		childMetadataRaw, marshalErr := json.Marshal(childMetadata)
-		if marshalErr != nil {
-			return queueDecompositionResult{}, marshalErr
-		}
-
+	childTaskIDs := make([]uuid.UUID, 0, len(prepared.ChildDrafts))
+	for _, childDraft := range prepared.ChildDrafts {
 		createdChild, createErr := s.tasks.Create(ctx, repo.ProjectTask{
 			OrganizationID:      taskRecord.OrganizationID,
 			ProjectID:           taskRecord.ProjectID,
-			Title:               childTitle,
-			Description:         pointerString(deliverable),
+			Title:               childDraft.Title,
+			Description:         childDraft.Description,
 			WorkStatus:          "draft",
 			FlowTemplateID:      taskRecord.FlowTemplateID,
 			ScheduleID:          taskRecord.ScheduleID,
@@ -585,7 +569,7 @@ func (s *service) applyQueueDecomposition(ctx context.Context, taskRecord *repo.
 			Priority:            taskRecord.Priority,
 			CreatedByType:       taskRecord.CreatedByType,
 			CreatedByID:         taskRecord.CreatedByID,
-			Metadata:            normalizeJSON(childMetadataRaw),
+			Metadata:            childDraft.Metadata,
 		})
 		if createErr != nil {
 			return queueDecompositionResult{}, createErr
@@ -611,8 +595,8 @@ func (s *service) applyQueueDecomposition(ctx context.Context, taskRecord *repo.
 		}
 	}
 
-	taskRecord.Description = pointerString(plan.PrimaryDeliverable)
-	taskRecord.Metadata = taskdecomp.ApplyMetadata(taskRecord.Metadata, plan, sourceDescription, childTaskIDs)
+	taskRecord.Description = pointerString(prepared.Plan.PrimaryDeliverable)
+	taskRecord.Metadata = taskdecomp.ApplyMetadata(taskRecord.Metadata, prepared.Plan, prepared.SourceDescription, childTaskIDs)
 
 	return queueDecompositionResult{
 		applied:      true,

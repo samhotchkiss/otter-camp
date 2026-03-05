@@ -2,6 +2,7 @@ package taskdecomp
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -18,6 +19,26 @@ type Plan struct {
 	PrimaryDeliverable    string
 	ChildDeliverables     []string
 	Deliverables          []string
+}
+
+type QueueDecompositionInput struct {
+	ParentTaskID uuid.UUID
+	Title        string
+	Description  *string
+	Metadata     json.RawMessage
+}
+
+type ChildDraft struct {
+	Title       string
+	Description *string
+	Metadata    json.RawMessage
+}
+
+type QueueDecomposition struct {
+	Applied           bool
+	Plan              Plan
+	SourceDescription string
+	ChildDrafts       []ChildDraft
 }
 
 func Analyze(title string, description *string) Plan {
@@ -51,6 +72,47 @@ func Analyze(title string, description *string) Plan {
 		ChildDeliverables:     children,
 		Deliverables:          all,
 	}
+}
+
+func PrepareQueueDecomposition(input QueueDecompositionInput) (QueueDecomposition, error) {
+	if strings.TrimSpace(ParsePrimaryDeliverable(input.Metadata)) != "" {
+		return QueueDecomposition{}, nil
+	}
+
+	plan := Analyze(input.Title, input.Description)
+	if !plan.RequiresDecomposition {
+		return QueueDecomposition{}, nil
+	}
+
+	sourceDescription := strings.TrimSpace(deref(input.Description))
+	childDrafts := make([]ChildDraft, 0, len(plan.ChildDeliverables))
+	for idx, deliverable := range plan.ChildDeliverables {
+		childTitle := strings.TrimSpace(input.Title)
+		if childTitle == "" {
+			childTitle = input.ParentTaskID.String()
+		}
+		childTitle = fmt.Sprintf("%s (Workstream %d)", childTitle, idx+2)
+
+		childMetadataRaw, err := json.Marshal(map[string]any{
+			"decomposition_parent_task_id": input.ParentTaskID.String(),
+			"workstream_index":             idx + 2,
+		})
+		if err != nil {
+			return QueueDecomposition{}, err
+		}
+		childDrafts = append(childDrafts, ChildDraft{
+			Title:       childTitle,
+			Description: strPtr(strings.TrimSpace(deliverable)),
+			Metadata:    normalizeJSON(childMetadataRaw),
+		})
+	}
+
+	return QueueDecomposition{
+		Applied:           true,
+		Plan:              plan,
+		SourceDescription: sourceDescription,
+		ChildDrafts:       childDrafts,
+	}, nil
 }
 
 func ParsePrimaryDeliverable(metadata json.RawMessage) string {
@@ -113,10 +175,14 @@ func extractDeliverables(description string) []string {
 		}
 	}
 	if len(candidates) < 2 {
-		candidates = append(candidates, splitSegments(description, ";")...)
+		if semicolonItems := splitSegments(description, ";"); len(semicolonItems) >= 2 {
+			candidates = append(candidates, semicolonItems...)
+		}
 	}
 	if len(candidates) < 2 {
-		candidates = append(candidates, splitSegments(description, ". ")...)
+		if sentenceItems := splitSegments(description, ". "); len(sentenceItems) >= 2 {
+			candidates = append(candidates, sentenceItems...)
+		}
 	}
 
 	seen := map[string]struct{}{}
@@ -168,6 +234,14 @@ func deref(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func strPtr(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func normalizeJSON(value json.RawMessage) json.RawMessage {
