@@ -19,31 +19,32 @@ import (
 )
 
 var (
-	ErrOrganizationIDRequired    = errors.New("organization_id is required")
-	ErrProjectIDRequired         = errors.New("project_id is required")
-	ErrTaskIDRequired            = errors.New("task_id is required")
-	ErrTitleRequired             = errors.New("title is required")
-	ErrInvalidCreatedByType      = errors.New("created_by_type must be human_user, agent, or system")
-	ErrCreatedByIDRequired       = errors.New("created_by_id is required for human_user and agent")
-	ErrAgentNotAssigned          = errors.New("assigned_agent_id is not actively assigned to the project")
-	ErrHumanReviewNotRequired    = errors.New("task does not require human review")
-	ErrInboxItemNotFound         = errors.New("inbox item not found")
-	ErrInboxActionForbidden      = errors.New("inbox action forbidden for this user")
-	ErrUnknownInboxItemType      = errors.New("unknown inbox item type")
-	ErrUnknownInboxAction        = errors.New("unknown inbox action")
-	ErrNoTaskBranch              = errors.New("task has no branch name")
-	ErrPMNotAssigned             = errors.New("project has no active PM assignment")
-	ErrInboxItemTypeInvalid      = errors.New("invalid inbox item type")
-	ErrSourceTaskRequired        = errors.New("source_task_id is required for this inbox item type")
-	ErrSourceProjectIDRequired   = errors.New("source_project_id is required for this inbox item type")
-	ErrRequiresHumanApproval     = errors.New("task requires human approval before queueing")
-	ErrFlowTemplateRequired      = errors.New("task requires a flow template before it can be queued")
-	ErrDoneRequiresTerminalFlow  = errors.New("task can only be marked done when its flow reaches a terminal node")
-	ErrTransitionTargetRequired  = errors.New("target status is required")
-	ErrActorTypeInvalidForAction = errors.New("actor_type is invalid for action")
-	ErrBrowserHandoffUnavailable = errors.New("browser handoff service unavailable")
-	ErrActiveFlowRequired        = errors.New("task requires an active flow to be in_progress")
-	ErrFlowServiceUnavailable    = errors.New("flow service unavailable")
+	ErrOrganizationIDRequired     = errors.New("organization_id is required")
+	ErrProjectIDRequired          = errors.New("project_id is required")
+	ErrTaskIDRequired             = errors.New("task_id is required")
+	ErrTitleRequired              = errors.New("title is required")
+	ErrInvalidCreatedByType       = errors.New("created_by_type must be human_user, agent, or system")
+	ErrCreatedByIDRequired        = errors.New("created_by_id is required for human_user and agent")
+	ErrAgentNotAssigned           = errors.New("assigned_agent_id is not actively assigned to the project")
+	ErrHumanReviewNotRequired     = errors.New("task does not require human review")
+	ErrInboxItemNotFound          = errors.New("inbox item not found")
+	ErrInboxActionForbidden       = errors.New("inbox action forbidden for this user")
+	ErrUnknownInboxItemType       = errors.New("unknown inbox item type")
+	ErrUnknownInboxAction         = errors.New("unknown inbox action")
+	ErrNoTaskBranch               = errors.New("task has no branch name")
+	ErrPMNotAssigned              = errors.New("project has no active PM assignment")
+	ErrInboxItemTypeInvalid       = errors.New("invalid inbox item type")
+	ErrSourceTaskRequired         = errors.New("source_task_id is required for this inbox item type")
+	ErrSourceProjectIDRequired    = errors.New("source_project_id is required for this inbox item type")
+	ErrRequiresHumanApproval      = errors.New("task requires human approval before queueing")
+	ErrFlowTemplateRequired       = errors.New("task requires a flow template before it can be queued")
+	ErrFlowTemplateReviewRequired = errors.New("flow template must include at least one review node")
+	ErrDoneRequiresTerminalFlow   = errors.New("task can only be marked done when its flow reaches a terminal node")
+	ErrTransitionTargetRequired   = errors.New("target status is required")
+	ErrActorTypeInvalidForAction  = errors.New("actor_type is invalid for action")
+	ErrBrowserHandoffUnavailable  = errors.New("browser handoff service unavailable")
+	ErrActiveFlowRequired         = errors.New("task requires an active flow to be in_progress")
+	ErrFlowServiceUnavailable     = errors.New("flow service unavailable")
 )
 
 var validStatusTransitions = map[string]map[string]struct{}{
@@ -223,6 +224,7 @@ type flowExecutionRepository interface {
 
 type flowNodeRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.FlowNode, error)
+	GetByTemplateOrdered(ctx context.Context, flowTemplateID uuid.UUID) ([]repo.FlowNode, error)
 }
 
 type browserHandoffCompleter interface {
@@ -374,6 +376,15 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 	if err != nil {
 		return nil, err
 	}
+	if req.FlowTemplateID != nil && *req.FlowTemplateID != uuid.Nil {
+		hasReviewNode, reviewErr := s.flowTemplateHasReviewNode(ctx, *req.FlowTemplateID)
+		if reviewErr != nil {
+			return nil, reviewErr
+		}
+		if !hasReviewNode {
+			return nil, ErrFlowTemplateReviewRequired
+		}
+	}
 
 	if req.AssignedAgentID != nil {
 		assignment, getErr := s.assignments.GetByAgentAndProject(ctx, *req.AssignedAgentID, req.ProjectID)
@@ -447,6 +458,15 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	}
 	if statusRequiresFlowTemplate(target) && taskRecord.FlowTemplateID == nil {
 		return nil, ErrFlowTemplateRequired
+	}
+	if target == "queued" && taskRecord.FlowTemplateID != nil {
+		hasReviewNode, reviewErr := s.flowTemplateHasReviewNode(ctx, *taskRecord.FlowTemplateID)
+		if reviewErr != nil {
+			return nil, reviewErr
+		}
+		if !hasReviewNode {
+			return nil, ErrFlowTemplateReviewRequired
+		}
 	}
 
 	decomposition := queueDecompositionResult{}
@@ -777,6 +797,15 @@ func (s *service) MarkBlocked(ctx context.Context, taskID uuid.UUID, reason stri
 	pmAssignment, err := s.assignments.GetPM(ctx, blocked.ProjectID)
 	if err != nil {
 		return nil, ErrPMNotAssigned
+	}
+	if blocked.FlowTemplateID != nil {
+		hasReviewNode, reviewErr := s.flowTemplateHasReviewNode(ctx, *blocked.FlowTemplateID)
+		if reviewErr != nil {
+			return nil, reviewErr
+		}
+		if !hasReviewNode {
+			return nil, ErrFlowTemplateReviewRequired
+		}
 	}
 
 	title := fmt.Sprintf("Resolve blocker for task %s-%d", projectRecord.Slug, blocked.TaskNumber)
@@ -1298,6 +1327,29 @@ func statusRequiresFlowTemplate(status string) bool {
 	default:
 		return false
 	}
+}
+
+func (s *service) flowTemplateHasReviewNode(ctx context.Context, flowTemplateID uuid.UUID) (bool, error) {
+	if flowTemplateID == uuid.Nil {
+		return false, ErrFlowTemplateRequired
+	}
+	if s.flowNodes == nil {
+		return false, fmt.Errorf("task service flow-template validation requires flow node repository")
+	}
+
+	nodes, err := s.flowNodes.GetByTemplateOrdered(ctx, flowTemplateID)
+	if err != nil {
+		return false, fmt.Errorf("load flow template nodes: %w", err)
+	}
+	if len(nodes) == 0 {
+		return false, nil
+	}
+	for _, node := range nodes {
+		if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func normalizeJSON(value json.RawMessage) json.RawMessage {

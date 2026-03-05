@@ -155,6 +155,65 @@ func TestTaskServiceIntegrationHumanApprovalGate(t *testing.T) {
 	}
 }
 
+func TestTaskServiceIntegrationRejectsFlowTemplateWithoutReviewNode(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "task-svc-invalid-flow-" + uuid.NewString()[:8],
+		DisplayName:    "Invalid Flow Without Review",
+		Description:    "integration test invalid flow",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create invalid flow template: %v", err)
+	}
+
+	flowNodeRepo := repo.NewFlowNodeRepo(pool)
+	if _, err := flowNodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      10,
+	}); err != nil {
+		t.Fatalf("create non-review node: %v", err)
+	}
+
+	svc := newTaskIntegrationService(t, pool)
+	if _, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Invalid review-less template",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	}); !errors.Is(err, ErrFlowTemplateReviewRequired) {
+		t.Fatalf("CreateTask err = %v, want ErrFlowTemplateReviewRequired", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	direct, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Direct draft for transition check",
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create direct draft task: %v", err)
+	}
+
+	if _, err := svc.TransitionStatus(ctx, direct.ID, "queued", Actor{Type: "system"}); !errors.Is(err, ErrFlowTemplateReviewRequired) {
+		t.Fatalf("TransitionStatus queued err = %v, want ErrFlowTemplateReviewRequired", err)
+	}
+}
+
 func TestTaskServiceIntegrationMarkBlockedCreatesResolutionTaskAndInbox(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -441,7 +500,8 @@ func seedTaskServiceOrgProject(t *testing.T, ctx context.Context, pool *pgxpool.
 func seedTaskServiceFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID uuid.UUID) repo.FlowTemplate {
 	t.Helper()
 
-	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
 		OrganizationID: &orgID,
 		ProjectID:      &projectID,
 		Slug:           "task-svc-flow-" + uuid.NewString()[:8],
@@ -455,7 +515,22 @@ func seedTaskServiceFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpoo
 	if err != nil {
 		t.Fatalf("create flow template: %v", err)
 	}
-	return template
+	reviewNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       1,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	template.StartNodeID = &reviewNode.ID
+	updated, err := templateRepo.Update(ctx, template)
+	if err != nil {
+		t.Fatalf("update flow template start node: %v", err)
+	}
+	return updated
 }
 
 func seedTaskServiceUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, prefix, role string) repo.HumanUser {

@@ -2805,6 +2805,7 @@ func mapTaskError(err error) (int, string, string) {
 		errors.Is(err, tasksvc.ErrSourceProjectIDRequired),
 		errors.Is(err, tasksvc.ErrTransitionTargetRequired),
 		errors.Is(err, tasksvc.ErrFlowTemplateRequired),
+		errors.Is(err, tasksvc.ErrFlowTemplateReviewRequired),
 		errors.Is(err, tasksvc.ErrPMNotAssigned),
 		errors.Is(err, tasksvc.ErrActiveFlowRequired),
 		errors.Is(err, tasksvc.ErrActorTypeInvalidForAction),
