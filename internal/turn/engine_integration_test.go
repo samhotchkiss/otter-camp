@@ -346,6 +346,189 @@ func TestTurnEngineIntegrationProjectCreateConflictThenSuccessLocksIdentity(t *t
 	}
 }
 
+func TestTurnEngineIntegrationProjectKickoffResponderOrderFrankThenLori(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	frank := fixture.agent
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+
+	projectSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "sync",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession project scope: %v", err)
+	}
+
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("kickoff"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "kickoff"}, nil
+	}
+
+	authorType := "human_user"
+	firstUserMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  projectSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "Create kickoff handoff summary for this project.",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage first project user message: %v", err)
+	}
+	if err := fixture.engine.HandleUserMessage(ctx, projectSession.ID, firstUserMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage first project turn: %v", err)
+	}
+
+	secondUserMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  projectSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "Continue kickoff staffing planning.",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage second project user message: %v", err)
+	}
+	if err := fixture.engine.HandleUserMessage(ctx, projectSession.ID, secondUserMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage second project turn: %v", err)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project turns: %v", err)
+	}
+	if len(turns) != 2 {
+		t.Fatalf("project turn count = %d, want 2", len(turns))
+	}
+	if turns[0].RespondingID != frank.ID {
+		t.Fatalf("first project turn responding_id = %s, want Frank %s", turns[0].RespondingID, frank.ID)
+	}
+	if turns[1].RespondingID != lori.ID {
+		t.Fatalf("second project turn responding_id = %s, want Lori %s", turns[1].RespondingID, lori.ID)
+	}
+	if turns[0].RespondingID == turns[1].RespondingID {
+		t.Fatalf("project kickoff responder repeated %s before handoff", turns[0].RespondingID)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project messages: %v", err)
+	}
+	assistantAuthors := make([]uuid.UUID, 0, 2)
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "assistant") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Status), "final") {
+			continue
+		}
+		if message.AuthorID == nil || *message.AuthorID == uuid.Nil {
+			continue
+		}
+		assistantAuthors = append(assistantAuthors, *message.AuthorID)
+	}
+	if len(assistantAuthors) < 2 {
+		t.Fatalf("assistant project message authors = %v, want [Frank Lori]", assistantAuthors)
+	}
+	if assistantAuthors[0] != frank.ID {
+		t.Fatalf("first assistant project author = %s, want Frank %s", assistantAuthors[0], frank.ID)
+	}
+	if assistantAuthors[1] != lori.ID {
+		t.Fatalf("second assistant project author = %s, want Lori %s", assistantAuthors[1], lori.ID)
+	}
+}
+
+func TestTurnEngineIntegrationKickoffSummaryCarriesOriginatingWorkstreams(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	workstreamRequest := "Create project sam-blog-v2 with workstreams for landing page, Stripe billing integration, and analytics dashboard setup."
+	if _, err := repo.NewChatMessageRepo(fixture.pool).UpdateContent(ctx, fixture.userMessage.ID, workstreamRequest); err != nil {
+		t.Fatalf("UpdateContent originating user request: %v", err)
+	}
+	fixture.engine.assembler = &sessionHistoryAssembler{messages: repo.NewChatMessageRepo(fixture.pool)}
+
+	projectID := uuid.New()
+	projectSlug := "sam-blog-v2"
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		if call.ID != "create-1" {
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Error:      "unexpected_tool_call",
+			}, nil
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"project": map[string]any{
+					"id":   projectID,
+					"slug": projectSlug,
+					"name": "Sam Blog V2",
+				},
+			},
+		}, nil
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, req ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		round++
+		if round == 1 {
+			return ModelResponse{ToolCalls: []ModelToolCall{
+				{ID: "create-1", Name: "project.create", Tier: "tier1", Arguments: map[string]any{
+					"name": projectSlug,
+					"slug": projectSlug,
+				}},
+			}}, nil
+		}
+		promptText := strings.Builder{}
+		for _, message := range req.Prompt.Messages {
+			promptText.WriteString(strings.ToLower(strings.TrimSpace(message.Content)))
+			promptText.WriteString("\n")
+		}
+			promptBlob := promptText.String()
+			if strings.Contains(promptBlob, "kickoff handoff requirement") &&
+				strings.Contains(promptBlob, "landing page") &&
+				strings.Contains(promptBlob, "stripe billing integration") &&
+				strings.Contains(promptBlob, "analytics dashboard setup") {
+				return ModelResponse{Content: "Handoff to Lori: workstreams are landing page, Stripe billing integration, and analytics dashboard setup."}, nil
+			}
+			return ModelResponse{Content: "Handoff to Lori: missing required workstreams."}, nil
+		}
+
+	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	finalAssistant := ""
+	for _, item := range messages {
+		if !strings.EqualFold(strings.TrimSpace(item.Role), "assistant") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(item.Status), "final") {
+			continue
+		}
+		finalAssistant = strings.TrimSpace(item.Content)
+	}
+	if !strings.Contains(strings.ToLower(finalAssistant), "landing page") ||
+		!strings.Contains(strings.ToLower(finalAssistant), "stripe billing integration") ||
+		!strings.Contains(strings.ToLower(finalAssistant), "analytics dashboard setup") {
+		t.Fatalf("kickoff handoff summary missing originating workstreams: %q", finalAssistant)
+	}
+}
+
 func TestTurnEngineIntegrationTier1ToolDispatchRoundTrip(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	modelCalls := 0
@@ -738,6 +921,35 @@ func newIntegrationFixture(t *testing.T) *integrationFixture {
 	}
 }
 
+type sessionHistoryAssembler struct {
+	messages *repo.ChatMessageRepo
+}
+
+func (a *sessionHistoryAssembler) Assemble(ctx context.Context, input prompt.AssemblyInput) (*prompt.AssembledPrompt, error) {
+	if a == nil || a.messages == nil {
+		return &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "history unavailable"}}, TotalTokens: 16}, nil
+	}
+	rows, err := a.messages.ListBySession(ctx, input.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	promptMessages := make([]prompt.PromptMessage, 0, len(rows))
+	for _, row := range rows {
+		role := strings.TrimSpace(row.Role)
+		if role == "" {
+			continue
+		}
+		promptMessages = append(promptMessages, prompt.PromptMessage{
+			Role:    role,
+			Content: strings.TrimSpace(row.Content),
+		})
+	}
+	if len(promptMessages) == 0 {
+		promptMessages = append(promptMessages, prompt.PromptMessage{Role: "system", Content: "history unavailable"})
+	}
+	return &prompt.AssembledPrompt{Messages: promptMessages, TotalTokens: 64}, nil
+}
+
 func hasAssistantFinal(messages []repo.ChatMessage) bool {
 	for _, item := range messages {
 		if item.Role == "assistant" && item.Status == "final" {
@@ -899,6 +1111,27 @@ func mustCreateStarterFrank(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	})
 	if err != nil {
 		t.Fatalf("create Frank starter agent: %v", err)
+	}
+	return item
+}
+
+func mustCreateStarterLori(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID) repo.Agent {
+	t.Helper()
+	item, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:       orgID,
+		DisplayName:          "Lori",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "You are Lori.",
+		OperatorInstructions: "",
+		AgentType:            "pm",
+		IsStarterTrio:        true,
+		PrivateMemory:        false,
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create Lori starter agent: %v", err)
 	}
 	return item
 }

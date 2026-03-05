@@ -774,6 +774,244 @@ func TestProjectCreateStateMachinePreventsConflictReentryAfterSuccess(t *testing
 	}
 }
 
+func TestHandleUserMessageProjectScopeKickoffStartsWithFrank(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	frankID := uuid.New()
+	loriID := uuid.New()
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.chat.participants = []*chat.ChatParticipant{{
+		ID:              uuid.New(),
+		SessionID:       fixture.session.ID,
+		ParticipantType: "agent",
+		ParticipantID:   frankID,
+	}}
+	fixture.engine.assignments = &fakeAssignmentRepo{err: repo.ErrNotFound}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{
+			frankID: {ID: frankID, OrganizationID: fixture.session.OrganizationID},
+			loriID:  {ID: loriID, OrganizationID: fixture.session.OrganizationID},
+		},
+		starter: []repo.Agent{
+			{ID: loriID, DisplayName: "Lori", AgentType: "pm"},
+			{ID: frankID, DisplayName: "Frank", AgentType: "general"},
+		},
+	}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	turnID := fixture.chat.waitForTurnID(t)
+	turn := fixture.chat.turnByID(turnID)
+	if turn == nil {
+		t.Fatal("expected created turn")
+	}
+	if turn.RespondingID != frankID {
+		t.Fatalf("turn responding_id = %s, want %s", turn.RespondingID, frankID)
+	}
+}
+
+func TestHandleUserMessageProjectScopeKickoffHandoffRoutesToLoriAfterFrank(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	frankID := uuid.New()
+	loriID := uuid.New()
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.chat.participants = []*chat.ChatParticipant{{
+		ID:              uuid.New(),
+		SessionID:       fixture.session.ID,
+		ParticipantType: "agent",
+		ParticipantID:   frankID,
+	}}
+	fixture.engine.assignments = &fakeAssignmentRepo{err: repo.ErrNotFound}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{
+			frankID: {ID: frankID, OrganizationID: fixture.session.OrganizationID},
+			loriID:  {ID: loriID, OrganizationID: fixture.session.OrganizationID},
+		},
+		starter: []repo.Agent{
+			{ID: loriID, DisplayName: "Lori", AgentType: "pm"},
+			{ID: frankID, DisplayName: "Frank", AgentType: "general"},
+		},
+	}
+	completedAt := time.Now().UTC()
+	seededTurnID := uuid.New()
+	fixture.chat.turns[seededTurnID] = &chat.ChatTurn{
+		ID:             seededTurnID,
+		SessionID:      fixture.session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   frankID,
+		Status:         "completed",
+		StartedAt:      &completedAt,
+		CompletedAt:    &completedAt,
+	}
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, seededTurnID)
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	turnID := fixture.chat.waitForTurnID(t)
+	turn := fixture.chat.turnByID(turnID)
+	if turn == nil {
+		t.Fatal("expected created turn")
+	}
+	if turn.RespondingID != loriID {
+		t.Fatalf("turn responding_id = %s, want %s", turn.RespondingID, loriID)
+	}
+
+	participants, err := fixture.chat.ListParticipants(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListParticipants: %v", err)
+	}
+	hasLori := false
+	for _, participant := range participants {
+		if participant != nil && strings.EqualFold(strings.TrimSpace(participant.ParticipantType), "agent") && participant.ParticipantID == loriID {
+			hasLori = true
+			break
+		}
+	}
+	if !hasLori {
+		t.Fatalf("expected Lori %s to be added as a session participant", loriID)
+	}
+}
+
+func TestHandleUserMessageProjectScopeKickoffDoesNotHandoffOnInProgressFrankTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	frankID := uuid.New()
+	loriID := uuid.New()
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.chat.participants = []*chat.ChatParticipant{{
+		ID:              uuid.New(),
+		SessionID:       fixture.session.ID,
+		ParticipantType: "agent",
+		ParticipantID:   frankID,
+	}}
+	fixture.engine.assignments = &fakeAssignmentRepo{err: repo.ErrNotFound}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{
+			frankID: {ID: frankID, OrganizationID: fixture.session.OrganizationID},
+			loriID:  {ID: loriID, OrganizationID: fixture.session.OrganizationID},
+		},
+		starter: []repo.Agent{
+			{ID: loriID, DisplayName: "Lori", AgentType: "pm"},
+			{ID: frankID, DisplayName: "Frank", AgentType: "general"},
+		},
+	}
+	startedAt := time.Now().UTC()
+	seededTurnID := uuid.New()
+	fixture.chat.turns[seededTurnID] = &chat.ChatTurn{
+		ID:             seededTurnID,
+		SessionID:      fixture.session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   frankID,
+		Status:         "in_progress",
+		StartedAt:      &startedAt,
+	}
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, seededTurnID)
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	turnID := fixture.chat.waitForTurnID(t)
+	turn := fixture.chat.turnByID(turnID)
+	if turn == nil {
+		t.Fatal("expected created turn")
+	}
+	if turn.RespondingID != frankID {
+		t.Fatalf("turn responding_id = %s, want %s", turn.RespondingID, frankID)
+	}
+}
+
+func TestHandleUserMessageProjectScopeKickoffDoesNotHandoffOnFailedFrankTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	frankID := uuid.New()
+	loriID := uuid.New()
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.chat.participants = []*chat.ChatParticipant{{
+		ID:              uuid.New(),
+		SessionID:       fixture.session.ID,
+		ParticipantType: "agent",
+		ParticipantID:   frankID,
+	}}
+	fixture.engine.assignments = &fakeAssignmentRepo{err: repo.ErrNotFound}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{
+			frankID: {ID: frankID, OrganizationID: fixture.session.OrganizationID},
+			loriID:  {ID: loriID, OrganizationID: fixture.session.OrganizationID},
+		},
+		starter: []repo.Agent{
+			{ID: loriID, DisplayName: "Lori", AgentType: "pm"},
+			{ID: frankID, DisplayName: "Frank", AgentType: "general"},
+		},
+	}
+	startedAt := time.Now().UTC()
+	completedAt := startedAt.Add(1 * time.Second)
+	seededTurnID := uuid.New()
+	fixture.chat.turns[seededTurnID] = &chat.ChatTurn{
+		ID:             seededTurnID,
+		SessionID:      fixture.session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   frankID,
+		Status:         "failed",
+		StartedAt:      &startedAt,
+		CompletedAt:    &completedAt,
+	}
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, seededTurnID)
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	turnID := fixture.chat.waitForTurnID(t)
+	turn := fixture.chat.turnByID(turnID)
+	if turn == nil {
+		t.Fatal("expected created turn")
+	}
+	if turn.RespondingID != frankID {
+		t.Fatalf("turn responding_id = %s, want %s", turn.RespondingID, frankID)
+	}
+}
+
 func TestHandleUserMessageTaskScopeFallsBackToFrank(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
