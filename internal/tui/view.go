@@ -2575,7 +2575,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		// EX-267: ↑/↓ navigate sent message history (when input is empty), not scroll.
 		key("↑ / ↓", "↑ recall / ↓ advance sent message history  (when input is empty)"),
 		key("g / G", "jump to oldest / latest message"),
-		key("Esc", "cancel turn / clear input / focus main (3 states)"),
+		key("Esc", "task pane: composer→nav; otherwise clear input / focus main"),
 		key("Ctrl-U / Ctrl-W", "clear all input / delete last word"),
 		key("e / s / d", "queued msg: edit / steer / delete  (when turn active)"),
 		"",
@@ -2612,7 +2612,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key(":scope <level>", "switch chat scope: org | project | task"),
 		key(":focus <panel>", "focus sidebar|main|chat"),
 		key(":send <message>", "send message to Frank"),
-		key(":cancel-turn", "cancel agent turn"),
+		key(":cancel", "cancel active turn"),
 		key(":queue <action>", "manage queued msgs: edit | steer | delete"),
 		key(":sidebar <action>", "sidebar: up|down|home|end|expand|collapse|select"),
 		key(":inbox <action>", "inbox: approve|reject|defer|open"),
@@ -2672,6 +2672,7 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	if cw < 4 {
 		cw = 4
 	}
+	isTaskPane := m.workspace.mainView == ViewTask
 
 	// Session header — use human-readable label from sidebar node
 	rawSession := strings.TrimSpace(m.activeSession)
@@ -2721,6 +2722,12 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 		headerText,
 		styleDivider.Render(strings.Repeat("─", cw)),
 	}
+	if isTaskPane {
+		headerLines = append(headerLines,
+			m.renderTaskPaneTabs(cw),
+			styleDivider.Render(strings.Repeat("─", cw)),
+		)
+	}
 
 	// Keep bottom chrome visible first, then allocate remaining lines to message viewport.
 	targetH := innerH
@@ -2730,6 +2737,9 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	inputLines := strings.Split(m.renderChatInputBox(cw, focused), "\n")
 	bottomLines := make([]string, 0, len(inputLines)+8)
 	bottomLines = append(bottomLines, "")
+	if isTaskPane && focused && m.taskPaneMode == taskPaneModeNavigate {
+		bottomLines = append(bottomLines, styleMuted.Render("  nav·←/→ tabs  ↑/↓ scope  Enter·composer  Esc·main  :cancel"))
+	}
 	// EX-017: show all queued messages (up to 3) ABOVE the input box so they
 	// are never clipped by buildPanelContent's end-trim.
 	const maxQueueVisible = 3
@@ -2778,7 +2788,7 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	if msgAreaH < 1 {
 		msgAreaH = 1
 	}
-	allMsgLines := m.renderChatMessages(cw)
+	allMsgLines := m.renderTaskSurface(cw)
 	msgLines, scrollOffset, maxOffset := chatViewportLines(allMsgLines, msgAreaH, m.chatScrollOffset)
 
 	// Show scroll indicator when user has scrolled up (newer messages are below)
@@ -2831,6 +2841,215 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	content := buildPanelContent(lines, targetH, cw)
 
 	return panelStyle(innerW, innerH, focused).Render(content)
+}
+
+func (m Model) renderTaskPaneTabs(width int) string {
+	tabs := []struct {
+		tab   taskPaneTab
+		label string
+	}{
+		{taskPaneTabJournal, "Journal"},
+		{taskPaneTabEvents, "Events"},
+		{taskPaneTabDiscussion, "Discussion"},
+		{taskPaneTabTrace, "Trace"},
+	}
+	parts := make([]string, 0, len(tabs)+1)
+	for _, item := range tabs {
+		label := " " + item.label + " "
+		if item.tab == m.taskPaneTab {
+			parts = append(parts, styleActive.Render("["+label+"]"))
+			continue
+		}
+		parts = append(parts, styleMuted.Render("["+label+"]"))
+	}
+	mode := "compose"
+	if m.taskPaneMode == taskPaneModeNavigate {
+		mode = "nav"
+	}
+	line := strings.Join(parts, " ")
+	line += styleMuted.Render("  ·  ")
+	line += styleSubtle.Render("mode=" + mode)
+	return truncate(line, width)
+}
+
+func (m Model) renderTaskSurface(width int) []string {
+	if m.workspace.mainView != ViewTask {
+		return m.renderChatMessages(width)
+	}
+	switch m.taskPaneTab {
+	case taskPaneTabJournal:
+		return m.renderTaskJournalMessages(width)
+	case taskPaneTabEvents:
+		return m.renderTaskEventMessages(width)
+	case taskPaneTabTrace:
+		return m.renderChatMessages(width)
+	default:
+		return m.renderChatMessages(width)
+	}
+}
+
+func (m Model) renderTaskJournalMessages(width int) []string {
+	center := func(s string) string {
+		return lipgloss.NewStyle().Width(width).Align(lipgloss.Center).Foreground(colSubtle).Render(s)
+	}
+	task := m.activeTaskRecord()
+	if task == nil {
+		return []string{"", center("No task selected.")}
+	}
+	if strings.TrimSpace(m.taskExecutionSessionID(task)) == "" {
+		if strings.TrimSpace(m.taskDiscussionSessionID(task)) != "" {
+			return []string{
+				"",
+				center("No active work journal."),
+				center("Discussion is available for this task."),
+			}
+		}
+		return []string{
+			"",
+			center("No execution journal yet."),
+			center("Async work will appear here when a node starts."),
+		}
+	}
+	if len(m.chatMessages) == 0 {
+		if m.chatHistoryLoading {
+			return []string{
+				"",
+				lipgloss.NewStyle().Width(width).Align(lipgloss.Center).
+					Foreground(colMuted).Render("◌  loading journal..."),
+			}
+		}
+		if m.activeTurn {
+			return []string{
+				"",
+				center("◌  work in progress..."),
+				center("Waiting for the next journal update."),
+			}
+		}
+		return []string{
+			"",
+			center("No journal updates yet."),
+			center("Tool and agent activity will stream here."),
+		}
+	}
+
+	var lines []string
+	for _, msg := range m.chatMessages {
+		if strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0 {
+			continue
+		}
+		roleLabel := "Update"
+		roleStyle := styleAssistant
+		switch strings.ToLower(strings.TrimSpace(msg.Role)) {
+		case "user":
+			roleLabel = "Feedback"
+			roleStyle = styleUser
+		case "assistant":
+			roleLabel = m.assistantLabel()
+		case "system":
+			roleLabel = "System"
+			roleStyle = styleMuted
+		case "tool", "tool_result":
+			roleLabel = "Tool"
+			roleStyle = styleTool
+		}
+		left, right, gap := chatHeaderSegments(roleLabel, msg.Timestamp, width)
+		if right == "" {
+			lines = append(lines, roleStyle.Render(left))
+		} else {
+			lines = append(lines, roleStyle.Render(left)+strings.Repeat(" ", gap)+styleMuted.Render(right))
+		}
+		lines = append(lines, styleDivider.Render(strings.Repeat("─", width)))
+
+		content := strings.TrimSpace(markdownToPlain(msg.Content, width))
+		if content != "" {
+			rendered := strings.Split(content, "\n")
+			if len(rendered) > 3 {
+				rendered = rendered[:3]
+			}
+			for _, line := range rendered {
+				if strings.TrimSpace(line) == "" {
+					continue
+				}
+				for _, wrapped := range wrapText(line, maxInt(10, width)) {
+					lines = append(lines, styleText.Render(wrapped))
+				}
+			}
+		}
+		for _, tc := range msg.ToolCalls {
+			status := strings.TrimSpace(tc.Status)
+			if status == "" {
+				status = "pending"
+			}
+			name := strings.TrimSpace(tc.Name)
+			if name == "" {
+				name = "tool"
+			}
+			lines = append(lines, styleMuted.Render("  ⚙ "+name+" · "+status))
+		}
+		lines = append(lines, "")
+	}
+	if m.activeTurn {
+		lines = append(lines, styleReconnecting.Render("  ◌  work in progress..."))
+		lines = append(lines, "")
+	}
+	return lines
+}
+
+func (m Model) renderTaskEventMessages(width int) []string {
+	center := func(s string) string {
+		return lipgloss.NewStyle().Width(width).Align(lipgloss.Center).Foreground(colSubtle).Render(s)
+	}
+	task := m.activeTaskRecord()
+	if task == nil {
+		return []string{"", center("No task selected.")}
+	}
+	if len(task.Events) == 0 && len(task.History) == 0 {
+		return []string{
+			"",
+			center("No task events yet."),
+			center("Structured execution events will appear here."),
+		}
+	}
+
+	var lines []string
+	if len(task.Events) > 0 {
+		for _, event := range task.Events {
+			label := event.EventType
+			switch event.EventType {
+			case "status.changed":
+				from, _ := event.Payload["from_status"].(string)
+				to, _ := event.Payload["to_status"].(string)
+				if from != "" || to != "" {
+					label = fmt.Sprintf("%s → %s", from, to)
+				}
+			case "task.review_rejected":
+				label = "Review rejected"
+			case "task.created":
+				label = "Task created"
+			}
+			actor := strings.TrimSpace(event.ActorType)
+			if actor == "" {
+				actor = "system"
+			}
+			left, right, gap := chatHeaderSegments(label, event.CreatedAt, width)
+			if right == "" {
+				lines = append(lines, styleMuted.Render(left))
+			} else {
+				lines = append(lines, styleMuted.Render(left)+strings.Repeat(" ", gap)+styleMuted.Render(right))
+			}
+			lines = append(lines, styleDivider.Render(strings.Repeat("─", width)))
+			lines = append(lines, styleText.Render("actor: "+actor))
+			lines = append(lines, "")
+		}
+		return lines
+	}
+
+	for _, entry := range task.History {
+		for _, wrapped := range wrapText(entry, maxInt(10, width-2)) {
+			lines = append(lines, styleMuted.Render("• "+wrapped))
+		}
+	}
+	return lines
 }
 
 func renderChatHeader(sessionLabel string, active ChatScope, width int, thinking bool) string {
@@ -3141,10 +3360,14 @@ func (m Model) renderChatInputBox(width int, focused bool) string {
 	displayText := inputText
 	placeholder := false
 
-	if focused && !m.commandMode && m.loginStep == 0 {
+	if focused && !m.commandMode && m.loginStep == 0 && !m.taskPaneNavigationActive() {
 		displayText += "▌" // cursor
 	}
 
+	if focused && m.taskPaneNavigationActive() && displayText == "" && m.loginStep == 0 {
+		displayText = styleMuted.Render("navigation mode")
+		placeholder = true
+	}
 	if displayText == "" && !focused && m.loginStep == 0 {
 		displayText = styleMuted.Render("type a message...")
 		placeholder = true
@@ -3223,7 +3446,7 @@ func (m Model) commandPaletteSuggestions(limit int) []string {
 		"cmd: inbox", "cmd: agents", "cmd: agent", "cmd: activity", "cmd: merges", "cmd: schedules",
 		"cmd: focus sidebar", "cmd: focus main", "cmd: focus chat",
 		"cmd: scope org", "cmd: scope project", "cmd: scope task",
-		"cmd: send", "cmd: cancel-turn",
+		"cmd: send", "cmd: cancel", "cmd: cancel-turn",
 		"cmd: queue edit", "cmd: queue steer", "cmd: queue delete",
 		"cmd: sidebar up", "cmd: sidebar down", "cmd: sidebar home", "cmd: sidebar end",
 		"cmd: sidebar expand", "cmd: sidebar collapse", "cmd: sidebar select",

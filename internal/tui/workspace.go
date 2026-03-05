@@ -78,7 +78,10 @@ type taskRecord struct {
 	Description         string
 	AcceptanceCriteria  string
 	Subtasks            []string
-	SessionID           string
+	SessionID           string // preferred execution session (active when present, otherwise recent)
+	DiscussionSessionID string
+	ActiveExecutionID   string
+	RecentExecutionID   string
 	Status              string
 	Priority            int
 	Flow                int
@@ -86,6 +89,7 @@ type taskRecord struct {
 	AgentName           string // display_name of assigned agent
 	RequiresHumanReview bool
 	History             []string
+	Events              []TaskEvent
 	BranchName          string
 	FlowSteps           []FlowStep
 	SubtaskItems        []SubtaskItem
@@ -203,6 +207,7 @@ func newWorkspaceState() workspaceState {
 		taskSessionIDs:     map[string]string{},
 		sessionToTaskLabel: map[string]string{},
 		selectedTaskID:     "",
+		showTaskHistory:    true,
 		inbox:              []inboxItem{},
 		activity:           []string{"workspace initialized"},
 		agents:             []string{},
@@ -331,7 +336,13 @@ func (w *workspaceState) taskTitleForScopeSession(sessionID string) string {
 	}
 	// For real UUIDs: scan tasks map for a matching SessionID
 	for _, task := range w.tasks {
-		if task != nil && strings.TrimSpace(task.SessionID) == sessionID {
+		if task == nil {
+			continue
+		}
+		if strings.TrimSpace(task.SessionID) == sessionID ||
+			strings.TrimSpace(task.DiscussionSessionID) == sessionID ||
+			strings.TrimSpace(task.ActiveExecutionID) == sessionID ||
+			strings.TrimSpace(task.RecentExecutionID) == sessionID {
 			title := strings.TrimSpace(task.Title)
 			if task.TaskNumber > 0 {
 				return fmt.Sprintf("OC-%d: %s", task.TaskNumber, title)
@@ -344,8 +355,23 @@ func (w *workspaceState) taskTitleForScopeSession(sessionID string) string {
 
 func (w *workspaceState) taskSessionID(taskID string) string {
 	task := w.tasks[taskID]
-	if task != nil && strings.TrimSpace(task.SessionID) != "" {
-		return strings.TrimSpace(task.SessionID)
+	if task != nil {
+		switch {
+		case strings.TrimSpace(task.ActiveExecutionID) != "":
+			return strings.TrimSpace(task.ActiveExecutionID)
+		case strings.TrimSpace(task.RecentExecutionID) != "":
+			return strings.TrimSpace(task.RecentExecutionID)
+		case strings.TrimSpace(task.SessionID) != "":
+			return strings.TrimSpace(task.SessionID)
+		}
+	}
+	return strings.TrimSpace(w.taskSessionIDs[taskID])
+}
+
+func (w *workspaceState) taskDiscussionSessionID(taskID string) string {
+	task := w.tasks[taskID]
+	if task != nil && strings.TrimSpace(task.DiscussionSessionID) != "" {
+		return strings.TrimSpace(task.DiscussionSessionID)
 	}
 	return strings.TrimSpace(w.taskSessionIDs[taskID])
 }

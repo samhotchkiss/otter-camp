@@ -1167,6 +1167,229 @@ func TestEnterOnTaskDetailOpensAsyncSession(t *testing.T) {
 	}
 }
 
+func TestTaskDetailDefaultRightPaneSourceEX249(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		detail      TaskDetailItem
+		wantTab     taskPaneTab
+		wantSession string
+	}{
+		{
+			name: "active execution defaults to journal",
+			detail: TaskDetailItem{
+				ID:                  "task-249-active",
+				Title:               "Watch active execution",
+				SessionID:           "00000000-0000-0000-0000-000000002491",
+				ActiveExecutionID:   "00000000-0000-0000-0000-000000002491",
+				DiscussionSessionID: "00000000-0000-0000-0000-000000002492",
+			},
+			wantTab:     taskPaneTabJournal,
+			wantSession: "00000000-0000-0000-0000-000000002491",
+		},
+		{
+			name: "recent execution falls back to journal",
+			detail: TaskDetailItem{
+				ID:                  "task-249-recent",
+				Title:               "Watch recent execution",
+				SessionID:           "00000000-0000-0000-0000-000000002493",
+				RecentExecutionID:   "00000000-0000-0000-0000-000000002493",
+				DiscussionSessionID: "00000000-0000-0000-0000-000000002494",
+			},
+			wantTab:     taskPaneTabJournal,
+			wantSession: "00000000-0000-0000-0000-000000002493",
+		},
+		{
+			name: "no execution falls back to discussion",
+			detail: TaskDetailItem{
+				ID:                  "task-249-discussion",
+				Title:               "Use discussion",
+				DiscussionSessionID: "00000000-0000-0000-0000-000000002495",
+			},
+			wantTab:     taskPaneTabDiscussion,
+			wantSession: "00000000-0000-0000-0000-000000002495",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+				LoadChatHistory: func(_ context.Context, _ string) ([]ChatMessage, error) {
+					return nil, nil
+				},
+			})
+			m.workspace.mainView = ViewTask
+			m.workspace.selectedTaskID = tc.detail.ID
+			m.activeScope = ScopeTask
+
+			updated, cmd := m.Update(taskDetailLoadedMsg{Detail: tc.detail})
+			got := updated.(Model)
+
+			if got.taskPaneTab != tc.wantTab {
+				t.Fatalf("task pane tab = %s, want %s", got.taskPaneTab, tc.wantTab)
+			}
+			if got.activeSession != tc.wantSession {
+				t.Fatalf("active session = %q, want %q", got.activeSession, tc.wantSession)
+			}
+			if cmd == nil {
+				t.Fatal("task detail load should return a session sync cmd")
+			}
+		})
+	}
+}
+
+func TestTaskDetailHistoryVisibleByDefaultEX249(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(DefaultState())
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-249-history"
+	model.workspace.tasks["task-249-history"] = &taskRecord{
+		ID:      "task-249-history",
+		Title:   "History first",
+		Status:  "in_progress",
+		History: []string{"created", "flow started", "review requested"},
+	}
+
+	view := strings.Join(model.renderTaskView(120, 40), "\n")
+	if !strings.Contains(view, "Event Log") {
+		t.Fatalf("task detail should show history by default: %q", view)
+	}
+	if strings.Contains(view, "h·show history") {
+		t.Fatalf("task detail should not hide history behind a toggle by default: %q", view)
+	}
+}
+
+func TestTaskPaneNavigationStateMachineEX249(t *testing.T) {
+	t.Parallel()
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, _ string) ([]ChatMessage, error) {
+			return nil, nil
+		},
+	})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-249-nav"
+	model.workspace.tasks["task-249-nav"] = &taskRecord{
+		ID:                  "task-249-nav",
+		Title:               "Navigate task pane",
+		Status:              "in_progress",
+		SessionID:           "00000000-0000-0000-0000-000000002504",
+		ActiveExecutionID:   "00000000-0000-0000-0000-000000002504",
+		DiscussionSessionID: "00000000-0000-0000-0000-000000002505",
+	}
+	model.activeScope = ScopeTask
+	model.activeSession = "00000000-0000-0000-0000-000000002504"
+	model.taskPaneTab = taskPaneTabJournal
+	model.taskPaneTaskID = "task-249-nav"
+	model.taskPaneMode = taskPaneModeNavigate
+
+	model.setFocus(ChatPanel)
+	if model.taskPaneMode != taskPaneModeCompose {
+		t.Fatalf("task pane mode after focus = %s, want compose", model.taskPaneMode)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEsc})
+	if model.taskPaneMode != taskPaneModeNavigate {
+		t.Fatalf("task pane mode after Esc = %s, want navigate", model.taskPaneMode)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRight})
+	if model.taskPaneTab != taskPaneTabEvents {
+		t.Fatalf("task pane tab after Right = %s, want events", model.taskPaneTab)
+	}
+	if model.activeScope != ScopeTask {
+		t.Fatalf("scope after Right = %s, want task", model.activeScope)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyUp})
+	if model.activeScope != ScopeProject {
+		t.Fatalf("scope after Up = %s, want project", model.activeScope)
+	}
+	if model.taskPaneTab != taskPaneTabDiscussion {
+		t.Fatalf("task pane tab after Up = %s, want discussion", model.taskPaneTab)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyDown})
+	if model.activeScope != ScopeTask {
+		t.Fatalf("scope after Down = %s, want task", model.activeScope)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyLeft})
+	if model.taskPaneTab != taskPaneTabEvents {
+		t.Fatalf("task pane tab after Left = %s, want events", model.taskPaneTab)
+	}
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.taskPaneMode != taskPaneModeCompose {
+		t.Fatalf("task pane mode after Enter = %s, want compose", model.taskPaneMode)
+	}
+}
+
+func TestTaskPaneEscNavigatesAndCancelIsExplicitEX249(t *testing.T) {
+	t.Parallel()
+
+	cancelCalls := 0
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		CancelChatTurn: func(_ context.Context, _ string) error {
+			cancelCalls++
+			return nil
+		},
+	})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-249-keys"
+	model.workspace.tasks["task-249-keys"] = &taskRecord{
+		ID:                  "task-249-keys",
+		Title:               "Active work",
+		Status:              "in_progress",
+		SessionID:           "00000000-0000-0000-0000-000000002496",
+		ActiveExecutionID:   "00000000-0000-0000-0000-000000002496",
+		DiscussionSessionID: "00000000-0000-0000-0000-000000002497",
+	}
+	model.focus = ChatPanel
+	model.activeScope = ScopeTask
+	model.activeSession = "00000000-0000-0000-0000-000000002496"
+	model.taskPaneTab = taskPaneTabJournal
+	model.taskPaneMode = taskPaneModeCompose
+	model.chatInput = "keep draft"
+	model.activeTurn = true
+	model.activeTurnSessionID = model.activeSession
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	runNonTimerCmds(cmd)
+
+	if model.taskPaneMode != taskPaneModeNavigate {
+		t.Fatalf("task pane mode after Esc = %s, want navigate", model.taskPaneMode)
+	}
+	if !model.activeTurn {
+		t.Fatal("Esc in task pane should not cancel the active turn")
+	}
+	if cancelCalls != 0 {
+		t.Fatalf("Esc should not call CancelChatTurn; got %d call(s)", cancelCalls)
+	}
+	if model.chatInput != "keep draft" {
+		t.Fatalf("Esc should preserve draft input, got %q", model.chatInput)
+	}
+
+	cmd = model.executeCommand(":cancel")
+	if cmd == nil {
+		t.Fatal(":cancel should return a cancel cmd when a turn is active")
+	}
+	msg := cmd()
+	updated, followup := model.Update(msg)
+	model = updated.(Model)
+	runNonTimerCmds(followup)
+
+	if model.activeTurn {
+		t.Fatal(":cancel should clear the active turn")
+	}
+	if cancelCalls != 1 {
+		t.Fatalf(":cancel should call CancelChatTurn once; got %d call(s)", cancelCalls)
+	}
+}
+
 func TestDashboardCursorJKMoveSelection(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.workspace.tasks["task-1"] = &taskRecord{ID: "task-1", Title: "Launch docs", Status: "todo"}
@@ -6280,7 +6503,7 @@ func TestCommandPaletteSuggestionsComplete(t *testing.T) {
 		"inb re":   "cmd: inbox reject",
 		"tour":     "cmd: tour dismiss",
 		"sideb ex": "cmd: sidebar expand",
-		"cancel":   "cmd: cancel-turn",
+		"cancel":   "cmd: cancel",
 		"gen":      "cmd: general",
 	}
 
@@ -12637,7 +12860,7 @@ func TestCKeyHintEX373(t *testing.T) {
 		m.focus = MainPanel
 		m.activeTurn = true
 		m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
-		want := "c is not bound. Press Esc in chat (3 or Tab) or type :cancel-turn to cancel the turn."
+		want := "c is not bound. Press 3 or Tab to focus chat, then type :cancel to cancel the turn."
 		if m1.statusMessage != want {
 			t.Errorf("EX-373: got %q, want %q", m1.statusMessage, want)
 		}
@@ -13043,7 +13266,7 @@ func TestRemainingUppercaseHintsEX382(t *testing.T) {
 	}{
 		{'A', "A is not bound. Press a (lowercase) to approve in Inbox or Task view."},
 		{'B', "B is not bound. Use j/k or ↑/↓ to navigate, or ? for key reference."},
-		{'C', "C is not bound. Press c (lowercase) or use :cancel-turn for active-turn hints."},
+		{'C', "C is not bound. Press c (lowercase) or use :cancel for active-turn hints."},
 		{'E', "E is not bound. Press e (lowercase) or chat (3 or Tab) to request edits."},
 		{'F', "F is not bound. Press f (lowercase) to defer in Inbox view. Press i for Inbox."},
 		{'H', "H is not bound. Press h (lowercase) to collapse sidebar sections (1 to focus sidebar)."},

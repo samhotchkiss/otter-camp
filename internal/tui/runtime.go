@@ -122,7 +122,10 @@ type TaskDetailItem struct {
 	Description         string
 	WorkStatus          string
 	Priority            int
-	SessionID           string
+	SessionID           string // preferred execution session (active when present, otherwise recent)
+	DiscussionSessionID string
+	ActiveExecutionID   string
+	RecentExecutionID   string
 	AgentName           string // display_name of the assigned agent, if any
 	FlowNodeName        string // current flow node display_name, if any
 	RequiresHumanReview bool   // whether this task requires human review
