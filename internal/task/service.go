@@ -455,7 +455,7 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	if target == "queued" && taskRecord.RequiresHumanReview && !approvalOverride {
 		return nil, ErrRequiresHumanApproval
 	}
-	if target == "queued" && taskRecord.FlowTemplateID == nil {
+	if statusRequiresFlowTemplate(target) && taskRecord.FlowTemplateID == nil {
 		return nil, ErrFlowTemplateRequired
 	}
 	if target == "queued" && taskRecord.FlowTemplateID != nil {
@@ -1224,6 +1224,15 @@ func isTransitionAllowed(fromStatus, toStatus string) bool {
 
 func normalizeStatus(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func statusRequiresFlowTemplate(status string) bool {
+	switch normalizeStatus(status) {
+	case "queued", "in_progress", "review", "done":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *service) flowTemplateHasReviewNode(ctx context.Context, flowTemplateID uuid.UUID) (bool, error) {
