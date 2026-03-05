@@ -328,11 +328,13 @@ func TestEmailComposeCreatesDraftActionReviewInboxItem(t *testing.T) {
 }
 
 type mockTaskRepo struct {
+	createErr           error
 	task                repo.ProjectTask
 	getByIDErr          error
 	setFlowNodeErr      error
 	updateStatusErr     error
 	updateErr           error
+	createCalls         int
 	setFlowNodeCalls    int
 	updateStatusCalls   int
 	updateCalls         int
@@ -341,8 +343,22 @@ type mockTaskRepo struct {
 	lastUpdatedTaskStat string
 }
 
-func (m *mockTaskRepo) Create(context.Context, repo.ProjectTask) (repo.ProjectTask, error) {
-	return repo.ProjectTask{}, errors.New("not implemented")
+func (m *mockTaskRepo) Create(_ context.Context, task repo.ProjectTask) (repo.ProjectTask, error) {
+	m.createCalls++
+	if m.createErr != nil {
+		return repo.ProjectTask{}, m.createErr
+	}
+	if task.ID == uuid.Nil {
+		task.ID = uuid.New()
+	}
+	if task.WorkStatus == "" {
+		task.WorkStatus = "draft"
+	}
+	if task.TaskNumber == 0 {
+		task.TaskNumber = 1
+	}
+	m.task = task
+	return m.task, nil
 }
 
 func (m *mockTaskRepo) GetByID(context.Context, uuid.UUID) (repo.ProjectTask, error) {
@@ -390,6 +406,7 @@ func (m *mockTaskRepo) Update(_ context.Context, task repo.ProjectTask) (repo.Pr
 type mockFlowNodeRepo struct {
 	nodes         map[uuid.UUID]repo.FlowNode
 	templateNodes map[uuid.UUID][]repo.FlowNode
+	getByTplErr   error
 }
 
 func (m *mockFlowNodeRepo) Create(context.Context, repo.FlowNode) (repo.FlowNode, error) {
@@ -408,6 +425,9 @@ func (m *mockFlowNodeRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNo
 }
 
 func (m *mockFlowNodeRepo) GetByTemplateOrdered(_ context.Context, templateID uuid.UUID) ([]repo.FlowNode, error) {
+	if m.getByTplErr != nil {
+		return nil, m.getByTplErr
+	}
 	if m.templateNodes != nil {
 		return append([]repo.FlowNode(nil), m.templateNodes[templateID]...), nil
 	}
@@ -561,6 +581,61 @@ func TestTaskUpdateRejectsExecutionStatusWhenTemplateHasNoReviewNode(t *testing.
 	}
 	if tasks.updateCalls != 0 {
 		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)
+	}
+}
+
+func TestFlowTemplateHasReviewNodeReturnsErrorWhenFlowNodeRepoUnavailable(t *testing.T) {
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+
+	hasReviewNode, err := executor.flowTemplateHasReviewNode(context.Background(), uuid.New())
+	if err == nil {
+		t.Fatal("flowTemplateHasReviewNode err = nil, want error")
+	}
+	if hasReviewNode {
+		t.Fatal("flowTemplateHasReviewNode hasReviewNode = true, want false")
+	}
+}
+
+func TestFlowTemplateHasReviewNodeReturnsErrorWhenLookupFails(t *testing.T) {
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.flowNodes = &mockFlowNodeRepo{getByTplErr: errors.New("lookup failed")}
+
+	hasReviewNode, err := executor.flowTemplateHasReviewNode(context.Background(), uuid.New())
+	if err == nil {
+		t.Fatal("flowTemplateHasReviewNode err = nil, want error")
+	}
+	if hasReviewNode {
+		t.Fatal("flowTemplateHasReviewNode hasReviewNode = true, want false")
+	}
+}
+
+func TestTaskCreateRejectsFlowTemplateWithoutReviewNode(t *testing.T) {
+	projectID := uuid.New()
+	templateID := uuid.New()
+	tasks := &mockTaskRepo{}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			templateID: {
+				{ID: uuid.New(), FlowTemplateID: templateID, NodeType: "work", Position: 1},
+			},
+		},
+	}
+
+	out, err := executor.Execute(testExecCtx(), "task.create", map[string]any{
+		"project_id":       projectID.String(),
+		"title":            "Needs review node",
+		"flow_template_id": templateID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if out["error"] != "flow template must include at least one review node" {
+		t.Fatalf("error = %v, want review-node validation message", out["error"])
+	}
+	if tasks.createCalls != 0 {
+		t.Fatalf("create calls = %d, want 0", tasks.createCalls)
 	}
 }
 

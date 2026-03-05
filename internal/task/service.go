@@ -720,11 +720,22 @@ func (s *service) MarkBlocked(ctx context.Context, taskID uuid.UUID, reason stri
 	if strings.TrimSpace(actor.Type) == "system" {
 		createdByID = nil
 	}
+	var resolutionFlowTemplateID *uuid.UUID
+	if blocked.FlowTemplateID != nil && *blocked.FlowTemplateID != uuid.Nil {
+		hasReviewNode, reviewErr := s.flowTemplateHasReviewNode(ctx, *blocked.FlowTemplateID)
+		if reviewErr != nil {
+			return nil, reviewErr
+		}
+		if hasReviewNode {
+			resolutionFlowTemplateID = pointerUUID(*blocked.FlowTemplateID)
+		}
+	}
 	resolutionTask, createErr := s.tasks.Create(ctx, repo.ProjectTask{
 		OrganizationID:      blocked.OrganizationID,
 		ProjectID:           blocked.ProjectID,
 		Title:               title,
 		Description:         pointerString("Automatically created to resolve blocker"),
+		FlowTemplateID:      resolutionFlowTemplateID,
 		WorkStatus:          "queued",
 		CreatedByType:       normalizeActorTypeForTask(actor.Type),
 		CreatedByID:         createdByID,

@@ -894,14 +894,14 @@ func (e *NativeToolExecutor) validateTaskDoneTransition(ctx context.Context, tas
 }
 
 func (e *NativeToolExecutor) flowTemplateHasReviewNode(ctx context.Context, flowTemplateID uuid.UUID) (bool, error) {
-	if flowTemplateID == uuid.Nil || e.flowNodes == nil {
-		return true, nil
+	if flowTemplateID == uuid.Nil {
+		return false, errors.New("flow_template_id_required")
+	}
+	if e.flowNodes == nil {
+		return false, fmt.Errorf("native tool flow-template validation requires flow node repository")
 	}
 	nodes, err := e.flowNodes.GetByTemplateOrdered(ctx, flowTemplateID)
 	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			return true, nil
-		}
 		return false, err
 	}
 	if len(nodes) == 0 {

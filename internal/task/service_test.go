@@ -656,6 +656,7 @@ func TestMarkBlockedCreatesResolutionTaskTitle(t *testing.T) {
 	taskID := uuid.New()
 	orgID := uuid.New()
 	projectID := uuid.New()
+	flowTemplateID := uuid.New()
 	pmAgentID := uuid.New()
 	pmUserID := uuid.New()
 
@@ -668,6 +669,7 @@ func TestMarkBlockedCreatesResolutionTaskTitle(t *testing.T) {
 				TaskNumber:     3,
 				Title:          "Blocked task",
 				WorkStatus:     "in_progress",
+				FlowTemplateID: &flowTemplateID,
 				CreatedByType:  "system",
 			},
 		},
@@ -716,6 +718,20 @@ func TestMarkBlockedCreatesResolutionTaskTitle(t *testing.T) {
 	svc.assignments = assignments
 	svc.agents = agents
 	svc.users = users
+	svc.flowNodes = &fakeFlowNodeRepo{
+		nodes: map[uuid.UUID]repo.FlowNode{
+			uuid.New(): {
+				ID:             uuid.New(),
+				FlowTemplateID: flowTemplateID,
+				NodeType:       "work",
+			},
+			uuid.New(): {
+				ID:             uuid.New(),
+				FlowTemplateID: flowTemplateID,
+				NodeType:       "review",
+			},
+		},
+	}
 	svc.clock = clock.NewFake(now)
 
 	_, err := svc.MarkBlocked(context.Background(), taskID, "blocked by dependency", Actor{Type: "system"})
@@ -729,6 +745,9 @@ func TestMarkBlockedCreatesResolutionTaskTitle(t *testing.T) {
 	resolution := taskRepo.createdTasks[len(taskRepo.createdTasks)-1]
 	if resolution.Title != "Resolve blocker for task alpha-3" {
 		t.Fatalf("resolution title = %q, want %q", resolution.Title, "Resolve blocker for task alpha-3")
+	}
+	if resolution.FlowTemplateID == nil || *resolution.FlowTemplateID != flowTemplateID {
+		t.Fatalf("resolution flow_template_id = %v, want %s", resolution.FlowTemplateID, flowTemplateID)
 	}
 }
 
