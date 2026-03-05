@@ -201,6 +201,102 @@ func TestValidateFlowTemplateReviewPathRejectsTerminalWorkAfterReview(t *testing
 	}
 }
 
+func TestProjectDeleteCleansHistoricalReferencesBeforeDelete(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	order := make([]string, 0, 3)
+
+	projects := &fakeProjectDeleteRepo{
+		project: repo.Project{
+			ID:             projectID,
+			OrganizationID: orgID,
+			Slug:           "cleanup-target",
+		},
+		order: &order,
+	}
+	modelInvocations := &fakeProjectDeleteCleanup{order: &order, label: "model_invocations"}
+	chatSessions := &fakeProjectDeleteCleanup{order: &order, label: "chat_sessions"}
+	events := &fakeProjectEventBus{}
+
+	svc := &service{
+		projects:          projects,
+		modelInvocations:  modelInvocations,
+		chatSessions:      chatSessions,
+		activeTaskChecker: fakeProjectTaskActivityChecker{hasActive: false},
+		events:            events,
+	}
+
+	if err := svc.Delete(ctx, orgID, projectID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if got, want := order, []string{"model_invocations", "chat_sessions", "delete"}; !equalStringSlices(got, want) {
+		t.Fatalf("call order = %v, want %v", got, want)
+	}
+	if len(events.events) != 1 {
+		t.Fatalf("published events = %d, want 1", len(events.events))
+	}
+	if events.events[0].EventType != "project.deleted" {
+		t.Fatalf("event type = %q, want project.deleted", events.events[0].EventType)
+	}
+	if projects.deletedID != projectID {
+		t.Fatalf("deleted project id = %s, want %s", projects.deletedID, projectID)
+	}
+	if modelInvocations.projectID != projectID {
+		t.Fatalf("model invocation cleanup project id = %s, want %s", modelInvocations.projectID, projectID)
+	}
+	if chatSessions.projectID != projectID {
+		t.Fatalf("chat cleanup project id = %s, want %s", chatSessions.projectID, projectID)
+	}
+}
+
+func TestProjectDeleteCleanupFailureStopsDelete(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	order := make([]string, 0, 3)
+	cleanupErr := errors.New("cleanup failed")
+
+	projects := &fakeProjectDeleteRepo{
+		project: repo.Project{
+			ID:             projectID,
+			OrganizationID: orgID,
+			Slug:           "cleanup-target",
+		},
+		order: &order,
+	}
+	modelInvocations := &fakeProjectDeleteCleanup{order: &order, label: "model_invocations"}
+	chatSessions := &fakeProjectDeleteCleanup{
+		order: &order,
+		label: "chat_sessions",
+		err:   cleanupErr,
+	}
+	events := &fakeProjectEventBus{}
+
+	svc := &service{
+		projects:          projects,
+		modelInvocations:  modelInvocations,
+		chatSessions:      chatSessions,
+		activeTaskChecker: fakeProjectTaskActivityChecker{hasActive: false},
+		events:            events,
+	}
+
+	err := svc.Delete(ctx, orgID, projectID)
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("Delete err = %v, want %v", err, cleanupErr)
+	}
+	if got, want := order, []string{"model_invocations", "chat_sessions"}; !equalStringSlices(got, want) {
+		t.Fatalf("call order = %v, want %v", got, want)
+	}
+	if projects.deletedID != uuid.Nil {
+		t.Fatalf("deleted project id = %s, want nil UUID", projects.deletedID)
+	}
+	if len(events.events) != 0 {
+		t.Fatalf("published events = %d, want 0", len(events.events))
+	}
+}
+
 type fakeProjectCreateRepo struct {
 	createdID   uuid.UUID
 	lastCreated repo.Project
@@ -258,4 +354,87 @@ func projectRequiresPMQueueSetting(settings json.RawMessage) bool {
 	}
 	flag, ok := raw.(bool)
 	return ok && flag
+}
+
+type fakeProjectDeleteRepo struct {
+	project   repo.Project
+	order     *[]string
+	deletedID uuid.UUID
+}
+
+func (f *fakeProjectDeleteRepo) Create(_ context.Context, project repo.Project) (repo.Project, error) {
+	return project, nil
+}
+
+func (f *fakeProjectDeleteRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Project, error) {
+	if id != f.project.ID {
+		return repo.Project{}, repo.ErrNotFound
+	}
+	return f.project, nil
+}
+
+func (f *fakeProjectDeleteRepo) GetBySlug(context.Context, uuid.UUID, string) (repo.Project, error) {
+	return repo.Project{}, repo.ErrNotFound
+}
+
+func (f *fakeProjectDeleteRepo) List(context.Context, uuid.UUID) ([]repo.Project, error) {
+	return nil, nil
+}
+
+func (f *fakeProjectDeleteRepo) Update(context.Context, repo.Project) (repo.Project, error) {
+	return repo.Project{}, nil
+}
+
+func (f *fakeProjectDeleteRepo) Archive(context.Context, uuid.UUID) error { return nil }
+
+func (f *fakeProjectDeleteRepo) Delete(_ context.Context, id uuid.UUID) error {
+	if f.order != nil {
+		*f.order = append(*f.order, "delete")
+	}
+	f.deletedID = id
+	return nil
+}
+
+type fakeProjectDeleteCleanup struct {
+	order     *[]string
+	label     string
+	projectID uuid.UUID
+	err       error
+}
+
+func (f *fakeProjectDeleteCleanup) ClearProjectReferences(_ context.Context, projectID uuid.UUID) error {
+	if f.order != nil {
+		*f.order = append(*f.order, f.label)
+	}
+	f.projectID = projectID
+	return f.err
+}
+
+func (f *fakeProjectDeleteCleanup) DeleteProjectScoped(_ context.Context, projectID uuid.UUID) error {
+	if f.order != nil {
+		*f.order = append(*f.order, f.label)
+	}
+	f.projectID = projectID
+	return f.err
+}
+
+type fakeProjectTaskActivityChecker struct {
+	hasActive bool
+	err       error
+}
+
+func (f fakeProjectTaskActivityChecker) HasActiveProjectTasks(context.Context, uuid.UUID) (bool, error) {
+	return f.hasActive, f.err
+}
+
+func equalStringSlices(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }

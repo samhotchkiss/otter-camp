@@ -223,6 +223,22 @@ func (r *ChatSessionRepo) Close(ctx context.Context, id uuid.UUID) (ChatSession,
 	return item, nil
 }
 
+func (r *ChatSessionRepo) DeleteProjectScoped(ctx context.Context, projectID uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `
+		DELETE FROM chat_session
+		WHERE (scope_type = 'project' AND scope_id = $1)
+		   OR (scope_type = 'project_task' AND scope_id IN (
+				SELECT id
+				FROM project_task
+				WHERE project_id = $1
+		   ))
+	`, projectID)
+	if err != nil {
+		return mapDBError(err)
+	}
+	return nil
+}
+
 func (r *ChatSessionRepo) updateSessionColumn(ctx context.Context, id uuid.UUID, assignment string, value any) (ChatSession, error) {
 	query := fmt.Sprintf(`
 		UPDATE chat_session

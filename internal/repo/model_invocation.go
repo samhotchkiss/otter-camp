@@ -47,11 +47,11 @@ type ModelInvocation struct {
 }
 
 type ModelInvocationRepo struct {
-	pool *pgxpool.Pool
+	db projectTaskExecutor
 }
 
 func NewModelInvocationRepo(pool *pgxpool.Pool) *ModelInvocationRepo {
-	return &ModelInvocationRepo{pool: pool}
+	return &ModelInvocationRepo{db: pool}
 }
 
 func (r *ModelInvocationRepo) Create(ctx context.Context, invocation ModelInvocation) (ModelInvocation, error) {
@@ -70,7 +70,7 @@ func (r *ModelInvocationRepo) Create(ctx context.Context, invocation ModelInvoca
 		attemptNumber = 1
 	}
 
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.QueryRow(ctx, `
 		INSERT INTO model_invocation (
 			organization_id,
 			model_provider_id,
@@ -124,7 +124,7 @@ func (r *ModelInvocationRepo) Create(ctx context.Context, invocation ModelInvoca
 }
 
 func (r *ModelInvocationRepo) GetByID(ctx context.Context, id uuid.UUID) (ModelInvocation, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.QueryRow(ctx, `
 		SELECT id, organization_id, model_provider_id, provider_connection_id, model_profile_id, invocation_purpose, status, prompt_storage_key, response_storage_key,
 		       input_tokens, output_tokens, cache_read_tokens, model_name, is_streaming, latency_ms, total_duration_ms, attempt_number,
 		       fallback_from_invocation_id, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
@@ -144,7 +144,7 @@ func (r *ModelInvocationRepo) GetByID(ctx context.Context, id uuid.UUID) (ModelI
 }
 
 func (r *ModelInvocationRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string, errorCode, errorMessage *string) (ModelInvocation, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.QueryRow(ctx, `
 		UPDATE model_invocation
 		SET status = $2,
 		    error_code = $3,
@@ -168,7 +168,7 @@ func (r *ModelInvocationRepo) UpdateStatus(ctx context.Context, id uuid.UUID, st
 }
 
 func (r *ModelInvocationRepo) UpdateCompletion(ctx context.Context, id uuid.UUID, inputTokens, outputTokens, cacheTokens, latencyMS, totalDurationMS int, promptKey, responseKey *string) error {
-	command, err := r.pool.Exec(ctx, `
+	command, err := r.db.Exec(ctx, `
 		UPDATE model_invocation
 		SET status = 'completed',
 		    input_tokens = $2,
@@ -254,8 +254,27 @@ func (r *ModelInvocationRepo) ListByRun(ctx context.Context, organizationID, run
 	`, organizationID, runID)
 }
 
+func (r *ModelInvocationRepo) ClearProjectReferences(ctx context.Context, projectID uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE model_invocation
+		SET
+			project_id = NULL,
+			project_task_id = NULL
+		WHERE project_id = $1
+		   OR project_task_id IN (
+				SELECT id
+				FROM project_task
+				WHERE project_id = $1
+		   )
+	`, projectID)
+	if err != nil {
+		return mapDBError(err)
+	}
+	return nil
+}
+
 func (r *ModelInvocationRepo) list(ctx context.Context, query string, args ...any) ([]ModelInvocation, error) {
-	rows, err := r.pool.Query(ctx, query, args...)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, mapDBError(err)
 	}

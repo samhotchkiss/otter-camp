@@ -263,3 +263,45 @@ func TestMemorySourceRepoListBySessionFiltersBySessionID(t *testing.T) {
 		}
 	}
 }
+
+func TestChatSessionRepoDeleteProjectScopedRemovesProjectAndTaskScopedSessions(t *testing.T) {
+	projectID := uuid.New()
+
+	var (
+		capturedSQL  string
+		capturedArgs []any
+	)
+
+	repo := &ChatSessionRepo{
+		db: &fakeChatExecutor{
+			execFn: func(_ context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
+				capturedSQL = sql
+				capturedArgs = arguments
+				return pgconn.CommandTag{}, nil
+			},
+		},
+	}
+
+	if err := repo.DeleteProjectScoped(context.Background(), projectID); err != nil {
+		t.Fatalf("DeleteProjectScoped: %v", err)
+	}
+
+	if !strings.Contains(capturedSQL, "DELETE FROM chat_session") {
+		t.Fatalf("sql = %q, want DELETE FROM chat_session", capturedSQL)
+	}
+	if !strings.Contains(capturedSQL, "scope_type = 'project'") {
+		t.Fatalf("sql = %q, want project scope clause", capturedSQL)
+	}
+	if !strings.Contains(capturedSQL, "scope_type = 'project_task'") {
+		t.Fatalf("sql = %q, want project_task scope clause", capturedSQL)
+	}
+	if !strings.Contains(capturedSQL, "FROM project_task") {
+		t.Fatalf("sql = %q, want project_task subquery", capturedSQL)
+	}
+	if len(capturedArgs) != 1 {
+		t.Fatalf("args len = %d, want 1", len(capturedArgs))
+	}
+	if arg, ok := capturedArgs[0].(uuid.UUID); !ok || arg != projectID {
+		t.Fatalf("project id arg = %#v, want %s", capturedArgs[0], projectID)
+	}
+}
