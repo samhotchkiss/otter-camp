@@ -120,7 +120,7 @@ func TestBuildSystemTemplateNodeSeedPlan(t *testing.T) {
 		}
 	})
 
-	t.Run("review template seeds work then review with edge", func(t *testing.T) {
+	t.Run("review template seeds work then internal review with edge", func(t *testing.T) {
 		plan, err := buildSystemTemplateNodeSeedPlan(repo.FlowTemplate{
 			ID:       templateID,
 			Slug:     "default-review",
@@ -141,8 +141,11 @@ func TestBuildSystemTemplateNodeSeedPlan(t *testing.T) {
 		if plan.Seeds[1].NodeType != "review" {
 			t.Fatalf("second node_type = %q, want %q", plan.Seeds[1].NodeType, "review")
 		}
-		if !plan.Seeds[1].RequiresHumanReview {
-			t.Fatal("second node RequiresHumanReview = false, want true")
+		if plan.Seeds[1].DisplayName != "Internal Review" {
+			t.Fatalf("second display_name = %q, want Internal Review", plan.Seeds[1].DisplayName)
+		}
+		if plan.Seeds[1].RequiresHumanReview {
+			t.Fatal("second node RequiresHumanReview = true, want false")
 		}
 	})
 
