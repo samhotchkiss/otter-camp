@@ -38,6 +38,7 @@ const (
 	memoryRecordEmbeddingDims     = 1536
 	memoryRecordDefaultConfidence = 0.85
 	memoryRecordDefaultUtility    = 0.7
+	reviewPolicyErrorMessage      = "review_policy must include mode: human_review_required, human_review_preferred, or delegated_authority"
 )
 
 type executionActor struct {
@@ -111,6 +112,40 @@ func readStringSlice(input map[string]any, key string) []string {
 	default:
 		return nil
 	}
+}
+
+func applyReviewPolicyInput(existing json.RawMessage, input map[string]any) (json.RawMessage, error) {
+	if input == nil {
+		return existing, nil
+	}
+	raw, ok := input["review_policy"]
+	if !ok {
+		return existing, nil
+	}
+	if raw == nil {
+		return taskplan.ClearReviewPolicy(existing), nil
+	}
+	policy, ok := taskplan.ParseReviewPolicyValue(raw)
+	if !ok {
+		return nil, errors.New(reviewPolicyErrorMessage)
+	}
+	return taskplan.ApplyReviewPolicy(existing, policy), nil
+}
+
+func reviewPolicyResponse(policy taskplan.ReviewPolicy) map[string]any {
+	out := map[string]any{
+		"mode": policy.Mode,
+	}
+	if len(policy.Guardrails) > 0 {
+		out["guardrails"] = append([]string(nil), policy.Guardrails...)
+	}
+	if policy.SummaryCadence != "" {
+		out["summary_cadence"] = policy.SummaryCadence
+	}
+	if policy.Source != "" {
+		out["source"] = policy.Source
+	}
+	return out
 }
 
 func decodePathStrings(ctx context.Context, wd SessionWorkDir, baseDir string, rawPaths []string) ([]string, error) {
@@ -576,6 +611,10 @@ func (e *NativeToolExecutor) handleProjectCreate(ctx context.Context, input map[
 	if !ok || deliveryMode == "" {
 		deliveryMode = "gated"
 	}
+	settings, err := applyReviewPolicyInput(json.RawMessage(`{"requires_pm_assignment_before_queue":true}`), input)
+	if err != nil {
+		return map[string]any{"error": err.Error()}, nil
+	}
 	actor := actorFromContext(ctx)
 	created, err := e.projects.Create(ctx, repo.Project{
 		OrganizationID: scope.organizationID,
@@ -585,7 +624,7 @@ func (e *NativeToolExecutor) handleProjectCreate(ctx context.Context, input map[
 		DeliveryMode:   deliveryMode,
 		CreatedByType:  actor.createdByType,
 		CreatedByID:    actor.createdByID,
-		Settings:       json.RawMessage(`{"requires_pm_assignment_before_queue":true}`),
+		Settings:       settings,
 	})
 	if err != nil {
 		return nil, err
@@ -616,14 +655,16 @@ func (e *NativeToolExecutor) handleProjectCreate(ctx context.Context, input map[
 		})
 	}
 
-	return map[string]any{
-		"project": map[string]any{
-			"id":     created.ID,
-			"slug":   created.Slug,
-			"name":   created.DisplayName,
-			"status": "active",
-		},
-	}, nil
+	projectResponse := map[string]any{
+		"id":     created.ID,
+		"slug":   created.Slug,
+		"name":   created.DisplayName,
+		"status": "active",
+	}
+	if policy, ok := taskplan.ParseReviewPolicy(created.Settings); ok {
+		projectResponse["review_policy"] = reviewPolicyResponse(policy)
+	}
+	return map[string]any{"project": projectResponse}, nil
 }
 
 func (e *NativeToolExecutor) handleProjectUpdate(ctx context.Context, input map[string]any) (map[string]any, error) {
@@ -650,18 +691,25 @@ func (e *NativeToolExecutor) handleProjectUpdate(ctx context.Context, input map[
 	if deliveryMode, ok := readString(input, "delivery_mode"); ok && deliveryMode != "" {
 		current.DeliveryMode = deliveryMode
 	}
+	if settings, settingsErr := applyReviewPolicyInput(current.Settings, input); settingsErr != nil {
+		return map[string]any{"error": settingsErr.Error()}, nil
+	} else if _, ok := input["review_policy"]; ok {
+		current.Settings = settings
+	}
 	updated, err := e.projects.Update(ctx, current)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
-		"project": map[string]any{
-			"id":     updated.ID,
-			"slug":   updated.Slug,
-			"name":   updated.DisplayName,
-			"status": "active",
-		},
-	}, nil
+	projectResponse := map[string]any{
+		"id":     updated.ID,
+		"slug":   updated.Slug,
+		"name":   updated.DisplayName,
+		"status": "active",
+	}
+	if policy, ok := taskplan.ParseReviewPolicy(updated.Settings); ok {
+		projectResponse["review_policy"] = reviewPolicyResponse(policy)
+	}
+	return map[string]any{"project": projectResponse}, nil
 }
 
 func (e *NativeToolExecutor) handleProjectArchive(ctx context.Context, input map[string]any) (map[string]any, error) {
@@ -723,7 +771,10 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		blocksScope = normalized
 	}
 	requiresHumanReview := readBool(input, "requires_human_review", false)
-	metadata := json.RawMessage(`{}`)
+	metadata, policyErr := applyReviewPolicyInput(json.RawMessage(`{}`), input)
+	if policyErr != nil {
+		return map[string]any{"error": policyErr.Error()}, nil
+	}
 	planning, resolvedFlowTemplateID, enrichedMetadata, err := e.applyReviewRefinementPlanning(
 		ctx,
 		scope.organizationID,
@@ -760,7 +811,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 			"blocks_scope": created.BlocksScope,
 		},
 	}
-	if planning.RequiresReviewAndRefinement() {
+	if planning.RequiresPlanningFlow() {
 		response["planning"] = reviewPlanningResponse(planning)
 	}
 	return response, nil
@@ -808,6 +859,11 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			return map[string]any{"error": "blocks_scope must be one of: none, all"}, nil
 		}
 		current.BlocksScope = normalized
+	}
+	if metadata, policyErr := applyReviewPolicyInput(current.Metadata, input); policyErr != nil {
+		return map[string]any{"error": policyErr.Error()}, nil
+	} else if _, ok := input["review_policy"]; ok {
+		current.Metadata = metadata
 	}
 	previousStatus := strings.TrimSpace(current.WorkStatus)
 	statusChanged := false
@@ -894,7 +950,7 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			"child_task_ids": uuidStringSlice(decomposition.childTaskIDs),
 		}
 	}
-	if planning.RequiresReviewAndRefinement() {
+	if planning.RequiresPlanningFlow() {
 		response["planning"] = reviewPlanningResponse(planning)
 	}
 	return response, nil
@@ -1009,8 +1065,18 @@ func (e *NativeToolExecutor) applyReviewRefinementPlanning(
 	flowTemplateID *uuid.UUID,
 	metadata json.RawMessage,
 ) (taskplan.Plan, *uuid.UUID, json.RawMessage, error) {
-	plan := taskplan.Analyze(title, description)
-	if !plan.RequiresReviewAndRefinement() {
+	projectSettings := json.RawMessage(`{}`)
+	if e.projects != nil {
+		projectRecord, err := e.projects.GetByID(ctx, projectID)
+		if err != nil {
+			return taskplan.Plan{}, nil, nil, err
+		}
+		projectSettings = projectRecord.Settings
+	}
+
+	policy := taskplan.ResolveReviewPolicy(projectSettings, metadata)
+	plan := taskplan.AnalyzeWithPolicy(title, description, policy)
+	if !plan.RequiresPlanningFlow() {
 		return plan, flowTemplateID, metadata, nil
 	}
 
@@ -1055,8 +1121,9 @@ func (e *NativeToolExecutor) resolveSystemFlowTemplate(ctx context.Context, orga
 }
 
 func reviewPlanningResponse(plan taskplan.Plan) map[string]any {
-	return map[string]any{
+	response := map[string]any{
 		"mode":           plan.Mode,
+		"review_policy":  reviewPolicyResponse(taskplan.ReviewPolicy{Mode: plan.ReviewPolicyMode, Guardrails: plan.Guardrails, SummaryCadence: plan.SummaryCadence}),
 		"planned_stages": append([]string(nil), plan.PlannedStages...),
 		"review_packet": map[string]any{
 			"summary":  plan.ReviewPacket.Summary,
@@ -1064,6 +1131,10 @@ func reviewPlanningResponse(plan taskplan.Plan) map[string]any {
 		},
 		"default_template_slug": plan.DefaultTemplateSlug,
 	}
+	if plan.SummaryCadence != "" {
+		response["summary_cadence"] = plan.SummaryCadence
+	}
+	return response
 }
 
 func uuidStringSlice(ids []uuid.UUID) []string {

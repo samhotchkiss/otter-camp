@@ -9,6 +9,8 @@ import (
 const (
 	ModeExecutionFirst       = "execution_first"
 	ModeReviewAndRefinement  = "review_and_refinement"
+	ModeAutonomousInternal   = "autonomous_internal_review"
+	InternalReviewTemplate   = "default-review"
 	ReviewRefinementTemplate = "default-review-refinement"
 	metadataKeyPlanning      = "planning"
 	reviewPacketSummary      = "Package generated options with internal critique before human review."
@@ -98,6 +100,9 @@ type Plan struct {
 	Subjective          bool         `json:"subjective"`
 	Comparative         bool         `json:"comparative"`
 	MultiOption         bool         `json:"multi_option"`
+	ReviewPolicyMode    string       `json:"review_policy_mode,omitempty"`
+	Guardrails          []string     `json:"guardrails,omitempty"`
+	SummaryCadence      string       `json:"summary_cadence,omitempty"`
 	PlannedStages       []string     `json:"planned_stages,omitempty"`
 	DefaultTemplateSlug string       `json:"default_template_slug,omitempty"`
 	ReviewPacket        ReviewPacket `json:"review_packet,omitempty"`
@@ -107,7 +112,15 @@ func (p Plan) RequiresReviewAndRefinement() bool {
 	return p.Mode == ModeReviewAndRefinement
 }
 
+func (p Plan) RequiresPlanningFlow() bool {
+	return p.Mode != "" && p.Mode != ModeExecutionFirst
+}
+
 func Analyze(title string, description *string) Plan {
+	return AnalyzeWithPolicy(title, description, ReviewPolicy{})
+}
+
+func AnalyzeWithPolicy(title string, description *string, policy ReviewPolicy) Plan {
 	text := normalizeText(title, description)
 	if text == "" {
 		return Plan{Mode: ModeExecutionFirst}
@@ -133,11 +146,34 @@ func Analyze(title string, description *string) Plan {
 	}
 
 	if reviewScore >= 2 && (multiOption || subjective) {
+		policy = normalizeReviewPolicy(policy)
+		if policy.AllowsAutonomousContinuation() {
+			plan := Plan{
+				Mode:                ModeAutonomousInternal,
+				Subjective:          subjective,
+				Comparative:         comparative,
+				MultiOption:         multiOption,
+				ReviewPolicyMode:    policy.Mode,
+				Guardrails:          append([]string(nil), policy.Guardrails...),
+				SummaryCadence:      policy.SummaryCadence,
+				PlannedStages:       []string{"generation", "internal_review", "autonomous_delivery"},
+				DefaultTemplateSlug: InternalReviewTemplate,
+			}
+			if policy.Mode == PolicyHumanReviewPreferred {
+				plan.PlannedStages = []string{"generation", "internal_review", "periodic_review_summary"}
+				if plan.SummaryCadence == "" {
+					plan.SummaryCadence = "weekly"
+				}
+			}
+			return plan
+		}
+
 		return Plan{
 			Mode:                ModeReviewAndRefinement,
 			Subjective:          subjective,
 			Comparative:         comparative,
 			MultiOption:         multiOption,
+			ReviewPolicyMode:    PolicyHumanReviewRequired,
 			PlannedStages:       []string{"generation", "internal_review", "human_review"},
 			DefaultTemplateSlug: ReviewRefinementTemplate,
 			ReviewPacket: ReviewPacket{
@@ -156,7 +192,7 @@ func Analyze(title string, description *string) Plan {
 }
 
 func ApplyMetadata(existing json.RawMessage, plan Plan) json.RawMessage {
-	if !plan.RequiresReviewAndRefinement() {
+	if !plan.RequiresPlanningFlow() {
 		return normalizeJSON(existing)
 	}
 
@@ -173,6 +209,9 @@ func ApplyMetadata(existing json.RawMessage, plan Plan) json.RawMessage {
 		"subjective":            plan.Subjective,
 		"comparative":           plan.Comparative,
 		"multi_option":          plan.MultiOption,
+		"review_policy_mode":    plan.ReviewPolicyMode,
+		"guardrails":            append([]string(nil), plan.Guardrails...),
+		"summary_cadence":       plan.SummaryCadence,
 		"planned_stages":        append([]string(nil), plan.PlannedStages...),
 		"default_template_slug": plan.DefaultTemplateSlug,
 		"review_packet": map[string]any{
@@ -214,6 +253,9 @@ func Parse(metadata json.RawMessage) (Plan, bool) {
 		Subjective:          readBool(rawPlanning["subjective"]),
 		Comparative:         readBool(rawPlanning["comparative"]),
 		MultiOption:         readBool(rawPlanning["multi_option"]),
+		ReviewPolicyMode:    strings.TrimSpace(readString(rawPlanning["review_policy_mode"])),
+		Guardrails:          readStringSlice(rawPlanning["guardrails"]),
+		SummaryCadence:      strings.TrimSpace(readString(rawPlanning["summary_cadence"])),
 		DefaultTemplateSlug: strings.TrimSpace(readString(rawPlanning["default_template_slug"])),
 		PlannedStages:       readStringSlice(rawPlanning["planned_stages"]),
 	}

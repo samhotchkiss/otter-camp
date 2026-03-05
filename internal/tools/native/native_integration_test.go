@@ -23,6 +23,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"github.com/samhotchkiss/otter-camp/internal/testutil"
 )
@@ -425,6 +426,132 @@ func TestIntegrationTaskCreateSubjectiveMultiOptionUsesReviewRefinementPlanning(
 	}
 	if nodes[0].DisplayName != "Generation" || nodes[1].DisplayName != "Internal Review" || nodes[2].DisplayName != "Human Review" {
 		t.Fatalf("unexpected node sequence = [%s %s %s]", nodes[0].DisplayName, nodes[1].DisplayName, nodes[2].DisplayName)
+	}
+}
+
+func TestIntegrationDelegatedCreativeWorkflowUsesInternalReviewWithoutHumanCheckpoint(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	worker := testutil.MakeAgent(t, pool, orgID)
+	reviewer := testutil.MakeAgent(t, pool, orgID)
+
+	template := seedInternalReviewSystemTemplate(t, ctx, pool)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	updated, err := executor.Execute(integrationExecCtxWith(orgID, worker.ID), "project.update", map[string]any{
+		"project_id": project.ID.String(),
+		"review_policy": map[string]any{
+			"mode":       taskplan.PolicyDelegatedAuthority,
+			"guardrails": []string{"Use OtterCamp voice", "Avoid unsupported claims"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("project.update: %v", err)
+	}
+	projectPayload, ok := updated["project"].(map[string]any)
+	if !ok {
+		t.Fatalf("project output = %T, want map[string]any", updated["project"])
+	}
+	reviewPolicy, ok := projectPayload["review_policy"].(map[string]any)
+	if !ok {
+		t.Fatalf("project.review_policy = %T, want map[string]any", projectPayload["review_policy"])
+	}
+	if reviewPolicy["mode"] != taskplan.PolicyDelegatedAuthority {
+		t.Fatalf("project.review_policy.mode = %v, want %s", reviewPolicy["mode"], taskplan.PolicyDelegatedAuthority)
+	}
+
+	createTask := func(title, description string) (uuid.UUID, map[string]any) {
+		t.Helper()
+		out, err := executor.Execute(integrationExecCtxWith(orgID, worker.ID), "task.create", map[string]any{
+			"project_id":  project.ID.String(),
+			"title":       title,
+			"description": description,
+		})
+		if err != nil {
+			t.Fatalf("task.create %q: %v", title, err)
+		}
+		planning, ok := out["planning"].(map[string]any)
+		if !ok {
+			t.Fatalf("planning output for %q = %T, want map[string]any", title, out["planning"])
+		}
+		if planning["mode"] != taskplan.ModeAutonomousInternal {
+			t.Fatalf("planning.mode for %q = %v, want %s", title, planning["mode"], taskplan.ModeAutonomousInternal)
+		}
+		if planning["default_template_slug"] != taskplan.InternalReviewTemplate {
+			t.Fatalf("default_template_slug for %q = %v, want %s", title, planning["default_template_slug"], taskplan.InternalReviewTemplate)
+		}
+		return nestedUUID(t, out, "task", "id"), planning
+	}
+
+	firstTaskID, _ := createTask(
+		"Homepage design options",
+		"Generate 10 homepage design options, compare them, and recommend the strongest one within the brand guardrails.",
+	)
+	secondTaskID, _ := createTask(
+		"Launch-week blog post ideas",
+		"Brainstorm 8 launch-week blog post ideas, compare them, and recommend which ones to ship next.",
+	)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	firstTask, err := taskRepo.GetByID(ctx, firstTaskID)
+	if err != nil {
+		t.Fatalf("load first task: %v", err)
+	}
+	secondTask, err := taskRepo.GetByID(ctx, secondTaskID)
+	if err != nil {
+		t.Fatalf("load second task: %v", err)
+	}
+	if firstTask.FlowTemplateID == nil || *firstTask.FlowTemplateID != template.ID {
+		t.Fatalf("first flow_template_id = %v, want %s", firstTask.FlowTemplateID, template.ID)
+	}
+	if secondTask.FlowTemplateID == nil || *secondTask.FlowTemplateID != template.ID {
+		t.Fatalf("second flow_template_id = %v, want %s", secondTask.FlowTemplateID, template.ID)
+	}
+
+	if _, err := taskRepo.UpdateStatus(ctx, firstTaskID, "in_progress"); err != nil {
+		t.Fatalf("UpdateStatus in_progress: %v", err)
+	}
+
+	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})
+	flowService, err := flowsvc.NewService(flowsvc.Options{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService flow: %v", err)
+	}
+
+	if _, err := flowService.StartFlow(ctx, firstTaskID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := flowService.AdvanceFlow(ctx, firstTaskID, flowsvc.Actor{Type: "agent", ID: worker.ID}); err != nil {
+		t.Fatalf("AdvanceFlow work: %v", err)
+	}
+	if _, err := flowService.AdvanceFlow(ctx, firstTaskID, flowsvc.Actor{Type: "agent", ID: reviewer.ID}); err != nil {
+		t.Fatalf("AdvanceFlow internal review: %v", err)
+	}
+
+	completedTask, err := taskRepo.GetByID(ctx, firstTaskID)
+	if err != nil {
+		t.Fatalf("reload completed task: %v", err)
+	}
+	if completedTask.WorkStatus != "done" {
+		t.Fatalf("work_status = %q, want done", completedTask.WorkStatus)
+	}
+
+	var inboxCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM inbox_item
+		WHERE source_task_id = $1
+		  AND item_type = 'task_review'
+	`, firstTaskID).Scan(&inboxCount); err != nil {
+		t.Fatalf("count task review inbox items: %v", err)
+	}
+	if inboxCount != 0 {
+		t.Fatalf("task_review inbox count = %d, want 0", inboxCount)
 	}
 }
 
@@ -1421,6 +1548,60 @@ func seedReviewRefinementSystemTemplate(t *testing.T, ctx context.Context, pool 
 	updated, err := templateRepo.Update(ctx, template)
 	if err != nil {
 		t.Fatalf("set review refinement start node: %v", err)
+	}
+	return updated
+}
+
+func seedInternalReviewSystemTemplate(t *testing.T, ctx context.Context, pool *pgxpool.Pool) repo.FlowTemplate {
+	t.Helper()
+
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		Slug:          "default-review",
+		DisplayName:   "Default Review",
+		Description:   "Delegated creative work with internal review",
+		IsCurrent:     true,
+		Version:       1,
+		IsSystem:      true,
+		CreatedByType: "system",
+		CreatedByID:   uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create system internal review template: %v", err)
+	}
+
+	workNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create work node: %v", err)
+	}
+	internalReview, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Internal Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create internal review node: %v", err)
+	}
+
+	workNode.NextNodeID = &internalReview.ID
+	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
+		t.Fatalf("link work node: %v", err)
+	}
+
+	template.StartNodeID = &workNode.ID
+	updated, err := templateRepo.Update(ctx, template)
+	if err != nil {
+		t.Fatalf("set internal review start node: %v", err)
 	}
 	return updated
 }

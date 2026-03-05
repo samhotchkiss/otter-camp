@@ -662,10 +662,9 @@ func buildSystemTemplateNodeSeedPlan(template repo.FlowTemplate, existing []repo
 					NextSeedIndex: &nextIndex,
 				},
 				{
-					DisplayName:         "Review",
-					NodeType:            "review",
-					Position:            1,
-					RequiresHumanReview: true,
+					DisplayName: "Internal Review",
+					NodeType:    "review",
+					Position:    1,
 				},
 			},
 		}, nil

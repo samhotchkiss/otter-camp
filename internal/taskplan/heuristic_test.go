@@ -2,6 +2,7 @@ package taskplan
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -35,6 +36,47 @@ func TestAnalyzeClassifiesVerifiableRequestsAsExecutionFirst(t *testing.T) {
 	}
 	if plan.Mode != ModeExecutionFirst {
 		t.Fatalf("Mode = %q, want %q", plan.Mode, ModeExecutionFirst)
+	}
+}
+
+func TestAnalyzeWithDelegatedPolicyChoosesAutonomousInternalReview(t *testing.T) {
+	description := "Generate 10 homepage design options, compare them, and recommend a direction that stays on-brand."
+
+	plan := AnalyzeWithPolicy("Homepage design options", &description, ReviewPolicy{
+		Mode:       PolicyDelegatedAuthority,
+		Guardrails: []string{"Use OtterCamp voice", "Avoid unsupported claims"},
+	})
+	if plan.Mode != ModeAutonomousInternal {
+		t.Fatalf("Mode = %q, want %q", plan.Mode, ModeAutonomousInternal)
+	}
+	if plan.DefaultTemplateSlug != InternalReviewTemplate {
+		t.Fatalf("DefaultTemplateSlug = %q, want %q", plan.DefaultTemplateSlug, InternalReviewTemplate)
+	}
+	if plan.ReviewPolicyMode != PolicyDelegatedAuthority {
+		t.Fatalf("ReviewPolicyMode = %q, want %q", plan.ReviewPolicyMode, PolicyDelegatedAuthority)
+	}
+	if !reflect.DeepEqual(plan.Guardrails, []string{"Use OtterCamp voice", "Avoid unsupported claims"}) {
+		t.Fatalf("Guardrails = %#v, want delegated guardrails", plan.Guardrails)
+	}
+	if !reflect.DeepEqual(plan.PlannedStages, []string{"generation", "internal_review", "autonomous_delivery"}) {
+		t.Fatalf("PlannedStages = %#v, want autonomous internal review stages", plan.PlannedStages)
+	}
+}
+
+func TestAnalyzeWithPreferredPolicyAddsPeriodicReviewSummary(t *testing.T) {
+	description := "Brainstorm 12 campaign concepts, compare them, and recommend which ones to keep shipping."
+
+	plan := AnalyzeWithPolicy("Campaign concepts", &description, ReviewPolicy{
+		Mode: PolicyHumanReviewPreferred,
+	})
+	if plan.Mode != ModeAutonomousInternal {
+		t.Fatalf("Mode = %q, want %q", plan.Mode, ModeAutonomousInternal)
+	}
+	if plan.SummaryCadence != "weekly" {
+		t.Fatalf("SummaryCadence = %q, want weekly", plan.SummaryCadence)
+	}
+	if !reflect.DeepEqual(plan.PlannedStages, []string{"generation", "internal_review", "periodic_review_summary"}) {
+		t.Fatalf("PlannedStages = %#v, want periodic review summary stages", plan.PlannedStages)
 	}
 }
 

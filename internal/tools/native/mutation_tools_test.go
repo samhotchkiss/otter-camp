@@ -18,6 +18,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
 func TestFileWriteAtomicLeavesNoTempFile(t *testing.T) {
@@ -898,6 +899,112 @@ func TestTaskCreateSubjectiveMultiOptionAutoAssignsReviewRefinementTemplate(t *t
 	}
 }
 
+func TestTaskCreateDelegatedCreativePolicyUsesInternalReviewTemplate(t *testing.T) {
+	projectID := uuid.New()
+	orgID := uuid.New()
+	templateID := uuid.New()
+	internalReviewID := uuid.New()
+	description := "Generate 10 homepage design options, compare them, and recommend a direction that stays within the brand guardrails."
+
+	tasks := &mockTaskRepo{}
+	projects := &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Slug:           "editorial-project",
+				DisplayName:    "Editorial Project",
+				Settings: taskplan.ApplyReviewPolicy(nil, taskplan.ReviewPolicy{
+					Mode:       taskplan.PolicyDelegatedAuthority,
+					Guardrails: []string{"Use OtterCamp voice", "Avoid unsupported claims"},
+				}),
+			},
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.projects = projects
+	executor.flowTemplates = &mockFlowTemplateRepo{
+		templates: map[uuid.UUID]repo.FlowTemplate{
+			templateID: {
+				ID:        templateID,
+				Slug:      "default-review",
+				IsCurrent: true,
+			},
+		},
+	}
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			templateID: {
+				{
+					ID:             uuid.New(),
+					FlowTemplateID: templateID,
+					DisplayName:    "Work",
+					NodeType:       "work",
+					Position:       1,
+					NextNodeID:     &internalReviewID,
+				},
+				{
+					ID:             internalReviewID,
+					FlowTemplateID: templateID,
+					DisplayName:    "Internal Review",
+					NodeType:       "review",
+					Position:       2,
+				},
+			},
+		},
+	}
+
+	out, err := executor.Execute(testExecCtx(), "task.create", map[string]any{
+		"project_id":   projectID.String(),
+		"title":        "Homepage design options",
+		"description":  description,
+		"blocks_scope": "none",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if len(tasks.createdTasks) != 1 {
+		t.Fatalf("created task count = %d, want 1", len(tasks.createdTasks))
+	}
+	if tasks.createdTasks[0].FlowTemplateID == nil || *tasks.createdTasks[0].FlowTemplateID != templateID {
+		t.Fatalf("flow_template_id = %v, want %s", tasks.createdTasks[0].FlowTemplateID, templateID)
+	}
+
+	planning, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	if planning["mode"] != taskplan.ModeAutonomousInternal {
+		t.Fatalf("planning.mode = %v, want %s", planning["mode"], taskplan.ModeAutonomousInternal)
+	}
+	if planning["default_template_slug"] != taskplan.InternalReviewTemplate {
+		t.Fatalf("default_template_slug = %v, want %s", planning["default_template_slug"], taskplan.InternalReviewTemplate)
+	}
+	reviewPolicy, ok := planning["review_policy"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning.review_policy = %T, want map[string]any", planning["review_policy"])
+	}
+	if reviewPolicy["mode"] != taskplan.PolicyDelegatedAuthority {
+		t.Fatalf("planning.review_policy.mode = %v, want %s", reviewPolicy["mode"], taskplan.PolicyDelegatedAuthority)
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal(tasks.createdTasks[0].Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	planningMeta, ok := metadata["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning metadata = %T, want map[string]any", metadata["planning"])
+	}
+	if planningMeta["review_policy_mode"] != taskplan.PolicyDelegatedAuthority {
+		t.Fatalf("review_policy_mode = %v, want %s", planningMeta["review_policy_mode"], taskplan.PolicyDelegatedAuthority)
+	}
+	if planningMeta["default_template_slug"] != taskplan.InternalReviewTemplate {
+		t.Fatalf("default_template_slug = %v, want %s", planningMeta["default_template_slug"], taskplan.InternalReviewTemplate)
+	}
+}
+
 func TestTaskCreateVerifiableRequestDoesNotAutoAssignReviewRefinementTemplate(t *testing.T) {
 	projectID := uuid.New()
 	orgID := uuid.New()
@@ -1002,6 +1109,139 @@ func TestTaskUpdateRejectsFlowTemplateChangeOutsideDraft(t *testing.T) {
 	}
 	if tasks.updateCalls != 0 {
 		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)
+	}
+}
+
+func TestTaskUpdateReviewPolicyOverrideBeatsProjectPolicyWhenQueuing(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	orgID := uuid.New()
+	reviewTemplateID := uuid.New()
+	reviewRefinementTemplateID := uuid.New()
+	reviewInternalID := uuid.New()
+	reviewHumanID := uuid.New()
+	description := "Generate 10 homepage design options, compare them, and recommend the strongest one."
+
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Homepage design options",
+			Description:    &description,
+			WorkStatus:     "draft",
+			BlocksScope:    "none",
+			Metadata:       json.RawMessage(`{}`),
+			CreatedByType:  "agent",
+		},
+	}
+	projects := &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Settings: taskplan.ApplyReviewPolicy(nil, taskplan.ReviewPolicy{
+					Mode: taskplan.PolicyHumanReviewRequired,
+				}),
+			},
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.projects = projects
+	executor.flowTemplates = &mockFlowTemplateRepo{
+		templates: map[uuid.UUID]repo.FlowTemplate{
+			reviewTemplateID: {
+				ID:        reviewTemplateID,
+				Slug:      "default-review",
+				IsCurrent: true,
+			},
+			reviewRefinementTemplateID: {
+				ID:        reviewRefinementTemplateID,
+				Slug:      "default-review-refinement",
+				IsCurrent: true,
+			},
+		},
+	}
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			reviewTemplateID: {
+				{
+					ID:             uuid.New(),
+					FlowTemplateID: reviewTemplateID,
+					DisplayName:    "Work",
+					NodeType:       "work",
+					Position:       1,
+					NextNodeID:     &reviewInternalID,
+				},
+				{
+					ID:             reviewInternalID,
+					FlowTemplateID: reviewTemplateID,
+					DisplayName:    "Internal Review",
+					NodeType:       "review",
+					Position:       2,
+				},
+			},
+			reviewRefinementTemplateID: {
+				{
+					ID:             uuid.New(),
+					FlowTemplateID: reviewRefinementTemplateID,
+					DisplayName:    "Generation",
+					NodeType:       "work",
+					Position:       1,
+					NextNodeID:     &reviewInternalID,
+				},
+				{
+					ID:             reviewInternalID,
+					FlowTemplateID: reviewRefinementTemplateID,
+					DisplayName:    "Internal Review",
+					NodeType:       "review",
+					Position:       2,
+					NextNodeID:     &reviewHumanID,
+				},
+				{
+					ID:                  reviewHumanID,
+					FlowTemplateID:      reviewRefinementTemplateID,
+					DisplayName:         "Human Review",
+					NodeType:            "review",
+					Position:            3,
+					RequiresHumanReview: true,
+				},
+			},
+		},
+	}
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "queued",
+		"review_policy": map[string]any{
+			"mode":       taskplan.PolicyDelegatedAuthority,
+			"guardrails": []string{"Use OtterCamp voice"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if tasks.task.FlowTemplateID == nil || *tasks.task.FlowTemplateID != reviewTemplateID {
+		t.Fatalf("flow_template_id = %v, want %s", tasks.task.FlowTemplateID, reviewTemplateID)
+	}
+	if tasks.task.WorkStatus != "queued" {
+		t.Fatalf("work_status = %q, want queued", tasks.task.WorkStatus)
+	}
+
+	planning, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	if planning["default_template_slug"] != taskplan.InternalReviewTemplate {
+		t.Fatalf("default_template_slug = %v, want %s", planning["default_template_slug"], taskplan.InternalReviewTemplate)
+	}
+	policy, ok := taskplan.ParseReviewPolicy(tasks.task.Metadata)
+	if !ok {
+		t.Fatalf("ParseReviewPolicy(metadata) = false, want true")
+	}
+	if policy.Mode != taskplan.PolicyDelegatedAuthority {
+		t.Fatalf("policy mode = %q, want %s", policy.Mode, taskplan.PolicyDelegatedAuthority)
 	}
 }
 
@@ -1621,8 +1861,12 @@ func (f *fakeProjectRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Project
 func (f *fakeProjectRepo) GetBySlug(context.Context, uuid.UUID, string) (repo.Project, error) {
 	return repo.Project{}, nil
 }
-func (f *fakeProjectRepo) Update(context.Context, repo.Project) (repo.Project, error) {
-	return repo.Project{}, nil
+func (f *fakeProjectRepo) Update(_ context.Context, projectRecord repo.Project) (repo.Project, error) {
+	if f.projects == nil {
+		f.projects = make(map[uuid.UUID]repo.Project)
+	}
+	f.projects[projectRecord.ID] = projectRecord
+	return projectRecord, nil
 }
 func (f *fakeProjectRepo) Archive(context.Context, uuid.UUID) error { return nil }
 
@@ -1775,6 +2019,55 @@ func TestProjectCreatePublishesStaffingEventAndDoesNotAutoAssignAgents(t *testin
 	}
 	if publisher.events[1].EventType != "project.staffing_needed" {
 		t.Fatalf("event[1].type = %q, want project.staffing_needed", publisher.events[1].EventType)
+	}
+}
+
+func TestProjectCreatePersistsReviewPolicyInSettings(t *testing.T) {
+	orgID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	agentID := uuid.MustParse("66666666-6666-6666-6666-666666666666")
+
+	projects := &fakeProjectRepo{}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.projects = projects
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+	})
+
+	out, err := executor.Execute(ctx, "project.create", map[string]any{
+		"name": "Editorial Engine",
+		"review_policy": map[string]any{
+			"mode":            taskplan.PolicyDelegatedAuthority,
+			"guardrails":      []string{"Use OtterCamp voice", "Avoid unsupported claims"},
+			"summary_cadence": "weekly",
+		},
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+
+	policy, ok := taskplan.ParseReviewPolicy(projects.lastCreated.Settings)
+	if !ok {
+		t.Fatalf("ParseReviewPolicy(settings) = false, want true; settings=%s", string(projects.lastCreated.Settings))
+	}
+	if policy.Mode != taskplan.PolicyDelegatedAuthority {
+		t.Fatalf("Mode = %q, want %s", policy.Mode, taskplan.PolicyDelegatedAuthority)
+	}
+	if policy.SummaryCadence != "weekly" {
+		t.Fatalf("SummaryCadence = %q, want weekly", policy.SummaryCadence)
+	}
+
+	project, ok := out["project"].(map[string]any)
+	if !ok {
+		t.Fatalf("project output = %T, want map[string]any", out["project"])
+	}
+	responsePolicy, ok := project["review_policy"].(map[string]any)
+	if !ok {
+		t.Fatalf("project.review_policy = %T, want map[string]any", project["review_policy"])
+	}
+	if responsePolicy["mode"] != taskplan.PolicyDelegatedAuthority {
+		t.Fatalf("project.review_policy.mode = %v, want %s", responsePolicy["mode"], taskplan.PolicyDelegatedAuthority)
 	}
 }
 
