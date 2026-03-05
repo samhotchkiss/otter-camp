@@ -238,6 +238,78 @@ func TestProjectHTTPListStatusFiltersAfterArchive(t *testing.T) {
 	}
 }
 
+func TestProjectHTTPPauseResumeExposesPausedState(t *testing.T) {
+	testServer, _, adminUser, _ := newProjectTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects", map[string]any{
+		"slug":          "paused-project",
+		"display_name":  "Paused Project",
+		"delivery_mode": "gated",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if created.StatusCode != http.StatusCreated {
+		t.Fatalf("create project status = %d, want %d body=%s", created.StatusCode, http.StatusCreated, string(created.Body))
+	}
+	projectID := jsonPathString(t, created.Body, "data", "id")
+
+	paused := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+projectID+"/pause", map[string]any{
+		"reason": "operator pause",
+		"metadata": map[string]any{
+			"source": "integration-test",
+		},
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if paused.StatusCode != http.StatusOK {
+		t.Fatalf("pause project status = %d, want %d body=%s", paused.StatusCode, http.StatusOK, string(paused.Body))
+	}
+	if !jsonPathBoolValue(t, paused.Body, "data", "is_paused") {
+		t.Fatalf("pause response is_paused = false, want true body=%s", string(paused.Body))
+	}
+	if got := jsonPathString(t, paused.Body, "data", "pause_reason"); got != "operator pause" {
+		t.Fatalf("pause_reason = %q, want %q body=%s", got, "operator pause", string(paused.Body))
+	}
+	if got := jsonPathString(t, paused.Body, "data", "pause_metadata", "source"); got != "integration-test" {
+		t.Fatalf("pause_metadata.source = %q, want %q body=%s", got, "integration-test", string(paused.Body))
+	}
+
+	got := mustJSON(t, http.MethodGet, testServer.URL+"/v1/projects/"+projectID, nil, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if got.StatusCode != http.StatusOK {
+		t.Fatalf("get paused project status = %d, want %d body=%s", got.StatusCode, http.StatusOK, string(got.Body))
+	}
+	if !jsonPathBoolValue(t, got.Body, "data", "is_paused") {
+		t.Fatalf("get response is_paused = false, want true body=%s", string(got.Body))
+	}
+	if gotReason := jsonPathString(t, got.Body, "data", "pause_reason"); gotReason != "operator pause" {
+		t.Fatalf("get pause_reason = %q, want %q body=%s", gotReason, "operator pause", string(got.Body))
+	}
+
+	list := mustJSON(t, http.MethodGet, testServer.URL+"/v1/projects", nil, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if list.StatusCode != http.StatusOK {
+		t.Fatalf("list projects status = %d, want %d body=%s", list.StatusCode, http.StatusOK, string(list.Body))
+	}
+	if !jsonPathBoolValue(t, list.Body, "data", "0", "is_paused") {
+		t.Fatalf("list response is_paused = false, want true body=%s", string(list.Body))
+	}
+	if got := jsonPathString(t, list.Body, "data", "0", "pause_metadata", "source"); got != "integration-test" {
+		t.Fatalf("list pause_metadata.source = %q, want %q body=%s", got, "integration-test", string(list.Body))
+	}
+
+	resumed := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+projectID+"/resume", map[string]any{}, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if resumed.StatusCode != http.StatusOK {
+		t.Fatalf("resume project status = %d, want %d body=%s", resumed.StatusCode, http.StatusOK, string(resumed.Body))
+	}
+	if jsonPathBoolValue(t, resumed.Body, "data", "is_paused") {
+		t.Fatalf("resume response is_paused = true, want false body=%s", string(resumed.Body))
+	}
+}
+
 func TestProjectHTTPFlowTemplateScheduleAndNodes(t *testing.T) {
 	testServer, org, adminUser, memberUser := newProjectTestServer(t)
 	defer testServer.Close()

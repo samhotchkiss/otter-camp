@@ -18,6 +18,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/metrics"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
@@ -184,6 +185,10 @@ type projectTaskRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
 }
 
+type projectRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.Project, error)
+}
+
 type humanUserRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.HumanUser, error)
 }
@@ -209,6 +214,7 @@ type Options struct {
 	Turns        chatTurnRepository
 	Reactions    chatReactionRepository
 	Tasks        projectTaskRepository
+	Projects     projectRepository
 	Users        humanUserRepository
 	Agents       agentRepository
 
@@ -226,6 +232,7 @@ type service struct {
 	turns        chatTurnRepository
 	reactions    chatReactionRepository
 	tasks        projectTaskRepository
+	projects     projectRepository
 	users        humanUserRepository
 	agents       agentRepository
 
@@ -279,6 +286,11 @@ func NewService(opts Options) (ChatService, error) {
 		svc.tasks = opts.Tasks
 	} else {
 		svc.tasks = repo.NewProjectTaskRepo(opts.Pool)
+	}
+	if opts.Projects != nil {
+		svc.projects = opts.Projects
+	} else {
+		svc.projects = repo.NewProjectRepo(opts.Pool)
 	}
 	if opts.Users != nil {
 		svc.users = opts.Users
@@ -337,6 +349,11 @@ func (s *service) CreateSession(ctx context.Context, input CreateSessionInput) (
 		}
 		if taskRecord.OrganizationID != orgID {
 			return nil, repo.ErrNotFound
+		}
+	}
+	if mode == "async" {
+		if err := s.ensureProjectNotPausedForScope(ctx, scopeType, input.ScopeID, orgID); err != nil {
+			return nil, err
 		}
 	}
 
@@ -620,6 +637,13 @@ func (s *service) GetOrCreateNodeSession(ctx context.Context, flowNodeExecutionI
 		}
 		return nil, mapDBError(err)
 	}
+	taskRecord, err := s.tasks.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureProjectNotPausedByID(ctx, taskRecord.ProjectID, agentRecord.OrganizationID); err != nil {
+		return nil, err
+	}
 
 	metadata := normalizeJSON(mustJSON(map[string]any{"flow_node_execution_id": flowNodeExecutionID.String()}), json.RawMessage(`{}`))
 	var createdID uuid.UUID
@@ -867,6 +891,59 @@ func (s *service) monitorTurnResponse(orgID, sessionID uuid.UUID, msgAt time.Tim
 	})
 }
 
+func (s *service) ensureProjectNotPausedForSession(ctx context.Context, session *ChatSession) error {
+	if session == nil {
+		return nil
+	}
+	return s.ensureProjectNotPausedForScope(ctx, session.ScopeType, session.ScopeID, session.OrganizationID)
+}
+
+func (s *service) ensureProjectNotPausedForScope(ctx context.Context, scopeType string, scopeID, organizationID uuid.UUID) error {
+	projectID, err := s.projectIDForScope(ctx, scopeType, scopeID, organizationID)
+	if err != nil || projectID == nil || *projectID == uuid.Nil {
+		return err
+	}
+	return s.ensureProjectNotPausedByID(ctx, *projectID, organizationID)
+}
+
+func (s *service) projectIDForScope(ctx context.Context, scopeType string, scopeID, organizationID uuid.UUID) (*uuid.UUID, error) {
+	switch normalizeScopeType(scopeType) {
+	case "project":
+		projectID := scopeID
+		return &projectID, nil
+	case "project_task":
+		taskRecord, err := s.tasks.GetByID(ctx, scopeID)
+		if err != nil {
+			return nil, err
+		}
+		if taskRecord.OrganizationID != organizationID {
+			return nil, repo.ErrNotFound
+		}
+		projectID := taskRecord.ProjectID
+		return &projectID, nil
+	default:
+		return nil, nil
+	}
+}
+
+func (s *service) ensureProjectNotPausedByID(ctx context.Context, projectID, organizationID uuid.UUID) error {
+	if s.projects == nil || projectID == uuid.Nil {
+		return nil
+	}
+	projectRecord, err := s.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if projectRecord.OrganizationID != organizationID {
+		return repo.ErrNotFound
+	}
+	pauseState := projectpause.Parse(projectRecord.Settings)
+	if !pauseState.IsPaused {
+		return nil
+	}
+	return projectpause.NewError(pauseState.Reason)
+}
+
 func (s *service) UpdateMessageStatus(ctx context.Context, messageID uuid.UUID, newStatus, errorMsg string) error {
 	message, err := s.GetMessage(ctx, messageID)
 	if err != nil {
@@ -1009,6 +1086,9 @@ func (s *service) CreateTurn(ctx context.Context, sessionID, agentID uuid.UUID) 
 	}
 	if session.Status != "active" {
 		return nil, ErrSessionClosed
+	}
+	if err := s.ensureProjectNotPausedForSession(ctx, session); err != nil {
+		return nil, err
 	}
 
 	agentRecord, err := s.agents.GetByID(ctx, agentID)

@@ -192,6 +192,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	queueProcessor, err := controlplane.NewTaskQueueProcessor(controlplane.TaskQueueProcessorOptions{
 		Events:         bus,
 		Tasks:          repo.NewProjectTaskRepo(pool.Raw()),
+		Projects:       repo.NewProjectRepo(pool.Raw()),
 		TaskService:    tasks,
 		Flow:           flowService,
 		FlowExecutions: repo.NewFlowNodeExecutionRepo(pool.Raw()),
@@ -212,6 +213,8 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	defer bus.Unsubscribe(runCancellationSub)
 	flowAdvancedSub := queueProcessor.SubscribeFlowAdvanced(nil)
 	defer bus.Unsubscribe(flowAdvancedSub)
+	projectResumedSub := queueProcessor.SubscribeProjectResumed(nil)
+	defer bus.Unsubscribe(projectResumedSub)
 	toolResolver, err := tools.NewToolResolver(tools.ToolResolverOptions{
 		Pool:   pool.Raw(),
 		Events: bus,

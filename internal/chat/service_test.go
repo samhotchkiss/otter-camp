@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
@@ -545,6 +546,54 @@ func TestCreateTurnAssignsNextTurnNumber(t *testing.T) {
 	}
 }
 
+func TestCreateTurnRejectsPausedProject(t *testing.T) {
+	sessionID := uuid.New()
+	agentID := uuid.New()
+	projectID := uuid.New()
+	orgID := uuid.New()
+
+	svc := newUnitService(t, unitDeps{
+		sessions: &fakeSessionRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+				if id != sessionID {
+					t.Fatalf("unexpected session id %s", id)
+				}
+				return repo.ChatSession{
+					ID:             sessionID,
+					OrganizationID: orgID,
+					ScopeType:      "project",
+					ScopeID:        projectID,
+					Status:         "active",
+				}, nil
+			},
+		},
+		agents: &fakeAgentRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Agent, error) {
+				if id != agentID {
+					t.Fatalf("unexpected agent id %s", id)
+				}
+				return repo.Agent{ID: agentID, OrganizationID: orgID}, nil
+			},
+		},
+		projects: &fakeProjectRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Project, error) {
+				if id != projectID {
+					t.Fatalf("unexpected project id %s", id)
+				}
+				return repo.Project{
+					ID:             projectID,
+					OrganizationID: orgID,
+					Settings:       json.RawMessage(`{"pause":{"is_paused":true,"reason":"operator pause","metadata":{}}}`),
+				}, nil
+			},
+		},
+	})
+
+	if _, err := svc.CreateTurn(context.Background(), sessionID, agentID); !errors.Is(err, projectpause.ErrProjectPaused) {
+		t.Fatalf("CreateTurn err = %v, want ErrProjectPaused", err)
+	}
+}
+
 func TestAddReactionDedupMapsRepoConflictToErrDuplicateReaction(t *testing.T) {
 	messageID := uuid.New()
 	sessionID := uuid.New()
@@ -672,6 +721,7 @@ type unitDeps struct {
 	turns        *fakeTurnRepo
 	reactions    *fakeReactionRepo
 	tasks        *fakeTaskRepo
+	projects     *fakeProjectRepo
 	users        *fakeUserRepo
 	agents       *fakeAgentRepo
 	events       *fakeEventBus
@@ -698,6 +748,9 @@ func newUnitService(t *testing.T, deps unitDeps) *service {
 	if deps.tasks == nil {
 		deps.tasks = &fakeTaskRepo{}
 	}
+	if deps.projects == nil {
+		deps.projects = &fakeProjectRepo{}
+	}
 	if deps.users == nil {
 		deps.users = &fakeUserRepo{}
 	}
@@ -719,6 +772,7 @@ func newUnitService(t *testing.T, deps unitDeps) *service {
 		Turns:        deps.turns,
 		Reactions:    deps.reactions,
 		Tasks:        deps.tasks,
+		Projects:     deps.projects,
 		Users:        deps.users,
 		Agents:       deps.agents,
 		Events:       deps.events,
@@ -834,6 +888,17 @@ func (f *fakeParticipantRepo) Remove(ctx context.Context, id uuid.UUID) (repo.Ch
 	}
 	now := time.Now().UTC()
 	return repo.ChatParticipant{ID: id, RemovedAt: &now}, nil
+}
+
+type fakeProjectRepo struct {
+	getByIDFn func(ctx context.Context, id uuid.UUID) (repo.Project, error)
+}
+
+func (f *fakeProjectRepo) GetByID(ctx context.Context, id uuid.UUID) (repo.Project, error) {
+	if f.getByIDFn != nil {
+		return f.getByIDFn(ctx, id)
+	}
+	return repo.Project{}, repo.ErrNotFound
 }
 
 type fakeMessageRepo struct {

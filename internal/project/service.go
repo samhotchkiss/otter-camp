@@ -16,6 +16,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/scheduling"
 	"github.com/samhotchkiss/otter-camp/internal/validation"
@@ -40,6 +41,7 @@ var (
 	ErrTemplateIDRequired       = errors.New("template_id is required")
 	ErrNodeIDRequired           = errors.New("node_id is required")
 	ErrScheduleIDRequired       = errors.New("schedule_id is required")
+	ErrProjectPaused            = projectpause.ErrProjectPaused
 )
 
 const (
@@ -84,6 +86,13 @@ type UpdateProjectRequest struct {
 	Settings             *json.RawMessage
 	UpdatedByType        string
 	UpdatedByID          uuid.UUID
+}
+
+type PauseProjectRequest struct {
+	Reason       string
+	Metadata     json.RawMessage
+	PausedByType string
+	PausedByID   uuid.UUID
 }
 
 type CreateFlowTemplateRequest struct {
@@ -165,6 +174,8 @@ type ProjectService interface {
 	GetBySlug(ctx context.Context, orgID uuid.UUID, slug string) (*Project, error)
 	List(ctx context.Context, orgID uuid.UUID, filter ProjectFilter) ([]*Project, error)
 	Update(ctx context.Context, orgID, projectID uuid.UUID, req UpdateProjectRequest) (*Project, error)
+	Pause(ctx context.Context, orgID, projectID uuid.UUID, req PauseProjectRequest) (*Project, error)
+	Resume(ctx context.Context, orgID, projectID uuid.UUID, resumedByType string, resumedByID uuid.UUID) (*Project, error)
 	Archive(ctx context.Context, orgID, projectID uuid.UUID) (*Project, error)
 	Delete(ctx context.Context, orgID, projectID uuid.UUID) error
 
@@ -703,6 +714,77 @@ func (s *service) Update(ctx context.Context, orgID, projectID uuid.UUID, req Up
 	}
 
 	_ = s.publishEvent(ctx, stored.OrganizationID, "project.updated", updatedByType, actorIDPointer(updatedByID), map[string]any{
+		"project_id": stored.ID,
+		"slug":       stored.Slug,
+	})
+
+	return &stored, nil
+}
+
+func (s *service) Pause(ctx context.Context, orgID, projectID uuid.UUID, req PauseProjectRequest) (*Project, error) {
+	current, err := s.Get(ctx, orgID, projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	currentPause := projectpause.Parse(current.Settings)
+	pausedByType, pausedByID, _ := normalizeActor(req.PausedByType, req.PausedByID)
+	if pausedByType == "" {
+		pausedByType = actorSystem
+	}
+
+	updated := *current
+	updated.Settings, err = projectpause.ApplyPause(updated.Settings, req.Reason, req.Metadata, s.clock.Now().UTC(), pausedByType, pausedByID)
+	if err != nil {
+		return nil, err
+	}
+
+	stored, err := s.projects.Update(ctx, updated)
+	if err != nil {
+		return nil, err
+	}
+
+	if !currentPause.IsPaused {
+		payload := map[string]any{
+			"project_id": stored.ID,
+			"slug":       stored.Slug,
+		}
+		if reason := strings.TrimSpace(req.Reason); reason != "" {
+			payload["reason"] = reason
+		}
+		_ = s.publishEvent(ctx, stored.OrganizationID, "project.paused", pausedByType, actorIDPointer(pausedByID), payload)
+	}
+
+	return &stored, nil
+}
+
+func (s *service) Resume(ctx context.Context, orgID, projectID uuid.UUID, resumedByType string, resumedByID uuid.UUID) (*Project, error) {
+	current, err := s.Get(ctx, orgID, projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	currentPause := projectpause.Parse(current.Settings)
+	if !currentPause.IsPaused {
+		return current, nil
+	}
+
+	updated := *current
+	updated.Settings, err = projectpause.ClearPause(updated.Settings)
+	if err != nil {
+		return nil, err
+	}
+
+	stored, err := s.projects.Update(ctx, updated)
+	if err != nil {
+		return nil, err
+	}
+
+	actorType, actorID, _ := normalizeActor(resumedByType, resumedByID)
+	if actorType == "" {
+		actorType = actorSystem
+	}
+	_ = s.publishEvent(ctx, stored.OrganizationID, "project.resumed", actorType, actorIDPointer(actorID), map[string]any{
 		"project_id": stored.ID,
 		"slug":       stored.Slug,
 	})

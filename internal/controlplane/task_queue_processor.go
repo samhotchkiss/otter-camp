@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 )
@@ -19,6 +20,7 @@ const (
 	taskCompletedConsumerName       = "controlplane.task-completed"
 	taskRunCancellationConsumerName = "controlplane.run-cancellation"
 	flowAdvancedConsumerName        = "controlplane.flow-advanced"
+	projectResumedConsumerName      = "controlplane.project-resumed"
 	taskQueueTriggerType            = "scheduler"
 	taskSupervisorTriggerType       = "supervisor"
 )
@@ -30,6 +32,10 @@ type taskQueueEventSubscriber interface {
 type taskQueueTaskRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
 	ListByProject(ctx context.Context, projectID uuid.UUID, statuses ...string) ([]repo.ProjectTask, error)
+}
+
+type taskQueueProjectRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.Project, error)
 }
 
 type taskQueueStatusTransitioner interface {
@@ -77,6 +83,7 @@ type taskQueueSessionRepository interface {
 type TaskQueueProcessorOptions struct {
 	Events         taskQueueEventSubscriber
 	Tasks          taskQueueTaskRepository
+	Projects       taskQueueProjectRepository
 	TaskService    taskQueueStatusTransitioner
 	Flow           taskQueueFlowStarter
 	FlowExecutions taskQueueFlowExecutionRepository
@@ -90,6 +97,7 @@ type TaskQueueProcessorOptions struct {
 type TaskQueueProcessor struct {
 	events         taskQueueEventSubscriber
 	tasks          taskQueueTaskRepository
+	projects       taskQueueProjectRepository
 	taskService    taskQueueStatusTransitioner
 	flow           taskQueueFlowStarter
 	flowExecutions taskQueueFlowExecutionRepository
@@ -106,6 +114,9 @@ func NewTaskQueueProcessor(opts TaskQueueProcessorOptions) (*TaskQueueProcessor,
 	}
 	if opts.Tasks == nil {
 		return nil, fmt.Errorf("task queue processor requires task repository")
+	}
+	if opts.Projects == nil {
+		return nil, fmt.Errorf("task queue processor requires project repository")
 	}
 	if opts.TaskService == nil {
 		return nil, fmt.Errorf("task queue processor requires task service")
@@ -135,6 +146,7 @@ func NewTaskQueueProcessor(opts TaskQueueProcessorOptions) (*TaskQueueProcessor,
 	return &TaskQueueProcessor{
 		events:         opts.Events,
 		tasks:          opts.Tasks,
+		projects:       opts.Projects,
 		taskService:    opts.TaskService,
 		flow:           opts.Flow,
 		flowExecutions: opts.FlowExecutions,
@@ -155,6 +167,12 @@ func (p *TaskQueueProcessor) SubscribeFlowAdvanced(orgID *uuid.UUID) eventbus.Su
 func (p *TaskQueueProcessor) SubscribeTaskQueued(orgID *uuid.UUID) eventbus.Subscription {
 	return p.events.Subscribe(taskQueuedConsumerName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
 		return p.handleTaskQueuedEvent(ctx, event)
+	})
+}
+
+func (p *TaskQueueProcessor) SubscribeProjectResumed(orgID *uuid.UUID) eventbus.Subscription {
+	return p.events.Subscribe(projectResumedConsumerName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
+		return p.handleProjectResumedEvent(ctx, event)
 	})
 }
 
@@ -185,6 +203,11 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 	}
 	if err != nil {
 		return err
+	}
+	if paused, pauseErr := p.projectPaused(ctx, taskRecord.ProjectID); pauseErr != nil {
+		return pauseErr
+	} else if paused {
+		return nil
 	}
 	if blocked, blockErr := p.isBlockedByOutstandingProjectGate(ctx, taskRecord); blockErr != nil {
 		return blockErr
@@ -639,6 +662,11 @@ func (p *TaskQueueProcessor) handleFlowAdvancedEvent(ctx context.Context, event 
 	if payload.TaskID == uuid.Nil || payload.ProjectID == uuid.Nil || payload.TerminalTransitionDone {
 		return nil
 	}
+	if paused, err := p.projectPaused(ctx, payload.ProjectID); err != nil {
+		return err
+	} else if paused {
+		return nil
+	}
 	if payload.ToFlowNodeID == nil || *payload.ToFlowNodeID == uuid.Nil {
 		return nil
 	}
@@ -679,6 +707,22 @@ func (p *TaskQueueProcessor) handleFlowAdvancedEvent(ctx context.Context, event 
 	}
 
 	return p.ensureFlowTransitionRun(ctx, event, taskRecord, nextNode, nextExecution, *agentID, payload.RejectionFeedback)
+}
+
+func (p *TaskQueueProcessor) handleProjectResumedEvent(ctx context.Context, event eventbus.DomainEvent) error {
+	if event.EventType != "project.resumed" {
+		return nil
+	}
+	var payload struct {
+		ProjectID uuid.UUID `json:"project_id"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return nil
+	}
+	if payload.ProjectID == uuid.Nil {
+		return nil
+	}
+	return p.processNextEligibleQueuedTask(ctx, event, payload.ProjectID)
 }
 
 func (p *TaskQueueProcessor) ensureFlowTransitionRun(
@@ -817,6 +861,20 @@ func resolveFlowNodeRole(node repo.FlowNode) string {
 		return "reviewer"
 	}
 	return "worker"
+}
+
+func (p *TaskQueueProcessor) projectPaused(ctx context.Context, projectID uuid.UUID) (bool, error) {
+	if p.projects == nil || projectID == uuid.Nil {
+		return false, nil
+	}
+	projectRecord, err := p.projects.GetByID(ctx, projectID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return projectpause.Parse(projectRecord.Settings).IsPaused, nil
 }
 
 func flowNodeRoleFromMetadata(metadata json.RawMessage) string {

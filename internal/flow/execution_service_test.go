@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 )
@@ -203,6 +204,52 @@ func TestAdvanceFlowRejectsSelfReview(t *testing.T) {
 	}
 }
 
+func TestAdvanceFlowRejectsPausedProject(t *testing.T) {
+	taskID := uuid.New()
+	workNodeID := uuid.New()
+	projectID := uuid.New()
+
+	svc := &service{
+		tasks: &fakeTaskRepo{
+			items: map[uuid.UUID]repo.ProjectTask{
+				taskID: {
+					ID:                taskID,
+					ProjectID:         projectID,
+					OrganizationID:    uuid.New(),
+					CurrentFlowNodeID: &workNodeID,
+					WorkStatus:        "in_progress",
+				},
+			},
+		},
+		projects: &fakeProjectRepo{
+			items: map[uuid.UUID]repo.Project{
+				projectID: {
+					ID:       projectID,
+					Settings: json.RawMessage(`{"pause":{"is_paused":true,"reason":"operator pause","metadata":{}}}`),
+				},
+			},
+		},
+		flowNodes: &fakeNodeRepo{
+			items: map[uuid.UUID]repo.FlowNode{
+				workNodeID: {ID: workNodeID, NodeType: "work"},
+			},
+		},
+		executions: &fakeExecutionRepo{
+			active: repo.FlowNodeExecution{
+				ID:         uuid.New(),
+				TaskID:     taskID,
+				FlowNodeID: workNodeID,
+				Status:     "active",
+			},
+		},
+		taskService: &fakeTaskCoordinator{},
+	}
+
+	if _, err := svc.AdvanceFlow(context.Background(), taskID, Actor{Type: "agent", ID: uuid.New()}); !errors.Is(err, projectpause.ErrProjectPaused) {
+		t.Fatalf("AdvanceFlow err = %v, want ErrProjectPaused", err)
+	}
+}
+
 func TestAdvanceFlowTerminalRequiresReviewedWorkBeforeMutatingExecution(t *testing.T) {
 	taskID := uuid.New()
 	workNodeID := uuid.New()
@@ -265,6 +312,17 @@ type fakeExecutionRepo struct {
 	completeCalls       int
 	rejectCalls         int
 	updateMetadataCalls int
+}
+
+type fakeProjectRepo struct {
+	items map[uuid.UUID]repo.Project
+}
+
+func (f *fakeProjectRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Project, error) {
+	if item, ok := f.items[id]; ok {
+		return item, nil
+	}
+	return repo.Project{}, repo.ErrNotFound
 }
 
 func (f *fakeExecutionRepo) Create(context.Context, repo.FlowNodeExecution) (repo.FlowNodeExecution, error) {

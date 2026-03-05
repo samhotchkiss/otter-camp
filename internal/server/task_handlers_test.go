@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 )
@@ -89,6 +90,19 @@ func TestReviewDecisionInvalidDecisionReturns422(t *testing.T) {
 
 	if rr.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusUnprocessableEntity, rr.Body.String())
+	}
+}
+
+func TestMapTaskErrorProjectPausedReturnsConflict(t *testing.T) {
+	status, code, message := mapTaskError(projectpause.NewError("operator pause"))
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", status, http.StatusConflict)
+	}
+	if code != "project_paused" {
+		t.Fatalf("code = %q, want %q", code, "project_paused")
+	}
+	if !strings.Contains(message, "project is paused") {
+		t.Fatalf("message = %q, want paused message", message)
 	}
 }
 
