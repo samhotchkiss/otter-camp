@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	clitools "github.com/samhotchkiss/otter-camp/internal/cli"
 	tuiapp "github.com/samhotchkiss/otter-camp/internal/tui"
+	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 )
 
 func runTUICommand(args []string) int {
@@ -79,6 +80,7 @@ func runTUICommand(args []string) int {
 
 	runtimeHints := tuiapp.DetectRuntimeHints(os.Getenv)
 	runtimeHints.FirstRun = !stateExists
+	runtimeHints.BinaryStale = strings.TrimSpace(versionpkg.CachedStartupFreshnessWarning()) != ""
 
 	// Use a pointer so the SendChatMessage closure can reference program after it's created.
 	var program *tea.Program
@@ -750,9 +752,9 @@ func runTUICommand(args []string) int {
 			}
 			runtimeHints.CreateConnection = func(ctx context.Context, providerID, displayName, apiKeySecretSlug string, failoverPriority int) error {
 				body := map[string]any{
-					"display_name":      displayName,
+					"display_name":       displayName,
 					"api_key_secret_ref": "ref:" + apiKeySecretSlug,
-					"failover_priority": failoverPriority,
+					"failover_priority":  failoverPriority,
 				}
 				path := "/v1/model/providers/" + url.PathEscape(providerID) + "/connections"
 				var resp struct{}
@@ -955,6 +957,12 @@ func resolveTUIChatSessionID(ctx context.Context, client *cliAPIClient, sessionI
 		scopeType = "organization"
 	case strings.HasPrefix(trimmed, "session-task-"), trimmed == "task-session":
 		scopeType = "project_task"
+		// Extract task ID if embedded: "session-task-<uuid>"
+		if after, ok := strings.CutPrefix(trimmed, "session-task-"); ok {
+			if _, err := uuid.Parse(after); err == nil {
+				scopeID = after
+			}
+		}
 	case strings.HasPrefix(trimmed, "session-project-"), trimmed == "project-session":
 		scopeType = "project"
 		// Extract project ID if embedded: "session-project-<uuid>"
@@ -986,6 +994,39 @@ func resolveTUIChatSessionID(ctx context.Context, client *cliAPIClient, sessionI
 			ScopeType: scopeType,
 			ScopeID:   scopeID,
 			Mode:      "sync",
+		})
+		if createErr != nil {
+			return uuid.Nil, fmt.Errorf("create %s session: %w", scopeType, createErr)
+		}
+		return created.Data.ID, nil
+	}
+	// If no active org session exists, create one so chat send from TUI works
+	// without requiring a prior manual session bootstrap.
+	if len(sessions.Data) == 0 && scopeType == "organization" {
+		var orgResp struct {
+			Data struct {
+				ID string `json:"id"`
+			} `json:"data"`
+		}
+		if err := client.request(ctx, "GET", "/v1/orgs/current", nil, &orgResp); err != nil {
+			return uuid.Nil, fmt.Errorf("resolve organization for chat session: %w", err)
+		}
+		created, createErr := client.CreateChatSession(ctx, chatCreateSessionRequest{
+			ScopeType: "organization",
+			ScopeID:   orgResp.Data.ID,
+			Mode:      "sync",
+		})
+		if createErr != nil {
+			return uuid.Nil, fmt.Errorf("create organization session: %w", createErr)
+		}
+		return created.Data.ID, nil
+	}
+	// If a specific project_task scope ID was provided, create missing session.
+	if len(sessions.Data) == 0 && scopeType == "project_task" && scopeID != "" {
+		created, createErr := client.CreateChatSession(ctx, chatCreateSessionRequest{
+			ScopeType: scopeType,
+			ScopeID:   scopeID,
+			Mode:      "async",
 		})
 		if createErr != nil {
 			return uuid.Nil, fmt.Errorf("create %s session: %w", scopeType, createErr)

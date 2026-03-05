@@ -137,7 +137,7 @@ func run(args []string) int {
 		shouldWarnFreshness = true
 	}
 	if shouldWarnFreshness {
-		if warning := strings.TrimSpace(versionpkg.StartupFreshnessWarning()); warning != "" {
+		if warning := strings.TrimSpace(versionpkg.CachedStartupFreshnessWarning()); warning != "" {
 			fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 		}
 	}

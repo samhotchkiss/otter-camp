@@ -6,6 +6,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+)
+
+var (
+	startupFreshnessOnce    sync.Once
+	startupFreshnessWarning string
 )
 
 // StartupFreshnessWarning reports whether the running binary appears stale
@@ -50,6 +56,14 @@ func StartupFreshnessWarning() string {
 	}
 
 	return strings.Join(warnings, "; ")
+}
+
+// CachedStartupFreshnessWarning computes startup freshness once per process.
+func CachedStartupFreshnessWarning() string {
+	startupFreshnessOnce.Do(func() {
+		startupFreshnessWarning = StartupFreshnessWarning()
+	})
+	return startupFreshnessWarning
 }
 
 func commitMatches(head, built string) bool {

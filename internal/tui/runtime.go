@@ -101,9 +101,9 @@ type SubtaskItem struct {
 
 // TaskDependency represents a dependency relationship between tasks.
 type TaskDependency struct {
-	TaskID     string // UUID of the related task
-	TaskTitle  string // resolved display title (e.g. "OC-5: Build landing page")
-	Direction  string // "depends_on" or "blocks"
+	TaskID    string // UUID of the related task
+	TaskTitle string // resolved display title (e.g. "OC-5: Build landing page")
+	Direction string // "depends_on" or "blocks"
 }
 
 // TaskEvent represents a single timestamped event in a task's lifecycle.
@@ -135,6 +135,7 @@ type TaskDetailItem struct {
 
 type RuntimeHints struct {
 	ModifierReliabilityUncertain bool
+	BinaryStale                  bool
 	FirstRun                     bool
 	Clock                        func() time.Time
 	ColdOpenDuration             time.Duration

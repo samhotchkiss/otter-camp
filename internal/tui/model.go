@@ -7311,17 +7311,25 @@ func initialStatusMessage(state UIState, runtime RuntimeHints) string {
 }
 
 // isResolvableSessionAlias returns true for session placeholder strings that
-// embed enough info for the SendChatMessage callback to resolve on the fly
-// (e.g. "session-project-<UUID>" carries the project ID for auto-creation).
-// Generic placeholders like "session-org-general" are NOT resolvable — they
-// require the sidebar/SSE data load to supply the real UUID first.
+// can be resolved by the runtime SendChatMessage callback.
+// Examples:
+//   - organization aliases (session-org-*)
+//   - project aliases with embedded UUID (session-project-<UUID>)
+//
+// Generic placeholders like "session-task-current" remain non-resolvable.
 func isResolvableSessionAlias(s string) bool {
+	trimmed := strings.TrimSpace(strings.ToLower(s))
+	switch {
+	case strings.HasPrefix(trimmed, "session-org-"), trimmed == "session-general", trimmed == "org-session":
+		return true
+	}
+
 	const prefix = "session-project-"
-	if !strings.HasPrefix(s, prefix) {
+	if !strings.HasPrefix(trimmed, prefix) {
 		return false
 	}
 	// The suffix after the prefix must be a valid UUID (the project ID).
-	return looksLikeUUID(s[len(prefix):])
+	return looksLikeUUID(trimmed[len(prefix):])
 }
 
 // assistantLabel returns the display name for assistant-role messages.

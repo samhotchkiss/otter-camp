@@ -3406,7 +3406,13 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 		styleMuted.Render("  ·  ") + styleMuted.Render(sessionDisplay) +
 		styleMuted.Render("  ·  ") + styleSubtle.Render(sizeStr+"/"+focusStr)
 	if rv := strings.TrimSpace(versionpkg.RepoVersion); rv != "" {
-		bar += styleMuted.Render("  ·  ") + styleSubtle.Render("rv"+rv)
+		rvLabel := "rv" + rv
+		rvStyle := styleSubtle
+		if m.runtimeHints.BinaryStale {
+			rvLabel += "!"
+			rvStyle = styleDisconnected
+		}
+		bar += styleMuted.Render("  ·  ") + rvStyle.Render(rvLabel)
 	}
 	if breadcrumb != "" {
 		bar += styleMuted.Render("  ·  ") + styleSubtle.Render(breadcrumb)

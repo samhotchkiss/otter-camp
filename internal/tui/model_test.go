@@ -13917,42 +13917,44 @@ func TestRareCtrlKeyHintsEX398(t *testing.T) {
 	}
 }
 
-// TestSendOrQueueInputPlaceholderSessionEX400 verifies that attempting to send a
-// message before the real session UUID has been received from the server gives an
-// honest "loading" hint instead of the misleading "Message sent." → "Send failed."
-// two-step (EX-400).
+// TestSendOrQueueInputPlaceholderSessionEX400 verifies that send behavior is
+// scope-aware:
+//   - resolvable aliases (e.g. session-org-general) are allowed
+//   - non-resolvable placeholders (e.g. session-task-current) are blocked
+//
+// with a clear loading hint (EX-400).
 func TestSendOrQueueInputPlaceholderSessionEX400(t *testing.T) {
-	// DefaultState seeds activeSession = generalSessionID ("session-org-general"),
-	// which is not a UUID. Pressing Enter in chat should block with a loading hint.
+	// DefaultState seeds activeSession = generalSessionID ("session-org-general").
+	// This alias is resolvable by the CLI resolver, so Enter should proceed.
 	m := NewModel(DefaultState())
 	m.focus = ChatPanel
 	m.chatInput = "hello"
 
 	m1 := pressKey(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if !strings.Contains(m1.statusMessage, "Session loading") {
-		t.Errorf("EX-400: expected 'Session loading' hint, got %q", m1.statusMessage)
+	if !strings.Contains(m1.statusMessage, "Message sent") {
+		t.Errorf("EX-400: expected send to proceed for org alias, got %q", m1.statusMessage)
 	}
-	// Input should NOT be cleared (message was blocked, not sent).
-	if m1.chatInput != "hello" {
-		t.Errorf("EX-400: chatInput should remain 'hello' when blocked, got %q", m1.chatInput)
+	if m1.chatInput != "" {
+		t.Errorf("EX-400: chatInput should clear when send starts, got %q", m1.chatInput)
 	}
-	// activeTurn should NOT be set.
-	if m1.activeTurn {
-		t.Errorf("EX-400: activeTurn should remain false when blocked by placeholder session")
+	if !m1.activeTurn {
+		t.Errorf("EX-400: activeTurn should be true while send is in flight for org alias")
 	}
 
-	// With a real UUID as the session, Enter should proceed normally.
+	// A non-resolvable placeholder should still be blocked with loading hint.
 	m2 := NewModel(DefaultState())
 	m2.focus = ChatPanel
 	m2.chatInput = "hello"
-	m2.activeSession = "11111111-2222-3333-4444-555555555555"
+	m2.activeSession = "session-task-current"
 	m3 := pressKey(m2, tea.KeyMsg{Type: tea.KeyEnter})
-	// Should say "Message sent." and clear the input.
-	if !strings.Contains(m3.statusMessage, "Message sent") {
-		t.Errorf("EX-400: with real UUID should say 'Message sent.', got %q", m3.statusMessage)
+	if !strings.Contains(m3.statusMessage, "Session loading") {
+		t.Errorf("EX-400: expected loading hint for non-resolvable placeholder, got %q", m3.statusMessage)
 	}
-	if m3.chatInput != "" {
-		t.Errorf("EX-400: chatInput should be cleared after send, got %q", m3.chatInput)
+	if m3.chatInput != "hello" {
+		t.Errorf("EX-400: blocked send should preserve chatInput, got %q", m3.chatInput)
+	}
+	if m3.activeTurn {
+		t.Errorf("EX-400: blocked send should not set activeTurn")
 	}
 }
 
