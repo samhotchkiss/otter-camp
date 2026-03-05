@@ -1712,11 +1712,74 @@ func TestContinuationTurnRecoversWhenTurnAlreadyCompleted(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageCarriesRunAttributionIntoInvocationAndModelRequest(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	runID := uuid.New()
+	runStepID := uuid.New()
+	runAttemptID := uuid.New()
+
+	metadata, err := json.Marshal(map[string]any{
+		"run_id":         runID.String(),
+		"run_step_id":    runStepID.String(),
+		"run_attempt_id": runAttemptID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	message.Metadata = metadata
+	fixture.messages.upsert(message)
+
+	fixture.model.completeFn = func(context.Context, ModelRequest) (ModelResponse, error) {
+		return ModelResponse{Content: "respond"}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if req.InvocationID == nil || *req.InvocationID == uuid.Nil {
+			t.Fatalf("req.InvocationID = %v, want non-nil", req.InvocationID)
+		}
+		if req.RunID == nil || *req.RunID != runID {
+			t.Fatalf("req.RunID = %v, want %s", req.RunID, runID)
+		}
+		if req.RunStepID == nil || *req.RunStepID != runStepID {
+			t.Fatalf("req.RunStepID = %v, want %s", req.RunStepID, runStepID)
+		}
+		if req.RunAttemptID == nil || *req.RunAttemptID != runAttemptID {
+			t.Fatalf("req.RunAttemptID = %v, want %s", req.RunAttemptID, runAttemptID)
+		}
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok", Usage: &ModelUsage{InputTokens: 12, OutputTokens: 2}}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if len(fixture.invocations.creates) == 0 {
+		t.Fatal("expected at least one invocation create")
+	}
+	created := fixture.invocations.creates[0]
+	if created.RunID == nil || *created.RunID != runID {
+		t.Fatalf("created.RunID = %v, want %s", created.RunID, runID)
+	}
+	if created.RunStepID == nil || *created.RunStepID != runStepID {
+		t.Fatalf("created.RunStepID = %v, want %s", created.RunStepID, runStepID)
+	}
+	if created.RunAttemptID == nil || *created.RunAttemptID != runAttemptID {
+		t.Fatalf("created.RunAttemptID = %v, want %s", created.RunAttemptID, runAttemptID)
+	}
+}
+
 type unitFixture struct {
 	engine        *TurnEngine
 	events        *fakeEventBus
 	chat          *fakeChatService
 	messages      *fakeMessageRepo
+	invocations   *fakeInvocationRepo
 	model         *fakeModelGateway
 	dispatcher    *fakeDispatcher
 	runCanceler   *fakeRunCanceler
@@ -1813,6 +1876,7 @@ func newUnitFixture(t *testing.T, mode string) *unitFixture {
 		events:        events,
 		chat:          chatSvc,
 		messages:      messages,
+		invocations:   invocations,
 		model:         modelGateway,
 		dispatcher:    dispatcher,
 		runCanceler:   runCanceler,

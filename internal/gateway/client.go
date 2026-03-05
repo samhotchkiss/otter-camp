@@ -214,6 +214,14 @@ func (g *LiveModelGateway) complete(ctx context.Context, req turn.ModelRequest, 
 	priority := priorityForPurpose(req.Purpose)
 	attemptedConnections := make(map[uuid.UUID]struct{}, maxFallbackHops)
 	var lastErr error
+	var precreatedInvocation *repo.ModelInvocation
+	if req.InvocationID != nil && *req.InvocationID != uuid.Nil {
+		existing, err := g.invocations.GetByID(ctx, *req.InvocationID)
+		if err != nil {
+			return turn.ModelResponse{}, fmt.Errorf("lookup precreated invocation %s: %w", req.InvocationID.String(), err)
+		}
+		precreatedInvocation = &existing
+	}
 
 	for hop := 0; hop < maxFallbackHops; hop++ {
 		connection, provider, err := g.selectConnection(ctx, orgID, req, priority)
@@ -231,9 +239,14 @@ func (g *LiveModelGateway) complete(ctx context.Context, req turn.ModelRequest, 
 		}
 		attemptedConnections[connection.ID] = struct{}{}
 
-		invocation, err := g.createInvocation(ctx, orgID, req, provider, connection, stream)
-		if err != nil {
-			return turn.ModelResponse{}, err
+		var invocation repo.ModelInvocation
+		if precreatedInvocation != nil {
+			invocation = *precreatedInvocation
+		} else {
+			invocation, err = g.createInvocation(ctx, orgID, req, provider, connection, stream)
+			if err != nil {
+				return turn.ModelResponse{}, err
+			}
 		}
 
 		release, reserveErr := g.reserveConnection(ctx, connection)
@@ -334,6 +347,9 @@ func (g *LiveModelGateway) createInvocation(
 	if req.TurnID != uuid.Nil {
 		invocation.TurnID = uuidPtr(req.TurnID)
 	}
+	invocation.RunID = cloneUUIDPointer(req.RunID)
+	invocation.RunStepID = cloneUUIDPointer(req.RunStepID)
+	invocation.RunAttemptID = cloneUUIDPointer(req.RunAttemptID)
 
 	return g.invocations.Create(ctx, invocation)
 }
@@ -1959,6 +1975,18 @@ func buildLiveInvocationMetadata(req turn.ModelRequest) json.RawMessage {
 		"instruction_hint": strings.TrimSpace(req.InstructionHint),
 		"human_messages":   append([]string(nil), req.HumanMessages...),
 	}
+	if req.InvocationID != nil && *req.InvocationID != uuid.Nil {
+		payload["invocation_id"] = req.InvocationID.String()
+	}
+	if req.RunID != nil && *req.RunID != uuid.Nil {
+		payload["run_id"] = req.RunID.String()
+	}
+	if req.RunStepID != nil && *req.RunStepID != uuid.Nil {
+		payload["run_step_id"] = req.RunStepID.String()
+	}
+	if req.RunAttemptID != nil && *req.RunAttemptID != uuid.Nil {
+		payload["run_attempt_id"] = req.RunAttemptID.String()
+	}
 	if req.Prompt != nil {
 		payload["total_prompt_tokens"] = req.Prompt.TotalTokens
 		payload["messages"] = req.Prompt.Messages
@@ -1987,6 +2015,14 @@ func stringPtr(value string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func cloneUUIDPointer(value *uuid.UUID) *uuid.UUID {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
 
 func uuidPtr(value uuid.UUID) *uuid.UUID {

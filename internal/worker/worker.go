@@ -28,6 +28,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/model"
 	"github.com/samhotchkiss/otter-camp/internal/observability"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
+	"github.com/samhotchkiss/otter-camp/internal/profiles"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/push"
@@ -250,12 +251,23 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	if err != nil {
 		return fmt.Errorf("worker memory retriever setup: %w", err)
 	}
+	var profileCatalog *profiles.Catalog
+	profileDir := strings.TrimSpace(os.Getenv("OTTERCAMP_PROFILES_DIR"))
+	if profileDir == "" {
+		profileDir = "./agent-profiles"
+	}
+	if cat, catErr := profiles.LoadCatalog(profileDir); catErr != nil {
+		logger.Warn("agent profiles not loaded", "error", catErr)
+	} else {
+		profileCatalog = cat
+	}
 	nativeExecutor := nativetools.NewExecutor(nativetools.ExecutorOptions{
-		Pool:    pool.Raw(),
-		DataDir: strings.TrimSpace(os.Getenv("OTTERCAMP_DATA_DIR")),
-		Memory:  memoryRetriever,
-		CLI:     cliExecutor,
-		Secrets: secretService,
+		Pool:     pool.Raw(),
+		DataDir:  strings.TrimSpace(os.Getenv("OTTERCAMP_DATA_DIR")),
+		Memory:   memoryRetriever,
+		CLI:      cliExecutor,
+		Secrets:  secretService,
+		Profiles: profileCatalog,
 	})
 	browserExecutor, err := browser.NewExecutor(browser.ExecutorOptions{
 		Pool:      pool.Raw(),

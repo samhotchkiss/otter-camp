@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
+	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
@@ -69,6 +70,109 @@ func TestTurnEngineIntegrationFullTurnCycle(t *testing.T) {
 	}
 	if completedEvents == 0 {
 		t.Fatal("expected chat.turn.completed event")
+	}
+}
+
+func TestTurnEngineIntegrationRunAttributionUpdatesRunTokenTotals(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	runRepo := controlplane.NewRunRepository(fixture.pool)
+	stepRepo := controlplane.NewRunStepRepository(fixture.pool)
+	attemptRepo := controlplane.NewRunAttemptRepository(fixture.pool)
+
+	runRecord, err := runRepo.Create(ctx, controlplane.Run{
+		OrganizationID: fixture.org.ID,
+		PrincipalType:  "agent",
+		PrincipalID:    fixture.agent.ID,
+		TriggerType:    "api",
+		Status:         "created",
+		Metadata:       []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	step, err := stepRepo.Create(ctx, controlplane.RunStep{
+		RunID:      runRecord.ID,
+		StepNumber: 1,
+		Status:     "pending",
+		Metadata:   []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create run step: %v", err)
+	}
+	attempt, err := attemptRepo.Create(ctx, controlplane.RunAttempt{
+		RunStepID:     step.ID,
+		AttemptNumber: 1,
+		Trigger:       "initial",
+		Status:        "pending",
+		Metadata:      []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create run attempt: %v", err)
+	}
+
+	msgMeta := mustJSON(t, map[string]any{
+		"run_id":         runRecord.ID.String(),
+		"run_step_id":    step.ID.String(),
+		"run_attempt_id": attempt.ID.String(),
+	})
+	if _, err := repo.NewChatMessageRepo(fixture.pool).UpdateMetadata(ctx, fixture.userMessage.ID, msgMeta); err != nil {
+		t.Fatalf("set user message metadata: %v", err)
+	}
+
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{
+			Content: "ok",
+			Usage: &ModelUsage{
+				InputTokens:  120,
+				OutputTokens: 30,
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	updatedRun, err := runRepo.Get(ctx, runRecord.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if updatedRun.InputTokens != 120 || updatedRun.OutputTokens != 30 {
+		t.Fatalf("run token totals = (%d,%d), want (120,30)", updatedRun.InputTokens, updatedRun.OutputTokens)
+	}
+	updatedStep, err := stepRepo.Get(ctx, step.ID)
+	if err != nil {
+		t.Fatalf("get run step: %v", err)
+	}
+	if updatedStep.InputTokens != 120 || updatedStep.OutputTokens != 30 {
+		t.Fatalf("run_step token totals = (%d,%d), want (120,30)", updatedStep.InputTokens, updatedStep.OutputTokens)
+	}
+	updatedAttempt, err := attemptRepo.Get(ctx, attempt.ID)
+	if err != nil {
+		t.Fatalf("get run attempt: %v", err)
+	}
+	if updatedAttempt.InputTokens != 120 || updatedAttempt.OutputTokens != 30 {
+		t.Fatalf("run_attempt token totals = (%d,%d), want (120,30)", updatedAttempt.InputTokens, updatedAttempt.OutputTokens)
+	}
+
+	rows, err := repo.NewModelInvocationRepo(fixture.pool).ListBySession(ctx, fixture.org.ID, fixture.session.ID)
+	if err != nil {
+		t.Fatalf("list invocations: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("expected at least one model invocation row")
+	}
+	latest := rows[0]
+	if latest.RunID == nil || *latest.RunID != runRecord.ID {
+		t.Fatalf("invocation run_id = %v, want %s", latest.RunID, runRecord.ID)
+	}
+	if latest.RunStepID == nil || *latest.RunStepID != step.ID {
+		t.Fatalf("invocation run_step_id = %v, want %s", latest.RunStepID, step.ID)
+	}
+	if latest.RunAttemptID == nil || *latest.RunAttemptID != attempt.ID {
+		t.Fatalf("invocation run_attempt_id = %v, want %s", latest.RunAttemptID, attempt.ID)
 	}
 }
 

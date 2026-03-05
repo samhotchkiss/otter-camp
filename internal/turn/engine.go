@@ -69,6 +69,10 @@ type ModelRequest struct {
 	SessionID       uuid.UUID
 	TurnID          uuid.UUID
 	AgentID         uuid.UUID
+	RunID           *uuid.UUID
+	RunStepID       *uuid.UUID
+	RunAttemptID    *uuid.UUID
+	InvocationID    *uuid.UUID
 	Purpose         string
 	Profile         repo.ModelProfile
 	Prompt          *prompt.AssembledPrompt
@@ -322,6 +326,7 @@ type TurnEngine struct {
 	sleep                 func(context.Context, time.Duration) error
 	logger                *slog.Logger
 	cancelConsumerName    string
+	rollupUpdater         *model.RollupUpdater
 }
 
 type turnRuntime struct {
@@ -329,6 +334,9 @@ type turnRuntime struct {
 	agent             repo.Agent
 	turn              *chat.ChatTurn
 	initialMessageID  uuid.UUID
+	runID             *uuid.UUID
+	runStepID         *uuid.UUID
+	runAttemptID      *uuid.UUID
 	startedAt         time.Time
 	toolCallsUsed     int
 	activeTier2RunID  *uuid.UUID
@@ -442,6 +450,11 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 		}
 	}
 
+	var rollupUpdater *model.RollupUpdater
+	if opts.Pool != nil {
+		rollupUpdater = model.NewRollupUpdater(opts.Pool)
+	}
+
 	return &TurnEngine{
 		chat:                  opts.Chat,
 		toolResolver:          opts.ToolResolver,
@@ -475,6 +488,7 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 		sleep:                 opts.Sleep,
 		logger:                opts.Logger,
 		cancelConsumerName:    defaultCancelConsumerPrefix + "." + uuid.NewString(),
+		rollupUpdater:         rollupUpdater,
 	}, nil
 }
 
@@ -796,6 +810,9 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		agent:            agent,
 		turn:             turn,
 		initialMessageID: messageID,
+		runID:            runIDFromMetadata(message.Metadata),
+		runStepID:        runStepIDFromMetadata(message.Metadata),
+		runAttemptID:     runAttemptIDFromMetadata(message.Metadata),
 		startedAt:        e.turnStartTime(turn),
 	}
 
@@ -1156,6 +1173,9 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 		SessionID:       rt.session.ID,
 		TurnID:          rt.turn.ID,
 		AgentID:         rt.agent.ID,
+		RunID:           cloneUUIDPointer(rt.runID),
+		RunStepID:       cloneUUIDPointer(rt.runStepID),
+		RunAttemptID:    cloneUUIDPointer(rt.runAttemptID),
 		Purpose:         "continuation_summary",
 		Profile:         profile,
 		HumanMessages:   recent,
@@ -1287,6 +1307,9 @@ func (e *TurnEngine) runListeningEval(ctx context.Context, rt *turnRuntime, asse
 		SessionID:       rt.session.ID,
 		TurnID:          rt.turn.ID,
 		AgentID:         rt.agent.ID,
+		RunID:           cloneUUIDPointer(rt.runID),
+		RunStepID:       cloneUUIDPointer(rt.runStepID),
+		RunAttemptID:    cloneUUIDPointer(rt.runAttemptID),
 		Purpose:         "listening_eval",
 		Profile:         profile,
 		Prompt:          assembled,
@@ -1702,7 +1725,7 @@ func (e *TurnEngine) callMainModel(
 		}
 		rt.invocationAttempt++
 		invocationMetadata := buildInvocationMetadata(assembled)
-		invocation, err := e.invocations.Create(ctx, repo.ModelInvocation{
+		invocationInput := repo.ModelInvocation{
 			OrganizationID:           rt.session.OrganizationID,
 			ModelProviderID:          profile.ProviderID,
 			ModelProfileID:           stringPtr(profile.LogicalProfileID),
@@ -1717,11 +1740,27 @@ func (e *TurnEngine) callMainModel(
 			ProjectTaskID:            resolveTaskID(rt.session),
 			SessionID:                &rt.session.ID,
 			TurnID:                   &rt.turn.ID,
-			RunID:                    nil,
-			RunStepID:                nil,
-			RunAttemptID:             nil,
+			RunID:                    cloneUUIDPointer(rt.runID),
+			RunStepID:                cloneUUIDPointer(rt.runStepID),
+			RunAttemptID:             cloneUUIDPointer(rt.runAttemptID),
 			Metadata:                 invocationMetadata,
-		})
+		}
+		invocation, err := e.invocations.Create(ctx, invocationInput)
+		if err != nil && isRunAttributionConstraintError(err) && (invocationInput.RunID != nil || invocationInput.RunStepID != nil || invocationInput.RunAttemptID != nil) {
+			e.logger.Warn(
+				"dropping invalid run attribution on model invocation create",
+				"session_id", rt.session.ID,
+				"turn_id", rt.turn.ID,
+				"run_id", invocationInput.RunID,
+				"run_step_id", invocationInput.RunStepID,
+				"run_attempt_id", invocationInput.RunAttemptID,
+				"error", err,
+			)
+			invocationInput.RunID = nil
+			invocationInput.RunStepID = nil
+			invocationInput.RunAttemptID = nil
+			invocation, err = e.invocations.Create(ctx, invocationInput)
+		}
 		if err != nil {
 			return ModelResponse{}, err
 		}
@@ -1738,6 +1777,10 @@ func (e *TurnEngine) callMainModel(
 			SessionID:      rt.session.ID,
 			TurnID:         rt.turn.ID,
 			AgentID:        rt.agent.ID,
+			RunID:          cloneUUIDPointer(rt.runID),
+			RunStepID:      cloneUUIDPointer(rt.runStepID),
+			RunAttemptID:   cloneUUIDPointer(rt.runAttemptID),
+			InvocationID:   cloneUUIDPointer(&invocation.ID),
 			Purpose:        "agent_turn",
 			Profile:        profile,
 			Prompt:         assembled,
@@ -1826,7 +1869,38 @@ func (e *TurnEngine) callMainModel(
 			nil,
 			nil,
 		)
+		rollupInvocation := invocation
+		if rollupInvocation.RunID == nil {
+			rollupInvocation.RunID = cloneUUIDPointer(rt.runID)
+		}
+		if rollupInvocation.RunStepID == nil {
+			rollupInvocation.RunStepID = cloneUUIDPointer(rt.runStepID)
+		}
+		if rollupInvocation.RunAttemptID == nil {
+			rollupInvocation.RunAttemptID = cloneUUIDPointer(rt.runAttemptID)
+		}
+		e.updateRunTokenRollup(ctx, rollupInvocation, usage)
 		return response, nil
+	}
+}
+
+func (e *TurnEngine) updateRunTokenRollup(ctx context.Context, invocation repo.ModelInvocation, usage *ModelUsage) {
+	if e == nil || e.rollupUpdater == nil || usage == nil {
+		return
+	}
+	inputTokens := usage.InputTokens
+	outputTokens := usage.OutputTokens
+	invocation.InputTokens = &inputTokens
+	invocation.OutputTokens = &outputTokens
+	if err := e.rollupUpdater.UpdateRunTokenCounts(ctx, invocation); err != nil {
+		e.logger.Warn(
+			"failed to update run token rollup",
+			"invocation_id", invocation.ID,
+			"run_id", invocation.RunID,
+			"run_step_id", invocation.RunStepID,
+			"run_attempt_id", invocation.RunAttemptID,
+			"error", err,
+		)
 	}
 }
 
@@ -2573,6 +2647,43 @@ func payloadString(payload map[string]any, key string) (string, bool) {
 	return strings.TrimSpace(text), true
 }
 
+func runIDFromMetadata(metadata json.RawMessage) *uuid.UUID {
+	return runAttributionIDFromMetadata(metadata, "run_id")
+}
+
+func runStepIDFromMetadata(metadata json.RawMessage) *uuid.UUID {
+	return runAttributionIDFromMetadata(metadata, "run_step_id")
+}
+
+func runAttemptIDFromMetadata(metadata json.RawMessage) *uuid.UUID {
+	return runAttributionIDFromMetadata(metadata, "run_attempt_id")
+}
+
+func runAttributionIDFromMetadata(metadata json.RawMessage, key string) *uuid.UUID {
+	if len(metadata) == 0 || !json.Valid(metadata) {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return nil
+	}
+	id, ok := payloadUUID(payload, key)
+	if !ok {
+		return nil
+	}
+	return cloneUUIDPointer(&id)
+}
+
+func isRunAttributionConstraintError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(text, "model_invocation_run_id_fk") ||
+		strings.Contains(text, "model_invocation_run_step_id_fk") ||
+		strings.Contains(text, "model_invocation_run_attempt_id_fk")
+}
+
 func reactionDelta(emoji string) (float64, bool) {
 	normalized := strings.TrimSpace(strings.ToLower(emoji))
 	switch normalized {
@@ -2715,6 +2826,14 @@ func stringPtr(value string) *string {
 	}
 	copyValue := trimmed
 	return &copyValue
+}
+
+func cloneUUIDPointer(value *uuid.UUID) *uuid.UUID {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
 
 func lastNUserMessages(messages []repo.ChatMessage, n int) []string {
