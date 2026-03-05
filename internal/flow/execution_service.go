@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 )
@@ -291,6 +292,9 @@ func (s *service) StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNo
 	if err != nil {
 		return nil, err
 	}
+	if err := s.ensureProjectNotPaused(ctx, taskRecord.ProjectID); err != nil {
+		return nil, err
+	}
 	if taskRecord.FlowTemplateID == nil {
 		return nil, ErrFlowNotStarted
 	}
@@ -336,6 +340,9 @@ func (s *service) StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNo
 func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor) (*repo.FlowNodeExecution, error) {
 	taskRecord, currentNode, activeExecution, err := s.loadActiveFlowState(ctx, taskID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureProjectNotPaused(ctx, taskRecord.ProjectID); err != nil {
 		return nil, err
 	}
 
@@ -459,6 +466,9 @@ func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.Pro
 func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Actor) (*repo.FlowNodeExecution, error) {
 	taskRecord, currentNode, activeExecution, err := s.loadActiveFlowState(ctx, taskID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureProjectNotPaused(ctx, taskRecord.ProjectID); err != nil {
 		return nil, err
 	}
 
@@ -743,6 +753,21 @@ func (s *service) ensureExecutionSession(ctx context.Context, execution *repo.Fl
 	}
 	execution.SessionID = &session.ID
 	return nil
+}
+
+func (s *service) ensureProjectNotPaused(ctx context.Context, projectID uuid.UUID) error {
+	if s.projects == nil || projectID == uuid.Nil {
+		return nil
+	}
+	projectRecord, err := s.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	pauseState := projectpause.Parse(projectRecord.Settings)
+	if !pauseState.IsPaused {
+		return nil
+	}
+	return projectpause.NewError(pauseState.Reason)
 }
 
 func (s *service) validateSubtaskAssignee(ctx context.Context, assignee SubtaskAssignee) error {

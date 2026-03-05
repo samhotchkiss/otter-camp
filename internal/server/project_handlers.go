@@ -15,6 +15,7 @@ import (
 
 	"github.com/samhotchkiss/otter-camp/internal/api"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/scheduling"
@@ -52,6 +53,14 @@ func (r *ProjectRouteRegistrar) RegisterRoutes(router chi.Router) {
 		middleware.RequireRole("admin"),
 		middleware.RequireAnyScope(requireWriteScope("projects")...),
 	).Post("/projects/{id}/archive", r.handlers.archiveProject)
+	router.With(
+		middleware.RequireRole("member"),
+		middleware.RequireAnyScope(requireWriteScope("projects")...),
+	).Post("/projects/{id}/pause", r.handlers.pauseProject)
+	router.With(
+		middleware.RequireRole("member"),
+		middleware.RequireAnyScope(requireWriteScope("projects")...),
+	).Post("/projects/{id}/resume", r.handlers.resumeProject)
 
 	router.With(middleware.RequireAnyScope(requireReadScope("projects")...)).Get("/projects/{id}/flow-templates", r.handlers.listProjectFlowTemplates)
 	router.With(
@@ -132,6 +141,11 @@ type updateProjectRequest struct {
 	Settings             *json.RawMessage `json:"settings"`
 }
 
+type pauseProjectRequest struct {
+	Reason   string          `json:"reason"`
+	Metadata json.RawMessage `json:"metadata"`
+}
+
 type createFlowTemplateRequest struct {
 	Slug        string     `json:"slug"`
 	DisplayName string     `json:"display_name"`
@@ -206,6 +220,9 @@ type projectResponse struct {
 	Description          string          `json:"description"`
 	DeliveryMode         string          `json:"delivery_mode"`
 	Status               string          `json:"status"`
+	IsPaused             bool            `json:"is_paused"`
+	PauseReason          string          `json:"pause_reason"`
+	PauseMetadata        json.RawMessage `json:"pause_metadata"`
 	DeployFlowTemplateID *uuid.UUID      `json:"deploy_flow_template_id"`
 	Settings             json.RawMessage `json:"settings"`
 	CreatedByType        string          `json:"created_by_type"`
@@ -480,6 +497,59 @@ func (h projectHandlers) archiveProject(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	responder.JSON(w, http.StatusOK, toProjectResponse(archived))
+}
+
+func (h projectHandlers) pauseProject(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+
+	projectID, err := parseUUIDParam(r, "id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+
+	var req pauseProjectRequest
+	if err := decodeJSON(r, &req); err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+
+	paused, pauseErr := h.service.Pause(r.Context(), principal.OrganizationID, projectID, projectsvc.PauseProjectRequest{
+		Reason:       req.Reason,
+		Metadata:     normalizeJSONMap(req.Metadata),
+		PausedByType: "human_user",
+		PausedByID:   principal.UserID,
+	})
+	if pauseErr != nil {
+		h.respondProjectError(responder, w, pauseErr)
+		return
+	}
+	responder.JSON(w, http.StatusOK, toProjectResponse(paused))
+}
+
+func (h projectHandlers) resumeProject(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+
+	projectID, err := parseUUIDParam(r, "id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+
+	resumed, resumeErr := h.service.Resume(r.Context(), principal.OrganizationID, projectID, "human_user", principal.UserID)
+	if resumeErr != nil {
+		h.respondProjectError(responder, w, resumeErr)
+		return
+	}
+	responder.JSON(w, http.StatusOK, toProjectResponse(resumed))
 }
 
 func (h projectHandlers) listProjectFlowTemplates(w http.ResponseWriter, r *http.Request) {
@@ -1399,6 +1469,7 @@ func normalizeJSONMapPointer(value *json.RawMessage) *json.RawMessage {
 
 func toProjectResponse(model *projectsvc.Project) projectResponse {
 	settings := normalizeJSONMap(model.Settings)
+	pauseState := projectpause.Parse(settings)
 	return projectResponse{
 		ID:                   model.ID,
 		OrganizationID:       model.OrganizationID,
@@ -1407,6 +1478,9 @@ func toProjectResponse(model *projectsvc.Project) projectResponse {
 		Description:          model.Description,
 		DeliveryMode:         model.DeliveryMode,
 		Status:               model.Status,
+		IsPaused:             pauseState.IsPaused,
+		PauseReason:          pauseState.Reason,
+		PauseMetadata:        normalizeJSONMap(pauseState.Metadata),
 		DeployFlowTemplateID: model.DeployFlowTemplateID,
 		Settings:             settings,
 		CreatedByType:        model.CreatedByType,

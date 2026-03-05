@@ -23,6 +23,7 @@ import (
 	deliverysvc "github.com/samhotchkiss/otter-camp/internal/delivery"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 )
@@ -2842,6 +2843,8 @@ func mapTaskError(err error) (int, string, string) {
 		return http.StatusNotFound, api.ErrCodeNotFound, "resource not found"
 	case errors.Is(err, flowsvc.ErrFlowNotStarted):
 		return http.StatusNotFound, api.ErrCodeNotFound, "resource not found"
+	case errors.Is(err, projectpause.ErrProjectPaused):
+		return http.StatusConflict, "project_paused", err.Error()
 	case errors.Is(err, flowsvc.ErrMaxVisitsExceeded):
 		return http.StatusConflict, api.ErrCodeConflict, err.Error()
 	default:

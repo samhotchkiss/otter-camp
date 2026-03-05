@@ -71,6 +71,34 @@ func TestSelectNextQueuedTaskUnderProjectGatePrefersLowestOutstandingGate(t *tes
 	}
 }
 
+func TestProcessQueuedTaskSkipsPausedProject(t *testing.T) {
+	ctx := context.Background()
+	projectID := uuid.New()
+	taskID := uuid.New()
+
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:         taskID,
+				ProjectID:  projectID,
+				WorkStatus: "queued",
+			},
+		},
+		projects: &fakeTaskQueueProjectRepository{
+			items: map[uuid.UUID]repo.Project{
+				projectID: {
+					ID:       projectID,
+					Settings: json.RawMessage(`{"pause":{"is_paused":true,"reason":"operator pause","metadata":{}}}`),
+				},
+			},
+		},
+	}
+
+	if err := processor.processQueuedTask(ctx, eventbus.DomainEvent{ID: uuid.New()}, taskID); err != nil {
+		t.Fatalf("processQueuedTask: %v", err)
+	}
+}
+
 func TestTaskQueueProcessorHandleFlowAdvancedEventCreatesRunForAgentNode(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
@@ -671,6 +699,21 @@ func (f *fakeTaskQueueTaskRepository) ListByProject(context.Context, uuid.UUID, 
 	return []repo.ProjectTask{f.task}, nil
 }
 
+type fakeTaskQueueProjectRepository struct {
+	items map[uuid.UUID]repo.Project
+	err   error
+}
+
+func (f *fakeTaskQueueProjectRepository) GetByID(_ context.Context, id uuid.UUID) (repo.Project, error) {
+	if f.err != nil {
+		return repo.Project{}, f.err
+	}
+	if item, ok := f.items[id]; ok {
+		return item, nil
+	}
+	return repo.Project{}, repo.ErrNotFound
+}
+
 type fakeTaskQueueRunStarter struct {
 	run                     Run
 	createErr               error
@@ -919,5 +962,6 @@ var _ taskQueueSessionRepository = (*fakeTaskQueueSessionRepository)(nil)
 var _ taskQueueRunStarter = (*fakeTaskQueueRunStarter)(nil)
 var _ taskQueueFlowExecutionRepository = (*fakeTaskQueueFlowExecutionRepository)(nil)
 var _ taskQueueTaskRepository = (*fakeTaskQueueTaskRepository)(nil)
+var _ taskQueueProjectRepository = (*fakeTaskQueueProjectRepository)(nil)
 var _ taskQueueFlowNodeRepository = (*fakeTaskQueueFlowNodeRepository)(nil)
 var _ taskQueueAssignmentRepository = (*fakeTaskQueueAssignmentRepository)(nil)

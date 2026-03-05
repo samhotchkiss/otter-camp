@@ -20,6 +20,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/model"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
@@ -55,6 +56,7 @@ var (
 	ErrModelTransient = errors.New("transient model failure")
 	errTurnDeferred   = errors.New("turn deferred")
 	errTurnCancelled  = errors.New("turn cancelled")
+	errTurnPaused     = errors.New("turn paused")
 )
 
 type AgentTurnPayload struct {
@@ -240,6 +242,10 @@ type assignmentRepository interface {
 	GetPM(ctx context.Context, projectID uuid.UUID) (repo.AgentProjectAssignment, error)
 }
 
+type projectRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.Project, error)
+}
+
 type memorySourceRepository interface {
 	ListBySession(ctx context.Context, sessionID uuid.UUID) ([]repo.MemorySource, error)
 }
@@ -276,6 +282,7 @@ type Options struct {
 	Tasks         taskRepository
 	FlowNodes     flowNodeRepository
 	Assignments   assignmentRepository
+	Projects      projectRepository
 	MemorySources memorySourceRepository
 	Memories      memoryRepository
 
@@ -312,6 +319,7 @@ type TurnEngine struct {
 	tasks       taskRepository
 	flowNodes   flowNodeRepository
 	assignments assignmentRepository
+	projects    projectRepository
 	sources     memorySourceRepository
 	memories    memoryRepository
 
@@ -355,7 +363,7 @@ type projectIdentity struct {
 
 func NewEngine(opts Options) (*TurnEngine, error) {
 	needsPool := opts.Messages == nil || opts.Turns == nil || opts.Sessions == nil ||
-		opts.Agents == nil || opts.Tasks == nil || opts.MemorySources == nil || opts.Memories == nil
+		opts.Agents == nil || opts.Tasks == nil || opts.Projects == nil || opts.MemorySources == nil || opts.Memories == nil
 	if needsPool && opts.Pool == nil {
 		return nil, fmt.Errorf("turn engine requires database pool")
 	}
@@ -400,6 +408,9 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 	}
 	if opts.Tasks == nil {
 		opts.Tasks = repo.NewProjectTaskRepo(opts.Pool)
+	}
+	if opts.Projects == nil {
+		opts.Projects = repo.NewProjectRepo(opts.Pool)
 	}
 	if opts.FlowNodes == nil && opts.Pool != nil {
 		opts.FlowNodes = repo.NewFlowNodeRepo(opts.Pool)
@@ -475,6 +486,7 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 		tasks:                 opts.Tasks,
 		flowNodes:             opts.FlowNodes,
 		assignments:           opts.Assignments,
+		projects:              opts.Projects,
 		sources:               opts.MemorySources,
 		memories:              opts.Memories,
 		defaultModelProfileID: opts.DefaultModelProfileID,
@@ -530,6 +542,14 @@ func (e *TurnEngine) HandleTurnJob(ctx context.Context, job jobqueue.Job) error 
 	if payload.SessionID == uuid.Nil || payload.MessageID == uuid.Nil {
 		return fmt.Errorf("%s payload missing session_id or message_id", AgentTurnJobType)
 	}
+	if session, err := e.chat.GetSession(ctx, payload.SessionID); err == nil {
+		if paused, reason, pauseErr := e.projectPausedForSession(ctx, session); pauseErr != nil {
+			return pauseErr
+		} else if paused {
+			e.logPausedTurnSkip("skipping queued agent turn for paused project", session, reason, payload.MessageID)
+			return nil
+		}
+	}
 	return e.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount)
 }
 
@@ -544,10 +564,24 @@ func (e *TurnEngine) HandleUserMessageEvent(ctx context.Context, event eventbus.
 		return nil
 	}
 	if session, getErr := e.chat.GetSession(ctx, payload.SessionID); getErr == nil {
+		if paused, reason, pauseErr := e.projectPausedForSession(ctx, session); pauseErr != nil {
+			return pauseErr
+		} else if paused {
+			e.logPausedTurnSkip("skipping agent turn enqueue for paused project", session, reason, payload.MessageID)
+			return nil
+		}
 		if responderID, resolveErr := e.resolveSessionAgentForSession(ctx, session); resolveErr == nil && responderID != uuid.Nil {
 			responderID = e.resolveNonSelfLoopResponder(ctx, session, event, responderID)
 			payload.AgentID = &responderID
 		}
+		enqueued, enqueueErr := e.enqueueAgentTurnIfActive(ctx, session, payload, nil)
+		if enqueueErr != nil {
+			return enqueueErr
+		}
+		if !enqueued {
+			return nil
+		}
+		return nil
 	}
 	_, err = e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, payload, nil)
 	return err
@@ -669,6 +703,12 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	if !strings.EqualFold(strings.TrimSpace(session.Status), "active") {
 		return nil
 	}
+	if paused, reason, pauseErr := e.projectPausedForSession(ctx, session); pauseErr != nil {
+		return pauseErr
+	} else if paused {
+		e.logPausedTurnSkip("skipping auto continuation for paused project", session, reason, payload.TurnID)
+		return nil
+	}
 	if e.tasks == nil || e.flowNodes == nil {
 		return nil
 	}
@@ -745,8 +785,14 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 		nextPayload.AgentID = &agentID
 	}
 	runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
-	_, err = e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, nextPayload, &runAfter)
-	return err
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	if err != nil {
+		return err
+	}
+	if !enqueued {
+		return nil
+	}
+	return nil
 }
 
 func (e *TurnEngine) HandleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID) error {
@@ -764,6 +810,12 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	}
 	if strings.EqualFold(session.Status, "closed") || strings.EqualFold(session.Status, "archived") {
 		e.logger.Info("skipping agent turn for closed session", "session_id", sessionID)
+		return nil
+	}
+	if paused, reason, pauseErr := e.projectPausedForSession(ctx, session); pauseErr != nil {
+		return pauseErr
+	} else if paused {
+		e.logPausedTurnSkip("skipping agent turn for paused project", session, reason, messageID)
 		return nil
 	}
 	message, err := e.messages.GetByID(ctx, messageID)
@@ -820,7 +872,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	defer stopCancelWatch()
 
 	err = e.runTurn(cancelCtx, runtime)
-	if err == nil || errors.Is(err, errTurnDeferred) || errors.Is(err, errTurnCancelled) {
+	if err == nil || errors.Is(err, errTurnDeferred) || errors.Is(err, errTurnCancelled) || errors.Is(err, errTurnPaused) {
 		return nil
 	}
 	if errors.Is(err, ErrRateLimited) {
@@ -871,12 +923,17 @@ func (e *TurnEngine) handleRateLimitedTurnFailure(
 
 	retryDelay := rateLimitRetryDelay(retryCount, rateLimitRetryAfterHint(cause))
 	runAfter := e.now().Add(retryDelay).UTC()
-	if _, err := e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, nextPayload, &runAfter); err != nil {
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, runtime.session, nextPayload, &runAfter)
+	if err != nil {
 		return false, fmt.Errorf("enqueue rate-limited turn retry: %w", err)
 	}
 
 	_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(cause))
-	_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, fmt.Sprintf("[Rate limited, retrying in %s...]", formatRetryDelay(retryDelay)))
+	message := fmt.Sprintf("[Rate limited, retrying in %s...]", formatRetryDelay(retryDelay))
+	if !enqueued {
+		message = "[Project paused - retry deferred until resume.]"
+	}
+	_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, message)
 	return true, nil
 }
 
@@ -966,8 +1023,14 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			listeningChecked = true
 			if wait {
 				runAfter := e.now().Add(e.listeningEvalDelay)
-				_, _ = e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, AgentTurnPayload{SessionID: rt.session.ID, MessageID: rt.initialMessageID}, &runAfter)
+				enqueued, err := e.enqueueAgentTurnIfActive(ctx, rt.session, AgentTurnPayload{SessionID: rt.session.ID, MessageID: rt.initialMessageID}, &runAfter)
+				if err != nil {
+					return err
+				}
 				_ = e.chat.CompleteTurn(ctx, rt.turn.ID)
+				if !enqueued {
+					return errTurnPaused
+				}
 				return errTurnDeferred
 			}
 		}
@@ -1088,6 +1151,19 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	if err := e.recordStopReason(ctx, rt); err != nil {
 		return err
 	}
+	paused, reason, err := e.projectPausedForSession(ctx, rt.session)
+	if err != nil {
+		return err
+	}
+	if paused {
+		notice := "[Project paused - continuation deferred until resume.]"
+		if trimmed := strings.TrimSpace(reason); trimmed != "" {
+			notice = fmt.Sprintf("[Project paused - continuation deferred until resume: %s]", trimmed)
+		}
+		if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, notice); err != nil {
+			return err
+		}
+	}
 	if err := e.chat.CompleteTurn(ctx, rt.turn.ID); err != nil {
 		// If the turn was cancelled externally (supervisor/API), treat as cancellation.
 		if errors.Is(err, chat.ErrInvalidStatusTransition) {
@@ -1108,6 +1184,9 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 		} else {
 			return e.describeTurnTransitionError(ctx, rt.turn.ID, "continueTurn CompleteTurn", "in_progress->completed", err)
 		}
+	}
+	if paused {
+		return errTurnPaused
 	}
 
 	currentTurn, err := e.chat.GetTurn(ctx, rt.turn.ID)
@@ -2717,6 +2796,58 @@ func resolveProjectID(ctx context.Context, session *chat.ChatSession, tasks task
 	default:
 		return nil
 	}
+}
+
+func (e *TurnEngine) projectPausedForSession(ctx context.Context, session *chat.ChatSession) (bool, string, error) {
+	if session == nil || e.projects == nil {
+		return false, "", nil
+	}
+	projectID := resolveProjectID(ctx, session, e.tasks)
+	if projectID == nil || *projectID == uuid.Nil {
+		return false, "", nil
+	}
+	projectRecord, err := e.projects.GetByID(ctx, *projectID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	pauseState := projectpause.Parse(projectRecord.Settings)
+	return pauseState.IsPaused, pauseState.Reason, nil
+}
+
+func (e *TurnEngine) enqueueAgentTurnIfActive(ctx context.Context, session *chat.ChatSession, payload AgentTurnPayload, runAfter *time.Time) (bool, error) {
+	if paused, reason, err := e.projectPausedForSession(ctx, session); err != nil {
+		return false, err
+	} else if paused {
+		e.logPausedTurnSkip("skipping agent turn enqueue for paused project", session, reason, payload.MessageID)
+		return false, nil
+	}
+	if _, err := e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, payload, runAfter); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) logPausedTurnSkip(message string, session *chat.ChatSession, reason string, messageID uuid.UUID) {
+	if e == nil || e.logger == nil || session == nil {
+		return
+	}
+	attrs := []any{
+		"session_id", session.ID,
+		"scope_type", strings.TrimSpace(session.ScopeType),
+	}
+	if messageID != uuid.Nil {
+		attrs = append(attrs, "message_id", messageID)
+	}
+	if trimmed := strings.TrimSpace(reason); trimmed != "" {
+		attrs = append(attrs, "pause_reason", trimmed)
+	}
+	if projectID := resolveProjectID(context.Background(), session, e.tasks); projectID != nil && *projectID != uuid.Nil {
+		attrs = append(attrs, "project_id", *projectID)
+	}
+	e.logger.Info(message, attrs...)
 }
 
 func resolveTaskID(session *chat.ChatSession) *uuid.UUID {

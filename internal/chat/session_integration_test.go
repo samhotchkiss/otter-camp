@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
@@ -248,6 +250,76 @@ func TestSession_ModeSwitch(t *testing.T) {
 	}
 }
 
+func TestSession_CreateTurnBlockedWhileProjectPausedUntilResume(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	agent := seedChatServiceAgent(t, ctx, pool, org.ID)
+	svc := newIntegrationService(t, pool, nil)
+	projectRepo := repo.NewProjectRepo(pool)
+
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "chat-pause-" + uuid.NewString()[:8],
+		DisplayName:    "Chat Pause",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := svc.CreateSession(ctx, CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "sync",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	firstTurn, err := svc.CreateTurn(ctx, session.ID, agent.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn first: %v", err)
+	}
+	if err := svc.StartTurn(ctx, firstTurn.ID); err != nil {
+		t.Fatalf("StartTurn first: %v", err)
+	}
+
+	project.Settings, err = projectpause.ApplyPause(project.Settings, "operator pause", json.RawMessage(`{"source":"test"}`), mustParseTime(t, "2026-03-05T18:00:00Z"), "human_user", uuid.New())
+	if err != nil {
+		t.Fatalf("ApplyPause: %v", err)
+	}
+	if _, err := projectRepo.Update(ctx, project); err != nil {
+		t.Fatalf("update paused project: %v", err)
+	}
+
+	if err := svc.CompleteTurn(ctx, firstTurn.ID); err != nil {
+		t.Fatalf("CompleteTurn first: %v", err)
+	}
+	if _, err := svc.CreateTurn(ctx, session.ID, agent.ID); !errors.Is(err, projectpause.ErrProjectPaused) {
+		t.Fatalf("CreateTurn while paused err = %v, want ErrProjectPaused", err)
+	}
+
+	project.Settings, err = projectpause.ClearPause(project.Settings)
+	if err != nil {
+		t.Fatalf("ClearPause: %v", err)
+	}
+	if _, err := projectRepo.Update(ctx, project); err != nil {
+		t.Fatalf("update resumed project: %v", err)
+	}
+
+	secondTurn, err := svc.CreateTurn(ctx, session.ID, agent.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn after resume: %v", err)
+	}
+	if secondTurn.ID == uuid.Nil {
+		t.Fatal("second turn id is nil")
+	}
+}
+
 func TestSession_ReadCursor(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -299,4 +371,13 @@ func TestSession_ReadCursor(t *testing.T) {
 	if second.LastReadSequence != 3 {
 		t.Fatalf("last_read_sequence = %d, want 3", second.LastReadSequence)
 	}
+}
+
+func mustParseTime(t *testing.T, value string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatalf("parse time %q: %v", value, err)
+	}
+	return parsed.UTC()
 }

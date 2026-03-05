@@ -554,6 +554,130 @@ func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testin
 	}
 }
 
+func TestTaskQueueProcessorIntegrationPausedProjectQueuedWorkStartsAfterResume(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+	stopTurnRuntime := startTaskQueueTurnRuntime(t, ctx, fx.pool, fx.bus, fx.org.ID)
+	defer stopTurnRuntime()
+
+	projectService, err := projectsvc.NewService(projectsvc.Options{
+		Pool:   fx.pool,
+		Events: fx.bus,
+	})
+	if err != nil {
+		t.Fatalf("New project service: %v", err)
+	}
+
+	if _, err := projectService.Pause(ctx, fx.org.ID, fx.project.ID, projectsvc.PauseProjectRequest{
+		Reason:       "operator pause",
+		PausedByType: "system",
+	}); err != nil {
+		t.Fatalf("Pause project: %v", err)
+	}
+
+	reviewer := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "reviewer", "Pause Reviewer", "reviewer")
+	template := seedTaskQueueReviewCompletionFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID, fx.agent.ID, reviewer.ID)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Paused queued task",
+		Description:     stringPtr("Wait for project resume."),
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	runRepo := NewRunRepository(fx.pool)
+	sessionRepo := repo.NewChatSessionRepo(fx.pool)
+
+	time.Sleep(750 * time.Millisecond)
+
+	taskWhilePaused, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID task while paused: %v", err)
+	}
+	if taskWhilePaused.WorkStatus != "queued" {
+		t.Fatalf("task work_status while paused = %q, want queued", taskWhilePaused.WorkStatus)
+	}
+
+	sessionWhilePaused, err := sessionRepo.GetByScopeAndMode(ctx, "project_task", created.ID, "async")
+	if err != nil {
+		t.Fatalf("GetByScopeAndMode while paused: %v", err)
+	}
+	if sessionWhilePaused != nil {
+		t.Fatalf("session while paused = %+v, want nil", sessionWhilePaused)
+	}
+
+	runsWhilePaused, err := runRepo.List(ctx, RunListFilter{
+		OrganizationID: fx.org.ID,
+		TaskID:         &created.ID,
+		Limit:          20,
+	})
+	if err != nil {
+		t.Fatalf("List runs while paused: %v", err)
+	}
+	if len(runsWhilePaused) != 0 {
+		t.Fatalf("runs while paused = %d, want 0", len(runsWhilePaused))
+	}
+
+	var agentTurnJobs int
+	if err := fx.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = $1
+	`, testAgentTurnJobType).Scan(&agentTurnJobs); err != nil {
+		t.Fatalf("count agent_turn jobs while paused: %v", err)
+	}
+	if agentTurnJobs != 0 {
+		t.Fatalf("agent_turn jobs while paused = %d, want 0", agentTurnJobs)
+	}
+
+	if _, err := projectService.Resume(ctx, fx.org.ID, fx.project.ID, "system", uuid.Nil); err != nil {
+		t.Fatalf("Resume project: %v", err)
+	}
+
+	var runRecord Run
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskAfterResume, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if taskAfterResume.WorkStatus != "in_progress" {
+			return false, nil
+		}
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		for _, candidate := range runs {
+			if candidate.Status == "in_progress" {
+				runRecord = candidate
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+
+	if runRecord.ID == uuid.Nil {
+		t.Fatal("expected in_progress run after resume")
+	}
+}
+
 func TestTaskQueueProcessorIntegrationSupervisorRunCompletedOnTaskDone(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)
@@ -1135,6 +1259,7 @@ func seedTaskQueueProcessorFixture(t *testing.T, ctx context.Context) taskQueueP
 	processor, err := NewTaskQueueProcessor(TaskQueueProcessorOptions{
 		Events:         bus,
 		Tasks:          repo.NewProjectTaskRepo(pool),
+		Projects:       repo.NewProjectRepo(pool),
 		TaskService:    taskService,
 		Flow:           flowService,
 		FlowExecutions: repo.NewFlowNodeExecutionRepo(pool),
@@ -1152,6 +1277,10 @@ func seedTaskQueueProcessorFixture(t *testing.T, ctx context.Context) taskQueueP
 	taskCompletedSub := processor.SubscribeTaskCompleted(&org.ID)
 	runCancellationSub := processor.SubscribeRunCancellationRequested(&org.ID)
 	flowAdvancedSub := processor.SubscribeFlowAdvanced(&org.ID)
+	projectResumedSub := processor.SubscribeProjectResumed(&org.ID)
+	t.Cleanup(func() {
+		bus.Unsubscribe(projectResumedSub)
+	})
 
 	return taskQueueProcessorFixture{
 		pool:               pool,
@@ -1353,6 +1482,84 @@ func seedTaskQueueTransitionFlowTemplate(
 		t.Fatalf("set template start node: %v", err)
 	}
 	return template, workA, review, workB
+}
+
+func seedTaskQueueReviewCompletionFlowTemplate(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	orgID, projectID uuid.UUID,
+	workerAgentID, reviewerAgentID uuid.UUID,
+) repo.FlowTemplate {
+	t.Helper()
+
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	actorAgent := "agent"
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           "flow-review-completion-" + uuid.NewString()[:8],
+		DisplayName:    "Flow Review Completion",
+		Description:    "review to completion template",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create review completion template: %v", err)
+	}
+	work, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		ActorType:      &actorAgent,
+		ActorID:        &workerAgentID,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create work node: %v", err)
+	}
+	review, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		ActorType:      &actorAgent,
+		ActorID:        &reviewerAgentID,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create review node: %v", err)
+	}
+	completion, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Merge",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create completion node: %v", err)
+	}
+
+	work.NextNodeID = &review.ID
+	review.NextNodeID = &completion.ID
+	if _, err := nodeRepo.Update(ctx, work); err != nil {
+		t.Fatalf("update work edge: %v", err)
+	}
+	if _, err := nodeRepo.Update(ctx, review); err != nil {
+		t.Fatalf("update review edge: %v", err)
+	}
+
+	template.StartNodeID = &work.ID
+	if _, err := templateRepo.Update(ctx, template); err != nil {
+		t.Fatalf("set review completion template start node: %v", err)
+	}
+	return template
 }
 
 func seedTaskQueueHumanReviewFlowTemplate(

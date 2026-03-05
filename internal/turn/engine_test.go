@@ -516,6 +516,114 @@ func TestHandleTurnCompletedEventSkipsAtAutoContinuationCap(t *testing.T) {
 	}
 }
 
+func TestHandleTurnCompletedEventSkipsWhenProjectPaused(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:       projectID,
+				Settings: json.RawMessage(`{"pause":{"is_paused":true,"reason":"operator pause","metadata":{}}}`),
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "Investigating the next step.")
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+}
+
+func TestContinueTurnStopsWhenProjectPaused(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	projectID := uuid.New()
+	agentID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+			},
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:       projectID,
+				Settings: json.RawMessage(`{"pause":{"is_paused":true,"reason":"operator pause","metadata":{}}}`),
+			},
+		},
+	}
+
+	turn, err := fixture.chat.CreateTurn(context.Background(), fixture.session.ID, agentID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := fixture.chat.StartTurn(context.Background(), turn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		agent:            repo.Agent{ID: agentID, OrganizationID: fixture.session.OrganizationID},
+		turn:             turn,
+		initialMessageID: fixture.userMessageID,
+	}
+	if err := fixture.engine.continueTurn(context.Background(), rt); !errors.Is(err, errTurnPaused) {
+		t.Fatalf("continueTurn err = %v, want errTurnPaused", err)
+	}
+
+	if len(fixture.chat.turnOrder) != 1 {
+		t.Fatalf("turn count = %d, want 1", len(fixture.chat.turnOrder))
+	}
+	currentTurn, err := fixture.chat.GetTurn(context.Background(), turn.ID)
+	if err != nil {
+		t.Fatalf("GetTurn: %v", err)
+	}
+	if currentTurn.Status != "completed" {
+		t.Fatalf("turn status = %q, want completed", currentTurn.Status)
+	}
+	if !fixture.messages.containsContentSubstring("Project paused - continuation deferred until resume") {
+		t.Fatal("missing paused continuation message")
+	}
+}
+
 func TestHandleUserMessageTaskScopeRoutesToAssignedAgent(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -1858,6 +1966,7 @@ func newUnitFixture(t *testing.T, mode string) *unitFixture {
 		Sessions:      chatSvc,
 		Agents:        &fakeAgentRepo{agent: agentRecord, starter: []repo.Agent{agentRecord}},
 		Tasks:         &fakeTaskRepo{},
+		Projects:      &fakeProjectRepo{},
 		FlowNodes:     &fakeFlowNodeRepo{},
 		MemorySources: memSources,
 		Memories:      memories,
@@ -2665,6 +2774,21 @@ func (f *fakeAssignmentRepo) GetPM(_ context.Context, projectID uuid.UUID) (repo
 		return item, nil
 	}
 	return repo.AgentProjectAssignment{}, repo.ErrNotFound
+}
+
+type fakeProjectRepo struct {
+	items map[uuid.UUID]repo.Project
+	err   error
+}
+
+func (f *fakeProjectRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Project, error) {
+	if f.err != nil {
+		return repo.Project{}, f.err
+	}
+	if item, ok := f.items[id]; ok {
+		return item, nil
+	}
+	return repo.Project{}, repo.ErrNotFound
 }
 
 type fakeMemorySourceRepo struct {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/scheduling"
 )
@@ -119,6 +120,63 @@ func TestProjectCreateRejectsHTMLDisplayName(t *testing.T) {
 	})
 	if !errors.Is(err, ErrDisplayNameInvalid) {
 		t.Fatalf("Create err = %v, want ErrDisplayNameInvalid", err)
+	}
+}
+
+func TestProjectPauseResumePublishesEvents(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	userID := uuid.New()
+	now := time.Date(2026, time.March, 5, 18, 0, 0, 0, time.UTC)
+
+	projects := &fakeProjectMutableRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Slug:           "paused-project",
+				DisplayName:    "Paused Project",
+				Settings:       json.RawMessage(`{}`),
+			},
+		},
+	}
+	events := &fakeProjectEventBus{}
+	svc := &service{
+		projects: projects,
+		events:   events,
+		clock:    clock.NewFake(now),
+	}
+
+	paused, err := svc.Pause(context.Background(), orgID, projectID, PauseProjectRequest{
+		Reason:       "operator pause",
+		Metadata:     json.RawMessage(`{"source":"unit-test"}`),
+		PausedByType: "human_user",
+		PausedByID:   userID,
+	})
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	pauseState := projectpause.Parse(paused.Settings)
+	if !pauseState.IsPaused {
+		t.Fatal("pause state is_paused = false, want true")
+	}
+	if pauseState.Reason != "operator pause" {
+		t.Fatalf("pause reason = %q, want %q", pauseState.Reason, "operator pause")
+	}
+	if len(events.events) != 1 || events.events[0].EventType != "project.paused" {
+		t.Fatalf("pause events = %+v, want project.paused", events.events)
+	}
+
+	resumed, err := svc.Resume(context.Background(), orgID, projectID, "human_user", userID)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if projectpause.Parse(resumed.Settings).IsPaused {
+		t.Fatal("pause state after resume = true, want false")
+	}
+	if len(events.events) != 2 || events.events[1].EventType != "project.resumed" {
+		t.Fatalf("events = %+v, want trailing project.resumed", events.events)
 	}
 }
 
@@ -231,6 +289,57 @@ func (f *fakeProjectCreateRepo) Update(context.Context, repo.Project) (repo.Proj
 func (f *fakeProjectCreateRepo) Archive(context.Context, uuid.UUID) error { return nil }
 
 func (f *fakeProjectCreateRepo) Delete(context.Context, uuid.UUID) error { return nil }
+
+type fakeProjectMutableRepo struct {
+	items map[uuid.UUID]repo.Project
+}
+
+func (f *fakeProjectMutableRepo) Create(_ context.Context, project repo.Project) (repo.Project, error) {
+	if project.ID == uuid.Nil {
+		project.ID = uuid.New()
+	}
+	if f.items == nil {
+		f.items = map[uuid.UUID]repo.Project{}
+	}
+	f.items[project.ID] = project
+	return project, nil
+}
+
+func (f *fakeProjectMutableRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Project, error) {
+	if item, ok := f.items[id]; ok {
+		return item, nil
+	}
+	return repo.Project{}, repo.ErrNotFound
+}
+
+func (f *fakeProjectMutableRepo) GetBySlug(_ context.Context, orgID uuid.UUID, slug string) (repo.Project, error) {
+	for _, item := range f.items {
+		if item.OrganizationID == orgID && item.Slug == slug {
+			return item, nil
+		}
+	}
+	return repo.Project{}, repo.ErrNotFound
+}
+
+func (f *fakeProjectMutableRepo) List(context.Context, uuid.UUID) ([]repo.Project, error) {
+	items := make([]repo.Project, 0, len(f.items))
+	for _, item := range f.items {
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (f *fakeProjectMutableRepo) Update(_ context.Context, project repo.Project) (repo.Project, error) {
+	if f.items == nil {
+		f.items = map[uuid.UUID]repo.Project{}
+	}
+	f.items[project.ID] = project
+	return project, nil
+}
+
+func (f *fakeProjectMutableRepo) Archive(context.Context, uuid.UUID) error { return nil }
+
+func (f *fakeProjectMutableRepo) Delete(context.Context, uuid.UUID) error { return nil }
 
 type fakeProjectEventBus struct {
 	events []eventbus.DomainEvent

@@ -4,6 +4,7 @@ package project
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
@@ -198,6 +200,40 @@ func TestProjectServiceCreateAutoGeneratesBootstrapGateTaskAndFlow(t *testing.T)
 	}
 	if reviewNode.NextNodeID != nil {
 		t.Fatalf("review next_node_id = %v, want nil for terminal approval", reviewNode.NextNodeID)
+	}
+}
+
+func TestProjectServicePauseResumePersistsStateAndPublishesEvents(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	svc := newIntegrationService(t, pool)
+	orgID, projectID := seedProject(t, ctx, pool)
+
+	pausedByID := uuid.New()
+	paused, err := svc.Pause(ctx, orgID, projectID, PauseProjectRequest{
+		Reason:       "operator pause",
+		Metadata:     json.RawMessage(`{"source":"integration-test"}`),
+		PausedByType: "human_user",
+		PausedByID:   pausedByID,
+	})
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	pauseState := projectpause.Parse(paused.Settings)
+	if !pauseState.IsPaused {
+		t.Fatal("pause state is_paused = false, want true")
+	}
+	if pauseState.Reason != "operator pause" {
+		t.Fatalf("pause reason = %q, want %q", pauseState.Reason, "operator pause")
+	}
+
+	resumed, err := svc.Resume(ctx, orgID, projectID, "human_user", pausedByID)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if projectpause.Parse(resumed.Settings).IsPaused {
+		t.Fatal("pause state after resume = true, want false")
 	}
 }
 

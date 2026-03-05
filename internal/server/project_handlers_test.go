@@ -37,6 +37,8 @@ func TestProjectRoutesRegistered(t *testing.T) {
 		"GET /projects/{id}",
 		"PATCH /projects/{id}",
 		"DELETE /projects/{id}",
+		"POST /projects/{id}/pause",
+		"POST /projects/{id}/resume",
 		"GET /projects/{id}/flow-templates",
 		"POST /projects/{id}/flow-templates",
 		"GET /flow-templates",
@@ -261,6 +263,14 @@ func (f *fakeProjectService) List(context.Context, uuid.UUID, projectsvc.Project
 }
 
 func (f *fakeProjectService) Update(context.Context, uuid.UUID, uuid.UUID, projectsvc.UpdateProjectRequest) (*projectsvc.Project, error) {
+	return nil, repo.ErrNotFound
+}
+
+func (f *fakeProjectService) Pause(context.Context, uuid.UUID, uuid.UUID, projectsvc.PauseProjectRequest) (*projectsvc.Project, error) {
+	return nil, repo.ErrNotFound
+}
+
+func (f *fakeProjectService) Resume(context.Context, uuid.UUID, uuid.UUID, string, uuid.UUID) (*projectsvc.Project, error) {
 	return nil, repo.ErrNotFound
 }
 
