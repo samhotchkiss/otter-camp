@@ -688,6 +688,92 @@ func TestHandleUserMessageProjectScopeRoutesToProjectPMAndAddsParticipant(t *tes
 	}
 }
 
+func TestProjectCreateStateMachinePreventsConflictReentryAfterSuccess(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	projectID := uuid.New()
+	projectSlug := "sam-blog-v2"
+
+	dispatched := make([]string, 0, 3)
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		dispatched = append(dispatched, call.ID)
+		switch call.ID {
+		case "create-conflict":
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Error:      "slug_conflict_archive_or_reuse_required",
+			}, nil
+		case "create-success":
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Output: map[string]any{
+					"project": map[string]any{
+						"id":   projectID,
+						"slug": projectSlug,
+						"name": "Sam Blog V2",
+					},
+				},
+			}, nil
+		case "create-reopen":
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Error:      "unexpected_reopen_dispatch",
+			}, nil
+		default:
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}}, nil
+		}
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		round++
+		switch round {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "create-conflict", Name: "project.create", Tier: "tier1", Arguments: map[string]any{"name": "Sam Blog", "slug": "sam-blog"}}}}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "create-success", Name: "project.create", Tier: "tier1", Arguments: map[string]any{"name": "Sam Blog V2", "slug": projectSlug}}}}, nil
+		case 3:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "create-reopen", Name: "project.create", Tier: "tier1", Arguments: map[string]any{"name": "Sam Blog V2", "slug": projectSlug}}}}, nil
+		default:
+			return ModelResponse{Content: "Proceeding with the created project."}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if strings.Join(dispatched, ",") != "create-conflict,create-success" {
+		t.Fatalf("dispatched project.create calls = %v, want [create-conflict create-success]", dispatched)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	wantLock := fmt.Sprintf("Project identity locked: slug=%s project_id=%s", projectSlug, projectID)
+	hasLock := false
+	hasBlockedReopen := false
+	for _, message := range messages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "system") && strings.Contains(message.Content, wantLock) {
+			hasLock = true
+		}
+		if strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") &&
+			message.ToolCallID != nil &&
+			*message.ToolCallID == "create-reopen" &&
+			strings.Contains(message.Content, "project already created in this flow") {
+			hasBlockedReopen = true
+		}
+	}
+	if !hasLock {
+		t.Fatalf("missing project identity lock system message containing %q", wantLock)
+	}
+	if !hasBlockedReopen {
+		t.Fatal("missing blocked project.create tool_result for create-reopen call")
+	}
+}
+
 func TestHandleUserMessageTaskScopeFallsBackToFrank(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

@@ -335,6 +335,12 @@ type turnRuntime struct {
 	invocationAttempt int
 	toolSet           []tools.ToolDescriptor
 	stopReason        string
+	projectIdentity   *projectIdentity
+}
+
+type projectIdentity struct {
+	id   uuid.UUID
+	slug string
 }
 
 func NewEngine(opts Options) (*TurnEngine, error) {
@@ -1293,6 +1299,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 	}
 
 	toolCalls := make([]ToolCall, 0, len(calls))
+	blockedCalls := make([]ToolResult, 0)
 	for i, call := range calls {
 		id := strings.TrimSpace(call.ID)
 		if id == "" {
@@ -1329,6 +1336,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 				arguments["task_id"] = taskID.String()
 			}
 		}
+		if strings.EqualFold(name, "project.create") && rt.projectIdentity != nil {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      buildProjectCreateConflictGuardError(rt.projectIdentity),
+			})
+			continue
+		}
 		toolCalls = append(toolCalls, ToolCall{
 			ID:              id,
 			Name:            name,
@@ -1346,6 +1361,13 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 	toolBudget := e.maxToolCalls
 	if toolBudget < 1 {
 		toolBudget = 1
+	}
+
+	if len(blockedCalls) > 0 {
+		if err := e.appendToolResults(ctx, rt, blockedCalls); err != nil {
+			return false, err
+		}
+		rt.toolCallsUsed += len(blockedCalls)
 	}
 	if rt.toolCallsUsed >= toolBudget {
 		rt.stopReason = stopReasonMaxToolCalls
@@ -1487,8 +1509,72 @@ func (e *TurnEngine) appendToolResults(ctx context.Context, rt *turnRuntime, res
 		if _, err := e.messages.UpdateStatus(ctx, message.ID, "final", ""); err != nil {
 			return err
 		}
+		if identity, ok := parseProjectIdentityFromToolResult(result); ok {
+			rt.projectIdentity = identity
+			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectIdentityLockMessage(identity)); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+func parseProjectIdentityFromToolResult(result ToolResult) (*projectIdentity, bool) {
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "project.create") {
+		return nil, false
+	}
+	if strings.TrimSpace(result.Error) != "" || len(result.Output) == 0 {
+		return nil, false
+	}
+	projectValue, ok := result.Output["project"]
+	if !ok || projectValue == nil {
+		return nil, false
+	}
+	projectMap, ok := projectValue.(map[string]any)
+	if !ok || len(projectMap) == 0 {
+		return nil, false
+	}
+	projectID, ok := parseUUIDValue(projectMap["id"])
+	if !ok || projectID == uuid.Nil {
+		return nil, false
+	}
+	slug := strings.TrimSpace(fmt.Sprintf("%v", projectMap["slug"]))
+	if slug == "" {
+		return nil, false
+	}
+	return &projectIdentity{id: projectID, slug: slug}, true
+}
+
+func parseUUIDValue(value any) (uuid.UUID, bool) {
+	switch typed := value.(type) {
+	case uuid.UUID:
+		if typed == uuid.Nil {
+			return uuid.Nil, false
+		}
+		return typed, true
+	case string:
+		parsed, err := uuid.Parse(strings.TrimSpace(typed))
+		if err != nil || parsed == uuid.Nil {
+			return uuid.Nil, false
+		}
+		return parsed, true
+	default:
+		return uuid.Nil, false
+	}
+}
+
+func buildProjectIdentityLockMessage(identity *projectIdentity) string {
+	if identity == nil {
+		return "[Project identity locked.]"
+	}
+	return fmt.Sprintf("[Project identity locked: slug=%s project_id=%s. Continue using this project. Do not reopen slug-conflict or archive-vs-reuse reasoning unless the user explicitly asks to create another project.]", strings.TrimSpace(identity.slug), identity.id)
+}
+
+func buildProjectCreateConflictGuardError(identity *projectIdentity) string {
+	if identity == nil {
+		return "project already created in this flow"
+	}
+	return fmt.Sprintf("project already created in this flow as slug=%s project_id=%s; continue with that project unless the user explicitly starts a new create attempt", strings.TrimSpace(identity.slug), identity.id)
 }
 
 func (e *TurnEngine) callMainModel(
