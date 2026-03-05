@@ -118,6 +118,137 @@ func TestListeningEvalWaitReenqueuesAndSkipsPhase2(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageEventProjectScopeFrankHandoffRoutesToExistingParticipant(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	frankID := fixture.chat.participants[0].ParticipantID
+	workerID := uuid.New()
+	loriID := uuid.New()
+	actorID := frankID
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.chat.participants = []*chat.ChatParticipant{
+		{
+			ID:              uuid.New(),
+			SessionID:       fixture.session.ID,
+			ParticipantType: "agent",
+			ParticipantID:   frankID,
+		},
+		{
+			ID:              uuid.New(),
+			SessionID:       fixture.session.ID,
+			ParticipantType: "agent",
+			ParticipantID:   workerID,
+		},
+	}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{
+			frankID:  {ID: frankID, OrganizationID: fixture.session.OrganizationID, DisplayName: "Frank", AgentType: "general"},
+			workerID: {ID: workerID, OrganizationID: fixture.session.OrganizationID, DisplayName: "Builder", AgentType: "worker"},
+			loriID:   {ID: loriID, OrganizationID: fixture.session.OrganizationID, DisplayName: "Lori", AgentType: "pm"},
+		},
+		starter: []repo.Agent{
+			{ID: frankID, DisplayName: "Frank", AgentType: "general"},
+			{ID: loriID, DisplayName: "Lori", AgentType: "pm"},
+		},
+	}
+
+	err := fixture.engine.HandleUserMessageEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.message.user_sent",
+		ActorType:      "agent",
+		ActorID:        &actorID,
+		Payload: mustRawJSON(t, map[string]any{
+			"session_id": fixture.session.ID,
+			"message_id": fixture.userMessageID,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("HandleUserMessageEvent: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil || jobs[0].payload.AgentID == nil {
+		t.Fatal("agent_turn payload missing routed agent")
+	}
+	if *jobs[0].payload.AgentID != workerID {
+		t.Fatalf("payload.agent_id = %v, want %s", jobs[0].payload.AgentID, workerID)
+	}
+}
+
+func TestHandleUserMessageEventProjectScopeFrankHandoffFallsBackToLori(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	frankID := fixture.chat.participants[0].ParticipantID
+	loriID := uuid.New()
+	actorID := frankID
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.chat.participants = []*chat.ChatParticipant{
+		{
+			ID:              uuid.New(),
+			SessionID:       fixture.session.ID,
+			ParticipantType: "agent",
+			ParticipantID:   frankID,
+		},
+	}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{
+			frankID: {ID: frankID, OrganizationID: fixture.session.OrganizationID, DisplayName: "Frank", AgentType: "general"},
+			loriID:  {ID: loriID, OrganizationID: fixture.session.OrganizationID, DisplayName: "Lori", AgentType: "pm"},
+		},
+		starter: []repo.Agent{
+			{ID: frankID, DisplayName: "Frank", AgentType: "general"},
+			{ID: loriID, DisplayName: "Lori", AgentType: "pm"},
+		},
+	}
+
+	err := fixture.engine.HandleUserMessageEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.message.user_sent",
+		ActorType:      "agent",
+		ActorID:        &actorID,
+		Payload: mustRawJSON(t, map[string]any{
+			"session_id": fixture.session.ID,
+			"message_id": fixture.userMessageID,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("HandleUserMessageEvent: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil || jobs[0].payload.AgentID == nil {
+		t.Fatal("agent_turn payload missing routed agent")
+	}
+	if *jobs[0].payload.AgentID != loriID {
+		t.Fatalf("payload.agent_id = %v, want %s", jobs[0].payload.AgentID, loriID)
+	}
+
+	participants, err := fixture.chat.ListParticipants(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListParticipants: %v", err)
+	}
+	hasLori := false
+	for _, participant := range participants {
+		if participant != nil && strings.EqualFold(strings.TrimSpace(participant.ParticipantType), "agent") && participant.ParticipantID == loriID {
+			hasLori = true
+			break
+		}
+	}
+	if !hasLori {
+		t.Fatalf("expected Lori %s to be added as a session participant", loriID)
+	}
+}
+
 func TestHandleTurnJobRateLimitedEnqueuesRetryUsingProviderHint(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	base := time.Unix(1700000000, 0).UTC()

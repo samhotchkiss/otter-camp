@@ -523,11 +523,45 @@ func (e *TurnEngine) HandleUserMessageEvent(ctx context.Context, event eventbus.
 	}
 	if session, getErr := e.chat.GetSession(ctx, payload.SessionID); getErr == nil {
 		if responderID, resolveErr := e.resolveSessionAgentForSession(ctx, session); resolveErr == nil && responderID != uuid.Nil {
+			responderID = e.resolveNonSelfLoopResponder(ctx, session, event, responderID)
 			payload.AgentID = &responderID
 		}
 	}
 	_, err = e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, payload, nil)
 	return err
+}
+
+func (e *TurnEngine) resolveNonSelfLoopResponder(ctx context.Context, session *chat.ChatSession, event eventbus.DomainEvent, responderID uuid.UUID) uuid.UUID {
+	if session == nil || responderID == uuid.Nil {
+		return responderID
+	}
+	if !strings.EqualFold(strings.TrimSpace(event.ActorType), "agent") || event.ActorID == nil || *event.ActorID == uuid.Nil {
+		return responderID
+	}
+	actorID := *event.ActorID
+	if responderID != actorID {
+		return responderID
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") {
+		return responderID
+	}
+
+	if participantID, err := e.resolveFirstAgentParticipantExcluding(ctx, session.ID, actorID); err == nil && participantID != uuid.Nil {
+		return participantID
+	}
+
+	frankID, err := e.resolveFrankStarterID(ctx, session.OrganizationID)
+	if err != nil || frankID != actorID {
+		return responderID
+	}
+	loriID, err := e.resolveLoriStarterID(ctx, session.OrganizationID)
+	if err != nil || loriID == uuid.Nil || loriID == actorID {
+		return responderID
+	}
+	if err := e.ensureAgentParticipant(ctx, session.ID, loriID); err != nil {
+		return responderID
+	}
+	return loriID
 }
 
 func (e *TurnEngine) HandleReactionEvent(ctx context.Context, event eventbus.DomainEvent) error {
@@ -1748,6 +1782,36 @@ func (e *TurnEngine) resolveFrankStarterID(ctx context.Context, organizationID u
 	return uuid.Nil, repo.ErrNotFound
 }
 
+func (e *TurnEngine) resolveLoriStarterID(ctx context.Context, organizationID uuid.UUID) (uuid.UUID, error) {
+	if e.agents == nil {
+		return uuid.Nil, repo.ErrNotFound
+	}
+	starterAgents, err := e.agents.GetStarterTrio(ctx, organizationID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	for _, item := range starterAgents {
+		if strings.EqualFold(strings.TrimSpace(item.DisplayName), "lori") && item.ID != uuid.Nil {
+			return item.ID, nil
+		}
+	}
+	for _, item := range starterAgents {
+		if strings.EqualFold(strings.TrimSpace(item.AgentType), "pm") && item.ID != uuid.Nil {
+			return item.ID, nil
+		}
+	}
+	for _, item := range starterAgents {
+		if item.ID == uuid.Nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(item.DisplayName), "frank") {
+			continue
+		}
+		return item.ID, nil
+	}
+	return uuid.Nil, repo.ErrNotFound
+}
+
 func (e *TurnEngine) resolveFirstAgentParticipant(ctx context.Context, sessionID uuid.UUID) (uuid.UUID, error) {
 	participants, err := e.chat.ListParticipants(ctx, sessionID)
 	if err != nil {
@@ -1760,6 +1824,26 @@ func (e *TurnEngine) resolveFirstAgentParticipant(ctx context.Context, sessionID
 		if strings.EqualFold(strings.TrimSpace(participant.ParticipantType), "agent") {
 			return participant.ParticipantID, nil
 		}
+	}
+	return uuid.Nil, repo.ErrNotFound
+}
+
+func (e *TurnEngine) resolveFirstAgentParticipantExcluding(ctx context.Context, sessionID, excludedAgentID uuid.UUID) (uuid.UUID, error) {
+	participants, err := e.chat.ListParticipants(ctx, sessionID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	for _, participant := range participants {
+		if participant == nil {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(participant.ParticipantType), "agent") {
+			continue
+		}
+		if participant.ParticipantID == uuid.Nil || participant.ParticipantID == excludedAgentID {
+			continue
+		}
+		return participant.ParticipantID, nil
 	}
 	return uuid.Nil, repo.ErrNotFound
 }
