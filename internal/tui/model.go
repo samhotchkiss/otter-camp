@@ -175,36 +175,36 @@ type TUIPerformanceMetrics struct {
 }
 
 type Model struct {
-	state          UIState
-	focus          Panel
-	commandMode    bool
-	commandBuffer  string
-	searchMode     bool
-	searchPanel    Panel
-	searchQuery    string
-	sidebarFilter     string
-	mainFilter        string
-	helpScrollOffset  int // EX-209: scroll position within the help view
-	statusMessage     string
-	statusGeneration  int // incremented each time statusMessage is set; used to avoid stale auto-clears
-	runtimeHints      RuntimeHints
-	connection     ConnectionState
-	streamDegraded bool
-	width          int
-	height         int
-	quitting       bool
-	sidebarVisible bool
-	sizeClass      SizeClass
-	workspace      workspaceState
-	now            func() time.Time
-	startedAt      time.Time
-	firstRun       bool
-	coldOpenActive bool
-	tourActive     bool
-	proofRealtime  bool
-	proofReplay    bool
-	sidebarLoaded  bool
-	perfMetrics    TUIPerformanceMetrics
+	state            UIState
+	focus            Panel
+	commandMode      bool
+	commandBuffer    string
+	searchMode       bool
+	searchPanel      Panel
+	searchQuery      string
+	sidebarFilter    string
+	mainFilter       string
+	helpScrollOffset int // EX-209: scroll position within the help view
+	statusMessage    string
+	statusGeneration int // incremented each time statusMessage is set; used to avoid stale auto-clears
+	runtimeHints     RuntimeHints
+	connection       ConnectionState
+	streamDegraded   bool
+	width            int
+	height           int
+	quitting         bool
+	sidebarVisible   bool
+	sizeClass        SizeClass
+	workspace        workspaceState
+	now              func() time.Time
+	startedAt        time.Time
+	firstRun         bool
+	coldOpenActive   bool
+	tourActive       bool
+	proofRealtime    bool
+	proofReplay      bool
+	sidebarLoaded    bool
+	perfMetrics      TUIPerformanceMetrics
 
 	chatInput            string
 	lastEscNano          int64 // monotonic timestamp of last ESC keypress (for CSI fragment detection)

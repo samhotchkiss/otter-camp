@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/assignmentrole"
 )
 
 const activePMUniqueIndexName = "agent_project_assignment_active_pm_unique_idx"
@@ -51,7 +52,7 @@ func (r *AgentProjectAssignmentRepo) AssignTx(ctx context.Context, tx pgx.Tx, as
 }
 
 func (r *AgentProjectAssignmentRepo) assign(ctx context.Context, db dbExecutor, assignment AgentProjectAssignment) (AgentProjectAssignment, error) {
-	role := normalizeProjectAssignmentRole(assignment.Role)
+	role := assignmentrole.Normalize(assignment.Role)
 	if role == "" {
 		role = strings.ToLower(strings.TrimSpace(assignment.Role))
 	}
@@ -589,15 +590,4 @@ func mapAgentProjectAssignmentError(err error) error {
 	}
 
 	return mapDBError(err)
-}
-
-func normalizeProjectAssignmentRole(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "pm", "project_manager":
-		return "project_manager"
-	case "worker", "reviewer", "observer":
-		return strings.ToLower(strings.TrimSpace(value))
-	default:
-		return ""
-	}
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/samhotchkiss/otter-camp/internal/assignmentrole"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
@@ -828,7 +829,7 @@ func (e *NativeToolExecutor) projectHasActivePM(ctx context.Context, projectID u
 		if !assignment.IsActive {
 			continue
 		}
-		if isProjectManagerRole(assignment.Role) {
+		if assignmentrole.IsProjectManager(assignment.Role) {
 			return true
 		}
 	}
@@ -1549,17 +1550,6 @@ func (e *NativeToolExecutor) handleScheduleDelete(ctx context.Context, input map
 	return map[string]any{"deleted": true}, nil
 }
 
-func normalizeProjectAssignmentRole(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "pm", "project_manager":
-		return "project_manager"
-	case "worker", "reviewer", "observer":
-		return strings.ToLower(strings.TrimSpace(value))
-	default:
-		return ""
-	}
-}
-
 func projectAssignmentRoleRequiresDedicatedAgent(role string) bool {
 	switch role {
 	case "project_manager", "worker", "reviewer":
@@ -1567,10 +1557,6 @@ func projectAssignmentRoleRequiresDedicatedAgent(role string) bool {
 	default:
 		return false
 	}
-}
-
-func isProjectManagerRole(value string) bool {
-	return strings.EqualFold(strings.TrimSpace(value), "project_manager") || strings.EqualFold(strings.TrimSpace(value), "pm")
 }
 
 func (e *NativeToolExecutor) handleAgentAssignProject(ctx context.Context, input map[string]any) (map[string]any, error) {
@@ -1593,7 +1579,7 @@ func (e *NativeToolExecutor) handleAgentAssignProject(ctx context.Context, input
 	if !ok || strings.TrimSpace(roleRaw) == "" {
 		return map[string]any{"error": "role_required"}, nil
 	}
-	role := normalizeProjectAssignmentRole(roleRaw)
+	role := assignmentrole.Normalize(roleRaw)
 	if role == "" {
 		return map[string]any{"error": "invalid_role"}, nil
 	}
@@ -1828,8 +1814,8 @@ func (e *NativeToolExecutor) autoAddProjectParticipants(ctx context.Context, ses
 	copy(sortedAssignments, assignments)
 	for i := 0; i < len(sortedAssignments)-1; i++ {
 		for j := i + 1; j < len(sortedAssignments); j++ {
-			oi := roleOrder[normalizeProjectAssignmentRole(sortedAssignments[i].Role)]
-			oj := roleOrder[normalizeProjectAssignmentRole(sortedAssignments[j].Role)]
+			oi := roleOrder[assignmentrole.Normalize(sortedAssignments[i].Role)]
+			oj := roleOrder[assignmentrole.Normalize(sortedAssignments[j].Role)]
 			if oi > oj {
 				sortedAssignments[i], sortedAssignments[j] = sortedAssignments[j], sortedAssignments[i]
 			}

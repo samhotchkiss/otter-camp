@@ -146,6 +146,29 @@ func TestProjectAgentsHTTPAssignmentLifecycle(t *testing.T) {
 	}
 }
 
+func TestProjectAgentsHTTPCreateRejectsInvalidRole(t *testing.T) {
+	testServer, org, adminUser, _ := newAgentTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	project := seedAssignmentProject(t, testServer.Pool, org.ID)
+	agentRecord := seedActiveAssignmentAgent(t, testServer.Pool, org.ID, "project-route-agent-invalid-role")
+
+	assignResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+project.ID.String()+"/agents", map[string]any{
+		"agent_id": agentRecord.ID.String(),
+		"role":     "bogus",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if assignResp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("assign status = %d, want %d body=%s", assignResp.StatusCode, http.StatusUnprocessableEntity, string(assignResp.Body))
+	}
+	if got := jsonPathString(t, assignResp.Body, "error", "code"); got != "validation_error" {
+		t.Fatalf("error.code = %q, want %q body=%s", got, "validation_error", string(assignResp.Body))
+	}
+	if got := jsonPathString(t, assignResp.Body, "error", "message"); got != "role must be one of project_manager, worker, reviewer, observer" {
+		t.Fatalf("error.message = %q body=%s", got, string(assignResp.Body))
+	}
+}
+
 func TestAgentSkillsHTTPAttachmentLifecycle(t *testing.T) {
 	testServer, org, adminUser, _ := newAgentTestServer(t)
 	defer testServer.Close()

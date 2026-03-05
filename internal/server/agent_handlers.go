@@ -17,6 +17,7 @@ import (
 
 	"github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/api"
+	"github.com/samhotchkiss/otter-camp/internal/assignmentrole"
 	"github.com/samhotchkiss/otter-camp/internal/audit"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -1184,7 +1185,7 @@ func (h agentHandlers) createAgentProjectAssignment(w http.ResponseWriter, r *ht
 		return
 	}
 
-	role := normalizeProjectAssignmentRole(req.Role)
+	role := assignmentrole.Normalize(req.Role)
 	if role == "" {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "role must be one of project_manager, worker, reviewer, observer")
 		return
@@ -1381,13 +1382,14 @@ func (h agentHandlers) createProjectAgent(w http.ResponseWriter, r *http.Request
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "agent_id is required")
 		return
 	}
-	role := normalizeProjectAssignmentRole(req.Role)
+	rawRole := strings.TrimSpace(req.Role)
+	role := assignmentrole.Normalize(rawRole)
 	if role == "" {
+		if rawRole != "" {
+			responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "role must be one of project_manager, worker, reviewer, observer")
+			return
+		}
 		role = "worker"
-	}
-	if role == "" {
-		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "role must be one of project_manager, worker, reviewer, observer")
-		return
 	}
 
 	if _, err := h.getScopedProject(r.Context(), principal.OrganizationID, projectID); err != nil {
@@ -1914,17 +1916,6 @@ func mapTemplateError(err error) (status int, code, message string) {
 		return http.StatusConflict, api.ErrCodeConflict, "conflict"
 	default:
 		return http.StatusInternalServerError, api.ErrCodeInternal, "request failed"
-	}
-}
-
-func normalizeProjectAssignmentRole(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "pm", "project_manager":
-		return "project_manager"
-	case "worker", "reviewer", "observer":
-		return strings.ToLower(strings.TrimSpace(value))
-	default:
-		return ""
 	}
 }
 
