@@ -399,11 +399,24 @@ func (m *mockTaskRepo) Update(_ context.Context, task repo.ProjectTask) (repo.Pr
 }
 
 type mockFlowNodeRepo struct {
-	nodes map[uuid.UUID]repo.FlowNode
+	nodes         map[uuid.UUID]repo.FlowNode
+	templateNodes map[uuid.UUID][]repo.FlowNode
+	getByTplErr   error
 }
 
-func (m *mockFlowNodeRepo) Create(context.Context, repo.FlowNode) (repo.FlowNode, error) {
-	return repo.FlowNode{}, errors.New("not implemented")
+func (m *mockFlowNodeRepo) Create(_ context.Context, node repo.FlowNode) (repo.FlowNode, error) {
+	if node.ID == uuid.Nil {
+		node.ID = uuid.New()
+	}
+	if m.nodes == nil {
+		m.nodes = make(map[uuid.UUID]repo.FlowNode)
+	}
+	m.nodes[node.ID] = node
+	if m.templateNodes == nil {
+		m.templateNodes = make(map[uuid.UUID][]repo.FlowNode)
+	}
+	m.templateNodes[node.FlowTemplateID] = append(m.templateNodes[node.FlowTemplateID], node)
+	return node, nil
 }
 
 func (m *mockFlowNodeRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNode, error) {
@@ -417,12 +430,88 @@ func (m *mockFlowNodeRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNo
 	return node, nil
 }
 
-func (m *mockFlowNodeRepo) GetByTemplateOrdered(context.Context, uuid.UUID) ([]repo.FlowNode, error) {
-	return nil, errors.New("not implemented")
+func (m *mockFlowNodeRepo) GetByTemplateOrdered(_ context.Context, templateID uuid.UUID) ([]repo.FlowNode, error) {
+	if m.getByTplErr != nil {
+		return nil, m.getByTplErr
+	}
+	if m.templateNodes != nil {
+		return append([]repo.FlowNode(nil), m.templateNodes[templateID]...), nil
+	}
+	if m.nodes == nil {
+		return nil, nil
+	}
+	nodes := make([]repo.FlowNode, 0)
+	for _, node := range m.nodes {
+		if node.FlowTemplateID == templateID {
+			nodes = append(nodes, node)
+		}
+	}
+	return nodes, nil
 }
 
-func (m *mockFlowNodeRepo) Update(context.Context, repo.FlowNode) (repo.FlowNode, error) {
-	return repo.FlowNode{}, errors.New("not implemented")
+func (m *mockFlowNodeRepo) Update(_ context.Context, node repo.FlowNode) (repo.FlowNode, error) {
+	if m.nodes == nil {
+		m.nodes = make(map[uuid.UUID]repo.FlowNode)
+	}
+	m.nodes[node.ID] = node
+	if m.templateNodes != nil {
+		updated := make([]repo.FlowNode, 0, len(m.templateNodes[node.FlowTemplateID]))
+		replaced := false
+		for _, existing := range m.templateNodes[node.FlowTemplateID] {
+			if existing.ID == node.ID {
+				updated = append(updated, node)
+				replaced = true
+				continue
+			}
+			updated = append(updated, existing)
+		}
+		if !replaced {
+			updated = append(updated, node)
+		}
+		m.templateNodes[node.FlowTemplateID] = updated
+	}
+	return node, nil
+}
+
+type mockFlowTemplateRepo struct {
+	templates map[uuid.UUID]repo.FlowTemplate
+}
+
+func (m *mockFlowTemplateRepo) Create(_ context.Context, template repo.FlowTemplate) (repo.FlowTemplate, error) {
+	if template.ID == uuid.Nil {
+		template.ID = uuid.New()
+	}
+	if template.Version == 0 {
+		template.Version = 1
+	}
+	if m.templates == nil {
+		m.templates = make(map[uuid.UUID]repo.FlowTemplate)
+	}
+	m.templates[template.ID] = template
+	return template, nil
+}
+
+func (m *mockFlowTemplateRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowTemplate, error) {
+	if m.templates == nil {
+		return repo.FlowTemplate{}, repo.ErrNotFound
+	}
+	template, ok := m.templates[id]
+	if !ok {
+		return repo.FlowTemplate{}, repo.ErrNotFound
+	}
+	return template, nil
+}
+
+func (m *mockFlowTemplateRepo) ListCurrent(context.Context, *uuid.UUID, *uuid.UUID) ([]repo.FlowTemplate, error) {
+	return nil, nil
+}
+
+func (m *mockFlowTemplateRepo) Update(_ context.Context, template repo.FlowTemplate) (repo.FlowTemplate, error) {
+	if m.templates == nil {
+		m.templates = make(map[uuid.UUID]repo.FlowTemplate)
+	}
+	m.templates[template.ID] = template
+	return template, nil
 }
 
 type mockFlowExecutionRepo struct {
@@ -498,6 +587,13 @@ func TestTaskUpdateAllowsDraftToQueuedWithFlowTemplate(t *testing.T) {
 	}
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
 	executor.tasks = tasks
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			flowTemplateID: {
+				{ID: uuid.New(), FlowTemplateID: flowTemplateID, NodeType: "review", Position: 1},
+			},
+		},
+	}
 
 	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
 		"task_id":     taskID.String(),
@@ -540,6 +636,13 @@ func TestTaskUpdateQueuedOversizedTaskCreatesDecomposedChildWorkUnits(t *testing
 	}
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
 	executor.tasks = tasks
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			flowTemplateID: {
+				{ID: uuid.New(), FlowTemplateID: flowTemplateID, NodeType: "review", Position: 1},
+			},
+		},
+	}
 
 	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
 		"task_id":     taskID.String(),
@@ -599,6 +702,13 @@ func TestTaskUpdateQueuedOversizedTaskPublishesTaskCreatedEventsForDecomposedChi
 		Events:        publisher,
 	})
 	executor.tasks = tasks
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			flowTemplateID: {
+				{ID: uuid.New(), FlowTemplateID: flowTemplateID, NodeType: "review", Position: 1},
+			},
+		},
+	}
 
 	if _, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
 		"task_id":     taskID.String(),
@@ -647,6 +757,13 @@ func TestTaskUpdateSetsFlowTemplateIDWhileDraft(t *testing.T) {
 	}
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
 	executor.tasks = tasks
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			flowTemplateID: {
+				{ID: uuid.New(), FlowTemplateID: flowTemplateID, NodeType: "review", Position: 1},
+			},
+		},
+	}
 
 	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
 		"task_id":          taskID.String(),
@@ -692,6 +809,62 @@ func TestTaskUpdateRejectsFlowTemplateChangeOutsideDraft(t *testing.T) {
 	}
 	if tasks.updateCalls != 0 {
 		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)
+	}
+}
+
+func TestFlowCreateTemplateRejectsNodesWithoutReview(t *testing.T) {
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.flowTemplates = &mockFlowTemplateRepo{}
+	executor.flowNodes = &mockFlowNodeRepo{}
+	projectID := uuid.New()
+
+	out, err := executor.Execute(testExecCtx(), "flow.create_template", map[string]any{
+		"project_id": projectID.String(),
+		"name":       "No Review Template",
+		"nodes": []any{
+			map[string]any{
+				"display_name": "Work",
+				"node_type":    "work",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("flow.create_template: %v", err)
+	}
+	if out["error"] != "flow template must include at least one review node" {
+		t.Fatalf("error = %v, want review-node validation message", out["error"])
+	}
+}
+
+func TestFlowCreateTemplateAllowsNonMapNodeWhenReviewNodePresent(t *testing.T) {
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.flowTemplates = &mockFlowTemplateRepo{}
+	executor.flowNodes = &mockFlowNodeRepo{}
+	projectID := uuid.New()
+
+	out, err := executor.Execute(testExecCtx(), "flow.create_template", map[string]any{
+		"project_id": projectID.String(),
+		"name":       "Template With Review",
+		"nodes": []any{
+			"ignore-me",
+			map[string]any{
+				"display_name": "Review",
+				"node_type":    "review",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("flow.create_template: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("error = %v, want nil", out["error"])
+	}
+	templateOut, ok := out["template"].(map[string]any)
+	if !ok {
+		t.Fatalf("template output = %T, want map[string]any", out["template"])
+	}
+	if templateOut["id"] == nil {
+		t.Fatalf("template id = %v, want non-nil", templateOut["id"])
 	}
 }
 
@@ -753,6 +926,13 @@ func TestTaskUpdateRejectsDraftToQueuedWithoutPMWhenProjectRequiresPM(t *testing
 	executor.tasks = tasks
 	executor.projects = projects
 	executor.assignments = assignments
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			flowTemplateID: {
+				{ID: uuid.New(), FlowTemplateID: flowTemplateID, NodeType: "review", Position: 1},
+			},
+		},
+	}
 
 	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
 		"task_id":     taskID.String(),
@@ -799,6 +979,13 @@ func TestTaskUpdateAllowsDraftToQueuedWithPMWhenProjectRequiresPM(t *testing.T) 
 	executor.tasks = tasks
 	executor.projects = projects
 	executor.assignments = assignments
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			flowTemplateID: {
+				{ID: uuid.New(), FlowTemplateID: flowTemplateID, NodeType: "review", Position: 1},
+			},
+		},
+	}
 
 	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
 		"task_id":     taskID.String(),
@@ -989,6 +1176,13 @@ func TestTaskUpdatePublishesStatusChangedEventWhenWorkStatusChanges(t *testing.T
 		Events:        publisher,
 	})
 	executor.tasks = tasks
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			flowTemplateID: {
+				{ID: uuid.New(), FlowTemplateID: flowTemplateID, NodeType: "review", Position: 1},
+			},
+		},
+	}
 
 	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
 		"task_id":     taskID.String(),
