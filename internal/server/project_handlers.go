@@ -15,8 +15,8 @@ import (
 
 	"github.com/samhotchkiss/otter-camp/internal/api"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
-	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/scheduling"
 )
