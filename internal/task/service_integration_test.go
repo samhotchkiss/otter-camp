@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
@@ -515,17 +516,31 @@ func seedTaskServiceFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpoo
 	if err != nil {
 		t.Fatalf("create flow template: %v", err)
 	}
-	reviewNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+	workNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
 		FlowTemplateID: template.ID,
-		DisplayName:    "Review",
-		NodeType:       "review",
+		DisplayName:    "Work",
+		NodeType:       "work",
 		Position:       1,
 		MaxVisits:      10,
 	})
 	if err != nil {
 		t.Fatalf("create flow node: %v", err)
 	}
-	template.StartNodeID = &reviewNode.ID
+	reviewNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create review flow node: %v", err)
+	}
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := repo.NewFlowNodeRepo(pool).Update(ctx, workNode); err != nil {
+		t.Fatalf("link flow nodes: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
 	updated, err := templateRepo.Update(ctx, template)
 	if err != nil {
 		t.Fatalf("update flow template start node: %v", err)

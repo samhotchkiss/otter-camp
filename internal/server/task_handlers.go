@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/samhotchkiss/otter-camp/internal/api"
 	deliverysvc "github.com/samhotchkiss/otter-camp/internal/delivery"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
@@ -2832,6 +2833,7 @@ func mapTaskError(err error) (int, string, string) {
 		errors.Is(err, flowsvc.ErrCrossLevelDependency),
 		errors.Is(err, flowsvc.ErrSelfDependency),
 		errors.Is(err, flowsvc.ErrCyclicDependency),
+		errors.Is(err, flowsvc.ErrSelfReviewForbidden),
 		errors.Is(err, flowsvc.ErrInvalidSubtaskTransition),
 		errors.Is(err, flowsvc.ErrNoRejectionPath),
 		errors.Is(err, deliverysvc.ErrEnvironmentIDRequired):

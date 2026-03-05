@@ -15,6 +15,7 @@ import (
 
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/scheduling"
 	"github.com/samhotchkiss/otter-camp/internal/validation"
@@ -32,7 +33,7 @@ var (
 	ErrAgentNotFound            = errors.New("agent not found")
 	ErrFlowNodeTemplateMismatch = errors.New("flow node does not belong to flow template")
 	ErrDisplayNameInvalid       = errors.New("display_name contains HTML tags")
-	ErrFlowTemplateReviewPath   = errors.New("flow template must include at least one review node on every path to completion")
+	ErrFlowTemplateReviewPath   = errors.New("flow template must define a work -> review -> completion path")
 	ErrReviewNodeEdgesRequired  = errors.New("review nodes must define both approve and reject edges")
 	ErrOrganizationIDRequired   = errors.New("organization_id is required")
 	ErrProjectIDRequired        = errors.New("project_id is required")
@@ -1387,11 +1388,6 @@ func withProjectStaffingDefaults(settings json.RawMessage) json.RawMessage {
 	return encoded
 }
 
-type flowValidationState struct {
-	NodeID    uuid.UUID
-	HasReview bool
-}
-
 func (s *service) validateFlowTemplateReviewCoverage(ctx context.Context, templateID uuid.UUID, startNodeID *uuid.UUID, overrideNode *repo.FlowNode, removedNodeID *uuid.UUID) error {
 	if startNodeID == nil || *startNodeID == uuid.Nil {
 		return nil
@@ -1434,120 +1430,30 @@ func (s *service) validateFlowTemplateReviewCoverage(ctx context.Context, templa
 		nodes = filtered
 	}
 
-	return validateFlowTemplateReviewEntries(*startNodeID, nodes)
+	return ValidateExecutableFlowTemplate(startNodeID, nodes)
 }
 
-func validateFlowTemplateReviewEntries(startNodeID uuid.UUID, nodes []repo.FlowNode) error {
-	nodeByID := make(map[uuid.UUID]repo.FlowNode, len(nodes))
-	incoming := make(map[uuid.UUID]int, len(nodes))
-	for i := range nodes {
-		nodeByID[nodes[i].ID] = nodes[i]
-	}
-	if _, ok := nodeByID[startNodeID]; !ok {
-		return ErrFlowNodeTemplateMismatch
-	}
+func ValidateExecutableFlowNodes(nodes []repo.FlowNode) error {
+	return mapFlowValidationError(flowpolicy.ValidateExecutableFlowNodes(nodes))
+}
 
-	for i := range nodes {
-		node := nodes[i]
-		if node.NextNodeID != nil && *node.NextNodeID != uuid.Nil {
-			if _, ok := nodeByID[*node.NextNodeID]; ok {
-				incoming[*node.NextNodeID]++
-			}
-		}
-		if node.RejectNodeID != nil && *node.RejectNodeID != uuid.Nil {
-			if _, ok := nodeByID[*node.RejectNodeID]; ok {
-				if node.NextNodeID == nil || *node.NextNodeID != *node.RejectNodeID {
-					incoming[*node.RejectNodeID]++
-				}
-			}
-		}
-	}
-
-	entryNodeIDs := make([]uuid.UUID, 0, len(nodes)+1)
-	seenEntries := map[uuid.UUID]struct{}{startNodeID: {}}
-	entryNodeIDs = append(entryNodeIDs, startNodeID)
-	for i := range nodes {
-		node := nodes[i]
-		if incoming[node.ID] != 0 {
-			continue
-		}
-		if _, seen := seenEntries[node.ID]; seen {
-			continue
-		}
-		seenEntries[node.ID] = struct{}{}
-		entryNodeIDs = append(entryNodeIDs, node.ID)
-	}
-
-	for _, entryNodeID := range entryNodeIDs {
-		if err := validateFlowTemplateReviewPath(entryNodeID, nodes); err != nil {
-			return err
-		}
-	}
-	return nil
+func ValidateExecutableFlowTemplate(startNodeID *uuid.UUID, nodes []repo.FlowNode) error {
+	return mapFlowValidationError(flowpolicy.ValidateExecutableFlowTemplate(startNodeID, nodes))
 }
 
 func validateFlowTemplateReviewPath(startNodeID uuid.UUID, nodes []repo.FlowNode) error {
-	nodeByID := make(map[uuid.UUID]repo.FlowNode, len(nodes))
-	for i := range nodes {
-		nodeByID[nodes[i].ID] = nodes[i]
-	}
+	return ValidateExecutableFlowTemplate(&startNodeID, nodes)
+}
 
-	startNode, ok := nodeByID[startNodeID]
-	if !ok {
-		return ErrFlowNodeTemplateMismatch
-	}
-
-	visited := make(map[flowValidationState]struct{})
-	var walk func(node repo.FlowNode, hasReview bool) error
-	walk = func(node repo.FlowNode, hasReview bool) error {
-		hasReview = hasReview || strings.EqualFold(strings.TrimSpace(node.NodeType), "review")
-		state := flowValidationState{
-			NodeID:    node.ID,
-			HasReview: hasReview,
-		}
-		if _, seen := visited[state]; seen {
-			return nil
-		}
-		visited[state] = struct{}{}
-
-		nextNodeIDs := make([]uuid.UUID, 0, 2)
-		appendEdge := func(id *uuid.UUID) {
-			if id == nil || *id == uuid.Nil {
-				return
-			}
-			for _, existing := range nextNodeIDs {
-				if existing == *id {
-					return
-				}
-			}
-			nextNodeIDs = append(nextNodeIDs, *id)
-		}
-
-		isReview := strings.EqualFold(strings.TrimSpace(node.NodeType), "review")
-		if isReview && (node.NextNodeID == nil || node.RejectNodeID == nil) {
-			return ErrReviewNodeEdgesRequired
-		}
-		appendEdge(node.NextNodeID)
-		appendEdge(node.RejectNodeID)
-
-		if len(nextNodeIDs) == 0 {
-			if !hasReview {
-				return ErrFlowTemplateReviewPath
-			}
-			return nil
-		}
-
-		for _, nextID := range nextNodeIDs {
-			nextNode, exists := nodeByID[nextID]
-			if !exists {
-				return ErrFlowNodeTemplateMismatch
-			}
-			if err := walk(nextNode, hasReview); err != nil {
-				return err
-			}
-		}
+func mapFlowValidationError(err error) error {
+	switch {
+	case err == nil:
 		return nil
+	case errors.Is(err, flowpolicy.ErrFlowNodeTemplateMismatch):
+		return ErrFlowNodeTemplateMismatch
+	case errors.Is(err, flowpolicy.ErrExecutableFlowPath):
+		return ErrFlowTemplateReviewPath
+	default:
+		return err
 	}
-
-	return walk(startNode, false)
 }

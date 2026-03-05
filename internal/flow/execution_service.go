@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
@@ -31,6 +32,7 @@ var (
 	ErrInvalidSubtaskTransition  = errors.New("invalid subtask status transition")
 	ErrAgentNotFound             = errors.New("agent not found")
 	ErrUserNotFound              = errors.New("user not found")
+	ErrSelfReviewForbidden       = errors.New("review actor must differ from the actor who completed the work being reviewed")
 )
 
 type Actor struct {
@@ -73,6 +75,7 @@ type flowNodeExecutionRepository interface {
 	Complete(ctx context.Context, id uuid.UUID) (repo.FlowNodeExecution, error)
 	Reject(ctx context.Context, id uuid.UUID) (repo.FlowNodeExecution, error)
 	RecordCommitSHA(ctx context.Context, id uuid.UUID, commitSHA string) (repo.FlowNodeExecution, error)
+	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.FlowNodeExecution, error)
 }
 
 type projectTaskRepository interface {
@@ -347,6 +350,18 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 		return &activeExecution, nil
 	}
 
+	if err := s.validateReviewAdvanceActor(ctx, taskRecord.ID, currentNode, activeExecution, actor); err != nil {
+		return nil, err
+	}
+	if currentNode.NextNodeID == nil {
+		if err := s.validateTerminalAdvance(ctx, taskRecord.ID, activeExecution, currentNode, actor); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := s.executions.UpdateMetadata(ctx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
+		return nil, err
+	}
+
 	completedExecution, err := s.executions.Complete(ctx, activeExecution.ID)
 	if err != nil {
 		return nil, err
@@ -354,9 +369,7 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 
 	var nextExecution *repo.FlowNodeExecution
 	if currentNode.NextNodeID == nil {
-		taskActor := toTaskActor(actor)
-		taskActor.AllowDoneBypass = true
-		if _, err := s.taskService.TransitionStatus(ctx, taskRecord.ID, "done", taskActor); err != nil {
+		if _, err := s.taskService.TransitionStatus(ctx, taskRecord.ID, "done", toTaskActor(actor)); err != nil {
 			return nil, err
 		}
 		if _, err := s.tasks.SetFlowNode(ctx, taskRecord.ID, nil); err != nil {
@@ -449,6 +462,9 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 		return nil, err
 	}
 
+	if _, err := s.executions.UpdateMetadata(ctx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
+		return nil, err
+	}
 	if _, err := s.executions.Reject(ctx, activeExecution.ID); err != nil {
 		return nil, err
 	}
@@ -840,6 +856,161 @@ func (s *service) nextVisitNumber(ctx context.Context, taskID uuid.UUID, flowNod
 	}
 
 	return maxVisit + 1, nil
+}
+
+type reviewExecutionProgress struct {
+	hasWork            bool
+	hasReviewedWork    bool
+	pendingReviewWork  bool
+	pendingReviewActor executionActorRef
+}
+
+type executionActorRef struct {
+	Type string
+	ID   uuid.UUID
+}
+
+func (s *service) validateReviewAdvanceActor(ctx context.Context, taskID uuid.UUID, currentNode repo.FlowNode, _ repo.FlowNodeExecution, actor Actor) error {
+	if !strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "review") {
+		return nil
+	}
+
+	progress, err := s.reviewProgressForTask(ctx, taskID, nil)
+	if err != nil {
+		return err
+	}
+	if !progress.pendingReviewWork {
+		return nil
+	}
+	if actorMatchesExecutionActor(actor, progress.pendingReviewActor) {
+		return ErrSelfReviewForbidden
+	}
+	return nil
+}
+
+func (s *service) validateTerminalAdvance(ctx context.Context, taskID uuid.UUID, activeExecution repo.FlowNodeExecution, currentNode repo.FlowNode, actor Actor) error {
+	progress, err := s.reviewProgressForTask(ctx, taskID, &repo.FlowNodeExecution{
+		ID:          activeExecution.ID,
+		TaskID:      activeExecution.TaskID,
+		FlowNodeID:  currentNode.ID,
+		VisitNumber: activeExecution.VisitNumber,
+		Status:      "completed",
+		SessionID:   activeExecution.SessionID,
+		CommitSHA:   activeExecution.CommitSHA,
+		StartedAt:   activeExecution.StartedAt,
+		CompletedAt: activeExecution.CompletedAt,
+		Metadata:    executionMetadataWithCompletedBy(activeExecution.Metadata, actor),
+	})
+	if err != nil {
+		return err
+	}
+	if !progress.hasWork || !progress.hasReviewedWork || progress.pendingReviewWork {
+		return tasksvc.ErrDoneRequiresTerminalFlow
+	}
+	return nil
+}
+
+func (s *service) reviewProgressForTask(ctx context.Context, taskID uuid.UUID, override *repo.FlowNodeExecution) (reviewExecutionProgress, error) {
+	rows, err := s.executions.ListByTask(ctx, taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return reviewExecutionProgress{}, nil
+		}
+		return reviewExecutionProgress{}, err
+	}
+	if override != nil {
+		replaced := false
+		for i := range rows {
+			if rows[i].ID != override.ID {
+				continue
+			}
+			rows[i] = *override
+			replaced = true
+			break
+		}
+		if !replaced {
+			rows = append(rows, *override)
+		}
+	}
+
+	progress := reviewExecutionProgress{}
+	nodeCache := make(map[uuid.UUID]repo.FlowNode, len(rows))
+	for _, execution := range rows {
+		if !strings.EqualFold(strings.TrimSpace(execution.Status), "completed") {
+			continue
+		}
+		node, ok := nodeCache[execution.FlowNodeID]
+		if !ok {
+			loaded, err := s.flowNodes.GetByID(ctx, execution.FlowNodeID)
+			if err != nil {
+				return reviewExecutionProgress{}, err
+			}
+			node = loaded
+			nodeCache[execution.FlowNodeID] = node
+		}
+
+		switch strings.ToLower(strings.TrimSpace(node.NodeType)) {
+		case "work":
+			progress.hasWork = true
+			progress.pendingReviewWork = true
+			progress.pendingReviewActor = decodeExecutionActorRef(execution.Metadata)
+		case "review":
+			if progress.pendingReviewWork {
+				progress.hasReviewedWork = true
+				progress.pendingReviewWork = false
+				progress.pendingReviewActor = executionActorRef{}
+			}
+		}
+	}
+
+	return progress, nil
+}
+
+func executionMetadataWithCompletedBy(existing json.RawMessage, actor Actor) json.RawMessage {
+	payload := map[string]any{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &payload)
+	}
+	completedBy := map[string]any{
+		"type": normalizeTaskActorType(actor.Type),
+	}
+	if actor.ID != uuid.Nil {
+		completedBy["id"] = actor.ID.String()
+	}
+	payload["completed_by"] = completedBy
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return encoded
+}
+
+func decodeExecutionActorRef(metadata json.RawMessage) executionActorRef {
+	if len(metadata) == 0 {
+		return executionActorRef{}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return executionActorRef{}
+	}
+	rawCompletedBy, ok := payload["completed_by"].(map[string]any)
+	if !ok {
+		return executionActorRef{}
+	}
+	ref := executionActorRef{Type: normalizeTaskActorType(strings.TrimSpace(fmt.Sprintf("%v", rawCompletedBy["type"])))}
+	if rawID, ok := rawCompletedBy["id"]; ok {
+		if parsedID, err := uuid.Parse(strings.TrimSpace(fmt.Sprintf("%v", rawID))); err == nil {
+			ref.ID = parsedID
+		}
+	}
+	return ref
+}
+
+func actorMatchesExecutionActor(actor Actor, ref executionActorRef) bool {
+	if ref.Type == "" || ref.ID == uuid.Nil {
+		return false
+	}
+	return normalizeTaskActorType(actor.Type) == ref.Type && actor.ID != uuid.Nil && actor.ID == ref.ID
 }
 
 func (s *service) checkCycle(ctx context.Context, nodeType string, sourceID, dependsOnID uuid.UUID) (bool, error) {

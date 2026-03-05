@@ -220,6 +220,24 @@ func (r *FlowNodeExecutionRepo) RecordCommitSHA(ctx context.Context, id uuid.UUI
 	return updated, nil
 }
 
+func (r *FlowNodeExecutionRepo) UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (FlowNodeExecution, error) {
+	row := r.pool.QueryRow(ctx, `
+		UPDATE flow_node_execution
+		SET metadata = $2::jsonb
+		WHERE id = $1
+		RETURNING id, task_id, flow_node_id, visit_number, status, session_id, commit_sha, started_at, completed_at, metadata
+	`, id, normalizeFlowExecutionJSON(metadata))
+
+	updated, err := scanFlowNodeExecution(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return FlowNodeExecution{}, ErrNotFound
+	}
+	if err != nil {
+		return FlowNodeExecution{}, mapDBError(err)
+	}
+	return updated, nil
+}
+
 func (r *FlowNodeExecutionRepo) SetSessionID(ctx context.Context, id, sessionID uuid.UUID) (FlowNodeExecution, error) {
 	row := r.pool.QueryRow(ctx, `
 		UPDATE flow_node_execution

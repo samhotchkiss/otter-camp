@@ -633,13 +633,20 @@ func buildSystemTemplateNodeSeedPlan(template repo.FlowTemplate, existing []repo
 	roleActor := "role"
 	switch template.Slug {
 	case "default-single-agent":
+		nextIndex := 1
 		return systemTemplateNodeSeedPlan{
 			Seeds: []flowNodeSeedSpec{
 				{
-					DisplayName: "Work",
-					NodeType:    "work",
-					Position:    0,
-					ActorType:   &roleActor,
+					DisplayName:   "Work",
+					NodeType:      "work",
+					Position:      0,
+					ActorType:     &roleActor,
+					NextSeedIndex: &nextIndex,
+				},
+				{
+					DisplayName: "Review",
+					NodeType:    "review",
+					Position:    1,
 				},
 			},
 		}, nil
