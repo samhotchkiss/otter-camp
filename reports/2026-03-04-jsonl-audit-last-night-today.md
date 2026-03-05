@@ -100,3 +100,16 @@ Validation:
 - `go test ./internal/testdb`
 - `go test ./internal/testdb -tags integration`
 - `go test ./internal/testdb -tags integration -run TestNewReturnsIsolatedDatabaseAndDropsOnCleanup -count=20`
+
+## Baseline Test Health Gate (Task 235)
+- Added versioned baseline artifacts:
+  - `config/autowork-baseline-test-matrix.json`
+  - `config/autowork-flake-registry.json`
+- Added gate evaluator consumed by autowork runner:
+  - `scripts/lib/baseline-health-gate.sh`
+- Added regression coverage for gate evaluator:
+  - `scripts/lib/baseline-health-gate-test.sh`
+- Runner output now includes:
+  - `baseline-health-summary gate_status=... baseline_health_status=...`
+  - `task_scope_regressions=<n>`
+  - `waived_known_flakes=<n> waived_flake_refs=<flake-id-list>`

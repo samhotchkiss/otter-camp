@@ -394,6 +394,10 @@ Critical rules:
   - `scripts/lib/github-retry.sh git push <remote> <refspec>`
   - `scripts/lib/github-retry.sh gh pr edit <args...>`
 - Wrapper output includes retry attempt count and terminal reason; treat `action=fail_fast` as non-retryable.
+- Baseline health artifacts for build-run noise triage:
+  - `config/autowork-baseline-test-matrix.json`
+  - `config/autowork-flake-registry.json`
+- Any waiver in the flake registry must include owner, expiry date, and linked evidence.
 - Append blocker details to ${SHARED_ISSUES_DIR}/notes.md.
 - API routes are /v1/* except health (/health*) and test reset (POST /test/reset).
 - Headless MCP policy: claude.ai MCP servers are disabled by default for reviewer runs.
