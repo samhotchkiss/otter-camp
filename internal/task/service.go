@@ -444,7 +444,7 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	if target == "queued" && taskRecord.RequiresHumanReview && !approvalOverride {
 		return nil, ErrRequiresHumanApproval
 	}
-	if from == "draft" && target == "queued" && taskRecord.FlowTemplateID == nil {
+	if statusRequiresFlowTemplate(target) && taskRecord.FlowTemplateID == nil {
 		return nil, ErrFlowTemplateRequired
 	}
 	if from == "draft" && target == "queued" {
@@ -706,6 +706,7 @@ func (s *service) MarkBlocked(ctx context.Context, taskID uuid.UUID, reason stri
 		Title:               title,
 		Description:         pointerString("Automatically created to resolve blocker"),
 		WorkStatus:          "queued",
+		FlowTemplateID:      blocked.FlowTemplateID,
 		CreatedByType:       normalizeActorTypeForTask(actor.Type),
 		CreatedByID:         createdByID,
 		AssignedAgentID:     &pmAssignment.AgentID,
@@ -1204,6 +1205,15 @@ func isTransitionAllowed(fromStatus, toStatus string) bool {
 
 func normalizeStatus(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func statusRequiresFlowTemplate(status string) bool {
+	switch normalizeStatus(status) {
+	case "queued", "in_progress", "review", "done":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeJSON(value json.RawMessage) json.RawMessage {

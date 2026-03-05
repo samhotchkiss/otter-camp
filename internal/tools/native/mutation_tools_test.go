@@ -712,8 +712,9 @@ func TestTaskUpdateRejectsDoneWithoutFlowTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task.update: %v", err)
 	}
-	if out["error"] != taskDoneTerminalNodeMessage {
-		t.Fatalf("error = %v, want %q", out["error"], taskDoneTerminalNodeMessage)
+	const flowTemplateRequiredMessage = "task requires a flow template before it can be queued"
+	if out["error"] != flowTemplateRequiredMessage {
+		t.Fatalf("error = %v, want %q", out["error"], flowTemplateRequiredMessage)
 	}
 	if tasks.updateCalls != 0 {
 		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)

@@ -62,6 +62,7 @@ func TestMergeWorkerIntegrationAdvisoryLockReenqueue(t *testing.T) {
 		ProjectID:      project.ID,
 		Title:          "merge-source",
 		WorkStatus:     "done",
+		FlowTemplateID: project.DeployFlowTemplateID,
 		CreatedByType:  "system",
 		Metadata:       json.RawMessage(`{"task_type":"work"}`),
 		BranchName:     stringPtr("feature/one"),
@@ -168,6 +169,7 @@ func TestEnvUpdaterIntegrationDeployCompletionCascade(t *testing.T) {
 		ProjectID:      project.ID,
 		Title:          "source-task",
 		WorkStatus:     "done",
+		FlowTemplateID: project.DeployFlowTemplateID,
 		CreatedByType:  "system",
 		Metadata:       json.RawMessage(`{"task_type":"work"}`),
 	})
@@ -201,6 +203,7 @@ func TestEnvUpdaterIntegrationDeployCompletionCascade(t *testing.T) {
 		ProjectID:      project.ID,
 		Title:          "deploy",
 		WorkStatus:     "done",
+		FlowTemplateID: project.DeployFlowTemplateID,
 		CreatedByType:  "system",
 		Metadata:       metadata,
 	})

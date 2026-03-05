@@ -1092,11 +1092,27 @@ func waitForAuditEvent(t *testing.T, pool *pgxpool.Pool, orgID uuid.UUID, eventT
 func seedEscalationProjectTaskWithPM(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID) (repo.Project, repo.ProjectTask, uuid.UUID) {
 	t.Helper()
 	projectRecord := mustCreateProject(t, pool, orgID, "policy-escalate-project")
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectRecord.ID,
+		Slug:           "policy-escalate-flow-" + uuid.NewString()[:8],
+		DisplayName:    "Policy Escalation Flow",
+		Description:    "Flow template for escalation queue tasks",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
 	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
 		OrganizationID: orgID,
 		ProjectID:      projectRecord.ID,
 		Title:          "Escalation Task",
 		WorkStatus:     "queued",
+		FlowTemplateID: &template.ID,
 		CreatedByType:  "system",
 		CreatedByID:    nil,
 		Metadata:       json.RawMessage(`{}`),

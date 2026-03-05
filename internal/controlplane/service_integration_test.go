@@ -340,11 +340,27 @@ func seedRunProject(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID
 
 func seedRunTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID uuid.UUID) repo.ProjectTask {
 	t.Helper()
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           "cp-run-flow-" + uuid.NewString()[:8],
+		DisplayName:    "Control Plane Run Flow",
+		Description:    "Flow template for queued control-plane test tasks",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
 	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
 		OrganizationID: orgID,
 		ProjectID:      projectID,
 		Title:          "Control Plane Task",
 		WorkStatus:     "queued",
+		FlowTemplateID: &template.ID,
 		CreatedByType:  "system",
 		CreatedByID:    nil,
 		Metadata:       json.RawMessage(`{}`),

@@ -42,6 +42,9 @@ func TestTaskServiceIntegrationStatusLifecycleAndEvents(t *testing.T) {
 		if step == "in_progress" {
 			actor.AllowNoActiveFlow = true
 		}
+		if step == "done" {
+			actor.AllowDoneBypass = true
+		}
 		next, stepErr := svc.TransitionStatus(ctx, current.ID, step, actor)
 		if stepErr != nil {
 			t.Fatalf("TransitionStatus %s: %v", step, stepErr)

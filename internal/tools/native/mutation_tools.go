@@ -757,9 +757,7 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	previousStatus := strings.TrimSpace(current.WorkStatus)
 	statusChanged := false
 	if status, ok := readString(input, "work_status"); ok && status != "" {
-		if strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
-			strings.EqualFold(strings.TrimSpace(status), "queued") &&
-			current.FlowTemplateID == nil {
+		if taskStatusRequiresFlowTemplate(status) && current.FlowTemplateID == nil {
 			return map[string]any{"error": "task requires a flow template before it can be queued"}, nil
 		}
 		if strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
@@ -870,6 +868,15 @@ func (e *NativeToolExecutor) validateTaskDoneTransition(ctx context.Context, tas
 		}
 	}
 	return errors.New(taskDoneTerminalNodeMessage)
+}
+
+func taskStatusRequiresFlowTemplate(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "queued", "in_progress", "review", "done":
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *NativeToolExecutor) handleTaskAddDependency(ctx context.Context, input map[string]any) (map[string]any, error) {
