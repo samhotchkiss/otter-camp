@@ -537,6 +537,28 @@ func runTUICommand(args []string) int {
 						})
 					}
 				}
+				// Fetch task event history
+				var eventsResp struct {
+					Data []struct {
+						EventType string         `json:"event_type"`
+						ActorType string         `json:"actor_type"`
+						Payload   map[string]any `json:"payload"`
+						CreatedAt time.Time      `json:"created_at"`
+					} `json:"data"`
+				}
+				eventsPath := "/v1/tasks/" + url.PathEscape(taskID) + "/events?limit=50"
+				if apiClient.request(ctx, "GET", eventsPath, nil, &eventsResp) == nil {
+					// API returns DESC (newest first); reverse to chronological
+					for i := len(eventsResp.Data) - 1; i >= 0; i-- {
+						ev := eventsResp.Data[i]
+						item.Events = append(item.Events, tuiapp.TaskEvent{
+							EventType: ev.EventType,
+							ActorType: ev.ActorType,
+							Payload:   ev.Payload,
+							CreatedAt: ev.CreatedAt,
+						})
+					}
+				}
 				// Find the task's async chat session (scope_type=project_task)
 				var sessResp struct {
 					Data []struct {

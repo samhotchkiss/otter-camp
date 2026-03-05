@@ -19,6 +19,12 @@ import (
 // remainder ([<65;171;59M) as runes. Strip these before appending to chatInput.
 var sgrMouseLeakPattern = regexp.MustCompile(`\[?<\d+;\d+;\d+[Mm]`)
 
+var chatNewlineNormalizer = strings.NewReplacer("\r\n", "\n", "\r", "\n")
+
+func normalizeChatNewlines(text string) string {
+	return chatNewlineNormalizer.Replace(text)
+}
+
 type Panel int
 
 const (
@@ -573,6 +579,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rec.FlowSteps = typed.Detail.FlowSteps
 		rec.SubtaskItems = typed.Detail.SubtaskItems
 		rec.Dependencies = typed.Detail.Dependencies
+		// Format task events into human-readable history strings
+		if len(typed.Detail.Events) > 0 {
+			hist := make([]string, 0, len(typed.Detail.Events))
+			for _, ev := range typed.Detail.Events {
+				ts := ev.CreatedAt.Local().Format("Jan 02 15:04")
+				actor := ev.ActorType
+				if actor == "human_user" {
+					actor = "human"
+				}
+				var line string
+				switch ev.EventType {
+				case "status.changed":
+					from, _ := ev.Payload["from_status"].(string)
+					to, _ := ev.Payload["to_status"].(string)
+					line = fmt.Sprintf("%s  %s → %s (%s)", ts, from, to, actor)
+				case "task.review_rejected":
+					line = fmt.Sprintf("%s  Review rejected (%s)", ts, actor)
+				case "task.created":
+					line = fmt.Sprintf("%s  Created (%s)", ts, actor)
+				default:
+					line = fmt.Sprintf("%s  %s (%s)", ts, ev.EventType, actor)
+				}
+				hist = append(hist, line)
+			}
+			rec.History = hist
+		}
 		if typed.Detail.Title != "" {
 			rec.Title = typed.Detail.Title
 		}
@@ -2012,6 +2044,13 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// ([<65;171;59M) arrives as runes. Without this guard, the leading '['
 		// triggers scope cycling and the digits get typed into chat.
 		if sgrMouseLeakPattern.MatchString(string(key.Runes)) {
+			return m, nil
+		}
+		// Pasted text can contain shortcut characters (:, ?, 1/2/3, <, >, /).
+		// When Bubble Tea marks the key as paste, always treat it as literal chat
+		// input to avoid triggering global navigation/resize handlers mid-paste.
+		if m.focus == ChatPanel && key.Paste {
+			m.handleChatPasteRunes(key.Runes)
 			return m, nil
 		}
 		// When settings is in text input mode, capture ALL runes before global
@@ -4713,11 +4752,25 @@ func (m *Model) handleChatRunes(key tea.KeyMsg) {
 	// as a standalone key and the remainder ([<65;171;59M) arrives as runes.
 	// Strip all fragments; only append whatever clean text remains.
 	typed := sgrMouseLeakPattern.ReplaceAllString(string(key.Runes), "")
+	typed = normalizeChatNewlines(typed)
 	if typed == "" {
 		return
 	}
 	m.chatInput += typed
 	m.tryAutocompleteMention()
+}
+
+func (m *Model) handleChatPasteRunes(runes []rune) {
+	// Pasting should behave as literal input: preserve line breaks/indentation
+	// and skip mention autocomplete side-effects.
+	if m.chatHistoryIndex >= 0 {
+		m.chatHistoryIndex = -1
+	}
+	typed := normalizeChatNewlines(sgrMouseLeakPattern.ReplaceAllString(string(runes), ""))
+	if typed == "" {
+		return
+	}
+	m.chatInput += typed
 }
 
 func (m *Model) tryAutocompleteMention() {
@@ -5926,8 +5979,8 @@ func (m Model) focusOrder() []Panel {
 }
 
 func (m *Model) sendOrQueueInput() tea.Cmd {
-	text := strings.TrimSpace(m.chatInput)
-	if text == "" {
+	text := normalizeChatNewlines(m.chatInput)
+	if strings.TrimSpace(text) == "" {
 		m.statusMessage = "Cannot send empty message."
 		return nil
 	}

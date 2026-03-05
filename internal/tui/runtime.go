@@ -106,6 +106,14 @@ type TaskDependency struct {
 	Direction  string // "depends_on" or "blocks"
 }
 
+// TaskEvent represents a single timestamped event in a task's lifecycle.
+type TaskEvent struct {
+	EventType string         // "task.created", "status.changed", "task.review_rejected"
+	ActorType string         // "human_user", "agent", "system", "supervisor"
+	Payload   map[string]any // event-specific data (from_status, to_status, reason, etc.)
+	CreatedAt time.Time
+}
+
 // TaskDetailItem is the full task record fetched on demand when the user selects a task.
 type TaskDetailItem struct {
 	ID                  string
@@ -122,6 +130,7 @@ type TaskDetailItem struct {
 	FlowSteps           []FlowStep
 	SubtaskItems        []SubtaskItem
 	Dependencies        []TaskDependency
+	Events              []TaskEvent
 }
 
 type RuntimeHints struct {

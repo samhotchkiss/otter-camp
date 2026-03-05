@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestChatHeaderSegmentsIncludesTimestampWhenSpaceAllows(t *testing.T) {
@@ -402,5 +404,25 @@ func TestOrgScopedChatEmptyStateDoesNotShowTaskName(t *testing.T) {
 	// Should not show any "OC-" style task label
 	if strings.Contains(rendered, "OC-") {
 		t.Fatalf("org-scoped empty state should not show a task label: %q", rendered)
+	}
+}
+
+func TestRenderChatInputBoxWrapsMultilinePasteWithoutOverflow(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = ChatPanel
+	model.chatInput = "The new Sam.blog will be a central hub\t\nEvery project in OtterCamp has a connected Git repo, right? This line should wrap safely."
+
+	const inputWidth = 40
+	box := model.renderChatInputBox(inputWidth, true)
+	if strings.Contains(box, "\t") {
+		t.Fatalf("rendered input box should not contain raw tabs: %q", box)
+	}
+	for i, line := range strings.Split(box, "\n") {
+		if got := lipgloss.Width(line); got > inputWidth {
+			t.Fatalf("input line %d width = %d, want <= %d: %q", i, got, inputWidth, line)
+		}
+	}
+	if !strings.Contains(box, "Every project in OtterCamp") {
+		t.Fatalf("expected multiline pasted content to remain visible in input box: %q", box)
 	}
 }

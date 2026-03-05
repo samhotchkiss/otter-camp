@@ -318,7 +318,7 @@ func (m Model) viewForShell(shell string) string {
 		pvLines := strings.Split(pv, "\n")
 		if len(pvLines) > panelH {
 			clamped := make([]string, panelH)
-			clamped[0] = pvLines[0]                         // top border
+			clamped[0] = pvLines[0]                        // top border
 			copy(clamped[1:panelH-1], pvLines[1:panelH-1]) // content
 			clamped[panelH-1] = pvLines[len(pvLines)-1]    // bottom border
 			panelViews[i] = strings.Join(clamped, "\n")
@@ -651,7 +651,7 @@ func (m Model) renderSidebarNode(node *sidebarNode, cursor bool, hovered bool, w
 		case cursor && isActive:
 			// show ✓ check to distinguish active+cursor from cursor-only
 			check := " " + styleConnected.Render("✓")
-			rendered = styleSelected.Width(width - 2).Render(truncate(line, maxW-2)) + check
+			rendered = styleSelected.Width(width-2).Render(truncate(line, maxW-2)) + check
 		case cursor:
 			rendered = styleSelected.Width(width - 2).Render(truncate(line, maxW))
 		case isActive:
@@ -1439,7 +1439,7 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 				continue
 			}
 			openTasks = append(openTasks, SidebarTaskItem{
-				ID:         child.TaskID,   // raw UUID, not sidebar node ID
+				ID:         child.TaskID, // raw UUID, not sidebar node ID
 				Title:      child.Label,
 				WorkStatus: child.WorkStatus,
 				TaskNumber: child.TaskNumber,
@@ -2030,7 +2030,7 @@ func (m Model) renderInboxView(width, maxLines int) []string {
 					Foreground(colMuted).Render(emptyMsg),
 			),
 			"",
-			styleMuted.Render("  "+filterActionHint(query)+"  ·  Tab·navigate  ·  Esc·dashboard"),
+			styleMuted.Render("  " + filterActionHint(query) + "  ·  Tab·navigate  ·  Esc·dashboard"),
 		}
 	}
 
@@ -2949,14 +2949,14 @@ func (m Model) renderChatMessages(width int) []string {
 		lines = append(lines, styleDivider.Render(strings.Repeat("─", width)))
 
 		// Message content
-		content := strings.TrimSpace(msg.Content)
-		if content != "" {
+		content := normalizeChatNewlines(msg.Content)
+		if strings.TrimSpace(content) != "" {
 			role := strings.ToLower(strings.TrimSpace(msg.Role))
 			var rendered string
 			if role == "assistant" || role == "interjection" {
 				rendered = strings.TrimSpace(markdownToPlain(content, width))
 			} else {
-				rendered = strings.Join(wrapText(content, width), "\n")
+				rendered = strings.Join(wrapTextPreserveWhitespace(content, width), "\n")
 			}
 			if rendered == "" {
 				continue
@@ -2987,7 +2987,7 @@ func (m Model) renderChatMessages(width int) []string {
 			if expanded {
 				indicator = "▼"
 			}
-				// EX-221: fall back to positional label when tool name is missing.
+			// EX-221: fall back to positional label when tool name is missing.
 			toolName := tc.Name
 			if strings.TrimSpace(toolName) == "" {
 				toolName = fmt.Sprintf("tool[%d]", i+1)
@@ -3131,6 +3131,7 @@ func (m Model) renderChatInputBox(width int, focused bool) string {
 	}
 
 	displayText := inputText
+	placeholder := false
 
 	if focused && !m.commandMode && m.loginStep == 0 {
 		displayText += "▌" // cursor
@@ -3138,6 +3139,7 @@ func (m Model) renderChatInputBox(width int, focused bool) string {
 
 	if displayText == "" && !focused && m.loginStep == 0 {
 		displayText = styleMuted.Render("type a message...")
+		placeholder = true
 	}
 
 	boxBc := colSubtle
@@ -3165,6 +3167,14 @@ func (m Model) renderChatInputBox(width int, focused bool) string {
 	} else if m.loginStep == 2 {
 		prefix = styleReconnecting.Render("Password: ")
 		displayText = strings.Repeat("●", len(m.settingsInput)) + "▌"
+	}
+
+	if !placeholder {
+		contentW := innerW - lipgloss.Width(prefix)
+		if contentW < 1 {
+			contentW = 1
+		}
+		displayText = wrapChatInputForDisplay(displayText, contentW)
 	}
 
 	return boxStyle.Render(prefix + displayText)
@@ -3575,4 +3585,35 @@ func wrapText(text string, width int) []string {
 		}
 	}
 	return result
+}
+
+func wrapTextPreserveWhitespace(text string, width int) []string {
+	if width <= 0 {
+		return []string{text}
+	}
+	var result []string
+	for _, line := range strings.Split(text, "\n") {
+		runes := []rune(line)
+		if len(runes) == 0 {
+			result = append(result, "")
+			continue
+		}
+		for len(runes) > width {
+			result = append(result, string(runes[:width]))
+			runes = runes[width:]
+		}
+		result = append(result, string(runes))
+	}
+	return result
+}
+
+func wrapChatInputForDisplay(text string, width int) string {
+	if width <= 0 || text == "" {
+		return text
+	}
+	text = normalizeChatNewlines(text)
+	// Tabs render unpredictably in terminal layouts and can jump across panel
+	// boundaries; normalize them to spaces for stable wrapping.
+	text = strings.ReplaceAll(text, "\t", "    ")
+	return strings.Join(wrapTextPreserveWhitespace(text, width), "\n")
 }
