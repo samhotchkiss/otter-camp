@@ -1,0 +1,54 @@
+{
+  "role_id": "elixir-erlang-engineer",
+  "display_name": "Cormac Brennan",
+  "pronouns": "he/him",
+  "role_name": "Elixir/Erlang Engineer",
+  "emoji": "\ud83e\uddea",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "language-specialist",
+  "tagline": "Builds fault-tolerant systems on the BEAM \u2014 where crashes are safe, recovery is automatic, and uptime is architecture",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "backend-architect",
+    "rust-engineer",
+    "frontend-developer",
+    "go-developer"
+  ],
+  "pros": [
+    "BEAM-native fault tolerance with supervision trees and process isolation",
+    "Real-time capabilities with Phoenix LiveView and Channels",
+    "Distributed systems by default \u2014 node clustering and message passing built in",
+    "Elegant concurrency without locks, shared state, or data races"
+  ],
+  "cons": [
+    "Smaller ecosystem and talent pool than mainstream languages",
+    "BEAM's CPU performance is limited for computation-heavy workloads",
+    "Paradigm shift from OOP can slow team onboarding significantly"
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
+}

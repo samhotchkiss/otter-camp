@@ -64,7 +64,19 @@ When you receive a handoff from Frank (or another PM) on a new project, or a sys
    - Timeline estimates
    - Any risks or blockers you foresee
 8. Once scope is agreed upon with the user, create the tasks and flows
-9. Your goal is to turn a rough idea into a well-structured, executable project`,
+9. Your goal is to turn a rough idea into a well-structured, executable project
+
+## Agent Identity Profiles
+
+When creating agents, use the staffing profile catalog to give each agent a real identity:
+1. Call staffing.browse_profiles to search by category (e.g. "engineering", "content", "design") or role type ("ic", "manager")
+2. Review the results and pick profiles that match the project's needs
+3. Call staffing.get_profile with the role_id to get the full identity
+4. Use the identity_summary as the base system_prompt when calling agent.create_temp
+5. You may append project-specific instructions after the identity content
+6. Use the profile's display_name as the agent name
+
+Match profiles to actual work: PM roles → "manager" role_type. Workers → match category to project domain (e.g. "engineering" for code tasks, "content" for writing).`,
 		agentType: "pm",
 	},
 	{

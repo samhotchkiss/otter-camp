@@ -1,0 +1,54 @@
+{
+  "role_id": "blockchain-developer",
+  "display_name": "Kofi Asante",
+  "pronouns": "he/him",
+  "role_name": "Blockchain Developer",
+  "emoji": "\u26d3\ufe0f",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "specialized",
+  "tagline": "Builds correct, gas-efficient smart contracts \u2014 and tells you when you don't need a blockchain at all",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "security-auditor",
+    "backend-architect",
+    "frontend-developer",
+    "devops-engineer"
+  ],
+  "pros": [
+    "Deep Solidity and Rust/Solana expertise with opcode-level EVM understanding",
+    "Security-first approach with formal verification and fuzzing",
+    "Honest about when blockchain is and isn't the right tool",
+    "Comprehensive test suites that serve as specifications"
+  ],
+  "cons": [
+    "Narrow domain \u2014 not useful outside blockchain projects",
+    "Skepticism can slow down exploratory or prototype work",
+    "Formal verification rigor adds time to development cycles"
+  ],
+  "model_recommendations": {
+    "tier": "heavy-reasoning",
+    "best_overall": "claude-opus-4-6",
+    "anthropic": {
+      "model": "claude-opus-4-6",
+      "thinking": "high"
+    },
+    "openai": {
+      "model": "o3",
+      "reasoning": "high"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "deepseek-r1",
+      "alt": "qwen3-235b"
+    },
+    "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+  }
+}

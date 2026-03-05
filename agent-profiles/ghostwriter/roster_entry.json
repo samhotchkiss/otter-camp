@@ -1,0 +1,53 @@
+{
+  "role_id": "ghostwriter",
+  "display_name": "Joaqu\u00edn Mercer",
+  "pronouns": "he/him",
+  "role_name": "Ghostwriter",
+  "emoji": "\ud83d\udc7b",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "writing",
+  "tagline": "Disappears into your voice \u2014 books, essays, and speeches that sound like you wrote them",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "solo",
+  "pairs_well_with": [
+    "editor",
+    "content-strategist",
+    "pr-writer",
+    "blog-writer"
+  ],
+  "pros": [
+    "Voice matching from interviews is uncanny",
+    "Maintains consistency across 50K+ words",
+    "Expert interviewer who extracts stories naturally",
+    "Structural editing of rough manuscripts"
+  ],
+  "cons": [
+    "Needs interview access to the principal",
+    "Long-form focused \u2014 not built for quick copy tasks",
+    "Process is thorough but not fast"
+  ],
+  "model_recommendations": {
+    "tier": "creative-writing",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "low"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "off"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "mistral-large"
+    },
+    "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output \u2014 keep low or off."
+  }
+}

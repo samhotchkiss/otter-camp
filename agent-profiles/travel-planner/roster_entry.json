@@ -1,0 +1,51 @@
+{
+  "role_id": "travel-planner",
+  "display_name": "Kael dos Santos",
+  "pronouns": "he/him",
+  "role_name": "Travel Planner",
+  "emoji": "\u2708\ufe0f",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "experiences-lifestyle",
+  "tagline": "Itineraries that balance must-see moments with room to wander",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "adventure-outdoor-planner",
+    "restaurant-experience-scout",
+    "budget-manager",
+    "pet-care-manager"
+  ],
+  "pros": [
+    "Day-by-day itineraries with logical routing and realistic timing",
+    "Pre-departure checklists catch visa, vaccine, and document deadlines",
+    "60/40 planning ratio prevents both over- and under-scheduling",
+    "Culturally informed recommendations beyond tourist traps"
+  ],
+  "cons": [
+    "Recommends and plans but doesn't book directly",
+    "General travel \u2014 adventure-specific trips need the Outdoor Planner",
+    "Can't replace local guides for truly deep cultural experiences"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
+}

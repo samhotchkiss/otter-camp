@@ -1,0 +1,53 @@
+{
+  "role_id": "developer-relations",
+  "display_name": "Nalini Das",
+  "pronouns": "she/her",
+  "role_name": "Developer Relations",
+  "emoji": "\ud83d\udee0\ufe0f",
+  "role_type": "ic",
+  "category": "niche",
+  "subcategory": "developer-community",
+  "tagline": "The feedback loop between your product and the developers who depend on it",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "open-source-community-manager",
+    "technical-writer",
+    "changelog-writer",
+    "product-manager"
+  ],
+  "pros": [
+    "Friction logs from firsthand developer experience",
+    "Turns community complaints into actionable product insights",
+    "Technical enough to write real tutorials and debug live",
+    "Measures developer outcomes, not vanity metrics"
+  ],
+  "cons": [
+    "Needs product team access to close the feedback loop",
+    "Broad scope can be hard to prioritize without clear goals",
+    "Not a documentation team \u2014 covers tutorials and guides, not reference docs"
+  ],
+  "model_recommendations": {
+    "tier": "creative-writing",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "low"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "off"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "mistral-large"
+    },
+    "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output \u2014 keep low or off."
+  }
+}

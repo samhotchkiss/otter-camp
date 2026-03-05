@@ -1,0 +1,32 @@
+Create a square "headshot" of an anthropomorphic otter in classic textured style matching the approved aesthetic.
+
+STYLE:
+- Digital vector illustration with hand-inked woodcut texture
+- Bold black linework
+- Visible crosshatching and carved-stroke texture
+- Natural warm fur tones (tan/brown/cream), never monochrome color wash
+- Borderless full bleed, edge-to-edge design
+
+COMPOSITION:
+- **CRITICAL: Square 1:1 image — width MUST equal height exactly and Tight crop: head/shoulders MUST reach image edges**
+- The top of the head/ears should touch or be slightly cropped by the top edge; shoulders must extend fully off the bottom and side edges.
+- Background base color: #E8723A
+- Background may include subtle role-themed elements, patterns, or scene hints that enhance context
+- Base color must remain clearly dominant and visible
+- Background must be full bleed to all edges
+
+CONTENT RULES:
+- Exactly one coherent otter face (no duplicate faces/features)
+- No text, labels, logos, symbols, badges, or watermarks
+- No extra panels or poster-like framing
+- Expression must be neutral or friendly
+- Must NOT look angry, scary, hostile, or mean
+- Avoid stereotyped, harmful, or caricatured features
+- Fur and clothing must be clearly distinguishable from background color
+
+CHARACTER:
+- Name: Yuna Kobayashi
+- Role: Documentation Engineer
+- Pronoun/gender cue handling: feminine-coded cues. Should be easily identified as the assigned gender.
+- Distinctive accessories/features: role-appropriate professional attire and accessories that reflect their specialty
+- Keep high silhouette contrast so avatar is recognizable at very small size

@@ -19,6 +19,7 @@ import (
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
+	"github.com/samhotchkiss/otter-camp/internal/profiles"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
@@ -182,6 +183,12 @@ type secretResolver interface {
 
 type commandContextFunc func(ctx context.Context, name string, args ...string) *exec.Cmd
 
+type profileCatalog interface {
+	Search(category, roleType, query string, limit int) []profiles.RosterEntry
+	GetByRoleID(roleID string) (*profiles.ProfileDetail, bool)
+	Categories() []string
+}
+
 type ExecutorOptions struct {
 	Pool           *pgxpool.Pool
 	DataDir        string
@@ -192,6 +199,7 @@ type ExecutorOptions struct {
 	Events         eventPublisher
 	Command        commandContextFunc
 	Secrets        secretResolver
+	Profiles       profileCatalog
 }
 
 type NativeToolExecutor struct {
@@ -224,6 +232,7 @@ type NativeToolExecutor struct {
 	audit          *repo.AuditEventRepo
 	memories       memoryWriter
 	secrets        secretResolver
+	profiles       profileCatalog
 
 	mu         sync.Mutex
 	workspaces map[string]SessionWorkDir
@@ -245,6 +254,7 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 		events:         opts.Events,
 		command:        command,
 		secrets:        opts.Secrets,
+		profiles:       opts.Profiles,
 		workspaces:     make(map[string]SessionWorkDir),
 	}
 
@@ -451,6 +461,10 @@ func (e *NativeToolExecutor) Execute(ctx context.Context, toolName string, input
 		return e.handleWebSearch(ctx, input)
 	case "web.fetch":
 		return e.handleWebFetch(ctx, input)
+	case "staffing.browse_profiles":
+		return e.handleStaffingBrowseProfiles(ctx, input)
+	case "staffing.get_profile":
+		return e.handleStaffingGetProfile(ctx, input)
 	default:
 		return nil, ErrUnknownTool
 	}

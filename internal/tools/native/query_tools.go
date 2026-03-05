@@ -744,6 +744,71 @@ func (e *NativeToolExecutor) handleMergeQueueStatus(ctx context.Context, input m
 	return map[string]any{"entries": entries, "length": len(entries)}, nil
 }
 
+func (e *NativeToolExecutor) handleStaffingBrowseProfiles(_ context.Context, input map[string]any) (map[string]any, error) {
+	if e.profiles == nil {
+		return map[string]any{"error": "profile_catalog_unavailable"}, nil
+	}
+
+	category, _ := readString(input, "category")
+	roleType, _ := readString(input, "role_type")
+	query, _ := readString(input, "query")
+	limit := readInt(input, "limit", 20)
+
+	entries := e.profiles.Search(category, roleType, query, limit)
+	items := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		items = append(items, map[string]any{
+			"role_id":         entry.RoleID,
+			"display_name":    entry.DisplayName,
+			"role_name":       entry.RoleName,
+			"category":        entry.Category,
+			"subcategory":     entry.Subcategory,
+			"tagline":         entry.Tagline,
+			"role_type":       entry.RoleType,
+			"pairs_well_with": entry.PairsWellWith,
+		})
+	}
+
+	return map[string]any{
+		"profiles":   items,
+		"categories": e.profiles.Categories(),
+		"total":      len(items),
+	}, nil
+}
+
+func (e *NativeToolExecutor) handleStaffingGetProfile(_ context.Context, input map[string]any) (map[string]any, error) {
+	if e.profiles == nil {
+		return map[string]any{"error": "profile_catalog_unavailable"}, nil
+	}
+
+	roleID, ok := readString(input, "role_id")
+	if !ok || roleID == "" {
+		return map[string]any{"error": "role_id is required"}, nil
+	}
+
+	detail, found := e.profiles.GetByRoleID(roleID)
+	if !found {
+		return map[string]any{"error": "not_found"}, nil
+	}
+
+	return map[string]any{
+		"profile": map[string]any{
+			"role_id":          detail.RoleID,
+			"display_name":     detail.DisplayName,
+			"pronouns":         detail.Pronouns,
+			"role_name":        detail.RoleName,
+			"category":         detail.Category,
+			"tagline":          detail.Tagline,
+			"identity_summary": detail.IdentitySummary,
+			"soul":             detail.Soul,
+			"pros":             detail.Pros,
+			"cons":             detail.Cons,
+			"pairs_well_with":  detail.PairsWellWith,
+			"difficulty_tier":  detail.DifficultyTier,
+		},
+	}, nil
+}
+
 func readCursor(input map[string]any) string {
 	cursor, _ := readString(input, "cursor")
 	return cursor
