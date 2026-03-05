@@ -370,10 +370,10 @@ func TestAssignToProjectReturnsPMConflict(t *testing.T) {
 	}
 }
 
-func TestAssignToProjectRejectsStarterTrioForPMWorkerReviewerRoles(t *testing.T) {
+func TestAssignToProjectRejectsStarterTrioForAllProjectRoles(t *testing.T) {
 	t.Parallel()
 
-	for _, role := range []string{"pm", "worker", "reviewer"} {
+	for _, role := range []string{"pm", "worker", "reviewer", "observer"} {
 		role := role
 		t.Run(role, func(t *testing.T) {
 			t.Parallel()
@@ -433,17 +433,17 @@ func TestAssignToProjectRejectsTempAgentForProjectManagerRole(t *testing.T) {
 	}
 }
 
-func TestAssignToProjectAllowsStarterTrioObserverRole(t *testing.T) {
+func TestAssignToProjectAllowsNonStarterObserverRole(t *testing.T) {
 	t.Parallel()
 
 	tx := &fakeTx{}
 	txStarter := &fakeTxStarter{tx: tx}
-	starterTrioID := uuid.New()
+	agentID := uuid.New()
 	projectID := uuid.New()
 	assignments := &fakeProjectAssignments{
 		assignResult: repo.AgentProjectAssignment{
 			ID:        uuid.New(),
-			AgentID:   starterTrioID,
+			AgentID:   agentID,
 			ProjectID: projectID,
 			Role:      "observer",
 			IsActive:  true,
@@ -454,12 +454,12 @@ func TestAssignToProjectAllowsStarterTrioObserverRole(t *testing.T) {
 		projectAssignments: assignments,
 		agents: &fakeAssignmentAgents{
 			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Agent, error) {
-				return repo.Agent{ID: id, AgentClass: "staff", IsStarterTrio: true}, nil
+				return repo.Agent{ID: id, AgentClass: "staff", IsStarterTrio: false}, nil
 			},
 		},
 	}
 
-	result, err := svc.AssignToProject(context.Background(), starterTrioID, projectID, "observer", AssignmentActor{Type: "system"})
+	result, err := svc.AssignToProject(context.Background(), agentID, projectID, "observer", AssignmentActor{Type: "system"})
 	if err != nil {
 		t.Fatalf("AssignToProject observer returned error: %v", err)
 	}

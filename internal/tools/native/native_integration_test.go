@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
@@ -462,7 +463,7 @@ func TestIntegrationAgentAssignProjectRejectsSecondPM(t *testing.T) {
 	}
 }
 
-func TestIntegrationAgentAssignProjectRejectsStarterTrioPMRole(t *testing.T) {
+func TestIntegrationAgentAssignProjectRejectsStarterTrioProjectRoles(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
@@ -490,16 +491,21 @@ func TestIntegrationAgentAssignProjectRejectsStarterTrioPMRole(t *testing.T) {
 
 	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
 	ctx := integrationExecCtxWith(orgID, actor.ID)
-	out, err := executor.Execute(ctx, "agent.assign_project", map[string]any{
-		"agent_id":   starterTrio.ID.String(),
-		"project_id": project.ID.String(),
-		"role":       "pm",
-	})
-	if err != nil {
-		t.Fatalf("agent.assign_project: %v", err)
-	}
-	if out["error"] != "starter_trio_cannot_be_assigned" {
-		t.Fatalf("error = %v, want starter_trio_cannot_be_assigned", out["error"])
+	for _, role := range []string{"pm", "worker", "reviewer", "observer"} {
+		out, err := executor.Execute(ctx, "agent.assign_project", map[string]any{
+			"agent_id":   starterTrio.ID.String(),
+			"project_id": project.ID.String(),
+			"role":       role,
+		})
+		if err != nil {
+			t.Fatalf("agent.assign_project %s: %v", role, err)
+		}
+		if out["error"] != agentsvc.StarterTrioProjectRoleErrorCode {
+			t.Fatalf("%s error = %v, want %s", role, out["error"], agentsvc.StarterTrioProjectRoleErrorCode)
+		}
+		if out["message"] != agentsvc.ErrAssignmentStarterTrioRole.Error() {
+			t.Fatalf("%s message = %v, want %q", role, out["message"], agentsvc.ErrAssignmentStarterTrioRole.Error())
+		}
 	}
 
 	var assignments int

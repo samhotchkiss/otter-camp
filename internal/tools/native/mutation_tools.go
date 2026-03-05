@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/assignmentrole"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
@@ -1750,15 +1751,6 @@ func (e *NativeToolExecutor) handleScheduleDelete(ctx context.Context, input map
 	return map[string]any{"deleted": true}, nil
 }
 
-func projectAssignmentRoleRequiresDedicatedAgent(role string) bool {
-	switch role {
-	case "project_manager", "worker", "reviewer":
-		return true
-	default:
-		return false
-	}
-}
-
 func (e *NativeToolExecutor) handleAgentAssignProject(ctx context.Context, input map[string]any) (map[string]any, error) {
 	if e.assignments == nil {
 		return map[string]any{"error": "assignment_repository_unavailable"}, nil
@@ -1791,11 +1783,17 @@ func (e *NativeToolExecutor) handleAgentAssignProject(ctx context.Context, input
 		}
 		return nil, err
 	}
-	if projectAssignmentRoleRequiresDedicatedAgent(role) && agentRecord.IsStarterTrio {
-		return map[string]any{"error": "starter_trio_cannot_be_assigned"}, nil
-	}
-	if role == "project_manager" && !strings.EqualFold(strings.TrimSpace(agentRecord.AgentClass), "staff") {
-		return map[string]any{"error": "project_manager_requires_staff_agent"}, nil
+	if err := agentsvc.ValidateProjectAssignmentTarget(agentRecord, role); err != nil {
+		if errors.Is(err, agentsvc.ErrAssignmentStarterTrioRole) {
+			return map[string]any{
+				"error":   agentsvc.StarterTrioProjectRoleErrorCode,
+				"message": err.Error(),
+			}, nil
+		}
+		if errors.Is(err, agentsvc.ErrAssignmentPMRequiresStaff) {
+			return map[string]any{"error": "project_manager_requires_staff_agent"}, nil
+		}
+		return nil, err
 	}
 
 	actor := actorFromContext(ctx)

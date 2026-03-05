@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
@@ -68,7 +69,7 @@ func TestAgentAssignmentHTTPPMFlow(t *testing.T) {
 	}
 }
 
-func TestAgentAssignmentHTTPRejectsStarterTrioAsPM(t *testing.T) {
+func TestAgentAssignmentHTTPRejectsStarterTrioProjectRoles(t *testing.T) {
 	testServer, org, adminUser, _ := newAgentTestServer(t)
 	defer testServer.Close()
 
@@ -76,18 +77,20 @@ func TestAgentAssignmentHTTPRejectsStarterTrioAsPM(t *testing.T) {
 	project := seedAssignmentProject(t, testServer.Pool, org.ID)
 	frank := seedStarterTrioAssignmentAgent(t, testServer.Pool, org.ID, "Frank")
 
-	assignResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents/"+frank.ID.String()+"/project-assignments", map[string]any{
-		"project_id": project.ID.String(),
-		"role":       "pm",
-	}, map[string]string{"Authorization": "Bearer " + adminToken})
-	if assignResp.StatusCode != http.StatusUnprocessableEntity {
-		t.Fatalf("assign status = %d, want %d body=%s", assignResp.StatusCode, http.StatusUnprocessableEntity, string(assignResp.Body))
-	}
-	if got := jsonPathString(t, assignResp.Body, "error", "code"); got != "validation_error" {
-		t.Fatalf("error.code = %q, want %q body=%s", got, "validation_error", string(assignResp.Body))
-	}
-	if got := jsonPathString(t, assignResp.Body, "error", "message"); got != "starter trio agents (Frank, Lori, Ellie) operate at the organization level and cannot be assigned as project PM, worker, or reviewer" {
-		t.Fatalf("error.message = %q body=%s", got, string(assignResp.Body))
+	for _, role := range []string{"pm", "worker", "reviewer", "observer"} {
+		assignResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents/"+frank.ID.String()+"/project-assignments", map[string]any{
+			"project_id": project.ID.String(),
+			"role":       role,
+		}, map[string]string{"Authorization": "Bearer " + adminToken})
+		if assignResp.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("%s assign status = %d, want %d body=%s", role, assignResp.StatusCode, http.StatusUnprocessableEntity, string(assignResp.Body))
+		}
+		if got := jsonPathString(t, assignResp.Body, "error", "code"); got != agentsvc.StarterTrioProjectRoleErrorCode {
+			t.Fatalf("%s error.code = %q, want %q body=%s", role, got, agentsvc.StarterTrioProjectRoleErrorCode, string(assignResp.Body))
+		}
+		if got := jsonPathString(t, assignResp.Body, "error", "message"); got != agentsvc.ErrAssignmentStarterTrioRole.Error() {
+			t.Fatalf("%s error.message = %q body=%s", role, got, string(assignResp.Body))
+		}
 	}
 }
 
@@ -143,6 +146,31 @@ func TestProjectAgentsHTTPAssignmentLifecycle(t *testing.T) {
 	}
 	if len(itemsAfter) != 0 {
 		t.Fatalf("list after delete item count = %d, want 0 body=%s", len(itemsAfter), string(listAfterDelete.Body))
+	}
+}
+
+func TestProjectAgentsHTTPRejectsStarterTrioProjectRoles(t *testing.T) {
+	testServer, org, adminUser, _ := newAgentTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	project := seedAssignmentProject(t, testServer.Pool, org.ID)
+	ellie := seedStarterTrioAssignmentAgent(t, testServer.Pool, org.ID, "Ellie")
+
+	for _, role := range []string{"pm", "worker", "reviewer", "observer"} {
+		assignResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+project.ID.String()+"/agents", map[string]any{
+			"agent_id": ellie.ID.String(),
+			"role":     role,
+		}, map[string]string{"Authorization": "Bearer " + adminToken})
+		if assignResp.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("%s assign status = %d, want %d body=%s", role, assignResp.StatusCode, http.StatusUnprocessableEntity, string(assignResp.Body))
+		}
+		if got := jsonPathString(t, assignResp.Body, "error", "code"); got != agentsvc.StarterTrioProjectRoleErrorCode {
+			t.Fatalf("%s error.code = %q, want %q body=%s", role, got, agentsvc.StarterTrioProjectRoleErrorCode, string(assignResp.Body))
+		}
+		if got := jsonPathString(t, assignResp.Body, "error", "message"); got != agentsvc.ErrAssignmentStarterTrioRole.Error() {
+			t.Fatalf("%s error.message = %q body=%s", role, got, string(assignResp.Body))
+		}
 	}
 }
 
