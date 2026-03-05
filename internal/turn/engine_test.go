@@ -1624,6 +1624,52 @@ func TestContinuationTurnOnContextCompressed(t *testing.T) {
 	}
 }
 
+func TestResolveModelProfileWorkerDefaultsToStandardWithoutOverrides(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.engine.resolver = nil
+	agentRepo := fixture.engine.agents.(*fakeAgentRepo)
+	agentRepo.agent.AgentType = "worker"
+
+	profile, err := fixture.engine.resolveModelProfile(context.Background(), fixture.session, agentRepo.agent, "agent_turn", 0, false)
+	if err != nil {
+		t.Fatalf("resolveModelProfile: %v", err)
+	}
+	if profile.LogicalProfileID != "standard" {
+		t.Fatalf("logical_profile_id = %q, want %q", profile.LogicalProfileID, "standard")
+	}
+}
+
+func TestWorkerModelEscalatesToHighCapabilityAfterTransientRetry(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.engine.resolver = nil
+	agentRepo := fixture.engine.agents.(*fakeAgentRepo)
+	agentRepo.agent.AgentType = "worker"
+
+	streamProfiles := make([]string, 0, 2)
+	attempt := 0
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		streamProfiles = append(streamProfiles, strings.TrimSpace(req.Profile.LogicalProfileID))
+		attempt++
+		if attempt == 1 {
+			return ModelResponse{}, errors.New("rate limit exceeded")
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if len(streamProfiles) < 2 {
+		t.Fatalf("stream profile calls = %v, want at least 2 calls", streamProfiles)
+	}
+	if streamProfiles[0] != "standard" {
+		t.Fatalf("first stream profile = %q, want %q", streamProfiles[0], "standard")
+	}
+	if streamProfiles[1] != "high-capability" {
+		t.Fatalf("second stream profile = %q, want %q", streamProfiles[1], "high-capability")
+	}
+}
+
 func TestContinuationTurnRecoversWhenTurnAlreadyCompleted(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.assembler.results = []assembleResult{
@@ -2465,13 +2511,15 @@ func (f *fakeInvocationRepo) UpdateCompletion(context.Context, uuid.UUID, int, i
 }
 
 type fakeModelProfileRepo struct {
-	profile repo.ModelProfile
+	profile   repo.ModelProfile
+	requested []string
 }
 
 func (f *fakeModelProfileRepo) GetCurrentByLogicalID(ctx context.Context, organizationID uuid.UUID, logicalProfileID string) (repo.ModelProfile, error) {
 	if strings.TrimSpace(logicalProfileID) == "" {
 		return repo.ModelProfile{}, repo.ErrNotFound
 	}
+	f.requested = append(f.requested, strings.TrimSpace(logicalProfileID))
 	copyProfile := f.profile
 	copyProfile.LogicalProfileID = logicalProfileID
 	return copyProfile, nil

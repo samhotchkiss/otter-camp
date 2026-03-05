@@ -687,6 +687,87 @@ func TestTurnEngineIntegrationRetryTransientErrorRecordsThreeAttempts(t *testing
 	}
 }
 
+func TestTurnEngineIntegrationWorkerDefaultsStandardAndEscalatesAfterTransientFailure(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	if _, err := fixture.pool.Exec(ctx, `UPDATE agent SET agent_type = 'worker' WHERE id = $1`, fixture.agent.ID); err != nil {
+		t.Fatalf("set fixture agent type worker: %v", err)
+	}
+	fixture.engine.resolver = nil
+
+	providerID := mustFirstProviderID(t, ctx, fixture.pool)
+	mustCreateNamedProfile(t, ctx, fixture.pool, fixture.org.ID, providerID, "standard")
+	mustCreateNamedProfile(t, ctx, fixture.pool, fixture.org.ID, providerID, "high-capability")
+
+	attempt := 0
+	streamProfiles := make([]string, 0, 2)
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		streamProfiles = append(streamProfiles, strings.TrimSpace(req.Profile.LogicalProfileID))
+		attempt++
+		if attempt == 1 {
+			return ModelResponse{}, ErrModelTransient
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if len(streamProfiles) < 2 {
+		t.Fatalf("stream profile calls = %v, want at least 2 calls", streamProfiles)
+	}
+	if streamProfiles[0] != "standard" {
+		t.Fatalf("first profile = %q, want %q", streamProfiles[0], "standard")
+	}
+	if streamProfiles[1] != "high-capability" {
+		t.Fatalf("second profile = %q, want %q", streamProfiles[1], "high-capability")
+	}
+}
+
+func TestTurnEngineIntegrationPromptGuardrailPreventsRunawayInput(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	if _, err := fixture.pool.Exec(ctx, `UPDATE agent SET agent_type = 'worker' WHERE id = $1`, fixture.agent.ID); err != nil {
+		t.Fatalf("set fixture agent type worker: %v", err)
+	}
+	fixture.engine.resolver = nil
+
+	providerID := mustFirstProviderID(t, ctx, fixture.pool)
+	mustCreateNamedProfile(t, ctx, fixture.pool, fixture.org.ID, providerID, "standard")
+	mustCreateNamedProfile(t, ctx, fixture.pool, fixture.org.ID, providerID, "high-capability")
+
+	fixture.engine.assembler = &fakeAssembler{
+		results: []assembleResult{
+			{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "oversized"}}, TotalTokens: workerPromptTokenGuardrail + 1000}},
+			{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "small"}}, TotalTokens: 64}},
+		},
+	}
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			return ModelResponse{Content: "summary"}, nil
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if fixture.model.continuationSummaryCalls != 1 {
+		t.Fatalf("continuation summary calls = %d, want 1", fixture.model.continuationSummaryCalls)
+	}
+	if fixture.model.streamCalls != 1 {
+		t.Fatalf("stream calls = %d, want 1 after guardrail continuation", fixture.model.streamCalls)
+	}
+}
+
 func TestTurnEngineIntegrationCancelDuringTier2RequestsRunCancel(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	runStarted := make(chan uuid.UUID, 1)
@@ -1072,6 +1153,20 @@ func mustCreateProvider(t *testing.T, ctx context.Context, pool *pgxpool.Pool) r
 	return item
 }
 
+func mustFirstProviderID(t *testing.T, ctx context.Context, pool *pgxpool.Pool) uuid.UUID {
+	t.Helper()
+	var providerID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		SELECT id
+		FROM model_provider
+		ORDER BY created_at
+		LIMIT 1
+	`).Scan(&providerID); err != nil {
+		t.Fatalf("select first model provider: %v", err)
+	}
+	return providerID
+}
+
 func mustCreateProfile(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, providerID uuid.UUID) repo.ModelProfile {
 	t.Helper()
 	item, err := repo.NewModelProfileRepo(pool).Create(ctx, repo.ModelProfile{
@@ -1090,6 +1185,28 @@ func mustCreateProfile(t *testing.T, ctx context.Context, pool *pgxpool.Pool, or
 	})
 	if err != nil {
 		t.Fatalf("create profile: %v", err)
+	}
+	return item
+}
+
+func mustCreateNamedProfile(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, providerID uuid.UUID, logicalProfileID string) repo.ModelProfile {
+	t.Helper()
+	item, err := repo.NewModelProfileRepo(pool).Create(ctx, repo.ModelProfile{
+		LogicalProfileID:    logicalProfileID,
+		OrganizationID:      &orgID,
+		Version:             1,
+		IsCurrent:           true,
+		ProviderID:          providerID,
+		ModelName:           "test-model-" + strings.ReplaceAll(strings.TrimSpace(logicalProfileID), " ", "-"),
+		DisplayName:         "Test Model " + strings.TrimSpace(logicalProfileID),
+		ContextWindowTokens: 131072,
+		MaxOutputTokens:     4096,
+		SupportsStreaming:   true,
+		SupportsVision:      false,
+		InvocationPurpose:   "agent_turn",
+	})
+	if err != nil {
+		t.Fatalf("create %q profile: %v", logicalProfileID, err)
 	}
 	return item
 }

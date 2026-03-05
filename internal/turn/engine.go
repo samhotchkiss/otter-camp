@@ -47,6 +47,8 @@ const (
 	defaultCancelConsumerPrefix = "turn-engine.cancel"
 	stopReasonMaxToolCalls      = "max_tool_calls"
 	stopReasonMaxDuration       = "max_duration"
+	workerPromptTokenGuardrail  = 32000
+	defaultPromptTokenGuardrail = 64000
 )
 
 var (
@@ -875,7 +877,8 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			return e.handleCancellation(ctx, rt)
 		}
 
-		profile, err := e.resolveModelProfile(ctx, rt.session, rt.agent, "agent_turn")
+		taskComplexity := e.isComplexAgentTurnTask(ctx, rt.session)
+		profile, err := e.resolveModelProfile(ctx, rt.session, rt.agent, "agent_turn", rt.modelRetryUsed, taskComplexity)
 		if err != nil {
 			return fmt.Errorf("resolveModelProfile: %w", err)
 		}
@@ -907,6 +910,23 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 				return fmt.Errorf("context compression continuation depth exceeded")
 			}
 			rt.stopReason = ""
+			if err := e.continueTurn(ctx, rt); err != nil {
+				return err
+			}
+			listeningChecked = false
+			previousManifest = nil
+			continue
+		}
+		guardrail := agentTurnPromptGuardrailTokens(rt.agent, taskComplexity)
+		if guardrail > 0 && assembled != nil && assembled.TotalTokens > guardrail {
+			continuations++
+			if continuations > maxContinuationTurnDepth {
+				return fmt.Errorf("agent turn prompt exceeded guardrail continuation depth")
+			}
+			rt.stopReason = ""
+			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, fmt.Sprintf("[Prompt input exceeded %d-token guardrail - continuing in a new turn.]", guardrail)); err != nil {
+				return err
+			}
 			if err := e.continueTurn(ctx, rt); err != nil {
 				return err
 			}
@@ -1125,7 +1145,7 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	rt.invocationAttempt = 0
 	rt.stopReason = ""
 
-	profile, err := e.resolveModelProfile(ctx, rt.session, rt.agent, "continuation_summary")
+	profile, err := e.resolveModelProfile(ctx, rt.session, rt.agent, "continuation_summary", 0, false)
 	if err != nil {
 		return err
 	}
@@ -1255,7 +1275,7 @@ func (e *TurnEngine) runListeningEval(ctx context.Context, rt *turnRuntime, asse
 		return false, nil
 	}
 
-	profile, err := e.resolveModelProfile(ctx, rt.session, rt.agent, "listening_eval")
+	profile, err := e.resolveModelProfile(ctx, rt.session, rt.agent, "listening_eval", 0, false)
 	if err != nil {
 		return false, err
 	}
@@ -1626,6 +1646,23 @@ func parseUUIDAny(value any) (uuid.UUID, bool) {
 	}
 }
 
+func (e *TurnEngine) maybeEscalateWorkerRetryProfile(ctx context.Context, rt *turnRuntime, current repo.ModelProfile) (repo.ModelProfile, bool) {
+	if rt == nil || rt.session == nil {
+		return repo.ModelProfile{}, false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.agent.AgentType), "worker") {
+		return repo.ModelProfile{}, false
+	}
+	if strings.EqualFold(strings.TrimSpace(current.LogicalProfileID), "high-capability") {
+		return repo.ModelProfile{}, false
+	}
+	escalated, err := e.profiles.GetCurrentByLogicalID(ctx, rt.session.OrganizationID, "high-capability")
+	if err != nil {
+		return repo.ModelProfile{}, false
+	}
+	return escalated, true
+}
+
 func buildProjectIdentityLockMessage(identity *projectIdentity) string {
 	if identity == nil {
 		return "[Project identity locked.]"
@@ -1749,6 +1786,9 @@ func (e *TurnEngine) callMainModel(
 				if rt.modelRetryUsed >= e.modelRetryBudget {
 					_ = e.chat.UpdateMessageStatus(ctx, assistant.ID, "failed", callErr.Error())
 					return ModelResponse{}, callErr
+				}
+				if escalated, ok := e.maybeEscalateWorkerRetryProfile(ctx, rt, profile); ok {
+					profile = escalated
 				}
 				if sleepErr := e.sleep(ctx, retryBackoff(rt.modelRetryUsed)); sleepErr != nil {
 					return ModelResponse{}, sleepErr
@@ -2040,7 +2080,7 @@ func (e *TurnEngine) resolveFirstAgentParticipantExcluding(ctx context.Context, 
 	return uuid.Nil, repo.ErrNotFound
 }
 
-func (e *TurnEngine) resolveModelProfile(ctx context.Context, session *chat.ChatSession, agent repo.Agent, purpose string) (repo.ModelProfile, error) {
+func (e *TurnEngine) resolveModelProfile(ctx context.Context, session *chat.ChatSession, agent repo.Agent, purpose string, retryHint int, taskComplex bool) (repo.ModelProfile, error) {
 	scopes := make([]model.Scope, 0, 3)
 	scopes = append(scopes, model.Scope{Type: "agent", ID: agent.ID})
 	if projectID := resolveProjectID(ctx, session, e.tasks); projectID != nil {
@@ -2050,11 +2090,14 @@ func (e *TurnEngine) resolveModelProfile(ctx context.Context, session *chat.Chat
 	if e.resolver != nil {
 		profile, err := e.resolver.Resolve(ctx, session.OrganizationID, strings.TrimSpace(purpose), scopes...)
 		if err == nil && profile != nil {
+			if downgraded, ok := e.maybeDowngradeWorkerProfile(ctx, session.OrganizationID, agent, strings.TrimSpace(purpose), *profile, taskComplex, retryHint); ok {
+				return downgraded, nil
+			}
 			return *profile, nil
 		}
 	}
 
-	candidates := make([]string, 0, 4)
+	candidates := make([]string, 0, 6)
 	if strings.TrimSpace(purpose) == "listening_eval" || strings.TrimSpace(purpose) == "continuation_summary" {
 		candidates = append(candidates, "haiku")
 	}
@@ -2064,6 +2107,7 @@ func (e *TurnEngine) resolveModelProfile(ctx context.Context, session *chat.Chat
 	if e.defaultModelProfileID != nil && strings.TrimSpace(*e.defaultModelProfileID) != "" {
 		candidates = append(candidates, strings.TrimSpace(*e.defaultModelProfileID))
 	}
+	candidates = append(candidates, roleAwareFallbackCandidates(agent, strings.TrimSpace(purpose), taskComplex, retryHint)...)
 	candidates = append(candidates, "high-capability", "haiku")
 
 	seen := map[string]struct{}{}
@@ -2083,6 +2127,136 @@ func (e *TurnEngine) resolveModelProfile(ctx context.Context, session *chat.Chat
 	}
 
 	return repo.ModelProfile{}, model.ErrNoProfileAssigned
+}
+
+func (e *TurnEngine) isComplexAgentTurnTask(ctx context.Context, session *chat.ChatSession) bool {
+	if session == nil || strings.TrimSpace(session.ScopeType) != "project_task" || e.tasks == nil {
+		return false
+	}
+	taskID := session.ScopeID
+	if taskID == uuid.Nil {
+		return false
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, taskID)
+	if err != nil {
+		return false
+	}
+	return taskLooksComplex(taskRecord.Title, taskRecord.Description)
+}
+
+func taskLooksComplex(title string, description *string) bool {
+	text := strings.TrimSpace(title)
+	if description != nil {
+		if desc := strings.TrimSpace(*description); desc != "" {
+			if text != "" {
+				text += "\n"
+			}
+			text += desc
+		}
+	}
+	if text == "" {
+		return false
+	}
+
+	lower := strings.ToLower(text)
+	// Keep this heuristic intentionally conservative: role-based worker downgrades
+	// should only be bypassed when the task likely needs deeper reasoning.
+	complexSignals := []string{
+		"multi-step",
+		"multi step",
+		"decompose",
+		"decomposition",
+		"architecture",
+		"refactor",
+		"migration",
+		"cross-service",
+		"cross service",
+		"end-to-end",
+		"integration",
+		"investigate",
+	}
+	for _, signal := range complexSignals {
+		if strings.Contains(lower, signal) {
+			return true
+		}
+	}
+
+	if strings.Count(lower, "\n- ") >= 3 || strings.Count(lower, "\n* ") >= 3 {
+		return true
+	}
+	if len(strings.Fields(lower)) >= 120 {
+		return true
+	}
+	return false
+}
+
+func roleAwareFallbackCandidates(agent repo.Agent, purpose string, taskComplex bool, retryHint int) []string {
+	p := strings.TrimSpace(strings.ToLower(purpose))
+	if p != "agent_turn" {
+		return []string{"high-capability", "standard", "haiku"}
+	}
+	if retryHint > 0 {
+		return []string{"high-capability", "standard", "haiku"}
+	}
+
+	role := strings.TrimSpace(strings.ToLower(agent.AgentType))
+	switch role {
+	case "worker":
+		if taskComplex {
+			return []string{"standard", "high-capability", "haiku"}
+		}
+		return []string{"standard", "haiku", "high-capability"}
+	case "reviewer":
+		if taskComplex {
+			return []string{"high-capability", "standard", "haiku"}
+		}
+		return []string{"standard", "high-capability", "haiku"}
+	case "project_manager", "pm", "general":
+		return []string{"high-capability", "standard", "haiku"}
+	default:
+		return []string{"standard", "high-capability", "haiku"}
+	}
+}
+
+func (e *TurnEngine) maybeDowngradeWorkerProfile(
+	ctx context.Context,
+	orgID uuid.UUID,
+	agent repo.Agent,
+	purpose string,
+	resolved repo.ModelProfile,
+	taskComplex bool,
+	retryHint int,
+) (repo.ModelProfile, bool) {
+	if !strings.EqualFold(strings.TrimSpace(purpose), "agent_turn") {
+		return repo.ModelProfile{}, false
+	}
+	if !strings.EqualFold(strings.TrimSpace(agent.AgentType), "worker") {
+		return repo.ModelProfile{}, false
+	}
+	if retryHint > 0 || taskComplex {
+		return repo.ModelProfile{}, false
+	}
+	if agent.DefaultModelProfileID != nil && strings.TrimSpace(*agent.DefaultModelProfileID) != "" {
+		return repo.ModelProfile{}, false
+	}
+	if !strings.EqualFold(strings.TrimSpace(resolved.LogicalProfileID), "high-capability") {
+		return repo.ModelProfile{}, false
+	}
+	standard, err := e.profiles.GetCurrentByLogicalID(ctx, orgID, "standard")
+	if err != nil {
+		return repo.ModelProfile{}, false
+	}
+	return standard, true
+}
+
+func agentTurnPromptGuardrailTokens(agent repo.Agent, taskComplex bool) int {
+	if strings.EqualFold(strings.TrimSpace(agent.AgentType), "worker") {
+		if taskComplex {
+			return defaultPromptTokenGuardrail
+		}
+		return workerPromptTokenGuardrail
+	}
+	return defaultPromptTokenGuardrail
 }
 
 func (e *TurnEngine) appendAssistantPlaceholder(ctx context.Context, turnID, sessionID, agentID uuid.UUID) (*chat.ChatMessage, error) {
