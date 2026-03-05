@@ -20,7 +20,8 @@ var (
 	ErrAssignmentAgentIDRequired   = errors.New("assignment agent_id is required")
 	ErrAssignmentProjectIDRequired = errors.New("assignment project_id is required")
 	ErrAssignmentSkillIDRequired   = errors.New("assignment skill_id is required")
-	ErrAssignmentInvalidRole       = errors.New("assignment role must be pm, worker, reviewer, or observer")
+	ErrAssignmentInvalidRole       = errors.New("assignment role must be project_manager, worker, reviewer, or observer")
+	ErrAssignmentPMRequiresStaff   = errors.New("project_manager assignments require staff-class agents")
 	ErrAssignmentStarterTrioRole   = errors.New("starter trio agents (Frank, Lori, Ellie) operate at the organization level and cannot be assigned as project PM, worker, or reviewer")
 	ErrPMConflict                  = repo.ErrPMConflict
 )
@@ -136,6 +137,9 @@ func (s *assignmentService) AssignToProject(ctx context.Context, agentID, projec
 		if agentRecord.IsStarterTrio {
 			return nil, ErrAssignmentStarterTrioRole
 		}
+		if role == "project_manager" && !strings.EqualFold(strings.TrimSpace(agentRecord.AgentClass), "staff") {
+			return nil, ErrAssignmentPMRequiresStaff
+		}
 	}
 
 	assignedByType, assignedByID, err := normalizeAssignmentActor(assignedBy)
@@ -151,7 +155,7 @@ func (s *assignmentService) AssignToProject(ctx context.Context, agentID, projec
 		_ = tx.Rollback(ctx)
 	}()
 
-	if role == "pm" {
+	if role == "project_manager" {
 		currentPM, getErr := s.projectAssignments.GetPMTx(ctx, tx, projectID)
 		if getErr == nil {
 			if currentPM.AgentID != agentID {
@@ -215,7 +219,7 @@ func (s *assignmentService) RemoveFromProject(ctx context.Context, agentID, proj
 		return nil, err
 	}
 
-	if existing.Role == "pm" && existing.IsActive {
+	if existing.Role == "project_manager" && existing.IsActive {
 		payload, marshalErr := json.Marshal(map[string]any{
 			"agent_id":   existing.AgentID,
 			"project_id": existing.ProjectID,
@@ -314,7 +318,9 @@ func (s *assignmentService) ReorderSkills(ctx context.Context, agentID uuid.UUID
 func normalizeAssignmentRole(role string) string {
 	normalized := strings.ToLower(strings.TrimSpace(role))
 	switch normalized {
-	case "pm", "worker", "reviewer", "observer":
+	case "pm", "project_manager":
+		return "project_manager"
+	case "worker", "reviewer", "observer":
 		return normalized
 	default:
 		return ""
@@ -343,7 +349,7 @@ func normalizePriority(priority int) int {
 
 func roleRequiresDedicatedProjectAgent(role string) bool {
 	switch role {
-	case "pm", "worker", "reviewer":
+	case "project_manager", "worker", "reviewer":
 		return true
 	default:
 		return false

@@ -90,7 +90,7 @@ func (f *fakeProjectAssignments) DeactivateTx(_ context.Context, tx pgx.Tx, agen
 			ID:        uuid.New(),
 			AgentID:   agentID,
 			ProjectID: projectID,
-			Role:      "pm",
+			Role:      "project_manager",
 			IsActive:  false,
 		}
 	}
@@ -118,7 +118,7 @@ func (f *fakeAssignmentAgents) GetByID(ctx context.Context, id uuid.UUID) (repo.
 	if f.getByIDFn != nil {
 		return f.getByIDFn(ctx, id)
 	}
-	return repo.Agent{ID: id}, nil
+	return repo.Agent{ID: id, AgentClass: "staff"}, nil
 }
 
 type fakeSkillAttachments struct {
@@ -205,14 +205,14 @@ func TestAssignToProjectPMSwapUsesSingleTransaction(t *testing.T) {
 			ID:        uuid.New(),
 			AgentID:   previousPM,
 			ProjectID: projectID,
-			Role:      "pm",
+			Role:      "project_manager",
 			IsActive:  true,
 		},
 		assignResult: repo.AgentProjectAssignment{
 			ID:        uuid.New(),
 			AgentID:   newPM,
 			ProjectID: projectID,
-			Role:      "pm",
+			Role:      "project_manager",
 			IsActive:  true,
 		},
 	}
@@ -222,7 +222,7 @@ func TestAssignToProjectPMSwapUsesSingleTransaction(t *testing.T) {
 		projectAssignments: assignments,
 		agents: &fakeAssignmentAgents{
 			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Agent, error) {
-				return repo.Agent{ID: id, IsStarterTrio: false}, nil
+				return repo.Agent{ID: id, AgentClass: "staff", IsStarterTrio: false}, nil
 			},
 		},
 	}
@@ -359,7 +359,7 @@ func TestAssignToProjectReturnsPMConflict(t *testing.T) {
 		projectAssignments: assignments,
 		agents: &fakeAssignmentAgents{
 			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Agent, error) {
-				return repo.Agent{ID: id, IsStarterTrio: false}, nil
+				return repo.Agent{ID: id, AgentClass: "staff", IsStarterTrio: false}, nil
 			},
 		},
 	}
@@ -386,7 +386,7 @@ func TestAssignToProjectRejectsStarterTrioForPMWorkerReviewerRoles(t *testing.T)
 				projectAssignments: assignments,
 				agents: &fakeAssignmentAgents{
 					getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Agent, error) {
-						return repo.Agent{ID: id, IsStarterTrio: true}, nil
+						return repo.Agent{ID: id, AgentClass: "staff", IsStarterTrio: true}, nil
 					},
 				},
 			}
@@ -402,6 +402,34 @@ func TestAssignToProjectRejectsStarterTrioForPMWorkerReviewerRoles(t *testing.T)
 				t.Fatalf("tx counts commit=%d rollback=%d, want 0/0", tx.commitCount, tx.rollbackCount)
 			}
 		})
+	}
+}
+
+func TestAssignToProjectRejectsTempAgentForProjectManagerRole(t *testing.T) {
+	t.Parallel()
+
+	tx := &fakeTx{}
+	txStarter := &fakeTxStarter{tx: tx}
+	assignments := &fakeProjectAssignments{}
+	svc := &assignmentService{
+		txStarter:          txStarter,
+		projectAssignments: assignments,
+		agents: &fakeAssignmentAgents{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Agent, error) {
+				return repo.Agent{ID: id, AgentClass: "temp", IsStarterTrio: false}, nil
+			},
+		},
+	}
+
+	_, err := svc.AssignToProject(context.Background(), uuid.New(), uuid.New(), "project_manager", AssignmentActor{Type: "system"})
+	if !errors.Is(err, ErrAssignmentPMRequiresStaff) {
+		t.Fatalf("AssignToProject error = %v, want ErrAssignmentPMRequiresStaff", err)
+	}
+	if len(assignments.callOrder) != 0 {
+		t.Fatalf("assignment calls = %d, want 0", len(assignments.callOrder))
+	}
+	if tx.commitCount != 0 || tx.rollbackCount != 0 {
+		t.Fatalf("tx counts commit=%d rollback=%d, want 0/0", tx.commitCount, tx.rollbackCount)
 	}
 }
 
@@ -426,7 +454,7 @@ func TestAssignToProjectAllowsStarterTrioObserverRole(t *testing.T) {
 		projectAssignments: assignments,
 		agents: &fakeAssignmentAgents{
 			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Agent, error) {
-				return repo.Agent{ID: id, IsStarterTrio: true}, nil
+				return repo.Agent{ID: id, AgentClass: "staff", IsStarterTrio: true}, nil
 			},
 		},
 	}

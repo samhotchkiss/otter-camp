@@ -753,8 +753,8 @@ func flowNodeRoleFromMetadata(metadata json.RawMessage) string {
 	for _, key := range []string{"actor_role", "role", "project_role"} {
 		if value := strings.ToLower(strings.TrimSpace(valueAsString(payload[key]))); value != "" {
 			switch value {
-			case "project_manager":
-				return "pm"
+			case "project_manager", "pm":
+				return "project_manager"
 			default:
 				return value
 			}

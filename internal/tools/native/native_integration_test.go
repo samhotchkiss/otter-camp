@@ -373,23 +373,13 @@ func TestIntegrationAgentAssignProjectCreatesPMAssignment(t *testing.T) {
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
 	actor := testutil.MakeAgent(t, pool, orgID)
+	assignee := testutil.MakeAgent(t, pool, orgID)
 
 	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
 	ctx := integrationExecCtxWith(orgID, actor.ID)
 
-	createdTemp, err := executor.Execute(ctx, "agent.create_temp", map[string]any{
-		"name":        "Temp PM",
-		"scope_type":  "project",
-		"scope_id":    project.ID.String(),
-		"ttl_seconds": 3600,
-	})
-	if err != nil {
-		t.Fatalf("agent.create_temp: %v", err)
-	}
-	tempAgentID := nestedUUID(t, createdTemp, "agent", "id")
-
 	out, err := executor.Execute(ctx, "agent.assign_project", map[string]any{
-		"agent_id":   tempAgentID.String(),
+		"agent_id":   assignee.ID.String(),
 		"project_id": project.ID.String(),
 		"role":       "pm",
 	})
@@ -400,14 +390,14 @@ func TestIntegrationAgentAssignProjectCreatesPMAssignment(t *testing.T) {
 	if !ok {
 		t.Fatalf("assignment output = %T, want map[string]any", out["assignment"])
 	}
-	if mustUUIDValue(t, assignment["agent_id"]) != tempAgentID {
-		t.Fatalf("assignment agent_id = %v, want %s", assignment["agent_id"], tempAgentID)
+	if mustUUIDValue(t, assignment["agent_id"]) != assignee.ID {
+		t.Fatalf("assignment agent_id = %v, want %s", assignment["agent_id"], assignee.ID)
 	}
 	if mustUUIDValue(t, assignment["project_id"]) != project.ID {
 		t.Fatalf("assignment project_id = %v, want %s", assignment["project_id"], project.ID)
 	}
-	if assignment["role"] != "pm" {
-		t.Fatalf("assignment role = %v, want pm", assignment["role"])
+	if assignment["role"] != "project_manager" {
+		t.Fatalf("assignment role = %v, want project_manager", assignment["role"])
 	}
 
 	var activeAssignments int
@@ -416,9 +406,9 @@ func TestIntegrationAgentAssignProjectCreatesPMAssignment(t *testing.T) {
 		FROM agent_project_assignment
 		WHERE project_id = $1
 		  AND agent_id = $2
-		  AND role = 'pm'
+		  AND role = 'project_manager'
 		  AND is_active = true
-	`, project.ID, tempAgentID).Scan(&activeAssignments); err != nil {
+	`, project.ID, assignee.ID).Scan(&activeAssignments); err != nil {
 		t.Fatalf("count pm assignments: %v", err)
 	}
 	if activeAssignments != 1 {
@@ -431,40 +421,22 @@ func TestIntegrationAgentAssignProjectRejectsSecondPM(t *testing.T) {
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
 	actor := testutil.MakeAgent(t, pool, orgID)
+	firstAgent := testutil.MakeAgent(t, pool, orgID)
+	secondAgent := testutil.MakeAgent(t, pool, orgID)
 
 	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
 	ctx := integrationExecCtxWith(orgID, actor.ID)
 
-	firstTemp, err := executor.Execute(ctx, "agent.create_temp", map[string]any{
-		"name":       "First PM",
-		"scope_type": "project",
-		"scope_id":   project.ID.String(),
-	})
-	if err != nil {
-		t.Fatalf("agent.create_temp first: %v", err)
-	}
-	firstID := nestedUUID(t, firstTemp, "agent", "id")
-
 	if _, err := executor.Execute(ctx, "agent.assign_project", map[string]any{
-		"agent_id":   firstID.String(),
+		"agent_id":   firstAgent.ID.String(),
 		"project_id": project.ID.String(),
 		"role":       "pm",
 	}); err != nil {
 		t.Fatalf("agent.assign_project first pm: %v", err)
 	}
 
-	secondTemp, err := executor.Execute(ctx, "agent.create_temp", map[string]any{
-		"name":       "Second PM",
-		"scope_type": "project",
-		"scope_id":   project.ID.String(),
-	})
-	if err != nil {
-		t.Fatalf("agent.create_temp second: %v", err)
-	}
-	secondID := nestedUUID(t, secondTemp, "agent", "id")
-
 	secondAssign, err := executor.Execute(ctx, "agent.assign_project", map[string]any{
-		"agent_id":   secondID.String(),
+		"agent_id":   secondAgent.ID.String(),
 		"project_id": project.ID.String(),
 		"role":       "pm",
 	})
@@ -480,7 +452,7 @@ func TestIntegrationAgentAssignProjectRejectsSecondPM(t *testing.T) {
 		SELECT COUNT(*)
 		FROM agent_project_assignment
 		WHERE project_id = $1
-		  AND role = 'pm'
+		  AND role = 'project_manager'
 		  AND is_active = true
 	`, project.ID).Scan(&activePMCount); err != nil {
 		t.Fatalf("count active pm assignments: %v", err)

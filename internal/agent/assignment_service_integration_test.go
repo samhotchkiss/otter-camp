@@ -31,10 +31,10 @@ func TestAssignmentServiceAssignToProjectPMSwap(t *testing.T) {
 	org, project, agentA, agentB := seedAssignmentServiceFixtures(t, ctx, pool)
 	_ = org
 
-	if _, err := svc.AssignToProject(ctx, agentA.ID, project.ID, "pm", AssignmentActor{Type: "system"}); err != nil {
+	if _, err := svc.AssignToProject(ctx, agentA.ID, project.ID, "project_manager", AssignmentActor{Type: "system"}); err != nil {
 		t.Fatalf("AssignToProject agentA: %v", err)
 	}
-	if _, err := svc.AssignToProject(ctx, agentB.ID, project.ID, "pm", AssignmentActor{Type: "system"}); err != nil {
+	if _, err := svc.AssignToProject(ctx, agentB.ID, project.ID, "project_manager", AssignmentActor{Type: "system"}); err != nil {
 		t.Fatalf("AssignToProject agentB: %v", err)
 	}
 
@@ -57,8 +57,8 @@ func TestAssignmentServiceAssignToProjectPMSwap(t *testing.T) {
 	if !rowB.IsActive {
 		t.Fatalf("agentB assignment is_active = false, want true")
 	}
-	if rowB.Role != "pm" {
-		t.Fatalf("agentB role = %q, want pm", rowB.Role)
+	if rowB.Role != "project_manager" {
+		t.Fatalf("agentB role = %q, want project_manager", rowB.Role)
 	}
 
 	currentPM, err := projectAssignments.GetPM(ctx, project.ID)
@@ -85,7 +85,7 @@ func TestAssignmentServiceRemoveFromProjectDeactivatesAndEmitsEvent(t *testing.T
 
 	org, project, agentA, _ := seedAssignmentServiceFixtures(t, ctx, pool)
 
-	if _, err := svc.AssignToProject(ctx, agentA.ID, project.ID, "pm", AssignmentActor{Type: "system"}); err != nil {
+	if _, err := svc.AssignToProject(ctx, agentA.ID, project.ID, "project_manager", AssignmentActor{Type: "system"}); err != nil {
 		t.Fatalf("AssignToProject PM: %v", err)
 	}
 

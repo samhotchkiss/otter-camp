@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/samhotchkiss/otter-camp/internal/assignmentrole"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
@@ -828,7 +829,7 @@ func (e *NativeToolExecutor) projectHasActivePM(ctx context.Context, projectID u
 		if !assignment.IsActive {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(assignment.Role), "pm") {
+		if assignmentrole.IsProjectManager(assignment.Role) {
 			return true
 		}
 	}
@@ -1549,18 +1550,9 @@ func (e *NativeToolExecutor) handleScheduleDelete(ctx context.Context, input map
 	return map[string]any{"deleted": true}, nil
 }
 
-func normalizeProjectAssignmentRole(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "pm", "worker", "reviewer", "observer":
-		return strings.ToLower(strings.TrimSpace(value))
-	default:
-		return ""
-	}
-}
-
 func projectAssignmentRoleRequiresDedicatedAgent(role string) bool {
 	switch role {
-	case "pm", "worker", "reviewer":
+	case "project_manager", "worker", "reviewer":
 		return true
 	default:
 		return false
@@ -1587,7 +1579,7 @@ func (e *NativeToolExecutor) handleAgentAssignProject(ctx context.Context, input
 	if !ok || strings.TrimSpace(roleRaw) == "" {
 		return map[string]any{"error": "role_required"}, nil
 	}
-	role := normalizeProjectAssignmentRole(roleRaw)
+	role := assignmentrole.Normalize(roleRaw)
 	if role == "" {
 		return map[string]any{"error": "invalid_role"}, nil
 	}
@@ -1601,6 +1593,9 @@ func (e *NativeToolExecutor) handleAgentAssignProject(ctx context.Context, input
 	}
 	if projectAssignmentRoleRequiresDedicatedAgent(role) && agentRecord.IsStarterTrio {
 		return map[string]any{"error": "starter_trio_cannot_be_assigned"}, nil
+	}
+	if role == "project_manager" && !strings.EqualFold(strings.TrimSpace(agentRecord.AgentClass), "staff") {
+		return map[string]any{"error": "project_manager_requires_staff_agent"}, nil
 	}
 
 	actor := actorFromContext(ctx)
@@ -1814,13 +1809,13 @@ func (e *NativeToolExecutor) autoAddProjectParticipants(ctx context.Context, ses
 
 	// Sort: workers first, then PMs, then others — so the worker becomes
 	// the primary responder via resolveFirstAgentParticipant.
-	roleOrder := map[string]int{"worker": 0, "reviewer": 1, "pm": 2, "observer": 3}
+	roleOrder := map[string]int{"worker": 0, "reviewer": 1, "project_manager": 2, "observer": 3}
 	sortedAssignments := make([]repo.AgentProjectAssignment, len(assignments))
 	copy(sortedAssignments, assignments)
 	for i := 0; i < len(sortedAssignments)-1; i++ {
 		for j := i + 1; j < len(sortedAssignments); j++ {
-			oi := roleOrder[sortedAssignments[i].Role]
-			oj := roleOrder[sortedAssignments[j].Role]
+			oi := roleOrder[assignmentrole.Normalize(sortedAssignments[i].Role)]
+			oj := roleOrder[assignmentrole.Normalize(sortedAssignments[j].Role)]
 			if oi > oj {
 				sortedAssignments[i], sortedAssignments[j] = sortedAssignments[j], sortedAssignments[i]
 			}

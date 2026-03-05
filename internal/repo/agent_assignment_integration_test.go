@@ -5,6 +5,8 @@ package repo
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
@@ -24,7 +26,7 @@ func TestAgentProjectAssignmentRepoReturnsPMConflictOnSecondActivePM(t *testing.
 	if _, err := repo.Assign(ctx, AgentProjectAssignment{
 		AgentID:        agentA.ID,
 		ProjectID:      project.ID,
-		Role:           "pm",
+		Role:           "project_manager",
 		AssignedByType: "system",
 	}); err != nil {
 		t.Fatalf("Assign agentA as PM: %v", err)
@@ -33,7 +35,7 @@ func TestAgentProjectAssignmentRepoReturnsPMConflictOnSecondActivePM(t *testing.
 	_, err := repo.Assign(ctx, AgentProjectAssignment{
 		AgentID:        agentB.ID,
 		ProjectID:      project.ID,
-		Role:           "pm",
+		Role:           "project_manager",
 		AssignedByType: "system",
 	})
 	if !errors.Is(err, ErrPMConflict) {
@@ -56,7 +58,7 @@ func TestAgentProjectAssignmentPartialUniqueIndexRejectsDuplicatePMRows(t *testi
 			assigned_by_id,
 			is_active
 		)
-		VALUES ($1, $2, 'pm', 'system', NULL, true)
+		VALUES ($1, $2, 'project_manager', 'system', NULL, true)
 	`, agentA.ID, project.ID); err != nil {
 		t.Fatalf("insert first PM row: %v", err)
 	}
@@ -70,7 +72,7 @@ func TestAgentProjectAssignmentPartialUniqueIndexRejectsDuplicatePMRows(t *testi
 			assigned_by_id,
 			is_active
 		)
-		VALUES ($1, $2, 'pm', 'system', NULL, true)
+		VALUES ($1, $2, 'project_manager', 'system', NULL, true)
 	`, agentB.ID, project.ID)
 	if err == nil {
 		t.Fatal("expected second active PM insert to fail")
@@ -82,6 +84,102 @@ func TestAgentProjectAssignmentPartialUniqueIndexRejectsDuplicatePMRows(t *testi
 	}
 	if pgErr.Code != "23505" {
 		t.Fatalf("duplicate PM insert code = %s, want 23505", pgErr.Code)
+	}
+}
+
+func TestAgentProjectAssignmentMigrationConvertsLegacyPMRowsAndRepairsTempAgents(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org, project, _, _ := seedAssignmentProjectAgents(t, ctx, pool)
+	agentRepo := NewAgentRepo(pool)
+	tempPM, err := agentRepo.Create(ctx, Agent{
+		OrganizationID:       org.ID,
+		DisplayName:          "Legacy Temp PM",
+		AgentClass:           "temp",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "prompt",
+		OperatorInstructions: "",
+		AgentType:            "pm",
+		PrivateMemory:        false,
+		MemoryReadScopes:     []string{"org", "project", "agent"},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		TempProjectID:        &project.ID,
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create temp PM agent: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, `DROP TRIGGER IF EXISTS agent_project_assignment_project_manager_staff_chk ON agent_project_assignment`); err != nil {
+		t.Fatalf("drop project_manager staff trigger: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `ALTER TABLE agent_project_assignment DROP CONSTRAINT IF EXISTS agent_project_assignment_role_check`); err != nil {
+		t.Fatalf("drop role check constraint: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		ALTER TABLE agent_project_assignment
+		ADD CONSTRAINT agent_project_assignment_role_check
+		CHECK (role IN ('pm', 'project_manager', 'worker', 'reviewer', 'observer'))
+	`); err != nil {
+		t.Fatalf("add permissive role check constraint: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO agent_project_assignment (
+			agent_id,
+			project_id,
+			role,
+			assigned_by_type,
+			assigned_by_id,
+			is_active
+		)
+		VALUES ($1, $2, 'pm', 'system', NULL, true)
+	`, tempPM.ID, project.ID); err != nil {
+		t.Fatalf("insert legacy pm row: %v", err)
+	}
+
+	var legacyCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM agent_project_assignment
+		WHERE role = 'pm'
+	`).Scan(&legacyCount); err != nil {
+		t.Fatalf("count legacy pm rows: %v", err)
+	}
+	if legacyCount != 1 {
+		t.Fatalf("legacy pm rows = %d, want 1", legacyCount)
+	}
+
+	migrationPath := filepath.Join("..", "..", "migrations", "0108_project_manager_role_normalization.sql")
+	sqlBytes, err := os.ReadFile(migrationPath)
+	if err != nil {
+		t.Fatalf("read migration file: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(sqlBytes)); err != nil {
+		t.Fatalf("execute migration SQL: %v", err)
+	}
+
+	var canonicalCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM agent_project_assignment
+		WHERE role = 'project_manager'
+		  AND project_id = $1
+	`, project.ID).Scan(&canonicalCount); err != nil {
+		t.Fatalf("count canonical project_manager rows: %v", err)
+	}
+	if canonicalCount != 1 {
+		t.Fatalf("project_manager rows = %d, want 1", canonicalCount)
+	}
+
+	if err := pool.QueryRow(ctx, `SELECT agent_class FROM agent WHERE id = $1`, tempPM.ID).Scan(&tempPM.AgentClass); err != nil {
+		t.Fatalf("query temp PM class: %v", err)
+	}
+	if tempPM.AgentClass != "staff" {
+		t.Fatalf("temp PM class after migration = %q, want staff", tempPM.AgentClass)
 	}
 }
 

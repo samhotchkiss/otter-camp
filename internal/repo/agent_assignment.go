@@ -3,12 +3,14 @@ package repo
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/assignmentrole"
 )
 
 const activePMUniqueIndexName = "agent_project_assignment_active_pm_unique_idx"
@@ -50,6 +52,11 @@ func (r *AgentProjectAssignmentRepo) AssignTx(ctx context.Context, tx pgx.Tx, as
 }
 
 func (r *AgentProjectAssignmentRepo) assign(ctx context.Context, db dbExecutor, assignment AgentProjectAssignment) (AgentProjectAssignment, error) {
+	role := assignmentrole.Normalize(assignment.Role)
+	if role == "" {
+		role = strings.ToLower(strings.TrimSpace(assignment.Role))
+	}
+
 	row := db.QueryRow(ctx, `
 		INSERT INTO agent_project_assignment (
 			agent_id,
@@ -84,7 +91,7 @@ func (r *AgentProjectAssignmentRepo) assign(ctx context.Context, db dbExecutor, 
 	`,
 		assignment.AgentID,
 		assignment.ProjectID,
-		assignment.Role,
+		role,
 		assignment.AssignedByType,
 		assignment.AssignedByID,
 	)
@@ -264,7 +271,7 @@ func (r *AgentProjectAssignmentRepo) getPM(ctx context.Context, db dbExecutor, p
 			deactivated_at
 		FROM agent_project_assignment
 		WHERE project_id = $1
-		  AND role = 'pm'
+		  AND role = 'project_manager'
 		  AND is_active = true
 		LIMIT 1
 	`, projectID)

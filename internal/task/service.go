@@ -1264,7 +1264,7 @@ func projectRequiresHumanReview(settings json.RawMessage) bool {
 	}
 	// Thin-spec judgment:
 	// PM scope storage is not explicitly modeled yet, so support common nested keys.
-	for _, key := range []string{"pm", "pm_scope", "pm_scopes"} {
+	for _, key := range []string{"project_manager", "pm", "pm_scope", "pm_scopes"} {
 		raw, ok := parsed[key]
 		if !ok {
 			continue
