@@ -146,6 +146,32 @@ func TestBuildSystemTemplateNodeSeedPlan(t *testing.T) {
 		}
 	})
 
+	t.Run("review refinement template seeds generation internal review then human review", func(t *testing.T) {
+		plan, err := buildSystemTemplateNodeSeedPlan(repo.FlowTemplate{
+			ID:       templateID,
+			Slug:     "default-review-refinement",
+			IsSystem: true,
+		}, nil)
+		if err != nil {
+			t.Fatalf("buildSystemTemplateNodeSeedPlan: %v", err)
+		}
+		if len(plan.Seeds) != 3 {
+			t.Fatalf("seed count = %d, want 3", len(plan.Seeds))
+		}
+		if plan.Seeds[0].DisplayName != "Generation" {
+			t.Fatalf("first display_name = %q, want Generation", plan.Seeds[0].DisplayName)
+		}
+		if plan.Seeds[1].DisplayName != "Internal Review" {
+			t.Fatalf("second display_name = %q, want Internal Review", plan.Seeds[1].DisplayName)
+		}
+		if plan.Seeds[2].DisplayName != "Human Review" {
+			t.Fatalf("third display_name = %q, want Human Review", plan.Seeds[2].DisplayName)
+		}
+		if !plan.Seeds[2].RequiresHumanReview {
+			t.Fatal("third node RequiresHumanReview = false, want true")
+		}
+	})
+
 	t.Run("existing nodes skip creation and backfill start node", func(t *testing.T) {
 		plan, err := buildSystemTemplateNodeSeedPlan(repo.FlowTemplate{
 			ID:          templateID,

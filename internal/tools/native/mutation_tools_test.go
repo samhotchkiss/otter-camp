@@ -527,6 +527,29 @@ func (m *mockFlowTemplateRepo) ListCurrent(context.Context, *uuid.UUID, *uuid.UU
 	return nil, nil
 }
 
+func (m *mockFlowTemplateRepo) GetCurrentBySlug(_ context.Context, organizationID, projectID *uuid.UUID, slug string) (repo.FlowTemplate, error) {
+	for _, template := range m.templates {
+		if template.Slug != slug {
+			continue
+		}
+		switch {
+		case organizationID != nil:
+			if template.OrganizationID != nil && *template.OrganizationID == *organizationID {
+				return template, nil
+			}
+		case projectID != nil:
+			if template.ProjectID != nil && *template.ProjectID == *projectID {
+				return template, nil
+			}
+		default:
+			if template.OrganizationID == nil && template.ProjectID == nil {
+				return template, nil
+			}
+		}
+	}
+	return repo.FlowTemplate{}, repo.ErrNotFound
+}
+
 func (m *mockFlowTemplateRepo) Update(_ context.Context, template repo.FlowTemplate) (repo.FlowTemplate, error) {
 	if m.templates == nil {
 		m.templates = make(map[uuid.UUID]repo.FlowTemplate)
@@ -756,6 +779,163 @@ func TestTaskUpdateQueuedOversizedTaskPublishesTaskCreatedEventsForDecomposedChi
 		if payload["decomposition_parent"] != taskID.String() {
 			t.Fatalf("decomposition_parent = %v, want %s", payload["decomposition_parent"], taskID.String())
 		}
+	}
+}
+
+func TestTaskCreateSubjectiveMultiOptionAutoAssignsReviewRefinementTemplate(t *testing.T) {
+	projectID := uuid.New()
+	orgID := uuid.New()
+	templateID := uuid.New()
+	internalReviewID := uuid.New()
+	humanReviewID := uuid.New()
+	description := "Generate 10 homepage design options, compare them, shortlist the best ones, and recommend a direction with tradeoffs."
+
+	tasks := &mockTaskRepo{}
+	projects := &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Slug:           "design-project",
+				DisplayName:    "Design Project",
+			},
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.projects = projects
+	executor.flowTemplates = &mockFlowTemplateRepo{
+		templates: map[uuid.UUID]repo.FlowTemplate{
+			templateID: {
+				ID:             templateID,
+				OrganizationID: nil,
+				ProjectID:      nil,
+				Slug:           "default-review-refinement",
+				DisplayName:    "Default Review Refinement",
+				IsCurrent:      true,
+			},
+		},
+	}
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			templateID: {
+				{
+					ID:             uuid.New(),
+					FlowTemplateID: templateID,
+					DisplayName:    "Generation",
+					NodeType:       "work",
+					Position:       1,
+					NextNodeID:     &internalReviewID,
+				},
+				{
+					ID:             internalReviewID,
+					FlowTemplateID: templateID,
+					DisplayName:    "Internal Review",
+					NodeType:       "review",
+					Position:       2,
+					NextNodeID:     &humanReviewID,
+				},
+				{
+					ID:                  humanReviewID,
+					FlowTemplateID:      templateID,
+					DisplayName:         "Human Review",
+					NodeType:            "review",
+					Position:            3,
+					RequiresHumanReview: true,
+				},
+			},
+		},
+	}
+
+	out, err := executor.Execute(testExecCtx(), "task.create", map[string]any{
+		"project_id":   projectID.String(),
+		"title":        "Homepage design options",
+		"description":  description,
+		"blocks_scope": "none",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if len(tasks.createdTasks) != 1 {
+		t.Fatalf("created task count = %d, want 1", len(tasks.createdTasks))
+	}
+	if tasks.createdTasks[0].FlowTemplateID == nil || *tasks.createdTasks[0].FlowTemplateID != templateID {
+		t.Fatalf("flow_template_id = %v, want %s", tasks.createdTasks[0].FlowTemplateID, templateID)
+	}
+
+	planning, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	if planning["mode"] != "review_and_refinement" {
+		t.Fatalf("planning.mode = %v, want review_and_refinement", planning["mode"])
+	}
+	stages, ok := planning["planned_stages"].([]string)
+	if !ok {
+		rawStages, castOK := planning["planned_stages"].([]any)
+		if !castOK {
+			t.Fatalf("planned_stages = %T, want slice", planning["planned_stages"])
+		}
+		stages = make([]string, 0, len(rawStages))
+		for _, item := range rawStages {
+			stages = append(stages, fmt.Sprintf("%v", item))
+		}
+	}
+	if len(stages) != 3 {
+		t.Fatalf("planned stages len = %d, want 3", len(stages))
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal(tasks.createdTasks[0].Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	planningMeta, ok := metadata["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning metadata = %T, want map[string]any", metadata["planning"])
+	}
+	if planningMeta["default_template_slug"] != "default-review-refinement" {
+		t.Fatalf("default_template_slug = %v, want default-review-refinement", planningMeta["default_template_slug"])
+	}
+}
+
+func TestTaskCreateVerifiableRequestDoesNotAutoAssignReviewRefinementTemplate(t *testing.T) {
+	projectID := uuid.New()
+	orgID := uuid.New()
+
+	tasks := &mockTaskRepo{}
+	projects := &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Slug:           "ops-project",
+				DisplayName:    "Ops Project",
+			},
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.projects = projects
+	executor.flowTemplates = &mockFlowTemplateRepo{}
+	executor.flowNodes = &mockFlowNodeRepo{}
+
+	out, err := executor.Execute(testExecCtx(), "task.create", map[string]any{
+		"project_id":  projectID.String(),
+		"title":       "Verify webhook retry backoff",
+		"description": "Confirm whether the webhook retry policy still uses exponential backoff and report the configured maximum delay.",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if _, ok := out["planning"]; ok {
+		t.Fatalf("planning output should be omitted for execution-first work, got %v", out["planning"])
+	}
+	if len(tasks.createdTasks) != 1 {
+		t.Fatalf("created task count = %d, want 1", len(tasks.createdTasks))
+	}
+	if tasks.createdTasks[0].FlowTemplateID != nil {
+		t.Fatalf("flow_template_id = %v, want nil", tasks.createdTasks[0].FlowTemplateID)
 	}
 }
 

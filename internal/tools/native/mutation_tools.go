@@ -25,6 +25,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
@@ -722,6 +723,19 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		blocksScope = normalized
 	}
 	requiresHumanReview := readBool(input, "requires_human_review", false)
+	metadata := json.RawMessage(`{}`)
+	planning, resolvedFlowTemplateID, enrichedMetadata, err := e.applyReviewRefinementPlanning(
+		ctx,
+		scope.organizationID,
+		projectID,
+		title,
+		description,
+		flowTemplateID,
+		metadata,
+	)
+	if err != nil {
+		return nil, err
+	}
 	actor := actorFromContext(ctx)
 	created, err := e.tasks.Create(ctx, repo.ProjectTask{
 		OrganizationID:      scope.organizationID,
@@ -729,23 +743,27 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		Title:               title,
 		Description:         description,
 		BlocksScope:         blocksScope,
-		FlowTemplateID:      flowTemplateID,
+		FlowTemplateID:      resolvedFlowTemplateID,
 		RequiresHumanReview: requiresHumanReview,
 		CreatedByType:       actor.createdByType,
 		CreatedByID:         actor.createdByPtr,
-		Metadata:            json.RawMessage(`{}`),
+		Metadata:            enrichedMetadata,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	response := map[string]any{
 		"task": map[string]any{
 			"id":           created.ID,
 			"task_number":  created.TaskNumber,
 			"work_status":  created.WorkStatus,
 			"blocks_scope": created.BlocksScope,
 		},
-	}, nil
+	}
+	if planning.RequiresReviewAndRefinement() {
+		response["planning"] = reviewPlanningResponse(planning)
+	}
+	return response, nil
 }
 
 func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[string]any) (map[string]any, error) {
@@ -794,7 +812,28 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	previousStatus := strings.TrimSpace(current.WorkStatus)
 	statusChanged := false
 	decomposition := queueDecompositionResult{}
+	planning := taskplan.Plan{}
 	if status, ok := readString(input, "work_status"); ok && status != "" {
+		if current.FlowTemplateID == nil &&
+			strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
+			strings.EqualFold(strings.TrimSpace(status), "queued") {
+			var resolvedFlowTemplateID *uuid.UUID
+			planning, resolvedFlowTemplateID, current.Metadata, err = e.applyReviewRefinementPlanning(
+				ctx,
+				current.OrganizationID,
+				current.ProjectID,
+				current.Title,
+				current.Description,
+				current.FlowTemplateID,
+				current.Metadata,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if resolvedFlowTemplateID != nil {
+				current.FlowTemplateID = resolvedFlowTemplateID
+			}
+		}
 		if taskStatusRequiresFlowTemplate(status) && current.FlowTemplateID == nil {
 			return map[string]any{"error": "task requires a flow template before it can be queued"}, nil
 		}
@@ -854,6 +893,9 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			"applied":        true,
 			"child_task_ids": uuidStringSlice(decomposition.childTaskIDs),
 		}
+	}
+	if planning.RequiresReviewAndRefinement() {
+		response["planning"] = reviewPlanningResponse(planning)
 	}
 	return response, nil
 }
@@ -955,6 +997,72 @@ func taskStatusRequiresFlowTemplate(status string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (e *NativeToolExecutor) applyReviewRefinementPlanning(
+	ctx context.Context,
+	organizationID uuid.UUID,
+	projectID uuid.UUID,
+	title string,
+	description *string,
+	flowTemplateID *uuid.UUID,
+	metadata json.RawMessage,
+) (taskplan.Plan, *uuid.UUID, json.RawMessage, error) {
+	plan := taskplan.Analyze(title, description)
+	if !plan.RequiresReviewAndRefinement() {
+		return plan, flowTemplateID, metadata, nil
+	}
+
+	enrichedMetadata := taskplan.ApplyMetadata(metadata, plan)
+	resolvedFlowTemplateID := flowTemplateID
+	if resolvedFlowTemplateID != nil && *resolvedFlowTemplateID != uuid.Nil {
+		return plan, resolvedFlowTemplateID, enrichedMetadata, nil
+	}
+
+	template, err := e.resolveSystemFlowTemplate(ctx, organizationID, projectID, plan.DefaultTemplateSlug)
+	if err != nil {
+		return taskplan.Plan{}, nil, nil, err
+	}
+	if err := e.validateExecutableFlowTemplate(ctx, template.ID); err != nil {
+		return taskplan.Plan{}, nil, nil, err
+	}
+	resolvedFlowTemplateID = &template.ID
+	return plan, resolvedFlowTemplateID, enrichedMetadata, nil
+}
+
+func (e *NativeToolExecutor) resolveSystemFlowTemplate(ctx context.Context, organizationID, projectID uuid.UUID, slug string) (repo.FlowTemplate, error) {
+	if e.flowTemplates == nil {
+		return repo.FlowTemplate{}, repo.ErrNotFound
+	}
+
+	if projectID != uuid.Nil {
+		if template, err := e.flowTemplates.GetCurrentBySlug(ctx, nil, &projectID, slug); err == nil {
+			return template, nil
+		} else if !errors.Is(err, repo.ErrNotFound) {
+			return repo.FlowTemplate{}, err
+		}
+	}
+	if organizationID != uuid.Nil {
+		if template, err := e.flowTemplates.GetCurrentBySlug(ctx, &organizationID, nil, slug); err == nil {
+			return template, nil
+		} else if !errors.Is(err, repo.ErrNotFound) {
+			return repo.FlowTemplate{}, err
+		}
+	}
+
+	return e.flowTemplates.GetCurrentBySlug(ctx, nil, nil, slug)
+}
+
+func reviewPlanningResponse(plan taskplan.Plan) map[string]any {
+	return map[string]any{
+		"mode":           plan.Mode,
+		"planned_stages": append([]string(nil), plan.PlannedStages...),
+		"review_packet": map[string]any{
+			"summary":  plan.ReviewPacket.Summary,
+			"sections": append([]string(nil), plan.ReviewPacket.Sections...),
+		},
+		"default_template_slug": plan.DefaultTemplateSlug,
 	}
 }
 

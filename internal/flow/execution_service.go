@@ -14,6 +14,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
 const maxDependencyTraversalDepth = 100
@@ -436,6 +437,24 @@ func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.Pro
 		"task_id":      taskRecord.ID,
 		"flow_node_id": flowNodeID,
 	})
+	if plan, ok := taskplan.Parse(taskRecord.Metadata); ok && plan.RequiresReviewAndRefinement() {
+		title = "Review options and recommendation"
+		body = fmt.Sprintf(
+			"%s\n\nPlanned stages: %s\nReview packet sections: %s",
+			plan.ReviewPacket.Summary,
+			strings.Join(plan.PlannedStages, " -> "),
+			strings.Join(plan.ReviewPacket.Sections, ", "),
+		)
+		payload, _ = json.Marshal(map[string]any{
+			"task_id":        taskRecord.ID,
+			"flow_node_id":   flowNodeID,
+			"planned_stages": plan.PlannedStages,
+			"review_packet": map[string]any{
+				"summary":  plan.ReviewPacket.Summary,
+				"sections": plan.ReviewPacket.Sections,
+			},
+		})
+	}
 	created, err := s.inbox.Create(ctx, repo.InboxItem{
 		OrganizationID:  taskRecord.OrganizationID,
 		ItemType:        "task_review",

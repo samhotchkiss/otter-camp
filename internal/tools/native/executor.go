@@ -102,6 +102,7 @@ type agentReader interface {
 type flowTemplateReader interface {
 	Create(ctx context.Context, template repo.FlowTemplate) (repo.FlowTemplate, error)
 	GetByID(ctx context.Context, id uuid.UUID) (repo.FlowTemplate, error)
+	GetCurrentBySlug(ctx context.Context, organizationID, projectID *uuid.UUID, slug string) (repo.FlowTemplate, error)
 	ListCurrent(ctx context.Context, organizationID, projectID *uuid.UUID) ([]repo.FlowTemplate, error)
 	Update(ctx context.Context, template repo.FlowTemplate) (repo.FlowTemplate, error)
 }
