@@ -7,9 +7,16 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 )
 
 func TestLayoutGoldenSnapshots(t *testing.T) {
+	origRepoVersion := versionpkg.RepoVersion
+	versionpkg.RepoVersion = "9999"
+	t.Cleanup(func() {
+		versionpkg.RepoVersion = origRepoVersion
+	})
+
 	updateGolden := os.Getenv("UPDATE_GOLDEN") == "1"
 	shells := []string{"board", "chat", "inbox"}
 	classes := []SizeClass{SizeXS, SizeS, SizeM, SizeL, SizeXL}

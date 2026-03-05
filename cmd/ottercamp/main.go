@@ -131,6 +131,16 @@ func run(args []string) int {
 		printUsage(os.Stderr)
 		return 1
 	}
+	shouldWarnFreshness := false
+	switch remaining[0] {
+	case "tui", "serve", "server", "worker":
+		shouldWarnFreshness = true
+	}
+	if shouldWarnFreshness {
+		if warning := strings.TrimSpace(versionpkg.StartupFreshnessWarning()); warning != "" {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+		}
+	}
 
 	switch remaining[0] {
 	case "agent":
@@ -2081,10 +2091,11 @@ func runVersionCommand(args []string) int {
 	}
 
 	payload := map[string]string{
-		"version":    versionpkg.Version,
-		"commit":     versionpkg.Commit,
-		"built_at":   versionpkg.BuiltAt,
-		"go_version": versionpkg.GoVersion,
+		"version":      versionpkg.Version,
+		"commit":       versionpkg.Commit,
+		"built_at":     versionpkg.BuiltAt,
+		"go_version":   versionpkg.GoVersion,
+		"repo_version": versionpkg.RepoVersion,
 	}
 	if *jsonOutput {
 		formatter, _ := clitools.NewOutputFormatter(clitools.OutputModeJSON, os.Stdout, defaultNoColor)
@@ -2095,7 +2106,14 @@ func runVersionCommand(args []string) int {
 		return 0
 	}
 
-	fmt.Fprintf(os.Stdout, "version=%s commit=%s built_at=%s\n", versionpkg.Version, versionpkg.Commit, versionpkg.BuiltAt)
+	fmt.Fprintf(
+		os.Stdout,
+		"version=%s commit=%s built_at=%s repo_version=%s\n",
+		versionpkg.Version,
+		versionpkg.Commit,
+		versionpkg.BuiltAt,
+		versionpkg.RepoVersion,
+	)
 	return 0
 }
 

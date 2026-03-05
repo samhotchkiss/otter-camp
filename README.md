@@ -49,6 +49,15 @@ make install
 ottercamp tui
 ```
 
+### Enable Local Git Hooks (Repo Version Auto-Bump)
+
+This repo includes a pre-commit hook that increments `internal/version/repo_version.txt`
+on every commit and stages it automatically.
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Autowork Session Logs
 
 Autowork scripts now default session/runtime state to:

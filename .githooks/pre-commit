@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+version_file="$repo_root/internal/version/repo_version.txt"
+
+if [[ ! -f "$version_file" ]]; then
+  printf '0\n' >"$version_file"
+fi
+
+current="$(tr -d '[:space:]' <"$version_file")"
+if [[ ! "$current" =~ ^[0-9]+$ ]]; then
+  echo "pre-commit: invalid repo version in $version_file: $current" >&2
+  exit 1
+fi
+
+next="$((current + 1))"
+printf '%s\n' "$next" >"$version_file"
+git add "$version_file"

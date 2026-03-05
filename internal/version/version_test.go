@@ -15,4 +15,7 @@ func TestDefaultsPresent(t *testing.T) {
 	if GoVersion == "" {
 		t.Fatal("GoVersion must not be empty")
 	}
+	if RepoVersion == "" {
+		t.Fatal("RepoVersion must not be empty")
+	}
 }

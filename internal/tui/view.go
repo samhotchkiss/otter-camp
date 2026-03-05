@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	ansitrunc "github.com/muesli/reflow/truncate"
+	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 )
 
 // ── Color palette ──────────────────────────────────────────────────────────
@@ -349,7 +350,14 @@ func (m Model) viewForShell(shell string) string {
 
 	sections = append(sections, prefixLines(panelRow, prefix))
 	sections = append(sections, prefix+m.renderStatusBar(layout, focus))
-	sections = append(sections, prefix+m.renderHelpLine())
+	helpWidth := m.width
+	if helpWidth <= 0 {
+		helpWidth = layout.contentSize
+	}
+	if prefix != "" {
+		helpWidth = maxInt(1, helpWidth-lipgloss.Width(prefix))
+	}
+	sections = append(sections, prefix+m.renderHelpLine(helpWidth))
 
 	if m.tourActive {
 		// EX-108: promote ?·help so first-run users discover the full keybinding
@@ -3397,6 +3405,9 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 	bar := dot + "  " + connStyle.Render(connText) +
 		styleMuted.Render("  ·  ") + styleMuted.Render(sessionDisplay) +
 		styleMuted.Render("  ·  ") + styleSubtle.Render(sizeStr+"/"+focusStr)
+	if rv := strings.TrimSpace(versionpkg.RepoVersion); rv != "" {
+		bar += styleMuted.Render("  ·  ") + styleSubtle.Render("rv"+rv)
+	}
 	if breadcrumb != "" {
 		bar += styleMuted.Render("  ·  ") + styleSubtle.Render(breadcrumb)
 	}
@@ -3435,9 +3446,15 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 
 // ── Help line ────────────────────────────────────────────────────────────────
 
-func (m Model) renderHelpLine() string {
+func (m Model) renderHelpLine(width int) string {
 	help := "Help: " + m.commandFallbackHelp()
-	return styleMuted.Render(help)
+	if width <= 0 {
+		return styleMuted.Render(help)
+	}
+	if lipgloss.Width(help) <= width {
+		return styleMuted.Render(help)
+	}
+	return styleMuted.Render(truncate(help, maxInt(1, width)))
 }
 
 // ── Degraded banner ──────────────────────────────────────────────────────────
