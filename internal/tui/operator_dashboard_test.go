@@ -50,6 +50,18 @@ func TestDashboardRuntimeShortcutOpensTaskDetail(t *testing.T) {
 	}
 }
 
+func TestDashboardRuntimeShortcutShowsPanelHintOutsideDashboard(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = MainPanel
+	model.workspace.setMainView(ViewProject)
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+
+	if got := model.statusMessage; got != "Panels: 1 sidebar · 2 main · 3 chat. Press ? for full key reference." {
+		t.Fatalf("statusMessage = %q", got)
+	}
+}
+
 func TestDashboardRendersRuntimeHealthSection(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.focus = MainPanel
@@ -67,6 +79,8 @@ func TestDashboardRendersRuntimeHealthSection(t *testing.T) {
 			RecentFailures:  1,
 		},
 		Active: OperatorDashboardSection{
+			Count:      1,
+			TotalCount: 3,
 			Items: []OperatorDashboardItem{
 				{
 					Shortcut: 4,
@@ -86,5 +100,8 @@ func TestDashboardRendersRuntimeHealthSection(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "4. OC-12: Ship runtime dashboard") {
 		t.Fatalf("render missing runtime shortcut row:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "+2 more") {
+		t.Fatalf("render missing total-count overflow hint:\n%s", rendered)
 	}
 }

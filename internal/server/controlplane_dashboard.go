@@ -50,22 +50,23 @@ type operatorDashboardThresholds struct {
 }
 
 type operatorDashboardSectionResponse struct {
-	Count int                             `json:"count"`
-	Items []operatorDashboardItemResponse `json:"items"`
+	Count      int                             `json:"count"`
+	TotalCount int                             `json:"total_count"`
+	Items      []operatorDashboardItemResponse `json:"items"`
 }
 
 type operatorDashboardItemResponse struct {
-	Kind           string                        `json:"kind"`
-	Title          string                        `json:"title"`
-	Summary        string                        `json:"summary,omitempty"`
-	Status         string                        `json:"status"`
-	Project        *operatorDashboardRefResponse `json:"project,omitempty"`
-	Task           *operatorDashboardTaskRef     `json:"task,omitempty"`
-	Run            *operatorDashboardRefResponse `json:"run,omitempty"`
-	UpdatedAt      time.Time                     `json:"updated_at"`
-	AgeSeconds     int                           `json:"age_seconds"`
-	StaleForSecond int                           `json:"stale_for_seconds,omitempty"`
-	Links          operatorDashboardLinks        `json:"links"`
+	Kind            string                        `json:"kind"`
+	Title           string                        `json:"title"`
+	Summary         string                        `json:"summary,omitempty"`
+	Status          string                        `json:"status"`
+	Project         *operatorDashboardRefResponse `json:"project,omitempty"`
+	Task            *operatorDashboardTaskRef     `json:"task,omitempty"`
+	Run             *operatorDashboardRefResponse `json:"run,omitempty"`
+	UpdatedAt       time.Time                     `json:"updated_at"`
+	AgeSeconds      int                           `json:"age_seconds"`
+	StaleForSeconds int                           `json:"stale_for_seconds,omitempty"`
+	Links           operatorDashboardLinks        `json:"links"`
 }
 
 type operatorDashboardRefResponse struct {
@@ -151,6 +152,14 @@ func (l operatorDashboardLoader) Load(ctx context.Context, organizationID, userI
 	if err != nil {
 		return operatorDashboardResponse{}, err
 	}
+	activeSectionCount, err := l.countActiveSectionItems(ctx, organizationID)
+	if err != nil {
+		return operatorDashboardResponse{}, err
+	}
+	recentActivityCount, err := l.countRecentActivity(ctx, organizationID)
+	if err != nil {
+		return operatorDashboardResponse{}, err
+	}
 
 	activeItems, err := l.loadActiveItems(ctx, organizationID, limit)
 	if err != nil {
@@ -200,24 +209,29 @@ func (l operatorDashboardLoader) Load(ctx context.Context, organizationID, userI
 			RecentFailures:  recentFailureCount,
 		},
 		Active: operatorDashboardSectionResponse{
-			Count: len(activeItems),
-			Items: activeItems,
+			Count:      len(activeItems),
+			TotalCount: activeSectionCount,
+			Items:      activeItems,
 		},
 		Stale: operatorDashboardSectionResponse{
-			Count: len(staleItems),
-			Items: staleItems,
+			Count:      len(staleItems),
+			TotalCount: staleTaskCount + staleExecutionCount,
+			Items:      staleItems,
 		},
 		Blocked: operatorDashboardSectionResponse{
-			Count: len(blockedItems),
-			Items: blockedItems,
+			Count:      len(blockedItems),
+			TotalCount: blockedCount,
+			Items:      blockedItems,
 		},
 		RecentFailures: operatorDashboardSectionResponse{
-			Count: len(recentFailureItems),
-			Items: recentFailureItems,
+			Count:      len(recentFailureItems),
+			TotalCount: recentFailureCount,
+			Items:      recentFailureItems,
 		},
 		RecentActivity: operatorDashboardSectionResponse{
-			Count: len(recentActivityItems),
-			Items: recentActivityItems,
+			Count:      len(recentActivityItems),
+			TotalCount: recentActivityCount,
+			Items:      recentActivityItems,
 		},
 		Thresholds: operatorDashboardThresholds{
 			StaleExecutionSeconds: int(operatorDashboardStaleExecutionThreshold / time.Second),
@@ -364,6 +378,34 @@ func (l operatorDashboardLoader) countHumanInputItems(ctx context.Context, organ
 }
 
 func (l operatorDashboardLoader) countRecentFailures(ctx context.Context, organizationID uuid.UUID) (int, error) {
+	return l.countRecentEvents(ctx, organizationID, []string{
+		"run_failed",
+		"attempt_failed",
+		"run_timed_out",
+		"run_cancelled",
+		"wakeup_deferred",
+		"wakeup_promoted",
+		"supervisor_recovery",
+	})
+}
+
+func (l operatorDashboardLoader) countRecentActivity(ctx context.Context, organizationID uuid.UUID) (int, error) {
+	return l.countRecentEvents(ctx, organizationID, []string{
+		"run_started",
+		"run_completed",
+		"run_failed",
+		"run_cancelled",
+		"run_timed_out",
+		"run_paused",
+		"attempt_failed",
+		"supervisor_recovery",
+		"wakeup_coalesced",
+		"wakeup_deferred",
+		"wakeup_promoted",
+	})
+}
+
+func (l operatorDashboardLoader) countRecentEvents(ctx context.Context, organizationID uuid.UUID, eventTypes []string) (int, error) {
 	var count int
 	err := l.pool.QueryRow(ctx, `
 		SELECT COUNT(*)
@@ -371,8 +413,59 @@ func (l operatorDashboardLoader) countRecentFailures(ctx context.Context, organi
 		JOIN run r ON r.id = re.run_id
 		WHERE r.organization_id = $1
 		  AND re.created_at >= $2
-		  AND re.event_type IN ('run_failed', 'attempt_failed', 'run_timed_out', 'run_cancelled', 'wakeup_deferred', 'wakeup_promoted', 'supervisor_recovery')
-	`, organizationID, l.now.Add(-operatorDashboardRecentWindow)).Scan(&count)
+		  AND re.event_type = ANY($3::text[])
+	`, organizationID, l.now.Add(-operatorDashboardRecentWindow), eventTypes).Scan(&count)
+	return count, err
+}
+
+func (l operatorDashboardLoader) countActiveSectionItems(ctx context.Context, organizationID uuid.UUID) (int, error) {
+	runCount, err := l.countActiveSectionRuns(ctx, organizationID)
+	if err != nil {
+		return 0, err
+	}
+	taskCount, err := l.countActiveSectionTasks(ctx, organizationID)
+	if err != nil {
+		return 0, err
+	}
+	return runCount + taskCount, nil
+}
+
+func (l operatorDashboardLoader) countActiveSectionRuns(ctx context.Context, organizationID uuid.UUID) (int, error) {
+	var count int
+	err := l.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM runtime_state rs
+		JOIN run r ON r.id = rs.active_run_id
+		LEFT JOIN LATERAL (
+			SELECT created_at
+			FROM run_event re
+			WHERE re.run_id = r.id
+			  AND re.event_type = 'heartbeat'
+			ORDER BY re.sequence DESC
+			LIMIT 1
+		) hb ON true
+		WHERE rs.active_run_id IS NOT NULL
+		  AND r.organization_id = $1
+		  AND r.status IN ('created', 'in_progress', 'cancelling', 'paused')
+		  AND COALESCE(hb.created_at, rs.last_wakeup_at, r.updated_at, r.created_at) >= $2
+	`, organizationID, l.now.Add(-operatorDashboardStaleExecutionThreshold)).Scan(&count)
+	return count, err
+}
+
+func (l operatorDashboardLoader) countActiveSectionTasks(ctx context.Context, organizationID uuid.UUID) (int, error) {
+	var count int
+	err := l.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task t
+		LEFT JOIN runtime_state rs
+		  ON rs.scope_type = 'task'
+		 AND rs.scope_id = t.id
+		 AND rs.active_run_id IS NOT NULL
+		WHERE t.organization_id = $1
+		  AND t.work_status IN ('queued', 'in_progress', 'on_hold')
+		  AND rs.id IS NULL
+		  AND t.updated_at >= $2
+	`, organizationID, l.now.Add(-operatorDashboardStaleTaskThreshold)).Scan(&count)
 	return count, err
 }
 
@@ -1009,14 +1102,14 @@ func (l operatorDashboardLoader) newDashboardItem(
 		staleForSeconds = ageSeconds - staleThresholdSeconds
 	}
 	item := operatorDashboardItemResponse{
-		Kind:           strings.TrimSpace(kind),
-		Title:          strings.TrimSpace(title),
-		Summary:        strings.TrimSpace(summary),
-		Status:         strings.TrimSpace(status),
-		UpdatedAt:      updatedAt,
-		AgeSeconds:     ageSeconds,
-		StaleForSecond: staleForSeconds,
-		Links:          operatorDashboardLinksFor(projectID, taskID, runID),
+		Kind:            strings.TrimSpace(kind),
+		Title:           strings.TrimSpace(title),
+		Summary:         strings.TrimSpace(summary),
+		Status:          strings.TrimSpace(status),
+		UpdatedAt:       updatedAt,
+		AgeSeconds:      ageSeconds,
+		StaleForSeconds: staleForSeconds,
+		Links:           operatorDashboardLinksFor(projectID, taskID, runID),
 	}
 	if projectID != nil && *projectID != uuid.Nil {
 		item.Project = &operatorDashboardRefResponse{

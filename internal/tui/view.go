@@ -1348,8 +1348,12 @@ func renderOperatorDashboardSection(title string, section OperatorDashboardSecti
 	for i := 0; i < visible; i++ {
 		lines = append(lines, styleText.Render(truncate(operatorDashboardItemLine(section.Items[i]), maxInt(width-2, 12))))
 	}
-	if len(section.Items) > visible {
-		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more", len(section.Items)-visible)))
+	total := section.TotalCount
+	if total < len(section.Items) {
+		total = len(section.Items)
+	}
+	if total > visible {
+		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more", total-visible)))
 	}
 	return lines
 }
@@ -1363,7 +1367,7 @@ func operatorDashboardItemLine(item OperatorDashboardItem) string {
 	if trimmed := strings.TrimSpace(item.Summary); trimmed != "" {
 		parts = append(parts, trimmed)
 	}
-	if item.StaleForSecond > 0 {
+	if item.StaleForSeconds > 0 {
 		parts = append(parts, "over stale threshold")
 	}
 	if age := relativeTime(item.UpdatedAt); age != "" {

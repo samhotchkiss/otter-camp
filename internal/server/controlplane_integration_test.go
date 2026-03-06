@@ -431,6 +431,123 @@ func TestOperatorDashboardSummaryIncludesStaleTaskAndExecution(t *testing.T) {
 	}
 }
 
+func TestOperatorDashboardSectionTotalCountExceedsReturnedCountWhenLimited(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, orgA, adminA, _, _ := newControlPlaneTestServer(t)
+	defer testServer.Close()
+	token := loginToken(t, testServer.URL, adminA.Email, "admin-password")
+
+	ctx := context.Background()
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	templateRepo := repo.NewFlowTemplateRepo(testServer.Pool)
+	runRepo := controlplane.NewRunRepository(testServer.Pool)
+	stateRepo := controlplane.NewRuntimeStateRepository(testServer.Pool)
+
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgA.ID,
+		Slug:           "ops-dashboard-limited-stale",
+		DisplayName:    "Ops Dashboard Limited Stale",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgA.ID,
+		Slug:           "ops-dashboard-limited-stale-template",
+		DisplayName:    "Ops Dashboard Limited Stale Template",
+		Description:    "template for operator dashboard limit integration tests",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	createdByID := adminA.ID
+	staleExecTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgA.ID,
+		ProjectID:      project.ID,
+		Title:          "Investigate stale execution limit",
+		WorkStatus:     "in_progress",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	})
+	if err != nil {
+		t.Fatalf("create stale execution task: %v", err)
+	}
+	staleExecutionAt := time.Now().UTC().Add(-12 * time.Minute)
+	staleRun, err := runRepo.Create(ctx, controlplane.Run{
+		OrganizationID: orgA.ID,
+		ProjectID:      &project.ID,
+		TaskID:         &staleExecTask.ID,
+		PrincipalType:  "human_user",
+		PrincipalID:    adminA.ID,
+		Status:         "in_progress",
+		TriggerType:    "api",
+		StartedAt:      &staleExecutionAt,
+	})
+	if err != nil {
+		t.Fatalf("create stale run: %v", err)
+	}
+	if _, err := testServer.Pool.Exec(ctx, `UPDATE run SET updated_at = $2 WHERE id = $1`, staleRun.ID, staleExecutionAt); err != nil {
+		t.Fatalf("backdate stale run: %v", err)
+	}
+	state, err := stateRepo.Ensure(ctx, orgA.ID, "task", staleExecTask.ID)
+	if err != nil {
+		t.Fatalf("ensure runtime state: %v", err)
+	}
+	if _, err := stateRepo.SetActive(ctx, state.ID, staleRun.ID, "human_user", &adminA.ID, staleExecutionAt, staleExecutionAt); err != nil {
+		t.Fatalf("set active runtime state: %v", err)
+	}
+
+	for _, title := range []string{
+		"Review backlog is idle",
+		"Approval queue has not moved",
+	} {
+		taskRecord, createErr := taskRepo.Create(ctx, repo.ProjectTask{
+			OrganizationID: orgA.ID,
+			ProjectID:      project.ID,
+			Title:          title,
+			WorkStatus:     "queued",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "human_user",
+			CreatedByID:    &createdByID,
+		})
+		if createErr != nil {
+			t.Fatalf("create stale task %q: %v", title, createErr)
+		}
+		if _, createErr := testServer.Pool.Exec(ctx, `UPDATE project_task SET updated_at = $2 WHERE id = $1`, taskRecord.ID, time.Now().UTC().Add(-40*time.Minute)); createErr != nil {
+			t.Fatalf("backdate stale task %q: %v", title, createErr)
+		}
+	}
+
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/control/dashboard?limit=1", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard status=%d want=%d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	payload := decodeOperatorDashboardResponse(t, resp.Body)
+	if payload.Stale.Count != 1 {
+		t.Fatalf("stale.count=%d want=1 body=%s", payload.Stale.Count, string(resp.Body))
+	}
+	if payload.Stale.TotalCount != 3 {
+		t.Fatalf("stale.total_count=%d want=3 body=%s", payload.Stale.TotalCount, string(resp.Body))
+	}
+	if payload.Stale.TotalCount <= payload.Stale.Count {
+		t.Fatalf("stale.total_count=%d want greater than stale.count=%d body=%s", payload.Stale.TotalCount, payload.Stale.Count, string(resp.Body))
+	}
+}
+
 func TestOperatorDashboardRecentActivityIncludesFailuresRetriesAndNavigationTargets(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 

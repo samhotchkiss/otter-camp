@@ -262,8 +262,9 @@ func (w *workspaceState) setOperatorDashboard(data *OperatorDashboardData) {
 
 func operatorDashboardSectionWithShortcuts(section OperatorDashboardSection, targets *map[int]operatorDashboardTarget) OperatorDashboardSection {
 	cloned := OperatorDashboardSection{
-		Count: section.Count,
-		Items: make([]OperatorDashboardItem, 0, len(section.Items)),
+		Count:      section.Count,
+		TotalCount: section.TotalCount,
+		Items:      make([]OperatorDashboardItem, 0, len(section.Items)),
 	}
 	if *targets == nil {
 		*targets = map[int]operatorDashboardTarget{}

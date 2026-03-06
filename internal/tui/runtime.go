@@ -224,8 +224,9 @@ type OperatorDashboardThresholds struct {
 }
 
 type OperatorDashboardSection struct {
-	Count int
-	Items []OperatorDashboardItem
+	Count      int
+	TotalCount int
+	Items      []OperatorDashboardItem
 }
 
 type OperatorDashboardRef struct {
@@ -246,18 +247,18 @@ type OperatorDashboardLinks struct {
 }
 
 type OperatorDashboardItem struct {
-	Shortcut       int
-	Kind           string
-	Title          string
-	Summary        string
-	Status         string
-	Project        *OperatorDashboardRef
-	Task           *OperatorDashboardTaskRef
-	Run            *OperatorDashboardRef
-	UpdatedAt      time.Time
-	AgeSeconds     int
-	StaleForSecond int
-	Links          OperatorDashboardLinks
+	Shortcut        int
+	Kind            string
+	Title           string
+	Summary         string
+	Status          string
+	Project         *OperatorDashboardRef
+	Task            *OperatorDashboardTaskRef
+	Run             *OperatorDashboardRef
+	UpdatedAt       time.Time
+	AgeSeconds      int
+	StaleForSeconds int
+	Links           OperatorDashboardLinks
 }
 
 type OperatorDashboardData struct {

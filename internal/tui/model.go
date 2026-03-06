@@ -4267,6 +4267,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 				return true, nil
 			}
 			return true, m.navigateToOperatorDashboardTarget(target)
+		} else if m.focus != ChatPanel {
+			m.statusMessage = "Panels: 1 sidebar · 2 main · 3 chat. Press ? for full key reference."
+			return true, nil
 		}
 	case 'n':
 		if m.focus != ChatPanel {

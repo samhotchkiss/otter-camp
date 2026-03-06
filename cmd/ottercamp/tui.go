@@ -859,8 +859,9 @@ func loadTUIOperatorDashboard(ctx context.Context, apiClient *cliAPIClient) (*tu
 }
 
 type tuiOperatorDashboardSectionPayload struct {
-	Count int                               `json:"count"`
-	Items []tuiOperatorDashboardItemPayload `json:"items"`
+	Count      int                               `json:"count"`
+	TotalCount int                               `json:"total_count"`
+	Items      []tuiOperatorDashboardItemPayload `json:"items"`
 }
 
 type tuiOperatorDashboardRefPayload struct {
@@ -875,17 +876,17 @@ type tuiOperatorDashboardTaskRefPayload struct {
 }
 
 type tuiOperatorDashboardItemPayload struct {
-	Kind           string                              `json:"kind"`
-	Title          string                              `json:"title"`
-	Summary        string                              `json:"summary"`
-	Status         string                              `json:"status"`
-	Project        *tuiOperatorDashboardRefPayload     `json:"project"`
-	Task           *tuiOperatorDashboardTaskRefPayload `json:"task"`
-	Run            *tuiOperatorDashboardRefPayload     `json:"run"`
-	UpdatedAt      time.Time                           `json:"updated_at"`
-	AgeSeconds     int                                 `json:"age_seconds"`
-	StaleForSecond int                                 `json:"stale_for_seconds"`
-	Links          struct {
+	Kind            string                              `json:"kind"`
+	Title           string                              `json:"title"`
+	Summary         string                              `json:"summary"`
+	Status          string                              `json:"status"`
+	Project         *tuiOperatorDashboardRefPayload     `json:"project"`
+	Task            *tuiOperatorDashboardTaskRefPayload `json:"task"`
+	Run             *tuiOperatorDashboardRefPayload     `json:"run"`
+	UpdatedAt       time.Time                           `json:"updated_at"`
+	AgeSeconds      int                                 `json:"age_seconds"`
+	StaleForSeconds int                                 `json:"stale_for_seconds"`
+	Links           struct {
 		Project string `json:"project"`
 		Task    string `json:"task"`
 		Run     string `json:"run"`
@@ -896,16 +897,16 @@ func convertTUIOperatorDashboardSection(section tuiOperatorDashboardSectionPaylo
 	items := make([]tuiapp.OperatorDashboardItem, 0, len(section.Items))
 	for _, item := range section.Items {
 		items = append(items, tuiapp.OperatorDashboardItem{
-			Kind:           item.Kind,
-			Title:          item.Title,
-			Summary:        item.Summary,
-			Status:         item.Status,
-			Project:        convertTUIOperatorDashboardRef(item.Project),
-			Task:           convertTUIOperatorDashboardTaskRef(item.Task),
-			Run:            convertTUIOperatorDashboardRef(item.Run),
-			UpdatedAt:      item.UpdatedAt,
-			AgeSeconds:     item.AgeSeconds,
-			StaleForSecond: item.StaleForSecond,
+			Kind:            item.Kind,
+			Title:           item.Title,
+			Summary:         item.Summary,
+			Status:          item.Status,
+			Project:         convertTUIOperatorDashboardRef(item.Project),
+			Task:            convertTUIOperatorDashboardTaskRef(item.Task),
+			Run:             convertTUIOperatorDashboardRef(item.Run),
+			UpdatedAt:       item.UpdatedAt,
+			AgeSeconds:      item.AgeSeconds,
+			StaleForSeconds: item.StaleForSeconds,
 			Links: tuiapp.OperatorDashboardLinks{
 				Project: item.Links.Project,
 				Task:    item.Links.Task,
@@ -913,7 +914,11 @@ func convertTUIOperatorDashboardSection(section tuiOperatorDashboardSectionPaylo
 			},
 		})
 	}
-	return tuiapp.OperatorDashboardSection{Count: section.Count, Items: items}
+	return tuiapp.OperatorDashboardSection{
+		Count:      section.Count,
+		TotalCount: section.TotalCount,
+		Items:      items,
+	}
 }
 
 func convertTUIOperatorDashboardRef(ref *tuiOperatorDashboardRefPayload) *tuiapp.OperatorDashboardRef {
