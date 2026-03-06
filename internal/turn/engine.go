@@ -215,6 +215,7 @@ type messageRepository interface {
 }
 
 type turnRepository interface {
+	CreateForMessageAttempt(ctx context.Context, sessionID, agentID, messageID uuid.UUID, retryCount int) (repo.ChatTurn, bool, error)
 	Create(ctx context.Context, turn repo.ChatTurn) (repo.ChatTurn, error)
 	ListBySession(ctx context.Context, sessionID uuid.UUID) ([]repo.ChatTurn, error)
 	SetStopReason(ctx context.Context, id uuid.UUID, stopReason *string) (repo.ChatTurn, error)
@@ -799,6 +800,33 @@ func (e *TurnEngine) HandleUserMessage(ctx context.Context, sessionID, messageID
 	return e.handleUserMessage(ctx, sessionID, messageID, nil, 0)
 }
 
+func (e *TurnEngine) startInboundMessageTurn(ctx context.Context, turn repo.ChatTurn) (*chat.ChatTurn, bool, error) {
+	if turn.ID == uuid.Nil {
+		return nil, false, fmt.Errorf("turn_id is required")
+	}
+	if err := e.chat.StartTurn(ctx, turn.ID); err != nil {
+		if !errors.Is(err, chat.ErrInvalidStatusTransition) {
+			return nil, false, e.describeTurnTransitionError(ctx, turn.ID, "handleUserMessage StartTurn", "pending->in_progress", err)
+		}
+		current, getErr := e.chat.GetTurn(ctx, turn.ID)
+		if getErr != nil {
+			return nil, false, getErr
+		}
+		switch strings.ToLower(strings.TrimSpace(current.Status)) {
+		case "in_progress", "completed", "cancelled", "failed":
+			return current, false, nil
+		default:
+			return nil, false, e.describeTurnTransitionError(ctx, turn.ID, "handleUserMessage StartTurn", "pending->in_progress", err)
+		}
+	}
+
+	startedTurn, err := e.chat.GetTurn(ctx, turn.ID)
+	if err != nil {
+		return nil, false, err
+	}
+	return startedTurn, true, nil
+}
+
 func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID, routedAgentID *uuid.UUID, retryCount int) error {
 	if sessionID == uuid.Nil || messageID == uuid.Nil {
 		return fmt.Errorf("session_id and message_id are required")
@@ -845,16 +873,21 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		return err
 	}
 
-	turn, err := e.chat.CreateTurn(ctx, sessionID, agentID)
+	turnRecord, _, err := e.turns.CreateForMessageAttempt(ctx, sessionID, agentID, messageID, retryCount)
 	if err != nil {
 		return err
 	}
-	if err := e.chat.StartTurn(ctx, turn.ID); err != nil {
-		return e.describeTurnTransitionError(ctx, turn.ID, "handleUserMessage StartTurn", "pending->in_progress", err)
+	turn, shouldRun, err := e.startInboundMessageTurn(ctx, turnRecord)
+	if err != nil {
+		return err
 	}
-	refreshedTurn, err := e.chat.GetTurn(ctx, turn.ID)
-	if err == nil {
-		turn = refreshedTurn
+	if !shouldRun {
+		return nil
+	}
+	if retryCount > 0 {
+		if _, err := e.appendSystemMessage(ctx, turn.ID, sessionID, fmt.Sprintf("[Retry attempt %d started.]", retryCount)); err != nil {
+			return err
+		}
 	}
 
 	runtime := &turnRuntime{

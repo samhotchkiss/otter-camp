@@ -118,6 +118,202 @@ func TestListeningEvalWaitReenqueuesAndSkipsPhase2(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageAsyncExecutionSessionIdempotentForStableMessageKey(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				AssignedAgentID: &assignedID,
+			},
+		},
+	}
+	fixture.model.completeFn = func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("first HandleUserMessage: %v", err)
+	}
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("second HandleUserMessage: %v", err)
+	}
+
+	if got := len(fixture.chat.turnOrder); got != 1 {
+		t.Fatalf("turn count = %d, want 1", got)
+	}
+	if fixture.model.streamCalls != 1 {
+		t.Fatalf("stream calls = %d, want 1", fixture.model.streamCalls)
+	}
+
+	turn := fixture.chat.turnByID(fixture.chat.turnOrder[0])
+	if turn == nil {
+		t.Fatal("expected created turn")
+	}
+	if turn.TriggerMessageID == nil || *turn.TriggerMessageID != fixture.userMessageID {
+		t.Fatalf("trigger_message_id = %v, want %s", turn.TriggerMessageID, fixture.userMessageID)
+	}
+	if turn.RetryCount != 0 {
+		t.Fatalf("retry_count = %d, want 0", turn.RetryCount)
+	}
+}
+
+func TestHandleTurnJobDuplicateDeliveryDoesNotCreateSecondTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				AssignedAgentID: &assignedID,
+			},
+		},
+	}
+	fixture.model.completeFn = func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	payload, err := json.Marshal(AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{
+			JobType: AgentTurnJobType,
+			Payload: payload,
+		}); err != nil {
+			t.Fatalf("HandleTurnJob[%d]: %v", i, err)
+		}
+	}
+
+	if got := len(fixture.chat.turnOrder); got != 1 {
+		t.Fatalf("turn count = %d, want 1", got)
+	}
+	if fixture.model.streamCalls != 1 {
+		t.Fatalf("stream calls = %d, want 1", fixture.model.streamCalls)
+	}
+}
+
+func TestHandleTurnJobRetryAttemptCreatesDistinctTurnAndRecordsRetryState(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				AssignedAgentID: &assignedID,
+			},
+		},
+	}
+	fixture.model.completeFn = func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("retry-" + req.TurnID.String()[:8]); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	firstPayload, err := json.Marshal(AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	})
+	if err != nil {
+		t.Fatalf("marshal first payload: %v", err)
+	}
+	retryPayload, err := json.Marshal(AgentTurnPayload{
+		SessionID:  fixture.session.ID,
+		MessageID:  fixture.userMessageID,
+		RetryCount: 1,
+	})
+	if err != nil {
+		t.Fatalf("marshal retry payload: %v", err)
+	}
+
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{JobType: AgentTurnJobType, Payload: firstPayload}); err != nil {
+		t.Fatalf("HandleTurnJob first: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{JobType: AgentTurnJobType, Payload: firstPayload}); err != nil {
+		t.Fatalf("HandleTurnJob duplicate: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{JobType: AgentTurnJobType, Payload: retryPayload}); err != nil {
+		t.Fatalf("HandleTurnJob retry: %v", err)
+	}
+
+	if got := len(fixture.chat.turnOrder); got != 2 {
+		t.Fatalf("turn count = %d, want 2", got)
+	}
+	if fixture.model.streamCalls != 2 {
+		t.Fatalf("stream calls = %d, want 2", fixture.model.streamCalls)
+	}
+	if !fixture.messages.containsContent("[Retry attempt 1 started.]") {
+		t.Fatal("missing retry state system message")
+	}
+
+	firstTurn := fixture.chat.turnByID(fixture.chat.turnOrder[0])
+	secondTurn := fixture.chat.turnByID(fixture.chat.turnOrder[1])
+	if firstTurn == nil || secondTurn == nil {
+		t.Fatal("expected both turns to be present")
+	}
+	if firstTurn.RetryCount != 0 || secondTurn.RetryCount != 1 {
+		t.Fatalf("retry counts = [%d %d], want [0 1]", firstTurn.RetryCount, secondTurn.RetryCount)
+	}
+	if firstTurn.TriggerMessageID == nil || secondTurn.TriggerMessageID == nil {
+		t.Fatal("trigger_message_id should be set on both turns")
+	}
+	if *firstTurn.TriggerMessageID != fixture.userMessageID || *secondTurn.TriggerMessageID != fixture.userMessageID {
+		t.Fatalf("trigger_message_ids = [%v %v], want %s", firstTurn.TriggerMessageID, secondTurn.TriggerMessageID, fixture.userMessageID)
+	}
+}
+
 func TestHandleUserMessageEventProjectScopeFrankHandoffRoutesToExistingParticipant(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()
@@ -2018,6 +2214,47 @@ func (f *fakeChatService) GetSession(ctx context.Context, id uuid.UUID) (*chat.C
 	}
 	copySession := *f.session
 	return &copySession, nil
+}
+
+func (f *fakeChatService) CreateForMessageAttempt(ctx context.Context, sessionID, agentID, messageID uuid.UUID, retryCount int) (repo.ChatTurn, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if retryCount < 0 {
+		retryCount = 0
+	}
+	for _, turnID := range f.turnOrder {
+		turn := f.turns[turnID]
+		if turn == nil || turn.SessionID != sessionID {
+			continue
+		}
+		if turn.TriggerMessageID != nil && *turn.TriggerMessageID == messageID && turn.RetryCount == retryCount {
+			return repo.ChatTurn(*turn), false, nil
+		}
+	}
+
+	cycleID := uuid.New()
+	triggerMessageID := messageID
+	turnID := uuid.New()
+	turn := &chat.ChatTurn{
+		ID:               turnID,
+		SessionID:        sessionID,
+		TurnNumber:       len(f.turnOrder) + 1,
+		CycleID:          &cycleID,
+		RespondingType:   "agent",
+		RespondingID:     agentID,
+		Status:           "pending",
+		TriggerMessageID: &triggerMessageID,
+		RetryCount:       retryCount,
+	}
+	f.turns[turnID] = turn
+	f.turnOrder = append(f.turnOrder, turnID)
+	f.session.CurrentTurnID = &turnID
+	f.session.TurnCount++
+	select {
+	case f.turnCh <- turnID:
+	default:
+	}
+	return repo.ChatTurn(*turn), true, nil
 }
 
 func (f *fakeChatService) CreateTurn(ctx context.Context, sessionID, agentID uuid.UUID) (*chat.ChatTurn, error) {
