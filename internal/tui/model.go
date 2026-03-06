@@ -1157,6 +1157,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.workspace.sessionToTaskLabel[sid] = label
 		}
+		if sid := strings.TrimSpace(rec.DiscussionSessionID); sid != "" {
+			m.workspace.rememberTaskDiscussionSession(rec.ID, sid)
+		}
 		if sid := strings.TrimSpace(rec.DiscussionSessionID); sid != "" && rec.Title != "" {
 			label := strings.TrimSpace(rec.Title)
 			if rec.TaskNumber > 0 {
@@ -7463,6 +7466,7 @@ func (m *Model) jumpToSessionByName(name string) tea.Cmd {
 				m.activeScope = ScopeTask
 				if node.TaskID != "" {
 					m.workspace.selectedTaskID = node.TaskID
+					m.workspace.rememberTaskDiscussionSession(node.TaskID, sessionID)
 					m.workspace.setMainView(ViewTask)
 					cmds486 = append(cmds486, loadTaskDetailCmd(node.TaskID, m.runtimeHints))
 				}

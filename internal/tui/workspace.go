@@ -460,6 +460,18 @@ func (w *workspaceState) taskDiscussionSessionID(taskID string) string {
 	return strings.TrimSpace(w.taskSessionIDs[taskID])
 }
 
+func (w *workspaceState) rememberTaskDiscussionSession(taskID, sessionID string) {
+	taskID = strings.TrimSpace(taskID)
+	sessionID = strings.TrimSpace(sessionID)
+	if taskID == "" || sessionID == "" {
+		return
+	}
+	if w.taskSessionIDs == nil {
+		w.taskSessionIDs = make(map[string]string)
+	}
+	w.taskSessionIDs[taskID] = sessionID
+}
+
 func (w *workspaceState) selectedTaskSessionID() string {
 	return w.taskSessionID(w.selectedTaskID)
 }
@@ -632,6 +644,7 @@ func (w *workspaceState) selectSidebarNode() {
 		if node.TaskID != "" {
 			w.mainView = ViewTask
 			w.selectedTaskID = node.TaskID
+			w.rememberTaskDiscussionSession(node.TaskID, node.SessionID)
 		}
 		w.activeSessionID = node.SessionID
 		node.Unread = 0
@@ -1104,6 +1117,15 @@ func (w *workspaceState) rebuildSidebar(orgSessionID string, chats []SidebarChat
 			taskNodes[id] = node
 		}
 	}
+	taskSessionIDs := make(map[string]string, len(w.taskSessionIDs))
+	for taskID, sessionID := range w.taskSessionIDs {
+		taskID = strings.TrimSpace(taskID)
+		sessionID = strings.TrimSpace(sessionID)
+		if taskID == "" || sessionID == "" {
+			continue
+		}
+		taskSessionIDs[taskID] = sessionID
+	}
 
 	frankSessionID := generalSessionID
 	if orgSessionID != "" {
@@ -1142,6 +1164,9 @@ func (w *workspaceState) rebuildSidebar(orgSessionID string, chats []SidebarChat
 		projectID := ""
 		if chat.ScopeType == "project_task" {
 			taskID = chat.ScopeID
+			if strings.TrimSpace(taskID) != "" && strings.TrimSpace(chat.SessionID) != "" {
+				taskSessionIDs[taskID] = strings.TrimSpace(chat.SessionID)
+			}
 		}
 		if chat.ScopeType == "project" {
 			projectID = chat.ScopeID
@@ -1184,6 +1209,7 @@ func (w *workspaceState) rebuildSidebar(orgSessionID string, chats []SidebarChat
 
 	w.nodes = newNodes
 	w.topLevel = newTopLevel
+	w.taskSessionIDs = taskSessionIDs
 }
 
 // existingProjects extracts the current project items from the sidebar nodes.

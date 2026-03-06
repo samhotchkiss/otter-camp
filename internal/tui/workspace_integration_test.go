@@ -426,6 +426,274 @@ func TestJumpToSessionByNameKeepsTaskDetailInSyncEX254(t *testing.T) {
 	}
 }
 
+func TestOpenSidebarTaskChatKeepsDiscussionBindingAcrossTabNavigationEX285(t *testing.T) {
+	t.Parallel()
+
+	const (
+		taskID            = "task-285-sidebar"
+		projectID         = "project-285-sidebar"
+		orgSession        = "00000000-0000-0000-0000-000000002850"
+		discussionSession = "00000000-0000-0000-0000-000000002851"
+		executionSession  = "00000000-0000-0000-0000-000000002852"
+	)
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			return &TaskDetailItem{
+				ID:                id,
+				ProjectID:         projectID,
+				Title:             "OC-75: HTML Layout Templates",
+				SessionID:         executionSession,
+				ActiveExecutionID: executionSession,
+			}, nil
+		},
+		LoadChatHistory: func(_ context.Context, sessionID string) ([]ChatMessage, error) {
+			switch sessionID {
+			case discussionSession:
+				return []ChatMessage{{
+					ID:        "discussion-msg-285",
+					Role:      "assistant",
+					Content:   "DISCUSSION MARKER: sidebar-selected task discussion session.",
+					Timestamp: time.Now().UTC(),
+				}}, nil
+			case executionSession:
+				return []ChatMessage{{
+					ID:        "execution-msg-285",
+					Role:      "assistant",
+					Content:   "EXECUTION MARKER: task execution session.",
+					Timestamp: time.Now().UTC(),
+				}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 140, Height: 34})
+	model.workspace.rebuildSidebar(orgSession, []SidebarChatItem{{
+		SessionID:   discussionSession,
+		DisplayName: "OC-75: HTML Layout Templates",
+		ScopeType:   "project_task",
+		ScopeID:     taskID,
+		WorkStatus:  "in_progress",
+	}}, []SidebarProjectItem{{
+		ID:          projectID,
+		DisplayName: "Layout Templates",
+	}})
+	model.focus = SidebarPanel
+	model.workspace.sidebarCursor = model.workspace.indexOfNode("chat-" + discussionSession)
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = applyImmediateCmdMessages(updated.(Model), cmd)
+
+	if model.MainView() != ViewTask {
+		t.Fatalf("main view after opening sidebar task chat = %s, want %s", model.MainView(), ViewTask)
+	}
+	if model.workspace.selectedTaskID != taskID {
+		t.Fatalf("selectedTaskID after opening sidebar task chat = %q, want %q", model.workspace.selectedTaskID, taskID)
+	}
+	if model.taskPaneTaskID != taskID {
+		t.Fatalf("taskPaneTaskID after opening sidebar task chat = %q, want %q", model.taskPaneTaskID, taskID)
+	}
+	if model.taskPaneTab != taskPaneTabDiscussion {
+		t.Fatalf("task pane tab after opening sidebar task chat = %s, want %s", model.taskPaneTab, taskPaneTabDiscussion)
+	}
+	if model.ActiveChatSession() != discussionSession {
+		t.Fatalf("active session after opening sidebar task chat = %q, want %q", model.ActiveChatSession(), discussionSession)
+	}
+	body := strings.Join(model.renderTaskSurface(80), "\n")
+	if !renderedPanelContains(body, "DISCUSSION MARKER: sidebar-selected task discussion session.") {
+		t.Fatalf("discussion body after open missing discussion marker: %q", body)
+	}
+	if renderedPanelContains(body, "No task discussion session.") {
+		t.Fatalf("discussion body after open should not show placeholder: %q", body)
+	}
+
+	model.focus = ChatPanel
+	model.taskPaneMode = taskPaneModeNavigate
+	for _, key := range []tea.KeyType{tea.KeyRight, tea.KeyRight, tea.KeyRight, tea.KeyRight} {
+		updated, cmd = model.Update(tea.KeyMsg{Type: key})
+		model = applyImmediateCmdMessages(updated.(Model), cmd)
+	}
+
+	if model.taskPaneTab != taskPaneTabDiscussion {
+		t.Fatalf("task pane tab after cycling tabs = %s, want %s", model.taskPaneTab, taskPaneTabDiscussion)
+	}
+	if model.ActiveChatSession() != discussionSession {
+		t.Fatalf("active session after cycling tabs = %q, want %q", model.ActiveChatSession(), discussionSession)
+	}
+	body = strings.Join(model.renderTaskSurface(80), "\n")
+	if !renderedPanelContains(body, "DISCUSSION MARKER: sidebar-selected task discussion session.") {
+		t.Fatalf("discussion body after cycling tabs missing discussion marker: %q", body)
+	}
+	if renderedPanelContains(body, "No task discussion session.") {
+		t.Fatalf("discussion body after cycling tabs should not show placeholder: %q", body)
+	}
+}
+
+func TestTaskPaneNavigationWithDiscussionSessionDoesNotShowPlaceholderEX285(t *testing.T) {
+	t.Parallel()
+
+	const (
+		taskID            = "task-285-real-discussion"
+		discussionSession = "00000000-0000-0000-0000-000000002853"
+		executionSession  = "00000000-0000-0000-0000-000000002854"
+	)
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, sessionID string) ([]ChatMessage, error) {
+			switch sessionID {
+			case discussionSession:
+				return []ChatMessage{{
+					ID:        "discussion-msg-285-real",
+					Role:      "assistant",
+					Content:   "DISCUSSION MARKER: real task discussion session.",
+					Timestamp: time.Now().UTC(),
+				}}, nil
+			case executionSession:
+				return []ChatMessage{{
+					ID:        "execution-msg-285-real",
+					Role:      "assistant",
+					Content:   "EXECUTION MARKER: real task execution session.",
+					Timestamp: time.Now().UTC(),
+				}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 140, Height: 34})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = taskID
+	model.workspace.tasks[taskID] = &taskRecord{
+		ID:                  taskID,
+		Title:               "Real discussion session",
+		Status:              "in_progress",
+		SessionID:           executionSession,
+		ActiveExecutionID:   executionSession,
+		DiscussionSessionID: discussionSession,
+	}
+	model.focus = ChatPanel
+	model.activeScope = ScopeTask
+	model.activeSession = executionSession
+	model.taskPaneTab = taskPaneTabJournal
+	model.taskPaneTaskID = taskID
+	model.taskPaneMode = taskPaneModeNavigate
+
+	model = applyImmediateCmdMessages(model, model.switchVisibleSession(executionSession, true))
+
+	for _, key := range []tea.KeyType{tea.KeyRight, tea.KeyRight} {
+		updated, cmd := model.Update(tea.KeyMsg{Type: key})
+		model = applyImmediateCmdMessages(updated.(Model), cmd)
+	}
+	if model.taskPaneTab != taskPaneTabDiscussion {
+		t.Fatalf("task pane tab after journal->events->discussion = %s, want %s", model.taskPaneTab, taskPaneTabDiscussion)
+	}
+	if model.ActiveChatSession() != discussionSession {
+		t.Fatalf("active session on discussion tab = %q, want %q", model.ActiveChatSession(), discussionSession)
+	}
+	body := strings.Join(model.renderTaskSurface(80), "\n")
+	if !renderedPanelContains(body, "DISCUSSION MARKER: real task discussion session.") {
+		t.Fatalf("discussion body missing discussion marker: %q", body)
+	}
+	if renderedPanelContains(body, "No task discussion session.") {
+		t.Fatalf("discussion body should not show placeholder with real discussion session: %q", body)
+	}
+
+	for _, key := range []tea.KeyType{tea.KeyRight, tea.KeyLeft} {
+		updated, cmd := model.Update(tea.KeyMsg{Type: key})
+		model = applyImmediateCmdMessages(updated.(Model), cmd)
+	}
+	if model.taskPaneTab != taskPaneTabDiscussion {
+		t.Fatalf("task pane tab after trace round-trip = %s, want %s", model.taskPaneTab, taskPaneTabDiscussion)
+	}
+	if model.ActiveChatSession() != discussionSession {
+		t.Fatalf("active session after trace round-trip = %q, want %q", model.ActiveChatSession(), discussionSession)
+	}
+	body = strings.Join(model.renderTaskSurface(80), "\n")
+	if !renderedPanelContains(body, "DISCUSSION MARKER: real task discussion session.") {
+		t.Fatalf("discussion body after trace round-trip missing marker: %q", body)
+	}
+	if renderedPanelContains(body, "No task discussion session.") {
+		t.Fatalf("discussion body after trace round-trip should not show placeholder: %q", body)
+	}
+}
+
+func TestTaskPaneNavigationShowsDiscussionPlaceholderOnlyWhenMissingEX285(t *testing.T) {
+	t.Parallel()
+
+	const (
+		taskID           = "task-285-no-discussion"
+		executionSession = "00000000-0000-0000-0000-000000002855"
+	)
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, sessionID string) ([]ChatMessage, error) {
+			switch sessionID {
+			case executionSession:
+				return []ChatMessage{{
+					ID:        "execution-msg-285-missing",
+					Role:      "assistant",
+					Content:   "EXECUTION MARKER: task execution session without discussion.",
+					Timestamp: time.Now().UTC(),
+				}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 140, Height: 34})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = taskID
+	model.workspace.tasks[taskID] = &taskRecord{
+		ID:                taskID,
+		Title:             "No discussion session",
+		Status:            "in_progress",
+		SessionID:         executionSession,
+		ActiveExecutionID: executionSession,
+	}
+	model.focus = ChatPanel
+	model.activeScope = ScopeTask
+	model.activeSession = executionSession
+	model.taskPaneTab = taskPaneTabJournal
+	model.taskPaneTaskID = taskID
+	model.taskPaneMode = taskPaneModeNavigate
+
+	model = applyImmediateCmdMessages(model, model.switchVisibleSession(executionSession, true))
+
+	for _, key := range []tea.KeyType{tea.KeyRight, tea.KeyRight} {
+		updated, cmd := model.Update(tea.KeyMsg{Type: key})
+		model = applyImmediateCmdMessages(updated.(Model), cmd)
+	}
+	if model.taskPaneTab != taskPaneTabDiscussion {
+		t.Fatalf("task pane tab after journal->events->discussion = %s, want %s", model.taskPaneTab, taskPaneTabDiscussion)
+	}
+	if model.ActiveChatSession() != "" {
+		t.Fatalf("active session on missing discussion tab = %q, want empty", model.ActiveChatSession())
+	}
+	body := strings.Join(model.renderTaskSurface(80), "\n")
+	if !renderedPanelContains(body, "No task discussion session.") {
+		t.Fatalf("discussion body should show placeholder when discussion session is missing: %q", body)
+	}
+	if renderedPanelContains(body, "DISCUSSION MARKER") {
+		t.Fatalf("discussion body should not show discussion content when session is missing: %q", body)
+	}
+
+	for _, key := range []tea.KeyType{tea.KeyRight, tea.KeyLeft} {
+		updated, cmd := model.Update(tea.KeyMsg{Type: key})
+		model = applyImmediateCmdMessages(updated.(Model), cmd)
+	}
+	if model.taskPaneTab != taskPaneTabDiscussion {
+		t.Fatalf("task pane tab after trace round-trip = %s, want %s", model.taskPaneTab, taskPaneTabDiscussion)
+	}
+	if model.ActiveChatSession() != "" {
+		t.Fatalf("active session after trace round-trip on missing discussion task = %q, want empty", model.ActiveChatSession())
+	}
+	body = strings.Join(model.renderTaskSurface(80), "\n")
+	if !renderedPanelContains(body, "No task discussion session.") {
+		t.Fatalf("discussion body after trace round-trip should still show placeholder: %q", body)
+	}
+}
+
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 func renderedPanelContains(rendered string, want string) bool {
