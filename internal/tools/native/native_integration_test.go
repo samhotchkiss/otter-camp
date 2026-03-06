@@ -671,6 +671,9 @@ func TestIntegrationBlogIdeasCreateReviewPacketInboxHandoff(t *testing.T) {
 	if payload["playbook"] != taskplan.PlaybookGTMLaunch {
 		t.Fatalf("payload playbook = %v, want %s", payload["playbook"], taskplan.PlaybookGTMLaunch)
 	}
+	if payload["process_status"] != taskplan.ProcessStatusPending {
+		t.Fatalf("payload process_status = %v, want %s", payload["process_status"], taskplan.ProcessStatusPending)
+	}
 	rawPacket, ok := payload["review_packet"].(map[string]any)
 	if !ok {
 		t.Fatalf("review_packet payload = %T, want map[string]any", payload["review_packet"])
@@ -685,6 +688,173 @@ func TestIntegrationBlogIdeasCreateReviewPacketInboxHandoff(t *testing.T) {
 	}
 	if !containsString(joined, "comparison") || !containsString(joined, "shortlist") || !containsString(joined, "recommendation") {
 		t.Fatalf("review packet sections = %v, want comparison/shortlist/recommendation", joined)
+	}
+	checklist, ok := payload["review_checklist"].([]any)
+	if !ok {
+		t.Fatalf("review_checklist payload = %T, want []any", payload["review_checklist"])
+	}
+	checklistJoined := make([]string, 0, len(checklist))
+	for _, item := range checklist {
+		checklistJoined = append(checklistJoined, fmt.Sprintf("%v", item))
+	}
+	if !containsString(checklistJoined, "Verify the launch brief defines scope, audience, and timing for the rollout.") {
+		t.Fatalf("review_checklist = %v, want GTM rubric", checklistJoined)
+	}
+}
+
+func TestIntegrationTaskCompletionRequiresPlanningContractOrOverride(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	execRepo := repo.NewFlowNodeExecutionRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	template := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
+	if err != nil {
+		t.Fatalf("GetByTemplateOrdered: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("template nodes = %d, want 1", len(nodes))
+	}
+	terminalNode := nodes[0]
+
+	tests := []struct {
+		title          string
+		description    string
+		wantPlaybook   string
+		artifactSlug   string
+		overrideReason string
+	}{
+		{
+			title:          "Validate the onboarding problem",
+			description:    "Run customer interviews, document assumptions, and build a validation plan for this new product idea before we commit scope.",
+			wantPlaybook:   taskplan.PlaybookDiscovery,
+			artifactSlug:   "problem-brief",
+			overrideReason: "Interview slots are booked next week, so the remaining sections will be completed after the research kickoff.",
+		},
+		{
+			title:          "Positioning tradeoffs for analytics expansion",
+			description:    "Define the product strategy, positioning tradeoffs, and the roadmap sequence for the analytics platform.",
+			wantPlaybook:   taskplan.PlaybookStrategy,
+			artifactSlug:   "strategy-brief",
+			overrideReason: "Leadership still owes the final audience input; approval needs to unblock the downstream package today.",
+		},
+		{
+			title:          "PRD for billing migration",
+			description:    "Write the PRD, implementation plan, acceptance criteria, and dependency log for the billing migration.",
+			wantPlaybook:   taskplan.PlaybookExecutionSpec,
+			artifactSlug:   "prd",
+			overrideReason: "Dependency owners are still confirming the rollout sequence.",
+		},
+		{
+			title:          "Metric tree and instrumentation plan",
+			description:    "Define north-star metrics, KPI instrumentation, the dashboard spec, and weekly metric review cadence.",
+			wantPlaybook:   taskplan.PlaybookMetrics,
+			artifactSlug:   "metric-tree",
+			overrideReason: "Telemetry ownership is split across teams; the missing sections will land after the instrumentation handoff.",
+		},
+		{
+			title:          "Go-to-market launch plan",
+			description:    "Create the GTM launch plan, messaging brief, channel plan, and sales enablement checklist for release.",
+			wantPlaybook:   taskplan.PlaybookGTMLaunch,
+			artifactSlug:   "launch-brief",
+			overrideReason: "Channel owners are still finalizing timing, but the launch review must proceed.",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.wantPlaybook, func(t *testing.T) {
+			out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+				"project_id":  project.ID.String(),
+				"title":       tc.title,
+				"description": tc.description,
+			})
+			if err != nil {
+				t.Fatalf("task.create: %v", err)
+			}
+			planning, ok := out["planning"].(map[string]any)
+			if !ok {
+				t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+			}
+			if planning["playbook"] != tc.wantPlaybook {
+				t.Fatalf("playbook = %v, want %s", planning["playbook"], tc.wantPlaybook)
+			}
+
+			taskID := nestedUUID(t, out, "task", "id")
+			taskRecord, err := taskRepo.GetByID(ctx, taskID)
+			if err != nil {
+				t.Fatalf("GetByID: %v", err)
+			}
+			taskRecord.FlowTemplateID = &template.ID
+			taskRecord.CurrentFlowNodeID = &terminalNode.ID
+			taskRecord.WorkStatus = "review"
+			if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+				t.Fatalf("taskRepo.Update: %v", err)
+			}
+			if _, err := execRepo.Create(ctx, repo.FlowNodeExecution{
+				TaskID:      taskID,
+				FlowNodeID:  terminalNode.ID,
+				VisitNumber: 1,
+				Status:      "completed",
+			}); err != nil {
+				t.Fatalf("Create flow execution: %v", err)
+			}
+
+			out, err = executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.update", map[string]any{
+				"task_id":     taskID.String(),
+				"work_status": "done",
+			})
+			if err != nil {
+				t.Fatalf("task.update without contract: %v", err)
+			}
+			if got := fmt.Sprintf("%v", out["error"]); !strings.Contains(got, "planning artifact contract is incomplete") {
+				t.Fatalf("error = %v, want planning artifact contract failure", out["error"])
+			}
+
+			out, err = executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.update", map[string]any{
+				"task_id":     taskID.String(),
+				"work_status": "done",
+				"planning_artifacts": []map[string]any{
+					{
+						"slug":     tc.artifactSlug,
+						"summary":  "Draft artifact recorded for review.",
+						"sections": []string{"objective"},
+					},
+				},
+				"planning_override_reason": tc.overrideReason,
+			})
+			if err != nil {
+				t.Fatalf("task.update with override: %v", err)
+			}
+			if out["error"] != nil {
+				t.Fatalf("task.update override error = %v, want nil", out["error"])
+			}
+
+			taskRecord, err = taskRepo.GetByID(ctx, taskID)
+			if err != nil {
+				t.Fatalf("GetByID after override: %v", err)
+			}
+			if taskRecord.WorkStatus != "done" {
+				t.Fatalf("work_status = %q, want done", taskRecord.WorkStatus)
+			}
+			plan, ok := taskplan.Parse(taskRecord.Metadata)
+			if !ok {
+				t.Fatal("taskplan.Parse(metadata) = false, want true")
+			}
+			report := taskplan.Evaluate(plan)
+			if report.ProcessStatus != taskplan.ProcessStatusOverridden {
+				t.Fatalf("process_status = %q, want %s", report.ProcessStatus, taskplan.ProcessStatusOverridden)
+			}
+			if plan.Override == nil || plan.Override.Reason != tc.overrideReason {
+				t.Fatalf("override = %#v, want reason %q", plan.Override, tc.overrideReason)
+			}
+		})
 	}
 }
 

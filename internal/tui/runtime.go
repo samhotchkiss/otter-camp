@@ -194,6 +194,10 @@ type TaskDetailItem struct {
 	PlanningRiskLevel        string
 	PlanningArtifacts        []TaskPlanningArtifact
 	PlanningFollowOns        []string
+	PlanningProcessStatus    string
+	PlanningChecklist        []string
+	PlanningMissing          []string
+	PlanningOverrideReason   string
 	RequiresHumanReview      bool   // whether this task requires human review
 	BranchName               string // git branch name, if any
 	FlowSteps                []FlowStep

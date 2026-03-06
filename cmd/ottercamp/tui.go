@@ -852,6 +852,7 @@ func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID stri
 		item.FlowNodeName = d.CurrentFlowNode.DisplayName
 	}
 	if plan, ok := taskplan.Parse(d.Metadata); ok {
+		report := taskplan.Evaluate(plan)
 		item.PlanningPlaybook = plan.Playbook
 		item.PlanningWorkType = plan.WorkType
 		item.PlanningProjectStage = plan.ProjectStage
@@ -864,6 +865,14 @@ func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID stri
 			})
 		}
 		item.PlanningFollowOns = append(item.PlanningFollowOns, plan.FollowOnSuggestions...)
+		if report.Enforced {
+			item.PlanningProcessStatus = report.ProcessStatus
+			item.PlanningChecklist = append(item.PlanningChecklist, report.ReviewChecklist...)
+			item.PlanningMissing = append(item.PlanningMissing, report.MissingRequirements()...)
+		}
+		if report.ProcessStatus == taskplan.ProcessStatusOverridden && plan.Override != nil {
+			item.PlanningOverrideReason = strings.TrimSpace(plan.Override.Reason)
+		}
 	}
 	if d.AssignedAgentID != "" {
 		var agentResp struct {

@@ -1838,6 +1838,14 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 			formatPlanningLabel(task.PlanningEvidenceMaturity),
 			formatPlanningLabel(task.PlanningRiskLevel),
 		)))
+		if task.PlanningProcessStatus != "" {
+			lines = append(lines, styleMuted.Render("  Process: "+formatPlanningLabel(task.PlanningProcessStatus)))
+		}
+		if task.PlanningOverrideReason != "" {
+			for _, wrapped := range wrapText(task.PlanningOverrideReason, maxInt(10, width-12)) {
+				lines = append(lines, styleText.Render("  Override: "+wrapped))
+			}
+		}
 		if len(task.PlanningArtifacts) > 0 {
 			lines = append(lines, styleMuted.Render("  Planned artifacts:"))
 			for _, artifact := range task.PlanningArtifacts {
@@ -1846,6 +1854,22 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 					title = formatPlanningLabel(artifact.Slug)
 				}
 				lines = append(lines, styleText.Render("    - "+truncate(title, width-8)))
+			}
+		}
+		if len(task.PlanningChecklist) > 0 {
+			lines = append(lines, styleMuted.Render("  Review rubric:"))
+			for _, item := range task.PlanningChecklist {
+				for _, wrapped := range wrapText(strings.TrimSpace(item), maxInt(10, width-8)) {
+					lines = append(lines, styleText.Render("    - "+wrapped))
+				}
+			}
+		}
+		if len(task.PlanningMissing) > 0 {
+			lines = append(lines, styleMuted.Render("  Missing contract items:"))
+			for _, item := range task.PlanningMissing {
+				for _, wrapped := range wrapText(strings.TrimSpace(item), maxInt(10, width-8)) {
+					lines = append(lines, styleText.Render("    - "+wrapped))
+				}
 			}
 		}
 		if len(task.PlanningFollowOns) > 0 {

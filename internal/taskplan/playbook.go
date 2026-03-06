@@ -272,6 +272,17 @@ var (
 		"customer outage",
 		"irreversible",
 	}
+	executionSpecPlanningSignals = []string{
+		"prd",
+		"spec",
+		"requirements",
+		"implementation plan",
+		"technical design",
+		"architecture",
+		"acceptance criteria",
+		"delivery plan",
+		"execution plan",
+	}
 )
 
 func selectPlaybookContext(text string) (playbook, workType, projectStage, evidenceMaturity, riskLevel string) {
@@ -532,4 +543,20 @@ func signalScore(text string, signals []string) int {
 		}
 	}
 	return score
+}
+
+func playbookRequiresContract(playbook, text string) bool {
+	switch strings.TrimSpace(playbook) {
+	case PlaybookDiscovery,
+		PlaybookStrategy,
+		PlaybookBacklogDecomposition,
+		PlaybookRiskReadiness,
+		PlaybookMetrics,
+		PlaybookGTMLaunch:
+		return true
+	case PlaybookExecutionSpec:
+		return containsAny(text, executionSpecPlanningSignals)
+	default:
+		return false
+	}
 }

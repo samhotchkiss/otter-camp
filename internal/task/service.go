@@ -18,6 +18,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
 var (
@@ -531,6 +532,16 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 		}
 	}
 	if target == "done" && !actor.AllowDoneBypass {
+		if report, reportErr := taskplan.CompletionReport(taskRecord.Metadata); reportErr != nil {
+			return nil, reportErr
+		} else if payload := report.Payload(); len(payload) > 0 {
+			if extraPayload == nil {
+				extraPayload = map[string]any{}
+			}
+			for key, value := range payload {
+				extraPayload[key] = value
+			}
+		}
 		if err := s.validateDoneTransition(ctx, taskRecord); err != nil {
 			return nil, err
 		}

@@ -102,6 +102,10 @@ type taskRecord struct {
 	PlanningRiskLevel        string
 	PlanningArtifacts        []TaskPlanningArtifact
 	PlanningFollowOns        []string
+	PlanningProcessStatus    string
+	PlanningChecklist        []string
+	PlanningMissing          []string
+	PlanningOverrideReason   string
 	FlowSteps                []FlowStep
 	SubtaskItems             []SubtaskItem
 	Dependencies             []TaskDependency

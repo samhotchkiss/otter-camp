@@ -1590,6 +1590,142 @@ func TestTaskUpdateAllowsDoneWhenTerminalExecutionCompleted(t *testing.T) {
 	}
 }
 
+func TestTaskUpdateRejectsDoneWhenPlanningContractIncomplete(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowNodeID := uuid.New()
+	description := "Run customer interviews, capture assumptions, and design a validation plan for this new product idea."
+	plan := taskplan.Analyze("Validate the onboarding problem before writing specs", &description)
+	metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), plan)
+	metadata, _, _, err := taskplan.ApplyProcessUpdate(metadata, taskplan.ProcessUpdate{
+		Artifacts: []taskplan.ArtifactEvidence{
+			{
+				Slug:     "problem-brief",
+				Summary:  "We have a real onboarding drop-off.",
+				Sections: []string{"problem"},
+			},
+		},
+		HasArtifactChanges: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:                taskID,
+			OrganizationID:    uuid.New(),
+			ProjectID:         uuid.New(),
+			WorkStatus:        "review",
+			FlowTemplateID:    &flowTemplateID,
+			CurrentFlowNodeID: &flowNodeID,
+			Metadata:          metadata,
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.flowNodes = &mockFlowNodeRepo{
+		nodes: map[uuid.UUID]repo.FlowNode{
+			flowNodeID: {ID: flowNodeID, NextNodeID: nil},
+		},
+	}
+	executor.flowExecs = &mockFlowExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {{ID: uuid.New(), TaskID: taskID, FlowNodeID: flowNodeID, Status: "completed"}},
+		},
+	}
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "done",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if got := fmt.Sprintf("%v", out["error"]); !strings.Contains(got, "planning artifact contract is incomplete") {
+		t.Fatalf("error = %v, want planning artifact contract failure", out["error"])
+	}
+	if tasks.updateCalls != 0 {
+		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)
+	}
+}
+
+func TestTaskUpdateAllowsDoneWithPlanningOverrideReason(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowNodeID := uuid.New()
+	description := "Write the PRD, requirements, implementation plan, and acceptance criteria for the billing migration."
+	plan := taskplan.Analyze("PRD for billing migration", &description)
+	metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), plan)
+
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:                taskID,
+			OrganizationID:    uuid.New(),
+			ProjectID:         uuid.New(),
+			WorkStatus:        "review",
+			FlowTemplateID:    &flowTemplateID,
+			CurrentFlowNodeID: &flowNodeID,
+			Metadata:          metadata,
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.flowNodes = &mockFlowNodeRepo{
+		nodes: map[uuid.UUID]repo.FlowNode{
+			flowNodeID: {ID: flowNodeID, NextNodeID: nil},
+		},
+	}
+	executor.flowExecs = &mockFlowExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {{ID: uuid.New(), TaskID: taskID, FlowNodeID: flowNodeID, Status: "completed"}},
+		},
+	}
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "done",
+		"planning_artifacts": []map[string]any{
+			{
+				"slug":     "prd",
+				"summary":  "Billing migration scope and core requirements.",
+				"sections": []string{"objective", "scope"},
+			},
+		},
+		"planning_override_reason": "Dependency owners are still confirming rollout sequencing.",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("task.update error = %v, want nil", out["error"])
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if got := taskOut["work_status"]; got != "done" {
+		t.Fatalf("work_status = %v, want done", got)
+	}
+	planningOut, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	if planningOut["process_status"] != taskplan.ProcessStatusOverridden {
+		t.Fatalf("process_status = %v, want %s", planningOut["process_status"], taskplan.ProcessStatusOverridden)
+	}
+	override, ok := planningOut["override"].(map[string]any)
+	if !ok {
+		t.Fatalf("override output = %T, want map[string]any", planningOut["override"])
+	}
+	if override["reason"] != "Dependency owners are still confirming rollout sequencing." {
+		t.Fatalf("override reason = %v, want recorded reason", override["reason"])
+	}
+	if tasks.updateCalls != 1 {
+		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
+	}
+}
+
 func TestTaskUpdateAllowsCancelledWithoutFlowTemplate(t *testing.T) {
 	taskID := uuid.New()
 	tasks := &mockTaskRepo{

@@ -40,8 +40,8 @@ func TestKeyToolSchemasExposeRequiredParameters(t *testing.T) {
 	checks := []schemaCheck{
 		{name: "file.read", requiredKeys: []string{"path"}, propertyKeys: []string{"path", "encoding", "max_bytes"}},
 		{name: "memory.query", requiredKeys: []string{"query"}, propertyKeys: []string{"query", "scope", "limit"}},
-		{name: "task.create", requiredKeys: []string{"project_id", "title"}, propertyKeys: []string{"project_id", "title", "description"}},
-		{name: "task.update", requiredKeys: []string{"task_id"}, propertyKeys: []string{"task_id", "title", "description", "work_status", "flow_template_id", "assigned_agent_id"}},
+		{name: "task.create", requiredKeys: []string{"project_id", "title"}, propertyKeys: []string{"project_id", "title", "description", "planning_artifacts", "planning_override_reason"}},
+		{name: "task.update", requiredKeys: []string{"task_id"}, propertyKeys: []string{"task_id", "title", "description", "work_status", "flow_template_id", "assigned_agent_id", "planning_artifacts", "planning_override_reason"}},
 		{name: "agent.assign_project", requiredKeys: []string{"agent_id", "project_id", "role"}, propertyKeys: []string{"agent_id", "project_id", "role"}},
 		{name: "flow.list_templates", propertyKeys: []string{"project_id"}},
 		{name: "file.write", requiredKeys: []string{"path", "content"}, propertyKeys: []string{"path", "content"}},
