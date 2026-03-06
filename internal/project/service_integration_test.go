@@ -165,12 +165,13 @@ func TestProjectServiceCreateAutoGeneratesBootstrapGateTaskAndFlow(t *testing.T)
 	if err != nil {
 		t.Fatalf("GetByTemplateOrdered bootstrap nodes: %v", err)
 	}
-	if len(nodes) != 2 {
-		t.Fatalf("bootstrap flow nodes len = %d, want 2", len(nodes))
+	if len(nodes) != 3 {
+		t.Fatalf("bootstrap flow nodes len = %d, want 3", len(nodes))
 	}
 
 	setupNode := nodes[0]
 	reviewNode := nodes[1]
+	mergeNode := nodes[2]
 	if setupNode.ID != *template.StartNodeID {
 		t.Fatalf("start_node_id = %s, want setup node %s", *template.StartNodeID, setupNode.ID)
 	}
@@ -198,8 +199,14 @@ func TestProjectServiceCreateAutoGeneratesBootstrapGateTaskAndFlow(t *testing.T)
 	if reviewNode.RejectNodeID == nil || *reviewNode.RejectNodeID != setupNode.ID {
 		t.Fatalf("review reject_node_id = %v, want setup node %s", reviewNode.RejectNodeID, setupNode.ID)
 	}
-	if reviewNode.NextNodeID != nil {
-		t.Fatalf("review next_node_id = %v, want nil for terminal approval", reviewNode.NextNodeID)
+	if reviewNode.NextNodeID == nil || *reviewNode.NextNodeID != mergeNode.ID {
+		t.Fatalf("review next_node_id = %v, want merge node %s", reviewNode.NextNodeID, mergeNode.ID)
+	}
+	if mergeNode.NodeType != "merge" {
+		t.Fatalf("merge node_type = %q, want merge", mergeNode.NodeType)
+	}
+	if mergeNode.NextNodeID != nil {
+		t.Fatalf("merge next_node_id = %v, want nil for terminal completion", mergeNode.NextNodeID)
 	}
 }
 

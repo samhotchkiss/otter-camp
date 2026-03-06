@@ -548,6 +548,7 @@ type mockFlowTemplateRepo struct {
 }
 
 func validExecutableTemplateNodeList(flowTemplateID uuid.UUID) []repo.FlowNode {
+	mergeNodeID := uuid.New()
 	reviewNodeID := uuid.New()
 	return []repo.FlowNode{
 		{
@@ -562,6 +563,13 @@ func validExecutableTemplateNodeList(flowTemplateID uuid.UUID) []repo.FlowNode {
 			FlowTemplateID: flowTemplateID,
 			NodeType:       "review",
 			Position:       2,
+			NextNodeID:     &mergeNodeID,
+		},
+		{
+			ID:             mergeNodeID,
+			FlowTemplateID: flowTemplateID,
+			NodeType:       "merge",
+			Position:       3,
 		},
 	}
 }
@@ -1064,6 +1072,7 @@ func TestTaskCreateSubjectiveMultiOptionAutoAssignsReviewRefinementTemplate(t *t
 	templateID := uuid.New()
 	internalReviewID := uuid.New()
 	humanReviewID := uuid.New()
+	mergeID := uuid.New()
 	description := "Generate 10 homepage design options, compare them, shortlist the best ones, and recommend a direction with tradeoffs."
 
 	tasks := &mockTaskRepo{}
@@ -1118,6 +1127,14 @@ func TestTaskCreateSubjectiveMultiOptionAutoAssignsReviewRefinementTemplate(t *t
 					NodeType:            "review",
 					Position:            3,
 					RequiresHumanReview: true,
+					NextNodeID:          &mergeID,
+				},
+				{
+					ID:             mergeID,
+					FlowTemplateID: templateID,
+					DisplayName:    "Merge",
+					NodeType:       "merge",
+					Position:       4,
 				},
 			},
 		},
@@ -1185,6 +1202,7 @@ func TestTaskCreateDelegatedCreativePolicyUsesInternalReviewTemplate(t *testing.
 	orgID := uuid.New()
 	templateID := uuid.New()
 	internalReviewID := uuid.New()
+	mergeID := uuid.New()
 	description := "Generate 10 homepage design options, compare them, and recommend a direction that stays within the brand guardrails."
 
 	tasks := &mockTaskRepo{}
@@ -1231,6 +1249,14 @@ func TestTaskCreateDelegatedCreativePolicyUsesInternalReviewTemplate(t *testing.
 					DisplayName:    "Internal Review",
 					NodeType:       "review",
 					Position:       2,
+					NextNodeID:     &mergeID,
+				},
+				{
+					ID:             mergeID,
+					FlowTemplateID: templateID,
+					DisplayName:    "Merge",
+					NodeType:       "merge",
+					Position:       3,
 				},
 			},
 		},
@@ -1425,6 +1451,8 @@ func TestTaskUpdateReviewPolicyOverrideBeatsProjectPolicyWhenQueuing(t *testing.
 	reviewRefinementTemplateID := uuid.New()
 	reviewInternalID := uuid.New()
 	reviewHumanID := uuid.New()
+	reviewMergeID := uuid.New()
+	reviewRefinementMergeID := uuid.New()
 	description := "Generate 10 homepage design options, compare them, and recommend the strongest one."
 
 	tasks := &mockTaskRepo{
@@ -1485,6 +1513,14 @@ func TestTaskUpdateReviewPolicyOverrideBeatsProjectPolicyWhenQueuing(t *testing.
 					DisplayName:    "Internal Review",
 					NodeType:       "review",
 					Position:       2,
+					NextNodeID:     &reviewMergeID,
+				},
+				{
+					ID:             reviewMergeID,
+					FlowTemplateID: reviewTemplateID,
+					DisplayName:    "Merge",
+					NodeType:       "merge",
+					Position:       3,
 				},
 			},
 			reviewRefinementTemplateID: {
@@ -1511,6 +1547,14 @@ func TestTaskUpdateReviewPolicyOverrideBeatsProjectPolicyWhenQueuing(t *testing.
 					NodeType:            "review",
 					Position:            3,
 					RequiresHumanReview: true,
+					NextNodeID:          &reviewRefinementMergeID,
+				},
+				{
+					ID:             reviewRefinementMergeID,
+					FlowTemplateID: reviewRefinementTemplateID,
+					DisplayName:    "Merge",
+					NodeType:       "merge",
+					Position:       4,
 				},
 			},
 		},
@@ -1577,7 +1621,7 @@ func TestFlowCreateTemplateRejectsNodesWithoutReview(t *testing.T) {
 	}
 }
 
-func TestFlowCreateTemplateAllowsNonMapNodeWhenReviewNodePresent(t *testing.T) {
+func TestFlowCreateTemplateAllowsNonMapNodeWhenReviewAndMergeNodesPresent(t *testing.T) {
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
 	executor.flowTemplates = &mockFlowTemplateRepo{}
 	executor.flowNodes = &mockFlowNodeRepo{}
@@ -1595,6 +1639,10 @@ func TestFlowCreateTemplateAllowsNonMapNodeWhenReviewNodePresent(t *testing.T) {
 				"display_name": "Review",
 				"node_type":    "review",
 			},
+			map[string]any{
+				"display_name": "Merge",
+				"node_type":    "merge",
+			},
 			"ignore-me",
 		},
 	})
@@ -1610,6 +1658,44 @@ func TestFlowCreateTemplateAllowsNonMapNodeWhenReviewNodePresent(t *testing.T) {
 	}
 	if templateOut["id"] == nil {
 		t.Fatalf("template id = %v, want non-nil", templateOut["id"])
+	}
+}
+
+func TestFlowCreateTemplateRejectsInvalidNodeTypeWithBoundedError(t *testing.T) {
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.flowTemplates = &mockFlowTemplateRepo{}
+	executor.flowNodes = &mockFlowNodeRepo{}
+	projectID := uuid.New()
+
+	out, err := executor.Execute(testExecCtx(), "flow.create_template", map[string]any{
+		"project_id": projectID.String(),
+		"name":       "Invalid Node Type",
+		"nodes": []any{
+			map[string]any{
+				"display_name": "Work",
+				"node_type":    "work",
+			},
+			map[string]any{
+				"display_name": "QA Gate",
+				"node_type":    "qa_gate",
+			},
+			map[string]any{
+				"display_name": "Merge",
+				"node_type":    "merge",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("flow.create_template: %v", err)
+	}
+	if out["error"] != "invalid_node_type" {
+		t.Fatalf("error = %v, want invalid_node_type", out["error"])
+	}
+	if out["invalid_node_type"] != "qa_gate" {
+		t.Fatalf("invalid_node_type = %v, want qa_gate", out["invalid_node_type"])
+	}
+	if out["message"] == flowTemplateValidationMessage {
+		t.Fatalf("message = %v, want bounded invalid-node guidance", out["message"])
 	}
 }
 

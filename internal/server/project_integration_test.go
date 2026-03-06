@@ -674,6 +674,122 @@ func TestProjectHTTPFlowNodeCreateAcceptsLabelOrdinalAndListsLabel(t *testing.T)
 	}
 }
 
+func TestProjectHTTPFlowNodeCreateNormalizesHumanReviewAndCompletionAliases(t *testing.T) {
+	testServer, _, adminUser, memberUser := newProjectTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	memberToken := loginToken(t, testServer.URL, memberUser.Email, "member-password")
+
+	createdProject := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects", map[string]any{
+		"slug":          "node-alias-" + strings.ToLower(uuid.NewString()[:8]),
+		"display_name":  "Node Alias Project",
+		"delivery_mode": "gated",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if createdProject.StatusCode != http.StatusCreated {
+		t.Fatalf("create project status = %d, want %d body=%s", createdProject.StatusCode, http.StatusCreated, string(createdProject.Body))
+	}
+	projectID := jsonPathString(t, createdProject.Body, "data", "id")
+
+	templateResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+projectID+"/flow-templates", map[string]any{
+		"slug":         "alias-flow",
+		"display_name": "Alias Flow",
+		"description":  "alias test",
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if templateResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create flow template status = %d, want %d body=%s", templateResp.StatusCode, http.StatusCreated, string(templateResp.Body))
+	}
+	templateID := jsonPathString(t, templateResp.Body, "data", "id")
+
+	completionNode := mustJSON(t, http.MethodPost, testServer.URL+"/v1/flow-templates/"+templateID+"/nodes", map[string]any{
+		"display_name": "Completion",
+		"node_type":    "completion",
+		"position":     3,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if completionNode.StatusCode != http.StatusCreated {
+		t.Fatalf("create completion node status = %d, want %d body=%s", completionNode.StatusCode, http.StatusCreated, string(completionNode.Body))
+	}
+	completionNodeID := jsonPathString(t, completionNode.Body, "data", "id")
+	if got := jsonPathString(t, completionNode.Body, "data", "node_type"); got != "merge" {
+		t.Fatalf("completion node_type = %q, want merge body=%s", got, string(completionNode.Body))
+	}
+
+	humanReviewNode := mustJSON(t, http.MethodPost, testServer.URL+"/v1/flow-templates/"+templateID+"/nodes", map[string]any{
+		"display_name": "Human Review",
+		"node_type":    "human_review",
+		"position":     2,
+		"next_node_id": completionNodeID,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if humanReviewNode.StatusCode != http.StatusCreated {
+		t.Fatalf("create human review node status = %d, want %d body=%s", humanReviewNode.StatusCode, http.StatusCreated, string(humanReviewNode.Body))
+	}
+	humanReviewNodeID := jsonPathString(t, humanReviewNode.Body, "data", "id")
+	if got := jsonPathString(t, humanReviewNode.Body, "data", "node_type"); got != "review" {
+		t.Fatalf("human review node_type = %q, want review body=%s", got, string(humanReviewNode.Body))
+	}
+	if got := jsonPathValue(t, humanReviewNode.Body, "data", "requires_human_review"); got != true {
+		t.Fatalf("requires_human_review = %v, want true body=%s", got, string(humanReviewNode.Body))
+	}
+
+	workNode := mustJSON(t, http.MethodPost, testServer.URL+"/v1/flow-templates/"+templateID+"/nodes", map[string]any{
+		"display_name": "Work",
+		"node_type":    "work",
+		"position":     1,
+		"next_node_id": humanReviewNodeID,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if workNode.StatusCode != http.StatusCreated {
+		t.Fatalf("create work node status = %d, want %d body=%s", workNode.StatusCode, http.StatusCreated, string(workNode.Body))
+	}
+	workNodeID := jsonPathString(t, workNode.Body, "data", "id")
+
+	updateTemplate := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/flow-templates/"+templateID, map[string]any{
+		"start_node_id": workNodeID,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if updateTemplate.StatusCode != http.StatusOK {
+		t.Fatalf("update flow template status = %d, want %d body=%s", updateTemplate.StatusCode, http.StatusOK, string(updateTemplate.Body))
+	}
+}
+
+func TestProjectHTTPFlowNodeCreateRejectsInvalidNodeType(t *testing.T) {
+	testServer, _, adminUser, memberUser := newProjectTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	memberToken := loginToken(t, testServer.URL, memberUser.Email, "member-password")
+
+	createdProject := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects", map[string]any{
+		"slug":          "invalid-node-type-" + strings.ToLower(uuid.NewString()[:8]),
+		"display_name":  "Invalid Node Type Project",
+		"delivery_mode": "gated",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if createdProject.StatusCode != http.StatusCreated {
+		t.Fatalf("create project status = %d, want %d body=%s", createdProject.StatusCode, http.StatusCreated, string(createdProject.Body))
+	}
+	projectID := jsonPathString(t, createdProject.Body, "data", "id")
+
+	templateResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+projectID+"/flow-templates", map[string]any{
+		"slug":         "invalid-node-type-flow",
+		"display_name": "Invalid Node Type Flow",
+		"description":  "invalid node type test",
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if templateResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create flow template status = %d, want %d body=%s", templateResp.StatusCode, http.StatusCreated, string(templateResp.Body))
+	}
+	templateID := jsonPathString(t, templateResp.Body, "data", "id")
+
+	invalidNode := mustJSON(t, http.MethodPost, testServer.URL+"/v1/flow-templates/"+templateID+"/nodes", map[string]any{
+		"display_name": "QA Gate",
+		"node_type":    "qa_gate",
+		"position":     1,
+	}, map[string]string{"Authorization": "Bearer " + memberToken})
+	if invalidNode.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("create invalid node status = %d, want %d body=%s", invalidNode.StatusCode, http.StatusUnprocessableEntity, string(invalidNode.Body))
+	}
+	if got := jsonPathString(t, invalidNode.Body, "error", "message"); got != "invalid flow node type \"qa_gate\"" {
+		t.Fatalf("error.message = %q, want invalid flow node type guidance body=%s", got, string(invalidNode.Body))
+	}
+}
+
 func TestProjectHTTPFlowTemplateRejectsPathsWithoutReview(t *testing.T) {
 	testServer, _, adminUser, memberUser := newProjectTestServer(t)
 	defer testServer.Close()

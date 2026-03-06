@@ -187,52 +187,52 @@ func TestWithProjectStaffingDefaultsHandlesJSONNull(t *testing.T) {
 	}
 }
 
-func TestValidateFlowTemplateReviewPathRejectsWorkToDoneWithoutReview(t *testing.T) {
-	doneID := uuid.New()
-	work := repo.FlowNode{ID: uuid.New(), NodeType: "work", NextNodeID: &doneID}
-	done := repo.FlowNode{ID: doneID, NodeType: "done"}
+func TestValidateFlowTemplateReviewPathRejectsWorkToMergeWithoutReview(t *testing.T) {
+	mergeID := uuid.New()
+	work := repo.FlowNode{ID: uuid.New(), NodeType: "work", NextNodeID: &mergeID}
+	merge := repo.FlowNode{ID: mergeID, NodeType: "merge"}
 
-	err := validateFlowTemplateReviewPath(work.ID, []repo.FlowNode{work, done})
+	err := validateFlowTemplateReviewPath(work.ID, []repo.FlowNode{work, merge})
 	if !errors.Is(err, ErrFlowTemplateReviewPath) {
 		t.Fatalf("validateFlowTemplateReviewPath err = %v, want ErrFlowTemplateReviewPath", err)
 	}
 }
 
-func TestValidateFlowTemplateReviewPathAcceptsWorkReviewDone(t *testing.T) {
-	doneID := uuid.New()
+func TestValidateFlowTemplateReviewPathAcceptsWorkReviewMerge(t *testing.T) {
+	mergeID := uuid.New()
 	reviewID := uuid.New()
 	work := repo.FlowNode{ID: uuid.New(), NodeType: "work", NextNodeID: &reviewID}
-	review := repo.FlowNode{ID: reviewID, NodeType: "review", NextNodeID: &doneID, RejectNodeID: &doneID}
-	done := repo.FlowNode{ID: doneID, NodeType: "done"}
+	review := repo.FlowNode{ID: reviewID, NodeType: "review", NextNodeID: &mergeID, RejectNodeID: &mergeID}
+	merge := repo.FlowNode{ID: mergeID, NodeType: "merge"}
 
-	if err := validateFlowTemplateReviewPath(work.ID, []repo.FlowNode{work, review, done}); err != nil {
+	if err := validateFlowTemplateReviewPath(work.ID, []repo.FlowNode{work, review, merge}); err != nil {
 		t.Fatalf("validateFlowTemplateReviewPath err = %v, want nil", err)
 	}
 }
 
 func TestValidateFlowTemplateReviewPathRejectsBranchWithoutReview(t *testing.T) {
-	doneID := uuid.New()
+	mergeID := uuid.New()
 	reviewID := uuid.New()
-	work := repo.FlowNode{ID: uuid.New(), NodeType: "work", NextNodeID: &doneID, RejectNodeID: &reviewID}
-	review := repo.FlowNode{ID: reviewID, NodeType: "review", NextNodeID: &doneID, RejectNodeID: &doneID}
-	done := repo.FlowNode{ID: doneID, NodeType: "done"}
+	work := repo.FlowNode{ID: uuid.New(), NodeType: "work", NextNodeID: &mergeID, RejectNodeID: &reviewID}
+	review := repo.FlowNode{ID: reviewID, NodeType: "review", NextNodeID: &mergeID, RejectNodeID: &mergeID}
+	merge := repo.FlowNode{ID: mergeID, NodeType: "merge"}
 
-	err := validateFlowTemplateReviewPath(work.ID, []repo.FlowNode{work, review, done})
+	err := validateFlowTemplateReviewPath(work.ID, []repo.FlowNode{work, review, merge})
 	if !errors.Is(err, ErrFlowTemplateReviewPath) {
 		t.Fatalf("validateFlowTemplateReviewPath err = %v, want ErrFlowTemplateReviewPath", err)
 	}
 }
 
 func TestValidateFlowTemplateReviewPathAcceptsAllBranchesThroughReview(t *testing.T) {
-	doneID := uuid.New()
+	mergeID := uuid.New()
 	reviewAID := uuid.New()
 	reviewBID := uuid.New()
 	work := repo.FlowNode{ID: uuid.New(), NodeType: "work", NextNodeID: &reviewAID, RejectNodeID: &reviewBID}
-	reviewA := repo.FlowNode{ID: reviewAID, NodeType: "review", NextNodeID: &doneID, RejectNodeID: &doneID}
-	reviewB := repo.FlowNode{ID: reviewBID, NodeType: "review", NextNodeID: &doneID, RejectNodeID: &doneID}
-	done := repo.FlowNode{ID: doneID, NodeType: "done"}
+	reviewA := repo.FlowNode{ID: reviewAID, NodeType: "review", NextNodeID: &mergeID, RejectNodeID: &mergeID}
+	reviewB := repo.FlowNode{ID: reviewBID, NodeType: "review", NextNodeID: &mergeID, RejectNodeID: &mergeID}
+	merge := repo.FlowNode{ID: mergeID, NodeType: "merge"}
 
-	if err := validateFlowTemplateReviewPath(work.ID, []repo.FlowNode{work, reviewA, reviewB, done}); err != nil {
+	if err := validateFlowTemplateReviewPath(work.ID, []repo.FlowNode{work, reviewA, reviewB, merge}); err != nil {
 		t.Fatalf("validateFlowTemplateReviewPath err = %v, want nil", err)
 	}
 }

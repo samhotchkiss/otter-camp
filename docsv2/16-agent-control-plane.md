@@ -1166,7 +1166,7 @@ Chat messages (tool_call/tool_result) and control plane records (Run/ToolExecuti
 
 Flow transitions (`project.flow.advance`) and blocker filing (`project.flow.blocker.raise`) are control plane actions subject to policy evaluation. The task scheduler queries for available concurrency slots and kicks off runs when tasks are ready.
 
-Inbox integration: human review of agent actions is handled by `review` flow nodes with `human` actor type in the task graph, not by the control plane. `capability_approval` inbox items are created conversationally by agents when they need human authorization.
+Inbox integration: human review of agent actions is handled by `review` flow nodes in the task graph, using `requires_human_review = true` when a human sign-off gate is required, not by the control plane. `capability_approval` inbox items are created conversationally by agents when they need human authorization.
 
 Proactive supervision: the PM receives signals from the supervisor (stuck tasks, orphaned runs) and applies judgment in the project session.
 
@@ -1203,7 +1203,7 @@ The capability model in this doc defines what permissions are needed. The tool r
 
 - **Policy is binary: allow, deny.** `allow` executes immediately. `deny` rejects immediately. Policy outcomes are strictly binary — there is no intermediate "review" state at the policy level.
 
-- **Human review is a flow concern, not a policy concern.** Review of agent actions (e.g., reviewing a draft email before sending) is modeled as `review` flow nodes with `human` actor type in the task graph (see doc 03). The control plane does not intercept or stage actions — policy is strictly binary. If you want a human to review an email before it's sent, the flow has: `[email.draft]` → `[review node, human actor]` → `[email.send]`. The tool always does what it says — `send` sends, `draft` drafts. Nothing is secretly intercepted by policy.
+- **Human review is a flow concern, not a policy concern.** Review of agent actions (e.g., reviewing a draft email before sending) is modeled as `review` flow nodes in the task graph, with `requires_human_review = true` when a human sign-off gate is required (see doc 03). The control plane does not intercept or stage actions — policy is strictly binary. If you want a human to review an email before it's sent, the flow has: `[email.draft work node]` → `[review node, requires_human_review=true]` → `[email.send work node]` → `[merge/completion]`. The tool always does what it says — `send` sends, `draft` drafts. Nothing is secretly intercepted by policy.
 
 - **Default posture is permissive.** Agents receive generous capabilities from templates. The default experience empowers agents to do real work. Restrictions are opt-in — admins add `deny` rules at the org or project layer when they want guardrails. Instance safety (layer 1) is the only default-deny layer — it catches truly catastrophic actions. Everything else defaults to allowing what templates grant.
 

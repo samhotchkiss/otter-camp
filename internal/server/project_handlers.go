@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/samhotchkiss/otter-camp/internal/api"
+	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
@@ -836,14 +837,6 @@ func (h projectHandlers) addFlowNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	nodeType := strings.ToLower(strings.TrimSpace(req.NodeType))
-	switch nodeType {
-	case "agent_work":
-		nodeType = "work"
-	case "human_review":
-		nodeType = "review"
-	case "execute":
-		nodeType = "work"
-	}
 	if nodeType == "" {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "node_type is required")
 		return
@@ -1284,6 +1277,7 @@ type mappedProjectError struct {
 }
 
 func mapProjectError(err error) mappedProjectError {
+	var invalidNodeTypeErr *flowpolicy.InvalidNodeTypeError
 	switch {
 	case errors.Is(err, projectsvc.ErrSlugTaken):
 		return mappedProjectError{Status: http.StatusConflict, Code: api.ErrCodeConflict, Message: "conflict"}
@@ -1306,6 +1300,8 @@ func mapProjectError(err error) mappedProjectError {
 		}
 	case errors.Is(err, projectsvc.ErrAgentNotFound):
 		return mappedProjectError{Status: http.StatusUnprocessableEntity, Code: api.ErrCodeValidation, Message: projectsvc.ErrAgentNotFound.Error()}
+	case errors.As(err, &invalidNodeTypeErr):
+		return mappedProjectError{Status: http.StatusUnprocessableEntity, Code: api.ErrCodeValidation, Message: invalidNodeTypeErr.Error()}
 	case errors.Is(err, projectsvc.ErrInvalidSlug),
 		errors.Is(err, projectsvc.ErrDisplayNameInvalid),
 		errors.Is(err, projectsvc.ErrFlowNodeTemplateMismatch),

@@ -14,7 +14,7 @@ import (
 func TestCreateFlowTemplateValidatesReviewCoverageWhenStartNodeProvided(t *testing.T) {
 	sourceTemplateID := uuid.New()
 	workID := uuid.New()
-	doneID := uuid.New()
+	mergeID := uuid.New()
 	startNodeID := workID
 
 	templates := &reviewCoverageTemplateRepoStub{
@@ -27,12 +27,12 @@ func TestCreateFlowTemplateValidatesReviewCoverageWhenStartNodeProvided(t *testi
 				FlowTemplateID: sourceTemplateID,
 				NodeType:       "work",
 				Position:       1,
-				NextNodeID:     &doneID,
+				NextNodeID:     &mergeID,
 			},
-			doneID: {
-				ID:             doneID,
+			mergeID: {
+				ID:             mergeID,
 				FlowTemplateID: sourceTemplateID,
-				NodeType:       "done",
+				NodeType:       "merge",
 				Position:       2,
 			},
 		},
@@ -60,7 +60,7 @@ func TestAddFlowNodeRevalidatesCoverageAndRollsBack(t *testing.T) {
 	templateID := uuid.New()
 	workID := uuid.New()
 	reviewID := uuid.New()
-	doneID := uuid.New()
+	mergeID := uuid.New()
 
 	templates := &reviewCoverageTemplateRepoStub{
 		templates: map[uuid.UUID]repo.FlowTemplate{
@@ -84,13 +84,13 @@ func TestAddFlowNodeRevalidatesCoverageAndRollsBack(t *testing.T) {
 				FlowTemplateID: templateID,
 				NodeType:       "review",
 				Position:       2,
-				NextNodeID:     &doneID,
-				RejectNodeID:   &doneID,
+				NextNodeID:     &mergeID,
+				RejectNodeID:   &mergeID,
 			},
-			doneID: {
-				ID:             doneID,
+			mergeID: {
+				ID:             mergeID,
 				FlowTemplateID: templateID,
-				NodeType:       "done",
+				NodeType:       "merge",
 				Position:       3,
 			},
 		},
@@ -104,7 +104,7 @@ func TestAddFlowNodeRevalidatesCoverageAndRollsBack(t *testing.T) {
 		DisplayName: "Bypass Review",
 		NodeType:    "work",
 		Position:    4,
-		NextNodeID:  &doneID,
+		NextNodeID:  &mergeID,
 	})
 	if !errors.Is(err, ErrFlowTemplateReviewPath) {
 		t.Fatalf("AddFlowNode err = %v, want ErrFlowTemplateReviewPath", err)
@@ -121,7 +121,7 @@ func TestRemoveFlowNodeRejectsDeleteThatBreaksReviewCoverage(t *testing.T) {
 	templateID := uuid.New()
 	workID := uuid.New()
 	reviewID := uuid.New()
-	doneID := uuid.New()
+	mergeID := uuid.New()
 
 	templates := &reviewCoverageTemplateRepoStub{
 		templates: map[uuid.UUID]repo.FlowTemplate{
@@ -145,13 +145,13 @@ func TestRemoveFlowNodeRejectsDeleteThatBreaksReviewCoverage(t *testing.T) {
 				FlowTemplateID: templateID,
 				NodeType:       "review",
 				Position:       2,
-				NextNodeID:     &doneID,
-				RejectNodeID:   &doneID,
+				NextNodeID:     &mergeID,
+				RejectNodeID:   &mergeID,
 			},
-			doneID: {
-				ID:             doneID,
+			mergeID: {
+				ID:             mergeID,
 				FlowTemplateID: templateID,
-				NodeType:       "done",
+				NodeType:       "merge",
 				Position:       3,
 			},
 		},

@@ -2439,15 +2439,20 @@ func (e *NativeToolExecutor) handleFlowCreateTemplate(ctx context.Context, input
 		}
 		nodeType, typeOK := readString(nodeMap, "node_type")
 		if !typeOK || nodeType == "" {
-			nodeType = "work"
+			nodeType = flowpolicy.NodeTypeWork
+		}
+		nodeSpec, err := flowpolicy.NormalizeNodeSpec(nodeType, readBool(nodeMap, "requires_human_review", false))
+		if err != nil {
+			return invalidFlowNodeTypeResult(err), nil
 		}
 		plannedNodes = append(plannedNodes, repo.FlowNode{
-			ID:          nodeID,
-			DisplayName: displayName,
-			NodeType:    nodeType,
-			Position:    idx + 1,
-			ToolDomains: readStringSlice(nodeMap, "tool_domains"),
-			MaxVisits:   10,
+			ID:                  nodeID,
+			DisplayName:         displayName,
+			NodeType:            nodeSpec.NodeType,
+			Position:            idx + 1,
+			ToolDomains:         readStringSlice(nodeMap, "tool_domains"),
+			RequiresHumanReview: nodeSpec.RequiresHumanReview,
+			MaxVisits:           10,
 		})
 	}
 	if len(plannedNodes) == 0 {
@@ -2480,12 +2485,13 @@ func (e *NativeToolExecutor) handleFlowCreateTemplate(ctx context.Context, input
 	createdNodes := make([]repo.FlowNode, 0)
 	for _, plannedNode := range plannedNodes {
 		created, err := e.flowNodes.Create(ctx, repo.FlowNode{
-			FlowTemplateID: template.ID,
-			DisplayName:    plannedNode.DisplayName,
-			NodeType:       plannedNode.NodeType,
-			Position:       plannedNode.Position,
-			ToolDomains:    plannedNode.ToolDomains,
-			MaxVisits:      plannedNode.MaxVisits,
+			FlowTemplateID:      template.ID,
+			DisplayName:         plannedNode.DisplayName,
+			NodeType:            plannedNode.NodeType,
+			Position:            plannedNode.Position,
+			ToolDomains:         plannedNode.ToolDomains,
+			RequiresHumanReview: plannedNode.RequiresHumanReview,
+			MaxVisits:           plannedNode.MaxVisits,
 		})
 		if err != nil {
 			return nil, err
@@ -2515,6 +2521,21 @@ func (e *NativeToolExecutor) handleFlowCreateTemplate(ctx context.Context, input
 			"version": updatedTemplate.Version,
 		},
 	}, nil
+}
+
+func invalidFlowNodeTypeResult(err error) map[string]any {
+	invalidNodeType := strings.TrimSpace(err.Error())
+	var invalidNodeTypeErr *flowpolicy.InvalidNodeTypeError
+	if errors.As(err, &invalidNodeTypeErr) {
+		invalidNodeType = invalidNodeTypeErr.NodeType
+	}
+	return map[string]any{
+		"error":              "invalid_node_type",
+		"invalid_node_type":  invalidNodeType,
+		"message":            fmt.Sprintf("invalid node_type %q; valid stored node types are work, review, decision, parallel, merge. Use review with requires_human_review=true for human review, and merge for completion/success.", invalidNodeType),
+		"allowed_node_types": flowpolicy.ValidNodeTypes(),
+		"minimum_path":       []string{flowpolicy.NodeTypeWork, flowpolicy.NodeTypeReview, flowpolicy.NodeTypeMerge},
+	}
 }
 
 func (e *NativeToolExecutor) handleScheduleCreate(ctx context.Context, input map[string]any) (map[string]any, error) {
