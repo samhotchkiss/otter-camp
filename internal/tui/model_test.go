@@ -1450,6 +1450,80 @@ func TestTaskPaneEscNavigatesAndCancelIsExplicitEX249(t *testing.T) {
 	}
 }
 
+func TestSendOrQueueInputInterceptsCancelCommandEX260(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(DefaultState())
+	model.activeTurn = true
+	model.activeSession = "00000000-0000-0000-0000-000000002600"
+	model.chatInput = ":cancel"
+	model.chatMessages = []ChatMessage{{
+		ID:        "existing-msg",
+		Role:      "assistant",
+		Content:   "working",
+		Timestamp: time.Now().UTC(),
+	}}
+
+	cmd := model.sendOrQueueInput()
+	if cmd == nil {
+		t.Fatal(":cancel should return a cancel command when a turn is active")
+	}
+	if model.activeTurn {
+		t.Fatal(":cancel should clear activeTurn before dispatching cancel")
+	}
+	if model.chatInput != "" {
+		t.Fatalf(":cancel should clear the composer, got %q", model.chatInput)
+	}
+	if model.statusMessage != "Active turn cancelled." {
+		t.Fatalf("statusMessage = %q, want %q", model.statusMessage, "Active turn cancelled.")
+	}
+	if len(model.chatMessages) != 1 {
+		t.Fatalf(":cancel should not append a local user message; got %d messages", len(model.chatMessages))
+	}
+	if len(model.chatHistory) != 0 {
+		t.Fatalf(":cancel should not append to chat history; got %d entries", len(model.chatHistory))
+	}
+	msg := cmd()
+	request, ok := msg.(chatCancelRequestedMsg)
+	if !ok {
+		t.Fatalf(":cancel cmd message = %T, want chatCancelRequestedMsg", msg)
+	}
+	if request.SessionID != model.activeSession {
+		t.Fatalf("cancel session_id = %q, want %q", request.SessionID, model.activeSession)
+	}
+}
+
+func TestSendOrQueueInputCancelWithoutActiveTurnReportsLocallyEX260(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(DefaultState())
+	model.activeSession = "00000000-0000-0000-0000-000000002601"
+	model.chatInput = " :cancel "
+	model.chatMessages = []ChatMessage{{
+		ID:        "existing-msg",
+		Role:      "assistant",
+		Content:   "idle",
+		Timestamp: time.Now().UTC(),
+	}}
+
+	cmd := model.sendOrQueueInput()
+	if cmd != nil {
+		t.Fatal(":cancel without an active turn should not dispatch a cancel command")
+	}
+	if model.chatInput != "" {
+		t.Fatalf(":cancel should clear the composer, got %q", model.chatInput)
+	}
+	if model.statusMessage != "No active turn to cancel." {
+		t.Fatalf("statusMessage = %q, want %q", model.statusMessage, "No active turn to cancel.")
+	}
+	if len(model.chatMessages) != 1 {
+		t.Fatalf(":cancel should not append a local user message; got %d messages", len(model.chatMessages))
+	}
+	if len(model.chatHistory) != 0 {
+		t.Fatalf(":cancel should not append to chat history; got %d entries", len(model.chatHistory))
+	}
+}
+
 func TestTaskPaneMouseFocusIntoChatResetsComposeEX252(t *testing.T) {
 	t.Parallel()
 

@@ -6449,9 +6449,15 @@ func (m Model) focusOrder() []Panel {
 
 func (m *Model) sendOrQueueInput() tea.Cmd {
 	text := normalizeChatNewlines(m.chatInput)
-	if strings.TrimSpace(text) == "" {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
 		m.statusMessage = "Cannot send empty message."
 		return nil
+	}
+	switch strings.ToLower(trimmed) {
+	case ":cancel", ":cancel-turn":
+		m.chatInput = ""
+		return m.executeCommand(trimmed)
 	}
 	// EX-400: if the session ID is still a placeholder (e.g. "session-org-general"),
 	// the real UUID hasn't arrived from the server yet. Sending now would produce
