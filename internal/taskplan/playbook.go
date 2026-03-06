@@ -85,7 +85,6 @@ var (
 			"creative",
 			"concept",
 			"copy",
-			"messaging",
 		},
 		PlaybookExecutionSpec: {
 			"prd",
