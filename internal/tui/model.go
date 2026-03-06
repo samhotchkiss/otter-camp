@@ -611,7 +611,19 @@ func (m *Model) syncTaskPaneSelection(force bool) tea.Cmd {
 	}
 	nextTab := m.taskPaneTab
 	if force || m.taskPaneTaskID != task.ID {
-		nextTab = m.defaultTaskPaneTab(task)
+		currentSession := strings.TrimSpace(m.activeSession)
+		if currentSession != "" {
+			switch currentSession {
+			case m.taskDiscussionSessionID(task):
+				nextTab = taskPaneTabDiscussion
+			case m.taskExecutionSessionID(task):
+				nextTab = taskPaneTabJournal
+			default:
+				nextTab = m.defaultTaskPaneTab(task)
+			}
+		} else {
+			nextTab = m.defaultTaskPaneTab(task)
+		}
 	}
 	return m.applyTaskPaneSelection(task, m.activeScope, nextTab, force)
 }
